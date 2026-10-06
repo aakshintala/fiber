@@ -12,15 +12,16 @@
 )]
 
 use std::fs;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, ErrorKind, Write};
+use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::mpsc;
+use std::sync::{Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 
-use fakes::{Client, ProviderServer, Response, Watchdog};
+use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
 
 /// How long one `fiber` run, or one socket line, may take.
@@ -256,13 +257,18 @@ impl Running {
     /// connects once. The socket is bound in `Session::open` before the
     /// loop writes that line, so the line is the signal the socket
     /// accepts (`docs/testing.md`, "Waits and timeouts").
-    fn connect(&mut self, socket: &Path) -> Client {
-        let line = self
-            .lines
-            .recv_timeout(DEADLINE)
-            .expect("the session's first stdout line before the deadline");
+    fn connect(&mut self, socket: &Path) -> Socket {
+        let line = match self.lines.recv_timeout(DEADLINE) {
+            Ok(line) => line,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                panic!("waited {DEADLINE:?} for the session's first stdout line")
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                panic!("the session exited before its first stdout line")
+            }
+        };
         self.first.push(serde_json::from_str(&line).unwrap());
-        Client::connect(socket).expect("the session's socket accepted before the deadline")
+        Socket::connect(socket).expect("the session's socket accepted before the deadline")
     }
 
     /// Reads stdout lines until one of `kind` arrives, waiting [`DEADLINE`]
@@ -271,9 +277,15 @@ impl Running {
     /// and later need a turn, which needs the test's prompt.
     fn wait_for(&mut self, kind: &str) {
         loop {
-            let line = self.lines.recv_timeout(DEADLINE).unwrap_or_else(|_| {
-                panic!("waited {DEADLINE:?} for {kind} on the session's stdout")
-            });
+            let line = match self.lines.recv_timeout(DEADLINE) {
+                Ok(line) => line,
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    panic!("waited {DEADLINE:?} for {kind} on the session's stdout")
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    panic!("the session's stdout closed before {kind}")
+                }
+            };
             let value: Value = serde_json::from_str(&line).unwrap();
             let done = value["kind"] == kind;
             self.first.push(value);
@@ -288,23 +300,42 @@ impl Running {
     fn wait(mut self) -> (ExitStatus, Vec<Value>, String) {
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(self.child.wait()).unwrap());
-        let status = finished
-            .recv_timeout(DEADLINE)
-            .expect("waited for the session to exit")
-            .unwrap();
+        let status = match finished.recv_timeout(DEADLINE) {
+            Ok(status) => status.unwrap(),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                panic!("waited {DEADLINE:?} for the session to exit")
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                panic!("the session's wait thread ended before the session exited")
+            }
+        };
         assert!(
             !group_alive(self.group),
             "the session left a process in its group behind"
         );
         std::mem::forget(self.guard);
         // The process is gone, so its stdout is closed: the drain ends
-        // and every line arrives, each waited under DEADLINE. Lines taken
+        // and every line arrives, each waited under DEADLINE. A deadline
+        // with no line is a hang, not the end: only the drain thread
+        // ending (the channel disconnecting) ends the run. Lines taken
         // as the readiness signal come first.
         let mut out = std::mem::take(&mut self.first);
-        while let Ok(line) = self.lines.recv_timeout(DEADLINE) {
-            out.push(serde_json::from_str(&line).unwrap());
+        loop {
+            match self.lines.recv_timeout(DEADLINE) {
+                Ok(line) => out.push(serde_json::from_str(&line).unwrap()),
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    panic!("waited {DEADLINE:?} for the session's stdout to close")
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
         }
-        let stderr = self.stderr.recv_timeout(DEADLINE).unwrap_or_default();
+        let stderr = match self.stderr.recv_timeout(DEADLINE) {
+            Ok(text) => text,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                panic!("waited {DEADLINE:?} for the session's stderr")
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => String::new(),
+        };
         self.watchdog.stand_down(DEADLINE);
         (status, out, stderr)
     }
@@ -343,42 +374,84 @@ fn function_call(call_id: &str, name: &str, arguments: &Value) -> Value {
 
 /// An `openai-responses` stream answering `Hello.` in two fragments.
 fn hello() -> Response {
-    let events = [
+    stream(&[
         json!({"type": "response.output_text.delta", "delta": "Hel"}),
         json!({"type": "response.output_text.delta", "delta": "lo."}),
         json!({"type": "response.output_item.done", "item": {
             "type": "message", "content": [{"type": "output_text", "text": "Hello."}]
         }}),
-        json!({"type": "response.completed", "response": {
-            "id": "resp_1", "status": "completed",
-            "usage": {"input_tokens": 10, "input_tokens_details": {"cached_tokens": 4}, "output_tokens": 3}
-        }}),
-    ];
-    let body: String = events
-        .iter()
-        .map(|event| {
-            format!(
-                "event: {}\ndata: {event}\n\n",
-                event["type"].as_str().unwrap()
-            )
+    ])
+}
+
+/// A client on the session's socket that tells a read deadline from the
+/// session closing the socket. Reads wait [`DEADLINE`] each: expiry
+/// panics naming what was awaited, while the session closing the socket
+/// ends [`until_close`] and panics from [`recv`] and [`until`] naming
+/// the wait the close cut short.
+struct Socket {
+    write: Mutex<UnixStream>,
+    read: Mutex<BufReader<UnixStream>>,
+}
+
+impl Socket {
+    fn connect(path: &Path) -> std::io::Result<Self> {
+        let write = UnixStream::connect(path)?;
+        let read = write.try_clone()?;
+        read.set_read_timeout(Some(DEADLINE))?;
+        Ok(Self {
+            write: Mutex::new(write),
+            read: Mutex::new(BufReader::new(read)),
         })
-        .collect();
-    Response::stream(body)
+    }
+
+    fn send(&self, line: &str) {
+        let mut write = self.write.lock().unwrap();
+        write.write_all(line.as_bytes()).unwrap();
+        if !line.ends_with('\n') {
+            write.write_all(b"\n").unwrap();
+        }
+        write.flush().unwrap();
+    }
+
+    /// One socket line: a line, or `None` when the session closed the
+    /// socket. A [`DEADLINE`] with neither panics naming `what`, with
+    /// the lines before it.
+    fn next(&self, what: &str, got: &[Value]) -> Option<Value> {
+        let mut buf = String::new();
+        match self.read.lock().unwrap().read_line(&mut buf) {
+            Ok(0) => None,
+            Ok(_) => {
+                let line = buf.trim_end_matches(&['\r', '\n'][..]).to_owned();
+                Some(serde_json::from_str(&line).unwrap_or(Value::String(line)))
+            }
+            Err(error)
+                if error.kind() == ErrorKind::TimedOut || error.kind() == ErrorKind::WouldBlock =>
+            {
+                panic!("waited {DEADLINE:?} for {what}; got {got:?}")
+            }
+            Err(error) => {
+                panic!("reading the session socket while waiting for {what}: {error}")
+            }
+        }
+    }
 }
 
-fn send(client: &Client, line: &str) {
-    client.send(line).unwrap();
+fn send(client: &Socket, line: &str) {
+    client.send(line);
 }
 
-fn recv(client: &Client) -> Value {
-    client.recv(DEADLINE).expect("a line arrived")
+fn recv(client: &Socket, what: &str) -> Value {
+    match client.next(what, &[]) {
+        Some(line) => line,
+        None => panic!("the session closed the socket while waiting for {what}"),
+    }
 }
 
 /// Collects socket lines until the session closes the socket, waiting
 /// [`DEADLINE`] for each.
-fn until_close(client: &Client) -> Vec<Value> {
+fn until_close(client: &Socket) -> Vec<Value> {
     let mut lines = Vec::new();
-    while let Some(line) = client.recv(DEADLINE) {
+    while let Some(line) = client.next("the session to close the socket", &lines) {
         lines.push(line);
     }
     lines
@@ -394,13 +467,63 @@ fn kinds(lines: &[Value]) -> Vec<&str> {
         .map(|line| line["kind"].as_str().unwrap())
         .collect()
 }
-/// Collects lines until `done`, waiting `DEADLINE` for each.
-fn until(client: &Client, what: &str, mut done: impl FnMut(&Value) -> bool) -> Vec<Value> {
+/// The socket's event kinds for one prompt and `close`: the subscribe, the
+/// prompt's turn, and the close. The prompt-over-the-socket, skill and
+/// same-id tests run exactly this shape, so they share it.
+const SOCKET_KINDS_ONE_TURN_AND_CLOSE: [&str; 19] = [
+    "command_accepted",
+    "session_started",
+    "fiber_started",
+    "extensions_loaded",
+    "clients",
+    "preamble_built",
+    "opening_message",
+    "turn_started",
+    "command_accepted",
+    "step_started",
+    "assistant_message_started",
+    "assistant_message_delta",
+    "assistant_message_delta",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    "command_accepted",
+    "fiber_exited",
+];
+
+/// The same run's stdout kinds: the loop's own lines, without the
+/// socket's `command_accepted` echoes.
+const STDOUT_KINDS_ONE_TURN_AND_CLOSE: [&str; 16] = [
+    "session_started",
+    "fiber_started",
+    "extensions_loaded",
+    "clients",
+    "preamble_built",
+    "opening_message",
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "assistant_message_delta",
+    "assistant_message_delta",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    "fiber_exited",
+];
+
+/// Collects lines until `done`, waiting `DEADLINE` for each: expiry panics
+/// naming `what`, and the socket closing first panics too.
+fn until(client: &Socket, what: &str, mut done: impl FnMut(&Value) -> bool) -> Vec<Value> {
     let mut lines = Vec::new();
     loop {
-        let line = client
-            .recv(DEADLINE)
-            .unwrap_or_else(|| panic!("waited {DEADLINE:?} for {what}; got {lines:?}"));
+        let line = match client.next(what, &lines) {
+            Some(line) => line,
+            None => {
+                panic!("the session closed the socket while waiting for {what}; got {lines:?}")
+            }
+        };
         let stop = done(&line);
         lines.push(line);
         if stop {
@@ -426,7 +549,7 @@ fn a_prompt_over_the_socket_runs_a_turn_and_close_ends_the_session() {
         &client,
         r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
     );
-    let sub = recv(&client);
+    let sub = recv(&client, "the subscribe acknowledgement");
     assert_eq!(sub["payload"]["command_id"], "c_sub");
     send(
         &client,
@@ -463,51 +586,8 @@ fn a_prompt_over_the_socket_runs_a_turn_and_close_ends_the_session() {
     let mut stream = vec![sub];
     stream.extend(rest);
     stream.extend(tail);
-    assert_eq!(
-        kinds(&stream),
-        [
-            "command_accepted",
-            "session_started",
-            "fiber_started",
-            "extensions_loaded",
-            "clients",
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "command_accepted",
-            "step_started",
-            "assistant_message_started",
-            "assistant_message_delta",
-            "assistant_message_delta",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
-            "command_accepted",
-            "fiber_exited",
-        ]
-    );
-    assert_eq!(
-        kinds(&out),
-        [
-            "session_started",
-            "fiber_started",
-            "extensions_loaded",
-            "clients",
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "assistant_message_delta",
-            "assistant_message_delta",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
-            "fiber_exited",
-        ]
-    );
+    assert_eq!(kinds(&stream), SOCKET_KINDS_ONE_TURN_AND_CLOSE);
+    assert_eq!(kinds(&out), STDOUT_KINDS_ONE_TURN_AND_CLOSE);
 }
 
 #[test]
@@ -536,7 +616,7 @@ fn a_prompt_naming_a_skill_sends_the_expanded_text_as_one_message() {
         &client,
         r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
     );
-    let sub = recv(&client);
+    let sub = recv(&client, "the subscribe acknowledgement");
     assert_eq!(sub["payload"]["command_id"], "c_sub");
     send(
         &client,
@@ -581,51 +661,8 @@ fn a_prompt_naming_a_skill_sends_the_expanded_text_as_one_message() {
     let mut stream = vec![sub];
     stream.extend(rest);
     stream.extend(tail);
-    assert_eq!(
-        kinds(&stream),
-        [
-            "command_accepted",
-            "session_started",
-            "fiber_started",
-            "extensions_loaded",
-            "clients",
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "command_accepted",
-            "step_started",
-            "assistant_message_started",
-            "assistant_message_delta",
-            "assistant_message_delta",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
-            "command_accepted",
-            "fiber_exited",
-        ]
-    );
-    assert_eq!(
-        kinds(&out),
-        [
-            "session_started",
-            "fiber_started",
-            "extensions_loaded",
-            "clients",
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "assistant_message_delta",
-            "assistant_message_delta",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
-            "fiber_exited",
-        ]
-    );
+    assert_eq!(kinds(&stream), SOCKET_KINDS_ONE_TURN_AND_CLOSE);
+    assert_eq!(kinds(&out), STDOUT_KINDS_ONE_TURN_AND_CLOSE);
 }
 
 #[test]
@@ -650,7 +687,7 @@ fn an_idle_session_exits_with_a_client_still_connected() {
         &client,
         r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
     );
-    let sub = recv(&client);
+    let sub = recv(&client, "the subscribe acknowledgement");
     assert_eq!(sub["payload"]["command_id"], "c_sub");
     assert!(
         server.await_requests(1, DEADLINE),
@@ -710,6 +747,92 @@ fn an_idle_session_exits_with_a_client_still_connected() {
             "fiber_exited",
         ]
     );
+}
+
+#[test]
+fn a_session_started_with_a_prompt_keeps_serving_after_that_turn() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello(), hello()]).unwrap();
+    setup.provider(&server);
+    // Default idle: the session stays up after its first turn. The first
+    // response is held so the client subscribes before that turn
+    // completes; the hold stays on for the second turn's request.
+    server.hold();
+    let id = doors::mint("s_");
+    let mut running = setup.start_session(&id, &["--prompt", "hi"]);
+
+    let client = running.connect(&setup.socket(&id));
+    assert!(
+        server.await_requests(1, DEADLINE),
+        "the held first response was requested"
+    );
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    let sub = recv(&client, "the subscribe acknowledgement");
+    assert_eq!(sub["payload"]["command_id"], "c_sub");
+    server.release_one();
+    let first = until(&client, "the first turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    let started = first
+        .iter()
+        .find(|line| line["kind"] == "turn_started")
+        .expect("the queued prompt started a turn");
+    assert_eq!(started["payload"]["input"][0]["content"][0]["text"], "hi");
+    assert!(
+        first
+            .iter()
+            .any(|line| line["kind"] == "text_completed" && line["payload"]["text"] == "Hello."),
+        "the first turn ran: {first:?}"
+    );
+
+    // The session keeps serving: a second prompt over the socket runs a
+    // second turn. With `one_turn` forced on, the session would have
+    // closed after the first turn and this prompt would never run.
+    send(
+        &client,
+        r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"again"}]}}"#,
+    );
+    assert!(
+        server.await_requests(2, DEADLINE),
+        "the held second response was requested"
+    );
+    server.release();
+    let second = until(&client, "the second turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    let restarted = second
+        .iter()
+        .find(|line| line["kind"] == "turn_started")
+        .expect("the second prompt started a turn");
+    assert_eq!(
+        restarted["payload"]["input"][0]["content"][0]["text"],
+        "again"
+    );
+    assert!(
+        second
+            .iter()
+            .any(|line| line["kind"] == "text_completed" && line["payload"]["text"] == "Hello."),
+        "the second turn ran: {second:?}"
+    );
+
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let tail = until_close(&client);
+    assert_eq!(
+        tail.last()
+            .expect("the close was answered and the session exited")["kind"],
+        "fiber_exited"
+    );
+    drop(client);
+    let (status, out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+    let exited = out.last().expect("fiber_exited is the last stdout line");
+    assert_eq!(exited["kind"], "fiber_exited");
+    assert_eq!(exited["payload"]["exit_code"], 0);
+    assert!(!setup.socket(&id).exists());
+    assert_eq!(server.requests().len(), 2);
 }
 
 #[test]
@@ -834,7 +957,7 @@ fn an_escalation_reaches_a_connected_client_and_its_allow_runs_the_call() {
         &client,
         r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
     );
-    let sub = recv(&client);
+    let sub = recv(&client, "the subscribe acknowledgement");
     assert_eq!(sub["payload"]["command_id"], "c_sub");
     send(
         &client,
@@ -994,7 +1117,7 @@ fn a_second_session_with_the_same_id_fails_and_leaves_the_first_alone() {
         &client,
         r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
     );
-    let sub = recv(&client);
+    let sub = recv(&client, "the subscribe acknowledgement");
     assert_eq!(sub["payload"]["command_id"], "c_sub");
     send(
         &client,
@@ -1019,49 +1142,6 @@ fn a_second_session_with_the_same_id_fails_and_leaves_the_first_alone() {
     let mut stream = vec![sub];
     stream.extend(rest);
     stream.extend(tail);
-    assert_eq!(
-        kinds(&stream),
-        [
-            "command_accepted",
-            "session_started",
-            "fiber_started",
-            "extensions_loaded",
-            "clients",
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "command_accepted",
-            "step_started",
-            "assistant_message_started",
-            "assistant_message_delta",
-            "assistant_message_delta",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
-            "command_accepted",
-            "fiber_exited",
-        ]
-    );
-    assert_eq!(
-        kinds(&out),
-        [
-            "session_started",
-            "fiber_started",
-            "extensions_loaded",
-            "clients",
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "assistant_message_delta",
-            "assistant_message_delta",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
-            "fiber_exited",
-        ]
-    );
+    assert_eq!(kinds(&stream), SOCKET_KINDS_ONE_TURN_AND_CLOSE);
+    assert_eq!(kinds(&out), STDOUT_KINDS_ONE_TURN_AND_CLOSE);
 }

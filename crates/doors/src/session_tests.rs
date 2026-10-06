@@ -1531,9 +1531,12 @@ fn after_quiesce_a_client_leaving_writes_no_clients_line() {
 fn serve_with_a_prompt_delivers_exactly_that_prompt_and_no_close() {
     reset();
     let opened = open();
+    let ran = Arc::new(AtomicBool::new(false));
+    let seen = Arc::clone(&ran);
     opened
         .session
         .serve(Some("hi".to_owned()), Arc::new(|| false), |inbox| {
+            seen.store(true, Ordering::Relaxed);
             let delivery = inbox.recv_timeout(DEADLINE).expect("the prompt arrives");
             let Delivery::Prompt(message, _) = delivery else {
                 panic!("the first delivery is the prompt, got {delivery:?}");
@@ -1550,6 +1553,10 @@ fn serve_with_a_prompt_delivers_exactly_that_prompt_and_no_close() {
             Ok(())
         })
         .unwrap();
+    assert!(
+        ran.load(Ordering::Relaxed),
+        "serve ran the loop with the queued prompt"
+    );
     close_within(opened.session, opened.log);
 }
 
