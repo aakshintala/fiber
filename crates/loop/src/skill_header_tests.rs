@@ -383,7 +383,7 @@ fn a_map_after_a_comment_or_blank_line_is_still_a_map() {
 fn the_body_is_the_text_after_the_closing_fence() {
     assert_eq!(
         body("---\nname: n\ndescription: d\n---\nReview this.\n"),
-        Some("Review this.")
+        Some("Review this.".to_owned())
     );
 }
 
@@ -391,7 +391,7 @@ fn the_body_is_the_text_after_the_closing_fence() {
 fn blank_lines_at_either_end_are_removed_but_inner_ones_stay() {
     assert_eq!(
         body("---\nname: n\ndescription: d\n---\n\n\nFirst.\n\nSecond.\n\n\n"),
-        Some("First.\n\nSecond.")
+        Some("First.\n\nSecond.".to_owned())
     );
 }
 
@@ -399,7 +399,7 @@ fn blank_lines_at_either_end_are_removed_but_inner_ones_stay() {
 fn whitespace_only_lines_at_the_ends_are_blank_too() {
     assert_eq!(
         body("---\nname: n\ndescription: d\n---\n   \nBody.\n \t \n"),
-        Some("Body.")
+        Some("Body.".to_owned())
     );
 }
 
@@ -407,21 +407,30 @@ fn whitespace_only_lines_at_the_ends_are_blank_too() {
 fn crlf_fences_and_endings_leave_no_carriage_return_at_the_ends() {
     assert_eq!(
         body("---\r\nname: n\r\ndescription: d\r\n---\r\nBody.\r\n"),
-        Some("Body.")
+        Some("Body.".to_owned())
     );
-    // Inside the body the bytes stay as written: a borrowed body cannot
-    // re-end lines.
+    // Inside the body CRLF becomes LF: the body is re-ended line by line.
     assert_eq!(
         body("---\r\nname: n\r\ndescription: d\r\n---\r\nFirst.\r\n\r\nSecond.\r\n"),
-        Some("First.\r\n\r\nSecond.")
+        Some("First.\n\nSecond.".to_owned())
     );
 }
 
 #[test]
 fn an_empty_body_is_some_empty() {
-    assert_eq!(body("---\nname: n\ndescription: d\n---\n"), Some(""));
-    assert_eq!(body("---\nname: n\ndescription: d\n---"), Some(""));
-    assert_eq!(body("---\nname: n\ndescription: d\n---\n\n   \n"), Some(""));
+    assert_eq!(
+        body("---\nname: n\ndescription: d\n---\n"),
+        Some(String::new())
+    );
+    assert_eq!(
+        body("---\nname: n\ndescription: d\n---"),
+        Some(String::new())
+    );
+    assert_eq!(
+        body("---\nname: n\ndescription: d\n---\n\n   \n"),
+        Some(String::new())
+    );
+    assert_eq!(body("---\nname: x\n---\n   "), Some(String::new()));
 }
 
 #[test]
@@ -436,7 +445,16 @@ fn without_both_fences_there_is_no_body() {
 fn a_fence_again_in_the_body_is_body_text() {
     assert_eq!(
         body("---\nname: n\ndescription: d\n---\nBody.\n---\nMore.\n"),
-        Some("Body.\n---\nMore.")
+        Some("Body.\n---\nMore.".to_owned())
+    );
+}
+
+#[test]
+fn a_body_starting_right_after_the_fence_uses_the_full_rest() {
+    assert_eq!(body("---\nname: x\n---\nBody"), Some("Body".to_owned()));
+    assert_eq!(
+        body("---\nname: a-long-name\ndescription: d\n---\nX\n"),
+        Some("X".to_owned())
     );
 }
 

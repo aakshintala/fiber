@@ -38,33 +38,37 @@ struct Entry<'a> {
 /// with blank lines at either end removed. `None` when there is no header
 /// (no opening or closing `---`). Everything after the closing fence is
 /// the body, including a later `---` line.
-pub(crate) fn body(text: &str) -> Option<&str> {
-    // The closing fence, read like `parse` reads it: exactly `---`,
-    // down to the `\r` of a CRLF ending.
-    let mut offset = 0;
-    let mut found = None;
-    for (index, line) in text.split('\n').enumerate() {
-        let stripped = line.strip_suffix('\r').unwrap_or(line);
+pub(crate) fn body(text: &str) -> Option<String> {
+    // The fences, read like `parse` reads them: exactly `---`, down to
+    // the `\r` of a CRLF ending.
+    let mut consumed = 0;
+    let mut rest = None;
+    for (index, line) in text.split_inclusive('\n').enumerate() {
+        consumed += line.len();
+        let without_newline = line.strip_suffix('\n').unwrap_or(line);
+        let stripped = without_newline
+            .strip_suffix('\r')
+            .unwrap_or(without_newline);
         if stripped == "---" {
             if index > 0 {
-                found = Some((offset + line.len() + 1).min(text.len()));
+                rest = Some(&text[consumed..]);
                 break;
             }
         } else if index == 0 {
             return None;
         }
-        offset += line.len() + 1;
     }
-    let rest = &text[found?..];
-    let lead = rest.len() - rest.trim_start().len();
-    let start = rest[..lead].rfind('\n').map_or(0, |i| i + 1);
-    let mid = &rest[start..];
-    let kept = mid.trim_end().len();
-    let end = mid[kept..]
-        .find('\n')
-        .map_or(rest.len(), |at| start + kept + at);
-    let out = &rest[start..end];
-    Some(out.strip_suffix('\r').unwrap_or(out))
+    let rest = rest?;
+    let lines: Vec<&str> = rest.lines().collect();
+    let start = lines
+        .iter()
+        .position(|line| !line.trim().is_empty())
+        .unwrap_or(lines.len());
+    let end = lines
+        .iter()
+        .rposition(|line| !line.trim().is_empty())
+        .map_or(start, |last| last + 1);
+    Some(lines.get(start..end)?.join("\n"))
 }
 
 /// Parses the header at the start of `text`.

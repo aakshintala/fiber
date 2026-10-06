@@ -266,7 +266,7 @@ pub(crate) fn expand(
     let read = String::from_utf8_lossy(&raw);
     let body = skill_header::body(&read)?;
     let expanded = if args.is_empty() {
-        body.to_owned()
+        body
     } else {
         format!("{body}\n\n{args}")
     };
