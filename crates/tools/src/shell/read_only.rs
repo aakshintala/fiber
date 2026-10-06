@@ -17,8 +17,11 @@ pub(super) struct Command {
     pub(super) flags: &'static [Flag],
     /// Whether an operand is a path. `echo` and `pwd` name none.
     pub(super) paths: bool,
-    /// Whether the first operand is a search pattern, not a path.
+    /// Whether the first operand is a search pattern, not a path, unless a
+    /// flag in `pattern_flags` gives the pattern or says there is none.
     pub(super) pattern: bool,
+    /// Flags that leave every operand a path: `-e`, and `rg --files`.
+    pub(super) pattern_flags: &'static [&'static str],
     /// Whether `--` ends flags. `find` still reads a primary after `--`.
     pub(super) ends_flags: bool,
 }
@@ -184,6 +187,7 @@ pub(super) const COMMANDS: &[Command] = &[
         flags: &[],
         paths: false,
         pattern: false,
+        pattern_flags: &[],
         ends_flags: true,
     },
     Command {
@@ -191,6 +195,7 @@ pub(super) const COMMANDS: &[Command] = &[
         flags: &[flag("-n")],
         paths: false,
         pattern: false,
+        pattern_flags: &[],
         ends_flags: true,
     },
     Command {
@@ -209,6 +214,7 @@ pub(super) const COMMANDS: &[Command] = &[
         ],
         paths: true,
         pattern: false,
+        pattern_flags: &[],
         ends_flags: true,
     },
     Command {
@@ -224,6 +230,7 @@ pub(super) const COMMANDS: &[Command] = &[
         ],
         paths: true,
         pattern: false,
+        pattern_flags: &[],
         ends_flags: true,
     },
     Command {
@@ -231,6 +238,7 @@ pub(super) const COMMANDS: &[Command] = &[
         flags: HEAD_TAIL,
         paths: true,
         pattern: false,
+        pattern_flags: &[],
         ends_flags: true,
     },
     Command {
@@ -238,6 +246,7 @@ pub(super) const COMMANDS: &[Command] = &[
         flags: HEAD_TAIL,
         paths: true,
         pattern: false,
+        pattern_flags: &[],
         ends_flags: true,
     },
     Command {
@@ -245,6 +254,7 @@ pub(super) const COMMANDS: &[Command] = &[
         flags: &[flag("-l"), flag("-w"), flag("-c"), flag("-m")],
         paths: true,
         pattern: false,
+        pattern_flags: &[],
         ends_flags: true,
     },
     Command {
@@ -252,6 +262,7 @@ pub(super) const COMMANDS: &[Command] = &[
         flags: GREP,
         paths: true,
         pattern: true,
+        pattern_flags: &["-e"],
         ends_flags: true,
     },
     Command {
@@ -259,6 +270,7 @@ pub(super) const COMMANDS: &[Command] = &[
         flags: RG,
         paths: true,
         pattern: true,
+        pattern_flags: &["-e", "--files"],
         ends_flags: true,
     },
     Command {
@@ -266,6 +278,7 @@ pub(super) const COMMANDS: &[Command] = &[
         flags: FIND,
         paths: true,
         pattern: false,
+        pattern_flags: &[],
         ends_flags: false,
     },
     Command {
@@ -273,6 +286,7 @@ pub(super) const COMMANDS: &[Command] = &[
         flags: SORT,
         paths: true,
         pattern: false,
+        pattern_flags: &[],
         ends_flags: true,
     },
     Command {
@@ -280,6 +294,7 @@ pub(super) const COMMANDS: &[Command] = &[
         flags: GIT_STATUS,
         paths: true,
         pattern: false,
+        pattern_flags: &[],
         ends_flags: true,
     },
     Command {
@@ -287,6 +302,7 @@ pub(super) const COMMANDS: &[Command] = &[
         flags: GIT_DIFF,
         paths: true,
         pattern: false,
+        pattern_flags: &[],
         ends_flags: true,
     },
     Command {
@@ -294,6 +310,7 @@ pub(super) const COMMANDS: &[Command] = &[
         flags: GIT_LOG,
         paths: true,
         pattern: false,
+        pattern_flags: &[],
         ends_flags: true,
     },
     Command {
@@ -301,6 +318,7 @@ pub(super) const COMMANDS: &[Command] = &[
         flags: GIT_SHOW,
         paths: true,
         pattern: false,
+        pattern_flags: &[],
         ends_flags: true,
     },
 ];

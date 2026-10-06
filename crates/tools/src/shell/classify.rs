@@ -131,29 +131,37 @@ fn part_outcome(part: &Part, workdir: &Path) -> Outcome {
     let Some(entry) = lookup(first, &mut words) else {
         return Outcome::Executes;
     };
-    let mut paths = Vec::new();
+    let mut operands = Vec::new();
     let mut ended = false;
-    let mut saw_operand = false;
+    let mut pattern_given = false;
     while let Some(word) = words.next() {
         match word_at(word, ended, entry.ends_flags) {
-            WordAt::Operand(cooked) => {
-                if entry.paths {
-                    let Some(path) = resolve(workdir, &cooked) else {
-                        return Outcome::Executes;
-                    };
-                    paths.push(path);
-                }
-                saw_operand = true;
-            }
+            WordAt::Operand(cooked) => operands.push(cooked),
             WordAt::EndFlags => ended = true,
             WordAt::Flag => {
                 if accept_flag(entry, &mut words, &word.cooked).is_none() {
                     return Outcome::Executes;
                 }
+                pattern_given |= entry.pattern_flags.contains(&word.cooked.as_str());
             }
         }
     }
-    if entry.paths && !saw_operand {
+    if !entry.paths {
+        return Outcome::Reads(Vec::new());
+    }
+    // `grep` and `rg` read the first operand as the pattern unless a flag
+    // such as `-e` gives it, wherever that flag stands.
+    if entry.pattern && !pattern_given && !operands.is_empty() {
+        operands.remove(0);
+    }
+    let mut paths = Vec::new();
+    for operand in &operands {
+        let Some(path) = resolve(workdir, operand) else {
+            return Outcome::Executes;
+        };
+        paths.push(path);
+    }
+    if paths.is_empty() {
         let Some(path) = workdir.to_str().map(str::to_owned) else {
             return Outcome::Executes;
         };
