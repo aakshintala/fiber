@@ -110,6 +110,7 @@ impl Tool for WebFetch {
                 "additionalProperties": false
             }),
             deferred: false,
+            hosted: None,
         }
     }
 
