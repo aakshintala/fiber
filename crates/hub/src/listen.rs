@@ -23,7 +23,7 @@ const SOCKET_PATH_MAX: usize = if cfg!(target_os = "macos") { 103 } else { 107 }
 pub(crate) struct Held {
     _lock: File,
     pub(crate) listener: UnixListener,
-    socket: PathBuf,
+    pub(crate) socket: PathBuf,
 }
 
 impl Held {

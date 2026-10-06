@@ -12,10 +12,11 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
+use std::time::{Duration, Instant};
 
-use contract::clock::Clock;
+use contract::clock::{Clock, Wake};
 use contract::{CommandId, ErrorCode, HubLine, SCHEMA_VERSION};
 use serde_json::{Map, Value};
 
@@ -37,6 +38,15 @@ pub(crate) struct Hub {
     pub(crate) diag: Diag,
     clients: AtomicUsize,
     next_client: AtomicU64,
+    /// Every connection the idle wait counts, and its shutdown handle.
+    conns: Mutex<Vec<(u64, UnixStream)>>,
+    /// Bumped on every arrival and departure: the idle wait exits only
+    /// when no client has been connected for the whole `idle_exit`.
+    activity: AtomicU64,
+    /// Woken on every clock move and every arrival and departure.
+    tick: Arc<Tick>,
+    /// The clock's subscriber: kept alive so advances wake the idle wait.
+    _wake: Arc<dyn Wake>,
 }
 
 impl Hub {
@@ -48,6 +58,10 @@ impl Hub {
         starter: Arc<dyn Starter>,
         clock: Arc<dyn Clock>,
     ) -> Self {
+        let tick = Arc::new(Tick::default());
+        let wake = Arc::clone(&tick);
+        let wake: Arc<dyn Wake> = wake;
+        clock.subscribe(Arc::downgrade(&wake));
         Self {
             home: home.to_path_buf(),
             fiber_version: fiber_version.to_owned(),
@@ -56,7 +70,86 @@ impl Hub {
             diag: Diag::open(home, clock),
             clients: AtomicUsize::new(0),
             next_client: AtomicU64::new(0),
+            conns: Mutex::new(Vec::new()),
+            activity: AtomicU64::new(0),
+            tick,
+            _wake: wake,
         }
+    }
+
+    /// The open client connections, this connection's asker included.
+    pub(crate) fn clients(&self) -> usize {
+        self.clients.load(Ordering::SeqCst)
+    }
+
+    /// Every arrival and departure, in order.
+    pub(crate) fn activity(&self) -> u64 {
+        self.activity.load(Ordering::SeqCst)
+    }
+
+    /// Parks until `until` on `clock`, woken early by client arrivals and
+    /// departures and by clock moves.
+    pub(crate) fn park_until(&self, clock: &dyn Clock, until: Instant) {
+        // Taken before the clock is read and held into the wait: an
+        // arrival or departure that lands in between blocks on it instead
+        // of waking nobody.
+        let guard = lock(&self.tick.held);
+        if clock.now() >= until {
+            return;
+        }
+        let mut slot = Some(guard);
+        clock.wait_until(Some(until), &mut |bound| {
+            let Some(guard) = slot.take() else {
+                return;
+            };
+            slot = Some(match bound {
+                // The real clock never moves on its own: bound each park
+                // so a signal is noticed within `POLL`.
+                Some(limit) => {
+                    self.tick
+                        .moved
+                        .wait_timeout(guard, limit.min(POLL))
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .0
+                }
+                None => self
+                    .tick
+                    .moved
+                    .wait(guard)
+                    .unwrap_or_else(PoisonError::into_inner),
+            });
+        });
+    }
+
+    /// Shuts down every client connection: each session sees its clients
+    /// leave. Sessions are untouched.
+    pub(crate) fn shutdown_clients(&self) {
+        let conns = lock(&self.conns);
+        for (_, stream) in conns.iter() {
+            match stream.shutdown(Shutdown::Both) {
+                Ok(()) | Err(_) => {}
+            }
+        }
+    }
+}
+
+/// How often the idle wait re-checks signals on the real clock. The fake
+/// clock parks until woken, unaffected.
+const POLL: Duration = Duration::from_millis(100);
+
+/// Woken on every clock move and every client arrival or departure.
+#[derive(Default)]
+pub(crate) struct Tick {
+    held: Mutex<()>,
+    moved: Condvar,
+}
+
+impl Wake for Tick {
+    fn wake(&self) {
+        // Taken before the notify, so a waiter that has read the clock
+        // and not yet parked cannot miss it.
+        let _held = lock(&self.held);
+        self.moved.notify_all();
     }
 }
 /// One relay: the session connection, and the writer the next command for
@@ -74,6 +167,11 @@ struct Relay {
 pub(crate) fn serve_connection(stream: UnixStream, hub: Arc<Hub>) {
     let n = hub.next_client.fetch_add(1, Ordering::SeqCst) + 1;
     hub.clients.fetch_add(1, Ordering::SeqCst);
+    hub.activity.fetch_add(1, Ordering::SeqCst);
+    if let Ok(shutdown) = stream.try_clone() {
+        lock(&hub.conns).push((n, shutdown));
+    }
+    hub.tick.wake();
     hub.diag
         .info("client_connected", &format!("Client {n} connected."));
     let writer = match stream.try_clone() {
@@ -121,7 +219,14 @@ pub(crate) fn serve_connection(stream: UnixStream, hub: Arc<Hub>) {
 }
 
 fn disconnect(hub: &Hub, n: u64) {
+    let mut conns = lock(&hub.conns);
+    if let Some(at) = conns.iter().position(|(id, _)| *id == n) {
+        conns.remove(at);
+    }
+    drop(conns);
     hub.clients.fetch_sub(1, Ordering::SeqCst);
+    hub.activity.fetch_add(1, Ordering::SeqCst);
+    hub.tick.wake();
     hub.diag
         .info("client_disconnected", &format!("Client {n} disconnected."));
 }

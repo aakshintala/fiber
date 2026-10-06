@@ -11,12 +11,15 @@ mod connection;
 mod diag;
 #[cfg(test)]
 pub(crate) mod fake;
+mod idle;
 mod listen;
 mod start;
 
 use std::io;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::AtomicI32;
+#[cfg(not(test))]
 use std::thread;
 use std::time::Duration;
 
@@ -53,7 +56,7 @@ pub trait Started: Send {
 /// process with 128 plus the signal, as `doors::signal_code` does.
 pub fn serve(
     home: &Path,
-    _idle_exit: Duration,
+    idle_exit: Duration,
     fiber_version: &str,
     starter: Arc<dyn Starter>,
     clock: Arc<dyn Clock>,
@@ -63,20 +66,38 @@ pub fn serve(
         Ok(None) => return 0,
         Err(_) => return 1,
     };
-    // debt: the idle wait arrives with the idle handling; until then the
-    // accept loop blocks. Ceiling: the idle handling lands.
     let hub = Arc::new(Hub::new(home, fiber_version, starter, clock));
     hub.diag.info("hub_started", "The hub started.");
-    for stream in held.listener.incoming().flatten() {
-        let hub = Arc::clone(&hub);
-        let spawned = thread::Builder::new()
-            .name("hub-conn".to_owned())
-            .spawn(move || connection::serve_connection(stream, hub));
-        if spawned.is_err() {
-            continue;
-        }
-    }
-    hub.diag.info("hub_stopped", "The hub stopped: idle.");
+    let got = Arc::new(AtomicI32::new(0));
+    arm(&got);
+    let exit = idle::run(&hub, &held, idle_exit, &hub.clock, &got);
     held.stop();
-    0
+    exit.code()
 }
+
+/// Arms SIGTERM, SIGINT and SIGHUP to end the hub through `got`. Tests
+/// simulate signals through the flag, so nothing process-wide is installed
+/// there.
+#[cfg(not(test))]
+fn arm(got: &Arc<AtomicI32>) {
+    use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
+    use std::sync::atomic::Ordering;
+
+    let Ok(mut signals) = signal_hook::iterator::Signals::new([SIGTERM, SIGINT, SIGHUP]) else {
+        return;
+    };
+    let got = Arc::clone(got);
+    // A thread that ends with the process: the hub never disarms it.
+    let spawned = thread::Builder::new()
+        .name("hub-signals".to_owned())
+        .spawn(move || {
+            for signal in signals.forever() {
+                got.store(signal, Ordering::SeqCst);
+            }
+        });
+    if spawned.is_err() {}
+}
+
+/// No process-wide handlers under test: signals arrive through the flag.
+#[cfg(test)]
+fn arm(_got: &Arc<AtomicI32>) {}
