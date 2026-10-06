@@ -366,3 +366,15 @@ fn a_literal_block_keeps_trailing_spaces_inside_the_description() {
 fn a_whitespace_only_line_in_a_folded_block_is_a_line_break() {
     assert_eq!(description("description: >\n  a\n     \n  b"), "a\nb");
 }
+
+#[test]
+fn a_map_after_a_comment_or_blank_line_is_still_a_map() {
+    assert_eq!(
+        invalid(&header("name: n\ndescription:\n  # note\n  a: b")),
+        Invalid::DoesNotParse
+    );
+    assert_eq!(
+        invalid(&header("name: n\ndescription:\n\n  - x")),
+        Invalid::DoesNotParse
+    );
+}
