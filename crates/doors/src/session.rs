@@ -164,21 +164,30 @@ impl Session {
         cancel: Arc<dyn Fn() -> bool + Send + Sync>,
         run: impl FnOnce(Receiver<Delivery>) -> Result<(), Failure>,
     ) -> Result<(), Failure> {
-        let message = Message {
-            content: vec![ContentPart::Text { text: prompt }],
-            sender: CommandSender {
-                origin: Origin::Driver,
-                command_id: Some(CommandId(mint("c_"))),
-            },
-        };
         self.run(
             vec![
-                Delivery::Prompt(message, ignore()),
+                Delivery::Prompt(prompt_message(prompt), ignore()),
                 Delivery::Close(ignore()),
             ],
             cancel,
             run,
         )
+    }
+
+    /// Runs the internal session command: queues `prompt` when one was
+    /// supplied and serves clients until idle exit or `close`. With no
+    /// prompt it delivers nothing until a client sends one.
+    pub fn serve(
+        &self,
+        prompt: Option<String>,
+        cancel: Arc<dyn Fn() -> bool + Send + Sync>,
+        run: impl FnOnce(Receiver<Delivery>) -> Result<(), Failure>,
+    ) -> Result<(), Failure> {
+        let first = prompt
+            .map(|prompt| Delivery::Prompt(prompt_message(prompt), ignore()))
+            .into_iter()
+            .collect();
+        self.run(first, cancel, run)
     }
 
     /// The tool a driver `shell` runs (`docs/invocation.md`, "Shell").
@@ -713,6 +722,18 @@ fn remove_socket(socket: &Path) {
 /// waiting on one.
 fn ignore() -> Ack {
     Ack(Box::new(|_| {}))
+}
+
+/// The first prompt as a driver message: `ask` and `serve` build it the
+/// same way, and differ only in what follows it.
+fn prompt_message(prompt: String) -> Message {
+    Message {
+        content: vec![ContentPart::Text { text: prompt }],
+        sender: CommandSender {
+            origin: Origin::Driver,
+            command_id: Some(CommandId(mint("c_"))),
+        },
+    }
 }
 
 fn io_failed(path: &Path, e: &io::Error) -> Failure {

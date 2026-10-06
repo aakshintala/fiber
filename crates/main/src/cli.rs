@@ -55,7 +55,9 @@ pub(crate) enum Invocation {
     Print(clap::Error),
     /// A command, or no arguments.
     Run(Option<Commands>),
-    /// A usage error. `ask` is whether argv's first argument is `ask`.
+    /// A usage error. `ask` is whether the invocation runs a session:
+    /// `ask`, or the internal `session` command. Both fail before any
+    /// session through the same pre-session exit.
     Usage {
         /// Whether the invocation's first argument is `ask`.
         ask: bool,
@@ -135,6 +137,9 @@ pub(crate) enum Commands {
         )]
         args: Vec<OsString>,
     },
+    /// The internal session command: hidden and free to change.
+    #[command(hide = true)]
+    Session(SessionArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -222,6 +227,25 @@ pub(crate) struct ModelsArgs {
 }
 
 #[derive(Debug, clap::Args)]
+pub(crate) struct SessionArgs {
+    /// The session's id, minted by whoever starts it.
+    #[arg(long, value_name = "session_id", value_parser = parse_session_id)]
+    pub(crate) id: String,
+
+    /// The workspace the session runs in.
+    #[arg(long, value_name = "path")]
+    pub(crate) workspace: PathBuf,
+
+    /// The model for this run, as a person types it.
+    #[arg(long, value_name = "model")]
+    pub(crate) model: Option<String>,
+
+    /// The first prompt. With none the session waits for a client.
+    #[arg(long, value_name = "text")]
+    pub(crate) prompt: Option<String>,
+}
+
+#[derive(Debug, clap::Args)]
 pub(crate) struct AskArgs {
     /// The model for this run, as a person types it.
     #[arg(long, value_name = "model")]
@@ -240,6 +264,22 @@ pub(crate) struct AskArgs {
 /// Parses the process arguments.
 pub(crate) fn parse() -> Invocation {
     parse_from(std::env::args_os())
+}
+
+/// A session id: `s_` followed by exactly 16 lowercase hex digits, the
+/// shape `doors::mint("s_")` makes. Anything else cannot name a session
+/// directory, so it is a usage error before anything is read or created.
+fn parse_session_id(text: &str) -> Result<String, String> {
+    let hex = text.strip_prefix("s_").unwrap_or("");
+    let valid = hex.len() == 16
+        && hex
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'));
+    if valid {
+        Ok(text.to_owned())
+    } else {
+        Err("a session id is `s_` followed by 16 lowercase hex digits".to_owned())
+    }
 }
 
 /// `fiber <version>` or `fiber <version> (<commit>)`, with the trailing
@@ -268,7 +308,11 @@ fn compiled_version() -> &'static str {
 
 fn parse_from(args: impl IntoIterator<Item = impl Into<OsString>>) -> Invocation {
     let args: Vec<OsString> = args.into_iter().map(Into::into).collect();
-    let ask = args.get(1).is_some_and(|arg| arg == "ask");
+    // A usage error for `ask` or the internal session command fails
+    // before any session, through the pre-session exit both share.
+    let ask = args
+        .get(1)
+        .is_some_and(|arg| arg == "ask" || arg == "session");
     match command().try_get_matches_from(&args) {
         Ok(matches) => match Cli::from_arg_matches(&matches) {
             // Clap consumes the argv delimiter `--`, so the raw slice

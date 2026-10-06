@@ -132,6 +132,7 @@ fn run() -> i32 {
                 Err(sentence) => ask_failed(usage(sentence)),
             }
         }
+        cli::Invocation::Run(Some(cli::Commands::Session(args))) => session_command(args, clock),
         cli::Invocation::Run(Some(cli::Commands::Sessions(cmd))) => match cmd {
             cli::SessionsCommands::Export { id, path } => ::cli::export(&id, path.as_deref()),
         },
@@ -418,11 +419,60 @@ fn ask_new(
     clock: Arc<dyn contract::clock::Clock>,
     signals: &doors::Signals,
 ) -> i32 {
+    new_session(
+        SessionId(doors::mint("s_")),
+        model,
+        Some(prompt),
+        true,
+        clock,
+        signals,
+    )
+}
+
+/// The internal session command: one session process bound at
+/// `run/<session_id>` (`docs/invocation.md`, "Processes"). The workspace
+/// is entered before signals are installed or any thread starts, so the
+/// shared path reads it as the current directory exactly as `ask` does.
+/// Stdin is never read.
+fn session_command(args: cli::SessionArgs, clock: Arc<dyn contract::clock::Clock>) -> i32 {
+    if let Err(e) = std::env::set_current_dir(&args.workspace) {
+        return ask_failed(failed(
+            ErrorCode::IoFailed,
+            format!("{}: {e}", args.workspace.display()),
+        ));
+    }
+    // As `ask`: a signal while starting exits at once.
+    let signals = match doors::Signals::install(Arc::clone(&clock)) {
+        Ok(signals) => signals,
+        Err(e) => return ask_failed(failed(ErrorCode::IoFailed, format!("signals: {e}"))),
+    };
+    new_session(
+        SessionId(args.id),
+        args.model,
+        args.prompt,
+        false,
+        clock,
+        &signals,
+    )
+}
+
+/// One function builds and runs every new session (`docs/invocation.md`,
+/// "Processes"): `fiber ask` and the internal session command differ
+/// only in the id's source (minted vs `--id`), the workspace (the current
+/// directory on entry, applied by chdir before the call) and the first
+/// deliveries (prompt plus `close` vs an optional prompt).
+fn new_session(
+    id: SessionId,
+    model: Option<String>,
+    prompt: Option<String>,
+    one_turn: bool,
+    clock: Arc<dyn contract::clock::Clock>,
+    signals: &doors::Signals,
+) -> i32 {
     let mut parts = match parts_with(model, None, None, Arc::clone(&clock)) {
         Ok(parts) => parts,
         Err(e) => return ask_failed(e),
     };
-    let id = SessionId(doors::mint("s_"));
     crash::attach(&id);
     let dir = parts.sessions.join(&id.0);
     // The session directory's log: the opening message's environment
@@ -493,34 +543,42 @@ fn ask_new(
         session.close(log);
         return code;
     }
-    let code = run_turn(&session, &log, &dir, prompt, cancel, |inbox, cancel| {
-        finish(
-            // `Loop::start` writes `session_started`, which `fiber_started`
-            // follows (`docs/events.md`).
-            Loop::start(
-                Arc::clone(&log),
-                provider,
-                model,
-                prompt_inputs,
-                inbox,
-                tools,
-                permissions,
+    let code = run_turn(
+        &session,
+        &log,
+        &dir,
+        prompt,
+        one_turn,
+        cancel,
+        |inbox, cancel| {
+            finish(
+                // `Loop::start` writes `session_started`, which `fiber_started`
+                // follows (`docs/events.md`).
+                Loop::start(
+                    Arc::clone(&log),
+                    provider,
+                    model,
+                    prompt_inputs,
+                    inbox,
+                    tools,
+                    permissions,
+                )
+                .and_then(|looped| {
+                    r#loop::fiber_started(&log, env!("CARGO_PKG_VERSION"), false)?;
+                    session_extensions::written(&log, &extensions)?;
+                    r#loop::mcp_servers_started(&log, session_servers.failed, mcp.notices)?;
+                    let looped = session_extensions::hooked(looped.jobs(jobs), &extensions);
+                    Ok(looped.handoff(handoff).on_handoff(forget))
+                }),
+                budget,
+                idle,
+                reviewer,
+                limits,
+                retry,
+                cancel,
             )
-            .and_then(|looped| {
-                r#loop::fiber_started(&log, env!("CARGO_PKG_VERSION"), false)?;
-                session_extensions::written(&log, &extensions)?;
-                r#loop::mcp_servers_started(&log, session_servers.failed, mcp.notices)?;
-                let looped = session_extensions::hooked(looped.jobs(jobs), &extensions);
-                Ok(looped.handoff(handoff).on_handoff(forget))
-            }),
-            budget,
-            idle,
-            reviewer,
-            limits,
-            retry,
-            cancel,
-        )
-    });
+        },
+    );
     session_servers.servers.stop();
     session.close(log);
     code
@@ -573,22 +631,33 @@ fn finish(
 
 /// Runs one turn of the session `session` writes to `log`, once its log,
 /// model and prompt are known, shared by new and resumed sessions: sends
-/// the prompt, closes, and writes `fiber_exited` for what ran. One cancel
-/// signal, `cancel`, serves the door and the loop, so a `cancel` ends the
-/// turn the prompt starts; a shutdown's code on it is the exit code.
+/// the first prompt, closes when `one_turn`, and writes `fiber_exited` for
+/// what ran. One cancel signal, `cancel`, serves the door and the loop, so
+/// a `cancel` ends the turn the prompt starts; a shutdown's code on it is
+/// the exit code.
 fn run_turn(
     session: &Session,
     log: &Arc<Log>,
     dir: &Path,
-    prompt: String,
+    prompt: Option<String>,
+    one_turn: bool,
     cancel: Arc<r#loop::TurnCancel>,
     run: impl FnOnce(Receiver<Delivery>, Arc<r#loop::TurnCancel>) -> Result<(), Failure>,
 ) -> i32 {
     let door = Arc::clone(&cancel);
     let turn = Arc::clone(&cancel);
-    let ran = session.ask(prompt, Arc::new(move || door.cancel()), |inbox| {
-        run(inbox, turn)
-    });
+    let ran = match prompt {
+        // `fiber ask` runs one turn: the prompt, then `close`. It always
+        // supplies a prompt; without one it would wait for a client.
+        Some(prompt) if one_turn => session.ask(prompt, Arc::new(move || door.cancel()), |inbox| {
+            run(inbox, turn)
+        }),
+        // The session command queues its prompt when one was supplied and
+        // serves clients until idle exit or `close`.
+        prompt => session.serve(prompt, Arc::new(move || door.cancel()), |inbox| {
+            run(inbox, turn)
+        }),
+    };
     // `fiber_exited` is the last line: nothing on the door side follows it.
     session.quiesce();
     // A `fiber_exited` that cannot be written leaves a log that reads as a

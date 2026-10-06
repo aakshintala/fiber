@@ -1415,3 +1415,46 @@ fn after_quiesce_a_client_leaving_writes_no_clients_line() {
     drop(late);
     close_within(opened.session, opened.log);
 }
+
+#[test]
+fn serve_with_a_prompt_delivers_exactly_that_prompt_and_no_close() {
+    reset();
+    let opened = open();
+    opened
+        .session
+        .serve(Some("hi".to_owned()), Arc::new(|| false), |inbox| {
+            let delivery = inbox.recv_timeout(DEADLINE).expect("the prompt arrives");
+            let Delivery::Prompt(message, _) = delivery else {
+                panic!("the first delivery is the prompt, got {delivery:?}");
+            };
+            assert_eq!(message.content.len(), 1);
+            let ContentPart::Text { text } = &message.content[0] else {
+                panic!("the prompt is text");
+            };
+            assert_eq!(text, "hi");
+            assert!(
+                matches!(inbox.try_recv(), Err(mpsc::TryRecvError::Empty)),
+                "serve queues no close after its prompt"
+            );
+            Ok(())
+        })
+        .unwrap();
+    close_within(opened.session, opened.log);
+}
+
+#[test]
+fn serve_without_a_prompt_delivers_nothing_until_a_client_sends() {
+    reset();
+    let opened = open();
+    opened
+        .session
+        .serve(None, Arc::new(|| false), |inbox| {
+            assert!(
+                matches!(inbox.try_recv(), Err(mpsc::TryRecvError::Empty)),
+                "serve with no prompt delivers nothing on its own"
+            );
+            Ok(())
+        })
+        .unwrap();
+    close_within(opened.session, opened.log);
+}
