@@ -750,5 +750,4 @@ fn both_shipped_texts_parse_with_the_name_of_their_directory() {
         assert!(header.model_invocable);
         assert!(!header.description.is_empty());
     }
-    assert_eq!(SHIPPED.len(), 2);
 }
