@@ -2149,10 +2149,11 @@ fn openrouter_sends_the_cache_key_and_anthropic_markers_for_a_claude_model() {
     assert_eq!(system.last().unwrap()["cache_control"], hour);
     let last = body["messages"].as_array().unwrap();
     assert_eq!(last.last().unwrap()["content"][0]["cache_control"], hour);
-    // A 5-minute request's markers carry no `ttl`: the protocol tests
-    // pin that (`a_dropped_input_after_a_tool_result...` sends one at
-    // the default 5 minutes), because the CLI takes no lifetime and
-    // every binary run is 1 hour.
+    // A 5-minute request's markers carry no `ttl`: the shape is pinned
+    // in `crates/provider/tests/completions.rs`
+    // (`a_dropped_input_after_a_tool_result_does_not_break_the_previous_end`
+    // sends one at the default 5 minutes), because the CLI takes no
+    // lifetime and every binary run is 1 hour (see #840).
 }
 
 #[test]

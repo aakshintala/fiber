@@ -1651,13 +1651,6 @@ fn costed_stream(costs: &[Value]) -> Vec<u8> {
 }
 
 #[test]
-fn the_last_usage_chunks_cost_is_the_replys_cost() {
-    let bytes = costed_stream(&[usage_cost(json!(0.000123))]);
-    let (reply, _) = decoded(&bytes);
-    assert_eq!(reply.unwrap().cost, Some(0.000123));
-}
-
-#[test]
 fn usage_without_a_cost_carries_no_inline_cost() {
     let bytes = costed_stream(&[usage(15, 14, 9)]);
     let (reply, _) = decoded(&bytes);

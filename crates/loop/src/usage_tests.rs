@@ -260,14 +260,6 @@ fn priced() -> Cost {
 }
 
 #[test]
-fn an_inline_cost_is_recorded_as_it_came() {
-    assert_eq!(
-        call_cost(Some(0.000123), None, &tokens(1_000, 0, &[], 500)),
-        Some(0.000123)
-    );
-}
-
-#[test]
 fn without_an_inline_cost_the_declared_prices_apply() {
     let prices = priced();
     assert_eq!(

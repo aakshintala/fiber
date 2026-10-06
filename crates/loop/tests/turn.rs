@@ -1309,6 +1309,23 @@ fn a_reply_carrying_an_inline_cost_records_it_instead_of_the_declared_price() {
     session.inbox.send(delivery("hi")).unwrap();
     session.turn();
     let lines = session.lines();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     let usages: Vec<_> = lines
         .iter()
         .filter(|line| line.kind == "usage_recorded")

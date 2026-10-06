@@ -62,10 +62,7 @@ pub(crate) fn call_cost(
     prices: Option<&Cost>,
     tokens: &Tokens,
 ) -> Option<f64> {
-    if let Some(inline) = inline {
-        return Some(inline);
-    }
-    prices.map(|prices| price(prices, tokens))
+    inline.or_else(|| prices.map(|prices| price(prices, tokens)))
 }
 
 /// The latest `usage_recorded` per `generation_id`. A later line with an id
