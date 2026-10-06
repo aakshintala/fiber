@@ -602,10 +602,43 @@ fn sigterm_while_an_mcp_server_starts_kills_it_and_exits_143_writing_nothing() {
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     let ready = fakes::children::Ready::new(setup.root.path());
+    // A FIFO only the server holds open for writing: its read end sees
+    // end-of-file as soon as the server dies, while a pid probe still
+    // answers during the short window the kernel needs to tear it down.
+    // The blocking open and read run on a thread, and the wait below
+    // carries the deadline, so nothing polls and no clock is read.
+    let death = setup.root.path().join("death.fifo");
+    assert!(
+        Command::new("mkfifo")
+            .arg(&death)
+            .status()
+            .unwrap()
+            .success(),
+        "mkfifo {} failed",
+        death.display()
+    );
     // A server that writes its pid, then never answers `initialize` and
     // outlives the end of its input. Its startup deadline is far past the
-    // shutdown's 5 s bound.
-    let script = format!("echo $$ > '{}'\nexec sleep 3600\n", ready.path().display());
+    // shutdown's 5 s bound. It holds the death FIFO open across its exec
+    // of `sleep`, so the read end above sees end-of-file when it dies.
+    // Fiber never opens that FIFO (`crates/mcp/src/server.rs` pipes only
+    // stdin and stdout): only this server holds its write end.
+    let script = format!(
+        "exec 3>'{}'\necho $$ > '{}'\nexec sleep 3600\n",
+        death.display(),
+        ready.path().display()
+    );
+    let (dead, died) = mpsc::channel();
+    thread::spawn(move || {
+        if let Ok(mut fifo) = fs::File::open(&death) {
+            let mut sink = Vec::new();
+            if fifo.read_to_end(&mut sink).is_ok() {
+                match dead.send(()) {
+                    Ok(()) | Err(_) => {}
+                }
+            }
+        }
+    });
     write(
         &setup.home().join("config.json"),
         &json!({"model": "fake/m", "mcp": {"servers": {"slow": {
@@ -616,8 +649,12 @@ fn sigterm_while_an_mcp_server_starts_kills_it_and_exits_143_writing_nothing() {
     );
     let fiber = setup.start(&["ask", "hi"], Stdio::null());
     // The server runs, so the signals were armed before it started.
-    let pid = ready.wait(DEADLINE)[0];
+    let _pid = ready.wait(DEADLINE)[0];
     fiber.signal("TERM");
+    // Before `end`, whose group check would otherwise catch a server
+    // left alive first: this wait is the one that pins the kill.
+    died.recv_timeout(DEADLINE)
+        .expect("the MCP server outlived fiber");
     let ended = fiber.end();
 
     assert_eq!(ended.code, Some(143), "stderr: {}", ended.stderr);
@@ -626,10 +663,6 @@ fn sigterm_while_an_mcp_server_starts_kills_it_and_exits_143_writing_nothing() {
     assert!(
         setup.session_dirs().is_empty(),
         "a session directory was created"
-    );
-    assert!(
-        !fakes::kill_pid(pid, "0").unwrap(),
-        "the MCP server outlived fiber"
     );
     assert!(server.requests().is_empty());
 }
