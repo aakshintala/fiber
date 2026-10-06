@@ -793,6 +793,7 @@ Usage: fiber <command> [arguments]
 Sessions:
   ask [--model <model>] [--resume <id>] [<prompt>] [-]  Run one session of one turn; its events go to stdout
   sessions export <id> [<path>]                         Write the session's log and its artifacts to <path>
+  models [<search>] [--json]                            List the models the installed providers serve
 
 Fiber itself:
   login [<provider>] [--as <label>]         Store a provider's key

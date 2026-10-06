@@ -17,6 +17,7 @@ Usage: fiber <command> [arguments]
 Sessions:
   ask [--model <model>] [--resume <id>] [<prompt>] [-]  Run one session of one turn; its events go to stdout
   sessions export <id> [<path>]                         Write the session's log and its artifacts to <path>
+  models [<search>] [--json]                            List the models the installed providers serve
 
 Fiber itself:
   login [<provider>] [--as <label>]         Store a provider's key
@@ -82,6 +83,8 @@ pub(crate) enum Commands {
     /// Write a session's log and its artifacts to a directory
     #[command(subcommand, arg_required_else_help = false)]
     Sessions(SessionsCommands),
+    /// List the models the installed providers serve
+    Models(ModelsArgs),
     /// Manage extensions
     #[command(subcommand, arg_required_else_help = false)]
     Extension(ExtensionCommands),
@@ -205,6 +208,17 @@ pub(crate) struct LogoutArgs {
     /// Delete every stored label.
     #[arg(long)]
     pub(crate) all: bool,
+}
+
+#[derive(Debug, clap::Args)]
+pub(crate) struct ModelsArgs {
+    /// Only list models whose `provider/model` holds this text.
+    #[arg(value_name = "search")]
+    pub(crate) search: Option<String>,
+
+    /// Print one JSON object per model.
+    #[arg(long)]
+    pub(crate) json: bool,
 }
 
 #[derive(Debug, clap::Args)]

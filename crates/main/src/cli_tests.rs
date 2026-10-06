@@ -290,6 +290,51 @@ fn the_menu_lists_sessions_export_under_sessions() {
 }
 
 #[test]
+fn models_takes_an_optional_search_and_json() {
+    let Invocation::Run(Some(Commands::Models(models))) = parse_from(["fiber", "models"]) else {
+        panic!("bare models");
+    };
+    assert_eq!(models.search, None);
+    assert!(!models.json);
+    let Invocation::Run(Some(Commands::Models(models))) =
+        parse_from(["fiber", "models", "acme", "--json"])
+    else {
+        panic!("models with a search and --json");
+    };
+    assert_eq!(models.search.as_deref(), Some("acme"));
+    assert!(models.json);
+    assert!(
+        sentence(&["fiber", "models", "a", "b"]).starts_with("Unexpected argument 'b'"),
+        "{}",
+        sentence(&["fiber", "models", "a", "b"])
+    );
+}
+
+#[test]
+fn the_menu_lists_models_under_sessions() {
+    let menu = menu();
+    let sessions = menu
+        .split("\n\n")
+        .find(|group| group.starts_with("Sessions:"))
+        .unwrap();
+    assert!(
+        sessions.lines().any(|l|
+            l == "  models [<search>] [--json]                            List the models the installed providers serve"),
+        "{sessions}"
+    );
+    let help = super::render_help(Some("models")).unwrap();
+    assert!(
+        help.contains("List the models the installed providers serve"),
+        "{help}"
+    );
+    assert!(
+        help.lines()
+            .any(|line| line.starts_with("Usage: fiber models")),
+        "{help}"
+    );
+}
+
+#[test]
 fn the_menu_lists_login_and_logout_under_fiber_itself() {
     let menu = menu();
     let itself = menu
@@ -550,6 +595,7 @@ fn the_search_subcommands_stay_hidden_but_parse_everything_after() {
         [
             "ask",
             "sessions",
+            "models",
             "extension",
             "approve",
             "login",
@@ -611,6 +657,7 @@ fn the_image_subcommand_is_hidden_and_passes_its_arguments_through() {
         [
             "ask",
             "sessions",
+            "models",
             "extension",
             "approve",
             "login",

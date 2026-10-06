@@ -146,6 +146,11 @@ impl Providers {
                 continue;
             }
             for mut data in config::read_providers(&dir)? {
+                // The cached `models()` list stands in for the data file's
+                // until the refresh returns; a copy that is no list is no copy.
+                if let Some(cached) = config::read_model_cache(home, &data.name)? {
+                    data.models = cached;
+                }
                 notices.extend(leave_out_invalid(
                     &data.name,
                     &manifest.name,

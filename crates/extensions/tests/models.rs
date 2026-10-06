@@ -8,7 +8,7 @@
 mod common;
 
 use common::{Setup, install, manifest, provider, write};
-use config::{Config, ModelData, ProjectKey, Sources};
+use config::{Config, ModelData, ProjectKey, Sources, write_model_cache};
 use contract::ErrorCode;
 use extensions::{Error, Providers, leave_out_invalid};
 use serde_json::json;
@@ -437,6 +437,70 @@ fn a_model_with_two_reserved_fields_and_an_unread_search_gets_two_notices() {
             .any(|m| m.contains("acme/bad") && m.contains("web_search_20260209")),
         "{messages:?}"
     );
+}
+
+#[test]
+fn a_cached_list_replaces_the_data_files_models() {
+    let setup = Setup::new();
+    let providers = installed(&setup, &[("acme", provider("acme", &["a"]))]);
+    assert!(providers.resolve("acme/a").is_ok());
+    write_model_cache(
+        &setup.home(),
+        "acme",
+        &json!([{"id": "b", "protocol": "openai-responses",
+                 "base_url": "http://127.0.0.1:1/v1"}]),
+    )
+    .unwrap();
+    let (providers, notices) = Providers::load(&setup.home()).unwrap();
+    assert!(notices.is_empty(), "{notices:?}");
+    assert!(providers.resolve("acme/b").is_ok());
+    assert!(matches!(
+        providers.resolve("acme/a").unwrap_err(),
+        Error::UnknownModel { .. }
+    ));
+}
+
+#[test]
+fn without_a_cache_the_data_files_models_stand() {
+    let setup = Setup::new();
+    let providers = installed(&setup, &[("acme", provider("acme", &["a"]))]);
+    assert!(providers.resolve("acme/a").is_ok());
+    assert!(matches!(
+        providers.resolve("acme/b").unwrap_err(),
+        Error::UnknownModel { .. }
+    ));
+}
+
+#[test]
+fn a_cache_that_is_not_a_list_leaves_the_data_files_models() {
+    let setup = Setup::new();
+    installed(&setup, &[("acme", provider("acme", &["a"]))]);
+    write_model_cache(&setup.home(), "acme", &json!({})).unwrap();
+    let (providers, notices) = Providers::load(&setup.home()).unwrap();
+    assert!(notices.is_empty(), "{notices:?}");
+    assert!(providers.resolve("acme/a").is_ok());
+}
+
+#[test]
+fn a_cached_invalid_model_is_left_out_with_a_notice() {
+    let setup = Setup::new();
+    installed(&setup, &[("acme", provider("acme", &["a"]))]);
+    write_model_cache(
+        &setup.home(),
+        "acme",
+        &json!([{"id": "bad", "protocol": "openai-responses",
+                 "base_url": "http://127.0.0.1:1/v1",
+                 "extra_body": { "tools": 1 }}]),
+    )
+    .unwrap();
+    let (providers, notices) = Providers::load(&setup.home()).unwrap();
+    assert!(matches!(
+        providers.resolve("acme/bad").unwrap_err(),
+        Error::UnknownModel { .. }
+    ));
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0].code, ErrorCode::ModelInvalid);
+    assert_eq!(notices[0].extension.as_deref(), Some("acme"));
 }
 
 #[test]
