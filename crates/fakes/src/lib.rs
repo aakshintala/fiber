@@ -19,7 +19,7 @@ mod scripted_provider;
 mod temp_dir;
 mod watchdog;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub use blocking::BlockingProvider;
 pub use cancel::CancelToken;
@@ -33,6 +33,35 @@ pub use rerun::rerun;
 pub use scripted_provider::{Scripted, ScriptedProvider, reply};
 pub use temp_dir::TempDir;
 pub use watchdog::Watchdog;
+
+/// A stand-in script the kernel may exec: `dir/name` is a symlink to the
+/// checked-in trampoline, and the freshly written `body` runs through
+/// `/bin/sh` as `dir/name.sh` (`docs/testing.md`, "Waits and timeouts": a
+/// test does not execute a file it wrote in the same run). The link keeps
+/// the pid through `exec`, and a repeat call with the same `dir`/`name`
+/// rewrites the body while keeping the link.
+///
+/// # Panics
+///
+/// When the body cannot be written or the link cannot be created.
+#[allow(
+    clippy::panic,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "a test helper; a failure is the test's"
+)]
+pub fn script(dir: &Path, name: &str, body: &str) -> PathBuf {
+    let sh = dir.join(format!("{name}.sh"));
+    std::fs::write(&sh, body).unwrap_or_else(|err| panic!("writing {}: {err}", sh.display()));
+    let link = dir.join(name);
+    if std::fs::symlink_metadata(&link).is_err() {
+        let trampoline =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("script-fixture/trampoline.sh");
+        std::os::unix::fs::symlink(&trampoline, &link)
+            .unwrap_or_else(|err| panic!("linking {}: {err}", link.display()));
+    }
+    link
+}
 
 /// The fixture Lua extension's directory: `extension.json`, `init.lua` and
 /// the module it requires, one command per runtime behaviour a test exercises.
@@ -48,17 +77,4 @@ pub fn mcp_fixture() -> PathBuf {
 }
 
 #[cfg(test)]
-mod fixture_tests {
-    use super::mcp_fixture;
-
-    #[test]
-    fn the_mcp_fixture_points_at_server_sh() {
-        let path = mcp_fixture();
-        assert!(
-            path.ends_with("mcp-fixture/server.sh"),
-            "unexpected fixture path: {}",
-            path.display()
-        );
-        assert!(path.is_file(), "missing fixture: {}", path.display());
-    }
-}
+mod fixture_tests;

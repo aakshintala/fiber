@@ -4,7 +4,6 @@
 //! functions, dash among them.
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
@@ -41,17 +40,9 @@ const DEADLINE: Duration = Duration::from_secs(10);
 
 /// A stand-in search binary logging its arguments beside itself.
 fn stand_in(dir: &Path) -> std::path::PathBuf {
-    let script = dir.join("fiber");
-    fs::write(
-        &script,
-        format!(
-            "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"{}.log\"\n",
-            script.display()
-        ),
-    )
-    .unwrap();
-    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
-    script
+    let target = dir.join("fiber");
+    let body = format!("printf '%s\\n' \"$@\" >> \"{}.log\"\n", target.display());
+    fakes::script(dir, "fiber", &body)
 }
 
 /// Runs `command` under `program -c` with the real prelude, waiting under

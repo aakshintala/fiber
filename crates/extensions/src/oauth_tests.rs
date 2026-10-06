@@ -1,11 +1,9 @@
 use std::net::SocketAddr;
-use std::os::unix::fs::PermissionsExt;
 use std::sync::mpsc;
 
 use super::*;
 
-/// How long a test waits for a spawned program to report. A freshly written
-/// script can take several seconds to run the first time on macOS.
+/// How long a test waits for a spawned program to report.
 const WAIT: Duration = Duration::from_secs(15);
 
 #[test]
@@ -108,13 +106,8 @@ fn the_system_browser_starts_its_program_with_the_url() {
     let fifo = dir.path().join("seen");
     let made = Command::new("mkfifo").arg(&fifo).status().unwrap();
     assert!(made.success());
-    let script = dir.path().join("browser.sh");
-    std::fs::write(
-        &script,
-        format!("#!/bin/sh\nprintf '%s' \"$1\" > '{}'\n", fifo.display()),
-    )
-    .unwrap();
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let body = format!("printf '%s' \"$1\" > '{}'\n", fifo.display());
+    let script = fakes::script(dir.path(), "browser", &body);
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
         let mut seen = String::new();

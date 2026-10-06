@@ -65,13 +65,11 @@ fn read_is_wired_to_the_image_child() {
     std::fs::write(root.path().join("a.png"), b"\x89PNG\r\n\x1a\nrest").unwrap();
     let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
     // A child that prints the one line a stored image has.
-    let fiber = root.path().join("fiber-stub");
-    std::fs::write(
-        &fiber,
-        "#!/bin/sh\nprintf '{\"file\":\"%s.png\",\"mime_type\":\"image/png\",\"width\":1,\"height\":1}\\n' \"$4\"\n",
-    )
-    .unwrap();
-    std::fs::set_permissions(&fiber, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let fiber = fakes::script(
+        root.path(),
+        "fiber-stub",
+        "printf '{\"file\":\"%s.png\",\"mime_type\":\"image/png\",\"width\":1,\"height\":1}\\n' \"$4\"",
+    );
     let jobs = jobs::Registry::new(
         root.path().join("artifacts"),
         Arc::clone(&clock),

@@ -2,7 +2,6 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, reason = "test code")]
 
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -148,10 +147,7 @@ const DEADLINE: Duration = Duration::from_secs(10);
 
 /// A `ps` that runs `script` with `sh`.
 fn fake_ps(dir: &Path, script: &str) -> std::path::PathBuf {
-    let path = dir.join("ps");
-    std::fs::write(&path, format!("#!/bin/sh\n{script}\n")).unwrap();
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-    path
+    fakes::script(dir, "ps", script)
 }
 
 /// Lists group `pgid` with `ps` on a thread of its own, so a listing that
