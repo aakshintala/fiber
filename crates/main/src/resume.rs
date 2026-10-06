@@ -42,6 +42,9 @@ pub(crate) fn ask_resume(
         Ok(id) => id,
         Err(e) => return ask_failed(failed(e.code(), e)),
     };
+    // A resume that attaches to a live session names the crash file by the
+    // session it attaches to, as the TUI does.
+    crate::crash::attach(&id);
     let dir = sessions.join(&id.0);
     // `Log::open` takes the lock first; the lines below are read under it.
     // A held lock means a live session: attach to it instead of opening a
