@@ -101,6 +101,15 @@ stated invariants rather than a fixed expected output. For example:
 - `loop`: no turn is lost; nothing a cancelled call produces is admitted after
   the cancel; results return in request order
 
+`web_fetch`'s HTML converter carries property tests too. Generated pages mix
+nesting, broken markup, entities, scripts and huge attributes, and each is
+checked against the converter's promises (`docs/tools.md`, "HTML to
+markdown"): no visible text lost outside the dropped elements, no panic, and
+output in proportion to the input. It is also checked against about ten real
+pages under open licences, saved with their expected markdown. CI never
+writes the expected markdown: a changed conversion fails and shows the
+difference, and an accepted change appears in the pull request.
+
 Races are forced, not waited for. Tests use barriers to put competing events in
 each order that matters, such as a cancel arriving before, during and after a
 tool result.
