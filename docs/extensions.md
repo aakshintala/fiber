@@ -1100,7 +1100,7 @@ runs at session start ("Loading, and cost when nothing is loaded").
 
 A fresh install has every first-party extension: the eleven providers,
 `hooks` and `memory` (`docs/memory.md`). They arrive in the release's extensions archive, which `install.sh`
-installs beside the binary (`docs/releasing.md`), so a first run needs no
+installs into Fiber home's `extensions/` (`docs/releasing.md`), so a first run needs no
 `git` and no network beyond the download. They are ordinary extensions,
 recorded under their full names: nothing is compiled in, and
 `fiber extension remove <name>` removes any of them.

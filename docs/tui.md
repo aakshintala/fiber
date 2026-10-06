@@ -259,7 +259,8 @@ The default cards, in order:
   connection. It scrolls on its own under the mouse wheel.
 - **Jobs:** one line saying how many run, shown only while a job runs. A
   click lists them, one row each.
-- **Quota,** from its extension. Quota is not built in.
+- **Quota,** from each provider's `quota()`, as `/quota` shows it
+  (`docs/tools.md`, "Provider quota"). A provider without one shows none.
 
 The context bar is drawn against `preamble_built`'s `context_window` and
 `trigger_at`. Per-file counts come from `tool_call_completed`'s `changes`,

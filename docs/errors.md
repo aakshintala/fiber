@@ -80,6 +80,8 @@ asked for the session.
 | `model_ambiguous` | a bare model id matches models of two or more installed providers; the message lists every match (`docs/model-routing.md`, "Naming a model") | 1 |
 | `credential_missing` | the session model's credential cannot be found, or its credential label names none | 1 |
 | `credential_failed` | a stored credential is found but cannot be used, the provider's `credential()` call errors, or its `sign()` fails or returns unusable headers (`docs/model-routing.md`, "Credentials") | 1 |
+| `authentication_failed` | the startup OAuth refresh of the session model's token was rejected by the token endpoint (`docs/model-routing.md`, "Keys, tokens and OAuth") | 1 |
+| `connection_failed` | the startup OAuth refresh could not reach the token endpoint | 1 |
 | `session_not_found` | a resume names no session | 1 |
 | `session_held` | another process holds the session's lock | 1 |
 | `extension_missing` | the provider of a `provider/model` is not installed | 1 |
@@ -201,14 +203,14 @@ Every code Fiber emits. "Where" names the lines that carry it.
 | Code | Where | Meaning |
 |---|---|---|
 | `ambiguous_match` | tool call | an edit block's text occurs more than once (`docs/tools.md`, "File tools") |
-| `authentication_failed` | model call, turn | the provider rejected the credential |
+| `authentication_failed` | exit, model call, turn | the provider rejected the credential, or an OAuth refresh was rejected |
 | `blocked` | turn | the block budget ran out with no human to answer |
 | `blocked_host` | tool call | `web_fetch` named a link-local address or a cloud metadata host (`docs/tools.md`, "Web fetch and web search") |
 | `budget_exceeded` | turn | the spending budget was reached, or an extension refused a model request (`docs/loop.md`, "Spending budget") |
 | `busy` | driver command | `prompt` or `reload` while a turn is running, or `rewind` mid-turn (`docs/invocation.md`, "What each command does") |
 | `closing` | tool call, extension call, driver command | `session_message` named a session that was sent `close` (`docs/tools.md`, "Messaging other sessions"), or `state.set` or `state.unset` ran after `fiber_exited` (`docs/extensions.md`, "When a session ends"), or a driver command after `close` (`docs/invocation.md`, "Driver commands") |
 | `config_invalid` | exit | a configuration file is invalid |
-| `connection_failed` | model call, tool call, turn | the connection to the provider failed, or `web_fetch` could not reach the host |
+| `connection_failed` | exit, model call, tool call, turn | the connection to the provider or its token endpoint failed, or `web_fetch` could not reach the host |
 | `context_overflow` | model call, turn | the request does not fit the context window |
 | `credential_failed` | exit, model call, turn | a stored credential cannot be used, or the provider's `credential()` or `sign()` failed; log in again or fix the credential |
 | `credential_missing` | exit | no credential was found for the session's model, or its credential label names none; the message lists the provider's labels |
@@ -238,7 +240,7 @@ Every code Fiber emits. "Where" names the lines that carry it.
 | `mcp_tool_removed` | tool call | the server has removed the tool |
 | `message_refused` | tool call | the target session's `before_message` refused a session message |
 | `model_ambiguous` | exit | a bare model id matches models of two or more installed providers; prefix the provider |
-| `model_invalid` | notice | a model's `extra_body` names a field Fiber builds, or its `web_search` names a type its protocol does not read, so the model is left out of the model list (`docs/model-routing.md`, "Extra request body fields", "Hosted web search") |
+| `model_invalid` | notice | a model's `extra_body` names a field Fiber builds, its `web_search` names a type its protocol does not read, or it declares no `context_window`, so the model is left out of the model list (`docs/model-routing.md`, "Extra request body fields", "Hosted web search") |
 | `model_not_found` | model call, turn | the provider does not know the model |
 | `model_unconfigured` | notice | a model's base URL names a per-account host whose setting has no value, so the model is left out of the model list; the message names the setting (`docs/model-routing.md`, "A per-account host") |
 | `name_pinned` | tool call | `name_session` was called while the person's name pins the session |
@@ -292,7 +294,7 @@ Notices, for a failure outside any action:
 | `extension_shadowed` | a repository's approved copy of an extension loads in place of the personal install of the same name; the message names both versions |
 | `hook_failed` | a `non-blocking` hook or a watcher failed |
 | `instructions_large` | the instruction text passes 10% of the context window (`docs/system-prompt.md`, "Size") |
-| `model_invalid` | a model's `extra_body` names a field Fiber builds, such as `tools`, or its `web_search` names a type its protocol does not read, so the model is left out of the model list; the message names the model and the field or type (`docs/model-routing.md`, "Extra request body fields", "Hosted web search") |
+| `model_invalid` | a model's `extra_body` names a field Fiber builds, such as `tools`, its `web_search` names a type its protocol does not read, or it declares no `context_window`, so the model is left out of the model list; the message names the model and the field or type (`docs/model-routing.md`, "Extra request body fields", "Hosted web search") |
 | `model_unconfigured` | a model's base URL names a per-account host whose setting has no value, so the model is left out of the model list; the message names the model and the setting (`docs/model-routing.md`, "A per-account host") |
 | `no_model` | nothing chose the reviewer's model; set `reviewer.model` (`docs/permissions.md`, "How it runs") |
 | `repository_code_skipped` | an extension, hook or MCP server the repository declares was skipped, unapproved, with nobody to ask; the message names it and says to run `fiber approve` |

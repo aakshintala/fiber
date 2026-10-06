@@ -73,7 +73,7 @@ A first-party provider is one Fiber can probe and re-record. There are eleven:
 | OpenAI | `openai-responses` | key |
 | Gemini API | `google-generative-ai` | key |
 | ChatGPT/codex | `openai-responses`, with its flags | subscription login |
-| OpenRouter | `anthropic-messages`, `openai-completions` | key |
+| OpenRouter | `openai-completions`, with `compat.anthropic` for Claude | key |
 | OpenCode: `opencode-go` and `opencode-zen` | `anthropic-messages`, `openai-completions`, `openai-responses`, `google-generative-ai` | key, one for both |
 | Databricks | `anthropic-messages`, `openai-completions`, `openai-responses` | key |
 | muse (the Meta Model API) | `anthropic-messages`, `openai-completions`, `openai-responses` | key |
@@ -81,7 +81,9 @@ A first-party provider is one Fiber can probe and re-record. There are eleven:
 | Google Vertex | `anthropic-messages` for Claude, `google-generative-ai` for Gemini | token from `credential()` |
 | Azure | `openai-completions`, `openai-responses`; `anthropic-messages` for Foundry Claude | `api-key` header, or token from `credential()` |
 
-The OpenAI provider sends `store: false` on every request. Google Vertex's
+The protocols are the ones each provider serves and Fiber speaks for it. A
+package's shipped models may use only some of them, and a model on another
+one is added once it is probed. The OpenAI provider sends `store: false` on every request. Google Vertex's
 flags and URLs are data, like any provider's.
 
 A provider Fiber cannot probe is left to the community: a vendor whose
@@ -254,7 +256,10 @@ For each model:
   (`docs/system-prompt.md`, "The model's addendum"); a named file that is
   missing or outside the package fails the load, under the same check
   `prompt` gets
-- context window, output token limit, input kinds and cost
+- context window, which every model declares: one without it is left out of
+  the model list with the notice `model_invalid`, because handoff and the
+  size notices are measured against it
+- output token limit, input kinds and cost
 - whether a subscription login covers it ("Cost")
 
 Fiber never guesses a flag from a URL or a provider name. A flag the vendor
@@ -269,14 +274,15 @@ what Fiber records, or that Fiber relies on to read the reply:
 
 | Protocol | Fields `extra_body` may not name |
 |---|---|
-| `anthropic-messages` | `model`, `system`, `messages`, `tools`, `tool_choice`, `stream` |
+| `anthropic-messages` | `model`, `system`, `messages`, `tools`, `tool_choice`, `stream`, `cache_control` |
 | `openai-completions` | `model`, `messages`, `tools`, `tool_choice`, `stream` |
 | `openai-responses` | `model`, `instructions`, `input`, `tools`, `tool_choice`, `stream` |
 | `google-generative-ai` | `systemInstruction`, `contents`, `tools`, `toolConfig` |
 | `bedrock-converse` | `system`, `messages`, `toolConfig` |
 
 `google-generative-ai` and `bedrock-converse` carry the model and streaming
-in the URL, not the body.
+in the URL, not the body. `cache_control` is reserved because cache markers
+are Fiber's alone (`docs/prompt-cache.md`, "Cache markers and keys").
 
 A model whose `extra_body` names one of these is left out of the model list,
 with the notice `model_invalid` naming the model and the field. The same
@@ -384,7 +390,9 @@ metadata anywhere, models.dev included. A vendor with no listing endpoint ships 
 static list instead.
 
 A provider runs Lua in four functions at most: `models()`, `quota()`,
-`credential()` and `sign()`. Only `sign()` runs on the request path.
+`credential()` and `sign()`. Only `sign()` runs on the request path, and
+`credential()` only when the cached token has already expired ("Keys, tokens
+and OAuth").
 
 ### Signing a request
 
@@ -425,8 +433,10 @@ model with neither has `cost` `null`, and the person sees its tokens only.
 
 A model priced by request size declares `tiers` (`docs/configuration.md`, "A
 provider's data"). The tier with the highest `input_tokens_above` that the
-call's input tokens exceed gives every price for the whole call; below every
-threshold, the base prices apply.
+call's whole input exceeds gives every price for the whole call; below every
+threshold, the base prices apply. The whole input is `input` plus
+`cache_read` plus `cache_write` from the call's `tokens`, because a vendor
+that prices by request size counts the whole prompt, cached or not.
 
 A model that a subscription login serves declares `"subscription": true`
 beside its prices, which are the vendor's API prices. Its calls are logged
@@ -649,8 +659,11 @@ else.
 A provider whose credential is a token that expires declares a Lua
 `credential()` function. It returns `{ token = <string>, expires_at = <Unix
 seconds> }`: the token and the time it expires. Fiber caches the
-token and calls the function again when the token is within 5 minutes of
-expiry. It runs off the request path. A cloud's own sign-in, such as Google
+token and calls the function again, off the request path, when a request
+finds the token within 5 minutes of expiry. A request that finds the token
+already expired, because the session sat idle past it or the earlier refresh
+failed, waits for one call: an idle Fiber does no work, so nothing refreshes
+on a timer, and failing the request would only make the person send it again. A cloud's own sign-in, such as Google
 Vertex's, is this function, written in the extension, not in Fiber.
 
 An OAuth login is extension code too. The extension's `credential()` builds its

@@ -226,7 +226,7 @@ optional `multiSelect` (`docs/tools.md`, "The call").
 | `source` | string | yes | `driver`, a client's command; `extension`, an extension's `host.drive`; `session`, another session's `session_message` (`docs/tools.md`, "Messaging other sessions"); or `fiber`, Fiber's own message, such as the ending notice (`docs/tools.md`, "Background jobs"); a closed set |
 | `extension` | string | no | the extension's name, when `source` is `extension` |
 | `from_session_id` | string | no | the sending session's id, when `source` is `session` |
-| `command_id` | string | no | the id of the `prompt`, `steer` or `message` command that sent it; present unless `source` is `fiber` |
+| `command_id` | string | no | the id of the `prompt`, `steer` or `message` command that sent it; present unless `source` is `fiber` or a `turn_end` hook returned the message (`docs/extensions.md`, "The hook points") |
 
 ### `changed_by`
 
@@ -373,7 +373,7 @@ Durable. A steering message a running turn received at a step boundary.
 | `source` | string | yes | as in "Where a message came from" |
 | `extension` | string | no | as in "Where a message came from" |
 | `from_session_id` | string | no | as in "Where a message came from" |
-| `command_id` | string | yes | the id of the `steer` or `message` command that sent it |
+| `command_id` | string | no | as in "Where a message came from" |
 | `changed_by` | `changed_by` | no | when a hook rewrote the message |
 
 #### `steering_queue`
@@ -1040,9 +1040,9 @@ Behaviour is `docs/extensions.md`.
 
 #### `extensions_loaded`
 
-Durable. The full set of extensions the session loaded. Written once at
-session start, before the first model request, and again after every
-`reload`, following `reloaded`. It always carries the whole set, never a
+Durable. The full set of extensions the session loaded. Written at each
+process start, a resume included, before the first model request, and again
+after every `reload`, following `reloaded`. It always carries the whole set, never a
 difference; the latest wins, and a `summary` connection is sent the latest.
 A client half reads it to decide whether it draws for this session
 (`docs/extensions.md`, "Client halves").
