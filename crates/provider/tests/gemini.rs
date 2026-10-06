@@ -588,6 +588,7 @@ fn after(reply: &Reply, model: &str) -> Vec<Input> {
             ReplyAction::ToolCall(call) => conversation.push(Input::ToolCall {
                 action_id: ActionId(format!("a_{n}")),
                 call: call.clone(),
+                model: model.into(),
             }),
             ReplyAction::Hosted(_) => {}
         }
@@ -1347,6 +1348,7 @@ fn a_bare_call_signature_parks_before_user_content_and_not_on_a_later_call() {
                 ran_by: None,
                 provider_item: None,
             },
+            model: REFERENCE.into(),
         },
     ]);
     let (contents, _) = sent_contents(conversation);
@@ -1408,6 +1410,7 @@ fn a_failed_tool_result_sends_an_error_key_and_a_success_sends_output() {
                     ran_by: None,
                     provider_item: None,
                 },
+                model: REFERENCE.into(),
             },
             Input::ToolResult {
                 action_id: ActionId("a_1".into()),
@@ -1455,6 +1458,7 @@ fn image_conversation(
                 ran_by: None,
                 provider_item: None,
             },
+            model: REFERENCE.into(),
         },
         Input::ToolResult {
             action_id: ActionId("a_1".into()),
@@ -1554,5 +1558,189 @@ fn a_text_only_model_gets_no_parts_and_the_response_says_so() {
         function_response(&server),
         json!({"name": "read", "id": "c1",
             "response": {"output": "Image: 2x1 image/png.\n[Image artifacts/i_1.png left out: this model does not take images.]"}})
+    );
+}
+
+#[test]
+fn a_foreign_call_and_result_go_as_text_while_the_models_own_stay_native() {
+    let conversation = vec![
+        Input::User {
+            text: "What is in a.txt?".into(),
+        },
+        Input::Reasoning {
+            model: "other/model".into(),
+            text: "foreign thoughts here".into(),
+            provider_item: Some(
+                json!({"text": "foreign thoughts here", "thought": true, "thoughtSignature": "Zm9yZWln"}),
+            ),
+        },
+        Input::Assistant {
+            model: "other/model".into(),
+            text: "foreign words here".into(),
+            provider_item: None,
+        },
+        Input::ToolCall {
+            action_id: ActionId("a_f1".into()),
+            call: ToolCallRequested {
+                name: "read".into(),
+                arguments: json!({"path": "a.txt"}),
+                provider_id: Some(ProviderCallId("c_foreign".into())),
+                repair: None,
+                ran_by: None,
+                provider_item: None,
+            },
+            model: "other/model".into(),
+        },
+        Input::ToolResult {
+            action_id: ActionId("a_f1".into()),
+            text: "hello".into(),
+            is_error: false,
+            images: Vec::new(),
+        },
+        Input::Reasoning {
+            model: REFERENCE.into(),
+            text: String::new(),
+            provider_item: Some(json!({"thoughtSignature": "c2ln"})),
+        },
+        Input::ToolCall {
+            action_id: ActionId("a_o1".into()),
+            call: ToolCallRequested {
+                name: "read".into(),
+                arguments: json!({"path": "b.txt"}),
+                provider_id: Some(ProviderCallId("c1".into())),
+                repair: None,
+                ran_by: None,
+                provider_item: None,
+            },
+            model: REFERENCE.into(),
+        },
+        Input::ToolResult {
+            action_id: ActionId("a_o1".into()),
+            text: "world".into(),
+            is_error: false,
+            images: Vec::new(),
+        },
+    ];
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let request = ModelRequest {
+        conversation,
+        ..request()
+    };
+    run(Box::new(Gemini::new(endpoint(&server)).request(&request)))
+        .0
+        .unwrap();
+    let body = sent_body(&server, 0);
+    let raw = String::from_utf8(server.requests()[0].body.clone()).unwrap();
+    assert_eq!(
+        body["contents"],
+        json!([
+            {"role": "user", "parts": [{"text": "What is in a.txt?"}]},
+            {"role": "model", "parts": [{"text": "foreign words here"}]},
+            {"role": "user", "parts": [
+                {"text": "other/model called the tool read with arguments {\"path\":\"a.txt\"}"},
+                {"text": "The tool read returned:\nhello"}]},
+            {"role": "model", "parts": [{"functionCall":
+                {"name": "read", "args": {"path": "b.txt"}, "id": "c1"},
+                "thoughtSignature": "c2ln"}]},
+            {"role": "user", "parts": [{"functionResponse":
+                {"name": "read", "id": "c1", "response": {"output": "world"}}}]},
+        ])
+    );
+    // No reasoning from another model is sent, as text or otherwise.
+    assert!(!raw.contains("foreign thoughts here"));
+    assert!(!raw.contains("Zm9yZWln"));
+    // No provider id is sent for a foreign call or result.
+    assert!(!raw.contains("c_foreign"));
+}
+
+#[test]
+fn a_failed_foreign_result_renders_the_failed_text() {
+    let conversation = vec![
+        Input::ToolCall {
+            action_id: ActionId("a_f1".into()),
+            call: ToolCallRequested {
+                name: "read".into(),
+                arguments: json!({"path": "a.txt"}),
+                provider_id: Some(ProviderCallId("c_foreign".into())),
+                repair: None,
+                ran_by: None,
+                provider_item: None,
+            },
+            model: "other/model".into(),
+        },
+        Input::ToolResult {
+            action_id: ActionId("a_f1".into()),
+            text: "boom".into(),
+            is_error: true,
+            images: Vec::new(),
+        },
+    ];
+    let (contents, raw) = sent_contents(conversation);
+    assert_eq!(
+        contents,
+        json!([{"role": "user", "parts": [
+            {"text": "other/model called the tool read with arguments {\"path\":\"a.txt\"}"},
+            {"text": "The tool read failed:\nboom"}]}])
+    );
+    assert!(!contents.to_string().contains("functionCall"));
+    assert!(!contents.to_string().contains("functionResponse"));
+    assert!(!raw.contains("c_foreign"));
+}
+
+#[test]
+fn a_foreign_result_with_an_image_sends_text_then_inline_data() {
+    let session = fakes::TempDir::new("fiber-gemini-foreign-image");
+    std::fs::write(session.path().join("i.png"), b"abcd").unwrap();
+    let conversation = vec![
+        Input::ToolCall {
+            action_id: ActionId("a_f1".into()),
+            call: ToolCallRequested {
+                name: "read".into(),
+                arguments: json!({"path": "a.png"}),
+                provider_id: Some(ProviderCallId("c_foreign".into())),
+                repair: None,
+                ran_by: None,
+                provider_item: None,
+            },
+            model: "other/model".into(),
+        },
+        Input::ToolResult {
+            action_id: ActionId("a_f1".into()),
+            text: "Image: 2x1 image/png.\n".into(),
+            is_error: false,
+            images: vec![png_ref("i.png")],
+        },
+    ];
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let request = ModelRequest {
+        conversation,
+        session_dir: session.path().to_path_buf(),
+        ..request()
+    };
+    run(Box::new(Gemini::new(endpoint(&server)).request(&request)))
+        .0
+        .unwrap();
+    assert_eq!(
+        sent_body(&server, 0)["contents"],
+        json!([{"role": "user", "parts": [
+            {"text": "other/model called the tool read with arguments {\"path\":\"a.png\"}"},
+            {"text": "The tool read returned:\nImage: 2x1 image/png.\n"},
+            {"inlineData": {"mimeType": "image/png", "data": "YWJjZA=="}}]}])
+    );
+}
+
+#[test]
+fn a_result_without_its_call_renders_as_today() {
+    let conversation = vec![Input::ToolResult {
+        action_id: ActionId("a_missing".into()),
+        text: "hello".into(),
+        is_error: false,
+        images: Vec::new(),
+    }];
+    let (contents, _) = sent_contents(conversation);
+    assert_eq!(
+        contents,
+        json!([{"role": "user", "parts": [{"functionResponse":
+            {"name": "", "response": {"output": "hello"}}}]}])
     );
 }

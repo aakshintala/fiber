@@ -30,7 +30,9 @@ pub(crate) fn messages(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value
         .conversation
         .iter()
         .filter_map(|input| match input {
-            Input::ToolCall { action_id, call } => Some((
+            Input::ToolCall {
+                action_id, call, ..
+            } => Some((
                 action_id,
                 call.provider_id
                     .as_ref()
@@ -114,7 +116,9 @@ pub(crate) fn messages(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value
                 out.push(m);
             }
             Input::Reasoning { .. } => {}
-            Input::ToolCall { action_id, call } => {
+            Input::ToolCall {
+                action_id, call, ..
+            } => {
                 flush_images(&mut out, &mut ends, &mut pending, last_tool);
                 let mut m = take_assistant(&mut out, &[]);
                 let call = json!({

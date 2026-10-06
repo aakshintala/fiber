@@ -213,7 +213,9 @@ fn input(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
         .conversation
         .iter()
         .filter_map(|input| match input {
-            Input::ToolCall { action_id, call } => Some((
+            Input::ToolCall {
+                action_id, call, ..
+            } => Some((
                 action_id,
                 call.provider_id
                     .as_ref()
@@ -253,7 +255,9 @@ fn input(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
                 ..
             } if *model == reference => provider_item.clone(),
             Input::Reasoning { .. } => None,
-            Input::ToolCall { action_id, call } => Some(json!({
+            Input::ToolCall {
+                action_id, call, ..
+            } => Some(json!({
                 "type": "function_call",
                 "call_id": call_ids.get(action_id).copied().unwrap_or(action_id.0.as_str()),
                 "name": call.name,

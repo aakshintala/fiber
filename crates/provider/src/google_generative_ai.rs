@@ -297,12 +297,17 @@ fn function_calling(choice: &str, strict: bool) -> Value {
 /// content.
 fn contents(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
     let reference = endpoint.reference();
-    // Each call's name and the id the model gave it, for its response.
-    let calls: BTreeMap<&ActionId, &ToolCallRequested> = request
+    // Each call with the model reference that produced it. An orphan result
+    // keeps today's native rendering.
+    let calls: BTreeMap<&ActionId, (&ToolCallRequested, &String)> = request
         .conversation
         .iter()
         .filter_map(|input| match input {
-            Input::ToolCall { action_id, call } => Some((action_id, call)),
+            Input::ToolCall {
+                action_id,
+                call,
+                model,
+            } => Some((action_id, (call, model))),
             Input::User { .. }
             | Input::Assistant { .. }
             | Input::Reasoning { .. }
@@ -350,7 +355,21 @@ fn contents(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
                 }
             }
             Input::Reasoning { .. } => {}
-            Input::ToolCall { call, .. } => {
+            Input::ToolCall { call, model, .. } => {
+                // A call another model reference made goes as plain text:
+                // it carries no thought signature (`docs/loop.md`, "What
+                // the model is sent"). Parked first, so a waiting signature
+                // never rides onto a later own call.
+                if *model != reference {
+                    park(&mut out, &mut signature);
+                    let args = call.arguments.to_string();
+                    push(
+                        &mut out,
+                        "user",
+                        json!({"text": format!("{model} called the tool {} with arguments {args}", call.name)}),
+                    );
+                    continue;
+                }
                 // Only an id the model emitted is sent back
                 // (`docs/model-routing.md`, "Google Generative AI wire facts").
                 let function = with(
@@ -370,7 +389,35 @@ fn contents(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
                 images,
             } => {
                 park(&mut out, &mut signature);
-                let call = calls.get(action_id);
+                let found = calls.get(action_id).copied();
+                let call = found.map(|(call, _)| call);
+                // A result whose call another model reference made goes as
+                // plain text (`docs/model-routing.md`, "Google Generative
+                // AI wire facts"). An orphan keeps today's native rendering.
+                if let Some((made, made_model)) = found
+                    && *made_model != reference
+                {
+                    let prepared = crate::images::prepare(
+                        text,
+                        images,
+                        &request.session_dir,
+                        endpoint.text_only,
+                    );
+                    let line = if *is_error { "failed" } else { "returned" };
+                    push(
+                        &mut out,
+                        "user",
+                        json!({"text": format!("The tool {} {line}:\n{}", made.name, prepared.text)}),
+                    );
+                    for image in &prepared.images {
+                        push(
+                            &mut out,
+                            "user",
+                            json!({"inlineData": {"mimeType": image.mime_type, "data": image.data}}),
+                        );
+                    }
+                    continue;
+                }
                 let prepared =
                     crate::images::prepare(text, images, &request.session_dir, endpoint.text_only);
                 // A failed call sends the documented `error` key in place

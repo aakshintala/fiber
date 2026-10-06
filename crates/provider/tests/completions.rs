@@ -561,6 +561,7 @@ fn four_turn_conversation() -> Vec<Input> {
                 ran_by: None,
                 provider_item: None,
             },
+            model: "openrouter/z-ai/glm-5.3-flash".into(),
         },
         Input::ToolResult {
             action_id: ActionId("a_1".into()),
@@ -681,6 +682,7 @@ fn reasoning_goes_back_unchanged_only_to_the_model_reference_that_produced_it() 
                 ran_by: None,
                 provider_item: None,
             },
+            model: "openrouter/z-ai/glm-5.3-flash".into(),
         },
         Input::ToolResult {
             action_id: ActionId("a_1".into()),
@@ -956,6 +958,7 @@ fn an_assistants_calls_fold_into_one_message_and_reasoning_alone_keeps_a_content
             ran_by: None,
             provider_item: None,
         },
+        model: "openrouter/z-ai/glm-5.3-flash".into(),
     };
     let result = |id: &str| Input::ToolResult {
         action_id: ActionId(id.into()),
@@ -1300,6 +1303,7 @@ fn a_failed_tool_result_sends_the_same_bytes_as_a_success() {
                     ran_by: None,
                     provider_item: None,
                 },
+                model: "openrouter/z-ai/glm-5.3-flash".into(),
             },
             Input::ToolResult {
                 action_id: ActionId("a_1".into()),
@@ -1350,6 +1354,7 @@ fn image_turn(
                 ran_by: None,
                 provider_item: None,
             },
+            model: "openrouter/z-ai/glm-5.3-flash".into(),
         },
         Input::ToolResult {
             action_id: ActionId(action.into()),

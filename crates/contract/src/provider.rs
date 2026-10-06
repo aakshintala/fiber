@@ -167,6 +167,10 @@ pub enum Input {
         action_id: ActionId,
         /// The call as the model made it.
         call: ToolCallRequested,
+        /// The model reference that produced it, `provider/model`. A request
+        /// to any other model reference sends it as plain text
+        /// (`docs/loop.md`, "What the model is sent").
+        model: String,
     },
     /// A tool call's result, from `tool_call_completed`.
     ToolResult {

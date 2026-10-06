@@ -735,6 +735,7 @@ fn four_turn_conversation() -> Vec<Input> {
                 ran_by: None,
                 provider_item: None,
             },
+            model: "anthropic/claude-sonnet-5-5".into(),
         },
         Input::ToolResult {
             action_id: ActionId("a_1".into()),
@@ -824,6 +825,7 @@ fn reasoning_goes_back_unchanged_only_to_the_model_reference_that_produced_it() 
                 ran_by: None,
                 provider_item: None,
             },
+            model: "anthropic/claude-sonnet-5-5".into(),
         },
         Input::ToolResult {
             action_id: ActionId("a_1".into()),
@@ -1277,6 +1279,7 @@ fn text_around_a_tool_call_decodes_and_replays_in_that_order() {
                 ran_by: None,
                 provider_item: None,
             },
+            model: "anthropic/claude-sonnet-5-5".into(),
         },
         Input::Assistant {
             model: "anthropic/claude-sonnet-5-5".into(),
@@ -1371,6 +1374,7 @@ fn a_failed_tool_result_sends_is_error_and_a_success_sends_none() {
                     ran_by: None,
                     provider_item: None,
                 },
+                model: "anthropic/claude-sonnet-5-5".into(),
             },
             Input::ToolResult {
                 action_id: ActionId("a_1".into()),
@@ -1418,6 +1422,7 @@ fn image_conversation(is_error: bool, images: Vec<contract::provider::ImageRef>)
                 ran_by: None,
                 provider_item: None,
             },
+            model: "anthropic/claude-sonnet-5-5".into(),
         },
         Input::ToolResult {
             action_id: ActionId("a_1".into()),

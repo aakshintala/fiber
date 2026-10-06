@@ -93,6 +93,7 @@ fn call(name: &str, arguments: serde_json::Value) -> Input {
             ran_by: None,
             provider_item: None,
         },
+        model: "m".into(),
     }
 }
 

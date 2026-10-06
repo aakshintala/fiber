@@ -149,6 +149,7 @@ impl Rendered {
                     let input = Input::ToolCall {
                         action_id: action.clone(),
                         call: call.clone(),
+                        model: model.to_owned(),
                     };
                     self.carry.call_requested(action, &input);
                     self.conversation.push(input);
@@ -338,8 +339,10 @@ impl Rendered {
 }
 
 /// Adds what `event`, about `action`, puts in the conversation. `model` is
-/// the model reference in force, which produced any reasoning or text part.
-// debt: the model reference is the session's one model until `/model`
+/// the model reference in force, which produced any reasoning, text part or
+/// tool call.
+// debt: the model reference is the session's one model, which produced any
+// reasoning, text part or tool call, until `/model`
 // switches it; then it comes from the log's `model_changed`. A text part's
 // `provider_item` is stamped with that same reference.
 pub(crate) fn render(
@@ -477,6 +480,7 @@ pub(crate) fn render(
                 let input = Input::ToolCall {
                     action_id: action.clone(),
                     call: call.clone(),
+                    model: model.to_owned(),
                 };
                 carry.call_requested(action, &input);
                 conversation.push(input);
