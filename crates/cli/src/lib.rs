@@ -1,5 +1,5 @@
-//! The commands that run no session: `fiber login`, `fiber logout`,
-//! `fiber approve`, `fiber sessions export` and `fiber models`
+//! The commands that run no session: `fiber config`, `fiber login`,
+//! `fiber logout`, `fiber approve`, `fiber sessions export` and `fiber models`
 //! (`docs/architecture.md`, "The modules"). `main` parses argv and
 //! dispatches here; this crate takes plain values.
 
@@ -12,11 +12,13 @@ use contract::shapes::Failure;
 use doors::failure;
 
 mod approve;
+mod config;
 mod login;
 mod models;
 mod sessions;
 
 pub use approve::approve;
+pub use config::{config_get, config_set};
 pub use login::{LogoutTarget, run_login, run_logout};
 pub use models::models;
 pub use sessions::export;
@@ -27,7 +29,10 @@ pub const LOGOUT_SHAPE: &str =
 
 /// A workspace's project: its `sessions` directory and its key
 /// (`docs/state.md`, "Projects"). The one place the key is derived.
-pub fn project_of(home: &Path, workspace: &Path) -> Result<(PathBuf, config::ProjectKey), Failure> {
+pub fn project_of(
+    home: &Path,
+    workspace: &Path,
+) -> Result<(PathBuf, ::config::ProjectKey), Failure> {
     let sessions = log::sessions_dir(home, &doors::project(workspace));
     // `projects/<key>/sessions`: the project's key names its parent.
     let key = sessions
@@ -35,7 +40,7 @@ pub fn project_of(home: &Path, workspace: &Path) -> Result<(PathBuf, config::Pro
         .and_then(Path::file_name)
         .map(|key| key.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let project = config::ProjectKey::new(key).map_err(|e| failed(e.code(), e))?;
+    let project = ::config::ProjectKey::new(key).map_err(|e| failed(e.code(), e))?;
     Ok((sessions, project))
 }
 

@@ -879,6 +879,10 @@ Extensions:
   extension list                    List installed extensions: name, version and commit
   approve [--yes]                   Show what this repository ships and approve it
 
+Configuration:
+  config get <key>                              Print the effective value and the layer it came from
+  config set [--project | --repo] <key> <value>  Write one key in one layer's file
+
 Flags:
   -h, --help     Print this menu
   -v, --version  Print the version

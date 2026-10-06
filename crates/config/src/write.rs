@@ -10,8 +10,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde_json::{Map, Value};
 
+use contract::events::Notice;
+
 use crate::error::ConfigError;
-use crate::home::read;
+use crate::home::{ProjectKey, plain, read};
 use crate::{Source, keys, path};
 
 /// Which extension settings file `host.config.set` writes: the same words
@@ -24,17 +26,100 @@ pub enum Scope {
     Project,
 }
 
+/// Which configuration file `set` writes (`docs/configuration.md`, "When
+/// Fiber writes").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Layer {
+    /// `config.json` at the top of Fiber home.
+    Global,
+    /// `projects/<key>/config.json` in Fiber home.
+    Project,
+    /// The workspace's `.fiber/config.json`.
+    Repository,
+}
+
+/// Sets one key in a layer's file (`fiber config set`). The value's type is
+/// checked against "Keys", as [`set_global`] checks it, and a key the
+/// layer may not hold is refused before anything is written: on any `Err`
+/// no file is created or changed.
+pub fn set(
+    home: &Path,
+    workspace: &Path,
+    project: &ProjectKey,
+    layer: Layer,
+    key: &str,
+    value: Value,
+) -> Result<(), ConfigError> {
+    let file = match layer {
+        Layer::Global => home.join("config.json"),
+        Layer::Project => home
+            .join("projects")
+            .join(project.as_str())
+            .join("config.json"),
+        Layer::Repository => workspace.join(".fiber/config.json"),
+    };
+    let source = match layer {
+        Layer::Global => Source::Global(file.clone()),
+        Layer::Project => Source::Project(file.clone()),
+        Layer::Repository => Source::Repository(file.clone()),
+    };
+    if matches!(layer, Layer::Repository) {
+        // Someone else's text: a link, or anything but a directory and a
+        // regular file, is refused before the lock is taken, as
+        // `Config::load` refuses to read it.
+        plain(&workspace.join(".fiber"), true)?;
+        plain(&file, false)?;
+    }
+    let (segments, notices) = checked(key, value.clone(), &source)?;
+    if !notices.is_empty() {
+        return Err(ConfigError::Refused {
+            key: key.into(),
+            file,
+            why: refused_why(&segments, layer),
+        });
+    }
+    update(&file, &segments, value, false).map(|_| ())
+}
+
+/// Why `set` refuses `key` at `layer`: the notice `keys::check` pushed,
+/// read back off the table, since `keys` names no reason of its own.
+fn refused_why(segments: &[String], layer: Layer) -> &'static str {
+    match keys::leaf(segments) {
+        Some(found) if matches!(layer, Layer::Repository) && !found.repo => {
+            "a repository may not set it"
+        }
+        Some(found) if found.repo_only && !matches!(layer, Layer::Repository) => {
+            "only a repository's own file may set it"
+        }
+        _ => "this Fiber does not know it",
+    }
+}
+
+/// Parses `key` and checks one key's value against "Keys" for `source`,
+/// returning the segments and the notices the check pushed. Shared by
+/// [`set_global`], [`set_global_if_unset`] and [`set`]: only `set` turns a
+/// notice into a refusal, so an unknown key is still written elsewhere.
+fn checked(
+    key: &str,
+    value: Value,
+    source: &Source,
+) -> Result<(Vec<String>, Vec<Notice>), ConfigError> {
+    let segments = path::parse(key).ok_or_else(|| ConfigError::Override { arg: key.into() })?;
+    let mut candidate = Value::Object(Map::new());
+    path::set(&mut candidate, &segments, value);
+    let mut notices = Vec::new();
+    if let Value::Object(map) = candidate {
+        keys::check(map, source, &mut notices)?;
+    }
+    Ok((segments, notices))
+}
+
 /// Sets one key in the global `config.json` (`fiber config set`, the model
 /// picker). The value's type, and the type of every known key it holds, is
 /// checked against "Keys"; nothing else is.
 pub fn set_global(home: &Path, key: &str, value: Value) -> Result<(), ConfigError> {
     let file = home.join("config.json");
-    let segments = path::parse(key).ok_or_else(|| ConfigError::Override { arg: key.into() })?;
-    let mut candidate = Value::Object(Map::new());
-    path::set(&mut candidate, &segments, value.clone());
-    if let Value::Object(map) = candidate {
-        keys::check(map, &Source::Global(file.clone()), &mut Vec::new())?;
-    }
+    let (segments, _) = checked(key, value.clone(), &Source::Global(file.clone()))?;
     update(&file, &segments, value, false).map(|_| ())
 }
 
@@ -45,12 +130,7 @@ pub fn set_global(home: &Path, key: &str, value: Value) -> Result<(), ConfigErro
 /// file is looked at.
 pub fn set_global_if_unset(home: &Path, key: &str, value: Value) -> Result<bool, ConfigError> {
     let file = home.join("config.json");
-    let segments = path::parse(key).ok_or_else(|| ConfigError::Override { arg: key.into() })?;
-    let mut candidate = Value::Object(Map::new());
-    path::set(&mut candidate, &segments, value.clone());
-    if let Value::Object(map) = candidate {
-        keys::check(map, &Source::Global(file.clone()), &mut Vec::new())?;
-    }
+    let (segments, _) = checked(key, value.clone(), &Source::Global(file.clone()))?;
     update(&file, &segments, value, true)
 }
 

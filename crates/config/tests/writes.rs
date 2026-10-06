@@ -8,8 +8,8 @@ use std::fs;
 use std::sync::Arc;
 use std::thread;
 
-use common::{PROJECT, Setup};
-use config::{Scope, remove_extension_settings, set_global, set_global_if_unset};
+use common::{PROJECT, Setup, key};
+use config::{Layer, Scope, remove_extension_settings, set, set_global, set_global_if_unset};
 use contract::ErrorCode;
 use serde_json::json;
 
@@ -438,4 +438,183 @@ fn concurrent_writes_if_unset_let_exactly_one_win() {
         .map(|h| usize::from(h.join().unwrap()))
         .sum();
     assert_eq!(wins, 1);
+}
+
+#[test]
+fn set_writes_each_layer_s_file_sorted_and_keeps_other_keys() {
+    let setup = Setup::new();
+    setup.write(&setup.global(), r#"{"model": "a/b"}"#);
+    setup.write(&setup.project(), r#"{"model": "a/b"}"#);
+    setup.write(&setup.repository(), r#"{"model": "a/b"}"#);
+    set(
+        &setup.home(),
+        &setup.workspace(),
+        &key(),
+        Layer::Global,
+        "handoff.tokens",
+        json!(200000),
+    )
+    .unwrap();
+    set(
+        &setup.home(),
+        &setup.workspace(),
+        &key(),
+        Layer::Project,
+        "handoff.tokens",
+        json!(100),
+    )
+    .unwrap();
+    set(
+        &setup.home(),
+        &setup.workspace(),
+        &key(),
+        Layer::Repository,
+        "handoff.tokens",
+        json!(50),
+    )
+    .unwrap();
+    for file in [setup.global(), setup.project(), setup.repository()] {
+        let text = fs::read_to_string(&file).unwrap();
+        assert!(
+            text.contains("\"handoff\": {\n    \"tokens\""),
+            "{file:?}: {text:?}"
+        );
+        assert!(text.contains("\"model\": \""), "{file:?}: {text:?}");
+    }
+    assert_eq!(
+        setup
+            .load(&[])
+            .unwrap()
+            .get("handoff.tokens", None)
+            .unwrap()
+            .0,
+        json!(100),
+        "the project layer beats the repository layer"
+    );
+}
+
+#[test]
+fn set_with_a_person_only_key_at_the_repository_layer_is_refused_and_writes_nothing() {
+    let setup = Setup::new();
+    let e = set(
+        &setup.home(),
+        &setup.workspace(),
+        &key(),
+        Layer::Repository,
+        "session.idle_exit_ms",
+        json!(60000),
+    )
+    .unwrap_err();
+    assert_eq!(e.code(), ErrorCode::Usage);
+    assert!(e.to_string().contains("`session.idle_exit_ms`"), "{e}");
+    assert!(
+        e.to_string()
+            .contains(&setup.repository().display().to_string()),
+        "{e}"
+    );
+    assert!(!setup.repository().exists());
+    assert!(!setup.workspace().join(".fiber").exists());
+}
+
+#[test]
+fn set_of_a_repository_only_key_outside_the_repository_layer_is_refused() {
+    for layer in [Layer::Global, Layer::Project] {
+        let setup = Setup::new();
+        let e = set(
+            &setup.home(),
+            &setup.workspace(),
+            &key(),
+            layer,
+            "repository_extensions",
+            json!([{"path": "pkg"}]),
+        )
+        .unwrap_err();
+        assert_eq!(e.code(), ErrorCode::Usage, "{layer:?}");
+        assert!(
+            e.to_string().contains("`repository_extensions`"),
+            "{layer:?}: {e}"
+        );
+        assert!(!setup.global().exists(), "{layer:?}");
+    }
+}
+
+#[test]
+fn set_of_an_unknown_key_is_refused_and_writes_nothing() {
+    let setup = Setup::new();
+    setup.write(&setup.global(), r#"{"model": "a/b"}"#);
+    let e = set(
+        &setup.home(),
+        &setup.workspace(),
+        &key(),
+        Layer::Global,
+        "hub.port",
+        json!(8080),
+    )
+    .unwrap_err();
+    assert_eq!(e.code(), ErrorCode::Usage);
+    assert!(e.to_string().contains("`hub.port`"), "{e}");
+    assert_eq!(
+        fs::read_to_string(setup.global()).unwrap(),
+        r#"{"model": "a/b"}"#
+    );
+}
+
+#[test]
+fn set_of_a_wrongly_typed_value_is_config_invalid_and_writes_nothing() {
+    let setup = Setup::new();
+    let e = set(
+        &setup.home(),
+        &setup.workspace(),
+        &key(),
+        Layer::Project,
+        "handoff.tokens",
+        json!("many"),
+    )
+    .unwrap_err();
+    assert_eq!(e.code(), ErrorCode::ConfigInvalid);
+    assert!(!setup.project().exists());
+}
+
+#[test]
+fn set_at_the_repository_layer_refuses_a_symlinked_dot_fiber() {
+    for linked in [".fiber", ".fiber/config.json"] {
+        let setup = Setup::new();
+        let target = setup.root().join("elsewhere");
+        fs::create_dir_all(&target).unwrap();
+        let link = setup.workspace().join(linked);
+        if let Some(parent) = link.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let e = set(
+            &setup.home(),
+            &setup.workspace(),
+            &key(),
+            Layer::Repository,
+            "model",
+            json!("a/b"),
+        )
+        .unwrap_err();
+        assert_eq!(e.code(), ErrorCode::ConfigInvalid, "{linked}");
+    }
+}
+
+#[test]
+fn set_into_a_file_holding_invalid_json_leaves_it() {
+    let setup = Setup::new();
+    setup.write(&setup.global(), "{\"model\": \"a/b\",}");
+    let e = set(
+        &setup.home(),
+        &setup.workspace(),
+        &key(),
+        Layer::Global,
+        "model",
+        json!("c/d"),
+    )
+    .unwrap_err();
+    assert_eq!(e.code(), ErrorCode::ConfigInvalid);
+    assert_eq!(
+        fs::read_to_string(setup.global()).unwrap(),
+        "{\"model\": \"a/b\",}"
+    );
 }
