@@ -475,10 +475,15 @@ fn a_locked_write_waits_while_the_same_key_is_held() {
     let holder = thread::spawn(move || {
         locks.hold(&key, &mut || {
             entered.send(()).unwrap();
-            release_rx.recv_timeout(DEADLINE).unwrap();
+            release_rx
+                .recv_timeout(DEADLINE)
+                .expect("waited 10s for the release of the held key");
         });
     });
-    entered_rx.recv_timeout(DEADLINE).unwrap();
+    assert!(
+        entered_rx.recv_timeout(DEADLINE).is_ok(),
+        "waited {DEADLINE:?} for the holder to be holding the key"
+    );
     let (done, done_rx) = mpsc::channel();
     let writer = thread::spawn(move || {
         fs.write(b"notes/a.md", b"hi", true).unwrap();
@@ -492,13 +497,19 @@ fn a_locked_write_waits_while_the_same_key_is_held() {
         }
         waiting.send(()).unwrap();
     });
-    waiting_rx.recv_timeout(DEADLINE).unwrap();
+    assert!(
+        waiting_rx.recv_timeout(DEADLINE).is_ok(),
+        "waited {DEADLINE:?} for the locked write to be waiting"
+    );
     assert!(
         done_rx.try_recv().is_err(),
         "the locked write ran while the key was held"
     );
     release.send(()).unwrap();
-    done_rx.recv_timeout(DEADLINE).unwrap();
+    assert!(
+        done_rx.recv_timeout(DEADLINE).is_ok(),
+        "waited {DEADLINE:?} for the locked write to run"
+    );
     writer.join().unwrap();
     holder.join().unwrap();
     assert_eq!(fs::read(&target).unwrap(), b"hi");
@@ -561,7 +572,12 @@ fn a_same_path_rename_takes_the_lock_once_and_returns() {
 }
 
 #[test]
-fn an_alias_pair_rename_returns_rather_than_waiting_on_itself() {
+fn an_unresolved_alias_pair_rename_holds_both_raw_keys_and_returns() {
+    // The fake never resolves paths, so the `..` alias and the plain path
+    // are two raw keys: this proves the rename returns with both held, not
+    // that one effective key is deduped. The real dedupe is
+    // `hold_all_dedupes_paths_that_resolve_to_one_key` in
+    // `crates/tools/src/files/locks_tests.rs`.
     let setup = Setup::new();
     let fs = setup.fs();
     fs::create_dir(setup.workspace().join("sub")).unwrap();

@@ -23,19 +23,43 @@ fn wait_until(what: &str, pred: impl Fn() -> bool + Send + 'static) {
 
 #[test]
 fn a_guard_releases_on_drop() {
-    let locks = PathLocks::new();
-    let path = std::path::Path::new("/ws/a.txt");
-    let guard = locks.lock(path);
-    drop(guard);
-    let again = locks.lock(path);
-    drop(again);
+    let locks = Arc::new(PathLocks::new());
+    let (done, done_rx) = mpsc::channel();
+    let worker = Arc::clone(&locks);
+    let handle = thread::spawn(move || {
+        let path = std::path::Path::new("/ws/a.txt");
+        let guard = worker.lock(path);
+        drop(guard);
+        let again = worker.lock(path);
+        drop(again);
+        done.send(()).unwrap();
+    });
+    assert!(
+        done_rx.recv_timeout(DEADLINE).is_ok(),
+        "waited {DEADLINE:?} for the lock, release and relock to run"
+    );
+    handle.join().unwrap();
     assert!(locks.is_clear());
 }
 
 #[test]
 fn two_paths_do_not_block_each_other() {
     let locks = Arc::new(PathLocks::new());
-    let held = locks.lock(std::path::Path::new("/ws/a.txt"));
+    let first = Arc::clone(&locks);
+    let (entered, entered_rx) = mpsc::channel();
+    let (release, release_rx) = mpsc::channel::<()>();
+    let holder = thread::spawn(move || {
+        let guard = first.lock(std::path::Path::new("/ws/a.txt"));
+        entered.send(()).unwrap();
+        release_rx
+            .recv_timeout(DEADLINE)
+            .expect("waited 10s for the release of the first path");
+        drop(guard);
+    });
+    assert!(
+        entered_rx.recv_timeout(DEADLINE).is_ok(),
+        "waited {DEADLINE:?} for the first path to be held"
+    );
     let other = Arc::clone(&locks);
     let (done, finished) = mpsc::channel();
     let handle = thread::spawn(move || {
@@ -47,7 +71,8 @@ fn two_paths_do_not_block_each_other() {
         finished.recv_timeout(DEADLINE).is_ok(),
         "waited {DEADLINE:?} for a lock on a different path"
     );
-    drop(held);
+    release.send(()).unwrap();
+    holder.join().unwrap();
     handle.join().unwrap();
     assert!(locks.is_clear());
 }
@@ -56,7 +81,22 @@ fn two_paths_do_not_block_each_other() {
 fn a_second_lock_on_a_held_path_blocks_until_the_guard_drops() {
     let locks = Arc::new(PathLocks::new());
     let path = std::path::PathBuf::from("/ws/a.txt");
-    let guard = locks.lock(&path);
+    let first = Arc::clone(&locks);
+    let first_path = path.clone();
+    let (holding, holding_rx) = mpsc::channel();
+    let (release_first, release_first_rx) = mpsc::channel::<()>();
+    let holder = thread::spawn(move || {
+        let guard = first.lock(&first_path);
+        holding.send(()).unwrap();
+        release_first_rx
+            .recv_timeout(DEADLINE)
+            .expect("waited 10s for the release of the held path");
+        drop(guard);
+    });
+    assert!(
+        holding_rx.recv_timeout(DEADLINE).is_ok(),
+        "waited {DEADLINE:?} for the first lock to be held"
+    );
     let waiting = Arc::clone(&locks);
     let path_for_wait = path.clone();
     let (entered, entered_rx) = mpsc::channel();
@@ -71,20 +111,31 @@ fn a_second_lock_on_a_held_path_blocks_until_the_guard_drops() {
         entered_rx.try_recv().is_err(),
         "the second lock acquired the path while it was held"
     );
-    drop(guard);
+    release_first.send(()).unwrap();
     assert!(
         entered_rx.recv_timeout(DEADLINE).is_ok(),
         "waited {DEADLINE:?} for the second lock to acquire the path"
     );
+    holder.join().unwrap();
     handle.join().unwrap();
     assert!(locks.is_clear());
 }
 
 #[test]
 fn no_entry_remains_after_release() {
-    let locks = PathLocks::new();
-    let guard = locks.lock(std::path::Path::new("/ws/a.txt"));
-    drop(guard);
+    let locks = Arc::new(PathLocks::new());
+    let (done, done_rx) = mpsc::channel();
+    let worker = Arc::clone(&locks);
+    let handle = thread::spawn(move || {
+        let guard = worker.lock(std::path::Path::new("/ws/a.txt"));
+        drop(guard);
+        done.send(()).unwrap();
+    });
+    assert!(
+        done_rx.recv_timeout(DEADLINE).is_ok(),
+        "waited {DEADLINE:?} for the lock and release to run"
+    );
+    handle.join().unwrap();
     assert!(locks.is_clear());
 }
 
@@ -102,7 +153,9 @@ fn a_dyn_hold_blocks_a_second_hold_on_the_same_path() {
         let lock: &dyn PathLock = &*first;
         lock.hold(&first_path, &mut || {
             entered.send(()).unwrap();
-            release_rx.recv_timeout(DEADLINE).unwrap();
+            release_rx
+                .recv_timeout(DEADLINE)
+                .expect("waited 10s for the release of the first hold");
         });
     });
     assert!(
@@ -145,7 +198,9 @@ fn a_dyn_hold_does_not_block_a_different_path() {
         let lock: &dyn PathLock = &*first;
         lock.hold(std::path::Path::new("/ws/dyn-a.txt"), &mut || {
             entered.send(()).unwrap();
-            release_rx.recv_timeout(DEADLINE).unwrap();
+            release_rx
+                .recv_timeout(DEADLINE)
+                .expect("waited 10s for the release of the first hold");
         });
     });
     assert!(
@@ -199,7 +254,22 @@ fn an_alias_contends_with_the_built_in_key() {
         dir.path().join("link/file.txt"),
         dir.path().join("real/../real/file.txt"),
     ] {
-        let guard = locks.lock(&key);
+        let first = Arc::clone(&locks);
+        let key_for_hold = key.clone();
+        let (holding, holding_rx) = mpsc::channel();
+        let (release, release_rx) = mpsc::channel::<()>();
+        let holder = thread::spawn(move || {
+            let guard = first.lock(&key_for_hold);
+            holding.send(()).unwrap();
+            release_rx
+                .recv_timeout(DEADLINE)
+                .expect("waited 10s for the release of the built-in key");
+            drop(guard);
+        });
+        assert!(
+            holding_rx.recv_timeout(DEADLINE).is_ok(),
+            "waited {DEADLINE:?} for the built-in key to be held"
+        );
         let waiting = Arc::clone(&locks);
         let (done, done_rx) = mpsc::channel();
         let handle = thread::spawn(move || {
@@ -216,12 +286,62 @@ fn an_alias_contends_with_the_built_in_key() {
             done_rx.try_recv().is_err(),
             "the hold through the alias ran while the built-in key was held"
         );
-        drop(guard);
+        release.send(()).unwrap();
         assert!(
             done_rx.recv_timeout(DEADLINE).is_ok(),
             "waited {DEADLINE:?} for the hold through the alias to acquire the key"
         );
+        holder.join().unwrap();
         handle.join().unwrap();
     }
     assert!(locks.is_clear());
+}
+
+#[test]
+fn hold_all_dedupes_paths_that_resolve_to_one_key() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use contract::files::PathLock;
+
+    let dir = fakes::TempDir::new("fiber-locks-hold-all-alias");
+    std::fs::create_dir(dir.path().join("sub")).unwrap();
+    std::fs::write(dir.path().join("a.txt"), "hi").unwrap();
+    let real = dir.path().join("real");
+    std::fs::create_dir(&real).unwrap();
+    std::fs::write(real.join("file.txt"), "hi").unwrap();
+    std::os::unix::fs::symlink(&real, dir.path().join("link")).unwrap();
+    // Each pair resolves to one effective key. Without the dedupe in
+    // `PathLocks::hold_all` the second lock would wait on the first,
+    // held by the same thread, and miss the deadline below.
+    for pair in [
+        vec![dir.path().join("sub/../a.txt"), dir.path().join("a.txt")],
+        vec![
+            dir.path().join("link/file.txt"),
+            dir.path().join("real/file.txt"),
+        ],
+    ] {
+        let locks = Arc::new(PathLocks::new());
+        let runs = Arc::new(AtomicUsize::new(0));
+        let worker_locks = Arc::clone(&locks);
+        let worker_runs = Arc::clone(&runs);
+        let (done, done_rx) = mpsc::channel();
+        let handle = thread::spawn(move || {
+            let lock: &dyn PathLock = &*worker_locks;
+            lock.hold_all(&pair, &mut || {
+                worker_runs.fetch_add(1, Ordering::SeqCst);
+            });
+            done.send(()).unwrap();
+        });
+        assert!(
+            done_rx.recv_timeout(DEADLINE).is_ok(),
+            "waited {DEADLINE:?} for hold_all on an alias pair to run"
+        );
+        handle.join().unwrap();
+        assert_eq!(
+            runs.load(Ordering::SeqCst),
+            1,
+            "hold_all on an alias pair ran once"
+        );
+        assert!(locks.is_clear());
+    }
 }
