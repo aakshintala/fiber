@@ -15,7 +15,8 @@
 //!   which CI jobs run, as `key=value` lines
 //! - `verdict`: reads `NEEDS` and `JOBS` from the environment and passes only
 //!   if every selected job passed and every other job was skipped
-//! - `ticket`: the issue the pull request body on stdin resolves
+//! - `ticket`: the resolved issue the pull request body on stdin prints: the
+//!   only one, or with several the first one labelled `bug`, else the first
 //! - `bug-filter FILE...`: the nextest filter, packages and test files among
 //!   FILE, with how each is declared, as tab-separated lines
 //! - `line-cap`, `unsafe-table`, `signal-sites`, `compiled-in`, `dependency-list`, `image-isolation`, `check-docs`: the checks
@@ -139,7 +140,22 @@ fn run(args: &[String]) -> Result<bool, String> {
             std::io::stdin()
                 .read_to_string(&mut body)
                 .map_err(|e| format!("stdin: {e}"))?;
-            if let Some(number) = select::ticket(&body) {
+            let numbers = select::ticket(&body);
+            let chosen = match numbers.as_slice() {
+                [] => None,
+                [only] => Some(only.clone()),
+                [first, ..] => {
+                    let mut chosen = first.clone();
+                    for number in &numbers {
+                        if labelled_bug(number)? {
+                            chosen = number.clone();
+                            break;
+                        }
+                    }
+                    Some(chosen)
+                }
+            };
+            if let Some(number) = chosen {
                 println!("{number}");
             }
             Ok(true)
@@ -276,6 +292,22 @@ fn output(program: &str, args: &[&str]) -> Result<String, String> {
         ));
     }
     String::from_utf8(out.stdout).map_err(|e| format!("{program}: {e}"))
+}
+
+fn labelled_bug(number: &str) -> Result<bool, String> {
+    let out = output(
+        "gh",
+        &[
+            "issue",
+            "view",
+            number,
+            "--json",
+            "labels",
+            "-q",
+            ".labels[].name",
+        ],
+    )?;
+    Ok(out.lines().any(|line| line == "bug"))
 }
 
 fn git_lines(args: &[&str]) -> Result<Vec<String>, String> {
