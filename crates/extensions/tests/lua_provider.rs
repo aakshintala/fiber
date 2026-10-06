@@ -179,7 +179,9 @@ fn a_token_within_five_minutes_of_expiry_is_refreshed_off_the_request_path() {
     let setup = Setup::new();
     let server = ProviderServer::start([
         token("t1", Duration::from_secs(3600)),
-        token("t2", Duration::from_secs(3600)),
+        // Far past the advanced clock, so `t2` is not itself due: a poll that
+        // sees it starts no further refresh, and the count stays at two.
+        token("t2", Duration::from_secs(2 * 3600)),
     ])
     .unwrap();
     let clock = FakeClock::new();
