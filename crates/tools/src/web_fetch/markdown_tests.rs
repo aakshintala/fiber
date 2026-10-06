@@ -314,6 +314,13 @@ fn a_script_with_a_tag_like_close_prefix_keeps_looking() {
 }
 
 #[test]
+fn an_end_tag_closes_before_whitespace_or_a_slash() {
+    assert_eq!(to_markdown("a<script>x</script >b"), "ab\n");
+    assert_eq!(to_markdown("a<script>x</script\n>b"), "ab\n");
+    assert_eq!(to_markdown("a<script>x</script/>b"), "ab\n");
+}
+
+#[test]
 fn noscript_template_and_svg_are_dropped() {
     assert_eq!(
         to_markdown(
