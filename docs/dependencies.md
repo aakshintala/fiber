@@ -124,7 +124,9 @@ only that crate, in KiB; the empty program is 323 KiB.
 | rustix | the shell tool's pseudo-terminal, new session and process group, and reading a key without echo | ~0 | ~0 | ~0 | 4 | 330 |
 | ignore, grep-searcher, grep-regex, grep-matcher | the search behind the shell's `grep` and `find` (`docs/tools.md`, "Search") | 2,656 | 2,480 | 1,904 | 25 | 2,886 |
 | similar | an edit's diff in `details` (`docs/tools.md`, "edit") and an instruction file's diff (`docs/system-prompt.md`, "When something changes"), and a repository's changed code against its approved copy (`docs/extensions.md`, "Code a repository ships") | ~0 | 380 | ~0 | 1 | 389 |
-| all of the above together | | 7,048 | 6,104 | 4,288 | 136 | 6,452 |
+| html5ever | `web_fetch`'s tokenizer, without its tree builder | TBD | TBD | TBD | 19 | TBD |
+| encoding_rs | `web_fetch`'s decoding by the declared character set | TBD | TBD | TBD | 5 | TBD |
+| all of the above together | | TBD | TBD | TBD | TBD | TBD |
 | image, fast_image_resize | the image child; png, jpeg, gif and webp only (`docs/model-routing.md`, "Image limits") | 68,076 | 67,604 | 72,352 | 32 | 5,234 |
 
 Notes:
@@ -149,6 +151,25 @@ Notes:
   file. Alone, `regex` measured 1,780 KiB and `ignore` 1,392 KiB on Linux
   x86_64; about 440 KiB of `regex`'s binary is Unicode tables. The search,
   similar and together rows were measured on September 26, 2026.
+- html5ever's figure is a generated 1 MiB page through the tokenizer alone,
+  counting tokens in the sink, as the converter does without a tree.
+- encoding_rs's figure is decoding a 1 MiB windows-1252 page by its declared
+  character set.
+- `web_fetch` converts a page with html5ever's tokenizer feeding Fiber's own
+  single-pass writer (`crates/tools/src/web_fetch/markdown.rs`), not with a
+  parser that builds the page's document tree. The smallest maintained crate
+  that converts HTML to markdown on its own, htmd 0.5.5, passes `cargo deny`
+  with this repository's `deny.toml` but pulls 41 crates (html5ever,
+  markup5ever_rcdom, xml5ever, string_cache, phf and their dependencies) and
+  builds a DOM of the page. It is the tree that costs: htmd's tree
+  (markup5ever_rcdom) is what cost 232 MB. Peak memory footprint on macOS
+  arm64, from `/usr/bin/time -l` on a generated page, against the 24 MiB busy
+  session budget (`docs/performance.md`):
+
+  | Page | htmd | Fiber's converter |
+  |---|---|---|
+  | 1 MiB | 24.9 MB | 3.0 MB |
+  | 10 MiB (the download cap) | 232.2 MB | 21.0 MB |
 - The image row is `image` 0.25 with default features off and only the png,
   jpeg, gif and webp codecs, plus `fast_image_resize` 6 with its `image`
   feature, Lanczos3. It is pure Rust and passes cargo-deny. Memory is the
@@ -240,7 +261,6 @@ yaml-rust and bincode.
 | Percent-encoding OAuth URLs and parsing the callback query | a fixed format from RFC 3986, a few dozen lines |
 | File locking | `std::fs::File::lock`, stable since Rust 1.89 |
 | Timestamps | the log's `ts` is milliseconds since the epoch, from `std::time` |
-| Converting HTML to markdown for `web_fetch` | the smallest maintained crate builds a whole DOM and pulls 41 crates; see below |
 
 Tool arguments are checked against a subset of JSON Schema: `type`,
 `properties`, `required`, `additionalProperties`, `enum`, `items`, `minimum`,
@@ -254,19 +274,6 @@ server whose schema uses one still works. Checking those schemas is best
 effort. The jsonschema
 crate covers the whole specification, but it costs 14,808 KiB on Linux x86_64
 and brings 79 crates, more than every runtime crate together.
-
-`web_fetch` converts a page in one pass that holds the page and its output
-(`crates/tools/src/web_fetch/markdown.rs`). The smallest maintained crate,
-htmd 0.5.5, passes `cargo deny` with this repository's `deny.toml` but pulls 41
-crates (html5ever, markup5ever_rcdom, xml5ever, string_cache, phf and their
-dependencies) and builds a DOM of the page. Peak memory footprint on macOS
-arm64, from `/usr/bin/time -l` on a generated page, against the 24 MiB busy
-session budget (`docs/performance.md`):
-
-| Page | htmd | Fiber's converter |
-|---|---|---|
-| 1 MiB | 24.9 MB | 3.0 MB |
-| 10 MiB (the download cap) | 232.2 MB | 21.0 MB |
 
 The shell tool's recogniser splits a command on `&&`, `||`, `;` and `|` and
 reads each part as plain words. Anything it cannot read plainly makes the

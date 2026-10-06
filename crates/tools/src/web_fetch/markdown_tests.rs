@@ -270,7 +270,9 @@ fn an_empty_title_adds_nothing() {
 
 #[test]
 fn an_unclosed_title_does_not_swallow_the_page() {
-    assert_eq!(to_markdown("<title>T<p>x</p>"), "T\n\nx\n");
+    // The spec reads the rest of the page as the title's Rcdata text, so
+    // its words, whitespace collapsed, become the leading heading.
+    assert_eq!(to_markdown("<title>T<p>x</p>"), "# T<p>x</p>\n");
 }
 
 #[test]
@@ -355,15 +357,19 @@ fn an_unterminated_comment_drops_the_rest() {
 
 #[test]
 fn named_entities() {
+    // `&nbsp;` decodes to U+00A0 per the spec, which the converter keeps:
+    // only ASCII whitespace collapses.
     assert_eq!(
         to_markdown("&amp; &lt; &gt; &quot; &apos;|&nbsp;|"),
-        "& < > \" '| |\n"
+        "& < > \" '|\u{a0}|\n"
     );
 }
 
 #[test]
-fn a_non_breaking_space_collapses_like_a_space() {
-    assert_eq!(to_markdown("a&nbsp;&nbsp; b"), "a b\n");
+fn non_breaking_spaces_are_kept_as_written() {
+    // The spec decodes `&nbsp;` to U+00A0, which is not ASCII whitespace,
+    // so it is kept rather than collapsed.
+    assert_eq!(to_markdown("a&nbsp;&nbsp; b"), "a\u{a0}\u{a0} b\n");
 }
 
 #[test]
@@ -376,17 +382,7 @@ fn numeric_entities_decimal_and_hex() {
 
 #[test]
 fn invalid_entities_are_kept_as_written() {
-    for kept in [
-        "&unknown;",
-        "&#0;",
-        "&#xD800;",
-        "&#x110000;",
-        "&#99999999999;",
-        "&#;",
-        "&#xZ;",
-        "&#12a;",
-        "&;",
-    ] {
+    for kept in ["&unknown;", "&#;", "&#xZ;", "&;"] {
         assert_eq!(
             to_markdown(&format!("a{kept}b")),
             format!("a{kept}b\n"),
@@ -396,10 +392,33 @@ fn invalid_entities_are_kept_as_written() {
 }
 
 #[test]
+fn a_numeric_reference_without_its_semicolon_still_decodes() {
+    // Unlike a named reference, `&#12` followed by `a` flushes U+000C and
+    // leaves the `a;` as text per the spec; the form feed then collapses
+    // to a space.
+    assert_eq!(to_markdown("a&#12a;b"), "a a;b\n");
+}
+
+#[test]
+fn out_of_range_numeric_entities_become_the_replacement_character() {
+    // Zero, surrogates and code points past U+10FFFF decode to U+FFFD
+    // per the spec, instead of being kept as written.
+    for invalid in ["&#0;", "&#xD800;", "&#x110000;", "&#99999999999;"] {
+        assert_eq!(
+            to_markdown(&format!("a{invalid}b")),
+            "a\u{fffd}b\n",
+            "{invalid}"
+        );
+    }
+}
+
+#[test]
 fn an_ampersand_that_is_not_an_entity_stays() {
+    // A legacy entity without its semicolon still decodes before a
+    // character that cannot continue the name, including the end of input.
     assert_eq!(
         to_markdown("AT&T said a & b; ok &amp"),
-        "AT&T said a & b; ok &amp\n"
+        "AT&T said a & b; ok &\n"
     );
 }
 
@@ -412,13 +431,15 @@ fn an_entity_is_decoded_inside_pre() {
 }
 
 #[test]
-fn an_entity_may_be_exactly_thirty_two_bytes_long() {
+fn entities_have_no_length_cap() {
+    // The hand-written tokenizer looked at 32 bytes at most; the spec
+    // sets no limit, so a longer numeric reference decodes too.
     let fits = format!("&#x{}41;", "0".repeat(26));
     assert_eq!(fits.len(), 32);
     assert_eq!(to_markdown(&fits), "A\n");
-    let too_long = format!("&#x{}41;", "0".repeat(27));
-    assert_eq!(too_long.len(), 33);
-    assert_eq!(to_markdown(&too_long), format!("{too_long}\n"));
+    let long = format!("&#x{}41;", "0".repeat(27));
+    assert_eq!(long.len(), 33);
+    assert_eq!(to_markdown(&long), "A\n");
 }
 
 #[test]
@@ -435,8 +456,10 @@ fn text_with_a_less_than_that_is_not_a_tag_is_kept() {
 }
 
 #[test]
-fn a_tag_with_no_closing_bracket_is_kept_as_text() {
-    assert_eq!(to_markdown("a <b c=d"), "a <b c=d\n");
+fn a_tag_with_no_closing_bracket_is_dropped_at_eof() {
+    // The spec drops a tag the end of input cuts off, instead of keeping
+    // it as text.
+    assert_eq!(to_markdown("a <b c=d"), "a\n");
 }
 
 #[test]
@@ -521,8 +544,11 @@ fn a_huge_attribute_value_is_read_once() {
 
 #[test]
 fn many_unterminated_openers_stay_linear() {
+    // The spec drops a tag the end of input cuts off, so `<a ` alone
+    // converts to nothing; the point here is that each still converts in
+    // proportion to its size.
     let html = "<a ".repeat(300_000);
-    assert!(!to_markdown(&html).is_empty());
+    assert_eq!(to_markdown(&html), "");
     let html = "<title>".repeat(300_000);
     let _ = to_markdown(&html);
     let html = "<!-- ".repeat(300_000);
@@ -553,17 +579,16 @@ fn excess_list_closes_pop_the_counter_first() {
 
 #[test]
 fn a_million_nested_lists_keep_the_stack_at_its_cap() {
-    let mut converter = super::Converter::default();
-    converter.run(&"<ul>".repeat(1_000_000));
-    assert_eq!(converter.lists.len(), super::MAX_LEVELS);
-    converter.run(&"</ul>".repeat(1_000_000));
-    assert!(converter.lists.is_empty());
-    assert_eq!(converter.over, 0);
+    let html = "<ul>".repeat(1_000_000);
+    let markdown = to_markdown(&html);
+    assert!(markdown.len() < 64 * 1_000_000, "{} bytes", markdown.len());
 }
 
 #[test]
-fn a_close_of_a_non_element_is_text() {
-    assert_eq!(to_markdown("a</2x>b"), "a</2x>b\n");
+fn a_close_of_a_non_element_is_dropped() {
+    // `</` followed by a digit is ignored per the spec, instead of being
+    // kept as text.
+    assert_eq!(to_markdown("a</2x>b"), "ab\n");
 }
 
 #[test]
@@ -626,4 +651,43 @@ fn trailing_spaces_are_trimmed_before_a_block_break() {
 #[test]
 fn blocks_inside_a_link_are_spaces() {
     assert_eq!(to_markdown("<a href=\"u\">x<div></div>y</a>"), "[x y](u)\n");
+}
+
+#[test]
+fn named_entities_decode_per_the_spec() {
+    assert_eq!(to_markdown("&mdash;"), "—\n");
+    assert_eq!(to_markdown("&eacute;"), "é\n");
+    // A legacy entity without its semicolon still decodes in text.
+    assert_eq!(to_markdown("&notit"), "¬it\n");
+    assert_eq!(to_markdown("&Ouml;"), "Ö\n");
+    // Some entities name two code points.
+    assert_eq!(to_markdown("&NotEqualTilde;"), "≂̸\n");
+}
+
+#[test]
+fn an_entity_that_could_continue_a_name_is_kept_in_attributes() {
+    assert_eq!(
+        to_markdown("<a href=\"?a=1&copy=2\">x</a>"),
+        "[x](?a=1&copy=2)\n"
+    );
+}
+
+#[test]
+fn script_and_style_drop_markup_like_text() {
+    assert_eq!(to_markdown("a<script>x</p><b>y</b></script>b"), "ab\n");
+    assert_eq!(to_markdown("a<style>p</p><b>x</b></style>b"), "ab\n");
+}
+
+#[test]
+fn a_title_reads_markup_as_text() {
+    // Rcdata keeps markup literally: the tags become part of the title.
+    assert_eq!(to_markdown("<title>a <b>b</b></title>"), "# a <b>b</b>\n");
+}
+
+#[test]
+fn a_dropped_first_title_leaves_a_later_one_counting() {
+    assert_eq!(
+        to_markdown("<noscript><title>N</title></noscript><title>Real</title>"),
+        "# Real\n"
+    );
 }

@@ -8,9 +8,9 @@
 # ~4.5 MiB of RSS before it runs a line of code.
 set -eu
 cd "$(dirname "$0")"
-FEATURES="serde_json ureq ratatui crossterm rusqlite mlua clap thiserror signal-hook getrandom base64 ring rustix regex ignore search similar pulldown-cmark jsonschema syntect image image-parts"
+FEATURES="serde_json ureq ratatui crossterm rusqlite mlua clap thiserror signal-hook getrandom base64 ring rustix regex ignore search similar pulldown-cmark jsonschema syntect image image-parts html5ever encoding_rs"
 # Every crate in the runtime table of docs/dependencies.md, built together.
-RUNTIME="serde_json ureq ratatui crossterm mlua clap thiserror signal-hook getrandom base64 ring rustix search similar"
+RUNTIME="serde_json ureq ratatui crossterm mlua clap thiserror signal-hook getrandom base64 ring rustix search similar html5ever encoding_rs"
 
 # crossterm needs a terminal, so every binary runs under script(1), which
 # gives it a pseudo-terminal. time(1) runs inside it and measures only the

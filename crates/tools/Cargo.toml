@@ -9,9 +9,11 @@ publish.workspace = true
 # (docs/architecture.md, "The call rules").
 [dependencies]
 contract = { path = "../contract" }
+encoding_rs.workspace = true
 grep-regex.workspace = true
 grep-matcher.workspace = true
 grep-searcher.workspace = true
+html5ever.workspace = true
 ignore.workspace = true
 rustix.workspace = true
 serde_json.workspace = true
@@ -20,6 +22,7 @@ ureq.workspace = true
 
 [dev-dependencies]
 fakes = { path = "../fakes" }
+proptest.workspace = true
 
 # The jig (docs/testing.md, "Jigs").
 [[example]]
