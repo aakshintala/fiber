@@ -40,23 +40,6 @@ impl Hints {
         }
     }
 
-    /// The `annotations` object these hints round-trip through: each
-    /// present hint as its boolean, absent hints left out, so
-    /// [`Hints::from_annotations`] reads back what this wrote.
-    pub fn to_annotations(&self) -> Value {
-        let mut map = Map::new();
-        if let Some(read_only) = self.read_only {
-            map.insert("readOnlyHint".to_owned(), Value::Bool(read_only));
-        }
-        if let Some(destructive) = self.destructive {
-            map.insert("destructiveHint".to_owned(), Value::Bool(destructive));
-        }
-        if let Some(open_world) = self.open_world {
-            map.insert("openWorldHint".to_owned(), Value::Bool(open_world));
-        }
-        Value::Object(map)
-    }
-
     /// The declared effects (`docs/mcp.md`, "Effects"): `readOnlyHint`
     /// true wins over everything; else `destructiveHint` true is
     /// irreversible writes, false is reversible writes, and absent either

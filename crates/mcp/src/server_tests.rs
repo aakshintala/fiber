@@ -12,7 +12,7 @@ use fakes::TempDir;
 use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
-use super::{CallError, Server, StartError};
+use super::{CallError, ListedTool, Server, StartError};
 
 /// How long a test waits for a thread or a child, in real time.
 ///
@@ -170,7 +170,7 @@ fn initialize_and_list_succeed() {
     setup.result("echo", r#"{"content":[{"type":"text","text":"hi"}]}"#);
     let opened = setup.start(Duration::from_secs(5));
     assert_eq!(opened.tools.len(), 1);
-    let tool = &opened.tools[0];
+    let tool = ListedTool::read(&opened.tools[0]);
     assert_eq!(tool.name, "echo");
     assert_eq!(tool.description, "Echoes.");
     assert_eq!(tool.hints.read_only, Some(true));

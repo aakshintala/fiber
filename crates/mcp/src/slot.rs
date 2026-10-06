@@ -13,6 +13,7 @@ use contract::ErrorCode;
 use contract::clock::Clock;
 use contract::events::McpServerFailed;
 use contract::shapes::Failure;
+use serde_json::Value;
 
 use crate::cache;
 use crate::server::{ListedTool, Server};
@@ -35,8 +36,8 @@ pub(crate) struct Slot {
 enum State {
     /// Declared from the cache; no process runs.
     NotStarted {
-        /// The cached full list, for the rewrite check on start.
-        cached: Vec<ListedTool>,
+        /// The cached raw entries, for the rewrite check on start.
+        cached: Vec<Value>,
     },
     /// The server runs; `live` is every name it listed.
     Running {
@@ -69,6 +70,25 @@ pub(crate) struct RunFailed {
 }
 
 impl Slot {
+    /// One slot from its parts, in `state`.
+    fn new(
+        spec: ServerSpec,
+        workspace: &Path,
+        cache: &Path,
+        clock: &Arc<dyn Clock>,
+        version: &str,
+        state: State,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            spec,
+            workspace: workspace.to_path_buf(),
+            cache: cache.to_path_buf(),
+            clock: Arc::clone(clock),
+            version: version.to_owned(),
+            state: Mutex::new(state),
+        })
+    }
+
     /// A slot declared from `cached`, starting nothing until the first
     /// call to one of its tools.
     pub(crate) fn lazy(
@@ -77,16 +97,9 @@ impl Slot {
         cache: &Path,
         clock: &Arc<dyn Clock>,
         version: &str,
-        cached: Vec<ListedTool>,
+        cached: Vec<Value>,
     ) -> Arc<Self> {
-        Arc::new(Self {
-            spec,
-            workspace: workspace.to_path_buf(),
-            cache: cache.to_path_buf(),
-            clock: Arc::clone(clock),
-            version: version.to_owned(),
-            state: Mutex::new(State::NotStarted { cached }),
-        })
+        Self::new(spec, workspace, cache, clock, version, State::NotStarted { cached })
     }
 
     /// A slot for a server [`Server::start`] already runs, holding its full
@@ -101,17 +114,17 @@ impl Slot {
         tools: Vec<ListedTool>,
     ) -> Arc<Self> {
         let live = tools.iter().map(|tool| tool.name.clone()).collect();
-        Arc::new(Self {
+        Self::new(
             spec,
-            workspace: workspace.to_path_buf(),
-            cache: cache.to_path_buf(),
-            clock: Arc::clone(clock),
-            version: version.to_owned(),
-            state: Mutex::new(State::Running {
+            workspace,
+            cache,
+            clock,
+            version,
+            State::Running {
                 server: Arc::new(server),
                 live,
-            }),
-        })
+            },
+        )
     }
 
     /// The server to call `tool` on, starting it first when the slot is not
@@ -159,8 +172,11 @@ impl Slot {
                         &open.tools,
                     );
                 }
-                let live: HashSet<String> =
-                    open.tools.iter().map(|tool| tool.name.clone()).collect();
+                let live: HashSet<String> = open
+                    .tools
+                    .iter()
+                    .map(|entry| ListedTool::read(entry).name)
+                    .collect();
                 let present = live.contains(tool);
                 let server = Arc::new(open.server);
                 *state = State::Running {
@@ -174,7 +190,7 @@ impl Slot {
                 }
             }
             Err(error) => {
-                let record = failed(&name, &error, timeout);
+                let record = failed(&name, &error, timeout, false);
                 let failure = record.error.clone();
                 *state = State::Dead {
                     error: failure.clone(),

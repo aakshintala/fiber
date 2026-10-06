@@ -14,7 +14,6 @@ use fakes::TempDir;
 use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
-use crate::effects::Hints;
 use crate::server::ListedTool;
 use crate::start::{DEFAULT_CALL_TIMEOUT, DEFAULT_STARTUP_TIMEOUT, ServerSpec, Started, start};
 
@@ -76,7 +75,7 @@ impl Setup {
     }
 
     /// Writes the cache for `spec` holding `tools`, as a first start would.
-    fn write_cache(&self, spec: &ServerSpec, tools: &[ListedTool]) {
+    fn write_cache(&self, spec: &ServerSpec, tools: &[Value]) {
         crate::cache::write(
             &self.cache(),
             &spec.name,
@@ -88,12 +87,9 @@ impl Setup {
     /// Starts once to populate the cache, stops, and clears the spawn
     /// signals, so the next start declares from the cache.
     fn populate(&self, spec: ServerSpec) {
-        let workspace = self.workspace();
-        let cache = self.cache();
-        let clock = self.clock();
-        let started = start(vec![spec], &workspace, &cache, &clock, "0.0.0");
+        let started = self.start(vec![spec]);
         assert!(started.failed.is_empty());
-        started.servers.stop();
+        self.stop(&started);
         std::fs::remove_file(self.dir.path().join("pid.txt")).expect("pid.txt");
         let requests = self.dir.path().join("requests.log");
         if requests.exists() {
@@ -129,20 +125,42 @@ impl Setup {
     }
 
     fn run(&self, tool: &Arc<dyn Tool>) -> contract::tool::Output {
-        tool.run(
-            &Default::default(),
-            &fakes::CancelToken::new(),
-            &fakes::Recorder::default(),
-        )
+        // Threaded with a wall-clock limit: a silent server would sit
+        // parked on the fake clock forever, so a bare direct call would
+        // hang the test instead of failing it.
+        let tool = Arc::clone(tool);
+        let (done, result) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let output = tool.run(
+                &Default::default(),
+                &fakes::CancelToken::new(),
+                &fakes::Recorder::default(),
+            );
+            done.send(output).expect("collected");
+        });
+        result
+            .recv_timeout(WITHIN)
+            .unwrap_or_else(|_| panic!("the call ends within {WITHIN:?}"))
     }
 
-    fn listed(name: &str) -> Vec<ListedTool> {
-        vec![ListedTool {
-            name: name.to_owned(),
-            description: String::new(),
-            schema: json!({"type": "object"}),
-            hints: Hints::default(),
-        }]
+    fn stop(&self, started: &Started) {
+        // Threaded with a wall-clock limit: a lingering child would keep
+        // the stop parked on the fake clock forever, so a bare direct
+        // stop would hang the test instead of failing it.
+        std::thread::scope(|scope| {
+            let (done, stopped) = std::sync::mpsc::channel();
+            scope.spawn(move || {
+                started.servers.stop();
+                done.send(()).expect("collected");
+            });
+            stopped
+                .recv_timeout(WITHIN)
+                .unwrap_or_else(|_| panic!("the stop ends within {WITHIN:?}"));
+        });
+    }
+
+    fn listed(name: &str) -> Vec<Value> {
+        vec![json!({"name": name})]
     }
 }
 
@@ -177,7 +195,7 @@ fn the_first_call_starts_the_server_and_the_second_reuses_it() {
         1,
         "both calls share the one started server",
     );
-    started.servers.stop();
+    setup.stop(&started);
 }
 
 #[test]
@@ -202,7 +220,13 @@ fn two_concurrent_first_calls_spawn_once() {
         });
     }
     drop(done);
-    let outputs: Vec<_> = results.into_iter().collect();
+    let first = results
+        .recv_timeout(WITHIN)
+        .unwrap_or_else(|_| panic!("the first call ends within {WITHIN:?}"));
+    let second = results
+        .recv_timeout(WITHIN)
+        .unwrap_or_else(|_| panic!("the second call ends within {WITHIN:?}"));
+    let outputs = vec![first, second];
     assert_eq!(outputs.len(), 2);
     for output in &outputs {
         assert!(output.error.is_none());
@@ -212,7 +236,7 @@ fn two_concurrent_first_calls_spawn_once() {
         1,
         "concurrent first calls share one start",
     );
-    started.servers.stop();
+    setup.stop(&started);
 }
 
 #[test]
@@ -246,7 +270,7 @@ fn a_cached_server_whose_command_fails_dies_on_the_first_call() {
     let again = second.error.expect("failed");
     assert_eq!(again.code, ErrorCode::McpServerUnavailable);
     assert!(second.server_failed.is_none());
-    started.servers.stop();
+    setup.stop(&started);
 }
 
 #[test]
@@ -289,8 +313,8 @@ fn a_lazy_start_that_misses_its_deadline_fails_with_deadline() {
         let record = output.server_failed.expect("the failed start is recorded");
         assert_eq!(record.reason, ServerFailure::Deadline);
         assert!(!record.will_restart);
-        started.servers.stop();
     });
+    setup.stop(&started);
 }
 
 #[test]
@@ -328,11 +352,11 @@ fn a_call_to_a_removed_tool_fails_without_calling_and_updates_the_cache() {
     .expect("the cache holds the live list");
     assert_eq!(
         live.iter()
-            .map(|tool| tool.name.as_str())
+            .map(|entry| ListedTool::read(entry).name)
             .collect::<Vec<_>>(),
         ["echo"],
     );
-    started.servers.stop();
+    setup.stop(&started);
 }
 
 #[test]
@@ -349,7 +373,7 @@ fn a_live_list_equal_to_the_cache_leaves_the_file_untouched() {
     assert!(output.error.is_none());
     let after = std::fs::read(setup.cache().join("fx.json")).expect("cache");
     assert_eq!(before, after, "an equal live list rewrites nothing");
-    started.servers.stop();
+    setup.stop(&started);
 }
 
 #[test]
@@ -361,7 +385,7 @@ fn stop_stops_a_lazily_started_server_and_ignores_a_never_started_one() {
     setup.populate(setup.spec("fx"));
     let quiet = setup.start(vec![setup.spec("fx")]);
     let idle = setup.tool(&quiet, "mcp__fx__echo");
-    quiet.servers.stop();
+    setup.stop(&quiet);
     assert!(
         !setup.dir.path().join("pid.txt").exists(),
         "stopping a never-started slot spawns nothing",
@@ -388,7 +412,7 @@ fn stop_stops_a_lazily_started_server_and_ignores_a_never_started_one() {
         .trim()
         .parse()
         .expect("a pid");
-    started.servers.stop();
+    setup.stop(&started);
     let (_held, probe) = std::sync::mpsc::channel::<()>();
     for _ in 0..POLLS {
         if !fakes::kill_pid(pid, "0").expect("probe") {
@@ -399,4 +423,31 @@ fn stop_stops_a_lazily_started_server_and_ignores_a_never_started_one() {
         }
     }
     panic!("waited {WITHIN:?} for pid {pid} to exit after the stop");
+}
+
+#[test]
+fn an_annotation_only_change_rewrites_the_cache() {
+    // `idempotentHint` is not one of the hints Fiber reads, so the parsed
+    // tools are equal either way: only the raw entries tell the live list
+    // changed.
+    let setup = Setup::new();
+    setup.tools(&json!([{"name": "echo"}]));
+    setup.result("echo", r#"{"content":[]}"#);
+    setup.populate(setup.spec("fx"));
+    let before = std::fs::read_to_string(setup.cache().join("fx.json"))
+        .expect("the first start writes the cache");
+    assert!(!before.contains("idempotentHint"), "{before:?}");
+    setup.tools(&json!([{"name": "echo", "annotations": {"idempotentHint": true}}]));
+    let started = setup.start(vec![setup.spec("fx")]);
+    let tool = setup.tool(&started, "mcp__fx__echo");
+    let output = setup.run(&tool);
+    assert!(output.error.is_none());
+    let after =
+        std::fs::read_to_string(setup.cache().join("fx.json")).expect("cache");
+    assert_ne!(before, after, "an annotation-only change rewrites the cache");
+    assert!(
+        after.contains("idempotentHint"),
+        "the cache holds the raw entry: {after:?}",
+    );
+    setup.stop(&started);
 }

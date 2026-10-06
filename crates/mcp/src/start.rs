@@ -178,7 +178,9 @@ pub fn start(
         );
         let link: Weak<Slot> = Arc::downgrade(&slot);
         slots.push(slot);
-        tools.extend(declare(&spec, &cached, &link).into_iter().map(|tool| {
+        let listed: Vec<ListedTool> =
+            cached.iter().map(ListedTool::read).collect();
+        tools.extend(declare(&spec, &listed, &link).into_iter().map(|tool| {
             let info = info(&tool);
             let registered_by = tool.registered_by.clone();
             let tool: Arc<dyn Tool> = Arc::new(tool.tool);
@@ -232,19 +234,20 @@ pub(crate) fn open(
         Ok(open) => open,
         Err(error) => {
             return if required {
-                Opened::RequiredDown(required_failed(&name, &error, timeout))
+                Opened::RequiredDown(failed(&name, &error, timeout, true))
             } else {
-                Opened::Down(failed(&name, &error, timeout))
+                Opened::Down(failed(&name, &error, timeout, false))
             };
         }
     };
-    let tools: Vec<ListedTool> = open.tools;
+    let entries: Vec<serde_json::Value> = open.tools;
     cache::write(
         cache,
         &name,
         &cache::key(&spec.command, &spec.args, &spec.env),
-        &tools,
+        &entries,
     );
+    let tools: Vec<ListedTool> = entries.iter().map(ListedTool::read).collect();
     let slot = Slot::running(
         spec.clone(),
         workspace,
@@ -311,34 +314,17 @@ pub(crate) fn declare(spec: &ServerSpec, tools: &[ListedTool], link: &Weak<Slot>
     declared
 }
 
+/// The failure of a server that did not start: `required` servers name
+/// themselves, because the session stops before the log, so a required
+/// failure is never written as `mcp_server_failed` but returned for the
+/// exit-before-session path instead.
 pub(crate) fn failed(
     server: &str,
     error: &crate::server::StartError,
     startup: Duration,
+    required: bool,
 ) -> McpServerFailed {
-    let (reason, message) = fail_parts(server, error, startup, false);
-    McpServerFailed {
-        server: server.to_owned(),
-        reason,
-        will_restart: false,
-        error: Failure {
-            code: ErrorCode::McpServerUnavailable,
-            message,
-            retry_after: None,
-            provider: None,
-        },
-    }
-}
-
-/// The failure of a `required` server: the session stops before the log, so
-/// this is never written as `mcp_server_failed` but returned for the
-/// exit-before-session path instead.
-pub(crate) fn required_failed(
-    server: &str,
-    error: &crate::server::StartError,
-    startup: Duration,
-) -> McpServerFailed {
-    let (reason, message) = fail_parts(server, error, startup, true);
+    let (reason, message) = fail_parts(server, error, startup, required);
     McpServerFailed {
         server: server.to_owned(),
         reason,

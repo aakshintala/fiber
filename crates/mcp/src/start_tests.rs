@@ -383,6 +383,22 @@ fn servers_stop_at_once() {
     stopped.recv_timeout(WITHIN).expect("the stop returned");
 }
 
+fn stop_within(started: &super::Started) {
+    // Threaded with a wall-clock limit: a lingering child would keep the
+    // stop parked on the fake clock forever, so a bare direct stop would
+    // hang the test instead of failing it.
+    std::thread::scope(|scope| {
+        let (done, stopped) = std::sync::mpsc::channel();
+        scope.spawn(move || {
+            started.servers.stop();
+            done.send(()).expect("collected");
+        });
+        stopped
+            .recv_timeout(WITHIN)
+            .unwrap_or_else(|_| panic!("the stop ends within {WITHIN:?}"));
+    });
+}
+
 #[test]
 fn a_cached_server_declares_without_spawning() {
     let setup = Setup::new();
@@ -396,7 +412,7 @@ fn a_cached_server_declares_without_spawning() {
         setup.workspace().join("cache").join("fx.json").exists(),
         "the first start writes the cache",
     );
-    first.servers.stop();
+    stop_within(&first);
     std::fs::remove_file(setup.dir.path().join("pid.txt")).expect("pid.txt");
     // The second start shares the workspace, so it shares the cache: it
     // declares the same tools and infos and spawns nothing.
@@ -409,7 +425,7 @@ fn a_cached_server_declares_without_spawning() {
         !setup.dir.path().join("pid.txt").exists(),
         "a cached server spawns nothing before its first call",
     );
-    second.servers.stop();
+    stop_within(&second);
 }
 
 #[test]
@@ -419,7 +435,7 @@ fn a_changed_arg_misses_the_cache_and_spawns() {
     setup.result("echo", r#"{"content":[]}"#);
     let first = start_within(vec![setup.spec("fx")], setup.workspace(), setup.clock());
     assert_eq!(names(&first), ["mcp__fx__echo"]);
-    first.servers.stop();
+    stop_within(&first);
     std::fs::remove_file(setup.dir.path().join("pid.txt")).expect("pid.txt");
     let mut changed = setup.spec("fx");
     changed.args.push("changed".to_owned());
@@ -429,7 +445,7 @@ fn a_changed_arg_misses_the_cache_and_spawns() {
         setup.dir.path().join("pid.txt").exists(),
         "a changed declaration misses the cache and spawns",
     );
-    second.servers.stop();
+    stop_within(&second);
 }
 
 #[test]
@@ -439,7 +455,7 @@ fn a_required_server_with_a_cache_starts_and_declares_live() {
     setup.result("echo", r#"{"content":[]}"#);
     let first = start_within(vec![setup.spec("fx")], setup.workspace(), setup.clock());
     assert_eq!(names(&first), ["mcp__fx__echo"]);
-    first.servers.stop();
+    stop_within(&first);
     std::fs::remove_file(setup.dir.path().join("pid.txt")).expect("pid.txt");
     // The live list changed since the cache was written: a required
     // server declares what the server lists now, not the cached list.
@@ -453,7 +469,7 @@ fn a_required_server_with_a_cache_starts_and_declares_live() {
         setup.dir.path().join("pid.txt").exists(),
         "a required server starts with the session even with a cache",
     );
-    second.servers.stop();
+    stop_within(&second);
 }
 
 #[test]
@@ -466,7 +482,7 @@ fn a_required_server_that_fails_to_start_yields_required_failed() {
     let started = start_within(vec![failing], setup.workspace(), setup.clock());
     assert!(started.tools.is_empty());
     assert!(started.failed.is_empty());
-    let failure = started.required_failed.expect("required_failed");
+    let failure = started.required_failed.as_ref().expect("required_failed");
     assert_eq!(failure.server, "bad");
     assert_eq!(failure.reason, ServerFailure::StartFailed);
     assert!(!failure.will_restart);
@@ -487,7 +503,7 @@ fn a_required_server_that_fails_to_start_yields_required_failed() {
         "message: {}",
         failure.error.message,
     );
-    started.servers.stop();
+    stop_within(&started);
 }
 
 #[test]
@@ -519,7 +535,7 @@ fn a_required_server_that_misses_its_deadline_yields_required_failed() {
         let started = result.recv_timeout(WITHIN).expect("the start ends");
         assert!(started.tools.is_empty());
         assert!(started.failed.is_empty());
-        let failure = started.required_failed.expect("required_failed");
+        let failure = started.required_failed.as_ref().expect("required_failed");
         assert_eq!(failure.server, "slow");
         assert_eq!(failure.reason, ServerFailure::Deadline);
         assert_eq!(
@@ -527,7 +543,7 @@ fn a_required_server_that_misses_its_deadline_yields_required_failed() {
             "The required MCP server `slow` did not answer before its startup deadline of 5000 ms. \
              Raise `startup_timeout_ms` under `mcp.servers.slow` if it needs longer.",
         );
-        started.servers.stop();
+        stop_within(&started);
     });
 }
 
@@ -556,7 +572,7 @@ fn a_session_start_failure_carries_what_to_do() {
         "message: {}",
         failure.error.message,
     );
-    started.servers.stop();
+    stop_within(&started);
 }
 
 #[test]
@@ -572,7 +588,7 @@ fn the_first_failing_required_server_in_spec_order_wins() {
     second.required = true;
     let started = start_within(vec![first, second], setup.workspace(), setup.clock());
     assert!(started.failed.is_empty());
-    let failure = started.required_failed.expect("required_failed");
+    let failure = started.required_failed.as_ref().expect("required_failed");
     assert_eq!(failure.server, "first");
-    started.servers.stop();
+    stop_within(&started);
 }

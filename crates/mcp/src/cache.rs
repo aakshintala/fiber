@@ -11,8 +11,6 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use crate::server::ListedTool;
-
 /// The key of a server's declaration: the lowercase hex SHA-256 of the
 /// JSON serialisation of its command, arguments and environment. Timeouts,
 /// `required`, `enabled`, `disabled` and hint overrides are not part of
@@ -52,12 +50,13 @@ fn safe(server: &str) -> bool {
         && !server.contains('\0')
 }
 
-/// Reads the cached list for `server` whose key is `key`: `None` on every
+/// Reads the cached entries for `server` whose key is `key`: `None` on every
 /// miss (no file, an unreadable or unparsable file, a key that differs, a
-/// `tools` that is not an array, or an unsafe name). Each entry is read
-/// back through [`ListedTool::read`], so the cache holds the server's full
+/// `tools` that is not an array, or an unsafe name). Entries are the server's
+/// raw `tools/list` entries verbatim; callers read tools back through
+/// [`crate::server::ListedTool::read`], so the cache holds the server's full
 /// list before `enabled`/`disabled`/hint overrides.
-pub(crate) fn read(cache: &Path, server: &str, key: &str) -> Option<Vec<ListedTool>> {
+pub(crate) fn read(cache: &Path, server: &str, key: &str) -> Option<Vec<Value>> {
     let path = path(cache, server)?;
     let bytes = std::fs::read(path).ok()?;
     let file: Value = serde_json::from_slice(&bytes).ok()?;
@@ -66,46 +65,32 @@ pub(crate) fn read(cache: &Path, server: &str, key: &str) -> Option<Vec<ListedTo
         return None;
     }
     let tools = object.get("tools").and_then(Value::as_array)?;
-    Some(tools.iter().map(ListedTool::read).collect())
+    Some(tools.clone())
 }
 
-/// Writes `tools` as `server`'s cached list under `key`: `create_dir_all`
-/// first, then a temporary sibling file renamed over the cache file, so
-/// the last rename wins. A failure changes nothing the session depends
-/// on: it is ignored, and an unsafe name writes nothing at all.
-pub(crate) fn write(cache: &Path, server: &str, key: &str, tools: &[ListedTool]) {
+/// Writes `tools` (raw `tools/list` entries) as `server`'s cached list under
+/// `key`: `create_dir_all` first, then a temporary sibling file renamed over
+/// the cache file, so the last rename wins. A failure changes nothing the
+/// session depends on: it is ignored, and an unsafe name writes nothing at
+/// all.
+pub(crate) fn write(cache: &Path, server: &str, key: &str, tools: &[Value]) {
     let Some(path) = path(cache, server) else {
         return;
     };
     if std::fs::create_dir_all(cache).is_err() {
         return;
     }
-    let entries: Vec<Value> = tools.iter().map(entry).collect();
-    let file = serde_json::json!({"key": key, "tools": entries});
+    let file = serde_json::json!({"key": key, "tools": tools});
     let bytes = serde_json::to_vec(&file).unwrap_or_default();
     let tmp = path.with_extension(format!("json.{}.tmp", std::process::id(),));
-    if std::fs::write(&tmp, bytes).is_err() {
-        match std::fs::remove_file(&tmp) {
-            Ok(()) | Err(_) => {}
-        }
-        return;
-    }
-    if std::fs::rename(&tmp, &path).is_err() {
+    if std::fs::write(&tmp, bytes)
+        .and_then(|()| std::fs::rename(&tmp, &path))
+        .is_err()
+    {
         match std::fs::remove_file(&tmp) {
             Ok(()) | Err(_) => {}
         }
     }
-}
-
-/// One cached entry: the server's raw `tools/list` entry shape, which
-/// [`ListedTool::read`] reads back into the same tool.
-fn entry(tool: &ListedTool) -> Value {
-    serde_json::json!({
-        "name": tool.name,
-        "description": tool.description,
-        "inputSchema": tool.schema,
-        "annotations": tool.hints.to_annotations(),
-    })
 }
 
 #[cfg(test)]

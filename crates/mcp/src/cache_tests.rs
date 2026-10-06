@@ -6,7 +6,6 @@ use fakes::TempDir;
 use serde_json::json;
 
 use super::{key, path, read, write};
-use crate::server::ListedTool;
 
 fn env(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
     pairs
@@ -15,17 +14,13 @@ fn env(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
         .collect()
 }
 
-fn tools() -> Vec<ListedTool> {
-    vec![ListedTool {
-        name: "echo".to_owned(),
-        description: "Echoes.".to_owned(),
-        schema: json!({"type": "object"}),
-        hints: crate::effects::Hints {
-            read_only: Some(true),
-            destructive: None,
-            open_world: None,
-        },
-    }]
+fn tools() -> Vec<serde_json::Value> {
+    vec![json!({
+        "name": "echo",
+        "description": "Echoes.",
+        "inputSchema": {"type": "object"},
+        "annotations": {"readOnlyHint": true},
+    })]
 }
 
 #[test]
@@ -149,9 +144,9 @@ fn a_write_leaves_no_tmp_behind_and_creates_the_directory() {
 }
 
 #[test]
-fn entries_round_trip_through_read() {
-    // A bare entry takes the defaults the tool declares, and survives a
-    // write and a read unchanged.
+fn entries_are_stored_verbatim() {
+    // A bare entry round-trips unchanged, and reads back through
+    // `ListedTool::read` with the defaults the tool declares.
     let dir = TempDir::new("fiber-mcp-cache");
     let cache = dir.path().join("mcp");
     let declaration = key("fx", &[], &env(&[]));
@@ -161,13 +156,18 @@ fn entries_round_trip_through_read() {
         json!({"key": declaration, "tools": [{"name": "bare"}]}).to_string(),
     )
     .expect("bare cache");
-    let bare = ListedTool {
-        name: "bare".to_owned(),
-        description: String::new(),
-        schema: json!({"type": "object"}),
-        hints: crate::effects::Hints::default(),
-    };
-    assert_eq!(read(&cache, "fx", &declaration), Some(vec![bare.clone()]));
-    write(&cache, "fx", &declaration, std::slice::from_ref(&bare));
-    assert_eq!(read(&cache, "fx", &declaration), Some(vec![bare]));
+    assert_eq!(
+        read(&cache, "fx", &declaration),
+        Some(vec![json!({"name": "bare"})])
+    );
+    let bare = crate::server::ListedTool::read(&json!({"name": "bare"}));
+    assert_eq!(bare.name, "bare");
+    assert_eq!(bare.description, String::new());
+    assert_eq!(bare.schema, json!({"type": "object"}));
+    assert_eq!(bare.hints, crate::effects::Hints::default());
+    write(&cache, "fx", &declaration, &[json!({"name": "bare"})]);
+    assert_eq!(
+        read(&cache, "fx", &declaration),
+        Some(vec![json!({"name": "bare"})])
+    );
 }
