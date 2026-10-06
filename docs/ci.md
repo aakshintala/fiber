@@ -46,7 +46,9 @@ A pull request runs only what its diff can affect.
 
 - A diff in which every file is Markdown, or is under `docs/` or
   `research/`, runs no job after the selection, whose docs check is the
-  whole run. A file a crate compiles in is the exception, below.
+  whole run. A file a crate compiles in is the exception, below. A file
+  under `providers/` or `extensions/` is the other exception: it runs the
+  package readers, below, even when it is Markdown.
 - A diff that changes `Cargo.lock`, any `Cargo.toml`, `rust-toolchain.toml`,
   anything under `.github/` or `scripts/`, `clippy.toml`, `deny.toml`,
   `.cargo/config.toml` or `.config/nextest.toml` runs everything.
@@ -58,6 +60,11 @@ A pull request runs only what its diff can affect.
   tests check it parses. The selector lists these files. The gate fails when
   the list and the source disagree, or when an include's argument is not a
   string literal.
+- A diff under `providers/` or `extensions/` runs the binary-level tests,
+  every crate whose tests read a first-party package, and
+  `fiber extension test` for each changed package that has cases ("Testing
+  an extension"). The selector lists the crates that read packages. The
+  gate fails when the list and the source disagree.
 - Any other diff runs the crates it touches and every crate that depends on
   them, read from the workspace's dependency graph
   ([ADR 0002](adr/0002-module-boundaries-are-crate-boundaries.md)).
