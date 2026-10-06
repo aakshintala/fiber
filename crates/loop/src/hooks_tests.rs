@@ -114,6 +114,7 @@ impl Tool for Fixed {
             description: "Returns a fixed output.".to_owned(),
             input_schema: json!({"type": "object"}),
             deferred: false,
+            hosted: None,
         }
     }
 
@@ -157,6 +158,7 @@ fn script(name: &str, arguments: Value) -> Vec<fakes::Scripted> {
         provider_id: None,
         repair: None,
         ran_by: None,
+        provider_item: None,
     }));
     vec![
         fakes::Scripted {

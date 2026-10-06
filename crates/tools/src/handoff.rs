@@ -39,6 +39,7 @@ impl Tool for Handoff {
                 "additionalProperties": false
             }),
             deferred: false,
+            hosted: None,
         }
     }
 

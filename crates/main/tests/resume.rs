@@ -332,6 +332,7 @@ fn requested(name: &str) -> Event {
         provider_id: None,
         repair: None,
         ran_by: None,
+        provider_item: None,
     })
 }
 

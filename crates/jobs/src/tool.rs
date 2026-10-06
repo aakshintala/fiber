@@ -62,6 +62,7 @@ impl Tool for JobsTool {
                 "additionalProperties": false
             }),
             deferred: false,
+            hosted: None,
         }
     }
 

@@ -556,6 +556,7 @@ impl Decoder {
                 provider_id: Some(ProviderCallId(call.id)).filter(|id| !id.0.is_empty()),
                 repair: None,
                 ran_by: None,
+                provider_item: None,
             })
         }));
         Ok(Reply {

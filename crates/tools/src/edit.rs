@@ -72,6 +72,7 @@ impl Tool for Edit {
                 "additionalProperties": false
             }),
             deferred: false,
+            hosted: None,
         }
     }
 

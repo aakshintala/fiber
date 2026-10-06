@@ -76,6 +76,7 @@ fn weather_tool() -> ToolDefinition {
             "additionalProperties": false
         }),
         deferred: false,
+        hosted: None,
     }
 }
 
@@ -90,6 +91,7 @@ fn loose_tool() -> ToolDefinition {
             "required": ["a"]
         }),
         deferred: false,
+        hosted: None,
     }
 }
 
@@ -279,7 +281,9 @@ fn every_probe_recording_decodes_into_the_actions_and_usage_it_holds() {
                 .iter()
                 .filter_map(|a| match a {
                     ReplyAction::ToolCall(c) => Some(c),
-                    ReplyAction::Reasoning(_) | ReplyAction::Text(_) => None,
+                    ReplyAction::Reasoning(_) | ReplyAction::Text(_) | ReplyAction::Hosted(_) => {
+                        None
+                    }
                 })
                 .collect();
             assert_eq!(calls.len(), want.calls.len(), "{label}");
@@ -311,7 +315,9 @@ fn every_probe_recording_decodes_into_the_actions_and_usage_it_holds() {
                 .iter()
                 .filter_map(|a| match a {
                     ReplyAction::Reasoning(r) => Some(r),
-                    ReplyAction::ToolCall(_) | ReplyAction::Text(_) => None,
+                    ReplyAction::ToolCall(_) | ReplyAction::Text(_) | ReplyAction::Hosted(_) => {
+                        None
+                    }
                 })
                 .collect();
             if want.reasoning.is_empty() {
@@ -553,6 +559,7 @@ fn four_turn_conversation() -> Vec<Input> {
                 provider_id: Some(ProviderCallId("call_1".into())),
                 repair: None,
                 ran_by: None,
+                provider_item: None,
             },
         },
         Input::ToolResult {
@@ -700,6 +707,7 @@ fn reasoning_goes_back_unchanged_only_to_the_model_reference_that_produced_it() 
                 provider_id: None,
                 repair: None,
                 ran_by: None,
+                provider_item: None,
             },
         },
         Input::ToolResult {
@@ -974,6 +982,7 @@ fn an_assistants_calls_fold_into_one_message_and_reasoning_alone_keeps_a_content
             provider_id: None,
             repair: None,
             ran_by: None,
+            provider_item: None,
         },
     };
     let result = |id: &str| Input::ToolResult {
@@ -1087,6 +1096,7 @@ fn tool_call_deltas_without_an_index_are_told_apart_by_id() {
                 provider_id: Some(ProviderCallId("c1".into())),
                 repair: None,
                 ran_by: None,
+                provider_item: None,
             }),
             ReplyAction::ToolCall(ToolCallRequested {
                 name: "f".into(),
@@ -1094,6 +1104,7 @@ fn tool_call_deltas_without_an_index_are_told_apart_by_id() {
                 provider_id: Some(ProviderCallId("c2".into())),
                 repair: None,
                 ran_by: None,
+                provider_item: None,
             }),
         ]
     );
@@ -1395,6 +1406,7 @@ fn a_failed_tool_result_sends_the_same_bytes_as_a_success() {
                     provider_id: Some(ProviderCallId("call_1".into())),
                     repair: None,
                     ran_by: None,
+                    provider_item: None,
                 },
             },
             Input::ToolResult {
@@ -1444,6 +1456,7 @@ fn image_turn(
                 provider_id: Some(ProviderCallId(call_id.into())),
                 repair: None,
                 ran_by: None,
+                provider_item: None,
             },
         },
         Input::ToolResult {

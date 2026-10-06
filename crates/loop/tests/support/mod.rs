@@ -129,6 +129,7 @@ pub(crate) fn calls_reply(text: &str, calls: &[(&str, Value)]) -> Scripted {
             provider_id: None,
             repair: None,
             ran_by: None,
+            provider_item: None,
         }));
     }
     Scripted {
@@ -281,6 +282,7 @@ impl Tool for TestTool {
                 "additionalProperties": false
             }),
             deferred: false,
+            hosted: None,
         }
     }
 

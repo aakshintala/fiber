@@ -172,7 +172,7 @@ impl Tool for Shell {
                 "required": ["command"],
                 "additionalProperties": false
             }),
-            deferred: false,
+            deferred: false, hosted: None,
         }
     }
 

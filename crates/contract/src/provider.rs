@@ -9,7 +9,7 @@ use serde_json::{Map, Value};
 
 use crate::events::{
     CacheLifetime, ReasoningCompleted, TextCompleted, TextDelta, ToolCallArgumentsDelta,
-    ToolCallRequested,
+    ToolCallCompleted, ToolCallRequested,
 };
 use crate::shapes::{Failure, Tokens};
 use crate::{ActionId, GenerationId};
@@ -119,6 +119,11 @@ pub struct ToolDefinition {
     /// "What a provider extension declares").
     #[serde(default)]
     pub deferred: bool,
+    /// The vendor's hosted tool type, such as `web_search_20250305`, for a
+    /// tool the provider runs itself; the protocol sends only this type and
+    /// the name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hosted: Option<String>,
 }
 
 /// One piece of the conversation, rendered from the log's durable events.
@@ -139,7 +144,8 @@ pub enum Input {
         /// The part's text.
         text: String,
         /// The provider's own form of the part, sent back unchanged only to
-        /// `model`.
+        /// `model`. A hosted call's two lines render as an empty `text` with
+        /// the call block, then one with the result block.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         provider_item: Option<Value>,
     },
@@ -215,7 +221,9 @@ impl Reply {
             .iter()
             .filter_map(|action| match action {
                 ReplyAction::Text(part) => Some(part.text.as_str()),
-                ReplyAction::Reasoning(_) | ReplyAction::ToolCall(_) => None,
+                ReplyAction::Reasoning(_) | ReplyAction::ToolCall(_) | ReplyAction::Hosted(_) => {
+                    None
+                }
             })
             .collect()
     }
@@ -230,6 +238,19 @@ pub enum ReplyAction {
     Reasoning(ReasoningCompleted),
     /// `tool_call_requested`.
     ToolCall(ToolCallRequested),
+    /// A call the provider ran itself, such as a hosted web search, with its
+    /// result.
+    Hosted(HostedCall),
+}
+
+/// A call the provider ran itself, such as a hosted web search, with its
+/// result; both carry their raw blocks as `provider_item`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HostedCall {
+    /// The call, as `tool_call_requested`.
+    pub call: ToolCallRequested,
+    /// The result, as `tool_call_completed`.
+    pub completed: ToolCallCompleted,
 }
 
 /// Why a reply ended.

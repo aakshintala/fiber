@@ -84,6 +84,7 @@ fn requested(name: &str) -> Event {
         provider_id: None,
         repair: None,
         ran_by: None,
+        provider_item: None,
     })
 }
 
@@ -111,6 +112,7 @@ fn completed(text: &str) -> Event {
         changes: None,
         control: None,
         changed_by: None,
+        provider_item: None,
     })
 }
 

@@ -64,6 +64,7 @@ fn call(name: &str) -> ToolCallRequested {
         provider_id: None,
         repair: None,
         ran_by: None,
+        provider_item: None,
     }
 }
 
@@ -172,6 +173,7 @@ fn the_models_prose_reasoning_and_results_are_left_out() {
             changes: None,
             control: None,
             changed_by: None,
+            provider_item: None,
         }),
     ] {
         render_reviewed(&mut reviewed, &event, Some(&action));

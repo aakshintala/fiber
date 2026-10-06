@@ -20,6 +20,7 @@ pub(crate) fn wire_tools_fixture() -> Vec<ToolDefinition> {
             description: "Weather for a city.".into(),
             input_schema: strict_schema.clone(),
             deferred: false,
+            hosted: None,
         })
         .collect();
     tools.push(ToolDefinition {
@@ -31,6 +32,7 @@ pub(crate) fn wire_tools_fixture() -> Vec<ToolDefinition> {
             "required": ["a"]
         }),
         deferred: false,
+        hosted: None,
     });
     tools.push(ToolDefinition {
         name: "z_enum".into(),
@@ -42,6 +44,7 @@ pub(crate) fn wire_tools_fixture() -> Vec<ToolDefinition> {
             "additionalProperties": false
         }),
         deferred: false,
+        hosted: None,
     });
     tools
 }

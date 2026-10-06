@@ -197,6 +197,7 @@ impl Tool for SendTool {
             description: "Sends what the test queued.".into(),
             input_schema: json!({"type": "object", "additionalProperties": false}),
             deferred: false,
+            hosted: None,
         }
     }
 

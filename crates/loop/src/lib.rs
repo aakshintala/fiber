@@ -674,6 +674,7 @@ impl Loop {
                     self.append(&Event::ToolCallRequested(call.clone()), turn, Some(&id))?;
                     calls.push((id, call));
                 }
+                ReplyAction::Hosted(_) => {}
             }
         }
         let cost = self

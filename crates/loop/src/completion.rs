@@ -81,5 +81,6 @@ pub(crate) fn completed(text: String, error: Option<Failure>) -> ToolCallComplet
         changes: None,
         control: None,
         changed_by: None,
+        provider_item: None,
     }
 }

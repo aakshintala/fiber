@@ -133,6 +133,7 @@ fn calls(name: &str) -> Scripted {
         provider_id: None,
         repair: None,
         ran_by: None,
+        provider_item: None,
     }));
     Scripted {
         deltas: vec![Delta::ToolCallArguments(ToolCallArgumentsDelta {
@@ -175,6 +176,7 @@ impl Tool for Sends {
             description: "Sends while it runs.".into(),
             input_schema: json!({"type": "object", "additionalProperties": false}),
             deferred: false,
+            hosted: None,
         }
     }
 
@@ -213,6 +215,7 @@ impl Tool for Gated {
             description: "Needs a person's allow.".into(),
             input_schema: json!({"type": "object", "additionalProperties": false}),
             deferred: false,
+            hosted: None,
         }
     }
 

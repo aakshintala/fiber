@@ -75,6 +75,7 @@ fn weather_tool() -> ToolDefinition {
             "additionalProperties": false
         }),
         deferred: false,
+        hosted: None,
     }
 }
 
@@ -245,7 +246,9 @@ fn every_probe_recording_decodes_into_the_actions_and_usage_it_holds() {
                 .iter()
                 .filter_map(|a| match a {
                     ReplyAction::ToolCall(c) => Some(c),
-                    ReplyAction::Reasoning(_) | ReplyAction::Text(_) => None,
+                    ReplyAction::Reasoning(_) | ReplyAction::Text(_) | ReplyAction::Hosted(_) => {
+                        None
+                    }
                 })
                 .collect();
             let streamed = deltas
@@ -380,6 +383,7 @@ fn the_tool_use_stream_decodes_the_call() {
             provider_id: Some(ProviderCallId("toolu_01AXa3EtWnvLzfgA63BeZm68".into())),
             repair: None,
             ran_by: None,
+            provider_item: None,
         }
     );
     assert!(deltas.iter().any(
@@ -539,6 +543,7 @@ fn two_requests_built_from_the_same_inputs_are_the_same_bytes() {
         description: "First alphabetically.".into(),
         input_schema: json!({"type": "object", "properties": {}, "required": []}),
         deferred: false,
+        hosted: None,
     });
     for request in [request(), request(), reordered.clone()] {
         run(Box::new(messages.request(&request))).0.unwrap();
@@ -728,6 +733,7 @@ fn four_turn_conversation() -> Vec<Input> {
                 provider_id: Some(ProviderCallId("toolu_1".into())),
                 repair: None,
                 ran_by: None,
+                provider_item: None,
             },
         },
         Input::ToolResult {
@@ -816,6 +822,7 @@ fn reasoning_goes_back_unchanged_only_to_the_model_reference_that_produced_it() 
                 provider_id: Some(ProviderCallId("toolu_1".into())),
                 repair: None,
                 ran_by: None,
+                provider_item: None,
             },
         },
         Input::ToolResult {
@@ -1268,6 +1275,7 @@ fn text_around_a_tool_call_decodes_and_replays_in_that_order() {
                 provider_id: Some(ProviderCallId("t1".into())),
                 repair: None,
                 ran_by: None,
+                provider_item: None,
             },
         },
         Input::Assistant {
@@ -1361,6 +1369,7 @@ fn a_failed_tool_result_sends_is_error_and_a_success_sends_none() {
                     provider_id: Some(ProviderCallId("toolu_1".into())),
                     repair: None,
                     ran_by: None,
+                    provider_item: None,
                 },
             },
             Input::ToolResult {
@@ -1407,6 +1416,7 @@ fn image_conversation(is_error: bool, images: Vec<contract::provider::ImageRef>)
                 provider_id: Some(ProviderCallId("toolu_1".into())),
                 repair: None,
                 ran_by: None,
+                provider_item: None,
             },
         },
         Input::ToolResult {

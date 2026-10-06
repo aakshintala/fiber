@@ -45,6 +45,7 @@ impl Tool for Named {
             description: self.1.to_owned(),
             input_schema: json!({"type": "object"}),
             deferred: false,
+            hosted: None,
         }
     }
 
@@ -442,6 +443,7 @@ impl Tool for Lines {
             description: "Returns job lines.".to_owned(),
             input_schema: json!({"type": "object", "additionalProperties": false}),
             deferred: false,
+            hosted: None,
         }
     }
 
@@ -485,6 +487,7 @@ impl Tool for Hold {
             description: "Returns job lines after cancel.".to_owned(),
             input_schema: json!({"type": "object", "additionalProperties": false}),
             deferred: false,
+            hosted: None,
         }
     }
 
@@ -542,6 +545,7 @@ fn calls(text: &str, names: &[&str]) -> fakes::Scripted {
             provider_id: None,
             repair: None,
             ran_by: None,
+            provider_item: None,
         }));
     }
     fakes::Scripted {

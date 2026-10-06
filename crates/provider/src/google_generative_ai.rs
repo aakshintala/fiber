@@ -591,6 +591,7 @@ impl Decoder {
                     .map(|id| ProviderCallId(id.to_owned())),
                 repair: None,
                 ran_by: None,
+                provider_item: None,
             }));
             return;
         }

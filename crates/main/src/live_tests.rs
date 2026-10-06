@@ -85,6 +85,7 @@ impl Tool for Shell {
                 "additionalProperties": false
             }),
             deferred: false,
+            hosted: None,
         }
     }
 
@@ -192,6 +193,7 @@ fn live_reviewer() {
                 provider_id: None,
                 repair: None,
                 ran_by: None,
+                provider_item: None,
             })
         })
         .collect();

@@ -86,6 +86,7 @@ fn weather_tool() -> ToolDefinition {
             "additionalProperties": false
         }),
         deferred: false,
+        hosted: None,
     }
 }
 
@@ -252,7 +253,9 @@ fn every_probe_recording_decodes_into_the_actions_and_usage_it_holds() {
                 .iter()
                 .filter_map(|a| match a {
                     ReplyAction::ToolCall(c) => Some(c),
-                    ReplyAction::Reasoning(_) | ReplyAction::Text(_) => None,
+                    ReplyAction::Reasoning(_) | ReplyAction::Text(_) | ReplyAction::Hosted(_) => {
+                        None
+                    }
                 })
                 .collect();
             assert_eq!(calls.len(), want.calls.len(), "{label}");
@@ -291,7 +294,7 @@ fn every_probe_recording_decodes_into_the_actions_and_usage_it_holds() {
                     let item = match action {
                         ReplyAction::Text(part) => part.provider_item.as_ref(),
                         ReplyAction::Reasoning(reasoning) => reasoning.provider_item.as_ref(),
-                        ReplyAction::ToolCall(_) => None,
+                        ReplyAction::ToolCall(_) | ReplyAction::Hosted(_) => None,
                     };
                     item.is_some_and(|item| item.get("thoughtSignature").is_some())
                 })
@@ -393,6 +396,7 @@ fn requests_from_the_same_inputs_are_byte_identical() {
             description: "Last alphabetically.".into(),
             input_schema: json!({"type": "object", "$defs": {}, "properties": {}}),
             deferred: false,
+            hosted: None,
         },
     );
     for request in [request(), request(), reordered] {
@@ -586,6 +590,7 @@ fn after(reply: &Reply, model: &str) -> Vec<Input> {
                 action_id: ActionId(format!("a_{n}")),
                 call: call.clone(),
             }),
+            ReplyAction::Hosted(_) => {}
         }
     }
     for (n, action) in reply.actions.iter().enumerate() {
@@ -697,7 +702,7 @@ fn a_function_call_without_an_id_is_logged_without_one_and_sent_back_without_one
         .iter()
         .filter_map(|a| match a {
             ReplyAction::ToolCall(c) => Some(c),
-            ReplyAction::Reasoning(_) | ReplyAction::Text(_) => None,
+            ReplyAction::Reasoning(_) | ReplyAction::Text(_) | ReplyAction::Hosted(_) => None,
         })
         .collect();
     assert_eq!(calls.len(), 2);
@@ -1232,7 +1237,7 @@ fn consecutive_replies_each_keep_their_own_text() {
                     text: r.text.clone(),
                     provider_item: r.provider_item.clone(),
                 }),
-                ReplyAction::ToolCall(_) => {}
+                ReplyAction::ToolCall(_) | ReplyAction::Hosted(_) => {}
             }
         }
     }
@@ -1341,6 +1346,7 @@ fn a_bare_call_signature_parks_before_user_content_and_not_on_a_later_call() {
                 provider_id: None,
                 repair: None,
                 ran_by: None,
+                provider_item: None,
             },
         },
     ]);
@@ -1401,6 +1407,7 @@ fn a_failed_tool_result_sends_an_error_key_and_a_success_sends_output() {
                     provider_id: Some(ProviderCallId("c1".into())),
                     repair: None,
                     ran_by: None,
+                    provider_item: None,
                 },
             },
             Input::ToolResult {
@@ -1447,6 +1454,7 @@ fn image_conversation(
                 provider_id: Some(ProviderCallId("c1".into())),
                 repair: None,
                 ran_by: None,
+                provider_item: None,
             },
         },
         Input::ToolResult {

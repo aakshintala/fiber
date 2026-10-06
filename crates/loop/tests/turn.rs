@@ -568,6 +568,7 @@ fn a_reply_logs_each_text_part_among_its_other_items() {
             provider_id: None,
             repair: None,
             ran_by: None,
+            provider_item: None,
         }),
         part("B"),
     ];
