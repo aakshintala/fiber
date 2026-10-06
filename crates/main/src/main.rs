@@ -20,6 +20,7 @@ mod late_emit;
 mod mcp_servers;
 mod prompt_files;
 mod resume;
+mod session_command;
 mod session_extensions;
 mod settings;
 mod shutdown;
@@ -132,7 +133,9 @@ fn run() -> i32 {
                 Err(sentence) => ask_failed(usage(sentence)),
             }
         }
-        cli::Invocation::Run(Some(cli::Commands::Session(args))) => session_command(args, clock),
+        cli::Invocation::Run(Some(cli::Commands::Session(args))) => {
+            session_command::run(args, clock)
+        }
         cli::Invocation::Run(Some(cli::Commands::Sessions(cmd))) => match cmd {
             cli::SessionsCommands::Export { id, path } => ::cli::export(&id, path.as_deref()),
         },
@@ -419,7 +422,7 @@ fn ask_new(
     clock: Arc<dyn contract::clock::Clock>,
     signals: &doors::Signals,
 ) -> i32 {
-    new_session(
+    session_command::new_session(
         SessionId(doors::mint("s_")),
         model,
         Some(prompt),
@@ -427,165 +430,6 @@ fn ask_new(
         clock,
         signals,
     )
-}
-
-/// The internal session command: one session process bound at
-/// `run/<session_id>` (`docs/invocation.md`, "Processes"). The workspace
-/// is entered before signals are installed or any thread starts, so the
-/// shared path reads it as the current directory exactly as `ask` does.
-/// Stdin is never read.
-fn session_command(args: cli::SessionArgs, clock: Arc<dyn contract::clock::Clock>) -> i32 {
-    if let Err(e) = std::env::set_current_dir(&args.workspace) {
-        return ask_failed(failed(
-            ErrorCode::IoFailed,
-            format!("{}: {e}", args.workspace.display()),
-        ));
-    }
-    // As `ask`: a signal while starting exits at once.
-    let signals = match doors::Signals::install(Arc::clone(&clock)) {
-        Ok(signals) => signals,
-        Err(e) => return ask_failed(failed(ErrorCode::IoFailed, format!("signals: {e}"))),
-    };
-    new_session(
-        SessionId(args.id),
-        args.model,
-        args.prompt,
-        false,
-        clock,
-        &signals,
-    )
-}
-
-/// One function builds and runs every new session (`docs/invocation.md`,
-/// "Processes"): `fiber ask` and the internal session command differ
-/// only in the id's source (minted vs `--id`), the workspace (the current
-/// directory on entry, applied by chdir before the call) and the first
-/// deliveries (prompt plus `close` vs an optional prompt).
-fn new_session(
-    id: SessionId,
-    model: Option<String>,
-    prompt: Option<String>,
-    one_turn: bool,
-    clock: Arc<dyn contract::clock::Clock>,
-    signals: &doors::Signals,
-) -> i32 {
-    let mut parts = match parts_with(model, None, None, Arc::clone(&clock)) {
-        Ok(parts) => parts,
-        Err(e) => return ask_failed(e),
-    };
-    crash::attach(&id);
-    let dir = parts.sessions.join(&id.0);
-    // The session directory's log: the opening message's environment
-    // names it.
-    parts.prompt.session_log = dir.join("events.jsonl").display().to_string();
-    let Parts {
-        provider,
-        model,
-        prompt: prompt_inputs,
-        reviewer,
-        limits,
-        budget,
-        retry,
-        handoff,
-        idle,
-        home,
-        project,
-        workspace,
-        sessions,
-        extensions,
-        mcp,
-        web_search,
-    } = parts;
-    let (job_emit, jobs) = late_emit::registry(&dir, &clock);
-    shutdown::arm(signals);
-    // Before the log exists: a failure here, such as not finding the running
-    // binary, leaves no session line; every server starts with the session too.
-    let (tools, infos, driver, session_servers) = match mcp_servers::session_tools(
-        &workspace,
-        &dir.join("artifacts"),
-        &clock,
-        &jobs,
-        mcp.specs,
-        web_search.as_deref(),
-    ) {
-        Ok(built) => built,
-        Err(e) => return ask_failed(e),
-    };
-    let forget = Arc::clone(&session_servers.forget);
-    let permissions = ask_permissions(
-        &home,
-        &project,
-        workspace.to_string_lossy().into_owned(),
-        &clock,
-    );
-    let log = match Log::create(&sessions, id, Arc::clone(&clock)) {
-        Ok(log) => Arc::new(log),
-        Err(e) => return stop_and_fail(session_servers, failed(e.code(), e)),
-    };
-    job_emit.set(Arc::clone(&log) as _);
-    let session = match Session::open(
-        &home,
-        &dir,
-        &log,
-        Arc::clone(&clock),
-        infos,
-        Box::new(io::stdout()),
-    ) {
-        Ok(session) => session,
-        Err(e) => return stop_and_fail(session_servers, e),
-    };
-    session.shell(driver);
-    session.jobs(jobs.clone());
-    let cancel = Arc::new(r#loop::TurnCancel::default());
-    // A signal while armed: nothing was written, so nothing more is.
-    if let Some(code) = shutdown::start(signals, &cancel, &session, jobs.clone()) {
-        session_servers.servers.stop();
-        session.close(log);
-        return code;
-    }
-    let code = run_turn(
-        &session,
-        &log,
-        &dir,
-        prompt,
-        one_turn,
-        cancel,
-        |inbox, cancel| {
-            finish(
-                // `Loop::start` writes `session_started`, which `fiber_started`
-                // follows (`docs/events.md`).
-                Loop::start(
-                    Arc::clone(&log),
-                    provider,
-                    model,
-                    prompt_inputs,
-                    inbox,
-                    tools,
-                    permissions,
-                )
-                .and_then(|looped| {
-                    r#loop::fiber_started(&log, env!("CARGO_PKG_VERSION"), false)?;
-                    session_extensions::written(&log, &extensions)?;
-                    r#loop::mcp_servers_started(&log, session_servers.failed, mcp.notices)?;
-                    let looped = session_extensions::hooked(looped.jobs(jobs), &extensions);
-                    Ok(looped.handoff(handoff).on_handoff(forget))
-                }),
-                budget,
-                idle,
-                // Only one-turn `fiber ask` runs with no client: the
-                // session command serves clients that may answer
-                // (`docs/permissions.md`, "Headless").
-                !one_turn,
-                reviewer,
-                limits,
-                retry,
-                cancel,
-            )
-        },
-    );
-    session_servers.servers.stop();
-    session.close(log);
-    code
 }
 
 /// What an `ask` loop judges with: the workspace the session keeps, the
