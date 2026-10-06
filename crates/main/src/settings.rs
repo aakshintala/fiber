@@ -49,10 +49,10 @@ pub(crate) fn block_limits(config: &Config) -> r#loop::BlockLimits {
 /// the top level. `"5m"` is five minutes; anything else or absent is the
 /// 1-hour default (the config crate's `OneOf` refuses other values).
 pub(crate) fn cache_lifetime(config: &Config, model: &str) -> CacheLifetime {
-    let lifetime = config
+    if config
         .get("cache.lifetime", Some(model))
-        .and_then(|(value, _)| value.as_str().map(str::to_owned));
-    if lifetime.as_deref() == Some("5m") {
+        .is_some_and(|(value, _)| value == "5m")
+    {
         CacheLifetime::FiveMinutes
     } else {
         CacheLifetime::OneHour

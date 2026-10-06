@@ -2138,6 +2138,7 @@ fn openrouter_sends_the_cache_key_and_anthropic_markers_for_a_claude_model() {
         &[("OPENROUTER_API_KEY", "sk-test-openrouter")],
     );
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
     let built = run
         .lines
         .iter()
@@ -2196,6 +2197,7 @@ fn openrouter_claude_request(
 /// A 5-minute run records `"5m"` in `preamble_built` and marks the system
 /// and last-message blocks with a `ttl`-less marker.
 fn assert_five_minute_markers(run: &Run, body: &Value) {
+    assert_eq!(run.kinds(), HELLO_KINDS);
     let built = run
         .lines
         .iter()

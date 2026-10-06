@@ -462,6 +462,23 @@ fn a_five_minute_input_reaches_the_preamble_and_the_requests() {
     session.inbox.send(delivery("hi")).unwrap();
     session.turn();
     let lines = session.lines();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     let built = lines.iter().find(|l| l.kind == "preamble_built").unwrap();
     assert_eq!(built.payload["cache_lifetime"], "5m");
     // Every request sends the input's lifetime, and `preamble_built`
@@ -471,8 +488,4 @@ fn a_five_minute_input_reaches_the_preamble_and_the_requests() {
     for request in &requests {
         assert_eq!(request.cache_lifetime, CacheLifetime::FiveMinutes);
     }
-    assert_eq!(
-        built.payload["cache_lifetime"],
-        serde_json::to_value(requests[0].cache_lifetime).unwrap()
-    );
 }

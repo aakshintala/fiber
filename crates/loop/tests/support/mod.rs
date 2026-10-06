@@ -753,7 +753,7 @@ impl Session {
             Arc::new(TurnCancel::default()),
             (FakeClock::new(), 0),
             Vec::new(),
-            Some(lifetime),
+            lifetime,
         )
     }
 
@@ -895,7 +895,7 @@ impl Session {
             cancel,
             (FakeClock::new(), 0),
             sections,
-            None,
+            CacheLifetime::OneHour,
         )
     }
 
@@ -920,7 +920,7 @@ impl Session {
             Arc::new(TurnCancel::default()),
             (clock, 0),
             Vec::new(),
-            None,
+            CacheLifetime::OneHour,
         )
     }
 
@@ -937,7 +937,7 @@ impl Session {
             Arc::new(TurnCancel::default()),
             (FakeClock::new(), window),
             Vec::new(),
-            None,
+            CacheLifetime::OneHour,
         )
     }
 
@@ -954,7 +954,7 @@ impl Session {
         cancel: Arc<TurnCancel>,
         (clock, window): (Arc<FakeClock>, u64),
         sections: Vec<(String, Vec<PathBuf>, Option<u64>)>,
-        cache_lifetime: Option<CacheLifetime>,
+        cache_lifetime: CacheLifetime,
     ) -> Self {
         let home = TempDir::new();
         let workspace = home.0.join("workspace");
@@ -988,9 +988,7 @@ impl Session {
                 prompt.credential = Some("work".into());
                 prompt.context_window = (window != 0).then_some(window);
                 prompt.extension_sections = sections;
-                if let Some(lifetime) = cache_lifetime {
-                    prompt.cache_lifetime = lifetime;
-                }
+                prompt.cache_lifetime = cache_lifetime;
                 prompt
             },
             rx,
