@@ -44,6 +44,22 @@ impl Envelope {
     }
 }
 
+/// One line the hub sends on a connection to the hub
+/// (`docs/events.md`, "The envelope"): `hub_hello`, `command_accepted`
+/// and `command_rejected` for a hub command. It carries `kind`, `ts`,
+/// `schema_version` and `payload`, and no `session_id` in the envelope.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HubLine {
+    /// The only discriminator a consumer switches on.
+    pub kind: String,
+    /// Milliseconds since the epoch.
+    pub ts: u64,
+    /// The schema version this line is written against.
+    pub schema_version: u32,
+    /// The kind-specific body.
+    pub payload: Map<String, Value>,
+}
+
 #[cfg(test)]
 #[path = "envelope_tests.rs"]
 mod tests;

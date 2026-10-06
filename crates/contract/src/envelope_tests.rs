@@ -54,6 +54,33 @@ fn a_line_without_a_required_field_is_rejected() {
 }
 
 #[test]
+fn hub_hello_serializes_kind_ts_schema_version_payload_in_order() {
+    let mut payload = serde_json::Map::new();
+    payload.insert(
+        "fiber_version".to_owned(),
+        serde_json::Value::String("0.0.0".to_owned()),
+    );
+    let line = HubLine {
+        kind: "hub_hello".to_owned(),
+        ts: 1_759_150_000_000,
+        schema_version: SCHEMA_VERSION,
+        payload,
+    };
+    assert_eq!(
+        serde_json::to_string(&line).unwrap(),
+        r#"{"kind":"hub_hello","ts":1759150000000,"schema_version":1,"payload":{"fiber_version":"0.0.0"}}"#
+    );
+}
+
+#[test]
+fn a_hub_line_carries_no_session_id() {
+    let line = r#"{"kind":"hub_hello","ts":1759150000000,"schema_version":1,"payload":{"fiber_version":"0.0.0"}}"#;
+    let parsed: HubLine = serde_json::from_str(line).unwrap();
+    assert_eq!(parsed.kind, "hub_hello");
+    assert_eq!(serde_json::to_string(&parsed).unwrap(), line);
+}
+
+#[test]
 fn a_payload_that_is_not_an_object_is_rejected() {
     let line = r#"{"kind":"x","session_id":"s","ts":1,"schema_version":1,"payload":[]}"#;
     assert!(serde_json::from_str::<Envelope>(line).is_err());
