@@ -356,7 +356,10 @@ fn an_indented_line_before_the_first_key_does_not_parse() {
 
 #[test]
 fn a_literal_block_keeps_trailing_spaces_inside_the_description() {
-    assert_eq!(description("description: |\n  first  \n  second"), "first  \nsecond");
+    assert_eq!(
+        description("description: |\n  first  \n  second"),
+        "first  \nsecond"
+    );
 }
 
 #[test]
