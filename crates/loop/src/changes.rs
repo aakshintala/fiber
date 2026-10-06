@@ -17,6 +17,7 @@ use contract::shapes::DeclaredEffects;
 
 use crate::Error;
 use crate::opening;
+use crate::prompt::PromptInputs;
 
 /// A file's size and modification time when last read.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -49,6 +50,16 @@ struct Tracked {
     noticed: Option<Option<Stat>>,
 }
 
+/// One extension section's files for the turn-start check and the prune
+/// check: the extension's name, its files' paths as the manifest names
+/// them, and its byte budget, when the manifest gives one.
+#[derive(Debug)]
+struct Section {
+    extension: String,
+    paths: Vec<String>,
+    budget: Option<u64>,
+}
+
 /// The instruction files the model was sent and the directories checked,
 /// carried across turns and rebuilt from the log on resume.
 #[derive(Debug)]
@@ -68,6 +79,8 @@ pub(crate) struct State {
     /// The content the model last had per path, updated as instruction
     /// lines render, live and in `rebuild`.
     pub(crate) had: BTreeMap<String, String>,
+    /// Every extension section's files and budget, in send order.
+    sections: Vec<Section>,
     /// The subdirectory lines a call queued, written at the next step
     /// start.
     queued: Vec<Event>,
@@ -96,6 +109,7 @@ impl State {
             date: String::new(),
             home,
             had: BTreeMap::new(),
+            sections: Vec::new(),
             queued: Vec::new(),
         }
     }
@@ -104,10 +118,14 @@ impl State {
     /// sent with its size and time now, the home and chain directories
     /// checked, and the date given. The baseline the next turn's check
     /// compares against.
-    pub(crate) fn initial(message: &OpeningMessage, workspace: &Path, home: &Path) -> Self {
+    pub(crate) fn initial(
+        message: &OpeningMessage,
+        workspace: &Path,
+        prompt: &PromptInputs,
+    ) -> Self {
         let workspace = opening::canonical(workspace);
         let (chain, _) = opening::repo_chain(&workspace);
-        let mut state = Self::empty(home);
+        let mut state = Self::empty(&prompt.home);
         state.dirs.extend(chain);
         for file in &message.instruction_files {
             state.files.insert(
@@ -118,6 +136,7 @@ impl State {
                 },
             );
         }
+        state.track_sections(&prompt.extension_sections, true);
         state.date = message.environment.date.clone();
         state
     }
@@ -132,12 +151,16 @@ impl State {
     pub(crate) fn resumed(
         lines: &[Envelope],
         workspace: &Path,
-        home: &Path,
+        prompt: &PromptInputs,
     ) -> Result<Self, Error> {
         let workspace = opening::canonical(workspace);
         let (chain, _) = opening::repo_chain(&workspace);
-        let mut state = Self::empty(home);
+        let mut state = Self::empty(&prompt.home);
         state.dirs.extend(chain);
+        // Today's manifest only: a path the log's opening message sent
+        // that the manifest no longer names is not tracked and sends
+        // nothing.
+        state.track_sections(&prompt.extension_sections, false);
         for line in lines.iter().filter(|l| l.is_durable()) {
             let Some(event) = Event::from_envelope(line).map_err(Error::Unreadable)? else {
                 continue;
@@ -162,6 +185,44 @@ impl State {
             apply(&mut state.had, &event);
         }
         Ok(state)
+    }
+
+    /// Every section path in `sections` is tracked, present or absent: a
+    /// path absent at the build stays tracked with `stat: None`, so its
+    /// later appearance is `created` with the full text. With `sized` the
+    /// size and time are read now (live); on resume nothing is
+    /// remembered. Applied after the instruction files: a path in both
+    /// roles is tracked once, and reads as the section's.
+    fn track_sections(&mut self, sections: &[(String, Vec<PathBuf>, Option<u64>)], sized: bool) {
+        for (name, paths, budget) in sections {
+            let keys: Vec<String> = paths
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect();
+            for key in &keys {
+                if sized {
+                    self.files.entry(key.clone()).or_insert(Tracked {
+                        stat: stat_of(key),
+                        noticed: None,
+                    });
+                } else {
+                    self.files.entry(key.clone()).or_default();
+                }
+            }
+            self.sections.push(Section {
+                extension: name.clone(),
+                paths: keys,
+                budget: *budget,
+            });
+        }
+    }
+
+    /// The section `path` belongs to, when it is a section file.
+    fn extension_of(&self, path: &str) -> Option<&str> {
+        self.sections
+            .iter()
+            .find(|section| section.paths.iter().any(|key| key == path))
+            .map(|section| section.extension.as_str())
     }
 
     /// The turn-start check (`docs/system-prompt.md`, "When something
@@ -215,6 +276,7 @@ impl State {
                     // Touched but identical: sizes move on, nothing sent.
                     return;
                 }
+                let extension = self.extension_of(path).map(str::to_owned);
                 out.files.push(match old {
                     Some(old) => {
                         let diff = unified_diff(&old, &content, path);
@@ -228,7 +290,7 @@ impl State {
                         InstructionFile {
                             path: path.to_owned(),
                             reason: InstructionReason::Changed,
-                            extension: None,
+                            extension: extension.clone(),
                             content: Some(content.clone()),
                             sent,
                         }
@@ -236,7 +298,7 @@ impl State {
                     None => InstructionFile {
                         path: path.to_owned(),
                         reason: InstructionReason::Created,
-                        extension: None,
+                        extension,
                         content: Some(content),
                         sent: InstructionSent::Full,
                     },
@@ -250,7 +312,7 @@ impl State {
                     out.files.push(InstructionFile {
                         path: path.to_owned(),
                         reason: InstructionReason::Deleted,
-                        extension: None,
+                        extension: self.extension_of(path).map(str::to_owned),
                         content: None,
                         sent: InstructionSent::Deleted,
                     });
@@ -264,12 +326,19 @@ impl State {
                 // failure is always named.
                 let now = stat_of(path);
                 let noticed = self.files.get(path).and_then(|file| file.noticed);
+                let extension = self.extension_of(path).map(str::to_owned);
                 self.track(path, None);
                 if noticed != Some(now) {
                     if let Some(file) = self.files.get_mut(path) {
                         file.noticed = Some(now);
                     }
-                    out.notices.push(opening::io_failed(Path::new(path), &e));
+                    // A section file's notice names its section, as at the
+                    // build.
+                    let failed = Path::new(path);
+                    out.notices.push(match extension {
+                        Some(name) => opening::section_io_failed(failed, &e, &name),
+                        None => opening::io_failed(failed, &e),
+                    });
                 }
             }
         }
@@ -360,12 +429,12 @@ impl State {
     }
 
     /// A completed call's declared paths (`DeclaredEffects.paths`,
-    /// resolved against the workspace and lexically normalised): tracked
-    /// instruction files are re-read, and new subdirectory files are queued
-    /// for the next step start. Returns the session's own edits, written at
-    /// once; the queued lines wait in [`State::take_queued`]. A call that
-    /// declares no paths, and paths outside the workspace or that do not
-    /// resolve, change nothing here.
+    /// resolved against the workspace and lexically normalised): every
+    /// tracked path is re-read, wherever it is, and new subdirectory files
+    /// under the workspace are queued for the next step start. Returns the
+    /// session's own edits, written at once; the queued lines wait in
+    /// [`State::take_queued`]. A call that declares no paths, and paths that
+    /// do not resolve, change nothing here.
     pub(crate) fn call_completed(
         &mut self,
         workspace: &Path,
@@ -375,11 +444,11 @@ impl State {
             return Vec::new();
         };
         // Resolved once against the workspace and lexically normalised:
-        // paths outside it, or that do not resolve, change nothing here.
+        // every tracked path is re-read, wherever it is. Only the
+        // subdirectory walk below stays inside the workspace.
         let resolved: Vec<PathBuf> = paths
             .iter()
             .filter_map(|declared_path| clean(&workspace.join(declared_path)))
-            .filter(|resolved| resolved.strip_prefix(workspace).is_ok())
             .collect();
         let mut own = Vec::new();
         for resolved in &resolved {
@@ -394,10 +463,11 @@ impl State {
                     // Content different from what the model had: the model
                     // saw its own edit, so nothing is sent.
                     if self.had.get(&key).is_none_or(|old| old != &content) {
+                        let extension = self.extension_of(&key).map(str::to_owned);
                         own.push(InstructionFile {
                             path: key,
                             reason: InstructionReason::OwnEdit,
-                            extension: None,
+                            extension,
                             content: Some(content),
                             sent: InstructionSent::None,
                         });
@@ -408,10 +478,11 @@ impl State {
                     // The session's own call deleted a tracked file: an
                     // `own_edit` with no content, tracked as absent.
                     if self.had.contains_key(&key) {
+                        let extension = self.extension_of(&key).map(str::to_owned);
                         own.push(InstructionFile {
                             path: key,
                             reason: InstructionReason::OwnEdit,
-                            extension: None,
+                            extension,
                             content: None,
                             sent: InstructionSent::None,
                         });
@@ -421,8 +492,61 @@ impl State {
                 Err(_) => {}
             }
         }
-        self.touch_subdirs(workspace, &resolved);
+        // Only paths under the workspace reach new subdirectories.
+        let under: Vec<PathBuf> = resolved
+            .into_iter()
+            .filter(|resolved| resolved.strip_prefix(workspace).is_ok())
+            .collect();
+        self.touch_subdirs(workspace, &under);
         own
+    }
+
+    /// The prune lines a completed `write` or `edit` call's result carries
+    /// (`docs/system-prompt.md`, "Extension sections"): one per
+    /// over-budget section the call's declared paths touch, in
+    /// extension-name order. Anything else gives nothing. Sizes only are
+    /// read, never content.
+    pub(crate) fn prune_lines(
+        &self,
+        workspace: &Path,
+        tool: &str,
+        declared: &DeclaredEffects,
+    ) -> Vec<String> {
+        if tool != "write" && tool != "edit" {
+            return Vec::new();
+        }
+        let Some(paths) = declared.paths.as_ref() else {
+            return Vec::new();
+        };
+        // The same lexical match as the own-edit tracking above.
+        let touched: Vec<String> = paths
+            .iter()
+            .filter_map(|path| clean(&workspace.join(path)))
+            .map(|path| path.display().to_string())
+            .collect();
+        let mut sections: Vec<&Section> = self.sections.iter().collect();
+        sections.sort_by(|a, b| a.extension.cmp(&b.extension));
+        let mut lines = Vec::new();
+        for section in sections {
+            let Some(budget) = section.budget else {
+                continue;
+            };
+            if !section.paths.iter().any(|key| touched.contains(key)) {
+                continue;
+            }
+            // Sizes on disk now, absent files skipped: strictly greater
+            // means over.
+            let size: u64 = section
+                .paths
+                .iter()
+                .filter_map(|key| std::fs::metadata(key).ok())
+                .map(|meta| meta.len())
+                .sum();
+            if size > budget {
+                lines.push(opening::budget_line(size, budget));
+            }
+        }
+        lines
     }
 
     /// Each directory a call's declared paths reach, once per context: the
@@ -529,6 +653,13 @@ pub(crate) fn apply(had: &mut BTreeMap<String, String>, event: &Event) {
         had.clear();
         for file in &message.instruction_files {
             had.insert(file.path.clone(), file.content.clone());
+        }
+        // Each section file the message sent: a diff renders the same on
+        // resume.
+        for section in &message.extension_sections {
+            for file in &section.files {
+                had.insert(file.path.clone(), file.content.clone());
+            }
         }
     } else if let Event::InstructionFile(file) = event {
         match &file.content {

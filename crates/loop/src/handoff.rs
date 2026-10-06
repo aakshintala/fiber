@@ -767,7 +767,7 @@ impl Loop {
     pub(crate) fn write_opening(&mut self, turn: Option<&TurnId>) -> Result<(), Error> {
         let collected = crate::opening::collect(&self.prompt, &self.workspace);
         self.changes =
-            crate::changes::State::initial(&collected.message, &self.workspace, &self.prompt.home);
+            crate::changes::State::initial(&collected.message, &self.workspace, &self.prompt);
         for event in std::iter::once(Event::OpeningMessage(collected.message))
             .chain(collected.notices.into_iter().map(Event::Notice))
         {

@@ -139,6 +139,36 @@ fn created_renders_the_new_file() {
 }
 
 #[test]
+fn created_section_file_names_the_section() {
+    let mut had = BTreeMap::new();
+    let mut conversation = Vec::new();
+    render(
+        &mut conversation,
+        &Event::InstructionFile(InstructionFile {
+            path: "/h/notes/a.md".into(),
+            reason: InstructionReason::Created,
+            extension: Some("fiber.test/notes".into()),
+            content: Some("New notes.\n".into()),
+            sent: InstructionSent::Full,
+        }),
+        None,
+        "fake/model-1",
+        &mut had,
+        &mut crate::handoff::Carry::default(),
+    );
+    assert_eq!(conversation.len(), 1);
+    let text = user_text(&conversation[0]);
+    assert!(
+        text.contains("a new file appeared in the fiber.test/notes extension's section."),
+        "{text}"
+    );
+    assert!(!text.contains("applies to"), "{text}");
+    assert!(text.contains("### /h/notes/a.md"), "{text}");
+    assert!(text.contains("New notes.\n"), "{text}");
+    assert_eq!(had.get("/h/notes/a.md"), Some(&"New notes.\n".to_owned()));
+}
+
+#[test]
 fn subdirectory_renders_the_reached_file() {
     let mut had = BTreeMap::new();
     let mut conversation = Vec::new();

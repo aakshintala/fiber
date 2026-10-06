@@ -48,6 +48,14 @@ Fiber: a new instruction file appeared. It applies to {dir} and everything below
 
 {content}
 
+## created-section-file
+
+Fiber: a new file appeared in the {extension} extension's section.
+
+### {path}
+
+{content}
+
 ## replaced-file
 
 Fiber: {path} was changed outside this session. This full text replaces the version you were given earlier.
