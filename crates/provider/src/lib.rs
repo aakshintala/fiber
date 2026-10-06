@@ -110,7 +110,7 @@ pub struct Compat {
     /// `max_completion_tokens`. OpenAI's `gpt-6-luna` rejects `max_tokens`
     /// (`docs/model-routing.md`, "openai-completions facts").
     pub max_tokens: bool,
-    /// `openai-completions`: the effort goes in `reasoning: {effort}`, as
+    /// `openai-completions`: the level goes in `reasoning: {effort}`, as
     /// OpenRouter takes it, not in `reasoning_effort`.
     pub reasoning_object: bool,
     /// `openai-completions`: the model is Anthropic's, reached through a

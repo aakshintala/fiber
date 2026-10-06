@@ -843,7 +843,6 @@ Durable.
 | `model` | string | yes | the model reference |
 | `context_window` | integer | yes | the model's context window, in tokens |
 | `trigger_at` | integer | no | the context size, in tokens, at which an automatic handoff runs (`docs/handoff.md`, "Automatic"); absent when automatic handoff is off |
-| `effort` | string | no | the reasoning effort, where the model takes one |
 | `thinking` | string | no | the thinking level, where the model takes one (`docs/model-routing.md`, "Thinking") |
 | `tool_choice` | string | yes | the tool choice as sent |
 | `cache_lifetime` | string | yes | `5m` or `1h` |
@@ -858,7 +857,7 @@ Durable.
 
 | Key | Type | Required | Meaning |
 |---|---|---|---|
-| `before` | object | yes | `model`, `effort`, `thinking`, `cache_lifetime` and `credential` before the switch, as on `preamble_built` |
+| `before` | object | yes | `model`, `thinking`, `cache_lifetime` and `credential` before the switch, as on `preamble_built` |
 | `after` | object | yes | the same keys after it |
 | `source` | string | yes | who asked for it: `driver` or `extension`, as in "Where a message came from" |
 | `extension` | string | no | the extension's name, when `source` is `extension` |

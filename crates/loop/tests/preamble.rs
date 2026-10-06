@@ -489,3 +489,19 @@ fn a_five_minute_input_reaches_the_preamble_and_the_requests() {
         assert_eq!(request.cache_lifetime, CacheLifetime::FiveMinutes);
     }
 }
+
+#[test]
+fn a_thinking_level_is_recorded_and_sent_on_every_request() {
+    let mut session = Session::with_thinking(
+        vec![Scripted::text("Done.")],
+        Some(contract::ThinkingLevel::High),
+    );
+    session.inbox.send(delivery("hi")).unwrap();
+    session.turn();
+    let lines = session.lines();
+    let built = lines.iter().find(|l| l.kind == "preamble_built").unwrap();
+    assert_eq!(built.payload["thinking"], "high");
+    let requests = session.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].thinking, Some(contract::ThinkingLevel::High));
+}

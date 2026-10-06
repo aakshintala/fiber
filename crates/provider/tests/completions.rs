@@ -99,7 +99,7 @@ fn request() -> ModelRequest {
     ModelRequest {
         system_prompt: "You are terse.".into(),
         tools: vec![weather_tool(), loose_tool()],
-        effort: None,
+        thinking: None,
         tool_choice: "auto".into(),
         cache_lifetime: CacheLifetime::FiveMinutes,
         cache_key: "s_root".into(),
@@ -457,7 +457,7 @@ fn compat_flags_and_extra_fields_come_from_model_data_only() {
     let server =
         ProviderServer::start([completed_reply(), completed_reply(), completed_reply()]).unwrap();
     let mut thinking = request();
-    thinking.effort = Some("medium".into());
+    thinking.thinking = Some(contract::ThinkingLevel::Medium);
     // The same base URL with and without the flags: only the data decides.
     send(endpoint(&server), &thinking);
     let declared = Endpoint {
@@ -1708,4 +1708,50 @@ fn an_openrouter_stream_decodes_its_inline_cost() {
         "the stream's own cost"
     );
     assert_eq!(reply.tokens, tokens(&run["inline_usage"], "5m"));
+}
+
+#[test]
+fn thinking_levels_map_to_either_reasoning_field() {
+    use contract::ThinkingLevel::{Low, Off, Xhigh};
+    let server = ProviderServer::start([
+        completed_reply(),
+        completed_reply(),
+        completed_reply(),
+        completed_reply(),
+        completed_reply(),
+        completed_reply(),
+        completed_reply(),
+        completed_reply(),
+    ])
+    .unwrap();
+    for level in [None, Some(Off), Some(Low), Some(Xhigh)] {
+        let mut req = request();
+        req.thinking = level;
+        send(endpoint(&server), &req);
+    }
+    let plain = Endpoint {
+        compat: Compat {
+            reasoning_object: true,
+            ..Compat::default()
+        },
+        ..endpoint(&server)
+    };
+    for level in [None, Some(Off), Some(Low), Some(Xhigh)] {
+        let mut req = request();
+        req.thinking = level;
+        send(plain.clone(), &req);
+    }
+    let none = sent_body(&server, 0);
+    assert_eq!(none.get("reasoning"), None);
+    assert_eq!(none.get("reasoning_effort"), None);
+    assert_eq!(sent_body(&server, 1)["reasoning_effort"], "none");
+    assert_eq!(sent_body(&server, 2)["reasoning_effort"], "low");
+    assert_eq!(sent_body(&server, 3)["reasoning_effort"], "xhigh");
+    let none = sent_body(&server, 4);
+    assert_eq!(none.get("reasoning"), None);
+    assert_eq!(none.get("reasoning_effort"), None);
+    assert_eq!(sent_body(&server, 5)["reasoning"], json!({"effort": "none"}));
+    assert_eq!(sent_body(&server, 5).get("reasoning_effort"), None);
+    assert_eq!(sent_body(&server, 6)["reasoning"], json!({"effort": "low"}));
+    assert_eq!(sent_body(&server, 7)["reasoning"], json!({"effort": "xhigh"}));
 }

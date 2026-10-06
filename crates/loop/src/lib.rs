@@ -239,6 +239,8 @@ struct Preamble {
     tool_choice: String,
     /// The cache lifetime as sent, and as `preamble_built` records it.
     cache_lifetime: CacheLifetime,
+    /// The session's one reasoning setting, as `preamble_built` records it.
+    thinking: Option<contract::ThinkingLevel>,
 }
 
 impl Loop {
@@ -465,6 +467,7 @@ impl Loop {
             tools,
             tool_choice: event.tool_choice,
             cache_lifetime: event.cache_lifetime,
+            thinking: self.prompt.thinking,
         });
         self.ensure_opening()
     }

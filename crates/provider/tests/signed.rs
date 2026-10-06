@@ -56,7 +56,7 @@ fn request() -> ModelRequest {
     ModelRequest {
         system_prompt: "You are terse.".into(),
         tools: Vec::new(),
-        effort: None,
+        thinking: None,
         tool_choice: "auto".into(),
         cache_lifetime: CacheLifetime::OneHour,
         cache_key: "session_1".into(),

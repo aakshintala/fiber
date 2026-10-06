@@ -89,7 +89,7 @@ fn samples() -> Vec<Value> {
         json!({"id": "c", "command": "history", "args": {"from_seq": 0, "to_seq": 10}}),
         json!({"id": "c", "command": "history", "args": {"from_seq": 0}}),
         json!({"id": "c", "command": "model",
-            "args": {"model": "opus", "effort": "high", "thinking": "on"}}),
+            "args": {"model": "opus", "thinking": "high"}}),
         json!({"id": "c", "command": "model", "args": {"model": "opus"}}),
         json!({"id": "c", "command": "credential", "args": {"label": "work"}}),
         json!({"id": "c", "command": "name", "args": {"text": ""}}),
@@ -241,7 +241,7 @@ fn an_optional_arg_set_to_null_is_invalid_arguments() {
         parse(r#"{"id":"c","command":"history","args":{"from_seq":0,"to_seq":null}}"#).is_err()
     );
     assert!(
-        parse(r#"{"id":"c","command":"model","args":{"model":"opus","effort":null}}"#).is_err()
+        parse(r#"{"id":"c","command":"model","args":{"model":"opus","thinking":null}}"#).is_err()
     );
 }
 

@@ -100,7 +100,7 @@ pub enum Command {
     Tools,
     /// Answers with durable log lines in a seq range.
     History(HistoryArgs),
-    /// Switches model, effort or thinking at the next turn boundary.
+    /// Switches model or thinking at the next turn boundary.
     Model(ModelArgs),
     /// Switches the credential label at the next turn boundary.
     Credential(CredentialArgs),
@@ -287,9 +287,6 @@ pub struct HistoryArgs {
 pub struct ModelArgs {
     /// A model reference as a person types one.
     pub model: String,
-    /// The reasoning effort.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub effort: Option<String>,
     /// The thinking level.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking: Option<String>,

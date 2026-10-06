@@ -3,8 +3,10 @@
 
 use std::time::Duration;
 
-use config::Config;
+use config::{Config, ModelData};
 use contract::events::CacheLifetime;
+use contract::shapes::Failure;
+use contract::{ErrorCode, ThinkingLevel};
 
 /// How long an idle session waits before it exits, from
 /// `session.idle_exit_ms` (`docs/configuration.md`). `0` exits at the first
@@ -80,6 +82,54 @@ pub(crate) fn retry_policy(config: &Config) -> r#loop::Retry {
 #[path = "idle_tests.rs"]
 mod idle_tests;
 
+/// The session's one reasoning setting (`docs/model-routing.md`,
+/// "Thinking"): the `:level` suffix first, then the session's own choice,
+/// then the configured value (`models."<reference>".thinking` over the
+/// top-level `thinking` key), else the model's own default. A chosen level
+/// the model does not take is `invalid_arguments` before `session_started`.
+/// A model with no levels and no default resolves to `None`.
+pub(crate) fn thinking(
+    suffix: Option<ThinkingLevel>,
+    session: Option<ThinkingLevel>,
+    config: &Config,
+    model: &ModelData,
+    reference: &str,
+) -> Result<Option<ThinkingLevel>, Failure> {
+    let configured = config
+        .get("thinking", Some(reference))
+        .and_then(|(value, _)| value.as_str().map(str::to_owned))
+        .and_then(|name| name.parse::<ThinkingLevel>().ok());
+    if let Some(level) = suffix.or(session).or(configured) {
+        if model.thinking_levels.contains(&level) {
+            Ok(Some(level))
+        } else {
+            let takes = model
+                .thinking_levels
+                .iter()
+                .map(|level| level.as_str())
+                .map(|name| format!("`{name}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let takes = if takes.is_empty() {
+                "takes no thinking level".to_owned()
+            } else {
+                format!("takes {takes}")
+            };
+            Err(Failure {
+                code: ErrorCode::InvalidArguments,
+                message: format!(
+                    "The thinking level `{}` is not one model `{reference}` takes: it {takes}.",
+                    level.as_str()
+                ),
+                retry_after: None,
+                provider: None,
+            })
+        }
+    } else {
+        Ok(model.thinking_default)
+    }
+}
+
 #[cfg(test)]
 #[path = "retry_policy_tests.rs"]
 mod retry_policy_tests;
@@ -87,3 +137,7 @@ mod retry_policy_tests;
 #[cfg(test)]
 #[path = "cache_lifetime_tests.rs"]
 mod cache_lifetime_tests;
+
+#[cfg(test)]
+#[path = "thinking_tests.rs"]
+mod thinking_tests;

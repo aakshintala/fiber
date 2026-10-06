@@ -157,7 +157,12 @@ fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
         body.insert("tools".into(), Value::Array(tools));
         body.insert("tool_choice".into(), tool_choice(&request.tool_choice));
     }
-    if let Some(effort) = &request.effort {
+    if let Some(level) = &request.thinking {
+        let effort = if *level == contract::ThinkingLevel::Off {
+            "none"
+        } else {
+            level.as_str()
+        };
         if compat.reasoning_object {
             body.insert("reasoning".into(), json!({ "effort": effort }));
         } else {
