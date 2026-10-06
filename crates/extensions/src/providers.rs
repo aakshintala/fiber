@@ -81,19 +81,16 @@ pub fn leave_out_invalid(
                 .map(|field| format!("`{field}`"))
                 .collect::<Vec<_>>()
                 .join(", ");
-            let message = if reserved.len() == 1 {
-                format!(
-                    "The model `{provider}/{}` names {fields} in its `extra_body`, \
-                     a field Fiber builds itself.",
-                    model.id
-                )
+            let noun = if reserved.len() == 1 {
+                "a field"
             } else {
-                format!(
-                    "The model `{provider}/{}` names {fields} in its `extra_body`, \
-                     fields Fiber builds itself.",
-                    model.id
-                )
+                "fields"
             };
+            let message = format!(
+                "The model `{provider}/{}` names {fields} in its `extra_body`, \
+                 {noun} Fiber builds itself.",
+                model.id
+            );
             notices.push(Notice {
                 code: ErrorCode::ModelInvalid,
                 message,

@@ -317,11 +317,12 @@ fn reserved_case(protocol: &str, reserved: &[&str]) {
     for (notice, field) in notices.iter().zip(reserved.iter()) {
         assert_eq!(notice.code, ErrorCode::ModelInvalid);
         assert_eq!(notice.extension.as_deref(), Some("acme"));
-        assert!(
-            notice.message.contains(&format!("acme/bad-{field}"))
-                && notice.message.contains(&format!("`{field}`")),
-            "{}",
-            notice.message
+        assert_eq!(
+            notice.message,
+            format!(
+                "The model `acme/bad-{field}` names `{field}` in its `extra_body`, \
+                 a field Fiber builds itself."
+            )
         );
     }
 }
@@ -424,9 +425,10 @@ fn a_model_with_two_reserved_fields_and_an_unread_search_gets_two_notices() {
     }
     let messages: Vec<&str> = notices.iter().map(|n| n.message.as_str()).collect();
     assert!(
-        messages.iter().any(|m| m.contains("acme/bad")
-            && m.contains("`system`, `tools`")
-            && m.contains("extra_body")),
+        messages.contains(
+            &"The model `acme/bad` names `system`, `tools` in its `extra_body`, \
+               fields Fiber builds itself."
+        ),
         "{messages:?}"
     );
     assert!(
@@ -454,9 +456,8 @@ fn leave_out_invalid_filters_a_model_list_like_models_returns() {
     assert_eq!(notices.len(), 1);
     assert_eq!(notices[0].code, ErrorCode::ModelInvalid);
     assert_eq!(notices[0].extension.as_deref(), Some("acme"));
-    assert!(
-        notices[0].message.contains("acme/bad") && notices[0].message.contains("`tools`"),
-        "{}",
-        notices[0].message
+    assert_eq!(
+        notices[0].message,
+        "The model `acme/bad` names `tools` in its `extra_body`, a field Fiber builds itself."
     );
 }
