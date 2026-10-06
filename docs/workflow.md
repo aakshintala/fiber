@@ -113,7 +113,7 @@ The body says `Resolves #<ticket>`, and either `Doc friction: none` or a
 link to each `needs-owner` issue the work raised ("When a doc should
 change").
 
-When the ticket carries the `bug` label, CI runs the pull request's new and
+When any issue its body resolves is labelled `bug`, CI runs the pull request's new and
 changed tests against the base commit, and at least one must fail there
 (`docs/testing.md`, "Proving a test bites").
 

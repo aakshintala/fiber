@@ -275,6 +275,72 @@ fn ticket_reads_the_body_on_stdin() {
     );
 }
 
+#[cfg(unix)]
+fn fake_gh(dir: &TestDir, script: &str) -> String {
+    dir.write("bin/gh", script);
+    let path = dir.path().join("bin/gh");
+    let mut permissions = std::fs::metadata(&path).unwrap().permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+    std::fs::set_permissions(&path, permissions).unwrap();
+    format!(
+        "{}:{}",
+        dir.path().join("bin").display(),
+        std::env::var("PATH").unwrap_or_default()
+    )
+}
+
+#[cfg(unix)]
+#[test]
+fn ticket_prefers_the_issue_labelled_bug() {
+    let dir = TestDir::new("ticket-bug");
+    let path = fake_gh(
+        &dir,
+        "#!/bin/sh\nif [ \"$3\" = \"2\" ]; then echo bug; else echo enhancement; fi\n",
+    );
+    assert_eq!(
+        xtask(
+            &dir,
+            &["ticket"],
+            &[("PATH", path.as_str())],
+            "Resolves #1\nResolves #2\n"
+        ),
+        (0, "2\n".to_owned())
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn ticket_prints_the_first_issue_when_none_is_labelled_bug() {
+    let dir = TestDir::new("ticket-no-bug");
+    let path = fake_gh(&dir, "#!/bin/sh\necho enhancement\n");
+    assert_eq!(
+        xtask(
+            &dir,
+            &["ticket"],
+            &[("PATH", path.as_str())],
+            "Resolves #1\nResolves #2\n"
+        ),
+        (0, "1\n".to_owned())
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn ticket_fails_when_the_label_lookup_fails() {
+    let dir = TestDir::new("ticket-gh-fails");
+    let path = fake_gh(&dir, "#!/bin/sh\nexit 1\n");
+    assert_eq!(
+        xtask(
+            &dir,
+            &["ticket"],
+            &[("PATH", path.as_str())],
+            "Resolves #1\nResolves #2\n"
+        )
+        .0,
+        2
+    );
+}
+
 #[test]
 fn bug_filter_prints_the_filter_packages_and_declarations() {
     let dir = workspace();

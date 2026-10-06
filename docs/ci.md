@@ -110,7 +110,7 @@ On Linux x86_64 alone:
   which stops every running test at the first failure. A mutant that makes
   one test hang until its deadline is then caught by a faster test, not
   reported as a timeout.
-- for a pull request whose ticket, the issue its body resolves, is labelled
+- for a pull request where any issue its body resolves is labelled
   `bug`, its new and changed tests run against the base commit, and at least
   one must fail there
 

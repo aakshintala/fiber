@@ -319,20 +319,21 @@ fn is_word(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
 }
 
-/// The issue a pull request body resolves, from its first "Resolves #N" or
-/// GitHub's other closing keywords.
-pub(crate) fn ticket(body: &str) -> Option<String> {
+/// Every issue a pull request body resolves, in order of appearance, from
+/// "Resolves #N" lines and GitHub's other closing keywords.
+pub(crate) fn ticket(body: &str) -> Vec<String> {
+    let mut numbers = Vec::new();
     let mut prev = ' ';
     for (i, c) in body.char_indices() {
         if c.is_alphabetic()
             && !is_word(prev)
             && let Some(number) = ticket_at(body.get(i..).unwrap_or_default())
         {
-            return Some(number);
+            numbers.push(number);
         }
         prev = c;
     }
-    None
+    numbers
 }
 
 fn ticket_at(text: &str) -> Option<String> {

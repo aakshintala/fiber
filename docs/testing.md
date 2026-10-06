@@ -283,8 +283,8 @@ from outside, through a seam such as a fake writer or the injected clock. A
 plan that needs one says why.
 
 A bug fix must also show that its test reproduces the bug. For a pull request
-whose ticket is labelled `bug`, CI runs its new and changed tests against the base commit,
-and at least one must fail there.
+where any issue its body resolves is labelled `bug`, CI runs its new and
+changed tests against the base commit, and at least one must fail there.
 
 Diff-scoped mutation testing has two known limits. It cannot see a change in
 one place leaving other code under-tested. A pull request that changes only
