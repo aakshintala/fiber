@@ -21,11 +21,14 @@ mod strict;
 
 pub use error::Error;
 
+use std::sync::Arc;
+
+use contract::signing::Signer;
 use serde_json::{Map, Value};
 
 /// One model of one provider, as its provider data declares it
 /// (`docs/model-routing.md`, "What a provider extension declares").
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Clone, Default)]
 pub struct Endpoint {
     /// The provider's name, the first half of the model reference.
     pub provider: String,
@@ -38,6 +41,10 @@ pub struct Endpoint {
     pub key: Option<String>,
     /// Headers sent on every request, in order.
     pub headers: Vec<(String, String)>,
+    /// Signs each request just before it is sent, a retry included
+    /// (`docs/model-routing.md`, "Signing a request"); `None` sends the
+    /// request as built.
+    pub signer: Option<Arc<dyn Signer>>,
     /// The compatibility flags the protocol reads.
     pub compat: Compat,
     /// The model's output token limit, `max_output_tokens` in its data. A
@@ -69,6 +76,26 @@ impl Endpoint {
     /// model's when both are set (`docs/errors.md`, "Output tokens").
     pub fn output_limit(&self, request: Option<u64>) -> Option<u64> {
         request.into_iter().chain(self.max_output_tokens).min()
+    }
+}
+
+// `Arc<dyn Signer>` has no `Debug`: a debug print names the field without
+// reaching into it.
+impl std::fmt::Debug for Endpoint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Endpoint")
+            .field("provider", &self.provider)
+            .field("model", &self.model)
+            .field("base_url", &self.base_url)
+            .field("key", &self.key)
+            .field("headers", &self.headers)
+            .field("signer", &self.signer.as_ref().map(|_| "Signer"))
+            .field("compat", &self.compat)
+            .field("max_output_tokens", &self.max_output_tokens)
+            .field("extra_body", &self.extra_body)
+            .field("direct", &self.direct)
+            .field("text_only", &self.text_only)
+            .finish()
     }
 }
 

@@ -3,6 +3,8 @@
 //! asked for the headers to add just before each request is sent, a retry
 //! included. It adds headers only: the body goes out as it was built.
 
+use crate::ErrorCode;
+
 /// Why a request could not be signed.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
@@ -13,6 +15,14 @@ pub enum Error {
     /// values.
     #[error("`sign()` returned {0}")]
     NotHeaders(String),
+    /// A credential the signer needed failed, carrying its own code.
+    #[error("{message}")]
+    Credential {
+        /// The stable code the failure reports.
+        code: ErrorCode,
+        /// Why the credential failed.
+        message: String,
+    },
 }
 
 /// Adds a signature to each request a provider sends.

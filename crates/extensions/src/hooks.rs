@@ -20,7 +20,7 @@ use serde_json::{Map, Value};
 use crate::git::short_name;
 use crate::host::Session;
 use crate::lua::{DeclaredHooks, HookPhase, LuaExtension};
-use crate::{API, Error};
+use crate::{API, Error, LuaProvider};
 
 /// The one hook point this session calls.
 const AFTER_TOOL: &str = "after_tool";
@@ -42,7 +42,10 @@ pub struct SessionExtensions {
     openings: Vec<(String, String, config::Opening)>,
     notices: Vec<Notice>,
     /// The started Lua extensions.
-    lua: Vec<LuaExtension>,
+    lua: Vec<Arc<LuaExtension>>,
+    /// One provider per `fiber.provider` registration, in provider-name
+    /// order: the extension's name beside its provider.
+    lua_providers: Vec<(String, Arc<LuaProvider>)>,
     /// The `after_tool` chain, in run order.
     after_tool: Vec<Entry>,
     /// Whether any hook registered at any point.
@@ -166,6 +169,16 @@ impl SessionExtensions {
                     }
                 };
                 session.register(&item.name, declared, &mut chain);
+                let extension = Arc::new(extension);
+                match extension.provider_names() {
+                    Ok(names) => {
+                        for name in names {
+                            let provider = LuaProvider::new(Arc::clone(&extension), name);
+                            session.lua_providers.push((item.name.clone(), provider));
+                        }
+                    }
+                    Err(e) => session.failed(&item.name, &e),
+                }
                 session.lua.push(extension);
             }
             if let Some(opening) = manifest.opening.clone() {
@@ -194,6 +207,15 @@ impl SessionExtensions {
         });
         session.after_tool = chain.into_iter().map(|(_, _, entry)| entry).collect();
         session
+            .lua_providers
+            .sort_by(|a, b| a.1.name().cmp(b.1.name()));
+        session
+    }
+
+    /// One provider per `fiber.provider` registration, in provider-name
+    /// order: the extension's name beside its provider.
+    pub fn lua_providers(&self) -> &[(String, Arc<LuaProvider>)] {
+        &self.lua_providers
     }
 
     /// Every extension the session loaded, by name: `extensions_loaded`

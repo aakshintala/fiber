@@ -63,6 +63,9 @@ impl Error {
             Self::UnknownStopReason(_) => ErrorCode::UnknownStopReason,
             Self::ContextOverflow(_) => ErrorCode::ContextOverflow,
             Self::Refused(_) => ErrorCode::Refused,
+            // A credential failure carries its own code: a failed `sign()`
+            // is `credential_failed`, a failed refresh keeps its own.
+            Self::Sign(contract::signing::Error::Credential { code, .. }) => code.clone(),
             Self::Sign(_) => ErrorCode::CredentialFailed,
         }
     }

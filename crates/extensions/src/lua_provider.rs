@@ -45,6 +45,37 @@ impl LuaProvider {
         })
     }
 
+    /// The provider's name, as `fiber.provider` registered it.
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// The functions `fiber.provider` registered for this provider, sorted.
+    pub fn functions(&self) -> Result<Vec<String>, Error> {
+        self.extension.provider_functions(&self.name)
+    }
+
+    /// Whether `fiber.provider` registered `function` for this provider.
+    pub fn registers(&self, function: &str) -> Result<bool, Error> {
+        Ok(self.functions()?.iter().any(|name| name == function))
+    }
+
+    /// Signs this provider's requests: `None` when it registered neither
+    /// `credential` nor `sign`.
+    pub fn signer(self: &Arc<Self>) -> Result<Option<Arc<dyn Signer>>, Error> {
+        let functions = self.functions()?;
+        let credential = functions.iter().any(|f| f == "credential");
+        let sign = functions.iter().any(|f| f == "sign");
+        if !credential && !sign {
+            return Ok(None);
+        }
+        Ok(Some(Arc::new(LuaSigner {
+            provider: Arc::clone(self),
+            credential,
+            sign,
+        })))
+    }
+
     /// The provider's models: the list this process last discovered, else
     /// the cached copy, else what `models()` returns now.
     pub fn models(&self) -> Result<Vec<ModelData>, Error> {
@@ -209,6 +240,56 @@ impl Signer for LuaProvider {
                 Err(not_headers())
             }
         }
+    }
+}
+
+/// One Lua provider's requests, signed (`docs/model-routing.md`, "Signing
+/// a request"): the `credential()` token as `authorization: Bearer`, then
+/// what `sign()` returns, which wins when it names `authorization` itself.
+struct LuaSigner {
+    provider: Arc<LuaProvider>,
+    credential: bool,
+    sign: bool,
+}
+
+impl Signer for LuaSigner {
+    fn sign(&self, request: &SignRequest<'_>) -> Result<Vec<(String, String)>, signing::Error> {
+        let mut headers = Vec::new();
+        if self.credential {
+            let token = self
+                .provider
+                .token()
+                .map_err(|e| signing::Error::Credential {
+                    code: e.code(),
+                    message: e.to_string(),
+                })?;
+            headers.push((
+                "authorization".to_owned(),
+                format!("Bearer {}", token.expose()),
+            ));
+        }
+        if self.sign {
+            let seen: Vec<(String, String)> = request
+                .headers
+                .iter()
+                .cloned()
+                .chain(headers.iter().cloned())
+                .collect();
+            let signed = self.provider.sign(&SignRequest {
+                method: request.method,
+                url: request.url,
+                headers: &seen,
+                body: request.body,
+            })?;
+            if signed
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+            {
+                headers.retain(|(name, _)| !name.eq_ignore_ascii_case("authorization"));
+            }
+            headers.extend(signed);
+        }
+        Ok(headers)
     }
 }
 

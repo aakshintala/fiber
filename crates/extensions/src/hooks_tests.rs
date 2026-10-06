@@ -777,3 +777,41 @@ fn a_repository_key_the_manifest_does_not_list_is_one_notice() {
     // Collected once at load, not once per `get`.
     assert_eq!(session.notices().len(), 1);
 }
+
+/// One `fiber.provider` registration of `provider` with a `models` function.
+fn registering(provider: &str) -> String {
+    format!(
+        "fiber.provider(\"{provider}\", {{ models = {{ timeout = 1000,\n\
+           run = function() return {{}} end }} }})\n"
+    )
+}
+
+#[test]
+fn lua_providers_lists_each_registered_provider_in_provider_name_order() {
+    let home = Home::new();
+    home.install(
+        "two",
+        Some(&format!("{}{}", registering("b"), registering("a"))),
+    );
+    home.install(
+        "none",
+        Some("fiber.command(\"x\", { timeout = 1000, run = function(text) return text end })\n"),
+    );
+    let session = home.load(&[]);
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    let listed: Vec<(String, String)> = session
+        .lua_providers()
+        .iter()
+        .map(|(extension, provider)| (extension.clone(), provider.name().to_owned()))
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            ("fiber.test/two".to_owned(), "a".to_owned()),
+            ("fiber.test/two".to_owned(), "b".to_owned()),
+        ]
+    );
+    let sessioned = Arc::clone(&session);
+    let functions = bounded(move || sessioned.lua_providers()[0].1.functions().unwrap());
+    assert_eq!(functions, ["models"]);
+}

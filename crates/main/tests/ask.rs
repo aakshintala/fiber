@@ -2491,3 +2491,193 @@ fn a_slash_prompt_runs_a_prompt_template() {
     assert_eq!(run.kinds(), HELLO_KINDS);
     assert_eq!(turn_input(&run), "Plan the work below.\n\n42");
 }
+
+/// Installs the fixture extension and points its provider at `server`,
+/// with `fixture/m1` as the configured model.
+fn fixture(setup: &Setup, server: &ProviderServer) {
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(fakes::lua_fixture()),
+        "0.1.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    config::store_secret(
+        &setup.home(),
+        "fixture.url",
+        &config::Secret::new(server.url()),
+    )
+    .unwrap();
+    config::store_secret(
+        &setup.home(),
+        "fixture.api_key",
+        &config::Secret::new("k1".into()),
+    )
+    .unwrap();
+    write(
+        &setup.home().join("config.json"),
+        &json!({"model": "fixture/m1"}),
+    );
+}
+
+/// A token expiry far enough ahead that the running binary reads it as
+/// future, as a fixed stamp rather than a read of the test's clock.
+const EXPIRES_AT: u64 = 2_000_000_000;
+
+/// A reply the fixture's `models()` and `credential()` both read: the model
+/// list and the token in one body, so the background refresh and the token
+/// request succeed in either arrival order.
+fn listing_and_token() -> Response {
+    Response::status(
+        200,
+        json!({
+            "data": [{"id": "m1", "context_length": 1000}],
+            "access_token": "tok-1",
+            "expires_at": EXPIRES_AT,
+        })
+        .to_string(),
+    )
+}
+
+/// Whether `value` is 64 lowercase hex digits, a SHA-256 in hex.
+fn is_hex64(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// The model's request: exactly one went out, carrying the token and the
+/// signature.
+fn only_model_request(server: &ProviderServer) -> Request {
+    let sent: Vec<Request> = server
+        .requests()
+        .into_iter()
+        .filter(|request| request.path == "/v1/responses")
+        .collect();
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    let request = &sent[0];
+    assert_fingerprint(request, "authorization", "Bearer tok-1");
+    assert_eq!(
+        request.header("x-fixture-saw"),
+        Some("body_sha256,headers,method,url")
+    );
+    let signature = request.header("x-fixture-signature").unwrap_or("");
+    assert!(is_hex64(signature), "{signature:?}");
+    let content_sha = request.header("x-fixture-content-sha256").unwrap_or("");
+    assert!(is_hex64(content_sha), "{content_sha:?}");
+    sent.into_iter().next().unwrap()
+}
+
+#[test]
+fn a_lua_providers_model_answers_with_the_token_and_sign_headers() {
+    let setup = Setup::new();
+    let server = ProviderServer::start_with_fallback(
+        [
+            listing_and_token(),
+            listing_and_token(),
+            listing_and_token(),
+            hello(),
+        ],
+        hello(),
+    )
+    .unwrap();
+    fixture(&setup, &server);
+
+    let run = setup.fiber(&["ask", "hi"], None);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let exited = &run.last()["payload"];
+    assert_eq!(exited["exit_code"], 0);
+    assert_eq!(exited["text"], "Hello.");
+    only_model_request(&server);
+    // Discovery cached the list for the next start.
+    let cached: Value = serde_json::from_str(
+        &fs::read_to_string(setup.home().join("cache/models/fixture.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        cached
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|model| model["id"] == "m1"),
+        "{cached:?}"
+    );
+    // Discovery and the token request went out too.
+    let paths: Vec<String> = server
+        .requests()
+        .iter()
+        .map(|request| request.path.clone())
+        .collect();
+    assert!(
+        paths.contains(&"/v1/models".to_owned()) && paths.contains(&"/token".to_owned()),
+        "{paths:?}"
+    );
+}
+
+#[test]
+fn a_cached_list_serves_the_model_while_the_refresh_runs_in_the_background() {
+    let setup = Setup::new();
+    let server = ProviderServer::start_with_fallback(
+        [
+            // No model list: if startup ran `models()` synchronously it
+            // would fail, so the run succeeding proves the cache served.
+            Response::status(
+                200,
+                json!({"access_token": "tok-1", "expires_at": EXPIRES_AT}).to_string(),
+            ),
+            listing_and_token(),
+            hello(),
+        ],
+        hello(),
+    )
+    .unwrap();
+    fixture(&setup, &server);
+    write(
+        &setup.home().join("cache/models/fixture.json"),
+        &json!([{
+            "id": "m1",
+            "protocol": "openai-responses",
+            "base_url": format!("{}/v1", server.url()),
+        }]),
+    );
+    let run = setup.fiber(&["ask", "hi"], None);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let exited = &run.last()["payload"];
+    assert_eq!(exited["exit_code"], 0);
+    assert_eq!(exited["text"], "Hello.");
+    assert!(
+        server.await_requests(3, Duration::from_secs(10)),
+        "waited for the refresh, the token and the model request"
+    );
+    let mut paths: Vec<String> = server
+        .requests()
+        .iter()
+        .map(|request| format!("{} {}", request.method, request.path))
+        .collect();
+    paths.sort();
+    assert_eq!(
+        paths,
+        ["GET /v1/models", "POST /token", "POST /v1/responses"]
+    );
+    only_model_request(&server);
+}
+
+#[test]
+fn a_credential_that_errors_fails_before_any_session_line() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([
+        Response::status(
+            200,
+            json!({"data": [{"id": "m1", "context_length": 1000}]}).to_string(),
+        ),
+        Response::status(500, "{}"),
+    ])
+    .unwrap();
+    fixture(&setup, &server);
+
+    let run = setup.fiber(&["ask", "hi"], None);
+
+    assert_pre_session(&run, 1, "credential_failed");
+}

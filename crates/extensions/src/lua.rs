@@ -272,6 +272,11 @@ impl LuaExtension {
         })
     }
 
+    /// Every provider `fiber.provider` registered, sorted.
+    pub fn provider_names(&self) -> Result<Vec<String>, Error> {
+        self.registered(|timeouts| timeouts.providers.keys().cloned().collect())
+    }
+
     /// Every hook the entry script registered, and why each one it tried
     /// and could not register was refused. Starts the extension.
     pub(crate) fn hooks(&self) -> Result<DeclaredHooks, Error> {

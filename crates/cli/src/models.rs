@@ -1,15 +1,21 @@
 //! `fiber models` (`docs/invocation.md`, "Commands and flags"): lists the
 //! models the installed providers serve, one row each, with the configured
 //! default marked. It reads each provider's cached list through
-//! [`Providers`], which serves `cache/models/<name>.json` when there is one.
+//! [`Providers`], which serves `cache/models/<name>.json` when there is one,
+//! and runs each Lua provider's `models()` when there is none, as at startup
+//! but without the background refresh: a one-shot command has nothing to
+//! serve after.
 
 use std::io::{self, Write};
 use std::path::Path;
+use std::sync::Arc;
 
 use config::{Config, Sources};
 use contract::ErrorCode;
+use contract::clock::Clock;
+use contract::files::PathLock;
 use contract::shapes::Failure;
-use extensions::Providers;
+use extensions::{Providers, SessionExtensions};
 use serde::Serialize;
 
 use crate::{fail, failed, project_of};
@@ -108,15 +114,12 @@ fn run(
     json: bool,
     out: &mut dyn Write,
     err: &mut dyn Write,
+    clock: Arc<dyn Clock>,
+    locks: Arc<dyn PathLock>,
 ) -> Result<(), Failure> {
     // debt: notices from loading are dropped, as `parts_with` drops them;
     // surfaced when #382 lands.
-    let (providers, _notices) = Providers::load(home).map_err(|e| failed(e.code(), e))?;
-    if providers.names().next().is_none() {
-        writeln!(err, "{NO_PROVIDER}")
-            .map_err(|e| failed(ErrorCode::IoFailed, format!("standard error: {e}")))?;
-        return Ok(());
-    }
+    let (mut providers, _notices) = Providers::load(home).map_err(|e| failed(e.code(), e))?;
     let (_, project) = project_of(home, workspace)?;
     let config = Config::load(Sources {
         home: home.to_path_buf(),
@@ -125,12 +128,21 @@ fn run(
         overrides: Vec::new(),
     })
     .map_err(|e| failed(e.code(), e))?;
+    let extensions = SessionExtensions::load(home, &config, clock, locks);
+    for (extension, provider) in extensions.lua_providers() {
+        let _notices = providers.add_lua(extension, provider);
+    }
+    if providers.names().next().is_none() {
+        writeln!(err, "{NO_PROVIDER}")
+            .map_err(|e| failed(ErrorCode::IoFailed, format!("standard error: {e}")))?;
+        return Ok(());
+    }
+    let needle = search.map(|search| search.to_ascii_lowercase());
     let default = config
         .get("model", None)
         .and_then(|(value, _)| value.as_str().map(str::to_owned))
         .and_then(|typed| providers.resolve(&typed).ok())
         .map(|model| model.reference());
-    let needle = search.map(|search| search.to_ascii_lowercase());
     let mut rows = Vec::new();
     let mut marked = false;
     for name in providers.names() {
@@ -179,7 +191,12 @@ fn run(
 
 /// `fiber models [--json] [<search>]` in the current directory: lists the
 /// models the installed providers serve.
-pub fn models(search: Option<&str>, json: bool) -> i32 {
+pub fn models(
+    search: Option<&str>,
+    json: bool,
+    clock: Arc<dyn Clock>,
+    locks: Arc<dyn PathLock>,
+) -> i32 {
     let ran = config::fiber_home_from_env()
         .map_err(|e| failed(e.code(), e))
         .and_then(|home| {
@@ -192,6 +209,8 @@ pub fn models(search: Option<&str>, json: bool) -> i32 {
                 json,
                 &mut io::stdout(),
                 &mut io::stderr(),
+                clock,
+                locks,
             )
         });
     match ran {
