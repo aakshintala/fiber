@@ -360,12 +360,30 @@ mod tests {
         );
     }
 
+    /// Runs `f`, which may block, on a worker and returns its result,
+    /// failing the test after [`DEADLINE`] with `what` named.
+    fn within<T: Send + 'static>(what: &str, f: impl FnOnce() -> T + Send + 'static) -> T {
+        let (done, finished) = mpsc::channel();
+        thread::spawn(move || {
+            let _sent = done.send(f());
+        });
+        match finished.recv_timeout(DEADLINE) {
+            Ok(value) => value,
+            Err(_) => panic!("waited {DEADLINE:?} for {what}"),
+        }
+    }
+
     #[test]
     fn a_second_update_waits_for_the_files_lock_then_keeps_both_writes() {
         let dir = TempDir::new("fiber-write-lock");
         let file = dir.path().join("fiber-acme.json");
-        update(&file, &["a".to_owned()], Value::from(1), false).unwrap();
-        let held = locked(&file).unwrap();
+        let setup = file.clone();
+        within("the first update", move || {
+            update(&setup, &["a".to_owned()], Value::from(1), false)
+        })
+        .unwrap();
+        let setup = file.clone();
+        let held = within("the test to take the file's lock", move || locked(&setup)).unwrap();
         let (started, started_rx) = mpsc::channel();
         let (done, done_rx) = mpsc::channel();
         let worker_file = file.clone();
