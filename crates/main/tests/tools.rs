@@ -1630,3 +1630,96 @@ fn a_web_fetch_with_no_rule_is_judged_at_step_7() {
     assert_eq!(completed_call(&run)["payload"]["status"], "denied");
     assert!(site.requests().is_empty(), "a denied call sends nothing");
 }
+
+#[test]
+fn markdown_writes_in_extension_data_directories_take_the_fast_path() {
+    let setup = Setup::new();
+    // Absolute paths: the tools join relative paths to the workspace.
+    let machine = setup.home().join("data/notes/a.md").display().to_string();
+    // The project key, as `Run::session_dir` derives it.
+    let key = fs::canonicalize(setup.workspace())
+        .unwrap()
+        .to_string_lossy()
+        .replace('/', "-");
+    let project_file = setup
+        .home()
+        .join("projects")
+        .join(key)
+        .join("data/notes/b.md");
+    let project = project_file.display().to_string();
+    let edit = |path: &str| json!({"path": path, "edits": [{"old_text": "first\n", "new_text": "edited\n"}]});
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "write_a",
+            "write",
+            &json!({"path": machine, "content": "first\n"}),
+        )]),
+        stream(&[function_call("edit_a", "edit", &edit(&machine))]),
+        stream(&[function_call(
+            "write_b",
+            "write",
+            &json!({"path": project, "content": "first\n"}),
+        )]),
+        stream(&[function_call("edit_b", "edit", &edit(&project))]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+
+    let run = setup.run(&["ask", "keep notes"]);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let mut expected = vec![
+        "session_started",
+        "fiber_started",
+        "extensions_loaded",
+        "preamble_built",
+        "opening_message",
+        "turn_started",
+    ];
+    for _ in 0..4 {
+        expected.extend([
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+        ]);
+    }
+    expected.extend([
+        "step_started",
+        "assistant_message_started",
+        "assistant_message_delta",
+        "assistant_message_delta",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+        "fiber_exited",
+    ]);
+    assert_eq!(run.kinds(), expected);
+    let completed: Vec<_> = run
+        .lines
+        .iter()
+        .filter(|line| line["kind"] == "tool_call_completed")
+        .collect();
+    assert_eq!(completed.len(), 4);
+    for done in completed {
+        assert_eq!(done["payload"]["status"], "completed");
+    }
+    assert_eq!(
+        fs::read_to_string(setup.home().join("data/notes/a.md")).unwrap(),
+        "edited\n"
+    );
+    assert_eq!(fs::read_to_string(&project_file).unwrap(), "edited\n");
+    // The fast path writes no `permission_` line and asks no reviewer: the
+    // provider server saw exactly the five scripted replies.
+    assert!(
+        run.lines
+            .iter()
+            .all(|line| !line["kind"].as_str().unwrap().starts_with("permission_"))
+    );
+    assert_eq!(server.requests().len(), 5);
+}

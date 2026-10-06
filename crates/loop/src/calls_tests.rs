@@ -30,8 +30,8 @@ use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
 use contract::{ActionId, CommandId, Envelope, ErrorCode, JobId};
 use serde_json::{Map, Value, json};
 
-use super::{fast_path, register};
-use crate::permission::{Verdict, judge};
+use super::register;
+use crate::permission::{Verdict, fast_path, judge};
 use crate::{Loop, Model};
 use log::Log;
 
@@ -100,15 +100,17 @@ fn a_later_tool_of_a_taken_name_replaces_the_earlier_and_is_recorded() {
 }
 
 /// A fresh workspace, symlinks resolved, holding `real/` and a link `out`
-/// to a directory outside it.
-fn workspace() -> (fakes::TempDir, PathBuf) {
+/// to a directory outside it, beside a Fiber home holding nothing yet.
+fn workspace() -> (fakes::TempDir, PathBuf, PathBuf) {
     let root = fakes::TempDir::new("fiber-calls");
     let canon = root.path().canonicalize().unwrap();
     let workspace = canon.join("ws");
+    let home = canon.join("home");
     std::fs::create_dir_all(workspace.join("real")).unwrap();
+    std::fs::create_dir_all(&home).unwrap();
     std::fs::create_dir_all(canon.join("elsewhere")).unwrap();
     std::os::unix::fs::symlink(canon.join("elsewhere"), workspace.join("out")).unwrap();
-    (root, workspace)
+    (root, workspace, home)
 }
 
 fn declared(effects: &[Effect], paths: Option<&[&str]>) -> DeclaredEffects {
@@ -121,21 +123,23 @@ fn declared(effects: &[Effect], paths: Option<&[&str]>) -> DeclaredEffects {
 
 #[test]
 fn reads_and_no_effect_take_the_fast_path_wherever_they_point() {
-    let (_root, ws) = workspace();
-    assert!(fast_path(&declared(&[], None), &ws));
+    let (_root, ws, home) = workspace();
+    assert!(fast_path(&declared(&[], None), &ws, &home));
     assert!(fast_path(
         &declared(&[Effect::Reads], Some(&["/etc/hosts"])),
-        &ws
+        &ws,
+        &home
     ));
 }
 
 #[test]
 fn a_write_takes_the_fast_path_only_inside_the_workspace_and_outside_git_and_fiber() {
-    let (_root, ws) = workspace();
+    let (_root, ws, home) = workspace();
     let writes = |paths: &[&str]| {
         fast_path(
             &declared(&[Effect::Reads, Effect::Writes], Some(paths)),
             &ws,
+            &home,
         )
     };
     let inside = ws.join("real/new/file.rs").display().to_string();
@@ -158,17 +162,165 @@ fn a_write_takes_the_fast_path_only_inside_the_workspace_and_outside_git_and_fib
     assert!(!writes(&["real/a.rs", ".git/x"]));
     // No paths, or none declared, is reviewed.
     assert!(!writes(&[]));
-    assert!(!fast_path(&declared(&[Effect::Writes], None), &ws));
+    assert!(!fast_path(&declared(&[Effect::Writes], None), &ws, &home));
 }
 
 #[test]
 fn executes_and_network_never_take_the_fast_path() {
-    let (_root, ws) = workspace();
+    let (_root, ws, home) = workspace();
     for effect in [Effect::Executes, Effect::Network] {
         assert!(!fast_path(
             &declared(&[Effect::Reads, effect], Some(&["real/a"])),
-            &ws
+            &ws,
+            &home
         ));
+    }
+}
+
+/// A Fiber home holding a machine data directory `data/n/` and a project
+/// data directory `projects/k/data/n/`, with a link `out` to a directory
+/// outside the home, a link `link.md` to an outside Markdown file and a
+/// link `code.md` to a Lua file inside, beside a workspace elsewhere.
+fn data_dirs() -> (fakes::TempDir, PathBuf, PathBuf) {
+    let root = fakes::TempDir::new("fiber-data");
+    let canon = root.path().canonicalize().unwrap();
+    let home = canon.join("home");
+    let workspace = canon.join("ws");
+    let outside = canon.join("outside");
+    std::fs::create_dir_all(home.join("data/n")).unwrap();
+    std::fs::create_dir_all(home.join("projects/k/data/n")).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(home.join("data/n/x.md"), "kept\n").unwrap();
+    std::fs::write(home.join("data/n/x.lua"), "return {}\n").unwrap();
+    std::fs::write(home.join("projects/k/data/n/x.md"), "kept\n").unwrap();
+    std::fs::write(outside.join("x.md"), "away\n").unwrap();
+    std::os::unix::fs::symlink(&outside, home.join("data/n/out")).unwrap();
+    std::os::unix::fs::symlink(outside.join("x.md"), home.join("data/n/link.md")).unwrap();
+    std::os::unix::fs::symlink(home.join("data/n/x.lua"), home.join("data/n/code.md")).unwrap();
+    (root, workspace, home)
+}
+
+/// A `writes` call over `paths` spelled against the data-directory home.
+fn data_writes(
+    workspace: &std::path::Path,
+    home: &std::path::Path,
+    effects: &[Effect],
+    paths: &[String],
+) -> bool {
+    let paths: Vec<&str> = paths.iter().map(String::as_str).collect();
+    fast_path(&declared(effects, Some(&paths)), workspace, home)
+}
+
+#[test]
+fn markdown_writes_in_extension_data_directories_take_the_fast_path() {
+    let (_root, ws, home) = data_dirs();
+    let path = |rest: &str| home.join(rest).display().to_string();
+    let kept = path("data/n/x.md");
+    assert!(
+        data_writes(&ws, &home, &[Effect::Writes], std::slice::from_ref(&kept)),
+        "{kept}"
+    );
+    let fresh = path("data/n/new.md");
+    assert!(
+        data_writes(&ws, &home, &[Effect::Writes], std::slice::from_ref(&fresh)),
+        "{fresh}"
+    );
+    let nested = path("data/n/sub/new.md");
+    assert!(
+        data_writes(&ws, &home, &[Effect::Writes], std::slice::from_ref(&nested)),
+        "{nested}"
+    );
+    let project = path("projects/k/data/n/x.md");
+    assert!(
+        data_writes(
+            &ws,
+            &home,
+            &[Effect::Reads, Effect::Writes],
+            std::slice::from_ref(&project)
+        ),
+        "{project}"
+    );
+    let (first, second) = (path("data/n/a.md"), path("projects/k/data/n/b.md"));
+    assert!(
+        data_writes(
+            &ws,
+            &home,
+            &[Effect::Writes],
+            &[first.clone(), second.clone()]
+        ),
+        "{first} + {second}"
+    );
+}
+
+#[test]
+fn other_writes_do_not_take_the_data_directory_fast_path() {
+    let (_root, ws, home) = data_dirs();
+    let path = |rest: &str| home.join(rest).display().to_string();
+    let outside = ws
+        .parent()
+        .unwrap()
+        .join("outside/x.md")
+        .display()
+        .to_string();
+    for single in [
+        path("data/n/x.lua"),
+        // `y.MD` has no lowercase sibling, so no file system folds it to
+        // `y.md`: the extension check sees `MD` everywhere (R3). A `DATA/`
+        // spelling is left out: where the file system folds case it is
+        // genuinely inside, where it does not it is reviewed (R8); either
+        // way nothing outside qualifies.
+        path("data/n/y.MD"),
+        path("data/n/x.markdown"),
+        path("data/n/.md"),
+        path("data/x.md"),
+        path("projects/k/data/x.md"),
+        path("projects/k/notdata/n/x.md"),
+        path("projects/data/n/x.md"),
+        path("x.md"),
+        outside,
+        path("data/n/out/x.md"),
+        path("data/n/link.md"),
+        path("data/n/code.md"),
+        path("data/n/new/../../../x.md"),
+        path("data/n/../../x.md"),
+    ] {
+        assert!(
+            !data_writes(&ws, &home, &[Effect::Writes], std::slice::from_ref(&single)),
+            "{single}"
+        );
+    }
+    let kept = path("data/n/a.md");
+    let lua = path("data/n/b.lua");
+    assert!(
+        !data_writes(&ws, &home, &[Effect::Writes], &[kept.clone(), lua.clone()]),
+        "{kept} + {lua}"
+    );
+    let workspace_file = ws.join("a.rs").display().to_string();
+    assert!(
+        !data_writes(
+            &ws,
+            &home,
+            &[Effect::Writes],
+            &[kept.clone(), workspace_file.clone()]
+        ),
+        "{kept} + {workspace_file}"
+    );
+    assert!(!data_writes(&ws, &home, &[Effect::Writes], &[]), "[]");
+    assert!(
+        !fast_path(&declared(&[Effect::Writes], None), &ws, &home),
+        "no paths"
+    );
+    for effect in [Effect::Executes, Effect::Network] {
+        assert!(
+            !data_writes(
+                &ws,
+                &home,
+                &[Effect::Writes, effect],
+                std::slice::from_ref(&kept)
+            ),
+            "{kept} + {effect:?}"
+        );
     }
 }
 
@@ -285,7 +437,7 @@ fn judged(subject: &str) -> Effects {
 
 #[test]
 fn a_session_remember_adds_a_grant_the_next_call_judged_matches() {
-    let (mut looped, _home, workspace, credentials) = start(Arc::new(FakeRules::default()));
+    let (mut looped, home, workspace, credentials) = start(Arc::new(FakeRules::default()));
     let answered = looped
         .answered(
             "shell",
@@ -310,6 +462,7 @@ fn a_session_remember_adds_a_grant_the_next_call_judged_matches() {
         &standing,
         &looped.grants,
         &workspace,
+        home.path(),
         &credentials,
     );
     assert!(matches!(
