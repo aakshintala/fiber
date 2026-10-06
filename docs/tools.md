@@ -783,9 +783,10 @@ backend.
 
 #### HTML to markdown
 
-Fiber converts a page in one pass with its own converter, not with a parser
-that builds the page's document tree (`docs/dependencies.md`, "Written
-ourselves"). It handles a stated subset of HTML, not the WHATWG parsing
+Fiber converts a page in one pass: html5ever's tokenizer, with no document
+tree, feeds Fiber's own single-pass writer (`docs/dependencies.md`, "Runtime
+dependencies"). Every character reference is decoded per the HTML standard.
+It handles a stated subset of HTML, not the WHATWG parsing
 algorithm:
 
 - Converted: headings, paragraphs, lists, links, images, emphasis, inline

@@ -1,22 +1,118 @@
 //! HTML to markdown for `web_fetch` (`docs/tools.md`, "web_fetch"). One pass
-//! over the page, no tree: the converter holds the page and its output, and
-//! no nesting depth in the input becomes recursion or an indent without a cap.
+//! over the page, no tree: html5ever's tokenizer, with no document tree,
+//! feeds the single-pass writer below in slices, so the converter holds the
+//! page and its output, and no nesting depth in the input becomes recursion
+//! or an indent without a cap. Every character reference is decoded per the
+//! HTML standard by the tokenizer, in text and attributes.
+
+use std::cell::RefCell;
+
+use html5ever::tokenizer::states::RawKind;
+use html5ever::tokenizer::{
+    BufferQueue, Tag, TagKind, Token, TokenSink, TokenSinkResult, Tokenizer, TokenizerOpts,
+};
 
 /// Levels of list indentation and block quote prefix kept; a hostile page
 /// that nests deeper than this gets no more indentation.
 const MAX_LEVELS: usize = 8;
 
-/// The longest entity, `&` and `;` included, that is looked at.
-const MAX_ENTITY: usize = 32;
+/// The largest slice of the page fed to the tokenizer at once: the
+/// converter never holds a second whole copy as tendrils.
+const SLICE: usize = 64 * 1024;
 
 /// Converts `html` to markdown: headings, paragraphs, lists, links, images,
 /// emphasis, code, quotes and tables, with scripts, styles and the head
 /// dropped. Text that is not markup, and markup it does not know, passes
 /// through. The result ends with one newline, or is empty.
 pub(crate) fn to_markdown(html: &str) -> String {
-    let mut converter = Converter::default();
-    converter.run(html);
-    converter.finish()
+    convert(html, SLICE)
+}
+
+/// Converts `html` feeding the tokenizer in slices of at most `slice`
+/// bytes, each cut on a char boundary. Every slice size converts the same:
+/// a tag, entity, multibyte char or `</script>` cut across slices changes
+/// nothing.
+fn convert(html: &str, slice: usize) -> String {
+    let slice = slice.max(1);
+    let cell = RefCell::new(Converter::default());
+    let sink = Sink { cell: &cell };
+    let tokenizer = Tokenizer::new(sink, TokenizerOpts::default());
+    let queue = BufferQueue::default();
+    let bytes = html.as_bytes();
+    let mut start = 0;
+    // `end` never passes the length, so the cuts land on it exactly.
+    while start != bytes.len() {
+        let mut end = bytes.len().min(start.saturating_add(slice));
+        // Cutting on a boundary cuts nothing (`floor` returns it), so the
+        // cut runs unconditionally: one less check a mutant could flip.
+        let floor = html.floor_char_boundary(end);
+        end = if floor == start {
+            html.ceil_char_boundary(end)
+        } else {
+            floor
+        };
+        queue.push_back(html.get(start..end).unwrap_or_default().into());
+        let _feed = tokenizer.feed(&queue);
+        start = end;
+    }
+    tokenizer.end();
+    cell.into_inner().finish()
+}
+
+/// The tokenizer's sink: tags drive the writer, character tokens become
+/// text, and everything else (comments, doctypes, parse errors, NUL) writes
+/// nothing.
+struct Sink<'a> {
+    cell: &'a RefCell<Converter>,
+}
+
+impl TokenSink for Sink<'_> {
+    type Handle = ();
+
+    fn process_token(&self, token: Token, _line: u64) -> TokenSinkResult<Self::Handle> {
+        let mut converter = self.cell.borrow_mut();
+        match token {
+            Token::TagToken(tag) => converter.tag_token(&tag),
+            Token::CharacterTokens(text) => {
+                converter.chars(&text);
+                TokenSinkResult::Continue
+            }
+            Token::DoctypeToken(_)
+            | Token::CommentToken(_)
+            | Token::NullCharacterToken
+            | Token::EOFToken
+            | Token::ParseError(_) => TokenSinkResult::Continue,
+        }
+    }
+
+    fn end(&self) {
+        self.cell.borrow_mut().input_ended();
+    }
+}
+
+/// The raw-text element whose text is arriving, if any. Each variant
+/// knows its end-tag name, so the element and its handling cannot disagree.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Raw {
+    /// `script`: dropped.
+    Script,
+    /// `style`: dropped.
+    Style,
+    /// A `title` that counts: collected for the leading heading.
+    Title,
+    /// A `title` that does not count: read as raw text and dropped.
+    TitleDrop,
+}
+
+impl Raw {
+    /// The end tag that closes the element.
+    fn name(self) -> &'static str {
+        match self {
+            Raw::Script => "script",
+            Raw::Style => "style",
+            Raw::Title | Raw::TitleDrop => "title",
+        }
+    }
 }
 
 /// What a list item is numbered by.
@@ -34,9 +130,19 @@ struct Link {
 struct Converter {
     out: String,
     title: Option<String>,
+    /// The text of the title being collected, when one is.
+    title_text: String,
+    /// Whether a title has been seen: only the first counts, as browsers
+    /// render only the first.
+    title_done: bool,
+    /// The raw-text element whose text is arriving, if any.
+    raw: Option<Raw>,
     /// Open `svg`, `noscript` and `template` elements, whose content is
     /// dropped.
     hidden: usize,
+    /// Open `svg` elements: inside one nothing switches state, so a `title`
+    /// there is neither collected nor switched.
+    svg: usize,
     in_head: bool,
     /// Open `pre` elements; the text of one is verbatim.
     pre: usize,
@@ -52,8 +158,6 @@ struct Converter {
     cells: usize,
     /// Whether the last thing written was whitespace, so another is dropped.
     last_space: bool,
-    /// Set when a `<title>` had no end tag, so no later one is searched for.
-    title_unclosed: bool,
 }
 
 impl Default for Converter {
@@ -61,7 +165,11 @@ impl Default for Converter {
         Self {
             out: String::new(),
             title: None,
+            title_text: String::new(),
+            title_done: false,
+            raw: None,
             hidden: 0,
+            svg: 0,
             in_head: false,
             pre: 0,
             pre_start: 0,
@@ -71,141 +179,131 @@ impl Default for Converter {
             quote: 0,
             cells: 0,
             last_space: true,
-            title_unclosed: false,
         }
     }
 }
 
 impl Converter {
-    fn run(&mut self, html: &str) {
-        // Slices, not indexes: every step hands back a shorter suffix, so a
-        // broken step can only misread, never spin.
-        let mut rest = html;
-        while let Some(lt) = rest.find('<') {
-            self.text(rest.get(..lt).unwrap_or_default());
-            rest = rest.get(lt..).unwrap_or_default();
-            rest = self.markup(rest);
+    /// Handles one tokenized tag. A `script`, `style` or first `title`
+    /// start tag switches the tokenizer to raw text; anything else is
+    /// handled and the tokenizer continues as usual.
+    fn tag_token(&mut self, tag: &Tag) -> TokenSinkResult<()> {
+        match tag.kind {
+            TagKind::StartTag => self.start_tag(&tag.name, tag),
+            TagKind::EndTag => {
+                self.end_tag(&tag.name, tag);
+                TokenSinkResult::Continue
+            }
         }
-        self.text(rest);
     }
 
-    /// Handles the `<` that starts `rest` and returns the text after it.
-    /// Every path consumes at least one byte, so the caller always moves on.
-    fn markup<'a>(&mut self, rest: &'a str) -> &'a str {
-        if let Some(body) = rest.strip_prefix("<!--") {
-            return match body.find("-->") {
-                Some(end) => body.get(end + "-->".len()..).unwrap_or_default(),
-                None => "",
-            };
+    fn start_tag(&mut self, name: &str, tag: &Tag) -> TokenSinkResult<()> {
+        // Raw-text switches apply everywhere but inside `svg`, whose
+        // content is foreign content: tokenized as markup and dropped.
+        // Inside `noscript` and `template` the switches apply.
+        if self.svg == 0 {
+            if name == "script" {
+                self.raw = Some(Raw::Script);
+                return TokenSinkResult::RawData(RawKind::ScriptData);
+            }
+            if name == "style" {
+                self.raw = Some(Raw::Style);
+                return TokenSinkResult::RawData(RawKind::Rawtext);
+            }
+            if name == "title" {
+                if !self.title_done && self.hidden == 0 {
+                    self.raw = Some(Raw::Title);
+                    self.title_text.clear();
+                } else {
+                    self.raw = Some(Raw::TitleDrop);
+                }
+                return TokenSinkResult::RawData(RawKind::Rcdata);
+            }
         }
-        let next = rest.as_bytes().get(1).copied();
-        match next {
-            Some(b'!' | b'?') => {
-                return match rest.find('>') {
-                    Some(end) => rest.get(end + 1..).unwrap_or_default(),
-                    None => "",
-                };
-            }
-            Some(byte) if byte.is_ascii_alphabetic() => {}
-            Some(b'/') if rest.as_bytes().get(2).is_some_and(u8::is_ascii_alphabetic) => {}
-            _ => {
-                self.text("<");
-                return rest.get(1..).unwrap_or_default();
-            }
-        }
-        // debt: a `>` inside a quoted attribute value ends the tag, because
-        // a search that respects quotes is quadratic on a page of unclosed
-        // quotes; read quotes if a page shows the damage.
-        let Some(end) = rest.find('>') else {
-            self.text(rest);
-            return "";
-        };
-        let tag = rest.get(1..end).unwrap_or_default();
-        self.tag(tag, rest.get(end + 1..).unwrap_or_default())
-    }
-
-    /// Handles one tag, `<` and `>` removed. Returns the text after it,
-    /// which is past `after` for an element whose content is skipped.
-    fn tag<'a>(&mut self, raw: &str, after: &'a str) -> &'a str {
-        let (closing, raw) = match raw.strip_prefix('/') {
-            Some(raw) => (true, raw),
-            None => (false, raw),
-        };
-        let name_end = raw
-            .find(|c: char| !(c.is_ascii_alphanumeric() || "-:".contains(c)))
-            .unwrap_or(raw.len());
-        let name = raw.get(..name_end).unwrap_or_default().to_ascii_lowercase();
-        let attrs = raw.get(name_end..).unwrap_or_default();
-        let self_closing = attrs.trim_end().ends_with('/');
-        let opens = !closing && !self_closing;
-
-        match name.as_str() {
-            "script" | "style" if !closing => {
-                // Past its end tag, or the end of the page when it has none.
-                return match split_end_tag(after, &name) {
-                    Some((_, resume)) => resume,
-                    None => "",
-                };
-            }
-            "title" if !closing => return self.title(after),
-            "head" => self.in_head = !closing,
-            "body" if !closing => self.in_head = false,
-            "svg" | "noscript" | "template" => {
-                if closing {
-                    self.hidden = self.hidden.saturating_sub(1);
-                } else if opens {
-                    self.hidden += 1;
+        if name == "head" {
+            self.in_head = true;
+        } else if name == "body" {
+            self.in_head = false;
+        } else if matches!(name, "svg" | "noscript" | "template") {
+            if !tag.self_closing {
+                self.hidden += 1;
+                if name == "svg" {
+                    self.svg += 1;
                 }
             }
-            _ => {
-                if self.hidden == 0 && !self.in_head {
-                    self.visible_tag(&name, closing, attrs);
-                }
-            }
+        } else if self.hidden == 0 && !self.in_head {
+            self.visible_tag(name, false, tag);
         }
-        after
+        TokenSinkResult::Continue
     }
 
-    /// Reads a title's text up to its end tag. Only the first title counts.
-    fn title<'a>(&mut self, after: &'a str) -> &'a str {
-        if self.title_unclosed {
-            return after;
+    fn end_tag(&mut self, name: &str, tag: &Tag) {
+        if self.raw.is_some_and(|raw| name == raw.name()) {
+            self.end_raw();
+            return;
         }
-        if self.hidden > 0 {
-            return after;
+        if name == "head" {
+            self.in_head = false;
+        } else if matches!(name, "svg" | "noscript" | "template") {
+            self.hidden = self.hidden.saturating_sub(1);
+            if name == "svg" {
+                self.svg = self.svg.saturating_sub(1);
+            }
+        } else if self.hidden == 0 && !self.in_head {
+            self.visible_tag(name, true, tag);
         }
-        let Some((text, resume)) = split_end_tag(after, "title") else {
-            self.title_unclosed = true;
-            return after;
-        };
-        if self.title.is_none() {
-            let decoded = decode(text);
-            let title = decoded
+    }
+
+    /// The end tag of the raw-text element: a collected title becomes the
+    /// pending heading, everything else was already dropped. A dropped
+    /// title leaves `title_done` alone, so a later title still counts.
+    fn end_raw(&mut self) {
+        if self.raw == Some(Raw::Title) {
+            let title = self
+                .title_text
                 .split_ascii_whitespace()
                 .collect::<Vec<_>>()
                 .join(" ");
             self.title = Some(title);
+            self.title_done = true;
         }
-        resume
+        self.raw = None;
     }
 
-    fn visible_tag(&mut self, name: &str, closing: bool, attrs: &str) {
+    /// The input ended: a title never closed swallows the rest of the page
+    /// in Rcdata, so its collected text, whitespace collapsed, becomes the
+    /// leading heading, and no text is lost.
+    fn input_ended(&mut self) {
+        if self.raw == Some(Raw::Title) {
+            self.end_raw();
+        } else {
+            self.raw = None;
+        }
+    }
+
+    fn visible_tag(&mut self, name: &str, closing: bool, tag: &Tag) {
         if self.pre > 0 && !matches!(name, "pre" | "br") {
             return;
         }
-        match name {
-            "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
-                self.block_break();
-                if !closing {
-                    let level = name.as_bytes().get(1).map_or(1, |digit| digit - b'0');
-                    for _ in 0..level {
-                        self.push('#');
-                    }
-                    self.push(' ');
+        if matches!(name, "h1" | "h2" | "h3" | "h4" | "h5" | "h6") {
+            self.block_break();
+            if !closing {
+                let level = name.as_bytes().get(1).map_or(1, |digit| digit - b'0');
+                for _ in 0..level {
+                    self.push('#');
                 }
+                self.push(' ');
             }
-            "p" | "div" | "section" | "article" | "main" | "header" | "footer" | "nav"
-            | "aside" => self.block_break(),
+            return;
+        }
+        if matches!(
+            name,
+            "p" | "div" | "section" | "article" | "main" | "header" | "footer" | "nav" | "aside"
+        ) {
+            self.block_break();
+            return;
+        }
+        match name {
             "br" => self.soft_break(),
             "hr" => {
                 self.block_break();
@@ -232,13 +330,13 @@ impl Converter {
                 if closing {
                     self.end_link();
                 } else {
-                    self.start_link(attrs);
+                    self.start_link(tag);
                 }
             }
             "strong" | "b" => self.push_str("**"),
             "em" | "i" => self.push_str("_"),
             "code" => self.push_str("`"),
-            "img" if !closing => self.image(attrs),
+            "img" if !closing => self.image(tag),
             "pre" => self.pre_tag(closing),
             "table" => self.block_break(),
             "tr" => {
@@ -302,13 +400,13 @@ impl Converter {
         self.push_str(&marker);
     }
 
-    fn start_link(&mut self, attrs: &str) {
+    fn start_link(&mut self, tag: &Tag) {
         // No `pre` check: `visible_tag` returns before every tag but `pre`
         // and `br` inside `pre`, so a link never opens there.
         if self.link.is_some() {
             return;
         }
-        if let Some(href) = attribute(attrs, "href") {
+        if let Some(href) = attribute(tag, "href") {
             self.link = Some(Link {
                 href,
                 text: String::new(),
@@ -336,9 +434,9 @@ impl Converter {
         self.push(')');
     }
 
-    fn image(&mut self, attrs: &str) {
-        let alt = attribute(attrs, "alt").unwrap_or_default();
-        match attribute(attrs, "src") {
+    fn image(&mut self, tag: &Tag) {
+        let alt = attribute(tag, "alt").unwrap_or_default();
+        match attribute(tag, "src") {
             Some(src) => {
                 self.push_str("![");
                 self.push_str(&alt);
@@ -378,30 +476,22 @@ impl Converter {
         self.block_break();
     }
 
-    fn text(&mut self, raw: &str) {
+    /// Character tokens: already entity-decoded per the HTML standard by
+    /// the tokenizer. Raw `script` and `style` text is dropped, a counted
+    /// title's is collected, and anything hidden or in the head is dropped.
+    fn chars(&mut self, text: &str) {
+        match self.raw {
+            Some(Raw::Title) => {
+                self.title_text.push_str(text);
+                return;
+            }
+            Some(_) => return,
+            None => {}
+        }
         if self.hidden > 0 || self.in_head {
             return;
         }
-        let mut rest = raw;
-        while let Some(amp) = rest.find('&') {
-            self.plain(rest.get(..amp).unwrap_or_default());
-            rest = rest.get(amp..).unwrap_or_default();
-            match entity(rest) {
-                Some((Entity::Char(c), used)) => {
-                    self.character(c);
-                    rest = rest.get(used..).unwrap_or_default();
-                }
-                Some((Entity::Written, used)) => {
-                    self.push_str(rest.get(..used).unwrap_or_default());
-                    rest = rest.get(used..).unwrap_or_default();
-                }
-                None => {
-                    self.push('&');
-                    rest = rest.get(1..).unwrap_or_default();
-                }
-            }
-        }
-        self.plain(rest);
+        self.plain(text);
     }
 
     fn plain(&mut self, text: &str) {
@@ -534,152 +624,28 @@ impl Converter {
     }
 }
 
-/// The text between `after` and its end tag `</name>`, matched without
-/// regard to case, and the text after that tag. The scan walks the `</`
-/// occurrences with an iterator, so a broken offset can only misread: the
-/// walk still ends when the occurrences run out.
-fn split_end_tag<'a>(after: &'a str, name: &str) -> Option<(&'a str, &'a str)> {
-    let bytes = after.as_bytes();
-    for (lt, _) in after.match_indices("</") {
-        let name_at = lt + 2;
-        let candidate = bytes.get(name_at..name_at + name.len())?;
-        let boundary = bytes.get(name_at + name.len()).copied();
-        if candidate.eq_ignore_ascii_case(name.as_bytes())
-            && boundary.is_some_and(|b| b == b'>' || b == b'/' || b.is_ascii_whitespace())
-        {
-            let close = after.get(name_at..)?.find('>')?;
-            return Some((
-                after.get(..lt).unwrap_or_default(),
-                after.get(name_at + close + 1..).unwrap_or_default(),
-            ));
-        }
-    }
-    None
-}
-
-enum Entity {
-    /// A character reference that names one.
-    Char(char),
-    /// A well-formed reference that names nothing, kept as written.
-    Written,
-}
-
-/// The entity at the `&` that starts `rest`, and how many bytes it takes.
-fn entity(rest: &str) -> Option<(Entity, usize)> {
-    let window = rest.as_bytes().get(..MAX_ENTITY.min(rest.len()))?;
-    let semicolon = window.iter().position(|&b| b == b';')?;
-    let body = rest.get(1..semicolon)?;
-    if body.is_empty() {
-        return None;
-    }
-    if !body.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'#') {
-        return None;
-    }
-    let used = semicolon + 1;
-    let named = match body {
-        "amp" => Some('&'),
-        "lt" => Some('<'),
-        "gt" => Some('>'),
-        "quot" => Some('"'),
-        "apos" => Some('\''),
-        "nbsp" => Some(' '),
-        _ => None,
-    };
-    let numeric = body.strip_prefix('#').and_then(|digits| {
-        let (digits, radix) = match digits.strip_prefix(['x', 'X']) {
-            Some(hex) => (hex, 16),
-            None => (digits, 10),
-        };
-        u32::from_str_radix(digits, radix).ok()
-    });
-    let decoded = named.or_else(|| numeric.filter(|&n| n != 0).and_then(char::from_u32));
-    Some((decoded.map_or(Entity::Written, Entity::Char), used))
-}
-
-/// `text` with its entities decoded.
-fn decode(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    while let Some(amp) = rest.find('&') {
-        out.push_str(rest.get(..amp).unwrap_or_default());
-        rest = rest.get(amp..).unwrap_or_default();
-        match entity(rest) {
-            Some((Entity::Char(c), used)) => {
-                out.push(c);
-                rest = rest.get(used..).unwrap_or_default();
-            }
-            Some((Entity::Written, used)) => {
-                out.push_str(rest.get(..used).unwrap_or_default());
-                rest = rest.get(used..).unwrap_or_default();
-            }
-            None => {
-                out.push('&');
-                rest = rest.get(1..).unwrap_or_default();
-            }
-        }
-    }
-    out.push_str(rest);
-    out
-}
-
-/// The value of attribute `wanted` in `attrs`, entities decoded, or `None`
-/// when it is absent or has no value. The scan hands back a shorter suffix
-/// on every pass, so a broken step can only misread, never spin.
-fn attribute(attrs: &str, wanted: &str) -> Option<String> {
-    let mut rest = attrs;
-    while !rest.is_empty() {
-        let tail = rest.trim_start_matches(|c: char| c.is_ascii_whitespace());
-        let name_end = tail
-            .bytes()
-            .position(|b| !(b.is_ascii_alphanumeric() || b"-_:".contains(&b)))
-            .unwrap_or(tail.len());
-        let (name, after_name) = tail.split_at(name_end);
-        if name.is_empty() {
-            // Not a name: past one character, so the scan always moves on.
-            let first = after_name.chars().next()?;
-            rest = after_name.get(first.len_utf8()..).unwrap_or_default();
-            continue;
-        }
-        let tail = after_name.trim_start_matches(|c: char| c.is_ascii_whitespace());
-        let Some(value_rest) = tail.strip_prefix('=') else {
-            // A name with no value: the next attribute starts after it.
-            rest = after_name;
-            continue;
-        };
-        let value_rest = value_rest.trim_start_matches(|c: char| c.is_ascii_whitespace());
-        let first = value_rest.as_bytes().first()?;
-        if *first == b'"' || *first == b'\'' {
-            let body = value_rest.get(1..).unwrap_or_default();
-            let Some(quote_end) = body.bytes().position(|b| b == *first) else {
-                // An unclosed quote runs to the end.
-                if name.eq_ignore_ascii_case(wanted) {
-                    return Some(decode(body));
-                }
-                return None;
-            };
-            let value = body.get(..quote_end).unwrap_or_default();
-            rest = body
-                .get(quote_end..)
-                .unwrap_or_default()
-                .get(1..)
-                .unwrap_or_default();
-            if name.eq_ignore_ascii_case(wanted) {
-                return Some(decode(value));
-            }
+/// The value of attribute `wanted` on a tokenized tag, or `None` when it is
+/// absent. Names are compared ASCII case-insensitively; values arrive
+/// entity-decoded per the HTML standard from the tokenizer.
+fn attribute(tag: &Tag, wanted: &str) -> Option<String> {
+    tag.attrs.iter().find_map(|attr| {
+        let name: &str = &attr.name.local;
+        if name == wanted {
+            Some(attr.value.to_string())
         } else {
-            let end = value_rest
-                .find(|c: char| c.is_ascii_whitespace())
-                .unwrap_or(value_rest.len());
-            let value = value_rest.get(..end).unwrap_or_default();
-            rest = value_rest.get(end..).unwrap_or_default();
-            if name.eq_ignore_ascii_case(wanted) {
-                return Some(decode(value));
-            }
+            None
         }
-    }
-    None
+    })
 }
 
 #[cfg(test)]
 #[path = "markdown_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "markdown_props_tests.rs"]
+mod props_tests;
+
+#[cfg(test)]
+#[path = "pages_tests.rs"]
+mod pages_tests;

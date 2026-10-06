@@ -375,6 +375,39 @@ fn main() {
         let b = a.replace("fox_5", "cat_5");
         black_box(similar::TextDiff::from_lines(&a, &b).unified_diff().to_string());
     }
+    #[cfg(feature = "html5ever")]
+    {
+        // web_fetch: a 64 KiB page through the tokenizer alone, counting
+        // tokens in the sink, as Fiber's converter does without a tree.
+        use html5ever::tokenizer::{
+            BufferQueue, Token, TokenSink, TokenSinkResult, Tokenizer, TokenizerOpts,
+        };
+        struct Count(std::cell::Cell<usize>);
+        impl TokenSink for &Count {
+            type Handle = ();
+            fn process_token(&self, _token: Token, _line: u64) -> TokenSinkResult<()> {
+                self.0.set(self.0.get() + 1);
+                TokenSinkResult::Continue
+            }
+        }
+        let page =
+            "<div><p>Hello <a href=\"/x\">world</a> &amp; friends</p></div>".repeat(1_500);
+        let count = Count(std::cell::Cell::new(0));
+        let tokenizer = Tokenizer::new(&count, TokenizerOpts::default());
+        let queue = BufferQueue::default();
+        queue.push_back(page.into());
+        let _ = tokenizer.feed(&queue);
+        tokenizer.end();
+        black_box(count.0.get());
+    }
+    #[cfg(feature = "encoding_rs")]
+    {
+        // web_fetch: decoding a 64 KiB windows-1252 page by its declared
+        // character set.
+        let bytes = vec![0xe9u8; 64 * 1024];
+        let (text, _, _) = encoding_rs::WINDOWS_1252.decode(&bytes);
+        black_box(text.len());
+    }
     #[cfg(feature = "pulldown-cmark")]
     {
         let md = "# Heading\n\nSome *emphasis* and `code`.\n\n- item\n- item\n\n```rust\nfn main() {}\n```\n\n".repeat(20);

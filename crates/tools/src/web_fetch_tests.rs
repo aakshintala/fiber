@@ -166,15 +166,101 @@ fn the_content_type_is_shown_as_the_server_sent_it() {
 
 #[test]
 fn html_comes_back_as_markdown() {
-    let server = serve([ok(
-        "text/html; charset=utf-8",
-        "<html><head><title>T</title><script>x()</script></head><body><h1>Hi</h1><p>a <a href=\"/b\">b</a></p></body></html>",
-    )]);
+    let body = "<html><head><title>T</title><script>x()</script></head><body><h1>Hi</h1><p>a <a href=\"/b\">b</a></p></body></html>";
+    let server = serve([ok("text/html; charset=utf-8", body)]);
+    let rig = Rig::new();
     let url = format!("{}/", server.url());
-    let output = Rig::new().fetch(&url);
+    let output = rig.fetch(&url);
+    let text = text(&output);
+    let first = text.lines().next().unwrap();
+    let prefix = format!("{url} 200 text/html; charset=utf-8; raw page at ");
+    let path = first.strip_prefix(&prefix).unwrap();
+    assert_eq!(fs::read(path).unwrap(), body.as_bytes());
     assert_eq!(
-        text(&output),
-        format!("{url} 200 text/html; charset=utf-8\n\n# T\n\n# Hi\n\na [b](/b)\n")
+        text,
+        format!("{prefix}{path}\n\n# T\n\n# Hi\n\na [b](/b)\n")
+    );
+}
+
+#[test]
+fn an_html_page_is_saved_raw_byte_for_byte() {
+    // Bytes that are not valid UTF-8 survive in the saved page.
+    let body: Vec<u8> = b"<p>a\xffb</p>".to_vec();
+    let server = serve([ok("text/html", body.clone())]);
+    let rig = Rig::new();
+    let url = format!("{}/", server.url());
+    let output = rig.fetch(&url);
+    assert_eq!(code(&output), None);
+    let text = text(&output);
+    let first = text.lines().next().unwrap();
+    assert!(
+        first.starts_with(&format!("{url} 200 text/html; raw page at ")),
+        "{first}"
+    );
+    let path = first.rsplit_once("; raw page at ").unwrap().1;
+    assert!(path.ends_with(".html"), "{path}");
+    assert_eq!(fs::read(path).unwrap(), body);
+}
+
+#[test]
+fn a_shift_jis_page_named_by_the_header_converts_with_its_text_intact() {
+    let mut body = b"<p>".to_vec();
+    body.extend_from_slice(&[0x82, 0xa0]);
+    body.extend_from_slice(b"</p>");
+    let server = serve([ok("text/html; charset=shift_jis", body.clone())]);
+    let rig = Rig::new();
+    let output = rig.fetch(&server.url());
+    let text = text(&output);
+    assert!(text.contains("\u{3042}"), "{text}");
+    let path = text
+        .lines()
+        .next()
+        .unwrap()
+        .rsplit_once("; raw page at ")
+        .unwrap()
+        .1;
+    assert_eq!(fs::read(path).unwrap(), body);
+}
+
+#[test]
+fn a_latin1_page_named_only_by_its_meta_converts_with_its_text_intact() {
+    let mut body = b"<meta charset=\"windows-1252\"><p>".to_vec();
+    body.extend_from_slice(&[0xe9]);
+    body.extend_from_slice(b"</p>");
+    let server = serve([ok("text/html", body.clone())]);
+    let rig = Rig::new();
+    let output = rig.fetch(&server.url());
+    let text = text(&output);
+    assert!(text.contains("\u{e9}"), "{text}");
+    let path = text
+        .lines()
+        .next()
+        .unwrap()
+        .rsplit_once("; raw page at ")
+        .unwrap()
+        .1;
+    assert_eq!(fs::read(path).unwrap(), body);
+}
+
+#[test]
+fn an_html_page_with_no_charset_reads_as_utf8_with_replacement() {
+    let body: Vec<u8> = b"<p>a\xffb</p>".to_vec();
+    let server = serve([ok("text/html", body)]);
+    let output = Rig::new().fetch(&server.url());
+    assert!(text(&output).contains("a\u{fffd}b"), "{}", text(&output));
+}
+
+#[test]
+fn an_html_download_that_cannot_be_saved_is_a_tool_error() {
+    let server = serve([ok("text/html", "<p>x</p>")]);
+    let rig = Rig::new();
+    fs::write(rig.artifacts(), "a file where the directory goes").unwrap();
+    let output = rig.fetch(&server.url());
+    assert_eq!(code(&output), Some(ErrorCode::ToolError));
+    assert!(
+        text(&output).contains("could not save"),
+        "{}",
+        text(&output)
     );
 }
 

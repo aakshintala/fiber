@@ -1508,10 +1508,10 @@ fn a_web_fetch_allowed_by_a_standing_rule_returns_the_pages_first_line() {
     assert_eq!(resolved["payload"]["decided_by"], "standing_rule");
     let completed = completed_call(&run);
     assert_eq!(completed["payload"]["status"], "completed");
-    assert_eq!(
-        completed["payload"]["content"][0]["text"],
-        format!("{url} 200 text/html; charset=utf-8\n\n# Hello\n\nfrom the page\n")
-    );
+    let got = completed["payload"]["content"][0]["text"].as_str().unwrap();
+    let prefix = format!("{url} 200 text/html; charset=utf-8; raw page at ");
+    assert!(got.starts_with(&prefix), "{got}");
+    assert!(got.ends_with("\n\n# Hello\n\nfrom the page\n"), "{got}");
     assert_eq!(site.requests().len(), 1);
     assert_eq!(site.requests()[0].path, "/doc");
 }
@@ -1573,12 +1573,11 @@ fn a_fetched_page_over_16_kib_is_cut_and_its_whole_markdown_is_in_the_artifact()
     assert_eq!(completed["payload"]["status"], "completed");
     let artifact = completed["payload"]["artifact"].as_str().unwrap();
     let kept = fs::read_to_string(run.session_dir(&setup).join(artifact)).unwrap();
-    assert_eq!(kept, format!("{url} 200 text/html\n\n{markdown}"));
+    let prefix = format!("{url} 200 text/html; raw page at ");
+    assert!(kept.starts_with(&prefix), "{kept}");
+    assert!(kept.ends_with(&format!("\n\n{markdown}")), "{kept}");
     let shown = completed["payload"]["content"][0]["text"].as_str().unwrap();
-    assert!(
-        shown.starts_with(&format!("{url} 200 text/html\n\n")),
-        "{shown}"
-    );
+    assert!(shown.starts_with(&prefix), "{shown}");
     assert!(shown.len() < kept.len(), "the result was not cut");
 }
 

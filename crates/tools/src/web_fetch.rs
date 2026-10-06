@@ -2,6 +2,7 @@
 //! names, redirects followed hop by hop, each hop judged and bounded, and the
 //! page returned as text or saved to the session's `artifacts/`.
 
+mod charset;
 mod http;
 mod markdown;
 mod target;
@@ -92,7 +93,8 @@ impl Tool for WebFetch {
             name: "web_fetch".to_owned(),
             description: "Fetches a web page and returns it as text. There is no prompt: you \
                  read the page yourself. The result begins with one line giving the final \
-                 URL after redirects, the HTTP status and the content type. HTML is \
+                 URL after redirects, the HTTP status and the content type, and, for HTML, \
+                 the path of the raw page in `artifacts/`. HTML is \
                  converted to markdown; other text, JSON and XML come back as they are. A \
                  PDF, or a PNG, JPEG, GIF or WebP image, is saved to `artifacts/` and the \
                  result gives its path, which you read with `read`. A long page is cut, and \
@@ -270,10 +272,14 @@ impl WebFetch {
             head.content_type.as_deref().unwrap_or_default()
         );
         match kind {
-            Kind::Markdown => text_output(format!(
-                "{first}\n\n{}",
-                markdown::to_markdown(&String::from_utf8_lossy(bytes))
-            )),
+            Kind::Markdown => match self.save(bytes, "html") {
+                Ok(path) => {
+                    let page = charset::decode(head.content_type.as_deref(), bytes);
+                    let markdown = markdown::to_markdown(&page);
+                    text_output(format!("{first}; raw page at {path}\n\n{markdown}"))
+                }
+                Err(message) => failed(ErrorCode::ToolError, message),
+            },
             Kind::Text => text_output(format!("{first}\n\n{}", String::from_utf8_lossy(bytes))),
             Kind::Saved(extension) => match self.save(bytes, extension) {
                 Ok(path) => text_output(format!(
