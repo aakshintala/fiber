@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use contract::ErrorCode;
 use contract::events::{Notice, SkillListed, SkillSource};
+use contract::shapes::ContentPart;
 
 use crate::opening::canonical;
 use crate::prompt::PromptInputs;
@@ -213,6 +214,66 @@ fn invalid_notice(path: &Path, invalid: &Invalid) -> Notice {
         message: format!("Skill {} was left out: {reason}.", path.display()),
         extension: None,
     }
+}
+
+/// A `prompt` whose first word is `/name`, split from its arguments
+/// (`docs/invocation.md`, "Driver commands"): the first word runs to the
+/// first whitespace char, the name is the word without the `/`, and the
+/// arguments are the rest, with leading whitespace trimmed and trailing
+/// kept as written. The text's leading whitespace is skipped. `None`
+/// when the text names no command: it does not start with `/`, or the
+/// name is empty.
+pub(crate) fn split_command(text: &str) -> Option<(&str, &str)> {
+    let command = text
+        .trim_start_matches(|c: char| c.is_whitespace())
+        .strip_prefix('/')?;
+    let end = command
+        .find(|c: char| c.is_whitespace())
+        .unwrap_or(command.len());
+    let (name, after) = (&command[..end], &command[end..]);
+    if name.is_empty() {
+        return None;
+    }
+    Some((name, after.trim_start_matches(|c: char| c.is_whitespace())))
+}
+
+/// Expands a `prompt` whose first word is `/name` into the skill's text,
+/// then the rest of the prompt as its arguments (`docs/invocation.md`,
+/// "Driver commands"): the body, then, when the arguments are non-empty,
+/// one blank line and the arguments. `None` means "send as written": the
+/// first part is no text, names no skill, is switched off, or its
+/// `SKILL.md` cannot be read at expansion. Every discovered skill counts,
+/// including `disable-model-invocation` and extension `prompts/` skills;
+/// the winner of a shared name is the one `discover` keeps. Only the first
+/// content part changes.
+pub(crate) fn expand(
+    inputs: &PromptInputs,
+    top: &Path,
+    content: &[ContentPart],
+) -> Option<Vec<ContentPart>> {
+    let Some((ContentPart::Text { text }, rest)) = content.split_first() else {
+        return None;
+    };
+    let (name, args) = split_command(text)?;
+    if inputs.skills_disabled.iter().any(|off| off == name) {
+        return None;
+    }
+    let found = discover(inputs, top)
+        .skills
+        .into_iter()
+        .find(|found| found.listed.name == name)?;
+    let raw = std::fs::read(&found.listed.path).ok()?;
+    let read = String::from_utf8_lossy(&raw);
+    let body = skill_header::body(&read)?;
+    let expanded = if args.is_empty() {
+        body.to_owned()
+    } else {
+        format!("{body}\n\n{args}")
+    };
+    let mut out = Vec::with_capacity(content.len());
+    out.push(ContentPart::Text { text: expanded });
+    out.extend(rest.iter().cloned());
+    Some(out)
 }
 
 /// The skills the model may load, by name: those whose header allows it

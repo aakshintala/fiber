@@ -19,7 +19,7 @@ use std::thread;
 use contract::commands::{Reply, ReplyAnswer};
 use contract::events::{Decision, TurnOutcome};
 use contract::inbox::{Ack, Answer, Delivery, Rejection};
-use contract::provider::ToolDefinition;
+use contract::provider::{Input, ToolDefinition};
 use contract::rules::{Rule, RuleDecision, StandingRules};
 use contract::shapes::{ContentPart, DeclaredEffects, Effect};
 use contract::tool::{Bound, Cancel, Effects, EffectsError, Output, Tool};
@@ -431,6 +431,86 @@ fn run_until_close(session: &mut Session) -> Vec<Envelope> {
         .expect("close ended the loop")
         .unwrap();
     lines
+}
+
+/// Writes the `review-pr` skill into `workspace`'s `.agents/skills/`.
+fn review_skill(workspace: &Path) {
+    let dir = workspace.join(".agents/skills/review-pr");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("SKILL.md"),
+        "---\nname: review-pr\ndescription: Reviews.\n---\nReview the pull request named in the arguments.\n",
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_slash_prompt_runs_the_skill_with_the_rest_as_its_arguments() {
+    let mut session = Session::new(vec![Scripted::text("Hi.")], None);
+    review_skill(&session.workspace);
+    session
+        .inbox
+        .send(support::delivery("/review-pr 42"))
+        .unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    let lines = session.lines();
+    assert_eq!(kinds(&lines), plain());
+    let input = &lines[3].payload["input"];
+    assert_eq!(input.as_array().unwrap().len(), 1);
+    assert_eq!(
+        input[0]["content"][0]["text"],
+        "Review the pull request named in the arguments.\n\n42"
+    );
+    // The provider's last user message carries the expanded text too.
+    let expanded = session
+        .requests()
+        .iter()
+        .flat_map(|request| request.conversation.clone())
+        .rev()
+        .find_map(|input| match input {
+            Input::User { text } => Some(text),
+            Input::Assistant { .. }
+            | Input::Reasoning { .. }
+            | Input::ToolCall { .. }
+            | Input::ToolResult { .. } => None,
+        })
+        .unwrap();
+    assert_eq!(
+        expanded,
+        "Review the pull request named in the arguments.\n\n42"
+    );
+}
+
+#[test]
+fn a_prompt_naming_no_skill_is_sent_as_written() {
+    let mut session = Session::new(vec![Scripted::text("Hi.")], None);
+    session.inbox.send(support::delivery("/nope x")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    let lines = session.lines();
+    assert_eq!(kinds(&lines), plain());
+    assert_eq!(
+        lines[3].payload["input"][0]["content"][0]["text"],
+        "/nope x"
+    );
+}
+
+#[test]
+fn a_steer_naming_a_skill_is_not_expanded() {
+    let mut session = Session::new(vec![Scripted::text("Hi.")], None);
+    review_skill(&session.workspace);
+    let (ack, answers) = capture();
+    session
+        .inbox
+        .send(steer_with("/review-pr 42", ack))
+        .unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    assert_eq!(take(&answers), accepted());
+    let lines = session.lines();
+    assert_eq!(kinds(&lines), plain());
+    assert_eq!(
+        lines[3].payload["input"][0]["content"][0]["text"],
+        "/review-pr 42"
+    );
 }
 
 #[test]

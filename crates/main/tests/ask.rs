@@ -2411,3 +2411,86 @@ fn two_runs_send_byte_identical_preambles() {
         ]
     );
 }
+
+/// Installs the `review-pr` skill with body `Review the pull request named
+/// in the arguments.` in the workspace's `.agents/skills/`.
+fn install_review_skill(setup: &Setup) {
+    let dir = setup.root.path().join("w/.agents/skills/review-pr");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("SKILL.md"),
+        "---\nname: review-pr\ndescription: Reviews a pull request.\n---\nReview the pull request named in the arguments.\n",
+    )
+    .unwrap();
+}
+
+/// Every string the JSON `value` holds, in order.
+fn texts(value: &Value, out: &mut Vec<String>) {
+    match value {
+        Value::String(text) => out.push(text.clone()),
+        Value::Array(items) => items.iter().for_each(|item| texts(item, out)),
+        Value::Object(map) => map.values().for_each(|item| texts(item, out)),
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
+}
+
+#[test]
+fn a_slash_prompt_runs_the_skill_with_the_rest_as_its_arguments() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    install_review_skill(&setup);
+
+    let run = setup.fiber(&["ask", "/review-pr 42"], None);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let expanded = "Review the pull request named in the arguments.\n\n42";
+    assert_eq!(turn_input(&run), expanded);
+    // The fake provider's received user message carries the expanded text.
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
+    let mut found = Vec::new();
+    texts(&body, &mut found);
+    assert!(found.iter().any(|text| text == expanded), "{found:?}");
+}
+
+#[test]
+fn a_prompt_naming_no_skill_is_sent_as_written() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    install_review_skill(&setup);
+
+    let run = setup.fiber(&["ask", "/nope x"], None);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(turn_input(&run), "/nope x");
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
+    let mut found = Vec::new();
+    texts(&body, &mut found);
+    assert!(found.iter().any(|text| text == "/nope x"), "{found:?}");
+}
+
+#[test]
+fn a_slash_prompt_runs_a_prompt_template() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    // A prompt template: a skill with `disable-model-invocation: true`. It
+    // is left out of the listing but keeps its `/name`.
+    let dir = setup.root.path().join("w/.agents/skills/plan");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("SKILL.md"),
+        "---\nname: plan\ndescription: Plans the work.\ndisable-model-invocation: true\n---\nPlan the work below.\n",
+    )
+    .unwrap();
+
+    let run = setup.fiber(&["ask", "/plan 42"], None);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(turn_input(&run), "Plan the work below.\n\n42");
+}
