@@ -288,9 +288,12 @@ from outside, through a seam such as a fake writer or the injected clock. A
 `#[cfg(test)]` hook inside a production function is a last resort, and the
 plan that needs one says why.
 
-A bug fix must also show that its test reproduces the bug. For a pull request
-where any issue its body resolves is labelled `bug`, CI runs its new and
-changed tests against the base commit, and at least one must fail there.
+A bug fix must also show that its test reproduces the bug. A pull request
+where any issue its body resolves is labelled `bug` starts with a red commit:
+the reproducing test and any new signature or test seam it needs, without the
+fix (`docs/workflow.md`, "The pull request"). CI runs the new and changed
+tests at the red commit and at the head. The red commit must build, at least
+one of those tests must fail there, and all of them must pass at the head.
 
 Diff-scoped mutation testing has two known limits. It cannot see a change in
 one place leaving other code under-tested. A pull request that changes only
@@ -345,6 +348,11 @@ test's own deadlines, so a hang reports which wait expired, not a harness kill.
 A test advances a fake clock only after a signal that the code under test is
 waiting on that clock (past its own clock check); a parked caller alone is not
 that signal.
+
+A test that reproduces a race forces the bad interleaving with a pause point:
+a committed, test-only seam where the code under test waits until the test
+releases it. The race then happens on every run, so the red commit fails every
+time ("Proving a test bites").
 
 A test does not execute a file it wrote in the same run. On macOS, the first
 run of a newly written executable can stall for seconds under load. The test
