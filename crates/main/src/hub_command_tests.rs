@@ -10,10 +10,16 @@
 )]
 
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 
 use hub::Started;
 
 use super::*;
+
+/// One named deadline per wait: the drain finishes before it.
+const DRAIN_DEADLINE: Duration = Duration::from_secs(10);
 
 fn exited_line(code: &str, message: &str) -> String {
     serde_json::json!({
@@ -48,7 +54,24 @@ fn drained(child: Child) -> Arc<Mutex<State>> {
         exited: false,
         failure: None,
     }));
-    drain(&Arc::new(Mutex::new(child)), &state);
+    let child = Arc::new(Mutex::new(child));
+    // `drain` blocks reading stdout to EOF and reaping the child: a wait,
+    // so the test receives it with a wall-clock deadline.
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::Builder::new()
+        .name("hub-test-drain".to_owned())
+        .spawn({
+            let child = Arc::clone(&child);
+            let state = Arc::clone(&state);
+            move || {
+                drain(&child, &state);
+                done_tx.send(()).unwrap_or(());
+            }
+        })
+        .unwrap();
+    done_rx
+        .recv_timeout(DRAIN_DEADLINE)
+        .expect("drain finishes before its deadline");
     state
 }
 

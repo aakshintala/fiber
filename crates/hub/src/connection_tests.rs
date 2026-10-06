@@ -488,6 +488,28 @@ fn until_clients(hub: &Arc<Hub>, n: usize, what: &str) {
         .unwrap_or_else(|_| panic!("the hub counts {n} connections {what}"));
 }
 
+/// Waits, at most one deadline, for the hub's activity to reach `expected`:
+/// `disconnect` removes before it bumps, so clients can read 0 while the
+/// departure has yet to bump.
+fn until_activity(hub: &Arc<Hub>, expected: u64, what: &str) {
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::Builder::new()
+        .name("hub-test-activity".to_owned())
+        .spawn({
+            let hub = Arc::clone(hub);
+            move || {
+                while hub.activity() != expected {
+                    std::thread::yield_now();
+                }
+                done_tx.send(()).unwrap_or(());
+            }
+        })
+        .unwrap();
+    done_rx
+        .recv_timeout(DEADLINE)
+        .unwrap_or_else(|_| panic!("the hub reaches activity {expected} {what}"));
+}
+
 #[test]
 fn session_ids_outside_the_minted_shape_are_session_not_found() {
     let temp = Temp::new();
@@ -577,6 +599,32 @@ fn activity_counts_arrivals_and_departures_in_order() {
     assert_eq!(hub.activity(), 1);
     drop(client);
     until_clients(&hub, 0, "after the departure");
+    // The removal lands before the bump, so 0 clients is observable while
+    // the departure has yet to bump: wait for the bump before asserting.
+    until_activity(&hub, 2, "after the departure");
+    assert_eq!(hub.activity(), 2);
+}
+
+#[test]
+fn a_failed_clone_counts_nothing_and_serves_nothing() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    let failed: std::io::Result<UnixStream> = Err(std::io::Error::other("no fd"));
+    assert!(hub.register_with(|| failed, &mut Vec::new()).is_none());
+    assert_eq!(hub.clients(), 0);
+    assert_eq!(hub.activity(), 0);
+}
+
+#[test]
+fn rollback_removes_the_count_and_bumps_activity() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    let (a, _b) = UnixStream::pair().unwrap();
+    let n = hub.register(&a).expect("the clone succeeds");
+    assert_eq!(hub.clients(), 1);
+    assert_eq!(hub.activity(), 1);
+    hub.rollback(n);
+    assert_eq!(hub.clients(), 0);
     assert_eq!(hub.activity(), 2);
 }
 
@@ -591,6 +639,34 @@ fn client_numbers_start_at_one() {
     let log = fs::read_to_string(temp.dir.join("logs").join("hub.log")).unwrap();
     assert!(log.contains("Client 1 connected."));
     assert!(log.contains("Client 2 connected."));
+}
+
+#[test]
+fn client_lines_hold_no_workspace_or_model_text() {
+    const SECRET: &str = "the-volume-of-the-meeting-room";
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::bind_and_hold(&temp.dir));
+    let mut client = Client::connect(&hub);
+    client.hello();
+    // Plant path and model secrets the client lines must never hold: the
+    // count `n` is hub-minted, the sentences fixed.
+    let workspace = temp.dir.join(format!("w-{SECRET}"));
+    fs::create_dir_all(&workspace).unwrap();
+    client.send(&command(
+        "c_1",
+        "start",
+        json!({"workspace": workspace.to_string_lossy(), "model": SECRET}),
+    ));
+    let (_, _) = accepted(&client.next("the acknowledgement"));
+    drop(client);
+    until_clients(&hub, 0, "after the departure");
+    let log = fs::read_to_string(temp.dir.join("logs").join("hub.log")).unwrap();
+    assert!(log.contains("Client 1 connected."));
+    assert!(log.contains("Client 1 disconnected."));
+    assert!(
+        !log.contains(SECRET),
+        "no workspace or model text in client lines"
+    );
 }
 
 #[test]

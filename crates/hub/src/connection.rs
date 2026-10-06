@@ -86,32 +86,57 @@ impl Hub {
     }
 
     /// Counts a connection the accept loop holds: under the connection
-    /// lock, so the idle exit's check and claim see it. `None` once the hub
+    /// lock, so the idle exit's check and claim see it. Exiting once the hub
     /// is exiting: the caller drops the stream unanswered, EOF with no
-    /// `hub_hello`, and the client retries.
-    pub(crate) fn poll_accept(&self, stream: &UnixStream, stop: &AtomicBool) -> Option<u64> {
+    /// `hub_hello`, and the client retries. Dropped when the shutdown
+    /// clone fails: count nothing, serve nothing, and continue accepting.
+    pub(crate) fn poll_accept(&self, stream: &UnixStream, stop: &AtomicBool) -> Accept {
         let mut conns = lock(&self.conns);
         if stop.load(Ordering::SeqCst) {
-            return None;
+            return Accept::Exiting;
         }
-        Some(self.register_locked(stream, &mut conns))
+        match self.register_with(|| stream.try_clone(), &mut conns) {
+            Some(n) => Accept::Counted(n),
+            None => Accept::Dropped,
+        }
     }
 
     /// Counts one connection, for a caller with no exit to check.
+    /// `None` when the shutdown clone fails: count nothing, serve nothing.
     #[cfg(test)]
-    pub(crate) fn register(&self, stream: &UnixStream) -> u64 {
+    pub(crate) fn register(&self, stream: &UnixStream) -> Option<u64> {
         let mut conns = lock(&self.conns);
-        self.register_locked(stream, &mut conns)
+        self.register_with(|| stream.try_clone(), &mut conns)
     }
 
-    fn register_locked(&self, stream: &UnixStream, conns: &mut Vec<(u64, UnixStream)>) -> u64 {
+    fn register_with(
+        &self,
+        clone: impl FnOnce() -> std::io::Result<UnixStream>,
+        conns: &mut Vec<(u64, UnixStream)>,
+    ) -> Option<u64> {
+        // Clone first: a failure counts nothing, serves nothing, and
+        // consumes no client number.
+        let Ok(shutdown) = clone() else {
+            return None;
+        };
         let n = self.next_client.fetch_add(1, Ordering::SeqCst) + 1;
-        if let Ok(shutdown) = stream.try_clone() {
-            conns.push((n, shutdown));
-        }
+        conns.push((n, shutdown));
         self.activity.fetch_add(1, Ordering::SeqCst);
         self.tick.wake();
-        n
+        Some(n)
+    }
+
+    /// Rolls back a counted connection whose serving thread never started:
+    /// removes it, bumps activity, and wakes, before the stream is dropped.
+    /// Never connected, so no `client_disconnected` line.
+    pub(crate) fn rollback(&self, n: u64) {
+        let mut conns = lock(&self.conns);
+        if let Some(at) = conns.iter().position(|(id, _)| *id == n) {
+            conns.remove(at);
+        }
+        drop(conns);
+        self.activity.fetch_add(1, Ordering::SeqCst);
+        self.tick.wake();
     }
 
     /// Whether no client is connected and none arrived since `seen`.
@@ -179,6 +204,16 @@ impl Hub {
     }
 }
 
+/// What `poll_accept` decided for one accepted stream.
+pub(crate) enum Accept {
+    /// Counted under the connection lock: serve it as `n`.
+    Counted(u64),
+    /// The shutdown clone failed: count nothing, serve nothing.
+    Dropped,
+    /// The hub is exiting: drop unanswered.
+    Exiting,
+}
+
 /// How often the idle wait re-checks signals on the real clock. The fake
 /// clock parks until woken, unaffected.
 const POLL: Duration = Duration::from_millis(100);
@@ -213,7 +248,9 @@ struct Relay {
 /// [`Hub::poll_accept`], then serves here.
 #[cfg(test)]
 pub(crate) fn serve_connection(stream: UnixStream, hub: Arc<Hub>) {
-    let n = hub.register(&stream);
+    let Some(n) = hub.register(&stream) else {
+        return;
+    };
     serve_counted(stream, hub, n);
 }
 

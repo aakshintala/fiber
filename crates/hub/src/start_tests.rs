@@ -9,13 +9,15 @@
 )]
 
 use std::fs;
-use std::path::PathBuf;
+use std::io;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
 use contract::ErrorCode;
+use contract::SessionId;
 use contract::clock::Clock;
 use serde_json::{Value, json};
 
@@ -51,6 +53,10 @@ impl Temp {
     }
 
     fn hub(&self, starter: FakeStarter) -> Hub {
+        self.hub_with(starter)
+    }
+
+    fn hub_with(&self, starter: impl crate::Starter + 'static) -> Hub {
         let clock = Arc::clone(&self.clock);
         let timed: Arc<dyn Clock> = clock;
         Hub::new(&self.dir, "0.0.0", Arc::new(starter), timed)
@@ -185,6 +191,81 @@ fn an_unreachable_socket_error_fails_without_retrying() {
     assert!(temp.clock.now() < temp.clock.origin() + START_DEADLINE);
 }
 
+/// A starter that fails with `message` as its io error text.
+struct FailStarter {
+    message: String,
+}
+
+impl crate::Starter for FailStarter {
+    fn start(
+        &self,
+        _id: &SessionId,
+        _workspace: &Path,
+        _model: Option<&str>,
+    ) -> io::Result<Box<dyn crate::Started>> {
+        Err(io::Error::other(self.message.clone()))
+    }
+}
+
+#[test]
+fn a_starter_error_keeps_its_detail_out_of_the_log() {
+    const SECRET: &str = "the-volume-of-the-meeting-room";
+    let temp = Temp::new();
+    let starter = FailStarter {
+        message: format!("starter blew up on {SECRET}."),
+    };
+    let hub = temp.hub_with(starter);
+    let workspace = temp.workspace();
+    let outcome = started(hub, workspace, Some(SECRET.to_owned()), None);
+    let Outcome::Rejected { code, message } = outcome else {
+        panic!("the start is rejected");
+    };
+    assert_eq!(code, ErrorCode::IoFailed);
+    assert!(
+        message.contains(SECRET),
+        "the client keeps the starter detail"
+    );
+    let log = fs::read_to_string(temp.dir.join("logs").join("hub.log")).unwrap();
+    assert!(log.contains("\"code\":\"io_failed\""));
+    assert!(log.contains("could not start."));
+    assert!(!log.contains(SECRET), "no starter text in the log");
+}
+
+#[test]
+fn an_unexpected_connect_error_keeps_its_detail_out_of_the_log() {
+    const SECRET: &str = "the-volume-of-the-meeting-room";
+    let temp = Temp::new();
+    // `run/` is a file, so connecting fails NotADirectory on every
+    // platform: not a missing socket, so there is nothing to wait for.
+    // The workspace name plants a path secret the log must never hold.
+    fs::write(temp.dir.join("run"), b"x").unwrap();
+    let workspace = temp.dir.join(format!("w-{SECRET}"));
+    fs::create_dir_all(&workspace).unwrap();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    let outcome = started(
+        hub,
+        workspace.to_string_lossy().into_owned(),
+        Some(SECRET.to_owned()),
+        None,
+    );
+    let Outcome::Rejected { code, message } = outcome else {
+        panic!("the start is rejected");
+    };
+    assert_eq!(code, ErrorCode::IoFailed);
+    assert!(
+        message.contains("could not start:"),
+        "the client keeps the connect detail"
+    );
+    let log = fs::read_to_string(temp.dir.join("logs").join("hub.log")).unwrap();
+    assert!(log.contains("\"code\":\"io_failed\""));
+    assert!(log.contains("could not start."));
+    assert!(!log.contains(SECRET), "no path or model text in the log");
+    assert!(
+        !log.contains("could not start:"),
+        "no connect detail in the log"
+    );
+}
+
 #[test]
 fn a_failed_start_logs_the_code_and_a_fixed_sentence() {
     let temp = Temp::new();
@@ -200,6 +281,51 @@ fn a_failed_start_logs_the_code_and_a_fixed_sentence() {
     let log = fs::read_to_string(temp.dir.join("logs").join("hub.log")).unwrap();
     assert!(log.contains("\"code\":\"no_model\""));
     assert!(!log.contains("No model is configured."));
+}
+
+#[test]
+fn an_exited_failure_keeps_session_text_out_of_the_log() {
+    const SECRET: &str = "the-volume-of-the-meeting-room";
+    let temp = Temp::new();
+    let exited = failure(ErrorCode::NoModel, &format!("No model for {SECRET}."));
+    let hub = temp.hub(FakeStarter::exit_with(&temp.dir, exited));
+    let workspace = temp.workspace();
+    let outcome = started(hub, workspace, Some(SECRET.to_owned()), None);
+    let Outcome::Rejected { code, message } = outcome else {
+        panic!("the start is rejected");
+    };
+    assert_eq!(code, ErrorCode::NoModel);
+    assert!(
+        message.contains(SECRET),
+        "the client keeps what the session said"
+    );
+    let log = fs::read_to_string(temp.dir.join("logs").join("hub.log")).unwrap();
+    assert!(log.contains("\"code\":\"no_model\""));
+    assert!(!log.contains(SECRET), "no session text in the log");
+}
+
+#[test]
+fn session_started_keeps_workspace_and_model_out_of_the_log() {
+    const SECRET: &str = "the-volume-of-the-meeting-room";
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::bind_and_hold(&temp.dir));
+    let workspace = temp.dir.join(format!("w-{SECRET}"));
+    fs::create_dir_all(&workspace).unwrap();
+    let outcome = started(
+        hub,
+        workspace.to_string_lossy().into_owned(),
+        Some(SECRET.to_owned()),
+        None,
+    );
+    let Outcome::Accepted { .. } = outcome else {
+        panic!("the start is accepted");
+    };
+    let log = fs::read_to_string(temp.dir.join("logs").join("hub.log")).unwrap();
+    assert!(log.contains("\"code\":\"session_started\""));
+    assert!(
+        !log.contains(SECRET),
+        "no workspace or model text in the log"
+    );
 }
 
 #[test]

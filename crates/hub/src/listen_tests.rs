@@ -125,9 +125,12 @@ fn a_socket_path_past_the_limit_is_invalid_input() {
 fn a_symlink_at_the_socket_path_is_not_replaced() {
     let temp = Temp::new();
     fs::create_dir_all(temp.dir.join("run")).unwrap();
-    fs::write(temp.dir.join("plain"), b"x").unwrap();
-    // A symlink may lead to a live session, so the hub binds nothing.
-    std::os::unix::fs::symlink(temp.dir.join("plain"), temp.socket()).unwrap();
+    // A symlink loop fails FilesystemLoop (ELOOP) on every platform: on
+    // Linux a symlink to a plain file would fail ConnectionRefused and look
+    // replaceable, while macOS fails Uncategorized (ENOTSOCK), so no plain
+    // file here. A symlink may lead to a live session, so the hub binds
+    // nothing.
+    std::os::unix::fs::symlink(temp.socket(), temp.socket()).unwrap();
     assert!(listen(&temp.dir).is_err());
     assert!(
         fs::symlink_metadata(temp.socket())

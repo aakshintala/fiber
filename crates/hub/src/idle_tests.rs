@@ -79,22 +79,72 @@ fn serve_in(
     done_rx
 }
 
+/// Serves the hub on a thread with its handle: the caller waits on
+/// activity before each advance, so every advance follows a park that began
+/// after the event under test.
+fn serve_with_hub(
+    temp: &Temp,
+    idle: Duration,
+    clock: Arc<fakes::clock::FakeClock>,
+) -> (Arc<Hub>, mpsc::Receiver<i32>) {
+    let timed = Arc::clone(&clock);
+    let timed: Arc<dyn contract::clock::Clock> = timed;
+    let hub = Arc::new(Hub::new(
+        &temp.dir,
+        "0.0.0",
+        Arc::new(FakeStarter::hang(&temp.dir)),
+        timed,
+    ));
+    hub.diag.info("hub_started", "The hub started.");
+    let held = crate::listen::listen(&temp.dir).unwrap().unwrap();
+    let got = Arc::new(AtomicI32::new(0));
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::Builder::new()
+        .name("hub-test-run".to_owned())
+        .spawn({
+            let hub = Arc::clone(&hub);
+            let timed = Arc::clone(&clock);
+            let timed: Arc<dyn contract::clock::Clock> = timed;
+            move || {
+                let exit = run(&hub, &held, idle, &timed, &got);
+                held.stop();
+                done_tx.send(exit.code()).unwrap_or(());
+            }
+        })
+        .unwrap();
+    (hub, done_rx)
+}
+
+/// Waits, at most one deadline, for the hub's activity to reach `expected`.
+fn until_activity(hub: &Arc<Hub>, expected: u64, what: &str) {
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::Builder::new()
+        .name("hub-test-activity".to_owned())
+        .spawn({
+            let hub = Arc::clone(hub);
+            move || {
+                while hub.activity() != expected {
+                    thread::yield_now();
+                }
+                done_tx.send(()).unwrap_or(());
+            }
+        })
+        .unwrap();
+    done_rx
+        .recv_timeout(DEADLINE)
+        .unwrap_or_else(|_| panic!("the hub reaches activity {expected} {what}"));
+}
+
 /// A client on the hub's socket: connected once its `hub_hello` arrives.
 struct Client {
     _stream: UnixStream,
 }
 
-fn connect(temp: &Temp) -> (Client, String) {
-    let stream = UnixStream::connect(temp.socket()).unwrap();
-    stream.set_read_timeout(Some(DEADLINE)).unwrap();
-    let mut read = BufReader::new(stream.try_clone().unwrap());
-    let mut hello = String::new();
-    read.read_line(&mut hello).expect("the hub speaks first");
-    (Client { _stream: stream }, hello)
-}
-
 /// The instant the hub currently waits on: advancing past it is observed.
-/// Panics past the deadline naming the wait.
+/// Panics past the deadline naming the wait. Each use follows proof that
+/// the hub parked after the event under test (activity), so the returned
+/// park began after it: for a quiet hub the deadline is unchanged, for a
+/// connected one it moved, but either way the park is current.
 fn parked_until(clock: &Arc<fakes::clock::FakeClock>) -> std::time::Instant {
     let (done_tx, done_rx) = mpsc::channel();
     thread::Builder::new()
@@ -117,6 +167,15 @@ fn parked_until(clock: &Arc<fakes::clock::FakeClock>) -> std::time::Instant {
         .expect("the hub parks before its deadline")
 }
 
+fn connect(temp: &Temp) -> (Client, String) {
+    let stream = UnixStream::connect(temp.socket()).unwrap();
+    stream.set_read_timeout(Some(DEADLINE)).unwrap();
+    let mut read = BufReader::new(stream.try_clone().unwrap());
+    let mut hello = String::new();
+    read.read_line(&mut hello).expect("the hub speaks first");
+    (Client { _stream: stream }, hello)
+}
+
 #[test]
 fn with_no_clients_the_hub_parks_then_exits_idle() {
     let temp = Temp::new();
@@ -137,15 +196,19 @@ fn with_no_clients_the_hub_parks_then_exits_idle() {
 fn a_connected_client_keeps_the_hub_and_leaving_exits_it() {
     let temp = Temp::new();
     let clock = fakes::clock::FakeClock::new();
-    let done = serve_in(&temp, IDLE, Arc::clone(&clock));
+    let (hub, done) = serve_with_hub(&temp, IDLE, Arc::clone(&clock));
     assert!(clock.await_parked(clock.origin() + IDLE, WITHIN));
     let (client, hello) = connect(&temp);
     assert!(hello.contains("\"kind\":\"hub_hello\""));
-    // The hub re-parks its wait once it has seen the arrival: advancing
-    // before that would spend the idle period unobserved. The deadline is
-    // read off the frozen clock, the same sum the hub parks.
-    let held = clock.now() + IDLE;
-    assert!(clock.await_parked(held, WITHIN));
+    // The arrival is counted before any advance: otherwise the advance
+    // could spend the idle period before the count lands and exit spuriously.
+    until_activity(&hub, 1, "after the arrival");
+    // The re-park has the same deadline while the clock is frozen, so force
+    // a new one: prove the old park, move a millisecond, then prove the
+    // current park that began after the arrival before spending idle time.
+    assert!(clock.await_parked(clock.now() + IDLE, WITHIN));
+    clock.advance(Duration::from_millis(1));
+    parked_until(&clock);
     // The client is connected: a whole idle period passes without exit.
     clock.advance(IDLE + Duration::from_millis(1));
     assert!(
@@ -153,18 +216,15 @@ fn a_connected_client_keeps_the_hub_and_leaving_exits_it() {
         "a connected client keeps the hub"
     );
     drop(client);
-    // Leaving exits it: each advance passes the wait the hub currently
-    // parks, until it has seen a whole idle period with no client.
-    let mut code = None;
-    for _ in 0..10 {
-        parked_until(&clock);
-        clock.advance(IDLE);
-        if let Ok(exit) = done.recv_timeout(Duration::from_millis(200)) {
-            code = Some(exit);
-            break;
-        }
-    }
-    assert_eq!(code, Some(0));
+    // The departure is counted before any advance. A quiet hub keeps its
+    // deadline across the millisecond, so prove the current park after it
+    // rather than a computed one, then spend one period past it.
+    until_activity(&hub, 2, "after the departure");
+    assert!(clock.await_parked(clock.now() + IDLE, WITHIN));
+    clock.advance(Duration::from_millis(1));
+    parked_until(&clock);
+    clock.advance(IDLE + Duration::from_millis(1));
+    assert_eq!(done.recv_timeout(DEADLINE).expect("the hub exits idle"), 0);
     assert!(!temp.socket().exists());
 }
 
@@ -172,23 +232,27 @@ fn a_connected_client_keeps_the_hub_and_leaving_exits_it() {
 fn a_reconnect_resets_the_idle_timer() {
     let temp = Temp::new();
     let clock = fakes::clock::FakeClock::new();
-    let done = serve_in(&temp, IDLE, Arc::clone(&clock));
+    let (hub, done) = serve_with_hub(&temp, IDLE, Arc::clone(&clock));
     assert!(clock.await_parked(clock.origin() + IDLE, WITHIN));
     let (first, _) = connect(&temp);
-    // Read off the frozen clock, the same sum the hub parks.
-    let held = clock.now() + IDLE;
-    assert!(clock.await_parked(held, WITHIN));
+    until_activity(&hub, 1, "after the first arrival");
+    assert!(clock.await_parked(clock.now() + IDLE, WITHIN));
+    clock.advance(Duration::from_millis(1));
+    parked_until(&clock);
     clock.advance(IDLE + Duration::from_millis(1));
     assert!(
         done.recv_timeout(Duration::from_millis(200)).is_err(),
         "the first client keeps the hub"
     );
     drop(first);
+    until_activity(&hub, 2, "after the first departure");
     let (second, _) = connect(&temp);
-    // The second client arrived after the first left: the hub re-parks its
-    // wait on the arrival before another idle period passes over it.
-    let held_again = clock.now() + IDLE;
-    assert!(clock.await_parked(held_again, WITHIN));
+    until_activity(&hub, 3, "after the second arrival");
+    // The second arrival began after the first departure: force a new park
+    // after it before spending another idle period.
+    assert!(clock.await_parked(clock.now() + IDLE, WITHIN));
+    clock.advance(Duration::from_millis(1));
+    parked_until(&clock);
     // The second client arrived after the first left: passing another
     // idle period still exits nothing.
     clock.advance(IDLE + Duration::from_millis(1));
@@ -197,18 +261,13 @@ fn a_reconnect_resets_the_idle_timer() {
         "a reconnect resets the timer"
     );
     drop(second);
-    let mut code = None;
-    for _ in 0..10 {
-        // Advance past the wait the hub currently parks: the park is the
-        // signal the advance is observed.
-        parked_until(&clock);
-        clock.advance(IDLE);
-        if let Ok(exit) = done.recv_timeout(Duration::from_millis(200)) {
-            code = Some(exit);
-            break;
-        }
-    }
-    assert_eq!(code, Some(0));
+    until_activity(&hub, 4, "after the second departure");
+    assert!(clock.await_parked(clock.now() + IDLE, WITHIN));
+    clock.advance(Duration::from_millis(1));
+    parked_until(&clock);
+    clock.advance(IDLE + Duration::from_millis(1));
+    assert_eq!(done.recv_timeout(DEADLINE).expect("the hub exits idle"), 0);
+    assert!(!temp.socket().exists());
 }
 
 #[test]
@@ -282,6 +341,12 @@ fn a_signal_shuts_down_connected_clients() {
     let mut hello = String::new();
     read.read_line(&mut hello).expect("the hub speaks first");
     assert!(hello.contains("\"kind\":\"hub_hello\""));
+    // The hello proves the arrival was counted: force a new park after it
+    // before waking for the signal, so the advance is observed.
+    until_activity(&hub, 1, "after the arrival");
+    assert!(clock.await_parked(clock.now() + IDLE, WITHIN));
+    clock.advance(Duration::from_millis(1));
+    parked_until(&clock);
     got.store(signal_hook::consts::SIGTERM, Ordering::SeqCst);
     clock.advance(Duration::from_millis(1));
     assert_eq!(done_rx.recv_timeout(DEADLINE).expect("the hub stops"), 143);
@@ -311,7 +376,10 @@ fn a_connection_accepted_after_the_exit_decision_gets_eof_without_hello() {
     let stop = AtomicBool::new(true);
     let (served, mut client) = UnixStream::pair().unwrap();
     client.set_read_timeout(Some(DEADLINE)).unwrap();
-    assert!(hub.poll_accept(&served, &stop).is_none());
+    assert!(matches!(
+        hub.poll_accept(&served, &stop),
+        crate::connection::Accept::Exiting
+    ));
     drop(served);
     let mut got = Vec::new();
     assert_eq!(client.read_to_end(&mut got).expect("EOF, not a hello"), 0);

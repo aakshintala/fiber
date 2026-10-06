@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use contract::clock::Clock;
 
-use crate::connection::{Hub, serve_counted};
+use crate::connection::{Accept, Hub, serve_counted};
 use crate::listen::Held;
 
 /// How the hub stopped.
@@ -65,14 +65,21 @@ pub(crate) fn run(
                         // dropped here unanswered, EOF with no `hub_hello`,
                         // and the client retries.
                         match hub.poll_accept(&stream, &stop) {
-                            Some(n) => {
-                                let hub = Arc::clone(&hub);
-                                let spawned = thread::Builder::new()
+                            Accept::Counted(n) => {
+                                let for_thread = Arc::clone(&hub);
+                                // The closure owns `stream`: on spawn failure
+                                // it is dropped with the closure, after the
+                                // registration is rolled back below.
+                                match thread::Builder::new()
                                     .name("hub-conn".to_owned())
-                                    .spawn(move || serve_counted(stream, hub, n));
-                                if spawned.is_err() {}
+                                    .spawn(move || serve_counted(stream, for_thread, n))
+                                {
+                                    Ok(_) => {}
+                                    Err(_) => hub.rollback(n),
+                                }
                             }
-                            None => return,
+                            Accept::Dropped => {}
+                            Accept::Exiting => return,
                         }
                     }
                     Err(_) => {

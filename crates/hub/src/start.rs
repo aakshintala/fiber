@@ -224,12 +224,17 @@ fn exited_or_io(hub: &Hub, id: &SessionId, started: &dyn crate::Started) -> Outc
     }
 }
 
-fn io_failed(hub: &Hub, id: &SessionId, message: &str) -> Outcome {
-    let message = format!("Session {} could not start: {message}", id.0);
-    hub.diag.warn_session(id, "io_failed", &message);
+fn io_failed(hub: &Hub, id: &SessionId, detail: &str) -> Outcome {
+    // The log keeps the code and a fixed sentence: `detail` may hold an
+    // io error, a path, or model text. The rejection keeps what happened.
+    hub.diag.warn_session(
+        id,
+        "io_failed",
+        &format!("Session {} could not start.", id.0),
+    );
     Outcome::Rejected {
         code: ErrorCode::IoFailed,
-        message,
+        message: format!("Session {} could not start: {detail}", id.0),
     }
 }
 

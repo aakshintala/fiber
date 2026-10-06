@@ -147,10 +147,11 @@ fn without_a_hub_that_binds_connect_fails_past_its_deadline() {
 #[test]
 fn an_unexpected_connect_error_fails_without_starting() {
     let temp = Temp::new();
-    let run = temp.run();
-    fs::write(temp.dir.join("plain"), b"x").unwrap();
-    // A symlink may lead to a live session: the client starts nothing.
-    std::os::unix::fs::symlink(temp.dir.join("plain"), run.join("hub")).unwrap();
+    // `run/` is a regular file, so connecting to `run/hub` fails
+    // NotADirectory on every platform: on Linux a symlink to a missing
+    // target gives NotFound and would start a hub, so no symlink here.
+    // NotADirectory is unexpected, so the client starts nothing.
+    fs::write(temp.dir.join("run"), b"x").unwrap();
     let calls = Arc::new(AtomicUsize::new(0));
     let failed = run_connect(
         temp.dir.clone(),
