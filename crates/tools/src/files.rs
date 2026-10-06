@@ -302,45 +302,22 @@ struct Session {
 impl Files {
     /// File tools for `workspace`. Nothing has been seen.
     pub fn new(workspace: PathBuf) -> Self {
+        Self::with_locks(workspace, Arc::new(PathLocks::new()))
+    }
+
+    /// File tools for `workspace`, sharing `locks` with outside holders,
+    /// so an extension's `host.fs` contends with the file tools.
+    pub fn with_locks(workspace: PathBuf, locks: Arc<PathLocks>) -> Self {
         Self {
             shared: Arc::new(Shared {
                 workspace,
-                locks: Arc::new(PathLocks::new()),
+                locks,
                 state: Mutex::new(Session {
                     seen: BTreeMap::new(),
                     judged: BTreeMap::new(),
                 }),
                 images: OnceLock::new(),
             }),
-        }
-    }
-
-    /// Lets `read` process images: it runs `fiber image` with `fiber`, the
-    /// running binary, and the child writes the processed file into
-    /// `artifacts`, the session's `artifacts/` directory.
-    #[must_use]
-    pub fn with_locks(self, locks: Arc<PathLocks>) -> Self {
-        match Arc::try_unwrap(self.shared) {
-            Ok(mut shared) => {
-                shared.locks = locks;
-                Self {
-                    shared: Arc::new(shared),
-                }
-            }
-            Err(shared) => {
-                let workspace = shared.workspace().to_path_buf();
-                Self {
-                    shared: Arc::new(Shared {
-                        workspace,
-                        locks,
-                        state: Mutex::new(Session {
-                            seen: BTreeMap::new(),
-                            judged: BTreeMap::new(),
-                        }),
-                        images: OnceLock::new(),
-                    }),
-                }
-            }
         }
     }
 

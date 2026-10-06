@@ -2,7 +2,7 @@
 //! calls"): `host.secret`, `host.http`, `host.sha256`, `host.hmac_sha256` and
 //! `json`, and converting between Lua values and JSON.
 
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -51,6 +51,8 @@ pub(crate) struct HostContext {
     pub extension: String,
     /// The session, absent without [`LuaExtension::with_session`].
     pub session: Option<Session>,
+    /// The extension's memory cap in bytes, bounding `host.fs.read`.
+    pub memory_cap: usize,
 }
 
 /// `host.http` yields this tag, `"http"` and the request table. The
@@ -82,40 +84,33 @@ pub(crate) fn install(
     browser: Arc<dyn Browser>,
     entry: Rc<Cell<bool>>,
 ) -> mlua::Result<LuaValue> {
+    let HostContext {
+        home,
+        workspace,
+        extension,
+        session,
+        memory_cap,
+    } = ctx;
     let host = lua.create_table()?;
-    let home = ctx.home.clone();
+    let secret_home = home.clone();
     host.set(
         "secret",
         lua.create_function(move |_, name: String| {
-            config::read_secret(&home, &name)
+            config::read_secret(&secret_home, &name)
                 .map(|secret| secret.map(|s| s.expose().trim().to_owned()))
                 .map_err(mlua::Error::external)
         })?,
     )?;
-    let session = ctx.session.map(|session| {
-        let project = session.config.project().as_str().to_owned();
-        let locks = Arc::clone(&session.locks);
-        let settings = settings::Settings {
-            extension: ctx.extension.clone(),
-            repo_settings: session.repo_settings.clone(),
-            config: Rc::new(RefCell::new(session.config)),
-        };
-        (project, locks, settings)
-    });
-    let (project, locks, settings) = match session {
-        Some((project, locks, settings)) => (Some(project), Some(locks), Some(settings)),
-        None => (None, None, None),
-    };
     fs::install(
         lua,
         &host,
-        ctx.workspace,
-        ctx.home,
-        &ctx.extension,
-        project.as_deref(),
-        locks,
+        workspace,
+        home,
+        &extension,
+        memory_cap,
+        session.as_ref(),
     )?;
-    settings::install(lua, &host, settings)?;
+    settings::install(lua, &host, &extension, session)?;
     let tag = lua.create_table()?;
     lua.load(HTTP)
         .set_name("=host.http")

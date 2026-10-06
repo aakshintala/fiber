@@ -2,9 +2,8 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, reason = "test code")]
 
-use std::cell::RefCell;
 use std::fs;
-use std::rc::Rc;
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -12,7 +11,7 @@ use config::{Config, ProjectKey, Sources};
 use mlua::{Lua, Value as LuaValue};
 use serde_json::Value;
 
-use super::{Settings, install};
+use super::install;
 
 /// How long a test waits for a thread before failing.
 const DEADLINE: Duration = Duration::from_secs(10);
@@ -67,19 +66,19 @@ impl Setup {
         .unwrap()
     }
 
-    fn settings(&self, config: Config, repo_settings: &[&str]) -> Settings {
-        Settings {
-            extension: EXTENSION.to_owned(),
+    fn session(&self, config: Config, repo_settings: &[&str]) -> crate::host::Session {
+        crate::host::Session {
+            config,
             repo_settings: repo_settings.iter().map(|s| (*s).to_owned()).collect(),
-            config: Rc::new(RefCell::new(config)),
+            locks: Arc::new(super::super::FakeLock::new()),
         }
     }
 
     /// Lua with `host.config` for `fiber.test/notes`.
-    fn lua(&self, settings: Option<Settings>) -> Lua {
+    fn lua(&self, session: Option<crate::host::Session>) -> Lua {
         let lua = Lua::new();
         let host = lua.create_table().unwrap();
-        install(&lua, &host, settings).unwrap();
+        install(&lua, &host, EXTENSION, session).unwrap();
         lua.globals().set("host", host).unwrap();
         lua
     }
@@ -112,7 +111,7 @@ fn get_returns_the_value_merged_across_global_project_and_run() {
         "extensions.\"fiber.test/notes\".settings.picker.theme=\"dark\"",
         "model=a/b",
     ]);
-    let lua = setup.lua(Some(setup.settings(config, &[])));
+    let lua = setup.lua(Some(setup.session(config, &[])));
     assert_eq!(
         eval(&lua, "return host.config.get(\"picker.model\")"),
         "project/m"
@@ -140,7 +139,7 @@ fn a_repository_key_outside_repo_settings_is_ignored() {
         r#"{"workspace_url": "https://repo", "token_command": "curl evil"}"#,
     );
     let config = setup.load(&[]);
-    let lua = setup.lua(Some(setup.settings(config, &["workspace_url"])));
+    let lua = setup.lua(Some(setup.session(config, &["workspace_url"])));
     assert_eq!(
         eval(&lua, "return host.config.get(\"workspace_url\")"),
         "https://repo"
@@ -155,7 +154,7 @@ fn a_repository_key_outside_repo_settings_is_ignored() {
 fn set_writes_the_named_layer_and_get_sees_it_at_once() {
     let setup = Setup::new();
     let config = setup.load(&[]);
-    let lua = setup.lua(Some(setup.settings(config, &[])));
+    let lua = setup.lua(Some(setup.session(config, &[])));
     lua.load("host.config.set(\"picker.model\", \"x/y\", \"machine\")")
         .exec()
         .unwrap();
@@ -186,7 +185,7 @@ fn set_writes_the_named_layer_and_get_sees_it_at_once() {
 fn a_table_with_mixed_keys_is_an_object_with_string_keys() {
     let setup = Setup::new();
     let config = setup.load(&[]);
-    let lua = setup.lua(Some(setup.settings(config, &[])));
+    let lua = setup.lua(Some(setup.session(config, &[])));
     lua.load("host.config.set(\"mixed\", {[1] = \"a\", foo = \"b\"}, \"machine\")")
         .exec()
         .unwrap();
@@ -200,7 +199,7 @@ fn a_table_with_mixed_keys_is_an_object_with_string_keys() {
 fn a_missing_or_bad_scope_writes_nothing() {
     let setup = Setup::new();
     let config = setup.load(&[]);
-    let lua = setup.lua(Some(setup.settings(config, &[])));
+    let lua = setup.lua(Some(setup.session(config, &[])));
     for code in [
         "host.config.set(\"a\", 1)",
         "host.config.set(\"a\", 1, nil)",
@@ -221,7 +220,7 @@ fn a_missing_or_bad_scope_writes_nothing() {
 fn a_nil_value_and_a_bad_key_write_nothing() {
     let setup = Setup::new();
     let config = setup.load(&[]);
-    let lua = setup.lua(Some(setup.settings(config, &[])));
+    let lua = setup.lua(Some(setup.session(config, &[])));
     let message = fails(&lua, "host.config.set(\"a\", nil, \"machine\")");
     assert!(
         message.contains("host.config.set: value must not be nil"),
@@ -274,14 +273,14 @@ fn two_sessions_setting_at_once_lose_no_key() {
                 overrides: Vec::new(),
             })
             .unwrap();
-            let settings = Settings {
-                extension: EXTENSION.to_owned(),
+            let session = crate::host::Session {
+                config,
                 repo_settings: Vec::new(),
-                config: Rc::new(RefCell::new(config)),
+                locks: Arc::new(crate::host::FakeLock::new()),
             };
             let lua = Lua::new();
             let host = lua.create_table().unwrap();
-            install(&lua, &host, Some(settings)).unwrap();
+            install(&lua, &host, EXTENSION, Some(session)).unwrap();
             lua.globals().set("host", host).unwrap();
             lua.load(format!(
                 "host.config.set(\"slot{value}\", {value}, \"machine\")"

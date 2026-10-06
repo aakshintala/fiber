@@ -9,8 +9,9 @@ use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
 
+use config::{Config, ProjectKey, Sources};
 use contract::files::PathLock;
-use mlua::{Lua, LuaString, Value as LuaValue};
+use mlua::{Lua, LuaString, Table, Value as LuaValue};
 use serde_json::Value;
 
 use super::{FakeLock, Fs, install};
@@ -58,12 +59,29 @@ impl Setup {
                     .join("data")
                     .join("fiber.test-notes"),
             ),
+            memory_cap: crate::MEMORY_CAP,
+        }
+    }
+
+    fn session(&self) -> super::super::Session {
+        let config = Config::load(Sources {
+            home: self.home(),
+            workspace: self.workspace(),
+            project: ProjectKey::new("p").unwrap(),
+            overrides: Vec::new(),
+        })
+        .unwrap();
+        super::super::Session {
+            config,
+            repo_settings: Vec::new(),
+            locks: self.locks(),
         }
     }
 
     /// Lua with `host.fs` and `host.data_dir` for `fiber.test/notes` in
     /// project `p`, locking through the shared fake.
     fn lua(&self) -> Lua {
+        let session = self.session();
         let lua = Lua::new();
         let host = lua.create_table().unwrap();
         install(
@@ -72,8 +90,8 @@ impl Setup {
             self.workspace(),
             self.home(),
             "fiber.test/notes",
-            Some("p"),
-            Some(self.locks()),
+            crate::MEMORY_CAP,
+            Some(&session),
         )
         .unwrap();
         lua.globals().set("host", host).unwrap();
@@ -92,7 +110,7 @@ impl Setup {
             std::env::current_dir().unwrap(),
             self.home(),
             "fiber.test/notes",
-            None,
+            crate::MEMORY_CAP,
             None,
         )
         .unwrap();
@@ -256,27 +274,66 @@ fn every_failure_names_its_call_and_its_path() {
 
 #[test]
 fn a_non_utf8_path_is_bytes_and_never_panics() {
-    // macOS refuses non-UTF-8 file names, so this names no file: it shows
-    // paths travel as bytes and failures name the call, without ever
-    // requiring UTF-8.
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
     let setup = Setup::new();
     let lua = setup.lua();
+    // Branch on the OS's answer, not the target: Linux accepts
+    // non-UTF-8 names, macOS refuses them, so probe with std first.
+    let probe = setup.workspace().join(OsStr::from_bytes(b"probe-\xff\xfe"));
+    let accepted = fs::write(&probe, b"x").is_ok();
+    if accepted {
+        fs::remove_file(&probe).unwrap();
+    }
+    if !accepted {
+        // macOS: the name reaches no file; every call names its call
+        // and never panics.
+        assert_eq!(
+            eval(
+                &lua,
+                "return host.fs.stat(\"gone-\" .. string.char(255, 254))"
+            ),
+            Value::Null
+        );
+        for code in [
+            "return host.fs.read(\"gone-\" .. string.char(255, 254))",
+            "host.fs.write(\"gone-\" .. string.char(255, 254), \"x\")",
+        ] {
+            let message = fails(&lua, code);
+            assert!(message.contains("host.fs."), "{code}: {message}");
+        }
+        let names = eval(&lua, "return host.fs.list(\".\")");
+        assert_eq!(names, Value::Array(Vec::new()));
+        return;
+    }
+    // Linux: a non-UTF-8 path round-trips as bytes.
+    lua.load("host.fs.write(\"live-\" .. string.char(255, 254), \"x\")")
+        .exec()
+        .unwrap();
+    let back: LuaString = lua
+        .load("return host.fs.read(\"live-\" .. string.char(255, 254))")
+        .eval()
+        .unwrap();
+    assert_eq!(back.as_bytes(), b"x");
     assert_eq!(
         eval(
             &lua,
-            "return host.fs.stat(\"gone-\" .. string.char(255, 254))"
+            "return host.fs.stat(\"live-\" .. string.char(255, 254)).kind"
         ),
-        Value::Null
+        "file"
     );
-    for code in [
-        "return host.fs.read(\"gone-\" .. string.char(255, 254))",
-        "host.fs.write(\"gone-\" .. string.char(255, 254), \"x\")",
-    ] {
-        let message = fails(&lua, code);
-        assert!(message.contains("host.fs."), "{code}: {message}");
+    let list: Table = lua.load("return host.fs.list(\".\")").eval().unwrap();
+    let mut found = false;
+    for name in list.sequence_values::<LuaString>() {
+        if name.unwrap().as_bytes() == b"live-\xff\xfe" {
+            found = true;
+        }
     }
-    let names = eval(&lua, "return host.fs.list(\".\")");
-    assert_eq!(names, Value::Array(Vec::new()));
+    assert!(found, "the non-UTF-8 name lists as bytes");
+    lua.load("host.fs.remove(\"live-\" .. string.char(255, 254))")
+        .exec()
+        .unwrap();
 }
 
 #[test]
@@ -450,13 +507,19 @@ fn a_locked_write_waits_while_the_same_key_is_held() {
 #[test]
 fn rename_locks_both_keys_sorted_and_an_unlocked_write_asks_for_none() {
     let setup = Setup::new();
-    let lua = setup.lua();
-    lua.load("host.fs.write(\"z.txt\", \"x\")").exec().unwrap();
+    let fs = setup.fs();
+    fs.write(b"z.txt", b"x", false).unwrap();
     assert!(setup.locks.calls().is_empty());
     let workspace = setup.workspace();
-    lua.load("host.fs.rename(\"z.txt\", \"a.txt\", { lock = true })")
-        .exec()
-        .unwrap();
+    let (done, done_rx) = mpsc::channel();
+    thread::spawn(move || {
+        fs.rename(b"z.txt", b"a.txt", true).unwrap();
+        done.send(()).unwrap();
+    });
+    assert!(
+        done_rx.recv_timeout(DEADLINE).is_ok(),
+        "waited {DEADLINE:?} for the locked rename to run"
+    );
     assert_eq!(
         setup.locks.calls(),
         [workspace.join("a.txt"), workspace.join("z.txt")]
@@ -466,10 +529,71 @@ fn rename_locks_both_keys_sorted_and_an_unlocked_write_asks_for_none() {
 #[test]
 fn lock_keys_are_absolute_paths_under_the_workspace() {
     let setup = Setup::new();
-    let lua = setup.lua();
+    let fs = setup.fs();
     fs::create_dir(setup.workspace().join("notes")).unwrap();
-    lua.load("host.fs.write(\"notes/a.md\", \"x\", { lock = true })")
-        .exec()
-        .unwrap();
+    let (done, done_rx) = mpsc::channel();
+    thread::spawn(move || {
+        fs.write(b"notes/a.md", b"x", true).unwrap();
+        done.send(()).unwrap();
+    });
+    assert!(
+        done_rx.recv_timeout(DEADLINE).is_ok(),
+        "waited {DEADLINE:?} for the locked write to run"
+    );
     assert_eq!(setup.locks.calls(), [setup.workspace().join("notes/a.md")]);
+}
+
+#[test]
+fn a_same_path_rename_takes_the_lock_once_and_returns() {
+    let setup = Setup::new();
+    let fs = setup.fs();
+    fs.write(b"a.txt", b"x", false).unwrap();
+    let (done, done_rx) = mpsc::channel();
+    thread::spawn(move || {
+        fs.rename(b"a.txt", b"a.txt", true).unwrap();
+        done.send(()).unwrap();
+    });
+    assert!(
+        done_rx.recv_timeout(DEADLINE).is_ok(),
+        "waited {DEADLINE:?} for the same-path rename to run"
+    );
+    assert_eq!(setup.locks.calls(), [setup.workspace().join("a.txt")]);
+}
+
+#[test]
+fn an_alias_pair_rename_returns_rather_than_waiting_on_itself() {
+    let setup = Setup::new();
+    let fs = setup.fs();
+    fs::create_dir(setup.workspace().join("sub")).unwrap();
+    fs.write(b"a.txt", b"x", false).unwrap();
+    let (done, done_rx) = mpsc::channel();
+    thread::spawn(move || {
+        fs.rename(b"sub/../a.txt", b"a.txt", true).unwrap();
+        done.send(()).unwrap();
+    });
+    assert!(
+        done_rx.recv_timeout(DEADLINE).is_ok(),
+        "waited {DEADLINE:?} for the alias-pair rename to run"
+    );
+}
+
+#[test]
+fn a_read_past_the_memory_cap_names_the_call_the_path_and_the_cap() {
+    const CAP: usize = 8;
+
+    let setup = Setup::new();
+    let fs = Fs {
+        workspace: setup.workspace(),
+        locks: Some(setup.locks()),
+        machine_dir: None,
+        project_dir: None,
+        memory_cap: CAP,
+    };
+    fs::write(setup.workspace().join("small.txt"), "12345678").unwrap();
+    assert_eq!(fs.read(b"small.txt").unwrap(), b"12345678");
+    fs::write(setup.workspace().join("big.txt"), "123456789").unwrap();
+    let err = fs.read(b"big.txt").unwrap_err();
+    assert!(err.contains("host.fs.read"), "{err}");
+    assert!(err.contains("big.txt"), "{err}");
+    assert!(err.contains(&format!("{CAP} bytes")), "{err}");
 }

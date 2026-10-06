@@ -9,6 +9,7 @@ fn lua() -> Lua {
             workspace: PathBuf::from("/nonexistent-workspace"),
             extension: "fiber.test/x".to_owned(),
             session: None,
+            memory_cap: crate::MEMORY_CAP,
         },
         Arc::new(crate::SystemBrowser::default()),
         Rc::default(),

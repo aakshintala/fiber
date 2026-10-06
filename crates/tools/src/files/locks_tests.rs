@@ -152,16 +152,76 @@ fn a_dyn_hold_does_not_block_a_different_path() {
         entered_rx.recv_timeout(DEADLINE).is_ok(),
         "waited {DEADLINE:?} for the first hold to run"
     );
-    let lock: &dyn PathLock = &*locks;
+    let second = Arc::clone(&locks);
     let (done, done_rx) = mpsc::channel();
-    lock.hold(std::path::Path::new("/ws/dyn-b.txt"), &mut || {
-        done.send(()).unwrap();
+    let second_handle = thread::spawn(move || {
+        let lock: &dyn PathLock = &*second;
+        lock.hold(std::path::Path::new("/ws/dyn-b.txt"), &mut || {
+            done.send(()).unwrap();
+        });
     });
     assert!(
-        done_rx.try_recv().is_ok(),
-        "a hold on a different path did not run while the first was held"
+        done_rx.recv_timeout(DEADLINE).is_ok(),
+        "waited {DEADLINE:?} for the hold on a different path to run"
     );
     release.send(()).unwrap();
     handle.join().unwrap();
+    second_handle.join().unwrap();
+    assert!(locks.is_clear());
+}
+
+#[test]
+fn an_alias_contends_with_the_built_in_key() {
+    use contract::files::PathLock;
+
+    use super::super::resolve;
+
+    let dir = fakes::TempDir::new("fiber-locks-alias");
+    let real = dir.path().join("real");
+    std::fs::create_dir(&real).unwrap();
+    std::fs::write(real.join("file.txt"), "hi").unwrap();
+    std::os::unix::fs::symlink(&real, dir.path().join("link")).unwrap();
+    // The key the file tools lock, reached through a symlinked parent
+    // and through a `..`: both aliases resolve to it.
+    let key = resolve(dir.path(), "link/file.txt").unwrap();
+    assert_eq!(
+        key,
+        resolve(dir.path(), "real/file.txt").unwrap(),
+        "the symlinked parent resolves to the built-in key"
+    );
+    assert_eq!(
+        key,
+        resolve(dir.path(), "real/../real/file.txt").unwrap(),
+        "the `..` resolves to the built-in key"
+    );
+    let locks = Arc::new(PathLocks::new());
+    for alias in [
+        dir.path().join("link/file.txt"),
+        dir.path().join("real/../real/file.txt"),
+    ] {
+        let guard = locks.lock(&key);
+        let waiting = Arc::clone(&locks);
+        let (done, done_rx) = mpsc::channel();
+        let handle = thread::spawn(move || {
+            let lock: &dyn PathLock = &*waiting;
+            lock.hold(&alias, &mut || {
+                done.send(()).unwrap();
+            });
+        });
+        let probe = Arc::clone(&locks);
+        wait_until("a hold through an alias to be waiting", move || {
+            probe.waiting() == 1
+        });
+        assert!(
+            done_rx.try_recv().is_err(),
+            "the hold through the alias ran while the built-in key was held"
+        );
+        drop(guard);
+        assert!(
+            done_rx.recv_timeout(DEADLINE).is_ok(),
+            "waited {DEADLINE:?} for the hold through the alias to acquire the key"
+        );
+        handle.join().unwrap();
+    }
     assert!(locks.is_clear());
 }

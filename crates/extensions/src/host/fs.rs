@@ -2,6 +2,7 @@
 
 use std::ffi::OsStr;
 use std::fs;
+use std::io::Read;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
@@ -14,23 +15,27 @@ use std::sync::{Condvar, Mutex};
 use contract::files::PathLock;
 use mlua::{Lua, LuaString, Table, Value as LuaValue};
 
-/// Installs `host.fs` and `host.data_dir` on `host`. `project` is the
-/// project's key, naming `projects/<key>/` in Fiber home; `locks` is the
-/// session's per-path lock. Both are `None` without a session
-/// (`LuaExtension::with_session`): then relative paths resolve against the
+use super::Session;
+
+/// Installs `host.fs` and `host.data_dir` on `host`. `session` is the
+/// extension's session: its project names `projects/<key>/` in Fiber home
+/// and its lock is the session's per-path lock. Without one
+/// (`LuaExtension::with_session`), relative paths resolve against the
 /// process's current directory, `lock = true` takes no lock, and
-/// `host.data_dir` raises.
+/// `host.data_dir` raises. `memory_cap` bounds `read`: a file larger
+/// than the cap is refused, never read into Lua past its limit.
 pub(crate) fn install(
     lua: &Lua,
     host: &Table,
     workspace: PathBuf,
     home: PathBuf,
     extension: &str,
-    project: Option<&str>,
-    locks: Option<Arc<dyn PathLock>>,
+    memory_cap: usize,
+    session: Option<&Session>,
 ) -> mlua::Result<()> {
     let slug = extension.replace('/', "-");
-    let (machine_dir, project_dir) = match project {
+    let project = session.map(|session| session.config.project().as_str().to_owned());
+    let (machine_dir, project_dir) = match project.as_deref() {
         Some(key) => (
             Some(home.join("data").join(&slug)),
             Some(home.join("projects").join(key).join("data").join(&slug)),
@@ -39,9 +44,10 @@ pub(crate) fn install(
     };
     let fs = Fs {
         workspace,
-        locks,
+        locks: session.map(|session| Arc::clone(&session.locks)),
         machine_dir,
         project_dir,
+        memory_cap,
     };
     let table = lua.create_table()?;
     {
@@ -133,7 +139,14 @@ pub(crate) fn install(
         host.set(
             "data_dir",
             lua.create_function(move |lua, scope: LuaValue| {
-                let dir = fs.data_dir(&lua_string(&scope)?).map_err(runtime)?;
+                let scope = if let LuaValue::String(s) = &scope {
+                    s.as_bytes()
+                } else {
+                    return Err(runtime(
+                        "host.data_dir: scope must be \"machine\" or \"project\"".into(),
+                    ));
+                };
+                let dir = fs.data_dir(&scope).map_err(runtime)?;
                 lua.create_string(dir.as_os_str().as_bytes())
             })?,
         )?;
@@ -153,17 +166,6 @@ fn lock(opts: Option<Table>) -> mlua::Result<bool> {
     }
 }
 
-/// A scope argument as text; anything else is the scope error.
-fn lua_string(value: &LuaValue) -> mlua::Result<Vec<u8>> {
-    if let LuaValue::String(s) = value {
-        Ok(s.as_bytes().to_vec())
-    } else {
-        Err(runtime(
-            "host.data_dir: scope must be \"machine\" or \"project\"".into(),
-        ))
-    }
-}
-
 /// What `stat` reports for a path that exists.
 struct Stat {
     kind: &'static str,
@@ -172,14 +174,15 @@ struct Stat {
 }
 
 /// The files one extension reaches through `host.fs`: its workspace for
-/// relative paths, the session's lock when one is offered, and its two data
-/// directories, created on first write.
+/// relative paths, the session's lock when one is offered, its two data
+/// directories, created on first write, and the bound `read` refuses past.
 #[derive(Clone)]
 struct Fs {
     workspace: PathBuf,
     locks: Option<Arc<dyn PathLock>>,
     machine_dir: Option<PathBuf>,
     project_dir: Option<PathBuf>,
+    memory_cap: usize,
 }
 
 impl Fs {
@@ -196,7 +199,22 @@ impl Fs {
 
     fn read(&self, raw: &[u8]) -> Result<Vec<u8>, String> {
         let path = self.absolute(raw);
-        fs::read(&path).map_err(|err| fail("read", &path, err))
+        let cap = u64::try_from(self.memory_cap).unwrap_or(u64::MAX);
+        // Refuse past the cap before allocating: the bytes would land in
+        // Lua past its memory limit.
+        if fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0) > cap {
+            return Err(too_big("read", &path, self.memory_cap));
+        }
+        // Bound the read itself, so a file that grows between stat and
+        // read is refused too.
+        let mut data = Vec::new();
+        fs::File::open(&path)
+            .and_then(|file| file.take(cap.saturating_add(1)).read_to_end(&mut data))
+            .map_err(|err| fail("read", &path, err))?;
+        if u64::try_from(data.len()).unwrap_or(u64::MAX) > cap {
+            return Err(too_big("read", &path, self.memory_cap));
+        }
+        Ok(data)
     }
 
     fn write(&self, raw: &[u8], data: &[u8], with_lock: bool) -> Result<(), String> {
@@ -309,49 +327,43 @@ impl Fs {
         Ok(())
     }
 
-    /// Runs `op` while holding the lock on each of `paths`, in sorted
-    /// order, when `want` and the session offers a lock. Without either,
-    /// no lock is taken; reads never ask.
+    /// Runs `op` while holding the lock on each of `paths` when `want`
+    /// and the session offers a lock. The lock sorts the keys and drops
+    /// duplicates, so a rename onto itself never waits on itself. Without
+    /// either, no lock is taken; reads never ask.
     fn locked(
         &self,
-        mut paths: Vec<PathBuf>,
+        paths: Vec<PathBuf>,
         want: bool,
         op: &mut dyn FnMut() -> Result<(), String>,
     ) -> Result<(), String> {
         match (want, self.locks.clone()) {
             (true, Some(locks)) => {
-                paths.sort();
-                hold_all(&locks, &paths, op)
+                let mut out = None;
+                {
+                    let mut nested = || {
+                        out = Some(op());
+                    };
+                    locks.hold_all(&paths, &mut nested);
+                }
+                out.unwrap_or(Ok(()))
             }
             _ => op(),
         }
     }
 }
 
-/// Runs `op` while holding the lock on each of `paths`: the first path is
-/// held, then the rest inside it, so two renames never deadlock.
-fn hold_all(
-    locks: &Arc<dyn PathLock>,
-    paths: &[PathBuf],
-    op: &mut dyn FnMut() -> Result<(), String>,
-) -> Result<(), String> {
-    match paths.split_first() {
-        None => op(),
-        Some((first, rest)) => {
-            let mut out = None;
-            {
-                let mut nested = || {
-                    out = Some(hold_all(locks, rest, &mut *op));
-                };
-                locks.hold(first, &mut nested);
-            }
-            out.unwrap_or(Ok(()))
-        }
-    }
-}
-
 fn fail(op: &str, path: &Path, err: impl std::fmt::Display) -> String {
     format!("host.fs.{op}: {}: {err}", path.display())
+}
+
+/// A file `read` refuses past the extension's memory cap: the call, the
+/// path and the cap, without allocating the file's contents.
+fn too_big(op: &str, path: &Path, cap: usize) -> String {
+    format!(
+        "host.fs.{op}: {}: larger than the extension's memory cap of {cap} bytes",
+        path.display()
+    )
 }
 
 /// `path` with `.` dropped and `..` popping lexically, so the data-directory

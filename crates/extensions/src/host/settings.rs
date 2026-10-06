@@ -22,7 +22,17 @@ pub(crate) struct Settings {
 
 /// Installs `host.config` on `host`. Without a session both calls raise:
 /// there is no configuration to read and no file to write.
-pub(crate) fn install(lua: &Lua, host: &Table, session: Option<Settings>) -> mlua::Result<()> {
+pub(crate) fn install(
+    lua: &Lua,
+    host: &Table,
+    extension: &str,
+    session: Option<super::Session>,
+) -> mlua::Result<()> {
+    let session = session.map(|session| Settings {
+        extension: extension.to_owned(),
+        repo_settings: session.repo_settings,
+        config: Rc::new(RefCell::new(session.config)),
+    });
     let table = lua.create_table()?;
     {
         let session = session.clone();
@@ -58,7 +68,14 @@ pub(crate) fn install(lua: &Lua, host: &Table, session: Option<Settings>) -> mlu
                     if matches!(value, LuaValue::Nil) {
                         return Err(runtime("host.config.set: value must not be nil".into()));
                     }
-                    let scope = match lua_scope(&scope)?.as_slice() {
+                    let scope = if let LuaValue::String(s) = &scope {
+                        s.as_bytes()
+                    } else {
+                        return Err(runtime(
+                            "host.config.set: scope must be \"machine\" or \"project\"".into(),
+                        ));
+                    };
+                    let scope = match scope.as_ref() {
                         b"machine" => Scope::Machine,
                         b"project" => Scope::Project,
                         _ => {
@@ -68,8 +85,12 @@ pub(crate) fn install(lua: &Lua, host: &Table, session: Option<Settings>) -> mlu
                         }
                     };
                     let key = key_text("set", &key)?;
-                    let json = to_json(&value)
-                        .map_err(|err| runtime(format!("host.config.set: {}", message(&err))))?;
+                    let json = to_json(&value).map_err(|err| {
+                        runtime(format!(
+                            "host.config.set: {}",
+                            err.to_string().lines().next().unwrap_or_default()
+                        ))
+                    })?;
                     session
                         .config
                         .borrow_mut()
@@ -104,17 +125,6 @@ fn key_text(op: &str, key: &LuaString) -> Result<String, mlua::Error> {
         })
 }
 
-/// A scope argument as bytes; anything else is the scope error.
-fn lua_scope(scope: &LuaValue) -> mlua::Result<Vec<u8>> {
-    if let LuaValue::String(s) = scope {
-        Ok(s.as_bytes().to_vec())
-    } else {
-        Err(runtime(
-            "host.config.set: scope must be \"machine\" or \"project\"".into(),
-        ))
-    }
-}
-
 /// A failure of `extension_setting` or `set_extension_setting`: an
 /// unparseable key names the key, anything else names its file.
 fn key_error(op: &str, key: &str, err: ConfigError) -> mlua::Error {
@@ -123,15 +133,6 @@ fn key_error(op: &str, key: &str, err: ConfigError) -> mlua::Error {
     } else {
         runtime(format!("host.config.{op}: {err}"))
     }
-}
-
-/// The message a person reads for a Lua error: its first line.
-fn message(err: &mlua::Error) -> String {
-    err.to_string()
-        .lines()
-        .next()
-        .unwrap_or_default()
-        .to_owned()
 }
 
 #[cfg(test)]

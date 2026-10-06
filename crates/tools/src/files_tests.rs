@@ -374,7 +374,7 @@ fn with_locks_shares_one_lock_set_with_outside_holders() {
 
     let dir = TempDir::new("fiber-files-with-locks");
     let locks = Arc::new(PathLocks::new());
-    let files = Files::new(dir.path().to_path_buf()).with_locks(Arc::clone(&locks));
+    let files = Files::with_locks(dir.path().to_path_buf(), Arc::clone(&locks));
     assert!(Arc::ptr_eq(&locks, &files.locks()));
     let path = dir.path().join("a.txt");
     let guard = locks.lock(&path);

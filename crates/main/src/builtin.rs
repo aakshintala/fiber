@@ -62,8 +62,7 @@ pub(crate) fn with_binary(
     web_search: Option<&str>,
 ) -> Result<SessionTools, Failure> {
     let files = Arc::new(
-        tools::Files::new(workspace.to_path_buf())
-            .with_locks(Arc::clone(locks))
+        tools::Files::with_locks(workspace.to_path_buf(), Arc::clone(locks))
             .with_images(fiber.clone(), artifacts.to_path_buf()),
     );
     let moves: Arc<dyn contract::jobs::Jobs> = jobs.clone();

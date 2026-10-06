@@ -509,6 +509,7 @@ impl Vm {
                 workspace,
                 extension: name.to_owned(),
                 session: session.clone(),
+                memory_cap: *memory_cap,
             },
             Arc::clone(browser),
             Rc::clone(&entry),
