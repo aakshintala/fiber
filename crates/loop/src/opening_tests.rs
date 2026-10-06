@@ -591,9 +591,19 @@ fn live_and_resumed_conversations_render_the_same_opening() {
     let (home, _held) = dir();
     let workspace = home.join("workspace");
     write(&workspace.join("AGENTS.md"), "Leaf rules.\n");
+    // A listing whose description spans lines and holds a placeholder.
+    write(
+        &workspace.join(".agents/skills/review/SKILL.md"),
+        "---\nname: review\ndescription: >\n  Reviews a diff on {date}.\n\n  Second paragraph.\n---\nBody\n",
+    );
     let fake = clock();
     let message = collected(&home, &workspace, &fake).message;
+    assert_eq!(message.skills.len(), 1);
     let rendered = render(&message);
+    assert!(
+        rendered.contains("Reviews a diff on {date}.\nSecond paragraph."),
+        "{rendered}"
+    );
     let mut live = Vec::new();
     let mut had = std::collections::BTreeMap::new();
     crate::conversation::render(
@@ -716,4 +726,154 @@ fn whitespace_only_texts_do_not_count_toward_the_size() {
     with.system = Some(" ".repeat(500));
     with.extensions = vec![("ext".into(), "\n  \n".into())];
     assert!(collect(&with, &workspace).notices.is_empty());
+}
+
+const SKILLS_SENTENCE: &str = "Each entry below is a skill. When a task matches a skill's description, load it with the `skill` tool.";
+
+#[test]
+fn a_repository_skill_is_listed_last_with_its_name_description_path_and_source() {
+    let (home, _held) = dir();
+    let workspace = home.join("workspace");
+    write(&workspace.join("AGENTS.md"), "Leaf rules.\n");
+    let path = workspace.join(".agents/skills/review/SKILL.md");
+    write(
+        &path,
+        "---\nname: review\ndescription: Reviews a diff.\n---\nBody\n",
+    );
+    let fake = clock();
+    let collected = collected(&home, &workspace, &fake);
+    assert!(collected.notices.is_empty(), "{:?}", collected.notices);
+    let [skill] = collected.message.skills.as_slice() else {
+        panic!("{:?}", collected.message.skills);
+    };
+    assert_eq!(skill.name, "review");
+    assert_eq!(skill.description, "Reviews a diff.");
+    assert_eq!(skill.path, canon(&path).display().to_string());
+    assert_eq!(skill.source, contract::events::SkillSource::Repository);
+    let text = render(&collected.message);
+    let entry = format!("- review: Reviews a diff. ({})", skill.path);
+    assert!(
+        text.ends_with(&format!("# Skills\n\n{SKILLS_SENTENCE}\n\n{entry}\n")),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_repository_in_git_reads_its_top_levels_skills_from_a_subdirectory() {
+    let (home, _held) = dir();
+    let root = home.join("repo");
+    let workspace = root.join("sub");
+    write(&root.join(".git/HEAD"), "ref: refs/heads/main\n");
+    write(
+        &root.join(".fiber/skills/top/SKILL.md"),
+        "---\nname: top\ndescription: d\n---\n",
+    );
+    write(
+        &workspace.join(".fiber/skills/nested/SKILL.md"),
+        "---\nname: nested\ndescription: d\n---\n",
+    );
+    let fake = clock();
+    let message = collected(&home, &workspace, &fake).message;
+    let names: Vec<&str> = message.skills.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, ["top"]);
+}
+
+#[test]
+fn with_no_skills_the_heading_and_sentence_are_absent_and_the_bytes_are_unchanged() {
+    let (home, _held) = dir();
+    let workspace = home.join("workspace");
+    write(&workspace.join("AGENTS.md"), "Leaf rules.\n");
+    let fake = clock();
+    let message = collected(&home, &workspace, &fake).message;
+    assert!(message.skills.is_empty());
+    let environment = &message.environment;
+    let file = &message.instruction_files[0];
+    let expected = format!(
+        "This message is from Fiber, not the person. It describes your environment and carries the project's instruction files.\n\n\
+         # Environment\n\n\
+         - Date: {}\n- Platform: {} {}\n- Shell: {}\n- Workspace: {}\n- Git: no\n- Session log: {}\n\n\
+         # Instruction files\n\n{}",
+        environment.date,
+        environment.os,
+        environment.arch,
+        environment.shell,
+        environment.workspace,
+        environment.session_log,
+        crate::prompt::fill(
+            &crate::prompt::body(include_str!("../prompt/messages.md"), "instruction-file"),
+            &[
+                ("path", file.path.as_str()),
+                (
+                    "dir",
+                    &Path::new(&file.path).parent().unwrap().display().to_string()
+                ),
+                ("content", file.content.as_str()),
+            ],
+        ),
+    );
+    assert_eq!(render(&message), expected);
+    assert!(!expected.contains("# Skills"));
+    assert!(!expected.contains(SKILLS_SENTENCE));
+}
+
+#[test]
+fn a_switched_off_skill_is_not_listed() {
+    let (home, _held) = dir();
+    let workspace = home.join("workspace");
+    for name in ["keep", "drop"] {
+        write(
+            &workspace.join(format!(".agents/skills/{name}/SKILL.md")),
+            &format!("---\nname: {name}\ndescription: d\n---\n"),
+        );
+    }
+    let fake = clock();
+    let mut with = inputs(&home, &fake);
+    with.skills_disabled = vec!["drop".into()];
+    let message = collect(&with, &workspace).message;
+    let names: Vec<&str> = message.skills.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, ["keep"]);
+}
+
+#[test]
+fn notices_come_in_the_documented_order() {
+    use contract::ErrorCode::{
+        InstructionsLarge, IoFailed, SkillInvalid, SkillShadowed, SkillsLarge,
+    };
+    let (home, _held) = dir();
+    let workspace = home.join("workspace");
+    // An unreadable instruction file.
+    std::fs::create_dir_all(workspace.join("AGENTS.md")).unwrap();
+    let places = workspace.join(".agents/skills");
+    // Discovery order: entries in byte order of their names.
+    std::fs::create_dir_all(places.join("a/SKILL.md")).unwrap();
+    write(&places.join("b/SKILL.md"), "no header");
+    write(
+        &places.join("c/SKILL.md"),
+        "---\nname: same\ndescription: d\n---\n",
+    );
+    write(
+        &places.join("d/SKILL.md"),
+        "---\nname: same\ndescription: d\n---\n",
+    );
+    let fake = clock();
+    let mut with = inputs(&home, &fake);
+    // The system text and the listing both pass 10% of this window.
+    with.context_window = Some(10);
+    with.system = Some("s".repeat(100));
+    let codes: Vec<_> = collect(&with, &workspace)
+        .notices
+        .into_iter()
+        .map(|notice| notice.code)
+        .collect();
+    assert_eq!(
+        codes,
+        [
+            IoFailed,
+            InstructionsLarge,
+            IoFailed,
+            SkillInvalid,
+            SkillShadowed,
+            SkillsLarge
+        ]
+    );
 }
