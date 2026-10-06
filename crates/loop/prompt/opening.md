@@ -15,4 +15,6 @@ This message is from Fiber, not the person. It describes your environment and ca
 
 # Skills
 
+Each entry below is a skill. When a task matches a skill's description, load it with the `skill` tool.
+
 {skills}

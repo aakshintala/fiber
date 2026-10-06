@@ -154,8 +154,8 @@ fn system_md_bytes_are_pinned() {
 fn opening_md_bytes_are_pinned() {
     pinned(
         include_bytes!("../prompt/opening.md"),
-        320,
-        0xf7d734bea035be64,
+        424,
+        0xf50a9f974a4b1e60,
     );
 }
 

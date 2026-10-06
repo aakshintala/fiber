@@ -595,6 +595,9 @@ fn parts_with(
     prompt.system = prompt_files::system(&home, &project);
     prompt.append = prompt_files::append(&home, &project);
     prompt.context_window = model.model.context_window;
+    prompt.agents_home = prompt_files::agents_home(std::env::var_os("HOME"));
+    prompt.extension_dirs = extensions.dirs();
+    prompt.skills_disabled = config.union_list("skills.disabled");
     prompt.credential = Some(label);
     Ok(Parts {
         sessions,

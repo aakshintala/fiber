@@ -5,7 +5,7 @@
 //! tool set is fixed ("Registering"). A session with none starts no VM.
 
 use std::num::NonZeroUsize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -30,6 +30,8 @@ const ENTRY: &str = "init.lua";
 #[derive(Default)]
 pub struct SessionExtensions {
     loaded: Vec<LoadedExtension>,
+    /// Each loaded extension's name and package directory.
+    dirs: Vec<(String, PathBuf)>,
     notices: Vec<Notice>,
     /// The started Lua extensions.
     lua: Vec<LuaExtension>,
@@ -122,6 +124,7 @@ impl SessionExtensions {
                 session.register(&item.name, declared, &mut chain);
                 session.lua.push(extension);
             }
+            session.dirs.push((item.name.clone(), dir));
             session.loaded.push(LoadedExtension {
                 name: item.name,
                 version: item.version,
@@ -150,6 +153,12 @@ impl SessionExtensions {
     /// (`docs/events.md`).
     pub fn loaded(&self) -> Vec<LoadedExtension> {
         self.loaded.clone()
+    }
+
+    /// Each loaded extension's name and package directory, as listed:
+    /// where its `skills/` and `prompts/` are read from.
+    pub fn dirs(&self) -> Vec<(String, PathBuf)> {
+        self.dirs.clone()
     }
 
     /// What loading raised: an entry script that failed, a hook that did

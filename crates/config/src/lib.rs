@@ -257,6 +257,26 @@ impl Config {
         }
     }
 
+    /// Every name in the list at `key`, from every layer that sets it,
+    /// lowest layer first, each name once at its first appearance: a list
+    /// key whose layers all apply (`skills.disabled`). A key no layer sets
+    /// gives an empty list.
+    pub fn union_list(&self, key: &str) -> Vec<String> {
+        let Some(key) = path::parse(key) else {
+            return Vec::new();
+        };
+        let mut names: Vec<String> = Vec::new();
+        for (_, layer) in &self.layers {
+            let items = path::get(layer, &key).and_then(Value::as_array);
+            for name in items.into_iter().flatten().filter_map(Value::as_str) {
+                if !names.iter().any(|seen| seen == name) {
+                    names.push(name.to_owned());
+                }
+            }
+        }
+        names
+    }
+
     /// An extension's settings, merged across its layers as they were when
     /// this configuration was loaded, plus its own writes since
     /// (`docs/configuration.md`, "Extension settings"). The repository's file

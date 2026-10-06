@@ -9,6 +9,7 @@ use contract::ErrorCode;
 use contract::events::{Environment, Git, InstructionFileSent, Notice, OpeningMessage};
 
 use crate::prompt::{PromptInputs, fill};
+use crate::skills;
 
 const OPENING_MD: &str = include_str!("../prompt/opening.md");
 const MESSAGES_MD: &str = include_str!("../prompt/messages.md");
@@ -25,12 +26,14 @@ pub(crate) struct Collected {
     pub(crate) message: OpeningMessage,
     /// One `io_failed` per unreadable instruction file, then
     /// `instructions_large` when the instruction text passes 10% of the
-    /// context window.
+    /// context window, then the skill notices in discovery order, then
+    /// `skills_large` when the listing does.
     pub(crate) notices: Vec<Notice>,
 }
 
-/// Reads the environment and the instruction files once
-/// (`docs/system-prompt.md`, "Environment" and "Instruction files").
+/// Reads the environment, the instruction files and the skills once
+/// (`docs/system-prompt.md`, "Environment", "Instruction files" and
+/// "Skills").
 /// `workspace` is the loop's canonical workspace.
 pub(crate) fn collect(inputs: &PromptInputs, workspace: &Path) -> Collected {
     let workspace = canonical(workspace);
@@ -49,6 +52,8 @@ pub(crate) fn collect(inputs: &PromptInputs, workspace: &Path) -> Collected {
         }
         read_dir_file(dir, &mut files, &mut notices);
     }
+    let found = skills::discover(inputs, chain.first().unwrap_or(&workspace));
+    let listed = skills::listing(&found.skills, &inputs.skills_disabled);
     let message = OpeningMessage {
         environment: Environment {
             date: date_of(inputs.clock.wall()),
@@ -62,11 +67,12 @@ pub(crate) fn collect(inputs: &PromptInputs, workspace: &Path) -> Collected {
                 .to_string(),
         },
         instruction_files: files,
-        // debt: no skill runtime lists skills yet; fixed by #511.
-        skills: Vec::new(),
+        skills: listed.iter().map(|skill| skill.listed.clone()).collect(),
     };
     let large = size_notice(inputs, &message.instruction_files);
     notices.extend(large);
+    notices.extend(found.notices);
+    notices.extend(skills::size_notice(&listed, inputs.context_window));
     Collected { message, notices }
 }
 
@@ -109,8 +115,6 @@ pub(crate) fn render(message: &OpeningMessage) -> String {
     // out: the template is cut at its last `# Skills` line. Cutting before
     // the one `fill` keeps inserted text (a path or a file's content
     // holding `{date}`) unre-scanned.
-    // debt: the skills listing is always empty and its entry format is
-    // provisional; fixed by #511.
     let template = if message.skills.is_empty() {
         cut_skills(OPENING_MD)
     } else {
@@ -119,7 +123,7 @@ pub(crate) fn render(message: &OpeningMessage) -> String {
     let skills = message
         .skills
         .iter()
-        .map(|skill| format!("- {}: {} ({})", skill.name, skill.description, skill.path))
+        .map(skills::entry)
         .collect::<Vec<_>>()
         .join("\n");
     fill(

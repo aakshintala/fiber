@@ -7,7 +7,7 @@
     reason = "test code; a failure is the test's"
 )]
 
-use super::{append, system};
+use super::{agents_home, append, system};
 
 fn home() -> (fakes::TempDir, config::ProjectKey) {
     let home = fakes::TempDir::new("fiber-prompt-files");
@@ -78,4 +78,15 @@ fn missing_files_are_absent() {
     let (home, project) = home();
     assert_eq!(system(home.path(), &project), None);
     assert_eq!(append(home.path(), &project), None);
+}
+
+#[test]
+fn the_agents_home_is_an_absolute_home_value() {
+    assert_eq!(
+        agents_home(Some("/home/alice".into())),
+        Some(std::path::PathBuf::from("/home/alice"))
+    );
+    assert_eq!(agents_home(None), None);
+    assert_eq!(agents_home(Some("".into())), None);
+    assert_eq!(agents_home(Some("relative/home".into())), None);
 }

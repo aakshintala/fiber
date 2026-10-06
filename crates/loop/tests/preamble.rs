@@ -72,6 +72,42 @@ fn a_new_session_builds_the_preamble_before_its_first_turn() {
 }
 
 #[test]
+fn a_workspace_skill_is_logged_in_the_opening_message_listing() {
+    let mut session = Session::new(vec![Scripted::text("Done.")], None);
+    let skill = session.workspace.join(".agents/skills/review/SKILL.md");
+    std::fs::create_dir_all(skill.parent().unwrap()).unwrap();
+    std::fs::write(
+        &skill,
+        "---\nname: review\ndescription: Reviews a diff.\n---\nBody\n",
+    )
+    .unwrap();
+    session.inbox.send(delivery("hi")).unwrap();
+    session.turn();
+    let lines = session.lines();
+    let opening = lines.iter().find(|l| l.kind == "opening_message").unwrap();
+    let path = skill.canonicalize().unwrap().display().to_string();
+    assert_eq!(
+        opening.payload["skills"],
+        serde_json::json!([{
+            "name": "review",
+            "description": "Reviews a diff.",
+            "path": path,
+            "source": "repository",
+        }])
+    );
+    let requests = session.requests();
+    let contract::provider::Input::User { text } = &requests[0].conversation[0] else {
+        panic!("{:?}", requests[0].conversation[0]);
+    };
+    assert!(
+        text.ends_with(&format!("- review: Reviews a diff. ({path})\n")),
+        "{text}"
+    );
+    // No notice: the skill is well formed.
+    assert!(lines.iter().all(|l| l.kind != "notice"));
+}
+
+#[test]
 fn an_unreadable_instruction_file_is_a_notice_after_the_opening_message() {
     let mut session = Session::new(vec![Scripted::text("Done.")], None);
     // A directory where the workspace file should be cannot be read as

@@ -22,8 +22,15 @@ pub struct PromptInputs {
     pub extensions: Vec<(String, String)>,
     /// The model's context window, in tokens.
     pub context_window: Option<u64>,
-    /// Fiber home, for the global `AGENTS.md`.
+    /// Fiber home, for the global `AGENTS.md` and `skills/`.
     pub home: PathBuf,
+    /// The person's home; `~/.agents/skills` is under it.
+    pub agents_home: Option<PathBuf>,
+    /// Each loaded extension's name and package directory, for its
+    /// `skills/` and `prompts/`.
+    pub extension_dirs: Vec<(String, PathBuf)>,
+    /// `skills.disabled`, every layer unioned.
+    pub skills_disabled: Vec<String>,
     /// The shell, or `unknown` when `SHELL` is unset.
     pub shell: String,
     /// The session log's path.
@@ -52,6 +59,9 @@ impl PromptInputs {
             extensions: Vec::new(),
             context_window: None,
             home,
+            agents_home: None,
+            extension_dirs: Vec::new(),
+            skills_disabled: Vec::new(),
             shell,
             session_log,
             clock,

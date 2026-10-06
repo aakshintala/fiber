@@ -153,6 +153,7 @@ pub(crate) const KEYS: &[Key] = &[
     key("shell.read_only.*.flags", StrList, NO, None),
     key("budget.usd", Number, NO, None),
     key("quota.notice_at", Number, YES, Some("80")),
+    key("skills.disabled", StrList, NO, Some("[]")),
     key("mcp.servers.*.command", Str, YES, None),
     key("mcp.servers.*.args", StrList, YES, None),
     key("mcp.servers.*.env", StrMap, YES, None),
