@@ -124,6 +124,34 @@ pub fn leave_out_invalid(
     notices
 }
 
+/// Reads every model's `prompt_addendum` file against `dir`, by model id.
+/// A file that cannot be read is one `extension_failed` notice naming
+/// `extension`, so `load` and `add_lua` share the one loop.
+fn read_addenda(
+    dir: &Path,
+    models: &[ModelData],
+    extension: &str,
+) -> Result<BTreeMap<String, String>, Notice> {
+    let mut addenda = BTreeMap::new();
+    for model in models {
+        if let Some(relative) = model.prompt_addendum.as_deref() {
+            match config::read_package_text(dir, relative, "prompt_addendum") {
+                Ok(text) => {
+                    addenda.insert(model.id.clone(), text);
+                }
+                Err(e) => {
+                    return Err(Notice {
+                        code: ErrorCode::ExtensionFailed,
+                        message: e.to_string(),
+                        extension: Some(extension.to_owned()),
+                    });
+                }
+            }
+        }
+    }
+    Ok(addenda)
+}
+
 impl Providers {
     /// A typed model reference without any `:<level>` suffix, and the level
     /// the suffix named, if any: the single strip of a `:<level>` suffix both
@@ -196,28 +224,13 @@ impl Providers {
                 // one of its files succeeds: a bad addendum leaves out all
                 // of its providers, with one notice, and other extensions
                 // load (`docs/system-prompt.md`, "Extension texts").
-                let mut addenda = BTreeMap::new();
-                for model in &data.models {
-                    if let Some(relative) = model.prompt_addendum.as_deref() {
-                        match config::read_package_text(&dir, relative, "prompt_addendum") {
-                            Ok(text) => {
-                                addenda.insert(model.id.clone(), text);
-                            }
-                            Err(e) => {
-                                failed = Some(Notice {
-                                    code: ErrorCode::ExtensionFailed,
-                                    message: e.to_string(),
-                                    extension: Some(manifest.name.clone()),
-                                });
-                                break;
-                            }
-                        }
+                match read_addenda(&dir, &data.models, &manifest.name) {
+                    Ok(addenda) => buffered.push((data, addenda)),
+                    Err(notice) => {
+                        failed = Some(notice);
+                        break;
                     }
                 }
-                if failed.is_some() {
-                    break;
-                }
-                buffered.push((data, addenda));
             }
             if let Some(notice) = failed {
                 notices.push(notice);
@@ -261,23 +274,10 @@ impl Providers {
         let notices = leave_out_invalid(&name, extension, &mut models);
         // The addenda resolve against the Lua extension's package
         // directory, replacing the data file's with the final models.
-        let mut addenda = BTreeMap::new();
-        for model in &models {
-            if let Some(relative) = model.prompt_addendum.as_deref() {
-                match config::read_package_text(provider.dir(), relative, "prompt_addendum") {
-                    Ok(text) => {
-                        addenda.insert(model.id.clone(), text);
-                    }
-                    Err(e) => {
-                        return vec![Notice {
-                            code: ErrorCode::ExtensionFailed,
-                            message: e.to_string(),
-                            extension: Some(extension.to_owned()),
-                        }];
-                    }
-                }
-            }
-        }
+        let addenda = match read_addenda(provider.dir(), &models, extension) {
+            Ok(addenda) => addenda,
+            Err(notice) => return vec![notice],
+        };
         match self.by_name.get_mut(&name) {
             Some(data) => {
                 data.models = models;

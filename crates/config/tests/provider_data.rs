@@ -92,6 +92,52 @@ fn read_package_text_rejects_paths_outside_the_package() {
 }
 
 #[test]
+#[cfg(unix)]
+fn read_package_text_refuses_a_file_symlink_pointing_outside() {
+    let setup = Setup::new();
+    let dir = setup.root().join("ext");
+    setup.write(&setup.root().join("outside/evil.md"), "evil\n");
+    let link = dir.join("prompts/m.md");
+    std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(setup.root().join("outside/evil.md"), &link).unwrap();
+    let err = read_package_text(&dir, "prompts/m.md", "prompt_addendum").unwrap_err();
+    assert_eq!(err.code(), ErrorCode::ConfigInvalid);
+    let msg = err.to_string();
+    assert!(msg.contains("prompt_addendum"), "{msg}");
+    assert!(msg.contains("m.md"), "{msg}");
+}
+
+#[test]
+#[cfg(unix)]
+fn read_package_text_refuses_a_symlinked_parent_pointing_outside() {
+    let setup = Setup::new();
+    let dir = setup.root().join("ext");
+    setup.write(&setup.root().join("outside/m.md"), "evil\n");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::os::unix::fs::symlink(setup.root().join("outside"), dir.join("prompts")).unwrap();
+    let err = read_package_text(&dir, "prompts/m.md", "prompt_addendum").unwrap_err();
+    assert_eq!(err.code(), ErrorCode::ConfigInvalid);
+    let msg = err.to_string();
+    assert!(msg.contains("prompt_addendum"), "{msg}");
+    assert!(msg.contains("m.md"), "{msg}");
+}
+
+#[test]
+#[cfg(unix)]
+fn read_package_text_reads_a_symlink_staying_inside_the_package() {
+    let setup = Setup::new();
+    let dir = setup.root().join("ext");
+    setup.write(&dir.join("real/m.md"), "Be brief.\n");
+    let link = dir.join("prompts/m.md");
+    std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(dir.join("real/m.md"), &link).unwrap();
+    assert_eq!(
+        read_package_text(&dir, "prompts/m.md", "prompt_addendum").unwrap(),
+        "Be brief.\n"
+    );
+}
+
+#[test]
 fn read_package_text_rejects_non_utf8_bytes() {
     let setup = Setup::new();
     let dir = setup.root().join("ext");

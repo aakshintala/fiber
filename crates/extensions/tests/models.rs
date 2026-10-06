@@ -792,22 +792,6 @@ fn a_missing_addendum_leaves_out_the_whole_extension_and_keeps_the_other() {
 }
 
 #[test]
-fn an_addendum_path_outside_the_package_leaves_out_the_extension() {
-    let setup = Setup::new();
-    let escaping = provider_with_addendum("acme", "m", "../x.md");
-    let source = setup.source("acme", &manifest("acme"), &[escaping]);
-    install(&setup.home(), &source, "0.1.0").unwrap();
-    let other = setup.source("other", &manifest("other"), &[provider("zed", &["z"])]);
-    install(&setup.home(), &other, "0.1.0").unwrap();
-    let (providers, notices) = Providers::load(&setup.home()).unwrap();
-    assert!(providers.resolve("acme/m").is_err());
-    assert!(providers.resolve("zed/z").is_ok());
-    assert_eq!(notices.len(), 1, "{notices:?}");
-    assert_eq!(notices[0].code, ErrorCode::ExtensionFailed);
-    assert_eq!(notices[0].extension.as_deref(), Some("acme"));
-}
-
-#[test]
 fn the_later_extension_wins_the_provider_and_its_addendum() {
     let setup = Setup::new();
     for (dir, text) in [("first", "From one.\n"), ("second", "From two.\n")] {
@@ -894,16 +878,4 @@ fn add_lua_with_a_missing_addendum_keeps_the_data_files_models() {
     assert_eq!(notices.len(), 1, "{notices:?}");
     assert_eq!(notices[0].code, ErrorCode::ExtensionFailed);
     assert_eq!(notices[0].extension.as_deref(), Some("acme-ext"));
-}
-
-#[test]
-fn add_lua_with_an_escaping_addendum_leaves_no_models() {
-    let setup = Setup::new();
-    let mut providers = Providers::default();
-    let lua = lua_acme(&setup, "ext", &lua_addendum_run("m", "../x.md"));
-    let notices = providers.add_lua("acme-ext", &lua);
-    assert_eq!(providers.names().count(), 0);
-    assert!(providers.lua("acme").is_some());
-    assert_eq!(notices.len(), 1, "{notices:?}");
-    assert_eq!(notices[0].code, ErrorCode::ExtensionFailed);
 }

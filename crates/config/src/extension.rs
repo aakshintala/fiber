@@ -273,6 +273,16 @@ pub fn read_package_text(dir: &Path, relative: &str, key: &str) -> Result<String
         });
     }
     let file = dir.join(relative);
+    if let (Ok(canonical_dir), Ok(canonical_file)) =
+        (std::fs::canonicalize(dir), std::fs::canonicalize(&file))
+        && !canonical_file.starts_with(&canonical_dir)
+    {
+        return Err(ConfigError::WrongType {
+            source_name: file.display().to_string(),
+            key: key.into(),
+            expected: "a path relative to the package directory and inside it".into(),
+        });
+    }
     let bytes = fs::read(&file).map_err(|source| ConfigError::WrongType {
         source_name: file.display().to_string(),
         key: key.into(),

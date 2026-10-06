@@ -234,20 +234,6 @@ fn a_missing_prompt_file_fails_the_load_before_its_vm_starts() {
     assert_eq!(changed_content(&after_tool(&session, "x")), Some("x|fine"));
 }
 
-#[test]
-fn a_prompt_path_outside_the_package_fails_the_load() {
-    let home = Home::new();
-    home.install("sneaky", None);
-    home.edit_manifest("sneaky", |m| m["prompt"] = json!("../x.md"));
-    let session = home.load(&[]);
-    assert!(session.loaded().is_empty());
-    assert!(session.prompts().is_empty());
-    let notices = session.notices();
-    assert_eq!(notices.len(), 1);
-    assert_eq!(notices[0].code, ErrorCode::ExtensionFailed);
-    assert_eq!(notices[0].extension.as_deref(), Some("fiber.test/sneaky"));
-}
-
 fn opening(machine: &[&str], project: &[&str], budget_bytes: Option<u64>) -> serde_json::Value {
     let strings = |names: &[&str]| {
         names
