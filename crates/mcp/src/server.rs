@@ -1,8 +1,10 @@
 //! One stdio MCP server: the child Fiber started, one parked thread per
 //! pipe, requests answered by id, and a stop that closes stdin, waits a
 //! grace on the clock, then kills and reaps (`docs/mcp.md`, "Starting
-//! servers"). Time comes only from the injected [`contract::clock::Clock`];
-//! no process group is ever signalled: only a server's own process, by pid.
+//! servers"); a signal during startup stops every start through
+//! [`stop_every_start`]. Time comes only from the injected
+//! [`contract::clock::Clock`]; no process group is ever signalled: only a
+//! server's own process, by pid.
 
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -38,6 +40,40 @@ const GRACE: Duration = Duration::from_millis(800);
 /// Every server child's pid, from its spawn until its reap: what
 /// [`kill_every_server`] reaches.
 static LIVE: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+
+/// Stops every server still starting, and every start after it: the flag is
+/// sticky for the life of the process. It sets the flag and wakes the parked
+/// handshakes; the stop and reap run on each start's own thread. Idempotent.
+pub fn stop_every_start() {
+    *lock(&STOPPED) = true;
+    // Dropped before any wake: a wake takes the shared lock.
+    let waiting = std::mem::take(&mut *lock(&WAITING));
+    for waker in waiting {
+        if let Some(waker) = waker.upgrade() {
+            waker.wake();
+        }
+    }
+}
+
+static STOPPED: Mutex<bool> = Mutex::new(false);
+static WAITING: Mutex<Vec<Weak<dyn Wake>>> = Mutex::new(Vec::new());
+
+/// The handshake's cancel, fired by [`stop_every_start`].
+struct Stopping;
+
+impl Cancel for Stopping {
+    fn is_cancelled(&self) -> bool {
+        *lock(&STOPPED)
+    }
+
+    fn subscribe(&self, waker: Weak<dyn Wake>) {
+        let mut waiting = lock(&WAITING);
+        // A finished start drops its bridge and leaves a dead entry: pruned
+        // here, so the list holds only the starts still running.
+        waiting.retain(|listed| listed.upgrade().is_some());
+        waiting.push(waker);
+    }
+}
 
 /// Sends SIGKILL to every server child not yet reaped, at once
 /// (`docs/invocation.md`, "Shutdown": the bound). A pid of 1 or less is
@@ -116,6 +152,11 @@ pub(crate) enum StartError {
     Deadline,
 }
 
+/// A start refused because Fiber is shutting down.
+fn shutting_down() -> StartError {
+    StartError::StartFailed("Fiber is shutting down.".to_owned())
+}
+
 /// Why [`Server::call`] failed.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum CallError {
@@ -178,6 +219,11 @@ impl Server {
         startup_timeout: Duration,
         client_version: &str,
     ) -> Result<OpenServer, StartError> {
+        // Sticky: a start after the stop spawns nothing.
+        if Stopping.is_cancelled() {
+            return Err(shutting_down());
+        }
+        let stopping = Stopping;
         let mut cmd = Command::new(command);
         cmd.args(args)
             .current_dir(workspace)
@@ -231,7 +277,7 @@ impl Server {
                     "clientInfo": {"name": "fiber", "version": client_version},
                 }),
                 deadline,
-                &NoCancel,
+                &stopping,
             ) {
                 Ok(value) if value.is_object() => {}
                 Err(CallError::Timeout) => return Err(StartError::Deadline),
@@ -249,7 +295,7 @@ impl Server {
                     Some(cursor) => serde_json::json!({"cursor": cursor}),
                     None => serde_json::json!({}),
                 };
-                let page = match server.request("tools/list", &params, deadline, &NoCancel) {
+                let page = match server.request("tools/list", &params, deadline, &stopping) {
                     Ok(value) => value,
                     Err(CallError::Timeout) => return Err(StartError::Deadline),
                     Err(_) => {
@@ -287,8 +333,14 @@ impl Server {
         match handshake(&server) {
             Ok(tools) => Ok(OpenServer { server, tools }),
             Err(error) => {
-                server.shutdown();
-                Err(error)
+                if stopping.is_cancelled() {
+                    // The documented stop, then the failure the door never writes.
+                    server.stop();
+                    Err(shutting_down())
+                } else {
+                    server.shutdown();
+                    Err(error)
+                }
             }
         }
     }

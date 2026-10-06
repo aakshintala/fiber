@@ -617,14 +617,19 @@ fn sigterm_while_an_mcp_server_starts_kills_it_and_exits_143_writing_nothing() {
         "mkfifo {} failed",
         death.display()
     );
-    // A server that writes its pid, then never answers `initialize` and
-    // outlives the end of its input. Its startup deadline is far past the
-    // shutdown's 5 s bound. It holds the death FIFO open across its exec
-    // of `sleep`, so the read end above sees end-of-file when it dies.
-    // Fiber never opens that FIFO (`crates/mcp/src/server.rs` pipes only
-    // stdin and stdout): only this server holds its write end.
+    // A server that writes its pid, then never answers `initialize`. The
+    // recorded signal gives the starting server the documented stop:
+    // stdin closed, SIGTERM, then SIGKILL 800 ms later. It ignores SIGTERM
+    // (`trap '' TERM` is inherited across its exec of `sleep`), so the
+    // stop's kill after the grace is the path exercised, and the server is
+    // reaped before fiber exits. The process itself still exits at the
+    // bound on this path (see #830). Its startup deadline is far past the
+    // 5 s bound. It holds the death FIFO open across the exec, so
+    // the read end above sees end-of-file when it dies. Fiber never opens
+    // that FIFO (`crates/mcp/src/server.rs` pipes only stdin and stdout):
+    // only this server holds its write end.
     let script = format!(
-        "exec 3>'{}'\necho $$ > '{}'\nexec sleep 3600\n",
+        "trap '' TERM\nexec 3>'{}'\necho $$ > '{}'\nexec sleep 3600\n",
         death.display(),
         ready.path().display()
     );
@@ -652,7 +657,7 @@ fn sigterm_while_an_mcp_server_starts_kills_it_and_exits_143_writing_nothing() {
     let _pid = ready.wait(DEADLINE)[0];
     fiber.signal("TERM");
     // Before `end`, whose group check would otherwise catch a server
-    // left alive first: this wait is the one that pins the kill.
+    // left alive first: this wait is the one that pins the stop's kill.
     died.recv_timeout(DEADLINE)
         .expect("the MCP server outlived fiber");
     let ended = fiber.end();
@@ -665,4 +670,54 @@ fn sigterm_while_an_mcp_server_starts_kills_it_and_exits_143_writing_nothing() {
         "a session directory was created"
     );
     assert!(server.requests().is_empty());
+}
+
+#[test]
+fn sigterm_while_an_mcp_server_starts_sends_it_sigterm() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    let ready = fakes::children::Ready::new(setup.root.path());
+    let marker = setup.root.path().join("marker");
+    let quote =
+        |path: &std::path::Path| format!("'{}'", path.display().to_string().replace('\'', "'\\''"));
+    // Never answers `initialize`. The trap is set before the pid line,
+    // so the ready wait proves SIGTERM will be caught. Builtins only:
+    // no `exec sleep` to drop the trap, no background child to outlive
+    // the group. On the base commit the server gets only the bound's
+    // SIGKILL, so the marker is never written and this fails there.
+    let script = format!(
+        "trap 'echo term > {}; exit 0' TERM\necho $$ > {}\nwhile :; do :; done\n",
+        quote(&marker),
+        quote(ready.path()),
+    );
+    write(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "mcp": {"servers": {"slow": {
+            "command": "/bin/sh",
+            "args": ["-c", script],
+            "startup_timeout_ms": 600_000,
+        }}}}),
+    );
+    let fiber = setup.start(&["ask", "hi"], Stdio::null());
+    // The server runs past its trap, so the signals were armed before
+    // it started.
+    let _pid = ready.wait(DEADLINE)[0];
+    fiber.signal("TERM");
+    // The group check inside fails first when a server is left alive.
+    let ended = fiber.end();
+
+    assert_eq!(ended.code, Some(143), "stderr: {}", ended.stderr);
+    assert!(ended.lines.is_empty(), "{:?}", ended.lines);
+    assert!(setup.logs().is_empty(), "a session was left behind");
+    assert!(
+        setup.session_dirs().is_empty(),
+        "a session directory was created"
+    );
+    assert!(server.requests().is_empty());
+    assert_eq!(
+        fs::read_to_string(&marker).unwrap_or_default().trim(),
+        "term",
+        "the starting server saw SIGTERM"
+    );
 }

@@ -1027,3 +1027,166 @@ fn stop_holds_the_child_unreaped_while_it_sends_sigterm() {
     reaped.recv_timeout(WITHIN).expect("the reap finished");
     assert!(!super::lock(&super::LIVE).contains(&pid));
 }
+
+/// A server start on its own thread; the receiver hears the outcome.
+fn starting(
+    command: &str,
+    args: &[String],
+    clock: &std::sync::Arc<dyn Clock>,
+    workspace: &std::path::Path,
+    timeout: Duration,
+) -> mpsc::Receiver<Result<super::OpenServer, StartError>> {
+    let command = command.to_owned();
+    let args = args.to_owned();
+    let clock = std::sync::Arc::clone(clock);
+    let workspace = workspace.to_path_buf();
+    let (done, result) = mpsc::channel();
+    thread::spawn(move || {
+        let outcome = Server::start(
+            &command,
+            &args,
+            &BTreeMap::new(),
+            &workspace,
+            &clock,
+            timeout,
+            "0.0.0",
+        );
+        done.send(outcome).expect("collected");
+    });
+    result
+}
+
+/// A server that never answers and ignores SIGTERM: `trap '' TERM` is
+/// inherited across `exec`, so `sleep` holds its stdout pipe open until it
+/// is killed. The script writes its pid to `ready` after installing the
+/// trap, so the wait below proves the trap is set before the stop signals
+/// it.
+fn starting_silent_ignoring(
+    ready: &std::path::Path,
+    clock: &std::sync::Arc<dyn Clock>,
+    workspace: &std::path::Path,
+    timeout: Duration,
+) -> mpsc::Receiver<Result<super::OpenServer, StartError>> {
+    let quoted = ready.display().to_string().replace('\'', "'\\''");
+    let script = format!("trap '' TERM\necho $$ > '{quoted}'\nexec sleep 300");
+    starting(
+        "/bin/bash",
+        &["-c".to_owned(), script],
+        clock,
+        workspace,
+        timeout,
+    )
+}
+
+/// Waits, at most [`WITHIN`], until a start has listed its child in
+/// [`super::LIVE`]: the signal that it spawned.
+fn await_listed() {
+    let (_held, tick) = mpsc::channel::<()>();
+    for _ in 0..POLLS {
+        if !super::lock(&super::LIVE).is_empty() {
+            return;
+        }
+        match tick.recv_timeout(POLL) {
+            Ok(()) | Err(_) => {}
+        }
+    }
+    panic!("the start listed its child within {WITHIN:?}");
+}
+
+fn assert_shutdown_failed(outcome: Result<super::OpenServer, StartError>) {
+    match outcome {
+        Err(StartError::StartFailed(message)) => assert_eq!(
+            message, "Fiber is shutting down.",
+            "unexpected message: {message}"
+        ),
+        Err(StartError::Deadline) => panic!("a stopped start is not a deadline"),
+        Ok(_) => panic!("a stopped start does not open"),
+    }
+}
+
+#[test]
+fn a_stopped_start_waits_out_the_grace_before_its_kill() {
+    // Without the grace wait the stop would kill at once, as a plain
+    // shutdown and reap does: the probe below pins the wait.
+    let setup = Setup::tools(&json!([]));
+    let workspace = setup.dir.path().to_path_buf();
+    let ready = fakes::children::Ready::new(setup.dir.path());
+    let result = starting_silent_ignoring(
+        ready.path(),
+        &setup.clock(),
+        &workspace,
+        Duration::from_secs(600),
+    );
+    // After the trap: the script writes its pid only once `trap '' TERM`
+    // is set, so the stop below cannot signal before it ignores SIGTERM.
+    ready.wait(WITHIN);
+    super::stop_every_start();
+    let grace = setup.fake.now().checked_add(super::GRACE).expect("grace");
+    assert!(
+        setup.fake.await_parked(grace, WITHIN),
+        "the stop waits out the grace within {WITHIN:?}"
+    );
+    let pid = super::lock(&super::LIVE).first().copied().expect("listed");
+    assert!(
+        fakes::kill_pid(pid, "0").expect("probe"),
+        "the server was killed before the grace passed"
+    );
+    setup.fake.advance(super::GRACE);
+    assert_shutdown_failed(
+        result
+            .recv_timeout(WITHIN)
+            .expect("the start ends once the grace passes"),
+    );
+    assert!(
+        !fakes::kill_pid(pid, "0").expect("probe"),
+        "the server was reaped after the grace"
+    );
+    assert!(super::lock(&super::LIVE).is_empty());
+}
+
+#[test]
+fn a_stopped_start_whose_server_exits_on_sigterm_returns_without_the_clock_moving() {
+    let setup = Setup::tools(&json!([]));
+    let workspace = setup.dir.path().to_path_buf();
+    // Silent, but SIGTERM ends it: its output ends inside the grace.
+    let result = starting(
+        "/bin/sleep",
+        &["30".to_owned()],
+        &setup.clock(),
+        &workspace,
+        Duration::from_secs(600),
+    );
+    await_listed();
+    let before = setup.fake.now();
+    super::stop_every_start();
+    assert_shutdown_failed(
+        result
+            .recv_timeout(WITHIN)
+            .expect("the start ends without the clock moving"),
+    );
+    assert_eq!(setup.fake.now(), before, "the clock never moved");
+    assert!(super::lock(&super::LIVE).is_empty());
+}
+
+#[test]
+fn a_start_after_stop_every_start_spawns_nothing() {
+    let setup = Setup::tools(&json!([]));
+    super::stop_every_start();
+    let workspace = setup.dir.path().to_path_buf();
+    let result = starting(
+        "/bin/true",
+        &[],
+        &setup.clock(),
+        &workspace,
+        Duration::from_secs(5),
+    );
+    assert_shutdown_failed(
+        result
+            .recv_timeout(WITHIN)
+            .expect("the start returns at once"),
+    );
+    assert!(
+        super::lock(&super::LIVE).is_empty(),
+        "nothing spawned after the stop"
+    );
+}

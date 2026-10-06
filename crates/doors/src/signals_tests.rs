@@ -78,10 +78,16 @@ fn sender(tx: &Sender<Did>) -> Mutex<Sender<Did>> {
 }
 
 fn arm(signals: &Signals, did: &Sender<Did>) {
-    let tx = sender(did);
-    signals.arm(Box::new(move || {
-        tx.lock().unwrap().send(Did::Bound).unwrap()
-    }));
+    arm_with(signals, did, did);
+}
+
+fn arm_with(signals: &Signals, record_did: &Sender<Did>, bound_did: &Sender<Did>) {
+    let record_tx = sender(record_did);
+    let bound_tx = sender(bound_did);
+    signals.arm(
+        Box::new(move || record_tx.lock().unwrap().send(Did::Signal(-1)).unwrap()),
+        Box::new(move || bound_tx.lock().unwrap().send(Did::Bound).unwrap()),
+    );
 }
 
 fn start(signals: &Signals, did: &Sender<Did>) -> Option<i32> {
@@ -108,7 +114,12 @@ fn a_signal_while_armed_is_returned_by_start_and_never_shuts_down() {
     let (tx, calls) = mpsc::channel();
     arm(&signals, &tx);
     signals.handle(SIGHUP);
+    assert_eq!(calls.try_recv().unwrap(), Did::Signal(-1));
     signals.handle(SIGTERM);
+    assert!(
+        calls.try_recv().is_err(),
+        "a second signal while armed does nothing"
+    );
     assert_eq!(start(&signals, &tx), Some(129));
     // Still armed: a later signal neither shuts down nor exits.
     signals.handle(SIGINT);
@@ -139,6 +150,7 @@ fn the_bound_kills_then_exits_only_once_five_seconds_pass() {
     arm(&signals, &tx);
     let until = clock.now() + BOUND;
     signals.handle(SIGTERM);
+    assert_eq!(calls.try_recv().unwrap(), Did::Signal(-1));
     assert!(
         clock.await_parked(until, DEADLINE),
         "the bound waits on the clock"
@@ -172,6 +184,40 @@ fn a_started_shutdown_has_the_same_bound() {
     clock.advance(BOUND);
     assert_eq!(calls.recv_timeout(DEADLINE).unwrap(), Did::Bound);
     assert_eq!(did.recv_timeout(DEADLINE).unwrap(), Did::Exit(129));
+}
+
+#[test]
+fn a_signal_while_booting_does_not_run_on_record() {
+    let clock = FakeClock::new();
+    let (signals, did) = recorded(&clock);
+    signals.handle(SIGTERM);
+    assert_eq!(did.try_recv().unwrap(), Did::Exit(143));
+    let (record_tx, record_calls) = mpsc::channel();
+    let (bound_tx, bound_calls) = mpsc::channel();
+    arm_with(&signals, &record_tx, &bound_tx);
+    signals.handle(SIGINT);
+    assert!(
+        record_calls.try_recv().is_err(),
+        "a booting exit is not recorded"
+    );
+    assert_eq!(start(&signals, &bound_tx), None);
+    drop(bound_calls);
+}
+
+#[test]
+fn a_first_signal_once_started_does_not_run_on_record() {
+    let clock = FakeClock::new();
+    let (signals, _did) = recorded(&clock);
+    let (record_tx, record_calls) = mpsc::channel();
+    let (bound_tx, bound_calls) = mpsc::channel();
+    arm_with(&signals, &record_tx, &bound_tx);
+    assert_eq!(start(&signals, &bound_tx), None);
+    signals.handle(SIGTERM);
+    assert_eq!(bound_calls.try_recv().unwrap(), Did::Signal(143));
+    assert!(
+        record_calls.try_recv().is_err(),
+        "a started shutdown runs no on_record"
+    );
 }
 
 /// The child's marker: set, the test installs the signals and sends itself
@@ -227,8 +273,10 @@ fn a_bound_that_cannot_start_its_thread_ends_at_once() {
     let mut signals = Signals::new(timed, exit);
     signals.spawn = Box::new(|_| Err(std::io::Error::other("no thread for the test")));
     let signals = Arc::new(signals);
-    arm(&signals, &tx);
+    let (record_tx, record_calls) = mpsc::channel();
+    arm_with(&signals, &record_tx, &tx);
     signals.handle(SIGTERM);
+    assert_eq!(record_calls.try_recv().unwrap(), Did::Signal(-1));
     // The clock never moved: the bound ran on the signal's own thread.
     assert_eq!(did.try_recv().unwrap(), Did::Bound);
     assert_eq!(did.try_recv().unwrap(), Did::Exit(143));
