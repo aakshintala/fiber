@@ -263,8 +263,32 @@ fn await_refreshed(file: &std::path::Path, old: &[u8]) {
     panic!("waited {DEADLINE:?} for the cached model list to refresh");
 }
 
+/// The refresh child's command line: the built `fiber` re-run as
+/// `refresh-model-lists`. Scoped to this binary, so the stub in `cli`'s
+/// spawn test (a shell script with the same arguments) never matches.
+fn refresh_pattern() -> String {
+    format!("{} refresh-model-lists", env!("CARGO_BIN_EXE_fiber"))
+}
+
+/// Waits until no refresh child of this binary remains, in slices of
+/// 100 ms up to [`DEADLINE`]: the detached refresh child exits after it
+/// rewrites the cache, and a rewritten cache alone never proves it did.
+fn await_refresh_exit() {
+    let (_tx, rx) = mpsc::channel::<()>();
+    let slices = DEADLINE.as_millis() / 100;
+    for _ in 0..slices {
+        match fakes::matching(&refresh_pattern()) {
+            Ok(matched) if matched.is_empty() => return,
+            _ => {}
+        }
+        let _waited = rx.recv_timeout(Duration::from_millis(100));
+    }
+    panic!("waited {DEADLINE:?} for the refresh child to exit");
+}
+
 #[test]
 fn models_prints_a_stale_list_at_once_and_it_is_fresh_on_the_next_run() {
+    let refresh_guard = Watchdog::matching(&refresh_pattern());
     let setup = Setup::new();
     let server = fakes::ProviderServer::start([fakes::Response::status(
         200,
@@ -337,4 +361,10 @@ fn models_prints_a_stale_list_at_once_and_it_is_fresh_on_the_next_run() {
         "stdout: {}",
         second.stdout
     );
+    // The rewritten cache never proves the detached child exited: wait
+    // for it under the deadline, then stand its watchdog down. Dropping
+    // the guard without an exit would kill it instead of checking it,
+    // and a timeout above drops it, so no run leaves one behind.
+    await_refresh_exit();
+    refresh_guard.stand_down(DEADLINE);
 }
