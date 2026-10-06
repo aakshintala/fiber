@@ -180,8 +180,7 @@ fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
             .map_or(limit, |n| n.min(limit));
         body.insert(field.into(), json!(max));
     }
-    let body = Value::Object(body);
-    body.to_string().into_bytes()
+    Value::Object(body).to_string().into_bytes()
 }
 
 /// `tool_choice` on the wire: `auto`, `none` and `required` are OpenAI's own
@@ -492,7 +491,7 @@ impl Decoder {
 /// (`cached_tokens`) and OpenRouter's cache writes (`cache_write_tokens`)
 /// inside `prompt_tokens`, and `tokens.input` excludes both
 /// (`docs/model-routing.md`, "openai-completions facts"). The vendor does
-/// not say which lifetime a write was, so it is counted under the request\'s
+/// not say which lifetime a write was, so it is counted under the request's
 /// cache lifetime: `1h` for a 1-hour request, whose marker carries `ttl: "1h"`,
 /// and 5 minutes for one without (openrouter.ai/docs/guides/best-practices/prompt-caching:
 /// "By default, the cache expires after 5 minutes").

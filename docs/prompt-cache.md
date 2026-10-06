@@ -115,7 +115,10 @@ The second marker keeps a long stretch of appended messages within the
 lookback. Probed: 12 appended exchanges with only an end marker lost the cache
 for every message.
 
-Fiber places at most these three markers, and model data adds none (`docs/model-routing.md`, "Extra request body fields"). Anthropic refuses a request with more than 4 markers across `tools`, `system` and `messages` (`research/anthropic-messages-probe`).
+Fiber places at most these three markers, and model data adds none
+(`docs/model-routing.md`, "Extra request body fields"). Anthropic refuses a
+request with more than 4 markers across `tools`, `system` and `messages`
+(`research/anthropic-messages-probe`).
 
 Providers that route by key are given the root session's id:
 

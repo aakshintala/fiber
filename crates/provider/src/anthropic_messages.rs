@@ -216,8 +216,7 @@ fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
             .map_or(limit, |n| n.min(limit));
         body.insert("max_tokens".into(), json!(max));
     }
-    let body = Value::Object(body);
-    body.to_string().into_bytes()
+    Value::Object(body).to_string().into_bytes()
 }
 
 /// Whether any `enum` in `schema` has an object or array value.
