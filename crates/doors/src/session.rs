@@ -3,9 +3,8 @@
 //! stream copied to stdout, the clients on that socket, and what is left
 //! when it exits.
 
-use std::fs::{self, DirBuilder, Permissions};
+use std::fs;
 use std::io::{self, Write};
-use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -25,11 +24,8 @@ use log::{Log, Watcher};
 use serde_json::Map;
 
 use crate::client;
+use crate::socket::{bind, remove_socket};
 use crate::{failure, mint};
-
-/// The longest socket path the platform binds: `sun_path` less its
-/// terminating byte (`docs/state.md`, "Sockets").
-const SOCKET_PATH_MAX: usize = if cfg!(target_os = "macos") { 103 } else { 107 };
 
 // debt: 2 s grace is picked, not measured; a slow client's measured drain time would set it.
 /// How long [`Session::close`] waits for a connection's writer to finish
@@ -164,21 +160,27 @@ impl Session {
         cancel: Arc<dyn Fn() -> bool + Send + Sync>,
         run: impl FnOnce(Receiver<Delivery>) -> Result<(), Failure>,
     ) -> Result<(), Failure> {
-        let message = Message {
-            content: vec![ContentPart::Text { text: prompt }],
-            sender: CommandSender {
-                origin: Origin::Driver,
-                command_id: Some(CommandId(mint("c_"))),
-            },
-        };
         self.run(
             vec![
-                Delivery::Prompt(message, ignore()),
+                Delivery::Prompt(prompt_message(prompt), ignore()),
                 Delivery::Close(ignore()),
             ],
             cancel,
             run,
         )
+    }
+
+    /// Runs the internal session command: queues `prompt` when one was
+    /// supplied and serves clients until idle exit or `close`. With no
+    /// prompt it delivers nothing until a client sends one.
+    pub fn serve(
+        &self,
+        prompt: Option<String>,
+        cancel: Arc<dyn Fn() -> bool + Send + Sync>,
+        run: impl FnOnce(Receiver<Delivery>) -> Result<(), Failure>,
+    ) -> Result<(), Failure> {
+        let first = prompt.map(|prompt| Delivery::Prompt(prompt_message(prompt), ignore()));
+        self.run(first.into_iter().collect(), cancel, run)
     }
 
     /// The tool a driver `shell` runs (`docs/invocation.md`, "Shell").
@@ -675,48 +677,22 @@ fn prompted(dir: &Path) -> bool {
     })
 }
 
-/// Binds the session's socket at `run/<session_id>`, mode 0600 in a 0700
-/// directory. The session's lock holder owns the socket, so a stale one left
-/// by a dead process is removed first.
-fn bind(home: &Path, dir: &Path) -> Result<(PathBuf, UnixListener), Failure> {
-    let run = home.join("run");
-    let socket = run.join(dir.file_name().unwrap_or_default());
-    if socket.as_os_str().len() > SOCKET_PATH_MAX {
-        return Err(failure(
-            ErrorCode::Usage,
-            format!(
-                "FIBER_HOME is too long: a session's socket path must fit in \
-                 {SOCKET_PATH_MAX} bytes. Set FIBER_HOME to a shorter path."
-            ),
-        ));
-    }
-    DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(&run)
-        .map_err(|e| io_failed(&run, &e))?;
-    remove_socket(&socket);
-    let listener = UnixListener::bind(&socket).map_err(|e| io_failed(&socket, &e))?;
-    if let Err(e) = fs::set_permissions(&socket, Permissions::from_mode(0o600)) {
-        remove_socket(&socket);
-        return Err(io_failed(&socket, &e));
-    }
-    Ok((socket, listener))
-}
-
-fn remove_socket(socket: &Path) {
-    // Nothing there is the usual case.
-    fs::remove_file(socket).unwrap_or(());
-}
-
 /// An acknowledgement that discards its answer. `fiber ask` has no client
 /// waiting on one.
 fn ignore() -> Ack {
     Ack(Box::new(|_| {}))
 }
 
-fn io_failed(path: &Path, e: &io::Error) -> Failure {
-    failure(ErrorCode::IoFailed, format!("{}: {e}", path.display()))
+/// The first prompt as a driver message: `ask` and `serve` build it the
+/// same way, and differ only in what follows it.
+fn prompt_message(prompt: String) -> Message {
+    Message {
+        content: vec![ContentPart::Text { text: prompt }],
+        sender: CommandSender {
+            origin: Origin::Driver,
+            command_id: Some(CommandId(mint("c_"))),
+        },
+    }
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {

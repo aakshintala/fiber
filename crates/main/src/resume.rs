@@ -153,30 +153,40 @@ pub(crate) fn ask_resume(
         session.close(log);
         return ask_failed(failed(e.code(), e));
     }
-    let code = run_turn(&session, &log, &dir, prompt, cancel, |inbox, cancel| {
-        crate::finish(
-            Loop::resume(
-                Arc::clone(&log),
-                &lines,
-                provider,
-                model,
-                prompt_inputs,
-                inbox,
-                tools,
-                permissions,
+    let code = run_turn(
+        &session,
+        &log,
+        &dir,
+        Some(prompt),
+        true,
+        cancel,
+        |inbox, cancel| {
+            crate::finish(
+                Loop::resume(
+                    Arc::clone(&log),
+                    &lines,
+                    provider,
+                    model,
+                    prompt_inputs,
+                    inbox,
+                    tools,
+                    permissions,
+                )
+                .map(|looped| {
+                    let looped = crate::session_extensions::hooked(looped.jobs(jobs), &extensions);
+                    looped.handoff(handoff).on_handoff(forget)
+                }),
+                budget,
+                idle,
+                // `fiber ask --resume` runs one turn with no client.
+                false,
+                reviewer,
+                limits,
+                retry,
+                cancel,
             )
-            .map(|looped| {
-                let looped = crate::session_extensions::hooked(looped.jobs(jobs), &extensions);
-                looped.handoff(handoff).on_handoff(forget)
-            }),
-            budget,
-            idle,
-            reviewer,
-            limits,
-            retry,
-            cancel,
-        )
-    });
+        },
+    );
     session_servers.servers.stop();
     session.close(log);
     code

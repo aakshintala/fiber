@@ -707,3 +707,109 @@ fn find_keeps_the_argv_delimiter_like_grep() {
         ]
     );
 }
+
+#[test]
+fn session_parses_its_id_workspace_model_and_prompt() {
+    let Invocation::Run(Some(Commands::Session(args))) = parse_from([
+        "fiber",
+        "session",
+        "--id",
+        "s_0123456789abcdef",
+        "--workspace",
+        "/home/u/proj",
+        "--model",
+        "fake/m",
+        "--prompt",
+        "hi",
+    ]) else {
+        panic!("session with all four flags");
+    };
+    assert_eq!(args.id, "s_0123456789abcdef");
+    assert_eq!(args.workspace, PathBuf::from("/home/u/proj"));
+    assert_eq!(args.model.as_deref(), Some("fake/m"));
+    assert_eq!(args.prompt.as_deref(), Some("hi"));
+
+    let Invocation::Run(Some(Commands::Session(args))) = parse_from([
+        "fiber",
+        "session",
+        "--id",
+        "s_0123456789abcdef",
+        "--workspace",
+        "/home/u/proj",
+    ]) else {
+        panic!("session with only the required flags");
+    };
+    assert_eq!(args.model, None);
+    assert_eq!(args.prompt, None);
+}
+
+#[test]
+fn session_without_an_id_or_a_workspace_is_a_usage_error() {
+    let missing_id = sentence(&["fiber", "session", "--workspace", "/w"]);
+    assert!(missing_id.contains("--id <session_id>"), "{missing_id}");
+    let missing_workspace = sentence(&["fiber", "session", "--id", "s_0123456789abcdef"]);
+    assert!(
+        missing_workspace.contains("--workspace <path>"),
+        "{missing_workspace}"
+    );
+}
+
+#[test]
+fn session_rejects_an_id_that_is_not_a_minted_session_id() {
+    for id in [
+        "../x",
+        "s_ABCDEF0123456789",
+        "s_0123456789abcde",
+        "s_0123456789abcdef0",
+        "s_0123456789abcdeg",
+        "s_",
+        "s_0123456789ABCDEF",
+        "x_0123456789abcdef",
+    ] {
+        let said = sentence(&["fiber", "session", "--id", id, "--workspace", "/w"]);
+        assert!(said.contains("session id"), "{id}: {said}");
+    }
+}
+
+#[test]
+fn the_menu_and_top_level_help_name_no_session_command() {
+    // A command line is two spaces, the name, then a space: `  session `.
+    // `  sessions export` stays, as does prose such as "one session of".
+    let command_line = |text: &str| text.lines().any(|line| line.starts_with("  session "));
+    assert!(
+        !command_line(&menu()),
+        "the menu names no session command:\n{}",
+        menu()
+    );
+    assert!(
+        menu().contains("sessions export"),
+        "sessions export stays:\n{}",
+        menu()
+    );
+    assert!(
+        !command_line(&super::render_help(None).unwrap()),
+        "top-level help names no session command"
+    );
+    assert!(
+        visible().iter().all(|name| name != "session"),
+        "session stays hidden: {:?}",
+        visible()
+    );
+}
+
+#[test]
+fn a_session_usage_error_fails_before_any_session_like_ask() {
+    let (ask, missing) = usage(&["fiber", "session"]);
+    assert!(ask);
+    assert!(missing.ends_with("Run `fiber --help` for usage."));
+    let (ask, bad_id) = usage(&[
+        "fiber",
+        "session",
+        "--id",
+        "s_0123456789abcde",
+        "--workspace",
+        "/w",
+    ]);
+    assert!(ask);
+    assert!(bad_id.contains("session id"), "{bad_id}");
+}

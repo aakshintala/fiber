@@ -12,6 +12,7 @@ mod client;
 mod session;
 mod shell;
 mod signals;
+mod socket;
 
 use std::collections::hash_map::RandomState;
 use std::hash::BuildHasher;

@@ -10,6 +10,7 @@
 
 use std::fs;
 use std::io::{self, Read, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
@@ -967,6 +968,116 @@ fn resume_replaces_a_stale_socket_file() {
 }
 
 #[test]
+fn open_refuses_a_socket_a_live_session_holds() {
+    reset();
+    let opened = open();
+    let socket = opened.socket.clone();
+    // The same id in another project: its own new directory, the shared
+    // socket the live session owns.
+    let id = contract::SessionId(socket.file_name().unwrap().to_string_lossy().into_owned());
+    let home = opened._temp.path().join("h");
+    let sessions = home.join("projects/q/sessions");
+    let clock = FakeClock::new();
+    let timed = Arc::clone(&clock);
+    let timed: Arc<dyn Clock> = timed;
+    let log = Arc::new(Log::create(&sessions, id.clone(), Arc::clone(&timed)).unwrap());
+    let dir = sessions.join(&id.0);
+
+    let timed: Arc<dyn Clock> = clock;
+    let error = match Session::open(&home, &dir, &log, timed, Vec::new(), Box::new(io::sink())) {
+        Ok(_) => panic!("a socket a live session holds binds"),
+        Err(error) => error,
+    };
+
+    assert_eq!(error.code, ErrorCode::SessionHeld);
+    // Nothing the live session owns was removed: its socket still
+    // answers. Only the refused session's own directory is cleaned up.
+    UnixStream::connect(&socket).unwrap();
+    assert!(!dir.exists());
+    close_within(opened.session, opened.log);
+}
+
+#[test]
+fn open_leaves_a_live_socket_it_cannot_connect_to() {
+    reset();
+    let opened = open();
+    let socket = opened.socket.clone();
+    // A live listener whose mode hides it: connect fails, but a session is
+    // still behind the path, so `open` must fail and leave the path alone.
+    fs::set_permissions(&socket, fs::Permissions::from_mode(0o000)).unwrap();
+    // The same id in another project: its own new directory, the hidden
+    // socket the live session owns.
+    let id = contract::SessionId(socket.file_name().unwrap().to_string_lossy().into_owned());
+    let home = opened._temp.path().join("h");
+    let sessions = home.join("projects/q/sessions");
+    let clock = FakeClock::new();
+    let timed = Arc::clone(&clock);
+    let timed: Arc<dyn Clock> = timed;
+    let log = Arc::new(Log::create(&sessions, id.clone(), Arc::clone(&timed)).unwrap());
+    let dir = sessions.join(&id.0);
+
+    let timed: Arc<dyn Clock> = clock;
+    let error = match Session::open(&home, &dir, &log, timed, Vec::new(), Box::new(io::sink())) {
+        Ok(_) => panic!("a socket a live session holds binds"),
+        Err(error) => error,
+    };
+    // Restored before any assert that can fail, so cleanup still unlinks it.
+    fs::set_permissions(&socket, fs::Permissions::from_mode(0o600)).unwrap();
+
+    assert_eq!(error.code, ErrorCode::IoFailed);
+    assert!(
+        error.message.contains(&socket.display().to_string()),
+        "the failure names the socket path"
+    );
+    assert!(
+        fs::symlink_metadata(&socket).is_ok(),
+        "a connect error that may hide a live session leaves its path in place"
+    );
+    // The live session still answers, and only the refused open's own
+    // directory is cleaned up.
+    UnixStream::connect(&socket).unwrap();
+    assert!(!dir.exists());
+    close_within(opened.session, opened.log);
+}
+
+#[test]
+fn open_leaves_a_symlink_to_a_live_socket_it_cannot_connect_to() {
+    reset();
+    let opened = open();
+    let live = opened.socket.clone();
+    fs::set_permissions(&live, fs::Permissions::from_mode(0o000)).unwrap();
+    // Another session's path is a symlink to the hidden live socket: it is
+    // no regular file, so nothing proves it stale.
+    let home = opened._temp.path().join("h");
+    let id = contract::SessionId(crate::mint("s_"));
+    let link = home.join("run").join(&id.0);
+    std::os::unix::fs::symlink(&live, &link).unwrap();
+    let sessions = home.join("projects/q/sessions");
+    let clock = FakeClock::new();
+    let timed = Arc::clone(&clock);
+    let timed: Arc<dyn Clock> = timed;
+    let log = Arc::new(Log::create(&sessions, id.clone(), Arc::clone(&timed)).unwrap());
+    let dir = sessions.join(&id.0);
+
+    let timed: Arc<dyn Clock> = clock;
+    let error = match Session::open(&home, &dir, &log, timed, Vec::new(), Box::new(io::sink())) {
+        Ok(_) => panic!("a symlink to a hidden live socket was replaced"),
+        Err(error) => error,
+    };
+    // Restored before any assert that can fail, so cleanup still unlinks it.
+    fs::set_permissions(&live, fs::Permissions::from_mode(0o600)).unwrap();
+
+    assert_eq!(error.code, ErrorCode::IoFailed);
+    assert!(
+        fs::symlink_metadata(&link).is_ok_and(|meta| meta.file_type().is_symlink()),
+        "the symlink stays in place"
+    );
+    UnixStream::connect(&live).unwrap();
+    fs::remove_file(&link).unwrap();
+    close_within(opened.session, opened.log);
+}
+
+#[test]
 fn close_after_resume_keeps_a_session_that_has_turns() {
     use contract::events::{InputItem, TurnStarted};
     use contract::shapes::{ContentPart, Origin, Sender};
@@ -1413,5 +1524,55 @@ fn after_quiesce_a_client_leaving_writes_no_clients_line() {
         }
     }
     drop(late);
+    close_within(opened.session, opened.log);
+}
+
+#[test]
+fn serve_with_a_prompt_delivers_exactly_that_prompt_and_no_close() {
+    reset();
+    let opened = open();
+    let ran = Arc::new(AtomicBool::new(false));
+    let seen = Arc::clone(&ran);
+    opened
+        .session
+        .serve(Some("hi".to_owned()), Arc::new(|| false), |inbox| {
+            seen.store(true, Ordering::Relaxed);
+            let delivery = inbox.recv_timeout(DEADLINE).expect("the prompt arrives");
+            let Delivery::Prompt(message, _) = delivery else {
+                panic!("the first delivery is the prompt, got {delivery:?}");
+            };
+            assert_eq!(message.content.len(), 1);
+            let ContentPart::Text { text } = &message.content[0] else {
+                panic!("the prompt is text");
+            };
+            assert_eq!(text, "hi");
+            assert!(
+                matches!(inbox.try_recv(), Err(mpsc::TryRecvError::Empty)),
+                "serve queues no close after its prompt"
+            );
+            Ok(())
+        })
+        .unwrap();
+    assert!(
+        ran.load(Ordering::Relaxed),
+        "serve ran the loop with the queued prompt"
+    );
+    close_within(opened.session, opened.log);
+}
+
+#[test]
+fn serve_without_a_prompt_delivers_nothing_until_a_client_sends() {
+    reset();
+    let opened = open();
+    opened
+        .session
+        .serve(None, Arc::new(|| false), |inbox| {
+            assert!(
+                matches!(inbox.try_recv(), Err(mpsc::TryRecvError::Empty)),
+                "serve with no prompt delivers nothing on its own"
+            );
+            Ok(())
+        })
+        .unwrap();
     close_within(opened.session, opened.log);
 }
