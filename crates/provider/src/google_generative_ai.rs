@@ -241,9 +241,8 @@ fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
     // reasoning (ai.google.dev/api/generate-content, `ThinkingConfig`:
     // "thoughts are returned only when available").
     thinking.insert("includeThoughts".into(), json!(true));
-    // `thinkingLevel` is Gemini 3's dialect (`MINIMAL`, `LOW`, `MEDIUM`,
-    // `HIGH`); Fiber targets Gemini 3 and later. `Off` sends a zero budget
-    // with no level.
+    // `thinkingLevel` is Gemini 3's dialect; `Off` sends a zero budget with
+    // no level.
     if let Some(level) = &request.thinking {
         let (field, value) = if *level == contract::ThinkingLevel::Off {
             ("thinkingBudget", json!(0))
