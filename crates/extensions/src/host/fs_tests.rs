@@ -613,3 +613,44 @@ fn a_read_past_the_memory_cap_names_the_call_the_path_and_the_cap() {
     assert!(err.contains("big.txt"), "{err}");
     assert!(err.contains(&format!("{CAP} bytes")), "{err}");
 }
+
+#[test]
+fn only_lock_true_asks_the_lock_when_called_from_lua() {
+    let setup = Arc::new(Setup::new());
+    let worker = Arc::clone(&setup);
+    let (done, done_rx) = mpsc::channel();
+    // Lua is not `Send`, so the VM is built on the worker that runs it.
+    thread::spawn(move || {
+        let lua = worker.lua();
+        lua.load(
+            r#"host.fs.write("plain.txt", "x")
+host.fs.write("off.txt", "x", { lock = false })
+host.fs.write("empty.txt", "x", {})"#,
+        )
+        .exec()
+        .unwrap();
+        let unlocked = worker.locks.calls();
+        lua.load(r#"host.fs.write("on.txt", "x", { lock = true })"#)
+            .exec()
+            .unwrap();
+        done.send((unlocked, worker.locks.calls())).unwrap();
+    });
+    let Ok((unlocked, locked)) = done_rx.recv_timeout(DEADLINE) else {
+        panic!("waited {DEADLINE:?} for the four writes to run");
+    };
+    assert!(
+        unlocked.is_empty(),
+        "a write without `lock = true` asked for {unlocked:?}"
+    );
+    assert_eq!(locked, [setup.workspace().join("on.txt")]);
+}
+
+#[test]
+fn stat_through_a_regular_file_raises_rather_than_returning_nil() {
+    let setup = Setup::new();
+    let lua = setup.lua();
+    fs::write(setup.workspace().join("plain"), "x").unwrap();
+    let error = fails(&lua, r#"return host.fs.stat("plain/inner")"#);
+    assert!(error.contains("host.fs.stat"), "{error}");
+    assert!(error.contains("plain/inner"), "{error}");
+}
