@@ -226,10 +226,7 @@ impl Decoder {
             }
             Some(Block::Text { .. }) => {}
             Some(Block::HostedCall { id, name, input }) => {
-                let arguments = match serde_json::from_str(&input) {
-                    Ok(value @ (Value::Object(_) | Value::Array(_))) => value,
-                    Ok(_) | Err(_) => Value::String(input),
-                };
+                let arguments = parsed_input(input);
                 let item = json!({
                     "type": "server_tool_use",
                     "id": id,
@@ -277,10 +274,7 @@ impl Decoder {
                 name,
                 arguments,
             }) => {
-                let arguments = match serde_json::from_str(&arguments) {
-                    Ok(value @ (Value::Object(_) | Value::Array(_))) => value,
-                    Ok(_) | Err(_) => Value::String(arguments),
-                };
+                let arguments = parsed_input(arguments);
                 self.actions.push(ReplyAction::ToolCall(ToolCallRequested {
                     name,
                     arguments,
@@ -357,6 +351,15 @@ fn seeded_input(block: &Value) -> String {
             Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => true,
         })
         .map_or_else(String::new, Value::to_string)
+}
+
+/// A call's streamed input text as its arguments: the JSON object or array
+/// it holds, or the raw text as a string when it holds neither.
+fn parsed_input(input: String) -> Value {
+    match serde_json::from_str(&input) {
+        Ok(value @ (Value::Object(_) | Value::Array(_))) => value,
+        Ok(_) | Err(_) => Value::String(input),
+    }
 }
 
 /// A hosted search's outcome from its result block: the result URLs, one per
