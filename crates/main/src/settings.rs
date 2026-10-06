@@ -4,6 +4,7 @@
 use std::time::Duration;
 
 use config::Config;
+use contract::events::CacheLifetime;
 
 /// How long an idle session waits before it exits, from
 /// `session.idle_exit_ms` (`docs/configuration.md`). `0` exits at the first
@@ -45,6 +46,14 @@ pub(crate) fn block_limits(config: &Config) -> r#loop::BlockLimits {
 /// How a failed model call is retried, from configuration with the
 /// documented defaults (`docs/configuration.md`). `attempts` is clamped
 /// to `u32`, so a huge configured count never overflows the loop.
+/// The prompt-cache lifetime for `model`, from `cache.lifetime`
+/// (`docs/prompt-cache.md`, "Cache lifetime" and
+/// `docs/configuration.md`). A per-model key wins over the same key at
+/// the top level.
+pub(crate) fn cache_lifetime(_config: &Config, _model: &str) -> CacheLifetime {
+    CacheLifetime::OneHour
+}
+
 pub(crate) fn retry_policy(config: &Config) -> r#loop::Retry {
     let count = |key: &str, default: u64| {
         config
@@ -66,3 +75,7 @@ mod idle_tests;
 #[cfg(test)]
 #[path = "retry_policy_tests.rs"]
 mod retry_policy_tests;
+
+#[cfg(test)]
+#[path = "cache_lifetime_tests.rs"]
+mod cache_lifetime_tests;

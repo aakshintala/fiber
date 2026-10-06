@@ -7,7 +7,8 @@ use std::sync::Arc;
 
 /// What a preamble build reads, once (`docs/system-prompt.md`, "The
 /// system prompt" and `docs/prompt-cache.md`, "The preamble").
-/// [`PromptInputs::new`] returns every optional input absent.
+/// [`PromptInputs::new`] returns every optional input absent, and the
+/// 1-hour lifetime.
 #[derive(Clone)]
 pub struct PromptInputs {
     /// `SYSTEM.md` text.
@@ -41,12 +42,15 @@ pub struct PromptInputs {
     /// The credential label every request uses, which `preamble_built`
     /// records; absent when the provider takes no credential.
     pub credential: Option<String>,
+    /// The prompt-cache lifetime (`docs/prompt-cache.md`, "Cache
+    /// lifetime").
+    pub cache_lifetime: contract::events::CacheLifetime,
 }
 
 impl PromptInputs {
-    /// Every optional input absent: `home` is Fiber home, `shell` the
-    /// shell or `unknown`, `session_log` the session log's path and
-    /// `clock` the clock the date is read from.
+    /// Every optional input absent, and the 1-hour lifetime: `home` is
+    /// Fiber home, `shell` the shell or `unknown`, `session_log` the
+    /// session log's path and `clock` the clock the date is read from.
     pub fn new(
         home: PathBuf,
         shell: String,
@@ -68,6 +72,7 @@ impl PromptInputs {
             session_log,
             clock,
             credential: None,
+            cache_lifetime: contract::events::CacheLifetime::OneHour,
         }
     }
 }

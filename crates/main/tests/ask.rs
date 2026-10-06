@@ -2138,6 +2138,12 @@ fn openrouter_sends_the_cache_key_and_anthropic_markers_for_a_claude_model() {
         &[("OPENROUTER_API_KEY", "sk-test-openrouter")],
     );
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let built = run
+        .lines
+        .iter()
+        .find(|l| l["kind"] == "preamble_built")
+        .unwrap();
+    assert_eq!(built["payload"]["cache_lifetime"], "1h");
     let body: Value = serde_json::from_slice(&server.requests()[0].body).unwrap();
     assert_eq!(body["session_id"], run.session_id());
     assert_eq!(body["prompt_cache_key"], run.session_id());
@@ -2149,11 +2155,88 @@ fn openrouter_sends_the_cache_key_and_anthropic_markers_for_a_claude_model() {
     assert_eq!(system.last().unwrap()["cache_control"], hour);
     let last = body["messages"].as_array().unwrap();
     assert_eq!(last.last().unwrap()["content"][0]["cache_control"], hour);
-    // A 5-minute request's markers carry no `ttl`: the shape is pinned
-    // in `crates/provider/tests/completions.rs`
-    // (`a_dropped_input_after_a_tool_result_does_not_break_the_previous_end`
-    // sends one at the default 5 minutes), because the CLI takes no
-    // lifetime and every binary run is 1 hour (see #840).
+    // A per-session `-c cache.lifetime=5m` run is not covered here; see #414.
+}
+
+/// Runs `fiber ask` for the OpenRouter Claude model against `server`, with
+/// `home_config` as the global `config.json` and `repo_config` as the
+/// workspace's `.fiber/config.json` when given. Returns the run and the
+/// request it sent.
+fn openrouter_claude_request(
+    server: &ProviderServer,
+    setup: &Setup,
+    home_config: Value,
+    repo_config: Option<Value>,
+) -> (Run, Value) {
+    install(
+        setup,
+        &setup.package("openrouter", "https://openrouter.ai", &server.url()),
+    );
+    write(&setup.home().join("config.json"), &home_config);
+    if let Some(repo) = repo_config {
+        write(
+            &setup
+                .root
+                .path()
+                .join("w")
+                .join(".fiber/config.json"),
+            &repo,
+        );
+    }
+    let run = setup.fiber_with_env(
+        &[
+            "ask",
+            "--model",
+            "openrouter/anthropic/claude-sonnet-5.5",
+            "hi",
+        ],
+        &[("OPENROUTER_API_KEY", "sk-test-openrouter")],
+    );
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let body: Value = serde_json::from_slice(&server.requests()[0].body).unwrap();
+    (run, body)
+}
+
+/// A 5-minute run records `"5m"` in `preamble_built` and marks the system
+/// and last-message blocks with a `ttl`-less marker.
+fn assert_five_minute_markers(run: &Run, body: &Value) {
+    let built = run
+        .lines
+        .iter()
+        .find(|l| l["kind"] == "preamble_built")
+        .unwrap();
+    assert_eq!(built["payload"]["cache_lifetime"], "5m");
+    let five = json!({"type": "ephemeral"});
+    let system = body["messages"][0]["content"].as_array().unwrap();
+    assert_eq!(system.last().unwrap()["cache_control"], five);
+    let last = body["messages"].as_array().unwrap();
+    assert_eq!(last.last().unwrap()["content"][0]["cache_control"], five);
+}
+
+#[test]
+fn a_per_model_cache_lifetime_of_five_minutes_marks_the_request_without_ttl() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([completions_hello("gen-one", json!(0.0001))]).unwrap();
+    let (run, body) = openrouter_claude_request(
+        &server,
+        &setup,
+        json!({"models": {"openrouter/anthropic/claude-sonnet-5.5": {"cache": {"lifetime": "5m"}}}}),
+        None,
+    );
+    assert_five_minute_markers(&run, &body);
+}
+
+#[test]
+fn a_repository_cache_lifetime_of_five_minutes_marks_the_request_without_ttl() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([completions_hello("gen-one", json!(0.0001))]).unwrap();
+    let (run, body) = openrouter_claude_request(
+        &server,
+        &setup,
+        json!({"model": "openrouter/anthropic/claude-sonnet-5.5"}),
+        Some(json!({"cache": {"lifetime": "5m"}})),
+    );
+    assert_five_minute_markers(&run, &body);
 }
 
 #[test]
