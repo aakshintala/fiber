@@ -73,7 +73,7 @@ asked for the session.
 | Code | When | Exit |
 |---|---|---|
 | `usage` | the invocation or its environment is wrong: a bad flag, no prompt with stdin on a terminal, `fiber` without a tty, an empty or relative `FIBER_HOME`, `git` is not installed | 2 |
-| `config_invalid` | invalid JSON or a value of the wrong type in a configuration file (`docs/configuration.md`) | 1 |
+| `config_invalid` | invalid JSON, a value of the wrong type, or one extension key set under both its full and short name in a configuration file (`docs/configuration.md`) | 1 |
 | `io_failed` | a filesystem failure: a log write or fsync, or a configuration or credential file that exists but cannot be read or written; the message names the path | 1 |
 | `log_corrupt` | a log line that cannot be encoded, or one read back that does not parse | 1 |
 | `no_model` | nothing chose a model, an installed provider lacks the named model, or no installed provider has a bare model id (`docs/model-routing.md`, "Naming a model") | 1 |

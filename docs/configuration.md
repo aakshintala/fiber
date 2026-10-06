@@ -95,6 +95,12 @@ this one:
 Keys are snake_case and grouped by area. In "Repo", yes means a repository may
 set the key.
 
+In an `extensions."<name>"` key, `<name>` is the extension's full name or,
+for an extension that has one, its short name (`docs/extensions.md`,
+"Names"): `extensions."memory".enabled` and
+`extensions."github.com/aakshintala/fiber/extensions/memory".enabled` are the
+same key. A file that sets one key under both spellings is `config_invalid`.
+
 | Key | Default | Repo | Meaning |
 |---|---|---|---|
 | `model` | none | yes | The default model for a new session, as `provider/model` (`docs/model-routing.md`, "Choosing the model"). |
