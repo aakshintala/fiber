@@ -229,7 +229,9 @@ impl Server {
     ) -> Result<OpenServer, StartError> {
         // Sticky: a start after the stop spawns nothing.
         if Stopping.is_cancelled() {
-            return Err(StartError::StartFailed("Fiber is shutting down.".to_owned()));
+            return Err(StartError::StartFailed(
+                "Fiber is shutting down.".to_owned(),
+            ));
         }
         let stopping = Stopping;
         let mut cmd = Command::new(command);
@@ -345,7 +347,9 @@ impl Server {
                     // A signal during startup: the documented stop, then
                     // the failure the door never writes.
                     server.stop();
-                    Err(StartError::StartFailed("Fiber is shutting down.".to_owned()))
+                    Err(StartError::StartFailed(
+                        "Fiber is shutting down.".to_owned(),
+                    ))
                 } else {
                     server.shutdown();
                     Err(error)

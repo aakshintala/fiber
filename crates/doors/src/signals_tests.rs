@@ -85,13 +85,7 @@ fn arm_with(signals: &Signals, record_did: &Sender<Did>, bound_did: &Sender<Did>
     let record_tx = sender(record_did);
     let bound_tx = sender(bound_did);
     signals.arm(
-        Box::new(move || {
-            record_tx
-                .lock()
-                .unwrap()
-                .send(Did::Signal(-1))
-                .unwrap()
-        }),
+        Box::new(move || record_tx.lock().unwrap().send(Did::Signal(-1)).unwrap()),
         Box::new(move || bound_tx.lock().unwrap().send(Did::Bound).unwrap()),
     );
 }

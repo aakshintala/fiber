@@ -1042,10 +1042,7 @@ fn starting_silent_ignoring(
     thread::spawn(move || {
         let outcome = Server::start(
             "/bin/bash",
-            &[
-                "-c".to_owned(),
-                "trap '' TERM\nexec sleep 300".to_owned(),
-            ],
+            &["-c".to_owned(), "trap '' TERM\nexec sleep 300".to_owned()],
             &BTreeMap::new(),
             &workspace,
             &clock,
@@ -1075,8 +1072,7 @@ fn await_listed() {
 fn assert_shutdown_failed(outcome: Result<super::OpenServer, StartError>) {
     match outcome {
         Err(StartError::StartFailed(message)) => assert_eq!(
-            message,
-            "Fiber is shutting down.",
+            message, "Fiber is shutting down.",
             "unexpected message: {message}"
         ),
         Err(StartError::Deadline) => panic!("a stopped start is not a deadline"),
@@ -1088,8 +1084,7 @@ fn assert_shutdown_failed(outcome: Result<super::OpenServer, StartError>) {
 fn stopping_a_start_that_never_answers_fails_it_and_reaps_the_child() {
     let setup = Setup::tools(&json!([]));
     let workspace = setup.dir.path().to_path_buf();
-    let result =
-        starting_silent_ignoring(&setup.clock(), &workspace, Duration::from_secs(600));
+    let result = starting_silent_ignoring(&setup.clock(), &workspace, Duration::from_secs(600));
     await_listed();
     super::stop_every_start();
     // The stop parks on the grace: only then does the clock move, once.
@@ -1113,8 +1108,7 @@ fn a_stopped_start_waits_out_the_grace_before_its_kill() {
     // shutdown and reap does: the probe below pins the wait.
     let setup = Setup::tools(&json!([]));
     let workspace = setup.dir.path().to_path_buf();
-    let result =
-        starting_silent_ignoring(&setup.clock(), &workspace, Duration::from_secs(600));
+    let result = starting_silent_ignoring(&setup.clock(), &workspace, Duration::from_secs(600));
     await_listed();
     super::stop_every_start();
     let grace = setup.fake.now().checked_add(super::GRACE).expect("grace");
