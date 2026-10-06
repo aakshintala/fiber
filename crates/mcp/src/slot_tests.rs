@@ -15,7 +15,9 @@ use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
 use crate::server::ListedTool;
-use crate::start::{DEFAULT_CALL_TIMEOUT, DEFAULT_STARTUP_TIMEOUT, ServerSpec, Started, start};
+use crate::start::{
+    DEFAULT_CALL_TIMEOUT, DEFAULT_STARTUP_TIMEOUT, ServerSpec, Servers, Started, start,
+};
 
 /// How long a test waits for a thread or a child, in real time.
 const WITHIN: Duration = Duration::from_secs(10);
@@ -89,7 +91,7 @@ impl Setup {
     fn populate(&self, spec: ServerSpec) {
         let started = self.start(vec![spec]);
         assert!(started.failed.is_empty());
-        self.stop(&started);
+        self.stop(started.servers);
         std::fs::remove_file(self.dir.path().join("pid.txt")).expect("pid.txt");
         let requests = self.dir.path().join("requests.log");
         if requests.exists() {
@@ -143,20 +145,19 @@ impl Setup {
             .unwrap_or_else(|_| panic!("the call ends within {WITHIN:?}"))
     }
 
-    fn stop(&self, started: &Started) {
-        // Threaded with a wall-clock limit: a lingering child would keep
+    fn stop(&self, servers: Servers) {
+        // Detached with a wall-clock limit: a lingering child would keep
         // the stop parked on the fake clock forever, so a bare direct
-        // stop would hang the test instead of failing it.
-        std::thread::scope(|scope| {
-            let (done, stopped) = std::sync::mpsc::channel();
-            scope.spawn(move || {
-                started.servers.stop();
-                done.send(()).expect("collected");
-            });
-            stopped
-                .recv_timeout(WITHIN)
-                .unwrap_or_else(|_| panic!("the stop ends within {WITHIN:?}"));
+        // stop, or a join on its thread, would hang the test instead of
+        // failing it.
+        let (done, stopped) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            servers.stop();
+            done.send(()).expect("collected");
         });
+        stopped
+            .recv_timeout(WITHIN)
+            .unwrap_or_else(|_| panic!("the stop ends within {WITHIN:?}"));
     }
 
     fn listed(name: &str) -> Vec<Value> {
@@ -195,7 +196,7 @@ fn the_first_call_starts_the_server_and_the_second_reuses_it() {
         1,
         "both calls share the one started server",
     );
-    setup.stop(&started);
+    setup.stop(started.servers);
 }
 
 #[test]
@@ -236,7 +237,7 @@ fn two_concurrent_first_calls_spawn_once() {
         1,
         "concurrent first calls share one start",
     );
-    setup.stop(&started);
+    setup.stop(started.servers);
 }
 
 #[test]
@@ -270,7 +271,7 @@ fn a_cached_server_whose_command_fails_dies_on_the_first_call() {
     let again = second.error.expect("failed");
     assert_eq!(again.code, ErrorCode::McpServerUnavailable);
     assert!(second.server_failed.is_none());
-    setup.stop(&started);
+    setup.stop(started.servers);
 }
 
 #[test]
@@ -287,34 +288,35 @@ fn a_lazy_start_that_misses_its_deadline_fails_with_deadline() {
         .now()
         .checked_add(DEFAULT_STARTUP_TIMEOUT)
         .expect("deadline");
+    // Detached, not scoped: a scope joins its thread even after a
+    // `recv_timeout` panic, so a hung call would hang the test.
     let (done, result) = std::sync::mpsc::channel();
-    std::thread::scope(|scope| {
-        scope.spawn(|| {
-            let output = tool.run(
-                &Default::default(),
-                &fakes::CancelToken::new(),
-                &fakes::Recorder::default(),
-            );
-            done.send(output).expect("collected");
-        });
-        assert!(
-            setup.fake.await_parked(deadline, WITHIN),
-            "the lazy start waits on the startup deadline",
+    let call = Arc::clone(&tool);
+    std::thread::spawn(move || {
+        let output = call.run(
+            &Default::default(),
+            &fakes::CancelToken::new(),
+            &fakes::Recorder::default(),
         );
-        setup.fake.advance(DEFAULT_STARTUP_TIMEOUT);
-        let output = result.recv_timeout(WITHIN).expect("the call ends");
-        let error = output.error.expect("failed");
-        assert_eq!(error.code, ErrorCode::McpServerUnavailable);
-        assert_eq!(
-            error.message,
-            "The MCP server `slow` did not answer before its startup deadline of 5000 ms. \
-             Raise `startup_timeout_ms` under `mcp.servers.slow` if it needs longer.",
-        );
-        let record = output.server_failed.expect("the failed start is recorded");
-        assert_eq!(record.reason, ServerFailure::Deadline);
-        assert!(!record.will_restart);
+        done.send(output).expect("collected");
     });
-    setup.stop(&started);
+    assert!(
+        setup.fake.await_parked(deadline, WITHIN),
+        "the lazy start waits on the startup deadline",
+    );
+    setup.fake.advance(DEFAULT_STARTUP_TIMEOUT);
+    let output = result.recv_timeout(WITHIN).expect("the call ends");
+    let error = output.error.expect("failed");
+    assert_eq!(error.code, ErrorCode::McpServerUnavailable);
+    assert_eq!(
+        error.message,
+        "The MCP server `slow` did not answer before its startup deadline of 5000 ms. \
+         Raise `startup_timeout_ms` under `mcp.servers.slow` if it needs longer.",
+    );
+    let record = output.server_failed.expect("the failed start is recorded");
+    assert_eq!(record.reason, ServerFailure::Deadline);
+    assert!(!record.will_restart);
+    setup.stop(started.servers);
 }
 
 #[test]
@@ -356,7 +358,7 @@ fn a_call_to_a_removed_tool_fails_without_calling_and_updates_the_cache() {
             .collect::<Vec<_>>(),
         ["echo"],
     );
-    setup.stop(&started);
+    setup.stop(started.servers);
 }
 
 #[test]
@@ -373,7 +375,7 @@ fn a_live_list_equal_to_the_cache_leaves_the_file_untouched() {
     assert!(output.error.is_none());
     let after = std::fs::read(setup.cache().join("fx.json")).expect("cache");
     assert_eq!(before, after, "an equal live list rewrites nothing");
-    setup.stop(&started);
+    setup.stop(started.servers);
 }
 
 #[test]
@@ -385,7 +387,7 @@ fn stop_stops_a_lazily_started_server_and_ignores_a_never_started_one() {
     setup.populate(setup.spec("fx"));
     let quiet = setup.start(vec![setup.spec("fx")]);
     let idle = setup.tool(&quiet, "mcp__fx__echo");
-    setup.stop(&quiet);
+    setup.stop(quiet.servers);
     assert!(
         !setup.dir.path().join("pid.txt").exists(),
         "stopping a never-started slot spawns nothing",
@@ -412,7 +414,7 @@ fn stop_stops_a_lazily_started_server_and_ignores_a_never_started_one() {
         .trim()
         .parse()
         .expect("a pid");
-    setup.stop(&started);
+    setup.stop(started.servers);
     let (_held, probe) = std::sync::mpsc::channel::<()>();
     for _ in 0..POLLS {
         if !fakes::kill_pid(pid, "0").expect("probe") {
@@ -451,5 +453,5 @@ fn an_annotation_only_change_rewrites_the_cache() {
         after.contains("idempotentHint"),
         "the cache holds the raw entry: {after:?}",
     );
-    setup.stop(&started);
+    setup.stop(started.servers);
 }

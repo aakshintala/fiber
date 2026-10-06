@@ -94,14 +94,12 @@ impl Tool for McpTool {
             return failed(
                 ErrorCode::McpServerUnavailable,
                 slot::unavailable(&self.call.server),
-                None,
             );
         };
         match slot.run(&self.call.tool) {
             Run::Removed => failed(
                 ErrorCode::McpToolRemoved,
                 slot::removed(&self.call.server, &self.call.tool),
-                None,
             ),
             Run::Failed(failed) => Output {
                 error: Some(failed.error),
@@ -115,17 +113,16 @@ impl Tool for McpTool {
                 cancel,
             ) {
                 Ok(result) => answer(&self.call.server, &self.call.tool, &result),
-                Err(CallError::Timeout) => failed(ErrorCode::Timeout, timed_out(&self.call), None),
+                Err(CallError::Timeout) => failed(ErrorCode::Timeout, timed_out(&self.call)),
                 Err(CallError::Cancelled) => {
-                    failed(ErrorCode::McpCancelRequested, cancelled(&self.call), None)
+                    failed(ErrorCode::McpCancelRequested, cancelled(&self.call))
                 }
                 Err(CallError::Gone) => failed(
                     ErrorCode::McpServerUnavailable,
                     slot::unavailable(&self.call.server),
-                    None,
                 ),
                 Err(CallError::JsonRpc { code: _, message }) => {
-                    failed(ErrorCode::ToolError, message, None)
+                    failed(ErrorCode::ToolError, message)
                 }
             },
         }
@@ -197,11 +194,7 @@ fn cancelled(call: &Call) -> String {
     )
 }
 
-fn failed(
-    code: ErrorCode,
-    message: String,
-    server_failed: Option<contract::events::McpServerFailed>,
-) -> Output {
+fn failed(code: ErrorCode, message: String) -> Output {
     Output {
         error: Some(Failure {
             code,
@@ -209,7 +202,6 @@ fn failed(
             retry_after: None,
             provider: None,
         }),
-        server_failed,
         ..Output::default()
     }
 }
