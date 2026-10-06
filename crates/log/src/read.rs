@@ -359,3 +359,7 @@ fn poll(state: &mut State) -> Option<Taken> {
 fn pending(state: &State) -> bool {
     !state.queue.is_empty() || state.lagged || !matches!(state.end, End::Open)
 }
+
+#[cfg(test)]
+#[path = "read_tests.rs"]
+mod tests;
