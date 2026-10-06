@@ -528,6 +528,13 @@ const STDOUT_KINDS_ONE_TURN_AND_CLOSE: [&str; 16] = [
     "fiber_exited",
 ];
 
+/// Collects lines up to this connection's own `clients` line. The
+/// session writes it after the subscribe acknowledgement, with no order
+/// against lines the loop writes meanwhile (`docs/events.md`, `clients`).
+fn until_clients(client: &Socket) -> Vec<Value> {
+    until(client, "the clients line", |line| line["kind"] == "clients")
+}
+
 /// Collects lines until `done`, waiting `DEADLINE` for each: expiry panics
 /// naming `what`, and the socket closing first panics too.
 fn until(client: &Socket, what: &str, mut done: impl FnMut(&Value) -> bool) -> Vec<Value> {
@@ -704,10 +711,9 @@ fn an_idle_session_exits_with_a_client_still_connected() {
     );
     let sub = recv(&client, "the subscribe acknowledgement");
     assert_eq!(sub["payload"]["command_id"], "c_sub");
-    assert!(
-        server.await_requests(1, DEADLINE),
-        "the held response was requested"
-    );
+    // `clients` is written after the acknowledgement, so the reply is
+    // released only once it has arrived; otherwise the deltas may come first.
+    let attached = until_clients(&client);
     server.release();
 
     let tail = until_close(&client);
@@ -718,6 +724,7 @@ fn an_idle_session_exits_with_a_client_still_connected() {
     assert_eq!(exited["kind"], "fiber_exited");
     assert_eq!(exited["payload"]["exit_code"], 0);
     let mut stream = vec![sub];
+    stream.extend(attached);
     stream.extend(tail);
     assert_eq!(
         kinds(&stream),
@@ -787,12 +794,14 @@ fn a_session_started_with_a_prompt_keeps_serving_after_that_turn() {
     );
     let sub = recv(&client, "the subscribe acknowledgement");
     assert_eq!(sub["payload"]["command_id"], "c_sub");
+    let attached = until_clients(&client);
     server.release_one();
     let first = until(&client, "the first turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
-    let started = first
+    let started = attached
         .iter()
+        .chain(&first)
         .find(|line| line["kind"] == "turn_started")
         .expect("the queued prompt started a turn");
     assert_eq!(started["payload"]["input"][0]["content"][0]["text"], "hi");
@@ -849,6 +858,7 @@ fn a_session_started_with_a_prompt_keeps_serving_after_that_turn() {
     assert!(!setup.socket(&id).exists());
     assert_eq!(server.requests().len(), 2);
     let mut stream = vec![sub];
+    stream.extend(attached);
     stream.extend(first);
     stream.extend(second);
     stream.extend(tail);
