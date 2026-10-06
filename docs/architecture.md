@@ -351,3 +351,4 @@ that the other does not.
 - Delegates are `docs/delegates.md`
 - MCP is `docs/mcp.md`
 - Handoff is `docs/handoff.md`
+- Memory is `docs/memory.md`

@@ -399,7 +399,12 @@ holds what `docs/extensions.md` ("What a package holds") lists:
   "repo_settings": ["workspace_url"],
   "replaces": ["web_search"],
   "providers": { "acme": ["https://api.acme.dev/v1"] },
-  "prompt": "prompt.md"
+  "prompt": "prompt.md",
+  "opening": {
+    "machine": ["index.md"],
+    "project": ["index.md"],
+    "budget_bytes": 25000
+  }
 }
 ```
 
@@ -415,7 +420,12 @@ maps each provider it registers to its base URLs; both default to none, and a
 registration beyond them stops the extension loading (`docs/extensions.md`,
 "What a package holds"). `prompt` names a
 file in the package whose text goes in the system prompt
-(`docs/system-prompt.md`, "Extension texts").
+(`docs/system-prompt.md`, "Extension texts"). `opening` names files whose text
+goes in the opening message: `machine` lists paths in the extension's machine
+data directory and `project` paths in its project data directory
+(`docs/state.md`, "What each part holds"), each relative to that directory
+and inside it. `budget_bytes` is the section's optional byte budget
+(`docs/system-prompt.md`, "Extension sections"). All three default to none.
 
 ## A provider's data
 

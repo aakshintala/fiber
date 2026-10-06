@@ -17,7 +17,7 @@ What varies by project or by day is kept out of the system prompt:
   additions. It is part of the
   preamble, so it is built only at start, resume, `reload` and a model switch.
 - The **opening message** holds the environment, the project's instruction
-  files and the skills listing. It is the first message of the conversation,
+  files, extension sections and the skills listing. It is the first message of the conversation,
   written to the session log once and rendered from the log after that.
 
 A request is therefore the system prompt and tools, then the opening message,
@@ -144,7 +144,8 @@ the person, and holds, in order:
 
 1. The environment.
 2. The instruction files.
-3. The skills listing.
+3. The extension sections.
+4. The skills listing.
 
 It is written at session start and again after every completed handoff, and
 logged as `opening_message`.
@@ -188,6 +189,33 @@ which files were loaded.
 
 The evidence is in
 [research/system-prompt/instruction-files.md](../research/system-prompt/instruction-files.md).
+
+### Extension sections
+
+An extension's manifest may name files in its two data directories whose text
+goes in the opening message (`opening` in `extension.json`,
+`docs/configuration.md`). This is how an extension gives standing context
+that changes between sessions, such as the memory indexes (`docs/memory.md`).
+Text that never changes belongs in its prompt file ("Extension texts").
+
+Fiber reads the files as it reads instruction files: each is sent in full,
+under its path, after the instruction files. Each enabled extension with a
+file present gets a section under a heading naming it, in extension-name
+order. Within a section the machine directory's files come first, then the
+project's, each in the order the manifest lists them.
+
+- A missing file sends nothing, and an extension none of whose files exist
+  has no section.
+- An extension that is disabled for the project or removed has no section.
+- No extension code runs to build a section, so a section cannot fail a
+  session start.
+- Nothing from a section enters the system prompt.
+
+The manifest may also give the section a byte budget. When the section's files
+together are over it, Fiber ends the section with one line giving their size
+against the budget and telling the model to prune them. Under budget, or with
+no budget, there is no line. The files are never cut. The person cannot change
+the budget.
 
 ### Subdirectory files
 
@@ -272,7 +300,7 @@ permission decision on every call (`docs/permissions.md`).
 When the instruction text passes 10% of the model's context window, the build
 is followed by a `notice` with code `instructions_large`, naming the largest
 files and extension texts. Instruction text means the instruction files,
-extension texts, `SYSTEM.md` and `APPEND_SYSTEM.md`. The session runs anyway.
+extension sections, extension texts, `SYSTEM.md` and `APPEND_SYSTEM.md`. The session runs anyway.
 The 10% matches `tool_definitions_large` (`docs/tools.md`).
 
 Nothing is cut. A rules file with its end cut off breaks rules its author
@@ -290,7 +318,9 @@ Nothing sent is ever edited. A change is appended.
 
 At each turn start, Fiber checks every instruction file it has sent in this
 context, and the places a new one could appear (the directories from "Instruction
-files", and every subdirectory already touched). It compares size and
+files", and every subdirectory already touched). An extension section's files
+are checked the same way, each at the path its manifest names, and every rule
+below applies to them. It compares size and
 modification time, then content when those differ.
 
 | Change | What the model is sent |
@@ -369,7 +399,7 @@ compiled into the binary:
 | `crates/loop/prompt/system.md` | Fiber's system prompt text |
 | `crates/tools/prompt/guidelines.md` | the built-in tools' guidelines, one `##` section per tool |
 | `crates/loop/prompt/opening.md` | the opening message |
-| `crates/loop/prompt/messages.md` | everything else, one `##` section each: the tools heading, the session section, docs line and unattended line, instruction file headers, the diff, deleted and date lines, the added and removed skill lines, the session message framing, the extension heading, the nudge, the handoff note request, the handoff jobs line and the moved-result line |
+| `crates/loop/prompt/messages.md` | everything else, one `##` section each: the tools heading, the session section, docs line and unattended line, instruction file headers, the extension section heading and budget line, the diff, deleted and date lines, the added and removed skill lines, the session message framing, the extension heading, the nudge, the handoff note request, the handoff jobs line and the moved-result line |
 | `crates/loop/prompt/reviewer.md` | the reviewer's instructions: a `shared` section, then one `##` section per stage, `first-pass` and `second-pass` (`docs/permissions.md`, "The reviewer") |
 
 In `messages.md`, a section's text runs from its `## name` line to the next
