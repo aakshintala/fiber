@@ -29,6 +29,13 @@ fn rows() -> Vec<(&'static [&'static str], Value, Value, &'static str, bool)> {
             true,
         ),
         (
+            &["skills", "disabled"],
+            json!(["review", "grill"]),
+            json!("review"),
+            LIST,
+            false,
+        ),
+        (
             &["session", "idle_exit_ms"],
             json!(60000),
             json!("30m"),
@@ -577,6 +584,7 @@ fn with_no_files_the_configuration_is_the_built_in_defaults() {
             "retry": {"attempts": 3, "initial_delay_ms": 2000, "max_delay_ms": 60000},
             "reviewer": {"block_limits": {"consecutive": 3, "session": 20}},
             "session": {"idle_exit_ms": 1800000},
+            "skills": {"disabled": []},
             "tui": {
                 "attention": {"bell": true, "notification": true, "title": true},
                 "hover": true,

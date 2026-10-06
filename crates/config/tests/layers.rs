@@ -547,3 +547,42 @@ fn a_project_key_is_one_file_name() {
         );
     }
 }
+
+#[test]
+fn a_list_key_unions_the_layers_that_set_it() {
+    let setup = Setup::new();
+    setup.write(&setup.global(), r#"{"skills": {"disabled": ["a", "b"]}}"#);
+    setup.write(&setup.project(), r#"{"skills": {"disabled": ["c", "a"]}}"#);
+    let config = setup.load(&["skills.disabled=[\"d\", \"b\"]"]).unwrap();
+    assert_eq!(config.union_list("skills.disabled"), ["a", "b", "c", "d"]);
+}
+
+#[test]
+fn a_list_key_with_one_layer_is_that_layer() {
+    let setup = Setup::new();
+    setup.write(&setup.project(), r#"{"skills": {"disabled": ["x"]}}"#);
+    let config = setup.load(&[]).unwrap();
+    assert_eq!(config.union_list("skills.disabled"), ["x"]);
+}
+
+#[test]
+fn a_list_key_no_layer_sets_is_empty() {
+    let setup = Setup::new();
+    let config = setup.load(&[]).unwrap();
+    assert!(config.union_list("skills.disabled").is_empty());
+    assert!(config.union_list("no.such.key").is_empty());
+    assert!(config.union_list("").is_empty());
+}
+
+#[test]
+fn a_repository_layer_adds_nothing_to_a_list_key() {
+    let setup = Setup::new();
+    setup.write(&setup.global(), r#"{"skills": {"disabled": ["g"]}}"#);
+    setup.write(&setup.repository(), r#"{"skills": {"disabled": ["r"]}}"#);
+    let config = setup.load(&[]).unwrap();
+    assert_eq!(config.union_list("skills.disabled"), ["g"]);
+    let [notice] = config.notices() else {
+        panic!("{:?}", config.notices());
+    };
+    assert_eq!(notice.code, ErrorCode::ConfigKeyIgnored);
+}
