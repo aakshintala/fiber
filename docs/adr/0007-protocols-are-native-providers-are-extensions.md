@@ -51,10 +51,11 @@ one exception is the `scripted` provider, which reaches no network and reads a
 script file, so an extension can be tested with tooling everyone has
 (`docs/testing.md`, "Testing an extension").
 
-A provider is data, plus up to four optional Lua functions: `models()`
+A provider is data, plus up to five optional Lua functions: `models()`
 discovers its model list, `quota()` reports its quota, `credential()` returns a
-token and its expiry, and `sign()` adds headers to a request. Only `sign()`
-runs on the request path. It receives the method, the URL, the headers and the
+token and its expiry, `sign()` adds headers to a request, and `cost()` looks up
+the cost of a call that ended without one. Only `sign()` runs on the request
+path. It receives the method, the URL, the headers and the
 SHA-256 of the body, and returns headers to add. It never sees or changes the
 body.
 

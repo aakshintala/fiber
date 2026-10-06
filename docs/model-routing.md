@@ -389,10 +389,10 @@ The function can ask the vendor's own listing endpoint, read a file, or look up
 metadata anywhere, models.dev included. A vendor with no listing endpoint ships a
 static list instead.
 
-A provider runs Lua in four functions at most: `models()`, `quota()`,
-`credential()` and `sign()`. Only `sign()` runs on the request path, and
+A provider runs Lua in five functions at most: `models()`, `quota()`,
+`credential()`, `sign()` and `cost()`. Only `sign()` runs on the request path,
 `credential()` only when the cached token has already expired ("Keys, tokens
-and OAuth").
+and OAuth"), and `cost()` only after a call has ended ("Cost").
 
 ### Signing a request
 
@@ -430,6 +430,19 @@ response or a generation lookup reports one, as OpenRouter's does
 (`docs/events.md`, "Usage and notices"). Otherwise it is the model's declared
 `cost` prices applied to the call's `tokens`, each kind at its own price. A
 model with neither has `cost` `null`, and the person sees its tokens only.
+
+A provider whose vendor offers a generation lookup declares a Lua `cost()`
+function. It receives a `generation_id` and returns the generation's cost in US
+dollars, or nothing when the vendor does not have it. It asks the vendor
+through `host.http`, so the lookup's URL and the shape of its answer stay in
+the provider's package, as `quota()`'s do. The loop calls it once, 30 seconds
+after a call that ended without the vendor's own figure, on the session's
+injected clock: a stream closed early, cancelled or failed. A returned cost is
+written as a second `usage_recorded` with the same `generation_id`. Nothing
+returned, an error or a timeout leaves the first record as it is, and the loop
+does not ask again. A session that ends before the 30 seconds pass writes
+nothing more. OpenRouter's lookup answers "not found" until the cost is ready,
+which took up to 30 seconds when probed (`research/openrouter-cost`).
 
 A model priced by request size declares `tiers` (`docs/configuration.md`, "A
 provider's data"). The tier with the highest `input_tokens_above` that the

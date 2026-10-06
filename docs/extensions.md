@@ -430,7 +430,7 @@ protocols are native Rust, so a provider never parses a stream. What a provider
 declares, and why, is `docs/model-routing.md`. The file is
 `providers/<name>.json` (`docs/configuration.md`, "A provider's data").
 
-A provider may have four pieces of Lua:
+A provider may have five pieces of Lua:
 
 - `models()`, which discovers its models
 - `quota()`, which reports its quota (`docs/model-routing.md`, "Quota")
@@ -438,6 +438,8 @@ A provider may have four pieces of Lua:
   for a cloud sign-in or an OAuth login (`docs/model-routing.md`, "Credentials")
 - `sign()`, which adds headers to each request, for a scheme such as AWS SigV4
   (`docs/model-routing.md`, "Signing a request")
+- `cost(generation_id)`, which looks up the cost of a call that ended without
+  one (`docs/model-routing.md`, "Cost")
 
 Each function is `{ timeout, run }`, like `fiber.command`: `timeout` in
 milliseconds, `run` the function Fiber calls. Only `sign()` runs while a
