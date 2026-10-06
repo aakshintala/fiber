@@ -1798,3 +1798,128 @@ fn a_text_block_without_citations_keeps_no_provider_item() {
         [ReplyAction::Text(part)] if part.text == "plain" && part.provider_item.is_none()
     ));
 }
+
+fn hosted_tool() -> ToolDefinition {
+    ToolDefinition {
+        name: "web_search".into(),
+        description: String::new(),
+        input_schema: json!({}),
+        deferred: false,
+        hosted: Some("web_search_20250305".into()),
+    }
+}
+
+#[test]
+fn a_hosted_tool_is_sent_as_its_type_and_name_and_takes_no_strict_slot() {
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let mut request = request();
+    request.tools = (0..20)
+        .map(|i| ToolDefinition {
+            name: format!("tool_{i:02}"),
+            ..weather_tool()
+        })
+        .collect();
+    request.tools.insert(0, hosted_tool());
+    run(Box::new(Messages::new(endpoint(&server)).request(&request)))
+        .0
+        .unwrap();
+    let tools = sent_body(&server, 0)["tools"].as_array().unwrap().clone();
+    assert_eq!(tools.len(), 21);
+    let search: Vec<&Value> = tools.iter().filter(|t| t["name"] == "web_search").collect();
+    assert_eq!(
+        search,
+        [&json!({"name": "web_search", "type": "web_search_20250305"})]
+    );
+    let strict = tools.iter().filter(|t| t["strict"] == json!(true)).count();
+    assert_eq!(strict, 20);
+}
+
+fn hosted_conversation(model: &str) -> Vec<Input> {
+    let mut conversation = request().conversation;
+    conversation.extend([
+        Input::Assistant {
+            model: model.into(),
+            text: String::new(),
+            provider_item: Some(json!({"type": "server_tool_use", "id": "srvtoolu_01",
+                "name": "web_search", "input": {"query": "rust 1.90"}})),
+        },
+        Input::Assistant {
+            model: model.into(),
+            text: String::new(),
+            provider_item: Some(json!({"type": "web_search_tool_result",
+                "tool_use_id": "srvtoolu_01", "content": []})),
+        },
+        Input::Assistant {
+            model: model.into(),
+            text: "Rust 1.90 is out.".into(),
+            provider_item: Some(json!({"type": "text", "text": "Rust 1.90 is out.",
+                "citations": [{"type": "web_search_result_location", "url": "u"}]})),
+        },
+        Input::User {
+            text: "Thanks.".into(),
+        },
+    ]);
+    conversation
+}
+
+fn sent_messages(conversation: Vec<Input>) -> Value {
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let request = ModelRequest {
+        conversation,
+        ..request()
+    };
+    run(Box::new(Messages::new(endpoint(&server)).request(&request)))
+        .0
+        .unwrap();
+    sent_body(&server, 0)["messages"].clone()
+}
+
+#[test]
+fn a_hosted_pair_goes_back_unchanged_to_the_model_that_produced_it() {
+    let messages = sent_messages(hosted_conversation("anthropic/claude-sonnet-5-5"));
+    assert_eq!(
+        messages,
+        json!([
+            {"role": "user", "content": "What is the weather in Paris? Use the tool."},
+            {"role": "assistant", "content": [
+                {"type": "server_tool_use", "id": "srvtoolu_01", "name": "web_search",
+                 "input": {"query": "rust 1.90"}},
+                {"type": "web_search_tool_result", "tool_use_id": "srvtoolu_01", "content": []},
+                {"type": "text", "text": "Rust 1.90 is out.",
+                 "citations": [{"type": "web_search_result_location", "url": "u"}]}]},
+            {"role": "user", "content": [
+                {"type": "text", "text": "Thanks.", "cache_control": {"type": "ephemeral"}}]},
+        ])
+    );
+}
+
+#[test]
+fn a_hosted_pair_is_left_out_for_another_model_and_its_citing_text_goes_as_plain_text() {
+    let messages = sent_messages(hosted_conversation("openai/gpt-6-luna"));
+    assert_eq!(
+        messages,
+        json!([
+            {"role": "user", "content": "What is the weather in Paris? Use the tool."},
+            {"role": "assistant", "content": "Rust 1.90 is out."},
+            {"role": "user", "content": [
+                {"type": "text", "text": "Thanks.", "cache_control": {"type": "ephemeral"}}]},
+        ])
+    );
+}
+
+#[test]
+fn a_cache_marker_on_a_hosted_block_is_the_only_key_added() {
+    let mut conversation = hosted_conversation("anthropic/claude-sonnet-5-5");
+    conversation.truncate(3);
+    let messages = sent_messages(conversation);
+    assert_eq!(
+        messages[1]["content"][1],
+        json!({"type": "web_search_tool_result", "tool_use_id": "srvtoolu_01", "content": [],
+            "cache_control": {"type": "ephemeral"}})
+    );
+    assert_eq!(
+        messages[1]["content"][0],
+        json!({"type": "server_tool_use", "id": "srvtoolu_01", "name": "web_search",
+            "input": {"query": "rust 1.90"}})
+    );
+}

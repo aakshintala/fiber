@@ -147,6 +147,14 @@ fn wire_tools(tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
     sorted
         .into_iter()
         .map(|tool| {
+            // A hosted tool is the vendor's own: its type and name only, no
+            // schema, and no strict slot.
+            if let Some(kind) = &tool.hosted {
+                return json!({"name": tool.name, "type": kind})
+                    .as_object()
+                    .cloned()
+                    .unwrap_or_default();
+            }
             let strict = strict_left > 0
                 && strict::fits(&tool.input_schema)
                 && !complex_enum(&tool.input_schema);
@@ -407,6 +415,13 @@ fn block_of(
 ) -> Option<Value> {
     match input {
         Input::User { text } => Some(json!({"type": "text", "text": text})),
+        // A part's own form (a hosted call or result, a text with citations)
+        // goes back unchanged, only to the model that produced it.
+        Input::Assistant {
+            model,
+            provider_item: Some(item),
+            ..
+        } if model == reference => Some(item.clone()),
         Input::Assistant { text, .. } if text.is_empty() => None,
         Input::Assistant { text, .. } => Some(json!({"type": "text", "text": text})),
         // Reasoning goes back unchanged, only to the model that produced it,
