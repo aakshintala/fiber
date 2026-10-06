@@ -6,6 +6,9 @@ use serde_json::{Value, json};
 
 use super::Fold;
 
+/// The longest a wait in these tests lasts before it fails.
+const DEADLINE: std::time::Duration = std::time::Duration::from_secs(20);
+
 /// A fold over a fake job registry and a fake branch.
 struct World {
     fold: Fold,
@@ -753,11 +756,11 @@ fn the_branch_is_read_at_each_turn_start_and_a_change_is_a_change() {
     assert_eq!(w.status().git, None);
 }
 
-/// A watcher whose queue overflowed before the observer read it, and whose
-/// stop line, kept, comes ahead of the durable lines the queue dropped: the
-/// observer still folds those lines, so the last status is the final one.
-/// Nothing runs concurrently: the lines are written, the stop line is
-/// queued, then the observer's loop runs on this thread.
+/// A running observer held on its first jobs read while the log is written
+/// past its queue's capacity and the stop line is queued: released, it still
+/// folds the lines the queue dropped, since the kept stop line comes ahead of
+/// them, so the last status is the final one. The observer signals that it
+/// is held, and the test releases it only after the stop line is queued.
 #[test]
 fn a_lagging_observer_folds_every_written_line_before_it_stops() {
     use contract::events::{
@@ -775,9 +778,30 @@ fn a_lagging_observer_folds_every_written_line_before_it_stops() {
         )
         .unwrap(),
     );
-    let mut watcher = log.watch_all().unwrap();
-    let injector = watcher.injector();
-    injector.push_kept(super::control(super::LIVE));
+    let (held, observer_held) = std::sync::mpsc::channel::<()>();
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    let held_read = Mutex::new(Some((held, released)));
+    let status = super::start(
+        &log,
+        Fold::new(
+            "/w".to_owned(),
+            "fake/m".to_owned(),
+            None,
+            Box::new(move || {
+                if let Some((held, released)) = held_read.lock().unwrap().take() {
+                    held.send(()).unwrap();
+                    // A mutant that never releases cannot hang the run.
+                    released.recv_timeout(DEADLINE).unwrap();
+                }
+                Vec::new()
+            }),
+            Box::new(|| None),
+        ),
+    )
+    .expect("an observer");
+    observer_held
+        .recv_timeout(DEADLINE)
+        .expect("the observer is held");
     let turn = Some(TurnId("t_1".into()));
     let append = |event: Event| log.append(&event, turn.clone(), None).unwrap();
     append(Event::TurnStarted(TurnStarted {
@@ -814,21 +838,10 @@ fn a_lagging_observer_folds_every_written_line_before_it_stops() {
         error: None,
         questions: None,
     }));
-    injector.push_kept(super::control(super::STOP));
 
-    let mut observer = super::Observer {
-        fold: Fold::new(
-            "/w".to_owned(),
-            "fake/m".to_owned(),
-            None,
-            Box::new(Vec::new),
-            Box::new(|| None),
-        ),
-        log: Arc::downgrade(&log),
-        live: false,
-        last: None,
-    };
-    super::follow(&mut watcher, &mut observer);
+    status.signal();
+    release.send(()).unwrap();
+    status.join();
 
     // The log keeps the latest status it was handed.
     let last = log.latest("session_status").expect("a session_status");

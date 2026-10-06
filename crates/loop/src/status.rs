@@ -402,7 +402,17 @@ impl Status {
     /// Ends the thread after every line already written, and waits for it:
     /// no `session_status` follows this call.
     pub(crate) fn stop(self) {
+        self.signal();
+        self.join();
+    }
+
+    /// Queues the stop line, after every line already written.
+    fn signal(&self) {
         self.injector.push_kept(control(STOP));
+    }
+
+    /// Waits for the thread to end.
+    fn join(self) {
         // A thread that panicked has nothing left to write.
         match self.thread.join() {
             Ok(()) | Err(_) => {}
@@ -428,10 +438,6 @@ fn control(kind: &str) -> Envelope {
 /// log that cannot be read, or a thread that cannot start, leaves the
 /// session with no status.
 pub(crate) fn spawn(looped: &Loop) -> Option<Status> {
-    let log = Arc::downgrade(&looped.log);
-    let mut watcher = looped.log.watch_all().ok()?;
-    let injector = watcher.injector();
-    injector.push_kept(control(LIVE));
     let jobs = looped.ending.jobs.clone();
     let workspace = looped.workspace.clone();
     let fold = Fold::new(
@@ -441,12 +447,21 @@ pub(crate) fn spawn(looped: &Loop) -> Option<Status> {
         Box::new(move || jobs.as_ref().map(|jobs| jobs.running()).unwrap_or_default()),
         Box::new(move || branch(&workspace)),
     );
+    start(&looped.log, fold)
+}
+
+/// Registers the watcher and starts the thread that folds it with `fold`.
+fn start(log: &Arc<Log>, fold: Fold) -> Option<Status> {
+    let weak = Arc::downgrade(log);
+    let mut watcher = log.watch_all().ok()?;
+    let injector = watcher.injector();
+    injector.push_kept(control(LIVE));
     let thread = Builder::new()
         .name("status".to_owned())
         .spawn(move || {
             let mut observer = Observer {
                 fold,
-                log,
+                log: weak,
                 live: false,
                 last: None,
             };
