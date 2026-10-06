@@ -194,8 +194,8 @@ impl HubProc {
         fakes::kill_group(self.group, signal).unwrap();
     }
 
-    /// Waits under [`DEADLINE`] for the process to exit, and asserts that
-    /// nothing it started is left in its group.
+    /// Waits under [`DEADLINE`] for the process to exit, and then for its
+    /// group to empty.
     fn wait(self) -> ExitStatus {
         let Self {
             mut child,
@@ -213,10 +213,9 @@ impl HubProc {
                 panic!("the hub's wait thread ended before the hub exited")
             }
         };
-        assert!(
-            !group_alive(group),
-            "the hub left a process in its group behind"
-        );
+        // A child the group kill caught, such as the startup `git`, is
+        // reaped by init after the hub: the group empties under a deadline.
+        until_gone(group, "the hub's process group");
         watchdog.stand_down(DEADLINE);
         status
     }
@@ -358,16 +357,62 @@ fn hello() -> Response {
     ])
 }
 
-/// Kills process group `group` on drop. After the group is empty,
-/// [`std::mem::forget`] skips that kill.
-struct KillGroup(u32);
-
-impl Drop for KillGroup {
-    fn drop(&mut self) {
-        match fakes::kill_group(self.0, "KILL") {
-            Ok(_) | Err(_) => {}
+/// The process groups of the sessions under `home`: the pid each
+/// session's log lock names. A session runs in its own process group, so
+/// its pid is the group. A lock not yet written, or emptied by a session
+/// that let go, names none.
+fn session_groups(home: &Path) -> Vec<u32> {
+    let mut groups = Vec::new();
+    let Ok(projects) = fs::read_dir(home.join("projects")) else {
+        return groups;
+    };
+    for project in projects.flatten() {
+        let Ok(sessions) = fs::read_dir(project.path().join("sessions")) else {
+            continue;
+        };
+        for session in sessions.flatten() {
+            let pid = fs::read_to_string(session.path().join("session.lock")).unwrap_or_default();
+            if let Ok(group) = pid.trim().parse::<u32>() {
+                groups.push(group);
+            }
         }
     }
+    groups
+}
+
+/// Kills, on drop, the process group of every session under `home`.
+/// Armed before `start` is sent, so a start that fails or times out leaves
+/// no session behind. After the sessions are gone, [`std::mem::forget`]
+/// skips the kill.
+struct KillSessions(PathBuf);
+
+impl Drop for KillSessions {
+    fn drop(&mut self) {
+        for group in session_groups(&self.0) {
+            if group > 1 {
+                match fakes::kill_group(group, "KILL") {
+                    Ok(_) | Err(_) => {}
+                }
+            }
+        }
+    }
+}
+
+/// Waits under [`DEADLINE`] for process group `group` to empty.
+fn until_gone(group: u32, what: &str) {
+    let (done, gone) = mpsc::channel();
+    thread::spawn(move || {
+        while group_alive(group) {
+            thread::yield_now();
+        }
+        match done.send(()) {
+            Ok(()) | Err(mpsc::SendError(())) => {}
+        }
+    });
+    assert!(
+        gone.recv_timeout(DEADLINE).is_ok(),
+        "waited {DEADLINE:?} for {what} to empty"
+    );
 }
 
 /// A session the hub started in its own process group: killed on drop,
@@ -375,7 +420,7 @@ impl Drop for KillGroup {
 struct SessionProc {
     id: String,
     group: u32,
-    guard: KillGroup,
+    guard: KillSessions,
     watchdog: Watchdog,
 }
 
@@ -389,30 +434,19 @@ impl SessionProc {
             watchdog,
             ..
         } = self;
-        let (done, gone) = mpsc::channel();
-        thread::spawn(move || {
-            while group_alive(group) {
-                thread::yield_now();
-            }
-            match done.send(()) {
-                Ok(()) | Err(mpsc::SendError(())) => {}
-            }
-        });
-        assert!(
-            gone.recv_timeout(DEADLINE).is_ok(),
-            "waited {DEADLINE:?} for the session's process group to empty"
-        );
+        until_gone(group, "the session's process group");
         std::mem::forget(guard);
         watchdog.stand_down(DEADLINE);
     }
 }
 
 /// Starts a session through the hub with `content`, and guards its process
-/// group. The session writes its pid into its log's lock before it binds
-/// `run/<id>`, and the hub acknowledges only once that socket accepts, so
-/// the pid is there once the acknowledgement arrives. The hub starts each
-/// session in its own process group, so the pid is the group.
+/// group. The guard is armed before `start` is sent. The session writes its
+/// pid into its log's lock before it binds `run/<id>`, and the hub
+/// acknowledges only once that socket accepts, so the pid is there once the
+/// acknowledgement arrives; the watchdog is armed then.
 fn start_session(setup: &Setup, client: &Socket, workspace: &str, content: &str) -> SessionProc {
+    let guard = KillSessions(setup.home());
     client.send(&format!(
         "{{\"id\":\"c_start\",\"command\":\"start\",\"args\":{{\"workspace\":\"{workspace}\",\"content\":[{{\"type\":\"text\",\"text\":\"{content}\"}}]}}}}"
     ));
@@ -431,7 +465,6 @@ fn start_session(setup: &Setup, client: &Socket, workspace: &str, content: &str)
         .trim()
         .parse()
         .expect("the session's lock names its pid");
-    let guard = KillGroup(group);
     let watchdog = Watchdog::group(group);
     assert!(
         group_alive(group),
@@ -499,31 +532,72 @@ fn a_turn_runs_through_the_hub_and_the_hub_outlives_no_session() {
     session.wait_gone();
 }
 
+/// One side of a two-thread meeting with a deadline: each side waits
+/// [`DEADLINE`] for the other, and the other failing ends the wait at once.
+struct Meet {
+    arrived: mpsc::Sender<()>,
+    other: mpsc::Receiver<()>,
+}
+
+impl Meet {
+    fn pair() -> (Self, Self) {
+        let (a_tx, a_rx) = mpsc::channel();
+        let (b_tx, b_rx) = mpsc::channel();
+        (
+            Self {
+                arrived: a_tx,
+                other: b_rx,
+            },
+            Self {
+                arrived: b_tx,
+                other: a_rx,
+            },
+        )
+    }
+
+    /// Arrives, then waits for the other side, naming `what` on failure.
+    fn meet(&self, what: &str) {
+        match self.arrived.send(()) {
+            Ok(()) | Err(mpsc::SendError(())) => {}
+        }
+        match self.other.recv_timeout(DEADLINE) {
+            Ok(()) => {}
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                panic!("waited {DEADLINE:?} for the other client at {what}")
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                panic!("the other client failed before {what}")
+            }
+        }
+    }
+}
+
 #[test]
 fn two_racing_clients_share_one_hub() {
     let setup = Setup::new();
-    let barrier = Arc::new(std::sync::Barrier::new(2));
+    let (mine, theirs) = Meet::pair();
+    let setup = &setup;
     thread::scope(|scope| {
-        let first = scope.spawn(|| {
-            barrier.wait();
+        let first = scope.spawn(move || {
+            theirs.meet("both clients connecting");
             let hub = Arc::new(Mutex::new(None));
-            let (client, hello) = connect_hub(&setup, &hub);
+            let (client, hello) = connect_hub(setup, &hub);
             // Both clients are registered once both hellos arrived.
-            barrier.wait();
+            theirs.meet("both hellos");
             client.send(r#"{"id":"c_status","command":"status","args":{}}"#);
             let status = recv(&client, "the status acknowledgement");
             // Both stay open until both `status` answers are read.
-            barrier.wait();
+            theirs.meet("both status answers");
             drop(client);
             (hello, status, hub)
         });
-        barrier.wait();
+        mine.meet("both clients connecting");
         let hub = Arc::new(Mutex::new(None));
-        let (client, hello) = connect_hub(&setup, &hub);
-        barrier.wait();
+        let (client, hello) = connect_hub(setup, &hub);
+        mine.meet("both hellos");
         client.send(r#"{"id":"c_status","command":"status","args":{}}"#);
         let status = recv(&client, "the status acknowledgement");
-        barrier.wait();
+        mine.meet("both status answers");
         let (other_hello, other_status, other_hub) = first.join().unwrap();
         assert_eq!(hello["kind"], "hub_hello");
         assert_eq!(other_hello["kind"], "hub_hello");
@@ -613,4 +687,53 @@ fn a_relative_workspace_is_invalid_arguments() {
         running.kill("KILL");
         running.wait();
     }
+}
+
+#[test]
+fn a_session_left_running_is_killed_by_its_guard() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    let hub = Arc::new(Mutex::new(None));
+    let (client, _) = connect_hub(&setup, &hub);
+    let workspace = setup.workspace().to_string_lossy().into_owned();
+    let SessionProc {
+        group,
+        guard,
+        watchdog,
+        ..
+    } = start_session(&setup, &client, &workspace, PROMPT);
+    assert!(group_alive(group));
+    // The watchdog stands down first, so only the guard can kill.
+    watchdog.stand_down(DEADLINE);
+    drop(guard);
+    until_gone(group, "the session's process group after its guard dropped");
+    drop(client);
+    let hub = hub.lock().unwrap().take().expect("the starter ran");
+    hub.kill("KILL");
+    hub.wait();
+}
+
+#[test]
+fn a_hub_that_cannot_start_says_why_on_stderr() {
+    let setup = Setup::new();
+    fs::write(setup.home().join("config.json"), "{").unwrap();
+    let child = setup.fiber(&["hub", "serve"]).spawn().unwrap();
+    let group = child.id();
+    let watchdog = Watchdog::group(group);
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || done.send(child.wait_with_output()).unwrap());
+    let output = match finished.recv_timeout(DEADLINE) {
+        Ok(output) => output.unwrap(),
+        Err(error) => panic!("waited {DEADLINE:?} for the failing hub to exit: {error}"),
+    };
+    assert!(
+        !group_alive(group),
+        "the hub left a process in its group behind"
+    );
+    watchdog.stand_down(DEADLINE);
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.starts_with("fiber: "), "{stderr}");
+    assert!(!setup.hub_socket().exists());
 }
