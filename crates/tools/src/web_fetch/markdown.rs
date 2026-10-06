@@ -42,14 +42,14 @@ fn convert(html: &str, slice: usize) -> String {
     let mut start = 0;
     while start < bytes.len() {
         let mut end = bytes.len().min(start.saturating_add(slice));
-        if end < bytes.len() && !html.is_char_boundary(end) {
-            let floor = html.floor_char_boundary(end);
-            end = if floor == start {
-                html.ceil_char_boundary(end)
-            } else {
-                floor
-            };
-        }
+        // Cutting on a boundary cuts nothing (`floor` returns it), so the
+        // cut runs unconditionally: one less check a mutant could flip.
+        let floor = html.floor_char_boundary(end);
+        end = if floor == start {
+            html.ceil_char_boundary(end)
+        } else {
+            floor
+        };
         queue.push_back(html.get(start..end).unwrap_or_default().into());
         let _feed = tokenizer.feed(&queue);
         start = end;

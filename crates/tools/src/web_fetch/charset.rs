@@ -132,11 +132,10 @@ fn content_charset(content: &str) -> Option<String> {
     let lower = content.to_ascii_lowercase();
     let mut rest = lower.as_str();
     loop {
-        let at = rest.find("charset")?;
-        let after = rest.get(at + "charset".len()..).unwrap_or_default();
+        let (_, after) = rest.split_once("charset")?;
         // The name must end here: `charsetx=` names nothing.
         let boundary = after.chars().next();
-        if boundary.is_some_and(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        if boundary.is_some_and(|c| matches!(c, 'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_')) {
             rest = after;
             continue;
         }

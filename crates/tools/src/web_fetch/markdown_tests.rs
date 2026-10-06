@@ -1,6 +1,8 @@
 //! Tests beside [`super::to_markdown`]: one per element class, then hostile
 //! input.
 
+use std::time::Duration;
+
 use super::to_markdown;
 
 #[test]
@@ -717,5 +719,57 @@ fn a_dropped_first_title_leaves_a_later_one_counting() {
     assert_eq!(
         to_markdown("<noscript><title>N</title></noscript><title>Real</title>"),
         "# Real\n"
+    );
+}
+
+/// The tokenizer slice is 64 KiB: every slice size converts the same (see
+/// `every_slice_size_converts_like_the_whole_page`), so only this number
+/// tells `64 * 1024` from the mutants' `64 + 1024` and `64 / 1024`.
+#[test]
+fn the_tokenizer_slice_is_64_kib() {
+    assert_eq!(super::SLICE, 65_536);
+}
+
+#[test]
+fn a_script_inside_svg_does_not_switch_to_raw_text() {
+    // `svg` counts the open elements: with `*= 1` it stays zero, the script
+    // below would swallow the svg close as raw text and drop the `y`.
+    assert_eq!(to_markdown("a<svg><script>x</svg>y</script>z"), "ayz\n");
+}
+
+/// The result of `run` with a deadline on the wall clock (docs/testing.md,
+/// "Waits and timeouts"): a mutant that hangs the conversion fails here
+/// naming what it waited for, instead of hanging CI.
+fn with_deadline(what: &'static str, run: impl FnOnce() -> String + Send + 'static) -> String {
+    let (done, result) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let markdown = run();
+        done.send(markdown).unwrap_or(());
+    });
+    result
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap_or_else(|_| panic!("timed out waiting for {what}"))
+}
+
+#[test]
+fn conversion_ends_past_the_last_byte() {
+    // `while start <= len` feeds the empty final slice forever: with a
+    // deadline the mutant fails instead of hanging.
+    assert_eq!(
+        with_deadline("converting a short page", || to_markdown("a")),
+        "a\n"
+    );
+}
+
+#[test]
+fn a_slice_of_one_still_advances_past_a_multibyte_char() {
+    // With `!=` the cut below a wide char resets to the char's start, so
+    // the converter never advances: with a deadline the mutant fails.
+    let html = "é".to_owned();
+    assert_eq!(
+        with_deadline("converting one byte at a time", move || {
+            super::convert(&html, 1)
+        }),
+        "é\n"
     );
 }

@@ -186,3 +186,32 @@ fn windows_1252_bytes_decode_to_their_text() {
     page.extend_from_slice(b"\x93quoted\x94");
     assert!(decode(None, &page).as_ref().contains("“quoted”"));
 }
+
+#[test]
+fn a_header_value_that_only_ends_quoted_is_not_stripped() {
+    // Both quotes are required: with `||` the mutant strips the first and
+    // last byte, turning this unknown label into shift_jis.
+    assert_eq!(
+        super::header_encoding("text/html; charset=qshift_jis\""),
+        None
+    );
+}
+
+#[test]
+fn a_non_meta_start_tag_is_not_a_charset() {
+    // Every non-meta tag is skipped: with `&&` the div's charset below
+    // would decode the page as Shift-JIS.
+    let mut page = b"<div charset=\"shift_jis\">".to_vec();
+    page.extend_from_slice(SHIFT_JIS_A);
+    assert!(!decode(None, &page).as_ref().contains("あ"));
+}
+
+#[test]
+fn a_meta_content_with_a_single_quoted_charset_decodes() {
+    // The closing `'` ends the label: with `&&` it never ends, the label
+    // keeps the quote and is unknown, so the page falls back to UTF-8.
+    let mut page =
+        b"<meta http-equiv=\"content-type\" content=\"text/html; charset='shift_jis'\">".to_vec();
+    page.extend_from_slice(SHIFT_JIS_A);
+    assert!(decode(None, &page).as_ref().contains("あ"));
+}
