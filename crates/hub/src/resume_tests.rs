@@ -503,3 +503,121 @@ fn a_connection_that_never_subscribed_gets_no_replay() {
         ]
     );
 }
+
+/// A session after `close` at `run/<SID>`: it answers every command but
+/// `subscribe` with `closing` until the test stops it.
+fn closing_session(temp: &Temp) -> FakeStarter {
+    let dying = FakeStarter::closing(&temp.dir);
+    let started = crate::Starter::start(&dying, &sid(), &temp.workspace(), None);
+    assert!(started.is_ok(), "the closing session binds");
+    dying
+}
+
+#[test]
+fn a_command_answered_closing_after_fiber_exited_reaches_the_resumed_session() {
+    let temp = Temp::new();
+    temp.recorded();
+    temp.append("fiber_exited");
+    let dying = closing_session(&temp);
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    client.send("c_1", "reply");
+    // The exiting process still accepts on its socket: the hub waits.
+    let until = temp.clock.origin() + HELD_POLL;
+    assert!(
+        temp.clock.await_parked(until, DEADLINE),
+        "the hub waits out the exiting process"
+    );
+    assert!(starter.resumed().is_empty());
+    assert!(dying.stop(&sid(), DEADLINE), "the exiting process ended");
+    temp.clock.advance(HELD_POLL);
+    // One acknowledgement, the resumed session's.
+    assert_eq!(client.acknowledged("the reply"), "c_1");
+    assert_eq!(starter.resumed().len(), 1);
+    assert_eq!(received(&starter), [("c_1".into(), "reply".into())]);
+    client.send("c_2", "steer");
+    assert_eq!(client.acknowledged("the steer"), "c_2");
+}
+
+#[test]
+fn two_commands_answered_closing_reach_one_resumed_session() {
+    let temp = Temp::new();
+    temp.recorded();
+    temp.append("fiber_exited");
+    let dying = closing_session(&temp);
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    client.send("c_1", "reply");
+    client.send("c_2", "steer");
+    assert!(
+        dying.await_received(2, DEADLINE),
+        "both commands were answered closing"
+    );
+    let until = temp.clock.origin() + HELD_POLL;
+    assert!(
+        temp.clock.await_parked(until, DEADLINE),
+        "the hub waits out the exiting process"
+    );
+    assert!(dying.stop(&sid(), DEADLINE), "the exiting process ended");
+    temp.clock.advance(HELD_POLL);
+    assert_eq!(client.acknowledged("the reply"), "c_1");
+    assert_eq!(client.acknowledged("the steer"), "c_2");
+    assert_eq!(starter.resumed().len(), 1, "one resume for both");
+    assert_eq!(
+        received(&starter),
+        [
+            ("c_1".into(), "reply".into()),
+            ("c_2".into(), "steer".into())
+        ]
+    );
+}
+
+#[test]
+fn closing_before_fiber_exited_is_passed_on() {
+    let temp = Temp::new();
+    temp.recorded();
+    temp.append("turn_ended");
+    let _dying = closing_session(&temp);
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    client.send("c_1", "reply");
+    let line = client.next("the rejection");
+    assert_eq!(line["kind"], "command_rejected", "{line}");
+    assert_eq!(line["payload"]["command_id"], "c_1");
+    assert_eq!(line["payload"]["code"], "closing");
+    assert_eq!(line["payload"]["message"], "The session is closing.");
+    assert!(starter.resumed().is_empty());
+}
+
+#[test]
+fn an_exiting_process_that_never_ends_is_session_held_past_the_bound() {
+    let temp = Temp::new();
+    temp.recorded();
+    temp.append("fiber_exited");
+    let _dying = closing_session(&temp);
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    client.send("c_1", "reply");
+    for k in 1..=polls() {
+        let until = temp.clock.origin() + HELD_POLL * k;
+        assert!(
+            temp.clock.await_parked(until, DEADLINE),
+            "the hub waits poll {k} inside the bound"
+        );
+        temp.clock.advance(HELD_POLL);
+    }
+    let line = client.next("the rejection");
+    assert_eq!(line["kind"], "command_rejected", "{line}");
+    assert_eq!(line["payload"]["command_id"], "c_1");
+    assert_eq!(line["payload"]["code"], "session_held");
+    assert_eq!(
+        line["payload"]["message"],
+        format!("Session {SID} is still held by its exiting process.")
+    );
+    assert_eq!(temp.clock.now(), temp.clock.origin() + SHUTDOWN_BOUND);
+    assert!(starter.resumed().is_empty());
+}

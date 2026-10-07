@@ -37,7 +37,10 @@ pub(crate) struct FakeStarter {
     bind: bool,
     exited: Option<Failure>,
     handshake: Arc<Mutex<Option<Handshake>>>,
-    received: Arc<Mutex<Vec<String>>>,
+    /// Whether the session answers every command but `subscribe` with
+    /// `closing`, as a session after `close` does.
+    closing: bool,
+    received: Arc<Received>,
     /// Each `resume` call's session and workspace, in order.
     resumed: Arc<Mutex<Vec<(SessionId, PathBuf)>>>,
     /// The connections the fake sessions accepted and still serve.
@@ -45,6 +48,20 @@ pub(crate) struct FakeStarter {
     /// How many more `resume` calls exit `session_held` without binding,
     /// as a resume does while the exiting process still holds the lock.
     held: Arc<Mutex<usize>>,
+}
+
+/// Every line the fake sessions received, and a wake for each new one.
+#[derive(Debug, Default)]
+struct Received {
+    lines: Mutex<Vec<String>>,
+    grew: Condvar,
+}
+
+impl Received {
+    fn push(&self, line: String) {
+        lock(&self.lines).push(line);
+        self.grew.notify_all();
+    }
 }
 
 /// The connections the fake sessions serve: a clone of each, to shut it
@@ -91,13 +108,22 @@ impl FakeStarter {
         starter
     }
 
+    /// Binds `run/<id>` and answers every command but `subscribe` with
+    /// `command_rejected` `closing`, as a session after `close` does.
+    pub(crate) fn closing(home: &Path) -> Self {
+        let mut starter = Self::bind_and_hold(home);
+        starter.closing = true;
+        starter
+    }
+
     fn new(home: &Path, bind: bool, exited: Option<Failure>, handshake: Option<Handshake>) -> Self {
         Self {
             home: home.to_path_buf(),
             bind,
             exited,
             handshake: Arc::new(Mutex::new(handshake)),
-            received: Arc::new(Mutex::new(Vec::new())),
+            closing: false,
+            received: Arc::new(Received::default()),
             resumed: Arc::new(Mutex::new(Vec::new())),
             serving: Arc::new(Serving::default()),
             held: Arc::new(Mutex::new(0)),
@@ -106,7 +132,19 @@ impl FakeStarter {
 
     /// Every line the fake session received, in order.
     pub(crate) fn received(&self) -> Vec<String> {
-        lock(&self.received).clone()
+        lock(&self.received.lines).clone()
+    }
+
+    /// Waits, at most `within` of real time, until the fake sessions have
+    /// received `count` lines and answered each. True once they have.
+    pub(crate) fn await_received(&self, count: usize, within: Duration) -> bool {
+        let lines = lock(&self.received.lines);
+        let (lines, _) = self
+            .received
+            .grew
+            .wait_timeout_while(lines, within, |lines| lines.len() < count)
+            .unwrap_or_else(PoisonError::into_inner);
+        lines.len() >= count
     }
 
     /// Each `resume` call's session and workspace, in order.
@@ -146,10 +184,11 @@ impl FakeStarter {
             let received = Arc::clone(&self.received);
             let handshake = Arc::clone(&self.handshake);
             let serving = Arc::clone(&self.serving);
+            let closing = self.closing;
             // The listener lives in the accept loop's thread.
             thread::Builder::new()
                 .name("fake-session".to_owned())
-                .spawn(move || accept_loop(listener, &received, &handshake, &serving))
+                .spawn(move || accept_loop(listener, &received, &handshake, &serving, closing))
                 .map_err(|error| {
                     std::io::Error::new(error.kind(), format!("fake session: {error}"))
                 })?;
@@ -211,9 +250,10 @@ pub(crate) fn failure(code: ErrorCode, message: &str) -> Failure {
 
 fn accept_loop(
     listener: UnixListener,
-    received: &Arc<Mutex<Vec<String>>>,
+    received: &Arc<Received>,
     handshake: &Arc<Mutex<Option<Handshake>>>,
     serving: &Arc<Serving>,
+    closing: bool,
 ) {
     loop {
         let Ok((stream, _)) = listener.accept() else {
@@ -230,7 +270,7 @@ fn accept_loop(
         let spawned = thread::Builder::new()
             .name("fake-session-conn".to_owned())
             .spawn(move || {
-                serve_one(stream, &received, &handshake);
+                serve_one(stream, &received, &handshake, closing);
                 *lock(&serving.live) -= 1;
                 serving.ended.notify_all();
             });
@@ -242,8 +282,9 @@ fn accept_loop(
 
 fn serve_one(
     stream: UnixStream,
-    received: &Arc<Mutex<Vec<String>>>,
+    received: &Arc<Received>,
     handshake: &Arc<Mutex<Option<Handshake>>>,
+    closing: bool,
 ) {
     if stream
         .set_read_timeout(Some(Duration::from_secs(5)))
@@ -264,8 +305,16 @@ fn serve_one(
             Ok(0) => return,
             Ok(_) => {
                 let text = String::from_utf8_lossy(&buf).into_owned();
-                lock(received).push(text.clone());
-                match command_of(&text).as_deref() {
+                let command = command_of(&text);
+                if closing && command.as_deref().is_some_and(|name| name != "subscribe") {
+                    // Answered before it is recorded, so a test that saw it
+                    // received knows the answer is sent.
+                    write_ack(&mut writer, &text, &closing_reply());
+                    received.push(text);
+                    continue;
+                }
+                received.push(text.clone());
+                match command.as_deref() {
                     // The hub's handshake subscribes before its first prompt.
                     Some("subscribe") => write_accepted(&mut writer, &text),
                     Some("prompt") => {
@@ -284,6 +333,15 @@ fn serve_one(
             // Nothing sent yet: hold until EOF.
             Err(_) => hold(&mut read),
         }
+    }
+}
+
+/// What a session after `close` answers a command with.
+fn closing_reply() -> Handshake {
+    Handshake {
+        accept: false,
+        code: "closing".to_owned(),
+        message: "The session is closing.".to_owned(),
     }
 }
 
