@@ -88,7 +88,8 @@ Nothing in the binary embeds documentation.
 
 The release also carries `fiber-extensions.tar.gz` and its checksum file:
 every first-party extension at the release tag, the eleven directories under
-`providers/`, `extensions/hooks` and `extensions/memory`. It is the same for every target. Nothing
+`providers/`, the two harnesses, `extensions/claude` and
+`extensions/cursor-agent`, and `extensions/hooks` and `extensions/memory`. It is the same for every target. Nothing
 in the binary embeds an extension (`docs/extensions.md`, "A fresh install").
 At its top level the archive has one directory per extension, named as it is
 installed under `extensions/` in Fiber home (`docs/extensions.md`, "Names"),

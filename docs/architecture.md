@@ -53,6 +53,7 @@ ephemeral event where it is display-only.
 | `tools` | Runs the built-in tools that act on the workspace and the session: shell, file edits, search, web fetch, `ask_user`, session messaging and `tool_search`. Reached only through the tool seam. |
 | `mcp` | The MCP client: both transports, OAuth, the cached tool lists and `mcp_resources` (`docs/mcp.md`), and `fiber mcp serve`. Reached only through the tool seam. |
 | `jobs` | Background jobs and delegates: starting, watching and stopping them, the runner for delegates on another harness, and their worktrees, through `worktree` (`docs/delegates.md`). Reached only through the tool seam. |
+| `net` | The TLS configuration every HTTPS call uses: the platform verifier, or on Linux, when the system store has no certificates, Mozilla's roots compiled in through ureq (`docs/dependencies.md`). |
 | `worktree` | Creates and removes the git worktrees sessions and delegates run in, by running the `git` program (`docs/invocation.md`, "Isolation"). |
 | `extensions` | Loads extension code, hosts the runtime, and wires what extensions register into the three seams. |
 | `tui` | Draws the terminal, in its own process, as a client of the hub. Watches events, sends commands, knows nothing else. |
@@ -86,7 +87,9 @@ or `main`. `tui`, `hub` and `doors` depend on `contract` and on `log`'s reading
 side, and never on `loop`, `provider`, `tools`, `mcp`, `jobs` or
 `extensions`. `cli` depends on `contract`, `log`, `config`, `doors` and
 `extensions`, and never on `loop`. `worktree` depends only on `contract`, and
-`jobs`, `doors` and `cli` may depend on it. `main` depends on
+`jobs`, `doors` and `cli` may depend on it. `net` depends only on `contract`
+and ureq's TLS stack, and `provider`, `tools` and `extensions` may depend on it,
+so `hub` and `tui` still do no TLS. `main` depends on
 everything, and nothing depends on `main`.
 
 `fakes` holds the shared fakes that tests and jigs run against

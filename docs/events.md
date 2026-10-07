@@ -1,6 +1,8 @@
 # The event stream
 
-What Fiber writes down, what it emits, and what a consumer can rely on. This is
+What Fiber writes down, what it emits, and what a consumer can rely on. A
+consumer is anything that reads these lines: a client, or a program reading a
+session's `events.jsonl`. This is
 what is true now, not a plan. It is settled by
 [What is the event stream, and what is durable?](https://github.com/aakshintala/fiber/issues/6);
 that ticket's resolution holds the rationale and the rejected alternatives.
@@ -1000,8 +1002,8 @@ text ("Writing"), except a note a hook wrote, which appears on no earlier line.
 generated from its payload.
 
 A handoff that fails or is cancelled leaves the model's context as it was. A
-cancelled handoff is a person's cancellation of the turn, which then completes
-`interrupted`.
+cancelled handoff means the turn was cancelled, by a person or a shutdown, and
+the turn completes `interrupted`.
 
 ### MCP servers
 
@@ -1258,7 +1260,7 @@ Every driver command is answered with exactly one of these, echoing its id
 | Key | Type | Required | Meaning |
 |---|---|---|---|
 | `command_id` | string | yes | the command's id |
-| `result` | object | no | on `rewind`, `tools`, `history` and a `shell` sent with `send` false, as below; absent for every other command |
+| `result` | object | no | on the commands in the table below; absent for every other command |
 
 | Command | `result` keys |
 |---|---|

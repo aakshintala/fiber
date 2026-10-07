@@ -183,7 +183,7 @@ a key is valid.
 | Command | What it does |
 |---|---|
 | `mcp add [--project \| --repo] <name> <url>` | Declares a remote server. |
-| `mcp add [--project \| --repo] <name> [-e KEY=value]... -- <command> [args]...` | Declares a stdio server. |
+| `mcp add [--project \| --repo] <name> [-e KEY=value]... [--secret KEY]... -- <command> [args]...` | Declares a stdio server. `--secret KEY` reads the value from a hidden prompt, or stdin without a terminal, stores it at `credentials/mcp.<name>.<KEY>`, and writes `{ "secret": "mcp.<name>.<KEY>" }` as the variable's value. |
 | `mcp remove [--project \| --repo] <name>` | Removes a server's declaration. |
 | `mcp list` | Lists every declared server, the layer that declares it, and whether a repository's server is approved. |
 | `mcp login <server>` | Logs in to a server that needs OAuth. |
@@ -441,7 +441,8 @@ Settled by
 with `rewound` while it still holds its lock, and the hub starts the new one,
 whose `session_started` names the old session in `forked_from`. Each client
 connected to the old session is sent the new session's id and subscribes to
-it. A session no process holds is rewound by the hub opening it first.
+it. For a session no process holds, the hub starts a session process for it, and
+that process rewinds it.
 
 **The set is a floor, not a proof.** It is what Fiber's settled semantics
 require today. A later ticket may add one. Adding a command is additive and not
@@ -842,7 +843,7 @@ websocket for everything it does.
 | `delete` | `session` (string), `cascade` (boolean, optional) | Deletes an exited session ("Deleting and pruning"). |
 | `prompt_history` | `project` (string), `before` (integer, optional) | Answers with a page of the project's prompt history, newest first (`docs/state.md`). |
 | `read_file` | `session` (string), `path` (string) | Answers with one file from the session's `artifacts/` ("A session's files"). |
-| `status` | none | Answers with what `fiber hub status` prints. |
+| `status` | none | Answers with `running`, `fiber_version` and `clients` (`docs/events.md`, "Command results"). |
 | `refresh` | none | Rebuilds the hub's environment, as `fiber hub refresh` does. |
 | `pairing_code` | `device` (string) | Answers with a new pairing code for that device, as `fiber hub pair` prints. |
 | `devices` | none | Answers with the paired devices. |
@@ -1035,7 +1036,9 @@ session:
 session's `events.jsonl` and `artifacts/` into a directory, `./<id>/` by
 default. A path that already exists is refused, naming it; nothing is merged
 or overwritten. A running session's export holds the lines written so far. The
-export is the log as recorded: text a hook redacted before it was logged is
+export copies a symbolic link as a link and never reads through it. Its top
+directory is created with mode 0700; files keep their modes. The export is the
+log as recorded: text a hook redacted before it was logged is
 redacted, and nothing else is (`docs/extensions.md`, "Hooks"). What the person
 does with it is theirs. Another format, such as Markdown or HTML, or further
 redaction, is an extension command (`docs/extensions.md`, "Commands and

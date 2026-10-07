@@ -24,7 +24,7 @@ the agent working, a research prototype of a better handoff.
 Its code runs in one of two ways, and a package may use both:
 
 - a **Lua extension** runs Lua 5.4 inside the session's own process, at about
-  150 KiB
+  120 to 150 KiB
 - a **process extension** is a separate program in any language, which the
   session starts and talks to over a pipe
 
@@ -162,7 +162,7 @@ failed ("When a hook fails"), and a late reply is dropped.
 
 A process extension written in Node, Bun or Python costs a runtime: an idle
 Node process measured 40 MiB, Bun 20 MiB and Python 10 MiB, against about
-150 KiB for a Lua extension (macOS arm64, `research/extension-process/`). A
+120 to 150 KiB for a Lua extension (macOS arm64, `research/extension-process/`). A
 round trip over the pipe took 56 to 79 µs for 16 KiB, against under 10 µs into
 Lua. An extension too heavy to run once per session is its author's to make
 smaller.
@@ -917,7 +917,7 @@ installed Lua extension that is enabled for the project runs its `init.lua`,
 because a tool, hook, watcher, harness or search backend must register before
 the session's tool set is fixed (`docs/prompt-cache.md`, "Tools"), and Fiber
 cannot know what an extension registers without running it. Each started
-extension costs about 120 KiB and a thread for the whole session. These cost
+extension costs about 120 to 150 KiB and a thread for the whole session. These cost
 nothing at start:
 
 - an extension disabled for the project, which never starts;
@@ -936,7 +936,7 @@ must register before the session's first request. A TUI extension's VM is
 created before the terminal's first frame, since a replaced layout or input
 box changes that frame (`docs/tui.md`, "How a TUI extension runs").
 
-One VM per extension (rather than one shared VM for all) costs about 120 KiB per
+One VM per extension (rather than one shared VM for all) costs about 120 to 150 KiB per
 extension — measured, `research/extension-runtime/vm-isolation/` — and buys real
 isolation: each extension has its own globals, its own garbage collector, a
 per-extension memory cap, and a crash or runaway allocation contained to
@@ -945,7 +945,7 @@ extension counts and is the documented fallback if that ever matters.
 
 Each Lua extension's memory is capped at 1 MiB by default. Past the cap, an
 allocation fails with a Lua error in that extension's VM, and Fiber does not
-read a file larger than the cap. A Lua extension measures about 150 KiB, and
+read a file larger than the cap. A Lua extension measures about 120 to 150 KiB, and
 the busy-session budget is 24 MiB (`docs/performance.md`), so a small default
 keeps one extension from using the budget. An extension that needs more sets
 `memory_mib` in its manifest (`docs/configuration.md`, "An extension's
@@ -953,8 +953,8 @@ manifest"). The install summary shows a raised cap ("What an install shows").
 
 The `reload` driver command (`docs/invocation.md`) reloads extensions. It is how
 a running session picks up an installed or updated extension. Each reloaded
-Lua extension's VM is created again the next time it is invoked, and each
-process extension is restarted. Both are handed their folded state again.
+Lua extension runs `init.lua` again in a new VM before the new tool set is
+declared, and each process extension is restarted. Both are handed their folded state again.
 
 ## When an extension misbehaves
 

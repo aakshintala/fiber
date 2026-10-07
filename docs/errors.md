@@ -28,7 +28,11 @@ A failed model call adds two optional fields:
 - `provider { name, status, message }`: the provider's name, the HTTP status and
   the provider's own message. Provider messages can mislead (OpenRouter answers
   a bad key with "Missing Authentication header"), which is why they sit here
-  and not in `message`.
+  and not in `message`. For an extension provider whose `credential()` or
+  `sign()` failed, `message` is the first line of the extension's error and
+  `status` is absent. Before it is stored, every credential value and every
+  header value the credential, `credential()` or `sign()` supplied is replaced
+  with `[redacted]`.
 
 ## Where a code comes from
 
@@ -166,8 +170,8 @@ an overflow as a generic "invalid parameters" 400, so on muse it is
 "max_tokens exceeds …" would start a handoff whose note request fails the same
 way.
 
-Fiber also checks its own token estimate before sending, and hands off at 0.7
-of the window by default (`docs/handoff.md`), so a provider-reported overflow is
+Fiber also checks its own token estimate before sending, and hands off at
+the point `docs/handoff.md`, "Automatic", sets, so a provider-reported overflow is
 the exception.
 
 ### Output tokens
@@ -184,7 +188,8 @@ one. With wrong data the retries waste three minutes and then fail
 A tool call's failure never ends a turn: the model reads it as the call's
 result. `turn_completed` is `failed`, with `error` set to the cause, on:
 
-- a model call that failed after its retries: that call's code
+- a model call that failed after its retries, other than a handoff's note
+  request (`docs/handoff.md`, "Recording"): that call's code
 - `context_overflow` after the overflow rule's one retry, or with automatic
   handoff off (`docs/handoff.md`)
 - `hook_failed` from a `turn_start`, `before_model_call` or `turn_end` hook
@@ -198,7 +203,9 @@ result. `turn_completed` is `failed`, with `error` set to the cause, on:
 
 ## Registry
 
-Every code Fiber emits. "Where" names the lines that carry it.
+Every code Fiber emits, except the codes only a driver command's rejection
+carries, which `docs/invocation.md`, "Driver commands", lists. "Where" names
+the lines that carry it.
 
 | Code | Where | Meaning |
 |---|---|---|
@@ -261,7 +268,7 @@ Every code Fiber emits. "Where" names the lines that carry it.
 | `repository_code_skipped` | notice | an extension, hook or MCP server the repository declares was skipped, because nobody approved it and nobody could be asked (`docs/extensions.md`, "Code a repository ships") |
 | `session_has_dependents` | exit | a delete names a session that forks or rewinds point at; the message lists them, and `--cascade` deletes them too (`docs/invocation.md`, "Deleting and pruning") |
 | `session_held` | exit | another process holds the session |
-| `session_not_found` | exit, hub command | a resume names no session, or a command whose `session_id` names no socket that accepts a connection (`docs/invocation.md`, "The hub") |
+| `session_not_found` | exit, hub command | a resume names no session, or a command whose `session_id` names no session, running or exited (`docs/invocation.md`, "The hub") |
 | `signal` | tool call, job | a process killed by a signal Fiber did not send |
 | `skill_invalid` | notice | a skill's `SKILL.md` header does not parse or lacks `name` or `description`, so it is left out; the message names its path (`docs/system-prompt.md`, "Skills") |
 | `skill_shadowed` | notice | two skills share a name; the message names both paths and which one won (`docs/system-prompt.md`, "Skills") |
@@ -288,7 +295,7 @@ Notices, for a failure outside any action:
 | Code | Meaning |
 |---|---|
 | `command_conflict` | two extensions registered the same command name |
-| `config_key_ignored` | an unknown key, or a key a repository may not set |
+| `config_key_ignored` | an unknown key, a key a repository may not set, or a configured `thinking` level the session's model does not declare (`docs/model-routing.md`, "Thinking") |
 | `extension_failed` | an extension failed to start or missed its deadline, or its install record is missing or unreadable, so loading skipped it, or loading skipped one of its registrations; the message names which (`docs/extensions.md`, "Installing") |
 | `extension_incompatible` | an extension needs a newer `fiber` or a different extension API version, so loading skipped it |
 | `extension_shadowed` | a repository's approved copy of an extension loads in place of the personal install of the same name; the message names both versions |

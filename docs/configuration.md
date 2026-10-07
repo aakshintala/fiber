@@ -117,7 +117,7 @@ same key. A file that sets one key under both spellings is `config_invalid`.
 | `hub.idle_exit_ms` | 1800000 (30 minutes) | no | How long a hub a client started stays running with no client connected, the same default as `session.idle_exit_ms`; an installed hub never exits for being idle (`docs/invocation.md`, "The hub"). |
 | `hub.default` | none | no | On a client, the name of the hub in `hubs` it uses without `--hub`; unset, it uses the local hub. |
 | `hubs."<name>".address` | none | no | On a client, a hub's address: `ws://`, `wss://`, or `unix:` and a socket path (`docs/invocation.md`, "Several hubs"). The device token is in `credentials/hubs/<name>`, never here. |
-| `session.idle_exit_ms` | 1800000 (30 minutes) | no | How long a session stays running with no turn and no jobs, whoever is connected (`docs/invocation.md`, "Lifecycle"). |
+| `session.idle_exit_ms` | 1800000 (30 minutes) | no | How long a session stays running with no turn, no jobs and no cache warming, whoever is connected (`docs/invocation.md`, "Lifecycle"). |
 | `reviewer.model` | the session's provider's reviewer model | no | The reviewer's model (`docs/permissions.md`, "The reviewer"). |
 | `reviewer.context` | none | no | The person's notes about their environment, in prose, which the reviewer reads after its fixed instructions; the global and per-project values are both read, the project's winning where they conflict (`docs/permissions.md`, "What the person tells it"). |
 | `reviewer.block_limits.consecutive` | 3 | no | Consecutive blocks before a person is asked. |
@@ -128,7 +128,7 @@ same key. A file that sets one key under both spellings is `config_invalid`.
 | `handoff.nudge` | true | yes | Whether the nudge is given. |
 | `cache.lifetime` | `"1h"` | yes | The prompt-cache lifetime, `"5m"` or `"1h"` (`docs/prompt-cache.md`). |
 | `cache.warm_idle` | false | yes | Whether an idle session keeps its prompt cache warm (`docs/prompt-cache.md`, "Warming while idle"). |
-| `cache.warm_cap` | `"2h"` | yes | How long after the last turn warming stops, as a duration such as `"4h"`; never more than 19 cache lifetimes (`docs/prompt-cache.md`, "Warming while idle"). |
+| `cache.warm_cap` | `"2h"` | yes | How long after the last turn warming stops, as a duration such as `"4h"`; less than 19 cache lifetimes (`docs/prompt-cache.md`, "Warming while idle"). |
 | `keys."<action>"` | the binding in `docs/tui.md` | no | A key, or a list of keys, for a terminal action; `[]` unbinds it (`docs/tui.md`, "Bindings"). |
 | `retry.attempts` | 3 | yes | Retries of a failed model call (`docs/model-routing.md`, "When a model call fails"). |
 | `retry.initial_delay_ms` | 2000 | yes | The first backoff, doubling each retry. |
@@ -197,7 +197,7 @@ lists:
 
 | Field | Meaning |
 |---|---|
-| `command`, `args`, `env` | the program of a stdio server |
+| `command`, `args`, `env` | the program of a stdio server; an `env` value is a string, or `{ "secret": "<name>" }`, which reads `credentials/<name>` when the server starts. The name must start `mcp.<server>.`, so a server reads only its own secrets |
 | `url` | a remote server |
 | `required` | whether failing to start ends the session, default false |
 | `startup_timeout_ms` | the startup deadline, default 5000 |
@@ -277,7 +277,8 @@ global or per-project file, with one of:
 { "command": ["op", "read", "op://Private/OpenRouter/key"] }
 ```
 
-A command runs once per process. A repository can never set this, because a
+A command runs once per process, and is named by its program alone in every
+message, because its arguments may hold a key. A repository can never set this, because a
 command runs a program and a changed source sends the key elsewhere. A
 credential stored under the same label comes first.
 

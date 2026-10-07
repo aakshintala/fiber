@@ -151,7 +151,7 @@ the command to resume it.
 ## Layout
 
 The screen is a session rail on the left while two or more sessions are
-live, a conversation column, and a side panel on the right. The panel is always shown while the screen is wide enough. It replaces
+live, a conversation column, and a side panel on the right. The panel is shown while the screen is wide enough, unless the person hides it with ⌥P. It replaces
 a footer and status line, and the input box spans only the conversation
 column.
 
@@ -1217,6 +1217,8 @@ The terminal reads these keys (`docs/configuration.md`, "Keys"):
 
 | Key | What it sets |
 |---|---|
+| `tui.rail.width` | The rail's share of the screen's width |
+| `tui.panel.width` | The panel's share of the screen's width |
 | `tui.panel.cards` | Which cards the panel shows, and their order |
 | `tui.theme` | The theme; unset, it follows the terminal's appearance |
 | `tui.reduced_motion` | Reduced motion |

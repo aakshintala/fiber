@@ -11,8 +11,8 @@ boundary and artifact mean what it says there and nothing else. The events are
 
 ## What a handoff is
 
-A handoff restarts the model's context from a handoff note written by the
-session's own model. It is one mechanism with three triggers: Fiber, a person
+A handoff restarts the model's context from a handoff note, written by the
+session's own model or by a `before_handoff` hook. It is one mechanism with three triggers: Fiber, a person
 or a tool. Nothing is deleted: the handoff is appended to the session log, and
 a person can still scroll back through everything before it.
 
@@ -189,11 +189,13 @@ lines and never rewrites earlier ones. The kinds are `docs/events.md`
   no note request and writes no `handoff_started`.
 - The note request is an ordinary assistant message action with its own
   `usage_recorded`.
-- `handoff_completed { outcome, note, tokens_before, instructions? }`. `note`
+- `handoff_completed`, with the keys `docs/events.md` lists. `note`
   lists the `action_id`s of the actions that carry the note: the model's reply,
   or the tool call or calls whose result set `control.handoff`, in call order.
-  The note's text is never copied into this line, because no line restates the
-  content of an earlier line in the same turn.
+  The model's note text is never copied into this line, because no line
+  restates the content of an earlier line in the same turn. A
+  `before_handoff` hook's note is the exception: no earlier line holds it, so
+  `note_text` carries it.
 - `context_nudged { tokens, trigger_at }`. It is durable because the model saw
   it. The nudge's text is generated from this payload.
 
@@ -202,7 +204,9 @@ a breaking change.
 
 - `failed` carries `error { code, message }`. A note request that fails follows
   the normal retry rules. If it still fails, `handoff_completed` records the
-  failure, the context stays as it was, and the turn continues. A `blocking`
+  failure, the context stays as it was, and the turn continues. An overflow
+  handoff is the exception: whatever failed, its turn fails with
+  `context_overflow`. A `blocking`
   `session_start` hook that fails at the handoff ends it the same way, with
   code `hook_failed`. A `non-blocking` one only loses its context, with a
   `notice` (`docs/extensions.md`, "When a hook fails"). The automatic

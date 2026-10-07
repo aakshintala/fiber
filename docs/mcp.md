@@ -325,7 +325,9 @@ The `mcp_*` codes are listed with every other code in `docs/errors.md`.
 
 Each server has:
 
-- a command, arguments and environment, for a stdio server
+- a command, arguments and environment, for a stdio server; a secret goes in
+  the environment as `{ "secret": "<name>" }` (`docs/configuration.md`,
+  "Keys")
 - a URL, for a remote server
 - `required`
 - a startup deadline

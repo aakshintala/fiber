@@ -566,13 +566,20 @@ A session has one reasoning setting, its thinking level: `off`, `minimal`,
 `low`, `medium`, `high`, `xhigh` or `max`. Fiber has no separate effort
 setting. Each protocol module maps the level to whatever its vendor takes,
 whether a token budget, an effort parameter or both. A model
-declares the levels it supports, and the model picker offers only those. A
-level the model does not support is `invalid_arguments`.
+declares the levels it supports, and the model picker offers only those.
 
 The level comes from, in order: a `:level` suffix typed with the model, which
 applies to that session only; the session's own choice, from the picker or
 `/thinking`; `models."provider/model".thinking`; the top-level `thinking` key;
 and otherwise the model's own default (`docs/configuration.md`).
+
+A level the model does not declare is checked by where it came from. One asked
+for now, by a `:level` suffix, the session's choice or a driver, fails with
+`invalid_arguments`. A configured one, from `models."provider/model".thinking`
+or the top-level `thinking`, is ignored: the session uses the model's own
+default and logs the notice `config_key_ignored`, naming the key, the level and
+the model. A model that declares no levels, such as a local Ollama model, runs
+with none.
 
 ## Choosing the model
 

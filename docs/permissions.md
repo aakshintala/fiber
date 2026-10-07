@@ -147,7 +147,9 @@ Fiber refuses every tool call whose declared paths touch the credential
 directory in [Fiber home](state.md) (`credentials/`). This is a built-in
 deny: it is not a standing rule, no person or extension can remove it, and
 it applies to every call. It covers every effect — a read, a
-write, anything — not only reads.
+write, anything — not only reads. It refuses, the same way, every tool call
+whose declared paths touch the resolved path of a configured `file`
+credential source.
 
 Fiber does not confine tools ([Confinement](#confinement)), so without this
 deny an agent's file read could retrieve the stored tokens. The macOS Keychain is not an
