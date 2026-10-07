@@ -75,6 +75,7 @@ if [ "$scope" != platform ]; then
     cargo xtask line-cap
     cargo xtask signal-sites
     cargo xtask compiled-in
+    cargo xtask preserve-order
     cargo xtask image-isolation
     cargo xtask tui-isolation
   fi

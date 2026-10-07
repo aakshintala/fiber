@@ -21,7 +21,7 @@
 //!   as tab-separated lines
 //! - `docs-only FILE...`: whether every file is a docs file, as `docs-only: yes` or
 //!   `docs-only: no`
-//! - `line-cap`, `unsafe-table`, `signal-sites`, `compiled-in`, `dependency-list`, `image-isolation`, `tui-isolation`, `check-docs`: the checks
+//! - `line-cap`, `unsafe-table`, `signal-sites`, `compiled-in`, `dependency-list`, `preserve-order`, `image-isolation`, `tui-isolation`, `check-docs`: the checks
 
 #![allow(
     clippy::print_stdout,
@@ -210,6 +210,11 @@ fn run(args: &[String]) -> Result<bool, String> {
             let failures = rules::unlisted(&cargo_dependencies()?, &read("docs/dependencies.md")?)?;
             report("dependency-list", &failures, "ok")
         }
+        "preserve-order" => report(
+            "preserve-order",
+            &rules::preserve_order(&read("Cargo.lock")?),
+            "ok",
+        ),
         "image-isolation" => isolation(
             "image-isolation",
             &rules::IMAGE,
