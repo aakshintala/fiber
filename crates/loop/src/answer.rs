@@ -144,6 +144,7 @@ impl Loop {
             | Delivery::Job(_)
             | Delivery::JobLine(_)
             | Delivery::ExtensionExec(_)
+            | Delivery::ExtensionLog(_)
             | Delivery::Cancelled => false,
         })?;
         self.deferred.remove(at)
