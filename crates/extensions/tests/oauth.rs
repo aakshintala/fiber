@@ -1246,6 +1246,14 @@ fiber.provider("acme", { credential = { timeout = 60000, run = function()
   if mode == "callback" then
     return caught(pcall(host.oauth.callback, { port = tonumber(host.secret("port")) }))
   end
+  if mode == "rethrow" then
+    local _, first = pcall(host.oauth.open, url .. "/verify")
+    local _, second = pcall(host.oauth.poll, { url = url .. "/device/token" })
+    if second.code ~= "authentication_failed" then
+      return { token = "unexpected-poll", expires_at = 1700003600 }
+    end
+    error(first, 0)
+  end
   if mode == "poll" then
     return caught(pcall(host.oauth.poll, {
       url = url .. "/device/token",
@@ -1402,4 +1410,21 @@ fn an_unattended_open_callback_and_poll_are_authentication_failed_for_pcall() {
         );
         assert!(server.requests().is_empty(), "{mode}");
     }
+}
+
+#[test]
+fn a_caught_unattended_failure_rethrown_after_another_keeps_authentication_failed() {
+    // Two unattended failures are caught, then the first is rethrown
+    // uncaught: the callback fails with its own code and call, not the
+    // second's and not `extension_failed`.
+    let env = Env::new();
+    let ext = caught(&env, Arc::new(Recording::never()));
+    let server = OauthServer::start(vec![]);
+    env.store(&json!({ "token": "old", "expires_at": WALL + 100 }));
+    let provider = env.provider(&ext, &server, "rethrow");
+    let error = finish(&start_token(&provider)).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::AuthenticationFailed, "{error}");
+    assert!(error.to_string().contains("host.oauth.open"), "{error}");
+    assert!(!error.to_string().contains("host.oauth.poll"), "{error}");
+    assert!(server.requests().is_empty());
 }

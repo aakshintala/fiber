@@ -405,15 +405,34 @@ fn wrong_arguments_are_strings_and_coded_failures_are_tables() {
         .eval()
         .unwrap()
     };
-    // Errors in the calling code stay strings (ruling 17).
+    // Every error in the calling code stays a string (ruling 17): a key that
+    // is not a string, not UTF-8 or not a dotted key, a nil or non-JSON
+    // value, and a missing or bad scope.
     for code in [
         "return host.config.get(123)",
+        "return host.config.get(\"\\255\")",
+        "return host.config.get(\"unclosed.\\\"quote\")",
+        "host.config.set(123, 1, \"machine\")",
+        "host.config.set(\"\\255\", 1, \"machine\")",
+        "host.config.set(\"unclosed.\\\"quote\", 1, \"machine\")",
         "host.config.set(\"a\", nil, \"machine\")",
+        "host.config.set(\"a\", print, \"machine\")",
+        "host.config.set(\"a\", 1)",
         "host.config.set(\"a\", 1, \"bogus\")",
         "host.config.set(\"a\", 1, 123)",
     ] {
         assert_eq!(kind_of(code), "string", "{code}");
     }
+    assert!(!setup.config_file("machine").exists());
+    // Every operational failure is a table: an invalid file, and a file
+    // that cannot be written.
+    setup.write(&setup.config_file("machine"), "{invalid");
+    assert_eq!(kind_of("host.config.set(\"a\", 1, \"machine\")"), "table");
+    setup.write(
+        &setup.home().join("projects").join("p").join("config"),
+        "in the way",
+    );
+    assert_eq!(kind_of("host.config.set(\"a\", 1, \"project\")"), "table");
     // No session stays a string too.
     let lua = setup.lua(None);
     let clock = fakes::clock::FakeClock::new();
@@ -421,11 +440,27 @@ fn wrong_arguments_are_strings_and_coded_failures_are_tables() {
     let dir = fakes::TempDir::new("fiber-settings-types-nosession");
     crate::lua::install_prelude(&lua, &deadline, dir.path().to_path_buf(), crate::MEMORY_CAP)
         .unwrap();
-    let kind: String = lua
-        .load(
-            "local ok, err = pcall(function() return host.config.get(\"a\") end); return type(err)",
-        )
-        .eval()
-        .unwrap();
-    assert_eq!(kind, "string");
+    for code in [
+        "return host.config.get(\"a\")",
+        "host.config.set(\"a\", 1, \"machine\")",
+    ] {
+        let kind: String = lua
+            .load(format!(
+                "local ok, err = pcall(function() {code} end); return type(err)"
+            ))
+            .eval()
+            .unwrap();
+        assert_eq!(kind, "string", "{code}");
+    }
+}
+
+#[test]
+fn a_get_over_a_file_the_session_read_as_invalid_is_a_table() {
+    let setup = Setup::new();
+    setup.write(&setup.config_file("machine"), "{invalid");
+    let config = setup.load(&[]);
+    let lua = setup.lua(Some(setup.session(config, &[])));
+    let (code, message) = pcall_of(&lua, "return host.config.get(\"a\")");
+    assert_eq!(code, "config_invalid");
+    assert!(message.starts_with("host.config.get: "), "{message}");
 }

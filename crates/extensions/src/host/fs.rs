@@ -247,17 +247,20 @@ fn bad_path(call: &str) -> String {
     format!("{call}: path must be a string")
 }
 
-/// The `lock` option of a mutating call: absent or missing is no lock.
-/// Anything else is the caller's error, as the message to raise as a string.
-/// The `lock` option of a mutating call: absent or missing is no lock.
-/// Anything else is the caller's error, as the message to raise as a string.
+/// The `lock` option of a mutating call: absent or missing is no lock, and a
+/// boolean is itself. Anything else, such as `"yes"`, a table or a number,
+/// is the caller's error, as the message to raise as a string.
 fn lock(opts: &LuaValue) -> Result<bool, String> {
     match opts {
         LuaValue::Nil => Ok(false),
-        LuaValue::Table(opts) => match opts.get::<Option<bool>>("lock") {
-            Ok(value) => Ok(value.unwrap_or(false)),
-            Err(_) => Err("host.fs: `lock` must be a boolean".to_owned()),
-        },
+        LuaValue::Table(opts) => {
+            let not_boolean = || "host.fs: `lock` must be a boolean".to_owned();
+            let value = opts.get::<LuaValue>("lock").map_err(|_| not_boolean())?;
+            if value.is_nil() {
+                return Ok(false);
+            }
+            value.as_boolean().ok_or_else(not_boolean)
+        }
         LuaValue::Boolean(_)
         | LuaValue::LightUserData(_)
         | LuaValue::Integer(_)

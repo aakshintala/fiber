@@ -824,20 +824,68 @@ fn wrong_arguments_are_strings_and_coded_failures_are_tables() {
         .eval()
         .unwrap()
     };
-    // Errors in the calling code stay strings (ruling 17).
+    std::fs::write(setup.workspace().join("f.md"), "x").unwrap();
+    std::fs::create_dir(setup.workspace().join("dir")).unwrap();
+    std::fs::write(setup.workspace().join("dir/kid.md"), "x").unwrap();
+    // Every error in the calling code stays a string (ruling 17): a path,
+    // data, options or `lock` of the wrong type, and a bad scope.
     for code in [
         "return host.fs.read({})",
+        "host.fs.write(1, \"x\")",
+        "host.fs.write(\"f.md\", 1)",
         "host.fs.write(\"f.md\", \"x\", \"yes\")",
+        "host.fs.write(\"f.md\", \"x\", { lock = \"yes\" })",
+        "host.fs.write(\"f.md\", \"x\", { lock = {} })",
+        "host.fs.write(\"f.md\", \"x\", { lock = 1 })",
+        "return host.fs.list(1)",
+        "return host.fs.stat(1)",
+        "host.fs.mkdir(1)",
+        "host.fs.mkdir(\"d\", \"yes\")",
+        "host.fs.mkdir(\"d\", { lock = \"yes\" })",
+        "host.fs.remove(1)",
+        "host.fs.remove(\"f.md\", 7)",
+        "host.fs.remove(\"f.md\", { lock = {} })",
+        "host.fs.rename(1, \"g.md\")",
+        "host.fs.rename(\"f.md\", 1)",
+        "host.fs.rename(\"f.md\", \"g.md\", \"yes\")",
+        "host.fs.rename(\"f.md\", \"g.md\", { lock = 1 })",
         "return host.data_dir(\"elsewhere\")",
         "return host.data_dir(123)",
     ] {
         assert_eq!(kind_of(code), "string", "{code}");
     }
-    // Coded failures stay tables.
+    let message: String = lua
+        .load(
+            "local ok, err = pcall(host.fs.write, \"f.md\", \"x\", { lock = \"yes\" }); return err",
+        )
+        .eval()
+        .unwrap();
+    assert_eq!(message, "host.fs: `lock` must be a boolean");
+    // A wrong `lock` refuses before anything is written.
+    assert_eq!(
+        std::fs::read_to_string(setup.workspace().join("f.md")).unwrap(),
+        "x"
+    );
+    assert!(!setup.workspace().join("d").exists());
+    // Every operational failure is a table.
     for code in [
         "return host.fs.read(\"missing.md\")",
+        "host.fs.write(\"no/parent/x.md\", \"x\")",
         "return host.fs.list(\"missing.md\")",
+        "return host.fs.list(\"f.md\")",
+        "host.fs.mkdir(\"f.md/kid\")",
+        "host.fs.remove(\"dir\")",
+        "host.fs.rename(\"gone.md\", \"there.md\")",
     ] {
         assert_eq!(kind_of(code), "table", "{code}");
+    }
+    // An absent, nil or boolean `lock` is accepted.
+    for code in [
+        "host.fs.write(\"f.md\", \"y\")",
+        "host.fs.write(\"f.md\", \"y\", {})",
+        "host.fs.write(\"f.md\", \"y\", { lock = false })",
+        "host.fs.write(\"f.md\", \"y\", { lock = true })",
+    ] {
+        assert_eq!(kind_of(code), "nil", "{code}");
     }
 }
