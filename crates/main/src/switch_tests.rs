@@ -17,7 +17,7 @@ use contract::{ErrorCode, ThinkingLevel};
 use extensions::Providers;
 use serde_json::json;
 
-use super::{Credentials, Switching, prepare, sentence};
+use super::{Credentials, Switching, prepare, resolve, sentence};
 
 /// The fixture home, workspace and config: `fake` with `m`, `n` (low and
 /// high, defaulting low, with an addendum) and `r`; `claude` with the
@@ -902,5 +902,115 @@ fn a_retained_lua_provider_without_a_cache_does_not_resolve() {
             .count(),
         listed,
         "the clone loaded no listing"
+    );
+}
+
+/// A bare id one provider names resolves; pushing the reference again
+/// would list it twice and reject as ambiguous, as would treating one
+/// match as many.
+#[test]
+fn a_bare_id_one_provider_names_resolves() {
+    let fixture = fixture("fiber-switch-bare-single");
+    let switching = switching(&fixture, &[]);
+    let made = prepared(&switching, &args("r"), None);
+    assert_eq!(made.model.reference, "fake/r");
+}
+
+/// A qualified reference outside the credential map rejects in `resolve`
+/// itself; always taking the first match arm would return it as `Ok`, and
+/// only `prepare`'s second refusal would hide the miss.
+#[test]
+fn a_typed_reference_outside_the_map_rejects_at_resolve() {
+    let fixture = fixture("fiber-switch-resolve-outside");
+    let (providers, _) = Providers::load(&fixture.home).unwrap();
+    let in_map = |name: &str| name == "fake" || name == "claude";
+    let error = match resolve(&providers, &[], &in_map, "other/m") {
+        Ok(_) => panic!("the typed reference resolved"),
+        Err(error) => error,
+    };
+    assert_eq!(error.code, ErrorCode::InvalidArguments);
+    assert_eq!(
+        error.message,
+        "The credential for `other` was not read when this session started; \
+         start a session with `--model <ref>`."
+    );
+}
+
+/// A `:<level>` id no literal names reports the stripped id's ambiguity,
+/// not the full id's: always taking the full-id ambiguity arm would name
+/// `m:high`, and reporting ambiguity on an empty match list would too.
+#[test]
+fn a_suffixed_id_without_a_literal_reports_the_stripped_ambiguity() {
+    let fixture = fixture("fiber-switch-stripped-suffix");
+    let switching = switching(&fixture, &[]);
+    let rejection = rejected(&switching, &args("m:high"), None);
+    assert_eq!(rejection.code, ErrorCode::InvalidArguments);
+    assert_eq!(
+        rejection.message,
+        "The model `m` is offered by more than one provider: fake/m, other/m. \
+         Name one as `provider/model`."
+    );
+}
+
+/// Adds extensions `lit1` and `lit2` each naming the literal `n:high`: a
+/// model id ending in a recognised thinking level that two registry
+/// providers share.
+fn with_two_literal_providers(fixture: &Fixture) {
+    for name in ["lit1", "lit2"] {
+        let dir = fixture.home.join(format!("extensions/{name}"));
+        std::fs::create_dir_all(dir.join("providers")).unwrap();
+        std::fs::write(
+            dir.join("extension.json"),
+            json!({"name": name, "version": "v0.0.0", "fiber": "0.0.0", "api": 1}).to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join(format!("providers/{name}.json")),
+            json!({
+                "name": name,
+                "models": [
+                    {"id": "n:high", "protocol": "openai-responses",
+                     "base_url": "http://127.0.0.1:9/v1", "context_window": 1000},
+                ],
+            })
+            .to_string(),
+        )
+        .unwrap();
+    }
+}
+
+/// Two registry literals sharing one id are ambiguous on the full id, even
+/// when the naming list holds only one: skipping the guard would fall back
+/// to the stripped id, and pushing only duplicates would drop the other.
+#[test]
+fn two_registry_literals_sharing_one_id_are_ambiguous_on_the_full_id() {
+    let fixture = fixture("fiber-switch-literal-registry-ambiguity");
+    with_two_literal_providers(&fixture);
+    let config = config(&fixture, &[]);
+    let (providers, _) = Providers::load(&fixture.home).unwrap();
+    let credentials: Credentials = [("lit1", keyed("default"))]
+        .into_iter()
+        .map(|(name, entry)| (name.to_owned(), entry))
+        .collect();
+    // The naming list holds only one of the two literals.
+    let naming = vec![("lit1".to_owned(), "n:high".to_owned())];
+    let switching = Switching::new(providers, &[], naming, config, credentials).unwrap();
+    let rejection = rejected(&switching, &args("n:high"), None);
+    assert_eq!(rejection.code, ErrorCode::InvalidArguments);
+    assert_eq!(
+        rejection.message,
+        "The model `n:high` is offered by more than one provider: lit1/n:high, lit2/n:high. \
+         Name one as `provider/model`."
+    );
+}
+
+/// The credential sentence is literal text: comparing against `sentence`
+/// itself would pass even when the function returns nothing or anything.
+#[test]
+fn the_credential_sentence_is_literal() {
+    assert_eq!(
+        sentence("other"),
+        "The credential for `other` was not read when this session started; \
+         start a session with `--model <ref>`."
     );
 }
