@@ -253,6 +253,62 @@ fn force_lists_losing_worktrees_as_forced() {
 }
 
 #[test]
+fn revalidation_covers_each_cleanliness_and_force_case_with_exact_totals() {
+    for (case, initially_dirty, force, make_dirty, should_remove) in [
+        ("clean-unforced", false, false, false, true),
+        ("clean-forced", false, true, false, true),
+        ("dirty-unforced", false, false, true, false),
+        ("dirty-forced", true, true, false, true),
+    ] {
+        let setup = Setup::new(&format!("cli-prune-wt-guard-{case}"));
+        let dir = setup.worktree("s_00000000000000e1");
+        if initially_dirty {
+            fs::write(dir.join("notes.txt"), "scratch").unwrap();
+        }
+        let bytes = log::session_bytes(&dir);
+        assert!(bytes > 0);
+        let mut planned = select(&setup, force);
+        assert_eq!(listed_bytes(&planned), bytes, "{case}: listed bytes");
+        let mut before_remove = |path: &Path| {
+            if make_dirty {
+                fs::write(path.join("notes.txt"), "scratch").unwrap();
+            }
+        };
+        let removed = remove_planned(&setup.home(), &mut planned, force, &mut before_remove);
+        assert_eq!(removed.total, 1, "{case}: total");
+        assert_eq!(
+            removed.freed,
+            if should_remove { bytes } else { 0 },
+            "{case}: freed"
+        );
+        if should_remove {
+            assert!(
+                removed.failures.is_empty(),
+                "{case}: {:?}",
+                removed.failures
+            );
+            assert!(!dir.exists(), "{case}: worktree remains");
+            assert!(
+                !setup.branch_exists("s_00000000000000e1"),
+                "{case}: branch remains"
+            );
+        } else {
+            assert_eq!(removed.failures.len(), 1, "{case}: failures");
+            assert_eq!(
+                removed.failures[0].2,
+                "it changed since it was listed: removing it would now lose uncommitted or ignored files",
+                "{case}: guard reason"
+            );
+            assert!(dir.is_dir(), "{case}: worktree was removed");
+            assert!(
+                setup.branch_exists("s_00000000000000e1"),
+                "{case}: branch was removed"
+            );
+        }
+    }
+}
+
+#[test]
 fn force_removes_the_dirty_and_unique_cases() {
     let setup = Setup::new("cli-prune-wt-force");
     let dirty = setup.worktree("s_00000000000000e2");
