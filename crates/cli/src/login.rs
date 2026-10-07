@@ -2,9 +2,10 @@
 //! `docs/configuration.md`, "Secrets"; `docs/model-routing.md`, "Logging
 //! in"): a provider's key is stored in `credentials/<stored>/<label>`, where
 //! `<stored>` is the credential the provider reads and `<label>` is the
-//! `--as` label (`default` without one), and deleted again. No
-//! key reaches stdout, stderr, `Debug` or a log: it is a [`Secret`] from the
-//! moment it is read.
+//! `--as` label (`default` without one), and deleted again. A secret an
+//! installed extension declares is stored in `credentials/<name>`. No key or
+//! secret reaches stdout, stderr, `Debug` or a log: it is a [`Secret`] from
+//! the moment it is read.
 
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::os::fd::{AsFd, OwnedFd};
@@ -13,8 +14,8 @@ use std::thread::{self, JoinHandle};
 
 use config::{
     Config, ConfigError, CredentialFile, CredentialSource, ProviderData, Secret, Sources,
-    credential_labels, delete_credential, delete_credential_held, read_credential,
-    set_global_if_unset, store_credential,
+    credential_labels, delete_credential, delete_credential_held, read_credential, read_secret,
+    set_global_if_unset, store_credential, store_secret,
 };
 use contract::ErrorCode;
 use contract::shapes::Failure;
@@ -215,22 +216,64 @@ fn installed<'a>(providers: &'a Providers, name: &str) -> Result<&'a ProviderDat
     })
 }
 
-/// The provider a person picks from the menu, by number or by name.
+/// The secrets installed extensions declare, less any name that is also a
+/// provider: that name always logs in to the provider.
+fn declared(providers: &Providers) -> impl Iterator<Item = &str> {
+    providers
+        .secrets()
+        .filter(|name| providers.get(name).is_none())
+}
+
+/// The usage error for a name that is neither a provider nor a declared
+/// secret, listing both.
+fn unknown(providers: &Providers, name: &str) -> Failure {
+    let names: Vec<&str> = providers.names().collect();
+    let secrets: Vec<&str> = declared(providers).collect();
+    let names = if names.is_empty() {
+        "no provider is installed".to_owned()
+    } else {
+        format!("the installed providers are {}", names.join(", "))
+    };
+    let secrets = if secrets.is_empty() {
+        "no installed extension declares a secret".to_owned()
+    } else {
+        format!("the declared secrets are {}", secrets.join(", "))
+    };
+    usage(format!(
+        "`{name}` is neither an installed provider nor a declared secret; {names}, and {secrets}."
+    ))
+}
+
+/// The provider or declared secret a person picks from the menu, by number
+/// or by name. Providers are numbered first, then secrets.
 fn choose(io: &mut LoginIo<'_>) -> Result<String, Failure> {
     if !io.terminal {
         return Err(usage(
-            "`fiber login` takes a provider when there is no terminal to ask on.",
+            "`fiber login` takes a provider or a secret's name when there is no terminal to ask on.",
         ));
     }
-    let names: Vec<&str> = io.providers.names().collect();
-    if names.is_empty() {
-        return Err(usage("No provider is installed."));
+    let providers: Vec<&str> = io.providers.names().collect();
+    let secrets: Vec<&str> = declared(io.providers).collect();
+    if providers.is_empty() && secrets.is_empty() {
+        return Err(usage(
+            "No provider is installed, and no installed extension declares a secret.",
+        ));
     }
-    let mut menu = String::from("Providers:\n");
-    for (index, name) in names.iter().enumerate() {
+    let mut menu = String::new();
+    if !providers.is_empty() {
+        menu.push_str("Providers:\n");
+    }
+    for (index, name) in providers.iter().enumerate() {
         menu.push_str(&format!("  {}) {name}\n", index + 1));
     }
-    menu.push_str("Provider, by number or name: ");
+    if !secrets.is_empty() {
+        menu.push_str("Secrets:\n");
+    }
+    for (index, name) in secrets.iter().enumerate() {
+        menu.push_str(&format!("  {}) {name}\n", index + providers.len() + 1));
+    }
+    menu.push_str("Provider or secret, by number or name: ");
+    let names: Vec<&str> = providers.into_iter().chain(secrets).collect();
     io.err
         .write_all(menu.as_bytes())
         .and_then(|()| io.err.flush())
@@ -239,7 +282,7 @@ fn choose(io: &mut LoginIo<'_>) -> Result<String, Failure> {
     io.stdin.read_line(&mut answer).map_err(terminal_failure)?;
     let answer = answer.trim();
     if answer.is_empty() {
-        return Err(usage("No provider was chosen."));
+        return Err(usage("Nothing was chosen."));
     }
     let picked = match answer.parse::<usize>() {
         Ok(number) => number.checked_sub(1).and_then(|index| names.get(index)),
@@ -247,7 +290,7 @@ fn choose(io: &mut LoginIo<'_>) -> Result<String, Failure> {
     };
     picked.map(|name| (*name).to_owned()).ok_or_else(|| {
         usage(format!(
-            "`{answer}` is neither a listed number nor an installed provider."
+            "`{answer}` is neither a listed number nor an installed provider or declared secret."
         ))
     })
 }
@@ -261,19 +304,57 @@ fn credential_key(name: &str) -> String {
     }
 }
 
-/// Stores a provider's key as `credentials/<stored>/<label>`, and names the
-/// label in `providers."<name>".credential` when that is unset
-/// (`docs/model-routing.md`, "Logging in").
+/// Stores a secret an installed extension declares as `credentials/<name>`
+/// (`docs/configuration.md`, "Secrets"). One already stored is replaced, and
+/// the result line says so: logging in again is how a key is rotated.
+fn store_declared(name: &str, label: Option<&str>, io: &mut LoginIo<'_>) -> Result<(), Failure> {
+    if label.is_some() {
+        return Err(usage(format!(
+            "--as applies only to a provider, and `{name}` is a declared secret."
+        )));
+    }
+    let replaced = read_secret(io.home, name)
+        .map_err(config_failure)?
+        .is_some();
+    let prompt = if io.terminal {
+        format!("Value for {name}: ")
+    } else {
+        String::new()
+    };
+    let value = io
+        .keys
+        .read_key(&prompt, io.stdin, io.err)
+        .map_err(terminal_failure)?;
+    if value.expose().is_empty() {
+        return Err(usage("No value was given; nothing was stored."));
+    }
+    store_secret(io.home, name, &value).map_err(config_failure)?;
+    let done = if replaced { "replaced" } else { "stored" };
+    writeln!(io.err, "fiber: {done} credentials/{name}").map_err(terminal_failure)
+}
+
+/// Logs in to the provider `name`, or stores the secret `name` an installed
+/// extension declares. A provider's key goes in
+/// `credentials/<stored>/<label>`, and the label is named in
+/// `providers."<name>".credential` when that is unset
+/// (`docs/model-routing.md`, "Logging in"). A name that is both is the
+/// provider.
 pub(crate) fn login(
-    provider: Option<&str>,
+    name: Option<&str>,
     label: Option<&str>,
     io: &mut LoginIo<'_>,
 ) -> Result<(), Failure> {
-    let name = match provider {
+    let name = match name {
         Some(name) => name.to_owned(),
         None => choose(io)?,
     };
-    let data = installed(io.providers, &name)?;
+    let Some(data) = io.providers.get(&name) else {
+        return if io.providers.secrets().any(|secret| secret == name) {
+            store_declared(&name, label, io)
+        } else {
+            Err(unknown(io.providers, &name))
+        };
+    };
     let stored = stored_name(data);
     // A key login reveals no email; the OAuth login of #311 passes its own.
     let label = chosen_label(label, None);
@@ -438,8 +519,8 @@ fn home_and_providers() -> Result<(std::path::PathBuf, Providers), Failure> {
     Ok((home, providers))
 }
 
-/// `fiber login [<provider>] [--as <label>]`.
-pub fn run_login(provider: Option<&str>, label: Option<&str>) -> i32 {
+/// `fiber login [<name>] [--as <label>]`.
+pub fn run_login(name: Option<&str>, label: Option<&str>) -> i32 {
     let ran = home_and_providers().and_then(|(home, providers)| {
         let stdin = io::stdin();
         let on_terminal = stdin.is_terminal();
@@ -451,7 +532,7 @@ pub fn run_login(provider: Option<&str>, label: Option<&str>) -> i32 {
             Box::new(Plain)
         };
         login(
-            provider,
+            name,
             label,
             &mut LoginIo {
                 home: &home,

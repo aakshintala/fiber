@@ -108,6 +108,19 @@ impl Setup {
         .unwrap();
     }
 
+    /// Installs the extension `extension` with no provider, declaring
+    /// `secrets`.
+    fn declare(&self, extension: &str, secrets: &[&str]) {
+        let dir = self.home().join("extensions").join(extension);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("extension.json"),
+            json!({"name": extension, "version": "v0.0.0", "fiber": "0.0.0", "api": 1, "secrets": secrets})
+                .to_string(),
+        )
+        .unwrap();
+    }
+
     fn providers(&self) -> Providers {
         let (providers, notices) = Providers::load(&self.home()).unwrap();
         assert!(notices.is_empty(), "{notices:?}");
@@ -381,14 +394,18 @@ fn an_unknown_provider_is_a_usage_error_naming_the_installed_ones() {
     let (result, _) = setup.login(Some("nope"), false, "", &mut Fake::new(KEY));
     let e = failed(result);
     assert_eq!(e.code, ErrorCode::Usage);
-    assert!(e.message.contains("none is installed"), "{}", e.message);
+    assert!(
+        e.message.contains("no provider is installed"),
+        "{}",
+        e.message
+    );
     setup.install("zed", None, None);
     setup.install("alpha", None, None);
     let (result, _) = setup.login(Some("nope"), false, "", &mut Fake::new(KEY));
     let e = failed(result);
     assert_eq!(
         e.message,
-        "`nope` is not an installed provider; the installed providers are alpha, zed. Run `fiber --help` for usage."
+        "`nope` is neither an installed provider nor a declared secret; the installed providers are alpha, zed, and no installed extension declares a secret. Run `fiber --help` for usage."
     );
     let (result, _) = setup.logout(Some("nope"));
     assert_eq!(failed(result).code, ErrorCode::Usage);
@@ -423,7 +440,9 @@ fn the_menu_picks_a_provider_by_number_or_by_name() {
         let (result, err) = setup.login(None, true, typed, &mut Fake::new(KEY));
         result.unwrap();
         assert!(
-            err.starts_with("Providers:\n  1) alpha\n  2) beta\nProvider, by number or name: "),
+            err.starts_with(
+                "Providers:\n  1) alpha\n  2) beta\nProvider or secret, by number or name: "
+            ),
             "{err}"
         );
         assert!(err.contains(&format!("Key for {stored}: ")), "{err}");
@@ -457,7 +476,7 @@ fn the_menu_refuses_a_bad_answer_and_stores_nothing() {
         let e = failed(result);
         assert_eq!(e.code, ErrorCode::Usage, "{typed:?}");
         if typed.trim().is_empty() {
-            assert!(e.message.contains("No provider was chosen"), "{typed:?}");
+            assert!(e.message.contains("Nothing was chosen"), "{typed:?}");
         } else {
             assert!(e.message.contains("is neither a listed"), "{typed:?}");
         }
@@ -485,10 +504,9 @@ fn a_terminal_with_no_provider_installed_says_so() {
     let (result, _) = setup.login(None, true, "1\n", &mut Fake::new(KEY));
     let e = failed(result);
     assert_eq!(e.code, ErrorCode::Usage);
-    assert!(
-        e.message.starts_with("No provider is installed"),
-        "{}",
-        e.message
+    assert_eq!(
+        e.message,
+        "No provider is installed, and no installed extension declares a secret. Run `fiber --help` for usage."
     );
 }
 
@@ -733,3 +751,5 @@ fn login_of_an_unknown_provider_is_a_usage_failure() {
 
 #[path = "login_label_tests.rs"]
 mod label;
+#[path = "login_secret_tests.rs"]
+mod secret;

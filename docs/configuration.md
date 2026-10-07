@@ -257,9 +257,11 @@ extension declares each name it reads in its manifest's `secrets`, and
 extension prefixes its names with its own name, such as `acme.api_key`.
 `fiber login <name>` stores a declared secret: it reads the value from a
 hidden prompt, or from stdin without a terminal, and writes
-`credentials/<name>` with mode 0600. A name that is neither a provider nor a
-secret an installed extension declares is refused, so a mistyped name is
-caught rather than stored where nothing reads it.
+`credentials/<name>` with mode 0600. A secret that is already stored is
+replaced, and the command says so, because logging in again is how a key is
+rotated. A name that is neither a provider nor a secret an installed extension
+declares is refused, so a mistyped name is caught rather than stored where
+nothing reads it.
 
 This is one namespace, not a wall between extensions. An extension runs with
 the account's full rights and could read `credentials/` with `host.fs` anyway
