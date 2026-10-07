@@ -39,6 +39,7 @@ fn serve(exe: Result<PathBuf, String>) -> i32 {
     };
     finish(hub::serve(
         &home,
+        hub::Mode::OnDemand,
         configure,
         env!("CARGO_PKG_VERSION"),
         Arc::new(SpawnStarter { exe }),
