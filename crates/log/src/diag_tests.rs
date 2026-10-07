@@ -24,11 +24,6 @@ type Reader = fn() -> Option<u64>;
 /// The wall-clock limit on every channel receive below.
 const LIMIT: Duration = Duration::from_secs(30);
 
-/// How long the pair's seam waits for the rival to finish its write:
-/// under the single lock the rival stays blocked and the wait times
-/// out; with split locks the rival completes inside the wait.
-const SEAM_WAIT: Duration = Duration::from_millis(300);
-
 struct Home {
     held: fakes::TempDir,
 }
@@ -333,50 +328,24 @@ fn a_line_racing_attach_lands_whole_in_the_file_its_order_implies() {
     assert_eq!(after["session_id"], "s_0123456789abcdef");
 }
 
-/// `peak_memory_then_info` holds one lock for both lines: the seam runs
-/// between the pair's two appends, so it signals `inside`, then waits
-/// for the rival to finish its write. Under the single lock the rival
-/// stays blocked, the wait times out, and the file reads `peak_memory`,
-/// `hub_stopped`, `other`; with split locks the rival lands between
-/// them. Every wait is bounded and nothing sleeps.
+/// `peak_memory_then_info` holds one lock across both lines: the seam
+/// runs between the pair's two appends and reports whether the state
+/// lock is still held, which only the single-lock implementation can
+/// satisfy. No threads, no waits: the property is read directly off
+/// the lock.
 #[test]
 fn peak_memory_then_info_writes_its_pair_with_nothing_between() {
     let home = Home::new("ld-pair-forced");
-    let (inside_tx, inside_rx) = mpsc::channel::<()>();
-    let (rival_done_tx, rival_done_rx) = mpsc::channel::<()>();
-    let rival_done_rx = Arc::new(Mutex::new(rival_done_rx));
-    let between: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
-        inside_tx.send(()).unwrap();
-        // Times out under the single lock, the pass path; with split
-        // locks the rival completes inside the wait and the file order
-        // below fails the test.
-        let _rival_finished = rival_done_rx.lock().unwrap().recv_timeout(SEAM_WAIT);
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let between: Arc<dyn Fn(bool) + Send + Sync> = Arc::new({
+        let calls = Arc::clone(&calls);
+        move |held| calls.lock().unwrap().push(held)
     });
-    let diag = Arc::new(
-        home.diag(Process::Hub, Level::Debug)
-            .with_peak(|| Some(7))
-            .with_between(between),
-    );
-    let pair = thread::Builder::new()
-        .name("log-test-pair".to_owned())
-        .spawn({
-            let diag = Arc::clone(&diag);
-            move || diag.peak_memory_then_info("hub_stopped", "The hub stopped: signal.")
-        })
-        .unwrap();
-    inside_rx.recv_timeout(LIMIT).unwrap();
-    let rival = thread::Builder::new()
-        .name("log-test-rival".to_owned())
-        .spawn({
-            let diag = Arc::clone(&diag);
-            move || {
-                diag.line(Severity::Info, None, "other", "Other.");
-                rival_done_tx.send(()).unwrap();
-            }
-        })
-        .unwrap();
-    pair.join().unwrap();
-    rival.join().unwrap();
+    home.diag(Process::Hub, Level::Debug)
+        .with_peak(|| Some(7))
+        .with_between(between)
+        .peak_memory_then_info("hub_stopped", "The hub stopped: signal.");
+    assert_eq!(*calls.lock().unwrap(), [true]);
     let lines: Vec<serde_json::Value> = fs::read_to_string(home.file("hub.log"))
         .unwrap()
         .lines()
@@ -387,7 +356,7 @@ fn peak_memory_then_info_writes_its_pair_with_nothing_between() {
             .iter()
             .map(|line| line["code"].as_str().unwrap())
             .collect::<Vec<_>>(),
-        ["peak_memory", "hub_stopped", "other"],
+        ["peak_memory", "hub_stopped"],
     );
     assert_eq!(lines[0]["data"]["peak_kib"], 7);
 }

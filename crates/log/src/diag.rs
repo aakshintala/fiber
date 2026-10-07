@@ -93,12 +93,13 @@ pub struct Diag {
     clock: Arc<dyn Clock>,
     rotate_at: Option<u64>,
     peak: fn() -> Option<u64>,
-    /// A hook run between [`Diag::peak_memory_then_info`]'s two appends.
-    /// Test-only: it forces the race the pair closes, so a split-lock
-    /// implementation lets a rival through during the hook
-    /// (`docs/testing.md`, "Races are forced, not waited for"). Always
-    /// `None` outside tests, where the branch below never fires.
-    between: Option<Arc<dyn Fn() + Send + Sync>>,
+    /// A hook run between [`Diag::peak_memory_then_info`]'s two appends,
+    /// told whether the state lock is still held. Test-only: the pair
+    /// must hold one lock across both appends, so a split-lock
+    /// implementation reports an unlocked seam (`docs/testing.md`,
+    /// "Races are forced, not waited for"). Always `None` outside
+    /// tests, where the branch below never fires.
+    between: Option<Arc<dyn Fn(bool) + Send + Sync>>,
     state: Mutex<State>,
 }
 
@@ -152,10 +153,11 @@ impl Diag {
     }
 
     /// Runs `between` between [`Diag::peak_memory_then_info`]'s two
-    /// appends, before the writer is shared. Test-only: see [`Diag`].
+    /// appends, telling it whether the state lock is still held, before
+    /// the writer is shared. Test-only: see [`Diag`].
     #[doc(hidden)]
     #[must_use]
-    pub fn with_between(mut self, between: Arc<dyn Fn() + Send + Sync>) -> Self {
+    pub fn with_between(mut self, between: Arc<dyn Fn(bool) + Send + Sync>) -> Self {
         self.between = Some(between);
         self
     }
@@ -218,8 +220,11 @@ impl Diag {
                 Some(&data),
             );
         }
+        // The same thread still owns `state`, so `try_lock` never
+        // blocks: it reports `WouldBlock` exactly when the single lock
+        // is correctly held across both appends.
         if let Some(between) = &self.between {
-            between();
+            between(self.state.try_lock().is_err());
         }
         self.append(&state, "info", None, code, message, None);
     }

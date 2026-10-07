@@ -73,10 +73,11 @@ impl Diag {
         }
     }
 
-    /// Runs `between` between the stop lines' two appends, before the hub
-    /// shares the log. Test-only: it forces the race the pair closes.
+    /// Runs `between` between the stop lines' two appends, telling it
+    /// whether the log's lock is still held, before the hub shares the
+    /// log. Test-only: it forces the race the pair closes.
     #[cfg(test)]
-    pub(crate) fn with_between(self, between: Arc<dyn Fn() + Send + Sync>) -> Self {
+    pub(crate) fn with_between(self, between: Arc<dyn Fn(bool) + Send + Sync>) -> Self {
         Self {
             log: self.log.with_between(between),
         }
