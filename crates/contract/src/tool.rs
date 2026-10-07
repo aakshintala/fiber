@@ -61,17 +61,6 @@ pub struct Asking {
     pub check: Option<Check>,
 }
 
-impl std::fmt::Debug for Asking {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Asking")
-            .field("interaction", &self.interaction)
-            .field("action_ids", &self.action_ids)
-            .field("until", &self.until)
-            .field("check", &self.check.is_some())
-            .finish()
-    }
-}
-
 /// How an [`Ask::ask`] ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Answered {

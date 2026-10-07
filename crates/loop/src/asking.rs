@@ -215,7 +215,7 @@ impl AskSlot {
 /// Closes every stream's slot when dropped: `run_batch` returns, `Ok` or
 /// `Err`, and no call's thread is left blocked in an ask while the scope
 /// joins it. Each stream is added before its worker is spawned.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub(crate) struct Release(Vec<Arc<Stream>>);
 
 impl Release {

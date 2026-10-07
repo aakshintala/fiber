@@ -120,16 +120,6 @@ struct Flag {
     to: Option<Arc<dyn Wake>>,
 }
 
-impl std::fmt::Debug for SharedWake {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let flag = lock(&self.inner);
-        f.debug_struct("SharedWake")
-            .field("set", &flag.set)
-            .field("forwarding", &flag.to.is_some())
-            .finish()
-    }
-}
-
 impl SharedWake {
     /// Parks until `until` on `clock`, an emit, a call returning or a clock
     /// move. When the flag is set, a bump landed since the last pass and
@@ -223,7 +213,6 @@ struct StreamInner {
 /// action. The loop thread takes what is due, flushes what is held when the
 /// call returns, and takes the returned output, each under one lock. Its
 /// [`Ask`] raises the call's interaction for the loop thread to write.
-#[derive(Debug)]
 pub(crate) struct Stream {
     inner: Mutex<StreamInner>,
     wake: Arc<SharedWake>,
