@@ -789,12 +789,17 @@ fn how_left_names_both_exit_lines() {
 fn a_session_resumed_before_its_end_is_read_is_not_crashed() {
     let temp = Temp::new();
     let (feed, clock) = new_feed(&temp);
-    // The resumed run has written past `fiber_exited` already.
     let id = temp.session(1, "p", "fiber_started");
     let (session, line) = running(&temp, &id, "idle");
     let mut sub = Sub::new(&feed);
     start(&feed, &clock);
     assert_eq!(sub.raw("the status"), line);
+    // The followed run exits, and the resumed run has written past its
+    // `fiber_exited` already.
+    let log = recent::session_dir(&temp.dir, "p", &id).join("events.jsonl");
+    let mut file = fs::OpenOptions::new().append(true).open(log).unwrap();
+    file.write_all(b"{\"kind\":\"fiber_exited\"}\n{\"kind\":\"fiber_started\"}\n")
+        .unwrap();
     let back = session.resumed(&temp.dir, &id);
     let again = status_line(&id, &status("again", "/w", "idle", None));
     back.say(&again);
