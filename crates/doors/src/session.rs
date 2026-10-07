@@ -26,7 +26,10 @@ use contract::{CommandId, ErrorCode, SessionId};
 use log::{Log, Watcher};
 
 mod event;
+mod shells;
 pub(crate) use event::envelope;
+use shells::RunningShells;
+pub(crate) use shells::Stopped;
 
 // debt: 2 s grace is picked, not measured; a slow client's measured drain time would set it.
 /// How long [`Session::close`] waits for a connection's writer to finish
@@ -299,19 +302,6 @@ impl Session {
 }
 
 impl Gate {
-    /// Waits until no driver shell is registered: each has answered.
-    fn wait_shells(&self) {
-        let mut shells = lock(&self.shells);
-        while !shells.running.is_empty() {
-            #[cfg(test)]
-            self.note(tests::Probe::ShellsWaiting);
-            shells = self
-                .shell_ended
-                .wait(shells)
-                .unwrap_or_else(PoisonError::into_inner);
-        }
-    }
-
     #[cfg(test)]
     fn note(&self, point: tests::Probe) {
         let probe = lock(&self.probe).clone();
@@ -382,31 +372,6 @@ impl Gate {
         log.emit(&Event::Clients(Clients { count }));
     }
 
-    /// Stops a running turn and every driver shell. The shells are
-    /// cancelled after the registry lock is released, so a shell's return
-    /// can remove its entry without waiting on this call.
-    pub(crate) fn stop_running(&self) -> Stopped {
-        let turn = lock(&self.cancel).as_ref().is_some_and(|cancel| cancel());
-        let shells = lock(&self.shells).running.clone();
-        cancel_each(&shells);
-        Stopped {
-            turn,
-            shell: !shells.is_empty(),
-        }
-    }
-
-    /// Marks the gate so a shell that registers later is cancelled at once,
-    /// and cancels the shells already running. Closing the socket does not
-    /// stop a tool blocked in `run`.
-    fn cancel_shells(&self) {
-        let running = {
-            let mut shells = lock(&self.shells);
-            shells.stopped = true;
-            shells.running.clone()
-        };
-        cancel_each(&running);
-    }
-
     pub(crate) fn commands(&self) -> Vec<CommandInfo> {
         lock(&self.commands).clone()
     }
@@ -417,27 +382,6 @@ impl Gate {
 
     pub(crate) fn driver_shell(&self) -> Option<Arc<dyn Tool>> {
         lock(&self.driver_shell).clone()
-    }
-
-    /// Registers a driver shell's cancel. After `close` or the stopper it
-    /// is registered too, so they wait for its thread, and cancelled at once.
-    pub(crate) fn track_shell(&self, cancel: Arc<crate::shell::ShellCancel>) {
-        let stopped = {
-            let mut shells = lock(&self.shells);
-            shells.running.push(Arc::clone(&cancel));
-            shells.stopped
-        };
-        // After the lock: `cancel` wakes the tool, which must not need this lock.
-        if stopped {
-            cancel.cancel();
-        }
-    }
-
-    pub(crate) fn untrack_shell(&self, cancel: &Arc<crate::shell::ShellCancel>) {
-        lock(&self.shells)
-            .running
-            .retain(|tracked| !Arc::ptr_eq(tracked, cancel));
-        self.shell_ended.notify_all();
     }
 
     pub(crate) fn deliver(&self, delivery: Delivery) {
@@ -547,23 +491,6 @@ impl Wake for Gate {
         // The delivery means only that the loop should look again.
         self.deliver(Delivery::Cancelled);
     }
-}
-
-struct RunningShells {
-    stopped: bool,
-    running: Vec<Arc<crate::shell::ShellCancel>>,
-}
-
-fn cancel_each(shells: &[Arc<crate::shell::ShellCancel>]) {
-    for shell in shells {
-        shell.cancel();
-    }
-}
-
-/// What [`Gate::stop_running`] found running.
-pub(crate) struct Stopped {
-    pub(crate) turn: bool,
-    pub(crate) shell: bool,
 }
 
 fn open_in(
