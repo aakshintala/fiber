@@ -2359,6 +2359,18 @@ fn the_declarer_changes_the_tools_answer() {
                 named(&[("edit", 1), ("write", 2), ("zz", 3)]),
                 "a name after every other goes last"
             );
+            declare("aaa", Some(tool_info("aaa", 4)));
+            assert_eq!(
+                tools_answer(&client, "c_6"),
+                named(&[("aaa", 4), ("edit", 1), ("write", 2), ("zz", 3)]),
+                "a name before every other goes first"
+            );
+            declare("aaa", None);
+            assert_eq!(
+                tools_answer(&client, "c_7"),
+                named(&[("edit", 1), ("write", 2), ("zz", 3)]),
+                "removes the first entry"
+            );
             Ok(())
         })
         .unwrap();

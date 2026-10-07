@@ -274,24 +274,22 @@ impl Session {
                 return;
             }
             let mut tools = lock(&gate.tools);
-            let at = tools.iter().position(|tool| tool.name == name);
-            match (at, info) {
-                (Some(at), Some(info)) => {
+            match (
+                tools.binary_search_by(|tool| tool.name.as_str().cmp(name)),
+                info,
+            ) {
+                (Ok(at), Some(info)) => {
                     if let Some(entry) = tools.get_mut(at) {
                         *entry = info;
                     }
                 }
-                (Some(at), None) => {
+                (Ok(at), None) => {
                     tools.remove(at);
                 }
-                (None, Some(info)) => {
-                    let at = tools
-                        .iter()
-                        .position(|tool| tool.name.as_str() > name)
-                        .unwrap_or(tools.len());
+                (Err(at), Some(info)) => {
                     tools.insert(at, info);
                 }
-                (None, None) => {}
+                (Err(_), None) => {}
             }
         })
     }

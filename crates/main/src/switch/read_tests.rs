@@ -90,6 +90,40 @@ fn cancel_ends_a_blocked_run_with_closing_and_a_late_value_changes_nothing() {
 }
 
 #[test]
+fn cancel_ends_a_blocked_run_started_before_a_quick_one_with_closing() {
+    let reads = Arc::new(Reads::default());
+    let (open, gate) = mpsc::channel::<()>();
+    let (started, began) = mpsc::channel();
+    let waiter = {
+        let reads = Arc::clone(&reads);
+        std::thread::spawn(move || {
+            reads.run(move || {
+                started.send(()).unwrap();
+                gate.recv().unwrap_or(());
+                9
+            })
+        })
+    };
+    began.recv_timeout(DEADLINE).expect("the read started");
+    // A second run takes the next id; under the `*=` mutant it reuses id 0,
+    // replaces A's wake, and its finish removes A's entry, so the cancel
+    // below never wakes A.
+    let probe = Arc::clone(&reads);
+    let quick = fakes::within("the quick run", DEADLINE, move || probe.run(|| 1));
+    assert_eq!(quick.unwrap(), 1);
+    reads.cancel();
+    let rejected = fakes::within("the cancelled run", DEADLINE, move || {
+        waiter.join().unwrap()
+    });
+    let failure = rejected.expect_err("a cancelled read is no value");
+    assert_eq!(failure.code, ErrorCode::Closing);
+    assert_eq!(failure.message, "The session is shutting down.");
+    // The read finishes after the cancel; nobody receives its value.
+    open.send(()).unwrap();
+    assert!(reads.lock().waiting.is_empty());
+}
+
+#[test]
 fn run_after_cancel_is_closing_without_running_the_read() {
     let reads = Reads::default();
     reads.cancel();
