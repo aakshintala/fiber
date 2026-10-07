@@ -544,6 +544,10 @@ fn parts_in(
     prompt.credential = Some(label);
     prompt.cache_lifetime = settings::cache_lifetime(&config, &model.reference());
     prompt.thinking = thinking;
+    // The thinking notice is written with the MCP notices, after
+    // `fiber_started`.
+    let mut mcp = mcp_servers::specs(&config);
+    mcp.notices.splice(0..0, startup_notices);
     Ok(Parts {
         sessions,
         home,
@@ -567,7 +571,7 @@ fn parts_in(
         credential_files,
         locks,
         extensions: Arc::new(extensions),
-        mcp: mcp_servers::specs(&config),
+        mcp,
         web_search: model.model.web_search.clone(),
     })
 }

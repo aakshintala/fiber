@@ -185,7 +185,11 @@ fn a_per_model_level_the_model_does_not_declare_falls_back_to_its_default() {
     assert_eq!(level, Some(ThinkingLevel::Low));
     assert_eq!(notices.len(), 1, "{notices:?}");
     assert_eq!(notices[0].code, ErrorCode::ConfigKeyIgnored);
-    for part in ["models.\"openai/gpt-5.6\".thinking", "`max`", "`openai/gpt-5.6`"] {
+    for part in [
+        "models.\"openai/gpt-5.6\".thinking",
+        "`max`",
+        "`openai/gpt-5.6`",
+    ] {
         assert!(notices[0].message.contains(part), "{}", notices[0].message);
     }
 }

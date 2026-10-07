@@ -3066,6 +3066,35 @@ fn a_thinking_suffix_is_recorded_and_an_unsupported_level_fails_first() {
     );
 }
 
+#[test]
+fn a_configured_level_the_model_does_not_declare_logs_one_notice_and_runs() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider_with_thinking(&server);
+    write(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "thinking": "max"}),
+    );
+
+    let run = setup.fiber(&["ask", "hi"], None);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let mut expected = HELLO_KINDS.to_vec();
+    expected.insert(3, "notice");
+    assert_eq!(run.kinds(), expected);
+    let notice = run.lines.iter().find(|l| l["kind"] == "notice").unwrap();
+    assert_eq!(notice["payload"]["code"], "config_key_ignored");
+    let message = notice["payload"]["message"].as_str().unwrap();
+    for part in ["`thinking`", "`max`", "`fake/m`"] {
+        assert!(message.contains(part), "{message}");
+    }
+    let built = run
+        .lines
+        .iter()
+        .find(|l| l["kind"] == "preamble_built")
+        .unwrap();
+    assert_eq!(built["payload"]["thinking"], "low");
+}
+
 /// Installs an inline extension `name` with `init_lua`, and makes `name/m1`
 /// the configured model.
 fn inline_extension(setup: &Setup, name: &str, init_lua: &str) {
