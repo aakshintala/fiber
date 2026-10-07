@@ -570,9 +570,11 @@ resume the session, then deliver the reply. A late reply still cannot
 authorise a different action, because a different action is a different
 request.
 
-**A pending approval or question does not keep a session alive past the idle
-delay.** When the delay passes with either pending, the session exits, and
-`fiber_exited` names the request it stopped on. Resuming the session raises
+**A pending approval, question or repository offer does not keep a session
+alive past the idle delay** (an offer: `docs/events.md`, "Repository code").
+When the delay passes with any of them pending, the session exits, and
+`fiber_exited` names the request it stopped on, the approval or question when
+an offer is pending too. Resuming the session raises
 the request again and the turn goes on from there. `fiber ask --resume` on such
 a session has no one to answer, so it refuses the request, lets the model finish
 the turn, and then runs its prompt as the next turn; the prompt waits behind that
@@ -729,7 +731,7 @@ and a repeat does nothing. A SIGTERM or SIGINT after it is a second signal.
 (`docs/architecture.md`, "Cancellation"): each tool call completes
 `cancelled` once its group is empty, each job `cancelled`, a handoff in
 flight `cancelled`, and the turn `turn_completed { outcome: interrupted }`. Two
-things differ from a cancel: a pending approval or question stays pending, so
+things differ from a cancel: a pending approval, question or repository offer stays pending, so
 resuming raises it again (below), and queued steering messages start no turn. They
 were never logged, so they are gone. An extension's pending `host.ask` is the
 exception: its asker lives in a Lua VM that does not survive the exit, so
@@ -741,7 +743,7 @@ Nothing is written for a call before it has stopped. Then `fiber_exited`
 with the exit code and no final message, the socket is unlinked, the lock is
 released, and the process exits.
 
-A session waiting on an approval or a question when the signal arrives has nothing running
+A session waiting on an approval, a question or a repository offer when the signal arrives has nothing running
 (`docs/architecture.md`: "Permission decisions are made in order, before any
 of them runs"). It stops its jobs and exits with `suspended_on` naming the
 request, as it does when the idle delay passes ("Lifecycle"), and resuming
