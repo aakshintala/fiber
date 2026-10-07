@@ -854,17 +854,21 @@ fn extensions_loaded_writes_the_set_then_each_notice() {
     )
     .unwrap();
     drop(log);
-    let streamed = fakes::within("the log's remaining lines (extensions)", TURN_DEADLINE, move || {
-        let mut streamed = Vec::new();
-        loop {
-            match watcher.recv() {
-                Ok(Some(line)) => streamed.push(line),
-                Ok(None) => break,
-                Err(e) => panic!("the extensions watcher failed: {e}"),
+    let streamed = fakes::within(
+        "the log's remaining lines (extensions)",
+        TURN_DEADLINE,
+        move || {
+            let mut streamed = Vec::new();
+            loop {
+                match watcher.recv() {
+                    Ok(Some(line)) => streamed.push(line),
+                    Ok(None) => break,
+                    Err(e) => panic!("the extensions watcher failed: {e}"),
+                }
             }
-        }
-        streamed
-    });
+            streamed
+        },
+    );
     let kinds: Vec<&str> = streamed.iter().map(|l| l.kind.as_str()).collect();
     assert_eq!(kinds, ["extensions_loaded", "notice"]);
     assert_eq!(
@@ -903,17 +907,21 @@ fn mcp_servers_started_writes_each_failure_then_each_notice() {
     )
     .unwrap();
     drop(log);
-    let streamed = fakes::within("the log's remaining lines (MCP servers)", TURN_DEADLINE, move || {
-        let mut streamed = Vec::new();
-        loop {
-            match watcher.recv() {
-                Ok(Some(line)) => streamed.push(line),
-                Ok(None) => break,
-                Err(e) => panic!("the MCP watcher failed: {e}"),
+    let streamed = fakes::within(
+        "the log's remaining lines (MCP servers)",
+        TURN_DEADLINE,
+        move || {
+            let mut streamed = Vec::new();
+            loop {
+                match watcher.recv() {
+                    Ok(Some(line)) => streamed.push(line),
+                    Ok(None) => break,
+                    Err(e) => panic!("the MCP watcher failed: {e}"),
+                }
             }
-        }
-        streamed
-    });
+            streamed
+        },
+    );
     let kinds: Vec<&str> = streamed.iter().map(|l| l.kind.as_str()).collect();
     assert_eq!(kinds, ["mcp_server_failed", "notice"]);
     assert_eq!(streamed[0].payload["server"], "fx");
