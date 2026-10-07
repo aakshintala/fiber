@@ -1493,7 +1493,11 @@ fn commands_answers_with_the_workspaces_skills_and_templates() {
     let setup = Setup::new();
     let server = ProviderServer::start([]).unwrap();
     setup.provider(&server);
-    workspace_skill(&setup, "review-pr", "description: Reviews a pull request.\n");
+    workspace_skill(
+        &setup,
+        "review-pr",
+        "description: Reviews a pull request.\n",
+    );
     workspace_skill(
         &setup,
         "ship",

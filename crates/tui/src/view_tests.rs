@@ -746,7 +746,10 @@ fn slash_panel_with_the_sessions_commands() {
     for ch in "/re".chars() {
         app.on_key(Key::Char(ch), now);
     }
-    insta::assert_snapshot!("slash_panel_with_the_sessions_commands", sized(&mut app, 80, 24));
+    insta::assert_snapshot!(
+        "slash_panel_with_the_sessions_commands",
+        sized(&mut app, 80, 24)
+    );
 }
 
 /// A connected app attached to `S_A`, with nothing on screen.
