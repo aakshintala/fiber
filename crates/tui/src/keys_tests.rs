@@ -156,3 +156,31 @@ fn control_characters_are_dropped_whole() {
     assert_eq!(feed_all(&[b"\ta"]), vec![Event::Key(Key::Char('a'))]);
     assert_eq!(feed_all(&[b"\xc2\x80b"]), vec![Event::Key(Key::Char('b'))]);
 }
+
+#[test]
+fn up_and_down_in_csi_and_ss3_forms() {
+    assert_eq!(feed_all(&[b"\x1b[A"]), vec![Event::Key(Key::Up)]);
+    assert_eq!(feed_all(&[b"\x1b[B"]), vec![Event::Key(Key::Down)]);
+    assert_eq!(feed_all(&[b"\x1bOA"]), vec![Event::Key(Key::Up)]);
+    assert_eq!(feed_all(&[b"\x1bOB"]), vec![Event::Key(Key::Down)]);
+    // A modified arrow is no plain Up.
+    assert!(feed_all(&[b"\x1b[1;2A"]).is_empty());
+    assert!(feed_all(&[b"\x1b[1;2B"]).is_empty());
+}
+
+#[test]
+fn esc_a_in_one_read_is_alt_a() {
+    assert_eq!(feed_all(&[b"\x1ba"]), vec![Event::Key(Key::AltA)]);
+    assert_eq!(
+        feed_all(&[b"\x1bab"]),
+        vec![Event::Key(Key::AltA), Event::Key(Key::Char('b'))]
+    );
+}
+
+#[test]
+fn esc_ending_a_read_then_a_is_esc_then_a() {
+    assert_eq!(
+        feed_all(&[b"\x1b", b"a"]),
+        vec![Event::Key(Key::Esc), Event::Key(Key::Char('a'))]
+    );
+}

@@ -172,6 +172,7 @@ impl App {
                 self.follow();
                 Effect::None
             }
+            Key::Up | Key::Down | Key::AltA => Effect::None,
         }
     }
 
