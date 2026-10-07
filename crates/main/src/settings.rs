@@ -7,6 +7,7 @@ use config::{Config, ModelData};
 use contract::events::CacheLifetime;
 use contract::shapes::Failure;
 use contract::{ErrorCode, ThinkingLevel};
+use serde_json::Value;
 
 /// How long an idle session waits before it exits, from
 /// `session.idle_exit_ms` (`docs/configuration.md`). `0` exits at the first
@@ -162,3 +163,32 @@ mod thinking_tests;
 #[cfg(test)]
 #[path = "warm_tests.rs"]
 mod warm_tests;
+
+/// Each configured `tools."<name>".max_result_bytes`, by the tool's
+/// registered name (`docs/configuration.md`, "Keys"; `docs/tools.md`,
+/// "Bounded results"). The key is not a per-model key, so the caps are
+/// read with no model. An entry whose `max_result_bytes` is absent or not
+/// a whole number gives no entry.
+pub(crate) fn result_caps(config: &Config) -> r#loop::ResultCaps {
+    let mut caps = r#loop::ResultCaps::new();
+    let tools = config
+        .merged(None)
+        .get("tools")
+        .cloned()
+        .unwrap_or_default();
+    let Value::Object(tools) = tools else {
+        return caps;
+    };
+    for (name, entry) in tools {
+        if let Value::Object(entry) = entry
+            && let Some(cap) = entry.get("max_result_bytes").and_then(Value::as_u64)
+        {
+            caps.insert(name, cap);
+        }
+    }
+    caps
+}
+
+#[cfg(test)]
+#[path = "result_caps_tests.rs"]
+mod result_caps_tests;

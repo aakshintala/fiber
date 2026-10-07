@@ -39,6 +39,11 @@ fn a_tool_without_guidelines_returns_none() {
 }
 
 #[test]
+fn a_tool_that_does_not_cut_its_own_output_leaves_the_cap_to_the_loop() {
+    assert!(NoGuidelines.with_cap(100).is_none());
+}
+
+#[test]
 fn an_effects_error_reads_as_its_message() {
     assert_eq!(
         EffectsError::Arguments("no such path".into()).to_string(),

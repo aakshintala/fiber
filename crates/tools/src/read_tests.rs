@@ -419,6 +419,142 @@ fn a_failed_read_records_nothing() {
 }
 
 #[test]
+fn a_configured_cap_cuts_at_a_line_boundary_with_the_offset_notice() {
+    let dir = TempDir::new("fiber-read-cap-100");
+    let line = format!("{}\n", "a".repeat(63));
+    fs::write(dir.path().join("a.txt"), line.repeat(3)).unwrap();
+    let files = Files::new(dir.path().to_path_buf());
+    let capped = files.read().with_cap(100).unwrap();
+    let output = capped.run(
+        &args(json!({"path": "a.txt"})),
+        &CancelToken::new(),
+        &Recorder::default(),
+    );
+    assert!(output.error.is_none());
+    assert_eq!(
+        text(&output),
+        format!("{line}[Showing lines 1-1 of 3. Continue with offset=2.]")
+    );
+}
+
+#[test]
+fn a_configured_cap_cuts_a_long_first_line_inside_it() {
+    let dir = TempDir::new("fiber-read-cap-long");
+    fs::write(dir.path().join("a.txt"), "b".repeat(150)).unwrap();
+    let files = Files::new(dir.path().to_path_buf());
+    let capped = files.read().with_cap(100).unwrap();
+    let output = capped.run(
+        &args(json!({"path": "a.txt"})),
+        &CancelToken::new(),
+        &Recorder::default(),
+    );
+    assert!(output.error.is_none());
+    let shown = text(&output);
+    assert!(shown.starts_with(&"b".repeat(100)), "{shown}");
+    assert!(
+        shown.ends_with(
+            "[Line 1 is longer than 100 bytes; showing its first 100 bytes. \
+             Read the rest by byte range through the shell, such as cut -c or dd. \
+             The file has 1 lines.]"
+        ),
+        "{shown}"
+    );
+}
+
+#[test]
+fn a_configured_cap_above_the_default_shows_more() {
+    let dir = TempDir::new("fiber-read-cap-above");
+    let line = format!("{}\n", "a".repeat(63));
+    let body = line.repeat(320);
+    assert_eq!(body.len(), 20_480);
+    fs::write(dir.path().join("a.txt"), &body).unwrap();
+    let files = Files::new(dir.path().to_path_buf());
+    let capped = files.read().with_cap(32_768).unwrap();
+    let output = capped.run(
+        &args(json!({"path": "a.txt"})),
+        &CancelToken::new(),
+        &Recorder::default(),
+    );
+    assert!(output.error.is_none());
+    assert_eq!(text(&output), body);
+}
+
+#[test]
+fn a_zero_cap_shows_only_the_notice() {
+    let dir = TempDir::new("fiber-read-cap-zero");
+    fs::write(dir.path().join("a.txt"), "a\nb\n").unwrap();
+    let files = Files::new(dir.path().to_path_buf());
+    let capped = files.read().with_cap(0).unwrap();
+    let output = capped.run(
+        &args(json!({"path": "a.txt"})),
+        &CancelToken::new(),
+        &Recorder::default(),
+    );
+    assert!(output.error.is_none());
+    assert_eq!(
+        text(&output),
+        "[Line 1 is longer than 0 bytes; showing its first 0 bytes. \
+         Read the rest by byte range through the shell, such as cut -c or dd. \
+         The file has 2 lines.]"
+    );
+}
+
+#[test]
+fn a_capped_reads_bound_sits_above_its_own_cut() {
+    let files = Files::new(std::path::Path::new("/ws").to_path_buf());
+    assert_eq!(
+        files.read().with_cap(100).unwrap().bound(),
+        Bound {
+            start: 16_484,
+            end: 0
+        }
+    );
+    assert_eq!(
+        files.read().with_cap(0).unwrap().bound(),
+        Bound {
+            start: 16_384,
+            end: 0
+        }
+    );
+    assert_eq!(
+        files.read().with_cap(usize::MAX).unwrap().bound(),
+        Bound {
+            start: usize::MAX,
+            end: 0
+        }
+    );
+}
+
+#[test]
+fn a_capped_read_keeps_its_name() {
+    let files = Files::new(std::path::Path::new("/ws").to_path_buf());
+    assert_eq!(
+        files.read().with_cap(100).unwrap().definition(),
+        files.read().definition()
+    );
+}
+
+#[test]
+fn a_capped_read_shares_the_session_file_state() {
+    let dir = TempDir::new("fiber-read-cap-seen");
+    fs::write(dir.path().join("a.txt"), "old\n").unwrap();
+    let files = Files::new(dir.path().to_path_buf());
+    let output = files.read().with_cap(100).unwrap().run(
+        &args(json!({"path": "a.txt"})),
+        &CancelToken::new(),
+        &Recorder::default(),
+    );
+    assert!(output.error.is_none());
+    let output = files.write().run(
+        &args(json!({"path": "a.txt", "content": "new\n"})),
+        &CancelToken::new(),
+        &Recorder::default(),
+    );
+    assert!(output.error.is_none(), "{}", text(&output));
+    assert_eq!(fs::read(dir.path().join("a.txt")).unwrap(), b"new\n");
+}
+
+#[test]
 fn guidelines_are_the_read_section() {
     let files = Files::new(std::path::Path::new("/ws").to_path_buf());
     let text = files.read().guidelines().unwrap();

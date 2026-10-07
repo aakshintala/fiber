@@ -93,6 +93,7 @@ pub(crate) fn new_session(
         handoff,
         idle,
         warm,
+        caps,
         home,
         project,
         workspace,
@@ -174,7 +175,7 @@ pub(crate) fn new_session(
                     model,
                     prompt_inputs,
                     inbox,
-                    tools,
+                    r#loop::capped(tools, &caps),
                     permissions,
                 )
                 .and_then(|looped| {

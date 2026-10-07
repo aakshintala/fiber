@@ -85,6 +85,9 @@ struct Parts {
     /// How many cache lifetimes an idle session keeps its cache warm;
     /// `None` never warms.
     warm: Option<u32>,
+    /// Each configured `tools."<name>".max_result_bytes`, by the tool's
+    /// registered name (`docs/tools.md`, "Bounded results").
+    caps: r#loop::ResultCaps,
     /// Every configured `file` credential source, relative paths joined
     /// with the workspace the reader reads them from
     /// (`docs/permissions.md`, "Credentials").
@@ -543,6 +546,7 @@ fn parts_in(
         handoff,
         idle,
         warm,
+        caps: settings::result_caps(&config),
         credential_files,
         locks,
         extensions: Arc::new(extensions),
