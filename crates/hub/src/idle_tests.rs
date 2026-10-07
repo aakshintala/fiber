@@ -400,7 +400,18 @@ fn join_after_wake_unblocks_and_joins_a_blocked_acceptor() {
     let temp = Temp::new();
     let socket = temp.dir.join("wake");
     let (acceptor, ended) = one_accept_thread(&socket);
-    join_after_wake(&socket, acceptor);
+    let (done_tx, done_rx) = mpsc::channel();
+    let wake_socket = socket.clone();
+    thread::Builder::new()
+        .name("hub-test-wake".to_owned())
+        .spawn(move || {
+            join_after_wake(&wake_socket, acceptor);
+            done_tx.send(()).unwrap_or(());
+        })
+        .unwrap();
+    done_rx
+        .recv_timeout(DEADLINE)
+        .expect("the wake joins the acceptor");
     assert!(
         ended.load(Ordering::SeqCst),
         "the acceptor ended before the join returned"
