@@ -1230,8 +1230,20 @@ fn main_reads_a_package() -> RustFile {
     )
 }
 
+fn extensions_reads_a_package() -> RustFile {
+    package_src(
+        "extensions",
+        "crates/extensions/tests/openrouter_cost.rs",
+        "fn package() -> PathBuf {\n    PathBuf::from(env!(\"CARGO_MANIFEST_DIR\")).join(\"../../providers/openrouter\")\n}\n",
+    )
+}
+
 fn package_ok_files() -> Vec<RustFile> {
-    vec![config_reads_a_package(), main_reads_a_package()]
+    vec![
+        config_reads_a_package(),
+        extensions_reads_a_package(),
+        main_reads_a_package(),
+    ]
 }
 
 /// `members()` with the `tools` and `xtask` crates: only the package-reader
@@ -1277,7 +1289,11 @@ fn an_unlisted_crate_that_reads_a_package_fails() {
 #[test]
 fn a_listed_crate_with_no_reading_source_fails() {
     assert_eq!(
-        package_reader_mismatches(&[config_reads_a_package()], &package_members()).unwrap(),
+        package_reader_mismatches(
+            &[config_reads_a_package(), extensions_reads_a_package()],
+            &package_members()
+        )
+        .unwrap(),
         ["main: listed as reading a first-party package, but no source reads one"]
     );
 }
