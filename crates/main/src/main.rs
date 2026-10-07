@@ -483,10 +483,11 @@ fn parts_in(
         .map_err(|e| failed(e.code(), e))?;
     let label =
         recorded_credential.map_or_else(|| config.credential_label(model.provider), str::to_owned);
-    let (key, signer) = lua_providers::session_credential(&providers, model.provider, || {
-        crate::credential::session_credential(&config, model.provider, recorded_credential)
-            .map(|(_, key)| key)
-    })?;
+    let (key, signer) =
+        lua_providers::session_credential(&providers, model.provider, &label, || {
+            crate::credential::session_credential(&config, model.provider, recorded_credential)
+                .map(|(_, key)| key)
+        })?;
     let session_credential = (key.clone(), signer.clone());
     let provider = connect(model, key, signer)?;
     let reviewer = choose_reviewer(&providers, &config, &model, &session_credential);
@@ -602,9 +603,12 @@ fn choose_reviewer(
     let (key, signer) = if model.provider.name == session.provider.name {
         session_credential.clone()
     } else {
-        lua_providers::session_credential(providers, model.provider, || {
-            credential::session_credential(config, model.provider, None).map(|(_, key)| key)
-        })?
+        lua_providers::session_credential(
+            providers,
+            model.provider,
+            &config.credential_label(model.provider),
+            || credential::session_credential(config, model.provider, None).map(|(_, key)| key),
+        )?
     };
     // The token is read once, so a failing `credential()` fails here:
     // not a startup error, the loop gets it and every reviewed call

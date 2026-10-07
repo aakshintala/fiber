@@ -4,14 +4,20 @@
 #![allow(clippy::unwrap_used, reason = "test code; a failure is the test's")]
 
 use std::sync::Arc;
+use std::sync::mpsc;
+use std::time::Duration;
 
 use config::{Config, ProjectKey, Sources};
 use contract::ErrorCode;
+use contract::signing::SignRequest;
 use extensions::Providers;
 use serde_json::json;
 use tools::PathLocks;
 
-use super::add_lua;
+use super::{add_lua, session_credential};
+
+/// How long the test waits for the credential lookup.
+const WAIT: Duration = Duration::from_secs(5);
 
 fn setup_home(name: &str) -> (fakes::TempDir, std::path::PathBuf, std::path::PathBuf) {
     let root = fakes::TempDir::new(name);
@@ -106,4 +112,79 @@ fn a_settings_file_that_cannot_be_read_fails_with_config_invalid() {
     );
     let err = add_lua(&extensions, &mut providers, &config).unwrap_err();
     assert_eq!(err.code, ErrorCode::ConfigInvalid);
+}
+
+#[test]
+fn the_session_label_and_shared_credential_name_reach_credential() {
+    let (_root, home, workspace) = setup_home("fiber-lua-credential-pair");
+    let src = home.join("src").join("acme");
+    std::fs::create_dir_all(src.join("providers")).unwrap();
+    std::fs::write(
+        src.join("extension.json"),
+        json!({"name": "acme", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}).to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        src.join("init.lua"),
+        "fiber.provider(\"acme\", { credential = { timeout = 60000, run = function(who)\
+          return { token = who.credential .. \"/\" .. who.label, expires_at = 4102444800 } end } })\n",
+    )
+    .unwrap();
+    std::fs::write(
+        src.join("providers/acme.json"),
+        json!({
+            "name": "acme",
+            "credential_name": "shared",
+            "models": [{"id": "m", "protocol": "openai-responses",
+                        "base_url": "https://x.example/v1"}],
+        })
+        .to_string(),
+    )
+    .unwrap();
+    extensions::plan(
+        &home,
+        &extensions::Request::Path(src),
+        "0.1.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    let config = load_config(&home, &workspace, &[]);
+    let (mut providers, _) = Providers::load(&home).unwrap();
+    let extensions = extensions::SessionExtensions::load(
+        &home,
+        &config,
+        fakes::clock::FakeClock::new(),
+        Arc::new(PathLocks::new()),
+    );
+    add_lua(&extensions, &mut providers, &config).unwrap();
+    let data = providers.data("acme");
+    // The lookup blocks on Lua, so it runs on its own thread under a
+    // deadline instead of hanging the test.
+    let (done, looked_up) = mpsc::channel();
+    std::thread::spawn(move || {
+        drop(done.send(session_credential(&providers, &data, "work", || {
+            panic!("no key is read when credential() is registered")
+        })))
+    });
+    let (key, signer) = looked_up
+        .recv_timeout(WAIT)
+        .expect("the lookup ended in time")
+        .unwrap();
+    assert!(key.is_none(), "no key file is needed past credential()");
+    let signer = signer.unwrap();
+    let headers = signer
+        .sign(&SignRequest {
+            method: "POST",
+            url: "https://x.example/v1",
+            headers: &[],
+            body: b"{}",
+        })
+        .unwrap();
+    assert_eq!(
+        headers,
+        [("authorization".to_owned(), "Bearer shared/work".to_owned())]
+    );
 }

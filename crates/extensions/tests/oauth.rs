@@ -27,7 +27,7 @@ use common::{Setup, write};
 use config::{CredentialFile, Secret, store_secret};
 use contract::ErrorCode;
 use contract::clock::Clock;
-use extensions::{Browser, Error, LuaExtension, LuaProvider};
+use extensions::{Browser, CredentialPair, Error, LuaExtension, LuaProvider};
 use fakes::OauthReply;
 use fakes::OauthServer;
 use fakes::clock::FakeClock;
@@ -321,11 +321,21 @@ fn run(ext: &Arc<LuaExtension>, command: &'static str, text: &str) -> Result<Str
     finish(&start(ext, command, text))
 }
 
-/// Starts `provider.token()`; the token's text arrives on the receiver.
+/// Starts `provider.token()` for the default label; the token's text arrives
+/// on the receiver.
 fn start_token(provider: &Arc<LuaProvider>) -> mpsc::Receiver<Result<String, Error>> {
     let (tx, rx) = mpsc::channel();
     let provider = Arc::clone(provider);
-    std::thread::spawn(move || tx.send(provider.token().map(|secret| secret.expose().to_owned())));
+    std::thread::spawn(move || {
+        tx.send(
+            provider
+                .token(&CredentialPair {
+                    credential: "acme".to_owned(),
+                    label: "default".to_owned(),
+                })
+                .map(|secret| secret.expose().to_owned()),
+        )
+    });
     rx
 }
 
