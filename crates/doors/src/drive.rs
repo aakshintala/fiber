@@ -39,23 +39,16 @@ impl contract::extension::Drive for Driver {
     /// gate is checked after upgrading, because a retained handle (a release
     /// closure, a shell thread) can keep it alive past the close.
     fn drive(&self, extension: &str, command: &str, args: Map<String, Value>, answer: Ack) {
-        let Some(gate) = self.gate.upgrade() else {
-            // drive_after_close_is_closing: the gate is gone.
+        // drive_after_close_is_closing: the gate is gone, or a retained
+        // handle (a release closure, a shell thread) keeps it alive past
+        // `Session::close`.
+        let Some(gate) = self.gate.upgrade().filter(|gate| !gate.stopped()) else {
             answer.0(Err(Rejection {
                 code: ErrorCode::Closing,
                 message: client::ENDED.to_owned(),
             }));
             return;
         };
-        if gate.stopped() {
-            // drive_after_close_is_closing: a retained handle keeps the gate
-            // alive past `Session::close`.
-            answer.0(Err(Rejection {
-                code: ErrorCode::Closing,
-                message: client::ENDED.to_owned(),
-            }));
-            return;
-        }
         let mut line = Map::new();
         let id = CommandId(crate::mint("c_"));
         line.insert("id".into(), Value::String(id.0.clone()));

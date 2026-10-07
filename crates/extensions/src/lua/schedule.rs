@@ -315,22 +315,65 @@ fn settle(
         Request::Drive(request) => {
             match hub.driver() {
                 Some(driver) => {
-                    let parked = Arc::clone(hub);
-                    let ack = contract::inbox::Ack(Box::new(move |answer| {
-                        parked.deliver(
-                            id,
-                            match answer {
-                                Ok(result) => Reply::Drive(Ok(result)),
-                                Err(rejection) => {
-                                    Reply::Drive(Err((rejection.code, rejection.message)))
-                                }
-                            },
-                        );
-                    }));
-                    driver.drive(name, &request.command, request.args, ack);
+                    // The door runs the command elsewhere, as `host.http`
+                    // does: a driven `prompt` carrying an image blocks on
+                    // the image child, and the thread serves other work
+                    // meanwhile. Parked before the spawn: the door answers
+                    // in-process, so its reply can arrive before a spawn
+                    // returns, and a reply for an unparked id is dropped.
                     // No off-thread wait to cancel: the parked deadline
                     // bounds the call, and a late answer is dropped.
-                    (None, None)
+                    parked.push(Parked {
+                        id,
+                        thread,
+                        target: target.clone(),
+                        deadline,
+                        timeout,
+                        wake: None,
+                        _cancel: None,
+                    });
+                    if let Some(progress) = hub.lock().calls.get_mut(&id) {
+                        *progress = Progress::Started {
+                            deadline,
+                            parked: true,
+                        };
+                    }
+                    hub.notify();
+                    let answered = Arc::clone(hub);
+                    let extension = name.to_owned();
+                    let command = request.command;
+                    let args = request.args;
+                    let spawned =
+                        thread::Builder::new()
+                            .name(format!("drive {name}"))
+                            .spawn(move || {
+                                let ack = contract::inbox::Ack(Box::new(move |answer| {
+                                    answered.deliver(
+                                        id,
+                                        match answer {
+                                            Ok(result) => Reply::Drive(Ok(result)),
+                                            Err(rejection) => Reply::Drive(Err((
+                                                rejection.code,
+                                                rejection.message,
+                                            ))),
+                                        },
+                                    );
+                                }));
+                                driver.drive(&extension, &command, args, ack);
+                            });
+                    if let Err(source) = spawned {
+                        if let Some(pos) = parked.iter().position(|p| p.id == id) {
+                            parked.swap_remove(pos);
+                        }
+                        return hub.finish(
+                            id,
+                            Err(Error::Io {
+                                path: dir.to_owned(),
+                                source,
+                            }),
+                        );
+                    }
+                    return;
                 }
                 None => {
                     // drive_without_a_driver_is_closing: only a sealed

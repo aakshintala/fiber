@@ -24,6 +24,17 @@ use crate::{Error, LuaExtension};
 /// Wall-clock bound on a wait for the extension's thread.
 const WAIT: Duration = Duration::from_secs(5);
 
+/// Runs the blocking call `f` on a thread and receives its result with a
+/// deadline: calling code that blocks is a wait too (`docs/testing.md`,
+/// "Waits and timeouts").
+fn within<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+    let (done_tx, done_rx) = mpsc::channel();
+    std::thread::spawn(move || done_tx.send(f()));
+    done_rx
+        .recv_timeout(WAIT)
+        .unwrap_or_else(|_| panic!("the call did not return within {WAIT:?}"))
+}
+
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
@@ -134,7 +145,8 @@ fn drive_returns_true_with_no_result() {
         &clock,
         vec![Ok(None)],
     );
-    assert_eq!(ext.command("go", "").unwrap(), "true");
+    let held = Arc::clone(&ext);
+    assert_eq!(within(move || held.command("go", "")).unwrap(), "true");
     // The door saw the extension's name, the command and no arguments.
     assert_eq!(
         drive.calls(),
@@ -157,7 +169,8 @@ fn drive_returns_the_result_table() {
             }],
         }))],
     );
-    assert_eq!(ext.command("go", "").unwrap(), "sync");
+    let held = Arc::clone(&ext);
+    assert_eq!(within(move || held.command("go", "")).unwrap(), "sync");
 }
 
 #[test]
@@ -172,8 +185,9 @@ fn drive_rejection_raises_code_and_message_for_pcall() {
         vec![busy()],
     );
     // `pcall` catches the table with exactly `code` and `message`.
+    let held = Arc::clone(&ext);
     assert_eq!(
-        ext.command("go", "").unwrap(),
+        within(move || held.command("go", "")).unwrap(),
         "false busy a turn is running"
     );
 }
@@ -187,7 +201,8 @@ fn drive_rejection_uncaught_fails_with_the_message() {
         vec![busy()],
     );
     // Uncaught, the callback fails with the message text, never a table dump.
-    match ext.command("go", "") {
+    let held = Arc::clone(&ext);
+    match within(move || held.command("go", "")) {
         Err(Error::Lua { message, .. }) => assert_eq!(message, "a turn is running"),
         other => panic!("the drive fails its callback: {other:?}"),
     }
@@ -206,13 +221,14 @@ fn drive_before_drive_to_raises_closing() {
     )
     .unwrap();
     // No `drive_to`: only the entry script could see that, so `closing`.
-    let ext = LuaExtension::new(
+    let ext = Arc::new(LuaExtension::new(
         "ext",
         dir.path(),
         "/nonexistent-fiber-home",
         clocked(&clock),
-    );
-    assert_eq!(ext.command("go", "").unwrap(), "closing");
+    ));
+    let held = Arc::clone(&ext);
+    assert_eq!(within(move || held.command("go", "")).unwrap(), "closing");
 }
 
 #[test]
@@ -228,7 +244,11 @@ fn drive_argument_errors_raise_strings() {
         vec![],
     );
     // A wrong argument is an error in the calling code: a string, not a table.
-    assert_eq!(ext.command("go", "").unwrap(), "string/string/true/true");
+    let held = Arc::clone(&ext);
+    assert_eq!(
+        within(move || held.command("go", "")).unwrap(),
+        "string/string/true/true"
+    );
 }
 
 #[test]
@@ -248,7 +268,9 @@ fn drive_in_the_entry_script_raises_closing() {
         clocked(&clock),
     );
     // `drive_to` is set only after the entry script runs.
-    match ext.commands() {
+    let ext = Arc::new(ext);
+    let held = Arc::clone(&ext);
+    match within(move || held.commands()) {
         Err(Error::Lua { message, .. }) => {
             assert_eq!(message, "host.drive: not available while init.lua runs");
         }
@@ -292,9 +314,85 @@ fn drive_parked_past_deadline_drops_the_late_answer() {
     );
     // The late answer is dropped: the VM still runs the next command.
     drive.answer_parked(Ok(None));
-    assert_eq!(ext.command("fast", "").unwrap(), "fast");
+    let held = Arc::clone(&ext);
+    assert_eq!(within(move || held.command("fast", "")).unwrap(), "fast");
     assert_eq!(
         drive.calls(),
+        vec![("ext".to_owned(), "steer".to_owned(), Map::new())]
+    );
+}
+
+/// A fake door whose `drive` blocks until the test releases it: the held
+/// driver that proves the extension's thread serves other work meanwhile.
+struct BlockingDrive {
+    calls: Mutex<Vec<Call>>,
+    called: mpsc::Sender<()>,
+    release: Mutex<mpsc::Receiver<()>>,
+}
+
+impl Drive for BlockingDrive {
+    fn drive(&self, extension: &str, command: &str, args: Map<String, Value>, answer: Ack) {
+        lock(&self.calls).push((extension.to_owned(), command.to_owned(), args));
+        match self.called.send(()) {
+            Ok(()) | Err(mpsc::SendError(())) => {}
+        }
+        // A fake's own wait with a deadline on the wall clock
+        // (`docs/testing.md`, "Waits and timeouts").
+        match lock(&self.release).recv_timeout(WAIT) {
+            Ok(()) | Err(_) => {}
+        }
+        answer.0(Ok(None));
+    }
+}
+
+#[test]
+fn a_provider_runs_while_a_driven_command_is_held() {
+    let clock = FakeClock::new();
+    let dir = fakes::TempDir::new("fiber-drive");
+    std::fs::write(
+        dir.path().join("init.lua"),
+        "fiber.command(\"hold\", { timeout = 5000, run = function() return tostring(host.drive(\"steer\", {})) end })\n\
+         fiber.provider(\"p\", { sign = { timeout = 5000, run = function() return {} end } })\n",
+    )
+    .unwrap();
+    let (called_tx, called_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let drive = Arc::new(BlockingDrive {
+        calls: Mutex::new(Vec::new()),
+        called: called_tx,
+        release: Mutex::new(release_rx),
+    });
+    let ext = Arc::new(LuaExtension::new(
+        "ext",
+        dir.path(),
+        "/nonexistent-fiber-home",
+        clocked(&clock),
+    ));
+    ext.set_driver(Arc::clone(&drive) as Arc<dyn Drive>);
+    // The driven command blocks inside the door, off the worker thread.
+    let holder = Arc::clone(&ext);
+    let (hold_tx, hold_rx) = mpsc::channel();
+    std::thread::spawn(move || hold_tx.send(holder.command("hold", "")));
+    called_rx
+        .recv_timeout(WAIT)
+        .expect("the drive reached the door");
+    // A provider callback runs while the driven command is still held.
+    let caller = Arc::clone(&ext);
+    within(move || {
+        caller
+            .provider_call("p", "sign", Value::Null)
+            .expect("the provider ran while the drive was held")
+    });
+    release_tx.send(()).expect("the test releases the drive");
+    assert_eq!(
+        hold_rx
+            .recv_timeout(WAIT)
+            .expect("the held command returned")
+            .unwrap(),
+        "true"
+    );
+    assert_eq!(
+        lock(&drive.calls).clone(),
         vec![("ext".to_owned(), "steer".to_owned(), Map::new())]
     );
 }

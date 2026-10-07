@@ -678,7 +678,7 @@ fn host_drive_steer_from_a_command_carries_the_extension_sender() {
     setup.provider(&server);
     setup.lua(
         "worker",
-        "fiber.command(\"nudge\", { timeout = 8000, run = function() host.drive(\"steer\", { content = {{ type = \"text\", text = \"use the other file\" }} }) end })\n",
+        "fiber.command(\"nudge\", { timeout = 8000, run = function() host.status(\"driving\") host.drive(\"steer\", { content = {{ type = \"text\", text = \"use the other file\" }} }) end })\n",
     );
     let id = doors::mint("s_");
     let mut running = setup.start_session(&id, &[]);
@@ -705,6 +705,14 @@ fn host_drive_steer_from_a_command_carries_the_extension_sender() {
         line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_1"
     });
     assert!(accepted.last().unwrap()["payload"].get("result").is_none());
+    // The command reports before it drives: the report reaches the client
+    // over the socket, so once it is seen the steer's inbox send (a few
+    // instructions later, in-process) has already happened. Releasing the
+    // provider only then forces the steer to join the running turn instead
+    // of racing it.
+    let _driving = until(&client, "extension_ui driving", |line| {
+        line["kind"] == "extension_ui" && line["payload"]["status"] == "driving"
+    });
     server.release();
     let applied = until(&client, "steering_applied", |line| {
         line["kind"] == "steering_applied"
