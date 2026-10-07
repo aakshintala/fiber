@@ -4,6 +4,7 @@
 //! first frame (`docs/performance.md`, "Budgets").
 
 use std::ffi::OsString;
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use contract::clock::Clock;
@@ -28,6 +29,8 @@ pub(crate) struct Ctx<'a> {
     pub(crate) clock: &'a dyn Clock,
     pub(crate) idle: Duration,
     pub(crate) path: Option<OsString>,
+    /// The `paging` jig, when the harness was given one.
+    pub(crate) paging: Option<&'a Path>,
 }
 
 /// One run's samples, by metric id.

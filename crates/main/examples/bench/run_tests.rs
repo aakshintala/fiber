@@ -3,12 +3,20 @@ use std::path::Path;
 
 use serde_json::json;
 
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use contract::clock::Clock;
+use fakes::children::{Ready, leaves_descendants};
+use fakes::{TempDir, Watchdog};
 
-use super::{Proc, Startup, command, parse_line};
+use super::{Proc, Startup, System, command, parse_line, run_to_end};
+
+/// The wall-clock bound on each test below that runs a child.
+const WALL: Duration = Duration::from_secs(30);
+
+/// How long a ready line from a test's child may take.
+const READY: Duration = Duration::from_secs(5);
 
 const PROXIES: [&str; 8] = [
     "HTTP_PROXY",
@@ -102,4 +110,95 @@ fn a_startup_timing_starts_at_the_clock_read_just_before_the_spawn() {
     let proc = Proc::spawn(&mut Command::new("true"), &*clock).unwrap();
     assert_eq!(proc.spawned, before + Duration::from_millis(7));
     proc.stop(&super::System).unwrap();
+}
+
+#[test]
+fn a_command_run_to_its_end_returns_its_status_and_output() {
+    let finished = fakes::within("a short command", WALL, || {
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "echo out; echo err >&2; exit 3"]);
+        run_to_end(&mut command, &System, WALL, "the short command")
+    })
+    .unwrap();
+    assert_eq!(finished.status.code(), Some(3));
+    assert_eq!(finished.stdout, "out\n");
+    assert_eq!(finished.stderr, "err\n");
+}
+
+/// A `perl` that sleeps for an hour with `marker` on its command line; the
+/// second form first leaves the process group, keeping stdout open.
+fn sleeper(marker: &Path, escapes: bool) -> String {
+    let leave = if escapes { "POSIX::setsid(); " } else { "" };
+    format!("perl -MPOSIX -e '{leave}sleep 3600' '{}'", marker.display())
+}
+
+#[test]
+fn a_command_past_its_deadline_errs_and_leaves_nothing_in_its_group() {
+    let dir = TempDir::new("fiber-bench-deadline");
+    let marker = dir.path().to_string_lossy().into_owned();
+    let watchdog = Watchdog::matching(&marker);
+    let script = format!(
+        "{} & {}",
+        sleeper(dir.path(), false),
+        sleeper(dir.path(), false)
+    );
+    let clock = fakes::clock::FakeClock::new();
+    let err = fakes::within("a command past its deadline", WALL, move || {
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", &script]);
+        run_to_end(
+            &mut command,
+            &*clock,
+            Duration::from_secs(120),
+            "the sleeper",
+        )
+    })
+    .unwrap_err();
+    assert_eq!(err, "timed out waiting for the sleeper");
+    assert_eq!(fakes::matching(&marker).unwrap(), Vec::<u32>::new());
+    watchdog.stand_down(READY);
+}
+
+#[test]
+fn output_held_open_by_a_process_outside_the_group_errs_instead_of_hanging() {
+    let dir = TempDir::new("fiber-bench-held");
+    let marker = dir.path().to_string_lossy().into_owned();
+    let watchdog = Watchdog::matching(&marker);
+    let script = format!("{} &", sleeper(dir.path(), true));
+    let err = fakes::within("output held open", WALL, move || {
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", &script]);
+        run_to_end(&mut command, &System, WALL, "the holder")
+    })
+    .unwrap_err();
+    assert_eq!(err, "the output of the holder stayed open");
+    fakes::kill_matching(&marker).unwrap();
+    assert!(fakes::matching_exits(&marker, READY));
+    watchdog.stand_down(READY);
+}
+
+#[test]
+fn a_stop_that_needs_a_second_sigkill_errs_after_the_group_empties() {
+    let dir = TempDir::new("fiber-bench-stop");
+    let ready = Ready::new(dir.path());
+    let mut command = Command::new("/bin/bash");
+    command
+        .arg("-c")
+        .arg(leaves_descendants(ready.path()))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let proc = Proc::spawn(&mut command, &System).unwrap();
+    let group = ready.wait(READY)[0];
+    assert_eq!(group, proc.pid());
+    // The descendant ignores SIGTERM and holds the group after its leader
+    // exits; it is up once its pid is written.
+    ready.wait(READY);
+    let err = fakes::within("the stop", WALL, move || proc.stop(&System)).unwrap_err();
+    assert!(err.contains("left a process in its group behind"), "{err}");
+    assert!(err.contains("SIGKILL emptied it"), "{err}");
+    assert!(
+        !fakes::kill_group(group, "0").unwrap(),
+        "group {group} still has a process"
+    );
 }

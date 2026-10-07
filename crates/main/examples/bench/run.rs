@@ -8,7 +8,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::{Arc, Mutex, Weak, mpsc};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
@@ -158,8 +158,15 @@ impl Proc {
         }
         if !fakes::group_empties(self.group, STOP) {
             signal(self.group, "KILL")?;
+            // It returns once the group is seen empty or the bound passes,
+            // never while a member may still be dying unreported.
+            let after = if fakes::group_empties(self.group, STOP) {
+                "SIGKILL emptied it"
+            } else {
+                "it outlived SIGKILL"
+            };
             return Err(format!(
-                "process {} left a process in its group behind",
+                "process {} left a process in its group behind; {after}",
                 self.group
             ));
         }
@@ -168,6 +175,74 @@ impl Proc {
         }
         Ok(())
     }
+}
+
+/// A command that ran to its end: its exit status and everything it wrote.
+#[derive(Debug)]
+pub(crate) struct Finished {
+    pub(crate) status: ExitStatus,
+    pub(crate) stdout: String,
+    pub(crate) stderr: String,
+}
+
+/// Runs `command` in its own process group with stdin closed, waiting up to
+/// `within` on `clock` for it to exit, then stops its group and collects
+/// its output. Past `within` it errs naming `what`. Output still open
+/// [`STOP`] after the group is gone, held by a process that left the group,
+/// is an error rather than a wait.
+pub(crate) fn run_to_end(
+    command: &mut Command,
+    clock: &dyn Clock,
+    within: Duration,
+    what: &str,
+) -> Result<Finished, String> {
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut proc = Proc::spawn(command, clock)?;
+    // Both pipes are drained from the start, so a full pipe never stalls
+    // the child.
+    let stdout = read_on_thread(proc.child.stdout.take(), what)?;
+    let stderr = read_on_thread(proc.child.stderr.take(), what)?;
+    // The wait ends when the child exits or `within` passes; one still
+    // running then has no status.
+    proc.exits(clock, within)?;
+    let status = proc
+        .child
+        .try_wait()
+        .map_err(|err| format!("waiting for {what}: {err}"))?;
+    // Signals reach the group in real time, whatever clock times the run.
+    proc.stop(&System)?;
+    let status = status.ok_or_else(|| format!("timed out waiting for {what}"))?;
+    let closed = |text: &mpsc::Receiver<String>| {
+        text.recv_timeout(STOP)
+            .map_err(|_| format!("the output of {what} stayed open"))
+    };
+    Ok(Finished {
+        status,
+        stdout: closed(&stdout)?,
+        stderr: closed(&stderr)?,
+    })
+}
+
+/// Reads `pipe` to its end on a thread, which sends the text once.
+fn read_on_thread(
+    pipe: Option<impl Read + Send + 'static>,
+    what: &str,
+) -> Result<mpsc::Receiver<String>, String> {
+    let mut pipe = pipe.ok_or_else(|| format!("{what} has no output pipe"))?;
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut bytes = Vec::new();
+        match pipe.read_to_end(&mut bytes) {
+            Ok(_) | Err(_) => {}
+        }
+        match tx.send(String::from_utf8_lossy(&bytes).into_owned()) {
+            Ok(()) | Err(_) => {}
+        }
+    });
+    Ok(rx)
 }
 
 fn signal(group: u32, signal: &str) -> Result<(), String> {
