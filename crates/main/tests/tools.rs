@@ -998,6 +998,11 @@ fn a_tool_call_with_no_arguments_is_logged_and_sent_back_as_an_empty_object() {
     let run = setup.run(&["ask", "call it"]);
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    // The call streams no argument text, and `read` without a path fails
+    // before it starts.
+    let mut kinds = anthropic_read_kinds();
+    kinds.retain(|kind| !matches!(*kind, "tool_call_arguments_delta" | "tool_call_started"));
+    assert_eq!(run.kinds(), kinds);
     let requested = run
         .lines
         .iter()
