@@ -9,6 +9,8 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::JoinHandle;
@@ -169,6 +171,8 @@ pub(crate) struct Attention {
     started_ms: u64,
     announced: Mutex<BTreeMap<String, Announced>>,
     listeners: Mutex<Listeners>,
+    #[cfg(test)]
+    joining: AtomicUsize,
 }
 
 impl Attention {
@@ -179,6 +183,8 @@ impl Attention {
             started_ms,
             announced: Mutex::new(BTreeMap::new()),
             listeners: Mutex::new(Listeners::default()),
+            #[cfg(test)]
+            joining: AtomicUsize::new(0),
         }
     }
 
@@ -207,7 +213,15 @@ impl Attention {
         };
         if let Some(listener) = gone {
             drop(listener.tx);
-            join(listener.writer);
+            self.join(listener.writer);
+        }
+    }
+
+    fn join(&self, handle: JoinHandle<()>) {
+        #[cfg(test)]
+        self.joining.fetch_add(1, Ordering::SeqCst);
+        match handle.join() {
+            Ok(()) | Err(_) => {}
         }
     }
 
@@ -265,6 +279,11 @@ impl Attention {
         lock(&self.listeners).list.len()
     }
 
+    #[cfg(test)]
+    pub(crate) fn joining(&self) -> usize {
+        self.joining.load(Ordering::SeqCst)
+    }
+
     /// How many listeners' writers have returned.
     #[cfg(test)]
     pub(crate) fn ended(&self) -> usize {
@@ -301,12 +320,6 @@ fn line_for(session: &str, now: &SessionStatus, reason: Reason, ts: u64) -> crat
 
 fn lock<'a, T>(mutex: &'a Mutex<T>) -> MutexGuard<'a, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
-fn join(handle: JoinHandle<()>) {
-    match handle.join() {
-        Ok(()) | Err(_) => {}
-    }
 }
 
 #[cfg(test)]

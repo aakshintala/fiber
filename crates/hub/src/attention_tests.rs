@@ -23,12 +23,6 @@ use crate::fake;
 
 const DEADLINE: Duration = Duration::from_secs(10);
 
-/// How long `unlisten_waits_for_its_writer_still_draining_its_backlog` holds
-/// the far-end reader while asserting unlisten has not returned: long enough
-/// for a runnable unlisten thread to return under the no-op-`join` mutant,
-/// while the test itself waits on [`mpsc::Receiver::recv_timeout`].
-const SETTLED: Duration = Duration::from_millis(500);
-
 /// `wall()` on a fake clock nobody advanced, in milliseconds.
 const WALL: u64 = 1_700_000_000_000;
 
@@ -572,6 +566,25 @@ fn read_line(read: &mut BufReader<UnixStream>, what: &str) -> Value {
     serde_json::from_str(&text).unwrap()
 }
 
+/// Waits under [`DEADLINE`] until `done` holds, naming `what` on expiry.
+fn await_true(what: &str, done: impl Fn() -> bool + Send + 'static) {
+    let (tx, rx) = mpsc::channel();
+    let (cancel_tx, cancel_rx) = mpsc::channel();
+    thread::spawn(move || {
+        while !done() {
+            if cancel_rx.try_recv().is_ok() {
+                return;
+            }
+            thread::yield_now();
+        }
+        tx.send(()).unwrap_or(());
+    });
+    if rx.recv_timeout(DEADLINE).is_err() {
+        cancel_tx.send(()).unwrap_or(());
+        panic!("waited for {what}");
+    }
+}
+
 /// Drops listener `id` on a thread and receives its return under
 /// [`DEADLINE`]: joining the writer blocks.
 fn unlisten_within(attention: &Arc<Attention>, id: u64, what: &str) {
@@ -777,9 +790,25 @@ fn unlisten_waits_for_its_writer_still_draining_its_backlog() {
         waiting.name = format!("{n}:{}", "x".repeat(2_000));
         attention.notify("s_0000000000000001", None, &waiting, false);
     }
-    let (go_tx, go_rx) = mpsc::channel::<()>();
+    let (tx, rx) = mpsc::channel();
+    let ending = Arc::clone(&attention);
+    let watched = Arc::clone(&kept);
+    thread::spawn(move || {
+        ending.unlisten(id);
+        tx.send(Arc::strong_count(&watched)).unwrap_or(());
+    });
+    // The far end holds its reader until the test-only join point confirms
+    // unlisten reached the writer join. Under the no-op-`join` mutant the
+    // counter never advances, so this wait fails on every run.
+    let joining = Arc::clone(&attention);
+    await_true("unlisten to reach its writer join", move || {
+        joining.joining() == 1
+    });
+    assert!(
+        matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
+        "unlisten returned while its writer still held a full backlog"
+    );
     let drained = thread::spawn(move || {
-        go_rx.recv_timeout(DEADLINE).unwrap();
         let mut read = BufReader::new(far);
         let mut text = String::new();
         for _ in 0..count {
@@ -788,23 +817,6 @@ fn unlisten_waits_for_its_writer_still_draining_its_backlog() {
             assert!(!text.is_empty());
         }
     });
-    let (tx, rx) = mpsc::channel();
-    let ending = Arc::clone(&attention);
-    let watched = Arc::clone(&kept);
-    thread::spawn(move || {
-        ending.unlisten(id);
-        tx.send(Arc::strong_count(&watched)).unwrap_or(());
-    });
-    // The far end holds its reader while unlisten runs: a joining unlisten
-    // cannot return, so nothing arrives within SETTLED. Under the no-op-`join`
-    // mutant unlisten returns at once and this fails. The far end starts
-    // reading only after the blocked join is observed, so no schedule lets
-    // draining finish first.
-    assert!(
-        rx.recv_timeout(SETTLED).is_err(),
-        "unlisten returned while its writer still held a full backlog"
-    );
-    go_tx.send(()).unwrap();
     let left = rx.recv_timeout(DEADLINE).expect("unlisten returns");
     // The test's handle, `watched`, and none from the writer thread.
     assert_eq!(left, 2, "unlisten returned before its writer ended");
