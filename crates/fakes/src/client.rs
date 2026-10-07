@@ -5,7 +5,7 @@ use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, mpsc};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -33,6 +33,7 @@ pub struct Client {
     shutdown: Mutex<Option<UnixStream>>,
     pending: Mutex<Option<UnixStream>>,
     reader: Mutex<Option<JoinHandle<()>>>,
+    blocked: Mutex<Option<mpsc::Sender<()>>>,
 }
 
 struct State {
@@ -61,6 +62,7 @@ impl Client {
             shutdown: Mutex::new(Some(shutdown)),
             pending: Mutex::new(Some(stream)),
             reader: Mutex::new(None),
+            blocked: Mutex::new(None),
         })
     }
 
@@ -161,6 +163,14 @@ impl Client {
         }
     }
 
+    /// Test-only pause point for the unwind regression test: the reader
+    /// sends once per loop after passing its stop check, so the test can
+    /// wait until the reader is about to block in `read` before dropping
+    /// the client (`docs/testing.md`, "Waits and timeouts").
+    pub fn notify_when_blocked(&self, tx: mpsc::Sender<()>) {
+        *lock(&self.blocked) = Some(tx);
+    }
+
     fn ensure_reader(&self) {
         let mut slot = lock(&self.reader);
         if slot.is_some() {
@@ -171,9 +181,10 @@ impl Client {
         };
         let state = Arc::clone(&self.state);
         let ready = Arc::clone(&self.ready);
+        let blocked = lock(&self.blocked).clone();
         match std::thread::Builder::new()
             .name("fake-client".to_owned())
-            .spawn(move || read_lines(stream, state, ready))
+            .spawn(move || read_lines(stream, state, ready, blocked))
         {
             Ok(handle) => *slot = Some(handle),
             Err(_) => {
@@ -198,19 +209,34 @@ impl Drop for Client {
             }
         }
         if let Some(handle) = lock(&self.reader).take() {
-            // The shutdown above wakes the reader's `read` at once
-            // (`docs/testing.md`, "Waits and timeouts"); the bound only
-            // reports a reader that missed the wake.
-            match crate::within("the fake client's reader to stop", READER_STOP, move || {
-                handle.join()
-            }) {
-                Ok(()) | Err(_) => {}
-            }
+            stop_reader(handle, READER_STOP);
         }
     }
 }
 
-fn read_lines(stream: UnixStream, state: Arc<Mutex<State>>, ready: Arc<Condvar>) {
+/// Joins the reader within `deadline` of real time, failing the test when it
+/// misses. The shutdown in `Drop` wakes the reader's `read` at once
+/// (`docs/testing.md`, "Waits and timeouts"), so the bound only reports a
+/// reader that missed the wake. While the thread is already panicking, such
+/// as in a timeout's unwind, it leaves the reader unjoined instead: a second
+/// panic would abort the test process and lose the first one's message.
+fn stop_reader(handle: JoinHandle<()>, deadline: Duration) {
+    if std::thread::panicking() {
+        return;
+    }
+    match crate::within("the fake client's reader to stop", deadline, move || {
+        handle.join()
+    }) {
+        Ok(()) | Err(_) => {}
+    }
+}
+
+fn read_lines(
+    stream: UnixStream,
+    state: Arc<Mutex<State>>,
+    ready: Arc<Condvar>,
+    blocked: Option<mpsc::Sender<()>>,
+) {
     let mut read = BufReader::new(stream);
     let mut buf = Vec::new();
     loop {
@@ -221,6 +247,13 @@ fn read_lines(stream: UnixStream, state: Arc<Mutex<State>>, ready: Arc<Condvar>)
             }
             if guard.stop {
                 return;
+            }
+        }
+        // Past the stop check: the test waits on this before dropping the
+        // client, so the drop lands while the `read` below blocks.
+        if let Some(tx) = &blocked {
+            match tx.send(()) {
+                Ok(()) | Err(_) => {}
             }
         }
         buf.clear();

@@ -8,10 +8,15 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
+use std::cell::Cell;
+use std::io;
+
+use rustix::process::{Pid, Signal};
+
 use super::{
-    MATCHING_PATTERN_VAR, MATCHING_WATCHDOG_SCRIPT, WATCHDOG_SCRIPT, alive, group_empties,
+    MATCHING_PATTERN_VAR, MATCHING_WATCHDOG_SCRIPT, WATCHDOG_SCRIPT, alive, bounded, group_empties,
     group_lives, kill_group, kill_matching, kill_pid, listed_exit, matching, matching_exits,
-    pattern, pids_exit,
+    pattern, pids_exit, signal_group, signal_named, signal_pid,
 };
 
 const DEADLINE: Duration = Duration::from_secs(5);
@@ -158,6 +163,193 @@ fn kill_pid_signals_a_live_process() {
     assert!(kill_pid(child.id(), "0").unwrap());
     assert!(kill_pid(child.id(), "KILL").unwrap());
     child.wait().unwrap();
+}
+
+/// One refused id through `signal_group` or `signal_pid`, with a `deliver`
+/// that records being called instead of signalling anything.
+type Refusal = fn(u32, &str, &Cell<bool>) -> io::Result<bool>;
+
+// The seams take the kernel call as a closure, so these refusals pass
+// `KILL` itself: a refusal that let an id through would only set the flag.
+#[test]
+fn refused_groups_and_pids_never_reach_the_kernel_call() {
+    let seams: [(&str, Refusal); 2] = [
+        ("group", |id, name, called| {
+            signal_group(id, name, |_, _| {
+                called.set(true);
+                Ok(())
+            })
+        }),
+        ("pid", |id, name, called| {
+            signal_pid(id, name, |_, _| {
+                called.set(true);
+                Ok(())
+            })
+        }),
+    ];
+    for (seam, refuse) in seams {
+        for id in [0, 1] {
+            // `NONE` is no signal's name: the refusal comes before the name
+            // is read, so it panics rather than returning the name's error.
+            for name in ["KILL", "TERM", "0", "NONE"] {
+                let called = Cell::new(false);
+                let refused = panic::catch_unwind(AssertUnwindSafe(|| refuse(id, name, &called)));
+                assert!(refused.is_err(), "{seam} {id} with {name} was not refused");
+                assert!(
+                    !called.get(),
+                    "{seam} {id} with {name} reached the kernel call"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn an_accepted_id_reaches_the_kernel_call_with_its_signal() {
+    let seen = Cell::new(None);
+    let sent = signal_group(4242, "TERM", |id, sig| {
+        seen.set(Some((id, sig)));
+        Ok(())
+    });
+    assert!(sent.unwrap(), "an accepted send reads as sent");
+    assert_eq!(
+        seen.get(),
+        Some((Pid::from_raw(4242).unwrap(), Some(Signal::TERM)))
+    );
+    let refused = signal_pid(4243, "0", |id, sig| {
+        seen.set(Some((id, sig)));
+        Err(rustix::io::Errno::SRCH)
+    });
+    assert!(
+        !refused.unwrap(),
+        "a send the kernel refused reads as not sent"
+    );
+    assert_eq!(seen.get(), Some((Pid::from_raw(4243).unwrap(), None)));
+}
+
+#[test]
+fn an_id_past_the_pid_range_is_an_error_and_sends_nothing() {
+    let called = Cell::new(false);
+    let sent = signal_group(u32::MAX, "0", |_, _| {
+        called.set(true);
+        Ok(())
+    });
+    assert_eq!(sent.unwrap_err().kind(), io::ErrorKind::InvalidInput);
+    assert!(
+        !called.get(),
+        "an id past the pid range reached the kernel call"
+    );
+}
+
+#[test]
+fn each_signal_name_reads_as_its_signal_and_others_are_refused() {
+    let names = [
+        ("0", None),
+        ("HUP", Some(Signal::HUP)),
+        ("INT", Some(Signal::INT)),
+        ("KILL", Some(Signal::KILL)),
+        ("TERM", Some(Signal::TERM)),
+        ("WINCH", Some(Signal::WINCH)),
+    ];
+    for (name, signal) in names {
+        assert_eq!(signal_named(name).unwrap(), signal, "{name}");
+    }
+    for name in ["", "SIGKILL", "kill", "9", "QUIT"] {
+        assert_eq!(
+            signal_named(name).unwrap_err().kind(),
+            io::ErrorKind::InvalidInput,
+            "{name:?}"
+        );
+    }
+}
+
+/// A shell blocked reading a stdin pipe the test holds, its stdout piped
+/// for `bounded`.
+fn hung() -> Child {
+    Command::new("sh")
+        .args(["-c", "read line"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap()
+}
+
+#[test]
+fn bounded_returns_a_timeout_on_a_miss_and_kills_the_child() {
+    let mut child = hung();
+    let pid = child.id();
+    let stdin = child.stdin.take().unwrap();
+    let missed = crate::within(
+        "bounded to give up on the hung shell",
+        DEADLINE,
+        move || bounded(child, "the hung shell", Duration::from_millis(100)),
+    );
+    let err = missed.unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+    assert!(err.to_string().contains("the hung shell"), "{err}");
+    assert!(
+        pids_exit(&[pid], DEADLINE),
+        "waited {DEADLINE:?} for the hung shell to be killed and reaped"
+    );
+    drop(stdin);
+}
+
+/// A shell in its own process group that closes its piped stdout, signals
+/// readiness past the close, then blocks in `sleep`: at `bounded`'s
+/// deadline stdout is already at end-of-file while the child lives, so a
+/// worker that held its lock across `wait` could never be killed.
+#[test]
+fn bounded_kills_a_child_that_closed_stdout_then_hangs() {
+    let dir = crate::TempDir::new("bc");
+    let ready = crate::children::Ready::new(dir.path());
+    let fifo = ready.path().to_owned();
+    let child = Command::new("sh")
+        .args(["-c", "exec 1>&-; echo $$ > \"$1\"; exec sleep 600", "sh"])
+        .arg(&fifo)
+        .process_group(0)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let group = child.id();
+    let watchdog = crate::Watchdog::group(group);
+    // The line is written past the close, so stdout is at end-of-file
+    // while the `sleep` lives.
+    assert_eq!(
+        ready.wait(DEADLINE),
+        vec![group],
+        "the ready line is the closed-stdout shell's pid"
+    );
+    let pid = child.id();
+    let missed = crate::within(
+        "bounded to give up on the closed-stdout shell",
+        DEADLINE,
+        move || bounded(child, "the closed-stdout shell", Duration::from_millis(100)),
+    );
+    let err = missed.unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+    assert!(err.to_string().contains("the closed-stdout shell"), "{err}");
+    assert!(
+        pids_exit(&[pid], DEADLINE),
+        "waited {DEADLINE:?} for the closed-stdout shell to be killed and reaped"
+    );
+    watchdog.stand_down(DEADLINE);
+}
+
+#[test]
+fn bounded_returns_the_status_and_stdout_of_a_child_that_exits() {
+    let child = Command::new("sh")
+        .args(["-c", "echo listed; exit 3"])
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let (status, stdout) = crate::within("bounded to return", DEADLINE, move || {
+        bounded(child, "the listing shell", DEADLINE)
+    })
+    .unwrap();
+    assert_eq!(status.code(), Some(3));
+    assert_eq!(stdout, b"listed\n");
 }
 
 #[test]

@@ -383,3 +383,54 @@ fn await_partial_needs_every_counted_partial() {
         "the client close ends the stall"
     );
 }
+
+/// A thread that finishes only once the returned sender drops.
+fn held_thread() -> (JoinHandle<()>, mpsc::Sender<()>) {
+    let (release, released) = mpsc::channel::<()>();
+    let handle = thread::spawn(move || if let Err(mpsc::RecvError) = released.recv() {});
+    (handle, release)
+}
+
+#[test]
+fn stop_gives_up_on_an_accept_thread_that_never_finishes() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (accept, release) = held_thread();
+    let joined = crate::within(
+        "stop to give up on the held thread",
+        STATUS_WITHIN,
+        move || stop(addr, accept, Duration::from_millis(100)),
+    );
+    assert!(!joined, "a thread that never finishes is not joined");
+    drop(release);
+}
+
+#[test]
+fn stop_gives_up_when_the_wake_cannot_connect() {
+    let addr = TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap();
+    let accept = thread::spawn(|| {});
+    let joined = crate::within(
+        "stop to give up on a refused wake",
+        STATUS_WITHIN,
+        move || stop(addr, accept, Duration::from_millis(100)),
+    );
+    assert!(!joined, "a failed connection leaves the thread unjoined");
+}
+
+#[test]
+fn stop_joins_an_accept_thread_that_sees_stopping() {
+    let mut server = ProviderServer::start([]).unwrap();
+    lock(&server.state).stopping = true;
+    let accept = server.accept.take().unwrap();
+    let addr = server.addr;
+    let joined = crate::within("stop to join the accept thread", STATUS_WITHIN, move || {
+        stop(addr, accept, STATUS_WITHIN)
+    });
+    assert!(
+        joined,
+        "waited {STATUS_WITHIN:?} for the accept thread to stop"
+    );
+}

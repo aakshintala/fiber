@@ -378,3 +378,58 @@ fn send_by_leaves_the_socket_without_a_write_timeout() {
         "a later send is not bounded by send_by's last timeout"
     );
 }
+
+/// A reader thread that finishes only once the returned sender drops.
+fn held_reader() -> (JoinHandle<()>, mpsc::Sender<()>) {
+    let (release, released) = mpsc::channel::<()>();
+    let handle = thread::spawn(move || if let Err(mpsc::RecvError) = released.recv() {});
+    (handle, release)
+}
+
+#[test]
+fn stop_reader_outside_an_unwind_fails_naming_the_wait() {
+    let (handle, release) = held_reader();
+    let missed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        stop_reader(handle, Duration::from_millis(100));
+    }));
+    let message = *missed
+        .expect_err("a reader that misses its deadline fails the test")
+        .downcast::<String>()
+        .unwrap();
+    assert!(
+        message.contains("the fake client's reader to stop"),
+        "{message}"
+    );
+    drop(release);
+}
+
+#[test]
+fn a_client_dropped_during_an_unwind_keeps_the_first_panic() {
+    let dir = TempDir::new("fc");
+    let path = dir.path().join("s");
+    let listener = UnixListener::bind(&path).unwrap();
+    let client = Client::connect(&path).unwrap();
+    let _server = accept_within(&listener);
+    // The reader signals past its stop check, so the drop below lands
+    // while it is blocked in `read`: without the wait the drop could set
+    // `stop` first and the reader would exit cleanly without the fix.
+    let (blocked, is_blocked) = mpsc::channel();
+    client.notify_when_blocked(blocked);
+    client.slow(false);
+    is_blocked
+        .recv_timeout(DEADLINE)
+        .expect("the reader to block in read");
+    // Without its shutdown stream, `Drop` cannot wake the reader, which
+    // stays blocked in `read` and would miss `READER_STOP`.
+    let wake = super::lock(&client.shutdown).take().unwrap();
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        let _client = client;
+        panic!("the first failure");
+    }));
+    let message = *unwound
+        .expect_err("the closure panics")
+        .downcast::<&str>()
+        .unwrap();
+    assert_eq!(message, "the first failure");
+    wake.shutdown(std::net::Shutdown::Both).unwrap();
+}
