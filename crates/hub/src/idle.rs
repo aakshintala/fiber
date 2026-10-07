@@ -92,19 +92,13 @@ pub(crate) fn run(hub: &Arc<Hub>, held: &Held, idle_exit: Duration, got: &Atomic
         match hub.idle_wait(idle_exit, &stop, got) {
             Idle::Signal(signal) => {
                 stop.store(true, Ordering::SeqCst);
-                wake(&socket);
-                match acceptor.join() {
-                    Ok(()) | Err(_) => {}
-                }
+                join_after_wake(&socket, acceptor);
                 hub.shutdown_clients();
                 hub.diag.info("hub_stopped", "The hub stopped: signal.");
                 return Exit::Signal(signal);
             }
             Idle::Expired => {
-                wake(&socket);
-                match acceptor.join() {
-                    Ok(()) | Err(_) => {}
-                }
+                join_after_wake(&socket, acceptor);
                 hub.diag.info("hub_stopped", "The hub stopped: idle.");
                 return Exit::Idle;
             }
@@ -113,11 +107,16 @@ pub(crate) fn run(hub: &Arc<Hub>, held: &Held, idle_exit: Duration, got: &Atomic
     }
 }
 
-/// Wakes the acceptor's blocking `accept`, which sees `stop` and returns.
-/// The connection is dropped unanswered; the client retries.
-fn wake(socket: &std::path::Path) {
-    match UnixStream::connect(socket) {
-        Ok(_) | Err(_) => {}
+/// Wakes the acceptor's blocking `accept`, which sees `stop` and returns,
+/// then joins it. The wake connection is dropped unanswered; the client
+/// retries. When the socket path was removed the connect fails and nothing
+/// can wake `accept`: the acceptor is left blocked, and the process exit
+/// ends it.
+fn join_after_wake(socket: &std::path::Path, acceptor: thread::JoinHandle<()>) {
+    if UnixStream::connect(socket).is_ok() {
+        match acceptor.join() {
+            Ok(()) | Err(_) => {}
+        }
     }
 }
 
