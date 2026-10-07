@@ -28,6 +28,7 @@ jobs:
   select:
     name: Selection
     runs-on: ubuntu-24.04
+    # Median 44 s; the 5-minute floor applies (docs/ci.md, "Job time limits").
     timeout-minutes: 5
     permissions:
       contents: read
@@ -129,6 +130,7 @@ jobs:
     needs: select
     if: fromJSON(needs.select.outputs.jobs).lint
     runs-on: ubuntu-24.04
+    # Median 55 s; floor.
     timeout-minutes: 5
     env:
       BASE: ${{ needs.select.outputs.base }}
@@ -161,6 +163,7 @@ jobs:
         # A draft runs Linux x86_64 only; marking it ready runs all three (docs/ci.md).
         runner: ${{ github.event.pull_request.draft && fromJSON('["ubuntu-24.04"]') || fromJSON('["ubuntu-24.04", "ubuntu-24.04-arm", "macos-26"]') }}
     runs-on: ${{ matrix.runner }}
+    # Medians: Linux 4 min, macOS 7 min.
     timeout-minutes: ${{ matrix.runner == 'macos-26' && 15 || 10 }}
     env:
       BASE: ${{ needs.select.outputs.base }}
@@ -190,6 +193,7 @@ jobs:
         # A skipped job still needs a non-empty matrix.
         shard: ${{ fromJSON(needs.select.outputs.shard_total) > 0 && fromJSON(needs.select.outputs.shards) || fromJSON('[0]') }}
     runs-on: ubuntu-24.04
+    # Median 2.5 min; 8 % of shards take 9-12 min, so the bound is twice that slow group.
     timeout-minutes: 20
     env:
       BASE: ${{ needs.select.outputs.base }}
@@ -218,7 +222,9 @@ jobs:
     needs: select
     if: fromJSON(needs.select.outputs.jobs).bug_red
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    # One run, 3 min.
+    # No history: it makes only gh calls.
+    timeout-minutes: 5
     env:
       BASE: ${{ needs.select.outputs.base }}
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -261,6 +267,7 @@ jobs:
     needs: [select, lint, test, mutants, bug_red]
     if: always()
     runs-on: ubuntu-24.04
+    # Median 46 s; floor.
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
