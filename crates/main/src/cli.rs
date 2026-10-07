@@ -107,9 +107,10 @@ pub(crate) enum Commands {
     Version,
     /// Print this menu, or a command's help
     Help {
-        /// The command to describe. Absent prints the menu.
+        /// The command to describe, a word per level: `extension install`.
+        /// Absent prints the menu.
         #[arg(value_name = "command")]
-        command: Option<String>,
+        command: Vec<String>,
     },
     /// The search behind the shell's `grep`: hidden and free to change.
     #[command(hide = true, disable_help_flag = true)]
@@ -432,23 +433,31 @@ fn command() -> clap::Command {
         )
 }
 
-/// The menu, or one command's help. An unknown name is the same sentence
-/// as invoking that name directly.
+/// The menu, or one command's help, found a word per level. An unknown
+/// name is the same sentence as invoking those words directly.
 pub(crate) fn render_help<S: AsRef<str>>(words: &[S]) -> Result<String, String> {
     let mut cmd = command();
-    let Some(name) = words.first().map(AsRef::as_ref) else {
+    if words.is_empty() {
         return Ok(cmd.render_help().to_string());
-    };
+    }
     // The usage line names the parent (`fiber ask`) only after the parent
     // builds bin names, which `fiber ask --help` does while parsing.
     cmd.build();
-    let Some(sub) = cmd.find_subcommand_mut(name) else {
-        let error = match command().try_get_matches_from(["fiber", name]) {
-            Err(error) => error,
-            Ok(_) => return Err(format!("Unrecognized subcommand '{name}'.{HELP_SUFFIX}")),
+    let mut sub = &mut cmd;
+    for (depth, word) in words.iter().enumerate() {
+        let Some(next) = sub.find_subcommand_mut(word.as_ref()) else {
+            let typed = words.iter().take(depth + 1).map(AsRef::as_ref);
+            let error = match command().try_get_matches_from(["fiber"].into_iter().chain(typed)) {
+                Err(error) => error,
+                Ok(_) => {
+                    let name = word.as_ref();
+                    return Err(format!("Unrecognized subcommand '{name}'.{HELP_SUFFIX}"));
+                }
+            };
+            return Err(usage_sentence(&error));
         };
-        return Err(usage_sentence(&error));
-    };
+        sub = next;
+    }
     Ok(sub.render_help().to_string())
 }
 
