@@ -514,9 +514,11 @@ impl App {
 
     /// A key for home, ahead of the key map and focus: the picker's keys
     /// while it is open, then down in an empty box focusing the first
-    /// row, and down on the last drawn row focusing the next one below
-    /// the fold. `None` for anything else, so the focused stops keep
-    /// moving as they do on the conversation.
+    /// row, and down or j on the last drawn row focusing the next one
+    /// below the fold. `None` for anything else, so the focused stops
+    /// keep moving as they do on the conversation. Only ↓ enters the
+    /// list: j and k move only while it already has focus, and the draft
+    /// keeps every printable key typed into it.
     pub(super) fn home_key(&mut self, key: &Key) -> Option<Effect> {
         // The quit question takes every key first, on home or not:
         // Enter leaves working sessions running, `c` closes them all
@@ -617,6 +619,11 @@ impl App {
                 | Key::AltX => {}
             }
             return Some(Effect::None);
+        }
+        // Only ↓ enters the list: with the box focused the draft keeps
+        // j, and focus moves it once the list has focus.
+        if matches!(key, Key::Char('j')) && self.focus.is_none() {
+            return None;
         }
         if !matches!(key, Key::Down | Key::Char('j')) {
             // Backspace on a focused row asks to delete it when it

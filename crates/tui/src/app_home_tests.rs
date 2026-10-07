@@ -1527,15 +1527,30 @@ fn down_in_an_empty_box_focuses_the_first_row() {
         app.focused(),
         Some(crate::mouse::TargetId::Home(Spot::Entry(keys(&app)[0])))
     );
-    // Esc returns focus to the input box, and j focuses the first row
+    // Esc returns focus to the input box, and ↓ focuses the first row
     // again.
     assert_eq!(app.on_key(Key::Esc, now), Effect::None);
     assert_eq!(app.focused(), None);
-    assert_eq!(app.on_key(Key::Char('j'), now), Effect::None);
+    assert_eq!(app.on_key(Key::Down, now), Effect::None);
     assert_eq!(
         app.focused(),
         Some(crate::mouse::TargetId::Home(Spot::Entry(keys(&app)[0])))
     );
+}
+
+#[test]
+fn typing_into_the_empty_draft_inserts_text_with_rows_present() {
+    // Printable keys reach the draft while the box has focus: only ↓
+    // enters the list, and j and k move only while it has focus.
+    for key in ['j', 'k', 'c', 'x'] {
+        let mut app = home();
+        two_rows(&mut app);
+        drawn(&mut app);
+        let now = fakes::clock::FakeClock::new().now();
+        assert_eq!(app.on_key(Key::Char(key), now), Effect::None);
+        assert_eq!(app.focused(), None, "{key} keeps the box focused");
+        assert_eq!(app.input().expand(), key.to_string());
+    }
 }
 
 #[test]
