@@ -1,22 +1,29 @@
 //! Handoff (`docs/handoff.md`): the context's restart from a note the
-//! session's own model writes. This module holds the settings, the context
-//! size and the automatic check, the note request, the recording, and the
-//! render state that makes the live conversation and a resume's rebuild
-//! agree.
+//! session's own model writes. This module holds the settings, context size
+//! and automatic check. Its child modules hold the note request, recording,
+//! handoff run, and render state that makes the live conversation and a
+//! resume's rebuild agree.
 
 use std::sync::Arc;
 
 use contract::events::{
-    ContextNudged, Event, HandoffCompleted, HandoffStarted, HandoffTrigger, Note, Outcome,
-    ToolCallRequested, TurnCompleted, TurnOutcome,
+    ContextNudged, Event, HandoffCompleted, HandoffTrigger, Note, Outcome, ToolCallRequested,
+    TurnCompleted, TurnOutcome,
 };
-use contract::provider::{Finish, Input, ModelRequest, Reply, ReplyAction};
+use contract::provider::{Input, ModelRequest};
 use contract::shapes::{Failure, Tokens};
 use contract::{ActionId, ErrorCode, TurnId};
 
-use crate::prompt::{body, fill};
-use crate::retry::Attempted;
 use crate::{Error, Loop, Step};
+
+mod carry;
+mod note;
+
+#[cfg(test)]
+pub(crate) use note::note_request_text;
+use note::{cancelled, failure};
+
+pub(crate) use carry::Carry;
 
 /// How automatic handoff is set (`docs/configuration.md`, `handoff.*`).
 #[derive(Debug, Clone, PartialEq)]
@@ -143,238 +150,6 @@ impl State {
         self.blocked = false;
         self.person_turn = person;
     }
-}
-
-/// The render state a handoff reads: the same fold in the live loop and in a
-/// rebuild, so the two never differ (`docs/loop.md`, "What the model is
-/// sent").
-#[derive(Debug, Clone, Default, PartialEq)]
-pub(crate) struct Carry {
-    /// The conversation's length at the open `handoff_started`.
-    pub(crate) window: Option<usize>,
-    /// This turn's input: its message items and the steering messages
-    /// applied, in log order. A handoff carries it verbatim.
-    pub(crate) input: Vec<Input>,
-    /// The jobs started and not completed, in start order, as
-    /// `(job id, description)`.
-    pub(crate) jobs: Vec<(String, String)>,
-    /// The session log's path, from the latest opening message.
-    pub(crate) session_log: String,
-    /// Whether this context was nudged.
-    pub(crate) nudged: bool,
-    /// The text parts the actions of a handoff window completed, by action:
-    /// a completed handoff takes them; a window that ends otherwise leaves
-    /// its few lines, which no later note names.
-    pub(crate) texts: Vec<(ActionId, String)>,
-    /// The calls of the last reply, in call order, with their results.
-    pub(crate) step: Vec<StepCall>,
-    /// The artifact of each tool result in this context that has one, by
-    /// call, as a path relative to the session directory.
-    pub(crate) artifacts: Vec<(ActionId, String)>,
-}
-
-/// One call of the last reply: the call, its result once written, and the
-/// note its result set as `control.handoff`.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct StepCall {
-    pub(crate) action: ActionId,
-    pub(crate) call: Input,
-    pub(crate) result: Option<Input>,
-    pub(crate) note: Option<String>,
-}
-
-impl Carry {
-    /// The conversation after a completed handoff: the carried input, the
-    /// note, a line for the jobs still running and, when tools set the note,
-    /// the other calls of that step with their results.
-    pub(crate) fn restart(&mut self, done: &HandoffCompleted) -> Vec<Input> {
-        let mut conversation = self.input.clone();
-        let texts = std::mem::take(&mut self.texts);
-        let step = std::mem::take(&mut self.step);
-        let ids: &[ActionId] = match &done.note {
-            Some(Note::Actions { note }) => note,
-            Some(Note::Hook { .. }) | None => &[],
-        };
-        let note = match &done.note {
-            Some(Note::Hook { note_text, .. }) => note_text.clone(),
-            Some(Note::Actions { .. }) | None => ids
-                .iter()
-                .map(|id| {
-                    let parts: Vec<&str> = texts
-                        .iter()
-                        .filter(|(action, _)| action == id)
-                        .map(|(_, text)| text.as_str())
-                        .collect();
-                    if parts.is_empty() {
-                        step.iter()
-                            .find(|call| call.action == *id)
-                            .and_then(|call| call.note.clone())
-                            .unwrap_or_default()
-                    } else {
-                        parts.join("\n")
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join("\n\n"),
-        };
-        conversation.push(Input::User { text: note });
-        if !self.jobs.is_empty() {
-            let listed: Vec<String> = self
-                .jobs
-                .iter()
-                .map(|(id, description)| format!("- {id}: {description}"))
-                .collect();
-            conversation.push(Input::User {
-                text: fill(
-                    &body(crate::conversation::MESSAGES_MD, "handoff-jobs"),
-                    &[("jobs", listed.join("\n").as_str())],
-                ),
-            });
-        }
-        // The model had not seen the other calls of a step a tool ended: they
-        // follow the note, the calls then their results, in call order. A
-        // tool ended the step when a note action is one of its calls; a
-        // note request's action is a reply, never a call.
-        if step.iter().any(|call| ids.contains(&call.action)) {
-            let others: Vec<&StepCall> = step
-                .iter()
-                .filter(|call| !ids.contains(&call.action))
-                .collect();
-            conversation.extend(others.iter().map(|call| call.call.clone()));
-            conversation.extend(others.iter().filter_map(|call| call.result.clone()));
-        }
-        // Only a result still in this context can be moved out of it.
-        self.artifacts.retain(|(id, _)| {
-            conversation.iter().any(
-                |input| matches!(input, Input::ToolResult { action_id, .. } if action_id == id),
-            )
-        });
-        self.nudged = false;
-        conversation
-    }
-
-    /// A call of the last reply was requested.
-    pub(crate) fn call_requested(&mut self, action: &ActionId, call: &Input) {
-        self.step.push(StepCall {
-            action: action.clone(),
-            call: call.clone(),
-            result: None,
-            note: None,
-        });
-    }
-
-    /// A call of the last reply completed, with its result, its artifact and
-    /// the note its `control.handoff` set, when it completed.
-    pub(crate) fn call_completed(
-        &mut self,
-        action: &ActionId,
-        result: &Input,
-        artifact: Option<&str>,
-        note: Option<&str>,
-    ) {
-        if let Some(path) = artifact {
-            self.artifacts.push((action.clone(), path.to_owned()));
-        }
-        if let Some(call) = self.step.iter_mut().find(|call| call.action == *action) {
-            call.result = Some(result.clone());
-            call.note = note.map(str::to_owned);
-        }
-    }
-
-    /// The calls of the last reply whose result set `control.handoff`, in
-    /// call order.
-    pub(crate) fn noted(&self) -> Vec<ActionId> {
-        self.step
-            .iter()
-            .filter(|call| call.note.is_some())
-            .map(|call| call.action.clone())
-            .collect()
-    }
-
-    /// Closes a window left open: truncates `conversation` back to where
-    /// the handoff began, so the note request's lines never stay.
-    pub(crate) fn close_window(&mut self, conversation: &mut Vec<Input>) {
-        if let Some(length) = self.window.take() {
-            conversation.truncate(length);
-        }
-    }
-
-    /// Tracks the jobs running: started adds, completed removes.
-    pub(crate) fn fold_jobs(&mut self, event: &Event) {
-        if let Event::JobStarted(job) = event {
-            self.jobs
-                .push((job.job_id.0.clone(), job.description.clone()));
-        }
-        if let Event::JobCompleted(job) = event {
-            self.jobs.retain(|(id, _)| *id != job.job_id.0);
-        }
-    }
-
-    /// The nudge's text, from its payload.
-    pub(crate) fn nudge_text(&self, nudged: &ContextNudged) -> String {
-        fill(
-            &body(crate::conversation::MESSAGES_MD, "nudge"),
-            &[
-                ("tokens", nudged.tokens.to_string().as_str()),
-                ("trigger_at", nudged.trigger_at.to_string().as_str()),
-                ("session_log", self.session_log.as_str()),
-            ],
-        )
-    }
-}
-
-/// The request for the note: `handoff-note`, then `handoff-focus` when there
-/// are instructions.
-pub(crate) fn note_request_text(session_log: &str, instructions: Option<&str>) -> String {
-    let mut text = fill(
-        &body(crate::conversation::MESSAGES_MD, "handoff-note"),
-        &[("session_log", session_log)],
-    );
-    if let Some(instructions) = instructions {
-        text.push_str("\n\n");
-        text.push_str(&fill(
-            &body(crate::conversation::MESSAGES_MD, "handoff-focus"),
-            &[("instructions", instructions)],
-        ));
-    }
-    text
-}
-
-/// The turn's end when a handoff was cancelled: a person cancelled the turn.
-fn cancelled(outcome: Outcome) -> Option<TurnCompleted> {
-    (outcome == Outcome::Cancelled).then(|| crate::ended(TurnOutcome::Interrupted, None))
-}
-
-/// What the note request came to.
-enum Noted {
-    /// The reply is the note; its message action carries it.
-    Note(ActionId),
-    /// The request or the reply failed.
-    Failed(Failure),
-    /// A person cancelled the turn.
-    Cancelled,
-}
-
-fn failure(code: ErrorCode, message: &str) -> Failure {
-    Failure {
-        code,
-        message: message.to_owned(),
-        retry_after: None,
-        provider: None,
-    }
-}
-
-/// The note a reply holds: its text parts in order, joined with a newline.
-fn reply_note(reply: &Reply) -> String {
-    reply
-        .actions
-        .iter()
-        .filter_map(|action| match action {
-            ReplyAction::Text(part) => Some(part.text.as_str()),
-            ReplyAction::Reasoning(_) | ReplyAction::ToolCall(_) | ReplyAction::Hosted(_) => None,
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 impl Loop {
@@ -534,184 +309,6 @@ impl Loop {
             .unwrap_or_else(|| self.conversation.iter().map(estimate).sum())
     }
 
-    /// What a completed handoff leaves to do: the next request starts a new
-    /// context, unmeasured and missing the cache for everything after the
-    /// preamble, under a new opening message; the files seen are forgotten.
-    fn restarted(&mut self, turn: &TurnId) -> Result<(), Error> {
-        self.sent = None;
-        self.handoff.measured = None;
-        self.write_opening(Some(turn))?;
-        if let Some(forget) = &self.handoff.forget {
-            forget();
-        }
-        Ok(())
-    }
-
-    /// One handoff: `handoff_started`, the note request, then
-    /// `handoff_completed` with how it ended (`docs/handoff.md`,
-    /// "Recording"). A completed one writes the new opening message.
-    fn run_handoff(
-        &mut self,
-        turn: &TurnId,
-        trigger: HandoffTrigger,
-        instructions: Option<String>,
-        tokens_before: u64,
-    ) -> Result<Outcome, Error> {
-        self.handoff.step_ran = true;
-        self.append(
-            &Event::HandoffStarted(HandoffStarted { trigger }),
-            turn,
-            None,
-        )?;
-        let noted = self.request_note(turn, trigger, instructions.as_deref())?;
-        let (outcome, error, note) = match noted {
-            Noted::Note(id) => (
-                Outcome::Completed,
-                None,
-                Some(Note::Actions { note: vec![id] }),
-            ),
-            Noted::Failed(failure) => (Outcome::Failed, Some(failure), None),
-            Noted::Cancelled => (Outcome::Cancelled, None, None),
-        };
-        self.append(
-            &Event::HandoffCompleted(HandoffCompleted {
-                outcome,
-                error,
-                note,
-                tokens_before,
-                instructions,
-            }),
-            turn,
-            None,
-        )?;
-        match outcome {
-            Outcome::Completed => self.restarted(turn)?,
-            Outcome::Failed => self.handoff.blocked = true,
-            Outcome::Cancelled => {}
-        }
-        Ok(outcome)
-    }
-
-    /// Asks the model for its note: the conversation and one more user
-    /// input, which is never logged. A cancel that landed before the call
-    /// ends it at once, as it ends any call (`cancel::run_cancellable`).
-    fn request_note(
-        &mut self,
-        turn: &TurnId,
-        trigger: HandoffTrigger,
-        instructions: Option<&str>,
-    ) -> Result<Noted, Error> {
-        let mut conversation = if trigger == HandoffTrigger::Overflow {
-            self.moved_results()
-        } else {
-            self.conversation.clone()
-        };
-        conversation.push(Input::User {
-            text: note_request_text(&self.handoff.carry.session_log, instructions),
-        });
-        let Some(request) = self.request_for(conversation) else {
-            return Ok(Noted::Failed(failure(
-                ErrorCode::LogCorrupt,
-                "The preamble was not built.",
-            )));
-        };
-        if let Some(over) = self.over_budget().and_then(|ended| ended.error) {
-            return Ok(Noted::Failed(over));
-        }
-        self.sent = Some(self.conversation.len());
-        match self.call_with_retries(&request, turn)? {
-            Attempted::Replied {
-                reply,
-                reasoning,
-                message,
-            } => self.record_note(reply, reasoning, turn, message),
-            Attempted::Failed(failed) => Ok(Noted::Failed(failed)),
-            Attempted::Interrupted => Ok(Noted::Cancelled),
-        }
-    }
-
-    /// Writes the note reply as any reply is written. A tool call in it
-    /// never runs.
-    fn record_note(
-        &mut self,
-        reply: Reply,
-        reasoning: std::collections::VecDeque<ActionId>,
-        turn: &TurnId,
-        message: ActionId,
-    ) -> Result<Noted, Error> {
-        let note = reply_note(&reply);
-        let (calls, finish) = self.write_reply(reply, reasoning, turn, &message)?;
-        for (id, _) in calls {
-            let completed = self.cancelled_before_ran();
-            self.append(&Event::ToolCallCompleted(*completed), turn, Some(&id))?;
-        }
-        if finish == Finish::OutputLimit {
-            return Ok(Noted::Failed(failure(
-                ErrorCode::OutputTruncated,
-                "The handoff note reached the output limit.",
-            )));
-        }
-        if note.trim().is_empty() {
-            return Ok(Noted::Failed(failure(
-                ErrorCode::UnreadableReply,
-                "The handoff note reply held no text.",
-            )));
-        }
-        Ok(Noted::Note(message))
-    }
-
-    /// The conversation with the last step's tool results moved out: each
-    /// result after the last reply input is replaced by a line naming its
-    /// artifact, written here where the result has none. A result whose
-    /// artifact cannot be written stays inline; the log holds it in full.
-    fn moved_results(&self) -> Vec<Input> {
-        let mut conversation = self.conversation.clone();
-        // From the end back to the last reply input: what followed the reply.
-        let after_reply = conversation.iter_mut().rev().take_while(|input| {
-            !matches!(
-                input,
-                Input::Assistant { .. } | Input::Reasoning { .. } | Input::ToolCall { .. }
-            )
-        });
-        for input in after_reply {
-            if let Input::ToolResult {
-                action_id, text, ..
-            } = input
-                && let Some(path) = self.artifact_of(action_id, text)
-            {
-                *text = fill(
-                    &body(crate::conversation::MESSAGES_MD, "moved-result"),
-                    &[("path", path.as_str())],
-                );
-            }
-        }
-        conversation
-    }
-
-    /// The path of the full text of a tool result: its artifact, or one
-    /// written now, named after the call's action.
-    fn artifact_of(&self, action: &ActionId, text: &str) -> Option<String> {
-        let relative = match self
-            .handoff
-            .carry
-            .artifacts
-            .iter()
-            .find(|(id, _)| id == action)
-        {
-            Some((_, path)) => path.clone(),
-            None => {
-                self.log
-                    .write_artifact(&format!("{}.txt", action.0), text.as_bytes())
-                    .ok()?
-                    .0
-            }
-        };
-        let session = std::path::Path::new(&self.handoff.carry.session_log).parent();
-        Some(session.map_or(relative.clone(), |dir| {
-            dir.join(&relative).display().to_string()
-        }))
-    }
-
     /// The overflow rule (`docs/handoff.md`, "Overflow"): a request that
     /// does not fit, or that the provider rejected for size as `failed`,
     /// hands off with the last step's tool results moved out, then sends the
@@ -796,5 +393,4 @@ impl Loop {
 pub(crate) type Calls = Vec<(ActionId, ToolCallRequested)>;
 
 #[cfg(test)]
-#[path = "handoff_tests.rs"]
 mod tests;
