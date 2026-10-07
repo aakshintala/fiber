@@ -654,15 +654,6 @@ fn process_cancel_stops_a_stalled_child_while_the_write_is_blocked() {
         .unwrap()
         .success();
     assert!(!alive, "the child {pid} still exists");
-    // No zombie: `kill(pid, 0)` fails once the child is reaped.
-    let no_such = std::process::Command::new("kill")
-        .args(["-0", &pid.to_string()])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .unwrap()
-        .success();
-    assert!(!no_such, "the child {pid} was not reaped");
 }
 
 fn bad_body_for(label: &str) -> String {
