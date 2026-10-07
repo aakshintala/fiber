@@ -3,6 +3,7 @@ use std::collections::BTreeSet;
 use serde_json::{Value, json};
 
 use super::*;
+use crate::events::OfferDecision;
 
 const DOC: &str = include_str!("../../../docs/invocation.md");
 
@@ -82,6 +83,8 @@ fn samples() -> Vec<Value> {
             "feedback": "no"}}),
         json!({"id": "c", "command": "reply", "args": {"request_id": "r", "decision": "allow",
             "remember": {"scope": "session", "prefix": "ls"}}}),
+        json!({"id": "c", "command": "reply", "args": {"request_id": "r",
+            "decisions": ["approve", "skip", "never"]}}),
         json!({"id": "c", "command": "job_stop", "args": {"job_id": "j"}}),
         json!({"id": "c", "command": "background"}),
         json!({"id": "c", "command": "reload"}),
@@ -412,4 +415,43 @@ fn built_in_commands_match_the_tui_doc_table() {
             "`{name}` in BUILT_IN_COMMANDS not in docs/tui.md"
         );
     }
+}
+
+#[test]
+fn decisions_read_in_order_as_an_offers_answer() {
+    let line =
+        parse(r#"{"id":"c","command":"reply","args":{"request_id":"r_1","decisions":["approve","skip","never"]}}"#)
+            .unwrap();
+    let Command::Reply(reply) = line.command else {
+        panic!("not a reply");
+    };
+    assert_eq!(reply.request_id, RequestId("r_1".into()));
+    assert_eq!(
+        reply.answer,
+        ReplyAnswer::Decisions {
+            decisions: vec![
+                OfferDecision::Approve,
+                OfferDecision::Skip,
+                OfferDecision::Never
+            ],
+        }
+    );
+    let empty = parse(r#"{"id":"c","command":"reply","args":{"request_id":"r_1","decisions":[]}}"#)
+        .unwrap();
+    let Command::Reply(reply) = empty.command else {
+        panic!("not a reply");
+    };
+    assert_eq!(reply.answer, ReplyAnswer::Decisions { decisions: vec![] });
+}
+
+#[test]
+fn decisions_outside_the_closed_set_or_beside_another_answer_are_refused() {
+    assert!(
+        parse(r#"{"id":"c","command":"reply","args":{"request_id":"r","decisions":["maybe"]}}"#)
+            .is_err()
+    );
+    assert!(
+        parse(r#"{"id":"c","command":"reply","args":{"request_id":"r","decisions":["approve"],"decision":"allow"}}"#)
+            .is_err()
+    );
 }
