@@ -203,7 +203,7 @@ fn a_new_session_cuts_a_shell_result_to_its_configured_cap() {
     setup.provider(&server);
     write_config(&setup, json!({"shell": {"max_result_bytes": 100}}));
 
-    let output = run_to_exit("fiber ask", setup.fiber(&["ask", "go"]));
+    let output = run_to_exit(setup.deadline, "fiber ask", setup.fiber(&["ask", "go"]));
     let run = Run::from(output);
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
@@ -253,12 +253,17 @@ fn a_resumed_session_cuts_a_shell_result_to_its_configured_cap() {
     .unwrap();
     setup.provider(&server);
 
-    let first = Run::from(run_to_exit("fiber ask", setup.fiber(&["ask", "one"])));
+    let first = Run::from(run_to_exit(
+        setup.deadline,
+        "fiber ask",
+        setup.fiber(&["ask", "one"]),
+    ));
     assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
     let id = first.session_id().to_owned();
 
     write_config(&setup, json!({"shell": {"max_result_bytes": 100}}));
     let second = Run::from(run_to_exit(
+        setup.deadline,
         "fiber ask --resume",
         setup.fiber(&["ask", "--resume", &id, "go"]),
     ));
@@ -317,7 +322,7 @@ fn a_new_session_cuts_a_read_at_its_configured_cap_with_no_artifact() {
     setup.provider(&server);
     write_config(&setup, json!({"read": {"max_result_bytes": 100}}));
 
-    let output = run_to_exit("fiber ask", setup.fiber(&["ask", "go"]));
+    let output = run_to_exit(setup.deadline, "fiber ask", setup.fiber(&["ask", "go"]));
     let run = Run::from(output);
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);

@@ -100,7 +100,7 @@ fn prune(setup: &Setup, args: &[&str]) -> std::process::Output {
     all.extend_from_slice(args);
     let mut command = setup.fiber(&all);
     command.current_dir(setup.workspace());
-    run_to_exit("fiber sessions prune", command)
+    run_to_exit(setup.deadline, "fiber sessions prune", command)
 }
 
 /// Waits under [`DEADLINE`] until `socket` is gone, naming `what`.
@@ -114,8 +114,8 @@ fn until_absent(socket: &Path, what: &str) {
         done.send(()).unwrap_or(());
     });
     assert!(
-        reached.recv_timeout(DEADLINE).is_ok(),
-        "waited {DEADLINE:?} for {what}"
+        reached.recv_timeout(deadline.left()).is_ok(),
+        "waited until the deadline for {what}"
     );
 }
 

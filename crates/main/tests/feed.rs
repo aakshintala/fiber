@@ -56,7 +56,7 @@ fn a_fiber_ask_run_appends_exactly_one_exited_row() {
     setup.provider(&server);
     let mut command = setup.fiber(&["ask", "hi"]);
     command.current_dir(setup.workspace());
-    let output = run_to_exit("fiber ask", command);
+    let output = run_to_exit(setup.deadline, "fiber ask", command);
     assert!(
         output.status.success(),
         "{}",
@@ -109,6 +109,7 @@ fn a_session_that_exits_on_a_pending_approval_leaves_a_waiting_row() {
     let id = doors::mint("s_");
     let workspace = setup.workspace().to_string_lossy().into_owned();
     let output = run_to_exit(
+        setup.deadline,
         "the session",
         setup.fiber(&[
             "session",
@@ -145,6 +146,7 @@ fn a_session_that_never_got_a_prompt_appends_no_row() {
     let id = doors::mint("s_");
     let workspace = setup.workspace().to_string_lossy().into_owned();
     let output = run_to_exit(
+        setup.deadline,
         "the session",
         setup.fiber(&["session", "--id", &id, "--workspace", &workspace]),
     );
@@ -160,7 +162,7 @@ fn a_session_that_never_got_a_prompt_appends_no_row() {
 /// A second client on a running hub: connected once its `hub_hello`
 /// arrives.
 fn client(setup: &Setup) -> Socket {
-    let client = Socket::connect(&setup.hub_socket());
+    let client = Socket::connect(setup.deadline, &setup.hub_socket());
     assert_eq!(recv(&client, "hub_hello")["kind"], "hub_hello");
     client
 }
@@ -193,7 +195,7 @@ fn recent_skips_a_delegates_row() {
     setup.provider(&server);
     let mut command = setup.fiber(&["ask", "hi"]);
     command.current_dir(setup.workspace());
-    let output = run_to_exit("fiber ask", command);
+    let output = run_to_exit(setup.deadline, "fiber ask", command);
     assert!(
         output.status.success(),
         "{}",
@@ -241,15 +243,18 @@ fn the_feed_shows_sessions_across_projects_and_recent_lists_the_exited() {
     }
     let first_text = first.to_string_lossy().into_owned();
     let second_text = second.to_string_lossy().into_owned();
-    let first_guard = SessionGuard::arm(&first_text);
-    let second_guard = SessionGuard::arm(&second_text);
+    let first_guard = SessionGuard::arm(setup.deadline, &first_text);
+    let second_guard = SessionGuard::arm(setup.deadline, &second_text);
     let a = start_session(&control, &first_text, "first");
     let b = start_session(&control, &second_text, "second");
     // A `fiber ask` the hub did not start: it finds it in `run/`.
     let mut ask = setup.fiber(&["ask", "third"]);
     ask.current_dir(&outside);
-    let asking = std::thread::spawn(move || run_to_exit("fiber ask", ask));
-    assert!(server.await_requests(3, DEADLINE), "all three turns run");
+    let asking = std::thread::spawn(move || run_to_exit(setup.deadline, "fiber ask", ask));
+    assert!(
+        server.await_requests(3, setup.deadline.left()),
+        "all three turns run"
+    );
     let mut seen = std::collections::BTreeSet::new();
     let statuses = until(&watch, "three sessions' status", |line| {
         if line["kind"] == "session_status" {
@@ -331,7 +336,7 @@ fn the_feed_shows_sessions_across_projects_and_recent_lists_the_exited() {
     );
     assert!(!everything.contains(&b), "a running session is not recent");
     // The second session ends on its own socket; then the hub.
-    close_session(&Socket::connect(&setup.session_socket(&b)));
+    close_session(&Socket::connect(setup.deadline, &setup.session_socket(&b)));
     second_guard.wait_gone();
     drop((watch, control, fresh));
     let hub = hub.lock().unwrap().take().expect("the starter ran");
@@ -350,14 +355,17 @@ fn a_killed_session_is_crashed_until_dismissed() {
     let (watch, _) = connect_hub(&setup, &hub);
     feed(&watch);
     let workspace = setup.workspace().to_string_lossy().into_owned();
-    let guard = SessionGuard::arm(&workspace);
+    let guard = SessionGuard::arm(setup.deadline, &workspace);
     let control = client(&setup);
     let id = start_session(&control, &workspace, "doomed");
-    assert!(server.await_requests(1, DEADLINE), "the turn runs");
+    assert!(
+        server.await_requests(1, setup.deadline.left()),
+        "the turn runs"
+    );
     until(&watch, "the session's status", |line| {
         line["kind"] == "session_status" && line["session_id"] == id.as_str()
     });
-    fakes::kill_matching(&workspace).unwrap();
+    support::kill_matching(setup.deadline, &workspace).unwrap();
     guard.wait_gone();
     let left = until(&watch, "the crash's session_left", |line| {
         line["kind"] == "session_left"
@@ -421,9 +429,9 @@ fn a_killed_session_whose_listener_outlives_its_summary_connection_is_crashed() 
         tx.send((listener, accepted)).unwrap_or(());
     });
     let (listener, accepted) = rx
-        .recv_timeout(DEADLINE)
+        .recv_timeout(setup.deadline.left())
         .expect("the hub connects to the session");
-    let summary = Socket::from(accepted.unwrap());
+    let summary = Socket::from(setup.deadline, accepted.unwrap());
     assert_eq!(
         recv(&summary, "the summary subscribe")["command"],
         "subscribe"
@@ -490,7 +498,7 @@ fn attention_reaches_a_client_without_a_feed_for_a_standing_ask_and_a_finished_t
     // `watch` never sends a command: it hears only attention.
     let (watch, _) = connect_hub(&setup, &hub);
     let workspace = setup.workspace().to_string_lossy().into_owned();
-    let guard = SessionGuard::arm(&workspace);
+    let guard = SessionGuard::arm(setup.deadline, &workspace);
     let control = client(&setup);
     let id = start_session(&control, &workspace, "run it");
     // The waiting attention is the watcher's first line.
@@ -542,7 +550,7 @@ fn attention_reaches_a_client_without_a_feed_for_a_standing_ask_and_a_finished_t
     );
     assert!(finished["payload"].get("summary").is_none());
     // No third line: the watcher's stream held exactly the pair.
-    close_session(&Socket::connect(&setup.session_socket(&id)));
+    close_session(&Socket::connect(setup.deadline, &setup.session_socket(&id)));
     guard.wait_gone();
     let hub = hub.lock().unwrap().take().expect("the starter ran");
     hub.kill("TERM");

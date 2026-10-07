@@ -232,7 +232,12 @@ pub(crate) fn kill_matching_detached(text: &str) {
 /// The timeout branch of a wait for a started process's exit: kills
 /// `group`, reaps through `reap` and checks the group empties, each within
 /// `deadline.cleanup()`, then panics naming `what`.
-pub(crate) fn expired<T>(deadline: Deadline, group: u32, reap: &mpsc::Receiver<T>, what: &str) -> ! {
+pub(crate) fn expired<T>(
+    deadline: Deadline,
+    group: u32,
+    reap: &mpsc::Receiver<T>,
+    what: &str,
+) -> ! {
     // A kill that fails shows as the group not emptying below.
     match kill_group(deadline, group, "KILL") {
         Ok(_) | Err(_) => {}

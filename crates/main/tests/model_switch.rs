@@ -117,7 +117,7 @@ struct KillGroup(u32);
 
 impl Drop for KillGroup {
     fn drop(&mut self) {
-        match fakes::kill_group(self.0, "KILL") {
+        match support::kill_group_detached(self.0, "KILL") {
             Ok(_) | Err(_) => {}
         }
     }
@@ -140,16 +140,16 @@ impl Running {
     /// loop writes that line, so the line is the signal the socket
     /// accepts (`docs/testing.md`, "Waits and timeouts").
     fn connect(&self, socket: &Path) -> Socket {
-        match self.lines.recv_timeout(DEADLINE) {
+        match self.lines.recv_timeout(self.deadline.left()) {
             Ok(_) => {}
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                panic!("waited {DEADLINE:?} for the session's first stdout line")
+                panic!("waited until the deadline for the session's first stdout line")
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 panic!("the session exited before its first stdout line")
             }
         }
-        Socket::connect(socket)
+        Socket::connect(self.deadline, socket)
     }
 
     /// Reads stdout lines until one of `kind` arrives, waiting [`DEADLINE`]
@@ -158,10 +158,10 @@ impl Running {
     /// test's prompt.
     fn wait_for(&self, kind: &str) {
         loop {
-            let line = match self.lines.recv_timeout(DEADLINE) {
+            let line = match self.lines.recv_timeout(self.deadline.left()) {
                 Ok(line) => line,
                 Err(mpsc::RecvTimeoutError::Timeout) => {
-                    panic!("waited {DEADLINE:?} for {kind} on the session's stdout")
+                    panic!("waited until the deadline for {kind} on the session's stdout")
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
                     panic!("the session's stdout closed before {kind}")
@@ -179,33 +179,36 @@ impl Running {
     fn wait(mut self) -> (ExitStatus, String) {
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(self.child.wait()).unwrap());
-        let status = match finished.recv_timeout(DEADLINE) {
+        let status = match finished.recv_timeout(self.deadline.left()) {
             Ok(status) => status.unwrap(),
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                panic!("waited {DEADLINE:?} for the session to exit")
+                panic!("waited until the deadline for the session to exit")
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 panic!("the session's wait thread ended before the session exited")
             }
         };
         assert!(
-            !group_alive(self.group),
+            !group_alive(self.deadline, self.group),
             "the session left a process in its group behind"
         );
         std::mem::forget(self.guard);
         // The process is gone, so its stdout is closed: the drain ends,
         // each line waited under DEADLINE.
         loop {
-            match self.lines.recv_timeout(DEADLINE) {
+            match self.lines.recv_timeout(self.deadline.left()) {
                 Ok(_) => {}
                 Err(mpsc::RecvTimeoutError::Timeout) => {
-                    panic!("waited {DEADLINE:?} for the session's stdout to close")
+                    panic!("waited until the deadline for the session's stdout to close")
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
             }
         }
-        let stderr = self.stderr.recv_timeout(DEADLINE).unwrap_or_default();
-        self.watchdog.stand_down(DEADLINE);
+        let stderr = self
+            .stderr
+            .recv_timeout(self.deadline.left())
+            .unwrap_or_default();
+        self.watchdog.stand_down(self.deadline.cleanup());
         (status, stderr)
     }
 }

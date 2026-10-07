@@ -19,7 +19,6 @@ use std::fs;
 use std::path::Path;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
-use std::time::Duration;
 
 use fakes::ProviderServer;
 use serde_json::{Value, json};
@@ -27,10 +26,6 @@ use support::*;
 
 /// The prompt a started session runs, and the marker the log must never hold.
 const PROMPT: &str = "the-volume-of-the-meeting-room";
-
-/// How long the stuck-in-setup test waits for the MCP server's ready line:
-/// the ready FIFO's 5 s open plus this 15 s wait make 20 s in all.
-const READY_WAIT: Duration = Duration::from_secs(15);
 
 #[test]
 fn a_turn_runs_through_the_hub_and_the_hub_outlives_no_session() {
@@ -42,7 +37,7 @@ fn a_turn_runs_through_the_hub_and_the_hub_outlives_no_session() {
     assert_eq!(hello["kind"], "hub_hello");
     assert_eq!(hello["payload"]["fiber_version"], env!("CARGO_PKG_VERSION"));
     let workspace = setup.workspace().to_string_lossy().into_owned();
-    let guard = SessionGuard::arm(&workspace);
+    let guard = SessionGuard::arm(setup.deadline, &workspace);
     let session = start_session(&client, &workspace, PROMPT);
     subscribe(&client, &session);
     let rest = until(&client, "turn_completed", |line| {
@@ -58,7 +53,7 @@ fn a_turn_runs_through_the_hub_and_the_hub_outlives_no_session() {
     let hub = hub.lock().unwrap().take().expect("the starter ran");
     let status = hub.kill_and_wait();
     assert!(!status.success());
-    let direct = Socket::connect(&setup.session_socket(&session));
+    let direct = Socket::connect(setup.deadline, &setup.session_socket(&session));
     close_session(&direct);
     drop(direct);
     assert!(
@@ -76,7 +71,7 @@ fn prompts_sent_through_the_hub_page_back_newest_first_and_ask_adds_none() {
     let hub = Arc::new(Mutex::new(None));
     let (client, _) = connect_hub(&setup, &hub);
     let workspace = setup.workspace().to_string_lossy().into_owned();
-    let guard = SessionGuard::arm(&workspace);
+    let guard = SessionGuard::arm(setup.deadline, &workspace);
     let session = start_session(&client, &workspace, "first-prompt");
     subscribe(&client, &session);
     until(&client, "the first turn_completed", |line| {
@@ -99,7 +94,7 @@ fn prompts_sent_through_the_hub_page_back_newest_first_and_ask_adds_none() {
     // `fiber ask` in the same workspace shares the project and appends nothing.
     let mut ask = setup.fiber(&["ask", "asked-prompt"]);
     ask.current_dir(setup.workspace());
-    let output = run_to_exit("fiber ask", ask);
+    let output = run_to_exit(setup.deadline, "fiber ask", ask);
     assert!(output.status.success(), "{output:?}");
     let projects: Vec<_> = fs::read_dir(setup.home().join("projects"))
         .unwrap()
@@ -145,7 +140,7 @@ fn prompts_sent_through_the_hub_page_back_newest_first_and_ask_adds_none() {
     drop(client);
     let hub = hub.lock().unwrap().take().expect("the starter ran");
     hub.kill_and_wait();
-    let direct = Socket::connect(&setup.session_socket(&session));
+    let direct = Socket::connect(setup.deadline, &setup.session_socket(&session));
     close_session(&direct);
     drop(direct);
     guard.wait_gone();
@@ -179,10 +174,10 @@ impl Meet {
         match self.arrived.send(()) {
             Ok(()) | Err(mpsc::SendError(())) => {}
         }
-        match self.other.recv_timeout(DEADLINE) {
+        match self.other.recv_timeout(self.deadline.left()) {
             Ok(()) => {}
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                panic!("waited {DEADLINE:?} for the other client at {what}")
+                panic!("waited until the deadline for the other client at {what}")
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 panic!("the other client failed before {what}")
@@ -246,7 +241,7 @@ fn sigterm_stops_the_hub_and_leaves_sessions_accepting() {
     let hub = Arc::new(Mutex::new(None));
     let (client, _) = connect_hub(&setup, &hub);
     let workspace = setup.workspace().to_string_lossy().into_owned();
-    let guard = SessionGuard::arm(&workspace);
+    let guard = SessionGuard::arm(setup.deadline, &workspace);
     let session = start_session(&client, &workspace, PROMPT);
     subscribe(&client, &session);
     let hub = hub.lock().unwrap().take().expect("the starter ran");
@@ -254,7 +249,7 @@ fn sigterm_stops_the_hub_and_leaves_sessions_accepting() {
     let status = hub.wait();
     assert_eq!(status.code(), Some(143));
     // The session keeps accepting on its own socket.
-    let direct = Socket::connect(&setup.session_socket(&session));
+    let direct = Socket::connect(setup.deadline, &setup.session_socket(&session));
     close_session(&direct);
     drop(direct);
     guard.wait_gone();
@@ -349,14 +344,14 @@ fn a_session_left_running_is_killed_by_its_guard() {
     let hub = Arc::new(Mutex::new(None));
     let (client, _) = connect_hub(&setup, &hub);
     let workspace = setup.workspace().to_string_lossy().into_owned();
-    let mut guard = SessionGuard::arm(&workspace);
+    let mut guard = SessionGuard::arm(setup.deadline, &workspace);
     start_session(&client, &workspace, PROMPT);
     // The watchdog stands down first, so only the drop can kill.
     guard.stand_down_watchdog();
     drop(guard);
     assert!(
-        fakes::matching_exits(&workspace, DEADLINE),
-        "waited {DEADLINE:?} for the session to die after its guard dropped"
+        fakes::matching_exits(&workspace, setup.deadline.left()),
+        "waited until the deadline for the session to die after its guard dropped"
     );
     drop(client);
     let hub = hub.lock().unwrap().take().expect("the starter ran");
@@ -384,11 +379,11 @@ fn a_session_stuck_in_setup_is_killed_by_its_guard() {
     );
     let hub = Arc::new(Mutex::new(None));
     let (client, _) = connect_hub(&setup, &hub);
-    let mut guard = SessionGuard::arm(&workspace);
+    let mut guard = SessionGuard::arm(setup.deadline, &workspace);
     client.send(&format!(
         "{{\"id\":\"c_start\",\"command\":\"start\",\"args\":{{\"workspace\":\"{workspace}\"}}}}"
     ));
-    ready.wait(READY_WAIT);
+    ready.wait(setup.deadline.left());
     let sessions = log::sessions_dir(&setup.home(), &fs::canonicalize(&workspace).unwrap());
     let locks = fs::read_dir(&sessions)
         .map(|dirs| {
@@ -403,8 +398,8 @@ fn a_session_stuck_in_setup_is_killed_by_its_guard() {
     let rejected = recv(&client, "the start rejection");
     assert_eq!(rejected["kind"], "command_rejected", "{rejected}");
     assert!(
-        fakes::matching_exits(&workspace, DEADLINE),
-        "waited {DEADLINE:?} for the stuck session and its server to die after the guard dropped"
+        fakes::matching_exits(&workspace, setup.deadline.left()),
+        "waited until the deadline for the stuck session and its server to die after the guard dropped"
     );
     drop(client);
     let hub = hub.lock().unwrap().take().expect("the starter ran");
@@ -424,7 +419,11 @@ fn hub_log_lines(home: &Path) -> Vec<Value> {
 fn a_hub_that_cannot_start_says_why_on_stderr() {
     let setup = Setup::new();
     fs::write(setup.home().join("config.json"), "{").unwrap();
-    let output = run_to_exit("the failing hub", setup.fiber(&["hub", "serve"]));
+    let output = run_to_exit(
+        setup.deadline,
+        "the failing hub",
+        setup.fiber(&["hub", "serve"]),
+    );
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.starts_with("fiber: "), "{stderr}");
@@ -436,7 +435,11 @@ fn a_hub_that_cannot_start_says_why_on_stderr() {
 fn an_invalid_config_is_written_to_the_hub_log() {
     let setup = Setup::new();
     fs::write(setup.home().join("config.json"), "{").unwrap();
-    let output = run_to_exit("the failing hub", setup.fiber(&["hub", "serve"]));
+    let output = run_to_exit(
+        setup.deadline,
+        "the failing hub",
+        setup.fiber(&["hub", "serve"]),
+    );
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8(output.stderr).unwrap();
     let lines = hub_log_lines(&setup.home());
@@ -457,7 +460,7 @@ fn a_too_long_fiber_home_is_reported_on_stderr_and_in_the_hub_log() {
     fs::create_dir_all(&home).unwrap();
     let mut command = setup.fiber(&["hub", "serve"]);
     command.env("FIBER_HOME", &home);
-    let output = run_to_exit("the failing hub", command);
+    let output = run_to_exit(setup.deadline, "the failing hub", command);
     assert_eq!(output.status.code(), Some(2), "{output:?}");
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.starts_with("fiber: "), "{stderr}");
