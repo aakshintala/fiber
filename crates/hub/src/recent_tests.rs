@@ -217,6 +217,27 @@ fn before_pages_across_the_page_boundary_exclusively() {
 }
 
 #[test]
+fn a_delegate_row_is_skipped_and_pages_stay_full() {
+    let temp = Temp::new();
+    let total = RECENT_PAGE as u64 + 3;
+    // A delegate's row, its status naming a parent, between every two
+    // root rows.
+    for n in 0..total {
+        temp.append(&temp.row(n, "p", Left::Exited, Some("idle")));
+        let mut delegate = temp.row(1000 + n, "p", Left::Exited, None);
+        delegate.status =
+            Some(serde_json::from_value(status("n", "/w", "idle", Some(&id(n)))).unwrap());
+        temp.append(&delegate);
+    }
+    let first = page_of(&temp.dir, None, None);
+    assert_eq!(first.len(), RECENT_PAGE);
+    assert_eq!(first.first(), Some(&id(total - 1)));
+    assert_eq!(first.last(), Some(&id(3)));
+    let second = page_of(&temp.dir, Some(&id(3)), None);
+    assert_eq!(second, [id(2), id(1), id(0)]);
+}
+
+#[test]
 fn an_unknown_before_is_an_error() {
     let temp = Temp::new();
     temp.append(&temp.row(1, "p", Left::Exited, None));

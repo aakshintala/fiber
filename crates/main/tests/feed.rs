@@ -185,6 +185,42 @@ fn recent(client: &Socket, args: &Value) -> Vec<String> {
 }
 
 #[test]
+fn recent_skips_a_delegates_row() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    let mut command = setup.fiber(&["ask", "hi"]);
+    command.current_dir(setup.workspace());
+    let output = run_to_exit("fiber ask", command);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let root = session_of(&output.stdout);
+    // A delegate's row: the root's, under another id, its status naming
+    // the root as parent, with its own directory.
+    let mut delegate = rows(&setup.home()).remove(0);
+    let child = doors::mint("s_");
+    delegate["session_id"] = json!(child);
+    delegate["status"]["parent"] = json!(root);
+    let sessions = log::sessions_dir(&setup.home(), &doors::project(&setup.workspace()));
+    fs::create_dir_all(sessions.join(&child)).unwrap();
+    let mut file = fs::OpenOptions::new()
+        .append(true)
+        .open(setup.home().join("recent.jsonl"))
+        .unwrap();
+    std::io::Write::write_all(&mut file, format!("{delegate}\n").as_bytes()).unwrap();
+    let hub = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let (client, _) = connect_hub(&setup, &hub);
+    assert_eq!(recent(&client, &json!({})), [root.as_str()]);
+    drop(client);
+    let hub = hub.lock().unwrap().take().expect("the starter ran");
+    hub.kill("TERM");
+    hub.wait();
+}
+
+#[test]
 fn the_feed_shows_sessions_across_projects_and_recent_lists_the_exited() {
     let setup = Setup::new();
     let server = ProviderServer::start([hello(), hello(), hello()]).unwrap();
