@@ -29,8 +29,9 @@ commands".
   first-frame budget and supply-chain checks stay strict
   (`docs/dependencies.md`, "Measuring memory", and "Performance" below).
 - **It reads the event stream and nothing else.** It is its own process and a
-  client of the hub: a `full` connection to the session on screen and a
-  `summary` connection to each other live session (`docs/invocation.md`,
+  client of the hub: a `full` connection to the session on screen, a
+  `summary` connection to each session it has opened, stopped or closed, and
+  the hub's feed for every other live session (`docs/invocation.md`,
   "Processes"). When a screen
   needs data the stream does not carry, the stream changes; the terminal has no
   other path to state.
