@@ -9,9 +9,12 @@
     reason = "test helpers; a failure is the test's"
 )]
 
+use std::fs;
 use std::io::{self, BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
+use std::os::unix::process::CommandExt;
 use std::path::Path;
+use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -19,7 +22,7 @@ use std::time::Duration;
 use contract::{ErrorCode, HubLine};
 use serde_json::{Map, Value, json};
 
-use super::run;
+use super::{list, run};
 
 /// One named deadline per wait on the fake hub.
 const HUB_DEADLINE: Duration = Duration::from_secs(10);
@@ -442,4 +445,81 @@ fn no_rows_prints_the_header_in_text_and_nothing_in_json() {
     ran.unwrap();
     assert_eq!(out, "id  state  spend  waits on  name\n");
     assert!(json_rows(empty()).is_empty());
+}
+
+/// The child runs `list` and exits with its code, so the parent can read
+/// the exit code while the list's own stdout goes nowhere.
+const CHILD: &str = "FIBER_CLI_SESSIONS_LIST_CHILD";
+
+/// How long a killed child or its watchdog may take to be reaped.
+const REAP_DEADLINE: Duration = Duration::from_secs(10);
+
+#[test]
+fn list_exits_zero_on_success_and_fail_code_on_hub_failure() {
+    if let Ok(case) = std::env::var(CHILD) {
+        let code = match case.as_str() {
+            "connect-error" => list(false, false, &mut || Err(io::Error::other("hub down"))),
+            "rejected" => {
+                let mut hub = FakeHub::new(&[hub_line(
+                    "command_rejected",
+                    json!({"command_id": "c_sessions", "code": "invalid_arguments", "message": "no"}),
+                )]);
+                let code = list(false, false, &mut || hub.connect());
+                assert_eq!(hub.sent()["command"], json!("sessions"));
+                code
+            }
+            _ => {
+                let mut hub = FakeHub::new(&[accepted(empty())]);
+                let code = list(false, false, &mut || hub.connect());
+                assert_eq!(hub.sent()["command"], json!("sessions"));
+                code
+            }
+        };
+        std::process::exit(code);
+    }
+    let root = fakes::TempDir::new("cli-sessions-list");
+    let workspace = root.path().join("workspace");
+    fs::create_dir_all(&workspace).unwrap();
+    let workspace = fs::canonicalize(&workspace).unwrap();
+    let io_failed = crate::fail(doors::failure(ErrorCode::IoFailed, "probe"));
+    let refused = crate::fail(doors::failure(ErrorCode::InvalidArguments, "probe"));
+    assert_eq!(io_failed, 1);
+    assert_eq!(refused, 1);
+    let name = module_path!().split_once("::").unwrap().1;
+    for (case, code) in [
+        ("success", 0),
+        ("connect-error", io_failed),
+        ("rejected", refused),
+    ] {
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                &format!("{name}::list_exits_zero_on_success_and_fail_code_on_hub_failure"),
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CHILD, case)
+            .current_dir(&workspace)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let group = child.id();
+        let watchdog = fakes::Watchdog::group(group);
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || tx.send(child.wait()));
+        let Ok(status) = rx.recv_timeout(HUB_DEADLINE) else {
+            assert!(fakes::kill_group(group, "KILL").unwrap());
+            rx.recv_timeout(REAP_DEADLINE)
+                .expect("the killed list child must be reaped")
+                .unwrap();
+            panic!("waited {HUB_DEADLINE:?} for `fiber sessions` ({case}) to exit");
+        };
+        let status = status.unwrap();
+        assert!(!fakes::kill_group(group, "0").unwrap(), "a child remains");
+        watchdog.stand_down(REAP_DEADLINE);
+        assert_eq!(status.code(), Some(code), "{case}: {status}");
+    }
 }
