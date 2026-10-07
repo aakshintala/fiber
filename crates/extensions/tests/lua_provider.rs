@@ -778,6 +778,56 @@ fn sign_wins_over_the_token_header_whatever_its_case() {
 }
 
 #[test]
+fn signer_credentials_returns_the_cached_token_even_when_sign_replaces_authorization() {
+    let setup = Setup::new();
+    let provider = script_provider(
+        &setup,
+        Some(TOKEN),
+        Some("{ Authorization = \"Bearer custom\" }"),
+    );
+    let signer = within({
+        let provider = Arc::clone(&provider);
+        move || provider.signer()
+    })
+    .unwrap()
+    .unwrap();
+    assert!(
+        signer.credentials().is_empty(),
+        "no sign yet, no cached token"
+    );
+    assert_eq!(
+        signed(&(signer.clone() as Arc<dyn Signer>), &[]),
+        [("Authorization".to_owned(), "Bearer custom".to_owned())]
+    );
+    assert_eq!(
+        signer
+            .credentials()
+            .iter()
+            .map(|secret| secret.expose().to_owned())
+            .collect::<Vec<_>>(),
+        ["tok-1"],
+        "the replaced token is still reported"
+    );
+}
+
+#[test]
+fn signer_credentials_is_empty_without_credential() {
+    let setup = Setup::new();
+    let provider = script_provider(&setup, None, Some("{ [\"x-s\"] = \"v\" }"));
+    let signer = within({
+        let provider = Arc::clone(&provider);
+        move || provider.signer()
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        signed(&(signer.clone() as Arc<dyn Signer>), &[]),
+        [("x-s".to_owned(), "v".to_owned())]
+    );
+    assert!(signer.credentials().is_empty());
+}
+
+#[test]
 fn a_credential_error_at_send_time_is_credential_failed() {
     let setup = Setup::new();
     let provider = script_provider(&setup, Some("{}"), Some("{}"));

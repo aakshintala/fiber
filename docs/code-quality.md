@@ -172,7 +172,7 @@ the code and the list disagree.
 
 | Crate | File | Why |
 |---|---|---|
-| `tools` | `crates/tools/src/shell/command.rs` | `pre_exec` calls `setsid`, and for a `tty` command the `TIOCSCTTY` ioctl on fd 0, between fork and exec |
+| `tools` | `crates/tools/src/shell/spawn.rs` | `pre_exec` calls `setsid`, and for a `tty` command the `TIOCSCTTY` ioctl on fd 0, between fork and exec |
 
 `unsafe` inside dependencies is `docs/dependencies.md`'s.
 

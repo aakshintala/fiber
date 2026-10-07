@@ -194,6 +194,22 @@ impl Run {
         self.lines.last().expect("stdout has a line")
     }
 
+    fn session_id(&self) -> &str {
+        self.lines[0]["session_id"].as_str().unwrap()
+    }
+
+    /// The session's directory, from its id.
+    fn session_dir(&self, setup: &Setup) -> PathBuf {
+        let workspace = fs::canonicalize(setup.root.path().join("w")).unwrap();
+        let key = workspace.to_string_lossy().replace('/', "-");
+        setup
+            .home()
+            .join("projects")
+            .join(key)
+            .join("sessions")
+            .join(self.session_id())
+    }
+
     /// The `code` of every `retry_scheduled`, in order.
     fn retried(&self) -> Vec<&str> {
         self.lines
@@ -529,4 +545,36 @@ fn two_503s_with_one_attempt_fail_the_ask() {
     );
     assert_eq!(run.retried(), ["provider_unavailable"]);
     assert_eq!(server.requests().len(), 2);
+}
+
+#[test]
+fn a_401_that_echoes_the_key_is_logged_redacted() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([Response::status(
+        401,
+        r#"{"error":{"message":"Incorrect API key provided: sk-test"}}"#,
+    )])
+    .unwrap();
+    setup.provider(&server, "openai-responses", 3);
+    let run = setup.ask();
+    assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), FAILED_AT_ONCE_KINDS);
+    let message = run
+        .lines
+        .iter()
+        .find(|l| l["kind"] == "assistant_message_completed")
+        .unwrap();
+    assert_eq!(
+        message["payload"]["error"]["provider"]["message"],
+        "Incorrect API key provided: [redacted]"
+    );
+    for line in &run.lines {
+        assert!(
+            !serde_json::to_string(line).unwrap().contains("sk-test"),
+            "stdout echoes the key: {line}"
+        );
+    }
+    let log = fs::read_to_string(run.session_dir(&setup).join("events.jsonl")).unwrap();
+    assert!(log.contains("[redacted]"), "the log redacts the key");
+    assert!(!log.contains("sk-test"), "the log echoes the key");
 }

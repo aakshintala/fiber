@@ -472,7 +472,8 @@ fn reserved_body_fields_match_the_documented_table() {
             "messages",
             "tools",
             "tool_choice",
-            "stream"
+            "stream",
+            "cache_control"
         ]
     );
     assert_eq!(

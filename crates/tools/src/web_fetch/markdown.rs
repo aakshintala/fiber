@@ -1,7 +1,7 @@
 //! HTML to markdown for `web_fetch` (`docs/tools.md`, "web_fetch"). One pass
 //! over the page, no tree: html5ever's tokenizer, with no document tree,
-//! feeds the single-pass writer below in slices, so the converter holds the
-//! page and its output, and no nesting depth in the input becomes recursion
+//! feeds the single-pass writer in a child module in slices, so the converter
+//! holds the page and its output, and no nesting depth in the input becomes recursion
 //! or an indent without a cap. Every character reference is decoded per the
 //! HTML standard by the tokenizer, in text and attributes.
 
@@ -11,6 +11,12 @@ use html5ever::tokenizer::states::RawKind;
 use html5ever::tokenizer::{
     BufferQueue, Tag, TagKind, Token, TokenSink, TokenSinkResult, Tokenizer, TokenizerOpts,
 };
+
+mod hidden;
+mod writer;
+
+use hidden::Hidden;
+use writer::Writer;
 
 /// Levels of list indentation and block quote prefix kept; a hostile page
 /// that nests deeper than this gets no more indentation.
@@ -56,7 +62,8 @@ fn convert(html: &str, slice: usize) -> String {
         start = end;
     }
     tokenizer.end();
-    cell.into_inner().finish()
+    let converter = cell.into_inner();
+    converter.writer.finish(converter.title)
 }
 
 /// The tokenizer's sink: tags drive the writer, character tokens become
@@ -115,76 +122,14 @@ impl Raw {
     }
 }
 
-/// The start tags that can be in the head, beside `script`, `style` and
-/// `title`, which switch to raw text first. Any other ends it.
-const IN_HEAD: [&str; 10] = [
-    "base", "basefont", "bgsound", "head", "html", "link", "meta", "noframes", "noscript",
-    "template",
-];
-
-/// The start tags that close every open `svg`, beside a `font` with a
-/// `color`, `face` or `size` attribute.
-const OUT_OF_SVG: [&str; 44] = [
-    "b",
-    "big",
-    "blockquote",
-    "body",
-    "br",
-    "center",
-    "code",
-    "dd",
-    "div",
-    "dl",
-    "dt",
-    "em",
-    "embed",
-    "h1",
-    "h2",
-    "h3",
-    "h4",
-    "h5",
-    "h6",
-    "head",
-    "hr",
-    "i",
-    "img",
-    "li",
-    "listing",
-    "menu",
-    "meta",
-    "nobr",
-    "ol",
-    "p",
-    "pre",
-    "ruby",
-    "s",
-    "small",
-    "span",
-    "strong",
-    "strike",
-    "sub",
-    "sup",
-    "table",
-    "tt",
-    "u",
-    "ul",
-    "var",
-];
-
 /// What a list item is numbered by.
 struct List {
     ordered: bool,
     count: u64,
 }
 
-/// A link whose closing tag has not arrived.
-struct Link {
-    href: String,
-    text: String,
-}
-
+#[derive(Default)]
 struct Converter {
-    out: String,
     title: Option<String>,
     /// The text of the title being collected, when one is.
     title_text: String,
@@ -193,58 +138,14 @@ struct Converter {
     title_done: bool,
     /// The raw-text element whose text is arriving, if any.
     raw: Option<Raw>,
-    /// Open `svg`, `noscript` and `template` elements, whose content is
-    /// dropped. Each has a depth, its place among them counted from the
-    /// outermost; the three stacks below hold the depths of each kind,
-    /// innermost last, so every open, close and lookup is amortised O(1).
-    hidden: usize,
-    /// Depths of the open `svg` elements. Everything inside the outermost
-    /// is foreign content: there nothing switches state, so a `title` is
-    /// neither collected nor switched, and a `noscript` or `template` is an
-    /// element of the `svg`, closed with it.
-    svgs: Vec<usize>,
-    noscripts: Vec<usize>,
-    templates: Vec<usize>,
-    in_head: bool,
-    /// Open `pre` elements; the text of one is verbatim.
-    pre: usize,
-    /// Where the content of the outermost `pre` starts in `out`.
-    pre_start: usize,
-    link: Option<Link>,
+    hidden: Hidden,
+    writer: Writer,
     lists: Vec<List>,
     /// Open lists past [`MAX_LEVELS`]: kept as a count, not entries, so a
     /// hostile page of opens cannot grow the stack. Closing tags pop this
-    /// first. `quote` and `pre` are already counts, not stacks.
+    /// first. The writer's `quote` and `pre` are already counts, not stacks.
     over: usize,
-    quote: usize,
     cells: usize,
-    /// Whether the last thing written was whitespace, so another is dropped.
-    last_space: bool,
-}
-
-impl Default for Converter {
-    fn default() -> Self {
-        Self {
-            out: String::new(),
-            title: None,
-            title_text: String::new(),
-            title_done: false,
-            raw: None,
-            hidden: 0,
-            svgs: Vec::new(),
-            noscripts: Vec::new(),
-            templates: Vec::new(),
-            in_head: false,
-            pre: 0,
-            pre_start: 0,
-            link: None,
-            lists: Vec::new(),
-            over: 0,
-            quote: 0,
-            cells: 0,
-            last_space: true,
-        }
-    }
 }
 
 impl Converter {
@@ -265,7 +166,7 @@ impl Converter {
         // Raw-text switches apply everywhere but inside `svg`, whose
         // content is foreign content: tokenized as markup and dropped.
         // Inside `noscript` and `template` the switches apply.
-        if self.svgs.is_empty() {
+        if !self.hidden.in_svg() {
             if name == "script" {
                 self.raw = Some(Raw::Script);
                 return TokenSinkResult::RawData(RawKind::ScriptData);
@@ -275,7 +176,7 @@ impl Converter {
                 return TokenSinkResult::RawData(RawKind::Rawtext);
             }
             if name == "title" {
-                if !self.title_done && self.hidden == 0 {
+                if !self.title_done && !self.hidden.is_hidden() {
                     self.raw = Some(Raw::Title);
                     self.title_text.clear();
                 } else {
@@ -284,23 +185,8 @@ impl Converter {
                 return TokenSinkResult::RawData(RawKind::Rcdata);
             }
         }
-        // The HTML standard ends the head at the first start tag that cannot
-        // be in it, and every open `svg` at the first that cannot be in one.
-        if !IN_HEAD.contains(&name) {
-            self.in_head = false;
-        }
-        if breaks_out_of_svg(name, tag) {
-            self.close_svg();
-        }
-        let depth = self.hidden;
-        if name == "head" {
-            self.in_head = true;
-        } else if let Some(depths) = self.depths(name) {
-            if !tag.self_closing {
-                depths.push(depth);
-                self.hidden += 1;
-            }
-        } else if self.hidden == 0 && !self.in_head {
+        self.hidden.open(name, tag);
+        if !self.hidden.is_hidden() && !self.hidden.in_head() {
             self.visible_tag(name, false, tag);
         }
         TokenSinkResult::Continue
@@ -311,71 +197,8 @@ impl Converter {
             self.end_raw();
             return;
         }
-        // The HTML standard also ends the head at these end tags, and every
-        // open `svg` at `</p>` and `</br>`; `</br>` is then a `br`.
-        if matches!(name, "head" | "body" | "html" | "br") {
-            self.in_head = false;
-        }
-        if matches!(name, "p" | "br") {
-            self.close_svg();
-        }
-        if matches!(name, "svg" | "noscript" | "template") {
-            self.end_hidden(name);
-        } else if self.hidden == 0 && !self.in_head {
+        if !self.hidden.end(name) && !self.hidden.is_hidden() && !self.hidden.in_head() {
             self.visible_tag(name, true, tag);
-        }
-    }
-
-    /// An end tag of a hidden element, as the HTML standard closes one.
-    /// Inside an `svg` it closes the innermost element of its name there.
-    /// Failing that, `</template>` closes the innermost `template`, and a
-    /// `</noscript>` the innermost hidden element when it is a `noscript`,
-    /// as a `template` or `noscript` around one stops it. Anything open
-    /// inside the closed element closes with it; any other end tag is
-    /// ignored, so an `svg` already closed stays closed.
-    fn end_hidden(&mut self, name: &str) {
-        let foreign = self.svgs.first().copied().unwrap_or(self.hidden);
-        let innermost = self.depths(name).and_then(|depths| depths.last().copied());
-        let at = innermost.filter(|&at| at >= foreign).or_else(|| {
-            if name == "template" {
-                innermost
-            } else {
-                foreign
-                    .checked_sub(1)
-                    .filter(|&below| innermost == Some(below))
-            }
-        });
-        if let Some(at) = at {
-            self.close_hidden(at);
-        }
-    }
-
-    /// Closes every open `svg`, and with them what they hide.
-    fn close_svg(&mut self) {
-        if let Some(&svg) = self.svgs.first() {
-            self.close_hidden(svg);
-        }
-    }
-
-    /// Closes the hidden element at depth `at` and everything open inside
-    /// it: each depth is popped once, so this is amortised O(1).
-    fn close_hidden(&mut self, at: usize) {
-        self.hidden = at;
-        for depths in [&mut self.svgs, &mut self.noscripts, &mut self.templates] {
-            while depths.last().is_some_and(|&depth| depth >= at) {
-                depths.pop();
-            }
-        }
-    }
-
-    /// The depths of the open hidden elements named `name`, if it names
-    /// a hidden element.
-    fn depths(&mut self, name: &str) -> Option<&mut Vec<usize>> {
-        match name {
-            "svg" => Some(&mut self.svgs),
-            "noscript" => Some(&mut self.noscripts),
-            "template" => Some(&mut self.templates),
-            _ => None,
         }
     }
 
@@ -407,17 +230,17 @@ impl Converter {
     }
 
     fn visible_tag(&mut self, name: &str, closing: bool, tag: &Tag) {
-        if self.pre > 0 && !matches!(name, "pre" | "br") {
+        if self.writer.in_pre() && !matches!(name, "pre" | "br") {
             return;
         }
         if matches!(name, "h1" | "h2" | "h3" | "h4" | "h5" | "h6") {
-            self.block_break();
+            self.writer.block_break();
             if !closing {
                 let level = name.as_bytes().get(1).map_or(1, |digit| digit - b'0');
                 for _ in 0..level {
-                    self.push('#');
+                    self.writer.push('#');
                 }
-                self.push(' ');
+                self.writer.push(' ');
             }
             return;
         }
@@ -425,53 +248,46 @@ impl Converter {
             name,
             "p" | "div" | "section" | "article" | "main" | "header" | "footer" | "nav" | "aside"
         ) {
-            self.block_break();
+            self.writer.block_break();
             return;
         }
         match name {
-            "br" => self.soft_break(),
+            "br" => self.writer.soft_break(),
             "hr" => {
-                self.block_break();
-                self.push_str("---");
-                self.block_break();
+                self.writer.block_break();
+                self.writer.push_str("---");
+                self.writer.block_break();
             }
-            "blockquote" => {
-                self.block_break();
-                self.quote = if closing {
-                    self.quote.saturating_sub(1)
-                } else {
-                    self.quote + 1
-                };
-            }
+            "blockquote" => self.writer.block_quote(closing),
             "ul" | "ol" => self.list(closing, name == "ol"),
             "li" => {
                 if !closing {
                     self.item();
                 } else {
-                    self.soft_break();
+                    self.writer.soft_break();
                 }
             }
             "a" => {
                 if closing {
-                    self.end_link();
+                    self.writer.end_link();
                 } else {
-                    self.start_link(tag);
+                    self.writer.start_link(tag);
                 }
             }
-            "strong" | "b" => self.push_str("**"),
-            "em" | "i" => self.push_str("_"),
-            "code" => self.push_str("`"),
+            "strong" | "b" => self.writer.push_str("**"),
+            "em" | "i" => self.writer.push_str("_"),
+            "code" => self.writer.push_str("`"),
             "img" if !closing => self.image(tag),
-            "pre" => self.pre_tag(closing),
-            "table" => self.block_break(),
+            "pre" => self.writer.pre_tag(closing),
+            "table" => self.writer.block_break(),
             "tr" => {
-                self.soft_break();
+                self.writer.soft_break();
                 self.cells = 0;
             }
             "td" | "th" if !closing => {
                 if self.cells > 0 {
-                    self.trim_inline();
-                    self.push_str(" | ");
+                    self.writer.trim_inline();
+                    self.writer.push_str(" | ");
                 }
                 self.cells += 1;
             }
@@ -486,21 +302,21 @@ impl Converter {
         if closing {
             if self.over > 0 {
                 self.over -= 1;
-                self.soft_break();
+                self.writer.soft_break();
                 return;
             }
             self.lists.pop();
             if self.lists.is_empty() {
-                self.block_break();
+                self.writer.block_break();
             } else {
-                self.soft_break();
+                self.writer.soft_break();
             }
             return;
         }
         if self.lists.is_empty() {
-            self.block_break();
+            self.writer.block_break();
         } else {
-            self.soft_break();
+            self.writer.soft_break();
         }
         if self.lists.len() >= MAX_LEVELS {
             self.over += 1;
@@ -510,10 +326,10 @@ impl Converter {
     }
 
     fn item(&mut self) {
-        self.soft_break();
+        self.writer.soft_break();
         let indent = self.lists.len().saturating_sub(1).min(MAX_LEVELS) * 2;
         for _ in 0..indent {
-            self.push(' ');
+            self.writer.push(' ');
         }
         let marker = match self.lists.last_mut() {
             Some(list) if list.ordered => {
@@ -522,83 +338,21 @@ impl Converter {
             }
             Some(_) | None => "- ".to_owned(),
         };
-        self.push_str(&marker);
-    }
-
-    fn start_link(&mut self, tag: &Tag) {
-        // No `pre` check: `visible_tag` returns before every tag but `pre`
-        // and `br` inside `pre`, so a link never opens there.
-        if self.link.is_some() {
-            return;
-        }
-        if let Some(href) = attribute(tag, "href") {
-            self.link = Some(Link {
-                href,
-                text: String::new(),
-            });
-            self.last_space = true;
-        }
-    }
-
-    fn end_link(&mut self) {
-        let Some(link) = self.link.take() else {
-            return;
-        };
-        let text = link
-            .text
-            .split_ascii_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ");
-        if text.is_empty() {
-            return;
-        }
-        self.push('[');
-        self.push_str(&text);
-        self.push_str("](");
-        self.push_str(&link.href);
-        self.push(')');
+        self.writer.push_str(&marker);
     }
 
     fn image(&mut self, tag: &Tag) {
         let alt = attribute(tag, "alt").unwrap_or_default();
         match attribute(tag, "src") {
             Some(src) => {
-                self.push_str("![");
-                self.push_str(&alt);
-                self.push_str("](");
-                self.push_str(&src);
-                self.push(')');
+                self.writer.push_str("![");
+                self.writer.push_str(&alt);
+                self.writer.push_str("](");
+                self.writer.push_str(&src);
+                self.writer.push(')');
             }
-            None => self.plain(&alt),
+            None => self.writer.plain(&alt),
         }
-    }
-
-    fn pre_tag(&mut self, closing: bool) {
-        if !closing {
-            if self.pre == 0 {
-                self.block_break();
-                self.push_str("```\n");
-                self.pre_start = self.out.len();
-            }
-            self.pre += 1;
-        } else if self.pre > 0 {
-            self.pre -= 1;
-            if self.pre == 0 {
-                self.close_fence();
-            }
-        }
-    }
-
-    fn close_fence(&mut self) {
-        while self.out.len() > self.pre_start && self.out.ends_with(['\n', '\r']) {
-            self.out.pop();
-        }
-        if self.out.len() > self.pre_start {
-            self.out.push('\n');
-        }
-        self.out.push_str("```");
-        self.last_space = false;
-        self.block_break();
     }
 
     /// Character tokens: already entity-decoded per the HTML standard by
@@ -615,154 +369,14 @@ impl Converter {
             Some(_) => return,
             None => {}
         }
-        if self.hidden > 0 {
+        if self.hidden.is_hidden() {
             return;
         }
-        self.in_head &= text.chars().all(|c| c.is_ascii_whitespace());
-        if self.in_head {
+        if self.hidden.text_is_in_head(text) {
             return;
         }
-        self.plain(text);
+        self.writer.plain(text);
     }
-
-    fn plain(&mut self, text: &str) {
-        for c in text.chars() {
-            self.character(c);
-        }
-    }
-
-    fn character(&mut self, c: char) {
-        if self.pre == 0 && c.is_ascii_whitespace() {
-            if !self.last_space {
-                self.push(' ');
-            }
-        } else {
-            self.push(c);
-        }
-    }
-
-    /// Writes one character where the converter is writing: the open link's
-    /// text, or the output, which starts a quoted line with its prefix.
-    fn push(&mut self, c: char) {
-        self.last_space = c.is_ascii_whitespace();
-        if self.pre == 0
-            && let Some(link) = &mut self.link
-        {
-            link.text.push(c);
-            return;
-        }
-        // Without a quote the loop below runs zero times, so no guard is
-        // needed: one less comparison a mutant could flip for nothing.
-        if c != '\n' && (self.out.is_empty() || self.out.ends_with('\n')) {
-            for _ in 0..self.quote.min(MAX_LEVELS) {
-                self.out.push_str("> ");
-            }
-        }
-        self.out.push(c);
-    }
-
-    fn push_str(&mut self, text: &str) {
-        for c in text.chars() {
-            self.push(c);
-        }
-    }
-
-    /// Whether a break is inside `pre`, where it does nothing. `visible_tag`
-    /// returns before every tag that breaks, and `close_fence` runs after
-    /// `pre` hits zero, so a mutant of this check changes nothing.
-    #[cfg_attr(false, mutants::skip)]
-    fn break_in_pre(&self) -> bool {
-        self.pre > 0
-    }
-
-    /// Ends the line, and leaves a blank one after it. Inside a link, a
-    /// space: a link's text is one line. Inside `pre`, nothing.
-    fn block_break(&mut self) {
-        if self.break_in_pre() {
-            return;
-        }
-        if self.link.is_some() {
-            self.space();
-            return;
-        }
-        self.trim_inline();
-        if self.out.is_empty() || self.out.ends_with("\n\n") {
-            return;
-        }
-        self.out.push_str(if self.out.ends_with('\n') {
-            "\n"
-        } else {
-            "\n\n"
-        });
-        self.last_space = true;
-    }
-
-    /// Ends the line.
-    fn soft_break(&mut self) {
-        if self.pre > 0 {
-            self.out.push('\n');
-            return;
-        }
-        if self.link.is_some() {
-            self.space();
-            return;
-        }
-        self.trim_inline();
-        if self.out.is_empty() || self.out.ends_with('\n') {
-            return;
-        }
-        self.out.push('\n');
-        self.last_space = true;
-    }
-
-    fn space(&mut self) {
-        if self.last_space {
-            return;
-        }
-        self.push(' ');
-    }
-
-    fn trim_inline(&mut self) {
-        while self.out.ends_with([' ', '\t']) {
-            self.out.pop();
-        }
-        self.last_space = self
-            .out
-            .chars()
-            .next_back()
-            .is_none_or(|c| c.is_ascii_whitespace());
-    }
-
-    fn finish(mut self) -> String {
-        if self.pre > 0 {
-            self.pre = 0;
-            self.close_fence();
-        }
-        self.end_link();
-        self.out.truncate(self.out.trim_end().len());
-        if let Some(title) = self.title.take().filter(|title| !title.is_empty()) {
-            let head = if self.out.is_empty() {
-                format!("# {title}")
-            } else {
-                format!("# {title}\n\n")
-            };
-            self.out.insert_str(0, &head);
-        }
-        if !self.out.is_empty() {
-            self.out.push('\n');
-        }
-        self.out
-    }
-}
-
-/// Whether a start tag closes every open `svg`, per the HTML standard's
-/// rules for foreign content: an HTML element that cannot be inside one.
-fn breaks_out_of_svg(name: &str, tag: &Tag) -> bool {
-    OUT_OF_SVG.contains(&name)
-        || name == "font"
-            && ["color", "face", "size"]
-                .iter()
-                .any(|wanted| attribute(tag, wanted).is_some())
 }
 
 /// The value of attribute `wanted` on a tokenized tag, or `None` when it is

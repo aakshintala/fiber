@@ -9,7 +9,8 @@
 #   --platform-only  only clippy, nextest and doc-tests: what CI runs on
 #                    every platform
 #   --shared-only    only the platform-independent checks: what CI runs on
-#                    Linux x86_64 alone
+#                    Linux x86_64 alone. The unsafe table and dependency list
+#                    are not among them: CI's selection job runs those.
 set -euo pipefail
 # The last line says pass or fail, so a caller reading only the tail of the
 # output (`| tail`) cannot mistake a failure for a pass.
@@ -60,17 +61,21 @@ count() {
 if [ "$scope" != platform ]; then
   echo "== docs check"
   scripts/check-docs
+  if [ "$scope" = all ]; then
+    echo "== unsafe table, dependency list"
+    cargo xtask unsafe-table
+    cargo xtask dependency-list
+  fi
   if [ "$mode" != docs ]; then
     if [ ${#package_args[@]} -gt 0 ]; then
       echo "== cargo fmt --check"
       cargo fmt --check "${package_args[@]}"
     fi
-    echo "== file size, unsafe table, signal sites, compiled-in list, dependency list, image and tui isolation"
+    echo "== file size, signal sites, compiled-in list, image and tui isolation"
     cargo xtask line-cap
-    cargo xtask unsafe-table
     cargo xtask signal-sites
     cargo xtask compiled-in
-    cargo xtask dependency-list
+    cargo xtask preserve-order
     cargo xtask image-isolation
     cargo xtask tui-isolation
   fi

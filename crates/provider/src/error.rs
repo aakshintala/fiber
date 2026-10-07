@@ -5,6 +5,8 @@ use contract::ErrorCode;
 use contract::shapes::{Failure, ProviderFailure};
 use serde_json::Value;
 
+use crate::redact::Secrets;
+
 /// A failed model call. Each message is a phrase that follows the
 /// provider's name, as [`Error::failure`] writes it.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
@@ -87,7 +89,10 @@ impl Error {
     }
 
     /// The failure as a failed model call records it, naming `provider`.
-    pub fn failure(&self, provider: &str) -> Failure {
+    /// The stored provider message holds no secret value: every value in
+    /// `secrets` is replaced with `[redacted]`; the code and retry advice
+    /// read the original body unchanged.
+    pub fn failure(&self, provider: &str, secrets: &Secrets) -> Failure {
         let code = self.code();
         let (retry_after, said) = match self {
             Self::Status {
@@ -95,8 +100,11 @@ impl Error {
                 body,
                 retry_after,
                 ..
-            } => (*retry_after, Some((*status, body_message(body)))),
-            Self::ReplyFailed { message, .. } => (None, Some((200, message.clone()))),
+            } => (
+                *retry_after,
+                Some((*status, secrets.redact(&body_message(body)))),
+            ),
+            Self::ReplyFailed { message, .. } => (None, Some((200, secrets.redact(message)))),
             Self::Connection(_)
             | Self::StreamIncomplete(_)
             | Self::UnknownStopReason(_)
@@ -136,11 +144,27 @@ fn status_code(status: u16, body: &str) -> ErrorCode {
         400 if has_reason(body, "API_KEY_INVALID") => ErrorCode::AuthenticationFailed,
         429 => ErrorCode::RateLimited,
         408 | 409 | 500..=599 => ErrorCode::ProviderUnavailable,
+        404 => ErrorCode::ModelNotFound,
+        _ if unknown_model(body) => ErrorCode::ModelNotFound,
         _ if overflow(body_code(body).as_deref(), &body_message(body)) => {
             ErrorCode::ContextOverflow
         }
         _ => ErrorCode::InvalidRequest,
     }
+}
+
+/// Whether an error body, on a status other than 404, says the provider does not know the model: the
+/// code `model_not_found` (muse, OpenAI), the type `not_found_error`
+/// (Anthropic, muse on messages), or OpenRouter's "is not a valid model ID"
+/// (`research/provider-errors`, "Unknown model").
+fn unknown_model(body: &str) -> bool {
+    let value: Option<Value> = serde_json::from_str(body).ok();
+    let error_type = value
+        .as_ref()
+        .and_then(|v| v.pointer("/error/type")?.as_str());
+    body_code(body).as_deref() == Some("model_not_found")
+        || error_type == Some("not_found_error")
+        || body_message(body).contains("is not a valid model ID")
 }
 
 /// The code for a failure inside a 200 stream: from the provider's own code,

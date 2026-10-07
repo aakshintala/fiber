@@ -8,7 +8,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use rustix::process::Signal;
 
-use super::command::{group_alive, signal_group};
+use super::process_group::{group_alive, signal_group};
 
 /// The listed groups, by id.
 static LIVE: Mutex<Vec<u32>> = Mutex::new(Vec::new());

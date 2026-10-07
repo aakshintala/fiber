@@ -89,6 +89,39 @@ pub(crate) fn leaks(trees: &[(String, String)], rule: &Isolation) -> Vec<String>
     failures.into_iter().collect()
 }
 
+/// Each failure where `lock` (a `Cargo.lock`) shows serde_json depending on
+/// `indexmap`: Cargo adds that edge only when some package in the build
+/// enables serde_json's `preserve_order` feature (`docs/prompt-cache.md`,
+/// "Bytes").
+pub(crate) fn preserve_order(lock: &str) -> Vec<String> {
+    let mut failures = Vec::new();
+    for block in lock.split("[[package]]") {
+        let mut name = None;
+        let mut in_dependencies = false;
+        let mut indexmap = false;
+        for line in block.lines().map(str::trim) {
+            if let Some(value) = line.strip_prefix("name = ") {
+                name = Some(value.trim_matches('"'));
+            }
+            if line.starts_with("dependencies = [") {
+                in_dependencies = true;
+            } else if line == "]" {
+                in_dependencies = false;
+            } else if in_dependencies {
+                let entry = line.trim_matches(|c| c == '"' || c == ',');
+                indexmap |= entry.split_whitespace().next() == Some("indexmap");
+            }
+        }
+        if name == Some("serde_json") && indexmap {
+            failures.push(
+                "serde_json depends on indexmap, so a dependency enables its `preserve_order` feature"
+                    .to_owned(),
+            );
+        }
+    }
+    failures
+}
+
 /// Whether Rust `source` uses the `unsafe` keyword. proc-macro2 tokenises
 /// it, so comments, literals and doc comments are never read as code.
 pub(crate) fn uses_unsafe(source: &str) -> Result<bool, proc_macro2::LexError> {
@@ -197,7 +230,7 @@ const SIGNAL_ALLOWLIST: &[&str] = &[
     "crates/extensions/src/host/exec.rs",
     "crates/fakes/src/process_group.rs",
     "crates/mcp/src/registry.rs",
-    "crates/tools/src/shell/command.rs",
+    "crates/tools/src/shell/process_group.rs",
 ];
 
 /// What counts as a process signal: the pattern, and whether it only counts

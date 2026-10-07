@@ -87,6 +87,12 @@ jobs:
         if: github.event_name == 'pull_request'
         run: scripts/check-docs
 
+      - name: Unsafe table
+        run: cargo xtask unsafe-table
+
+      - name: Dependency list
+        run: cargo xtask dependency-list
+
       - name: Read the ticket's labels
         id: ticket
         if: github.event_name == 'pull_request'

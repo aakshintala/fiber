@@ -3,7 +3,7 @@
 //! asked for the headers to add just before each request is sent, a retry
 //! included. It adds headers only: the body goes out as it was built.
 
-use crate::ErrorCode;
+use crate::{ErrorCode, Secret};
 
 /// Why a request could not be signed.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -30,6 +30,14 @@ pub trait Signer: Send + Sync {
     /// The headers to add to `request`, or why it could not be signed. An
     /// extension's `sign()` is handed the body's SHA-256, never the body.
     fn sign(&self, request: &SignRequest<'_>) -> Result<Vec<(String, String)>, Error>;
+
+    /// The credential values the last `sign` used. Never more than the
+    /// credentials the signer holds.
+    // `vec![]` is `Vec::new()`, so a mutant of this default changes nothing.
+    #[cfg_attr(false, mutants::skip)]
+    fn credentials(&self) -> Vec<Secret> {
+        Vec::new()
+    }
 }
 
 /// A request about to be sent.

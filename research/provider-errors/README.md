@@ -138,6 +138,19 @@ Anthropic, Google and Azure, and listed them in
   `type: not_found_error` on messages.
 - OpenRouter: 400, "anthropic/no-such-model is not a valid model ID".
 
+### Wrong path
+
+Probed 2026-10-07 with a misspelt endpoint path, for comparison with an
+unknown model:
+
+- Anthropic, `POST /v1/messagez`: 404,
+  `{"type":"error","error":{"type":"not_found_error","message":"Not found"}}`.
+  An unknown model on `/v1/messages` is also 404 `not_found_error`, with the
+  message "model: claude-no-such-model".
+- OpenAI, `POST /v1/chat/completionz`: 404, empty body.
+- OpenRouter, `POST /api/v1/chat/completionz`: 404,
+  `{"error":{"message":"Not Found","code":404}}`.
+
 ### Rate limit
 
 Not reached. A burst of 170 one-token requests at muse's completions endpoint,
