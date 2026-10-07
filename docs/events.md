@@ -781,13 +781,13 @@ none.
 
 | Key | Type | Required | Meaning |
 |---|---|---|---|
-| `generation_id` | string | yes | the provider's id for the generation |
+| `generation_id` | string | yes | the provider's id for the generation, or an id Fiber mints, starting `fiber-`, when the provider named none |
 | `model` | string | yes | the model reference, `provider/model` |
 | `tokens` | `tokens` | yes | the call's tokens |
 | `input_bytes` | integer | yes | the size in bytes of the request body Fiber sent for the call: the system prompt, tool definitions and messages as serialised for the provider, with the request's settings |
 | `input_media` | boolean | no | `true` when the request carried, or tried to carry, an image or a PDF part (an image that could not be read still counts); absent means none |
 | `web_searches` | integer | no | hosted web searches, where the provider reports them |
-| `cost` | number or null | yes | in US dollars: the vendor's own figure where it reports one, otherwise the model's declared prices applied to `tokens` (`docs/model-routing.md`, "Cost"); `null` when neither exists |
+| `cost` | number or null | yes | in US dollars: the vendor's own figure where it reports one, otherwise the model's declared prices applied to `tokens` (`docs/model-routing.md`, "Cost"); `null` when neither exists; `null` for an id Fiber minted |
 | `subscription` | boolean | no | `true` when a subscription login covered the call, so `cost` is an API-price estimate, not money billed; absent means billed per token |
 | `extension` | string | no | the extension whose `host.model` made the call |
 | `origin_session_id` | string | no | on a copy, the session whose call it was (`docs/delegates.md`, "Streams"); absent on the session's own calls |
@@ -826,10 +826,9 @@ Ephemeral. A failure outside any action.
 | `extension` | string | no | the extension it concerns |
 
 One `usage_recorded` per model call, whatever started it, however it ended. A
-call that is cancelled, fails or closes early, after the provider named its
-generation, writes its `usage_recorded` at once, with the tokens it saw and
-`cost` as for any call without the vendor's figure (`docs/model-routing.md`,
-"Cost"). A cost that settles late, from the provider's `cost()`, is a second
+call that is cancelled, fails or closes early writes its `usage_recorded` at
+once, with the tokens it saw and `cost` as for any call without the vendor's
+figure, or `null` when Fiber minted its id (`docs/model-routing.md`, "Cost"). A cost that settles late, from the provider's `cost()`, is a second
 `usage_recorded` with the same `generation_id`, replacing the first. A parent writes a copy of each `usage_recorded` it receives from a
 delegate, with the same payload and `origin_session_id` added, so a session's
 log holds its whole tree's spend. The fold counts one line per
