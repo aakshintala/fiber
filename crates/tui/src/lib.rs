@@ -30,6 +30,7 @@ mod osc;
 mod pages;
 mod shell;
 mod slash;
+mod sources;
 mod term;
 mod turn;
 mod turn_text;
@@ -38,13 +39,12 @@ mod window;
 
 use std::collections::VecDeque;
 use std::fs::File;
-use std::io::{self, PipeReader, PipeWriter, Write};
+use std::io::{self, Write};
 use std::ops::RangeInclusive;
 use std::os::unix::net::UnixStream;
+use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard};
-use std::thread;
 
 use contract::clock::Clock;
 use contract::{Envelope, HubLine, Seq, SessionId};
@@ -59,6 +59,7 @@ use crate::app::{App, Effect, mint, session_command};
 use crate::keys::{Button, Event, MouseKind, Parser, Reply};
 use crate::link::Line;
 use crate::mouse::{Pointer, Target};
+use crate::sources::{Reader, spawn_hub, spawn_resize};
 
 pub use home::Launch;
 
@@ -733,182 +734,6 @@ fn answers(line: &Envelope, id: &str) -> bool {
             .get("command_id")
             .and_then(serde_json::Value::as_str)
             == Some(id)
-}
-
-/// The input reader's state, shared with the loop under one mutex.
-#[derive(Debug, Default)]
-struct ReaderState {
-    /// The loop asked the reader to stop reading the tty.
-    paused: bool,
-    /// The reader stopped and waits for `paused` to clear.
-    parked: bool,
-    /// The reader returned, or never started: nothing to wait for.
-    ended: bool,
-}
-
-/// The pause handshake: the state and the condition variable each change
-/// is announced on.
-#[derive(Debug, Default)]
-struct Gate {
-    state: Mutex<ReaderState>,
-    changed: Condvar,
-}
-
-impl Gate {
-    /// The state, even after a thread panicked holding it.
-    fn lock(&self) -> MutexGuard<'_, ReaderState> {
-        self.state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-    }
-
-    /// Waits on the condition variable while `blocked` holds.
-    fn wait_while<'a>(
-        &self,
-        guard: MutexGuard<'a, ReaderState>,
-        blocked: impl FnMut(&mut ReaderState) -> bool,
-    ) -> MutexGuard<'a, ReaderState> {
-        self.changed
-            .wait_while(guard, blocked)
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-    }
-
-    /// Records that the reader returned.
-    fn end(&self) {
-        self.lock().ended = true;
-        self.changed.notify_all();
-    }
-}
-
-/// Reads the tty on its own thread, polling it and a wake pipe, so the loop
-/// can stop it from reading while another program has the terminal. Left
-/// blocked on quit; it ends with the process.
-struct Reader {
-    gate: Arc<Gate>,
-    /// Written to wake the reader from its poll.
-    wake: PipeWriter,
-}
-
-impl Reader {
-    /// Starts reading `tty`, sending each read as [`Input::Bytes`]. `None`
-    /// when the reader cannot start: the terminal then reads no keys, the
-    /// hub thread may still report, and Ctrl+C from the shell ends it.
-    fn spawn(tty: &File, tx: Sender<Input>) -> Option<Self> {
-        let tty = tty.try_clone().ok()?;
-        let (woken, wake) = io::pipe().ok()?;
-        let gate = Arc::new(Gate::default());
-        let shared = Arc::clone(&gate);
-        thread::Builder::new()
-            .name("tui-input".to_owned())
-            .spawn(move || {
-                read_input(tty, &woken, &shared, &tx);
-                shared.end();
-            })
-            .ok()?;
-        Some(Self { gate, wake })
-    }
-
-    /// Stops the reader from reading the tty, returning once it has parked
-    /// or ended. Bytes it read before parking are already sent.
-    fn pause(&mut self) {
-        let mut state = self.gate.lock();
-        state.paused = true;
-        drop(state);
-        // A failed write leaves a reader blocked in poll; it parks on the
-        // next tty byte, or the loop waits for it until it does.
-        io::Write::write_all(&mut self.wake, &[0]).unwrap_or(());
-        let state = self.gate.lock();
-        drop(
-            self.gate
-                .wait_while(state, |state| !state.parked && !state.ended),
-        );
-    }
-
-    /// Lets a paused reader read the tty again.
-    fn resume(&self) {
-        self.gate.lock().paused = false;
-        self.gate.changed.notify_all();
-    }
-}
-
-/// The reader thread: polls `tty` and `woken`; after every wake drains the
-/// pipe, parks while paused, and otherwise reads the tty. Returns on the
-/// tty's end, a failed read or poll, or a closed channel.
-fn read_input(mut tty: File, mut woken: &PipeReader, gate: &Gate, tx: &Sender<Input>) {
-    use rustix::event::{PollFd, PollFlags, poll};
-    let mut buf = [0u8; 4096];
-    loop {
-        let mut fds = [
-            PollFd::new(&tty, PollFlags::IN),
-            PollFd::new(woken, PollFlags::IN),
-        ];
-        match poll(&mut fds, None) {
-            Ok(_) | Err(rustix::io::Errno::INTR) => {}
-            Err(_) => return,
-        }
-        let [tty_ready, wake_ready] = fds.map(|fd| !fd.revents().is_empty());
-        if wake_ready && io::Read::read(&mut woken, &mut buf).is_err() {
-            return;
-        }
-        let mut state = gate.lock();
-        if state.paused {
-            state.parked = true;
-            gate.changed.notify_all();
-            state = gate.wait_while(state, |state| state.paused);
-            state.parked = false;
-            continue;
-        }
-        drop(state);
-        if !tty_ready {
-            continue;
-        }
-        let Ok(read) = io::Read::read(&mut tty, &mut buf) else {
-            return;
-        };
-        let Some(bytes) = buf.get(..read).filter(|bytes| !bytes.is_empty()) else {
-            return;
-        };
-        if tx.send(Input::Bytes(bytes.to_vec())).is_err() {
-            return;
-        }
-    }
-}
-
-/// Connects to the hub on its own thread, after the first frame, then
-/// reads its lines.
-fn spawn_hub(connect: Connect, tx: Sender<Input>) {
-    let hub = thread::Builder::new()
-        .name("tui-hub".to_owned())
-        .spawn(move || {
-            let connected = connect().and_then(|(stream, hello)| {
-                let reader = stream.try_clone()?;
-                Ok((stream, reader, hello))
-            });
-            match connected {
-                Ok((stream, reader, hello)) => {
-                    if tx.send(Input::Connected(stream, hello)).is_ok() {
-                        link::read_lines(reader, &tx);
-                    }
-                }
-                Err(error) => drop(tx.send(Input::ConnectFailed(error.to_string()))),
-            }
-        });
-    drop(hub);
-}
-
-/// Turns SIGWINCH into [`Input::Resize`] on its own thread. Left blocked on
-/// quit; it ends with the process.
-fn spawn_resize(mut signals: Signals, tx: Sender<Input>) {
-    let resize = thread::Builder::new()
-        .name("tui-resize".to_owned())
-        .spawn(move || {
-            for _ in signals.forever() {
-                if tx.send(Input::Resize).is_err() {
-                    return;
-                }
-            }
-        });
-    drop(resize);
 }
 
 #[cfg(test)]
