@@ -671,14 +671,13 @@ fn a_command_parked_past_close_writes_no_line_after_fiber_exited() {
 }
 
 #[test]
-fn host_drive_steer_from_a_command_carries_the_extension_sender() {
+fn host_drive_prompt_from_a_command_carries_the_extension_sender() {
     let setup = Setup::new();
     let server = ProviderServer::start([hello()]).unwrap();
-    server.hold();
     setup.provider(&server);
     setup.lua(
         "worker",
-        "fiber.command(\"nudge\", { timeout = 8000, run = function() host.status(\"driving\") host.drive(\"steer\", { content = {{ type = \"text\", text = \"use the other file\" }} }) end })\n",
+        "fiber.command(\"start\", { timeout = 8000, run = function() host.drive(\"prompt\", { content = {{ type = \"text\", text = \"started by extension\" }} }) end })\n",
     );
     let id = doors::mint("s_");
     let mut running = setup.start_session(&id, &[]);
@@ -688,47 +687,37 @@ fn host_drive_steer_from_a_command_carries_the_extension_sender() {
         &client,
         r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
     );
+    // The session is idle: this prompt starts a turn, with no held provider
+    // response or race against a turn completing.
     send(
         &client,
-        r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"hi"}]}}"#,
+        r#"{"id":"c_1","command":"command","args":{"name":"start"}}"#,
+    );
+    let lines = until(&client, "the extension-driven turn", |line| {
+        line["kind"] == "turn_started"
+    });
+    assert!(
+        lines.iter().any(|line| {
+            line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_1"
+        }),
+        "the extension command was admitted: {lines:?}"
+    );
+    let started = lines.last().expect("the turn-started line was received");
+    let message = &started["payload"]["input"][0];
+    assert_eq!(message["type"], "message");
+    assert_eq!(message["content"][0]["text"], "started by extension");
+    assert_eq!(message["source"], "extension");
+    assert_eq!(message["extension"], "fiber.test/worker");
+    assert!(
+        message["command_id"]
+            .as_str()
+            .is_some_and(|id| id.starts_with("c_")),
+        "{message}"
     );
     assert!(
         server.await_requests(1, DEADLINE),
-        "the held response was requested"
+        "the extension-driven turn requested its provider response"
     );
-    // A command is allowed during a turn; its `host.drive` steers that turn.
-    send(
-        &client,
-        r#"{"id":"c_1","command":"command","args":{"name":"nudge"}}"#,
-    );
-    let accepted = until(&client, "command_accepted", |line| {
-        line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_1"
-    });
-    assert!(accepted.last().unwrap()["payload"].get("result").is_none());
-    // The command reports before it drives: the report reaches the client
-    // over the socket, so once it is seen the steer's inbox send (a few
-    // instructions later, in-process) has already happened. Releasing the
-    // provider only then forces the steer to join the running turn instead
-    // of racing it.
-    let _driving = until(&client, "extension_ui driving", |line| {
-        line["kind"] == "extension_ui" && line["payload"]["status"] == "driving"
-    });
-    server.release();
-    let applied = until(&client, "steering_applied", |line| {
-        line["kind"] == "steering_applied"
-    });
-    // The applied message carries `source: extension`, the extension's name
-    // and a `command_id`: a rejection would have raised instead of steering.
-    let line = applied.last().unwrap();
-    assert_eq!(line["payload"]["source"], "extension");
-    assert_eq!(line["payload"]["extension"], "fiber.test/worker");
-    assert!(
-        line["payload"]["command_id"]
-            .as_str()
-            .is_some_and(|id| id.starts_with("c_")),
-        "{line}"
-    );
-    assert_eq!(line["payload"]["content"][0]["text"], "use the other file");
     send(&client, r#"{"id":"c_close","command":"close"}"#);
     let _tail = until_close(&client);
     drop(client);

@@ -328,6 +328,7 @@ struct BlockingDrive {
     calls: Mutex<Vec<Call>>,
     called: mpsc::Sender<()>,
     release: Mutex<mpsc::Receiver<()>>,
+    order: Arc<Mutex<Vec<&'static str>>>,
 }
 
 impl Drive for BlockingDrive {
@@ -338,9 +339,10 @@ impl Drive for BlockingDrive {
         }
         // A fake's own wait with a deadline on the wall clock
         // (`docs/testing.md`, "Waits and timeouts").
-        match lock(&self.release).recv_timeout(WAIT) {
-            Ok(()) | Err(_) => {}
-        }
+        lock(&self.release)
+            .recv_timeout(WAIT)
+            .expect("the test explicitly releases the held drive before its deadline");
+        lock(&self.order).push("released");
         answer.0(Ok(None));
     }
 }
@@ -357,10 +359,12 @@ fn a_provider_runs_while_a_driven_command_is_held() {
     .unwrap();
     let (called_tx, called_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
+    let order = Arc::new(Mutex::new(Vec::new()));
     let drive = Arc::new(BlockingDrive {
         calls: Mutex::new(Vec::new()),
         called: called_tx,
         release: Mutex::new(release_rx),
+        order: Arc::clone(&order),
     });
     let ext = Arc::new(LuaExtension::new(
         "ext",
@@ -383,6 +387,7 @@ fn a_provider_runs_while_a_driven_command_is_held() {
             .provider_call("p", "sign", Value::Null)
             .expect("the provider ran while the drive was held")
     });
+    lock(&order).push("provider_done");
     release_tx.send(()).expect("the test releases the drive");
     assert_eq!(
         hold_rx
@@ -390,6 +395,11 @@ fn a_provider_runs_while_a_driven_command_is_held() {
             .expect("the held command returned")
             .unwrap(),
         "true"
+    );
+    lock(&order).push("drive_finished");
+    assert_eq!(
+        lock(&order).as_slice(),
+        ["provider_done", "released", "drive_finished"]
     );
     assert_eq!(
         lock(&drive.calls).clone(),
