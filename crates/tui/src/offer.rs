@@ -350,11 +350,10 @@ impl Offer {
             return;
         };
         let row: usize = rows.iter().take(*at).map(|row| row.height(width)).sum();
-        if row < held.top {
-            held.top = row;
-        } else if row >= held.top.saturating_add(height) {
-            held.top = row.saturating_add(1).saturating_sub(height);
-        }
+        held.top = held
+            .top
+            .min(row)
+            .max(row.saturating_add(1).saturating_sub(height));
     }
 }
 

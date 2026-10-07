@@ -431,6 +431,45 @@ fn the_rows_show_each_item_and_the_tui_files_line() {
 }
 
 #[test]
+fn the_title_fills_the_header_before_the_close_target() {
+    let offer = holding(1);
+    let title = "Repository code · 1 item";
+    let title_width = u16::try_from(crate::format::width(title)).expect("short title fits u16");
+
+    let Some((rows, _)) = offer.rows(title_width + 1) else {
+        panic!("open");
+    };
+    let header = rows.first().expect("header row");
+    assert_eq!(header.line.to_string(), format!("{title}✕"));
+    assert_eq!(header.spots, [(title_width, title_width + 1, Spot::Close)]);
+
+    let Some((rows, _)) = offer.rows(title_width) else {
+        panic!("open");
+    };
+    let header = rows.first().expect("header row");
+    assert_eq!(
+        header.line.to_string(),
+        format!("{}✕", title.strip_suffix('m').expect("title ends in m"))
+    );
+    assert_eq!(header.spots, [(title_width - 1, title_width, Spot::Close)]);
+}
+
+#[test]
+fn a_target_starting_at_the_width_is_dropped() {
+    let width = 10;
+    let row = super::clipped(
+        ratatui::text::Line::raw("abcdefghijk"),
+        vec![
+            (width - 1, width + 2, Spot::Close),
+            (width, width + 1, Spot::Send),
+        ],
+        width,
+    );
+
+    assert_eq!(row.spots, [(width - 1, width, Spot::Close)]);
+}
+
+#[test]
 fn a_narrow_view_drops_the_clipped_targets() {
     let offer = holding(1);
     let Some((rows, _)) = offer.rows(12) else {
