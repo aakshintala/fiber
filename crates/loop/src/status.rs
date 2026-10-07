@@ -289,6 +289,7 @@ impl Fold {
             | Event::HandoffStarted(_)
             | Event::SkillsResent(_)
             | Event::ContextNudged(_)
+            | Event::ReviewerKept(_)
             | Event::McpServerFailed(_)
             | Event::McpServerReady(_)
             | Event::Reloaded(_)

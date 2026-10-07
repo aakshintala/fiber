@@ -538,6 +538,11 @@ fn samples() -> Vec<(&'static str, Value)> {
         ),
         ("context_nudged", json!({"tokens": 100, "trigger_at": 140})),
         (
+            "reviewer_kept",
+            json!({"kept":[{"seq":12,"item":0},{"seq":31,"item":2}]}),
+        ),
+        ("reviewer_kept", json!({"kept":[],"failed":true})),
+        (
             "mcp_server_failed",
             json!({"server": "m", "reason": "not_logged_in",
             "will_restart": true, "error": error}),
@@ -693,6 +698,11 @@ fn the_samples_cover_every_key_each_kind_lists() {
 
 fn read(kind: &str, payload: Value) -> Result<Option<Event>, serde_json::Error> {
     Event::from_envelope(&line(kind, payload))
+}
+
+#[test]
+fn a_reviewer_kept_without_failure_must_not_carry_failed_false() {
+    assert!(read("reviewer_kept", json!({"kept":[],"failed":false})).is_err());
 }
 
 #[test]

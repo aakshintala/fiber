@@ -439,8 +439,10 @@ fn a_second_call_is_reviewed_with_the_first_as_history() {
 
 #[test]
 fn an_unreadable_verdict_is_asked_for_once_more() {
-    let (session, tool, reviewer, lines) =
-        reviewed_turn(vec![Scripted::text("maybe"), Scripted::text("allow")]);
+    let (session, tool, reviewer, lines) = reviewed_turn(vec![
+        Scripted::text("maybe ZQX-UNREAD"),
+        Scripted::text("allow"),
+    ]);
     assert_eq!(
         kinds(&lines),
         kinds_with(
@@ -464,6 +466,12 @@ fn an_unreadable_verdict_is_asked_for_once_more() {
     assert_eq!(requests.len(), 2);
     assert_eq!(requests[1].conversation.len(), 5);
     assert!(user_text(&requests[1].conversation[4]).starts_with("Your reply could not be read: "));
+    // The re-ask never quotes the reply: no text of the first reply
+    // reaches the second request's system prompt or any of its items.
+    assert!(!requests[1].system_prompt.contains("ZQX-UNREAD"));
+    for input in &requests[1].conversation {
+        assert!(!format!("{input:?}").contains("ZQX-UNREAD"));
+    }
     assert_eq!(session.requests().len(), 2);
 }
 
@@ -478,7 +486,10 @@ fn a_verdict_still_unreadable_escalates() {
         None,
         vec![tool.clone() as Arc<dyn Tool>],
     );
-    let reviewer = session.reviewer(vec![Scripted::text("maybe"), Scripted::text("perhaps")]);
+    let reviewer = session.reviewer(vec![
+        Scripted::text("maybe ZQX-FIRST"),
+        Scripted::text("perhaps ZQX-LAST"),
+    ]);
     let answered = on_request(&session, {
         let inbox = session.inbox.clone();
         move |id| inbox.send(reply(id, allow())).unwrap()
@@ -506,6 +517,13 @@ fn a_verdict_still_unreadable_escalates() {
         requested.payload["escalation"]["error"]["code"],
         "unreadable_reply"
     );
+    // The escalation still shows the last reply, quoted: only a person's
+    // escalation carries reviewer text, never a later reviewer request.
+    let message = requested.payload["escalation"]["error"]["message"]
+        .as_str()
+        .unwrap();
+    assert!(message.contains("\"perhaps ZQX-LAST\""), "{message}");
+    assert!(!message.contains("ZQX-FIRST"), "{message}");
     let resolved = line(&lines, "permission_resolved");
     assert_eq!(resolved.payload["decision"], "allow");
     assert_eq!(resolved.payload["decided_by"], "person");

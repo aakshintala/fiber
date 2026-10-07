@@ -65,7 +65,8 @@ pub struct Resumed {
     pub(crate) grants: Vec<Grant>,
     /// The reviewer's blocks this session.
     pub(crate) session_blocks: u64,
-    /// What the reviewer is shown.
+    /// What the reviewer is shown: the latest `reviewer_kept`'s messages,
+    /// then what followed (`docs/permissions.md`, "At a handoff").
     pub(crate) reviewed: Vec<Reviewed>,
     /// The jobs started and never ended, each as its `orphaned` completion.
     pub(crate) orphans: Vec<JobCompleted>,
@@ -86,6 +87,7 @@ const FOLDED: &[&str] = &[
     "rewound",
     "opening_message",
     "handoff_completed",
+    "reviewer_kept",
 ];
 
 /// Folds the log in the session directory `dir` in one pass, one line at a
@@ -101,8 +103,8 @@ pub fn resumed(dir: &Path) -> Result<Resumed, Error> {
     let mut ledger = crate::usage::Ledger::default();
     let mut grants = Vec::new();
     let mut session_blocks = 0;
-    // debt: what the reviewer is shown grows with the whole transcript, as
-    // it does live; a handoff does not reset it. #940 decides its scope.
+    // The reviewer's input follows the session's handoffs
+    // (`docs/permissions.md`, "At a handoff").
     let mut reviewed = Vec::new();
     let mut orphans = crate::jobs::Orphans::default();
     // The jobs running and the session log's path as of the line read.
@@ -121,7 +123,7 @@ pub fn resumed(dir: &Path) -> Result<Resumed, Error> {
         let Some(event) = Event::from_envelope(&line).map_err(Error::Unreadable)? else {
             continue;
         };
-        render_reviewed(&mut reviewed, &event, line.action_id.as_ref());
+        render_reviewed(&mut reviewed, &event, line.action_id.as_ref(), line.seq);
         orphans.fold(&event);
         running.fold_jobs(&event);
         if let Event::SessionStarted(started) = &event
