@@ -546,7 +546,11 @@ fn two_commands_answered_closing_reach_one_resumed_session() {
     temp.recorded();
     temp.append("fiber_exited");
     let dying = closing_session(&temp);
-    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    // The resumed process writes its durable `fiber_started` while the
+    // relay thread is still draining the dying connection's answers, so
+    // the second `closing` re-routes only when the thread keeps what its
+    // first answer detected.
+    let starter = FakeStarter::bind_hold_and_append_started(&temp.dir);
     let hub = temp.hub(starter.clone());
     let mut client = Client::connect(&hub);
     client.send("c_1", "reply");

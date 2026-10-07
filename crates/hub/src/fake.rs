@@ -40,6 +40,9 @@ pub(crate) struct FakeStarter {
     /// Whether the session answers every command but `subscribe` with
     /// `closing`, as a session after `close` does.
     closing: bool,
+    /// Whether each `resume` appends `fiber_started` to the session log,
+    /// as a resumed process writing its durable start does.
+    append_started: bool,
     received: Arc<Received>,
     /// Each `resume` call's session and workspace, in order.
     resumed: Arc<Mutex<Vec<(SessionId, PathBuf)>>>,
@@ -116,6 +119,15 @@ impl FakeStarter {
         starter
     }
 
+    /// Binds `run/<id>` and holds it; each `resume` also appends
+    /// `fiber_started` to the session log, as a resumed process writing
+    /// its durable start does.
+    pub(crate) fn bind_hold_and_append_started(home: &Path) -> Self {
+        let mut starter = Self::bind_and_hold(home);
+        starter.append_started = true;
+        starter
+    }
+
     fn new(home: &Path, bind: bool, exited: Option<Failure>, handshake: Option<Handshake>) -> Self {
         Self {
             home: home.to_path_buf(),
@@ -123,6 +135,7 @@ impl FakeStarter {
             exited,
             handshake: Arc::new(Mutex::new(handshake)),
             closing: false,
+            append_started: false,
             received: Arc::new(Received::default()),
             resumed: Arc::new(Mutex::new(Vec::new())),
             serving: Arc::new(Serving::default()),
@@ -223,6 +236,9 @@ impl Starter for FakeStarter {
                 }));
             }
         }
+        if self.append_started {
+            append_started(&self.home, id);
+        }
         self.launch(id)
     }
 }
@@ -245,6 +261,31 @@ pub(crate) fn failure(code: ErrorCode, message: &str) -> Failure {
         message: message.to_owned(),
         retry_after: None,
         provider: None,
+    }
+}
+
+/// Appends `fiber_started` as the last line of `id`'s log, as a resumed
+/// process writing its durable start does.
+fn append_started(home: &Path, id: &SessionId) {
+    let Ok(projects) = std::fs::read_dir(home.join("projects")) else {
+        return;
+    };
+    let mut projects: Vec<PathBuf> = projects
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .collect();
+    projects.sort();
+    for project in projects {
+        let log = project.join("sessions").join(&id.0).join("events.jsonl");
+        if log.is_file()
+            && let Ok(mut text) = std::fs::read_to_string(&log)
+        {
+            text.push_str(&format!(
+                "{{\"kind\":\"fiber_started\",\"session_id\":\"{}\",\"payload\":{{}}}}\n",
+                id.0
+            ));
+            std::fs::write(log, text).unwrap_or(());
+            return;
+        }
     }
 }
 

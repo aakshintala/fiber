@@ -276,6 +276,7 @@ fn relay(
     } = owned;
     let mut read = BufReader::new(reader);
     let mut buf = Vec::new();
+    let mut exiting = false;
     loop {
         buf.clear();
         match read.read_until(b'\n', &mut buf) {
@@ -288,7 +289,8 @@ fn relay(
                     replayed = None;
                     continue;
                 }
-                if let Some((id, line)) = settle(&buf, &kept, hub, session) {
+                if let Some((id, line)) = settle(&buf, &kept, hub, session, exiting) {
+                    exiting = true;
                     lock(relays).finish(session, epoch);
                     route(&CommandId(id), session, line, hub, writer, relays, true);
                     continue;
@@ -304,13 +306,15 @@ fn relay(
 }
 
 /// Settles a kept command `line` acknowledges: it is no longer kept. A
-/// `closing` rejection of it while the session's log ends in
-/// `fiber_exited` returns it, to be routed again.
+/// `closing` rejection of it returns it, to be routed again, once this
+/// thread has seen the exited window, whether in this answer
+/// (`crate::resume::exited`) or an earlier one (`exiting`).
 fn settle(
     line: &[u8],
     kept: &Kept,
     hub: &Hub,
     session: &str,
+    exiting: bool,
 ) -> Option<(String, Map<String, Value>)> {
     let (id, closing) = {
         let mut kept = lock(kept);
@@ -321,7 +325,8 @@ fn settle(
         let at = kept.iter().position(|(kept, _)| *kept == id)?;
         (kept.remove(at), closing)
     };
-    (closing && crate::resume::exited(&hub.home, &SessionId(session.to_owned()))).then_some(id)
+    (closing && (exiting || crate::resume::exited(&hub.home, &SessionId(session.to_owned()))))
+        .then_some(id)
 }
 
 /// The `command_id` of a session's `command_accepted` or
