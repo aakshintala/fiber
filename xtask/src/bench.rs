@@ -120,6 +120,30 @@ const MEASURED: &[(&str, Check)] = &[
         "Terminal to its first frame, new session",
         Check::Timing("terminal_first_frame_ms"),
     ),
+    (
+        "`paging` jig, its session at scale 1 and 160 by 48",
+        Check::Memory(&["paging_rss_kib"]),
+    ),
+    (
+        "`paging` jig, open pass and first frame",
+        Check::Timing("paging_open_ms"),
+    ),
+    (
+        "`paging` jig, slowest frame that loaded pages",
+        Check::Timing("paging_load_ms"),
+    ),
+    (
+        "`paging` jig, slowest jump frame",
+        Check::Timing("paging_jump_ms"),
+    ),
+    (
+        "`paging` jig, slowest re-count at a new width",
+        Check::Timing("paging_width_ms"),
+    ),
+    (
+        "`paging` jig, slowest append frame",
+        Check::Timing("paging_append_ms"),
+    ),
 ];
 
 /// Each row with no benchmark yet, by its Budget cell, and what owns it.
@@ -607,6 +631,9 @@ fn judge(
             line.base = match base {
                 Base::None => String::new(),
                 Base::Failed(why) => format!("base failed: {why}"),
+                // A base that ran cleanly but predates the workload has
+                // nothing to compare.
+                Base::Ok(results) if !results.metrics.contains_key(id) => "unavailable".to_owned(),
                 Base::Ok(results) => run_median(Some(results), id)
                     .map_or_else(|e| format!("base failed: {e}"), |v| format!("{v:.1} ms")),
             };

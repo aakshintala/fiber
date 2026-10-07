@@ -19,6 +19,12 @@ const DOC: &str = concat!(
     "| Terminal to its first frame, attaching | 50 ms plus 10 ms per MiB of session log | Linux x86_64 | picked |\n",
     "| Listing 1,000 sessions in one project, warm cache | 50 ms | Linux x86_64 | picked |\n",
     "| `session_list`, waiting for every running session's status | 2 s for the whole call | Linux x86_64 | picked |\n",
+    "| `paging` jig, its session at scale 1 and 160 by 48 | 21,224 KiB peak RSS | Linux x86_64 | picked |\n",
+    "| `paging` jig, open pass and first frame | 616 ms | Linux x86_64 | picked |\n",
+    "| `paging` jig, slowest frame that loaded pages | 3 ms | Linux x86_64 | picked |\n",
+    "| `paging` jig, slowest jump frame | 6 ms | Linux x86_64 | picked |\n",
+    "| `paging` jig, slowest re-count at a new width | 48 ms | Linux x86_64 | picked |\n",
+    "| `paging` jig, slowest append frame | 4 ms | Linux x86_64 | picked |\n",
     "\n## Measuring\n\n| Not | A budget |\n|---|---|\n| x | y |\n",
 );
 
@@ -55,7 +61,14 @@ fn head() -> Value {
             "resume_2m_rss_kib": [14000, 14010, 13990, 14005, 13995],
             "web_fetch_rss_kib": [22000, 22010, 21990, 22005, 21995],
             "fsyncs": [fsync_run(430, 429, 1718)],
-            "turn_log_bytes": vec![log_run(1_700_000, 1_520_000, 429); 5]
+            "turn_log_bytes": vec![log_run(1_700_000, 1_520_000, 429); 5],
+            "paging_rss_kib": [10612, 10604, 10620, 10612, 10608],
+            "paging_open_ms": [301.2, 308.0, 305.5, 310.1, 307.7],
+            "paging_load_ms": [1.3, 1.2, 1.3, 1.4, 1.3],
+            "paging_jump_ms": [2.6, 2.5, 2.7, 2.6, 2.6],
+            "paging_width_ms": [24.1, 23.8, 24.0, 24.4, 24.0],
+            "paging_append_ms": [1.8, 1.7, 1.8, 1.9, 1.8],
+            "paging_counts": vec![json!({"lines": 8074, "turns": 10, "calls": 1051, "pages": 120, "rows": 2915}); 5]
         },
         "failures": []
     })
@@ -74,7 +87,12 @@ fn base() -> Value {
         "schema": 1, "runs": 5, "idle_secs": 10,
         "metrics": {
             "session_start_ms": [0.6, 0.6, 0.6, 0.6, 0.6],
-            "terminal_first_frame_ms": [1.8, 1.8, 1.8, 1.8, 1.8]
+            "terminal_first_frame_ms": [1.8, 1.8, 1.8, 1.8, 1.8],
+            "paging_open_ms": [290.0, 290.0, 290.0, 290.0, 290.0],
+            "paging_load_ms": [1.1, 1.1, 1.1, 1.1, 1.1],
+            "paging_jump_ms": [2.2, 2.2, 2.2, 2.2, 2.2],
+            "paging_width_ms": [20.5, 20.5, 20.5, 20.5, 20.5],
+            "paging_append_ms": [1.5, 1.5, 1.5, 1.5, 1.5]
         },
         "failures": []
     })
@@ -416,10 +434,17 @@ fn a_failed_base_passes_and_shows_why() {
     assert_eq!(out.failures, Vec::<String>::new());
     assert!(out.comment.contains("base failed: base.json: no such file"));
 
+    // A base that predates every workload has nothing to compare, and
+    // nothing failed.
     let missing = json!({"schema": 1, "runs": 5, "idle_secs": 10, "metrics": {}, "failures": []});
     let out = judge(&head(), Some(&missing), Event::PullRequest);
     assert_eq!(out.failures, Vec::<String>::new());
-    assert!(out.comment.contains("base failed:"), "{}", out.comment);
+    assert!(
+        row(&out.comment, "Session start").contains("| unavailable |"),
+        "{}",
+        out.comment
+    );
+    assert!(!out.comment.contains("base failed:"), "{}", out.comment);
 }
 
 #[test]
@@ -674,4 +699,83 @@ fn an_exact_part_2_row_whose_text_changes_fails() {
             out.failures
         );
     }
+}
+
+/// The six paging rows, by Budget cell, and the metric each reads.
+const PAGING: [(&str, &str); 6] = [
+    ("`paging` jig, its session", "paging_rss_kib"),
+    ("`paging` jig, open pass", "paging_open_ms"),
+    ("`paging` jig, slowest frame that loaded", "paging_load_ms"),
+    ("`paging` jig, slowest jump", "paging_jump_ms"),
+    ("`paging` jig, slowest re-count", "paging_width_ms"),
+    ("`paging` jig, slowest append", "paging_append_ms"),
+];
+
+#[test]
+fn a_head_missing_a_paging_metric_fails_naming_it() {
+    for (budget, id) in PAGING {
+        let mut missing = head();
+        missing["metrics"].as_object_mut().unwrap().remove(id);
+        let failures = failures_of(&missing);
+        assert!(has(&failures, id), "{id}: {failures:?}");
+        assert!(has(&failures, budget), "{id}: {failures:?}");
+    }
+}
+
+#[test]
+fn paging_memory_at_its_ceiling_passes_and_one_kib_over_fails() {
+    let at = with_metric(head(), "paging_rss_kib", json!(vec![21224; 5]));
+    assert_eq!(failures_of(&at), Vec::<String>::new());
+    let over = with_metric(head(), "paging_rss_kib", json!(vec![21225; 5]));
+    let failures = failures_of(&over);
+    assert!(has(&failures, "`paging` jig, its session"), "{failures:?}");
+    let comment = judge(&head(), Some(&base()), Event::PullRequest).comment;
+    let row = row(&comment, "`paging` jig, its session");
+    assert!(row.contains("paging_rss_kib: 10612 KiB"), "{row}");
+}
+
+#[test]
+fn a_slow_paging_timing_is_advisory_and_shows_both_medians() {
+    let mut slow = head();
+    for (_, id) in PAGING.iter().skip(1) {
+        slow = with_metric(slow, id, json!(vec![9999.0; 5]));
+    }
+    let out = judge(&slow, Some(&base()), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new());
+    for ((budget, _), shown) in PAGING
+        .iter()
+        .skip(1)
+        .zip(["290.0 ms", "1.1 ms", "2.2 ms", "20.5 ms", "1.5 ms"])
+    {
+        let row = row(&out.comment, budget);
+        assert!(row.contains("9999.0 ms"), "{row}");
+        assert!(row.contains(shown), "{row}");
+        assert!(row.ends_with("| advisory |"), "{row}");
+    }
+}
+
+#[test]
+fn a_base_with_no_paging_jig_shows_unavailable_and_keeps_its_other_medians() {
+    let mut old = base();
+    for (_, id) in PAGING.iter().skip(1) {
+        old["metrics"].as_object_mut().unwrap().remove(*id);
+    }
+    let out = judge(&head(), Some(&old), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new());
+    for (budget, _) in PAGING.iter().skip(1) {
+        let row = row(&out.comment, budget);
+        assert!(row.contains("| unavailable |"), "{row}");
+    }
+    let start = row(&out.comment, "Session start");
+    assert!(start.contains("| 0.6 ms |"), "{start}");
+    assert!(!out.comment.contains("base failed:"), "{}", out.comment);
+}
+
+#[test]
+fn a_malformed_base_paging_timing_shows_base_failed() {
+    let bad = with_metric(base(), "paging_open_ms", json!("slow"));
+    let out = judge(&head(), Some(&bad), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new());
+    let row = row(&out.comment, "`paging` jig, open pass");
+    assert!(row.contains("base failed: paging_open_ms"), "{row}");
 }
