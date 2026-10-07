@@ -30,10 +30,17 @@ fn model_without_levels() -> ModelData {
 }
 
 fn config(overrides: Vec<String>) -> config::Config {
+    config_with_global(None, overrides)
+}
+
+fn config_with_global(global: Option<serde_json::Value>, overrides: Vec<String>) -> config::Config {
     let root = fakes::TempDir::new("fiber-thinking");
     let home = root.path().join("home");
     let workspace = root.path().join("workspace");
     std::fs::create_dir_all(&home).unwrap();
+    if let Some(global) = global {
+        std::fs::write(home.join("config.json"), global.to_string()).unwrap();
+    }
     std::fs::create_dir_all(&workspace).unwrap();
     let project = config::ProjectKey::new("test").unwrap();
     config::Config::load(config::Sources {
@@ -192,6 +199,23 @@ fn a_per_model_level_the_model_does_not_declare_falls_back_to_its_default() {
     ] {
         assert!(notices[0].message.contains(part), "{}", notices[0].message);
     }
+}
+
+#[test]
+fn the_notice_names_the_key_of_the_winning_layer() {
+    let (level, notices) = resolved(
+        &config_with_global(
+            Some(json!({"models": {"openai/gpt-5.6": {"thinking": "low"}}})),
+            vec!["thinking=max".into()],
+        ),
+        &model(),
+        "openai/gpt-5.6",
+    );
+    assert_eq!(level, Some(ThinkingLevel::Low));
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    let message = &notices[0].message;
+    assert!(message.contains("`thinking` setting `max`"), "{message}");
+    assert!(!message.contains("models."), "{message}");
 }
 
 #[test]

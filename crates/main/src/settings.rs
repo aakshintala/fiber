@@ -134,14 +134,16 @@ pub(crate) fn thinking(
             })
         };
     }
+    // The layer that set the winning value also names its key: a layer's
+    // per-model key beats its own top-level key, but a higher layer's
+    // top-level key beats a lower layer's per-model key.
     let per_model = format!("models.\"{reference}\".thinking");
-    let key = if config.get(&per_model, None).is_some() {
-        per_model
-    } else {
-        "thinking".to_owned()
+    let winner = config.get("thinking", Some(reference));
+    let key = match (&winner, config.get(&per_model, None)) {
+        (Some((_, layer)), Some((_, own))) if *layer == own => per_model,
+        _ => "thinking".to_owned(),
     };
-    let configured = config
-        .get("thinking", Some(reference))
+    let configured = winner
         .and_then(|(value, _)| value.as_str().map(str::to_owned))
         .and_then(|name| name.parse::<ThinkingLevel>().ok());
     match configured {
