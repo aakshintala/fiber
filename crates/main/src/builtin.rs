@@ -22,6 +22,7 @@ type SessionTools = (
     Vec<ToolInfo>,
     Arc<dyn Tool>,
     Arc<dyn Fn() + Send + Sync>,
+    Arc<dyn contract::images::Images>,
 );
 
 /// `edit`, `handoff`, `read`, `shell`, `web_fetch`, `write` and `jobs`, each
@@ -47,6 +48,10 @@ pub(crate) fn builtin(
         tools::Files::with_locks(workspace.to_path_buf(), Arc::clone(locks))
             .with_images(fiber.clone(), artifacts.to_path_buf()),
     );
+    let images: Arc<dyn contract::images::Images> = Arc::new(tools::ImageChild::new(
+        fiber.clone(),
+        artifacts.to_path_buf(),
+    ));
     let moves: Arc<dyn contract::jobs::Jobs> = jobs.clone();
     // Only `fiber ask` reaches here, new or resumed: a non-interactive run.
     let shell = tools::Shell::new(workspace.to_path_buf(), Arc::clone(clock))
@@ -80,7 +85,7 @@ pub(crate) fn builtin(
         infos.push(info);
     }
     let forget: Arc<dyn Fn() + Send + Sync> = Arc::new(move || files.forget());
-    Ok((pairs, infos, driver, forget))
+    Ok((pairs, infos, driver, forget, images))
 }
 
 /// One tool and what the `tools` command answers for it.

@@ -53,17 +53,31 @@ impl Setup {
     /// Installs a provider `fake` with model `m` on `openai-responses` at the
     /// fake server, and makes `fake/m` the configured model.
     fn provider(&self, server: &ProviderServer) {
+        self.provider_with(&json!({}), server);
+    }
+
+    /// [`Setup::provider`], with the fake model declaring `input`
+    /// `["text", "image"]`, so a pasted image is sent as an image part.
+    fn provider_with_images(&self, server: &ProviderServer) {
+        self.provider_with(&json!({"input": ["text", "image"]}), server);
+    }
+
+    fn provider_with(&self, model_extra: &Value, server: &ProviderServer) {
         let source = self.root.path().join("src");
         write_json(
             &source.join("extension.json"),
             &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
         );
+        let mut model = json!({"id": "m", "protocol": "openai-responses", "base_url": format!("{}/v1", server.url())});
+        for (key, value) in model_extra.as_object().unwrap() {
+            model[key] = value.clone();
+        }
         write_json(
             &source.join("providers/fake.json"),
             &json!({
                 "name": "fake",
                 "credential": {"env": "FIBER_TEST_FAKE_KEY"},
-                "models": [{"id": "m", "protocol": "openai-responses", "base_url": format!("{}/v1", server.url())}]
+                "models": [model]
             }),
         );
         extensions::plan(
@@ -1543,4 +1557,297 @@ fn a_resumed_session_answers_commands_from_its_recorded_workspace() {
             {"name": "later", "description": "Added before the resume.", "tag": "skill"}]})
     );
     // Dropping `running` kills the session, still waiting on the approval.
+}
+
+/// A 1x1 PNG, 69 bytes: within every cap, so the image child stores it byte
+/// for byte (as in `tests/tools.rs`).
+const PIXEL: [u8; 69] = [
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
+    0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0xf8, 0xcf, 0xc0, 0x00,
+    0x00, 0x03, 0x01, 0x01, 0x00, 0xc9, 0xfe, 0x92, 0xef, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e,
+    0x44, 0xae, 0x42, 0x60, 0x82,
+];
+
+/// [`PIXEL`] as base64.
+const PIXEL_BASE64: &str =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC";
+
+/// The acknowledgement or rejection naming `id`.
+fn answer(client: &Socket, id: &str) -> Value {
+    until(client, "the answer", |line| {
+        line["payload"].get("command_id") == Some(&json!(id))
+    })
+    .into_iter()
+    .next_back()
+    .unwrap()
+}
+
+fn image_prompt(id: &str, text: &str, data: &str) -> String {
+    format!(
+        "{{\"id\":\"{id}\",\"command\":\"prompt\",\"args\":{{\"content\":[{{\"type\":\"text\",\"text\":\"{text}\"}},{{\"type\":\"image\",\"data\":\"{data}\",\"mime_type\":\"image/png\"}}]}}}}"
+    )
+}
+
+#[test]
+fn a_pasted_image_is_stored_logged_by_path_and_sent_as_an_image_part() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider_with_images(&server);
+    let id = doors::mint("s_");
+    let mut running = setup.start_session(&id, &[]);
+
+    let client = running.connect(&setup.socket(&id));
+    running.wait_for("extensions_loaded");
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    recv(&client, "the subscribe acknowledgement");
+    send(&client, &image_prompt("c_prompt", "look", PIXEL_BASE64));
+    let rest = until(&client, "turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    let turn_started = rest
+        .iter()
+        .find(|line| line["kind"] == "turn_started")
+        .expect("the prompt started a turn");
+    let image = &turn_started["payload"]["input"][0]["content"][1];
+    assert_eq!(image["type"], "image");
+    let path = image["path"].as_str().unwrap();
+    assert!(
+        path.starts_with("artifacts/i_") && path.ends_with(".png"),
+        "{path}"
+    );
+    assert_eq!(image["mime_type"], "image/png");
+    assert_eq!(
+        (image["width"].clone(), image["height"].clone()),
+        (json!(1), json!(1))
+    );
+
+    let session = setup.session_dir(&id);
+    // The artifact is the processed file: here, the input byte for byte.
+    assert_eq!(fs::read(session.join(path)).unwrap(), PIXEL);
+    // The log names the file and never holds its bytes.
+    let log = fs::read(session.join("events.jsonl")).unwrap();
+    assert!(
+        !String::from_utf8_lossy(&log).contains(PIXEL_BASE64),
+        "the log holds the image's base64"
+    );
+    assert!(
+        !log.windows(PIXEL.len()).any(|window| window == PIXEL),
+        "the log holds the image's bytes"
+    );
+
+    // The first request carries the image as an image part of the text.
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
+    let user = body["input"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| {
+            item["role"] == "user"
+                && item["content"]
+                    .as_array()
+                    .is_some_and(|content| content.iter().any(|part| part["type"] == "input_image"))
+        })
+        .expect("the request carries the pasted image");
+    assert_eq!(
+        user["content"],
+        json!([
+            {"type": "input_text", "text": "look"},
+            {"type": "input_image", "image_url": format!("data:image/png;base64,{PIXEL_BASE64}")},
+        ])
+    );
+
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let _tail = until_close(&client);
+    drop(client);
+    let (status, _out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+}
+
+#[test]
+fn a_steered_image_is_applied_and_sent_on_the_next_request() {
+    let setup = Setup::new();
+    // The first reply runs `sleep 5`, so the turn stays open seconds
+    // after the prompt: the steer, pasted behind it, is delivered and
+    // applied at the step boundary, inside the turn. A standing rule
+    // allows the command without asking.
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "call_1",
+            "shell",
+            &json!({"command": "sleep 5"}),
+        )]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider_with_images(&server);
+    fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n",
+            json!({"decision": "allow", "tool": "shell", "prefix": "sleep 5"})
+        ),
+    )
+    .unwrap();
+    let id = doors::mint("s_");
+    let mut running = setup.start_session(&id, &[]);
+
+    let client = running.connect(&setup.socket(&id));
+    running.wait_for("extensions_loaded");
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    recv(&client, "the subscribe acknowledgement");
+    send(
+        &client,
+        r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"go"}]}}"#,
+    );
+    assert!(
+        server.await_requests(1, DEADLINE),
+        "the first request is in flight"
+    );
+    send(
+        &client,
+        &format!(
+            "{{\"id\":\"c_steer\",\"command\":\"steer\",\"args\":{{\"content\":[{{\"type\":\"image\",\"data\":\"{PIXEL_BASE64}\",\"mime_type\":\"image/png\"}}]}}}}"
+        ),
+    );
+    // The turn stays open on the sleeping call while the reader stores
+    // the image and the loop takes the steer off the inbox.
+    let accepted = answer(&client, "c_steer");
+    assert_eq!(accepted["kind"], "command_accepted", "{accepted}");
+
+    let mut saw_applied = false;
+    let rest = until(
+        &client,
+        "the steer applied and the turn completed",
+        |line| {
+            if line["kind"] == "steering_applied" {
+                saw_applied = true;
+            }
+            line["kind"] == "turn_completed" && saw_applied
+        },
+    );
+    assert!(
+        rest.iter().any(|line| line["kind"] == "steering_applied"),
+        "the steer was applied: {:?}",
+        kinds(&rest)
+    );
+    let applied = rest
+        .iter()
+        .find(|line| line["kind"] == "steering_applied")
+        .expect("the steer was applied");
+    let image = &applied["payload"]["content"][0];
+    assert_eq!(image["type"], "image");
+    assert!(
+        image["path"].as_str().unwrap().starts_with("artifacts/i_"),
+        "{image}"
+    );
+
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2);
+    let body: Value = serde_json::from_slice(&requests[1].body).unwrap();
+    let user = body["input"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| {
+            item["role"] == "user"
+                && item["content"]
+                    .as_array()
+                    .is_some_and(|content| content.iter().any(|part| part["type"] == "input_image"))
+        })
+        .expect("the second request carries the steered image");
+    assert!(
+        user["content"].as_array().unwrap().iter().any(|part| {
+            part["type"] == "input_image"
+                && part["image_url"] == format!("data:image/png;base64,{PIXEL_BASE64}")
+        }),
+        "{user}"
+    );
+
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let _tail = until_close(&client);
+    drop(client);
+    let (status, _out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+}
+
+#[test]
+fn unreadable_pasted_images_are_rejected_without_a_turn() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider_with_images(&server);
+    let id = doors::mint("s_");
+    let mut running = setup.start_session(&id, &[]);
+
+    let client = running.connect(&setup.socket(&id));
+    running.wait_for("extensions_loaded");
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    recv(&client, "the subscribe acknowledgement");
+    // Not an image.
+    send(
+        &client,
+        r#"{"id":"c_1","command":"prompt","args":{"content":[{"type":"image","data":"bm90IGFuIGltYWdl","mime_type":"image/png"}]}}"#,
+    );
+    let first = answer(&client, "c_1");
+    assert_eq!(first["kind"], "command_rejected", "{first}");
+    assert_eq!(first["payload"]["code"], "invalid_arguments");
+    assert!(
+        first["payload"]["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("Image 1 cannot be read: "),
+        "{first}"
+    );
+    // Over 50 megapixels: an 8000x7000 header and no pixels.
+    send(
+        &client,
+        r#"{"id":"c_2","command":"prompt","args":{"content":[{"type":"image","data":"iVBORw0KGgoAAAANSUhEUgAAH0AAABtYCAIAAACSWZ5GAAAAA0lEQVR4nAB+3LJc","mime_type":"image/png"}]}}"#,
+    );
+    let second = answer(&client, "c_2");
+    assert_eq!(second["kind"], "command_rejected", "{second}");
+    assert_eq!(second["payload"]["code"], "invalid_arguments");
+    assert_eq!(
+        second["payload"]["message"],
+        "Image 1 cannot be read: 8000x7000 is 56000000 pixels; the limit is 50000000"
+    );
+    // The second image fails: the counter counts image parts only.
+    send(
+        &client,
+        &format!(
+            "{{\"id\":\"c_3\",\"command\":\"prompt\",\"args\":{{\"content\":[{{\"type\":\"image\",\"data\":\"{PIXEL_BASE64}\",\"mime_type\":\"image/png\"}},{{\"type\":\"image\",\"data\":\"bm90IGFuIGltYWdl\",\"mime_type\":\"image/png\"}}]}}}}"
+        ),
+    );
+    let third = answer(&client, "c_3");
+    assert_eq!(third["kind"], "command_rejected", "{third}");
+    assert_eq!(third["payload"]["code"], "invalid_arguments");
+    assert!(
+        third["payload"]["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("Image 2 cannot be read: "),
+        "{third}"
+    );
+    assert!(server.requests().is_empty(), "no turn ran");
+    let events = fs::read(setup.session_dir(&id).join("events.jsonl")).unwrap();
+    assert!(
+        !String::from_utf8_lossy(&events).contains("turn_started"),
+        "no turn started"
+    );
+
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let _tail = until_close(&client);
+    drop(client);
+    let (status, _out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
 }
