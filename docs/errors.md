@@ -88,7 +88,7 @@ asked for the session.
 | `authentication_failed` | the startup OAuth refresh of the session model's token was rejected by the token endpoint, or its `credential()` needed a person to log in and nobody was attached (`docs/model-routing.md`, "Keys, tokens and OAuth") | 1 |
 | `connection_failed` | the startup OAuth refresh could not reach the token endpoint | 1 |
 | `session_not_found` | a resume names no session | 1 |
-| `session_held` | another process holds the session's lock | 1 |
+| `session_held` | another process holds the session's lock, or runs it at a schema version this build cannot read | 1 |
 | `extension_missing` | the provider of a `provider/model` is not installed | 1 |
 | `protocol_unsupported` | the session model's protocol is one this Fiber does not speak yet | 1 |
 | `extension_required_failed` | an extension marked `required` failed to start | 1 |
@@ -259,7 +259,7 @@ the lines that carry it.
 | `blocked_host` | tool call | `web_fetch` named a link-local address or a cloud metadata host (`docs/tools.md`, "Web fetch and web search") |
 | `budget_exceeded` | turn | the spending budget was reached, or an extension refused a model request (`docs/loop.md`, "Spending budget") |
 | `busy` | driver command | `prompt` or `reload` while a turn is running, or `rewind` mid-turn (`docs/invocation.md`, "What each command does") |
-| `closing` | tool call, extension call, driver command | `session_message` named a session that was sent `close` (`docs/tools.md`, "Messaging other sessions"), or `state.set` or `state.unset` ran after `fiber_exited` (`docs/extensions.md`, "When a session ends"), or a driver command after `close` (`docs/invocation.md`, "Driver commands") |
+| `closing` | exit, tool call, extension call, driver command | `session_message` named a session that was sent `close` (`docs/tools.md`, "Messaging other sessions"), or `state.set` or `state.unset` ran after `fiber_exited` (`docs/extensions.md`, "When a session ends"), or a driver command after `close` (`docs/invocation.md`, "Driver commands"), or the session `fiber ask` attached to ended before its turn completed |
 | `config_invalid` | exit, extension call | a configuration file is invalid |
 | `connection_failed` | exit, extension call, model call, tool call, turn | the connection to the provider or its token endpoint failed, or `web_fetch` could not reach the host |
 | `context_overflow` | model call, turn | the request does not fit the context window |
@@ -280,10 +280,11 @@ the lines that carry it.
 | `hook_unapproved` | exit | a repository's required hook is not approved; run `fiber approve` in the repository |
 | `http_error` | extension call, tool call | `web_fetch` got a status other than 2xx |
 | `indeterminate` | tool call, job | Fiber cannot tell whether the call completed |
-| `invalid_arguments` | driver command, extension call, tool call | the arguments failed the tool's schema or checks, or a driver command's `args` (`docs/invocation.md`, "Driver commands") |
+| `invalid_arguments` | driver command, hub command, extension call, tool call | the arguments failed the tool's schema or checks, or a driver or hub command's `args` (`docs/invocation.md`, "Driver commands" and "The hub") |
 | `invalid_request` | model call, turn | the provider rejected the request for any other reason |
-| `io_failed` | exit, extension call | a filesystem failure, or a `git` command on a worktree that failed: a log write or fsync, or a configuration or credential file that exists but cannot be read or written; the message names the path |
-| `log_corrupt` | exit | a log line that cannot be encoded, or one read back that does not parse |
+| `io_failed` | exit, driver command, hub command, extension call | a filesystem failure, or a `git` command on a worktree that failed: a log write or fsync, or a configuration or credential file that exists but cannot be read or written; the message names the path |
+| `log_corrupt` | exit, hub command | a log line that cannot be encoded, or one read back that does not parse |
+| `malformed` | driver command, hub command | a command line that is not a JSON object, has no string `id` or `command`, has `args` of the wrong type, or has a key no command line takes (`docs/invocation.md`, "Driver commands") |
 | `mcp_cancel_requested` | tool call | a cancelled call the server may still act on |
 | `mcp_required_server_failed` | exit | a required MCP server failed to start |
 | `mcp_server_unapproved` | exit | a repository's required MCP server is not approved; run `fiber approve` in the repository |
@@ -312,7 +313,7 @@ the lines that carry it.
 | `repository_code_skipped` | notice | an extension, hook or MCP server the repository declares was skipped, because nobody approved it and nobody could be asked (`docs/extensions.md`, "Code a repository ships") |
 | `reviewer_selection_failed` | notice | the reviewer could not choose which of the person's messages still bind at a handoff, so it kept every one |
 | `session_has_dependents` | exit, hub command | a delete names a session that forks or rewinds point at; the message lists them, and `--cascade` deletes them too (`docs/invocation.md`, "Deleting and pruning") |
-| `session_held` | exit, hub command | another process holds the session |
+| `session_held` | exit, hub command | another process holds the session, or runs it at a schema version this build cannot read (`docs/invocation.md`, "Processes") |
 | `session_not_found` | exit, hub command | a resume names no session, or a command whose `session_id` names no session, running or exited, or names a delegate that is not running (`docs/invocation.md`, "The hub" and "Lifecycle") |
 | `signal` | tool call, job | a process killed by a signal Fiber did not send |
 | `skill_invalid` | notice | a skill's `SKILL.md` header does not parse or lacks `name` or `description`, so it is left out; the message names its path (`docs/system-prompt.md`, "Skills") |
@@ -327,6 +328,7 @@ the lines that carry it.
 | `too_large` | extension call, tool call, hub command | a `web_fetch` download, or a file `read_file` names, larger than 10 MiB |
 | `tool_error` | tool call | the tool itself failed, or its effects function errored |
 | `unauthenticated` | hub connection | a remote connection's first message presented no valid device token; the hub closes the connection (`docs/invocation.md`, "Remote clients") |
+| `unknown_command` | driver command, hub command | a driver or hub command Fiber does not have, or a `command` naming one no extension registered (`docs/invocation.md`, "Driver commands") |
 | `unknown_stop_reason` | model call, turn | the reply ended with a stop or finish reason Fiber does not map |
 | `unknown_tool` | tool call | the model named a tool that does not exist |
 | `unreachable` | tool call | `session_message` named an id no running session has |
@@ -359,7 +361,7 @@ Notices, for a failure outside any action:
 
 Driver command rejections (`malformed`, `not_subscribed`, `busy`, `stale_request`, `not_step_boundary`,
 `session_held`, `delegate_session`, `summary_failed`, `invalid_arguments`,
-`unknown_command`, `closing`, `duplicate_command`, `session_not_found`,
+`unknown_command`, `closing`, `io_failed`, `duplicate_command`, `session_not_found`,
 `message_refused`, `hook_failed`)
 are `docs/invocation.md`, "Driver commands".
 
