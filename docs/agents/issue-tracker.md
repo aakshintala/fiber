@@ -5,6 +5,7 @@ Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all o
 ## Conventions
 
 - **Create an issue**: `gh issue create --title "..." --body "..."`. Use a heredoc for multi-line bodies.
+- **Name code in a body** by path and function or test name, such as `crates/doors/tests/socket.rs`, `clients_counts_full_connections_on_attach_and_leave`. A line number may follow as a hint, but it drifts as other changes merge, so the name is what a lane searches for.
 - **Read an issue**: `gh issue view <number> --json title,body,labels,comments`, filtered with `--jq` when only part of it is needed.
 - **List issues**: `gh issue list --state open --json number,title,body,labels,comments --jq '[.[] | {number, title, body, labels: [.labels[].name], comments: [.comments[].body]}]'` with appropriate `--label` and `--state` filters.
 - **Comment on an issue**: `gh issue comment <number> --body "..."`
