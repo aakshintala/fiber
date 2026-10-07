@@ -15,7 +15,7 @@ use ratatui::text::{Line, Span};
 use serde_json::Value;
 
 use crate::app::Target;
-use crate::turn::{Group, Row, Thought};
+use crate::turn::{Group, Row, Thought, target_id};
 
 /// A span of milliseconds, truncated to whole seconds: `38s` under a
 /// minute, `4m 05s` under an hour, else `1h 02m`.
@@ -326,7 +326,7 @@ pub(crate) fn bubble(text: &str, columns: u16, out: &mut Vec<Row>) {
 /// a correction, is still one call (`docs/events.md`, `usage_recorded`).
 /// `loop` folds the same lines for its own totals; `contract` holds no
 /// behaviour, so this client keeps its own fold of what it draws.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct Spend {
     calls: BTreeMap<GenerationId, UsageRecorded>,
 }
@@ -553,7 +553,7 @@ impl Group {
         }
         out.push((
             dim(format!("• {}", parts.join(" · "))),
-            Some(Target::Group(self.id)),
+            self.key.as_deref().map(|key| Target::Group(target_id(key))),
         ));
         // An open approval shows its call whatever the group's own state.
         if self.open || self.calls().any(|call| call.asking) {

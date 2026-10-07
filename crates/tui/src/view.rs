@@ -45,8 +45,12 @@ fn paragraph(line: Line<'_>) -> Paragraph<'_> {
     Paragraph::new(line).wrap(Wrap { trim: false })
 }
 
-/// How many rows `line` takes at `width`.
+/// How many rows `line` takes at `width`: one when it fits, without
+/// wrapping it.
 pub(crate) fn rows(line: Line<'_>, width: u16) -> usize {
+    if line.width() <= usize::from(width) {
+        return 1;
+    }
     paragraph(line).line_count(width).max(1)
 }
 
@@ -292,34 +296,28 @@ pub(crate) fn cursor(app: &App, area: Rect) -> Option<Position> {
 }
 
 /// Draws the conversation's visible rows, bottom-aligned while it is
-/// shorter than its area. Pushes a target over the rows shown of each line
-/// that opens something, then one over the cells "↓ New messages below"
-/// took, when drawn; the overlay's row is no line's target.
+/// shorter than its area. Only the pages that draw a visible row are read;
+/// a page not loaded draws blank rows. Pushes a target over each shown line
+/// that opens something, and over "↓ New messages below" when drawn.
 fn conversation_rows(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
-    let lines = app.lines();
-    let heights: Vec<usize> = lines
-        .iter()
-        .map(|line| rows(line.clone(), area.width))
-        .collect();
-    let total: usize = heights.iter().sum();
+    let total = app.scroll().1;
     let height = usize::from(area.height);
     let bottom_top = total.saturating_sub(height);
     let top = app.top().map_or(bottom_top, |top| top.min(bottom_top));
     let end = top.saturating_add(height);
     let shown = total.min(end).saturating_sub(top);
     let mut y = area.y.saturating_add(to_u16(height.saturating_sub(shown)));
-    let mut start = 0usize;
+    let (mut start, lines) = app.shown(top, height);
     let overlay = app.has_new() && area.height > 0;
     let last = area.bottom().saturating_sub(u16::from(overlay));
-    let mut opens = app.targets().into_iter().peekable();
     // A line wholly above `top` or below `end` shows no rows.
-    for (at, (line, rows)) in lines.into_iter().zip(heights).enumerate() {
+    for (line, rows, open) in lines {
         let next = start.saturating_add(rows);
         let skip = top.saturating_sub(start);
         let count = next.min(end).saturating_sub(start.max(top));
         let rect = Rect::new(area.x, y, area.width, to_u16(count));
         paragraph(line).scroll((to_u16(skip), 0)).render(rect, buf);
-        if let Some((_, open)) = opens.next_if(|(index, _)| *index == at) {
+        if let Some(open) = open {
             let height = rect.height.min(last.saturating_sub(rect.y));
             // A code block's copy target is its `copy` cells, not the line.
             let cells = app.copy_cells(open).map_or(rect, |cols| Rect {

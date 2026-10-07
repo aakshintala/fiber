@@ -441,6 +441,7 @@ impl App {
     /// a page it notes what covers the input box; once that differs,
     /// whatever opened or closed a panel, the recall waits no more.
     pub(super) fn settle(&mut self) {
+        self.settle_pages();
         if !self.history.waiting {
             return;
         }

@@ -231,24 +231,27 @@ fn the_loop_lists_searches_and_drops_the_worker_on_close() {
         wakeups: 0,
         files_out: Some(out),
         search: None,
+        stash: std::collections::VecDeque::new(),
         reader: None,
         pointer: crate::mouse::Pointer::default(),
         hover: true,
         var: Box::new(|_| None),
         copy_command: None,
     };
-    assert_eq!(lp.step(Input::Bytes(b"@".to_vec())), None);
+    // No hub: a frame fetches no history, so nothing arrives here.
+    let (_hub, idle) = mpsc::channel();
+    assert_eq!(lp.step(Input::Bytes(b"@".to_vec()), &idle), None);
     assert!(lp.search.is_some());
     let (generation, result) = next_result(&rx, "the listing's first search");
     assert_eq!(generation, lp.app.generation());
-    assert_eq!(lp.step(Input::Files { generation, result }), None);
+    assert_eq!(lp.step(Input::Files { generation, result }, &idle), None);
     let shown = lp.app.completions().map(|c| c.lines).unwrap_or_default();
     assert_eq!(shown, owned(&["a.txt", "sub/b.rs"]));
-    assert_eq!(lp.step(Input::Bytes(b"b".to_vec())), None);
+    assert_eq!(lp.step(Input::Bytes(b"b".to_vec()), &idle), None);
     let (generation, result) = next_result(&rx, "the search for b");
     assert_eq!(result, Ok(owned(&["sub/b.rs"])));
-    assert_eq!(lp.step(Input::Files { generation, result }), None);
-    assert_eq!(lp.step(Input::Bytes(b"\t".to_vec())), None);
+    assert_eq!(lp.step(Input::Files { generation, result }, &idle), None);
+    assert_eq!(lp.step(Input::Bytes(b"\t".to_vec()), &idle), None);
     assert_eq!(lp.app.draft(), "sub/b.rs ");
     assert!(lp.search.is_none());
 }

@@ -8,6 +8,7 @@
 //! announced it. A replayed log has no deltas and lands in the same places.
 
 use std::collections::HashMap;
+use std::hash::{DefaultHasher, Hash, Hasher};
 
 use contract::Envelope;
 use contract::events::{
@@ -30,8 +31,15 @@ mod handoff;
 /// One drawn line and what clicking it opens.
 pub(crate) type Row = (Line<'static>, Option<Target>);
 
+/// The same action names the same target in a live turn and a page replay.
+pub(crate) fn target_id(action: &str) -> usize {
+    let mut hasher = DefaultHasher::new();
+    action.hash(&mut hasher);
+    usize::try_from(hasher.finish()).unwrap_or(usize::MAX)
+}
+
 /// What the fold keeps across turns.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct Fold {
     /// The next target id.
     next: usize,
@@ -48,7 +56,7 @@ pub(crate) struct Fold {
 }
 
 impl Fold {
-    fn id(&mut self) -> usize {
+    pub(crate) fn id(&mut self) -> usize {
         let id = self.next;
         self.next = self.next.saturating_add(1);
         id
@@ -56,7 +64,7 @@ impl Fold {
 }
 
 /// One item inside a card.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) enum Entry {
     /// One text part of a reply, updated as deltas arrive.
     Reply {
@@ -74,9 +82,10 @@ pub(crate) enum Entry {
 }
 
 /// Everything between two pieces of assistant text.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct Group {
-    pub(crate) id: usize,
+    /// The first call's or thought's action, used as a stable target across reloads.
+    pub(crate) key: Option<String>,
     /// Whether its ledger is open.
     pub(crate) open: bool,
     pub(crate) first: u64,
@@ -89,7 +98,7 @@ pub(crate) struct Group {
 }
 
 /// One step's part of a group.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct Section {
     pub(crate) step: u64,
     pub(crate) thoughts: Vec<Thought>,
@@ -99,7 +108,7 @@ pub(crate) struct Section {
 }
 
 /// One thinking block.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct Thought {
     pub(crate) id: usize,
     pub(crate) action: String,
@@ -110,7 +119,7 @@ pub(crate) struct Thought {
 }
 
 /// One tool call.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct Call {
     pub(crate) id: usize,
     pub(crate) action: String,
@@ -129,7 +138,7 @@ pub(crate) struct Call {
 }
 
 /// A call still streaming: its message, position, name and raw text.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct Streaming {
     pub(crate) message: String,
     pub(crate) index: u32,
@@ -138,7 +147,7 @@ pub(crate) struct Streaming {
 }
 
 /// One turn's card.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct Turn {
     prompts: Vec<String>,
     pub(crate) entries: Vec<Entry>,
@@ -162,7 +171,7 @@ pub(crate) struct Turn {
 }
 
 /// How a turn ended.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum Ending {
     /// Its `turn_completed`.
     Done(TurnCompleted),
@@ -181,6 +190,20 @@ impl Turn {
         }
     }
 
+    /// The part of a running turn on a page that begins at its step `step`:
+    /// no prompt bubble, and the step count it has reached.
+    pub(crate) fn part(step: u64) -> Self {
+        Self {
+            step,
+            ..Self::default()
+        }
+    }
+
+    /// Ends the open group at a page cut.
+    pub(crate) fn end_group(&mut self) {
+        self.open_group = None;
+    }
+
     /// Whether the turn is still running.
     pub(crate) fn is_open(&self) -> bool {
         self.ended.is_none()
@@ -189,6 +212,22 @@ impl Turn {
     /// Closes the card.
     pub(crate) fn complete(&mut self, done: TurnCompleted, ts: u64) {
         self.ended = Some((Ending::Done(done), ts));
+    }
+
+    /// Restores the whole-turn totals on the page that holds its ending.
+    pub(crate) fn summary(
+        &mut self,
+        started: u64,
+        calls: u64,
+        spend: &format::Spend,
+        ended: Option<&(TurnCompleted, u64)>,
+    ) {
+        self.started = started;
+        self.calls = calls;
+        self.spend = spend.clone();
+        if let Some((done, ts)) = ended {
+            self.ended = Some((Ending::Done(done.clone()), *ts));
+        }
     }
 
     /// A steering message, in place; it does not end a group.
@@ -323,10 +362,10 @@ impl Turn {
             return false;
         }
         let step = self.step;
-        let id = fold.id();
         let group = self.group(ts, fold);
+        group.key.get_or_insert_with(|| action.to_owned());
         group.section(step).thoughts.push(Thought {
-            id,
+            id: target_id(action),
             action: action.to_owned(),
             started: ts,
             ..Thought::default()
@@ -381,7 +420,6 @@ impl Turn {
             })
             .min();
         let step = self.step;
-        let id = fold.id();
         let group = match announced.and_then(|(index, at)| Some(index).zip(self.groups.get_mut(at)))
         {
             Some((index, group)) => {
@@ -393,12 +431,13 @@ impl Turn {
             }
             None => self.group(ts, fold),
         };
+        group.key.get_or_insert_with(|| action.to_owned());
         let arguments = match requested.repair {
             Some(repair) => Value::Object(repair.repaired),
             None => requested.arguments,
         };
         group.section(step).calls.push(Call {
-            id,
+            id: target_id(action),
             action: action.to_owned(),
             name: requested.name,
             arguments,
@@ -450,7 +489,6 @@ impl Turn {
             Some(at) => at,
             None => {
                 self.groups.push(Group {
-                    id: fold.id(),
                     open: fold.ledgers,
                     first: ts,
                     ..Group::default()
@@ -471,16 +509,66 @@ impl Turn {
     }
 
     /// The card's groups.
+    pub(crate) fn groups(&self) -> impl Iterator<Item = &Group> {
+        self.groups.iter()
+    }
+
+    /// The card's groups, to change.
     pub(crate) fn groups_mut(&mut self) -> impl Iterator<Item = &mut Group> {
         self.groups.iter_mut()
     }
 
-    /// Toggles what `target` opens; false when it is not in this turn.
-    pub(crate) fn toggle(&mut self, target: Target) -> bool {
-        self.groups_mut().any(|group| group.toggle(target))
+    /// Toggles what `target` opens, returning its new state when found.
+    pub(crate) fn toggle(&mut self, target: Target) -> Option<bool> {
+        match target {
+            Target::Group(id) => {
+                let group = self
+                    .groups
+                    .iter_mut()
+                    .find(|group| group.key.as_deref().is_some_and(|key| target_id(key) == id))?;
+                group.open = !group.open;
+                Some(group.open)
+            }
+            Target::Thought(id) => {
+                let thought = self
+                    .groups
+                    .iter_mut()
+                    .flat_map(|group| group.sections.iter_mut())
+                    .flat_map(|section| section.thoughts.iter_mut())
+                    .find(|thought| thought.id == id)?;
+                thought.open = !thought.open;
+                Some(thought.open)
+            }
+            Target::Call(id) => {
+                let call = self
+                    .groups
+                    .iter_mut()
+                    .flat_map(|group| group.sections.iter_mut())
+                    .flat_map(|section| section.calls.iter_mut())
+                    .find(|call| call.id == id)?;
+                call.open = !call.open;
+                Some(call.open)
+            }
+            Target::Note(id) => self.entries.iter_mut().find_map(|entry| match entry {
+                Entry::Band(band) => band.toggle(Target::Note(id)),
+                Entry::Reply { .. } | Entry::Steer(_) | Entry::Group(_) | Entry::Aside(_) => None,
+            }),
+            Target::Orphans(id) => self.entries.iter_mut().find_map(|entry| match entry {
+                Entry::Aside(aside) => aside.toggle(Target::Orphans(id)),
+                Entry::Reply { .. } | Entry::Steer(_) | Entry::Group(_) | Entry::Band(_) => None,
+            }),
+            Target::Login | Target::Copy { .. } => None,
+        }
+    }
+
+    /// Sets what `target` opens to `open`; false when it is not in this turn.
+    pub(crate) fn set_open(&mut self, target: &Target, open: bool) -> bool {
+        self.groups
+            .iter_mut()
+            .any(|group| group.set_open(target, open))
             || self.entries.iter_mut().any(|entry| match entry {
-                Entry::Aside(aside) => aside.toggle(target),
-                Entry::Band(band) => band.toggle(target),
+                Entry::Aside(aside) => aside.set_open(target, open),
+                Entry::Band(band) => band.set_open(target, open),
                 Entry::Reply { .. } | Entry::Steer(_) | Entry::Group(_) => false,
             })
     }
@@ -743,24 +831,28 @@ impl Group {
             .flat_map(|section| section.thoughts.iter())
     }
 
-    fn toggle(&mut self, target: Target) -> bool {
+    fn set_open(&mut self, target: &Target, open: bool) -> bool {
         let flag = match target {
-            Target::Group(id) => (self.id == id).then_some(&mut self.open),
+            Target::Group(id) => self
+                .key
+                .as_deref()
+                .is_some_and(|key| target_id(key) == *id)
+                .then_some(&mut self.open),
             Target::Thought(id) => self
                 .sections
                 .iter_mut()
                 .flat_map(|section| section.thoughts.iter_mut())
-                .find(|thought| thought.id == id)
+                .find(|thought| thought.id == *id)
                 .map(|thought| &mut thought.open),
             Target::Call(id) => self
                 .sections
                 .iter_mut()
                 .flat_map(|section| section.calls.iter_mut())
-                .find(|call| call.id == id)
+                .find(|call| call.id == *id)
                 .map(|call| &mut call.open),
             Target::Login | Target::Note(_) | Target::Orphans(_) | Target::Copy { .. } => None,
         };
-        flag.map(|open| *open = !*open).is_some()
+        flag.map(|flag| *flag = open).is_some()
     }
 
     /// Whether the group holds calls or failed model calls, and so a

@@ -3,7 +3,9 @@
 //! [`run`] sets the injected tty up, draws the first frame, then starts the
 //! threads that feed one loop: terminal bytes, hub lines and resizes. The
 //! loop's only wait is a channel receive with no timeout, so nothing runs
-//! while nothing happens.
+//! while nothing happens. A frame that needs a page of history it dropped
+//! fetches it with `history` and waits for the answer on the same channel
+//! before it draws.
 
 mod app;
 mod approvals;
@@ -19,23 +21,28 @@ mod keys;
 mod link;
 mod markdown;
 mod mouse;
+mod pages;
 mod shell;
 mod slash;
 mod term;
 mod turn;
 mod view;
+mod window;
 
+use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{self, PipeReader, PipeWriter};
+use std::ops::RangeInclusive;
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread;
+use std::time::Duration;
 
 use contract::clock::Clock;
-use contract::{Envelope, HubLine, SessionId};
+use contract::{Envelope, HubLine, Seq, SessionId};
 use ratatui::backend::{Backend, ClearType, CrosstermBackend, WindowSize};
 use ratatui::buffer::{Buffer, Cell};
 use ratatui::layout::{Position, Rect, Size};
@@ -43,7 +50,7 @@ use ratatui::{Terminal, TerminalOptions, Viewport};
 use signal_hook::consts::{SIGINT, SIGQUIT, SIGWINCH};
 use signal_hook::iterator::Signals;
 
-use crate::app::{App, Effect};
+use crate::app::{App, Effect, mint, session_command};
 use crate::keys::{Button, Event, MouseKind, Parser, Reply};
 use crate::link::Line;
 use crate::mouse::{Pointer, Target};
@@ -123,6 +130,7 @@ pub fn run(
         wakeups: 0,
         files_out: None,
         search: None,
+        stash: VecDeque::new(),
         reader: None,
         pointer: Pointer::default(),
         hover,
@@ -249,6 +257,167 @@ fn fold(events: &str, width: u16, height: u16) -> Result<App, String> {
         app.on_line(Line::Session(envelope));
     }
     Ok(app)
+}
+
+/// Opens `events`, one envelope per line as one session's stream, at
+/// `width` by `height` through the terminal's own paging, with `history`
+/// answered from the events in memory as the hub answers from the log. The
+/// lines after the last `turn_completed` are a turn still running: the
+/// rest is opened in one pass, then the jig pages to the top, jumps across
+/// the session, changes the width, and appends the running turn one line a
+/// frame, and reports what it measured. The `paging` jig prints it
+/// (`docs/testing.md`, "Jigs").
+pub fn measure_paging(
+    events: &str,
+    width: u16,
+    height: u16,
+    clock: Arc<dyn Clock>,
+) -> Result<String, String> {
+    const JUMPS: usize = 20;
+    let started = clock.now();
+    // The running turn follows the last `turn_completed`, by non-empty line.
+    let running = events
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .enumerate()
+        .filter_map(|(at, line)| {
+            line.contains(r#""kind":"turn_completed""#)
+                .then_some(at.saturating_add(1))
+        })
+        .last()
+        .unwrap_or(0);
+    let mut paging = Paging {
+        app: App::new(PathBuf::new()),
+        log: Vec::new(),
+        area: Rect::new(0, 0, width, height),
+        clock: Arc::clone(&clock),
+        most: 0,
+    };
+    paging.app.set_size(width, height);
+    let (mut turns, mut calls) = (0usize, 0usize);
+    let mut tail = Vec::new();
+    for (at, line) in events
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .enumerate()
+    {
+        let envelope: Envelope = serde_json::from_str(line)
+            .map_err(|error| format!("line {}: {error}", at.saturating_add(1)))?;
+        if let Some(seq) = envelope.seq {
+            paging.log.push((seq, line));
+        }
+        if at >= running {
+            tail.push(envelope);
+            continue;
+        }
+        if paging.app.session().is_none() {
+            paging.app.attach(envelope.session_id.clone());
+        }
+        turns = turns.saturating_add(usize::from(envelope.kind == "turn_started"));
+        calls = calls.saturating_add(usize::from(envelope.kind == "tool_call_requested"));
+        paging.app.on_line(Line::Session(envelope));
+        paging.most = paging.most.max(paging.app.pages().resident());
+    }
+    paging.frame()?;
+    let open = clock.now().saturating_duration_since(started);
+    let (mut loads, mut slowest_load) = (0usize, Duration::ZERO);
+    while paging.app.scroll().0 > 0 {
+        paging.app.on_key(keys::Key::PageUp, clock.now());
+        let (took, loaded) = paging.frame()?;
+        if loaded {
+            loads = loads.saturating_add(1);
+            slowest_load = slowest_load.max(took);
+        }
+    }
+    let total = paging.app.scroll().1;
+    let mut slowest_jump = Duration::ZERO;
+    // The furthest row jumped to: the jump targets reach the report, so
+    // the spread across the session is pinned, not just its timing.
+    let mut jumped = 0usize;
+    for at in 0..JUMPS {
+        jumped = total.saturating_mul(at) / JUMPS;
+        paging.app.jump(jumped);
+        slowest_jump = slowest_jump.max(paging.frame()?.0);
+    }
+    let mut slowest_width = Duration::ZERO;
+    for wide in [width.saturating_sub(1), width] {
+        paging.app.set_size(wide, height);
+        slowest_width = slowest_width.max(paging.frame()?.0);
+    }
+    paging.app.on_key(keys::Key::End, clock.now());
+    paging.frame()?;
+    let pages_before = paging.app.pages().index().pages().len();
+    paging.most = 0;
+    let mut slowest_append = Duration::ZERO;
+    let appended = tail.len();
+    for envelope in tail.drain(..) {
+        paging.app.on_line(Line::Session(envelope));
+        slowest_append = slowest_append.max(paging.frame()?.0);
+    }
+    let ms = |took: Duration| took.as_secs_f64() * 1000.0;
+    Ok(format!(
+        "lines: {}\nturns: {turns}\ncalls: {calls}\npages: {pages_before}\nrows: {total}\n\
+         open pass and first frame: {:.2} ms\n\
+         slowest frame that loaded pages: {:.2} ms, of {loads} paging up\n\
+         slowest jump frame: {:.2} ms, of {JUMPS} to row {jumped}\n\
+         slowest re-count at a new width: {:.2} ms\n\
+         slowest append frame: {:.2} ms, of {appended}; pages while appending: {} to {}, \
+         most resident {}\n",
+        paging.log.len(),
+        ms(open),
+        ms(slowest_load),
+        ms(slowest_jump),
+        ms(slowest_width),
+        ms(slowest_append),
+        pages_before,
+        paging.app.pages().index().pages().len(),
+        paging.most,
+    ))
+}
+
+/// The paging jig's terminal: the app, and the session's durable lines as
+/// the hub's log holds them, by `seq`.
+struct Paging<'a> {
+    app: App,
+    log: Vec<(Seq, &'a str)>,
+    area: Rect,
+    clock: Arc<dyn Clock>,
+    /// The most pages resident after any frame.
+    most: usize,
+}
+
+impl Paging<'_> {
+    /// One frame: loads what it needs from the log and draws. Returns how
+    /// long it took and whether it loaded a page.
+    fn frame(&mut self) -> Result<(Duration, bool), String> {
+        let started = self.clock.now();
+        let mut loaded = false;
+        while let Some(range) = self.app.needs().into_iter().next() {
+            let from = self.log.partition_point(|(seq, _)| seq < range.start());
+            let mut lines = Vec::new();
+            for (_, line) in self
+                .log
+                .iter()
+                .skip(from)
+                .take_while(|(seq, _)| range.contains(seq))
+            {
+                lines.push(serde_json::from_str(line).map_err(|error| error.to_string())?);
+            }
+            self.app.load(lines);
+            if self.app.needs().first() == Some(&range) {
+                return Err(format!(
+                    "the log holds no lines {}..={}",
+                    range.start().0,
+                    range.end().0
+                ));
+            }
+            loaded = true;
+        }
+        let mut buf = Buffer::empty(self.area);
+        view::render(&self.app, self.area, &mut buf, None);
+        self.most = self.most.max(self.app.pages().resident());
+        Ok((self.clock.now().saturating_duration_since(started), loaded))
+    }
 }
 
 /// One frame: the cells, and where the cursor shows, if anywhere.
@@ -394,6 +563,9 @@ struct Loop<B: Backend> {
     files_out: Option<Sender<Input>>,
     /// The `@` panel's search worker, while the panel is open.
     search: Option<files::Search>,
+    /// Inputs that arrived while a frame waited for history, handled next
+    /// in arrival order.
+    stash: VecDeque<Input>,
     /// The tty's reader, paused while the editor has the terminal.
     reader: Option<Reader>,
     /// The pointer's last cell and a pending click.
@@ -406,22 +578,36 @@ struct Loop<B: Backend> {
     copy_command: Option<Vec<String>>,
 }
 
+/// The most lines one `history` answer holds (`docs/invocation.md`,
+/// "Driver commands").
+const HISTORY_LINES: u64 = 256;
+
+/// What a lost connection fails a fetch with.
+const LOST: &str = "connection lost";
+
 impl<B: Backend> Loop<B> {
-    /// Handles inputs until one quits, or every sender is gone. The only
-    /// wait is `recv` with no timeout.
+    /// Handles inputs until one quits, or every sender is gone: those a
+    /// frame held while it waited first, then the channel's. The only wait
+    /// is `recv` with no timeout.
     fn run(&mut self, rx: &Receiver<Input>) -> i32 {
-        while let Ok(input) = rx.recv() {
+        loop {
+            let input = match self.stash.pop_front() {
+                Some(input) => input,
+                None => match rx.recv() {
+                    Ok(input) => input,
+                    Err(_) => return 0,
+                },
+            };
             self.wakeups = self.wakeups.saturating_add(1);
-            if let Some(code) = self.step(input) {
+            if let Some(code) = self.step(input, rx) {
                 return code;
             }
         }
-        0
     }
 
-    /// Handles one input and draws what changed. Returns the exit code
-    /// when the terminal quits.
-    fn step(&mut self, input: Input) -> Option<i32> {
+    /// Handles one input, loads the pages the frame needs, and draws what
+    /// changed. Returns the exit code when the terminal quits.
+    fn step(&mut self, input: Input, rx: &Receiver<Input>) -> Option<i32> {
         match input {
             Input::Bytes(bytes) => {
                 for event in self.parser.feed(&bytes) {
@@ -506,6 +692,7 @@ impl<B: Backend> Loop<B> {
         if !self.app.files_open() {
             self.search = None;
         }
+        self.page_in(rx);
         if self.screen.draw(&self.app, self.pointer.at).is_err() {
             return Some(1);
         }
@@ -537,6 +724,111 @@ impl<B: Backend> Loop<B> {
         let search = files::Search::spawn(move || files::list(&workspace), out.clone());
         search.search(self.app.generation(), String::new());
         self.search = Some(search);
+    }
+
+    /// Loads, one page at a time, every page the frame needs and does not
+    /// hold (`docs/tui.md`, "History and paging"). With no hub there is
+    /// nothing to ask, and the pages draw blank.
+    fn page_in(&mut self, rx: &Receiver<Input>) {
+        while let Some(range) = self.app.needs().into_iter().next() {
+            let Some(session) = self.app.session().cloned() else {
+                return;
+            };
+            if self.hub.is_none() {
+                return;
+            }
+            match self.fetch(rx, &session, &range) {
+                Ok(lines) => {
+                    self.app.load(lines);
+                    // An answer that folded nothing into the page would
+                    // leave it needed, and the frame asking forever.
+                    if self.app.needs().first() == Some(&range) {
+                        self.app
+                            .load_failed(&range, "the answer held none of its lines");
+                    }
+                }
+                Err(message) => self.app.load_failed(&range, &message),
+            }
+        }
+    }
+
+    /// Reads `range` with `history`, in commands of at most
+    /// [`HISTORY_LINES`] lines, each answered before the next is sent.
+    fn fetch(
+        &mut self,
+        rx: &Receiver<Input>,
+        session: &SessionId,
+        range: &RangeInclusive<Seq>,
+    ) -> Result<Vec<Envelope>, String> {
+        let mut lines = Vec::new();
+        let mut from = range.start().0;
+        while from <= range.end().0 {
+            let to = from.saturating_add(HISTORY_LINES - 1).min(range.end().0);
+            let id = mint();
+            let args = serde_json::json!({"from_seq": from, "to_seq": to});
+            let command = session_command(&id, "history", session, Some(args)).to_string();
+            let written = self
+                .hub
+                .as_ref()
+                .is_some_and(|hub| link::write_line(hub, &command).is_ok());
+            if !written {
+                self.lost();
+                return Err(LOST.to_owned());
+            }
+            let answer = self.answer(rx, &id)?;
+            let Some(last) = answer.last().and_then(|line| line.seq) else {
+                break;
+            };
+            from = last.0.saturating_add(1);
+            lines.extend(answer);
+        }
+        Ok(lines)
+    }
+
+    /// Waits for the answer to command `id`, holding every other input for
+    /// after the frame. A lost connection ends the wait.
+    fn answer(&mut self, rx: &Receiver<Input>, id: &str) -> Result<Vec<Envelope>, String> {
+        loop {
+            let Ok(input) = rx.recv() else {
+                self.lost();
+                return Err(LOST.to_owned());
+            };
+            match input {
+                Input::Hub(Line::Session(line)) if answers(&line, id) => {
+                    return if line.kind == "command_accepted" {
+                        line.payload
+                            .get("result")
+                            .and_then(|result| result.get("lines"))
+                            .cloned()
+                            .and_then(|lines| serde_json::from_value(lines).ok())
+                            .ok_or_else(|| "the answer could not be read".to_owned())
+                    } else {
+                        Err(line
+                            .payload
+                            .get("message")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or("rejected")
+                            .to_owned())
+                    };
+                }
+                Input::Disconnected => {
+                    self.lost();
+                    return Err(LOST.to_owned());
+                }
+                other @ (Input::Bytes(_)
+                | Input::Hub(_)
+                | Input::Connected(..)
+                | Input::ConnectFailed(_)
+                | Input::Resize
+                | Input::Files { .. }) => self.stash.push_back(other),
+            }
+        }
+    }
+
+    /// The connection ended during a fetch: nothing more is asked.
+    fn lost(&mut self) {
+        self.hang_up();
+        self.app.disconnected();
     }
 
     /// Writes command lines to the hub. A failed write hangs up: the
@@ -605,6 +897,16 @@ impl<B: Backend> Loop<B> {
             hub.shutdown(std::net::Shutdown::Both).unwrap_or(());
         }
     }
+}
+
+/// Whether `line` answers command `id`.
+fn answers(line: &Envelope, id: &str) -> bool {
+    matches!(line.kind.as_str(), "command_accepted" | "command_rejected")
+        && line
+            .payload
+            .get("command_id")
+            .and_then(serde_json::Value::as_str)
+            == Some(id)
 }
 
 /// The input reader's state, shared with the loop under one mutex.
@@ -786,6 +1088,10 @@ fn spawn_resize(mut signals: Signals, tx: Sender<Input>) {
 #[cfg(test)]
 #[path = "lib_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "loop_tests.rs"]
+mod loop_tests;
 
 #[cfg(test)]
 #[path = "lib_mouse_tests.rs"]

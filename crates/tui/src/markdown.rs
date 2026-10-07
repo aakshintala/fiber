@@ -48,7 +48,7 @@ impl Rendered {
 
 /// One reply's text and its render, kept until the text changes or the
 /// render is wanted at another width.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct Reply {
     text: String,
     id: usize,
