@@ -313,9 +313,20 @@ fn summary_then_full_folds_the_stream_and_counts_in_clients() {
                 log.append(&step(), None, None).unwrap();
             }
             log.append(&status("one"), None, None).unwrap();
+            log.append(&extensions(), None, None).unwrap();
+            // An upgrade does not seed the latest steering queue.
+            log.append(
+                &Event::SteeringQueue(contract::events::SteeringQueue {
+                    messages: Vec::new(),
+                }),
+                None,
+                None,
+            )
+            .unwrap();
             let client = Client::connect(&socket).unwrap();
             subscribe(&client, "c_a_sub", "summary");
             assert_eq!(kind(&next(&client)), "session_status");
+            assert_eq!(kind(&next(&client)), "extensions_loaded");
             send(
                 &client,
                 r#"{"id":"c_a_up","command":"subscribe","args":{"level":"full"}}"#,
@@ -328,14 +339,15 @@ fn summary_then_full_folds_the_stream_and_counts_in_clients() {
                     "step_started",
                     "step_started",
                     "step_started",
+                    "extensions_loaded",
                     "clients",
                     "session_status",
                 ],
                 "{lines:?}"
             );
             assert_eq!(command_id(&lines[0]), Some("c_a_up"));
-            assert_eq!(seqs(&lines[1..4]), vec![0, 1, 2]);
-            assert_eq!(count(&lines[4]), 1);
+            assert_eq!(seqs(&lines[1..6]), vec![0, 1, 2, 3]);
+            assert_eq!(count(&lines[5]), 1);
             tx.send(client).unwrap();
             Ok(())
         })

@@ -13,7 +13,7 @@ use contract::events::{CommandAccepted, Event};
 use contract::{CommandId, Envelope, ErrorCode, SessionId};
 use log::Injector;
 
-use super::{Conn, control_line, queue_latest, reject};
+use super::{Conn, control_line, reject};
 
 /// The control kind the reader pushes to switch its writer: never written
 /// to the client.
@@ -110,11 +110,7 @@ pub(super) fn change(conn: &mut Conn, id: CommandId, level: SubscribeLevel) {
         };
         let cutoff = if summary { log.count() } else { 0 };
         let status = log.latest("session_status");
-        let (queue, extensions) = if summary {
-            (None, log.latest("extensions_loaded"))
-        } else {
-            (log.latest("steering_queue"), None)
-        };
+        let extensions = log.latest("extensions_loaded");
         drop(log);
         let injector = watcher.injector();
         let ack = crate::session::envelope(
@@ -125,16 +121,16 @@ pub(super) fn change(conn: &mut Conn, id: CommandId, level: SubscribeLevel) {
                 result: None,
             }),
         );
-        let (prelude, latest, queued) = if summary {
+        let (prelude, latest) = if summary {
             let mut prelude = vec![ack];
             prelude.extend([status, extensions].into_iter().flatten());
-            (prelude, None, None)
+            (prelude, None)
         } else {
-            (vec![ack], status, queue)
+            (vec![ack], Some([status, extensions]))
         };
-        (watcher, injector, cutoff, prelude, latest, queued)
+        (watcher, injector, cutoff, prelude, latest)
     };
-    let (watcher, injector, cutoff, prelude, latest, queued) = prepared;
+    let (watcher, injector, cutoff, prelude, latest) = prepared;
     // The count changes before the writer can see the switch: the new
     // full watcher is registered, so an upgraded connection receives its
     // own `clients` line after the fold, and a downgrade's `clients` line
@@ -149,7 +145,11 @@ pub(super) fn change(conn: &mut Conn, id: CommandId, level: SubscribeLevel) {
         // Before the control line is published: otherwise the writer could
         // switch, and a pending acknowledgement could enter the new queue
         // ahead of the latest lines.
-        queue_latest(&injector, latest, queued);
+        if let Some(latest) = latest {
+            for line in latest.into_iter().flatten() {
+                injector.push_kept(line);
+            }
+        }
     }
     let switch = Switch {
         watcher,

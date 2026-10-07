@@ -18,8 +18,10 @@ use contract::events::{CommandAccepted, CommandRejected, CommandResult, Event};
 use contract::inbox::{Ack, Answer, Delivery, Message, Rejection};
 use contract::shapes::{ContentPart, Origin, Sender};
 use contract::{CommandId, Envelope, ErrorCode, SCHEMA_VERSION, SessionId};
-use log::Injector;
 use serde_json::{Map, Value};
+
+#[cfg(test)]
+use log::Injector;
 
 use crate::session::{self, Gate};
 
