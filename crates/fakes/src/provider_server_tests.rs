@@ -191,6 +191,51 @@ fn a_request_past_the_script_gets_the_fallback_or_the_default_500() {
     assert_eq!(get_status(&without), "500");
 }
 
+fn get_status_of(server: &ProviderServer, target: &str) -> String {
+    let mut stream = TcpStream::connect(server.addr).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    write!(stream, "GET {target} HTTP/1.1\r\nHost: localhost\r\n\r\n").unwrap();
+    let mut text = String::new();
+    stream.read_to_string(&mut text).unwrap();
+    text.split(' ').nth(1).unwrap().to_owned()
+}
+
+#[test]
+fn a_routed_response_answers_the_first_request_for_its_path_in_any_order() {
+    let server = ProviderServer::start_routed(
+        [
+            ("/a", Response::status(201, "")),
+            ("/b", Response::status(202, "")),
+        ],
+        Response::status(503, ""),
+    )
+    .unwrap();
+
+    assert_eq!(get_status_of(&server, "/b?x=1"), "202");
+    assert_eq!(get_status_of(&server, "/a"), "201");
+    // Each route answers once; a second request and an unrouted path get
+    // the fallback.
+    assert_eq!(get_status_of(&server, "/a"), "503");
+    assert_eq!(get_status_of(&server, "/c"), "503");
+}
+
+#[test]
+fn a_route_outranks_the_script_and_the_script_serves_unrouted_paths() {
+    let server = ProviderServer::start_routed(
+        [("/a", Response::status(201, ""))],
+        Response::status(503, ""),
+    )
+    .unwrap();
+    lock(&server.state)
+        .script
+        .push_back(Response::status(200, ""));
+
+    assert_eq!(get_status_of(&server, "/a"), "201");
+    assert_eq!(get_status_of(&server, "/z"), "200");
+}
+
 #[test]
 fn a_stall_sends_its_head_and_prefix_then_holds_until_the_client_closes() {
     use std::io::BufRead;
