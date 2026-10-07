@@ -46,7 +46,7 @@ fn endpoint(provider: &str, server: &ProviderServer) -> Endpoint {
         provider: provider.into(),
         model: "m".into(),
         base_url: format!("{}/v1", server.url()),
-        key: Some("sk-secret".into()),
+        key: Some(contract::Secret::new("sk-secret".into())),
         direct: true,
         ..Endpoint::default()
     }
@@ -94,7 +94,7 @@ fn refused_endpoint(provider: &str) -> Endpoint {
         provider: provider.into(),
         model: "m".into(),
         base_url: closed_port(),
-        key: Some("sk-secret".into()),
+        key: Some(contract::Secret::new("sk-secret".into())),
         direct: true,
         ..Endpoint::default()
     }

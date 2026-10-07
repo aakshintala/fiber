@@ -187,19 +187,16 @@ impl App {
     }
 
     /// ✕ on notice `id`.
-    #[cfg_attr(not(test), expect(dead_code, reason = "#682 clicks call it"))]
     pub(crate) fn dismiss_notice(&mut self, id: usize) {
         self.notices.dismiss(id);
     }
 
     /// A click on notice `id`: its whole text in the overlay.
-    #[cfg_attr(not(test), expect(dead_code, reason = "#682 clicks call it"))]
     pub(crate) fn open_notice(&mut self, id: usize) {
         self.notices.open(id);
     }
 
     /// A click on "+N more": every notice in the overlay.
-    #[cfg_attr(not(test), expect(dead_code, reason = "#682 clicks call it"))]
     pub(crate) fn open_more_notices(&mut self) {
         self.notices.open_all();
     }

@@ -201,13 +201,18 @@ impl App {
     }
 
     /// `select_steering` on the queued row at `index`.
-    #[cfg_attr(not(test), expect(dead_code, reason = "#682 clicks call it"))]
     pub(crate) fn select_steering(&mut self, index: usize) {
         self.steering.select(index, &mut self.draft);
     }
 
     /// `drop_steering` on the queued row at `index`.
-    #[cfg_attr(not(test), expect(dead_code, reason = "#682 clicks call it"))]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "no drawn drop target yet: docs/tui.md places none"
+        )
+    )]
     pub(crate) fn drop_steering(&mut self, index: usize) -> Effect {
         let row = self.steering.id_at(index);
         self.steer_drop(row.into_iter().collect())

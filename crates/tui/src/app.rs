@@ -31,6 +31,8 @@ mod steering;
 
 #[path = "app_commands.rs"]
 mod commands;
+#[path = "app_mouse.rs"]
+mod mouse;
 
 /// A line's payload as `$kind`; `None` when it does not parse, and the
 /// line is skipped.
@@ -398,10 +400,6 @@ impl App {
 
     /// For each line of [`Self::lines`] that opens something, its index and
     /// what it opens.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "#682 clicks and #683 focus call it")
-    )]
     pub(crate) fn targets(&self) -> Vec<(usize, Target)> {
         self.rows()
             .into_iter()
@@ -411,10 +409,6 @@ impl App {
     }
 
     /// Opens or closes what `target` names.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "#682 clicks and #683 focus call it")
-    )]
     pub(crate) fn open(&mut self, target: Target) {
         let asides = self.fold.asides.iter_mut().map(|(_, aside)| aside);
         if self.turns.iter_mut().any(|turn| turn.toggle(target))

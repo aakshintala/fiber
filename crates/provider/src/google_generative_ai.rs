@@ -65,7 +65,7 @@ impl Gemini {
         // (`docs/model-routing.md`, "Google Generative AI wire facts"); the
         // header keeps the key out of the URL.
         if let Some(key) = &endpoint.key {
-            headers.push(("x-goog-api-key".to_owned(), key.clone()));
+            headers.push(("x-goog-api-key".to_owned(), key.expose().to_owned()));
         }
         headers.extend(endpoint.headers.iter().cloned());
         if let Some(name) = &self.cache_key_header {

@@ -56,7 +56,7 @@ fn endpoint(server: &ProviderServer) -> Endpoint {
         provider: "opencode".into(),
         model: "muse-spark-1.3-contributor".into(),
         base_url: format!("{}/zen/go/v1", server.url()),
-        key: Some("sk-secret".into()),
+        key: Some(contract::Secret::new("sk-secret".into())),
         direct: true,
         ..Endpoint::default()
     }
