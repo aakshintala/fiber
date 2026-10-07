@@ -267,6 +267,8 @@ fn a_lowering_drains_a_lagged_writer_through_the_cutoff() {
             },
             delegates: 0,
             jobs: 0,
+            project: "-w".into(),
+            clients: 0,
         }),
         None,
         None,
