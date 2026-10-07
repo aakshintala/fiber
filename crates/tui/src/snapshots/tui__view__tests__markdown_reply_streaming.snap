@@ -1,0 +1,22 @@
+---
+source: crates/tui/src/view_tests.rs
+expression: "text(&buffer(&app, 40, 18))"
+---
+
+
+
+
+
+
+
+
+                                plan it
+Plan
+
+• read the file
+• write it
+
+rust                                copy
+1 │ fn main() {
+2 │     let x = 1;
+>

@@ -11,10 +11,14 @@ use ratatui::text::Line;
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 
 use crate::app::{App, QUIT_HINT};
+use crate::markdown::{Role, style};
 use crate::mouse::{self, Target, TargetId};
 
 /// The overlay shown while scrolled up once new output arrives.
 const NEW_BELOW: &str = "↓ New messages below";
+
+/// Shown on the conversation's top row after a copy.
+const COPIED: &str = "Copied";
 
 /// The approval panel's tint when a standing rule or review asked.
 /// debt: a fixed colour, not a theme role; upgrade when colour roles land
@@ -317,10 +321,16 @@ fn conversation_rows(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<
         paragraph(line).scroll((to_u16(skip), 0)).render(rect, buf);
         if let Some((_, open)) = opens.next_if(|(index, _)| *index == at) {
             let height = rect.height.min(last.saturating_sub(rect.y));
+            // A code block's copy target is its `copy` cells, not the line.
+            let cells = app.copy_cells(open).map_or(rect, |cols| Rect {
+                x: area.x.saturating_add(cols.start),
+                width: cols.end.saturating_sub(cols.start),
+                ..rect
+            });
             if height > 0 {
                 targets.push(Target {
                     id: TargetId::Line(open),
-                    rect: Rect { height, ..rect },
+                    rect: Rect { height, ..cells },
                 });
             }
         }
@@ -345,6 +355,12 @@ fn conversation_rows(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<
             id: TargetId::NewBelow,
             rect: Rect::new(x, row, end.saturating_sub(x), 1),
         });
+    }
+    if app.copied() && area.height > 0 {
+        let width = to_u16(COPIED.len());
+        let x = area.x.saturating_add(area.width.saturating_sub(width));
+        let shown = usize::from(area.width);
+        buf.set_stringn(x, area.y, COPIED, shown, style(Role::Accent));
     }
 }
 

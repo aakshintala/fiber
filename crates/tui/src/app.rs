@@ -32,6 +32,8 @@ mod steering;
 
 #[path = "app_commands.rs"]
 mod commands;
+#[path = "copy.rs"]
+mod copy;
 #[path = "history.rs"]
 mod history;
 #[path = "app_mouse.rs"]
@@ -97,6 +99,8 @@ pub(crate) enum Effect {
         /// What the editor opens.
         text: String,
     },
+    /// Copy this text to the clipboard.
+    Copy(String),
 }
 
 /// Which command the terminal sent and waits on.
@@ -141,6 +145,8 @@ pub(crate) enum Target {
     Note(usize),
     /// The jobs a resumed process marked orphaned.
     Orphans(usize),
+    /// A reply's `block`th code block's `copy` cells: they copy its code.
+    Copy { reply: usize, block: usize },
 }
 
 /// The terminal's state.
@@ -176,6 +182,8 @@ pub(crate) struct App {
     overlays: commands::Overlays,
     /// Prompt recall and the Ctrl+R panel.
     history: history::History,
+    /// "Copied" shows, from a click on `copy` to the next key or click.
+    copied: bool,
 }
 
 impl App {
@@ -202,6 +210,7 @@ impl App {
             name: None,
             overlays: commands::Overlays::default(),
             history: history::History::default(),
+            copied: false,
         }
     }
 
@@ -217,6 +226,7 @@ impl App {
     /// Hands one key to what is on top: the key map, the approval panel, a
     /// completion panel, then the input box.
     fn route_key(&mut self, key: Key, now: Instant) -> Effect {
+        self.copied = false;
         if key == Key::CtrlC {
             return self.on_ctrl_c(now);
         }
@@ -419,16 +429,6 @@ impl App {
     /// The conversation's lines, before wrapping.
     pub(crate) fn lines(&self) -> Vec<ratatui::text::Line<'static>> {
         self.rows().into_iter().map(|(line, _)| line).collect()
-    }
-
-    /// For each line of [`Self::lines`] that opens something, its index and
-    /// what it opens.
-    pub(crate) fn targets(&self) -> Vec<(usize, Target)> {
-        self.rows()
-            .into_iter()
-            .enumerate()
-            .filter_map(|(at, (_, target))| target.map(|target| (at, target)))
-            .collect()
     }
 
     /// Opens or closes what `target` names.

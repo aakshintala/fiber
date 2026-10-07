@@ -759,6 +759,7 @@ fn targets_name_the_lines_they_open() {
         .map(|(_, target)| match target {
             Target::Group(id) | Target::Call(id) | Target::Thought(id) => *id,
             Target::Note(id) | Target::Orphans(id) => *id,
+            Target::Copy { reply, .. } => *reply,
             Target::Login => usize::MAX,
         })
         .collect();

@@ -8,13 +8,16 @@
 mod app;
 mod approvals;
 mod bindings;
+mod clipboard;
 mod editor;
 mod files;
 mod format;
+mod highlight;
 mod input;
 mod keymap;
 mod keys;
 mod link;
+mod markdown;
 mod mouse;
 mod shell;
 mod slash;
@@ -41,7 +44,7 @@ use signal_hook::consts::{SIGINT, SIGQUIT, SIGWINCH};
 use signal_hook::iterator::Signals;
 
 use crate::app::{App, Effect};
-use crate::keys::{Event, Parser, Reply};
+use crate::keys::{Button, Event, MouseKind, Parser, Reply};
 use crate::link::Line;
 use crate::mouse::{Pointer, Target};
 
@@ -124,6 +127,8 @@ pub fn run(
         pointer: Pointer::default(),
         hover,
         var: Box::new(|name| std::env::var(name).ok()),
+        copy_command: clipboard::command(|name| std::env::var_os(name), clipboard::on_path)
+            .map(|argv| argv.into_iter().map(str::to_owned).collect()),
     };
     // The first frame waits on nothing: the queries are out, and nothing
     // reads the tty or the hub until it is drawn.
@@ -397,6 +402,8 @@ struct Loop<B: Backend> {
     hover: bool,
     /// Reads an environment variable: `$VISUAL` and `$EDITOR` for Ctrl+G.
     var: Var,
+    /// The system clipboard command a copy is piped to, beside OSC 52.
+    copy_command: Option<Vec<String>>,
 }
 
 impl<B: Backend> Loop<B> {
@@ -422,6 +429,11 @@ impl<B: Backend> Loop<B> {
                         Event::Key(key) => self.app.on_key(key, self.clock.now()),
                         Event::Edit(edit) => self.app.on_edit(edit),
                         Event::Mouse(mouse) => {
+                            // Every left click, on a target or not, clears
+                            // "Copied"; a click on `copy` sets it again.
+                            if mouse.kind == MouseKind::Press(Button::Left) {
+                                self.app.clear_copied();
+                            }
                             let clicked =
                                 self.pointer
                                     .on_mouse(&mouse, &self.screen.targets, self.hover);
@@ -435,6 +447,9 @@ impl<B: Backend> Loop<B> {
                     };
                     match effect {
                         Effect::None => {}
+                        Effect::Copy(text) => {
+                            clipboard::copy(self.tty.as_ref(), self.copy_command.as_deref(), text);
+                        }
                         Effect::Send(lines) => self.send(&lines),
                         Effect::Quit => return Some(0),
                         Effect::ListFiles => self.list_files(),

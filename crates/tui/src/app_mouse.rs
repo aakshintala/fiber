@@ -1,21 +1,24 @@
 //! What a click does to the terminal's state (`docs/tui.md`, "Mouse and
 //! hover").
 
-use super::{App, Effect};
+use super::{App, Effect, Target};
 use crate::keys::Key;
 use crate::mouse::TargetId;
 
 impl App {
     /// Handles a click on `target` (`docs/tui.md`, "Bindings"): the badge
     /// reopens the approval queue, "↓ New messages below" jumps to the end,
-    /// a conversation line opens or closes what it names, a steering row is
-    /// selected, its ✕ drops it, a notice opens whole, its ✕ dismisses it,
-    /// "+N more" lists the notices, and a paste token opens in the editor
-    /// as Ctrl+G on it does. A recall waiting for a page waits no more.
+    /// a conversation line opens or closes what it names, a code block's
+    /// `copy` copies its code, a steering row is selected, its ✕ drops
+    /// it, a notice opens whole, its ✕ dismisses it, "+N more" lists the
+    /// notices, and a paste token opens in the editor as Ctrl+G on it does.
+    /// A recall waiting for a page waits no more. A click clears "Copied".
     pub(crate) fn on_click(&mut self, target: TargetId) -> Effect {
         self.history.cancel();
+        self.copied = false;
         let effect = match target {
             TargetId::Badge => self.open_first(),
+            TargetId::Line(copy @ Target::Copy { .. }) => self.copy(copy),
             TargetId::Line(line) => {
                 self.open(line);
                 Effect::None

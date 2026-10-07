@@ -174,6 +174,7 @@ pub(super) fn new_loop<B: Backend>(
         pointer: crate::mouse::Pointer::default(),
         hover: true,
         var: Box::new(|_| None),
+        copy_command: None,
     };
     (lp, attached)
 }
@@ -1170,4 +1171,143 @@ fn ctrl_g_with_no_editor_says_so_and_the_loop_reads_on() {
     assert_eq!(code, 0);
     assert_eq!(lp.app.draft(), "a!");
     assert_eq!(lp.app.notice(), Some(crate::editor::NO_EDITOR));
+}
+
+#[test]
+fn a_copy_writes_osc_52_and_pipes_the_code_to_the_command() {
+    let pair = open();
+    let dir = fakes::TempDir::new("tui-copy");
+    let out = dir.path().join("copied").display().to_string();
+    let ready = fakes::children::Ready::new(dir.path());
+    let watchdog = fakes::Watchdog::matching(&out);
+    let tty = pair
+        .slave
+        .try_clone()
+        .unwrap_or_else(|err| panic!("dup: {err}"));
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), Some(tty));
+    let ready_path = ready.path().display().to_string();
+    lp.copy_command = Some(
+        [
+            "/bin/sh",
+            "-c",
+            "cat > \"$0\"; echo $$ > \"$1\"",
+            &out,
+            &ready_path,
+        ]
+        .map(str::to_owned)
+        .to_vec(),
+    );
+    let session = contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned());
+    lp.app.attach(session.clone());
+    let line = |kind: &str, payload: serde_json::Value, action: Option<&str>| {
+        Input::Hub(Line::Session(contract::Envelope {
+            kind: kind.to_owned(),
+            session_id: session.clone(),
+            ts: 0,
+            schema_version: contract::SCHEMA_VERSION,
+            turn_id: None,
+            action_id: action.map(|id| contract::ActionId(id.to_owned())),
+            seq: None,
+            payload: payload.as_object().cloned().unwrap_or_default(),
+        }))
+    };
+    let started = serde_json::json!({"input": [{"type": "message", "source": "driver",
+        "content": [{"type": "text", "text": "hi"}]}]});
+    let reply = serde_json::json!({"text": "```rust\nlet a = 1;\n```"});
+    feed(
+        &mut lp,
+        vec![
+            line("turn_started", started, None),
+            line("assistant_message_delta", reply, Some("a_1")),
+        ],
+    );
+    let shown = crate::view::text(lp.screen.terminal.backend().inner.buffer());
+    let row = shown
+        .lines()
+        .position(|line| line.ends_with("copy"))
+        .and_then(|row| u16::try_from(row).ok())
+        .unwrap_or_else(|| panic!("no copy target on\n{shown}"));
+    // SGR reports are 1-based. A wheel, a right click, hover, a left click
+    // off `copy` and a press on `copy` released elsewhere copy nothing.
+    let at = |button: u8, col: u16, row: u16, end: char| {
+        Input::Bytes(format!("\x1b[<{button};{};{}{end}", col + 1, row + 1).into_bytes())
+    };
+    feed(
+        &mut lp,
+        vec![
+            at(64, 57, row, 'M'),
+            at(2, 57, row, 'M'),
+            at(2, 57, row, 'm'),
+            at(35, 57, row, 'M'),
+            at(0, 10, row, 'M'),
+            at(0, 10, row, 'm'),
+            at(0, 57, row, 'M'),
+            at(0, 57, row + 1, 'm'),
+        ],
+    );
+    assert!(
+        !lp.app.copied(),
+        "a report other than a click on copy copied"
+    );
+    feed(&mut lp, vec![at(0, 57, row, 'M'), at(0, 57, row, 'm')]);
+    assert!(lp.app.copied());
+    // A left click off any target, here on blank cells, clears "Copied".
+    feed(&mut lp, vec![at(0, 2, 0, 'M'), at(0, 2, 0, 'm')]);
+    assert!(!lp.app.copied());
+    let osc = b"\x1b]52;c;bGV0IGEgPSAxOw==\x07";
+    assert_eq!(read_exact(&pair.main, osc.len(), "the OSC 52 bytes"), osc);
+    ready.wait(DEADLINE);
+    assert_eq!(
+        std::fs::read_to_string(&out).ok().as_deref(),
+        Some("let a = 1;")
+    );
+    watchdog.stand_down(DEADLINE);
+}
+
+#[test]
+fn a_non_left_press_keeps_copied_and_a_left_press_clears_it() {
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    let session = contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned());
+    lp.app.attach(session.clone());
+    let line = |kind: &str, payload: serde_json::Value, action: Option<&str>| {
+        Input::Hub(Line::Session(contract::Envelope {
+            kind: kind.to_owned(),
+            session_id: session.clone(),
+            ts: 0,
+            schema_version: contract::SCHEMA_VERSION,
+            turn_id: None,
+            action_id: action.map(|id| contract::ActionId(id.to_owned())),
+            seq: None,
+            payload: payload.as_object().cloned().unwrap_or_default(),
+        }))
+    };
+    let started = serde_json::json!({"input": [{"type": "message", "source": "driver",
+        "content": [{"type": "text", "text": "hi"}]}]});
+    let reply = serde_json::json!({"text": "```rust\nlet a = 1;\n```"});
+    feed(
+        &mut lp,
+        vec![
+            line("turn_started", started, None),
+            line("assistant_message_delta", reply, Some("a_1")),
+        ],
+    );
+    let shown = crate::view::text(lp.screen.terminal.backend().inner.buffer());
+    let row = shown
+        .lines()
+        .position(|line| line.ends_with("copy"))
+        .and_then(|row| u16::try_from(row).ok())
+        .unwrap_or_else(|| panic!("no copy target on\n{shown}"));
+    // SGR reports are 1-based.
+    let at = |button: u8, col: u16, row: u16, end: char| {
+        Input::Bytes(format!("\x1b[<{button};{};{}{end}", col + 1, row + 1).into_bytes())
+    };
+    // A left click on `copy` shows "Copied".
+    feed(&mut lp, vec![at(0, 57, row, 'M'), at(0, 57, row, 'm')]);
+    assert!(lp.app.copied());
+    // A right press on blank cells is not a click: "Copied" stays.
+    feed(&mut lp, vec![at(2, 2, 0, 'M'), at(2, 2, 0, 'm')]);
+    assert!(lp.app.copied());
+    // A left press on blank cells clears "Copied".
+    feed(&mut lp, vec![at(0, 2, 0, 'M'), at(0, 2, 0, 'm')]);
+    assert!(!lp.app.copied());
 }
