@@ -306,6 +306,19 @@ fn head_contents_other_than_the_title_are_dropped() {
 }
 
 #[test]
+fn a_head_start_tag_after_the_head_ended_is_ignored() {
+    // The HTML standard ignores a `head` start tag once the head has
+    // ended, so what follows it still shows, and its end tags still apply.
+    assert_eq!(to_markdown("<p>a<head></p>b"), "a\n\nb\n");
+    assert_eq!(to_markdown("<b>x<head></b>y"), "**x**y\n");
+    assert_eq!(to_markdown("<head></head><p>a<head></p>b"), "a\n\nb\n");
+    assert_eq!(to_markdown("<meta><p>a<head></p>b"), "a\n\nb\n");
+    assert_eq!(to_markdown("<head><title>T</title>x<head></p>y"), "# T\n\nxy\n");
+    // A first `head` start tag still opens it.
+    assert_eq!(to_markdown("<html><head><meta></p>x"), "x\n");
+}
+
+#[test]
 fn a_head_never_closed_ends_at_its_first_text() {
     // The HTML standard ends the head at the first text that is not
     // whitespace, as a browser shows it.
