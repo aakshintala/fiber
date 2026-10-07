@@ -663,3 +663,25 @@ fn no_home_no_lines() {
     let app = App::new(PathBuf::from("/w"));
     assert!(app.exit_lines().is_empty());
 }
+
+#[test]
+fn the_attached_idle_session_without_a_row_does_not_count() {
+    let mut app = home();
+    linked(&mut app);
+    app.attach(SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    let clock = fakes::clock::FakeClock::new();
+    assert_eq!(app.on_key(Key::CtrlC, clock.now()), Effect::None);
+    assert_eq!(app.on_key(Key::CtrlC, clock.now()), Effect::Quit);
+}
+
+#[test]
+fn the_attached_session_with_a_row_gets_one_line() {
+    let mut app = home();
+    linked(&mut app);
+    working(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.attach(SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    assert_eq!(
+        app.exit_lines(),
+        ["s_aaaaaaaaaaaaaaaa  fiber resume s_aaaaaaaaaaaaaaaa"]
+    );
+}

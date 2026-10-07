@@ -542,6 +542,30 @@ fn a_focused_row_below_the_fold_is_drawn_last() {
     assert_eq!(drawn.len(), 9);
     assert_eq!(drawn.last(), Some(&keys[9]));
     assert!(!drawn.contains(&keys[0]));
+    // One step reaches the row's ✕, and the list still ends there.
+    let mut buf = Buffer::empty(area);
+    let targets = render(&app, area, &mut buf, None);
+    app.drawn(&targets);
+    app.on_key(Key::Down, now);
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(crate::home::Spot::Stop(
+            keys[9]
+        )))
+    );
+    let mut buf = Buffer::empty(area);
+    let targets = render(&app, area, &mut buf, None);
+    let drawn: Vec<u64> = targets
+        .iter()
+        .filter_map(|target| {
+            if let crate::mouse::TargetId::Home(crate::home::Spot::Entry(key)) = target.id {
+                Some(key)
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(drawn.last(), Some(&keys[9]));
 }
 
 #[test]
@@ -616,6 +640,12 @@ fn home_rows_with_their_x() {
     app.on_line(status("s_aaaaaaaaaaaaaaaa", "fix the parser", live()));
     app.on_line(status("s_bbbbbbbbbbbbbbbb", "tidy docs", idle()));
     app.on_line(left("s_bbbbbbbbbbbbbbbb", "exited"));
+    // An unreadable row ends in no ✕.
+    let mut unreadable = status("s_cccccccccccccccc", "future work", live());
+    if let Line::Session(status) = &mut unreadable {
+        status.schema_version = contract::SCHEMA_VERSION + 1;
+    }
+    app.on_line(unreadable);
     insta::assert_snapshot!("home_rows_with_their_x", screen(&app, 80, 24));
 }
 

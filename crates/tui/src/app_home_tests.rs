@@ -2767,6 +2767,12 @@ fn a_stale_cascade_asks_again_with_the_new_set() {
         ))
         .is_empty()
     );
+    // One other session reads singular.
+    assert_eq!(
+        foot(&app),
+        "Delete fix the parser (s_0123456789abcdef) and 1 session that continues it: \
+        s_1111111111111111? It cannot be undone · enter delete all · esc keep"
+    );
     let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
         panic!("Enter deletes all");
     };
@@ -2865,5 +2871,122 @@ fn a_refused_cascade_delete_notes_the_row() {
     assert_eq!(
         foot(&app),
         "↓ the session list · F1 the key map · Ctrl+C twice to quit"
+    );
+}
+
+#[test]
+fn unreadable_rows_have_no_x() {
+    let mut app = home();
+    let (_, recent) = linked(&mut app);
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "fix the parser",
+        "/w",
+        "-w",
+        json!({"state": "streaming"}),
+    ));
+    let mut envelope = live(
+        "s_bbbbbbbbbbbbbbbb",
+        "tidy docs",
+        "/w",
+        "-w",
+        json!({"state": "streaming"}),
+    );
+    if let crate::link::Line::Session(status) = &mut envelope {
+        status.schema_version = contract::SCHEMA_VERSION + 1;
+    }
+    app.on_line(envelope);
+    app.on_line(accepted(
+        &recent,
+        json!({"sessions": [exited("s_cccccccccccccccc", "old work")]}),
+    ));
+    // A readable row ends in a ✕, live or exited; an unreadable one has
+    // none.
+    let rows: Vec<(String, bool)> = app
+        .home_screen()
+        .map(|screen| {
+            screen
+                .rows
+                .into_iter()
+                .map(|(_, line, has_x)| (line, has_x))
+                .collect()
+        })
+        .unwrap_or_default();
+    assert_eq!(rows.len(), 3);
+    assert!(rows[0].1);
+    assert!(!rows[1].1);
+    assert!(rows[2].1);
+}
+
+#[test]
+fn x_on_an_unreadable_row_says_so() {
+    let mut app = home();
+    linked(&mut app);
+    let mut envelope = status("s_aaaaaaaaaaaaaaaa");
+    if let crate::link::Line::Session(status) = &mut envelope {
+        status.schema_version = contract::SCHEMA_VERSION + 1;
+    }
+    app.on_line(envelope);
+    assert_eq!(click_stop(&mut app), Effect::None);
+    assert_eq!(
+        app.notice(),
+        Some("Cannot attach: this session's schema is newer than this terminal reads.")
+    );
+}
+
+#[test]
+fn enter_with_the_link_down_keeps_the_question() {
+    let mut app = home();
+    exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
+    click_stop(&mut app);
+    app.disconnected();
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Enter, now), Effect::None);
+    assert_eq!(
+        foot(&app),
+        "Delete old work (s_aaaaaaaaaaaaaaaa)? It cannot be undone · enter delete · esc keep"
+    );
+}
+
+#[test]
+fn an_accepted_close_changes_nothing() {
+    let mut app = home();
+    two_rows(&mut app);
+    let lines = stop(&mut app);
+    let close = lines[1]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("close id"));
+    assert!(
+        app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", close))
+            .is_empty()
+    );
+    assert_eq!(listed(&app), ["●  fix the parser", "✓  tidy docs"]);
+    assert_eq!(app.notice(), None);
+}
+
+#[test]
+fn backspace_with_the_box_focused_edits_the_draft() {
+    let mut app = home();
+    two_rows(&mut app);
+    drawn(&mut app);
+    type_text(&mut app, "x");
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Backspace, now), Effect::None);
+    assert!(app.input().expand().is_empty());
+    assert_eq!(
+        foot(&app),
+        "↓ the session list · F1 the key map · Ctrl+C twice to quit"
+    );
+}
+
+#[test]
+fn delete_edit_in_the_question_does_nothing() {
+    let mut app = home();
+    exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
+    click_stop(&mut app);
+    assert_eq!(app.on_edit(crate::keys::Edit::Delete), Effect::None);
+    assert_eq!(
+        foot(&app),
+        "Delete old work (s_aaaaaaaaaaaaaaaa)? It cannot be undone · enter delete · esc keep"
     );
 }
