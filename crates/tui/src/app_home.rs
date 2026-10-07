@@ -103,23 +103,20 @@ impl Prompt {
     }
 }
 
-/// A session opening from home: its subscribes, the last one whose
-/// acknowledgement ends the gate, and whether the same-level retry ran.
+/// A session opening from home: its last subscribe, whose
+/// acknowledgement ends the gate, and whether a same-level refusal of
+/// it may still retry once with `summary` then `full`.
 struct Opening {
     /// The session opening.
     session: SessionId,
-    /// Every subscribe id the open sent, the retry's included.
-    ids: Vec<String>,
     /// The last subscribe's id: only its rejection fails the open.
     ack: String,
-    /// The one-step retry already ran.
-    retried: bool,
+    /// A same-level refusal may still retry: a one-step open whose
+    /// retry has not run.
+    retry: bool,
 }
 
 impl App {
-    /// Stores the launch description as home, keying prompt history by its
-    /// project as the run argument did. The app keeps today's screen, so
-    /// the jigs and every existing app test stay byte-identical.
     /// Stores the launch description as home, keying prompt history by its
     /// project as the run argument did. The app keeps today's screen, so
     /// the jigs and every existing app test stay byte-identical.
@@ -1131,24 +1128,23 @@ impl App {
             .and_then(|home| home.subs.expected(&session));
         self.go_home();
         self.attach(session.clone());
-        let mut ids = Vec::new();
+        let levels = opening(expected);
+        let mut ack = String::new();
         let mut lines = Vec::new();
-        for level in opening(expected) {
+        for level in levels {
             let (id, line) = subscribe_line(&session, *level);
             if let Some(home) = self.home.as_mut() {
                 home.subs.sent(id.clone(), session.clone(), *level);
             }
-            ids.push(id);
+            ack = id;
             lines.push(line);
         }
         lines.push(self.ask_commands(&session));
-        let ack = ids.last().cloned().unwrap_or_default();
         if let Some(home) = self.home.as_mut() {
             home.opening = Some(Opening {
                 session,
-                ids,
                 ack,
-                retried: false,
+                retry: levels.len() == 1,
             });
         }
         Effect::Send(lines)
@@ -1209,9 +1205,7 @@ impl App {
             .home
             .as_ref()
             .and_then(|home| home.opening.as_ref())
-            .is_some_and(|opening| {
-                code == "invalid_arguments" && opening.ids.len() == 1 && !opening.retried
-            });
+            .is_some_and(|opening| code == "invalid_arguments" && opening.retry);
         if retry {
             let session = self
                 .home
@@ -1221,23 +1215,21 @@ impl App {
             let Some(session) = session else {
                 return Vec::new();
             };
-            let mut ids = Vec::new();
+            let mut ack = String::new();
             let mut lines = Vec::new();
             for level in [Level::Summary, Level::Full] {
                 let (id, line) = subscribe_line(&session, level);
                 if let Some(home) = self.home.as_mut() {
                     home.subs.sent(id.clone(), session.clone(), level);
                 }
-                ids.push(id);
+                ack = id;
                 lines.push(line);
             }
-            let ack = ids.last().cloned().unwrap_or_default();
             if let Some(home) = self.home.as_mut()
                 && let Some(opening) = home.opening.as_mut()
             {
-                opening.ids = ids;
                 opening.ack = ack;
-                opening.retried = true;
+                opening.retry = false;
             }
             return lines;
         }

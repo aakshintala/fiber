@@ -340,13 +340,13 @@ impl Sessions {
     /// The feed rows outside `project` scope hides, and of them how many
     /// wait on the person.
     pub(crate) fn hidden(&self, project: &str) -> (usize, usize) {
-        let hidden: Vec<&Row> = self
-            .feed
-            .iter()
-            .filter(|row| row.project != project)
-            .collect();
-        let waiting = hidden.iter().filter(|row| row.waiting.is_some()).count();
-        (hidden.len(), waiting)
+        let mut hidden = 0;
+        let mut waiting = 0;
+        for row in self.feed.iter().filter(|row| row.project != project) {
+            hidden += 1;
+            waiting += usize::from(row.waiting.is_some());
+        }
+        (hidden, waiting)
     }
 
     /// Whether an older `recent` page may exist: the last answer carried
@@ -403,6 +403,24 @@ impl Sessions {
     }
 }
 
+/// A `session_status` state as its row's glyph names it, with what it
+/// waits on: "approval: \<summary\>" or "question: \<summary\>".
+fn state_of(state: &SessionState) -> (State, Option<String>) {
+    match state {
+        SessionState::Streaming | SessionState::Tool { .. } => (State::Working, None),
+        SessionState::Retrying => (State::Retrying, None),
+        SessionState::Waiting { waiting } => {
+            let kind = match waiting.kind {
+                WaitingKind::Approval => "approval",
+                WaitingKind::Question => "question",
+            };
+            (State::Waiting, Some(format!("{kind}: {}", waiting.summary)))
+        }
+        SessionState::Jobs => (State::Jobs, None),
+        SessionState::Idle => (State::Idle, None),
+    }
+}
+
 /// A feed row from a `session_status` envelope. "Cannot read" is a newer
 /// `schema_version` than this terminal reads, or a payload that does not
 /// parse: the row is [`State::Unreadable`].
@@ -429,19 +447,7 @@ pub(crate) fn from_status(envelope: &Envelope) -> Row {
             note: None,
         };
     };
-    let (state, waiting) = match &status.state {
-        SessionState::Streaming | SessionState::Tool { .. } => (State::Working, None),
-        SessionState::Retrying => (State::Retrying, None),
-        SessionState::Waiting { waiting } => {
-            let kind = match waiting.kind {
-                WaitingKind::Approval => "approval",
-                WaitingKind::Question => "question",
-            };
-            (State::Waiting, Some(format!("{kind}: {}", waiting.summary)))
-        }
-        SessionState::Jobs => (State::Jobs, None),
-        SessionState::Idle => (State::Idle, None),
-    };
+    let (state, waiting) = state_of(&status.state);
     Row {
         key: 0,
         id: envelope.session_id.clone(),
@@ -477,21 +483,7 @@ pub(crate) fn recent_rows(result: &Value) -> Vec<Row> {
                     let (state, waiting, spend) = match &status {
                         None => (State::Idle, None, 0.0),
                         Some(status) => {
-                            let (state, waiting) = match &status.state {
-                                SessionState::Streaming | SessionState::Tool { .. } => {
-                                    (State::Working, None)
-                                }
-                                SessionState::Retrying => (State::Retrying, None),
-                                SessionState::Waiting { waiting } => {
-                                    let kind = match waiting.kind {
-                                        WaitingKind::Approval => "approval",
-                                        WaitingKind::Question => "question",
-                                    };
-                                    (State::Waiting, Some(format!("{kind}: {}", waiting.summary)))
-                                }
-                                SessionState::Jobs => (State::Jobs, None),
-                                SessionState::Idle => (State::Idle, None),
-                            };
+                            let (state, waiting) = state_of(&status.state);
                             (
                                 state,
                                 waiting,
