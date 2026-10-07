@@ -149,8 +149,7 @@ fn confirm(set_ids: &BTreeSet<&SessionId>, expect: &BTreeSet<&SessionId>) -> Res
     if set_ids == expect {
         return Ok(());
     }
-    let mut names: Vec<String> = set_ids.iter().map(|id| format!("`{}`", id.0)).collect();
-    names.sort();
+    let names: Vec<String> = set_ids.iter().map(|id| format!("`{}`", id.0)).collect();
     Err((
         ErrorCode::StaleRequest,
         format!(
