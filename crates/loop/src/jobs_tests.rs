@@ -1195,7 +1195,7 @@ fn close_with_a_job_running_gives_the_ending_notice_then_waits_for_the_job() {
     );
 
     // The loop is still there: the job's end starts a turn.
-    job.end.end(failed(&id));
+    (job.end.0)(failed(&id));
     let last = world.next_turn();
     assert_eq!(kinds(&last), one_step_with(&["job_completed"]));
     assert_eq!(
@@ -1225,7 +1225,7 @@ fn close_with_no_job_running_exits_with_no_notice() {
     let world = World::new(vec![Scripted::text("Done.")], Vec::new(), |_| Vec::new());
     let jobs = FakeJobs::new(world.home());
     let job = open_job(&jobs);
-    job.end.end(failed(&job.started.job_id.0));
+    (job.end.0)(failed(&job.started.job_id.0));
     // The end before the loop's inbox was wired sends nothing.
     let mut world = world.with_jobs(jobs.clone());
     world.send(prompt("Hello."));
@@ -1261,12 +1261,12 @@ fn the_ending_notice_is_given_once_even_when_another_job_starts() {
 
     let second_job = open_job(&jobs);
     let second_id = second_job.started.job_id.0.clone();
-    first_job.end.end(failed(&first_id));
+    (first_job.end.0)(failed(&first_id));
     let one = world.next_turn();
     assert_eq!(kinds(&one), one_step_with(&["job_completed"]));
     assert_notice(&one[2], &first_id);
 
-    second_job.end.end(failed(&second_id));
+    (second_job.end.0)(failed(&second_id));
     let two = world.next_turn();
     assert_eq!(kinds(&two), one_step_with(&["job_completed"]));
     assert_notice(&two[2], &second_id);
@@ -1415,7 +1415,7 @@ fn the_idle_delay_with_a_job_running_gives_the_jobs_check_once_and_never_exits()
         finished.try_recv(),
         Err(mpsc::TryRecvError::Empty)
     ));
-    job.end.end(failed(&id));
+    (job.end.0)(failed(&id));
     let turn = world.next_turn();
     assert_eq!(kinds(&turn), one_step_with(&["job_completed"]));
     // The idle delay starts once the job's turn is over and no job runs.
@@ -1476,7 +1476,7 @@ fn a_prompt_arms_the_jobs_check_again_from_when_it_was_taken() {
     clock.advance(IDLE);
     world.send(Delivery::Cancelled);
     assert_check(&world.next_turn(), &id);
-    job.end.end(failed(&id));
+    (job.end.0)(failed(&id));
     assert_eq!(kinds(&world.next_turn()), one_step_with(&["job_completed"]));
     assert!(clock.await_parked(rearmed + IDLE, DEADLINE));
     clock.advance(IDLE);
@@ -1531,7 +1531,7 @@ fn a_steer_in_the_check_turn_arms_the_check_again() {
     clock.advance(IDLE);
     world.send(Delivery::Cancelled);
     assert_check(&world.next_turn(), &id);
-    job.end.end(failed(&id));
+    (job.end.0)(failed(&id));
     assert_eq!(kinds(&world.next_turn()), one_step_with(&["job_completed"]));
     assert!(clock.await_parked(origin + IDLE * 3, DEADLINE));
     clock.advance(IDLE);
@@ -1569,7 +1569,7 @@ fn a_steer_while_idle_arms_the_check_again() {
     clock.advance(IDLE);
     world.send(Delivery::Cancelled);
     assert_check(&world.next_turn(), &id);
-    job.end.end(failed(&id));
+    (job.end.0)(failed(&id));
     assert_eq!(kinds(&world.next_turn()), one_step_with(&["job_completed"]));
     assert!(clock.await_parked(origin + IDLE * 3, DEADLINE));
     clock.advance(IDLE);
@@ -1612,11 +1612,11 @@ fn a_jobs_end_does_not_arm_the_check_again() {
     );
     // One job ends; its turn does not arm the check, so the other running
     // past another delay gives none.
-    first.end.end(failed(&one));
+    (first.end.0)(failed(&one));
     assert_eq!(kinds(&world.next_turn()), one_step_with(&["job_completed"]));
     clock.advance(IDLE + IDLE);
     world.send(Delivery::Cancelled);
-    second.end.end(failed(&two));
+    (second.end.0)(failed(&two));
     assert_eq!(kinds(&world.next_turn()), one_step_with(&["job_completed"]));
     assert!(clock.await_parked(origin + IDLE * 4, DEADLINE));
     clock.advance(IDLE);
@@ -1659,7 +1659,7 @@ fn with_no_idle_delay_a_job_running_gets_no_check() {
     let finished = world.spawn_run();
     clock.advance(IDLE * 10);
     world.send(Delivery::Cancelled);
-    job.end.end(failed(&id));
+    (job.end.0)(failed(&id));
     assert_eq!(kinds(&world.next_turn()), one_step_with(&["job_completed"]));
     world.send(Delivery::Close(ignore()));
     ran(&finished);
@@ -1798,7 +1798,7 @@ fn an_approval_wait_with_a_job_running_outlasts_the_idle_deadline() {
     ));
     assert_eq!(answer.recv_timeout(DEADLINE), Ok(false));
     // The job's end waits for the next step; the delay restarts from it.
-    job.end.end(failed(&id));
+    (job.end.0)(failed(&id));
     let restarted = origin + IDLE + Duration::from_secs(1) + IDLE;
     assert!(
         clock.await_parked(restarted, DEADLINE),
@@ -1927,7 +1927,7 @@ fn a_steer_in_a_turn_started_after_close_is_rejected_closing() {
     let ending = world.next_turn();
     assert_eq!(kinds(&ending), one_step_with(&["jobs_pending_notified"]));
     assert_eq!(ending_answer.recv_timeout(DEADLINE), Ok(false));
-    job.end.end(failed(&id));
+    (job.end.0)(failed(&id));
     let last = world.next_turn();
     assert_eq!(kinds(&last), one_step_with(&["job_completed"]));
     assert_eq!(job_answer.recv_timeout(DEADLINE), Ok(false));
@@ -2159,7 +2159,7 @@ fn a_batch_after_close_while_its_job_runs_starts_a_turn() {
     let woken = world.next_turn();
     assert_eq!(kinds(&woken), one_step_with(&["job_line"]));
     assert_eq!(woken[2].payload["lines"], "still going");
-    job.end.end(failed(&id));
+    (job.end.0)(failed(&id));
     let last = world.next_turn();
     assert_eq!(kinds(&last), one_step_with(&["job_completed"]));
     ran(&finished);
