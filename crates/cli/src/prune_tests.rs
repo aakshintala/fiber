@@ -38,6 +38,7 @@ fn args(older_than: Option<&str>, cascade: bool, dry_run: bool, yes: bool) -> Pr
         cascade,
         dry_run,
         yes,
+        force: false,
     }
 }
 

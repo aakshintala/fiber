@@ -1,6 +1,7 @@
 //! `fiber sessions prune` (`docs/invocation.md`, "Deleting and pruning"):
-//! deletes old exited sessions through the hub, and deletes old diagnostic
-//! logs and crash files, with `--dry-run`, `--yes` and the space freed.
+//! deletes old exited sessions through the hub, removes kept worktrees
+//! that hold nothing to lose, and deletes old diagnostic logs and crash
+//! files, with `--dry-run`, `--yes` and the space freed.
 
 use std::io::{self, BufReader, IsTerminal, Write};
 use std::path::Path;
@@ -13,6 +14,7 @@ use contract::shapes::Failure;
 
 mod diagnostics;
 mod sessions;
+mod worktrees;
 
 use crate::approve::{confirmed, say};
 use crate::sessions::Ask;
@@ -41,6 +43,9 @@ pub struct PruneArgs {
     pub dry_run: bool,
     /// Prunes without asking.
     pub yes: bool,
+    /// Removes a worktree even when removing it would lose something.
+    /// A worktree a running session works in is never removed.
+    pub force: bool,
 }
 
 /// `fiber sessions prune` in the current directory.
@@ -79,8 +84,8 @@ pub fn prune(
 }
 
 /// Runs prune for `home` and `workspace` at `now`: lists, asks unless
-/// `yes` or `dry_run`, deletes diagnostics then sessions, and prints the
-/// space freed. `--dry-run` never connects and never asks.
+/// `yes` or `dry_run`, deletes diagnostics, then worktrees, then sessions,
+/// and prints the space freed. `--dry-run` never connects and never asks.
 fn prune_run(
     home: &Path,
     workspace: &Path,
@@ -105,39 +110,55 @@ fn prune_run(
     let logs = old_diagnostics(&home.join("logs"), now);
     let crashes = old_diagnostics(&home.join("crashes"), now);
     let selected = sessions::select(home, workspace, older_than, args.cascade, now);
+    let mut planned = worktrees::select(home, workspace, args.force, now);
     let has_sessions = !selected.deletes.is_empty();
+    let has_worktrees = !planned.removals.is_empty();
     let has_diagnostics = !logs.is_empty() || !crashes.is_empty();
-    if !has_sessions && !has_diagnostics {
-        print_rows(out, &selected.rows, &logs, &crashes, now)?;
+    if !has_sessions && !has_worktrees && !has_diagnostics {
+        print_rows(out, &selected.rows, &planned.rows, &logs, &crashes, now)?;
         writeln!(out, "freed {}", format_size(0))
             .map_err(|e| failed(ErrorCode::IoFailed, format!("standard output: {e}")))?;
         return Ok(());
     }
-    let would_free =
-        session_listed_bytes(&selected.rows) + diag_bytes(&logs) + diag_bytes(&crashes);
+    let would_free = session_listed_bytes(&selected.rows)
+        + worktrees::listed_bytes(&planned)
+        + diag_bytes(&logs)
+        + diag_bytes(&crashes);
     if args.dry_run {
-        print_rows(out, &selected.rows, &logs, &crashes, now)?;
+        print_rows(out, &selected.rows, &planned.rows, &logs, &crashes, now)?;
         writeln!(out, "would free {}", format_size(would_free))
             .map_err(|e| failed(ErrorCode::IoFailed, format!("standard output: {e}")))?;
         return Ok(());
     }
-    print_rows(out, &selected.rows, &logs, &crashes, now)?;
+    print_rows(out, &selected.rows, &planned.rows, &logs, &crashes, now)?;
     if !ask.yes && !confirmed(PRUNE_PROMPT, PRUNE_NOBODY, ask.terminal, ask.input, ask.err)? {
         say(ask.err, "nothing deleted\n");
         return Ok(());
     }
     let removed_logs = remove_diagnostics(&logs);
     let removed_crashes = remove_diagnostics(&crashes);
-    let freed = removed_logs.freed + removed_crashes.freed;
-    let failures: Vec<(String, ErrorCode, String)> = removed_logs
+    let mut failures: Vec<(String, ErrorCode, String)> = removed_logs
         .failures
         .into_iter()
         .chain(removed_crashes.failures)
         .map(|(path, message)| (path, ErrorCode::IoFailed, message))
         .collect();
     let diag_total = logs.len() + crashes.len();
+    let removed_worktrees = worktrees::remove_planned(home, &mut planned, args.force, &mut |_| {});
+    let freed = removed_logs.freed + removed_crashes.freed + removed_worktrees.freed;
+    failures.extend(removed_worktrees.failures);
+    let worktree_total = removed_worktrees.total;
+    drop(planned);
     if !has_sessions {
-        return finish(out, ask.err, &selected.rows, freed, failures, diag_total);
+        return finish(
+            out,
+            ask.err,
+            &selected.rows,
+            freed,
+            failures,
+            diag_total,
+            worktree_total,
+        );
     }
     let stream = match connect() {
         Ok((stream, _)) => stream,
@@ -150,7 +171,14 @@ fn prune_run(
                 .map(|_| Err(failed(ErrorCode::IoFailed, format!("the hub: {e}"))))
                 .collect();
             return reconcile(
-                out, &selected, &results, freed, failures, diag_total, ask.err,
+                out,
+                &selected,
+                &results,
+                freed,
+                failures,
+                diag_total,
+                worktree_total,
+                ask.err,
             );
         }
     };
@@ -166,7 +194,14 @@ fn prune_run(
         ));
     }
     reconcile(
-        out, &selected, &results, freed, failures, diag_total, ask.err,
+        out,
+        &selected,
+        &results,
+        freed,
+        failures,
+        diag_total,
+        worktree_total,
+        ask.err,
     )
 }
 
@@ -185,11 +220,12 @@ fn in_repository(cwd: &Path) -> bool {
         .is_ok_and(|status| status.success())
 }
 
-/// Prints every row: sessions by id, then `logs/` then `crashes/` by file
-/// name, fields separated by two spaces.
+/// Prints every row: sessions by id, then worktrees by name, then `logs/`
+/// then `crashes/` by file name, fields separated by two spaces.
 fn print_rows(
     out: &mut dyn Write,
     sessions: &[sessions::SessionRow],
+    worktrees: &[worktrees::WorktreeRow],
     logs: &[OldFile],
     crashes: &[OldFile],
     now: SystemTime,
@@ -197,6 +233,9 @@ fn print_rows(
     let failed = |e: io::Error| failed(ErrorCode::IoFailed, format!("standard output: {e}"));
     for row in sessions {
         writeln!(out, "{}", session_line(row)).map_err(failed)?;
+    }
+    for row in worktrees {
+        writeln!(out, "{}", worktrees::worktree_line(row)).map_err(failed)?;
     }
     for file in logs {
         writeln!(out, "{}", diag_line("log", &file.path, file.bytes, now)).map_err(failed)?;
@@ -377,9 +416,13 @@ fn remove_diagnostics(files: &[OldFile]) -> DiagRemoved {
 /// has been answered: freed is listed minus remaining, and a row whose
 /// `delete` was not accepted and whose directory remains is a failure
 /// keeping the hub's code and message. `failures` already holds the
-/// diagnostics files that stayed, in path order. A failed hub connection
+/// diagnostics files and worktrees that stayed. A failed hub connection
 /// passes one error per delete, which reports every remaining directory
 /// with the connection error.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one hand-off of the reconcile: the rows, the hub answers and what already ran"
+)]
 fn reconcile(
     out: &mut dyn Write,
     selected: &sessions::Selected,
@@ -387,6 +430,7 @@ fn reconcile(
     diag_freed: u64,
     failures: Vec<(String, ErrorCode, String)>,
     diag_total: usize,
+    worktree_total: usize,
     err: &mut dyn Write,
 ) -> Result<(), Failure> {
     let mut freed = diag_freed;
@@ -447,7 +491,15 @@ fn reconcile(
             }
         }
     }
-    finish(out, err, &selected.rows, freed, failures, diag_total)
+    finish(
+        out,
+        err,
+        &selected.rows,
+        freed,
+        failures,
+        diag_total,
+        worktree_total,
+    )
 }
 
 /// Prints `freed`, and when any deletion failed the per-row stderr lines
@@ -460,6 +512,7 @@ fn finish(
     freed: u64,
     failures: Vec<(String, ErrorCode, String)>,
     diag_total: usize,
+    worktree_total: usize,
 ) -> Result<(), Failure> {
     writeln!(out, "freed {}", format_size(freed))
         .map_err(|e| failed(ErrorCode::IoFailed, format!("standard output: {e}")))?;
@@ -481,7 +534,8 @@ fn finish(
             )
         })
         .count()
-        + diag_total;
+        + diag_total
+        + worktree_total;
     let (_, code, _) =
         failures
             .first()

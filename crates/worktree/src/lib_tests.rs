@@ -9,6 +9,7 @@
 )]
 
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -186,11 +187,67 @@ fn a_main_worktree_is_not_a_worktree() {
 }
 
 #[test]
+fn a_foreign_gitdir_is_never_removed() {
+    // A `.git` file pointing at another repository is not one of the
+    // worktree's own, but git still reads it, so `inspect` reports a
+    // worktree. Removal is still safe: git refuses a path that is not a
+    // registered worktree, with `--force` too.
+    let holder = repo("worktree-foreign");
+    let elsewhere = fakes::TempDir::new("worktree-foreign-dir");
+    let path = elsewhere.path().join("wt");
+    fs::create_dir_all(&path).unwrap();
+    fs::write(path.join("precious.txt"), "precious").unwrap();
+    let gitdir = holder.path().join(".git");
+    fs::write(path.join(".git"), format!("gitdir: {}\n", gitdir.display())).unwrap();
+    let inspected = worktree_of(inspect(&path).unwrap());
+    assert!(remove(&path, &inspected, false).is_err());
+    assert!(remove(&path, &inspected, true).is_err());
+    assert_eq!(
+        fs::read_to_string(path.join("precious.txt")).unwrap(),
+        "precious"
+    );
+}
+
+#[test]
+fn an_unreadable_worktree_is_an_io_error() {
+    let home = fakes::TempDir::new("worktree-unreadable");
+    let path = home.path().join("wt");
+    fs::create_dir_all(&path).unwrap();
+    fs::write(path.join(".git"), "gitdir: /nonexistent-admin-dir/x\n").unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+    let err = inspect(&path).unwrap_err();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(matches!(err, Error::Io { .. }), "{err}");
+    assert_eq!(err.code(), ErrorCode::IoFailed);
+}
+
+#[test]
+fn a_git_that_cannot_execute_is_an_io_error() {
+    let home = repo("worktree-noexec");
+    let path = add(home.path(), "fiber/x", "wt");
+    let program = home.path().to_str().unwrap();
+    let err = inspect_with(program, &path).unwrap_err();
+    assert!(matches!(err, Error::Io { .. }), "{err}");
+    assert_eq!(err.code(), ErrorCode::IoFailed);
+}
+
+#[test]
 fn broken_metadata_is_a_git_error() {
     let home = fakes::TempDir::new("worktree-broken");
     let path = home.path().join("wt");
     fs::create_dir(&path).unwrap();
     fs::write(path.join(".git"), "gitdir: /nonexistent-admin-dir/x\n").unwrap();
+    let err = inspect(&path).unwrap_err();
+    assert!(matches!(err, Error::Git { .. }), "{err}");
+    assert_eq!(err.code(), ErrorCode::IoFailed);
+}
+
+#[test]
+fn a_corrupt_index_is_a_git_error() {
+    let home = repo("worktree-corrupt");
+    let path = add(home.path(), "fiber/x", "wt");
+    let admin = git(&path, &["rev-parse", "--absolute-git-dir"]);
+    fs::write(Path::new(&admin).join("index"), "garbage").unwrap();
     let err = inspect(&path).unwrap_err();
     assert!(matches!(err, Error::Git { .. }), "{err}");
     assert_eq!(err.code(), ErrorCode::IoFailed);

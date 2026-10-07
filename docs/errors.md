@@ -78,7 +78,7 @@ asked for the session.
 |---|---|---|
 | `usage` | the invocation or its environment is wrong: a bad flag, no prompt with stdin on a terminal, `fiber` without a tty, an empty or relative `FIBER_HOME`, `git` is not installed, `fiber ask --worktree` outside a git repository | 2 |
 | `config_invalid` | invalid JSON, a value of the wrong type, or one extension key set under both its full and short name in a configuration file (`docs/configuration.md`) | 1 |
-| `io_failed` | a filesystem failure: a log write or fsync, or a configuration or credential file that exists but cannot be read or written; the message names the path | 1 |
+| `io_failed` | a filesystem failure, or a `git` command on a worktree that failed: a log write or fsync, or a configuration or credential file that exists but cannot be read or written; the message names the path | 1 |
 | `log_corrupt` | a log line that cannot be encoded, or one read back that does not parse | 1 |
 | `no_model` | nothing chose a model, an installed provider lacks the named model, or no installed provider has a bare model id (`docs/model-routing.md`, "Naming a model") | 1 |
 | `model_ambiguous` | a bare model id matches models of two or more installed providers; the message lists every match (`docs/model-routing.md`, "Naming a model") | 1 |
@@ -282,7 +282,7 @@ the lines that carry it.
 | `indeterminate` | tool call, job | Fiber cannot tell whether the call completed |
 | `invalid_arguments` | tool call, driver command | the arguments failed the tool's schema or checks, or a driver command's `args` (`docs/invocation.md`, "Driver commands") |
 | `invalid_request` | model call, turn | the provider rejected the request for any other reason |
-| `io_failed` | exit | a filesystem failure: a log write or fsync, or a configuration or credential file that exists but cannot be read or written; the message names the path |
+| `io_failed` | exit | a filesystem failure, or a `git` command on a worktree that failed: a log write or fsync, or a configuration or credential file that exists but cannot be read or written; the message names the path |
 | `log_corrupt` | exit | a log line that cannot be encoded, or one read back that does not parse |
 | `mcp_cancel_requested` | tool call | a cancelled call the server may still act on |
 | `mcp_required_server_failed` | exit | a required MCP server failed to start |

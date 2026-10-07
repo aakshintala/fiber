@@ -163,7 +163,16 @@ fn run() -> i32 {
                 cascade,
                 dry_run,
                 yes,
-            } => sessions_prune(older_than, cascade, dry_run, yes, clock.as_ref(), fiber),
+                force,
+            } => sessions_prune(
+                older_than,
+                cascade,
+                dry_run,
+                yes,
+                force,
+                clock.as_ref(),
+                fiber,
+            ),
         },
         cli::Invocation::Run(Some(cli::Commands::Models(args))) => ::cli::models(
             args.search.as_deref(),
@@ -720,6 +729,7 @@ fn sessions_prune(
     cascade: bool,
     dry_run: bool,
     yes: bool,
+    force: bool,
     clock: &dyn contract::clock::Clock,
     fiber: Result<PathBuf, String>,
 ) -> i32 {
@@ -734,6 +744,7 @@ fn sessions_prune(
             cascade,
             dry_run,
             yes,
+            force,
         },
         clock,
         &mut connect,

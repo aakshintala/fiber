@@ -236,7 +236,8 @@ exceptions:
 - Installing, updating or fetching an extension runs the system `git`, so a
   person's SSH keys and credential helpers apply (`docs/extensions.md`,
   "Names"). Without it the command fails with `usage` and says to install git
-  (`docs/errors.md`).
+  (`docs/errors.md`). Creating and removing the git worktrees sessions run in
+  runs it too (`docs/architecture.md`).
 
 `grep` and `find` in the shell tool run Fiber's own search, not a system
 program (`docs/tools.md`, "Search").
