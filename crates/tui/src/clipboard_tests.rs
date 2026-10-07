@@ -67,6 +67,28 @@ fn reap(handle: JoinHandle<io::Result<ExitStatus>>) -> io::Result<ExitStatus> {
     }
 }
 
+/// Waits until the file at `path` exists, failing after [`DEADLINE`].
+/// The hung command creates its marker file first, which proves it has
+/// exec'd: the watchdog's scan then matches it.
+fn wait_for_marker(path: &str) {
+    let (done, finished) = mpsc::channel();
+    let path = path.to_owned();
+    std::thread::Builder::new()
+        .name("clipboard-wait".to_owned())
+        .spawn(move || {
+            // The park between polls reads no clock.
+            let (_, pace) = mpsc::channel::<()>();
+            while !std::path::Path::new(&path).exists() {
+                pace.recv_timeout(Duration::from_millis(1)).unwrap_or(());
+            }
+            done.send(()).unwrap_or(());
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    if finished.recv_timeout(DEADLINE).is_err() {
+        panic!("waited {DEADLINE:?} for the hung command to start");
+    }
+}
+
 /// A command line that writes its standard input to `out`.
 fn cat_to(out: &str) -> Vec<String> {
     ["/bin/sh", "-c", "cat > \"$0\"", out]
@@ -92,12 +114,15 @@ fn a_hung_command_holds_only_its_own_thread() {
     let dir = fakes::TempDir::new("tui-clipboard");
     let marker = dir.path().join("hung").display().to_string();
     let watchdog = fakes::Watchdog::matching(&marker);
-    let argv = ["/bin/sh", "-c", "sleep 3600; exit 1", &marker]
+    let argv = ["/bin/sh", "-c", ": > \"$0\"; sleep 3600; exit 1", &marker]
         .map(str::to_owned)
         .to_vec();
     let handle = pipe(argv, "x".to_owned()).unwrap_or_else(|err| panic!("pipe: {err}"));
     // pipe returned while the command still runs.
     assert!(!handle.is_finished());
+    // The command creates its marker file once it has exec'd; only then
+    // can the watchdog's scan match it.
+    wait_for_marker(&marker);
     // The watchdog kills the command, which ends the thread.
     drop(watchdog);
     let status = reap(handle).unwrap_or_else(|err| panic!("command: {err}"));

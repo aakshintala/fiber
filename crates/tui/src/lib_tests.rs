@@ -1263,3 +1263,51 @@ fn a_copy_writes_osc_52_and_pipes_the_code_to_the_command() {
     );
     watchdog.stand_down(DEADLINE);
 }
+
+#[test]
+fn a_non_left_press_keeps_copied_and_a_left_press_clears_it() {
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    let session = contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned());
+    lp.app.attach(session.clone());
+    let line = |kind: &str, payload: serde_json::Value, action: Option<&str>| {
+        Input::Hub(Line::Session(contract::Envelope {
+            kind: kind.to_owned(),
+            session_id: session.clone(),
+            ts: 0,
+            schema_version: contract::SCHEMA_VERSION,
+            turn_id: None,
+            action_id: action.map(|id| contract::ActionId(id.to_owned())),
+            seq: None,
+            payload: payload.as_object().cloned().unwrap_or_default(),
+        }))
+    };
+    let started = serde_json::json!({"input": [{"type": "message", "source": "driver",
+        "content": [{"type": "text", "text": "hi"}]}]});
+    let reply = serde_json::json!({"text": "```rust\nlet a = 1;\n```"});
+    feed(
+        &mut lp,
+        vec![
+            line("turn_started", started, None),
+            line("assistant_message_delta", reply, Some("a_1")),
+        ],
+    );
+    let shown = crate::view::text(lp.screen.terminal.backend().inner.buffer());
+    let row = shown
+        .lines()
+        .position(|line| line.ends_with("copy"))
+        .and_then(|row| u16::try_from(row).ok())
+        .unwrap_or_else(|| panic!("no copy target on\n{shown}"));
+    // SGR reports are 1-based.
+    let at = |button: u8, col: u16, row: u16, end: char| {
+        Input::Bytes(format!("\x1b[<{button};{};{}{end}", col + 1, row + 1).into_bytes())
+    };
+    // A left click on `copy` shows "Copied".
+    feed(&mut lp, vec![at(0, 57, row, 'M'), at(0, 57, row, 'm')]);
+    assert!(lp.app.copied());
+    // A right press on blank cells is not a click: "Copied" stays.
+    feed(&mut lp, vec![at(2, 2, 0, 'M'), at(2, 2, 0, 'm')]);
+    assert!(lp.app.copied());
+    // A left press on blank cells clears "Copied".
+    feed(&mut lp, vec![at(0, 2, 0, 'M'), at(0, 2, 0, 'm')]);
+    assert!(!lp.app.copied());
+}
