@@ -66,10 +66,16 @@ fn three_matches_report_that_count() {
 }
 
 #[test]
-fn an_overlapping_needle_is_counted_from_each_match_end() {
-    let applied = must("aaa", &[("aa", "X")]);
-    assert_eq!(applied.bytes, b"Xa");
+fn overlapping_copies_of_a_needle_count_separately() {
+    let err = edited("aaa", &[("aa", "X")]).unwrap_err();
+    assert_eq!(err, MatchError::Ambiguous { index: 0, count: 2 });
     let err = edited("aaaa", &[("aa", "X")]).unwrap_err();
+    assert_eq!(err, MatchError::Ambiguous { index: 0, count: 3 });
+}
+
+#[test]
+fn overlapping_copies_count_on_the_folded_pass_too() {
+    let err = edited("a\u{a0}a\u{a0}a\n", &[("a a", "X")]).unwrap_err();
     assert_eq!(err, MatchError::Ambiguous { index: 0, count: 2 });
 }
 
