@@ -11,15 +11,15 @@ use std::collections::HashMap;
 
 use contract::Envelope;
 use contract::events::{
-    CallStatus, FileChange, ReasoningCompleted, TextCompleted, TextDelta, ToolCallArgumentsDelta,
-    ToolCallCompleted, ToolCallRequested, TurnCompleted,
+    CallStatus, FileChange, InputItem, ReasoningCompleted, SteeringApplied, TextCompleted,
+    TextDelta, ToolCallArgumentsDelta, ToolCallCompleted, ToolCallRequested, TurnCompleted,
+    TurnStarted, UsageRecorded,
 };
-use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
 use serde_json::Value;
 
-use crate::app::{Target, read};
-use crate::format::{self, Kinds};
+use crate::app::{Target, read, text_of};
+use crate::format;
 
 /// One drawn line and what clicking it opens.
 pub(crate) type Row = (Line<'static>, Option<Target>);
@@ -55,59 +55,59 @@ enum Entry {
 /// Everything between two pieces of assistant text.
 #[derive(Debug)]
 pub(crate) struct Group {
-    id: usize,
+    pub(crate) id: usize,
     /// Whether its ledger is open.
     pub(crate) open: bool,
-    first: u64,
-    last: u64,
-    sections: Vec<Section>,
+    pub(crate) first: u64,
+    pub(crate) last: u64,
+    pub(crate) sections: Vec<Section>,
     /// Calls the model is still emitting.
-    streaming: Vec<Streaming>,
+    pub(crate) streaming: Vec<Streaming>,
 }
 
 /// One step's part of a group.
 #[derive(Debug)]
-struct Section {
-    step: u64,
-    thoughts: Vec<Thought>,
-    calls: Vec<Call>,
+pub(crate) struct Section {
+    pub(crate) step: u64,
+    pub(crate) thoughts: Vec<Thought>,
+    pub(crate) calls: Vec<Call>,
 }
 
 /// One thinking block.
 #[derive(Debug)]
-struct Thought {
-    id: usize,
-    action: String,
-    text: String,
-    started: u64,
-    ended: Option<u64>,
-    open: bool,
+pub(crate) struct Thought {
+    pub(crate) id: usize,
+    pub(crate) action: String,
+    pub(crate) text: String,
+    pub(crate) started: u64,
+    pub(crate) ended: Option<u64>,
+    pub(crate) open: bool,
 }
 
 /// One tool call.
 #[derive(Debug)]
-struct Call {
-    id: usize,
-    action: String,
-    name: String,
-    arguments: Value,
+pub(crate) struct Call {
+    pub(crate) id: usize,
+    pub(crate) action: String,
+    pub(crate) name: String,
+    pub(crate) arguments: Value,
     /// How it ended; `None` while it runs.
-    status: Option<CallStatus>,
-    changes: Vec<FileChange>,
+    pub(crate) status: Option<CallStatus>,
+    pub(crate) changes: Vec<FileChange>,
     /// What opening the call shows.
-    detail: String,
-    open: bool,
+    pub(crate) detail: String,
+    pub(crate) open: bool,
     /// A `permission_requested` for it is open.
-    asking: bool,
+    pub(crate) asking: bool,
 }
 
 /// A call still streaming: its message, position, name and raw text.
 #[derive(Debug)]
-struct Streaming {
-    message: String,
-    index: u32,
-    name: Option<String>,
-    text: String,
+pub(crate) struct Streaming {
+    pub(crate) message: String,
+    pub(crate) index: u32,
+    pub(crate) name: Option<String>,
+    pub(crate) text: String,
 }
 
 /// One turn's card.
@@ -473,14 +473,72 @@ impl Turn {
     }
 }
 
+/// Folds one line of the attached session's stream into `turns`; false
+/// when it changed no card.
+pub(crate) fn fold_line(turns: &mut Vec<Turn>, fold: &mut Fold, envelope: &Envelope) -> bool {
+    let action = envelope.action_id.as_ref().map(|id| id.0.as_str());
+    let ts = envelope.ts;
+    match envelope.kind.as_str() {
+        "turn_started" => read!(envelope, TurnStarted).is_some_and(|started| {
+            let prompts = started
+                .input
+                .iter()
+                .filter_map(|input| {
+                    if let InputItem::Message { content, .. } = input {
+                        Some(text_of(content))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            turns.push(Turn::new(prompts, ts));
+            true
+        }),
+        "turn_completed" => read!(envelope, TurnCompleted).is_some_and(|done| {
+            open(turns).is_some_and(|turn| {
+                turn.complete(done, ts);
+                true
+            })
+        }),
+        "usage_recorded" => read!(envelope, UsageRecorded).is_some_and(|line| {
+            // A line folds where its generation already is, so a late
+            // correction updates a closed card; else into the open turn.
+            let known = turns
+                .iter()
+                .rposition(|turn| turn.spend.holds(&line.generation_id));
+            let turn = match known {
+                Some(at) => turns.get_mut(at),
+                None => open(turns),
+            };
+            turn.is_some_and(|turn| {
+                turn.spend.record(&line);
+                true
+            })
+        }),
+        "steering_applied" => read!(envelope, SteeringApplied).is_some_and(|applied| {
+            open(turns).is_some_and(|turn| {
+                turn.steer(text_of(&applied.content));
+                true
+            })
+        }),
+        "step_started" => {
+            if let Some(turn) = open(turns) {
+                turn.step_started();
+            }
+            false
+        }
+        _ => action.is_some_and(|action| fold_action(turns, fold, envelope, action)),
+    }
+}
+
+/// The turn still running, if any.
+fn open(turns: &mut [Turn]) -> Option<&mut Turn> {
+    turns.last_mut().filter(|turn| turn.is_open())
+}
+
 /// Folds a line about one action into `turns`; false when it changed no
 /// card.
-pub(crate) fn fold_action(
-    turns: &mut [Turn],
-    fold: &mut Fold,
-    envelope: &Envelope,
-    action: &str,
-) -> bool {
+fn fold_action(turns: &mut [Turn], fold: &mut Fold, envelope: &Envelope, action: &str) -> bool {
     let ts = envelope.ts;
     // Completions may follow their turn's end, so they search back
     // through every card; streaming goes only to the open one.
@@ -581,13 +639,13 @@ impl Group {
             .find(|call| call.action == action)
     }
 
-    fn calls(&self) -> impl Iterator<Item = &Call> {
+    pub(crate) fn calls(&self) -> impl Iterator<Item = &Call> {
         self.sections
             .iter()
             .flat_map(|section| section.calls.iter())
     }
 
-    fn thoughts(&self) -> impl Iterator<Item = &Thought> {
+    pub(crate) fn thoughts(&self) -> impl Iterator<Item = &Thought> {
         self.sections
             .iter()
             .flat_map(|section| section.thoughts.iter())
@@ -615,149 +673,6 @@ impl Group {
     /// Whether the group holds calls, and so a ledger.
     pub(crate) fn has_calls(&self) -> bool {
         self.calls().next().is_some()
-    }
-
-    /// What its calls did, by kind, and how often the model thought.
-    fn kinds(&self) -> Kinds {
-        let mut kinds = Kinds::default();
-        let mut paths = Vec::new();
-        let mut edits = 0u64;
-        for call in self.calls() {
-            match format::kind(&call.name, &call.arguments) {
-                format::Kind::Read => kinds.read = kinds.read.saturating_add(1),
-                format::Kind::Search => kinds.searched = kinds.searched.saturating_add(1),
-                format::Kind::Ran => kinds.ran = kinds.ran.saturating_add(1),
-                format::Kind::Other => kinds.other = kinds.other.saturating_add(1),
-                format::Kind::Edit => {
-                    edits = edits.saturating_add(1);
-                    for change in &call.changes {
-                        kinds.added = kinds.added.saturating_add(change.added);
-                        kinds.removed = kinds.removed.saturating_add(change.removed);
-                        if !paths.contains(&&change.path) {
-                            paths.push(&change.path);
-                        }
-                    }
-                }
-            }
-        }
-        kinds.edited = if paths.is_empty() {
-            edits
-        } else {
-            paths.len() as u64
-        };
-        kinds.thoughts = self.thoughts().count() as u64;
-        kinds
-    }
-
-    /// Its lines. A finished group with no call is its thinking, one line
-    /// a block; otherwise a summary line, and the ledger when open.
-    fn rows(&self, running: bool, out: &mut Vec<Row>) {
-        if !running && !self.has_calls() {
-            for thought in self.thoughts() {
-                thought_rows(thought, "", out);
-            }
-            return;
-        }
-        let mut parts = Vec::new();
-        let kinds = self.kinds().summary();
-        if !kinds.is_empty() {
-            parts.push(kinds);
-        }
-        if running {
-            let flight: Vec<String> = self
-                .calls()
-                .filter(|call| call.status.is_none())
-                .map(|call| {
-                    format::label(&call.name, &format::summary(&call.name, &call.arguments))
-                })
-                .chain(
-                    self.streaming
-                        .iter()
-                        .map(|call| format::label(call.name.as_deref().unwrap_or("…"), &call.text)),
-                )
-                .collect();
-            if !flight.is_empty() {
-                parts.push(flight.join(", "));
-            }
-            if let Some(thought) = self.thoughts().filter(|t| t.ended.is_none()).last() {
-                parts.push(match format::heading(&thought.text, true) {
-                    Some(heading) => format!("Thinking: {heading}"),
-                    None => "Thinking".to_owned(),
-                });
-            }
-        } else {
-            parts.extend(format::seconds(self.last.saturating_sub(self.first)));
-        }
-        if parts.is_empty() {
-            return;
-        }
-        out.push((
-            format::dim(format!("• {}", parts.join(" · "))),
-            Some(Target::Group(self.id)),
-        ));
-        // An open approval shows its call whatever the group's own state.
-        if self.open || self.calls().any(|call| call.asking) {
-            self.ledger(out);
-        }
-    }
-
-    /// One row per call, split by step: the step's number in the gutter on
-    /// its first row, its thinking first.
-    fn ledger(&self, out: &mut Vec<Row>) {
-        for section in &self.sections {
-            let mut gutter = format!("{:>3} ", section.step);
-            for thought in &section.thoughts {
-                thought_rows(
-                    thought,
-                    &std::mem::replace(&mut gutter, GAP.to_owned()),
-                    out,
-                );
-            }
-            for call in &section.calls {
-                let mut row = format!(
-                    "{}{}",
-                    std::mem::replace(&mut gutter, GAP.to_owned()),
-                    format::label(&call.name, &format::summary(&call.name, &call.arguments))
-                );
-                let (added, removed) = call.changes.iter().fold((0u64, 0u64), |(a, r), c| {
-                    (a.saturating_add(c.added), r.saturating_add(c.removed))
-                });
-                if !call.changes.is_empty() {
-                    row.push_str(&format!(" +{added} −{removed}"));
-                }
-                match call.status {
-                    None => row.push_str(" · running"),
-                    Some(CallStatus::Completed) => {}
-                    Some(CallStatus::Failed) => row.push_str(" · failed"),
-                    Some(CallStatus::Denied) => row.push_str(" · denied"),
-                    Some(CallStatus::Cancelled) => row.push_str(" · cancelled"),
-                }
-                let line = if call.changes.is_empty() {
-                    format::dim(row)
-                } else {
-                    Line::styled(row, Style::default().add_modifier(Modifier::BOLD))
-                };
-                out.push((line, Some(Target::Call(call.id))));
-                if call.open {
-                    format::opened(&call.detail, GAP, out);
-                }
-            }
-        }
-    }
-}
-
-/// The gutter left blank.
-const GAP: &str = "    ";
-
-/// A thought's line after `gutter`, and its text when open.
-fn thought_rows(thought: &Thought, gutter: &str, out: &mut Vec<Row>) {
-    let span = thought
-        .ended
-        .map(|ended| ended.saturating_sub(thought.started));
-    let line = format::thought(gutter, &thought.text, span);
-    out.push((line, Some(Target::Thought(thought.id))));
-    if thought.open {
-        format::opened(&thought.text, &" ".repeat(gutter.len()), out);
     }
 }
 

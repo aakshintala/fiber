@@ -6,10 +6,16 @@
 //! stashes the draft and loads the row's text; clearing the selection puts
 //! the stash back. A selection is held by the row's `steer` command id, so
 //! a queue that reorders keeps it on the same message.
+//!
+//! A child of `app`, so the keys and commands that act on the queue sit
+//! here beside it.
 
 use contract::events::SteeringQueue;
 
+use super::{App, Effect, Kind, Link, mint, session_command};
 use crate::format;
+use crate::keys::Key;
+use serde_json::json;
 
 /// One queued message.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -170,6 +176,83 @@ impl Steering {
                 format::cut(&line, usize::from(width))
             })
             .collect()
+    }
+}
+
+impl App {
+    /// ⌥↑, ⌥↓ and ⌥X: `select_steering` and `drop_steering`.
+    pub(super) fn steering_key(&mut self, key: &Key) -> Effect {
+        if *key == Key::AltX {
+            let rows = self.steering.to_drop();
+            return self.steer_drop(rows);
+        }
+        if *key == Key::AltUp {
+            self.steering.up(&mut self.draft);
+        } else {
+            self.steering.down(&mut self.draft);
+        }
+        Effect::None
+    }
+
+    /// The steering queue's rows, oldest first.
+    pub(crate) fn steering(&self) -> Vec<String> {
+        self.steering.lines(self.width)
+    }
+
+    /// `select_steering` on the queued row at `index`.
+    #[cfg_attr(not(test), expect(dead_code, reason = "#682 clicks call it"))]
+    pub(crate) fn select_steering(&mut self, index: usize) {
+        self.steering.select(index, &mut self.draft);
+    }
+
+    /// `drop_steering` on the queued row at `index`.
+    #[cfg_attr(not(test), expect(dead_code, reason = "#682 clicks call it"))]
+    pub(crate) fn drop_steering(&mut self, index: usize) -> Effect {
+        let row = self.steering.id_at(index);
+        self.steer_drop(row.into_iter().collect())
+    }
+
+    /// Enter with a queued row selected: `steer_drop` for the row, then
+    /// `steer` with the edited text; the draft from before the selection
+    /// comes back.
+    pub(super) fn amend(&mut self) -> Effect {
+        let (Some(session), Link::Up) = (self.session().cloned(), self.link) else {
+            return Effect::None;
+        };
+        let Some((row, stash)) = self.steering.amend() else {
+            return Effect::None;
+        };
+        let Effect::Send(mut lines) = self.steer_drop(vec![row]) else {
+            return Effect::None;
+        };
+        let id = mint();
+        let text = std::mem::replace(&mut self.draft, stash);
+        let content = json!({"content": [{"type": "text", "text": text}]});
+        lines.push(session_command(&id, "steer", &session, Some(content)).to_string());
+        self.pending.insert(id, (Kind::Steer, text));
+        Effect::Send(lines)
+    }
+
+    /// One `steer_drop` per command id in `rows`; nothing when there are
+    /// none, or no connection to send them on.
+    fn steer_drop(&mut self, rows: Vec<String>) -> Effect {
+        let Some(session) = self.session().cloned() else {
+            return Effect::None;
+        };
+        if rows.is_empty() || self.link != Link::Up {
+            return Effect::None;
+        }
+        let lines = rows
+            .into_iter()
+            .map(|row| {
+                let id = mint();
+                let args = json!({ "command_id": row });
+                let line = session_command(&id, "steer_drop", &session, Some(args));
+                self.pending.insert(id, (Kind::SteerDrop, String::new()));
+                line.to_string()
+            })
+            .collect();
+        Effect::Send(lines)
     }
 }
 

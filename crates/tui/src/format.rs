@@ -1,7 +1,8 @@
 //! The figures a card prints: durations, token counts, money and the
-//! usage behind them, the ▣ line, the kinds a group's summary line counts,
-//! a call's arguments in brief, thinking headings and the prompt bubble (`docs/tui.md`, "Turns", "Tool groups and the ledger",
-//! "Thinking").
+//! usage behind them, the ▣ line, a tool group's summary line and ledger,
+//! the kinds a summary line counts, a call's arguments in brief, thinking
+//! headings and the prompt bubble (`docs/tui.md`, "Turns", "Tool groups and
+//! the ledger", "Thinking").
 
 use std::collections::BTreeMap;
 
@@ -12,7 +13,8 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use serde_json::Value;
 
-use crate::turn::Row;
+use crate::app::Target;
+use crate::turn::{Group, Row, Thought};
 
 /// A span of milliseconds, truncated to whole seconds: `38s` under a
 /// minute, `4m 05s` under an hour, else `1h 02m`.
@@ -434,6 +436,149 @@ pub(crate) fn thought(gutter: &str, text: &str, span: Option<u64>) -> Line<'stat
 pub(crate) fn opened(text: &str, indent: &str, out: &mut Vec<Row>) {
     for line in text.split('\n') {
         out.push((dim(format!("{indent}{line}")), None));
+    }
+}
+
+impl Group {
+    /// What its calls did, by kind, and how often the model thought.
+    fn kinds(&self) -> Kinds {
+        let mut kinds = Kinds::default();
+        let mut paths = Vec::new();
+        let mut edits = 0u64;
+        for call in self.calls() {
+            match kind(&call.name, &call.arguments) {
+                Kind::Read => kinds.read = kinds.read.saturating_add(1),
+                Kind::Search => kinds.searched = kinds.searched.saturating_add(1),
+                Kind::Ran => kinds.ran = kinds.ran.saturating_add(1),
+                Kind::Other => kinds.other = kinds.other.saturating_add(1),
+                Kind::Edit => {
+                    edits = edits.saturating_add(1);
+                    for change in &call.changes {
+                        kinds.added = kinds.added.saturating_add(change.added);
+                        kinds.removed = kinds.removed.saturating_add(change.removed);
+                        if !paths.contains(&&change.path) {
+                            paths.push(&change.path);
+                        }
+                    }
+                }
+            }
+        }
+        kinds.edited = if paths.is_empty() {
+            edits
+        } else {
+            paths.len() as u64
+        };
+        kinds.thoughts = self.thoughts().count() as u64;
+        kinds
+    }
+
+    /// Its lines. A finished group with no call is its thinking, one line
+    /// a block; otherwise a summary line, and the ledger when open.
+    pub(crate) fn rows(&self, running: bool, out: &mut Vec<Row>) {
+        if !running && !self.has_calls() {
+            for thought in self.thoughts() {
+                thought_rows(thought, "", out);
+            }
+            return;
+        }
+        let mut parts = Vec::new();
+        let kinds = self.kinds().summary();
+        if !kinds.is_empty() {
+            parts.push(kinds);
+        }
+        if running {
+            let flight: Vec<String> = self
+                .calls()
+                .filter(|call| call.status.is_none())
+                .map(|call| label(&call.name, &summary(&call.name, &call.arguments)))
+                .chain(
+                    self.streaming
+                        .iter()
+                        .map(|call| label(call.name.as_deref().unwrap_or("…"), &call.text)),
+                )
+                .collect();
+            if !flight.is_empty() {
+                parts.push(flight.join(", "));
+            }
+            if let Some(thought) = self.thoughts().filter(|t| t.ended.is_none()).last() {
+                parts.push(match heading(&thought.text, true) {
+                    Some(heading) => format!("Thinking: {heading}"),
+                    None => "Thinking".to_owned(),
+                });
+            }
+        } else {
+            parts.extend(seconds(self.last.saturating_sub(self.first)));
+        }
+        if parts.is_empty() {
+            return;
+        }
+        out.push((
+            dim(format!("• {}", parts.join(" · "))),
+            Some(Target::Group(self.id)),
+        ));
+        // An open approval shows its call whatever the group's own state.
+        if self.open || self.calls().any(|call| call.asking) {
+            self.ledger(out);
+        }
+    }
+
+    /// One row per call, split by step: the step's number in the gutter on
+    /// its first row, its thinking first.
+    fn ledger(&self, out: &mut Vec<Row>) {
+        for section in &self.sections {
+            let mut gutter = format!("{:>3} ", section.step);
+            for thought in &section.thoughts {
+                thought_rows(
+                    thought,
+                    &std::mem::replace(&mut gutter, GAP.to_owned()),
+                    out,
+                );
+            }
+            for call in &section.calls {
+                let mut row = format!(
+                    "{}{}",
+                    std::mem::replace(&mut gutter, GAP.to_owned()),
+                    label(&call.name, &summary(&call.name, &call.arguments))
+                );
+                let (added, removed) = call.changes.iter().fold((0u64, 0u64), |(a, r), c| {
+                    (a.saturating_add(c.added), r.saturating_add(c.removed))
+                });
+                if !call.changes.is_empty() {
+                    row.push_str(&format!(" +{added} −{removed}"));
+                }
+                match call.status {
+                    None => row.push_str(" · running"),
+                    Some(CallStatus::Completed) => {}
+                    Some(CallStatus::Failed) => row.push_str(" · failed"),
+                    Some(CallStatus::Denied) => row.push_str(" · denied"),
+                    Some(CallStatus::Cancelled) => row.push_str(" · cancelled"),
+                }
+                let line = if call.changes.is_empty() {
+                    dim(row)
+                } else {
+                    Line::styled(row, Style::default().add_modifier(Modifier::BOLD))
+                };
+                out.push((line, Some(Target::Call(call.id))));
+                if call.open {
+                    opened(&call.detail, GAP, out);
+                }
+            }
+        }
+    }
+}
+
+/// The gutter left blank.
+const GAP: &str = "    ";
+
+/// A thought's line after `gutter`, and its text when open.
+fn thought_rows(thought: &Thought, gutter: &str, out: &mut Vec<Row>) {
+    let span = thought
+        .ended
+        .map(|ended| ended.saturating_sub(thought.started));
+    let line = self::thought(gutter, &thought.text, span);
+    out.push((line, Some(Target::Thought(thought.id))));
+    if thought.open {
+        opened(&thought.text, &" ".repeat(gutter.len()), out);
     }
 }
 

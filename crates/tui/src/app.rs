@@ -7,10 +7,7 @@ use std::hash::{BuildHasher, RandomState};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use contract::events::{
-    CommandAccepted, CommandRejected, InputItem, SteeringApplied, SteeringQueue, TurnCompleted,
-    TurnStarted, UsageRecorded,
-};
+use contract::events::{CommandAccepted, CommandRejected, SteeringQueue};
 use contract::shapes::ContentPart;
 use contract::{Envelope, HubLine, SessionId};
 use serde_json::{Map, Value, json};
@@ -18,8 +15,11 @@ use serde_json::{Map, Value, json};
 use crate::approvals::{self, Panel, PanelKey, Queue};
 use crate::keys::Key;
 use crate::link::Line;
-use crate::steering::Steering;
 use crate::turn::{Fold, Row, Turn};
+use steering::Steering;
+
+#[path = "steering.rs"]
+mod steering;
 
 /// A line's payload as `$kind`; `None` when it does not parse, and the
 /// line is skipped.
@@ -214,18 +214,7 @@ impl App {
             }
             Key::Up | Key::Down => Effect::None,
             Key::AltA => self.open_first(),
-            Key::AltUp => {
-                self.steering.up(&mut self.draft);
-                Effect::None
-            }
-            Key::AltDown => {
-                self.steering.down(&mut self.draft);
-                Effect::None
-            }
-            Key::AltX => {
-                let rows = self.steering.to_drop();
-                self.steer_drop(rows)
-            }
+            Key::AltUp | Key::AltDown | Key::AltX => self.steering_key(&key),
         }
     }
 
@@ -316,24 +305,6 @@ impl App {
     /// The notice line, if any.
     pub(crate) fn notice(&self) -> Option<&str> {
         self.notice.as_deref()
-    }
-
-    /// The steering queue's rows, oldest first.
-    pub(crate) fn steering(&self) -> Vec<String> {
-        self.steering.lines(self.width)
-    }
-
-    /// `select_steering` on the queued row at `index`.
-    #[cfg_attr(not(test), expect(dead_code, reason = "#682 clicks call it"))]
-    pub(crate) fn select_steering(&mut self, index: usize) {
-        self.steering.select(index, &mut self.draft);
-    }
-
-    /// `drop_steering` on the queued row at `index`.
-    #[cfg_attr(not(test), expect(dead_code, reason = "#682 clicks call it"))]
-    pub(crate) fn drop_steering(&mut self, index: usize) -> Effect {
-        let row = self.steering.id_at(index);
-        self.steer_drop(row.into_iter().collect())
     }
 
     /// Whether the quit hint shows: armed by a first Ctrl+C.
@@ -518,49 +489,6 @@ impl App {
         }
     }
 
-    /// Enter with a queued row selected: `steer_drop` for the row, then
-    /// `steer` with the edited text; the draft from before the selection
-    /// comes back.
-    fn amend(&mut self) -> Effect {
-        let (Some(session), Link::Up) = (self.session().cloned(), self.link) else {
-            return Effect::None;
-        };
-        let Some((row, stash)) = self.steering.amend() else {
-            return Effect::None;
-        };
-        let Effect::Send(mut lines) = self.steer_drop(vec![row]) else {
-            return Effect::None;
-        };
-        let id = mint();
-        let text = std::mem::replace(&mut self.draft, stash);
-        let content = json!({"content": [{"type": "text", "text": text}]});
-        lines.push(session_command(&id, "steer", &session, Some(content)).to_string());
-        self.pending.insert(id, (Kind::Steer, text));
-        Effect::Send(lines)
-    }
-
-    /// One `steer_drop` per command id in `rows`; nothing when there are
-    /// none, or no connection to send them on.
-    fn steer_drop(&mut self, rows: Vec<String>) -> Effect {
-        let Some(session) = self.session().cloned() else {
-            return Effect::None;
-        };
-        if rows.is_empty() || self.link != Link::Up {
-            return Effect::None;
-        }
-        let lines = rows
-            .into_iter()
-            .map(|row| {
-                let id = mint();
-                let args = json!({ "command_id": row });
-                let line = session_command(&id, "steer_drop", &session, Some(args));
-                self.pending.insert(id, (Kind::SteerDrop, String::new()));
-                line.to_string()
-            })
-            .collect();
-        Effect::Send(lines)
-    }
-
     /// Esc with nothing open interrupts the turn: `cancel`, only when busy.
     fn on_esc(&mut self) -> Effect {
         let session = match &self.phase {
@@ -691,8 +619,6 @@ impl App {
         if self.session() != Some(&envelope.session_id) {
             return;
         }
-        let action = envelope.action_id.as_ref().map(|id| id.0.as_str());
-        let ts = envelope.ts;
         // Only a line that changed a card shows the overlay.
         let changed = match envelope.kind.as_str() {
             "command_accepted" => {
@@ -709,75 +635,18 @@ impl App {
                 }
                 false
             }
-            "turn_started" => read!(envelope, TurnStarted).is_some_and(|started| {
-                self.set_busy(true);
-                let prompts = started
-                    .input
-                    .iter()
-                    .filter_map(|input| {
-                        if let InputItem::Message { content, .. } = input {
-                            Some(text_of(content))
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-                self.turns.push(Turn::new(prompts, ts));
-                true
-            }),
-            "turn_completed" => read!(envelope, TurnCompleted).is_some_and(|done| {
-                self.set_busy(false);
-                self.open_turn().is_some_and(|turn| {
-                    turn.complete(done, ts);
-                    true
-                })
-            }),
-            "usage_recorded" => read!(envelope, UsageRecorded).is_some_and(|line| {
-                // A line folds where its generation already is, so a late
-                // correction updates a closed card; else into the open turn.
-                let known = self
-                    .turns
-                    .iter()
-                    .rposition(|turn| turn.spend.holds(&line.generation_id));
-                let turn = match known {
-                    Some(at) => self.turns.get_mut(at),
-                    None => self.open_turn(),
-                };
-                turn.is_some_and(|turn| {
-                    turn.spend.record(&line);
-                    true
-                })
-            }),
-            "steering_applied" => read!(envelope, SteeringApplied).is_some_and(|applied| {
-                self.open_turn().is_some_and(|turn| {
-                    turn.steer(text_of(&applied.content));
-                    true
-                })
-            }),
             "steering_queue" => {
                 if let Some(queue) = read!(envelope, SteeringQueue) {
                     self.steering.fold(&queue, &mut self.draft);
                 }
                 false
             }
-            "step_started" => {
-                if let Some(turn) = self.open_turn() {
-                    turn.step_started();
-                }
-                false
-            }
-            _ => action.is_some_and(|action| {
-                crate::turn::fold_action(&mut self.turns, &mut self.fold, envelope, action)
-            }),
+            _ => crate::turn::fold_line(&mut self.turns, &mut self.fold, envelope),
         };
+        self.set_busy(self.turns.last().is_some_and(Turn::is_open));
         if changed {
             self.changed();
         }
-    }
-
-    /// The turn still running, if any.
-    fn open_turn(&mut self) -> Option<&mut Turn> {
-        self.turns.last_mut().filter(|turn| turn.is_open())
     }
 
     fn set_busy(&mut self, busy: bool) {
