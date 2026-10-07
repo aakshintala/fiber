@@ -954,7 +954,7 @@ fn resumed_state_restores_a_declared_directory() {
 }
 
 #[test]
-fn resumed_state_restores_a_declared_directory_removed_before_the_resume() {
+fn resumed_state_drops_a_declared_directory_removed_before_the_resume() {
     let (home, _held) = root();
     let workspace = home.join("workspace");
     std::fs::create_dir_all(workspace.join("sub")).unwrap();
@@ -966,20 +966,16 @@ fn resumed_state_restores_a_declared_directory_removed_before_the_resume() {
         started("a_1", Some(&["sub"])),
         finished("a_1"),
     ];
-    // The call declared `sub/` while it existed; it is gone at the resume
-    // and made again after it, as the live session still checks it.
+    // The call declared `sub/` while it existed; it is gone at the resume,
+    // so the resume drops it: remade after it, the check sends nothing.
     std::fs::remove_dir(workspace.join("sub")).unwrap();
     let mut state = State::resumed(&lines, &workspace, &inputs(&home, &fake)).unwrap();
     assert!(state.take_queued().is_empty());
     assert!(state.check(&*fake).files.is_empty());
     write(&workspace.join("sub/AGENTS.md"), "Late rules.\n");
     let out = state.check(&*fake);
-    assert_eq!(out.files.len(), 1);
-    assert_eq!(
-        out.files[0].path,
-        workspace.join("sub/AGENTS.md").display().to_string()
-    );
-    assert_eq!(out.files[0].reason, InstructionReason::Created);
+    assert!(out.files.is_empty());
+    assert!(out.notices.is_empty());
 }
 
 #[test]
@@ -1022,10 +1018,46 @@ fn resumed_state_checks_a_declared_file_without_a_notice() {
     // The restored `sub/x.txt` is a file: checking it finds no candidate
     // under it, sends nothing and names no failure.
     let mut state = State::resumed(&lines, &workspace, &inputs(&home, &fake)).unwrap();
-    assert!(state.maybe_dirs.contains(&workspace.join("sub/x.txt")));
     let out = state.check(&*fake);
     assert!(out.files.is_empty());
     assert!(out.notices.is_empty());
+}
+
+#[test]
+fn resumed_file_turned_directory_queues_when_a_call_touches_it() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    write(&workspace.join("sub/x.txt"), "data\n");
+    let workspace = canon(&workspace);
+    let fake = clock();
+    let message = opening::collect(&inputs(&home, &fake), &workspace).message;
+    let lines = vec![
+        envelope("opening_message", &Event::OpeningMessage(message)),
+        started("a_1", Some(&["sub/x.txt"])),
+        finished("a_1"),
+    ];
+    let mut state = State::resumed(&lines, &workspace, &inputs(&home, &fake)).unwrap();
+    assert!(state.take_queued().is_empty());
+    assert!(state.check(&*fake).files.is_empty());
+    // The declared file became a directory holding an instruction
+    // file: still nothing at the check, until a call touches it.
+    std::fs::remove_file(workspace.join("sub/x.txt")).unwrap();
+    write(&workspace.join("sub/x.txt/AGENTS.md"), "Late rules.\n");
+    assert!(state.check(&*fake).files.is_empty());
+    let own = state.call_completed(&workspace, &declared(Some(&["sub/x.txt"])));
+    assert!(own.is_empty());
+    let queued = state.take_queued();
+    assert_eq!(queued.len(), 1);
+    let Event::InstructionFile(line) = &queued[0] else {
+        panic!("queued a subdirectory line");
+    };
+    assert_eq!(
+        line.path,
+        workspace.join("sub/x.txt/AGENTS.md").display().to_string()
+    );
+    assert_eq!(line.reason, InstructionReason::Subdirectory);
+    assert_eq!(line.sent, InstructionSent::Full);
+    assert_eq!(line.content.as_deref(), Some("Late rules.\n"));
 }
 
 #[test]
