@@ -12,6 +12,7 @@ mod export;
 mod offsets;
 mod read;
 mod resolve;
+mod weak_emit;
 mod write;
 
 use std::io;
@@ -23,6 +24,7 @@ pub use dependents::dependents;
 pub use export::export;
 pub use read::{Injector, Lines, Watcher, lines, read};
 pub use resolve::resolve;
+pub use weak_emit::WeakEmit;
 pub use write::Log;
 
 /// The log's name in a session directory.
