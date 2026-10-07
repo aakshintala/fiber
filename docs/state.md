@@ -18,7 +18,7 @@ Default `~/.fiber` on macOS and Linux; `FIBER_HOME` relocates all of it.
     SYSTEM.md, APPEND_SYSTEM.md   this project's system prompt files
     config.json                   this project's configuration
     config/<extension>.json       an extension's settings for this project
-    worktrees/<id>/               one git worktree per delegate that asked for one
+    worktrees/<id>/               one git worktree per session that asked for one
     approvals/<content-hash>      one file per extension or hook approval or never
     data/<extension>/             an extension's data for this project
   extensions/<name>/              installed extensions, one directory each

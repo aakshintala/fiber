@@ -52,7 +52,8 @@ ephemeral event where it is display-only.
 | `provider` | Talks to model APIs: wire formats, credentials, streaming. Reached only through the provider seam. |
 | `tools` | Runs the built-in tools that act on the workspace and the session: shell, file edits, search, web fetch, `ask_user`, session messaging and `tool_search`. Reached only through the tool seam. |
 | `mcp` | The MCP client: both transports, OAuth, the cached tool lists and `mcp_resources` (`docs/mcp.md`), and `fiber mcp serve`. Reached only through the tool seam. |
-| `jobs` | Background jobs and delegates: starting, watching and stopping them, the runner for delegates on another harness, and their worktrees (`docs/delegates.md`). Reached only through the tool seam. |
+| `jobs` | Background jobs and delegates: starting, watching and stopping them, the runner for delegates on another harness, and their worktrees, through `worktree` (`docs/delegates.md`). Reached only through the tool seam. |
+| `worktree` | Creates and removes the git worktrees sessions and delegates run in, by running the `git` program (`docs/invocation.md`, "Isolation"). |
 | `extensions` | Loads extension code, hosts the runtime, and wires what extensions register into the three seams. |
 | `tui` | Draws the terminal, in its own process, as a client of the hub. Watches events, sends commands, knows nothing else. |
 | `config` | Reads the configuration files in [Fiber home](state.md) and the repository's `.fiber/` ([Configuration](configuration.md)). Answers questions; never asks any. |
@@ -84,7 +85,8 @@ depends on `contract`, `log` and the three seams, and never on `tui`, `doors`
 or `main`. `tui`, `hub` and `doors` depend on `contract` and on `log`'s reading
 side, and never on `loop`, `provider`, `tools`, `mcp`, `jobs` or
 `extensions`. `cli` depends on `contract`, `log`, `config`, `doors` and
-`extensions`, and never on `loop`. `main` depends on
+`extensions`, and never on `loop`. `worktree` depends only on `contract`, and
+`jobs`, `doors` and `cli` may depend on it. `main` depends on
 everything, and nothing depends on `main`.
 
 `fakes` holds the shared fakes that tests and jigs run against

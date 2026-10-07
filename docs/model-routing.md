@@ -637,7 +637,7 @@ file, unless that key is already set.
 
 ### Which credential a session uses
 
-A session fixes its credential label when it starts. Fiber picks it in this
+A session picks its credential label when it starts. Fiber picks it in this
 order:
 
 1. `--credential <label>` on a resume, which both doors accept.
@@ -645,6 +645,7 @@ order:
 3. For a delegate started with a role, the role's `credential`
    (`docs/delegates.md`, "Choosing a model").
 4. `providers."<name>".credential`, from any layer except a repository's.
+5. Otherwise `default`, the source the provider's data declares.
 
 A label that names no credential fails with `credential_missing`, naming the
 labels the provider has.
@@ -659,8 +660,8 @@ turn boundary and rebuilds the prompt cache, because a vendor holds the cache
 per account or workspace (`docs/prompt-cache.md`, "Switching model"). The
 terminal saves the label to the global `providers."<name>".credential`, unless
 the person marks the switch as this session only. A per-project file can pin a
-label for one project. A switch never changes a session that is already
-running.
+label for one project. Saving the label never changes another session that
+is already running.
 
 Fiber never changes a session's credential by itself. It does not rotate
 credentials, and it does not move to another label when one runs out of quota

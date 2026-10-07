@@ -127,7 +127,7 @@ provider's `models()` only when it has no cached copy. A list older than
 `-c <key>=<value>` sets one configuration key for one run, the per-run layer
 (`docs/configuration.md`, "Layers"). Both doors take it, as they take
 `--model`, and it may be given more than once. The terminal passes it to each
-session it asks the hub to start.
+session it asks the hub to start, in `start`'s `overrides` ("The hub").
 
 `--credential <label>` on a resume switches the session to another credential
 label, and the log records the switch (`docs/model-routing.md`, "Which
@@ -195,7 +195,7 @@ a key is valid.
 
 | Command | What it does |
 |---|---|
-| `config get <key>` | Prints the effective value and the layer or flag it came from. |
+| `config get <key>` | Prints the effective value and the layer it came from. |
 | `config set [--project \| --repo] <key> <value>` | Writes one key. |
 
 The commands that write configuration take the same scope flags. With
@@ -226,8 +226,9 @@ Every command that talks to the hub takes `--hub <name>` to use a hub from
 the client's list instead of the default.
 
 **Internal commands.** Fiber starts its own processes with internal
-commands: the session command, the hub, the image child ("Processes") and
-the `grep` and `find` that the file tools run (`docs/tools.md`). None is in
+commands: the session command, the hub, the image child ("Processes"), the
+release install step that `install.sh` runs (`docs/releasing.md`,
+"Installing"), and the `grep` and `find` that the file tools run (`docs/tools.md`). None is in
 the menu, and no person or client runs them.
 
 The flags are `-h`, `--help`, `-v` and `--version`. There is no `-V`.
@@ -834,7 +835,7 @@ websocket for everything it does.
 | `feed` | none | Subscribes the connection to the feed: the latest `session_status` of every running or waiting top-level session, and every change after it, then a `session_left` line (`docs/events.md`) when one ends. Crashed sessions not yet dismissed come first: each one's last `session_status`, then its `session_left`. |
 | `dismiss` | `session` (string) | Drops a crashed session from the feed, for every client; its log stays, and it can still be resumed from `recent`. Rejected `stale_request` unless the session is crashed. |
 | `recent` | `before` (string, optional), `project` (string, optional) | Answers with a page of exited sessions from `recent.jsonl`, newest first (`docs/state.md`). |
-| `start` | `workspace` (string), `model` (string, optional), `content` (optional) | Starts a session in the workspace, any absolute path, and answers with its `session_id`. With `content`, its first prompt. |
+| `start` | `workspace` (string), `model` (string, optional), `overrides` (array of strings, optional), `worktree` (boolean, optional), `content` (optional) | Starts a session in the workspace, any absolute path, and answers with its `session_id`. Each of `overrides` is a `key=value` passed to the session as `-c` ("Commands and flags"). With `worktree` true, the session runs in a new worktree of the workspace ("Isolation"). With `content`, its first prompt. |
 | `delete` | `session` (string), `cascade` (boolean, optional) | Deletes an exited session ("Deleting and pruning"). |
 | `prompt_history` | `project` (string), `before` (integer, optional) | Answers with a page of the project's prompt history, newest first (`docs/state.md`). |
 | `read_file` | `session` (string), `path` (string) | Answers with one file from the session's `artifacts/` ("A session's files"). |
@@ -983,8 +984,12 @@ delegate's `isolation: worktree` (`docs/delegates.md`), by the terminal's
 All three use the same rules (`docs/delegates.md`, "Worktrees"): a new branch
 from the workspace's HEAD in a worktree under
 `~/.fiber/projects/<key>/worktrees/<id>`, removed at the end when it holds
-nothing uncommitted and no commits beyond its base, kept otherwise, and
-`invalid_arguments` outside a git repository. Fiber runs the `git` program; no
+nothing uncommitted and no commits beyond its base, kept otherwise. Outside a
+git repository a delegate's `isolation: worktree` fails with
+`invalid_arguments`, and `fiber ask --worktree` is a usage error. The session
+records the worktree on `session_started` (`docs/events.md`). The `worktree`
+module creates and removes worktrees, for delegates, sessions and
+`fiber sessions prune` (`docs/architecture.md`). Fiber runs the `git` program; no
 git library is linked in. A supervisor that wants its own tree still makes it
 and passes the path.
 

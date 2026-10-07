@@ -90,6 +90,10 @@ The release also carries `fiber-extensions.tar.gz` and its checksum file:
 every first-party extension at the release tag, the eleven directories under
 `providers/`, `extensions/hooks` and `extensions/memory`. It is the same for every target. Nothing
 in the binary embeds an extension (`docs/extensions.md`, "A fresh install").
+At its top level the archive has one directory per extension, named as it is
+installed under `extensions/` in Fiber home (`docs/extensions.md`, "Names"),
+with no install record. The docs archive holds the contents of `docs/` at its
+top level.
 
 Archive names carry no version, so
 `https://github.com/aakshintala/fiber/releases/latest/download/<archive>`
@@ -142,11 +146,16 @@ curl -fsSL https://github.com/aakshintala/fiber/releases/latest/download/install
    failed install never leaves half a binary
 5. installs to `$FIBER_INSTALL_DIR`, or `~/.local/bin` if that is unset, and
    warns without failing when that directory is not on `PATH`
-6. downloads the same release's docs archive, checks its SHA-256, and puts it
-   in place as `docs/` in Fiber home, by extracting beside it and renaming
-7. downloads the same release's extensions archive, checks its SHA-256, and
-   installs each first-party extension under `extensions/` in Fiber home the
-   same way, recorded at the release's tag
+6. runs the binary it installed, once, with the internal install step,
+   passing the version. That step downloads the same release's docs and
+   extensions archives, checks each SHA-256, and puts `docs/` and each
+   first-party extension in place in Fiber home by extracting beside and
+   renaming, as `fiber update` does. It takes the extensions lock, and records
+   each extension at the release's version and the commit the binary was built
+   from.
+
+The script lives in the repository at `scripts/install.sh`. It reads only
+`FIBER_INSTALL_DIR` and `FIBER_VERSION`; the binary reads `FIBER_HOME`.
 
 `FIBER_VERSION=0.3.0` installs that version instead of the newest, with that
 version's docs and first-party extensions. Rolling back is installing an older

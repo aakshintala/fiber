@@ -1265,7 +1265,15 @@ visible.
 installs it for the current project only: it loads in that project's sessions
 and no others. The scope is the person's `extensions."<name>".enabled` key:
 `false` in the global configuration and `true` in the project's, both in Fiber
-home (`docs/configuration.md`). A repository cannot set it.
+home (`docs/configuration.md`). A repository cannot set it. For each
+extension the command installs for the first time, its dependencies included,
+it writes `false` globally and `true` for the project. For one already
+installed, it writes only the project's `true`, so it never turns off an
+extension that is on elsewhere. It writes the keys before it installs, so a
+failed install leaves nothing loading outside the project. A plain `install`,
+`update` or `remove` never writes or clears the key;
+`fiber config set extensions."<name>".enabled true` enables a scoped extension
+everywhere.
 
 ### What an install shows
 
