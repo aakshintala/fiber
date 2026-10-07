@@ -29,19 +29,24 @@ const ANTHROPIC_VERSION: &str = "2023-06-01";
 #[derive(Debug, Clone)]
 pub struct Messages {
     endpoint: Endpoint,
+    cache_key_header: Option<String>,
 }
 
 impl Messages {
     /// The protocol for one model of one provider.
     pub fn new(endpoint: Endpoint) -> Self {
-        Self { endpoint }
+        Self {
+            endpoint,
+            cache_key_header: None,
+        }
     }
 
     /// Also sends each request's cache key in the header `name`, for a
     /// provider that routes by it, such as OpenCode's `x-opencode-session`
     /// (`docs/prompt-cache.md`, "Cache markers and keys").
     #[must_use]
-    pub fn cache_key_header(self, _name: impl Into<String>) -> Self {
+    pub fn cache_key_header(mut self, name: impl Into<String>) -> Self {
+        self.cache_key_header = Some(name.into());
         self
     }
 
@@ -62,6 +67,9 @@ impl Messages {
             headers.push(("x-api-key".to_owned(), key.expose().to_owned()));
         }
         headers.extend(endpoint.headers.iter().cloned());
+        if let Some(name) = &self.cache_key_header {
+            headers.push((name.clone(), request.cache_key.clone()));
+        }
         Call {
             url: format!("{}/messages", endpoint.base_url.trim_end_matches('/')),
             headers,
