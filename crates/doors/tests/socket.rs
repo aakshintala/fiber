@@ -2750,3 +2750,143 @@ fn the_stopper_cancels_a_pasted_image_in_flight() {
         .unwrap();
     opened.close();
 }
+
+#[test]
+fn close_now_starts_the_shutdown_and_sends_the_loop_nothing() {
+    let opened = Opened::open(vec![]);
+    let socket = opened.socket.clone();
+    let (hook_tx, hook_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let release_rx = Mutex::new(release_rx);
+    opened.session.close_now(Arc::new(move || {
+        hook_tx.send(()).unwrap();
+        release_rx
+            .lock()
+            .unwrap()
+            .recv_timeout(DEADLINE)
+            .expect("the test releases the hook");
+    }));
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(
+                &client,
+                r#"{"id":"c_close_now","command":"close","args":{"now":true}}"#,
+            );
+            hook_rx.recv_timeout(DEADLINE).expect("the hook runs");
+            // The answer was queued before the hook ran: if the order were
+            // reversed, this read would wait out its deadline and fail.
+            let answer = response(&client, "c_close_now");
+            assert_eq!(kind(&answer), "command_accepted", "{answer}");
+            assert_eq!(command_id(&answer), Some("c_close_now"));
+            release_tx.send(()).unwrap();
+            assert!(hook_rx.try_recv().is_err(), "the hook ran once");
+            send(&client, r#"{"id":"c_tools","command":"tools"}"#);
+            let tools = response(&client, "c_tools");
+            assert_eq!(kind(&tools), "command_accepted", "{tools}");
+            // The reader handles lines in order, so every line before the
+            // tools answer has been handled: no `Close` reached the loop.
+            assert!(inbox.try_recv().is_err(), "no Close reached the loop");
+            send(
+                &client,
+                r#"{"id":"c_close_now_2","command":"close","args":{"now":true}}"#,
+            );
+            let second = response(&client, "c_close_now_2");
+            assert_eq!(kind(&second), "command_accepted", "{second}");
+            hook_rx
+                .recv_timeout(DEADLINE)
+                .expect("a repeat is answered too");
+            release_tx.send(()).unwrap();
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn close_without_now_starts_no_shutdown() {
+    let opened = Opened::open(vec![]);
+    let socket = opened.socket.clone();
+    let (hook_tx, hook_rx) = mpsc::channel::<()>();
+    opened.session.close_now(Arc::new(move || {
+        hook_tx.send(()).unwrap();
+    }));
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(&client, r#"{"id":"c_close_bare","command":"close"}"#);
+            send(
+                &client,
+                r#"{"id":"c_close_false","command":"close","args":{"now":false}}"#,
+            );
+            assert_eq!(take(&inbox), "close");
+            assert_eq!(take(&inbox), "close");
+            for id in ["c_close_bare", "c_close_false"] {
+                let answer = response(&client, id);
+                assert_eq!(kind(&answer), "command_accepted", "{answer}");
+            }
+            send(&client, r#"{"id":"c_tools","command":"tools"}"#);
+            let tools = response(&client, "c_tools");
+            assert_eq!(kind(&tools), "command_accepted", "{tools}");
+            // The reader handles lines in order, so a hook call would have
+            // come before the tools answer.
+            assert!(hook_rx.try_recv().is_err(), "no shutdown started");
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn close_now_with_no_shutdown_wired_is_a_plain_close() {
+    let opened = Opened::open(vec![]);
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(
+                &client,
+                r#"{"id":"c_close_now","command":"close","args":{"now":true}}"#,
+            );
+            assert_eq!(take(&inbox), "close");
+            let answer = response(&client, "c_close_now");
+            assert_eq!(kind(&answer), "command_accepted", "{answer}");
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn close_now_with_a_non_boolean_is_invalid_and_starts_nothing() {
+    let opened = Opened::open(vec![]);
+    let socket = opened.socket.clone();
+    let (hook_tx, hook_rx) = mpsc::channel::<()>();
+    opened.session.close_now(Arc::new(move || {
+        hook_tx.send(()).unwrap();
+    }));
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(
+                &client,
+                r#"{"id":"c_close_now","command":"close","args":{"now":"yes"}}"#,
+            );
+            let answer = response(&client, "c_close_now");
+            assert_eq!(rejection(&answer), ("invalid_arguments", UNFIT));
+            assert_eq!(command_id(&answer), Some("c_close_now"));
+            assert!(inbox.try_recv().is_err(), "no Close reached the loop");
+            assert!(hook_rx.try_recv().is_err(), "no shutdown started");
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}

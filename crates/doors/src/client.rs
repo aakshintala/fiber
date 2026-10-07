@@ -324,10 +324,7 @@ fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
         }
         Command::Cancel => cancel(conn, id),
         Command::Shell(args) => shell(conn, id, &args, name),
-        Command::Close(_) => {
-            let ack = inbox_ack(conn, id);
-            conn.gate.deliver(Delivery::Close(ack));
-        }
+        Command::Close(args) => crate::close::run(conn, id, args.now),
         Command::Handoff(args) => {
             let ack = inbox_ack(conn, id.clone());
             conn.gate.deliver(Delivery::Handoff(id, args, ack));
@@ -586,7 +583,7 @@ fn unknown(conn: &mut Conn, id: CommandId, command: &str) {
     );
 }
 
-fn inbox_ack(conn: &Conn, id: CommandId) -> Ack {
+pub(crate) fn inbox_ack(conn: &Conn, id: CommandId) -> Ack {
     let Some(outbox) = conn.outbox.clone() else {
         return guard(|_| {});
     };
