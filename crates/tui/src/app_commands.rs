@@ -102,10 +102,13 @@ impl App {
         if let Some(effect) = self.home_edit(&edit) {
             return effect;
         }
-        if self.overlays.keymap.is_some()
-            || self.search_edit(&edit)
-            || (self.focus.is_some() && self.panel().is_none())
-        {
+        if self.overlays.keymap.is_some() {
+            return Effect::None;
+        }
+        if let Some(effect) = self.offer_edit(&edit) {
+            return effect;
+        }
+        if self.search_edit(&edit) || (self.focus.is_some() && self.panel().is_none()) {
             return Effect::None;
         }
         crate::input::route(edit, &mut self.draft, &mut self.queue);
@@ -413,6 +416,7 @@ impl App {
         }
         self.phase = Phase::Starting;
         self.screen.clear();
+        self.offer = crate::offer::Offer::default();
         self.overlays.slash_rows = slash::rows(&[]);
         self.overlays.commands_id = None;
     }

@@ -1,6 +1,7 @@
-//! Terminal state: the draft, the attach phase, the folded stream and the
-//! approval queue (`docs/tui.md`, "Turns", "Steering", "Quit", "Approvals
-//! and questions").
+//! Terminal state: the draft, the attach phase, the folded stream, the
+//! approval queue and the repository offer (`docs/tui.md`, "Turns",
+//! "Steering", "Quit", "Approvals and questions", "Approving what a
+//! repository ships").
 
 use std::collections::HashMap;
 use std::hash::{BuildHasher, RandomState};
@@ -43,6 +44,7 @@ mod history;
 mod home;
 #[path = "app_mouse.rs"]
 mod mouse;
+mod offer;
 mod screen;
 
 use screen::Screen;
@@ -183,6 +185,8 @@ pub(crate) struct App {
     kitty: bool,
     /// Approval requests from every session.
     queue: Queue,
+    /// The attached session's offer of its repository's code.
+    offer: crate::offer::Offer,
     /// The attached session's steering queue.
     steering: Steering,
     /// The session's name, from the latest `session_named`.
@@ -221,6 +225,7 @@ impl App {
             armed_at: None,
             kitty: false,
             queue: Queue::default(),
+            offer: crate::offer::Offer::default(),
             steering: Steering::default(),
             name: None,
             overlays: commands::Overlays::default(),
@@ -260,6 +265,9 @@ impl App {
             Some(PanelKey::Handled) => return Effect::None,
             Some(PanelKey::Answer) => return self.answer(),
             None => {}
+        }
+        if let Some(effect) = self.offer_key(&key) {
+            return effect;
         }
         if let Some(effect) = self.history_key(&key) {
             return effect;
@@ -455,7 +463,7 @@ impl App {
 
     /// The badge line while the panel is closed and requests wait.
     pub(crate) fn badge(&self) -> Option<String> {
-        self.queue.badge()
+        self.queue.badge(usize::from(self.offer.aside()))
     }
 
     /// The resident conversation's lines, before wrapping.
@@ -640,6 +648,7 @@ impl App {
         }
         if kind == Kind::Reply {
             self.queue.restore(id);
+            self.offer.restore(id);
         }
     }
 
@@ -657,9 +666,15 @@ impl App {
         Effect::Send(vec![line])
     }
 
-    /// `/approvals` and Alt+A with the panel closed: the panel opens at the
-    /// first request waiting, or a notice says none waits.
+    /// `/approvals` and Alt+A with the panel closed: a put-aside offer
+    /// opens again, else the panel opens at the first request waiting, or a
+    /// notice says none waits.
     fn open_first(&mut self) -> Effect {
+        // The offer holds its session before its first request, so it
+        // reopens first.
+        if self.offer.reopen() {
+            return Effect::None;
+        }
         if !self.queue.open_first() {
             self.notices.push("No requests waiting.".to_owned());
         }
@@ -720,6 +735,9 @@ impl App {
                 if let Some(notice) = read!(envelope, Notice) {
                     self.notices.push(notice.message);
                 }
+            }
+            "repository_code_offered" | "repository_code_resolved" => {
+                self.offer.fold(envelope);
             }
             "steering_queue" => {
                 if let Some(queue) = read!(envelope, SteeringQueue) {

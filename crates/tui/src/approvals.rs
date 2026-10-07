@@ -223,12 +223,13 @@ impl Queue {
         })
     }
 
-    /// The badge line while the panel is closed and requests wait.
-    pub(crate) fn badge(&self) -> Option<String> {
+    /// The badge line while the panel is closed and requests wait,
+    /// counting `extra` requests held elsewhere with them.
+    pub(crate) fn badge(&self, extra: usize) -> Option<String> {
         if self.shown.is_some() {
             return None;
         }
-        let waiting = self.waiting_indices().count();
+        let waiting = self.waiting_indices().count().saturating_add(extra);
         (waiting > 0).then(|| format!("! {waiting} waiting · /approvals or ⌥A"))
     }
 

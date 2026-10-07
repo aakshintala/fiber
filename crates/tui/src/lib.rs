@@ -24,6 +24,7 @@ mod keys;
 mod link;
 mod markdown;
 mod mouse;
+mod offer;
 mod pages;
 mod shell;
 mod slash;

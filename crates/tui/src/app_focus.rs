@@ -243,7 +243,8 @@ impl App {
             | TargetId::DropSteering(_)
             | TargetId::DismissNotice(_)
             | TargetId::MoreNotices
-            | TargetId::CloseOverlay => None,
+            | TargetId::CloseOverlay
+            | TargetId::Offer(_) => None,
         }
     }
 

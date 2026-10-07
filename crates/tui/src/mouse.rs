@@ -35,6 +35,8 @@ pub(crate) enum TargetId {
     CloseOverlay,
     /// A home row, chip or toggle: what a click there does.
     Home(crate::home::Spot),
+    /// A chip, the Send row or the ✕ of the repository offer.
+    Offer(crate::offer::Spot),
 }
 
 /// One click target as drawn: what it does and the cells it covers.
