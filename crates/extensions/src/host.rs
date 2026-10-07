@@ -20,6 +20,7 @@ use ureq::tls::{RootCerts, TlsConfig};
 
 use crate::oauth::{self, Browser};
 
+mod ask;
 mod drive;
 pub(crate) mod exec;
 pub(crate) mod failure;
@@ -203,7 +204,8 @@ pub(crate) fn install(
         failure.clone(),
         note_failure,
     )?;
-    drive::install(lua, &host, &tag, entry, failure)?;
+    drive::install(lua, &host, &tag, Rc::clone(&entry), failure)?;
+    ask::install(lua, &host, &tag, entry)?;
     let timer_funcs = timers::install(lua, &host, hub)?;
     log::install(lua, &host, hub, &extension)?;
     ui::install(lua, &host, hub, &extension)?;
@@ -272,6 +274,8 @@ pub(crate) struct HttpRequest {
 pub(crate) enum Request {
     /// `host.http`.
     Http(HttpRequest),
+    /// `host.ask`: raise one of the closed interactions.
+    Ask(contract::events::Interaction),
     /// `host.drive`: send one driver command from inside the session.
     Drive(DriveRequest),
     /// `host.exec`: run a program in its own process group.
@@ -304,6 +308,8 @@ pub(crate) enum LockError {
 /// The answer to a [`Request`]. A failure is its code and the message Lua raises.
 pub(crate) enum Reply {
     Http(Result<(u16, Vec<u8>), (contract::ErrorCode, String)>),
+    /// How a `host.ask` call was answered: the answer keys, or declined.
+    Ask(contract::events::Answer),
     /// How a `host.drive` call was answered: its result, or the code and
     /// message `host.drive` raises.
     Drive(Result<Option<contract::events::CommandResult>, (contract::ErrorCode, String)>),
@@ -331,6 +337,7 @@ pub(crate) fn request_from(
 ) -> mlua::Result<Option<Request>> {
     Ok(Some(match (kind, arg) {
         ("http", Some(LuaValue::Table(opts))) => Request::Http(http_request(opts, timeout)?),
+        ("ask", Some(LuaValue::Table(asked))) => Request::Ask(ask_request(asked)?),
         ("drive", Some(LuaValue::Table(spec))) => Request::Drive(drive_request(spec)?),
         ("exec", Some(LuaValue::Table(spec))) => Request::Exec(exec_request(spec, workspace, cap)?),
         ("callback", Some(LuaValue::Table(opts))) => Request::Callback {
@@ -377,6 +384,19 @@ fn exec_request(spec: &Table, workspace: &Path, cap: usize) -> mlua::Result<exec
         cwd,
         cap,
     })
+}
+
+/// Reads a `host.ask` yield: its `kind` and `spec`, checked again through
+/// `interaction`. It cannot fail after the Lua half's `check` passed; an
+/// `Err` is an error in the calling code, raised as the string.
+fn ask_request(asked: &Table) -> mlua::Result<contract::events::Interaction> {
+    let kind: String = asked.get("kind")?;
+    let spec: LuaValue = asked.get("spec")?;
+    let spec = to_json(&spec)?;
+    match crate::lua::asks::interaction(&kind, &spec) {
+        Ok(interaction) => Ok(interaction),
+        Err(message) => Err(mlua::Error::RuntimeError(message)),
+    }
 }
 
 /// Reads a `host.drive` spec: the driver command and its arguments as
@@ -509,6 +529,13 @@ pub(crate) fn resume_values(
         Reply::Lock(Ok(lock)) => Ok(MultiValue::from_vec(vec![LuaValue::UserData(
             lua.create_userdata(oauth::Held::new(lock, Arc::clone(clock)))?,
         )])),
+        // An ask's answer as a Lua table: the answer keys of
+        // `interaction_resolved`, or `{ declined = true }`.
+        Reply::Ask(answer) => {
+            let json = serde_json::to_value(&answer)
+                .map_err(|e| mlua::Error::RuntimeError(format!("host.ask: {e}")))?;
+            Ok(MultiValue::from_vec(vec![to_lua(lua, &json)?]))
+        }
         // `command_accepted` returns its `result` as a Lua table, or `true`
         // when it has none.
         Reply::Drive(Ok(None)) => Ok(MultiValue::from_vec(vec![LuaValue::Boolean(true)])),

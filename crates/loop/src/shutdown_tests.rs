@@ -612,3 +612,59 @@ fn a_reply_taken_after_a_cancel_alone_ends_the_wait_cancelled() {
     let rejected = answer.recv_timeout(DEADLINE).unwrap().unwrap_err();
     assert_eq!(rejected.code, ErrorCode::StaleRequest);
 }
+
+fn asked(id: &str) -> contract::events::InteractionRequested {
+    contract::events::InteractionRequested {
+        request_id: contract::RequestId(id.into()),
+        interaction: contract::events::Interaction::Confirm {
+            prompt: "Overwrite?".into(),
+        },
+        action_ids: None,
+        extension: Some("fiber.test/notes".into()),
+    }
+}
+
+fn resolved(id: &str) -> contract::events::InteractionResolved {
+    contract::events::InteractionResolved {
+        request_id: contract::RequestId(id.into()),
+        by: contract::events::ResolvedBy::Person,
+        answer: contract::events::Answer::Confirmed { confirmed: true },
+    }
+}
+
+#[test]
+fn settle_writes_an_interaction_and_its_resolution_then_acks() {
+    let (jobs, _stops) = Listed::new(&[]);
+    let mut world = World::new(jobs);
+    world
+        .looped
+        .settle_one(Delivery::Interaction(asked("r_1")))
+        .unwrap();
+    let (tx, rx) = mpsc::channel();
+    let dir = world.held.dir.clone();
+    let ack = Ack(Box::new(move |answer| {
+        let seen = log::read(&dir)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|line| line.kind)
+            .collect::<Vec<_>>();
+        let _sent = tx.send((answer.is_ok(), seen));
+    }));
+    world
+        .looped
+        .settle_one(Delivery::Resolved(resolved("r_1"), ack))
+        .unwrap();
+    let (accepted, seen) = rx.recv_timeout(DEADLINE).expect("the ack runs");
+    assert!(accepted, "resolved accepts its ack");
+    assert_eq!(
+        seen.last().map(String::as_str),
+        Some("interaction_resolved"),
+        "settle calls the ack only after its line is written"
+    );
+    let kinds = world.held.kinds();
+    assert_eq!(
+        kinds[kinds.len().saturating_sub(2)..],
+        ["interaction_requested", "interaction_resolved"],
+        "both lines are written in order"
+    );
+}

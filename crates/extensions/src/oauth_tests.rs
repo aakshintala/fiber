@@ -271,6 +271,7 @@ fn failed(reply: Reply) -> (contract::ErrorCode, String) {
         | Reply::Exec(_)
         | Reply::Query(_)
         | Reply::Lock(_)
+        | Reply::Ask(_)
         | Reply::Slept => {
             panic!("no failure was delivered")
         }

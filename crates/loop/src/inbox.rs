@@ -16,6 +16,8 @@ use crate::cancel::SignalState;
 use crate::jobs::Queued;
 use crate::{Error, Loop};
 
+mod asked;
+
 /// A turn is running.
 const BUSY: &str = "A turn is running; send `steer` to add to it.";
 
@@ -429,6 +431,8 @@ impl Loop {
             | Delivery::Handoff(..)
             | Delivery::Model(..)
             | Delivery::Reply(..)
+            | Delivery::Interaction(_)
+            | Delivery::Resolved(..)
             | Delivery::Job(_)
             | Delivery::JobLine(_)
             | Delivery::ExtensionExec(_)
@@ -511,6 +515,8 @@ impl Loop {
             Delivery::ExtensionExec(exec) => {
                 self.log.append(&Event::ExtensionExec(exec), None, None)?;
             }
+            Delivery::Interaction(requested) => self.record_interaction(requested)?,
+            Delivery::Resolved(resolved, ack) => self.record_resolved(resolved, ack)?,
             Delivery::ExtensionLog(entry) => self.record_extension_log(entry)?,
         }
         Ok(())
@@ -591,6 +597,8 @@ impl Loop {
             Delivery::ExtensionExec(exec) => {
                 self.log.append(&Event::ExtensionExec(exec), None, None)?;
             }
+            Delivery::Interaction(requested) => self.record_interaction(requested)?,
+            Delivery::Resolved(resolved, ack) => self.record_resolved(resolved, ack)?,
             Delivery::ExtensionLog(entry) => self.record_extension_log(entry)?,
         }
         Ok(())

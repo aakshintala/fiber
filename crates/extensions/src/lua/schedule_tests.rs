@@ -22,6 +22,7 @@ fn entry(lua: &mlua::Lua, id: u64) -> Parked {
         timeout: Duration::from_millis(100),
         wake: None,
         _cancel: None,
+        ask: None,
     }
 }
 

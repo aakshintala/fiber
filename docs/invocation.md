@@ -730,7 +730,10 @@ and a repeat does nothing. A SIGTERM or SIGINT after it is a second signal.
 flight `cancelled`, and the turn `turn_completed { outcome: interrupted }`. Two
 things differ from a cancel: a pending approval or question stays pending, so
 resuming raises it again (below), and queued steering messages start no turn. They
-were never logged, so they are gone. A request already answered when the signal
+were never logged, so they are gone. An extension's pending `host.ask` is the
+exception: its asker lives in a Lua VM that does not survive the exit, so
+`fiber_exited` follows an `interaction_resolved` with `declined: true` and `by`
+`fiber` for each of them, and resuming raises nothing. A request already answered when the signal
 arrives was not pending: its answer stands, and a call it allowed completes
 `cancelled` without running.
 Nothing is written for a call before it has stopped. Then `fiber_exited`

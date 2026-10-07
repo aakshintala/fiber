@@ -279,3 +279,122 @@ fn drive_after_close_answers_closing_with_a_retained_handle() {
     let rejection = rejected(rx.recv_timeout(DEADLINE).expect("the drive is answered"));
     assert_eq!(rejection.code, ErrorCode::Closing);
 }
+
+/// A fake door for `reply`: takes the ask `r_held` and answers its ack
+/// itself; hands every other reply back for the loop.
+struct AskDoor;
+
+impl contract::extension::ExtensionDoor for AskDoor {
+    fn command(&self, name: &str, _text: &str) -> Result<Box<dyn FnOnce() + Send>, Rejection> {
+        Err(Rejection {
+            code: ErrorCode::UnknownCommand,
+            message: format!("`{name}` names no extension command."),
+        })
+    }
+
+    fn seal(&self) {}
+
+    fn reply(
+        &self,
+        reply: contract::commands::Reply,
+        ack: Ack,
+    ) -> Option<(contract::commands::Reply, Ack)> {
+        if reply.request_id.0 == "r_held" {
+            // reply_for_a_held_ask_never_reaches_the_inbox: the answer is
+            // what the holder does with the ack.
+            ack.0(Ok(None));
+            None
+        } else {
+            Some((reply, ack))
+        }
+    }
+}
+
+fn reply_args(request: &str) -> Value {
+    serde_json::json!({"request_id": request, "confirmed": true})
+}
+
+#[test]
+fn reply_for_a_held_ask_never_reaches_the_inbox() {
+    let opened = open(vec![]);
+    opened.session.extensions(Arc::new(AskDoor));
+    let driver = opened.session.driver();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let outcome = drive(&driver, "reply", reply_args("r_held"));
+            let answered = outcome
+                .recv_timeout(DEADLINE)
+                .expect("the reply is answered");
+            assert!(
+                matches!(answered, Ok(None)),
+                "the answer is what the holder does with the ack: {answered:?}"
+            );
+            assert!(
+                inbox.try_recv().is_err(),
+                "a held reply never reaches the inbox"
+            );
+            Ok(())
+        })
+        .unwrap();
+    opened.session.close(opened.log);
+}
+
+#[test]
+fn reply_handed_back_reaches_the_inbox() {
+    let opened = open(vec![]);
+    opened.session.extensions(Arc::new(AskDoor));
+    let driver = opened.session.driver();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let outcome = drive(&driver, "reply", reply_args("r_other"));
+            let Delivery::Reply(reply, ack) = inbox
+                .recv_timeout(DEADLINE)
+                .expect("the reply is delivered")
+            else {
+                panic!("a handed-back reply is delivered");
+            };
+            assert_eq!(reply.request_id.0, "r_other");
+            ack.0(Ok(None));
+            let answered = outcome
+                .recv_timeout(DEADLINE)
+                .expect("the reply is answered");
+            assert!(
+                matches!(answered, Ok(None)),
+                "the loop accepts the handed-back reply: {answered:?}"
+            );
+            Ok(())
+        })
+        .unwrap();
+    opened.session.close(opened.log);
+}
+
+#[test]
+fn reply_with_no_door_reaches_the_inbox() {
+    let opened = open(vec![]);
+    let driver = opened.session.driver();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let outcome = drive(&driver, "reply", reply_args("r_other"));
+            let Delivery::Reply(reply, ack) = inbox
+                .recv_timeout(DEADLINE)
+                .expect("the reply is delivered")
+            else {
+                panic!("a reply with no door is delivered");
+            };
+            assert_eq!(reply.request_id.0, "r_other");
+            ack.0(Ok(None));
+            let answered = outcome
+                .recv_timeout(DEADLINE)
+                .expect("the reply is answered");
+            assert!(
+                matches!(answered, Ok(None)),
+                "the loop accepts the reply: {answered:?}"
+            );
+            Ok(())
+        })
+        .unwrap();
+    opened.session.close(opened.log);
+}

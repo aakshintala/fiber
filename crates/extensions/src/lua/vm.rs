@@ -343,6 +343,7 @@ impl Vm {
                     | host::Request::Lock
                     | host::Request::Sleep(_)
                     | host::Request::Drive(_)
+                    | host::Request::Ask(_)
                     | host::Request::Exec(_),
                 ) => return Err(self.yielded()),
             }

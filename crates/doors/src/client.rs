@@ -281,10 +281,7 @@ pub(crate) fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
             let ack = inbox_ack(conn, id.clone());
             conn.gate.deliver(Delivery::SteerDrop(args.command_id, ack));
         }
-        Command::Reply(reply) => {
-            let ack = inbox_ack(conn, id);
-            conn.gate.deliver(Delivery::Reply(reply, ack));
-        }
+        Command::Reply(reply) => crate::reply::route(conn, id, reply),
         Command::Cancel => cancel(conn, id),
         Command::Shell(args) => shell(conn, id, &args, name),
         Command::Close(args) => crate::close::run(conn, id, args.now),
