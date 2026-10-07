@@ -578,3 +578,21 @@ fn a_search_pattern_is_not_a_declared_path() {
         assert_eq!(classified(command).declared.paths, Some(paths), "{command}");
     }
 }
+
+#[test]
+fn a_search_or_diff_of_fiber_home_declares_fiber_home_or_the_workdir() {
+    // The paths the credential deny judges: each contains Fiber home's
+    // `credentials/` (`docs/permissions.md`, "Credentials").
+    for (command, paths) in [
+        ("grep -r '' /home/me/.fiber", vec!["/home/me/.fiber"]),
+        ("rg sk-", vec!["/work"]),
+        (
+            "git diff /home/me/.fiber /tmp",
+            vec!["/home/me/.fiber", "/tmp"],
+        ),
+    ] {
+        assert_reads(command);
+        let paths = paths.into_iter().map(str::to_owned).collect();
+        assert_eq!(classified(command).declared.paths, Some(paths), "{command}");
+    }
+}

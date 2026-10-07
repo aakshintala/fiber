@@ -87,9 +87,12 @@ pub(crate) fn judge(
 }
 
 /// Why the credential deny refuses a call with `declared` effects, if it
-/// does: one of its paths touches the credentials directory. A path that
-/// does not resolve counts as touching (fail closed). No paths, or no
-/// declared paths, never matches.
+/// does: one of its paths touches the credentials directory, by being it,
+/// sitting inside it, or containing it (Fiber home, `$HOME`, `/`), since a
+/// recursive read of a containing directory reads every stored key.
+/// Containment is by whole path components. A path that does not resolve
+/// counts as touching (fail closed). No paths, or no declared paths, never
+/// matches.
 pub(crate) fn credential_why(
     declared: &DeclaredEffects,
     workspace: &Path,
@@ -102,7 +105,11 @@ pub(crate) fn credential_why(
             // `join` replaces the workspace when the path is absolute.
             match super::calls::resolve(&workspace.join(path)) {
                 None => true,
-                Some(resolved) => resolved == credentials || resolved.starts_with(credentials),
+                Some(resolved) => {
+                    resolved == credentials
+                        || resolved.starts_with(credentials)
+                        || credentials.starts_with(&resolved)
+                }
             }
         })
         .then(|| "The call touches Fiber's credential directory.".to_owned())

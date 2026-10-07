@@ -147,7 +147,10 @@ Fiber refuses every tool call whose declared paths touch the credential
 directory in [Fiber home](state.md) (`credentials/`). This is a built-in
 deny: it is not a standing rule, no person or extension can remove it, and
 it applies to every call. It covers every effect — a read, a
-write, anything — not only reads. It refuses, the same way, every tool call
+write, anything — not only reads. A path touches the credential directory
+when it is the directory, sits inside it, or contains it: a recursive read
+of Fiber home, `$HOME` or `/` reads every stored key, so a call declaring
+one of them is refused too. It refuses, the same way, every tool call
 whose declared paths touch the resolved path of a configured `file`
 credential source.
 
