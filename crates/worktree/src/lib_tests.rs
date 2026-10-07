@@ -183,7 +183,7 @@ fn the_same_commit_on_a_remote_counts_as_merged() {
 }
 
 #[test]
-fn an_ignored_only_worktree_is_uncommitted_when_untracked_files_are_hidden() {
+fn an_ignored_only_worktree_is_clean_when_untracked_files_are_hidden() {
     let home = repo("worktree-ignored-hidden");
     let path = add(home.path(), "fiber/x", "wt");
     fs::write(path.join(".gitignore"), "secret\n").unwrap();
@@ -193,9 +193,188 @@ fn an_ignored_only_worktree_is_uncommitted_when_untracked_files_are_hidden() {
     git(&path, &["config", "status.showUntrackedFiles", "no"]);
     let inspected = worktree_of(inspect(&path).unwrap());
     assert!(
-        inspected.uncommitted,
-        "an ignored-only worktree counts as uncommitted"
+        !inspected.uncommitted,
+        "an ignored-only worktree is clean: ignored files are not changes"
     );
+}
+
+#[test]
+fn an_untracked_file_is_uncommitted_when_untracked_files_are_hidden() {
+    let home = repo("worktree-untracked-hidden");
+    let path = add(home.path(), "fiber/x", "wt");
+    fs::write(path.join("notes.txt"), "scratch").unwrap();
+    git(&path, &["config", "status.showUntrackedFiles", "no"]);
+    let inspected = worktree_of(inspect(&path).unwrap());
+    assert!(
+        inspected.uncommitted,
+        "--untracked-files=all still reports an untracked file"
+    );
+}
+
+#[test]
+fn ignored_lists_a_directory_and_a_file() {
+    let home = repo("worktree-ignored-list");
+    let path = add(home.path(), "fiber/x", "wt");
+    fs::write(path.join(".gitignore"), "target/\n.env\n").unwrap();
+    git(&path, &["add", ".gitignore"]);
+    git(&path, &["commit", "--quiet", "-m", "ignore"]);
+    fs::create_dir_all(path.join("target")).unwrap();
+    fs::write(path.join("target/out.bin"), "build").unwrap();
+    fs::write(path.join(".env"), "secret").unwrap();
+    let mut entries = ignored(&path).unwrap();
+    entries.sort_by(|a, b| a.path.cmp(&b.path));
+    assert_eq!(
+        entries,
+        vec![
+            IgnoredEntry {
+                path: PathBuf::from(".env"),
+                is_dir: false,
+            },
+            IgnoredEntry {
+                path: PathBuf::from("target"),
+                is_dir: true,
+            },
+        ]
+    );
+}
+
+#[test]
+fn ignored_lists_only_the_ignored_entry_under_a_mixed_directory() {
+    let home = repo("worktree-ignored-mixed");
+    let path = add(home.path(), "fiber/x", "wt");
+    fs::create_dir_all(path.join("sub")).unwrap();
+    fs::write(path.join("sub/t"), "tracked").unwrap();
+    fs::write(path.join(".gitignore"), "sub/build/\n").unwrap();
+    git(&path, &["add", "."]);
+    git(&path, &["commit", "--quiet", "-m", "mixed"]);
+    fs::create_dir_all(path.join("sub/build")).unwrap();
+    fs::write(path.join("sub/build/out.bin"), "build").unwrap();
+    assert_eq!(
+        ignored(&path).unwrap(),
+        vec![IgnoredEntry {
+            path: PathBuf::from("sub/build"),
+            is_dir: true,
+        }]
+    );
+}
+
+#[test]
+fn ignored_skips_untracked_files_that_are_not_ignored() {
+    let home = repo("worktree-ignored-untracked");
+    let path = add(home.path(), "fiber/x", "wt");
+    fs::write(path.join(".gitignore"), ".env\n").unwrap();
+    git(&path, &["add", ".gitignore"]);
+    git(&path, &["commit", "--quiet", "-m", "ignore"]);
+    fs::write(path.join("notes.txt"), "scratch").unwrap();
+    fs::write(path.join(".env"), "secret").unwrap();
+    assert_eq!(
+        ignored(&path).unwrap(),
+        vec![IgnoredEntry {
+            path: PathBuf::from(".env"),
+            is_dir: false,
+        }]
+    );
+}
+
+#[test]
+fn ignored_is_empty_when_nothing_is_ignored() {
+    let home = repo("worktree-ignored-empty");
+    let path = add(home.path(), "fiber/x", "wt");
+    assert!(ignored(&path).unwrap().is_empty());
+}
+
+#[test]
+fn show_untracked_files_no_changes_nothing_about_ignored() {
+    let home = repo("worktree-ignored-showno");
+    let path = add(home.path(), "fiber/x", "wt");
+    fs::write(path.join(".gitignore"), ".env\n").unwrap();
+    git(&path, &["add", ".gitignore"]);
+    git(&path, &["commit", "--quiet", "-m", "ignore"]);
+    fs::write(path.join(".env"), "secret").unwrap();
+    git(&path, &["config", "status.showUntrackedFiles", "no"]);
+    assert_eq!(
+        ignored(&path).unwrap(),
+        vec![IgnoredEntry {
+            path: PathBuf::from(".env"),
+            is_dir: false,
+        }]
+    );
+}
+
+#[test]
+fn ignored_keeps_a_newline_in_a_name_as_raw_bytes() {
+    let home = repo("worktree-ignored-newline");
+    let path = add(home.path(), "fiber/x", "wt");
+    fs::write(path.join(".gitignore"), "we*ird\n").unwrap();
+    git(&path, &["add", ".gitignore"]);
+    git(&path, &["commit", "--quiet", "-m", "ignore"]);
+    fs::write(path.join("we\nird"), "secret").unwrap();
+    assert_eq!(
+        ignored(&path).unwrap(),
+        vec![IgnoredEntry {
+            path: PathBuf::from("we\nird"),
+            is_dir: false,
+        }]
+    );
+}
+
+#[test]
+fn a_corrupt_index_is_a_ls_files_error() {
+    let home = repo("worktree-ignored-corrupt");
+    let path = add(home.path(), "fiber/x", "wt");
+    let admin = git(&path, &["rev-parse", "--absolute-git-dir"]);
+    fs::write(Path::new(&admin).join("index"), "garbage").unwrap();
+    match ignored(&path).unwrap_err() {
+        Error::Git { command, .. } => assert_eq!(command, "ls-files"),
+        Error::GitMissing | Error::Io { .. } => panic!("expected a ls-files error"),
+    }
+}
+
+#[test]
+fn git_environment_cannot_redirect_the_ignored_listing() {
+    if let Ok(path) = std::env::var("FIBER_WORKTREE_IGNORED_ENV_CHILD") {
+        let path = PathBuf::from(path);
+        match ignored(&path) {
+            Ok(entries)
+                if entries
+                    == vec![IgnoredEntry {
+                        path: PathBuf::from(".env"),
+                        is_dir: false,
+                    }] =>
+            {
+                std::process::exit(0);
+            }
+            _ => {
+                std::process::exit(1);
+            }
+        }
+    }
+    let home = repo("worktree-ignored-env");
+    let path = add(home.path(), "fiber/x", "wt");
+    fs::write(path.join(".gitignore"), ".env\n").unwrap();
+    git(&path, &["add", ".gitignore"]);
+    git(&path, &["commit", "--quiet", "-m", "ignore"]);
+    fs::write(path.join(".env"), "secret").unwrap();
+    let other = repo("worktree-ignored-env-other");
+    let wrong_index = home.path().join("wrong-index");
+    fs::write(&wrong_index, "not an index").unwrap();
+    let name = module_path!().split_once("::").unwrap().1;
+    let status = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            &format!("{name}::git_environment_cannot_redirect_the_ignored_listing"),
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env("GIT_DIR", other.path().join(".git"))
+        .env("GIT_WORK_TREE", other.path())
+        .env("GIT_COMMON_DIR", other.path().join(".git"))
+        .env("GIT_INDEX_FILE", &wrong_index)
+        .env("FIBER_WORKTREE_IGNORED_ENV_CHILD", &path)
+        .stdin(std::process::Stdio::null())
+        .status()
+        .unwrap();
+    assert!(status.success(), "the listing must see past the redirect");
 }
 
 #[test]
