@@ -27,6 +27,7 @@ pub(crate) const STOP: &str = "doors.stop";
 const MALFORMED: &str = "A command is one JSON object per line, with a string `id` and `command`.";
 const NOT_SUBSCRIBED: &str = "Send `subscribe` first.";
 const ALREADY: &str = "This connection is already subscribed.";
+const DUPLICATE: &str = "A command with this id was already accepted.";
 const UNFIT: &str = "The arguments do not fit this command.";
 const PAST: &str = "`from_seq` is past the latest line.";
 const REVERSED: &str = "`to_seq` is before `from_seq`.";
@@ -179,6 +180,15 @@ fn on_line(bytes: &[u8], conn: &mut Conn) {
             return;
         }
     };
+    if conn.gate.was_accepted(&parsed.id) {
+        reject(
+            conn,
+            Some(parsed.id),
+            ErrorCode::DuplicateCommand,
+            DUPLICATE,
+        );
+        return;
+    }
     dispatch(conn, parsed, &line.command);
 }
 
@@ -520,6 +530,7 @@ fn history(
 }
 
 fn accept(conn: &mut Conn, id: CommandId, result: Option<CommandResult>) {
+    conn.gate.remember(&id);
     send(
         conn,
         Event::CommandAccepted(CommandAccepted {
@@ -570,10 +581,13 @@ fn inbox_ack(conn: &Conn, id: CommandId) -> Ack {
     let gate = Arc::clone(&conn.gate);
     guard(move |result| {
         let event = match result {
-            Ok(result) => Event::CommandAccepted(CommandAccepted {
-                command_id: id,
-                result,
-            }),
+            Ok(result) => {
+                gate.remember(&id);
+                Event::CommandAccepted(CommandAccepted {
+                    command_id: id,
+                    result,
+                })
+            }
             Err(rejection) => Event::CommandRejected(CommandRejected {
                 command_id: Some(id),
                 code: rejection.code,
