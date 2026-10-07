@@ -173,6 +173,14 @@ impl crate::Loop {
                 Some(&message),
             )?;
             let (reply, reasoning) = self.stream(request, turn, &message)?;
+            // A call that ended without a reply, after the provider named
+            // its generation, writes its usage at once, before anything
+            // else the failure or cancel causes.
+            if let Err(error) = &reply
+                && let Some(usage) = error.usage().cloned()
+            {
+                self.write_unfinished(&usage, turn, &message)?;
+            }
             match reply {
                 Ok(reply) => {
                     return Ok(Attempted::Replied {

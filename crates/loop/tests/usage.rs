@@ -157,3 +157,53 @@ fn a_call_cancelled_before_any_generation_writes_no_usage() {
     );
     assert!(lines.iter().all(|l| l.kind != "usage_recorded"));
 }
+
+#[test]
+fn a_failed_call_s_usage_counts_toward_the_budget() {
+    let mut usage = call_usage("gen_failed");
+    usage.tokens.input = 1_000;
+    usage.tokens.output = 0;
+    let model = r#loop::Model {
+        reference: support::MODEL.into(),
+        cost: Some(contract::provider::Cost {
+            input: 1.0,
+            output: 0.0,
+            cache_read: None,
+            cache_write: None,
+            tiers: Vec::new(),
+        }),
+        subscription: false,
+    };
+    let mut session = Session::open(
+        vec![Scripted::failed_after(
+            Failure {
+                code: ErrorCode::InvalidRequest,
+                message: "The call failed.".into(),
+                retry_after_ms: None,
+                provider: None,
+            },
+            usage,
+        )],
+        Vec::new(),
+        Vec::new(),
+        model,
+    )
+    .budget(Some(0.0005));
+    session.inbox.send(delivery("hi")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Failed));
+    let first = session.lines();
+    assert_eq!(first.last().unwrap().payload["outcome"], "failed");
+    assert_eq!(
+        first.last().unwrap().payload["error"]["code"],
+        "invalid_request"
+    );
+    session.inbox.send(delivery("again")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Failed));
+    let second = session.lines();
+    assert_eq!(second.last().unwrap().payload["outcome"], "failed");
+    assert_eq!(
+        second.last().unwrap().payload["error"]["code"],
+        "budget_exceeded"
+    );
+    assert_eq!(session.requests().len(), 1);
+}
