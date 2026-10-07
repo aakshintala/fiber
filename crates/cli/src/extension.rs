@@ -260,6 +260,7 @@ fn commit_plan(
             source: item.source(),
             version: item.version.clone(),
             changes: item.changes.clone(),
+            replaces: item.manifest.replaces.clone(),
             providers: item
                 .providers
                 .iter()

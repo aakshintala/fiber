@@ -372,6 +372,7 @@ fn summary() -> InstallSummary {
         source: "/src/opencode".into(),
         version: "v1.2.0".into(),
         changes: None,
+        replaces: Vec::new(),
         process: None,
         install_step: None,
         carries: Vec::new(),
@@ -417,6 +418,24 @@ fn an_install_in_a_terminal_shows_its_summary_and_goes_ahead_only_on_yes() {
             .unwrap()
             .contains("It registers no provider.\n")
     );
+}
+
+#[test]
+fn a_summary_names_each_built_in_the_extension_replaces() {
+    let replacing = InstallSummary {
+        replaces: vec!["shell".into(), "read".into()],
+        ..summary()
+    };
+    let mut out = Vec::new();
+    install_approved(&[replacing], true, &mut "n\n".as_bytes(), &mut out).unwrap();
+    let text = String::from_utf8(out).unwrap();
+    assert!(
+        text.contains("Replaces `shell`\nReplaces `read`\n"),
+        "{text}"
+    );
+    let mut out = Vec::new();
+    install_approved(&[summary()], true, &mut "n\n".as_bytes(), &mut out).unwrap();
+    assert!(!String::from_utf8(out).unwrap().contains("Replaces"));
 }
 
 #[test]
