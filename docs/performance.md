@@ -48,8 +48,8 @@ a 20-thousand-token one fit the same ceiling.
 |---|---|---|---|
 | Session, idle, headless | 12 MiB peak RSS | Linux x86_64 | picked |
 | Terminal, idle | 9,048 KiB peak RSS | Linux x86_64 | from components |
-| Session, busy or resumed | 137 MiB peak RSS | Linux x86_64 | from components |
-| `web_fetch` converting a 10 MiB HTML page, the download cap | within the busy session's 137 MiB peak RSS | Linux x86_64 | from components |
+| Session, busy or resumed | 137 MiB peak RSS | Linux x86_64 | measured |
+| `web_fetch` converting a 10 MiB HTML page, the download cap | within the busy session's 137 MiB peak RSS | Linux x86_64 | measured |
 | Idle CPU, session and terminal | zero context switches in the idle window, on every thread | Linux x86_64 | exact |
 | Threads, idle headless session | 5, plus 2 per client, plus 1 per Lua extension in use | Linux x86_64 | exact |
 | fsyncs | 2 per model request, 2 per tool call | Linux x86_64 | exact |
