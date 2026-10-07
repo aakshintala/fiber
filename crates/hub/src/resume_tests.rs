@@ -101,6 +101,22 @@ impl Temp {
         workspace
     }
 
+    /// `SID`'s log recording [`Temp::workspace`] and naming `parent`: a
+    /// delegate's, when `parent` is anything but `null`.
+    fn delegate_log(&self, parent: Value) -> PathBuf {
+        let workspace = self.workspace();
+        self.log(
+            &json!({
+                "kind": "session_started",
+                "seq": 0,
+                "session_id": SID,
+                "payload": {"workspace": workspace, "parent": parent},
+            })
+            .to_string(),
+        );
+        workspace
+    }
+
     /// Appends `kind` as the last line of `SID`'s log.
     fn append(&self, kind: &str) {
         let log = self
@@ -131,6 +147,16 @@ fn resumed(hub: &Arc<Hub>) -> Result<UnixStream, Refused> {
     let (done, finished) = mpsc::channel();
     let hub = Arc::clone(hub);
     thread::spawn(move || done.send(resume(&hub, &sid())).unwrap_or(()));
+    finished
+        .recv_timeout(DEADLINE)
+        .expect("the resume answers before its deadline")
+}
+
+/// Runs `resume_exited` on a thread, received with a wall-clock deadline.
+fn resumed_exited(hub: &Arc<Hub>) -> Result<UnixStream, Refused> {
+    let (done, finished) = mpsc::channel();
+    let hub = Arc::clone(hub);
+    thread::spawn(move || done.send(resume_exited(&hub, &sid())).unwrap_or(()));
     finished
         .recv_timeout(DEADLINE)
         .expect("the resume answers before its deadline")
@@ -225,6 +251,12 @@ fn a_log_whose_first_line_names_no_workspace_is_log_corrupt() {
         json!({"kind": "session_started", "payload": {}}).to_string(),
         json!({"kind": "session_started", "payload": {"workspace": 7}}).to_string(),
         json!({"kind": "fiber_started", "payload": {"workspace": "/w"}}).to_string(),
+        // A delegate's first line with no workspace is corrupt first.
+        json!({
+            "kind": "session_started",
+            "payload": {"parent": {"session_id": "s", "delegate_id": "j"}},
+        })
+        .to_string(),
     ] {
         let temp = Temp::new();
         temp.log(&first);
@@ -831,4 +863,104 @@ fn a_lowered_level_is_replayed() {
     assert_eq!(got[2].2, Some("summary".into()), "{got:?}");
     assert_eq!(got[3].0, "c_3");
     assert_eq!(got[3].1, "reply");
+}
+
+/// What a client is told for a delegate the hub does not resume.
+const DELEGATE_REFUSED: &str = "A delegate resumes only through its parent.";
+
+/// The `parent` a delegate's `session_started` names, in the contract's
+/// wire shape.
+fn parent() -> Value {
+    serde_json::to_value(contract::events::Parent {
+        session_id: SessionId("s_1111111111111111".to_owned()),
+        delegate_id: contract::JobId("j_1".to_owned()),
+    })
+    .unwrap()
+}
+
+#[test]
+fn an_exited_delegate_is_refused_without_a_resume() {
+    // Any `parent` but `null` is a delegate's, even one of the wrong shape.
+    for parent in [parent(), json!("s0"), json!({})] {
+        let temp = Temp::new();
+        temp.delegate_log(parent.clone());
+        let starter = FakeStarter::bind_and_hold(&temp.dir);
+        let hub = temp.hub(starter.clone());
+        let refused = refused(resumed(&hub));
+        assert_eq!(refused.code, ErrorCode::SessionNotFound, "{parent}");
+        assert_eq!(refused.message, DELEGATE_REFUSED, "{parent}");
+        assert!(starter.resumed().is_empty(), "{parent}");
+        assert!(!temp.hub_log().contains("session_resumed"), "{parent}");
+    }
+    let temp = Temp::new();
+    let workspace = temp.delegate_log(Value::Null);
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    assert!(
+        resumed(&hub).is_ok(),
+        "a null parent is a top-level session"
+    );
+    assert_eq!(starter.resumed(), [(sid(), workspace)]);
+}
+
+#[test]
+fn an_exited_delegate_ending_fiber_exited_is_refused_on_resume_exited() {
+    let temp = Temp::new();
+    temp.delegate_log(parent());
+    temp.append("fiber_exited");
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let refused = refused(resumed_exited(&hub));
+    assert_eq!(refused.code, ErrorCode::SessionNotFound);
+    assert_eq!(refused.message, DELEGATE_REFUSED);
+    assert!(starter.resumed().is_empty());
+    assert_eq!(temp.clock.now(), temp.clock.origin());
+}
+
+#[test]
+fn a_running_delegate_is_attached_to() {
+    let temp = Temp::new();
+    temp.delegate_log(parent());
+    let run = temp.dir.join("run");
+    fs::create_dir_all(&run).unwrap();
+    let _running = UnixListener::bind(run.join(SID)).unwrap();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    assert!(resumed(&hub).is_ok());
+    // The trusted first pass attaches past `fiber_exited` too.
+    temp.append("fiber_exited");
+    assert!(resumed(&hub).is_ok());
+    assert!(starter.resumed().is_empty());
+    assert_eq!(temp.clock.now(), temp.clock.origin());
+}
+
+#[test]
+fn a_subscribe_through_the_hub_to_a_running_delegate_is_relayed() {
+    let temp = Temp::new();
+    temp.delegate_log(parent());
+    let running = FakeStarter::bind_and_hold(&temp.dir);
+    let started = crate::Starter::start(&running, &sid(), &temp.workspace(), None);
+    assert!(started.is_ok(), "the delegate binds");
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    client.subscribe("c_1", "summary");
+    assert_eq!(client.acknowledged("the subscribe"), "c_1");
+    assert!(starter.resumed().is_empty());
+}
+
+#[test]
+fn a_subscribe_through_the_hub_to_an_exited_delegate_is_refused() {
+    let temp = Temp::new();
+    temp.delegate_log(parent());
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    client.subscribe("c_1", "summary");
+    let line = client.next("the rejection");
+    assert_eq!(line["kind"], "command_rejected", "{line}");
+    assert_eq!(line["payload"]["code"], "session_not_found");
+    assert_eq!(line["payload"]["command_id"], "c_1");
+    assert_eq!(line["payload"]["message"], DELEGATE_REFUSED);
+    assert!(starter.resumed().is_empty());
 }
