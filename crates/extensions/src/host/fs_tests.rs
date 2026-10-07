@@ -14,7 +14,7 @@ use contract::files::PathLock;
 use mlua::{Lua, LuaString, Table, Value as LuaValue};
 use serde_json::Value;
 
-use super::{FakeLock, Fs, install};
+use super::{Ctx, FakeLock, Fs, install};
 
 /// How long a test waits for a lock or a thread before failing.
 const DEADLINE: Duration = Duration::from_secs(10);
@@ -89,14 +89,18 @@ impl Setup {
         let session = self.session();
         let lua = Lua::new();
         let host = lua.create_table().unwrap();
+        let failure = crate::host::failure::install(&lua).unwrap().failure;
         install(
             &lua,
             &host,
-            self.workspace(),
-            self.home(),
-            extension,
-            crate::MEMORY_CAP,
-            Some(&session),
+            Ctx {
+                workspace: self.workspace(),
+                home: self.home(),
+                extension,
+                memory_cap: crate::MEMORY_CAP,
+                session: Some(&session),
+            },
+            &failure,
         )
         .unwrap();
         lua.globals().set("host", host).unwrap();
@@ -109,14 +113,18 @@ impl Setup {
     fn lua_without_session(&self) -> Lua {
         let lua = Lua::new();
         let host = lua.create_table().unwrap();
+        let failure = crate::host::failure::install(&lua).unwrap().failure;
         install(
             &lua,
             &host,
-            std::env::current_dir().unwrap(),
-            self.home(),
-            "fiber.test/notes",
-            crate::MEMORY_CAP,
-            None,
+            Ctx {
+                workspace: std::env::current_dir().unwrap(),
+                home: self.home(),
+                extension: "fiber.test/notes",
+                memory_cap: crate::MEMORY_CAP,
+                session: None,
+            },
+            &failure,
         )
         .unwrap();
         lua.globals().set("host", host).unwrap();
@@ -651,10 +659,11 @@ fn a_read_past_the_memory_cap_names_the_call_the_path_and_the_cap() {
     fs::write(setup.workspace().join("small.txt"), "12345678").unwrap();
     assert_eq!(fs.read(b"small.txt").unwrap(), b"12345678");
     fs::write(setup.workspace().join("big.txt"), "123456789").unwrap();
-    let err = fs.read(b"big.txt").unwrap_err();
-    assert!(err.contains("host.fs.read"), "{err}");
-    assert!(err.contains("big.txt"), "{err}");
-    assert!(err.contains(&format!("{CAP} bytes")), "{err}");
+    let (code, message) = fs.read(b"big.txt").unwrap_err();
+    assert_eq!(code, contract::ErrorCode::TooLarge);
+    assert!(message.contains("host.fs.read"), "{message}");
+    assert!(message.contains("big.txt"), "{message}");
+    assert!(message.contains(&format!("{CAP} bytes")), "{message}");
 }
 
 #[test]
@@ -696,4 +705,219 @@ fn stat_through_a_regular_file_raises_rather_than_returning_nil() {
     let error = fails(&lua, r#"return host.fs.stat("plain/inner")"#);
     assert!(error.contains("host.fs.stat"), "{error}");
     assert!(error.contains("plain/inner"), "{error}");
+}
+
+/// The failure a `pcall` of `code` catches: its code and message. The
+/// prelude's `pcall` runs the call in a coroutine of its own, so a failure
+/// the host raises comes back as its table.
+fn pcall_of(lua: &Lua, code: &str) -> (String, String) {
+    let (ok, err): (bool, LuaValue) = lua
+        .load(format!("return pcall(function() {code} end)"))
+        .eval()
+        .unwrap();
+    assert!(!ok, "{code} unexpectedly succeeded");
+    let LuaValue::Table(failed) = err else {
+        panic!("{code} raised no failure table");
+    };
+    (failed.get("code").unwrap(), failed.get("message").unwrap())
+}
+
+/// The failure a raw `coroutine.resume` of `code` catches: its code and
+/// message. The value is the table at its source, not userdata.
+fn resume_of(lua: &Lua, code: &str) -> (String, String) {
+    let (ok, err): (bool, LuaValue) = lua
+        .load(format!(
+            "return coroutine.resume(coroutine.create(function() {code} end))"
+        ))
+        .eval()
+        .unwrap();
+    assert!(!ok, "{code} unexpectedly succeeded");
+    let LuaValue::Table(failed) = err else {
+        panic!("{code} raised no failure table");
+    };
+    (failed.get("code").unwrap(), failed.get("message").unwrap())
+}
+
+#[test]
+fn every_failure_carries_its_code_for_pcall() {
+    let setup = Setup::new();
+    let lua = setup.lua();
+    let clock = fakes::clock::FakeClock::new();
+    let deadline = crate::lua::Deadline::new(clock);
+    let dir = fakes::TempDir::new("fiber-fs-prelude");
+    crate::lua::install_prelude(&lua, &deadline, dir.path().to_path_buf(), crate::MEMORY_CAP)
+        .unwrap();
+    lua.load("host.fs.write(\"f.md\", \"x\")").exec().unwrap();
+    lua.load("host.fs.mkdir(\"dir\")").exec().unwrap();
+    lua.load("host.fs.write(\"dir/child.md\", \"x\")")
+        .exec()
+        .unwrap();
+    for (code, lua_code, starts) in [
+        (
+            "return host.fs.read(\"missing.md\")",
+            "not_found",
+            "host.fs.read",
+        ),
+        (
+            "host.fs.write(\"no/parent/x.md\", \"x\")",
+            "not_found",
+            "host.fs.write",
+        ),
+        (
+            "host.fs.rename(\"gone.md\", \"there.md\")",
+            "not_found",
+            "host.fs.rename",
+        ),
+        (
+            "return host.fs.list(\"f.md\")",
+            "unsupported_file",
+            "host.fs.list",
+        ),
+        (
+            "host.fs.mkdir(\"f.md/kid\")",
+            "unsupported_file",
+            "host.fs.mkdir",
+        ),
+        ("host.fs.remove(\"dir\")", "io_failed", "host.fs.remove"),
+    ] {
+        let (name, message) = pcall_of(&lua, code);
+        assert_eq!(name, lua_code, "{code}");
+        assert!(message.starts_with(starts), "{code}: {message}");
+    }
+}
+
+#[test]
+fn a_resumed_failure_is_the_table_at_its_source() {
+    let setup = Setup::new();
+    let lua = setup.lua();
+    for (code, want, starts) in [
+        (
+            "return host.fs.read(\"missing.md\")",
+            "not_found",
+            "host.fs.read",
+        ),
+        (
+            "host.fs.write(\"no/parent/x.md\", \"x\")",
+            "not_found",
+            "host.fs.write",
+        ),
+    ] {
+        let (name, message) = resume_of(&lua, code);
+        assert_eq!(name, want, "{code}");
+        assert!(message.starts_with(starts), "{code}: {message}");
+    }
+}
+
+#[test]
+fn a_path_that_is_not_a_string_names_the_call() {
+    let setup = Setup::new();
+    let lua = setup.lua();
+    let clock = fakes::clock::FakeClock::new();
+    let deadline = crate::lua::Deadline::new(clock);
+    let dir = fakes::TempDir::new("fiber-fs-badpath");
+    crate::lua::install_prelude(&lua, &deadline, dir.path().to_path_buf(), crate::MEMORY_CAP)
+        .unwrap();
+    for (call, code) in [
+        ("read", "host.fs.read({})"),
+        ("write", "host.fs.write(1, \"x\")"),
+        ("list", "host.fs.list(1)"),
+        ("stat", "host.fs.stat(1)"),
+        ("mkdir", "host.fs.mkdir(1)"),
+        ("remove", "host.fs.remove(1)"),
+        ("rename", "host.fs.rename(1, \"g.md\")"),
+        ("rename", "host.fs.rename(\"f.md\", 1)"),
+    ] {
+        let message: String = lua
+            .load(format!(
+                "local ok, err = pcall(function() {code} end); return err"
+            ))
+            .eval()
+            .unwrap();
+        assert!(
+            message.ends_with(&format!("host.fs.{call}: path must be a string")),
+            "{code}: {message}"
+        );
+    }
+}
+
+#[test]
+fn wrong_arguments_are_strings_and_coded_failures_are_tables() {
+    let setup = Setup::new();
+    let lua = setup.lua();
+    let clock = fakes::clock::FakeClock::new();
+    let deadline = crate::lua::Deadline::new(clock);
+    let dir = fakes::TempDir::new("fiber-fs-types");
+    crate::lua::install_prelude(&lua, &deadline, dir.path().to_path_buf(), crate::MEMORY_CAP)
+        .unwrap();
+    let kind_of = |code: &str| -> String {
+        lua.load(format!(
+            "local ok, err = pcall(function() {code} end); return type(err)"
+        ))
+        .eval()
+        .unwrap()
+    };
+    std::fs::write(setup.workspace().join("f.md"), "x").unwrap();
+    std::fs::create_dir(setup.workspace().join("dir")).unwrap();
+    std::fs::write(setup.workspace().join("dir/kid.md"), "x").unwrap();
+    // Every error in the calling code stays a string (ruling 17): a path,
+    // data, options or `lock` of the wrong type, and a bad scope.
+    for code in [
+        "return host.fs.read({})",
+        "host.fs.write(1, \"x\")",
+        "host.fs.write(\"f.md\", 1)",
+        "host.fs.write(\"f.md\", \"x\", \"yes\")",
+        "host.fs.write(\"f.md\", \"x\", { lock = \"yes\" })",
+        "host.fs.write(\"f.md\", \"x\", { lock = {} })",
+        "host.fs.write(\"f.md\", \"x\", { lock = 1 })",
+        "return host.fs.list(1)",
+        "return host.fs.stat(1)",
+        "host.fs.mkdir(1)",
+        "host.fs.mkdir(\"d\", \"yes\")",
+        "host.fs.mkdir(\"d\", { lock = \"yes\" })",
+        "host.fs.remove(1)",
+        "host.fs.remove(\"f.md\", 7)",
+        "host.fs.remove(\"f.md\", { lock = {} })",
+        "host.fs.rename(1, \"g.md\")",
+        "host.fs.rename(\"f.md\", 1)",
+        "host.fs.rename(\"f.md\", \"g.md\", \"yes\")",
+        "host.fs.rename(\"f.md\", \"g.md\", { lock = 1 })",
+        "return host.data_dir(\"elsewhere\")",
+        "return host.data_dir(123)",
+    ] {
+        assert_eq!(kind_of(code), "string", "{code}");
+    }
+    let message: String = lua
+        .load(
+            "local ok, err = pcall(host.fs.write, \"f.md\", \"x\", { lock = \"yes\" }); return err",
+        )
+        .eval()
+        .unwrap();
+    assert_eq!(message, "host.fs: `lock` must be a boolean");
+    // A wrong `lock` refuses before anything is written.
+    assert_eq!(
+        std::fs::read_to_string(setup.workspace().join("f.md")).unwrap(),
+        "x"
+    );
+    assert!(!setup.workspace().join("d").exists());
+    // Every operational failure is a table.
+    for code in [
+        "return host.fs.read(\"missing.md\")",
+        "host.fs.write(\"no/parent/x.md\", \"x\")",
+        "return host.fs.list(\"missing.md\")",
+        "return host.fs.list(\"f.md\")",
+        "host.fs.mkdir(\"f.md/kid\")",
+        "host.fs.remove(\"dir\")",
+        "host.fs.rename(\"gone.md\", \"there.md\")",
+    ] {
+        assert_eq!(kind_of(code), "table", "{code}");
+    }
+    // An absent, nil or boolean `lock` is accepted.
+    for code in [
+        "host.fs.write(\"f.md\", \"y\")",
+        "host.fs.write(\"f.md\", \"y\", {})",
+        "host.fs.write(\"f.md\", \"y\", { lock = false })",
+        "host.fs.write(\"f.md\", \"y\", { lock = true })",
+    ] {
+        assert_eq!(kind_of(code), "nil", "{code}");
+    }
 }

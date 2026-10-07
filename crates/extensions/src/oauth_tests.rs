@@ -247,3 +247,335 @@ fn a_malformed_parameter_is_named_only_when_recognised_and_its_value_never_shown
         assert!(!err.contains('\n'), "{query}: {err}");
     }
 }
+
+/// The reply `work` delivers: every failure carries its code and message.
+fn delivered(work: impl FnOnce(&Deliver)) -> Reply {
+    let (tx, rx) = mpsc::channel();
+    let deliver: Deliver = Arc::new(move |reply| match tx.send(reply) {
+        Ok(()) | Err(_) => {}
+    });
+    work(&deliver);
+    rx.recv_timeout(WAIT)
+        .expect("waited {WAIT:?} for the reply")
+}
+
+fn failed(reply: Reply) -> (contract::ErrorCode, String) {
+    match reply {
+        Reply::Query(Err(failed)) => failed,
+        Reply::Lock(Err(crate::host::LockError::Coded(failed))) => failed,
+        Reply::Lock(Err(crate::host::LockError::Arg(message))) => {
+            panic!("a string failure was delivered: {message}")
+        }
+        Reply::Http(_) | Reply::Exec(_) | Reply::Query(_) | Reply::Lock(_) | Reply::Slept => {
+            panic!("no failure was delivered")
+        }
+    }
+}
+
+#[test]
+fn a_port_that_cannot_be_bound_is_io_failed() {
+    let held = bind(0).unwrap();
+    let port = held.local_addr().unwrap().port();
+    let (code, message) = failed(delivered(|deliver| {
+        assert!(listen(port, deliver).is_none());
+    }));
+    assert_eq!(code, contract::ErrorCode::IoFailed);
+    assert!(message.contains(&format!("port {port}")), "{message}");
+}
+
+#[test]
+fn a_request_whose_query_cannot_be_read_is_unreadable_reply() {
+    let port = bind(0).unwrap().local_addr().unwrap().port();
+    let (tx, rx) = mpsc::channel();
+    let deliver: Deliver = Arc::new(move |reply| match tx.send(reply) {
+        Ok(()) | Err(_) => {}
+    });
+    let cancel = listen(port, &deliver).expect("the listener binds");
+    let mut stream = std::net::TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
+    std::io::Write::write_all(
+        &mut stream,
+        b"GET /cb?code=SECRET%zz HTTP/1.1\r\nHost: x\r\n\r\n",
+    )
+    .unwrap();
+    let (code, message) = failed(rx.recv_timeout(WAIT).expect("the reply arrives"));
+    assert_eq!(code, contract::ErrorCode::UnreadableReply);
+    assert!(message.starts_with("host.oauth.callback: "), "{message}");
+    assert!(!message.contains("SECRET"), "{message}");
+    drop(cancel);
+}
+
+#[test]
+fn a_lock_whose_file_cannot_be_written_is_io_failed() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = fakes::TempDir::new("fiber-oauth-lock");
+    let credentials = dir.path().join("credentials");
+    std::fs::create_dir(&credentials).unwrap();
+    std::fs::set_permissions(&credentials, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let pair = crate::CredentialPair {
+        credential: "acme".to_owned(),
+        label: "default".to_owned(),
+    };
+    let (code, message) = failed(delivered(|deliver| {
+        // The directories check passes; the spawned wait fails writing
+        // the lock file and delivers the failure.
+        let _waiting = lock(dir.path(), &pair, deliver);
+    }));
+    assert_eq!(code, contract::ErrorCode::IoFailed);
+    assert!(message.starts_with("host.oauth.refresh: "), "{message}");
+    std::fs::set_permissions(&credentials, std::fs::Permissions::from_mode(0o700)).unwrap();
+}
+
+/// Calls each `held:` method in Lua and converts the caught failure to its
+/// code and message.
+
+#[test]
+fn a_credential_file_that_cannot_be_read_or_written_is_io_failed() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = fakes::TempDir::new("fiber-oauth-held");
+    let file = CredentialFile::new(dir.path(), "acme", "default").unwrap();
+    {
+        let lock = file.try_lock().unwrap().unwrap();
+        lock.write(&serde_json::json!({ "token": "old", "expires_at": 1 }))
+            .unwrap();
+    }
+    let cred_dir = dir.path().join("credentials").join("acme");
+    let path = cred_dir.join("default");
+    // Each phase runs in its own VM: dropping it frees the held lock.
+    // The methods return `(nil, code, message)` on a coded failure, which
+    // the refresh half raises as the table; assert the triple and the
+    // table it builds.
+    let failed = |held: Held, method: &str| {
+        let lua = Lua::new();
+        let lib = crate::host::failure::install(&lua).unwrap();
+        lua.globals().set("held", held).unwrap();
+        let values: mlua::MultiValue = lua.load(format!("return {method}")).eval().unwrap();
+        let mut values = values.into_vec();
+        assert_eq!(values.len(), 3, "{method} returned no failure triple");
+        let message = values.pop().unwrap();
+        let code = values.pop().unwrap();
+        assert_eq!(values.pop().unwrap(), mlua::Value::Nil);
+        let (code, message) = match (code, message) {
+            (mlua::Value::String(code), mlua::Value::String(message)) => (
+                code.to_str().unwrap().to_owned(),
+                message.to_str().unwrap().to_owned(),
+            ),
+            _ => panic!("{method} raised no failure triple"),
+        };
+        let table: mlua::Table = lib.failure.call((code.clone(), message.clone())).unwrap();
+        let (tcode, tmessage): (String, String) =
+            (table.get("code").unwrap(), table.get("message").unwrap());
+        assert_eq!((tcode, tmessage), (code.clone(), message.clone()));
+        (code, message)
+    };
+    // An unreadable file fails the read.
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let clock = fakes::clock::FakeClock::new();
+    let held = Held::new(file.try_lock().unwrap().unwrap(), clock);
+    let (code, message) = failed(held, "held:read()");
+    assert_eq!(code, "io_failed");
+    assert!(message.contains("default"), "{message}");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    // A read-only directory fails the atomic write's rename.
+    let clock = fakes::clock::FakeClock::new();
+    let held = Held::new(file.try_lock().unwrap().unwrap(), clock);
+    std::fs::set_permissions(&cred_dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let (code, message) = failed(held, "held:write({ token = 't', expires_at = 1 })");
+    assert_eq!(code, "io_failed");
+    assert!(message.contains("default"), "{message}");
+    std::fs::set_permissions(&cred_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+}
+
+/// A credential file that is not JSON, or a path that is a symlink, fails the
+/// held read as `io_failed`, the code the file layer's
+/// `config_invalid` must not replace on this path.
+#[test]
+fn a_malformed_or_symlinked_credential_is_io_failed_through_held() {
+    let triple = |held: Held, method: &str| {
+        let lua = Lua::new();
+        crate::host::failure::install(&lua).unwrap();
+        lua.globals().set("held", held).unwrap();
+        let values: mlua::MultiValue = lua.load(format!("return {method}")).eval().unwrap();
+        let values = values.into_vec();
+        assert_eq!(values.len(), 3, "{method} returned no failure triple");
+        let mlua::Value::String(code) = &values[1] else {
+            panic!("{method} raised no code");
+        };
+        code.to_str().unwrap().to_owned()
+    };
+    let dir = fakes::TempDir::new("fiber-oauth-held-shape");
+    let file = CredentialFile::new(dir.path(), "acme", "default").unwrap();
+    {
+        let lock = file.try_lock().unwrap().unwrap();
+        lock.write(&serde_json::json!({ "token": "old", "expires_at": 1 }))
+            .unwrap();
+    }
+    let path = dir.path().join("credentials").join("acme").join("default");
+    std::fs::write(&path, b"not json").unwrap();
+    let clock = fakes::clock::FakeClock::new();
+    let held = Held::new(file.try_lock().unwrap().unwrap(), clock);
+    assert_eq!(triple(held, "held:read()"), "io_failed");
+    std::fs::remove_file(&path).unwrap();
+    let elsewhere = dir.path().join("elsewhere");
+    std::fs::write(&elsewhere, b"{}").unwrap();
+    std::os::unix::fs::symlink(&elsewhere, &path).unwrap();
+    let clock = fakes::clock::FakeClock::new();
+    let held = Held::new(file.try_lock().unwrap().unwrap(), clock);
+    assert_eq!(triple(held, "held:read()"), "io_failed");
+}
+
+fn unattended_oauth_lua() -> Lua {
+    let lua = Lua::new();
+    let failures = crate::host::failure::install(&lua).unwrap();
+    let host = lua.create_table().unwrap();
+    let tag = lua.create_table().unwrap();
+    install(
+        &lua,
+        &host,
+        &tag,
+        Arc::new(SystemBrowser::default()),
+        Rc::new(Cell::new(false)),
+        failures.failure,
+        failures.note_failure,
+    )
+    .unwrap();
+    lua.globals().set("host", host).unwrap();
+    lua.globals().set("tag", tag).unwrap();
+    lua
+}
+
+#[test]
+fn unattended_oauth_calls_raise_tables_to_coroutine_resume() {
+    let lua = unattended_oauth_lua();
+    for (call, message) in [
+        (
+            "host.oauth.open('https://example.test')",
+            "host.oauth.open needs a person to log in, and nobody is attached",
+        ),
+        (
+            "host.oauth.callback({ port = 1 })",
+            "host.oauth.callback needs a person to log in, and nobody is attached",
+        ),
+        (
+            "host.oauth.poll({ url = 'https://example.test' })",
+            "host.oauth.poll needs a person to log in, and nobody is attached",
+        ),
+    ] {
+        let (ok, err): (bool, mlua::Value) = lua
+            .load(format!(
+                "return coroutine.resume(coroutine.create(function() {call} end))"
+            ))
+            .eval()
+            .unwrap();
+        assert!(!ok, "{call} unexpectedly succeeded");
+        let mlua::Value::Table(failed) = err else {
+            panic!("{call} raised no failure table");
+        };
+        assert_eq!(
+            failed.get::<String>("code").unwrap(),
+            "authentication_failed"
+        );
+        assert_eq!(failed.get::<String>("message").unwrap(), message);
+    }
+}
+
+#[test]
+fn refresh_passes_the_original_failure_table_through_unchanged() {
+    let lua = unattended_oauth_lua();
+    let dir = fakes::TempDir::new("fiber-oauth-table-identity");
+    let lock = CredentialFile::new(dir.path(), "acme", "default")
+        .unwrap()
+        .try_lock()
+        .unwrap()
+        .unwrap();
+    lua.globals()
+        .set("held", Held::new(lock, fakes::clock::FakeClock::new()))
+        .unwrap();
+    let same: bool = lua
+        .load(
+            "local original = { code = 'connection_failed', message = 'offline', extra = 'kept' }
+             local co = coroutine.create(function()
+               return pcall(function()
+                 return host.oauth.refresh(function() error(original, 0) end)
+               end)
+             end)
+             local started, yielded, kind = coroutine.resume(co)
+             if not started or yielded ~= tag or kind ~= 'lock' then return false end
+             local resumed, ok, caught = coroutine.resume(co, held)
+             return resumed and not ok and rawequal(caught, original)
+               and caught.code == 'connection_failed' and caught.message == 'offline'
+               and caught.extra == 'kept'",
+        )
+        .eval()
+        .unwrap();
+    assert!(same, "refresh replaced or changed the user's failure table");
+}
+
+#[test]
+fn a_refresh_function_raising_a_string_reaches_coroutine_resume_as_credential_failed() {
+    let lua = unattended_oauth_lua();
+    let dir = fakes::TempDir::new("fiber-oauth-string-refresh");
+    let lock = CredentialFile::new(dir.path(), "acme", "default")
+        .unwrap()
+        .try_lock()
+        .unwrap()
+        .unwrap();
+    lua.globals()
+        .set("held", Held::new(lock, fakes::clock::FakeClock::new()))
+        .unwrap();
+    let (code, message): (String, String) = lua
+        .load(
+            "local co = coroutine.create(function()
+               return host.oauth.refresh(function() error('boom', 0) end)
+             end)
+             local started, yielded, kind = coroutine.resume(co)
+             assert(started and yielded == tag and kind == 'lock')
+             local resumed, caught = coroutine.resume(co, held)
+             assert(not resumed and type(caught) == 'table')
+             return caught.code, caught.message",
+        )
+        .eval()
+        .unwrap();
+    assert_eq!(
+        (code.as_str(), message.as_str()),
+        ("credential_failed", "boom")
+    );
+}
+
+#[test]
+fn a_held_write_with_no_usable_credential_is_a_string() {
+    let dir = fakes::TempDir::new("fiber-oauth-held-string");
+    let file = CredentialFile::new(dir.path(), "acme", "default").unwrap();
+    let lock = file.try_lock().unwrap().unwrap();
+    let held = Held::new(lock, fakes::clock::FakeClock::new());
+    let lua = Lua::new();
+    lua.globals().set("held", held).unwrap();
+    // The raw method returns `(nil, message)`, which the refresh half raises
+    // as the string: an error in the calling code (ruling 17).
+    let values: mlua::MultiValue = lua.load("return held:write({})").eval().unwrap();
+    let values = values.into_vec();
+    assert_eq!(values.len(), 2, "a string failure returns one message");
+    assert_eq!(values[0], mlua::Value::Nil);
+    let mlua::Value::String(message) = &values[1] else {
+        panic!("held:write raised no string failure");
+    };
+    assert!(
+        message.to_str().unwrap().contains("`token` string"),
+        "{message:?}"
+    );
+}
+
+#[test]
+fn a_held_read_after_release_is_a_string() {
+    let dir = fakes::TempDir::new("fiber-oauth-held-released");
+    let file = CredentialFile::new(dir.path(), "acme", "default").unwrap();
+    let lock = file.try_lock().unwrap().unwrap();
+    let held = Held::new(lock, fakes::clock::FakeClock::new());
+    let lua = Lua::new();
+    lua.globals().set("held", held).unwrap();
+    lua.load("held:release()").exec().unwrap();
+    let values: mlua::MultiValue = lua.load("return held:read()").eval().unwrap();
+    let values = values.into_vec();
+    assert_eq!(values.len(), 2, "a string failure returns one message");
+    assert_eq!(values[0], mlua::Value::Nil);
+    assert!(matches!(values[1], mlua::Value::String(_)));
+}

@@ -50,10 +50,14 @@ pub(crate) struct Ran {
     pub timed_out: bool,
 }
 
-/// A run that failed: the message Lua raises, and how the run ended when
-/// it started (a spawn failure never ran, so there is nothing to log).
+/// A run that failed: its code and message, which `host.exec` raises as
+/// `{ code, message }`, and how the run ended when it started (a spawn
+/// failure never ran, so there is nothing to log).
 #[derive(Debug)]
 pub(crate) struct ExecError {
+    /// The failure's code: `not_found` when the program or `cwd` does not
+    /// exist, `too_large` past the memory cap, else `io_failed`.
+    pub code: contract::ErrorCode,
     /// What `host.exec` raises.
     pub message: String,
     /// How the run ended, when it started.
@@ -121,7 +125,7 @@ pub(crate) fn run(
     clock: &dyn Clock,
     deadline: Option<Instant>,
     cancel: mpsc::Receiver<()>,
-) -> Result<Ran, ExecError> {
+) -> Result<Ran, Box<ExecError>> {
     let mut cmd = Command::new(&req.program);
     cmd.args(&req.args)
         .current_dir(&req.cwd)
@@ -134,10 +138,18 @@ pub(crate) fn run(
     let mut child = match spawn(&mut cmd) {
         Ok(child) => child,
         Err(source) => {
-            return Err(ExecError {
+            // `NotFound` names a missing program or working directory;
+            // anything else kept the program from starting.
+            let code = if source.kind() == std::io::ErrorKind::NotFound {
+                contract::ErrorCode::NotFound
+            } else {
+                contract::ErrorCode::IoFailed
+            };
+            return Err(Box::new(ExecError {
+                code,
                 message: format!("host.exec: {}: {source}", req.program),
                 ran: None,
-            });
+            }));
         }
     };
     let pgid = child.id();
@@ -246,7 +258,7 @@ fn supervise(
     deadline: Option<Instant>,
     cancel: &mpsc::Receiver<()>,
     reap: &mut dyn FnMut(),
-) -> Result<Ran, ExecError> {
+) -> Result<Ran, Box<ExecError>> {
     let mut seen_empty = false;
     let mut timed_out = false;
     let mut capped = false;
@@ -328,13 +340,14 @@ fn supervise(
             lock(&shared.inner).discard = true;
             finished(pgid, seen_empty);
             if capped {
-                return Err(ExecError {
+                return Err(Box::new(ExecError {
+                    code: contract::ErrorCode::TooLarge,
                     message: format!(
                         "host.exec: {}: output passed the extension's memory cap of {} bytes",
                         req.program, req.cap
                     ),
                     ran: Some(ran),
-                });
+                }));
             }
             return Ok(ran);
         }
@@ -355,7 +368,7 @@ fn abort_startup(
     clock: &dyn Clock,
     reading: [bool; 2],
     source: std::io::Error,
-) -> ExecError {
+) -> Box<ExecError> {
     {
         let mut inner = lock(&shared.inner);
         let [out, err] = reading;
@@ -376,10 +389,11 @@ fn abort_startup(
         Err(capped) => capped.ran,
     }
     .map(|ran| completed(ran, status));
-    ExecError {
+    Box::new(ExecError {
+        code: contract::ErrorCode::IoFailed,
         message: format!("host.exec: {}: {source}", req.program),
         ran,
-    }
+    })
 }
 
 /// Records the child's end once it has one; an error means nothing is left

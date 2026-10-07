@@ -1,12 +1,17 @@
 use super::*;
 
 fn lua() -> Lua {
+    lua_in(PathBuf::from("/nonexistent-fiber-home"))
+}
+
+fn lua_in(home: PathBuf) -> Lua {
     let lua = Lua::new();
     let hub = crate::lua::Hub::new(fakes::clock::FakeClock::new());
+    let failures = failure::install(&lua).unwrap();
     install(
         &lua,
         HostContext {
-            home: PathBuf::from("/nonexistent-fiber-home"),
+            home,
             workspace: PathBuf::from("/nonexistent-workspace"),
             extension: "fiber.test/x".to_owned(),
             session: None,
@@ -15,8 +20,21 @@ fn lua() -> Lua {
         Arc::new(crate::SystemBrowser::default()),
         Rc::default(),
         &hub,
+        failures.failure,
+        failures.note_failure,
     )
     .unwrap();
+    lua
+}
+
+/// Lua with the prelude installed, so `pcall` catches a failure as its table.
+fn lua_prelude(home: PathBuf) -> Lua {
+    let lua = lua_in(home);
+    let clock = fakes::clock::FakeClock::new();
+    let deadline = crate::lua::Deadline::new(clock);
+    let dir = fakes::TempDir::new("fiber-host-prelude");
+    crate::lua::install_prelude(&lua, &deadline, dir.path().to_path_buf(), crate::MEMORY_CAP)
+        .unwrap();
     lua
 }
 
@@ -233,4 +251,163 @@ fn host_http_bypasses_the_proxy_for_no_proxy_hosts() {
         "nothing went through the proxy"
     );
     assert_eq!(server.requests().len(), 1);
+}
+
+fn get(
+    url: &str,
+    timeout: Option<Duration>,
+) -> Result<(u16, Vec<u8>), (contract::ErrorCode, String)> {
+    perform(&HttpRequest {
+        method: "GET".to_owned(),
+        url: url.to_owned(),
+        headers: Vec::new(),
+        body: None,
+        timeout,
+    })
+}
+
+#[test]
+fn a_refused_connection_is_connection_failed() {
+    let (code, message) = get("http://127.0.0.1:1/", None).unwrap_err();
+    assert_eq!(code, contract::ErrorCode::ConnectionFailed);
+    assert!(message.starts_with("host.http: "), "{message}");
+}
+
+/// How long the silent fake waits for the request before failing the test.
+const ACCEPT_WITHIN: Duration = Duration::from_secs(10);
+/// How long the test waits for the blocking `get` before failing it.
+const GET_WITHIN: Duration = Duration::from_secs(10);
+/// How often the silent fake polls for the request while waiting.
+const ACCEPT_POLL: Duration = Duration::from_millis(20);
+
+#[test]
+fn a_silent_server_past_the_backstop_is_timeout() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        // Accept and never reply: the read, not the connect, passes the backstop.
+        // Both waits are bounded: the polls end at `ACCEPT_WITHIN`, and the
+        // held connection is released at `GET_WITHIN`.
+        let (_held_tx, held) = std::sync::mpsc::channel::<()>();
+        let polls = ACCEPT_WITHIN.as_millis() / ACCEPT_POLL.as_millis();
+        for _ in 0..polls {
+            match listener.accept() {
+                Ok((_held, _)) => {
+                    match held.recv_timeout(GET_WITHIN) {
+                        Ok(()) | Err(_) => {}
+                    }
+                    return;
+                }
+                Err(source) if source.kind() == std::io::ErrorKind::WouldBlock => {
+                    match held.recv_timeout(ACCEPT_POLL) {
+                        Ok(()) | Err(_) => {}
+                    }
+                }
+                Err(source) => panic!("the silent server failed to accept: {source}"),
+            }
+        }
+        panic!("waited {ACCEPT_WITHIN:?} for the silent server to accept");
+    });
+    let (tx, rx) = std::sync::mpsc::channel();
+    let url = format!("http://127.0.0.1:{port}/");
+    std::thread::spawn(move || {
+        tx.send(get(&url, Some(Duration::from_millis(300))))
+            .unwrap_or(());
+    });
+    let (code, message) = rx
+        .recv_timeout(GET_WITHIN)
+        .expect("waited {GET_WITHIN:?} for the silent-server get")
+        .unwrap_err();
+    assert_eq!(code, contract::ErrorCode::Timeout, "{message}");
+    assert!(message.starts_with("host.http: "), "{message}");
+}
+
+/// The failure a prelude `pcall` of `code` catches: its code and message.
+fn pcall_of(lua: &Lua, code: &str) -> (String, String) {
+    let (ok, err): (bool, LuaValue) = lua
+        .load(format!("return pcall(function() {code} end)"))
+        .eval()
+        .unwrap();
+    assert!(!ok, "{code} unexpectedly succeeded");
+    let LuaValue::Table(failed) = err else {
+        panic!("{code} raised no failure table");
+    };
+    (failed.get("code").unwrap(), failed.get("message").unwrap())
+}
+
+/// The string a prelude `pcall` of `code` catches: a wrong argument stays
+/// a string error (ruling 17).
+fn pcall_string_of(lua: &Lua, code: &str) -> String {
+    let (ok, err): (bool, LuaValue) = lua
+        .load(format!("return pcall(function() {code} end)"))
+        .eval()
+        .unwrap();
+    assert!(!ok, "{code} unexpectedly succeeded");
+    let LuaValue::String(err) = err else {
+        panic!("{code} raised no string error: {err:?}");
+    };
+    err.to_str().unwrap().to_owned()
+}
+
+#[test]
+fn a_secret_with_a_bad_name_is_a_string_at_its_source() {
+    // Even a raw `coroutine.resume`, which the prelude's `pcall` never
+    // sees, catches the string: the Lua half raises it at the call.
+    let lua = lua();
+    let (ok, err): (bool, LuaValue) = lua
+        .load("return coroutine.resume(coroutine.create(function() return host.secret('a/b') end))")
+        .eval()
+        .unwrap();
+    assert!(!ok);
+    let LuaValue::String(message) = err else {
+        panic!("host.secret raised no string error: {err:?}");
+    };
+    let message = message.to_str().unwrap().to_owned();
+    assert!(message.contains("not a secret's name"), "{message}");
+    let lua = lua_prelude(PathBuf::from("/nonexistent-fiber-home"));
+    let kind: String = lua
+        .load("local ok, err = pcall(function() return host.secret('a/b') end); return type(err)")
+        .eval()
+        .unwrap();
+    assert_eq!(kind, "string");
+}
+
+#[test]
+fn pkce_resolves_through_its_wrapper() {
+    let lua = lua();
+    let (ok, pair): (bool, LuaValue) = lua
+        .load("return coroutine.resume(coroutine.create(host.oauth.pkce))")
+        .eval()
+        .unwrap();
+    assert!(ok);
+    let LuaValue::Table(pair) = pair else {
+        panic!("host.oauth.pkce returned no table");
+    };
+    for field in ["challenge", "verifier"] {
+        let value: String = pair.get(field).unwrap();
+        assert_eq!(value.len(), 43, "{field}");
+    }
+}
+
+#[test]
+fn a_secret_with_a_bad_name_is_a_string_for_pcall() {
+    let lua = lua_prelude(PathBuf::from("/nonexistent-fiber-home"));
+    let message = pcall_string_of(&lua, "return host.secret('a/b')");
+    assert!(message.contains("not a secret's name"), "{message}");
+}
+
+#[test]
+fn an_unreadable_secret_is_io_failed() {
+    use std::os::unix::fs::PermissionsExt;
+    let home = fakes::TempDir::new("fiber-host-secret");
+    let home = home.path().to_path_buf();
+    config::store_secret(&home, "token", &config::Secret::new("s3cr3t".to_owned())).unwrap();
+    let path = home.join("credentials").join("token");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let lua = lua_prelude(home);
+    let (code, message) = pcall_of(&lua, "return host.secret('token')");
+    assert_eq!(code, "io_failed");
+    assert!(message.contains("token"), "{message}");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
 }

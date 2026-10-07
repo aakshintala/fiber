@@ -21,6 +21,7 @@ use ureq::tls::{RootCerts, TlsConfig};
 use crate::oauth::{self, Browser};
 
 pub(crate) mod exec;
+pub(crate) mod failure;
 mod fs;
 mod log;
 mod settings;
@@ -65,14 +66,14 @@ pub(crate) struct HostContext {
 /// code that made it"). Every host call that waits yields the tag and its
 /// kind, as [`Request`] lists.
 const HTTP: &str = r#"
-local host, tag = ...
+local host, tag, failure = ...
 function host.http(opts)
   if type(opts) ~= "table" or type(opts.url) ~= "string" then
     error("host.http: `url` must be a string", 2)
   end
-  local status, body = coroutine.yield(tag, "http", opts)
-  if status == nil then error(body, 0) end
-  return { status = status, body = body }
+  local status, second, third = coroutine.yield(tag, "http", opts)
+  if status == nil then error(failure(second, third), 0) end
+  return { status = status, body = second }
 end
 "#;
 
@@ -82,7 +83,7 @@ end
 /// code that made it"). Refused in the entry script before it yields, like
 /// `host.oauth.callback`.
 const EXEC: &str = r#"
-local host, tag, in_entry = ...
+local host, tag, in_entry, failure = ...
 function host.exec(program, args, opts)
   if in_entry() then
     error("host.exec: not available while init.lua runs", 2)
@@ -107,8 +108,8 @@ function host.exec(program, args, opts)
   if cwd ~= nil and type(cwd) ~= "string" then
     error("host.exec: `cwd` must be a string", 2)
   end
-  local result, err = coroutine.yield(tag, "exec", { program = program, args = args, cwd = cwd })
-  if result == nil then error(err, 0) end
+  local result, code, message = coroutine.yield(tag, "exec", { program = program, args = args, cwd = cwd })
+  if result == nil then error(failure(code, message), 0) end
   return result
 end
 "#;
@@ -120,12 +121,15 @@ const MAX_DEPTH: usize = 128;
 /// Sets the `host` and `json` globals. The returned tag is what the host
 /// calls yield, so the scheduler can tell that yield from any other; the
 /// returned table holds the timers' functions by id, which each firing runs.
+/// `failure` is the `{ code, message }` constructor the halves raise.
 pub(crate) fn install(
     lua: &Lua,
     ctx: HostContext,
     browser: Arc<dyn Browser>,
     entry: Rc<Cell<bool>>,
     hub: &Arc<crate::lua::Hub>,
+    failure: mlua::Function,
+    note_failure: mlua::Function,
 ) -> mlua::Result<(LuaValue, Table)> {
     let HostContext {
         home,
@@ -136,34 +140,60 @@ pub(crate) fn install(
     } = ctx;
     let host = lua.create_table()?;
     let secret_home = home.clone();
-    host.set(
-        "secret",
-        lua.create_function(move |_, name: String| {
-            config::read_secret(&secret_home, &name)
-                .map(|secret| secret.map(|s| s.expose().trim().to_owned()))
-                .map_err(mlua::Error::external)
-        })?,
-    )?;
+    let secret_raw = lua.create_function(move |lua, name: LuaValue| {
+        // A coded failure returns `(nil, code, message)` for the Lua half
+        // to raise as the table; a wrong name stays a string error.
+        let LuaValue::String(name) = &name else {
+            return failure::raw_string(lua, "host.secret: name must be a string".to_owned());
+        };
+        let Ok(name) = name.to_str() else {
+            return failure::raw_string(lua, "host.secret: name must be a string".to_owned());
+        };
+        match config::read_secret(&secret_home, &name) {
+            Ok(secret) => Ok(match secret.map(|s| s.expose().trim().to_owned()) {
+                Some(secret) => {
+                    MultiValue::from_vec(vec![LuaValue::String(lua.create_string(secret)?)])
+                }
+                None => MultiValue::from_vec(vec![LuaValue::Nil]),
+            }),
+            Err(source) if matches!(source, config::ConfigError::SecretName { .. }) => {
+                failure::raw_string(lua, source.to_string())
+            }
+            Err(source) => {
+                let (code, message) = (source.code(), source.to_string());
+                failure::raw_failure(lua, &code, message)
+            }
+        }
+    })?;
+    host.set("secret", failure::wrap(lua, secret_raw, &failure)?)?;
     fs::install(
         lua,
         &host,
-        workspace,
-        home,
-        &extension,
-        memory_cap,
-        session.as_ref(),
+        fs::Ctx {
+            workspace,
+            home,
+            extension: &extension,
+            memory_cap,
+            session: session.as_ref(),
+        },
+        &failure,
     )?;
-    settings::install(lua, &host, &extension, session)?;
+    settings::install(lua, &host, &extension, session, &failure)?;
     let tag = lua.create_table()?;
-    lua.load(HTTP)
-        .set_name("=host.http")
-        .call::<()>((host.clone(), tag.clone()))?;
+    lua.load(HTTP).set_name("=host.http").call::<()>((
+        host.clone(),
+        tag.clone(),
+        failure.clone(),
+    ))?;
     let exec_entry = Rc::clone(&entry);
     let in_entry = lua.create_function(move |_, ()| Ok(exec_entry.get()))?;
-    lua.load(EXEC)
-        .set_name("=host.exec")
-        .call::<()>((host.clone(), tag.clone(), in_entry))?;
-    oauth::install(lua, &host, &tag, browser, entry)?;
+    lua.load(EXEC).set_name("=host.exec").call::<()>((
+        host.clone(),
+        tag.clone(),
+        in_entry,
+        failure.clone(),
+    ))?;
+    oauth::install(lua, &host, &tag, browser, entry, failure, note_failure)?;
     let timer_funcs = timers::install(lua, &host, hub)?;
     log::install(lua, &host, hub, &extension)?;
     ui::install(lua, &host, hub, &extension)?;
@@ -242,14 +272,23 @@ pub(crate) enum Request {
     Sleep(Duration),
 }
 
-/// The answer to a [`Request`]. A failure is the text Lua raises.
+/// A `host.oauth.refresh` lock failure: a coded failure the refresh half
+/// raises as the table, or an error in the calling code it raises as the
+/// string (a command, hook or timer holds no provider credential).
+pub(crate) enum LockError {
+    Coded((contract::ErrorCode, String)),
+    Arg(String),
+}
+
+/// The answer to a [`Request`]. A failure is its code and the message Lua raises.
 pub(crate) enum Reply {
-    Http(Result<(u16, Vec<u8>), String>),
-    /// How a `host.exec` run ended, or the text `host.exec` raises.
-    Exec(Result<exec::Ran, String>),
-    /// The query parameters of the one request the callback served.
-    Query(Result<Vec<(String, String)>, String>),
-    Lock(Result<CredentialLock, String>),
+    Http(Result<(u16, Vec<u8>), (contract::ErrorCode, String)>),
+    /// How a `host.exec` run ended, or the code and message `host.exec` raises.
+    Exec(Result<exec::Ran, (contract::ErrorCode, String)>),
+    /// The query parameters of the one request the callback served, or the
+    /// code and message `host.oauth.callback` raises.
+    Query(Result<Vec<(String, String)>, (contract::ErrorCode, String)>),
+    Lock(Result<CredentialLock, LockError>),
     Slept,
 }
 
@@ -337,9 +376,21 @@ fn http_request(opts: &Table, timeout: Option<Duration>) -> mlua::Result<HttpReq
 }
 
 /// Runs `request`. A status other than 2xx is a reply, not an error. The
-/// error string is what `host.http` raises.
-pub(crate) fn perform(request: &HttpRequest) -> Result<(u16, Vec<u8>), String> {
-    let fail = |e: &dyn std::fmt::Display| format!("host.http: {e}");
+/// failure is the code and message `host.http` raises: a passed backstop
+/// is `timeout`, any other transport failure `connection_failed`.
+pub(crate) fn perform(
+    request: &HttpRequest,
+) -> Result<(u16, Vec<u8>), (contract::ErrorCode, String)> {
+    use contract::ErrorCode::{ConnectionFailed, Timeout};
+    // A passed backstop is `timeout`; DNS, TLS, a refused or dropped
+    // connection, and an unreadable body are `connection_failed`.
+    let transport = |e: ureq::Error| {
+        if matches!(e, ureq::Error::Timeout(_)) {
+            (Timeout, format!("host.http: {e}"))
+        } else {
+            (ConnectionFailed, format!("host.http: {e}"))
+        }
+    };
     let config = Agent::config_builder()
         .tls_config(
             TlsConfig::builder()
@@ -357,26 +408,37 @@ pub(crate) fn perform(request: &HttpRequest) -> Result<(u16, Vec<u8>), String> {
     for (name, value) in &request.headers {
         builder = builder.header(name, value);
     }
-    let response = match &request.body {
-        Some(body) => agent.run(builder.body(body.clone()).map_err(|e| fail(&e))?),
-        None => agent.run(builder.body(()).map_err(|e| fail(&e))?),
-    };
-    let mut response = response.map_err(|e| fail(&e))?;
-    let bytes = response.body_mut().read_to_vec().map_err(|e| fail(&e))?;
+    let built = request.body.clone();
+    let mut response = match built {
+        Some(body) => agent.run(
+            builder
+                .body(body)
+                .map_err(|e| (ConnectionFailed, format!("host.http: {e}")))?,
+        ),
+        None => agent.run(
+            builder
+                .body(())
+                .map_err(|e| (ConnectionFailed, format!("host.http: {e}")))?,
+        ),
+    }
+    .map_err(transport)?;
+    let bytes = response.body_mut().read_to_vec().map_err(transport)?;
     Ok((response.status().as_u16(), bytes))
 }
 
 /// The values `coroutine.yield` returns to the host call that yielded: its
-/// result, or nil and the error text. `clock` is what a held credential's
-/// expiry is judged by.
+/// result, or nil, the failure's code and its message, or nil and the
+/// message of an error in the calling code. `clock` is what a held
+/// credential's expiry is judged by.
 pub(crate) fn resume_values(
     lua: &Lua,
     clock: &Arc<dyn Clock>,
     reply: Reply,
 ) -> mlua::Result<MultiValue> {
-    let failed = |message: String| -> mlua::Result<MultiValue> {
+    let failed = |(code, message): (contract::ErrorCode, String)| -> mlua::Result<MultiValue> {
         Ok(MultiValue::from_vec(vec![
             LuaValue::Nil,
+            LuaValue::String(lua.create_string(failure::code_name(&code))?),
             LuaValue::String(lua.create_string(message)?),
         ]))
     };
@@ -385,10 +447,14 @@ pub(crate) fn resume_values(
             LuaValue::Integer(i64::from(status)),
             LuaValue::String(lua.create_string(bytes)?),
         ])),
-        Reply::Http(Err(message))
-        | Reply::Query(Err(message))
-        | Reply::Lock(Err(message))
-        | Reply::Exec(Err(message)) => failed(message),
+        Reply::Http(Err(failed_with))
+        | Reply::Exec(Err(failed_with))
+        | Reply::Query(Err(failed_with)) => failed(failed_with),
+        Reply::Lock(Err(LockError::Coded(failed_with))) => failed(failed_with),
+        Reply::Lock(Err(LockError::Arg(message))) => Ok(MultiValue::from_vec(vec![
+            LuaValue::Nil,
+            LuaValue::String(lua.create_string(message)?),
+        ])),
         Reply::Query(Ok(pairs)) => {
             let table = lua.create_table()?;
             for (key, value) in pairs {

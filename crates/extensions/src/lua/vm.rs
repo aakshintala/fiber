@@ -42,6 +42,8 @@ pub(super) struct Vm {
     hooks: Table,
     /// Why each hook `fiber.hook` refused was not registered.
     problems: Table,
+    /// The last raised failure, consumed only if its text escapes the callback.
+    failures: crate::host::failure::FailureState,
     /// The timers `host.after` and `host.every` set, by id in set order:
     /// each firing runs the function stored here.
     pub(super) timer_funcs: Table,
@@ -99,8 +101,9 @@ impl Vm {
         )
         .map_err(lua_error)?;
         lua.set_memory_limit(*memory_cap).map_err(lua_error)?;
-        let (commands, providers, hooks, problems) =
+        let (commands, providers, hooks, problems, failures) =
             setup::install(&lua, &deadline, dir.clone(), *memory_cap).map_err(lua_error)?;
+        let failure_state = failures.state.clone();
         let workspace = session
             .as_ref()
             .map(|session| session.config.workspace().to_path_buf())
@@ -118,6 +121,8 @@ impl Vm {
             Arc::clone(browser),
             Rc::clone(&entry),
             hub,
+            failures.failure,
+            failures.note_failure,
         )
         .map_err(lua_error)?;
         let vm = Self {
@@ -132,6 +137,7 @@ impl Vm {
             providers,
             hooks,
             problems,
+            failures: failure_state,
             timer_funcs,
         };
 
@@ -286,19 +292,8 @@ impl Vm {
     }
 
     pub(super) fn error(&self, e: &mlua::Error) -> Error {
-        if let Some(failed) = e.downcast_ref::<crate::oauth::RefreshFailed>() {
-            let (extension, message) = (self.name.clone(), failed.message.clone());
-            return if failed.reached {
-                Error::RefreshRejected { extension, message }
-            } else {
-                Error::RefreshUnreachable { extension, message }
-            };
-        }
-        if let Some(unattended) = e.downcast_ref::<crate::oauth::Unattended>() {
-            return Error::Unattended {
-                extension: self.name.clone(),
-                call: unattended.call.clone(),
-            };
+        if let Some(failed) = self.failures.take_matching(e) {
+            return pending_error(&self.name, failed);
         }
         Error::Lua {
             extension: self.name.clone(),
@@ -438,3 +433,25 @@ impl Vm {
         }
     }
 }
+
+/// The error a recorded failure fails its callback with.
+fn pending_error(extension: &str, failure: crate::host::failure::PendingFailure) -> Error {
+    use crate::host::failure::Boundary;
+
+    let extension = extension.to_owned();
+    match failure.boundary {
+        Boundary::Unattended { call } => Error::Unattended { extension, call },
+        Boundary::Refresh { reached: true } => Error::RefreshRejected {
+            extension,
+            message: failure.message,
+        },
+        Boundary::Refresh { reached: false } => Error::RefreshUnreachable {
+            extension,
+            message: failure.message,
+        },
+    }
+}
+
+#[cfg(test)]
+#[path = "vm_tests.rs"]
+mod tests;

@@ -127,37 +127,41 @@ impl Browser for SystemBrowser {
 /// table, the yield tag and a function that says whether the entry script is
 /// running, which can wait on nothing.
 const LUA: &str = r#"
-local host, tag, in_entry, refresh_failed, need_person = ...
+local host, tag, failure, in_entry, note_failure, attended = ...
 local oauth = host.oauth
 local yield, resume, status = coroutine.yield, coroutine.resume, coroutine.status
 -- The armed `coroutine.create` the prelude installed.
 local create = coroutine.create
 local pack, unpack = table.pack, table.unpack
 
--- Like `pcall(f, ...)`, but `f` may suspend on a host call. The VM's `pcall`
--- cannot be yielded across, so `f` runs in a coroutine of its own and each
--- yield it makes is passed up to the host, and the answer back down.
-local function run(f, ...)
-  local co = create(f)
-  local args = pack(...)
-  while true do
-    local r = pack(resume(co, unpack(args, 1, args.n)))
-    if not r[1] then return false, r[2] end
-    if status(co) == "dead" then return true, r[2] end
-    args = pack(yield(unpack(r, 2, r.n)))
-  end
-end
+-- The prelude's yield-forwarding `pcall`: `refresh` needs no HTTP tracking
+-- around `held` reads and writes, so it shares the global. `attempt` keeps
+-- its own loop to observe each `host.http` yield and its answer.
+local run = pcall
 
 -- Runs the refresh function `f` the way `run` does, and sees each `host.http`
--- yield and its answer. A function that raises fails the refresh, and the host
--- is told whether the last request got no reply at all.
+-- yield and its answer. A function that raises fails the refresh: a table
+-- passes through unchanged, anything else becomes `credential_failed`.
+-- Either is recorded with whether the last request got a reply, which an
+-- uncaught one fails the callback by.
 local function attempt(f, ...)
   local co = create(f)
   local args = pack(...)
   local unreached = false
   while true do
     local r = pack(resume(co, unpack(args, 1, args.n)))
-    if not r[1] then refresh_failed(not unreached, tostring(r[2]), r[2]) end
+    if not r[1] then
+      local err = r[2]
+      local boundary = unreached and "refresh:unreached" or "refresh:reached"
+      if type(err) == "table" then
+        local text = tostring(err)
+        local message = err.message
+        note_failure(text, type(message) == "string" and message or text, boundary)
+      else
+        err = failure("credential_failed", tostring(err), boundary)
+      end
+      error(err, 0)
+    end
     if status(co) == "dead" then return r[2] end
     local http = r[2] == tag and r[3] == "http"
     args = pack(yield(unpack(r, 2, r.n)))
@@ -171,6 +175,13 @@ local function in_callback(call)
   end
 end
 
+local function need_person(call)
+  if not attended() then
+    local message = "host.oauth." .. call .. " needs a person to log in, and nobody is attached"
+    error(failure("authentication_failed", message, "unattended:" .. call), 0)
+  end
+end
+
 function oauth.callback(opts)
   in_callback("callback")
   local port = type(opts) == "table" and opts.port or nil
@@ -178,8 +189,8 @@ function oauth.callback(opts)
     error("host.oauth.callback: `port` must be a whole number from 1 to 65535", 2)
   end
   need_person("callback")
-  local query, err = yield(tag, "callback", { port = port })
-  if query == nil then error(err, 0) end
+  local query, code, message = yield(tag, "callback", { port = port })
+  if query == nil then error(failure(code, message), 0) end
   return query
 end
 
@@ -204,23 +215,25 @@ function oauth.poll(opts)
     need_person("poll")
     local reply = host.http(request)
     local ok, body = pcall(json.decode, reply.body)
-    if not ok or type(body) ~= "table" then
-      error("host.oauth.poll: status " .. reply.status .. " with a body that is not a JSON object", 0)
+    -- A JSON array decodes to a Lua table too: only a `{` after any
+    -- space opens the object ruling 17 requires.
+    if not ok or type(body) ~= "table" or reply.body:match("^%s*(.)") ~= "{" then
+      error(failure("unreadable_reply", "host.oauth.poll: status " .. reply.status .. " with a body that is not a JSON object"), 0)
     end
     local code = body.error
     if code == nil then
       if reply.status < 200 or reply.status > 299 then
-        error("host.oauth.poll: status " .. reply.status, 0)
+        error(failure("http_error", "host.oauth.poll: status " .. reply.status), 0)
       end
       return body
     elseif code == "slow_down" then
       interval = interval + 5
       if interval > 3600 then
-        error("host.oauth.poll: the server asked for more than 3600 seconds between polls", 0)
+        error(failure("rate_limited", "host.oauth.poll: the server asked for more than 3600 seconds between polls"), 0)
       end
     elseif code ~= "authorization_pending" then
       local detail = type(body.error_description) == "string" and (": " .. body.error_description) or ""
-      error("host.oauth.poll: " .. tostring(code) .. detail, 0)
+      error(failure("authentication_failed", "host.oauth.poll: " .. tostring(code) .. detail), 0)
     end
     yield(tag, "sleep", interval)
   end
@@ -231,13 +244,21 @@ function oauth.refresh(fn)
   if type(fn) ~= "function" then
     error("host.oauth.refresh: takes a function", 2)
   end
-  local held, err = yield(tag, "lock")
-  if held == nil then error(err, 0) end
+  local held, code, message = yield(tag, "lock")
+  if held == nil then
+    if message == nil then error(code, 0) else error(failure(code, message), 0) end
+  end
   local ok, result = run(function()
-    local stored = held:read()
+    local stored, code, message = held:read()
+    if code ~= nil then
+      if message == nil then error(code, 0) else error(failure(code, message), 0) end
+    end
     if stored ~= nil and not held:due(stored) then return stored end
     local fresh = attempt(fn, stored)
-    held:write(fresh)
+    local _, wcode, wmessage = held:write(fresh)
+    if wcode ~= nil then
+      if wmessage == nil then error(wcode, 0) else error(failure(wcode, wmessage), 0) end
+    end
     return fresh
   end)
   held:release()
@@ -247,84 +268,73 @@ end
 "#;
 
 /// Sets `host.oauth`. `entry` is true while the entry script runs.
+/// `failure` raises a table; `note_failure` preserves refresh's outer mapping.
 pub(crate) fn install(
     lua: &Lua,
     host: &Table,
     tag: &Table,
     browser: Arc<dyn Browser>,
     entry: Rc<Cell<bool>>,
+    failure: mlua::Function,
+    note_failure: mlua::Function,
 ) -> mlua::Result<()> {
     let oauth = lua.create_table()?;
-    let need_browser = Arc::clone(&browser);
+    let open_browser = Arc::clone(&browser);
+    let open_raw = lua.create_function(move |lua, url: LuaValue| {
+        let LuaValue::String(url) = &url else {
+            return crate::host::failure::raw_string(
+                lua,
+                "host.oauth.open: url must be a string".to_owned(),
+            );
+        };
+        let Ok(url) = url.to_str() else {
+            return crate::host::failure::raw_string(
+                lua,
+                "host.oauth.open: url must be a string".to_owned(),
+            );
+        };
+        if !open_browser.attended() {
+            return crate::host::failure::raw_failure(
+                lua,
+                &contract::ErrorCode::AuthenticationFailed,
+                "host.oauth.open needs a person to log in, and nobody is attached".to_owned(),
+            );
+        }
+        open_browser.open(&url);
+        Ok(mlua::MultiValue::new())
+    })?;
     oauth.set(
         "open",
-        lua.create_function(move |_, url: String| {
-            if !browser.attended() {
-                return Err::<(), _>(mlua::Error::external(Unattended {
-                    call: "open".to_owned(),
-                }));
+        crate::host::failure::wrap_with_boundary(lua, open_raw, &failure, Some("unattended:open"))?,
+    )?;
+    let pkce_raw = lua.create_function(|lua, ()| {
+        let verifier = match verifier() {
+            Ok(verifier) => verifier,
+            Err(message) => {
+                return crate::host::failure::raw_failure(
+                    lua,
+                    &contract::ErrorCode::IoFailed,
+                    message,
+                );
             }
-            browser.open(&url);
-            Ok(())
-        })?,
-    )?;
-    oauth.set(
-        "pkce",
-        lua.create_function(|lua, ()| {
-            let verifier = verifier().map_err(mlua::Error::runtime)?;
-            let pair = lua.create_table()?;
-            pair.set("challenge", challenge(&verifier))?;
-            pair.set("verifier", verifier)?;
-            Ok(pair)
-        })?,
-    )?;
+        };
+        let pair = lua.create_table()?;
+        pair.set("challenge", challenge(&verifier))?;
+        pair.set("verifier", verifier)?;
+        Ok(mlua::MultiValue::from_vec(vec![mlua::Value::Table(pair)]))
+    })?;
+    oauth.set("pkce", crate::host::failure::wrap(lua, pkce_raw, &failure)?)?;
     host.set("oauth", oauth)?;
     let in_entry = lua.create_function(move |_, ()| Ok(entry.get()))?;
-    let refresh_failed =
-        lua.create_function(|_, (reached, message, raised): (bool, String, LuaValue)| {
-            if let LuaValue::Error(e) = &raised
-                && let Some(unattended) = e.downcast_ref::<Unattended>()
-            {
-                return Err::<(), _>(mlua::Error::external(Unattended {
-                    call: unattended.call.clone(),
-                }));
-            }
-            Err::<(), _>(mlua::Error::external(RefreshFailed { reached, message }))
-        })?;
-    let need_person = lua.create_function(move |_, call: String| {
-        if need_browser.attended() {
-            Ok(())
-        } else {
-            Err(mlua::Error::external(Unattended { call }))
-        }
-    })?;
+    let attended = lua.create_function(move |_, ()| Ok(browser.attended()))?;
     lua.load(LUA).set_name("=host.oauth").call::<()>((
         host.clone(),
         tag.clone(),
+        failure,
         in_entry,
-        refresh_failed,
-        need_person,
+        note_failure,
+        attended,
     ))
-}
-
-/// What the refresh function's failure carries out of Lua: whether the token
-/// endpoint was reached, so the host can tell a rejection from a network
-/// failure. `reached` is false when the last `host.http` call the function
-/// made before it raised got no reply.
-#[derive(Debug, thiserror::Error)]
-#[error("{message}")]
-pub(crate) struct RefreshFailed {
-    pub(crate) reached: bool,
-    pub(crate) message: String,
-}
-
-/// An interactive `host.oauth` helper called with nobody attached to answer
-/// (`docs/model-routing.md`, "Keys, tokens and OAuth"). `open`, `callback`
-/// and `poll` raise this before they open, listen or send anything.
-#[derive(Debug, thiserror::Error)]
-#[error("host.oauth.{call} needs a person to log in, and nobody is attached")]
-pub(crate) struct Unattended {
-    pub(crate) call: String,
 }
 
 /// 32 random bytes as base64url without padding, 43 characters (RFC 7636,
@@ -357,14 +367,6 @@ impl Held {
         }
     }
 
-    fn with<T>(&self, f: impl FnOnce(&CredentialLock) -> Result<T, String>) -> mlua::Result<T> {
-        let held = self.lock.borrow();
-        let lock = held.as_ref().ok_or_else(|| {
-            mlua::Error::runtime("host.oauth.refresh: the credential is no longer held")
-        })?;
-        f(lock).map_err(mlua::Error::runtime)
-    }
-
     /// Whether `stored` needs refreshing: not a usable credential, or one
     /// that expires within [`REFRESH_BEFORE`].
     fn due(&self, stored: &Value) -> bool {
@@ -391,20 +393,65 @@ fn usable(value: &Value) -> Option<i64> {
 impl UserData for Held {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         methods.add_method("read", |lua, this, ()| {
-            let stored = this.with(|lock| lock.read().map_err(|e| e.to_string()))?;
-            stored.map_or(Ok(LuaValue::Nil), |value| host::to_lua(lua, &value))
+            // A coded failure returns `(nil, code, message)` for the refresh
+            // half to raise as the table; no longer held returns
+            // `(nil, message)` for it to raise as the string.
+            let held = this.lock.borrow();
+            let Some(lock) = held.as_ref() else {
+                return crate::host::failure::raw_string(
+                    lua,
+                    "host.oauth.refresh: the credential is no longer held".to_owned(),
+                );
+            };
+            match lock.read() {
+                Ok(None) => Ok(mlua::MultiValue::from_vec(vec![LuaValue::Nil])),
+                Ok(Some(value)) => Ok(mlua::MultiValue::from_vec(vec![host::to_lua(lua, &value)?])),
+                Err(e) => crate::host::failure::raw_failure(
+                    lua,
+                    &contract::ErrorCode::IoFailed,
+                    e.to_string(),
+                ),
+            }
         });
         methods.add_method("due", |_, this, stored: LuaValue| {
             Ok(host::to_json(&stored).map_or(true, |value| this.due(&value)))
         });
-        methods.add_method("write", |_, this, fresh: LuaValue| {
-            let value = host::to_json(&fresh)?;
+        methods.add_method("write", |lua, this, fresh: LuaValue| {
+            let value = match host::to_json(&fresh) {
+                Ok(value) => value,
+                Err(err) => {
+                    return crate::host::failure::raw_string(
+                        lua,
+                        format!(
+                            "host.oauth.refresh: {}",
+                            err.to_string().lines().next().unwrap_or_default()
+                        ),
+                    );
+                }
+            };
             if usable(&value).is_none() {
-                return Err(mlua::Error::runtime(
-                    "host.oauth.refresh: the function must return a table with a `token` string and an `expires_at` whole number of seconds",
-                ));
+                return crate::host::failure::raw_string(
+                    lua,
+                    "host.oauth.refresh: the function must return a table with a `token` string and an `expires_at` whole number of seconds".to_owned(),
+                );
             }
-            this.with(|lock| lock.write(&value).map_err(|e| e.to_string()))
+            let held = this.lock.borrow();
+            let Some(lock) = held.as_ref() else {
+                return crate::host::failure::raw_string(
+                    lua,
+                    "host.oauth.refresh: the credential is no longer held".to_owned(),
+                );
+            };
+            match lock.write(&value) {
+                Ok(()) => Ok(mlua::MultiValue::from_vec(vec![])),
+                Err(e) => {
+                    crate::host::failure::raw_failure(
+                        lua,
+                        &contract::ErrorCode::IoFailed,
+                        e.to_string(),
+                    )
+                }
+            }
         });
         methods.add_method("release", |_, this, ()| {
             this.lock.borrow_mut().take();
@@ -423,9 +470,13 @@ fn bind(port: u16) -> io::Result<TcpListener> {
 /// frees the port. None when nothing is listening, in which case the error is
 /// already delivered.
 pub(crate) fn listen(port: u16, deliver: &Deliver) -> Option<Sender<()>> {
+    // A port that cannot be bound is `io_failed`; a request whose query
+    // cannot be read is `unreadable_reply`, both raised as `{ code,
+    // message }` by the callback half.
     let fail = |why: &dyn std::fmt::Display| {
-        deliver(Reply::Query(Err(format!(
-            "host.oauth.callback: port {port}: {why}"
+        deliver(Reply::Query(Err((
+            contract::ErrorCode::IoFailed,
+            format!("host.oauth.callback: port {port}: {why}"),
         ))));
     };
     let listener = match bind(port).and_then(|l| l.set_nonblocking(true).map(|()| l)) {
@@ -453,7 +504,7 @@ pub(crate) fn listen(port: u16, deliver: &Deliver) -> Option<Sender<()>> {
     }
 }
 
-type Query = Result<Vec<(String, String)>, String>;
+type Query = Result<Vec<(String, String)>, (contract::ErrorCode, String)>;
 
 /// Serves connections until one is a request, then returns its query. None
 /// when cancelled.
@@ -501,7 +552,10 @@ fn answer(mut stream: TcpStream, stop: &mpsc::Receiver<()>) -> Option<Query> {
         }
         Err(why) => {
             respond(&mut stream, "400 Bad Request");
-            Some(Err(format!("host.oauth.callback: {why}")))
+            Some(Err((
+                contract::ErrorCode::UnreadableReply,
+                format!("host.oauth.callback: {why}"),
+            )))
         }
     }
 }
@@ -632,7 +686,10 @@ fn decode(text: &str) -> Result<String, &'static str> {
 /// the error is already delivered.
 pub(crate) fn lock(home: &Path, pair: &CredentialPair, deliver: &Deliver) -> Option<Sender<()>> {
     let fail = |why: &dyn std::fmt::Display| {
-        deliver(Reply::Lock(Err(format!("host.oauth.refresh: {why}"))));
+        deliver(Reply::Lock(Err(crate::host::LockError::Coded((
+            contract::ErrorCode::IoFailed,
+            format!("host.oauth.refresh: {why}"),
+        )))));
     };
     let file = match CredentialFile::new(home, &pair.credential, &pair.label) {
         Ok(file) => file,
@@ -651,7 +708,10 @@ pub(crate) fn lock(home: &Path, pair: &CredentialPair, deliver: &Deliver) -> Opt
                     Ok(Some(lock)) => return send(Reply::Lock(Ok(lock))),
                     Ok(None) => {}
                     Err(e) => {
-                        return send(Reply::Lock(Err(format!("host.oauth.refresh: {e}"))));
+                        return send(Reply::Lock(Err(crate::host::LockError::Coded((
+                            contract::ErrorCode::IoFailed,
+                            format!("host.oauth.refresh: {e}"),
+                        )))));
                     }
                 }
                 match stop.recv_timeout(POLL) {

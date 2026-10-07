@@ -52,9 +52,10 @@ pub(super) const CHECK_EVERY: u32 = 1000;
 // extension runs"). A hook's phase and `on_failure` are docs/extensions.md,
 // "When several hooks share a point" and "When a hook fails".
 pub(super) const PRELUDE: &str = r#"
-local create, load_module = ...
+local create, load_module, rethrow_panic = ...
 local commands, providers, hooks, problems = {}, {}, {}, {}
-local resume, pack, unpack = coroutine.resume, table.pack, table.unpack
+local resume, status, yield, pack, unpack =
+  coroutine.resume, coroutine.status, coroutine.yield, table.pack, table.unpack
 
 coroutine.create = create
 coroutine.wrap = function(f)
@@ -64,6 +65,34 @@ coroutine.wrap = function(f)
     if not r[1] then error(r[2], 0) end
     return unpack(r, 2, r.n)
   end
+end
+
+-- Like `pcall(f, ...)`, but `f` may suspend on a host call. The VM's `pcall`
+-- cannot be yielded across, so `f` runs in a coroutine of its own and each
+-- yield it makes is passed up to the host, and the answer back down. Every
+-- error passes through unchanged (a host failure is already its
+-- `{ code, message }` table), and every return survives. `rethrow_panic`
+-- reads the error so a Rust panic resumes in Rust instead of being caught.
+pcall = function(f, ...)
+  local co = create(f)
+  local args = pack(...)
+  while true do
+    local r = pack(resume(co, unpack(args, 1, args.n)))
+    if not r[1] then
+      rethrow_panic(r[2])
+      return false, r[2]
+    end
+    if status(co) == "dead" then return true, unpack(r, 2, r.n) end
+    args = pack(yield(unpack(r, 2, r.n)))
+  end
+end
+
+xpcall = function(f, errfunc, ...)
+  local r = pack(pcall(f, ...))
+  if r[1] then return true, unpack(r, 2, r.n) end
+  local h = pack(pcall(errfunc, r[2]))
+  if h[1] then return false, unpack(h, 2, h.n) end
+  return false, h[2]
 end
 
 local loaded = {}
@@ -598,6 +627,8 @@ pub(crate) use hub::{DeclaredHooks, HookPhase};
 use vm::{Step, Vm};
 
 pub(crate) use setup::Deadline;
+#[cfg(test)]
+pub(crate) use setup::install as install_prelude;
 
 #[cfg(test)]
 #[path = "lua_tests.rs"]

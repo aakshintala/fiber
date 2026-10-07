@@ -78,7 +78,8 @@ impl Setup {
     fn lua(&self, session: Option<crate::host::Session>) -> Lua {
         let lua = Lua::new();
         let host = lua.create_table().unwrap();
-        install(&lua, &host, EXTENSION, session).unwrap();
+        let failure = crate::host::failure::install(&lua).unwrap().failure;
+        install(&lua, &host, EXTENSION, session, &failure).unwrap();
         lua.globals().set("host", host).unwrap();
         lua
     }
@@ -280,7 +281,8 @@ fn two_sequential_sets_both_land() {
             };
             let lua = Lua::new();
             let host = lua.create_table().unwrap();
-            install(&lua, &host, EXTENSION, Some(session)).unwrap();
+            let failure = crate::host::failure::install(&lua).unwrap().failure;
+            install(&lua, &host, EXTENSION, Some(session), &failure).unwrap();
             lua.globals().set("host", host).unwrap();
             lua.load(format!(
                 "host.config.set(\"slot{value}\", {value}, \"machine\")"
@@ -314,4 +316,151 @@ fn two_sequential_sets_both_land() {
         .extension_setting(EXTENSION, &[], "slot2")
         .unwrap();
     assert_eq!(merged, Some(serde_json::json!(2)));
+}
+
+/// The failure a prelude `pcall` of `code` catches: its code and message.
+fn pcall_of(lua: &Lua, code: &str) -> (String, String) {
+    let clock = fakes::clock::FakeClock::new();
+    let deadline = crate::lua::Deadline::new(clock);
+    let dir = fakes::TempDir::new("fiber-settings-prelude");
+    crate::lua::install_prelude(lua, &deadline, dir.path().to_path_buf(), crate::MEMORY_CAP)
+        .unwrap();
+    let (ok, err): (bool, LuaValue) = lua
+        .load(format!("return pcall(function() {code} end)"))
+        .eval()
+        .unwrap();
+    assert!(!ok, "{code} unexpectedly succeeded");
+    let LuaValue::Table(failed) = err else {
+        panic!("{code} raised no failure table");
+    };
+    (failed.get("code").unwrap(), failed.get("message").unwrap())
+}
+
+/// The failure a raw `coroutine.resume` of `code` catches: its code and
+/// message. The value is the table at its source, not userdata.
+fn resume_of(lua: &Lua, code: &str) -> (String, String) {
+    let (ok, err): (bool, LuaValue) = lua
+        .load(format!(
+            "return coroutine.resume(coroutine.create(function() {code} end))"
+        ))
+        .eval()
+        .unwrap();
+    assert!(!ok, "{code} unexpectedly succeeded");
+    let LuaValue::Table(failed) = err else {
+        panic!("{code} raised no failure table");
+    };
+    (failed.get("code").unwrap(), failed.get("message").unwrap())
+}
+
+#[test]
+fn a_resumed_coded_failure_is_the_table_at_its_source() {
+    let setup = Setup::new();
+    let config = setup.load(&[]);
+    let lua = setup.lua(Some(setup.session(config, &[])));
+    // Another session left invalid JSON on disk after this one loaded.
+    setup.write(&setup.config_file("machine"), "{invalid");
+    let (code, message) = resume_of(&lua, "host.config.set(\"a\", 1, \"machine\")");
+    assert_eq!(code, "config_invalid");
+    assert!(message.starts_with("host.config.set: "), "{message}");
+}
+
+#[test]
+fn a_set_over_an_invalid_file_is_config_invalid() {
+    let setup = Setup::new();
+    let config = setup.load(&[]);
+    let lua = setup.lua(Some(setup.session(config, &[])));
+    // Another session left invalid JSON on disk after this one loaded.
+    setup.write(&setup.config_file("machine"), "{invalid");
+    let (code, message) = pcall_of(&lua, "host.config.set(\"a\", 1, \"machine\")");
+    assert_eq!(code, "config_invalid");
+    assert!(message.starts_with("host.config.set: "), "{message}");
+}
+
+#[test]
+fn a_set_where_no_file_can_be_written_is_io_failed() {
+    let setup = Setup::new();
+    let config = setup.load(&[]);
+    let lua = setup.lua(Some(setup.session(config, &[])));
+    // A file where the settings directory goes leaves no file to write.
+    setup.write(&setup.home().join("config"), "in the way");
+    let (code, message) = pcall_of(&lua, "host.config.set(\"a\", 1, \"machine\")");
+    assert_eq!(code, "io_failed");
+    assert!(message.starts_with("host.config.set: "), "{message}");
+}
+
+#[test]
+fn wrong_arguments_are_strings_and_coded_failures_are_tables() {
+    let setup = Setup::new();
+    let config = setup.load(&[]);
+    let lua = setup.lua(Some(setup.session(config, &[])));
+    let clock = fakes::clock::FakeClock::new();
+    let deadline = crate::lua::Deadline::new(clock);
+    let dir = fakes::TempDir::new("fiber-settings-types");
+    crate::lua::install_prelude(&lua, &deadline, dir.path().to_path_buf(), crate::MEMORY_CAP)
+        .unwrap();
+    let kind_of = |code: &str| -> String {
+        lua.load(format!(
+            "local ok, err = pcall(function() {code} end); return type(err)"
+        ))
+        .eval()
+        .unwrap()
+    };
+    // Every error in the calling code stays a string (ruling 17): a key that
+    // is not a string, not UTF-8 or not a dotted key, a nil or non-JSON
+    // value, and a missing or bad scope.
+    for code in [
+        "return host.config.get(123)",
+        "return host.config.get(\"\\255\")",
+        "return host.config.get(\"unclosed.\\\"quote\")",
+        "host.config.set(123, 1, \"machine\")",
+        "host.config.set(\"\\255\", 1, \"machine\")",
+        "host.config.set(\"unclosed.\\\"quote\", 1, \"machine\")",
+        "host.config.set(\"a\", nil, \"machine\")",
+        "host.config.set(\"a\", print, \"machine\")",
+        "host.config.set(\"a\", 1)",
+        "host.config.set(\"a\", 1, \"bogus\")",
+        "host.config.set(\"a\", 1, 123)",
+    ] {
+        assert_eq!(kind_of(code), "string", "{code}");
+    }
+    assert!(!setup.config_file("machine").exists());
+    // Every operational failure is a table: an invalid file, and a file
+    // that cannot be written.
+    setup.write(&setup.config_file("machine"), "{invalid");
+    assert_eq!(kind_of("host.config.set(\"a\", 1, \"machine\")"), "table");
+    setup.write(
+        &setup.home().join("projects").join("p").join("config"),
+        "in the way",
+    );
+    assert_eq!(kind_of("host.config.set(\"a\", 1, \"project\")"), "table");
+    // No session stays a string too.
+    let lua = setup.lua(None);
+    let clock = fakes::clock::FakeClock::new();
+    let deadline = crate::lua::Deadline::new(clock);
+    let dir = fakes::TempDir::new("fiber-settings-types-nosession");
+    crate::lua::install_prelude(&lua, &deadline, dir.path().to_path_buf(), crate::MEMORY_CAP)
+        .unwrap();
+    for code in [
+        "return host.config.get(\"a\")",
+        "host.config.set(\"a\", 1, \"machine\")",
+    ] {
+        let kind: String = lua
+            .load(format!(
+                "local ok, err = pcall(function() {code} end); return type(err)"
+            ))
+            .eval()
+            .unwrap();
+        assert_eq!(kind, "string", "{code}");
+    }
+}
+
+#[test]
+fn a_get_over_a_file_the_session_read_as_invalid_is_a_table() {
+    let setup = Setup::new();
+    setup.write(&setup.config_file("machine"), "{invalid");
+    let config = setup.load(&[]);
+    let lua = setup.lua(Some(setup.session(config, &[])));
+    let (code, message) = pcall_of(&lua, "return host.config.get(\"a\")");
+    assert_eq!(code, "config_invalid");
+    assert!(message.starts_with("host.config.get: "), "{message}");
 }

@@ -355,7 +355,7 @@ fn settle(
                     }
                     deliver(match outcome {
                         Ok(ran) => Reply::Exec(Ok(ran)),
-                        Err(failed) => Reply::Exec(Err(failed.message)),
+                        Err(failed) => Reply::Exec(Err((failed.code, failed.message))),
                     });
                 });
             if let Err(source) = spawned {
@@ -370,6 +370,14 @@ fn settle(
             (Some(cancel_tx), None)
         }
         Request::Lock => {
+            // A command, hook or timer holds no provider credential: calling
+            // `refresh` there is an error in the calling code, raised as
+            // a string.
+            let no_credential = |what: &str| {
+                crate::host::LockError::Arg(format!(
+                    "host.oauth.refresh: a {what} has no provider credential to refresh"
+                ))
+            };
             let cancel = match &target {
                 Target::Provider {
                     credential: Some(pair),
@@ -380,30 +388,21 @@ fn settle(
                     function,
                     credential: None,
                 } => {
-                    deliver(Reply::Lock(Err(format!(
+                    deliver(Reply::Lock(Err(crate::host::LockError::Arg(format!(
                         "host.oauth.refresh: {name}.{function} has no credential to refresh; only credential() refreshes"
-                    ))));
+                    )))));
                     None
                 }
                 Target::Command(_) => {
-                    deliver(Reply::Lock(Err(
-                        "host.oauth.refresh: a command has no provider credential to refresh"
-                            .to_owned(),
-                    )));
+                    deliver(Reply::Lock(Err(no_credential("command"))));
                     None
                 }
                 Target::Hook { .. } => {
-                    deliver(Reply::Lock(Err(
-                        "host.oauth.refresh: a hook has no provider credential to refresh"
-                            .to_owned(),
-                    )));
+                    deliver(Reply::Lock(Err(no_credential("hook"))));
                     None
                 }
                 Target::Timer { .. } => {
-                    deliver(Reply::Lock(Err(
-                        "host.oauth.refresh: a timer has no provider credential to refresh"
-                            .to_owned(),
-                    )));
+                    deliver(Reply::Lock(Err(no_credential("timer"))));
                     None
                 }
             };
