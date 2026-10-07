@@ -2,6 +2,9 @@
 //! exited session's directory, its log and artifacts together, and drops
 //! it from the feed. A session another process holds is refused, and so is
 //! one that forks or rewinds continue, unless `cascade` deletes them too.
+//! With `cascade`, `expect` names the sessions the person confirmed; when
+//! the sessions the hub would remove differ, the delete is refused and
+//! nothing is deleted.
 //!
 //! The hub takes the lock of every session it deletes before removing any,
 //! so a session process opening one meanwhile is refused as held. Each
@@ -9,6 +12,7 @@
 //! once removal began finds no log to open, so nothing writes into a
 //! directory being removed.
 
+use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io;
 use std::path::PathBuf;
@@ -23,9 +27,14 @@ use crate::relay::valid_session_id;
 use crate::resume::{find_log, not_found};
 
 /// `delete`: removes `session`, and with `cascade` every session that
-/// continues it, dependents first. Accepted with no `result`.
+/// continues it, dependents first. With `cascade`, `expect` holds the set
+/// the person confirmed; without `cascade` it is checked but not compared.
+/// Accepted with no `result`.
 pub(crate) fn delete(hub: &Hub, args: &Map<String, Value>) -> Result<Option<Value>, Refusal> {
-    let (session, cascade) = parse(args).ok_or_else(invalid)?;
+    let parsed = parse(args).ok_or_else(invalid)?;
+    let session = parsed.session;
+    let cascade = parsed.cascade;
+    let _ = parsed.expect;
     // No resume starts a process for a session while it is deleted.
     let _gate = hub
         .resume_gate
@@ -79,10 +88,22 @@ pub(crate) fn delete(hub: &Hub, args: &Map<String, Value>) -> Result<Option<Valu
     Ok(None)
 }
 
-/// `session` (a minted id) and `cascade` (default false); `None` for any
-/// other shape. The id is joined into a path, so its shape is checked here.
-fn parse(args: &Map<String, Value>) -> Option<(SessionId, bool)> {
-    if args.keys().any(|key| key != "session" && key != "cascade") {
+/// `session` (a minted id), `cascade` (default false) and `expect` (an
+/// optional array of minted ids); `None` for any other shape. The ids are
+/// only compared, never joined into a path except `session`, whose shape is
+/// checked here as it is joined into a path; every `expect` element is
+/// checked the same way.
+struct DeleteArgs {
+    session: SessionId,
+    cascade: bool,
+    expect: Option<BTreeSet<SessionId>>,
+}
+
+fn parse(args: &Map<String, Value>) -> Option<DeleteArgs> {
+    if args
+        .keys()
+        .any(|key| key != "session" && key != "cascade" && key != "expect")
+    {
         return None;
     }
     let session = args.get("session")?.as_str()?;
@@ -94,7 +115,26 @@ fn parse(args: &Map<String, Value>) -> Option<(SessionId, bool)> {
         Some(Value::Bool(cascade)) => *cascade,
         Some(_) => return None,
     };
-    Some((SessionId(session.to_owned()), cascade))
+    let expect = match args.get("expect") {
+        None => None,
+        Some(Value::Array(elements)) => {
+            let mut set = BTreeSet::new();
+            for element in elements {
+                let text = element.as_str()?;
+                if !valid_session_id(text) {
+                    return None;
+                }
+                set.insert(SessionId(text.to_owned()));
+            }
+            Some(set)
+        }
+        Some(_) => return None,
+    };
+    Some(DeleteArgs {
+        session: SessionId(session.to_owned()),
+        cascade,
+        expect,
+    })
 }
 
 /// `session`'s directory: a real directory, never a link, holding its log.

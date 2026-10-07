@@ -1,6 +1,6 @@
-//! Tests for `delete`: what it removes and leaves, the argument shape, a
-//! linked session directory, held sessions, dependents and `cascade`, and
-//! the feed entry it drops.
+//! Tests for `delete`: what it removes and leaves, the argument shape
+//! (including the confirmed `expect` set), a linked session directory,
+//! held sessions, dependents and `cascade`, and the feed entry it drops.
 
 #![allow(
     clippy::unwrap_used,
@@ -182,11 +182,43 @@ fn arguments_that_do_not_fit_are_invalid_and_remove_nothing() {
         json!({"session": "a/b"}),
         json!({"session": format!("../{}", id(1))}),
         json!({"session": "s_0123"}),
+        json!({"session": id(1), "cascade": true, "expect": id(1)}),
+        json!({"session": id(1), "cascade": true, "expect": null}),
+        json!({"session": id(1), "cascade": true, "expect": {}}),
+        json!({"session": id(1), "cascade": true, "expect": 1}),
+        json!({"session": id(1), "cascade": true, "expect": [1]}),
+        json!({"session": id(1), "cascade": true, "expect": [id(1), null]}),
+        json!({"session": id(1), "cascade": true, "expect": ["../x"]}),
+        json!({"session": id(1), "cascade": true, "expect": ["s_0123"]}),
+        json!({"session": id(1), "cascade": true, "expect": [format!("../{}", id(1))]}),
     ] {
         let (code, _) = refused(&hub, bad.clone());
         assert_eq!(code, ErrorCode::InvalidArguments, "{bad}");
     }
     assert!(dir.join("events.jsonl").is_file());
+}
+
+#[test]
+fn expect_without_cascade_is_checked_but_not_compared() {
+    let temp = Temp::new();
+    temp.session("-p", 1, None);
+    let root = temp.session("-p", 2, None);
+    let fork = temp.session("-p", 3, Some(2));
+    let hub = temp.hub();
+    // No dependents: a confirmed set naming another session still deletes.
+    assert_eq!(
+        delete(&hub, &args(json!({"session": id(1), "expect": [id(9)]}))),
+        Ok(None)
+    );
+    // Dependents still refuse without `cascade`, even with a matching set.
+    let (code, _) = refused(
+        &hub,
+        json!({"session": id(2), "cascade": false, "expect": [id(2), id(3)]}),
+    );
+    assert_eq!(code, ErrorCode::SessionHasDependents);
+    for dir in [&root, &fork] {
+        assert!(dir.join("events.jsonl").is_file(), "{}", dir.display());
+    }
 }
 
 #[test]
