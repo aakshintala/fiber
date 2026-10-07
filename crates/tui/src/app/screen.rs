@@ -172,3 +172,7 @@ impl Screen {
         self.scroll.top.map_or(bottom, |top| top.min(bottom))
     }
 }
+
+#[cfg(test)]
+#[path = "screen_tests.rs"]
+mod tests;
