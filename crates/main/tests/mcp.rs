@@ -25,6 +25,9 @@ use serde_json::{Value, json};
 /// How long one `fiber` run may take.
 const DEADLINE: Duration = Duration::from_secs(20);
 
+/// How long a stopped MCP server may take to exit once `fiber` did.
+const SERVER_EXIT: Duration = Duration::from_secs(5);
+
 /// The built-in tool order, when no MCP server declares anything.
 const TOOL_NAMES: [&str; 7] = [
     "edit",
@@ -498,18 +501,11 @@ fn the_server_runs_in_the_workspace_and_stops_with_the_session() {
         .parse()
         .unwrap();
     assert!(pid > 1);
-    // The server's pid is gone after `fiber` exits: poll, then fail naming
-    // the wait.
-    let (_held, tick) = mpsc::channel::<()>();
-    for _ in 0..100 {
-        if !fakes::kill_pid(pid, "0").unwrap() {
-            return;
-        }
-        match tick.recv_timeout(Duration::from_millis(50)) {
-            Ok(()) | Err(_) => {}
-        }
-    }
-    panic!("waited 5s for pid {pid} to exit after `fiber`");
+    // The server's pid is gone after `fiber` exits.
+    assert!(
+        fakes::pids_exit(&[pid], SERVER_EXIT),
+        "waited {SERVER_EXIT:?} for pid {pid} to exit after `fiber`"
+    );
 }
 
 #[test]
@@ -989,18 +985,11 @@ fn a_required_server_that_fails_to_start_exits_before_the_session() {
         .trim()
         .parse()
         .unwrap();
-    // The healthy server started, then stopped with the failed session:
-    // poll, then fail naming the wait.
-    let (_held, tick) = mpsc::channel::<()>();
-    for _ in 0..100 {
-        if !fakes::kill_pid(pid, "0").unwrap() {
-            return;
-        }
-        match tick.recv_timeout(Duration::from_millis(50)) {
-            Ok(()) | Err(_) => {}
-        }
-    }
-    panic!("waited 5s for pid {pid} to exit after the required failure");
+    // The healthy server started, then stopped with the failed session.
+    assert!(
+        fakes::pids_exit(&[pid], SERVER_EXIT),
+        "waited {SERVER_EXIT:?} for pid {pid} to exit after the required failure"
+    );
 }
 
 #[test]

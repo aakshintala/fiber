@@ -19,6 +19,7 @@ use std::fs;
 use std::path::Path;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
+use std::time::Duration;
 
 use fakes::ProviderServer;
 use serde_json::{Value, json};
@@ -26,6 +27,10 @@ use support::*;
 
 /// The prompt a started session runs, and the marker the log must never hold.
 const PROMPT: &str = "the-volume-of-the-meeting-room";
+
+/// How long the stuck-in-setup test waits for the MCP server's ready line:
+/// the ready FIFO's 5 s open plus this 15 s wait make 20 s in all.
+const READY_WAIT: Duration = Duration::from_secs(15);
 
 #[test]
 fn a_turn_runs_through_the_hub_and_the_hub_outlives_no_session() {
@@ -312,14 +317,12 @@ fn a_session_left_running_is_killed_by_its_guard() {
     let workspace = setup.workspace().to_string_lossy().into_owned();
     let mut guard = SessionGuard::arm(&workspace);
     start_session(&client, &workspace, PROMPT);
-    until_matching(&workspace, "the started session", |pids| !pids.is_empty());
     // The watchdog stands down first, so only the drop can kill.
     guard.stand_down_watchdog();
     drop(guard);
-    until_matching(
-        &workspace,
-        "the session to die after its guard dropped",
-        <[u32]>::is_empty,
+    assert!(
+        fakes::matching_exits(&workspace, DEADLINE),
+        "waited {DEADLINE:?} for the session to die after its guard dropped"
     );
     drop(client);
     let hub = hub.lock().unwrap().take().expect("the starter ran");
@@ -335,11 +338,13 @@ fn a_session_stuck_in_setup_is_killed_by_its_guard() {
     // An MCP server that never answers holds the session in setup, before
     // its log and lock exist. Its command line carries a marker.
     let marker = format!("{workspace}/blocked-mcp");
+    let ready = fakes::children::Ready::new(setup.root.path());
+    let ready_path = ready.path().to_string_lossy().into_owned();
     write_json(
         &setup.home().join("config.json"),
         &json!({"model": "fake/m", "mcp": {"servers": {"blocked": {
             "command": "sh",
-            "args": ["-c", "while read -r line; do :; done", marker],
+            "args": ["-c", "echo $$ > \"$1\"; while read -r line; do :; done", marker, ready_path],
             "startup_timeout_ms": 600_000
         }}}}),
     );
@@ -349,7 +354,7 @@ fn a_session_stuck_in_setup_is_killed_by_its_guard() {
     client.send(&format!(
         "{{\"id\":\"c_start\",\"command\":\"start\",\"args\":{{\"workspace\":\"{workspace}\"}}}}"
     ));
-    until_matching(&marker, "the session's MCP server", |pids| !pids.is_empty());
+    ready.wait(READY_WAIT);
     let sessions = log::sessions_dir(&setup.home(), &fs::canonicalize(&workspace).unwrap());
     let locks = fs::read_dir(&sessions)
         .map(|dirs| {
@@ -361,13 +366,12 @@ fn a_session_stuck_in_setup_is_killed_by_its_guard() {
     assert_eq!(locks, 0, "the session is still in setup: no lock yet");
     guard.stand_down_watchdog();
     drop(guard);
-    until_matching(
-        &workspace,
-        "the stuck session and its server to die after the guard dropped",
-        <[u32]>::is_empty,
-    );
     let rejected = recv(&client, "the start rejection");
     assert_eq!(rejected["kind"], "command_rejected", "{rejected}");
+    assert!(
+        fakes::matching_exits(&workspace, DEADLINE),
+        "waited {DEADLINE:?} for the stuck session and its server to die after the guard dropped"
+    );
     drop(client);
     let hub = hub.lock().unwrap().take().expect("the starter ran");
     hub.kill_and_wait();

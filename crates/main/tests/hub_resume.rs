@@ -192,24 +192,6 @@ fn group_alive(group: u32) -> bool {
     fakes::kill_group(group, "0").unwrap()
 }
 
-/// Waits under [`DEADLINE`] until no process's command line holds `text`.
-fn until_none_matching(text: &str, what: &str) {
-    let (tx, rx) = mpsc::channel();
-    let text = text.to_owned();
-    thread::spawn(move || {
-        while !fakes::matching(&text).unwrap().is_empty() {
-            thread::yield_now();
-        }
-        match tx.send(()) {
-            Ok(()) | Err(mpsc::SendError(())) => {}
-        }
-    });
-    assert!(
-        rx.recv_timeout(DEADLINE).is_ok(),
-        "waited {DEADLINE:?} for {what}"
-    );
-}
-
 /// The process clock behind `contract::clock::Clock`.
 struct SystemClock;
 
@@ -288,7 +270,10 @@ impl Hub {
             thread::spawn(move || done.send(child.wait().is_ok()).unwrap_or(()));
             assert!(finished.recv_timeout(DEADLINE).is_ok(), "the hub exited");
         }
-        until_none_matching(&self.workspace, "every session to exit");
+        assert!(
+            fakes::matching_exits(&self.workspace, DEADLINE),
+            "waited {DEADLINE:?} for every session to exit"
+        );
         if let Some(watchdog) = self.watchdog.take() {
             watchdog.stand_down(DEADLINE);
         }
@@ -485,7 +470,10 @@ fn until_exited(client: &Socket, setup: &Setup) -> Vec<Value> {
     let lines = until(client, "fiber_exited", |line| {
         line["kind"] == "fiber_exited"
     });
-    until_none_matching(&setup.workspace_text(), "the session process to exit");
+    assert!(
+        fakes::matching_exits(&setup.workspace_text(), DEADLINE),
+        "waited {DEADLINE:?} for the session process to exit"
+    );
     lines
 }
 
