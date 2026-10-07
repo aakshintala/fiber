@@ -223,6 +223,7 @@ fn resumed_session(
     session.hooks(Arc::clone(&extensions) as Arc<dyn contract::hook::Hooks>);
     session.extensions(Arc::clone(&extensions) as Arc<dyn contract::extension::ExtensionDoor>);
     extensions.emit_to(Arc::new(log::WeakEmit::new(&log)));
+    extensions.drive_to(session.driver());
     let mut all_commands = r#loop::commands(&prompt_inputs, Path::new(&folded.workspace));
     all_commands.extend(extensions.commands());
     session.commands(all_commands);

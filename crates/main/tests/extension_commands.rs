@@ -669,3 +669,61 @@ fn a_command_parked_past_close_writes_no_line_after_fiber_exited() {
         "the sealed status never reaches stdout"
     );
 }
+
+#[test]
+fn host_drive_steer_from_a_command_carries_the_extension_sender() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    server.hold();
+    setup.provider(&server);
+    setup.lua(
+        "worker",
+        "fiber.command(\"nudge\", { timeout = 8000, run = function() host.drive(\"steer\", { content = {{ type = \"text\", text = \"use the other file\" }} }) end })\n",
+    );
+    let id = doors::mint("s_");
+    let mut running = setup.start_session(&id, &[]);
+    let client = running.connect(&setup.socket(&id));
+    running.wait_for("extensions_loaded");
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    send(
+        &client,
+        r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"hi"}]}}"#,
+    );
+    assert!(
+        server.await_requests(1, DEADLINE),
+        "the held response was requested"
+    );
+    // A command is allowed during a turn; its `host.drive` steers that turn.
+    send(
+        &client,
+        r#"{"id":"c_1","command":"command","args":{"name":"nudge"}}"#,
+    );
+    let accepted = until(&client, "command_accepted", |line| {
+        line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_1"
+    });
+    assert!(accepted.last().unwrap()["payload"].get("result").is_none());
+    server.release();
+    let applied = until(&client, "steering_applied", |line| {
+        line["kind"] == "steering_applied"
+    });
+    // The applied message carries `source: extension`, the extension's name
+    // and a `command_id`: a rejection would have raised instead of steering.
+    let line = applied.last().unwrap();
+    assert_eq!(line["payload"]["source"], "extension");
+    assert_eq!(line["payload"]["extension"], "fiber.test/worker");
+    assert!(
+        line["payload"]["command_id"]
+            .as_str()
+            .is_some_and(|id| id.starts_with("c_")),
+        "{line}"
+    );
+    assert_eq!(line["payload"]["content"][0]["text"], "use the other file");
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let _tail = until_close(&client);
+    drop(client);
+    let (status, _out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+}
