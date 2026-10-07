@@ -827,40 +827,313 @@ fn open_job_descriptions_survive_live_page_cuts_and_reload() {
     assert_eq!(differs(&reloaded, &live), None);
 }
 
+/// A job's lines: started with `description`, or completed as orphaned or
+/// successfully.
+fn job_started(stream: &mut Stream, id: &str, description: &str) {
+    stream.durable(
+        "job_started",
+        None,
+        json!({"job_id": id, "description": description, "output_path": "/tmp/o"}),
+    );
+}
+
+fn job_orphaned(stream: &mut Stream, id: &str) {
+    stream.durable(
+        "job_completed",
+        None,
+        json!({"job_id": id, "status": "failed",
+            "error": {"code": "orphaned", "message": format!("{id} orphaned.")}}),
+    );
+}
+
+fn job_done(stream: &mut Stream, id: &str) {
+    stream.durable(
+        "job_completed",
+        None,
+        json!({"job_id": id, "status": "completed"}),
+    );
+}
+
+/// Enough lines that the next turn cuts a page.
+fn pad(stream: &mut Stream) {
+    for _ in 0..64 {
+        stream.durable("unknown", None, json!({}));
+    }
+}
+
+/// How a job that `ended` ends.
+#[derive(Clone, Copy)]
+enum Ends {
+    /// Orphaned on the page after the one it started on.
+    OrphanedLater,
+    /// Completed successfully on the page after.
+    DoneLater,
+    /// Orphaned on the page it started on.
+    OrphanedHere,
+}
+
+/// Job `j_cross` started and ending as `ends` across turn cuts; the page
+/// holding its completion closes before the session ends.
+fn crossing_turns(ends: Ends) -> Vec<Envelope> {
+    let mut stream = Stream::new(false);
+    stream.turn(0, 1);
+    if !matches!(ends, Ends::OrphanedHere) {
+        job_started(&mut stream, "j_cross", "cross the boundary");
+    }
+    pad(&mut stream);
+    stream.turn(1, 1);
+    match ends {
+        Ends::OrphanedLater => job_orphaned(&mut stream, "j_cross"),
+        Ends::DoneLater => job_done(&mut stream, "j_cross"),
+        Ends::OrphanedHere => {
+            job_started(&mut stream, "j_cross", "cross the boundary");
+            job_orphaned(&mut stream, "j_cross");
+        }
+    }
+    pad(&mut stream);
+    stream.turn(2, 1);
+    stream.lines
+}
+
+/// Job `j_step` crosses a step cut inside one turn, orphaned while the cut
+/// is pending when `pending`, else once it is confirmed; the page holding
+/// the completion closes before the session ends.
+fn crossing_step(pending: bool) -> Vec<Envelope> {
+    let mut stream = Stream::new(false);
+    stream.durable(
+        "turn_started",
+        None,
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "go"}]}]}),
+    );
+    job_started(&mut stream, "j_step", "step over the line");
+    pad(&mut stream);
+    stream.durable("step_started", None, json!({}));
+    stream.durable("assistant_message_started", Some("a_m1"), json!({}));
+    if pending {
+        job_orphaned(&mut stream, "j_step");
+    }
+    stream.text("a_m1", "the reply that opens the step");
+    stream.durable(
+        "assistant_message_completed",
+        Some("a_m1"),
+        json!({"outcome": "completed"}),
+    );
+    if !pending {
+        job_orphaned(&mut stream, "j_step");
+    }
+    stream.durable("turn_completed", None, json!({"outcome": "completed"}));
+    pad(&mut stream);
+    stream.turn(2, 1);
+    stream.lines
+}
+
+/// Job `j_late` starts on the first page and is orphaned on the second,
+/// which a confirmed step cut closes.
+fn orphaned_before_step_cut() -> Vec<Envelope> {
+    let mut stream = Stream::new(false);
+    stream.turn(0, 1);
+    job_started(&mut stream, "j_late", "late to the cut");
+    pad(&mut stream);
+    stream.durable(
+        "turn_started",
+        None,
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "go"}]}]}),
+    );
+    job_orphaned(&mut stream, "j_late");
+    pad(&mut stream);
+    stream.durable("step_started", None, json!({}));
+    stream.durable("assistant_message_started", Some("a_m1"), json!({}));
+    stream.text("a_m1", "the reply that opens the step");
+    stream.durable(
+        "assistant_message_completed",
+        Some("a_m1"),
+        json!({"outcome": "completed"}),
+    );
+    stream.durable("turn_completed", None, json!({"outcome": "completed"}));
+    stream.lines
+}
+
+/// The page holding the first line of `kind`.
+fn page_of_kind(pages: &Pages, lines: &[Envelope], kind: &str) -> usize {
+    lines
+        .iter()
+        .find(|line| line.kind == kind)
+        .and_then(|line| line.seq)
+        .and_then(|seq| pages.index().page_of(seq))
+        .expect("the line is on a page")
+}
+
+/// The drawn lines' texts.
+fn texts(rows: &[Row]) -> Vec<String> {
+    rows.iter().map(|(line, _)| line.to_string()).collect()
+}
+
+/// How many times `needle` shows in the seeds, the closed resident pages
+/// and the open page's state.
+fn held(pages: &Pages, needle: &str) -> (usize, usize, usize) {
+    (
+        format!("{:?}", pages.seeds).matches(needle).count(),
+        format!("{:?}", pages.closed).matches(needle).count(),
+        format!("{:?}", pages.open).matches(needle).count(),
+    )
+}
+
+/// Folds `lines` live and checks the orphan line names `name` live, with
+/// every page dropped and loaded again, and after a new width with every
+/// page dropped; each reload draws what the live fold drew.
+fn orphan_line_survives(lines: &[Envelope], name: &str) -> Pages {
+    let mut pages = Pages::new(80);
+    for line in lines {
+        pages.apply(line);
+    }
+    let want = format!("Orphaned jobs: {name}");
+    let live = pages.rows();
+    assert!(texts(&live).contains(&want), "{:?}", texts(&live));
+    drop_all(&mut pages);
+    let reloaded = joined(&mut pages, lines);
+    assert_eq!(differs(&reloaded, &live), None);
+    drop_all(&mut pages);
+    pages.set_width(50);
+    let narrow = joined(&mut pages, lines);
+    assert!(texts(&narrow).contains(&want), "{:?}", texts(&narrow));
+    pages
+}
+
 #[test]
-fn page_seeds_keep_only_descriptions_of_open_jobs() {
+fn open_job_descriptions_survive_step_cuts_and_reload() {
+    for pending in [false, true] {
+        let lines = crossing_step(pending);
+        let pages = orphan_line_survives(&lines, "step over the line");
+        let started = page_of_kind(&pages, &lines, "job_started");
+        let completed = page_of_kind(&pages, &lines, "job_completed");
+        assert_eq!(completed, started + 1, "pending {pending}");
+        assert!(pages.seeds.get(started).is_some_and(|seed| seed.cut));
+        assert!(completed < pages.closed.len(), "the completion page closes");
+    }
+}
+
+#[test]
+fn a_confirmed_step_cut_keeps_what_its_closed_page_carried() {
+    let lines = orphaned_before_step_cut();
+    let pages = orphan_line_survives(&lines, "late to the cut");
+    let completed = page_of_kind(&pages, &lines, "job_completed");
+    assert_eq!(completed, page_of_kind(&pages, &lines, "job_started") + 1);
+    assert!(pages.seeds.get(completed).is_some_and(|seed| seed.cut));
+    let carried = pages.seeds.get(completed).map(|seed| seed.carried.len());
+    assert_eq!(carried, Some(1));
+}
+
+#[test]
+fn a_confirmed_step_cut_leaves_no_job_text_on_the_closed_page() {
+    for pending in [false, true] {
+        let lines = crossing_step(pending);
+        let mut pages = Pages::new(80);
+        for line in &lines {
+            pages.apply(line);
+            let started = pages.closed.first().and_then(Option::as_ref);
+            if let Some(part) = started {
+                let debug = format!("{part:?}");
+                assert!(!debug.contains("step over the line"), "pending {pending}");
+            }
+        }
+    }
+}
+
+#[test]
+fn page_seeds_keep_no_descriptions_of_open_jobs() {
     let mut stream = Stream::new(false);
     stream.turn(0, 1);
     for index in 0..40 {
         let id = format!("j_done_{index}");
-        stream.durable(
-            "job_started",
-            None,
-            json!({"job_id": id, "description": format!("completed job {index} description"),
-                "output_path": "/tmp/o"}),
+        job_started(
+            &mut stream,
+            &id,
+            &format!("completed job {index} description"),
         );
-        stream.durable(
-            "job_completed",
-            None,
-            json!({"job_id": id, "status": "completed"}),
-        );
+        job_done(&mut stream, &id);
     }
-    stream.durable(
-        "job_started",
-        None,
-        json!({"job_id": "j_open", "description": "active job description",
-            "output_path": "/tmp/o"}),
-    );
+    job_started(&mut stream, "j_open", "active job description");
     stream.turn(1, 1);
 
     let mut pages = Pages::new(80);
     for line in &stream.lines {
         pages.apply(line);
     }
-    let seed = pages.seeds.last().expect("the latest page has a seed");
-    let seed_debug = format!("{seed:?}");
-    assert_eq!(seed_debug.matches("active job description").count(), 1);
-    assert!(!seed_debug.contains("completed job"), "{seed_debug}");
+    assert!(!pages.closed.is_empty(), "the job crosses a page cut");
+    assert_eq!(held(&pages, "active job description"), (0, 0, 1));
+    let seeds = format!("{:?}", pages.seeds);
+    assert!(!seeds.contains("completed job"), "{seeds}");
+}
+
+#[test]
+fn only_the_page_orphaning_a_crossing_job_carries_its_description() {
+    let lines = crossing_turns(Ends::OrphanedLater);
+    let pages = orphan_line_survives(&lines, "cross the boundary");
+    let completed = page_of_kind(&pages, &lines, "job_completed");
+    assert_ne!(page_of_kind(&pages, &lines, "job_started"), completed);
+    for (at, seed) in pages.seeds.iter().enumerate() {
+        let want = usize::from(at == completed);
+        assert_eq!(seed.carried.len(), want, "page {at}");
+    }
+    assert_eq!(
+        pages
+            .seeds
+            .get(completed)
+            .and_then(|seed| seed.carried.get("j_cross"))
+            .map(String::as_str),
+        Some("cross the boundary")
+    );
+}
+
+#[test]
+fn a_crossing_job_completed_leaves_its_description_nowhere() {
+    let lines = crossing_turns(Ends::DoneLater);
+    let mut pages = Pages::new(80);
+    for line in &lines {
+        pages.apply(line);
+    }
+    assert_ne!(
+        page_of_kind(&pages, &lines, "job_started"),
+        page_of_kind(&pages, &lines, "job_completed")
+    );
+    assert_eq!(held(&pages, "cross the boundary"), (0, 0, 0));
+}
+
+#[test]
+fn a_job_orphaned_on_its_own_page_carries_nothing() {
+    let lines = crossing_turns(Ends::OrphanedHere);
+    let pages = orphan_line_survives(&lines, "cross the boundary");
+    assert_eq!(
+        page_of_kind(&pages, &lines, "job_started"),
+        page_of_kind(&pages, &lines, "job_completed")
+    );
+    assert!(pages.seeds.iter().all(|seed| seed.carried.is_empty()));
+}
+
+#[test]
+fn open_jobs_add_no_seed_text_however_many_cuts_they_cross() {
+    for cuts in [1, 3, 6] {
+        let mut stream = Stream::new(false);
+        stream.turn(0, 1);
+        for job in 0..5 {
+            job_started(&mut stream, &format!("j_{job}"), &format!("open job {job}"));
+        }
+        for turn in 0..cuts {
+            pad(&mut stream);
+            stream.turn(turn + 1, 1);
+        }
+        let mut pages = Pages::new(80);
+        for line in &stream.lines {
+            pages.apply(line);
+        }
+        assert_eq!(pages.closed.len(), cuts, "{cuts} cuts");
+        for job in 0..5 {
+            let held = held(&pages, &format!("open job {job}"));
+            assert_eq!(held, (0, 0, 1), "job {job} over {cuts} cuts");
+        }
+    }
 }
 
 /// A turn the process leaves suspended on one page and resumes on the

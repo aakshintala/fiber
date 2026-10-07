@@ -17,8 +17,8 @@ use crate::pages::{Cut, Index};
 use crate::turn::{Fold, Row, Turn};
 
 /// Where folding a page begins: its turn and step, the live fold's scalar
-/// continuation state, and descriptions only for jobs still open at the
-/// boundary. Rendered asides stay in resident pages, not in the seed.
+/// continuation state, and descriptions only of earlier pages' jobs that
+/// complete orphaned on it. Rendered asides stay in resident pages.
 #[derive(Debug, Clone, Default)]
 struct Seed {
     /// The summary of the page's first card.
@@ -37,8 +37,9 @@ struct Seed {
     trigger_at: Option<u64>,
     /// The last `fiber_exited` carried `suspended_on`.
     suspended: bool,
-    /// Descriptions of jobs still open at this page boundary.
-    jobs: HashMap<String, String>,
+    /// Descriptions of jobs that complete orphaned on this page but started
+    /// on an earlier one, set once the page closes.
+    carried: HashMap<String, String>,
     /// The live durations of the page's groups, in order: a reload folds
     /// the page's durable lines only, without the ephemeral lines that
     /// timed them.
@@ -49,7 +50,7 @@ impl Seed {
     /// The seed a page opening on `open`'s cards starts from: its turn and
     /// step, and the fold's continuation state.
     fn live(first: usize, step: Option<u64>, open: &Part) -> Self {
-        let (next, ledgers, trigger_at, suspended, jobs) = open.fold.seed_continuation();
+        let (next, ledgers, trigger_at, suspended) = open.fold.seed_continuation();
         Self {
             first,
             step,
@@ -58,7 +59,7 @@ impl Seed {
             ledgers,
             trigger_at,
             suspended,
-            jobs,
+            carried: HashMap::new(),
             spans: Vec::new(),
         }
     }
@@ -84,7 +85,7 @@ impl Part {
                 seed.ledgers,
                 seed.trigger_at,
                 seed.suspended,
-                seed.jobs,
+                seed.carried,
             ),
             aside_start: 0,
         }
@@ -366,12 +367,14 @@ impl Pages {
         let seed = Seed::live(self.summaries.len(), None, &self.open);
         self.pending = None;
         let at = self.closed.len();
-        let part = std::mem::replace(&mut self.open, Part::seeded(seed.clone()));
+        let mut part = std::mem::replace(&mut self.open, Part::seeded(seed.clone()));
+        self.open.fold.carry_from(&mut part.fold);
         let spans = group_spans(&part);
-        self.closed.push(Some(part));
         if let Some(closing) = self.seeds.get_mut(at) {
             closing.spans = spans;
+            closing.carried = part.fold.take_carried();
         }
+        self.closed.push(Some(part));
         self.seeds.push(seed);
         self.count(at);
     }
@@ -386,9 +389,11 @@ impl Pages {
             ),
             None => Seed::live(self.summaries.len(), None, &self.open),
         };
+        let mut next = Part::seeded(seed.clone());
+        next.fold.carry_copy(&self.open.fold);
         Pending {
             before: self.open.clone(),
-            next: Part::seeded(seed.clone()),
+            next,
             seed,
         }
     }
@@ -412,7 +417,11 @@ impl Pages {
         if let Some(closing) = self.seeds.get_mut(at) {
             closing.cut = true;
             closing.spans = spans;
+            closing.carried = before.fold.take_carried();
         }
+        // The next page took its copy of the open jobs at the candidate:
+        // the closed page keeps none of their descriptions.
+        Fold::default().carry_from(&mut before.fold);
         self.closed.push(Some(before));
         self.seeds.push(seed);
         self.open = next;

@@ -23,36 +23,39 @@ use crate::turn::Row;
 pub(crate) struct Crash {
     /// The last `fiber_exited` carried `suspended_on`.
     suspended: bool,
-    /// Descriptions for jobs that may still complete, by job id.
+    /// Descriptions of jobs started on this page and still open, by job id.
     jobs: HashMap<String, String>,
+    /// Descriptions of jobs started on earlier pages and still open.
+    earlier: HashMap<String, String>,
+    /// The descriptions this page took from `earlier` for jobs that
+    /// completed orphaned on it: all its seed keeps of job text.
+    carried: HashMap<String, String>,
     /// The orphaned-jobs line since the latest `fiber_started`.
     orphans: Option<usize>,
 }
 
 impl Fold {
-    /// The continuation state a page seed keeps: scalars, and descriptions
-    /// for jobs still open at the boundary. Rendered asides stay in resident
-    /// pages and are folded again from that page's lines on reload.
-    pub(crate) fn seed_continuation(
-        &self,
-    ) -> (usize, bool, Option<u64>, bool, HashMap<String, String>) {
+    /// The scalar continuation state a page seed keeps. Rendered asides
+    /// stay in resident pages and are folded again from that page's lines
+    /// on reload.
+    pub(crate) fn seed_continuation(&self) -> (usize, bool, Option<u64>, bool) {
         (
             self.next,
             self.ledgers,
             self.trigger_at,
             self.crash.suspended,
-            self.crash.jobs.clone(),
         )
     }
 
     /// A page's starting fold from its seed's continuation state, with no
     /// rendered text: the reload folds the page's own lines into it.
+    /// `carried` names the earlier pages' jobs that complete orphaned on it.
     pub(crate) fn seeded(
         next: usize,
         ledgers: bool,
         trigger_at: Option<u64>,
         suspended: bool,
-        jobs: HashMap<String, String>,
+        carried: HashMap<String, String>,
     ) -> Self {
         Self {
             next,
@@ -60,11 +63,40 @@ impl Fold {
             trigger_at,
             crash: Crash {
                 suspended,
-                jobs,
+                earlier: carried,
                 ..Crash::default()
             },
             ..Self::default()
         }
+    }
+
+    /// Takes the open jobs of the page `old` closes as this page's earlier
+    /// ones, moving them so no closed page keeps their descriptions.
+    pub(crate) fn carry_from(&mut self, old: &mut Self) {
+        self.crash
+            .earlier
+            .extend(std::mem::take(&mut old.crash.jobs));
+        self.crash
+            .earlier
+            .extend(std::mem::take(&mut old.crash.earlier));
+    }
+
+    /// Copies `open`'s open jobs as this candidate page's earlier ones,
+    /// held only while the cut is pending.
+    pub(crate) fn carry_copy(&mut self, open: &Self) {
+        self.crash.earlier.extend(
+            open.crash
+                .jobs
+                .iter()
+                .chain(&open.crash.earlier)
+                .map(|(id, name)| (id.clone(), name.clone())),
+        );
+    }
+
+    /// Takes the descriptions this page took from earlier pages for jobs
+    /// that completed orphaned on it.
+    pub(crate) fn take_carried(&mut self) -> HashMap<String, String> {
+        std::mem::take(&mut self.crash.carried)
     }
 }
 
@@ -203,11 +235,21 @@ pub(crate) fn fold(turns: &mut [Turn], fold: &mut Fold, envelope: &Envelope) -> 
             let Some(done) = read!(envelope, JobCompleted) else {
                 return false;
             };
-            let name = fold.crash.jobs.remove(&done.job_id.0);
+            let id = done.job_id.0;
+            let here = fold.crash.jobs.remove(&id);
+            let earlier = fold.crash.earlier.remove(&id);
             let Some(error) = done.error.filter(|error| error.code == ErrorCode::Orphaned) else {
                 return false;
             };
-            let job = (name.unwrap_or(done.job_id.0), error.message);
+            let name = match (here, earlier) {
+                (Some(name), _) => name,
+                (None, Some(name)) => {
+                    fold.crash.carried.insert(id, name.clone());
+                    name
+                }
+                (None, None) => id,
+            };
+            let job = (name, error.message);
             if let Some(jobs) = fold.crash.orphans.and_then(|id| orphans(turns, fold, id)) {
                 jobs.push(job);
             } else {
