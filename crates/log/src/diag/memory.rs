@@ -31,12 +31,27 @@ fn read() -> Option<u64> {
             libc::proc_pid_rusage(libc::getpid(), libc::RUSAGE_INFO_V4, (&raw mut info).cast());
         (status, info)
     };
-    (status == 0).then_some(info.ri_lifetime_max_phys_footprint / 1024)
+    read_status_ok(status).then_some(footprint_kib(info.ri_lifetime_max_phys_footprint))
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn read() -> Option<u64> {
     None
+}
+
+/// The macOS peak physical footprint in bytes as whole KiB, rounding
+/// down: Activity Monitor's figure in the units a `peak_memory` line
+/// reports.
+#[cfg(any(target_os = "macos", test))]
+fn footprint_kib(bytes: u64) -> u64 {
+    bytes / 1024
+}
+
+/// Whether `proc_pid_rusage` reported success: status 0 means it wrote
+/// one `rusage_info_v4`, and anything else left `info` untouched.
+#[cfg(any(target_os = "macos", test))]
+fn read_status_ok(status: i32) -> bool {
+    status == 0
 }
 
 /// The `VmHWM:` line of `/proc/self/status`, already in kB: `None` when it

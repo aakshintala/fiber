@@ -7,8 +7,38 @@ use super::*;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
-fn the_test_process_has_a_non_zero_peak() {
-    assert!(peak_kib().unwrap() > 0);
+fn the_reader_reports_a_sixty_four_mebibyte_allocation() {
+    let before = peak_kib().unwrap();
+    // Touched on every page by the repeat constructor, so the peak
+    // the reader reports must cover it; `black_box` keeps the buffer
+    // alive past the reads.
+    let buffer = vec![1u8; 64 << 20];
+    let after = peak_kib().unwrap();
+    assert!(after >= before, "{after} >= {before}");
+    assert!(after >= 64 * 1024, "{after}");
+    std::hint::black_box(buffer);
+}
+
+#[test]
+fn footprint_kib_divides_bytes_by_1024_rounding_down() {
+    let cases: &[(u64, u64)] = &[
+        (0, 0),
+        (1023, 0),
+        (1024, 1),
+        (1025, 1),
+        (u64::MAX, u64::MAX / 1024),
+    ];
+    for (bytes, want) in cases {
+        assert_eq!(footprint_kib(*bytes), *want, "{bytes}");
+    }
+}
+
+#[test]
+fn read_status_ok_accepts_only_zero() {
+    let cases: &[(i32, bool)] = &[(0, true), (1, false), (-1, false)];
+    for (status, want) in cases {
+        assert_eq!(read_status_ok(*status), *want, "{status}");
+    }
 }
 
 #[test]
