@@ -20,6 +20,7 @@ Sessions:
   models [<search>] [--json]                            List the models the installed providers serve
 
 Fiber itself:
+  approve [--yes]                           Show what this repository ships and approve it
   login [<provider>] [--as <label>]         Store a provider's key
   logout <provider> [--as <label> | --all]  Delete a provider's stored key
   help [<command>]                          Print this menu, or a command's help
@@ -30,7 +31,6 @@ Extensions:
   extension update [<name>]         Update one extension, or every installed extension, to its newest tag
   extension remove <name>           Remove an extension, the dependencies nothing else uses, and their data
   extension list                    List installed extensions: name, version and commit
-  approve [--yes]                   Show what this repository ships and approve it
 
 Configuration:
   config get <key>                              Print the effective value and the layer it came from
