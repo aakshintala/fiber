@@ -10,6 +10,7 @@
 mod attach;
 mod client;
 pub mod hub;
+mod prompt_history;
 mod session;
 mod shell;
 mod signals;

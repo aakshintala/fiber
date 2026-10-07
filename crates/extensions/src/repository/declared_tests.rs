@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use super::{RepoItem, declared_items};
 use crate::Error;
 
-const HOOKS_FILE: &str = ".fiber/config/github.com-aakshintala-fiber-extensions-hooks.json";
+const HOOKS_FILE: &str = ".fiber/config/hooks.json";
 
 /// A git repository in `<tmp>/repo`, with Fiber home beside it in
 /// `<tmp>/home`.

@@ -3,6 +3,7 @@
 //! every new session, `fiber ask`'s included.
 
 use std::io;
+use std::path::Path;
 use std::sync::Arc;
 
 use contract::{ErrorCode, SessionId};
@@ -19,7 +20,8 @@ use crate::{
 /// `run/<session_id>` (`docs/invocation.md`, "Processes"). The workspace
 /// is entered before signals are installed or any thread starts, so the
 /// shared path reads it as the current directory exactly as `ask` does.
-/// Stdin is never read.
+/// With `--resume` the workspace is the one the log recorded, and the
+/// session is resumed instead of started. Stdin is never read.
 pub(crate) fn run(args: cli::SessionArgs, clock: Arc<dyn contract::clock::Clock>) -> i32 {
     if let Err(e) = std::env::set_current_dir(&args.workspace) {
         return ask_failed(failed(
@@ -32,6 +34,9 @@ pub(crate) fn run(args: cli::SessionArgs, clock: Arc<dyn contract::clock::Clock>
         Ok(signals) => signals,
         Err(e) => return ask_failed(failed(ErrorCode::IoFailed, format!("signals: {e}"))),
     };
+    if args.resume {
+        return crate::resume::session_resume(SessionId(args.id), args.model, clock, &signals);
+    }
     new_session(
         SessionId(args.id),
         args.model,
@@ -74,6 +79,7 @@ pub(crate) fn new_session(
         retry,
         handoff,
         idle,
+        warm,
         home,
         project,
         workspace,
@@ -130,7 +136,7 @@ pub(crate) fn new_session(
     // A signal while armed: nothing was written, so nothing more is.
     if let Some(code) = shutdown::start(signals, &cancel, &session, jobs.clone()) {
         session_servers.servers.stop();
-        session.close(log);
+        close(session, log, &home, &dir, &workspace, &*clock);
         return code;
     }
     let code = run_turn(
@@ -162,6 +168,7 @@ pub(crate) fn new_session(
                 }),
                 budget,
                 idle,
+                warm,
                 // Only one-turn `fiber ask` runs with no client: the
                 // session command serves clients that may answer
                 // (`docs/permissions.md`, "Headless").
@@ -174,6 +181,50 @@ pub(crate) fn new_session(
         },
     );
     session_servers.servers.stop();
-    session.close(log);
+    close(session, log, &home, &dir, &workspace, &*clock);
     code
+}
+
+/// Ends a session process, however it ran: closes the door side, then
+/// appends the session's `recent.jsonl` row with what it stopped on, its
+/// last `session_status` (`docs/state.md`, "Recently exited sessions").
+/// A session `close` deleted, never prompted, leaves nothing behind.
+pub(crate) fn close(
+    session: Session,
+    log: Arc<Log>,
+    home: &Path,
+    dir: &Path,
+    workspace: &Path,
+    clock: &dyn contract::clock::Clock,
+) {
+    let status = log
+        .latest("session_status")
+        .and_then(|line| serde_json::from_value(line.payload.into()).ok());
+    session.close(log);
+    if !dir.is_dir() {
+        return;
+    }
+    let name = |path: Option<&Path>| {
+        path.and_then(Path::file_name)
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    };
+    let row = hub::RecentRow {
+        session_id: SessionId(name(Some(dir))),
+        ts: clock
+            .wall()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX)),
+        // `projects/<key>/sessions/<id>`: the key names the grandparent.
+        project: name(dir.parent().and_then(Path::parent)),
+        workspace: workspace.to_string_lossy().into_owned(),
+        name: status
+            .as_ref()
+            .map(|status: &contract::events::SessionStatus| status.name.clone())
+            .unwrap_or_default(),
+        how: hub::Left::Exited,
+        status,
+    };
+    // A row that cannot be written loses only the listing, not the log.
+    hub::append(home, &row).unwrap_or(());
 }

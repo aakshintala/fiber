@@ -278,7 +278,7 @@ host.drive(command, args)          -- send a driver command
 host.ask(kind, spec)               -- raise an interaction; returns the answer, or declined
 host.status(text) / host.widget(id, lines)
 host.emit(data)                    -- data for this extension's own TUI extension
-host.log(msg)                      -- write a debug line
+host.log(msg)                      -- write a diagnostic line (see below)
 host.oauth.open(url)               -- open the browser at url, and show the URL to copy
 host.oauth.callback(opts)          -- serve one request on localhost; returns its query parameters
 host.oauth.pkce()                  -- returns { verifier, challenge }
@@ -346,6 +346,11 @@ json.decode(str) / json.encode(value)   -- JSON, host-provided (Lua has none bui
   crypto written in Lua. `host.hmac_sha256` returns raw bytes because a
   signing scheme such as AWS SigV4 feeds each HMAC into the next as its key,
   and hex-encodes only the last.
+- **`host.log`** writes one line to the session's diagnostic log in `logs/`
+  (`docs/state.md`, "What each part holds"), and sends it live to attached clients
+  and `fiber ask` as an `extension_log` event (`docs/events.md`). Fiber
+  records the line as given. People attach `logs/` to bug reports, so an
+  extension never logs a secret, a token or a person's content.
 
 ### Running a tool
 
@@ -593,8 +598,9 @@ as one a central service keeps. A refusal fails the turn with
 before every step's model request, so it must answer fast: an extension that
 reports spend to a service does that from a watcher on `usage_recorded`
 ("Watchers"), keeps the service's verdict in its state ("State"), and the
-hook only reads it. A reviewer's call, a handoff note request and a
-`host.model` call are counted in `usage` but never reach this hook.
+hook only reads it. A reviewer's call, a handoff note request, a
+`host.model` call and a cache-warming refresh (`docs/prompt-cache.md`,
+"Warming while idle") are counted in `usage` but never reach this hook.
 
 **`after_tool`** runs on every call that ran: `completed`, `failed` and
 `cancelled` alike, since a cancelled command's partial output can hold a

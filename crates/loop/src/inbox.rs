@@ -7,7 +7,7 @@ use std::sync::mpsc::RecvTimeoutError;
 use std::time::{Duration, Instant};
 
 use contract::commands::Reply;
-use contract::events::{Event, QueuedMessage, SteeringQueue};
+use contract::events::{Event, ExtensionLog, QueuedMessage, SteeringQueue};
 use contract::inbox::{Ack, Delivery, Message, Rejection};
 use contract::shapes::ContentPart;
 use contract::{CommandId, ErrorCode, RequestId, TurnId};
@@ -85,6 +85,9 @@ pub(crate) enum InboxRecv {
     /// The jobs check came due on an empty inbox; only a wait that checks
     /// the jobs ends this way.
     Unattended,
+    /// A cache refresh came due on an empty inbox with no job running; only
+    /// a wait given a refresh instant ends this way.
+    Warm,
 }
 
 impl Loop {
@@ -98,11 +101,20 @@ impl Loop {
     /// `clock.now()` when this idle wait began, plus the idle delay. `None`
     /// when the loop does not expire, or the instant cannot be represented.
     pub(crate) fn idle_deadline(&self) -> Option<Instant> {
-        let after = self.idle_exit?;
-        self.log.clock().now().checked_add(after)
+        self.idle_from(self.log.clock().now())
     }
 
-    /// The next delivery, or why the wait ended. Anything already queued is
+    /// The idle deadline for a wait whose idle clock starts at `start`:
+    /// the instant warming stopped, or now.
+    fn idle_from(&self, start: Instant) -> Option<Instant> {
+        let after = self.idle_exit?;
+        start.checked_add(after)
+    }
+
+    /// The next delivery, or why the wait ended. With `warm`, the wait
+    /// also ends when that refresh instant comes and no job runs: a job
+    /// running means the session is not idle (`docs/invocation.md`,
+    /// "Lifecycle"). Anything already queued is
     /// taken before the deadline is checked, so a prompt queued as the
     /// deadline passes still starts its turn. The caller keeps the deadline
     /// from the start of the idle wait; while a job runs there is none, and
@@ -111,7 +123,12 @@ impl Loop {
     /// (`docs/invocation.md`, "Lifecycle"). Once a shutdown started, every
     /// wait ends as the idle delay ends it, taking nothing
     /// (`docs/invocation.md`, "Shutdown").
-    pub(crate) fn recv_until(&mut self, deadline: Option<Instant>, check: bool) -> InboxRecv {
+    pub(crate) fn recv_until(
+        &mut self,
+        deadline: Option<Instant>,
+        check: bool,
+        warm: Option<Instant>,
+    ) -> InboxRecv {
         loop {
             if self.shutting_down() {
                 return InboxRecv::Idle;
@@ -127,9 +144,14 @@ impl Loop {
             if due.is_some_and(|until| clock.now() >= until) {
                 return InboxRecv::Unattended;
             }
-            // Idle needs no job running and the check needs one, so at most
-            // one of the two is set.
-            let deadline = idle.or(due);
+            let warm = warm.filter(|_| self.running().is_empty());
+            if warm.is_some_and(|until| clock.now() >= until) {
+                return InboxRecv::Warm;
+            }
+            // Idle and a refresh need no job running and the check needs
+            // one; a warming wait has no idle deadline. So at most one of
+            // the three is set.
+            let deadline = idle.or(due).or(warm);
             if idle.is_some_and(|until| clock.now() >= until) {
                 match self.inbox.try_recv() {
                     Ok(delivery) => return InboxRecv::Delivery(delivery),
@@ -169,7 +191,15 @@ impl Loop {
         }
         // Idle starts as the wait begins. A rejected command, a dropped
         // steer and a wake do not move it (`docs/invocation.md`, "Lifecycle").
-        let deadline = self.idle_deadline();
+        // While the cache is kept warm the session is not idle: the idle
+        // clock starts once warming stops (`docs/prompt-cache.md`,
+        // "Warming while idle").
+        let start = self.log.clock().now();
+        let mut warming = self.warm_stop(start);
+        let mut deadline = match warming {
+            Some(_) => None,
+            None => self.idle_deadline(),
+        };
         self.start_unattended();
         loop {
             let mut input = TurnInput::of(Vec::new());
@@ -206,7 +236,12 @@ impl Loop {
                     self.admit_idle(delivery, &mut input)?;
                 }
             } else {
-                match self.recv_until(deadline, true) {
+                let due = warming.and_then(|stop| self.warm_due(stop));
+                if let (Some(stop), None) = (warming, due) {
+                    warming = None;
+                    deadline = self.idle_from(stop);
+                }
+                match self.recv_until(deadline, true, due) {
                     InboxRecv::Delivery(first) => {
                         let mut batch = vec![first];
                         batch.extend(self.inbox.try_iter());
@@ -215,6 +250,14 @@ impl Loop {
                         }
                     }
                     InboxRecv::Unattended => self.check_jobs(&mut input.pieces),
+                    InboxRecv::Warm => {
+                        if let Some(stop) = warming
+                            && let crate::warm::Refreshed::Stopped(at) = self.refresh(stop)?
+                        {
+                            warming = None;
+                            deadline = self.idle_from(at);
+                        }
+                    }
                     InboxRecv::Closed | InboxRecv::Idle => return Ok(None),
                 }
             }
@@ -261,7 +304,7 @@ impl Loop {
             if self.notify_pending(running, &mut input.pieces) {
                 return Ok(Some(input));
             }
-            match self.recv_until(None, false) {
+            match self.recv_until(None, false, None) {
                 InboxRecv::Delivery(first) => {
                     let mut batch = vec![first];
                     batch.extend(self.inbox.try_iter());
@@ -269,7 +312,9 @@ impl Loop {
                         self.admit_idle(delivery, &mut input)?;
                     }
                 }
-                InboxRecv::Closed | InboxRecv::Idle | InboxRecv::Unattended => return Ok(None),
+                InboxRecv::Closed | InboxRecv::Idle | InboxRecv::Unattended | InboxRecv::Warm => {
+                    return Ok(None);
+                }
             }
         }
     }
@@ -372,6 +417,7 @@ impl Loop {
             | Delivery::Job(_)
             | Delivery::JobLine(_)
             | Delivery::ExtensionExec(_)
+            | Delivery::ExtensionLog(_)
             | Delivery::Cancelled) => {
                 self.admit_running(other, turn)?;
                 Ok(Waited::Again)
@@ -445,6 +491,19 @@ impl Loop {
             Delivery::ExtensionExec(exec) => {
                 self.log.append(&Event::ExtensionExec(exec), None, None)?;
             }
+            Delivery::ExtensionLog(entry) => self.record_extension_log(entry)?,
+        }
+        Ok(())
+    }
+
+    /// Writes an `extension_log` delivery live and to the diagnostic log.
+    /// The bound event goes to the log first, as the drains did before,
+    /// and lends the diagnostic line its fields, so no clone is kept.
+    pub(crate) fn record_extension_log(&self, entry: ExtensionLog) -> Result<(), Error> {
+        let event = Event::ExtensionLog(entry);
+        self.log.append(&event, None, None)?;
+        if let Event::ExtensionLog(entry) = &event {
+            self.diag.extension_log(&entry.extension, &entry.message);
         }
         Ok(())
     }
@@ -498,6 +557,7 @@ impl Loop {
             Delivery::ExtensionExec(exec) => {
                 self.log.append(&Event::ExtensionExec(exec), None, None)?;
             }
+            Delivery::ExtensionLog(entry) => self.record_extension_log(entry)?,
         }
         Ok(())
     }

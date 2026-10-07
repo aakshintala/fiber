@@ -75,6 +75,9 @@ pub enum Delivery {
     /// A program an extension ran outside a tool call: written as
     /// `extension_exec`, starts nothing.
     ExtensionExec(crate::events::ExtensionExec),
+    /// A line an extension wrote with `host.log`: shown live, recorded in
+    /// the diagnostic log, starts nothing.
+    ExtensionLog(crate::events::ExtensionLog),
     /// Wakes a loop blocked on its inbox after an accepted `cancel` or a
     /// clock move. It carries no ack and no meaning: every drain discards
     /// it, and an approval wait reads the cancel signal after it wakes

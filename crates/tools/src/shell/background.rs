@@ -268,7 +268,7 @@ fn hand_off(
     // timeout and stop hold while `ps` runs.
     thread::spawn(move || {
         let finished = moved.drive_job(job_clock.as_ref(), job_cancel.as_ref(), stream, feed);
-        end.end(to_completed(job_id, &path, finished, limit));
+        (end.0)(to_completed(job_id, &path, finished, limit));
     });
     if let Some(sink) = sink {
         return monitor_receipt(&opened.started, &opened.path, &errors, &sink, limit.ms);

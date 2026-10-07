@@ -207,7 +207,7 @@ fn list_is_empty_then_shows_jobs_in_start_order() {
     let ended_id = ended.started.job_id.0.clone();
     let running_path = running.path.clone();
     let ended_path = ended.path.clone();
-    ended.end.end(completed(&ended_id, Outcome::Completed));
+    (ended.end.0)(completed(&ended_id, Outcome::Completed));
     let listed = run(&tool, json!({"action": "list"}), &cancel);
     assert!(listed.error.is_none());
     assert!(listed.jobs.is_empty(), "list does not deliver a completion");
@@ -324,7 +324,7 @@ fn a_job_that_already_ended_is_returned_at_once_and_claimed_once() {
     let opened = open(&registry, "npm test", idle_stop());
     let id = opened.started.job_id.0.clone();
     let path = opened.path.clone();
-    opened.end.end(JobCompleted {
+    (opened.end.0)(JobCompleted {
         job_id: JobId(id.clone()),
         status: Outcome::Failed,
         error: Some(Failure {
@@ -370,7 +370,7 @@ fn a_completed_job_names_its_exit_code_and_nothing_else() {
     let opened = open(&registry, "npm test", idle_stop());
     let id = opened.started.job_id.0.clone();
     let path = opened.path.clone();
-    opened.end.end(JobCompleted {
+    (opened.end.0)(JobCompleted {
         job_id: JobId(id.clone()),
         status: Outcome::Completed,
         error: None,
@@ -404,7 +404,7 @@ fn final_text_adds_a_newline_only_when_the_piece_has_none() {
     let opened = open(&registry, "npm test", idle_stop());
     let id = opened.started.job_id.0.clone();
     let path = opened.path.clone();
-    opened.end.end(JobCompleted {
+    (opened.end.0)(JobCompleted {
         job_id: JobId(id.clone()),
         status: Outcome::Cancelled,
         error: Some(Failure {
@@ -554,7 +554,7 @@ fn a_wait_returns_when_the_job_ends_and_when_the_deadline_passes() {
         ));
     });
     assert!(clock.await_parked(deadline, DEADLINE));
-    opened.end.end(completed(&id, Outcome::Completed));
+    (opened.end.0)(completed(&id, Outcome::Completed));
     let output = rx.recv_timeout(DEADLINE).expect("the wait returned");
     assert!(output.error.is_none());
     assert!(
@@ -614,7 +614,7 @@ fn a_timeout_that_overflows_the_clock_waits_until_the_job_ends() {
     });
     assert_eq!(clock.await_first(), vec![None]);
     assert!(rx.try_recv().is_err(), "the overflow wait returned early");
-    opened.end.end(completed(&end_id, Outcome::Completed));
+    (opened.end.0)(completed(&end_id, Outcome::Completed));
     let output = rx.recv_timeout(DEADLINE).expect("the wait returned");
     assert!(output.error.is_none());
     assert!(matches!(
@@ -702,7 +702,7 @@ fn two_waits_deliver_the_completion_once() {
         clock.await_parked_count(deadline, 2, DEADLINE),
         "both waits did not park"
     );
-    opened.end.end(completed(&id, Outcome::Failed));
+    (opened.end.0)(completed(&id, Outcome::Failed));
     let outputs: Vec<Output> = handles
         .into_iter()
         .map(|rx| rx.recv_timeout(DEADLINE).expect("a wait returned"))
@@ -730,7 +730,7 @@ fn stop_on_an_ended_job_names_how_it_ended() {
     ] {
         let opened = open(&registry, "npm test", idle_stop());
         let id = opened.started.job_id.0.clone();
-        opened.end.end(completed(&id, status));
+        (opened.end.0)(completed(&id, status));
         let output = run(&tool, json!({"action": "stop", "job_id": id}), &cancel);
         assert_eq!(
             output.error.as_ref().map(|error| error.code.clone()),
@@ -759,7 +759,7 @@ fn stop_calls_stop_once_and_returns_the_end_it_reports() {
         Stop(Box::new(move || {
             count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             if let Some(end) = give.lock().unwrap().take() {
-                end.end(JobCompleted {
+                (end.0)(JobCompleted {
                     job_id: JobId("j_ignored".into()),
                     status: Outcome::Cancelled,
                     error: None,
@@ -880,7 +880,7 @@ fn write_refuses_what_it_cannot_reach_as_invalid_arguments() {
     let plain = open(&registry, "ls", idle_stop());
     let plain_id = plain.started.job_id.0.clone();
     let (ended_id, ended) = tty_job(&registry);
-    ended.end.end(completed(&ended_id, Outcome::Failed));
+    (ended.end.0)(completed(&ended_id, Outcome::Failed));
     let (tty_id, tty) = tty_job(&registry);
 
     let output = run(

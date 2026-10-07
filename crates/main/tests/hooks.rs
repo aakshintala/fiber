@@ -601,3 +601,43 @@ fn an_after_tool_hook_running_host_exec_logs_one_extension_exec() {
     assert_eq!(payload["process"]["timed_out"], false);
     assert!(payload["process"].get("signal").is_none());
 }
+
+#[test]
+fn an_after_tool_hook_calling_host_log_writes_one_live_line_and_its_diagnostic_line() {
+    let setup = Setup::new();
+    setup.lua(
+        "log",
+        "fiber.hook(\"after_tool\", { timeout = 10000, on_failure = \"non-blocking\",\n\
+           run = function(call) host.log(\"seen\") end })\n",
+    );
+    let (run, _server) = setup.read_note("nothing secret\n", &json!({}));
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let logs = run.all("extension_log");
+    assert_eq!(logs.len(), 1, "one host.log call logs one line");
+    assert_eq!(logs[0]["payload"]["extension"], "fiber.test/log");
+    assert_eq!(logs[0]["payload"]["message"], "seen");
+    let id = run.lines[0]["session_id"].as_str().unwrap();
+    let text =
+        fs::read_to_string(setup.home().join("logs").join(format!("session-{id}.log"))).unwrap();
+    assert_eq!(text.lines().count(), 1, "one diagnostic line");
+    let line: Value = serde_json::from_str(text.trim()).unwrap();
+    assert_eq!(line["level"], "info");
+    assert_eq!(line["process"], "session");
+    assert_eq!(line["session_id"], id);
+    assert_eq!(line["code"], "extension_log");
+    assert_eq!(line["message"], "fiber.test/log: seen");
+    let order = [
+        "\"ts\":",
+        "\"level\":",
+        "\"process\":",
+        "\"session_id\":",
+        "\"code\":",
+        "\"message\":",
+    ];
+    let mut at = 0;
+    for key in order {
+        let next = text.find(key).unwrap();
+        assert!(next >= at, "{key} follows the key before it");
+        at = next;
+    }
+}

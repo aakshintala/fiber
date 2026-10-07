@@ -70,7 +70,7 @@ fn open_creates_a_file_under_the_directory_and_records_the_start() {
     assert_eq!(dropped.status, Outcome::Failed);
     assert_eq!(
         dropped.error.as_ref().map(|error| error.code.clone()),
-        Some(ErrorCode::ToolError)
+        Some(ErrorCode::Indeterminate)
     );
 }
 
@@ -109,7 +109,7 @@ fn type_into_reaches_the_input_of_a_tty_job_only_and_an_end_drops_it() {
     );
     assert!(typed_rx.try_recv().is_err());
     assert_eq!(std::sync::Arc::strong_count(&held), 2);
-    tty.end.end(completed(&id.0, Outcome::Completed));
+    (tty.end.0)(completed(&id.0, Outcome::Completed));
     assert_eq!(
         std::sync::Arc::strong_count(&held),
         1,
@@ -173,7 +173,7 @@ fn stop_calls_that_jobs_stop_and_end_is_delivered() {
         "a later stop called the closure again"
     );
     let done = completed(&id.0, Outcome::Completed);
-    opened.end.end(JobCompleted {
+    (opened.end.0)(JobCompleted {
         job_id: JobId("j_other".into()),
         ..done.clone()
     });
@@ -254,7 +254,7 @@ fn stop_after_the_end_is_false_and_calls_nothing() {
         ))
         .unwrap();
     let id = opened.started.job_id.clone();
-    opened.end.end(completed(&id.0, Outcome::Completed));
+    (opened.end.0)(completed(&id.0, Outcome::Completed));
     assert!(!jobs.stop(&id));
     assert!(
         fired_rx.try_recv().is_err(),
@@ -375,7 +375,7 @@ fn running_lists_unended_jobs_in_open_order() {
         third.started.job_id.clone(),
     ];
     assert_eq!(seam.running(), ids.to_vec());
-    second.end.end(completed(&ids[1].0, Outcome::Completed));
+    (second.end.0)(completed(&ids[1].0, Outcome::Completed));
     assert_eq!(seam.running(), vec![ids[0].clone(), ids[2].clone()]);
     drop(first.end);
     drop(third.end);
@@ -388,9 +388,7 @@ fn deliver_to_sends_each_later_end_whose_claim_holds() {
     let jobs = FakeJobs::new(dir.path());
     let seam: &dyn Jobs = jobs.as_ref();
     let before = seam.open(opening("before", Stop(Box::new(|| {})))).unwrap();
-    before
-        .end
-        .end(completed(&before.started.job_id.0, Outcome::Completed));
+    (before.end.0)(completed(&before.started.job_id.0, Outcome::Completed));
     let (tx, rx) = mpsc::channel();
     seam.deliver_to(tx);
     assert!(
@@ -399,7 +397,7 @@ fn deliver_to_sends_each_later_end_whose_claim_holds() {
     );
     let opened = seam.open(opening("after", Stop(Box::new(|| {})))).unwrap();
     let id = opened.started.job_id.clone();
-    opened.end.end(completed(&id.0, Outcome::Failed));
+    (opened.end.0)(completed(&id.0, Outcome::Failed));
     let delivery = rx.try_recv().expect("the end sent a notice");
     let contract::inbox::Delivery::Job(notice) = delivery else {
         panic!("the end sent {delivery:?}");
@@ -436,7 +434,7 @@ fn a_monitors_lines_are_recorded_in_order_and_reach_the_inbox_before_its_end() {
     let lines = opened.lines.unwrap();
     (lines.0)(line("one"));
     (lines.0)(line("two"));
-    opened.end.end(completed(&id.0, Outcome::Completed));
+    (opened.end.0)(completed(&id.0, Outcome::Completed));
     assert_eq!(jobs.lines().lines(), vec![line("one"), line("two")]);
     for text in ["one", "two"] {
         let delivery = rx.try_recv().unwrap();

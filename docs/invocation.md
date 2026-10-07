@@ -529,6 +529,14 @@ and its own jobs are done. It does not wait for `session.idle_exit_ms`. A later
 delivers the prompt. A client showing a session that exits keeps showing it,
 because its conversation is its log.
 
+A session whose log ends in `fiber_exited` has exited, even while its process
+is still shutting down. The hub does not pass on a `closing` answer from it: it
+resumes the session and delivers the command. If that resume fails
+`session_held`, the hub waits for the old process to release the lock, up to
+the 5-second shutdown bound, and the client gets `session_held` only once the
+bound has passed. A command after `close` and before `fiber_exited` still gets
+`closing`.
+
 **A session that never got a prompt leaves nothing behind.** A session that
 exits with no `turn_started` in its log deletes its own directory.
 
@@ -786,8 +794,10 @@ Every client reaches sessions through the hub, the local terminal included.
   feed, with its last `session_status`, until it is resumed or a client sends
   `dismiss`. Exited sessions
   come from a paged query over `recent.jsonl`, filterable by project, newest
-  first (`docs/state.md`). Delegates are never in the feed; a client shows a
-  delegate when the person opens its parent.
+  first (`docs/state.md`). Delegates are never in the feed or in that query;
+  a client shows a delegate when the person opens its parent. A `dismiss`
+  sends no line to clients already subscribed: a client showing the session
+  drops it at its next subscription.
 - **It starts sessions with the internal session command**, in the workspace
   the client names. Whoever starts a session generates its id and passes it
   on that command's line, so the starter knows the id before the process
@@ -840,10 +850,10 @@ websocket for everything it does.
 | `pair` | `code` (string) | On the port, instead of `authenticate`: exchanges a pairing code for a device token, returned in the acknowledgement. |
 | `feed` | none | Subscribes the connection to the feed: the latest `session_status` of every running or waiting top-level session, and every change after it, then a `session_left` line (`docs/events.md`) when one ends. Crashed sessions not yet dismissed come first: each one's last `session_status`, then its `session_left`. |
 | `dismiss` | `session` (string) | Drops a crashed session from the feed, for every client; its log stays, and it can still be resumed from `recent`. Rejected `stale_request` unless the session is crashed. |
-| `recent` | `before` (string, optional), `project` (string, optional) | Answers with a page of exited sessions from `recent.jsonl`, newest first (`docs/state.md`). |
+| `recent` | `before` (string, optional), `project` (string, optional) | Answers with a page of exited sessions from `recent.jsonl`, newest first, skipping delegates, whose row's `status` carries `parent` (`docs/state.md`). `project` is the project's key, the name of its `projects/<key>/` directory. |
 | `start` | `workspace` (string), `model` (string, optional), `overrides` (array of strings, optional), `worktree` (boolean, optional), `content` (optional) | Starts a session in the workspace, any absolute path, and answers with its `session_id`. Each of `overrides` is a `key=value` passed to the session as `-c` ("Commands and flags"). With `worktree` true, the session runs in a new worktree of the workspace ("Isolation"). With `content`, its first prompt. |
 | `delete` | `session` (string), `cascade` (boolean, optional) | Deletes an exited session ("Deleting and pruning"). |
-| `prompt_history` | `project` (string), `before` (integer, optional) | Answers with a page of the project's prompt history, newest first (`docs/state.md`). |
+| `prompt_history` | `project` (string), `before` (integer, optional) | Answers with a page of the project's prompt history, newest first (`docs/state.md`). `project` is the project's key, as for `recent`. |
 | `read_file` | `session` (string), `path` (string) | Answers with one file from the session's `artifacts/` ("A session's files"). |
 | `status` | none | Answers with `running`, `fiber_version` and `clients` (`docs/events.md`, "`command_accepted`"). |
 | `refresh` | none | Rebuilds the hub's environment, as `fiber hub refresh` does. |

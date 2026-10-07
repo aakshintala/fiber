@@ -5,7 +5,7 @@ description: Recommend a value for cache.warm_cap, and whether to turn on cache.
 
 # Recommending cache.warm_cap
 
-`cache.warm_idle` makes an idle session refresh its prompt cache shortly before the cache lifetime ends, so a person who returns after a long pause finds it warm. `cache.warm_cap` is how long after the last turn warming stops. Warming costs a little on every session nobody returns to and saves a lot on one that is resumed after a pause. This recipe works out which cap would have cost least on the person's own sessions. Background: `docs/prompt-cache.md`, "Warming while idle". Read it first. The method and the owner's figures are in `research/prompt-cache/warm-cap.md` in the Fiber repository, when it is available.
+`cache.warm_idle` makes an idle session refresh its prompt cache shortly before the cache lifetime ends, so a person who returns after a long pause finds it warm. `cache.warm_cap` is how many cache lifetimes after the last turn warming stops. Warming costs a little on every session nobody returns to and saves a lot on one that is resumed after a pause. This recipe works out which cap would have cost least on the person's own sessions. Background: `docs/prompt-cache.md`, "Warming while idle". Read it first. The method and the owner's figures are in `research/prompt-cache/warm-cap.md` in the Fiber repository, when it is available.
 
 Use your ordinary tools: read the logs, write a short script in a scratch directory and run it. Add no tool and change no Fiber file.
 
@@ -33,7 +33,7 @@ Sum the cost over all kept sessions for each cap and divide by the cap-0 sum.
 
 - Take the smallest cap whose total is within 0.5 percentage points of the lowest total.
 - When no cap beats 0, recommend leaving `cache.warm_idle` off.
-- The cap must stay under 19 lifetimes; Fiber refuses 19 or more with `config_invalid` (`docs/configuration.md`).
+- The cap must stay under 12 lifetimes; Fiber refuses 12 or more with `config_invalid` (`docs/configuration.md`).
 
 Report the number of sessions and requests used, the table of totals by cap, and the recommendation. The result is a count over the person's own history and not a promise: say how few resumed sessions carry the saving. With fewer than about 20 interactive sessions, say the sample is too small to recommend.
 
@@ -41,7 +41,7 @@ To apply it, with the person's agreement:
 
 ```
 fiber config set cache.warm_idle true
-fiber config set cache.warm_cap 2h
+fiber config set cache.warm_cap 2
 ```
 
-Replace `2h` with the recommended cap as a duration k x L (for example 2 lifetimes of 5m is `10m`). `fiber config set` writes the global file; `--repo` and the per-project forms are in `docs/configuration.md`.
+Replace `2` with the recommended cap in lifetimes, an integer. `fiber config set` writes the global file; `--repo` and the per-project forms are in `docs/configuration.md`.

@@ -5,6 +5,7 @@
 use std::io::{BufRead, BufReader, Write};
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc;
 use std::thread;
@@ -460,6 +461,10 @@ fn deliver_message(conn: &mut Conn, id: CommandId, content: Vec<ContentPart>, pr
     };
     let ack = inbox_ack(conn, id);
     if prompt {
+        let ack = match conn.gate.history.get().cloned().flatten() {
+            Some(path) => recorded(ack, path, &conn.gate, message.content.clone()),
+            None => ack,
+        };
         conn.gate.deliver(Delivery::Prompt(message, ack));
     } else {
         conn.gate.deliver(Delivery::Steer(message, ack));
@@ -575,6 +580,24 @@ fn inbox_ack(conn: &Conn, id: CommandId) -> Ack {
             &event,
         ));
     })
+}
+
+/// Wraps a prompt's acknowledgement so an accepted prompt is appended to
+/// the prompt history at `path` before `ack` answers, so a client that
+/// reads its acceptance finds the line. A wrapper dropped uncalled drops
+/// `ack`, which still answers `closing`.
+fn recorded(ack: Ack, path: PathBuf, gate: &Arc<Gate>, content: Vec<ContentPart>) -> Ack {
+    let gate = Arc::clone(gate);
+    Ack(Box::new(move |result| {
+        if result.is_ok() {
+            // debt: a failed append is dropped unreported, when a session gets a diag log, record a failed history append.
+            let ts = session::now_ms(gate.clock.as_ref());
+            match crate::prompt_history::append(&path, ts, &gate.session_id, &content) {
+                Ok(()) | Err(_) => {}
+            }
+        }
+        (ack.0)(result);
+    }))
 }
 
 /// Answers `closing` when the loop drops the acknowledgement uncalled.

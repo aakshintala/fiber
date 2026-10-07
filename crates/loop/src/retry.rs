@@ -151,6 +151,11 @@ impl crate::Loop {
     /// the budget check and `sent` are the step's, not per retry: a retry
     /// resends the same request (`docs/loop.md`, "What the model is sent").
     pub(crate) fn attempt(&mut self, request: &ModelRequest, turn: &TurnId) -> Result<Step, Error> {
+        // Stamped once per step: a retry's backoff only delays the real
+        // send, so a refresh counted from here comes early, never late.
+        if self.warm.is_some() {
+            self.last_request = Some((request.clone(), self.log.clock().now()));
+        }
         Ok(match self.call_with_retries(request, turn)? {
             Attempted::Replied {
                 reply,
