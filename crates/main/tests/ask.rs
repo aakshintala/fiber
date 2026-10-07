@@ -3124,6 +3124,22 @@ fn a_sign_error_keeps_the_token_out_of_every_line() {
     let run = setup.fiber(&["ask", "hi"], None);
 
     assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
     let exited = &run.last()["payload"];
     assert_eq!(exited["exit_code"], 1);
     let error = &exited["error"];

@@ -540,12 +540,12 @@ fn parse_query(query: &str) -> Result<Vec<(String, String)>, String> {
         .filter(|pair| !pair.is_empty())
         .map(|pair| {
             let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
-            let key = decode(key).map_err(|kind| format!("a parameter name {}", kind.phrase()))?;
-            let value = decode(value).map_err(|kind| {
+            let key = decode(key).map_err(|phrase| format!("a parameter name {phrase}"))?;
+            let value = decode(value).map_err(|phrase| {
                 if NAMED.contains(&key.as_str()) {
-                    format!("the `{key}` parameter's value {}", kind.phrase())
+                    format!("the `{key}` parameter's value {phrase}")
                 } else {
-                    format!("a parameter's value {}", kind.phrase())
+                    format!("a parameter's value {phrase}")
                 }
             })?;
             Ok((key, value))
@@ -564,26 +564,7 @@ const NAMED: &[&str] = &[
     "iss",
 ];
 
-/// Why percent-decoding failed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DecodeError {
-    /// A `%` escape with no two hex digits after it.
-    Escape,
-    /// Decoded bytes that are not UTF-8.
-    Utf8,
-}
-
-impl DecodeError {
-    /// The phrase an error uses for this failure.
-    fn phrase(&self) -> &'static str {
-        match self {
-            Self::Escape => "has an invalid % escape",
-            Self::Utf8 => "is not UTF-8 once decoded",
-        }
-    }
-}
-
-fn decode(text: &str) -> Result<String, DecodeError> {
+fn decode(text: &str) -> Result<String, &'static str> {
     let mut out = Vec::with_capacity(text.len());
     let mut bytes = text.bytes();
     while let Some(byte) = bytes.next() {
@@ -595,13 +576,13 @@ fn decode(text: &str) -> Result<String, DecodeError> {
                 let value = high
                     .zip(low)
                     .and_then(|(high, low)| u8::try_from(high * 16 + low).ok())
-                    .ok_or(DecodeError::Escape)?;
+                    .ok_or("has an invalid % escape")?;
                 out.push(value);
             }
             other => out.push(other),
         }
     }
-    String::from_utf8(out).map_err(|_| DecodeError::Utf8)
+    String::from_utf8(out).map_err(|_| "is not UTF-8 once decoded")
 }
 
 /// Waits for the lock on `provider`'s stored credential, polling
