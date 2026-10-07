@@ -32,6 +32,10 @@ pub struct Reviewer {
     pub provider: Arc<dyn Provider>,
     /// The reviewer's model, and how its calls are priced.
     pub model: Model,
+    /// The prompt-cache lifetime its requests ask for: `cache.lifetime`
+    /// resolved for the reviewer's model (`docs/prompt-cache.md`, "Cache
+    /// lifetime").
+    pub cache_lifetime: CacheLifetime,
 }
 
 /// When a reviewer block hands the call to a person
@@ -260,6 +264,7 @@ struct ReviewEndpoint {
     reference: String,
     cost: Option<Cost>,
     subscription: bool,
+    cache_lifetime: CacheLifetime,
 }
 
 /// What one full stage (with its one re-ask) said.
@@ -299,6 +304,7 @@ impl Loop {
                 reference: reviewer.model.reference.clone(),
                 cost: reviewer.model.cost.clone(),
                 subscription: reviewer.model.subscription,
+                cache_lifetime: reviewer.cache_lifetime,
             },
             Err(failure) => {
                 let failure = failure.clone();
@@ -566,7 +572,7 @@ impl Loop {
             tools: Vec::new(),
             effort: None,
             tool_choice: "auto".to_owned(),
-            cache_lifetime: CacheLifetime::OneHour,
+            cache_lifetime: endpoint.cache_lifetime,
             cache_key: self.reviewer_key.clone(),
             conversation,
             previous_end,
