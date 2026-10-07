@@ -108,11 +108,7 @@ impl Setup {
         thread::spawn(move || done.send(child.wait_with_output()).unwrap());
         let output = match finished.recv_timeout(self.deadline.left()) {
             Ok(output) => output.unwrap(),
-            Err(_) => {
-                support::kill_group(self.deadline, group, "KILL").unwrap();
-                let reaped = finished.recv_timeout(self.deadline.cleanup()).is_ok();
-                panic!("waited until the deadline for `fiber ask` to exit (reaped: {reaped})");
-            }
+            Err(_) => support::expired(self.deadline, group, &finished, "`fiber ask` to exit"),
         };
         assert!(
             !group_alive(self.deadline, group),

@@ -1,7 +1,9 @@
 //! Tests of the binary-level tests' shared deadline (`docs/testing.md`,
 //! "Waits and timeouts"): one deadline from the test's start, each wait
-//! taking only what remains of it. Every test here drives a fake clock that
-//! the code under test reads and never waits on.
+//! taking only what remains of it. The arithmetic tests drive a fake clock
+//! that the code under test reads and never waits on; the live-process
+//! probe below waits on real processes, so it takes its deadline from the
+//! process clock, which is the only clock those waits advance.
 
 #![allow(
     clippy::unwrap_used,
@@ -173,8 +175,11 @@ fn bounded_returns_or_expires() {
 
 #[test]
 fn a_probe_on_a_live_group_is_bounded() {
-    let clock = fake_clock();
-    let deadline = Deadline::on(&**clock);
+    // A wait on a live process advances only the wall clock: a fake clock
+    // that never advances would renew the allowance at every wait, so this
+    // probe takes the test's one process-clock deadline, and successive
+    // waits share its budget (`docs/testing.md`, "Waits and timeouts").
+    let deadline = Deadline::start();
     let (mut child, group, _guard) = sleeper();
     assert!(group_alive(deadline, group));
     assert!(kill_group(deadline, group, "KILL").unwrap());
