@@ -182,10 +182,6 @@ fn on_line(bytes: &[u8], conn: &mut Conn) {
         );
         return;
     }
-    if !built(&line.command) {
-        unknown(conn, line.id, &line.command);
-        return;
-    }
     let (parsed, name) = match crate::drive::parse(line) {
         Ok(parsed) => parsed,
         Err((id, code, message)) => {

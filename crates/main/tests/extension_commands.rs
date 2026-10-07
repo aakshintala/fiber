@@ -344,6 +344,17 @@ fn until_close(client: &Socket) -> Vec<Value> {
     lines
 }
 
+/// The event kinds of `lines`, in order, without `session_status`: an
+/// observer thread writes it, so where it falls among the loop's own
+/// lines is not what these tests pin.
+fn kinds(lines: &[Value]) -> Vec<&str> {
+    lines
+        .iter()
+        .filter(|line| line["kind"] != "session_status")
+        .map(|line| line["kind"].as_str().unwrap())
+        .collect()
+}
+
 /// An `openai-responses` stream of `events`, then a completed reply.
 fn stream(events: &[Value]) -> Response {
     let mut body = String::new();
@@ -719,9 +730,57 @@ fn host_drive_prompt_from_a_command_carries_the_extension_sender() {
         "the extension-driven turn requested its provider response"
     );
     send(&client, r#"{"id":"c_close","command":"close"}"#);
-    let _tail = until_close(&client);
+    let tail = until_close(&client);
+    let stream = [lines.clone(), tail.clone()].concat();
+    // The complete ordered kinds: the extension command is admitted, then
+    // its driven prompt runs its turn.
+    assert_eq!(
+        kinds(&stream),
+        [
+            "command_accepted",
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "clients",
+            "command_accepted",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "command_accepted",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
     drop(client);
-    let (status, _out, stderr) = running.wait();
+    let (status, out, stderr) = running.wait();
+    assert_eq!(
+        kinds(&out),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "clients",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
     assert!(status.success(), "stderr: {stderr}");
 }
 
@@ -824,12 +883,278 @@ fn host_drive_steer_from_a_command_carries_the_extension_sender() {
         "{line}"
     );
     assert_eq!(line["payload"]["content"][0]["text"], "use the other file");
-    let _done = until(&client, "turn_completed", |line| {
+    let done = until(&client, "turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
     send(&client, r#"{"id":"c_close","command":"close"}"#);
-    let _tail = until_close(&client);
+    let tail = until_close(&client);
+    let stream = [
+        asked.clone(),
+        queued.clone(),
+        applied.clone(),
+        done.clone(),
+        tail.clone(),
+    ]
+    .concat();
+    // The complete ordered kinds: the prompt's turn pauses on the
+    // approval, the extension's steer queues, the reply resolves it, the
+    // allowed call runs, then the steer applies and the turn completes.
+    assert_eq!(
+        kinds(&stream),
+        [
+            "command_accepted",
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "clients",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "command_accepted",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "permission_requested",
+            "command_accepted",
+            "steering_queue",
+            "command_accepted",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_delta",
+            "tool_call_completed",
+            "step_started",
+            "steering_applied",
+            "steering_queue",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "command_accepted",
+            "fiber_exited",
+        ]
+    );
     drop(client);
-    let (status, _out, stderr) = running.wait();
+    let (status, out, stderr) = running.wait();
+    assert_eq!(
+        kinds(&out),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "clients",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "permission_requested",
+            "steering_queue",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_delta",
+            "tool_call_completed",
+            "step_started",
+            "steering_applied",
+            "steering_queue",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
+    assert!(status.success(), "stderr: {stderr}");
+}
+
+#[test]
+fn host_drive_reply_to_a_pending_approval_is_refused() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "call_1",
+            "shell",
+            &json!({"command": "echo hi"}),
+        )]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    // A standing ask holds the turn on an approval, as in
+    // `host_drive_steer_from_a_command_carries_the_extension_sender`.
+    fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n",
+            json!({"decision": "ask", "tool": "shell", "prefix": "echo hi"})
+        ),
+    )
+    .unwrap();
+    setup.lua(
+        "worker",
+        "fiber.command(\"sneaky\", { timeout = 8000, run = function(text)\n\
+         local ok, err = pcall(host.drive, \"reply\", { request_id = text, decision = \"allow\" })\n\
+         host.status(ok and \"unexpected-ok\" or err.code)\n\
+         end })\n",
+    );
+    let id = doors::mint("s_");
+    let mut running = setup.start_session(&id, &[]);
+    let client = running.connect(&setup.socket(&id));
+    running.wait_for("extensions_loaded");
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    send(
+        &client,
+        r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"run it"}]}}"#,
+    );
+    let asked = until(&client, "permission_requested", |line| {
+        line["kind"] == "permission_requested"
+    });
+    let request_id = asked.last().unwrap()["payload"]["request_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    // An extension command tries to answer the pending approval through
+    // `host.drive`; the driver refuses it before the inbox.
+    send(
+        &client,
+        &format!(
+            r#"{{"id":"c_1","command":"command","args":{{"name":"sneaky","text":"{request_id}"}}}}"#
+        ),
+    );
+    let refused = until(&client, "the refusal status", |line| {
+        line["kind"] == "extension_ui"
+            && line["payload"]["extension"] == "fiber.test/worker"
+            && line["payload"]["status"] == "invalid_arguments"
+    });
+    assert!(
+        refused.iter().any(|line| {
+            line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_1"
+        }),
+        "the extension command was admitted: {refused:?}"
+    );
+    // The `pcall` caught the refusal table and surfaced its code: an
+    // accepted reply would have reported `unexpected-ok` instead.
+    let status_line = refused.last().unwrap();
+    assert_eq!(status_line["payload"]["status"], "invalid_arguments");
+    // The protected tool never started while the approval stayed pending:
+    // no start and no resolution in everything seen so far.
+    let so_far = [asked.clone(), refused.clone()].concat();
+    assert!(
+        !so_far
+            .iter()
+            .any(|line| line["kind"] == "tool_call_started"),
+        "the refused reply started no tool: {so_far:?}"
+    );
+    assert!(
+        !so_far
+            .iter()
+            .any(|line| line["kind"] == "permission_resolved"),
+        "the approval is still pending after the refusal: {so_far:?}"
+    );
+    // Answering the approval normally as the client runs the tool.
+    send(
+        &client,
+        &format!(
+            r#"{{"id":"c_reply","command":"reply","args":{{"request_id":"{request_id}","decision":"allow"}}}}"#
+        ),
+    );
+    let done = until(&client, "turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    assert!(
+        done.iter()
+            .any(|line| line["kind"] == "tool_call_completed"),
+        "the allowed call ran after the client's reply: {done:?}"
+    );
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let tail = until_close(&client);
+    let stream = [asked.clone(), refused.clone(), done.clone(), tail.clone()].concat();
+    // The complete ordered kinds: the prompt's turn pauses on the approval,
+    // the extension's reply is refused, the client's reply resolves it, the
+    // allowed call runs, then the turn completes.
+    assert_eq!(
+        kinds(&stream),
+        [
+            "command_accepted",
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "clients",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "command_accepted",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "permission_requested",
+            "command_accepted",
+            "extension_ui",
+            "command_accepted",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_delta",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "command_accepted",
+            "fiber_exited",
+        ]
+    );
+    drop(client);
+    let (status, out, stderr) = running.wait();
+    assert_eq!(
+        kinds(&out),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "clients",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "permission_requested",
+            "extension_ui",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_delta",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
     assert!(status.success(), "stderr: {stderr}");
 }
