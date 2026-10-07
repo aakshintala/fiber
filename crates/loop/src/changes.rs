@@ -8,12 +8,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
 use std::time::SystemTime;
 
-use contract::Envelope;
 use contract::clock::Clock;
 use contract::events::{
     DateChanged, Event, InstructionFile, InstructionReason, InstructionSent, Notice, OpeningMessage,
 };
 use contract::shapes::DeclaredEffects;
+use contract::{ActionId, Envelope};
 
 use crate::Error;
 use crate::opening;
@@ -143,11 +143,13 @@ impl State {
 
     /// The state the log's lines describe: the content fold gives what the
     /// model last had, the parents of every instruction file restore each
-    /// directory that held one, and the last date wins. No size or time is
+    /// directory that held one, the declared paths of every call the
+    /// current context started and completed restore each subdirectory
+    /// they reached, and the last date wins. No size or time is
     /// remembered, so the first check reads each file and sends nothing
-    /// when its content equals what the model had. A subdirectory touched
-    /// before the resume that held no instruction file is not remembered:
-    /// a call touching it again checks it.
+    /// when its content equals what the model had; a restored subdirectory
+    /// queues nothing, and a file created in it later is `created` at the
+    /// next check.
     pub(crate) fn resumed(
         lines: &[Envelope],
         workspace: &Path,
@@ -161,13 +163,20 @@ impl State {
         // that the manifest no longer names is not tracked and sends
         // nothing.
         state.track_sections(&prompt.extension_sections, false);
+        // Each started call's declared paths, until its completion: only a
+        // call that ran and completed touched its directories, as live.
+        let mut running: BTreeMap<ActionId, Vec<String>> = BTreeMap::new();
+        // The subdirectories the current context's calls reached.
+        let mut touched = BTreeSet::new();
         for line in lines.iter().filter(|l| l.is_durable()) {
             let Some(event) = Event::from_envelope(line).map_err(Error::Unreadable)? else {
                 continue;
             };
             // Every other line changes neither the date nor the checked
-            // set: only these three restore the tracked state.
+            // set: only these five restore the tracked state.
             if let Event::OpeningMessage(message) = &event {
+                // A new context: the calls before it touched nothing in it.
+                touched.clear();
                 state.date = message.environment.date.clone();
                 for file in &message.instruction_files {
                     state.files.entry(file.path.clone()).or_default();
@@ -187,11 +196,22 @@ impl State {
                     }
                 }
             }
+            if let (Event::ToolCallStarted(started), Some(action)) = (&event, &line.action_id)
+                && let Some(paths) = &started.declared.paths
+            {
+                running.insert(action.clone(), paths.clone());
+            }
+            if let (Event::ToolCallCompleted(_), Some(action)) = (&event, &line.action_id)
+                && let Some(paths) = running.remove(action)
+            {
+                touched.extend(reached(&workspace, &resolve(&workspace, &paths)));
+            }
             if let Event::DateChanged(changed) = &event {
                 state.date = changed.date.clone();
             }
             apply(&mut state.had, &event);
         }
+        state.dirs.extend(touched);
         Ok(state)
     }
 
@@ -450,10 +470,7 @@ impl State {
         // Resolved once against the workspace and lexically normalised:
         // every tracked path is re-read, wherever it is. Only the
         // subdirectory walk below stays inside the workspace.
-        let resolved: Vec<PathBuf> = paths
-            .iter()
-            .filter_map(|declared_path| clean(&workspace.join(declared_path)))
-            .collect();
+        let resolved = resolve(workspace, paths);
         let mut own = Vec::new();
         for resolved in &resolved {
             let key = resolved.display().to_string();
@@ -496,12 +513,7 @@ impl State {
                 Err(_) => {}
             }
         }
-        // Only paths under the workspace reach new subdirectories.
-        let under: Vec<PathBuf> = resolved
-            .into_iter()
-            .filter(|resolved| resolved.strip_prefix(workspace).is_ok())
-            .collect();
-        self.touch_subdirs(workspace, &under);
+        self.touch_subdirs(workspace, &resolved);
         own
     }
 
@@ -553,28 +565,14 @@ impl State {
         lines
     }
 
-    /// Each directory a call's declared paths reach, once per context: the
-    /// ancestors strictly below the workspace up to each path's parent, and
-    /// the path itself when it is a directory. A new directory holding a
-    /// candidate file queues one `subdirectory` line with the full text.
-    fn touch_subdirs(&mut self, workspace: &Path, paths: &[PathBuf]) {
-        let mut fresh = BTreeSet::new();
-        for resolved in paths {
-            let mut parent = resolved.parent();
-            while let Some(dir) = parent {
-                if dir == workspace || dir.strip_prefix(workspace).is_err() {
-                    break;
-                }
-                if !self.dirs.contains(dir) {
-                    fresh.insert(dir.to_path_buf());
-                }
-                parent = dir.parent();
-            }
-            // A shell search declaring `sub/` reaches `sub/AGENTS.md`.
-            if resolved.is_dir() && !self.dirs.contains(resolved) {
-                fresh.insert(resolved.clone());
-            }
-        }
+    /// Each directory [`reached`] by a call's resolved paths, once per
+    /// context: a new directory holding a candidate file queues one
+    /// `subdirectory` line with the full text.
+    fn touch_subdirs(&mut self, workspace: &Path, resolved: &[PathBuf]) {
+        let fresh: BTreeSet<PathBuf> = reached(workspace, resolved)
+            .into_iter()
+            .filter(|dir| !self.dirs.contains(dir))
+            .collect();
         // `BTreeSet` order: the queued lines read in path order.
         for dir in fresh {
             self.dirs.insert(dir.clone());
@@ -675,6 +673,41 @@ pub(crate) fn apply(had: &mut BTreeMap<String, String>, event: &Event) {
             }
         }
     }
+}
+
+/// A call's declared `paths` resolved against the workspace and lexically
+/// normalised; a path that does not resolve is dropped.
+fn resolve(workspace: &Path, paths: &[String]) -> Vec<PathBuf> {
+    paths
+        .iter()
+        .filter_map(|declared_path| clean(&workspace.join(declared_path)))
+        .collect()
+}
+
+/// The subdirectories `resolved` paths reach: for each path under the
+/// workspace, the ancestors strictly below the workspace up to its parent,
+/// and the path itself when it is a directory. Paths outside the workspace
+/// reach none.
+fn reached(workspace: &Path, resolved: &[PathBuf]) -> BTreeSet<PathBuf> {
+    let mut dirs = BTreeSet::new();
+    for resolved in resolved {
+        if resolved.strip_prefix(workspace).is_err() {
+            continue;
+        }
+        let mut parent = resolved.parent();
+        while let Some(dir) = parent {
+            if dir == workspace || dir.strip_prefix(workspace).is_err() {
+                break;
+            }
+            dirs.insert(dir.to_path_buf());
+            parent = dir.parent();
+        }
+        // A shell search declaring `sub/` reaches `sub/AGENTS.md`.
+        if resolved.is_dir() {
+            dirs.insert(resolved.clone());
+        }
+    }
+    dirs
 }
 
 /// `path` with `.` dropped and `..` applied lexically, without touching

@@ -963,17 +963,25 @@ fn resumed_state_skips_calls_that_touched_nothing_it_counts() {
     let message = opening::collect(&inputs(&home, &fake), &workspace).message;
     // A call with no paths, one never completed, one whose completion
     // names another call, a path outside the workspace, and one that does
-    // not resolve: none restores `sub/`.
-    let outside = home.join("elsewhere/sub/x.txt").display().to_string();
+    // not resolve: none restores `sub/`, and the outside directory is not
+    // checked.
+    let elsewhere = canon(&home).join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    let outside = elsewhere.display().to_string();
     let lines = vec![
         envelope("opening_message", &Event::OpeningMessage(message)),
         started("a_1", None),
         finished("a_1"),
         started("a_2", Some(&["sub/x.txt"])),
-        started("a_3", Some(&[outside.as_str(), "../../../../../../../../../../../../.."])),
+        started(
+            "a_3",
+            Some(&[outside.as_str(), "../../../../../../../../../../../../.."]),
+        ),
         finished("a_3"),
         finished("a_4"),
     ];
+    let state = State::resumed(&lines, &workspace, &inputs(&home, &fake)).unwrap();
+    assert!(!state.dirs.contains(&elsewhere));
     let files = resumed_then_created(&lines, &home, &workspace, &fake);
     assert!(files.is_empty());
 }
