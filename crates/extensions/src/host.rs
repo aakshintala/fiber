@@ -21,6 +21,7 @@ use ureq::tls::{RootCerts, TlsConfig};
 use crate::oauth::{self, Browser};
 
 pub(crate) mod exec;
+pub(crate) mod failure;
 mod fs;
 mod log;
 mod settings;
@@ -65,14 +66,14 @@ pub(crate) struct HostContext {
 /// code that made it"). Every host call that waits yields the tag and its
 /// kind, as [`Request`] lists.
 const HTTP: &str = r#"
-local host, tag = ...
+local host, tag, failure = ...
 function host.http(opts)
   if type(opts) ~= "table" or type(opts.url) ~= "string" then
     error("host.http: `url` must be a string", 2)
   end
-  local status, body = coroutine.yield(tag, "http", opts)
-  if status == nil then error(body, 0) end
-  return { status = status, body = body }
+  local status, second, third = coroutine.yield(tag, "http", opts)
+  if status == nil then error(failure(second, third), 0) end
+  return { status = status, body = second }
 end
 "#;
 
@@ -120,12 +121,14 @@ const MAX_DEPTH: usize = 128;
 /// Sets the `host` and `json` globals. The returned tag is what the host
 /// calls yield, so the scheduler can tell that yield from any other; the
 /// returned table holds the timers' functions by id, which each firing runs.
+/// `failure` is the `{ code, message }` constructor the halves raise.
 pub(crate) fn install(
     lua: &Lua,
     ctx: HostContext,
     browser: Arc<dyn Browser>,
     entry: Rc<Cell<bool>>,
     hub: &Arc<crate::lua::Hub>,
+    failure: mlua::Function,
 ) -> mlua::Result<(LuaValue, Table)> {
     let HostContext {
         home,
@@ -155,15 +158,20 @@ pub(crate) fn install(
     )?;
     settings::install(lua, &host, &extension, session)?;
     let tag = lua.create_table()?;
-    lua.load(HTTP)
-        .set_name("=host.http")
-        .call::<()>((host.clone(), tag.clone()))?;
+    lua.load(HTTP).set_name("=host.http").call::<()>((
+        host.clone(),
+        tag.clone(),
+        failure.clone(),
+    ))?;
     let exec_entry = Rc::clone(&entry);
     let in_entry = lua.create_function(move |_, ()| Ok(exec_entry.get()))?;
-    lua.load(EXEC)
-        .set_name("=host.exec")
-        .call::<()>((host.clone(), tag.clone(), in_entry))?;
-    oauth::install(lua, &host, &tag, browser, entry)?;
+    lua.load(EXEC).set_name("=host.exec").call::<()>((
+        host.clone(),
+        tag.clone(),
+        in_entry,
+        failure.clone(),
+    ))?;
+    oauth::install(lua, &host, &tag, browser, entry, failure)?;
     let timer_funcs = timers::install(lua, &host, hub)?;
     log::install(lua, &host, hub, &extension)?;
     ui::install(lua, &host, hub, &extension)?;
@@ -242,9 +250,9 @@ pub(crate) enum Request {
     Sleep(Duration),
 }
 
-/// The answer to a [`Request`]. A failure is the text Lua raises.
+/// The answer to a [`Request`]. A failure is its code and the message Lua raises.
 pub(crate) enum Reply {
-    Http(Result<(u16, Vec<u8>), String>),
+    Http(Result<(u16, Vec<u8>), (contract::ErrorCode, String)>),
     /// How a `host.exec` run ended, or the text `host.exec` raises.
     Exec(Result<exec::Ran, String>),
     /// The query parameters of the one request the callback served.
@@ -337,9 +345,18 @@ fn http_request(opts: &Table, timeout: Option<Duration>) -> mlua::Result<HttpReq
 }
 
 /// Runs `request`. A status other than 2xx is a reply, not an error. The
-/// error string is what `host.http` raises.
-pub(crate) fn perform(request: &HttpRequest) -> Result<(u16, Vec<u8>), String> {
-    let fail = |e: &dyn std::fmt::Display| format!("host.http: {e}");
+/// failure is the code and message `host.http` raises: a passed backstop
+/// is `timeout`, any other transport failure `connection_failed`.
+pub(crate) fn perform(
+    request: &HttpRequest,
+) -> Result<(u16, Vec<u8>), (contract::ErrorCode, String)> {
+    use contract::ErrorCode::{ConnectionFailed, Timeout};
+    // A passed backstop is `timeout`; DNS, TLS, a refused or dropped
+    // connection, and an unreadable body are `connection_failed`.
+    let transport = |e: ureq::Error| match &e {
+        ureq::Error::Timeout(_) => (Timeout, format!("host.http: {e}")),
+        _ => (ConnectionFailed, format!("host.http: {e}")),
+    };
     let config = Agent::config_builder()
         .tls_config(
             TlsConfig::builder()
@@ -357,26 +374,36 @@ pub(crate) fn perform(request: &HttpRequest) -> Result<(u16, Vec<u8>), String> {
     for (name, value) in &request.headers {
         builder = builder.header(name, value);
     }
-    let response = match &request.body {
-        Some(body) => agent.run(builder.body(body.clone()).map_err(|e| fail(&e))?),
-        None => agent.run(builder.body(()).map_err(|e| fail(&e))?),
-    };
-    let mut response = response.map_err(|e| fail(&e))?;
-    let bytes = response.body_mut().read_to_vec().map_err(|e| fail(&e))?;
+    let built = request.body.clone();
+    let mut response = match built {
+        Some(body) => agent.run(
+            builder
+                .body(body)
+                .map_err(|e| (ConnectionFailed, format!("host.http: {e}")))?,
+        ),
+        None => agent.run(
+            builder
+                .body(())
+                .map_err(|e| (ConnectionFailed, format!("host.http: {e}")))?,
+        ),
+    }
+    .map_err(transport)?;
+    let bytes = response.body_mut().read_to_vec().map_err(transport)?;
     Ok((response.status().as_u16(), bytes))
 }
 
 /// The values `coroutine.yield` returns to the host call that yielded: its
-/// result, or nil and the error text. `clock` is what a held credential's
-/// expiry is judged by.
+/// result, or nil, the failure's code and its message. `clock` is what a
+/// held credential's expiry is judged by.
 pub(crate) fn resume_values(
     lua: &Lua,
     clock: &Arc<dyn Clock>,
     reply: Reply,
 ) -> mlua::Result<MultiValue> {
-    let failed = |message: String| -> mlua::Result<MultiValue> {
+    let failed = |(code, message): (contract::ErrorCode, String)| -> mlua::Result<MultiValue> {
         Ok(MultiValue::from_vec(vec![
             LuaValue::Nil,
+            LuaValue::String(lua.create_string(failure::code_name(&code))?),
             LuaValue::String(lua.create_string(message)?),
         ]))
     };
@@ -385,10 +412,15 @@ pub(crate) fn resume_values(
             LuaValue::Integer(i64::from(status)),
             LuaValue::String(lua.create_string(bytes)?),
         ])),
-        Reply::Http(Err(message))
-        | Reply::Query(Err(message))
-        | Reply::Lock(Err(message))
-        | Reply::Exec(Err(message)) => failed(message),
+        Reply::Http(Err(failed_with)) => failed(failed_with),
+        // Tasks 2-3 migrate these halves to `(nil, code, message)`; until
+        // then their failures stay `(nil, message)` as their halves read.
+        Reply::Query(Err(message)) | Reply::Lock(Err(message)) | Reply::Exec(Err(message)) => {
+            Ok(MultiValue::from_vec(vec![
+                LuaValue::Nil,
+                LuaValue::String(lua.create_string(message)?),
+            ]))
+        }
         Reply::Query(Ok(pairs)) => {
             let table = lua.create_table()?;
             for (key, value) in pairs {

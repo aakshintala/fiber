@@ -25,13 +25,14 @@ pub(super) enum Poll {
 
 /// Removes the base library's I/O, which belongs to the host, and runs the
 /// prelude. Returns the tables `fiber.command`, `fiber.provider` and
-/// `fiber.hook` fill, and the one `fiber.hook` fills with its refusals.
-pub(super) fn install(
+/// `fiber.hook` fill, the one `fiber.hook` fills with its refusals, and the
+/// `failure(code, message)` constructor the host halves raise.
+pub(crate) fn install(
     lua: &Lua,
     deadline: &Deadline,
     dir: PathBuf,
     memory_cap: usize,
-) -> mlua::Result<(Table, Table, Table, Table)> {
+) -> mlua::Result<(Table, Table, Table, Table, mlua::Function)> {
     let globals = lua.globals();
     for name in ["print", "warn", "dofile", "loadfile"] {
         globals.raw_remove(name)?;
@@ -49,9 +50,12 @@ pub(super) fn install(
             Err(message) => (None, Some(message)),
         })
     })?;
-    lua.load(PRELUDE)
+    let failures = crate::host::failure::install(lua)?;
+    let (commands, providers, hooks, problems): (Table, Table, Table, Table) = lua
+        .load(PRELUDE)
         .set_name("=prelude")
-        .call((create, load_module))
+        .call((create, load_module, failures.convert))?;
+    Ok((commands, providers, hooks, problems, failures.failure))
 }
 
 /// Reads `file` under `dir` and compiles it, named by its path in `dir` so an
@@ -127,7 +131,7 @@ pub(crate) struct Deadline {
 }
 
 impl Deadline {
-    pub(super) fn new(clock: Arc<dyn Clock>) -> Self {
+    pub(crate) fn new(clock: Arc<dyn Clock>) -> Self {
         Self {
             at: Rc::default(),
             clock,

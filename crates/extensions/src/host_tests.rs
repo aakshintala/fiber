@@ -3,6 +3,7 @@ use super::*;
 fn lua() -> Lua {
     let lua = Lua::new();
     let hub = crate::lua::Hub::new(fakes::clock::FakeClock::new());
+    let failures = failure::install(&lua).unwrap();
     install(
         &lua,
         HostContext {
@@ -15,6 +16,7 @@ fn lua() -> Lua {
         Arc::new(crate::SystemBrowser::default()),
         Rc::default(),
         &hub,
+        failures.failure,
     )
     .unwrap();
     lua
@@ -233,4 +235,42 @@ fn host_http_bypasses_the_proxy_for_no_proxy_hosts() {
         "nothing went through the proxy"
     );
     assert_eq!(server.requests().len(), 1);
+}
+
+fn get(
+    url: &str,
+    timeout: Option<Duration>,
+) -> Result<(u16, Vec<u8>), (contract::ErrorCode, String)> {
+    perform(&HttpRequest {
+        method: "GET".to_owned(),
+        url: url.to_owned(),
+        headers: Vec::new(),
+        body: None,
+        timeout,
+    })
+}
+
+#[test]
+fn a_refused_connection_is_connection_failed() {
+    let (code, message) = get("http://127.0.0.1:1/", None).unwrap_err();
+    assert_eq!(code, contract::ErrorCode::ConnectionFailed);
+    assert!(message.starts_with("host.http: "), "{message}");
+}
+
+#[test]
+fn a_silent_server_past_the_backstop_is_timeout() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        // Accept and never reply: the read, not the connect, passes the backstop.
+        let _held = listener.accept();
+        std::thread::sleep(Duration::from_secs(10));
+    });
+    let (code, message) = get(
+        &format!("http://127.0.0.1:{port}/"),
+        Some(Duration::from_millis(300)),
+    )
+    .unwrap_err();
+    assert_eq!(code, contract::ErrorCode::Timeout, "{message}");
+    assert!(message.starts_with("host.http: "), "{message}");
 }

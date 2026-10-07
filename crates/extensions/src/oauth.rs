@@ -127,7 +127,7 @@ impl Browser for SystemBrowser {
 /// table, the yield tag and a function that says whether the entry script is
 /// running, which can wait on nothing.
 const LUA: &str = r#"
-local host, tag, in_entry, refresh_failed, need_person = ...
+local host, tag, failure, in_entry, refresh_failed, need_person = ...
 local oauth = host.oauth
 local yield, resume, status = coroutine.yield, coroutine.resume, coroutine.status
 -- The armed `coroutine.create` the prelude installed.
@@ -247,12 +247,14 @@ end
 "#;
 
 /// Sets `host.oauth`. `entry` is true while the entry script runs.
+/// `failure` is the `{ code, message }` constructor the waiting calls raise.
 pub(crate) fn install(
     lua: &Lua,
     host: &Table,
     tag: &Table,
     browser: Arc<dyn Browser>,
     entry: Rc<Cell<bool>>,
+    failure: mlua::Function,
 ) -> mlua::Result<()> {
     let oauth = lua.create_table()?;
     let need_browser = Arc::clone(&browser);
@@ -289,7 +291,12 @@ pub(crate) fn install(
                     call: unattended.call.clone(),
                 }));
             }
-            Err::<(), _>(mlua::Error::external(RefreshFailed { reached, message }))
+            let table_code = crate::host::failure::as_failure(&raised).map(|(code, _)| code);
+            Err::<(), _>(mlua::Error::external(RefreshFailed {
+                reached,
+                message,
+                table_code,
+            }))
         })?;
     let need_person = lua.create_function(move |_, call: String| {
         if need_browser.attended() {
@@ -301,6 +308,7 @@ pub(crate) fn install(
     lua.load(LUA).set_name("=host.oauth").call::<()>((
         host.clone(),
         tag.clone(),
+        failure,
         in_entry,
         refresh_failed,
         need_person,
@@ -310,12 +318,16 @@ pub(crate) fn install(
 /// What the refresh function's failure carries out of Lua: whether the token
 /// endpoint was reached, so the host can tell a rejection from a network
 /// failure. `reached` is false when the last `host.http` call the function
-/// made before it raised got no reply.
+/// made before it raised got no reply. `table_code` is the failure table's
+/// own code when the function raised one, so `pcall` passes it through
+/// unchanged; a string the function raised itself is the credential
+/// failing.
 #[derive(Debug, thiserror::Error)]
 #[error("{message}")]
 pub(crate) struct RefreshFailed {
     pub(crate) reached: bool,
     pub(crate) message: String,
+    pub(crate) table_code: Option<String>,
 }
 
 /// An interactive `host.oauth` helper called with nobody attached to answer

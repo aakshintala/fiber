@@ -99,7 +99,7 @@ impl Vm {
         )
         .map_err(lua_error)?;
         lua.set_memory_limit(*memory_cap).map_err(lua_error)?;
-        let (commands, providers, hooks, problems) =
+        let (commands, providers, hooks, problems, failure) =
             setup::install(&lua, &deadline, dir.clone(), *memory_cap).map_err(lua_error)?;
         let workspace = session
             .as_ref()
@@ -118,6 +118,7 @@ impl Vm {
             Arc::clone(browser),
             Rc::clone(&entry),
             hub,
+            failure,
         )
         .map_err(lua_error)?;
         let vm = Self {

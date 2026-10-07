@@ -939,3 +939,56 @@ fn an_extension_whose_directory_is_gone_fails_every_call() {
         assert!(matches!(err, Error::Io { .. }), "{err:?}");
     }
 }
+
+/// An extension whose commands fail `host.http` caught and uncaught, and
+/// with a missing argument.
+fn http_extension(setup: &Setup) -> Arc<LuaExtension> {
+    let dir = setup.root().join("extensions").join("http");
+    write(
+        &dir.join("init.lua"),
+        r#"
+fiber.command("fetch", { timeout = 60000, run = function(text)
+  local ok, err = pcall(host.http, { url = text })
+  if ok then return "ok" end
+  return err.code .. "\n" .. err.message
+end })
+fiber.command("fetch_raw", { timeout = 60000, run = function(text)
+  return tostring(host.http({ url = text }).status)
+end })
+fiber.command("fetch_arg", { timeout = 60000, run = function()
+  local ok, err = pcall(host.http, {})
+  return tostring(ok) .. ":" .. type(err) .. ":" .. tostring(err)
+end })
+"#,
+    );
+    extension("http", dir, setup.home(), FakeClock::new())
+}
+
+#[test]
+fn a_failed_host_http_raises_code_and_message_that_pcall_catches() {
+    let setup = Setup::new();
+    let ext = http_extension(&setup);
+    let url = "http://127.0.0.1:1/";
+    let caught = call(&ext, "fetch", url).unwrap();
+    let (code, message) = caught.split_once('\n').unwrap();
+    assert_eq!(code, "connection_failed");
+    assert!(message.starts_with("host.http: "), "{message}");
+    // Uncaught, the callback fails with the message as its text.
+    let Error::Lua {
+        message: uncaught, ..
+    } = &call(&ext, "fetch_raw", url).unwrap_err()
+    else {
+        panic!("an uncaught host.http failure is the callback's Lua error")
+    };
+    assert_eq!(uncaught, message);
+}
+
+#[test]
+fn a_host_http_with_no_url_stays_a_string_error() {
+    let setup = Setup::new();
+    let ext = http_extension(&setup);
+    let caught = call(&ext, "fetch_arg", "").unwrap();
+    let (shape, message) = caught.split_once(":host.http: ").unwrap();
+    assert_eq!(shape, "false:string");
+    assert!(message.contains("`url` must be a string"), "{message}");
+}
