@@ -675,7 +675,7 @@ marked with OSC 8 or handled on click.
   that blocks for up to 2 seconds, so Fiber reads terminal input itself
   ([fiber-zig#16](https://github.com/aakshintala/fiber-zig/issues/16)).
 - **Every action has a key.** Every action also has a mouse target or a slash
-  command. A mouse target is drawn only where one fits naturally, never as a
+  command, except editing the draft in the input box. A mouse target is drawn only where one fits naturally, never as a
   button added only so the mouse has a way in. A key that needs the kitty
   keyboard protocol also has one that does not, so every action keeps a key
   on any terminal.
@@ -749,12 +749,12 @@ keyboard's reach.
 |---|---|---|---|
 | Send a prompt, or a steering message during a turn | `send` | Enter | |
 | Insert a line break | `line_break` | Shift+Enter | Ctrl+J |
-| Close what is on top; interrupt the turn when nothing is open | `close_or_interrupt` | Esc | |
+| Close what is on top; interrupt the turn when nothing is open | `close_or_interrupt` | Esc | click the overlay's ✕ or outside it; click "esc to interrupt" |
 | Clear the draft, then quit | `clear_then_quit` | Ctrl+C, twice within about a second on an empty box | `/quit` |
 | Go home | `go_home` | ⌥0 | `/home` |
 | Start a new session | `new_session` | Ctrl+N | `/new` |
 | Switch to the session of rail card N | `rail_row_n` | ⌥1 to ⌥9 | click the card |
-| Delete the selected exited session in the session list | `delete_session` | Delete, or Backspace, on the row | |
+| Delete the selected exited session in the session list | `delete_session` | Delete, or Backspace, on the row | click the row's ✕ |
 | Recall an earlier prompt from the project of the session on screen | `recall_prompt` | ↑ in an empty box | |
 | Search those prompts | `search_prompts` | Ctrl+R | |
 | Move by word | `move_word` | ⌥← ⌥→, Ctrl+← Ctrl+→ | |
@@ -768,13 +768,13 @@ keyboard's reach.
 | Open the focused item | `open_focused` | Enter | click it |
 | Copy the focused item | `copy_focused` | y | select it |
 | Move focus to the panel, the rail, then the conversation | `focus_area` | Tab | click the area |
-| Show or hide the panel | `toggle_panel` | ⌥P | |
+| Show or hide the panel | `toggle_panel` | ⌥P | `/panel` |
 | Show or hide the rail | `toggle_rail` | ⌥R | drag its edge |
-| Search | `search` | Ctrl+F; Cmd+F where forwarded | |
+| Search | `search` | Ctrl+F; Cmd+F where forwarded | `/search` |
 | Open the search results | `search_results` | Ctrl+F with search open | click the match count |
 | Jump to the end | `jump_to_end` | End | click "↓ New messages below" |
 | Select a queued steering message | `select_steering` | ⌥↑ ⌥↓ | its mouse target |
-| Amend it | `amend_steering` | Enter | |
+| Amend it | `amend_steering` | Enter | its mouse target |
 | Drop it | `drop_steering` | ⌥X | its mouse target |
 | Reopen a request put aside, or move to the next, the oldest first, switching to its session | `next_request` | ⌥A | `/approvals`; click the badge or a waiting card |
 | Open the model picker | `model_picker` | Ctrl+L | `/model` |
@@ -811,11 +811,13 @@ release still applies.
 | `/context` | Opens the context breakdown. |
 | `/usage` | Opens the usage view. |
 | `/tools` | Opens the tools view. |
+| `/panel` | Shows or hides the panel ("The panel"). |
 | `/rules` | Opens the standing rules. |
 | `/settings` | Opens the configuration keys. |
 | `/keys` | Opens the rebinding screen ("Bindings"). |
 | `/skills` | Opens the skills. |
 | `/rewind` | Opens the rewind view. |
+| `/search` | Opens search ("Search"). |
 | `/handoff [instructions]` | Starts a handoff (`docs/handoff.md`, "A person"). |
 | `/name <text>` | Names the session. |
 | `/login` | Logs in ("Logging in"). |

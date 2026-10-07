@@ -2,6 +2,24 @@
 
 use super::BINDINGS;
 
+/// The ids of actions that edit the draft in the input box: the rule in
+/// `docs/tui.md`, "Rules" exempts them from having a mouse target or a
+/// slash command.
+const EDITING: [&str; 8] = [
+    "send",
+    "line_break",
+    "recall_prompt",
+    "search_prompts",
+    "move_word",
+    "delete_word",
+    "line_start_end",
+    "paste_image",
+];
+
+/// Substrings marking an other path as a slash command or a mouse path:
+/// the rule's "a mouse target or a slash command" in lowercase.
+const PATHS: [&str; 5] = ["/", "click", "drag", "select", "mouse target"];
+
 /// The cells of each row of `docs/tui.md`'s "Bindings" table, header and
 /// rule left out, with the code marks dropped.
 fn doc_rows() -> Vec<Vec<String>> {
@@ -71,4 +89,29 @@ fn areas_run_in_order_from_their_first_ids() {
         ]
     );
     assert_eq!(BINDINGS.last().map(|binding| binding.id), Some("key_map"));
+}
+
+#[test]
+fn every_action_has_a_key_and_a_mouse_target_or_a_slash_command() {
+    for binding in BINDINGS {
+        assert!(!binding.keys.is_empty(), "{} has no key", binding.id);
+        if EDITING.contains(&binding.id) {
+            continue;
+        }
+        assert!(
+            PATHS.iter().any(|path| binding.other_paths.contains(path)),
+            "{} has no mouse target or slash command",
+            binding.id
+        );
+    }
+}
+
+#[test]
+fn the_editing_exemptions_are_bindings() {
+    for id in EDITING {
+        assert!(
+            BINDINGS.iter().any(|binding| binding.id == id),
+            "{id} is not a binding"
+        );
+    }
 }
