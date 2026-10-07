@@ -508,12 +508,20 @@ fn a_focused_row_below_the_fold_is_drawn_last() {
     let mut buf = Buffer::empty(area);
     let targets = render(&app, area, &mut buf, None);
     app.drawn(&targets);
-    // Nine rows fit under the four-row logo's box: nine steps focus the
-    // last drawn row, and the tenth moves below the fold.
+    // Nine rows fit under the four-row logo's box, each with its ✕:
+    // nineteen steps focus the tenth row below the fold.
     let now = fakes::clock::FakeClock::new().now();
-    for _ in 0..10 {
+    for _ in 0..19 {
         app.on_key(Key::Down, now);
     }
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(crate::home::Spot::Entry(
+            app.home_screen()
+                .and_then(|screen| screen.rows.get(9).map(|(key, _, _)| *key))
+                .unwrap_or_else(|| panic!("a tenth row"))
+        )))
+    );
     let keys: Vec<u64> = app
         .home_screen()
         .map(|screen| screen.rows.into_iter().map(|(key, _, _)| key).collect())
@@ -548,4 +556,99 @@ fn home_with_a_focused_row() {
     app.drawn(&targets);
     app.on_key(Key::Down, fakes::clock::FakeClock::new().now());
     insta::assert_snapshot!("home_with_a_focused_row", screen(&app, 80, 24));
+}
+
+/// A hub `command_rejected` for `id`, with `code` and `message`.
+fn refused(id: &str, code: &str, message: &str) -> Line {
+    Line::Hub(contract::HubLine {
+        kind: "command_rejected".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: [
+            (
+                "command_id".to_owned(),
+                serde_json::Value::String(id.to_owned()),
+            ),
+            (
+                "code".to_owned(),
+                serde_json::Value::String(code.to_owned()),
+            ),
+            (
+                "message".to_owned(),
+                serde_json::Value::String(message.to_owned()),
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    })
+}
+
+/// A `session_left` for `session`, ending `how`.
+fn left(session: &str, how: &str) -> Line {
+    Line::Hub(contract::HubLine {
+        kind: "session_left".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::json!({"session_id": session, "how": how})
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+    })
+}
+
+/// The first row's key.
+fn first_key(app: &App) -> u64 {
+    app.home_screen()
+        .and_then(|screen| screen.rows.into_iter().next().map(|(key, _, _)| key))
+        .unwrap_or_else(|| panic!("a row"))
+}
+
+/// Clicks the first row's ✕.
+fn stop_first(app: &mut App) {
+    let key = first_key(app);
+    app.on_click(crate::mouse::TargetId::Home(Spot::Stop(key)));
+}
+
+#[test]
+fn home_rows_with_their_x() {
+    let mut app = home(80, 24);
+    app.on_line(hello());
+    app.on_line(status("s_aaaaaaaaaaaaaaaa", "fix the parser", live()));
+    app.on_line(status("s_bbbbbbbbbbbbbbbb", "tidy docs", idle()));
+    app.on_line(left("s_bbbbbbbbbbbbbbbb", "exited"));
+    insta::assert_snapshot!("home_rows_with_their_x", screen(&app, 80, 24));
+}
+
+#[test]
+fn home_delete_question() {
+    let mut app = home(80, 24);
+    app.on_line(hello());
+    app.on_line(status("s_aaaaaaaaaaaaaaaa", "fix the parser", live()));
+    app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited"));
+    stop_first(&mut app);
+    insta::assert_snapshot!("home_delete_question", screen(&app, 80, 24));
+}
+
+#[test]
+fn home_cascade_question() {
+    let mut app = home(80, 24);
+    app.on_line(hello());
+    app.on_line(status("s_0123456789abcdef", "fix the parser", live()));
+    app.on_line(left("s_0123456789abcdef", "exited"));
+    stop_first(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    let crate::app::Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+        panic!("Enter deletes");
+    };
+    let delete: serde_json::Value =
+        serde_json::from_str(lines.first().unwrap_or_else(|| panic!("a delete line")))
+            .unwrap_or_else(|err| panic!("{err}"));
+    let id = delete["id"].as_str().unwrap_or_else(|| panic!("delete id"));
+    app.on_line(refused(
+        id,
+        "session_has_dependents",
+        "Session `s_0123456789abcdef` has sessions that continue it: \
+        `s_1111111111111111`, `s_2222222222222222`. `--cascade` deletes them too.",
+    ));
+    insta::assert_snapshot!("home_cascade_question", screen(&app, 80, 24));
 }

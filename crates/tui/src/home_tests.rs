@@ -1,7 +1,9 @@
 //! Tests for the session list's data: folding statuses, `session_left`,
 //! `recent` pages, keys, glyphs and lines.
 
-use super::{Left, Level, Row, Sessions, State, Subs, from_status, line, opening, recent_rows};
+use super::{
+    Left, Level, Row, Sessions, State, Subs, dependents, from_status, line, opening, recent_rows,
+};
 use contract::{Envelope, SessionId};
 use serde_json::{Value, json};
 
@@ -562,4 +564,38 @@ fn toggle_line_names_waiting_or_scoping_back() {
         "0 waiting in other projects · show all"
     );
     assert_eq!(super::toggle_line(0, true), "show this project only");
+}
+
+#[test]
+fn dependents_reads_each_backticked_id_once_in_order() {
+    use contract::SessionId;
+    let id = |session: &str| SessionId(session.to_owned());
+    assert!(dependents("no sessions here").is_empty());
+    assert_eq!(
+        dependents("Session `s_0123456789abcdef` is held."),
+        vec![id("s_0123456789abcdef")]
+    );
+    assert_eq!(
+        dependents(
+            "Session `s_0123456789abcdef` has sessions that continue it: \
+             `s_1111111111111111`, `s_2222222222222222`. `--cascade` deletes them too."
+        ),
+        vec![
+            id("s_0123456789abcdef"),
+            id("s_1111111111111111"),
+            id("s_2222222222222222"),
+        ]
+    );
+    // A repeat names its session once.
+    assert_eq!(
+        dependents(
+            "Session `s_0123456789abcdef` has sessions that continue it: \
+             `s_0123456789abcdef`, `s_1111111111111111`."
+        ),
+        vec![id("s_0123456789abcdef"), id("s_1111111111111111")]
+    );
+    // A malformed `s_` token, and one outside backticks, read nothing.
+    assert!(dependents("Session `s_short` has sessions.").is_empty());
+    assert!(dependents("Session `s_0123456789ABCDEF` has sessions.").is_empty());
+    assert!(dependents("Session s_0123456789abcdef has sessions.").is_empty());
 }

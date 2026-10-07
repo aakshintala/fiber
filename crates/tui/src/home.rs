@@ -11,15 +11,18 @@ use contract::{Envelope, SessionId};
 use serde_json::Value;
 
 /// A click target on home: one row's line, by the key [`Sessions`]
-/// gave it when it first appeared, the scope toggle heading the list,
-/// the workspace chip opening the workspace picker, and one picker row
-/// by its index in the list fixed at open. Later parts add the stop
-/// crosses and the worktree switch.
+/// gave it when it first appeared, its ✕ in the last column, the scope
+/// toggle heading the list, the workspace chip opening the workspace
+/// picker, and one picker row by its index in the list fixed at open.
+/// The worktree switch lands in a later part.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Spot {
     /// A session row: clicking it, or Enter on it while focused, opens
     /// the session.
     Entry(u64),
+    /// A row's ✕ in its last column: stopping a live session, or the
+    /// delete question for an exited one. Unreadable rows have none.
+    Stop(u64),
     /// The scope toggle heading the list: clicking it, or Enter on it,
     /// shows every project or only the launch one.
     Toggle,
@@ -365,6 +368,13 @@ impl Sessions {
         }
     }
 
+    /// Drops the row for `id`, live or exited: an accepted delete. A
+    /// first-page `recent` asked again fills the gap.
+    pub(crate) fn remove(&mut self, id: &SessionId) {
+        self.feed.retain(|row| row.id != *id);
+        self.recent.retain(|row| row.id != *id);
+    }
+
     /// The next key: unique, never reused, even after a row drops.
     fn fresh(&mut self) -> u64 {
         let key = self.next_key;
@@ -505,6 +515,80 @@ pub(crate) fn toggle_line(waiting: usize, show_all: bool) -> String {
     } else {
         format!("{waiting} waiting in other projects · show all")
     }
+}
+
+/// The delete question on the foot: the session and that deleting is
+/// permanent. Deleting through the hub is permanent, so the terminal
+/// asks first, naming the session.
+pub(crate) fn delete_line(row: &Row) -> String {
+    format!(
+        "Delete {} ({})? It cannot be undone · enter delete · esc keep",
+        title(row),
+        row.id.0
+    )
+}
+
+/// The cascade question on the foot: the session and every session
+/// `--cascade` would add, named and counted. The hub names them in its
+/// refusal, and the terminal asks again with the set it would remove.
+pub(crate) fn cascade_line(row: &Row, others: &[SessionId]) -> String {
+    let names: Vec<&str> = others.iter().map(|id| id.0.as_str()).collect();
+    let continued = if others.len() == 1 {
+        format!("and 1 session that continues it: {}", names.join(", "))
+    } else {
+        format!(
+            "and {} sessions that continue it: {}",
+            others.len(),
+            names.join(", ")
+        )
+    };
+    format!(
+        "Delete {} ({}) {}? It cannot be undone · enter delete all · esc keep",
+        title(row),
+        row.id.0,
+        continued
+    )
+}
+
+/// The row's name, or its id when it never had one.
+fn title(row: &Row) -> &str {
+    if row.name.is_empty() {
+        row.id.0.as_str()
+    } else {
+        row.name.as_str()
+    }
+}
+
+/// The sessions a hub refusal names: every `s_` and 16 lowercase hex
+/// token inside backticks, once, in order. Both the dependents refusal
+/// and the stale cascade refusal name the root too, so the caller puts
+/// the row first and deduplicates keeping first occurrence.
+pub(crate) fn dependents(message: &str) -> Vec<SessionId> {
+    let mut out = Vec::new();
+    let mut rest = message;
+    while let Some(open) = rest.find('`') {
+        rest = &rest[open + 1..];
+        let Some(close) = rest.find('`') else {
+            break;
+        };
+        let token = &rest[..close];
+        rest = &rest[close + 1..];
+        let id = token
+            .strip_prefix("s_")
+            .filter(|hex| {
+                hex.len() == 16
+                    && hex
+                        .bytes()
+                        .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+            })
+            .map(|_| SessionId(token.to_owned()));
+        if let Some(id) = id
+            && !out.contains(&id)
+        {
+            out.push(id);
+        }
+    }
+    out
 }
 
 /// A row's line: the glyph, the name or the id, the detail, and the

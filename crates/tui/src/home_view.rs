@@ -293,30 +293,60 @@ pub(super) fn render(
     }
     let rows_capacity = capacity.saturating_sub(usize::from(screen.toggle.is_some()));
     let start = match app.focused() {
-        Some(TargetId::Home(Spot::Entry(key))) => screen
+        Some(TargetId::Home(Spot::Entry(key) | Spot::Stop(key))) => screen
             .rows
             .iter()
             .position(|(row, _, _)| *row == key)
             .map_or(0, |at| (at + 1).saturating_sub(rows_capacity)),
         _ => 0,
     };
-    for (key, text, _has_x) in screen.rows.iter().skip(start) {
+    for (key, text, has_x) in screen.rows.iter().skip(start) {
         if row_y >= placed.foot {
             break;
         }
-        put(
-            buf,
-            area,
-            placed.x,
-            row_y,
-            text,
-            placed.width,
-            Style::default(),
-        );
-        targets.push(Target {
-            id: TargetId::Home(Spot::Entry(*key)),
-            rect: Rect::new(placed.x, row_y, placed.width, 1),
-        });
+        // A readable row ends in a ✕ in its last column: stopping a
+        // live session, deleting an exited one.
+        if *has_x && placed.width > 0 {
+            let body = usize::from(placed.width.saturating_sub(1));
+            let wide = super::to_u16(body);
+            put(
+                buf,
+                area,
+                placed.x,
+                row_y,
+                &cut(text, body),
+                wide,
+                Style::default(),
+            );
+            let cross = placed.x.saturating_add(wide);
+            if row_y < area.bottom() {
+                buf.set_stringn(cross, row_y, "✕", 1, Style::default());
+            }
+            if wide > 0 {
+                targets.push(Target {
+                    id: TargetId::Home(Spot::Entry(*key)),
+                    rect: Rect::new(placed.x, row_y, wide, 1),
+                });
+            }
+            targets.push(Target {
+                id: TargetId::Home(Spot::Stop(*key)),
+                rect: Rect::new(cross, row_y, 1, 1),
+            });
+        } else {
+            put(
+                buf,
+                area,
+                placed.x,
+                row_y,
+                text,
+                placed.width,
+                Style::default(),
+            );
+            targets.push(Target {
+                id: TargetId::Home(Spot::Entry(*key)),
+                rect: Rect::new(placed.x, row_y, placed.width, 1),
+            });
+        }
         row_y = row_y.saturating_add(1);
     }
     // The workspace picker draws above the box, upward from its top

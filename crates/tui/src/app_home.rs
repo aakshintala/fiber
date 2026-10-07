@@ -2,6 +2,7 @@
 //! went out, and what home draws (`docs/tui.md`, "Home"). The data it
 //! draws lives in [`crate::home`]; this module is `App`'s home.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use serde_json::{Value, json};
@@ -9,10 +10,10 @@ use serde_json::{Value, json};
 use super::{App, Effect, Kind, Link, Phase, mint, session_command};
 use crate::focus::{Area, order};
 use crate::home::{
-    HomeScreen, Launch, Left, Level, Sessions, Spot, Subs, from_status, line, opening, recent_rows,
-    toggle_line,
+    HomeScreen, Launch, Left, Level, Sessions, Spot, State, Subs, cascade_line, delete_line,
+    dependents, from_status, line, opening, recent_rows, toggle_line,
 };
-use crate::keys::Key;
+use crate::keys::{Edit, Key};
 use crate::link::Line;
 use crate::mouse::{Target, TargetId};
 use contract::SessionId;
@@ -52,6 +53,41 @@ pub(super) struct Home {
     /// The workspace picker above the box: its list, fixed at open, and
     /// the selected index.
     picker: Option<(Vec<String>, usize)>,
+    /// The foot's question, while one is open: deleting a session.
+    prompt: Option<Prompt>,
+    /// The stops and deletes waiting for their answers, by command id.
+    asks: HashMap<String, Ask>,
+}
+
+/// A stop or delete waiting for its answer: a refusal becomes the row's
+/// note and a notice, an accepted delete drops the row.
+enum Ask {
+    /// A `close` with `now` for a live row: stopping one session.
+    Stop(SessionId),
+    /// A `delete` for an exited row, cascading when the question named
+    /// the sessions it would remove.
+    Delete(SessionId),
+}
+
+/// The foot's question: deleting an exited session through the hub.
+/// Delete is permanent, so the terminal asks first, naming the session
+/// and everything `--cascade` would add.
+enum Prompt {
+    /// Asking to delete `id`: without `expect` the plain question, with
+    /// it the cascade question naming the sessions the delete removes.
+    Delete {
+        id: SessionId,
+        expect: Option<Vec<SessionId>>,
+    },
+}
+
+impl Prompt {
+    /// The session the question asks about.
+    fn id(&self) -> &SessionId {
+        match self {
+            Prompt::Delete { id, .. } => id,
+        }
+    }
 }
 
 /// A session opening from home: its subscribes, the last one whose
@@ -90,6 +126,8 @@ impl App {
             blockers: Vec::new(),
             chosen: None,
             picker: None,
+            prompt: None,
+            asks: HashMap::new(),
         });
     }
 
@@ -120,6 +158,29 @@ impl App {
             .map(|name| name.to_string_lossy().into_owned())
             .filter(|name| !name.is_empty())
             .unwrap_or_else(|| workspace.display().to_string());
+        // The delete question sits on the foot, naming the session and
+        // everything `--cascade` would add.
+        let question = match &home.prompt {
+            Some(Prompt::Delete { id, expect }) => home.sessions.row(id).map(|row| match expect {
+                None => delete_line(row),
+                Some(expect) => cascade_line(
+                    row,
+                    &expect
+                        .iter()
+                        .filter(|session| **session != row.id)
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                ),
+            }),
+            None => None,
+        };
+        let foot = question.unwrap_or_else(|| {
+            if self.armed_at.is_some() {
+                super::QUIT_HINT.to_owned()
+            } else {
+                "↓ the session list · F1 the key map · Ctrl+C twice to quit".to_owned()
+            }
+        });
         Some(HomeScreen {
             version: home.launch.version.clone(),
             // A remote client has no launch directory; the picker it would
@@ -144,7 +205,16 @@ impl App {
                 .sessions
                 .shown(&home.launch.project, scoped)
                 .iter()
-                .map(|row| (row.key, line(row, &home.launch.project), false))
+                .map(|row| {
+                    // Every readable row ends in a ✕: stopping a live
+                    // session, deleting an exited one. An unreadable row
+                    // has none.
+                    (
+                        row.key,
+                        line(row, &home.launch.project),
+                        row.state != State::Unreadable,
+                    )
+                })
                 .collect(),
             picker: home.picker.clone(),
             blockers: home.blockers.clone(),
@@ -159,11 +229,7 @@ impl App {
                 (home.launch.git && (hidden > 0 || home.sessions.show_all()))
                     .then(|| toggle_line(waiting, home.sessions.show_all()))
             },
-            foot: if self.armed_at.is_some() {
-                super::QUIT_HINT.to_owned()
-            } else {
-                "↓ the session list · F1 the key map · Ctrl+C twice to quit".to_owned()
-            },
+            foot,
             // Until the first prompt, the placeholder says "/? for
             // shortcuts"; no session exists before Enter, so opening the
             // terminal, glancing at home and leaving creates nothing.
@@ -229,6 +295,9 @@ impl App {
                             return Some(self.retry_or_fail(code, message));
                         }
                         return Some(Vec::new());
+                    }
+                    if let Some(ask) = self.take_ask(id) {
+                        return Some(self.answer_ask(ask, accepted, &hub.payload));
                     }
                     // A rejected `start` is home's blocker text, above the
                     // box until the next `start` goes out. Reading
@@ -334,6 +403,9 @@ impl App {
                         }
                         return Some(Vec::new());
                     }
+                    if let Some(ask) = self.take_ask(id) {
+                        return Some(self.answer_ask(ask, accepted, &envelope.payload));
+                    }
                 }
                 let gated = self
                     .home
@@ -421,6 +493,36 @@ impl App {
         if !self.on_home() {
             return None;
         }
+        // The delete question takes every key first: Enter deletes, Esc
+        // keeps the session, Ctrl+C passes through to quit, and anything
+        // else is swallowed.
+        if self.home.as_ref().is_some_and(|home| home.prompt.is_some()) {
+            match key {
+                Key::Enter => return Some(self.send_delete()),
+                Key::Esc => {
+                    self.close_prompt();
+                    return Some(Effect::None);
+                }
+                Key::CtrlC => return None,
+                Key::Char(_)
+                | Key::Backspace
+                | Key::Up
+                | Key::Down
+                | Key::PageUp
+                | Key::PageDown
+                | Key::End
+                | Key::AltA
+                | Key::Tab
+                | Key::BackTab
+                | Key::F1
+                | Key::CtrlO
+                | Key::CtrlG
+                | Key::CtrlR
+                | Key::AltUp
+                | Key::AltDown
+                | Key::AltX => return Some(Effect::None),
+            }
+        }
         // The picker takes every key first: moving, choosing and closing
         // it, while Ctrl+C passes through and anything else is swallowed
         // so the draft keeps nothing typed into the picker.
@@ -450,6 +552,11 @@ impl App {
             return Some(Effect::None);
         }
         if !matches!(key, Key::Down | Key::Char('j')) {
+            // Backspace on a focused row asks to delete it when it
+            // exited; anything else on a focused row is swallowed.
+            if matches!(key, Key::Backspace) {
+                return self.delete_key();
+            }
             return None;
         }
         if self.focus.is_none() {
@@ -466,15 +573,17 @@ impl App {
             }
             return None;
         }
-        let Some(TargetId::Home(Spot::Entry(focused))) = self.focus else {
+        let Some(TargetId::Home(Spot::Entry(focused) | Spot::Stop(focused))) = self.focus else {
             return None;
         };
         let ordered = order(&self.stops, &self.regions, Area::Conversation);
+        // The last drawn list stop, rows or their crosses: further steps
+        // stay while focus is short of it.
         let last = ordered
             .iter()
             .rev()
-            .find(|id| matches!(id, TargetId::Home(Spot::Entry(_))));
-        if last != Some(&TargetId::Home(Spot::Entry(focused))) {
+            .find(|id| matches!(id, TargetId::Home(Spot::Entry(_) | Spot::Stop(_))));
+        if last != self.focus.as_ref() {
             return None;
         }
         let next = self.home.as_ref().and_then(|home| {
@@ -493,16 +602,259 @@ impl App {
         self.page_recent(focused)
     }
 
-    /// Clicks `spot` on home: a row opens its session, the toggle flips
+    /// Clicks `spot` on home: a row opens its session, its ✕ stops a
+    /// live session or asks to delete an exited one, the toggle flips
     /// the scope, the workspace chip opens the picker, and a picker row
     /// chooses its workspace.
     pub(super) fn home_click(&mut self, spot: Spot) -> Effect {
         match spot {
             Spot::Entry(key) => self.open_row(key),
+            Spot::Stop(key) => self.stop_or_ask(key),
             Spot::Toggle => self.toggle_scope(),
             Spot::Workspace => self.open_picker(),
             Spot::Pick(at) => self.pick(at),
         }
+    }
+
+    /// A row's ✕: `close` with `now` for a live session, stopping it,
+    /// with a `summary` subscribe first when this connection holds
+    /// nothing for it; the delete question for an exited row. With the
+    /// link down nothing goes out. A refusal of the close becomes the
+    /// row's note and a notice.
+    fn stop_or_ask(&mut self, key: u64) -> Effect {
+        if !self.on_home() || self.link != Link::Up {
+            return Effect::None;
+        }
+        let row = self
+            .home
+            .as_ref()
+            .and_then(|home| home.sessions.by_key(key))
+            .cloned();
+        let Some(row) = row else {
+            return Effect::None;
+        };
+        if row.state == State::Unreadable {
+            self.notices.push(
+                "Cannot attach: this session's schema is newer than this terminal reads."
+                    .to_owned(),
+            );
+            return Effect::None;
+        }
+        if row.left.is_some() {
+            self.ask_delete(key);
+            return Effect::None;
+        }
+        let session = row.id.clone();
+        let mut lines = Vec::new();
+        if self
+            .home
+            .as_ref()
+            .is_some_and(|home| home.subs.expected(&session).is_none())
+        {
+            lines.push(self.subscribe(&session, Level::Summary));
+        }
+        let id = mint();
+        lines.push(session_command(&id, "close", &session, Some(json!({"now": true}))).to_string());
+        if let Some(home) = self.home.as_mut() {
+            home.asks.insert(id, Ask::Stop(session));
+        }
+        Effect::Send(lines)
+    }
+
+    /// Opens the delete question for the row with `key`. Delete through
+    /// the hub is permanent, so the terminal asks first, naming the
+    /// session.
+    fn ask_delete(&mut self, key: u64) {
+        let id = self
+            .home
+            .as_ref()
+            .and_then(|home| home.sessions.by_key(key))
+            .map(|row| row.id.clone());
+        if let (Some(home), Some(id)) = (self.home.as_mut(), id) {
+            home.prompt = Some(Prompt::Delete { id, expect: None });
+        }
+    }
+
+    /// Closes the foot's question, keeping the session.
+    fn close_prompt(&mut self) {
+        if let Some(home) = self.home.as_mut() {
+            home.prompt = None;
+        }
+    }
+
+    /// Backspace, or Delete through `home_edit`, on a focused row: the
+    /// delete question when it exited. On a focused live or unreadable
+    /// row it does nothing, and on any other focused stop it is
+    /// swallowed; with the box focused the draft keeps the key.
+    fn delete_key(&mut self) -> Option<Effect> {
+        let key = match self.focus {
+            None => return None,
+            Some(TargetId::Home(Spot::Entry(key) | Spot::Stop(key))) => key,
+            Some(_) => return Some(Effect::None),
+        };
+        if self
+            .home
+            .as_ref()
+            .and_then(|home| home.sessions.by_key(key))
+            .is_some_and(|row| row.left.is_some())
+        {
+            self.ask_delete(key);
+        }
+        Some(Effect::None)
+    }
+
+    /// Delete on a focused row, ahead of the focus early return in
+    /// `on_edit`: the delete question when it exited, swallowed
+    /// otherwise. With the box focused the draft keeps the key.
+    pub(super) fn home_edit(&mut self, edit: &Edit) -> Option<Effect> {
+        if !self.on_home() {
+            return None;
+        }
+        if self.home.as_ref().is_some_and(|home| home.prompt.is_some()) {
+            return Some(Effect::None);
+        }
+        match edit {
+            Edit::Delete => self.delete_key(),
+            Edit::Left
+            | Edit::Right
+            | Edit::ShiftEnter
+            | Edit::CtrlJ
+            | Edit::WordLeft
+            | Edit::WordRight
+            | Edit::DeleteWord
+            | Edit::LineStart
+            | Edit::LineEnd
+            | Edit::Paste(_) => None,
+        }
+    }
+
+    /// Enter in the delete question: `delete` for its session, cascading
+    /// with the confirmed set from the cascade question. With the link
+    /// down nothing goes out and the question stays.
+    fn send_delete(&mut self) -> Effect {
+        let ask = self.home.as_ref().and_then(|home| {
+            home.prompt
+                .as_ref()
+                .map(|Prompt::Delete { id, expect }| (id.clone(), expect.clone()))
+        });
+        let Some((id, expect)) = ask else {
+            return Effect::None;
+        };
+        if self.link != Link::Up {
+            return Effect::None;
+        }
+        let command = mint();
+        let line = match &expect {
+            None => json!({"id": command, "command": "delete", "args": {"session": id.0}}),
+            Some(expect) => json!({
+                "id": command,
+                "command": "delete",
+                "args": {
+                    "session": id.0,
+                    "cascade": true,
+                    "expect": expect.iter().map(|session| &session.0).collect::<Vec<_>>(),
+                },
+            }),
+        }
+        .to_string();
+        if let Some(home) = self.home.as_mut() {
+            home.asks.insert(command, Ask::Delete(id));
+        }
+        Effect::Send(vec![line])
+    }
+
+    /// Takes the stop or delete waiting on command `id`, if any.
+    fn take_ask(&mut self, id: &str) -> Option<Ask> {
+        self.home.as_mut().and_then(|home| home.asks.remove(id))
+    }
+
+    /// A refusal shows on the row, in place of its detail.
+    fn note(&mut self, id: &SessionId, note: String) {
+        if let Some(home) = self.home.as_mut() {
+            home.sessions.note(id, note);
+        }
+    }
+
+    /// Answers a stop or delete. An accepted delete drops the row and
+    /// asks the first `recent` page again. A dependents refusal, or a
+    /// stale cascade refusal, reopens the cascade question naming the
+    /// set the delete would remove now; every other refusal, and one
+    /// naming no other session, becomes the row's note and a notice.
+    fn answer_ask(
+        &mut self,
+        ask: Ask,
+        accepted: bool,
+        payload: &serde_json::Map<String, Value>,
+    ) -> Vec<String> {
+        match ask {
+            Ask::Stop(session) => {
+                if !accepted {
+                    let message = refusal(payload);
+                    self.note(&session, message.clone());
+                    self.notices.push(message);
+                }
+                Vec::new()
+            }
+            Ask::Delete(id) => {
+                if accepted {
+                    self.clear_prompt(&id);
+                    if let Some(home) = self.home.as_mut() {
+                        home.sessions.remove(&id);
+                    }
+                    return self.ask_recent_first();
+                }
+                let (code, message) = refusal_parts(payload);
+                if code == "session_has_dependents" || code == "stale_request" {
+                    // The hub names the root too, so the row goes first
+                    // and the set deduplicates keeping first occurrence.
+                    let mut expect = vec![id.clone()];
+                    for session in dependents(&message) {
+                        if !expect.contains(&session) {
+                            expect.push(session);
+                        }
+                    }
+                    if expect.len() > 1 {
+                        if let Some(home) = self.home.as_mut() {
+                            home.prompt = Some(Prompt::Delete {
+                                id,
+                                expect: Some(expect),
+                            });
+                        }
+                        return Vec::new();
+                    }
+                }
+                self.note(&id, message.clone());
+                self.notices.push(message);
+                self.clear_prompt(&id);
+                Vec::new()
+            }
+        }
+    }
+
+    /// Closes the foot's question when it asks about `id`: an answer for
+    /// an older question leaves a newer one open.
+    fn clear_prompt(&mut self, id: &SessionId) {
+        if let Some(home) = self.home.as_mut()
+            && home.prompt.as_ref().is_some_and(|prompt| prompt.id() == id)
+        {
+            home.prompt = None;
+        }
+    }
+
+    /// Asks the first `recent` page again, naming the launch project
+    /// while scoped: an accepted delete fills the gap it left.
+    fn ask_recent_first(&mut self) -> Vec<String> {
+        if self.link != Link::Up {
+            return Vec::new();
+        }
+        let Some(home) = self.home.as_mut() else {
+            return Vec::new();
+        };
+        let project = home.launch.project.clone();
+        let scoped = home.launch.git && !home.sessions.show_all();
+        let id = mint();
+        home.recent_ask = Some((id.clone(), true));
+        vec![recent_line(&id, None, scoped.then_some(project.as_str()))]
     }
 
     /// Flips the scope toggle and asks the first `recent` page again,
@@ -633,7 +985,7 @@ impl App {
                 let row = home.sessions.by_key(key)?;
                 Some(line(row, &home.launch.project))
             }
-            Spot::Toggle | Spot::Workspace | Spot::Pick(_) => None,
+            Spot::Stop(_) | Spot::Toggle | Spot::Workspace | Spot::Pick(_) => None,
         }
     }
 

@@ -625,10 +625,16 @@ fn enter_on_a_focused_live_row_subscribes_full_asks_commands_and_attaches() {
     let mut buf = ratatui::buffer::Buffer::empty(area);
     let targets = crate::view::render(&app, area, &mut buf, None);
     app.drawn(&targets);
-    // Shift+Tab focuses the last stop: the second row.
+    // Shift+Tab focuses the last stop: the second row's ✕, and ↑ steps
+    // back to its line.
     let now = fakes::clock::FakeClock::new().now();
     app.on_key(Key::BackTab, now);
     let row = keys(&app)[1];
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Stop(row)))
+    );
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
     assert_eq!(
         app.focused(),
         Some(crate::mouse::TargetId::Home(Spot::Entry(row)))
@@ -1586,6 +1592,12 @@ fn down_twice_moves_to_the_second_row() {
         app.focused(),
         Some(crate::mouse::TargetId::Home(Spot::Entry(keys(&app)[0])))
     );
+    // Every click target is a focus stop: the row's ✕ comes next.
+    assert_eq!(app.on_key(Key::Char('j'), now), Effect::None);
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Stop(keys(&app)[0])))
+    );
     assert_eq!(app.on_key(Key::Char('j'), now), Effect::None);
     assert_eq!(
         app.focused(),
@@ -1610,15 +1622,21 @@ fn down_on_the_last_drawn_row_focuses_the_next_and_scrolls() {
     assert_eq!(keys(&app).len(), 15);
     drawn(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    // Nine rows fit under the four-row logo's box: nine steps reach
-    // the last drawn one, and the next step moves below the fold.
-    for _ in 0..9 {
+    // Nine rows fit under the four-row logo's box, each with its ✕:
+    // seventeen steps reach the last drawn row, the next its ✕, and the
+    // one after moves below the fold.
+    for _ in 0..17 {
         assert_eq!(app.on_key(Key::Down, now), Effect::None);
     }
     let shown = keys(&app);
     assert_eq!(
         app.focused(),
         Some(crate::mouse::TargetId::Home(Spot::Entry(shown[8])))
+    );
+    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Stop(shown[8])))
     );
     assert_eq!(app.on_key(Key::Down, now), Effect::None);
     assert_eq!(
@@ -1650,6 +1668,7 @@ fn down_on_the_last_row_of_the_list_does_nothing() {
     let now = fakes::clock::FakeClock::new().now();
     assert_eq!(app.on_key(Key::Down, now), Effect::None);
     assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(app.on_key(Key::Down, now), Effect::None);
     assert_eq!(
         app.focused(),
         Some(crate::mouse::TargetId::Home(Spot::Entry(keys(&app)[1])))
@@ -1657,7 +1676,12 @@ fn down_on_the_last_row_of_the_list_does_nothing() {
     assert_eq!(app.on_key(Key::Down, now), Effect::None);
     assert_eq!(
         app.focused(),
-        Some(crate::mouse::TargetId::Home(Spot::Entry(keys(&app)[1])))
+        Some(crate::mouse::TargetId::Home(Spot::Stop(keys(&app)[1])))
+    );
+    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Stop(keys(&app)[1])))
     );
 }
 
@@ -2122,6 +2146,9 @@ fn down_on_the_last_recent_row_asks_the_next_page() {
     answer_recent(&mut app, &recent, &[("s_bbbbbbbbbbbbbbbb", "old work")]);
     focus_last(&mut app);
     let now = fakes::clock::FakeClock::new().now();
+    // The row's ✕ is the last drawn stop: one step reaches it, and the
+    // next asks the page.
+    assert_eq!(app.on_key(Key::Down, now), Effect::None);
     let Effect::Send(lines) = app.on_key(Key::Down, now) else {
         panic!("the last row asks the next page");
     };
@@ -2134,7 +2161,7 @@ fn down_on_the_last_recent_row_asks_the_next_page() {
     let row = keys(&app)[1];
     assert_eq!(
         app.focused(),
-        Some(crate::mouse::TargetId::Home(Spot::Entry(row)))
+        Some(crate::mouse::TargetId::Home(Spot::Stop(row)))
     );
 }
 
@@ -2198,6 +2225,7 @@ fn none_after_an_empty_page() {
     answer_recent(&mut app, &recent, &[("s_bbbbbbbbbbbbbbbb", "old work")]);
     focus_last(&mut app);
     let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Down, now), Effect::None);
     let Effect::Send(lines) = app.on_key(Key::Down, now) else {
         panic!("the last row asks the next page");
     };
@@ -2385,5 +2413,454 @@ fn down_in_an_empty_box_focuses_the_toggle_when_it_shows() {
     assert_eq!(
         app.focused(),
         Some(crate::mouse::TargetId::Home(Spot::Toggle))
+    );
+}
+
+/// The foot home draws.
+fn foot(app: &App) -> String {
+    app.home_screen()
+        .map(|screen| screen.foot)
+        .unwrap_or_default()
+}
+
+/// Clicks the first row's ✕, with the parsed lines going out.
+fn stop(app: &mut App) -> Vec<Value> {
+    let key = keys(app)[0];
+    match app.home_click(Spot::Stop(key)) {
+        Effect::Send(lines) => lines
+            .iter()
+            .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
+            .collect(),
+        Effect::None
+        | Effect::Quit
+        | Effect::ListFiles
+        | Effect::Search { .. }
+        | Effect::Editor { .. }
+        | Effect::Copy(_) => panic!("the ✕ sends"),
+    }
+}
+
+/// Clicks the first row's ✕.
+fn click_stop(app: &mut App) -> Effect {
+    let key = keys(app)[0];
+    app.home_click(Spot::Stop(key))
+}
+
+/// One crashed `recent` row for `session`.
+fn crashed(session: &str, name: &str) -> Value {
+    json!({
+        "session_id": session,
+        "ts": 0,
+        "project": "-w",
+        "workspace": "/w",
+        "name": name,
+        "how": "crashed",
+    })
+}
+
+/// An exited row from `recent`, by `session`.
+fn exited_row(app: &mut App, session: &str, name: &str) {
+    let (_, recent) = linked(app);
+    app.on_line(accepted(
+        &recent,
+        json!({"sessions": [exited(session, name)]}),
+    ));
+}
+
+#[test]
+fn x_on_an_unsubscribed_live_row_sends_summary_then_close_now() {
+    let mut app = home();
+    two_rows(&mut app);
+    let lines = stop(&mut app);
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0]["command"], "subscribe");
+    assert_eq!(lines[0]["session_id"], "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(lines[0]["args"]["level"], "summary");
+    assert_eq!(lines[1]["command"], "close");
+    assert_eq!(lines[1]["session_id"], "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(lines[1]["args"], json!({"now": true}));
+    assert_ne!(lines[0]["id"], lines[1]["id"]);
+}
+
+#[test]
+fn x_on_a_subscribed_row_sends_close_now_only() {
+    let mut app = home();
+    two_rows(&mut app);
+    let first = stop(&mut app);
+    let summary = first[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("summary id"));
+    assert!(
+        app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", summary))
+            .is_empty()
+    );
+    let lines = stop(&mut app);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "close");
+    assert_eq!(lines[0]["session_id"], "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(lines[0]["args"], json!({"now": true}));
+}
+
+#[test]
+fn x_with_the_link_down_sends_nothing() {
+    let mut app = home();
+    app.connect_failed("gone".to_owned());
+    app.on_line(status("s_aaaaaaaaaaaaaaaa"));
+    assert_eq!(click_stop(&mut app), Effect::None);
+    assert_eq!(
+        foot(&app),
+        "↓ the session list · F1 the key map · Ctrl+C twice to quit"
+    );
+}
+
+#[test]
+fn a_refused_close_notes_the_row() {
+    let mut app = home();
+    two_rows(&mut app);
+    let lines = stop(&mut app);
+    let close = lines[1]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("close id"));
+    let message = "Session `s_aaaaaaaaaaaaaaaa` is held.";
+    assert!(
+        app.on_line(session_refused(
+            "s_aaaaaaaaaaaaaaaa",
+            close,
+            "session_held",
+            message
+        ))
+        .is_empty()
+    );
+    assert_eq!(
+        listed(&app),
+        [
+            format!("●  fix the parser  {message}"),
+            "✓  tidy docs".to_owned(),
+        ]
+    );
+    assert_eq!(app.notice(), Some(message));
+}
+
+#[test]
+fn x_on_an_exited_row_asks_to_delete() {
+    let mut app = home();
+    exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
+    assert_eq!(click_stop(&mut app), Effect::None);
+    assert_eq!(
+        foot(&app),
+        "Delete old work (s_aaaaaaaaaaaaaaaa)? It cannot be undone · enter delete · esc keep"
+    );
+}
+
+#[test]
+fn backspace_on_a_focused_exited_row_asks() {
+    let mut app = home();
+    exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
+    drawn(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(app.on_key(Key::Backspace, now), Effect::None);
+    assert_eq!(
+        foot(&app),
+        "Delete old work (s_aaaaaaaaaaaaaaaa)? It cannot be undone · enter delete · esc keep"
+    );
+}
+
+#[test]
+fn delete_on_a_focused_crashed_row_asks() {
+    let mut app = home();
+    let (_, recent) = linked(&mut app);
+    app.on_line(accepted(
+        &recent,
+        json!({"sessions": [crashed("s_aaaaaaaaaaaaaaaa", "dead work")]}),
+    ));
+    drawn(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(app.on_edit(crate::keys::Edit::Delete), Effect::None);
+    assert_eq!(
+        foot(&app),
+        "Delete dead work (s_aaaaaaaaaaaaaaaa)? It cannot be undone · enter delete · esc keep"
+    );
+}
+
+#[test]
+fn backspace_on_a_focused_live_row_does_nothing() {
+    let mut app = home();
+    two_rows(&mut app);
+    drawn(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(app.on_key(Key::Backspace, now), Effect::None);
+    assert_eq!(
+        foot(&app),
+        "↓ the session list · F1 the key map · Ctrl+C twice to quit"
+    );
+}
+
+#[test]
+fn backspace_with_focus_on_another_stop_is_still_swallowed() {
+    let mut app = home();
+    two_rows(&mut app);
+    drawn(&mut app);
+    app.focus = Some(crate::mouse::TargetId::Home(Spot::Toggle));
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Backspace, now), Effect::None);
+    assert_eq!(app.on_edit(crate::keys::Edit::Delete), Effect::None);
+    assert_eq!(
+        foot(&app),
+        "↓ the session list · F1 the key map · Ctrl+C twice to quit"
+    );
+    assert!(app.input().expand().is_empty());
+}
+
+#[test]
+fn enter_sends_delete_without_cascade() {
+    let mut app = home();
+    exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
+    click_stop(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+        panic!("Enter deletes");
+    };
+    let lines = commands(lines);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "delete");
+    assert_eq!(lines[0]["args"]["session"], "s_aaaaaaaaaaaaaaaa");
+    assert!(lines[0]["args"].get("cascade").is_none());
+}
+
+#[test]
+fn esc_sends_nothing() {
+    let mut app = home();
+    exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
+    click_stop(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Esc, now), Effect::None);
+    assert_eq!(
+        foot(&app),
+        "↓ the session list · F1 the key map · Ctrl+C twice to quit"
+    );
+}
+
+#[test]
+fn other_keys_do_nothing_in_the_question() {
+    let mut app = home();
+    exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
+    click_stop(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Char('x'), now), Effect::None);
+    assert!(app.input().expand().is_empty());
+    assert_eq!(
+        foot(&app),
+        "Delete old work (s_aaaaaaaaaaaaaaaa)? It cannot be undone · enter delete · esc keep"
+    );
+}
+
+#[test]
+fn ctrl_c_passes_through_the_question() {
+    let mut app = home();
+    exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
+    click_stop(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::CtrlC, now), Effect::None);
+    assert!(app.hint());
+}
+
+#[test]
+fn an_accepted_delete_removes_the_row_and_asks_recent_again() {
+    let mut app = home();
+    let (_, recent) = linked(&mut app);
+    app.on_line(accepted(
+        &recent,
+        json!({"sessions": [
+            exited("s_aaaaaaaaaaaaaaaa", "old work"),
+            exited("s_bbbbbbbbbbbbbbbb", "older work"),
+        ]}),
+    ));
+    click_stop(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+        panic!("Enter deletes");
+    };
+    let delete = commands(lines)[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("delete id"))
+        .to_owned();
+    let lines = commands(app.on_line(accepted(&delete, json!({}))));
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "recent");
+    assert!(lines[0].get("args").is_none());
+    assert_eq!(rows(&app), ["○  older work"]);
+    assert_eq!(
+        foot(&app),
+        "↓ the session list · F1 the key map · Ctrl+C twice to quit"
+    );
+}
+
+#[test]
+fn dependents_ask_again_naming_them_and_enter_sends_cascade_with_expect() {
+    let mut app = home();
+    exited_row(&mut app, "s_0123456789abcdef", "fix the parser");
+    click_stop(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+        panic!("Enter deletes");
+    };
+    let delete = commands(lines)[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("delete id"))
+        .to_owned();
+    let message = "Session `s_0123456789abcdef` has sessions that continue it: \
+        `s_1111111111111111`, `s_2222222222222222`. `--cascade` deletes them too.";
+    assert!(
+        app.on_line(hub_refused(&delete, "session_has_dependents", message))
+            .is_empty()
+    );
+    assert_eq!(
+        foot(&app),
+        "Delete fix the parser (s_0123456789abcdef) and 2 sessions that continue it: \
+        s_1111111111111111, s_2222222222222222? It cannot be undone · enter delete all · esc keep"
+    );
+    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+        panic!("Enter deletes all");
+    };
+    let lines = commands(lines);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "delete");
+    assert_eq!(
+        lines[0]["args"],
+        json!({
+            "session": "s_0123456789abcdef",
+            "cascade": true,
+            "expect": [
+                "s_0123456789abcdef",
+                "s_1111111111111111",
+                "s_2222222222222222",
+            ],
+        })
+    );
+}
+
+#[test]
+fn a_stale_cascade_asks_again_with_the_new_set() {
+    let mut app = home();
+    exited_row(&mut app, "s_0123456789abcdef", "fix the parser");
+    click_stop(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+        panic!("Enter deletes");
+    };
+    let delete = commands(lines)[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("delete id"))
+        .to_owned();
+    assert!(
+        app.on_line(hub_refused(
+            &delete,
+            "session_has_dependents",
+            "Session `s_0123456789abcdef` has sessions that continue it: \
+            `s_1111111111111111`. `--cascade` deletes them too."
+        ))
+        .is_empty()
+    );
+    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+        panic!("Enter deletes all");
+    };
+    let cascade = commands(lines)[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("cascade id"))
+        .to_owned();
+    let message = "The sessions this delete would remove are now `s_0123456789abcdef`, \
+        `s_1111111111111111`, `s_3333333333333333`. Nothing was deleted.";
+    assert!(
+        app.on_line(hub_refused(&cascade, "stale_request", message))
+            .is_empty()
+    );
+    assert_eq!(
+        foot(&app),
+        "Delete fix the parser (s_0123456789abcdef) and 2 sessions that continue it: \
+        s_1111111111111111, s_3333333333333333? It cannot be undone · enter delete all · esc keep"
+    );
+    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+        panic!("Enter deletes all");
+    };
+    let lines = commands(lines);
+    assert_eq!(
+        lines[0]["args"]["expect"],
+        json!([
+            "s_0123456789abcdef",
+            "s_1111111111111111",
+            "s_3333333333333333",
+        ])
+    );
+}
+
+#[test]
+fn a_dependents_refusal_with_no_other_ids_notes_the_row() {
+    let mut app = home();
+    exited_row(&mut app, "s_0123456789abcdef", "fix the parser");
+    click_stop(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+        panic!("Enter deletes");
+    };
+    let delete = commands(lines)[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("delete id"))
+        .to_owned();
+    let message = "Session `s_0123456789abcdef` has sessions that continue it: \
+        `s_0123456789abcdef`. `--cascade` deletes them too.";
+    assert!(
+        app.on_line(hub_refused(&delete, "session_has_dependents", message))
+            .is_empty()
+    );
+    assert_eq!(listed(&app), [format!("○  fix the parser  {message}")]);
+    assert_eq!(app.notice(), Some(message));
+    assert_eq!(
+        foot(&app),
+        "↓ the session list · F1 the key map · Ctrl+C twice to quit"
+    );
+}
+
+#[test]
+fn a_refused_cascade_delete_notes_the_row() {
+    let mut app = home();
+    exited_row(&mut app, "s_0123456789abcdef", "fix the parser");
+    click_stop(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+        panic!("Enter deletes");
+    };
+    let delete = commands(lines)[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("delete id"))
+        .to_owned();
+    assert!(
+        app.on_line(hub_refused(
+            &delete,
+            "session_has_dependents",
+            "Session `s_0123456789abcdef` has sessions that continue it: \
+            `s_1111111111111111`. `--cascade` deletes them too."
+        ))
+        .is_empty()
+    );
+    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+        panic!("Enter deletes all");
+    };
+    let cascade = commands(lines)[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("cascade id"))
+        .to_owned();
+    let message = "Session `s_0123456789abcdef` is held.";
+    assert!(
+        app.on_line(hub_refused(&cascade, "session_held", message))
+            .is_empty()
+    );
+    assert_eq!(listed(&app), [format!("○  fix the parser  {message}")]);
+    assert_eq!(app.notice(), Some(message));
+    assert_eq!(
+        foot(&app),
+        "↓ the session list · F1 the key map · Ctrl+C twice to quit"
     );
 }
