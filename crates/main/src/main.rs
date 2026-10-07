@@ -158,6 +158,12 @@ fn run() -> i32 {
                 sessions_delete(&id, cascade, yes, clock.as_ref(), fiber)
             }
             cli::SessionsCommands::Export { id, path } => ::cli::export(&id, path.as_deref()),
+            cli::SessionsCommands::Prune {
+                older_than,
+                cascade,
+                dry_run,
+                yes,
+            } => sessions_prune(older_than, cascade, dry_run, yes, clock.as_ref()),
         },
         cli::Invocation::Run(Some(cli::Commands::Models(args))) => ::cli::models(
             args.search.as_deref(),
@@ -706,6 +712,30 @@ fn sessions_delete(
         doors::hub::connect(&home, &mut start, clock)
     };
     ::cli::delete(id, cascade, yes, &mut connect)
+}
+
+/// `fiber sessions prune`: the hub it reaches is started when none runs.
+fn sessions_prune(
+    older_than: Option<String>,
+    cascade: bool,
+    dry_run: bool,
+    yes: bool,
+    clock: &dyn contract::clock::Clock,
+) -> i32 {
+    let mut connect = || {
+        let home = config::fiber_home_from_env().map_err(io::Error::other)?;
+        doors::hub::connect(&home, &mut start_hub, clock)
+    };
+    ::cli::prune(
+        &::cli::PruneArgs {
+            older_than,
+            cascade,
+            dry_run,
+            yes,
+        },
+        clock,
+        &mut connect,
+    )
 }
 
 fn usage(message: impl Into<String>) -> Failure {

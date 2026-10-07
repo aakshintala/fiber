@@ -18,6 +18,7 @@ Sessions:
   ask [--model <model>] [--resume <id>] [<prompt>] [-]  Run one session of one turn; its events go to stdout
   sessions delete [--cascade] [--yes] <id>              Delete a session, and with --cascade the sessions that continue it
   sessions export <id> [<path>]                         Write the session's log and its artifacts to <path>
+  sessions prune [--older-than <duration>] [--dry-run]  Delete old sessions and diagnostic logs
   models [<search>] [--json]                            List the models the installed providers serve
 
 Fiber itself:
@@ -194,6 +195,24 @@ pub(crate) enum SessionsCommands {
         /// relative; the session id when absent.
         #[arg(value_name = "path")]
         path: Option<PathBuf>,
+    },
+    /// Delete old sessions and diagnostic logs
+    Prune {
+        /// Delete every exited session whose last line is older than
+        /// this, such as `30d`: a whole number and `s`, `m`, `h` or `d`.
+        /// Without it no session is deleted.
+        #[arg(long, value_name = "duration")]
+        older_than: Option<String>,
+        /// Also delete every session that continues a deleted one.
+        #[arg(long)]
+        cascade: bool,
+        /// Print what would be deleted and the space it would free,
+        /// and delete nothing.
+        #[arg(long)]
+        dry_run: bool,
+        /// Prune without asking.
+        #[arg(long)]
+        yes: bool,
     },
 }
 
