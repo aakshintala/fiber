@@ -116,14 +116,7 @@ pub(crate) fn render(
             .wrap(Wrap { trim: false })
             .scroll((to_u16(top), 0))
             .render(conversation, buf),
-        None => {
-            if let Some(rect) = conversation_rows(app, conversation, buf) {
-                targets.push(Target {
-                    id: TargetId::NewBelow,
-                    rect,
-                });
-            }
-        }
+        None => conversation_rows(app, conversation, buf, &mut targets),
     }
     if let Some(target) = pointer.and_then(|(col, row)| mouse::under(&targets, col, row)) {
         buf.set_style(target.rect, HOVER_TINT);
@@ -172,9 +165,10 @@ pub(crate) fn cursor(app: &App, area: Rect) -> Option<Position> {
 }
 
 /// Draws the conversation's visible rows, bottom-aligned while it is
-/// shorter than its area. Returns the cells "↓ New messages below" took,
-/// when drawn.
-fn conversation_rows(app: &App, area: Rect, buf: &mut Buffer) -> Option<Rect> {
+/// shorter than its area. Pushes a target over the rows shown of each line
+/// that opens something, then one over the cells "↓ New messages below"
+/// took, when drawn; the overlay's row is no line's target.
+fn conversation_rows(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
     let lines = app.lines();
     let heights: Vec<usize> = lines
         .iter()
@@ -188,17 +182,29 @@ fn conversation_rows(app: &App, area: Rect, buf: &mut Buffer) -> Option<Rect> {
     let shown = total.min(end).saturating_sub(top);
     let mut y = area.y.saturating_add(to_u16(height.saturating_sub(shown)));
     let mut start = 0usize;
+    let overlay = app.has_new() && area.height > 0;
+    let last = area.bottom().saturating_sub(u16::from(overlay));
+    let mut opens = app.targets().into_iter().peekable();
     // A line wholly above `top` or below `end` shows no rows.
-    for (line, rows) in lines.into_iter().zip(heights) {
+    for (at, (line, rows)) in lines.into_iter().zip(heights).enumerate() {
         let next = start.saturating_add(rows);
         let skip = top.saturating_sub(start);
         let count = next.min(end).saturating_sub(start.max(top));
         let rect = Rect::new(area.x, y, area.width, to_u16(count));
         paragraph(line).scroll((to_u16(skip), 0)).render(rect, buf);
+        if let Some((_, open)) = opens.next_if(|(index, _)| *index == at) {
+            let height = rect.height.min(last.saturating_sub(rect.y));
+            if height > 0 {
+                targets.push(Target {
+                    id: TargetId::Line(open),
+                    rect: Rect { height, ..rect },
+                });
+            }
+        }
         y = y.saturating_add(to_u16(count));
         start = next;
     }
-    if app.has_new() && area.height > 0 {
+    if overlay {
         let row = area.bottom().saturating_sub(1);
         let blank = " ".repeat(usize::from(area.width));
         buf.set_stringn(
@@ -212,9 +218,11 @@ fn conversation_rows(app: &App, area: Rect, buf: &mut Buffer) -> Option<Rect> {
         let x = area.x.saturating_add(area.width.saturating_sub(width) / 2);
         let (end, _) =
             buf.set_stringn(x, row, NEW_BELOW, usize::from(area.width), Style::default());
-        return Some(Rect::new(x, row, end.saturating_sub(x), 1));
+        targets.push(Target {
+            id: TargetId::NewBelow,
+            rect: Rect::new(x, row, end.saturating_sub(x), 1),
+        });
     }
-    None
 }
 
 /// A row count as a screen coordinate; a screen is never taller than

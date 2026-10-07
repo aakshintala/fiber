@@ -213,3 +213,97 @@ fn hover_frames_counts_the_bytes_each_report_wrote() {
         Err(true)
     );
 }
+
+/// The screen a loop on a [`TestBackend`] shows, as text.
+fn shown(lp: &super::Loop<TestBackend>) -> String {
+    crate::view::text(lp.screen.terminal.backend().inner.buffer())
+}
+
+/// The first row of `lp`'s screen whose text, trimmed, starts with `start`.
+fn row_of(lp: &super::Loop<TestBackend>, start: &str) -> u16 {
+    shown(lp)
+        .lines()
+        .position(|row| row.trim_start().starts_with(start))
+        .and_then(|at| u16::try_from(at).ok())
+        .unwrap_or_else(|| panic!("no row starts {start:?} in\n{}", shown(lp)))
+}
+
+/// A completed turn that thought, then read one file.
+fn thought_and_read() -> Vec<Input> {
+    use serde_json::json;
+    let started = json!({"input": [{"type": "message", "source": "driver",
+        "content": [{"type": "text", "text": "hi"}]}]});
+    vec![
+        session("turn_started", started, None),
+        session("step_started", json!({}), None),
+        session("reasoning_started", json!({}), Some("a_t")),
+        session(
+            "reasoning_completed",
+            json!({"text": "# Plan\nRead a.rs first."}),
+            Some("a_t"),
+        ),
+        session(
+            "tool_call_requested",
+            json!({"name": "read", "arguments": {"path": "src/a.rs"}}),
+            Some("a_1"),
+        ),
+        session(
+            "tool_call_completed",
+            json!({"status": "completed",
+                "content": [{"type": "text", "text": "fn body_of_a() {}"}]}),
+            Some("a_1"),
+        ),
+        session("turn_completed", json!({"outcome": "completed"}), None),
+    ]
+}
+
+/// A loop showing [`thought_and_read`] on `backend`.
+fn grouped<B: ratatui::backend::Backend>(backend: B) -> super::Loop<B> {
+    let (mut lp, _) = new_loop(backend, None);
+    lp.app
+        .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    feed(&mut lp, thought_and_read());
+    lp
+}
+
+#[test]
+fn clicks_open_the_ledger_then_a_call_then_the_thought() {
+    let mut lp = grouped(TestBackend::new(60, 12));
+    assert!(!shown(&lp).contains("read src/a.rs"), "{}", shown(&lp));
+    let group = row_of(&lp, "• Read");
+    feed(&mut lp, vec![click(40, group)]);
+    let read = row_of(&lp, "read src/a.rs");
+    assert!(!shown(&lp).contains("fn body_of_a"), "{}", shown(&lp));
+    feed(&mut lp, vec![click(50, read)]);
+    assert!(shown(&lp).contains("fn body_of_a"), "{}", shown(&lp));
+    let thought = row_of(&lp, "1 + Thought");
+    assert!(!shown(&lp).contains("Read a.rs first."), "{}", shown(&lp));
+    feed(&mut lp, vec![click(0, thought)]);
+    assert!(shown(&lp).contains("Read a.rs first."), "{}", shown(&lp));
+    // A second click on the summary closes the ledger again.
+    let group = row_of(&lp, "• Read");
+    feed(&mut lp, vec![click(0, group)]);
+    assert!(!shown(&lp).contains("read src/a.rs"), "{}", shown(&lp));
+}
+
+#[test]
+fn hover_over_a_group_line_tints_only_its_row() {
+    let lp = grouped(TestBackend::new(60, 12));
+    let group = row_of(&lp, "• Read");
+    let mut lp = grouped(Cells::default());
+    lp.screen.terminal.backend_mut().inner.drawn.clear();
+    feed(&mut lp, vec![motion(5, group)]);
+    let drawn = &lp.screen.terminal.backend().inner.drawn;
+    assert_eq!(drawn.len(), 60);
+    assert!(drawn.iter().all(|&(_, y)| y == group), "{drawn:?}");
+    let mut lp = grouped(TestBackend::new(60, 12));
+    feed(&mut lp, vec![motion(5, group)]);
+    let buf = lp.screen.terminal.backend().inner.buffer();
+    for y in 0..12 {
+        for x in 0..60 {
+            let bg = buf.cell((x, y)).map(|cell| cell.bg);
+            let tinted = bg == crate::view::HOVER_TINT.bg;
+            assert_eq!(tinted, y == group, "cell {x},{y}");
+        }
+    }
+}

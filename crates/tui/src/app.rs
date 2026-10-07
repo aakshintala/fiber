@@ -233,10 +233,15 @@ impl App {
     }
 
     /// Handles a click on `target` (`docs/tui.md`, "Bindings"): the badge
-    /// reopens the approval queue, "↓ New messages below" jumps to the end.
+    /// reopens the approval queue, "↓ New messages below" jumps to the end,
+    /// a conversation line opens or closes what it names.
     pub(crate) fn on_click(&mut self, target: TargetId) -> Effect {
         match target {
             TargetId::Badge => self.open_first(),
+            TargetId::Line(line) => {
+                self.open(line);
+                Effect::None
+            }
             TargetId::NewBelow => {
                 self.follow();
                 Effect::None
@@ -396,10 +401,6 @@ impl App {
 
     /// For each line of [`Self::lines`] that opens something, its index and
     /// what it opens.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "#682 clicks and #683 focus call it")
-    )]
     pub(crate) fn targets(&self) -> Vec<(usize, Target)> {
         self.rows()
             .into_iter()
@@ -409,10 +410,6 @@ impl App {
     }
 
     /// Opens or closes what `target` names.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "#682 clicks and #683 focus call it")
-    )]
     pub(crate) fn open(&mut self, target: Target) {
         if self.turns.iter_mut().any(|turn| turn.toggle(target)) {
             self.changed();

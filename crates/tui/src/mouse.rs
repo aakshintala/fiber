@@ -13,6 +13,8 @@ pub(crate) enum TargetId {
     Badge,
     /// "↓ New messages below": jumps to the end.
     NewBelow,
+    /// A conversation line: opens or closes what it names.
+    Line(crate::app::Target),
 }
 
 /// One click target as drawn: what it does and the cells it covers.
