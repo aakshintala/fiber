@@ -392,6 +392,8 @@ pub(crate) fn plan(mode: &str, packages: &[String], event: &str, bug: bool) -> P
         ("test", !pr || !packages.is_empty()),
         ("mutants", shards > 0),
         ("bug_red", pr && code && bug),
+        // Runs with the binary-level tests, and on every push (`docs/ci.md`, "Selection").
+        ("release", !pr || packages.iter().any(|p| p == BINARY_TESTS)),
     ]);
     Plan { jobs, shards }
 }

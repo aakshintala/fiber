@@ -58,7 +58,7 @@ whole process, which
 Fiber's own `unsafe` code are `docs/code-quality.md`.
 
 Binary size is recorded, not gated per crate. CI fails a stripped release
-binary over 20 MiB. Compile time is not a criterion: CI caches built
+binary of 20 MiB (20,971,520 bytes) or more (`scripts/release-size`). Compile time is not a criterion: CI caches built
 dependencies. On macOS arm64, serde, ureq, ratatui, rusqlite and mlua build from clean in 8
 seconds, and adding ten candidates, syntect among them, takes it to 16.
 

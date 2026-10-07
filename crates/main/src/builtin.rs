@@ -107,3 +107,7 @@ fn registered(tool: impl Tool + 'static) -> Result<(Arc<dyn Tool>, ToolInfo), Fa
 #[cfg(test)]
 #[path = "builtin_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tool_budget_tests.rs"]
+mod tool_budget_tests;

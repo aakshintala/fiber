@@ -361,6 +361,14 @@ it on a thread and receives its result with a deadline. A fake's own sleep or po
 loop is a wait too, with a deadline on the wall clock. nextest's per-test timeout is at least twice the sum of the
 test's own deadlines, so a hang reports which wait expired, not a harness kill.
 
+A wait that takes several lines has one deadline for the whole wait, never one
+per line, and needs no clock: a scoped thread reads the lines and sends them
+over a channel, and the test takes them with one `recv_timeout`, as `until` in
+`crates/doors/tests/socket.rs` does. A binary-level test that must hand product
+code a `contract::clock::Clock` uses `SystemClock` in
+`crates/main/tests/support/mod.rs`, the process clock, or `StretchedClock`
+there, which runs it slower so a product deadline spans the test's own.
+
 A test advances a fake clock only after a signal that the code under test is
 waiting on that clock (past its own clock check); a parked caller alone is not
 that signal.
