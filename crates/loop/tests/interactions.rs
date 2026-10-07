@@ -1006,8 +1006,10 @@ fn prepare_to(provider: Arc<ScriptedProvider>) -> r#loop::Prepare {
                 retry_after_ms: None,
                 provider: None,
             }),
-            web_search: None,
+            web_search: r#loop::Hosted::Keep,
             notice: None,
+            applied: None,
+            credential_files: Vec::new(),
         })
     })
 }
@@ -1019,10 +1021,7 @@ fn other_deliveries_are_admitted_while_a_call_waits() {
     let switched = Arc::new(ScriptedProvider::new(vec![Scripted::text("Second.")]));
     let looped = session.looped.take().unwrap().switcher(
         prepare_to(Arc::clone(&switched)),
-        Switchable {
-            chosen: None,
-            web_search: None,
-        },
+        Switchable { chosen: None },
     );
     session.looped = Some(looped);
     let tap = Tap::new(&session.log);
