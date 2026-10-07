@@ -97,13 +97,12 @@ fn a_rerun_child_has_no_crash_exception_port() {
         println!("crash ports: {}", crate::crash_ports::probe::handlers());
         return;
     }
-    let mut command = Command::new(std::env::current_exe().unwrap());
-    command
-        .args(["--exact", TEST, "--nocapture"])
-        .env(CHILD, "1");
-    crate::crash_ports::probe::inherit_a_live_port(&mut command);
-    crate::crash_ports::silence(&mut command);
-    let output = command.output().unwrap();
+    let output = rerun_prepared(
+        TEST,
+        &[(CHILD, "1")],
+        Duration::from_secs(10),
+        crate::crash_ports::probe::inherit_a_live_port,
+    );
     assert!(
         String::from_utf8_lossy(&output.stdout).contains("crash ports: 0"),
         "the child still has a crash exception port:\n{}",
