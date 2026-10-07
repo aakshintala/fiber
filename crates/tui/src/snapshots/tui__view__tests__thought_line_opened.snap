@@ -1,0 +1,16 @@
+---
+source: crates/tui/src/view_tests.rs
+expression: screen(&app)
+---
+
+
+
+
+
+                                                        why
++ Thought: Plan the fix · 22s
+# Plan the fix
+Read a.rs first.
+Because.
+▣ completed · 24s · 340 tokens
+>

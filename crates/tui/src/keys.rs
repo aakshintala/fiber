@@ -14,6 +14,8 @@ pub(crate) enum Key {
     Esc,
     /// Ctrl+C (`0x03`).
     CtrlC,
+    /// Ctrl+O (`0x0f`): `toggle_ledgers`.
+    CtrlO,
     /// PageUp (`CSI 5~`).
     PageUp,
     /// PageDown (`CSI 6~`).
@@ -81,6 +83,7 @@ fn step(buf: &[u8]) -> Step {
     let key = |key: Key| Some((vec![Event::Key(key)], 1));
     match *buf.first()? {
         0x03 => key(Key::CtrlC),
+        0x0f => key(Key::CtrlO),
         0x08 | 0x7f => key(Key::Backspace),
         0x0d => key(Key::Enter),
         // A lone ESC ending the read is Esc; ESC followed by bytes in the

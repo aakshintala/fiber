@@ -8,8 +8,8 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use contract::events::{
-    CommandAccepted, CommandRejected, InputItem, SteeringApplied, TextCompleted, TextDelta,
-    TurnCompleted, TurnOutcome, TurnStarted,
+    CommandAccepted, CommandRejected, InputItem, SteeringApplied, TurnCompleted, TurnStarted,
+    UsageRecorded,
 };
 use contract::shapes::ContentPart;
 use contract::{Envelope, HubLine, SessionId};
@@ -18,6 +18,16 @@ use serde_json::{Map, Value, json};
 use crate::approvals::{self, Panel, PanelKey, Queue};
 use crate::keys::Key;
 use crate::link::Line;
+use crate::turn::{Fold, Row, Turn};
+
+/// A line's payload as `$kind`; `None` when it does not parse, and the
+/// line is skipped.
+macro_rules! read {
+    ($envelope:expr, $kind:ty) => {
+        serde_json::from_value::<$kind>(serde_json::Value::Object($envelope.payload.clone())).ok()
+    };
+}
+pub(crate) use read;
 
 /// How long the second Ctrl+C waits for the first.
 pub(crate) const QUIT_WINDOW: Duration = Duration::from_secs(1);
@@ -80,17 +90,16 @@ enum Link {
     Down,
 }
 
-/// One conversation item.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Item {
-    /// A turn's input message.
-    Prompt(String),
-    /// A steering message.
-    Steer(String),
-    /// One action's reply text, updated as deltas arrive.
-    Reply { action: String, text: String },
-    /// A closed turn.
-    Closed(String),
+/// What clicking a line, or Enter on it, opens. Ids are unique within the
+/// app, assigned in fold order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Target {
+    /// A tool group's ledger.
+    Group(usize),
+    /// A call's diff, output or error.
+    Call(usize),
+    /// A thinking block's text.
+    Thought(usize),
 }
 
 /// The terminal's state.
@@ -106,7 +115,8 @@ pub(crate) struct App {
     pending: HashMap<String, (Kind, String)>,
     /// The one notice line, the latest.
     notice: Option<String>,
-    items: Vec<Item>,
+    turns: Vec<Turn>,
+    fold: Fold,
     /// The top wrapped row while scrolled up; `None` follows new output.
     top: Option<usize>,
     /// New output arrived while scrolled up.
@@ -132,7 +142,8 @@ impl App {
             held: Vec::new(),
             pending: HashMap::new(),
             notice: None,
-            items: Vec::new(),
+            turns: Vec::new(),
+            fold: Fold::default(),
             top: None,
             has_new: false,
             width: 80,
@@ -180,6 +191,10 @@ impl App {
             }
             Key::PageDown => {
                 self.page_down();
+                Effect::None
+            }
+            Key::CtrlO => {
+                self.toggle_ledgers();
                 Effect::None
             }
             Key::End | Key::CtrlC => {
@@ -303,7 +318,7 @@ impl App {
             panel
                 .lines
                 .iter()
-                .map(|line| crate::view::rows(line, self.width))
+                .map(|line| crate::view::rows(ratatui::text::Line::raw(line.as_str()), self.width))
                 .sum()
         });
         let below = input
@@ -323,16 +338,62 @@ impl App {
         self.queue.badge()
     }
 
-    /// The conversation as plain lines, before wrapping.
-    pub(crate) fn lines(&self) -> Vec<String> {
-        self.items
-            .iter()
-            .map(|item| match item {
-                Item::Prompt(text) => format!("› {text}"),
-                Item::Steer(text) => format!("steer · {text}"),
-                Item::Reply { text, .. } | Item::Closed(text) => text.clone(),
-            })
+    /// The conversation's lines, before wrapping.
+    pub(crate) fn lines(&self) -> Vec<ratatui::text::Line<'static>> {
+        self.rows().into_iter().map(|(line, _)| line).collect()
+    }
+
+    /// For each line of [`Self::lines`] that opens something, its index and
+    /// what it opens.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "#682 clicks and #683 focus call it")
+    )]
+    pub(crate) fn targets(&self) -> Vec<(usize, Target)> {
+        self.rows()
+            .into_iter()
+            .enumerate()
+            .filter_map(|(at, (_, target))| target.map(|target| (at, target)))
             .collect()
+    }
+
+    /// Opens or closes what `target` names.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "#682 clicks and #683 focus call it")
+    )]
+    pub(crate) fn open(&mut self, target: Target) {
+        if self.turns.iter_mut().any(|turn| turn.toggle(target)) {
+            self.changed();
+        }
+    }
+
+    fn rows(&self) -> Vec<Row> {
+        let mut out = Vec::new();
+        for turn in &self.turns {
+            turn.rows(self.width, &mut out);
+        }
+        out
+    }
+
+    /// `toggle_ledgers`: closes every ledger when all are open, else opens
+    /// them all. Groups made later start the same way.
+    fn toggle_ledgers(&mut self) {
+        let mut ledgers: Vec<_> = self
+            .turns
+            .iter_mut()
+            .flat_map(Turn::groups_mut)
+            .filter(|group| group.has_calls())
+            .collect();
+        let open = if ledgers.is_empty() {
+            !self.fold.ledgers
+        } else {
+            !ledgers.iter().all(|group| group.open)
+        };
+        for group in &mut ledgers {
+            group.open = open;
+        }
+        self.fold.ledgers = open;
     }
 
     /// Ctrl+C clears, then quits: a second press before [`QUIT_WINDOW`]
@@ -537,103 +598,97 @@ impl App {
         // attached session's alone.
         if approvals::KINDS.contains(&envelope.kind.as_str()) {
             self.queue.fold(envelope);
-            return;
         }
         if self.session() != Some(&envelope.session_id) {
             return;
         }
-        let payload = Value::Object(envelope.payload.clone());
         let action = envelope.action_id.as_ref().map(|id| id.0.as_str());
-        match envelope.kind.as_str() {
+        let ts = envelope.ts;
+        // Only a line that changed a card shows the overlay.
+        let changed = match envelope.kind.as_str() {
             "command_accepted" => {
-                if let Ok(accepted) = serde_json::from_value::<CommandAccepted>(payload) {
+                if let Some(accepted) = read!(envelope, CommandAccepted) {
                     self.pending.remove(&accepted.command_id.0);
                 }
+                false
             }
             "command_rejected" => {
-                if let Ok(rejected) = serde_json::from_value::<CommandRejected>(payload)
+                if let Some(rejected) = read!(envelope, CommandRejected)
                     && let Some(id) = rejected.command_id
                 {
                     self.rejected(&id.0, rejected.message);
                 }
+                false
             }
-            "turn_started" => {
-                if let Ok(started) = serde_json::from_value::<TurnStarted>(payload) {
-                    self.set_busy(true);
-                    for input in &started.input {
+            "turn_started" => read!(envelope, TurnStarted).is_some_and(|started| {
+                self.set_busy(true);
+                let prompts = started
+                    .input
+                    .iter()
+                    .filter_map(|input| {
                         if let InputItem::Message { content, .. } = input {
-                            self.push(Item::Prompt(text_of(content)));
+                            Some(text_of(content))
+                        } else {
+                            None
                         }
-                    }
+                    })
+                    .collect();
+                self.turns.push(Turn::new(prompts, ts));
+                true
+            }),
+            "turn_completed" => read!(envelope, TurnCompleted).is_some_and(|done| {
+                self.set_busy(false);
+                self.open_turn().is_some_and(|turn| {
+                    turn.complete(done, ts);
+                    true
+                })
+            }),
+            "usage_recorded" => read!(envelope, UsageRecorded).is_some_and(|line| {
+                // A line folds where its generation already is, so a late
+                // correction updates a closed card; else into the open turn.
+                let known = self
+                    .turns
+                    .iter()
+                    .rposition(|turn| turn.spend.holds(&line.generation_id));
+                let turn = match known {
+                    Some(at) => self.turns.get_mut(at),
+                    None => self.open_turn(),
+                };
+                turn.is_some_and(|turn| {
+                    turn.spend.record(&line);
+                    true
+                })
+            }),
+            "steering_applied" => read!(envelope, SteeringApplied).is_some_and(|applied| {
+                self.open_turn().is_some_and(|turn| {
+                    turn.steer(text_of(&applied.content));
+                    true
+                })
+            }),
+            "step_started" => {
+                if let Some(turn) = self.open_turn() {
+                    turn.step_started();
                 }
+                false
             }
-            "steering_applied" => {
-                if let Ok(applied) = serde_json::from_value::<SteeringApplied>(payload) {
-                    self.push(Item::Steer(text_of(&applied.content)));
-                }
-            }
-            "assistant_message_delta" => {
-                if let (Some(action), Ok(delta)) =
-                    (action, serde_json::from_value::<TextDelta>(payload))
-                {
-                    self.reply(action, |text| text.push_str(&delta.text));
-                }
-            }
-            "text_completed" => {
-                if let (Some(action), Ok(done)) =
-                    (action, serde_json::from_value::<TextCompleted>(payload))
-                {
-                    self.reply(action, |text| *text = done.text);
-                }
-            }
-            "turn_completed" => {
-                if let Ok(done) = serde_json::from_value::<TurnCompleted>(payload) {
-                    self.set_busy(false);
-                    let line = match (done.outcome, done.error) {
-                        (TurnOutcome::Completed, _) => "▣ completed".to_owned(),
-                        (TurnOutcome::Interrupted, _) => "▣ interrupted".to_owned(),
-                        (TurnOutcome::Failed, Some(error)) => {
-                            format!("▣ failed · {}", error.message)
-                        }
-                        (TurnOutcome::Failed, None) => "▣ failed".to_owned(),
-                    };
-                    self.push(Item::Closed(line));
-                }
-            }
-            _ => {}
+            _ => action.is_some_and(|action| {
+                crate::turn::fold_action(&mut self.turns, &mut self.fold, envelope, action)
+            }),
+        };
+        if changed {
+            self.changed();
         }
+    }
+
+    /// The turn still running, if any.
+    fn open_turn(&mut self) -> Option<&mut Turn> {
+        self.turns.last_mut().filter(|turn| turn.is_open())
     }
 
     fn set_busy(&mut self, busy: bool) {
         if let Phase::Attached { busy: flag, .. } = &mut self.phase {
             *flag = busy;
         }
-    }
-
-    fn push(&mut self, item: Item) {
-        self.items.push(item);
-        self.changed();
-    }
-
-    /// Updates one action's reply text, starting its item on first text.
-    /// The reply being streamed is near the end, so the search runs back.
-    fn reply(&mut self, action: &str, update: impl FnOnce(&mut String)) {
-        let found = self.items.iter_mut().rev().find_map(|item| match item {
-            Item::Reply { action: has, text } if has == action => Some(text),
-            Item::Prompt(_) | Item::Steer(_) | Item::Reply { .. } | Item::Closed(_) => None,
-        });
-        match found {
-            Some(text) => update(text),
-            None => {
-                let mut text = String::new();
-                update(&mut text);
-                self.items.push(Item::Reply {
-                    action: action.to_owned(),
-                    text,
-                });
-            }
-        }
-        self.changed();
     }
 
     /// New output while scrolled up shows the overlay; the view stays put.
@@ -647,7 +702,7 @@ impl App {
     fn bottom_top(&self) -> usize {
         let total: usize = self
             .lines()
-            .iter()
+            .into_iter()
             .map(|line| crate::view::rows(line, self.width))
             .sum();
         total.saturating_sub(self.conversation_height())
