@@ -230,3 +230,21 @@ fn the_send_target_sends_and_the_cross_puts_it_aside() {
     let (screen, _) = draw(&app, 80, 24);
     assert!(screen.contains("! 1 waiting"), "{screen}");
 }
+
+#[test]
+fn a_taller_screen_shows_the_whole_offer_after_scrolling() {
+    let mut app = offered(
+        json!([server("a", false), server("b", false), server("c", false)]),
+        80,
+        8,
+    );
+    for _ in 0..5 {
+        press(&mut app, Key::PageDown);
+    }
+    assert!(!draw(&app, 80, 8).0.starts_with("Repository code"));
+    // The scroll is past the end of a 40-row view, which shows it all.
+    app.set_size(80, 40);
+    let (screen, _) = draw(&app, 80, 40);
+    assert!(screen.starts_with("Repository code"), "{screen}");
+    assert!(screen.contains("Send"), "{screen}");
+}
