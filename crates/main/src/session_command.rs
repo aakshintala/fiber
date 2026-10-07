@@ -132,6 +132,7 @@ pub(crate) fn new_session(
         credential_files,
         &clock,
     );
+    let offer = Arc::new(extensions::SessionOffer::new(&home, &project, &workspace));
     let log = match Log::create(&sessions, id, Arc::clone(&clock)) {
         Ok(log) => Arc::new(log),
         Err(e) => return stop_and_fail(session_servers, failed(e.code(), e)),
@@ -194,7 +195,8 @@ pub(crate) fn new_session(
                     Ok(looped
                         .handoff(handoff)
                         .on_handoff(forget)
-                        .switcher(switching.closure(), switchable))
+                        .switcher(switching.closure(), switchable)
+                        .repository_code(offer))
                 }),
                 budget,
                 idle,

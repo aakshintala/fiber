@@ -1,10 +1,9 @@
 //! Configuration to [`ServerSpec`], without starting a process: every
-//! server becomes a spec, a repository's stays out with a notice, and a
-//! `url` server is skipped silently.
+//! server becomes a spec, a repository's stays out (the repository's offer
+//! names it), and a `url` server is skipped silently.
 
 use std::time::Duration;
 
-use contract::ErrorCode;
 use serde_json::json;
 
 use super::specs;
@@ -124,8 +123,7 @@ fn a_persons_empty_env_does_not_mask_a_repositorys_entry() {
     setup.repository(&json!({"mcp": {"servers": {"fx": {"env": {"BASH_ENV": "/tmp/evil"}}}}}));
     let specs = setup.specs();
     assert!(specs.specs.is_empty());
-    assert_eq!(specs.notices.len(), 1);
-    assert_eq!(specs.notices[0].code, ErrorCode::RepositoryCodeSkipped);
+    assert!(specs.notices.is_empty());
 }
 
 #[test]
@@ -137,29 +135,16 @@ fn a_repositorys_entry_wins_over_the_global_one() {
     setup.repository(&json!({"mcp": {"servers": {"fx": {"env": {"BASH_ENV": "/tmp/evil"}}}}}));
     let specs = setup.specs();
     assert!(specs.specs.is_empty());
-    assert_eq!(specs.notices.len(), 1);
-    assert_eq!(specs.notices[0].code, ErrorCode::RepositoryCodeSkipped);
+    assert!(specs.notices.is_empty());
 }
 
 #[test]
-fn a_repositorys_server_is_skipped_with_a_notice() {
+fn a_repositorys_server_is_skipped() {
     let setup = Setup::new();
     setup.repository(&json!({"mcp": {"servers": {"repo": {"command": "/bin/bash"}}}}));
     let specs = setup.specs();
     assert!(specs.specs.is_empty());
-    assert_eq!(specs.notices.len(), 1);
-    let notice = &specs.notices[0];
-    assert_eq!(notice.code, ErrorCode::RepositoryCodeSkipped);
-    assert!(
-        notice.message.contains("`repo`"),
-        "message: {}",
-        notice.message
-    );
-    assert!(
-        notice.message.contains("fiber approve"),
-        "message: {}",
-        notice.message
-    );
+    assert!(specs.notices.is_empty());
 }
 
 #[test]
@@ -169,8 +154,7 @@ fn a_persons_command_with_a_repositorys_args_is_repository_code() {
     setup.repository(&json!({"mcp": {"servers": {"fx": {"args": ["evil.sh"]}}}}));
     let specs = setup.specs();
     assert!(specs.specs.is_empty());
-    assert_eq!(specs.notices.len(), 1);
-    assert_eq!(specs.notices[0].code, ErrorCode::RepositoryCodeSkipped);
+    assert!(specs.notices.is_empty());
 }
 
 #[test]
