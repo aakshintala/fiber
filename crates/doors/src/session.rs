@@ -62,6 +62,10 @@ pub(crate) struct Gate {
     /// The session's hooks, which receive the loop's inbox so an extension's
     /// program run can be logged as `extension_exec`.
     hooks: Mutex<Option<Arc<dyn contract::hook::Hooks>>>,
+    /// The project's `history.jsonl`, which an accepted socket `prompt` is
+    /// appended to. Set by [`Session::serve`] alone, so `fiber ask` and a
+    /// bare [`Session::run`] append nothing.
+    history: Mutex<Option<PathBuf>>,
     /// Driver shells running now, and whether shutdown has begun, which
     /// cancels a new one as it registers. Both sit under this lock, so a
     /// shell that registers after `close` cannot miss the snapshot.
@@ -180,13 +184,16 @@ impl Session {
 
     /// Runs the internal session command: queues `prompt` when one was
     /// supplied and serves clients until idle exit or `close`. With no
-    /// prompt it delivers nothing until a client sends one.
+    /// prompt it delivers nothing until a client sends one. Each `prompt` a
+    /// client sends that the loop accepts is appended to the project's
+    /// prompt history; `prompt` itself is not, as the hub never passes one.
     pub fn serve(
         &self,
         prompt: Option<String>,
         cancel: Arc<dyn Fn() -> bool + Send + Sync>,
         run: impl FnOnce(Receiver<Delivery>) -> Result<(), Failure>,
     ) -> Result<(), Failure> {
+        *lock(&self.gate.history) = crate::prompt_history::path(&self.dir);
         let first = prompt.map(|prompt| Delivery::Prompt(prompt_message(prompt), ignore()));
         self.run(first.into_iter().collect(), cancel, run)
     }
@@ -389,6 +396,10 @@ impl Gate {
         cancel_each(&running);
     }
 
+    pub(crate) fn history(&self) -> Option<PathBuf> {
+        lock(&self.history).clone()
+    }
+
     pub(crate) fn jobs(&self) -> Option<Arc<dyn contract::jobs::Jobs>> {
         lock(&self.jobs).clone()
     }
@@ -570,6 +581,7 @@ fn open_in(
         driver_shell: Mutex::new(None),
         jobs: Mutex::new(None),
         hooks: Mutex::new(None),
+        history: Mutex::new(None),
         shells: Mutex::new(RunningShells {
             stopped: false,
             running: Vec::new(),
