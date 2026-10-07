@@ -830,9 +830,12 @@ The rest of the list is the session's answer to the `commands` driver command
 and extension commands, each with the tag the answer gives. The terminal sends
 `commands` when it attaches to a session and again after each `reloaded`, and
 fills the list from the answer to the latest one it sent; until that answer
-arrives, the list holds the commands above only. A row named like a command
-above is left out. An extension's commands run with the `command` driver
-command (`docs/extensions.md`, "Commands and screens").
+arrives, the list holds the commands above only. A skill or prompt template
+named like a command above is left out. An extension command whose manifest
+names that command in `replaces` takes its row instead, and runs in its place
+(`docs/extensions.md`, "What a package holds"). An extension's commands run
+with the `command` driver command (`docs/extensions.md`, "Commands and
+screens").
 
 ### Logging in
 
