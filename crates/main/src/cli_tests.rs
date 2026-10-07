@@ -166,13 +166,13 @@ fn the_menu_and_approve_help_say_what_approve_does() {
     let help = super::render_help(&["approve"]).unwrap();
     assert!(help.contains("--yes"), "{help}");
     assert!(help.contains("without asking"), "{help}");
-    assert!(
-        menu().contains(
-            "  approve [--yes]                   Show what this repository ships and approve it\n"
-        ),
-        "{}",
-        menu()
-    );
+    let menu = menu();
+    let itself = menu
+        .split("\n\n")
+        .find(|group| group.starts_with("Fiber itself:"))
+        .unwrap();
+    let line = "  approve [--yes]                           Show what this repository ships and approve it";
+    assert!(itself.lines().any(|l| l == line), "{line}\n{itself}");
 }
 
 #[test]
