@@ -1614,6 +1614,9 @@ fn resume_interleaving_holds_arrival_order() {
 
     // A `model(n)` held aside before the finishing turn starts.
     inbox_tx.send(model("fake/n", None)).unwrap();
+    // The watcher exists before the turn thread starts: it only sees events
+    // appended after it is created, and the thread re-raises the request.
+    let mut watcher = log.watch();
     // The finishing turn runs on its own thread; a live `model(p)` arrives
     // during its approval wait and holds behind `n`.
     let (done, finished) = mpsc::channel();
@@ -1622,7 +1625,6 @@ fn resume_interleaving_holds_arrival_order() {
         done.send((looped, outcome)).unwrap();
     });
     // Wait for the re-raised request, then send the live switch and the reply.
-    let mut watcher = log.watch();
     let request_id = loop {
         let line = watcher
             .recv_timeout(DEADLINE)
