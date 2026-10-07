@@ -94,22 +94,30 @@ const ALT: u32 = 2;
 const CTRL: u32 = 4;
 /// Super, or ⌘.
 const SUPER: u32 = 8;
-/// Caps Lock and Num Lock, which change no binding.
-const LOCKS: u32 = 64 | 128;
+/// Caps Lock (64) and Num Lock (128), which change no binding.
+const LOCKS: u32 = 0b1100_0000;
 
 /// Parses terminal bytes. An incomplete CSI or UTF-8 sequence at the end of
-/// a read is held for the next read; a lone `0x1b` ending a read is Esc. A
-/// bracketed paste is held until its end marker, however many reads it
-/// takes, and yields no key.
+/// a read is held for the next read; a lone `0x1b` ending a read is Esc,
+/// until kitty's flags are pushed. A bracketed paste is held until its end
+/// marker, however many reads it takes, and yields no key.
 #[derive(Debug, Default)]
 pub(crate) struct Parser {
     /// Unprocessed tail from the previous read.
     pending: Vec<u8>,
     /// The bytes of a bracketed paste whose end has not arrived.
     paste: Option<Vec<u8>>,
+    /// Whether kitty's flags are pushed: Esc is then `CSI 27u`, so a lone
+    /// `0x1b` ending a read always starts a sequence and is held.
+    kitty: bool,
 }
 
 impl Parser {
+    /// Records that kitty's flags are pushed.
+    pub(crate) fn set_kitty(&mut self) {
+        self.kitty = true;
+    }
+
     /// Feeds one read's bytes, returning its events in order.
     pub(crate) fn feed(&mut self, bytes: &[u8]) -> Vec<Event> {
         let mut buf = std::mem::take(&mut self.pending);
@@ -141,6 +149,15 @@ impl Parser {
                 self.paste = Some(Vec::new());
                 rest = after;
                 continue;
+            }
+            // debt: without kitty's flags a lone ESC ending a read is Esc, so
+            // a paste start marker split right after its ESC reads as Esc and
+            // the paste as keys. Ceiling: only a read boundary landing exactly
+            // after that ESC. Upgrade trigger: a report of a paste typed as
+            // keys on a terminal without kitty's keyboard protocol; the fix
+            // is an Esc timeout.
+            if self.kitty && rest == [0x1b] {
+                break;
             }
             let Some((events, used)) = step(rest) else {
                 break;
@@ -304,6 +321,7 @@ fn kitty_key(params: &[u8]) -> Option<Event> {
         (127, 0) => Event::Key(Key::Backspace),
         (127, ALT) => Event::Edit(Edit::DeleteWord),
         (99, CTRL) => Event::Key(Key::CtrlC),
+        (111, CTRL) => Event::Key(Key::CtrlO),
         (106, CTRL) => Event::Edit(Edit::CtrlJ),
         (97, ALT) => Event::Key(Key::AltA),
         (98, ALT) => Event::Edit(Edit::WordLeft),

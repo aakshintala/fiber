@@ -361,8 +361,10 @@ impl<B: Backend> Loop<B> {
             return;
         }
         self.app.set_kitty();
-        if let Some(mut tty) = self.tty.as_ref() {
-            io::Write::write_all(&mut tty, term::KITTY_PUSH).unwrap_or(());
+        if let Some(mut tty) = self.tty.as_ref()
+            && io::Write::write_all(&mut tty, term::KITTY_PUSH).is_ok()
+        {
+            self.parser.set_kitty();
         }
     }
 

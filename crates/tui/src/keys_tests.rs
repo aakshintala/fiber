@@ -259,6 +259,7 @@ fn kitty_keys_read_as_their_legacy_meaning() {
     assert_eq!(feed_all(&[b"\x1b[13;2u"]), edit(Edit::ShiftEnter));
     assert_eq!(feed_all(&[b"\x1b[27u"]), vec![Event::Key(Key::Esc)]);
     assert_eq!(feed_all(&[b"\x1b[99;5u"]), vec![Event::Key(Key::CtrlC)]);
+    assert_eq!(feed_all(&[b"\x1b[111;5u"]), vec![Event::Key(Key::CtrlO)]);
     assert_eq!(feed_all(&[b"\x1b[106;5u"]), edit(Edit::CtrlJ));
     assert_eq!(feed_all(&[b"\x1b[127u"]), vec![Event::Key(Key::Backspace)]);
     assert_eq!(feed_all(&[b"\x1b[127;3u"]), edit(Edit::DeleteWord));
@@ -285,6 +286,8 @@ fn kitty_keys_with_other_modifiers_or_codes_drop_silently() {
         b"\x1b[99;3u",
         b"\x1b[99;7u",
         b"\x1b[99;13u",
+        b"\x1b[111u",
+        b"\x1b[111;3u",
         b"\x1b[106;3u",
         b"\x1b[127;5u",
         b"\x1b[127;2u",
@@ -391,4 +394,21 @@ fn a_paste_yields_no_keys_and_drops_control_characters() {
 fn an_empty_paste_is_nothing() {
     assert!(feed_all(&[b"\x1b[200~\x1b[201~"]).is_empty());
     assert!(feed_all(&[b"\x1b[200~\x01\x1b[201~"]).is_empty());
+}
+
+#[test]
+fn with_kitty_pushed_a_lone_esc_ending_a_read_is_held() {
+    // Esc is `CSI 27u` then, so the ESC starts a sequence: here a paste
+    // start marker split right after it.
+    let mut parser = Parser::default();
+    parser.set_kitty();
+    assert_eq!(parser.feed(b"a\x1b"), vec![Event::Key(Key::Char('a'))]);
+    assert_eq!(
+        parser.feed(b"[200~x\x1b[201~"),
+        edit(Edit::Paste("x".to_owned()))
+    );
+    assert!(parser.feed(b"\x1b").is_empty());
+    assert_eq!(parser.feed(b"[27u"), vec![Event::Key(Key::Esc)]);
+    // An ESC with bytes after it in the same read is not held.
+    assert_eq!(parser.feed(b"\x1ba"), vec![Event::Key(Key::AltA)]);
 }

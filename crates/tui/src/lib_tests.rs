@@ -2,6 +2,7 @@
 
 use super::{Input, Loop, Screen};
 use crate::app::App;
+use crate::keys::{Event, Key};
 use crate::link::Line;
 use ratatui::backend::{Backend, CrosstermBackend, TestBackend};
 use std::fs::File;
@@ -247,6 +248,8 @@ fn a_kitty_reply_is_recorded() {
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
     feed(&mut lp, vec![Input::Bytes(b"\x1b[?5u".to_vec())]);
     assert!(lp.app.kitty());
+    // No tty took the push, so a lone ESC ending a read is still Esc.
+    assert_eq!(lp.parser.feed(b"\x1b"), vec![Event::Key(Key::Esc)]);
 }
 
 #[test]
@@ -274,6 +277,9 @@ fn the_first_kitty_reply_pushes_the_flags_once() {
         b"\x1b[>1uEND"
     );
     assert_eq!(crate::term::KITTY_PUSH, b"\x1b[>1u");
+    // Once pushed, Esc is `CSI 27u`: a lone ESC ending a read is held.
+    assert!(lp.parser.feed(b"\x1b").is_empty());
+    assert_eq!(lp.parser.feed(b"[27u"), vec![Event::Key(Key::Esc)]);
 }
 
 #[test]
