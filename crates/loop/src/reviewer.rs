@@ -99,9 +99,7 @@ pub(crate) fn read_first(text: &str) -> Result<First, String> {
     match clean(text).as_str() {
         "allow" => Ok(First::Allow),
         "check" => Ok(First::Check),
-        _ => Err(format!(
-            "expected one word, `check` or `allow`, but got {text:?}"
-        )),
+        _ => Err("expected one word, `check` or `allow`".to_owned()),
     }
 }
 
@@ -129,9 +127,7 @@ pub(crate) fn read_second(text: &str) -> Result<Second, String> {
         }),
         "block" if !reason.is_empty() => Ok(Second::Block { reason }),
         "block" => Err("a `block` needs a reason in one sentence, but got none".to_owned()),
-        _ => Err(format!(
-            "expected `allow` or `block` with a reason, but got {text:?}"
-        )),
+        _ => Err("expected `allow` or `block` with a reason".to_owned()),
     }
 }
 
@@ -265,6 +261,7 @@ impl Loop {
     ) -> Result<StageReply<T>, Error> {
         let mut note = None;
         let mut why = String::new();
+        let mut last = String::new();
         for _ in 0..2 {
             if self.review_over_budget() {
                 return Ok(StageReply::Budget);
@@ -285,6 +282,7 @@ impl Loop {
                         Ok(reading) => return Ok(StageReply::Read(reading)),
                         Err(unread) => {
                             why = unread;
+                            last = text;
                             note = Some(format!(
                                 "Your reply could not be read: {why}. Reply in the form the \
                                  instructions give."
@@ -296,7 +294,11 @@ impl Loop {
                 Err(CallError::Cancelled) => return Ok(StageReply::Cancelled),
             }
         }
-        Ok(StageReply::Fail(unreadable(&why)))
+        // The escalation carries the last reply, quoted: a person's
+        // escalation may show reviewer text that no reviewer request may.
+        Ok(StageReply::Fail(unreadable(&format!(
+            "{why}, but got {last:?}"
+        ))))
     }
 
     /// A reviewer `allow`: the call runs.
