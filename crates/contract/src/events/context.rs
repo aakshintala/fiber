@@ -494,3 +494,22 @@ pub struct ContextNudged {
     /// The context size at which an automatic handoff runs.
     pub trigger_at: u64,
 }
+
+/// `reviewer_kept`: the person's messages the reviewer keeps across a handoff.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewerKept {
+    /// The kept messages, oldest first, after the window cap.
+    pub kept: Vec<KeptMessage>,
+    /// Only ever true: the selection request failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failed: Option<crate::shapes::True>,
+}
+
+/// A person's message, by the line that holds it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeptMessage {
+    /// The `seq` of the `turn_started` or `steering_applied` line holding it.
+    pub seq: crate::Seq,
+    /// The message's index in that line's input, counting every item type.
+    pub item: u64,
+}

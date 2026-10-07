@@ -1001,6 +1001,17 @@ text ("Writing"), except a note a hook wrote, which appears on no earlier line.
 `context_nudged` is durable because the model saw it; the nudge's text is
 generated from its payload.
 
+#### `reviewer_kept`
+
+Durable. The person's messages the reviewer keeps across a handoff.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `kept` | array | yes | the kept messages, oldest first, after the window cap: `{seq, item}` naming the `turn_started` or `steering_applied` line holding each message |
+| `failed` | boolean | no | `true` when the selection request failed, so every earlier person message was kept |
+
+Written after a completed handoff when the session has a reviewer (`docs/permissions.md`, "At a handoff").
+
 A handoff that fails or is cancelled leaves the model's context as it was. A
 cancelled handoff means the turn was cancelled, by a person or a shutdown, and
 the turn completes `interrupted`.
