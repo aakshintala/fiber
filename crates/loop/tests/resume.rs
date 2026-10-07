@@ -1073,8 +1073,7 @@ fn reviewer_denies_from_before_the_resume_count_toward_the_session_limit() {
     assert_eq!(completed.payload["error"]["code"], "blocked");
 }
 
-#[test]
-fn non_reviewer_denies_from_before_the_resume_do_not_count() {
+fn resume_after_prior_denials(decided_by: DecidedBy) -> (History, contract::events::TurnOutcome) {
     let mut history = History::new(vec![
         support::tool_call_reply("Go.", &["exec"]),
         Scripted::text("After."),
@@ -1087,14 +1086,12 @@ fn non_reviewer_denies_from_before_the_resume_do_not_count() {
     );
     tool.subject = Some("run tests".into());
     let tool = Arc::new(tool);
-    // Twenty denials with no `reviewer` object: a reviewer failure, not a
-    // model's block.
     for _ in 0..20 {
         history.write(
             Event::PermissionResolved(PermissionResolved {
                 request_id: None,
                 decision: Decision::Deny,
-                decided_by: DecidedBy::Reviewer,
+                decided_by,
                 reason: Some("no".into()),
                 feedback: None,
                 grant: None,
@@ -1146,6 +1143,46 @@ fn non_reviewer_denies_from_before_the_resume_do_not_count() {
     );
     history.inbox_tx = tx;
     let outcome = history.run(looped, "two");
+    (history, outcome)
+}
+
+#[test]
+fn no_reviewer_denies_from_before_the_resume_count_toward_the_session_limit() {
+    let (history, outcome) = resume_after_prior_denials(DecidedBy::NoReviewer);
+
+    // The 21st session block escalates with no person to answer: the turn
+    // fails `blocked`.
+    assert_eq!(outcome, contract::events::TurnOutcome::Failed);
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "usage_recorded",
+            "usage_recorded",
+            "permission_resolved",
+            "tool_call_completed",
+            "turn_completed",
+        ]
+    );
+    let completed = history
+        .new_lines()
+        .into_iter()
+        .find(|l| l.kind == "turn_completed")
+        .unwrap();
+    assert_eq!(completed.payload["error"]["code"], "blocked");
+}
+
+#[test]
+fn non_reviewer_denies_from_before_the_resume_do_not_count() {
+    let (history, outcome) = resume_after_prior_denials(DecidedBy::Budget);
 
     // The first counted block denies the call; the turn completes.
     assert_eq!(outcome, contract::events::TurnOutcome::Completed);

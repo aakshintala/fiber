@@ -223,7 +223,7 @@ impl Loop {
             Err(failure) => {
                 let failure = failure.clone();
                 self.no_model_notice(turn, &failure)?;
-                return self.review_failure(&under, failure);
+                return self.review_failure(&under, failure, None);
             }
         };
         match self.ask_stage(
@@ -249,11 +249,23 @@ impl Loop {
                 StageReply::Read(Second::Block { reason }) => {
                     self.second_block(&under, &endpoint, reason)
                 }
-                StageReply::Fail(failure) => self.review_failure(&under, failure),
+                StageReply::Fail(failure) => {
+                    let reviewer = Some(ReviewerRef {
+                        model: endpoint.reference.clone(),
+                        stage: 2,
+                    });
+                    self.review_failure(&under, failure, reviewer)
+                }
                 StageReply::Cancelled => self.review_cancelled(under.id, under.turn),
                 StageReply::Budget => self.budget_deny(under.id, under.turn),
             },
-            StageReply::Fail(failure) => self.review_failure(&under, failure),
+            StageReply::Fail(failure) => {
+                let reviewer = Some(ReviewerRef {
+                    model: endpoint.reference.clone(),
+                    stage: 1,
+                });
+                self.review_failure(&under, failure, reviewer)
+            }
             StageReply::Cancelled => self.review_cancelled(id, turn),
             StageReply::Budget => self.budget_deny(id, turn),
         }
@@ -371,17 +383,20 @@ impl Loop {
         self.escalate(under, cause, reason, reviewer)
     }
 
-    /// A reviewer failure: counted and escalated. Never an allow.
+    /// A reviewer failure: counted and escalated. Never an allow. `reviewer`
+    /// names the model and the stage that failed; `None` when the reviewer
+    /// could not be set up, and the denial is then `no_reviewer`.
     fn review_failure(
         &mut self,
         under: &UnderReview<'_>,
         failure: Failure,
+        reviewer: Option<ReviewerRef>,
     ) -> Result<Decided, Error> {
         self.consecutive += 1;
         self.session_blocks += 1;
         let reason = failure.message.clone();
         let escalation = Escalation::ReviewerFailed { error: failure };
-        self.escalate(under, escalation, reason, None)
+        self.escalate(under, escalation, reason, reviewer)
     }
 
     /// Hands the call to a person, or denies it where no answer is possible.
@@ -551,9 +566,11 @@ impl Loop {
         Ok(Err(self.cancelled_before_ran()))
     }
 
-    /// Denies the call as the reviewer, with no `permission_requested`: no
-    /// answer is possible. Past the session limit, the turn ends `failed`
-    /// with code `blocked` once the step's calls complete.
+    /// Denies the call with no `permission_requested`: no answer is
+    /// possible. With a reviewer it is the reviewer's block; with none, none
+    /// could be set up, and the denial is `no_reviewer`. Past the session
+    /// limit, the turn ends `failed` with code `blocked` once the step's
+    /// calls complete.
     fn reviewer_deny(
         &mut self,
         id: &ActionId,
@@ -562,11 +579,16 @@ impl Loop {
         reason: String,
         reviewer: Option<ReviewerRef>,
     ) -> Result<Box<ToolCallCompleted>, Error> {
+        let decided_by = if reviewer.is_some() {
+            DecidedBy::Reviewer
+        } else {
+            DecidedBy::NoReviewer
+        };
         self.append(
             &Event::PermissionResolved(resolved(
                 request_id,
                 Decision::Deny,
-                DecidedBy::Reviewer,
+                decided_by,
                 Some(reason.clone()),
                 reviewer,
             )),
@@ -600,8 +622,8 @@ impl Loop {
         }
     }
 
-    /// Denies the call without counting or escalating: the budget and the
-    /// cancelled review go through here.
+    /// Denies the call without counting or escalating: the spending-budget
+    /// denial goes through here.
     fn deny_quietly(
         &mut self,
         id: &ActionId,
@@ -638,7 +660,7 @@ impl Loop {
         self.deny_quietly(
             id,
             turn,
-            DecidedBy::Reviewer,
+            DecidedBy::Budget,
             "The session reached its spending budget.",
             "budget_exceeded",
         )

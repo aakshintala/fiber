@@ -471,6 +471,12 @@ pub enum DecidedBy {
     SessionGrant,
     /// The reviewer.
     Reviewer,
+    /// The spending budget: a call that needed review once the spend
+    /// reached `budget.usd`.
+    Budget,
+    /// No reviewer could be set up, such as with no reviewer model, and no
+    /// person could answer the escalation.
+    NoReviewer,
     /// The turn was cancelled while the request was pending.
     Cancel,
 }
@@ -517,7 +523,8 @@ pub struct PermissionResolved {
     /// file.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rule: Option<Grant>,
-    /// When `decided_by` is `reviewer`.
+    /// Present whenever `decided_by` is `reviewer`: the stage that decided,
+    /// or the stage that failed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reviewer: Option<ReviewerRef>,
 }

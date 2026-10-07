@@ -432,7 +432,8 @@ added from an approval is written to the project's rules file, and its
 
 An escalation where no answer is possible writes no `permission_requested`.
 It is the reviewer's block, recorded as a `permission_resolved` with
-`decided_by: reviewer`. A standing ask where no answer is possible is
+`decided_by: reviewer`, or with `decided_by: no_reviewer` when no reviewer
+could be set up ("How it runs"). A standing ask where no answer is possible is
 denied at once, the same way: no `permission_requested`, and a
 `permission_resolved` with `decision: deny` and `decided_by: standing_rule`.
 

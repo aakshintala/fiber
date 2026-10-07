@@ -1201,7 +1201,10 @@ mod window {
                 prefix: "cargo".into(),
             }]
         );
-        assert_eq!(folded.session_blocks, 1);
+        // Both reviewer-decided denies count, as they did live: the one
+        // with no `reviewer` object is a reviewer failure from before the
+        // log named its stage, and failures always counted.
+        assert_eq!(folded.session_blocks, 2);
         assert_eq!(folded.ledger.usage().tokens.input, 20);
         assert_eq!(folded.model.as_deref(), Some("fake/second"));
         // Only the job never ended is orphaned.
