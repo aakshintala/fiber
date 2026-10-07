@@ -7,6 +7,7 @@ mod table;
 
 use std::cell::RefCell;
 use std::ops::Range;
+use std::rc::Rc;
 
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 use ratatui::style::{Modifier, Style};
@@ -51,7 +52,7 @@ impl Rendered {
 pub(crate) struct Reply {
     text: String,
     id: usize,
-    cache: RefCell<Option<(u16, Rendered)>>,
+    cache: RefCell<Option<(u16, Rc<Rendered>)>>,
 }
 
 impl Reply {
@@ -83,25 +84,23 @@ impl Reply {
 
     /// The text rendered at `width`, from the cache when it was rendered at
     /// that width.
-    pub(crate) fn rendered(&self, width: u16) -> Rendered {
-        let Ok(mut cached) = self.cache.try_borrow_mut() else {
-            return render(&self.text, width);
-        };
-        match &*cached {
-            Some((at, rendered)) if *at == width => rendered.clone(),
-            Some(_) | None => {
-                let rendered = render(&self.text, width);
-                *cached = Some((width, rendered.clone()));
-                rendered
-            }
+    pub(crate) fn rendered(&self, width: u16) -> Rc<Rendered> {
+        let mut cached = self.cache.borrow_mut();
+        if let Some((at, rendered)) = &*cached
+            && *at == width
+        {
+            return Rc::clone(rendered);
         }
+        let rendered = Rc::new(render(&self.text, width));
+        *cached = Some((width, Rc::clone(&rendered)));
+        rendered
     }
 
     /// The rendered lines at `width`, each code block's header carrying
     /// its copy target.
     pub(crate) fn rows(&self, width: u16, out: &mut Vec<Row>) {
         let rendered = self.rendered(width);
-        for (at, line) in rendered.lines.into_iter().enumerate() {
+        for (at, line) in rendered.lines.iter().cloned().enumerate() {
             let block = rendered.targets.iter().position(|target| target.line == at);
             let target = block.map(|block| Target::Copy {
                 reply: self.id,

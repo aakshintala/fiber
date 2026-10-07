@@ -417,3 +417,9 @@ fn a_tab_in_prose_is_a_space_and_a_quote_ends() {
     assert_eq!(texts("a\tb", 40), vec!["a b"]);
     assert_eq!(texts("> b\n\nc", 40), vec!["│ b", "", "c"]);
 }
+
+#[test]
+fn an_item_that_opens_with_a_code_block_shows_its_marker_first() {
+    let lines = texts("- ```\n  x\n  ```\n- b", 12);
+    assert_eq!(lines, vec!["• ", "        copy", "1 │ x       ", "• b"]);
+}
