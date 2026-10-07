@@ -338,7 +338,7 @@ impl App {
             return;
         }
         self.phase = Phase::Starting;
-        self.turns.clear();
+        self.pages.clear();
         self.overlays.slash_rows = slash::rows(&[]);
         self.follow();
     }

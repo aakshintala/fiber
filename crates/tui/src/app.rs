@@ -4,21 +4,19 @@
 
 use std::collections::HashMap;
 use std::hash::{BuildHasher, RandomState};
+use std::ops::RangeInclusive;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use contract::events::{
-    CommandAccepted, CommandRejected, InputItem, SteeringApplied, TurnCompleted, TurnStarted,
-    UsageRecorded,
-};
-use contract::shapes::ContentPart;
-use contract::{Envelope, HubLine, SessionId};
+use contract::events::{CommandAccepted, CommandRejected};
+use contract::{ActionId, Envelope, HubLine, Seq, SessionId};
 use serde_json::{Map, Value, json};
 
 use crate::approvals::{self, Panel, PanelKey, Queue};
 use crate::keys::Key;
 use crate::link::Line;
-use crate::turn::{Fold, Row, Turn};
+use crate::turn::Row;
+use crate::window::{Pages, Shown};
 
 #[path = "app_commands.rs"]
 mod commands;
@@ -102,16 +100,17 @@ enum Link {
     Down,
 }
 
-/// What clicking a line, or Enter on it, opens. Ids are unique within the
-/// app, assigned in fold order.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// What clicking a line, or Enter on it, opens, keyed by identity so a
+/// page folded again names it the same: a call and a thought by their
+/// action, a group by its first call's or thought's.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum Target {
     /// A tool group's ledger.
-    Group(usize),
+    Group(ActionId),
     /// A call's diff, output or error.
-    Call(usize),
+    Call(ActionId),
     /// A thinking block's text.
-    Thought(usize),
+    Thought(ActionId),
 }
 
 /// The terminal's state.
@@ -127,8 +126,8 @@ pub(crate) struct App {
     pending: HashMap<String, (Kind, String)>,
     /// The one notice line, the latest.
     notice: Option<String>,
-    turns: Vec<Turn>,
-    fold: Fold,
+    /// The conversation, paged (`docs/tui.md`, "History and paging").
+    pages: Pages,
     /// The top wrapped row while scrolled up; `None` follows new output.
     top: Option<usize>,
     /// New output arrived while scrolled up.
@@ -156,8 +155,7 @@ impl App {
             held: Vec::new(),
             pending: HashMap::new(),
             notice: None,
-            turns: Vec::new(),
-            fold: Fold::default(),
+            pages: Pages::new(80),
             top: None,
             has_new: false,
             width: 80,
@@ -285,10 +283,13 @@ impl App {
         }
     }
 
-    /// Sets the screen size for wrapping and paging.
+    /// Sets the screen size for wrapping and paging; a new width re-counts
+    /// every page.
     pub(crate) fn set_size(&mut self, width: u16, height: u16) {
         self.width = width.max(1);
         self.height = height.max(1);
+        self.pages.set_width(self.width);
+        self.settle();
     }
 
     /// Records kitty's keyboard flags reply. No binding needs it yet.
@@ -356,7 +357,8 @@ impl App {
         self.queue.badge()
     }
 
-    /// The conversation's lines, before wrapping.
+    /// The resident conversation's lines, before wrapping.
+    #[cfg(test)]
     pub(crate) fn lines(&self) -> Vec<ratatui::text::Line<'static>> {
         self.rows().into_iter().map(|(line, _)| line).collect()
     }
@@ -381,37 +383,81 @@ impl App {
         expect(dead_code, reason = "#682 clicks and #683 focus call it")
     )]
     pub(crate) fn open(&mut self, target: Target) {
-        if self.turns.iter_mut().any(|turn| turn.toggle(target)) {
+        if self.pages.open(&target) {
             self.changed();
+            self.settle();
         }
     }
 
+    /// The resident pages' lines.
     fn rows(&self) -> Vec<Row> {
-        let mut out = Vec::new();
-        for turn in &self.turns {
-            turn.rows(self.width, &mut out);
-        }
-        out
+        self.pages.rows()
+    }
+
+    /// The top row shown and every row: what a scroll bar draws.
+    pub(crate) fn scroll(&self) -> (usize, usize) {
+        (self.view_top(), self.pages.index().total())
+    }
+
+    /// The lines drawing rows `[top, top + height)`.
+    pub(crate) fn shown(&self, top: usize, height: usize) -> Shown {
+        self.pages.shown(top, height)
+    }
+
+    /// The seq ranges of pages the next frame needs and does not hold.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the loop loads pages from the next commit")
+    )]
+    pub(crate) fn needs(&self) -> Vec<RangeInclusive<Seq>> {
+        self.pages
+            .needs(self.view_top(), self.conversation_height())
+    }
+
+    /// Folds a fetched range's durable lines into their pages.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the loop loads pages from the next commit")
+    )]
+    pub(crate) fn load(&mut self, lines: Vec<Envelope>) {
+        self.pages.load(&lines);
+        self.settle();
+    }
+
+    /// Loading `range` failed: its rows stay blank and the notice says why.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the loop loads pages from the next commit")
+    )]
+    pub(crate) fn load_failed(&mut self, range: &RangeInclusive<Seq>, message: &str) {
+        self.pages.fail(*range.start());
+        self.notice = Some(format!("Could not load history: {message}"));
+    }
+
+    /// Scrolls so `row` is the top row, as dragging the scroll bar does.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the loop loads pages from the next commit")
+    )]
+    pub(crate) fn jump(&mut self, row: usize) {
+        self.top = Some(row);
+        self.settle();
+    }
+
+    /// The pages.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the loop loads pages from the next commit")
+    )]
+    pub(crate) fn pages(&self) -> &Pages {
+        &self.pages
     }
 
     /// `toggle_ledgers`: closes every ledger when all are open, else opens
     /// them all. Groups made later start the same way.
     fn toggle_ledgers(&mut self) {
-        let mut ledgers: Vec<_> = self
-            .turns
-            .iter_mut()
-            .flat_map(Turn::groups_mut)
-            .filter(|group| group.has_calls())
-            .collect();
-        let open = if ledgers.is_empty() {
-            !self.fold.ledgers
-        } else {
-            !ledgers.iter().all(|group| group.open)
-        };
-        for group in &mut ledgers {
-            group.open = open;
-        }
-        self.fold.ledgers = open;
+        self.pages.toggle_ledgers();
+        self.settle();
     }
 
     /// Ctrl+C clears, then quits: a second press before [`QUIT_WINDOW`]
@@ -619,15 +665,12 @@ impl App {
         if self.session() != Some(&envelope.session_id) {
             return;
         }
-        let action = envelope.action_id.as_ref().map(|id| id.0.as_str());
-        let ts = envelope.ts;
         // Only a line that changed a card shows the overlay.
-        let changed = match envelope.kind.as_str() {
+        match envelope.kind.as_str() {
             "command_accepted" => {
                 if let Some(accepted) = read!(envelope, CommandAccepted) {
                     self.pending.remove(&accepted.command_id.0);
                 }
-                false
             }
             "command_rejected" => {
                 if let Some(rejected) = read!(envelope, CommandRejected)
@@ -635,72 +678,22 @@ impl App {
                 {
                     self.rejected(&id.0, rejected.message);
                 }
-                false
             }
-            "opening_message" => self.opening(envelope),
-            "turn_started" => read!(envelope, TurnStarted).is_some_and(|started| {
-                self.set_busy(true);
-                let prompts = started
-                    .input
-                    .iter()
-                    .filter_map(|input| {
-                        if let InputItem::Message { content, .. } = input {
-                            Some(text_of(content))
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-                self.turns.push(Turn::new(prompts, ts));
-                true
-            }),
-            "turn_completed" => read!(envelope, TurnCompleted).is_some_and(|done| {
-                self.set_busy(false);
-                self.open_turn().is_some_and(|turn| {
-                    turn.complete(done, ts);
-                    true
-                })
-            }),
-            "usage_recorded" => read!(envelope, UsageRecorded).is_some_and(|line| {
-                // A line folds where its generation already is, so a late
-                // correction updates a closed card; else into the open turn.
-                let known = self
-                    .turns
-                    .iter()
-                    .rposition(|turn| turn.spend.holds(&line.generation_id));
-                let turn = match known {
-                    Some(at) => self.turns.get_mut(at),
-                    None => self.open_turn(),
-                };
-                turn.is_some_and(|turn| {
-                    turn.spend.record(&line);
-                    true
-                })
-            }),
-            "steering_applied" => read!(envelope, SteeringApplied).is_some_and(|applied| {
-                self.open_turn().is_some_and(|turn| {
-                    turn.steer(text_of(&applied.content));
-                    true
-                })
-            }),
-            "step_started" => {
-                if let Some(turn) = self.open_turn() {
-                    turn.step_started();
+            kind => {
+                if kind == "opening_message" {
+                    self.opening(envelope);
                 }
-                false
+                let applied = self.pages.apply(envelope);
+                if let Some(busy) = applied.busy {
+                    self.set_busy(busy);
+                }
+                if applied.changed {
+                    self.changed();
+                }
+                // New rows move the window while following.
+                self.settle();
             }
-            _ => action.is_some_and(|action| {
-                crate::turn::fold_action(&mut self.turns, &mut self.fold, envelope, action)
-            }),
-        };
-        if changed {
-            self.changed();
         }
-    }
-
-    /// The turn still running, if any.
-    fn open_turn(&mut self) -> Option<&mut Turn> {
-        self.turns.last_mut().filter(|turn| turn.is_open())
     }
 
     fn set_busy(&mut self, busy: bool) {
@@ -718,12 +711,22 @@ impl App {
 
     /// The top row when following: the last screenful.
     fn bottom_top(&self) -> usize {
-        let total: usize = self
-            .lines()
-            .into_iter()
-            .map(|line| crate::view::rows(line, self.width))
-            .sum();
+        let total = self.pages.index().total();
         total.saturating_sub(self.conversation_height())
+    }
+
+    /// The top row shown: the bottom while following, and never past it.
+    fn view_top(&self) -> usize {
+        let bottom = self.bottom_top();
+        self.top.map_or(bottom, |top| top.min(bottom))
+    }
+
+    /// Clamps the top to the bottom and drops the pages outside the window.
+    fn settle(&mut self) {
+        if self.top.is_some() {
+            self.top = Some(self.view_top());
+        }
+        self.pages.trim(self.view_top(), self.conversation_height());
     }
 
     /// PageUp moves up by the conversation height less one.
@@ -731,6 +734,7 @@ impl App {
         let step = self.conversation_height().saturating_sub(1).max(1);
         let top = self.top.unwrap_or_else(|| self.bottom_top());
         self.top = Some(top.saturating_sub(step));
+        self.settle();
     }
 
     /// PageDown moves down by the conversation height less one, and follows
@@ -745,6 +749,7 @@ impl App {
             self.follow();
         } else {
             self.top = Some(next);
+            self.settle();
         }
     }
 
@@ -752,6 +757,7 @@ impl App {
     fn follow(&mut self) {
         self.top = None;
         self.has_new = false;
+        self.settle();
     }
 }
 
@@ -759,7 +765,7 @@ impl App {
 /// and 16 hex digits. `tui` keeps its own copy because it may not depend on
 /// `doors`. `RandomState` seeds its keys from the operating system's
 /// randomness.
-fn mint() -> String {
+pub(crate) fn mint() -> String {
     format!("c_{:016x}", RandomState::new().hash_one(()))
 }
 
@@ -775,17 +781,6 @@ pub(crate) fn session_command(
         object.insert("args".to_owned(), args);
     }
     line
-}
-
-/// The text parts of a message, joined.
-fn text_of(parts: &[ContentPart]) -> String {
-    parts
-        .iter()
-        .filter_map(|part| match part {
-            ContentPart::Text { text } => Some(text.as_str()),
-            ContentPart::Image { .. } | ContentPart::Unknown => None,
-        })
-        .collect()
 }
 
 fn hub_string(payload: &Map<String, Value>, key: &str) -> Option<String> {

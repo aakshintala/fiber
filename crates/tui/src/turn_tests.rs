@@ -148,12 +148,17 @@ fn bold(line: &ratatui::text::Line<'_>) -> bool {
     line.style.add_modifier.contains(Modifier::BOLD)
 }
 
+/// An action no line names.
+fn none() -> contract::ActionId {
+    contract::ActionId("a_none".to_owned())
+}
+
 /// The first group target.
 fn group(app: &App) -> Target {
     app.targets()
         .into_iter()
         .find_map(|(_, target)| matches!(target, Target::Group(_)).then_some(target))
-        .unwrap_or(Target::Group(usize::MAX))
+        .unwrap_or(Target::Group(none()))
 }
 
 /// The target of the line that reads `text`.
@@ -164,7 +169,7 @@ fn target(app: &App, text: &str) -> Target {
         .find_map(|(at, target)| {
             (lines.get(at).map(String::as_str) == Some(text)).then_some(target)
         })
-        .unwrap_or(Target::Group(usize::MAX))
+        .unwrap_or(Target::Group(none()))
 }
 
 fn ctrl_o(app: &mut App) {
@@ -321,7 +326,7 @@ fn a_thinking_only_group_is_one_line_per_block() {
     assert!(dim(&styled(&app, "+ Thought: short")));
     // Opening a thought shows its text under it, dim.
     let thought = target(&app, "+ Thought: Plan the fix · 22s");
-    app.open(thought);
+    app.open(thought.clone());
     assert_eq!(
         texts(&app).get(2..4).map(<[String]>::to_vec),
         Some(vec!["**Plan the fix**".to_owned(), "first a".to_owned()])
@@ -725,7 +730,7 @@ fn opening_a_call_shows_its_error_reason_diff_or_output() {
         ("    read a.rs", vec!["    ok"]),
     ] {
         let call = target(&app, row);
-        app.open(call);
+        app.open(call.clone());
         let lines = texts(&app);
         let at = lines
             .iter()
@@ -755,23 +760,18 @@ fn targets_name_the_lines_they_open() {
     assert_eq!(app.targets().len(), 1);
     app.open(group(&app));
     let targets = app.targets();
-    // The group line, one thought and six calls; ids are unique.
+    // The group line, one thought and six calls; targets are unique.
     assert_eq!(targets.len(), 8);
-    let mut ids: Vec<usize> = targets
-        .iter()
-        .map(|(_, target)| match target {
-            Target::Group(id) | Target::Call(id) | Target::Thought(id) => *id,
-        })
-        .collect();
+    let mut ids: Vec<Target> = targets.iter().map(|(_, target)| target.clone()).collect();
     ids.sort_unstable();
     ids.dedup();
     assert_eq!(ids.len(), 8);
     assert_eq!(targets.first().map(|(at, _)| *at), Some(1));
     // Opening something that is not there changes nothing.
     let before = texts(&app);
-    app.open(Target::Call(usize::MAX));
-    app.open(Target::Thought(usize::MAX));
-    app.open(Target::Group(usize::MAX));
+    app.open(Target::Call(none()));
+    app.open(Target::Thought(none()));
+    app.open(Target::Group(none()));
     assert_eq!(texts(&app), before);
 }
 

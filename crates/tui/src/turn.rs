@@ -9,11 +9,11 @@
 
 use std::collections::HashMap;
 
-use contract::Envelope;
 use contract::events::{
     CallStatus, FileChange, ReasoningCompleted, TextCompleted, TextDelta, ToolCallArgumentsDelta,
-    ToolCallCompleted, ToolCallRequested, TurnCompleted,
+    ToolCallCompleted, ToolCallRequested,
 };
+use contract::{ActionId, Envelope};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
 use serde_json::Value;
@@ -27,22 +27,12 @@ pub(crate) type Row = (Line<'static>, Option<Target>);
 /// What the fold keeps across turns.
 #[derive(Debug, Default)]
 pub(crate) struct Fold {
-    /// The next target id.
-    next: usize,
     /// Whether a new group starts with its ledger open: the last Ctrl+O.
     pub(crate) ledgers: bool,
 }
 
-impl Fold {
-    fn id(&mut self) -> usize {
-        let id = self.next;
-        self.next = self.next.saturating_add(1);
-        id
-    }
-}
-
 /// One item inside a card.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum Entry {
     /// One text part of a reply, updated as deltas arrive.
     Reply { action: String, text: String },
@@ -53,9 +43,10 @@ enum Entry {
 }
 
 /// Everything between two pieces of assistant text.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct Group {
-    id: usize,
+    /// Its first call's or thought's action, the key of its target.
+    key: Option<String>,
     /// Whether its ledger is open.
     pub(crate) open: bool,
     first: u64,
@@ -66,7 +57,7 @@ pub(crate) struct Group {
 }
 
 /// One step's part of a group.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Section {
     step: u64,
     thoughts: Vec<Thought>,
@@ -74,9 +65,8 @@ struct Section {
 }
 
 /// One thinking block.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Thought {
-    id: usize,
     action: String,
     text: String,
     started: u64,
@@ -85,9 +75,8 @@ struct Thought {
 }
 
 /// One tool call.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Call {
-    id: usize,
     action: String,
     name: String,
     arguments: Value,
@@ -102,7 +91,7 @@ struct Call {
 }
 
 /// A call still streaming: its message, position, name and raw text.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Streaming {
     message: String,
     index: u32,
@@ -110,52 +99,60 @@ struct Streaming {
     text: String,
 }
 
-/// One turn's card.
-#[derive(Debug)]
+/// One turn's card, or the part of it one page holds. The ▣ line that
+/// closes it is drawn from the turn's summary (`crate::pages`).
+#[derive(Debug, Clone)]
 pub(crate) struct Turn {
     prompts: Vec<String>,
     entries: Vec<Entry>,
     groups: Vec<Group>,
     /// The group new non-text items join, until the next reply.
     open_group: Option<usize>,
-    started: u64,
-    ended: Option<(TurnCompleted, u64)>,
-    calls: u64,
+    ended: bool,
     step: u64,
     /// The message whose raw arguments arrived last.
     message: Option<String>,
     /// How many non-empty `text_completed` each message has had.
     parts: HashMap<String, usize>,
-    /// The turn's usage, delegates' copies included.
-    pub(crate) spend: format::Spend,
 }
 
 impl Turn {
-    /// A turn started at `ts` by `prompts`.
-    pub(crate) fn new(prompts: Vec<String>, ts: u64) -> Self {
+    /// A turn started by `prompts`.
+    pub(crate) fn new(prompts: Vec<String>) -> Self {
         Self {
             prompts,
             entries: Vec::new(),
             groups: Vec::new(),
             open_group: None,
-            started: ts,
-            ended: None,
-            calls: 0,
+            ended: false,
             step: 0,
             message: None,
             parts: HashMap::new(),
-            spend: format::Spend::default(),
+        }
+    }
+
+    /// The part of a running turn on a page that begins at its step `step`
+    /// plus one: no bubble, and the step count it has reached.
+    pub(crate) fn part(step: u64) -> Self {
+        Self {
+            step,
+            ..Self::new(Vec::new())
         }
     }
 
     /// Whether the turn is still running.
     pub(crate) fn is_open(&self) -> bool {
-        self.ended.is_none()
+        !self.ended
     }
 
     /// Closes the card.
-    pub(crate) fn complete(&mut self, done: TurnCompleted, ts: u64) {
-        self.ended = Some((done, ts));
+    pub(crate) fn complete(&mut self) {
+        self.ended = true;
+    }
+
+    /// Ends the open group: the next page opens with the text that ends it.
+    pub(crate) fn end_group(&mut self) {
+        self.open_group = None;
     }
 
     /// A steering message, in place; it does not end a group.
@@ -244,7 +241,7 @@ impl Turn {
         action: &str,
         delta: ToolCallArgumentsDelta,
         ts: u64,
-        fold: &mut Fold,
+        fold: &Fold,
     ) {
         self.message = Some(action.to_owned());
         for group in self.groups_mut() {
@@ -272,7 +269,7 @@ impl Turn {
 
     /// `reasoning_started`: a thinking block joins the open group; false
     /// when it already has.
-    pub(crate) fn reasoning_started(&mut self, action: &str, ts: u64, fold: &mut Fold) -> bool {
+    pub(crate) fn reasoning_started(&mut self, action: &str, ts: u64, fold: &Fold) -> bool {
         if self
             .groups_mut()
             .any(|group| group.thought(action).is_some())
@@ -280,10 +277,9 @@ impl Turn {
             return false;
         }
         let step = self.step;
-        let id = fold.id();
         let group = self.group(ts, fold);
+        group.key.get_or_insert_with(|| action.to_owned());
         group.section(step).thoughts.push(Thought {
-            id,
             action: action.to_owned(),
             text: String::new(),
             started: ts,
@@ -323,9 +319,8 @@ impl Turn {
         action: &str,
         requested: ToolCallRequested,
         ts: u64,
-        fold: &mut Fold,
+        fold: &Fold,
     ) {
-        self.calls = self.calls.saturating_add(1);
         let message = self.message.clone();
         let announced = self
             .groups
@@ -340,7 +335,6 @@ impl Turn {
             })
             .min();
         let step = self.step;
-        let id = fold.id();
         let group = match announced.and_then(|(index, at)| Some(index).zip(self.groups.get_mut(at)))
         {
             Some((index, group)) => {
@@ -356,8 +350,8 @@ impl Turn {
             Some(repair) => Value::Object(repair.repaired),
             None => requested.arguments,
         };
+        group.key.get_or_insert_with(|| action.to_owned());
         group.section(step).calls.push(Call {
-            id,
             action: action.to_owned(),
             name: requested.name,
             arguments,
@@ -404,12 +398,12 @@ impl Turn {
     }
 
     /// The open group, or a new one started at `ts`.
-    fn group(&mut self, ts: u64, fold: &mut Fold) -> &mut Group {
+    fn group(&mut self, ts: u64, fold: &Fold) -> &mut Group {
         let at = match self.open_group {
             Some(at) => at,
             None => {
                 self.groups.push(Group {
-                    id: fold.id(),
+                    key: None,
                     open: fold.ledgers,
                     first: ts,
                     last: ts,
@@ -432,13 +426,18 @@ impl Turn {
     }
 
     /// The card's groups.
+    pub(crate) fn groups(&self) -> impl Iterator<Item = &Group> {
+        self.groups.iter()
+    }
+
+    /// The card's groups, to change.
     pub(crate) fn groups_mut(&mut self) -> impl Iterator<Item = &mut Group> {
         self.groups.iter_mut()
     }
 
-    /// Toggles what `target` opens; false when it is not in this turn.
-    pub(crate) fn toggle(&mut self, target: Target) -> bool {
-        self.groups_mut().any(|group| group.toggle(target))
+    /// Whether what `target` names is open, when it is in this card.
+    pub(crate) fn flag(&mut self, target: &Target) -> Option<&mut bool> {
+        self.groups.iter_mut().find_map(|group| group.flag(target))
     }
 
     /// The card's lines at `width`.
@@ -461,15 +460,6 @@ impl Turn {
                 }
             }
         }
-        if let Some((done, ts)) = &self.ended {
-            let closing = format::closing(
-                done,
-                ts.saturating_sub(self.started),
-                self.calls,
-                &self.spend.usage(),
-            );
-            out.push((format::dim(closing), None));
-        }
     }
 }
 
@@ -477,7 +467,7 @@ impl Turn {
 /// card.
 pub(crate) fn fold_action(
     turns: &mut [Turn],
-    fold: &mut Fold,
+    fold: &Fold,
     envelope: &Envelope,
     action: &str,
 ) -> bool {
@@ -593,23 +583,12 @@ impl Group {
             .flat_map(|section| section.thoughts.iter())
     }
 
-    fn toggle(&mut self, target: Target) -> bool {
-        let flag = match target {
-            Target::Group(id) => (self.id == id).then_some(&mut self.open),
-            Target::Thought(id) => self
-                .sections
-                .iter_mut()
-                .flat_map(|section| section.thoughts.iter_mut())
-                .find(|thought| thought.id == id)
-                .map(|thought| &mut thought.open),
-            Target::Call(id) => self
-                .sections
-                .iter_mut()
-                .flat_map(|section| section.calls.iter_mut())
-                .find(|call| call.id == id)
-                .map(|call| &mut call.open),
-        };
-        flag.map(|open| *open = !*open).is_some()
+    fn flag(&mut self, target: &Target) -> Option<&mut bool> {
+        match target {
+            Target::Group(key) => (self.key.as_ref() == Some(&key.0)).then_some(&mut self.open),
+            Target::Thought(key) => self.thought(&key.0).map(|thought| &mut thought.open),
+            Target::Call(key) => self.call(&key.0).map(|call| &mut call.open),
+        }
     }
 
     /// Whether the group holds calls, and so a ledger.
@@ -693,7 +672,7 @@ impl Group {
         }
         out.push((
             format::dim(format!("• {}", parts.join(" · "))),
-            Some(Target::Group(self.id)),
+            self.key.clone().map(|key| Target::Group(ActionId(key))),
         ));
         // An open approval shows its call whatever the group's own state.
         if self.open || self.calls().any(|call| call.asking) {
@@ -737,7 +716,7 @@ impl Group {
                 } else {
                     Line::styled(row, Style::default().add_modifier(Modifier::BOLD))
                 };
-                out.push((line, Some(Target::Call(call.id))));
+                out.push((line, Some(Target::Call(ActionId(call.action.clone())))));
                 if call.open {
                     format::opened(&call.detail, GAP, out);
                 }
@@ -755,7 +734,10 @@ fn thought_rows(thought: &Thought, gutter: &str, out: &mut Vec<Row>) {
         .ended
         .map(|ended| ended.saturating_sub(thought.started));
     let line = format::thought(gutter, &thought.text, span);
-    out.push((line, Some(Target::Thought(thought.id))));
+    out.push((
+        line,
+        Some(Target::Thought(ActionId(thought.action.clone()))),
+    ));
     if thought.open {
         format::opened(&thought.text, &" ".repeat(gutter.len()), out);
     }

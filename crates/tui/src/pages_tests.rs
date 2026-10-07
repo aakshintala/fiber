@@ -213,16 +213,17 @@ fn reasoning_in_flight_blocks_a_cut() {
     feed(
         &mut index,
         &mut seq,
-        &[
-            ("turn_started", None),
-            ("reasoning_started", Some("a_r")),
-        ],
+        &[("turn_started", None), ("reasoning_started", Some("a_r"))],
     );
     filler(&mut index, &mut seq, PAGE_LINES);
     assert!(feed(&mut index, &mut seq, TEXT_STEP).is_empty());
     assert!(feed(&mut index, &mut seq, &[("turn_started", None)]).is_empty());
     // Completed within the next turn: that turn's next text step cuts.
-    feed(&mut index, &mut seq, &[("reasoning_completed", Some("a_r"))]);
+    feed(
+        &mut index,
+        &mut seq,
+        &[("reasoning_completed", Some("a_r"))],
+    );
     let at = seq;
     let cuts = feed(&mut index, &mut seq, TEXT_STEP);
     assert_eq!(cuts, vec![(at, Cut::Candidate), (at + 2, Cut::AtCandidate)]);
@@ -245,7 +246,11 @@ fn an_open_permission_blocks_a_cut() {
     );
     filler(&mut index, &mut seq, PAGE_LINES);
     assert!(feed(&mut index, &mut seq, TEXT_STEP).is_empty());
-    feed(&mut index, &mut seq, &[("permission_resolved", Some("a_p"))]);
+    feed(
+        &mut index,
+        &mut seq,
+        &[("permission_resolved", Some("a_p"))],
+    );
     let at = seq;
     let cuts = feed(&mut index, &mut seq, TEXT_STEP);
     assert_eq!(cuts, vec![(at, Cut::Candidate), (at + 2, Cut::AtCandidate)]);
@@ -298,12 +303,22 @@ fn text_shown_on_no_card_confirms_nothing() {
         Cut::None
     );
     assert_eq!(
-        push(&mut index, at + 2, "tool_call_requested", Some("a_t2"), true),
+        push(
+            &mut index,
+            at + 2,
+            "tool_call_requested",
+            Some("a_t2"),
+            true
+        ),
         Cut::None
     );
     assert_eq!(index.pages().len(), 1);
     seq = at + 3;
-    feed(&mut index, &mut seq, &[("tool_call_completed", Some("a_t2"))]);
+    feed(
+        &mut index,
+        &mut seq,
+        &[("tool_call_completed", Some("a_t2"))],
+    );
     // A step whose text shows cuts.
     let at = seq;
     let cuts = feed(&mut index, &mut seq, TEXT_STEP);

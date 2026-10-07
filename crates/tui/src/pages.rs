@@ -122,7 +122,9 @@ impl Index {
         let mut cut = Cut::None;
         let begin = |flight: Flight, index: &mut Self| {
             if let Some(action) = action {
-                index.in_flight.insert((flight, action.clone()), index.turns);
+                index
+                    .in_flight
+                    .insert((flight, action.clone()), index.turns);
             }
         };
         match kind {
@@ -217,6 +219,10 @@ impl Index {
     }
 
     /// The page holding `seq`, if any does.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the loop loads pages from the next commit")
+    )]
     pub(crate) fn page_of(&self, seq: Seq) -> Option<usize> {
         let at = self.pages.partition_point(|page| page.last_seq < seq);
         self.pages
@@ -233,6 +239,7 @@ impl Index {
     }
 
     /// Each page's first row.
+    #[cfg(test)]
     pub(crate) fn starts(&self) -> Vec<usize> {
         let mut start = 0usize;
         self.pages
@@ -246,6 +253,7 @@ impl Index {
     }
 
     /// Whether page `at` draws a row in `[from, to)`.
+    #[cfg(test)]
     pub(crate) fn intersects(&self, at: usize, from: usize, to: usize) -> bool {
         let start: usize = self
             .pages
@@ -284,6 +292,11 @@ impl Index {
     /// How many lines the open page holds. The index always has one.
     fn held(&self) -> usize {
         self.pages.last().map_or(0, |page| page.lines)
+    }
+
+    /// Whether a candidate cut waits for its step's first content.
+    pub(crate) fn pending(&self) -> bool {
+        self.candidate.is_some()
     }
 }
 

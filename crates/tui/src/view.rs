@@ -109,23 +109,19 @@ fn put(buf: &mut Buffer, area: Rect, bottom: &mut u16, text: &str, style: Style)
 }
 
 /// Draws the conversation's visible rows, bottom-aligned while it is
-/// shorter than its area.
+/// shorter than its area. Only the pages that draw a visible row are read;
+/// a page not loaded draws blank rows.
 fn conversation_rows(app: &App, area: Rect, buf: &mut Buffer) {
-    let lines = app.lines();
-    let heights: Vec<usize> = lines
-        .iter()
-        .map(|line| rows(line.clone(), area.width))
-        .collect();
-    let total: usize = heights.iter().sum();
+    let total = app.scroll().1;
     let height = usize::from(area.height);
     let bottom_top = total.saturating_sub(height);
     let top = app.top().map_or(bottom_top, |top| top.min(bottom_top));
     let end = top.saturating_add(height);
     let shown = total.min(end).saturating_sub(top);
     let mut y = area.y.saturating_add(to_u16(height.saturating_sub(shown)));
-    let mut start = 0usize;
+    let (mut start, lines) = app.shown(top, height);
     // A line wholly above `top` or below `end` shows no rows.
-    for (line, rows) in lines.into_iter().zip(heights) {
+    for (line, rows) in lines {
         let next = start.saturating_add(rows);
         let skip = top.saturating_sub(start);
         let count = next.min(end).saturating_sub(start.max(top));
