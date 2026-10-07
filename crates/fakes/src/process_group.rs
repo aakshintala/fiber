@@ -51,7 +51,7 @@ pub fn kill_group(group: u32, signal: &str) -> io::Result<bool> {
 /// leader exits is a race: a transient child, such as a `cat` in a command
 /// substitution, can outlive it for a moment under load. The probes run on
 /// a thread, so the deadline holds even when a probe is slow. Any probe
-/// error counts as empty, as `kill`'s non-zero exit did.
+/// error (no such group, no permission) counts as empty.
 ///
 /// # Panics
 ///

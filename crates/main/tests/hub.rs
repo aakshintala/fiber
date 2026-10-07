@@ -29,7 +29,7 @@ use support::*;
 const PROMPT: &str = "the-volume-of-the-meeting-room";
 
 /// How long the stuck-in-setup test waits for the MCP server's ready line:
-/// the ready FIFO's 5 s open plus this 15 s wait take the 20 s the old wait had.
+/// the ready FIFO's 5 s open plus this 15 s wait make 20 s in all.
 const READY_WAIT: Duration = Duration::from_secs(15);
 
 #[test]
