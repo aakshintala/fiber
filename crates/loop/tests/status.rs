@@ -164,13 +164,12 @@ fn a_resumed_session_writes_one_status_for_its_history() {
         .expect("close ended the loop")
         .unwrap();
 
-    let history = log::read(&session.dir).unwrap();
     let mut lines = session.log.watch();
     let (inbox, rx) = mpsc::channel::<Delivery>();
     let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
     let resumed = Loop::resume(
         Arc::clone(&session.log),
-        &history,
+        r#loop::resumed(&session.dir).unwrap(),
         Arc::clone(&session.provider) as Arc<dyn Provider>,
         Model {
             reference: MODEL.into(),

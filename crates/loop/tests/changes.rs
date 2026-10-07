@@ -1041,11 +1041,10 @@ impl Resumed {
     }
 
     fn resume(&mut self, inbox: mpsc::Receiver<Delivery>) -> Loop {
-        let lines = self.lines();
-        self.history_len = lines.len();
+        self.history_len = self.lines().len();
         Loop::resume(
             Arc::clone(&self.log),
-            &lines,
+            r#loop::resumed(&self.dir).unwrap(),
             Arc::clone(&self.provider) as Arc<dyn Provider>,
             Self::model(),
             self.prompt(),

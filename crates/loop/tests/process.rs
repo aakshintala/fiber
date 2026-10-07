@@ -734,3 +734,92 @@ fn a_signal_reports_only_this_process_usage() {
 
     assert_eq!(exited["usage"]["tokens"]["output"], 5);
 }
+
+impl Session {
+    /// Appends `line` to the log as raw text, past the writer.
+    fn raw(&self, line: &str) {
+        use std::io::Write as _;
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(self.dir.join("events.jsonl"))
+            .unwrap();
+        writeln!(file, "{line}").unwrap();
+    }
+}
+
+#[test]
+fn an_unreadable_payload_fails_the_exit_log_corrupt() {
+    // With no `fiber_started` after it, the line that does not read as its
+    // kind is this process's, and the exit reports it.
+    let session = Session::new();
+    session.append(&turn_started(), None);
+    session.raw(&unreadable_turn_completed());
+
+    let (code, payload) = session.exit(Ok(()));
+
+    assert_eq!(code, 1);
+    assert_eq!(payload["error"]["code"], "log_corrupt");
+}
+
+/// A `turn_completed` line whose payload does not read.
+fn unreadable_turn_completed() -> String {
+    format!(
+        r#"{{"kind":"turn_completed","session_id":"s_1","ts":1,"schema_version":{},"turn_id":"t_1","seq":1,"payload":{{"outcome":7}}}}"#,
+        contract::SCHEMA_VERSION
+    )
+}
+
+#[test]
+fn an_unreadable_payload_before_the_latest_fiber_started_does_not_fail_the_exit() {
+    // The line belongs to an earlier process, which `fiber_exited` does not
+    // report (`docs/events.md`, `fiber_exited`).
+    let session = Session::new();
+    fiber_started(&session.log, "1.2.3", false).unwrap();
+    session.append(&turn_started(), None);
+    session.raw(&unreadable_turn_completed());
+    fiber_started(&session.log, "1.2.3", true).unwrap();
+    session.append(&turn_started(), None);
+    session.append(&text_part("Resumed."), Some("a_2"));
+    session.append(&message(), Some("a_2"));
+    session.append(&turn_completed(TurnOutcome::Completed, None), None);
+
+    let (code, exited) = session.exit(Ok(()));
+
+    assert_eq!(code, 0);
+    assert_eq!(exited["error"], Value::Null);
+    assert_eq!(exited["text"], "Resumed.");
+}
+
+#[test]
+fn an_unreadable_payload_after_the_latest_fiber_started_fails_the_exit_log_corrupt() {
+    // An earlier process's unreadable line is forgiven; this process's is not.
+    let session = Session::new();
+    fiber_started(&session.log, "1.2.3", false).unwrap();
+    session.raw(&unreadable_turn_completed());
+    fiber_started(&session.log, "1.2.3", true).unwrap();
+    session.append(&turn_started(), None);
+    session.raw(&unreadable_turn_completed());
+    session.append(&text_part("Resumed."), Some("a_2"));
+    session.append(&message(), Some("a_2"));
+    session.append(&turn_completed(TurnOutcome::Completed, None), None);
+
+    let (code, exited) = session.exit(Ok(()));
+
+    assert_eq!(code, 1);
+    assert_eq!(exited["error"]["code"], "log_corrupt");
+}
+
+#[test]
+fn a_line_that_is_not_an_envelope_fails_the_exit_log_corrupt() {
+    let session = Session::new();
+    session.append(&turn_started(), None);
+    session.raw("not an envelope");
+
+    let exited = fiber_exited(&session.log, &session.dir, Ok(()), true, None).unwrap();
+
+    assert_eq!(exited.code, 1);
+    assert_eq!(
+        exited.error.map(|error| error.code),
+        Some(ErrorCode::LogCorrupt)
+    );
+}
