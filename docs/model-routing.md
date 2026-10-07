@@ -30,9 +30,11 @@ AWS event-stream framing is a per-model flag, not a protocol. `anthropic-message
 reads it for Claude on Bedrock, which Bedrock serves through its Invoke API, and
 `bedrock-converse` reads it too.
 
-ChatGPT/codex speaks `openai-responses` with compatibility flags its extension
-declares: the request fields it requires or rejects, such as `store: false`,
-the headers its login supplies, and its usage-limit error body. Its streamed
+ChatGPT/codex speaks `openai-responses` with two compatibility flags its
+extension declares on each model, `store: false` and
+`cache_key_header: "session_id"`, and one provider header, `originator: fiber`.
+It sends no `OpenAI-Beta` header. The account-id header comes from its
+`credential()` ("Keys, tokens and OAuth"). Its streamed
 events, tool calls and reasoning items are parsed as plain Responses. A stream
 ends with `response.completed`: all 45 SSE streams sent to `gpt-6-luna`
 that returned 200 did, and none contained `response.done`. Requests with the
@@ -40,6 +42,16 @@ that returned 200 did, and none contained `response.done`. Requests with the
 With `gpt-6-luna` the endpoint accepted
 `parallel_tool_calls`, `tool_choice` and `text.verbosity`. It rejected
 `temperature` with status 400, and a `service_tier` of `flex` or `auto`.
+
+`openai-responses` maps a failed reply whose `error.code` or `error.type` is
+`usage_limit_reached` or `usage_not_included` to `quota_exceeded`, on any
+endpoint and whatever the HTTP status, and never retries it. No other vendor
+sends these codes, so the match needs no flag. When the body has `resets_at`
+(Unix seconds), the seconds until then become the error's `retry_after`, and
+the message names the reset time. `rate_limit_exceeded` stays `rate_limited`.
+No usage-limit reply has been probed: the match rests on the reference
+implementations ([research/codex-responses-probe](../research/codex-responses-probe/README.md),
+"The usage-limit error body").
 
 On OpenAI's own endpoint, with `gpt-6-luna`, `instructions` and a system
 message in `input` gave the same answer and the same prompt cache for one
@@ -618,7 +630,7 @@ label.
 
 `fiber login <provider> --as <label>` stores a credential under that label.
 Without `--as`, the label is the account's email when the login reveals one,
-as an OAuth token does, and `default` otherwise. A login whose label is
+as `credential()`'s `email` does, and `default` otherwise. A login whose label is
 already stored is refused, and the message names `--as`. The first label a
 provider stores is written to `providers."<name>".credential` in the global
 file, unless that key is already set.
@@ -671,7 +683,17 @@ else.
 
 A provider whose credential is a token that expires declares a Lua
 `credential()` function. It returns `{ token = <string>, expires_at = <Unix
-seconds> }`: the token and the time it expires. Fiber caches the
+seconds>, headers = { [name] = <string> }, email = <string> }`: the token, the
+time it expires, and two optional fields.
+
+- `headers` are sent on every request that uses the token, and are cached and
+  refreshed with it. ChatGPT/codex returns its `chatgpt-account-id` here. A
+  header Fiber builds itself, such as `authorization`, fails the call with
+  `credential_failed`.
+- `email` is read only by `fiber login`, which uses it as the label when
+  `--as` is absent ("Logging in"). Every other call ignores it.
+
+Fiber caches the
 token and calls the function again, off the request path, when a request
 finds the token within 5 minutes of expiry. A request that finds the token
 already expired, because the session sat idle past it or the earlier refresh
@@ -682,8 +704,9 @@ Vertex's, is this function, written in the extension, not in Fiber.
 An OAuth login is extension code too. The extension's `credential()` builds its
 vendor's flow from native host calls: opening the browser, a one-shot localhost
 callback, PKCE, device-code polling and the locked credential file
-(`docs/extensions.md`, "Host calls"). It adds its vendor's own steps, such as
-reading the ChatGPT account id from codex's token.
+(`docs/extensions.md`, "Host calls"). It adds its vendor's own steps. codex
+reads the account id from the access token's `https://api.openai.com/auth`
+claim `chatgpt_account_id`, and the email from the `id_token`'s `email` claim.
 
 ChatGPT/codex is the only subscription login Fiber ships. A subscription login
 ships when its vendor permits use from other harnesses and Fiber can probe it.

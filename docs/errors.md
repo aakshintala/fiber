@@ -315,3 +315,5 @@ are `docs/invocation.md`, "Driver commands".
   `io_failed`.
 - Rate-limit, overload, quota, billing and refusal bodies were not reached by
   the probe; their matches rest on protocol documentation until one is seen.
+  ChatGPT/codex documents no usage-limit body, so its match rests on reference
+  implementations (`docs/model-routing.md`, "Protocols and providers").

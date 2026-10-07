@@ -86,6 +86,21 @@ and `x-client-request-id` alone did not hit. A per-request session id loses the 
 stable; the gap was raised to 20 seconds of sleep for every later group. Whether the gap explains the miss is untested.
 The hit is 7,936 tokens of about 9,000.
 
+## The usage-limit error body
+
+Not probed: no request reached a usage limit. The shape below comes from two reference implementations, read on
+2026-10-07.
+
+- pi (`@earendil-works/pi-ai` 1.0.0), `parseErrorResponse` in `dist/api/openai-codex-responses.js`:1240-1262. It reads
+  `error.code`, falling back to `error.type`, and treats `usage_limit_reached`, `usage_not_included` or
+  `rate_limit_exceeded` (or any 429) as the usage limit. It reads `error.plan_type` and `error.resets_at` (Unix
+  seconds) for its message, "You have hit your ChatGPT usage limit (<plan> plan). Try again in ~N min."
+- codex-cli 0.160.0: `strings` on the binary finds the error codes `usage_limit_reached` and `usage_not_included`
+  beside `quota_exceeded`, `server_overloaded` and the other codes it reports.
+
+Fiber matches only the two usage-limit codes as `quota_exceeded`. `rate_limit_exceeded` names a rate limit, so it stays
+retryable. pi's free-text match (`isTerminalRateLimitError`, lines 52-54) is not adopted.
+
 ## Malformed replies
 
 None. All 200 streams ended in `response.completed`; tool arguments parsed as JSON in the streams checked.

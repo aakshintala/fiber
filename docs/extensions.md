@@ -440,7 +440,9 @@ A provider may have five pieces of Lua:
 - `models()`, which discovers its models
 - `quota()`, which reports its quota (`docs/model-routing.md`, "Quota")
 - `credential()`, which returns `{ token = <string>, expires_at = <Unix seconds> }`,
-  for a cloud sign-in or an OAuth login (`docs/model-routing.md`, "Credentials")
+  and optionally `headers` sent with the token and the login's `email`, for a
+  cloud sign-in or an OAuth login (`docs/model-routing.md`, "Keys, tokens and
+  OAuth")
 - `sign()`, which adds headers to each request, for a scheme such as AWS SigV4
   (`docs/model-routing.md`, "Signing a request")
 - `cost(generation_id)`, which looks up the cost of a call that ended without
