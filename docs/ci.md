@@ -173,14 +173,17 @@ opened.
 
 ## The backstop on `main`
 
-Every push to `main` runs the backstop on all three platforms. It compiles
-the whole workspace and runs the tests the selection chooses from the diff
-since the last `main` commit whose backstop passed. That is the parent
+Every push to `main` runs the backstop. It runs the lint, test and mutant
+jobs the selection chooses from the diff
+since the last `main` commit whose backstop passed. The tests run on all
+three platforms, and it compiles
+the whole workspace. That is the parent
 commit unless a run was cancelled or failed. A conflict between two merged
 pull requests shows in a crate that depends on what the later one changed,
 and the selection includes that crate.
 
-When the backstop fails, it opens an issue, or comments on the open one. It
+When lint, the tests or the mutants fail, the backstop opens an issue, or
+comments on the open one. It
 never blocks a merge.
 
 The backstop is the only run that saves the build cache. Pull requests
