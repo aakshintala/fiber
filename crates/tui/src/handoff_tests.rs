@@ -366,3 +366,18 @@ fn a_streamed_note_joins_each_parts_deltas() {
         ["    one", "    two"]
     );
 }
+
+#[test]
+fn set_open_reports_whether_the_note_matched() {
+    let mut band = super::Band::new(3, "the model handed off".to_owned());
+    // The matching target sets the flag and answers true, both ways.
+    assert!(band.set_open(&Target::Note(3), true));
+    assert!(band.open);
+    assert!(band.set_open(&Target::Note(3), false));
+    assert!(!band.open);
+    // Another band's note and another kind answer false and change nothing.
+    assert!(!band.set_open(&Target::Note(4), true));
+    assert!(!band.open);
+    assert!(!band.set_open(&Target::Orphans(3), true));
+    assert!(!band.open);
+}
