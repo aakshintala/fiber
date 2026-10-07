@@ -416,7 +416,7 @@ impl Feed {
         if state.stopped {
             return true;
         }
-        if payload.parent.is_some() {
+        if recent::is_delegate(&payload) {
             state.tracked.remove(id);
             state.delegates.insert(id.to_owned());
             return false;
