@@ -315,6 +315,7 @@ impl App {
                 let args = (!rest.is_empty()).then(|| json!({ "instructions": rest }));
                 self.send_command("handoff", args)
             }
+            "name" => self.send_command("name", Some(json!({ "text": rest }))),
             "reload" => self.send_command("reload", None),
             "close" => self.close(),
             "quit" => Effect::Quit,

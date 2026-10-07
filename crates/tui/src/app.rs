@@ -43,9 +43,6 @@ pub(crate) const QUIT_WINDOW: Duration = Duration::from_secs(1);
 /// What the quit hint says.
 pub(crate) const QUIT_HINT: &str = "Press Ctrl+C again to quit";
 
-/// The command that names the session.
-const NAME: &str = "/name";
-
 /// What the terminal is attached to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Phase {
@@ -95,7 +92,6 @@ enum Kind {
     Cancel,
     Reply,
     SteerDrop,
-    Name,
     /// A built-in command such as `handoff`, `reload` or `close`.
     Command,
 }
@@ -478,9 +474,6 @@ impl App {
         if self.draft.trim().is_empty() || self.link == Link::Down {
             return Effect::None;
         }
-        if let Some(effect) = self.rename() {
-            return effect;
-        }
         if self.steering.is_selected() {
             return self.amend();
         }
@@ -528,25 +521,6 @@ impl App {
             self.held.push(line);
             Effect::None
         }
-    }
-
-    /// `/name <text>` sends `name`; `/name` alone clears the name. With no
-    /// session nothing goes out and the draft stays. `None` when the draft
-    /// is not `/name`.
-    fn rename(&mut self) -> Option<Effect> {
-        let rest = self.draft.trim().strip_prefix(NAME)?;
-        if !rest.is_empty() && !rest.starts_with(' ') {
-            return None;
-        }
-        let text = rest.trim().to_owned();
-        let Some(session) = self.session().cloned() else {
-            return Some(Effect::None);
-        };
-        let id = mint();
-        let line = session_command(&id, "name", &session, Some(json!({ "text": text })));
-        self.pending
-            .insert(id, (Kind::Name, std::mem::take(&mut self.draft)));
-        Some(Effect::Send(vec![line.to_string()]))
     }
 
     /// Esc with nothing open interrupts the turn: `cancel`, only when busy.
@@ -625,7 +599,7 @@ impl App {
                 self.pending.remove(id);
             }
             Some((
-                Kind::Start | Kind::Prompt | Kind::Steer | Kind::Reply | Kind::Command | Kind::Name,
+                Kind::Start | Kind::Prompt | Kind::Steer | Kind::Reply | Kind::Command,
                 _,
             )) => {
                 self.notices.push(message);

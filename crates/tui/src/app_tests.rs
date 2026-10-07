@@ -1054,13 +1054,14 @@ fn a_rejected_name_is_a_notice_and_returns_the_draft() {
 }
 
 #[test]
-fn slash_name_with_no_session_keeps_the_draft() {
+fn slash_name_with_no_session_clears_the_draft_with_a_notice() {
     let clock = fakes::clock::FakeClock::new();
     let now = clock.now();
     let mut app = app();
     connect(&mut app);
     assert_eq!(send(&mut app, "/name x", now), Effect::None);
-    assert_eq!(app.draft(), "/name x");
+    assert_eq!(app.notice(), Some("No session on screen."));
+    assert_eq!(app.draft(), "");
 }
 
 #[test]
