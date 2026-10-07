@@ -2347,3 +2347,43 @@ fn the_feed_arriving_keeps_them() {
     ));
     assert_eq!(blockers(&app), ["No provider key."]);
 }
+
+#[test]
+fn toggle_with_the_link_down_flips_scope_but_sends_nothing() {
+    let mut app = git_home();
+    linked(&mut app);
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "here",
+        "/w",
+        "-w",
+        json!({"state": "idle"}),
+    ));
+    app.on_line(waiting("s_bbbbbbbbbbbbbbbb", "away", "/lens", "-other"));
+    assert_eq!(rows(&app), ["✓  here"]);
+    app.disconnected();
+    assert_eq!(app.home_click(Spot::Toggle), Effect::None);
+    assert_eq!(rows(&app).len(), 2);
+    assert_eq!(toggle(&app), Some("show this project only".to_owned()));
+}
+
+#[test]
+fn down_in_an_empty_box_focuses_the_toggle_when_it_shows() {
+    let mut app = git_home();
+    linked(&mut app);
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "here",
+        "/w",
+        "-w",
+        json!({"state": "idle"}),
+    ));
+    app.on_line(waiting("s_bbbbbbbbbbbbbbbb", "away", "/lens", "-other"));
+    drawn(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Toggle))
+    );
+}

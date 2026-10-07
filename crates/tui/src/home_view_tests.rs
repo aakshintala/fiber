@@ -392,6 +392,79 @@ fn home_with_blocker_lines() {
 }
 
 #[test]
+fn blockers_count_against_the_four_row_logo() {
+    // Three blocker lines at the 17-row threshold leave no room for the
+    // pixel logo: the one-row form draws, with the blockers above the
+    // box.
+    let mut app = home(80, 17);
+    app.on_line(hello());
+    type_draft(&mut app, "hi");
+    let now = fakes::clock::FakeClock::new().now();
+    let crate::app::Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+        panic!("Enter sends the start");
+    };
+    let start: serde_json::Value =
+        serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("start: {err}"));
+    let id = start["id"].as_str().unwrap_or_else(|| panic!("start id"));
+    app.on_line(Line::Hub(contract::HubLine {
+        kind: "command_rejected".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: [
+            (
+                "command_id".to_owned(),
+                serde_json::Value::String(id.to_owned()),
+            ),
+            (
+                "code".to_owned(),
+                serde_json::Value::String("start_failed".to_owned()),
+            ),
+            (
+                "message".to_owned(),
+                serde_json::Value::String("one\ntwo\nthree".to_owned()),
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    }));
+    let text = screen(&app, 80, 17);
+    assert!(!text.contains('█'), "one row while the blockers show");
+    assert!(text.contains("⌇ fiber 0.0.1"), "the one-row logo");
+    assert_eq!(
+        app.home_screen()
+            .map(|screen| screen.blockers)
+            .unwrap_or_default(),
+        ["one", "two", "three"]
+    );
+}
+
+#[test]
+fn the_toggle_keeps_a_row_for_the_list() {
+    // Nine rows fit under the box: with the toggle heading the list,
+    // eight session rows draw.
+    let mut app = git_home(80, 24);
+    app.on_line(hello());
+    for n in 0..10u8 {
+        let session = format!("s_{n:016x}");
+        app.on_line(status(&session, "here", idle()));
+    }
+    app.on_line(away_waiting());
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let targets = render(&app, area, &mut buf, None);
+    let toggles = targets
+        .iter()
+        .filter(|target| target.id == crate::mouse::TargetId::Home(Spot::Toggle))
+        .count();
+    let entries = targets
+        .iter()
+        .filter(|target| matches!(target.id, crate::mouse::TargetId::Home(Spot::Entry(_))))
+        .count();
+    assert_eq!(toggles, 1);
+    assert_eq!(entries, 8);
+}
+
+#[test]
 fn home_cursor_hides_while_navigating() {
     let mut app = home(80, 24);
     // Pasted text past the token line count becomes one paste token, a

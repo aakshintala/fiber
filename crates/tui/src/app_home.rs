@@ -528,20 +528,12 @@ impl App {
 
     /// Asks the next `recent` page past the focused last row: `before`
     /// its id, naming the launch project while scoped. `None` unless the
-    /// focused row is the whole list's last recent row, the last answer
-    /// was not empty, and no `recent` is in flight.
+    /// focused row ends the list and is its last recent row, the last
+    /// answer was not empty, and no `recent` is in flight.
     fn page_recent(&mut self, focused: u64) -> Option<Effect> {
         let home = self.home.as_mut()?;
         let project = home.launch.project.clone();
         let scoped = home.launch.git && !home.sessions.show_all();
-        let shown = home.sessions.shown(&project, scoped);
-        let (at, _) = shown
-            .iter()
-            .enumerate()
-            .find(|(_, row)| row.key == focused)?;
-        if at + 1 != shown.len() {
-            return None;
-        }
         if !home.sessions.more() || home.recent_ask.is_some() {
             return None;
         }
