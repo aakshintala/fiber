@@ -348,3 +348,102 @@ fn no_hosted_search_type_registers_no_web_search() {
     assert!(definitions.iter().all(|(name, _)| name != "web_search"));
     assert!(!infos.contains(&"web_search".to_owned()), "{infos:?}");
 }
+
+/// The keywords `docs/dependencies.md` ("Tool arguments are checked
+/// against a subset of JSON Schema") lists, plus `description`.
+const SUBSET: &[&str] = &[
+    "type",
+    "properties",
+    "required",
+    "additionalProperties",
+    "enum",
+    "items",
+    "minimum",
+    "maximum",
+    "minLength",
+    "maxLength",
+    "minItems",
+    "maxItems",
+    "anyOf",
+    "$ref",
+    "description",
+];
+
+/// Every keyword outside the subset in `node` and the schemas below it,
+/// each as `path: keyword`.
+fn outside_subset(node: &serde_json::Value, path: &str, found: &mut Vec<String>) {
+    let Some(map) = node.as_object() else {
+        return;
+    };
+    for (key, value) in map {
+        if !SUBSET.contains(&key.as_str()) {
+            found.push(format!("{path}: {key}"));
+        }
+        match key.as_str() {
+            "properties" => {
+                for (name, property) in value.as_object().into_iter().flatten() {
+                    outside_subset(property, &format!("{path}.{name}"), found);
+                }
+            }
+            "items" | "additionalProperties" => {
+                outside_subset(value, &format!("{path}[]"), found);
+            }
+            "anyOf" => {
+                for (index, branch) in value.as_array().into_iter().flatten().enumerate() {
+                    outside_subset(branch, &format!("{path}|{index}"), found);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+#[test]
+fn outside_subset_names_a_keyword_at_any_depth() {
+    let schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "a": {"type": "array", "items": {"type": "string", "pattern": "x"}},
+            "b": {"anyOf": [{"type": "string"}, {"type": "integer", "format": "f"}]},
+            "pattern": {"type": "string"}
+        },
+        "additionalProperties": false,
+        "default": 1
+    });
+    let mut found = Vec::new();
+    outside_subset(&schema, "$", &mut found);
+    found.sort();
+    assert_eq!(
+        found,
+        ["$.a[]: pattern", "$.b|1: format", "$: default"],
+        "a property named like a keyword is not a keyword"
+    );
+}
+
+#[test]
+fn every_builtin_schema_keeps_to_the_documented_subset() {
+    let root = fakes::TempDir::new("fiber-builtin-subset");
+    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    let jobs = jobs::Registry::new(
+        root.path().join("artifacts"),
+        Arc::clone(&clock),
+        Arc::new(fakes::Recorder::default()),
+    );
+    let (tools, _infos, _driver, _forget) = super::builtin(
+        root.path().join("fiber-stub"),
+        root.path(),
+        &root.path().join("artifacts"),
+        &clock,
+        &jobs,
+        &Arc::new(tools::PathLocks::new()),
+        Some("web_search_20250305"),
+    )
+    .unwrap();
+    assert!(tools.len() >= 8, "web_search and jobs register too");
+    let mut found = Vec::new();
+    for (_, tool) in &tools {
+        let definition = tool.definition();
+        outside_subset(&definition.input_schema, &definition.name, &mut found);
+    }
+    assert!(found.is_empty(), "outside the subset: {found:?}");
+}
