@@ -785,11 +785,11 @@ impl Loop {
             // of taking a next step. An idle approval writes nothing more.
             return Ok(Step::Ended(ended(TurnOutcome::Interrupted, None)));
         }
-        if let Some(error) = self.turn_blocked.take() {
+        if let Some(blocked) = self.take_blocked_end() {
             // Headless, the block budget ran out: the step's calls
             // completed, and the turn ends `failed` with code `blocked`
             // (`docs/permissions.md`, "Headless").
-            return Ok(Step::Ended(ended(TurnOutcome::Failed, Some(error))));
+            return Ok(Step::Ended(blocked));
         }
         Ok(self.after_calls(turn)?.map_or(Step::Next, Step::Ended))
     }

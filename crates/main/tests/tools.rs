@@ -2472,6 +2472,25 @@ fn ask_user_ends_the_run_with_its_questions_and_a_resume_answers_them() {
     let second = setup.run(&["ask", "--resume", &id, "main; call it fiber"]);
 
     assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
+    // No `session_started`: the session keeps its first line. No
+    // `opening_message` either: the log already holds one. The resumed
+    // reply says "Done." as one finished message, with no deltas.
+    assert_eq!(
+        second.kinds(),
+        [
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
     let requests = server.requests();
     assert_eq!(requests.len(), 2);
     let body: Value = serde_json::from_slice(&requests[1].body).unwrap();
@@ -2517,11 +2536,33 @@ fn an_ask_user_call_outside_its_limits_fails_before_it_starts() {
     let run = setup.run(&["ask", "ask me"]);
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
-    assert!(
-        !run.kinds().contains(&"tool_call_started"),
-        "{:?}",
-        run.kinds()
-    );
+    // Every invalid call fails before it starts: no `tool_call_started`
+    // is written, and the turn continues on the [`hello`] reply.
+    let mut expected = vec![
+        "session_started",
+        "fiber_started",
+        "extensions_loaded",
+        "preamble_built",
+        "opening_message",
+        "turn_started",
+        "step_started",
+        "assistant_message_started",
+    ];
+    expected.extend(["tool_call_requested"; 6]);
+    expected.extend(["usage_recorded", "assistant_message_completed"]);
+    expected.extend(["tool_call_completed"; 6]);
+    expected.extend([
+        "step_started",
+        "assistant_message_started",
+        "assistant_message_delta",
+        "assistant_message_delta",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+        "fiber_exited",
+    ]);
+    assert_eq!(run.kinds(), expected);
     let completed: Vec<&Value> = run
         .lines
         .iter()

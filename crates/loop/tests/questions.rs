@@ -147,6 +147,21 @@ fn questions_follow_call_order_not_completion_order() {
     );
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     let lines = session.lines();
+    let mut expected = vec![
+        "session_started",
+        "preamble_built",
+        "opening_message",
+        "turn_started",
+    ];
+    expected.extend(step_of(2));
+    expected.extend([
+        "tool_call_started",
+        "tool_call_started",
+        "tool_call_completed",
+        "tool_call_completed",
+        "turn_completed",
+    ]);
+    assert_eq!(kinds(&lines), expected);
     let trace = trace.lock().unwrap().clone();
     assert!(
         trace.iter().position(|t| t == "done second")
@@ -171,6 +186,21 @@ fn a_call_beside_the_asking_one_still_completes() {
     );
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     let lines = session.lines();
+    let mut expected = vec![
+        "session_started",
+        "preamble_built",
+        "opening_message",
+        "turn_started",
+    ];
+    expected.extend(step_of(2));
+    expected.extend([
+        "tool_call_started",
+        "tool_call_started",
+        "tool_call_completed",
+        "tool_call_completed",
+        "turn_completed",
+    ]);
+    assert_eq!(kinds(&lines), expected);
     let results: Vec<&Value> = lines
         .iter()
         .filter(|line| line.kind == "tool_call_completed")
@@ -188,6 +218,26 @@ fn a_failed_call_asks_nothing() {
     let mut session = session(vec![Arc::new(tool)], &["ask"]);
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     let lines = session.lines();
+    let mut expected = vec![
+        "session_started",
+        "preamble_built",
+        "opening_message",
+        "turn_started",
+    ];
+    expected.extend(step_of(1));
+    expected.extend([
+        "tool_call_started",
+        "tool_call_completed",
+        "step_started",
+        "assistant_message_started",
+        "assistant_message_delta",
+        "assistant_message_delta",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+    ]);
+    assert_eq!(kinds(&lines), expected);
     let done: Vec<&Envelope> = lines
         .iter()
         .filter(|line| line.kind == "tool_call_completed")
@@ -202,6 +252,26 @@ fn an_empty_list_of_questions_asks_nothing() {
     let mut session = session(vec![Arc::new(asking("ask", &[]))], &["ask"]);
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     let lines = session.lines();
+    let mut expected = vec![
+        "session_started",
+        "preamble_built",
+        "opening_message",
+        "turn_started",
+    ];
+    expected.extend(step_of(1));
+    expected.extend([
+        "tool_call_started",
+        "tool_call_completed",
+        "step_started",
+        "assistant_message_started",
+        "assistant_message_delta",
+        "assistant_message_delta",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+    ]);
+    assert_eq!(kinds(&lines), expected);
     assert_eq!(turn_completed(&lines), json!({"outcome": "completed"}));
     assert_eq!(session.requests().len(), 2);
 }
@@ -217,6 +287,23 @@ fn a_handoff_in_the_same_step_applies_before_the_questions_end_the_turn() {
     );
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     let lines = session.lines();
+    let mut expected = vec![
+        "session_started",
+        "preamble_built",
+        "opening_message",
+        "turn_started",
+    ];
+    expected.extend(step_of(2));
+    expected.extend([
+        "tool_call_started",
+        "tool_call_started",
+        "tool_call_completed",
+        "tool_call_completed",
+        "handoff_completed",
+        "opening_message",
+        "turn_completed",
+    ]);
+    assert_eq!(kinds(&lines), expected);
     let at = |kind: &str| lines.iter().position(|line| line.kind == kind).unwrap();
     assert!(at("handoff_completed") < at("turn_completed"));
     assert_eq!(turn_completed(&lines)["questions"], asked(&["Which?"]));
@@ -280,6 +367,15 @@ fn a_cancel_that_ends_the_step_drops_the_questions() {
     });
     gate.check("ask");
     let lines = session.lines();
+    let mut expected = vec![
+        "session_started",
+        "preamble_built",
+        "opening_message",
+        "turn_started",
+    ];
+    expected.extend(step_of(1));
+    expected.extend(["tool_call_started", "tool_call_completed", "turn_completed"]);
+    assert_eq!(kinds(&lines), expected);
     assert_eq!(turn_completed(&lines), json!({"outcome": "interrupted"}));
     assert_eq!(session.requests().len(), 1);
 }
@@ -338,6 +434,23 @@ fn a_cancel_after_the_questions_are_collected_ends_the_turn_interrupted() {
     }));
     assert_eq!(session.turn(), Some(TurnOutcome::Interrupted));
     let lines = session.lines();
+    let mut expected = vec![
+        "session_started",
+        "preamble_built",
+        "opening_message",
+        "turn_started",
+    ];
+    expected.extend(step_of(2));
+    expected.extend([
+        "tool_call_started",
+        "tool_call_started",
+        "tool_call_completed",
+        "tool_call_completed",
+        "handoff_completed",
+        "opening_message",
+        "turn_completed",
+    ]);
+    assert_eq!(kinds(&lines), expected);
     assert!(lines.iter().any(|line| line.kind == "handoff_completed"));
     assert_eq!(turn_completed(&lines), json!({"outcome": "interrupted"}));
     assert_eq!(session.requests().len(), 1);

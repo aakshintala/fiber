@@ -571,9 +571,17 @@ impl Loop {
             // Orphan notices the resume logged behind the open batch.
             self.conversation.append(&mut self.held);
             // A cancel that ended the batch ends the turn `interrupted` at
-            // the next step's start, as a step's cancel does.
-            if !cancelled && let Some(completed) = self.after_calls(&turn)? {
-                return self.end_turn(&turn, completed);
+            // the next step's start, as a step's cancel does. A spent
+            // headless block budget ends the turn `failed` `blocked`
+            // before the batch's questions are processed, as a step's
+            // does.
+            if !cancelled {
+                if let Some(blocked) = self.take_blocked_end() {
+                    return self.end_turn(&turn, blocked);
+                }
+                if let Some(completed) = self.after_calls(&turn)? {
+                    return self.end_turn(&turn, completed);
+                }
             }
             return self.run_steps(&turn);
         }
@@ -675,9 +683,16 @@ impl Loop {
         // Orphan notices the resume logged behind the open batch.
         self.conversation.append(&mut self.held);
         // A cancel that ended the batch ends the turn `interrupted` at the
-        // next step's start, as a step's cancel does.
-        if !cancelled && let Some(completed) = self.after_calls(&turn)? {
-            return self.end_turn(&turn, completed);
+        // next step's start, as a step's cancel does. A spent headless
+        // block budget ends the turn `failed` `blocked` before the batch's
+        // questions are processed, as a step's does.
+        if !cancelled {
+            if let Some(blocked) = self.take_blocked_end() {
+                return self.end_turn(&turn, blocked);
+            }
+            if let Some(completed) = self.after_calls(&turn)? {
+                return self.end_turn(&turn, completed);
+            }
         }
         self.run_steps(&turn)
     }

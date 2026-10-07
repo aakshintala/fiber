@@ -8,6 +8,16 @@ use contract::events::{TurnCompleted, TurnOutcome};
 use crate::{Error, Loop};
 
 impl Loop {
+    /// The headless block-budget exhaustion, if any, as the turn's end:
+    /// the budget ends the turn `failed` with code `blocked`, with no
+    /// questions, before questions are processed
+    /// (`docs/permissions.md`, "Headless"). Every site that calls
+    /// [`Loop::after_calls`] checks this first, so the sites cannot drift.
+    pub(crate) fn take_blocked_end(&mut self) -> Option<TurnCompleted> {
+        let error = self.turn_blocked.take()?;
+        Some(crate::ended(TurnOutcome::Failed, Some(error)))
+    }
+
     /// Collects the questions the step's completed calls set and, when any
     /// were asked, takes the queued subdirectory lines; runs the tools'
     /// handoff; writes the taken lines; returns the turn's end when
