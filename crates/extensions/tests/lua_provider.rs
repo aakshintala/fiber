@@ -12,7 +12,6 @@
 
 mod common;
 
-use std::io::Read;
 use std::sync::Arc;
 use std::sync::mpsc;
 use std::time::{Duration, UNIX_EPOCH};
@@ -379,35 +378,10 @@ fn sign_sees_the_bodys_hash_never_the_body_and_adds_headers() {
 #[test]
 fn sign_returns_while_a_background_refresh_is_stuck_on_http() {
     let setup = Setup::new();
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let url = format!("http://{}", listener.local_addr().unwrap());
-    let (accepted_tx, accepted_rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let Ok((mut sock, _)) = listener.accept() else {
-            return;
-        };
-        let mut buf = [0; 1];
-        let mut seen = Vec::new();
-        loop {
-            match sock.read(&mut buf) {
-                Ok(0) | Err(_) => return,
-                Ok(_) => seen.push(buf[0]),
-            }
-            if seen.ends_with(b"\r\n\r\n") {
-                break;
-            }
-        }
-        if accepted_tx.send(()).is_err() {
-            return;
-        }
-        let (_hold_tx, hold_rx) = mpsc::channel::<()>();
-        match hold_rx.recv_timeout(Duration::from_secs(5)) {
-            Ok(())
-            | Err(mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected) => {}
-        }
-    });
+    let server = ProviderServer::start([listing(&["m1", "m2"])]).unwrap();
+    server.hold();
     let home = setup.home();
-    store_secret(&home, "fixture.url", &Secret::new(url)).unwrap();
+    store_secret(&home, "fixture.url", &Secret::new(server.url())).unwrap();
     store_secret(&home, "fixture.api_key", &Secret::new("k1".into())).unwrap();
     let extension = Arc::new(LuaExtension::new(
         "fixture",
@@ -417,9 +391,10 @@ fn sign_returns_while_a_background_refresh_is_stuck_on_http() {
     ));
     let provider = LuaProvider::new(extension, "fixture");
     let refresh = provider.refresh(None).unwrap();
-    accepted_rx
-        .recv_timeout(WAIT)
-        .expect("waited for models() to reach the server");
+    assert!(
+        server.await_requests(1, WAIT),
+        "waited for models() to reach the server"
+    );
     let signer = Arc::clone(&provider);
     let headers = within(move || {
         signer.sign(&SignRequest {
@@ -521,40 +496,12 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Accepts one connection, reads its head, reports, and holds the socket
-/// for at most 5 seconds without answering.
-fn hold_after_head(listener: std::net::TcpListener, accepted: mpsc::Sender<()>) {
-    let Ok((mut sock, _)) = listener.accept() else {
-        return;
-    };
-    let mut buf = [0; 1];
-    let mut seen = Vec::new();
-    loop {
-        match sock.read(&mut buf) {
-            Ok(0) | Err(_) => return,
-            Ok(_) => seen.push(buf[0]),
-        }
-        if seen.ends_with(b"\r\n\r\n") {
-            break;
-        }
-    }
-    if accepted.send(()).is_err() {
-        return;
-    }
-    let (_tx, rx) = mpsc::channel::<()>();
-    match rx.recv_timeout(Duration::from_secs(5)) {
-        Ok(()) | Err(mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected) => {}
-    }
-    drop(sock);
-}
-
 #[test]
 fn a_host_http_call_gives_up_at_the_callbacks_deadline() {
     let setup = Setup::new();
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let url = format!("http://{}/", listener.local_addr().unwrap());
-    let (accepted_tx, accepted_rx) = mpsc::channel();
-    std::thread::spawn(move || hold_after_head(listener, accepted_tx));
+    let server = ProviderServer::start([Response::status(200, "held")]).unwrap();
+    server.hold();
+    let url = format!("{}/", server.url());
     let dir = setup.home().join("ext");
     write(
         &dir.join("init.lua"),
@@ -569,9 +516,10 @@ fn a_host_http_call_gives_up_at_the_callbacks_deadline() {
     let call = Arc::clone(&extension);
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || tx.send(call.command("get", "")));
-    accepted_rx
-        .recv_timeout(WAIT)
-        .expect("waited for get to reach the server");
+    assert!(
+        server.await_requests(1, WAIT),
+        "waited for get to reach the server"
+    );
     // The caller waits out the grace. The extension thread fails a parked
     // callback at the deadline, which is only the 200 ms.
     assert!(
