@@ -1,4 +1,4 @@
-//! Unit tests of `Retry::decide`: the decision table of the plan's Rulings.
+//! Unit tests of `Retry::decide`: its decision table.
 
 use std::time::Duration;
 

@@ -871,7 +871,7 @@ fn only_matching_keeps_literal_pipes_builtin() {
 
 #[test]
 fn only_matching_with_invert_falls_back() {
-    // Ruling 17 on #298: `-o` with `-v` runs the system grep.
+    // `-o` with `-v` runs the system grep.
     let dir = text_tree(&BTreeMap::from([("a.txt", "needle\nplain\n")]));
     let args = vec![
         OsString::from("-o"),
@@ -892,7 +892,7 @@ fn only_matching_with_invert_falls_back() {
 
 #[test]
 fn only_matching_with_context_falls_back() {
-    // Ruling 17 on #298: `-o` with `-A`, `-B` or `-C` runs the system grep.
+    // `-o` with `-A`, `-B` or `-C` runs the system grep.
     let dir = text_tree(&BTreeMap::from([("a.txt", "1\nneedle\n3\n")]));
     for flag in ["-A1", "-B1", "-C1"] {
         let args = vec![
@@ -946,9 +946,9 @@ fn a_bare_pipe_after_a_closed_bracket_is_an_alternation() {
 
 #[test]
 fn only_matching_with_an_alternation_falls_back() {
-    // Ruling 17 on #298: GNU prints the longest match at each position
-    // while the regex crate prints the first alternative, so `-o` with
-    // an alternation runs the system grep.
+    // With `-o` and an alternation, run the system grep: GNU prints the
+    // longest match at each position while the regex crate prints the first
+    // alternative, so the spans below would differ.
     let dir = text_tree(&BTreeMap::from([("a.txt", "ab\n")]));
     let basic = vec![
         OsString::from("-o"),
@@ -981,9 +981,8 @@ fn only_matching_with_an_alternation_falls_back() {
 
 #[test]
 fn only_matching_on_a_closed_pipe_stops_before_the_input_ends() {
-    // Ruling 13 on #298, as `a_closed_pipe_stops_before_the_input_ends`
-    // does for whole lines: `-o` output through a closed pipe stays
-    // quiet and stops reading.
+    // A broken pipe makes `-o` output stay quiet and stops reading, as
+    // `a_closed_pipe_stops_before_the_input_ends` does for whole lines.
     let dir = text_tree(&BTreeMap::from([("a.txt", "x\n")]));
     let owned: Vec<OsString> = [OsString::from("-o"), OsString::from("needle")].to_vec();
     let path = dir.path().to_path_buf();
@@ -1197,7 +1196,7 @@ fn an_implicit_recursive_root_prints_without_the_dot_slash_prefix() {
         ("a.txt", "needle\n"),
         ("sub/c.txt", "needle\n"),
     ]));
-    // Ruling 9 on #298: `-r` with no path searches `.` but prints
+    // `-r` with no path searches `.` but prints
     // paths without the walk's `./` prefix.
     let (code, stdout, stderr) = text(&dir, &["-r", "needle"], "");
     assert_eq!(code, 0);
@@ -1281,8 +1280,8 @@ fn a_closed_pipe_with_a_zero_count_stays_quiet_despite_skipped_directories() {
         Outcome::Done(code) => code,
         Outcome::Fallback => panic!("fell back"),
     };
-    // Ruling 13 on #298: a broken pipe ends the process quietly with
-    // the exit it had so far. The zero counts break the pipe with no
+    // A broken pipe ends the process quietly with the exit it had so far.
+    // The zero counts break the pipe with no
     // match, so the exit stays 1 and the skipped-directory notice never
     // prints.
     assert_eq!(code, 1);

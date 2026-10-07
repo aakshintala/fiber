@@ -44,7 +44,7 @@ const POLL: Duration = Duration::from_millis(20);
 const MAX_HEAD: usize = 8 * 1024;
 
 /// How many polls in a row a connection may send nothing before the listener
-/// drops it and serves the next (Ruling 7 as amended on #309). The listener
+/// drops it and serves the next. The listener
 /// serves one connection at a time and browsers open idle speculative
 /// connections, so silence on one cannot last to the callback's timeout. The
 /// count restarts whenever bytes arrive, so pauses between bytes do not add

@@ -204,8 +204,8 @@ fn a_closed_pipe_stops_the_walk_before_a_later_error() {
     };
     fs::set_permissions(&locked, kept).unwrap();
     // The root's write fails, so the walk stops before the locked
-    // directory's error: ruling 13 on #298 keeps the exit it had so far
-    // and stays quiet instead of failing with permission denied.
+    // directory's error: a broken pipe keeps the exit it had so far and
+    // stays quiet instead of failing with permission denied.
     assert_eq!(code, 0);
     assert_eq!(stdout.writes, 1);
     assert!(stderr.is_empty());
@@ -245,8 +245,8 @@ fn a_closed_pipe_flush_with_no_match_stays_quiet_despite_skipped_directories() {
         Outcome::Done(code) => code,
         Outcome::Fallback => panic!("fell back"),
     };
-    // Ruling 13 on #298: a broken pipe ends the process quietly with
-    // the exit it had so far. The flush breaks the pipe with nothing
+    // A broken pipe ends the process quietly with the exit it had so far.
+    // The flush breaks the pipe with nothing
     // printed, so the skipped-directory notice never prints.
     assert_eq!(code, 0);
     assert!(

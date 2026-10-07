@@ -14,9 +14,9 @@ use serde_json::{Map, Value};
 /// "Seeing the tools").
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Rate {
-    /// The last `preamble_built`'s size in bytes (ruling 4); 0 before one.
+    /// The last `preamble_built`'s request fields' compact-JSON size in bytes; 0 before one.
     preamble: u64,
-    /// Tokens its first own request wrote to the cache (rulings 2, 6);
+    /// Cache-write tokens from the first own request after the build;
     /// None until that request's `usage_recorded`.
     written: Option<u64>,
 }
@@ -37,7 +37,7 @@ impl Rate {
 
 /// What `log` keeps to fold the rate: the rate, and the action ids of the
 /// `assistant_message_started` lines since the latest build while its
-/// numerator is unset (ruling 6).
+/// numerator is unset.
 #[derive(Debug, Default)]
 pub(crate) struct RateFold {
     rate: Rate,
@@ -87,7 +87,7 @@ impl RateFold {
 }
 
 /// The size in bytes of the request a `preamble_built` payload describes:
-/// the request fields' compact JSON (ruling 4).
+/// the compact JSON size of `preamble_built`'s request fields.
 pub(crate) fn preamble_size(payload: &Map<String, Value>) -> u64 {
     let mut request = Map::new();
     for key in [
@@ -116,7 +116,7 @@ pub(crate) fn preamble_size(payload: &Map<String, Value>) -> u64 {
     serde_json::to_vec(&request).map_or(0, |bytes| u64::try_from(bytes.len()).unwrap_or(u64::MAX))
 }
 
-/// The tokens `recorded` wrote to the cache, over every lifetime (ruling 2).
+/// The tokens `recorded` wrote to the cache, summed across every lifetime.
 pub(crate) fn cache_written(recorded: &UsageRecorded) -> u64 {
     recorded
         .tokens

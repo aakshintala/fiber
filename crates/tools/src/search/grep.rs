@@ -58,7 +58,7 @@ pub(crate) fn run(
     if options.files_with_matches && options.count {
         return Outcome::Fallback;
     }
-    // Ruling 17 on #298: `-o` with `-v` or context runs the system grep,
+    // `-o` with `-v` or context runs the system grep,
     // whose output for these combinations is not reproduced here.
     if options.only_matching && options.invert {
         return Outcome::Fallback;
@@ -72,7 +72,7 @@ pub(crate) fn run(
     };
     // `-r` with no path searches `.`; without `-r` and no path the filter
     // reads standard input. An implicit root prints without the walk's
-    // `./` prefix (ruling 9 on #298); an explicit `.` keeps it.
+    // `./` prefix; an explicit `.` keeps it.
     let implicit = options.paths.is_empty() && options.recursive;
     let paths = if implicit {
         vec![PathBuf::from(".")]
@@ -242,7 +242,7 @@ fn compile(options: &Options) -> Result<Search, ()> {
             Mode::Fixed => pattern.push_str(&escape_fixed(part)),
         }
     }
-    // Ruling 17 on #298: `-o` with an alternation runs the system grep:
+    // `-o` with an alternation runs the system grep:
     // GNU prints the longest match at each position while the regex
     // crate prints the first alternative, so the spans below would differ.
     if options.only_matching && has_alternation(&pattern) {

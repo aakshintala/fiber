@@ -417,7 +417,7 @@ impl Feed {
         let Some(payload) = parse_status(bytes) else {
             return true;
         };
-        // Ruling 5's probe, with no lock held: only a non-delegate `idle`
+        // The unseen-turn probe, with no lock held: only a non-delegate `idle`
         // with a known log and no live entry reads the log.
         let unseen = if !may_be_unseen(&payload) {
             false
