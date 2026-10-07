@@ -72,6 +72,14 @@ pub(crate) struct Feed {
     /// scanner.
     _wake: Arc<dyn Wake>,
     scanner: Mutex<Option<JoinHandle<()>>>,
+    #[cfg(test)]
+    settle_pause: Mutex<Option<SettlePause>>,
+}
+
+#[cfg(test)]
+pub(super) struct SettlePause {
+    pub(super) arrived: mpsc::Sender<()>,
+    pub(super) release: mpsc::Receiver<()>,
 }
 
 #[derive(Default)]
@@ -139,6 +147,8 @@ impl Feed {
             tick,
             _wake: wake,
             scanner: Mutex::new(None),
+            #[cfg(test)]
+            settle_pause: Mutex::new(None),
         }
     }
 

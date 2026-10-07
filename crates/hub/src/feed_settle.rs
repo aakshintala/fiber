@@ -4,12 +4,17 @@
 //! A session that never answers holds the listing for at most one
 //! [`RUN_SCAN`] past the scan.
 
+#[cfg(test)]
+use std::time::Duration;
 use std::time::Instant;
 
 use contract::clock::Wake;
 use contract::events::SessionStatus;
 
 use super::{Entry, Feed, PoisonError, RUN_SCAN, lock};
+
+#[cfg(test)]
+const PAUSE_DEADLINE: Duration = Duration::from_secs(10);
 
 /// Settles session `id` when dropped: the caller has taken its line.
 pub(super) struct Settle<'a>(pub(super) &'a Feed, pub(super) &'a str);
@@ -44,6 +49,8 @@ impl Feed {
                     break;
                 }
             }
+            #[cfg(test)]
+            self.pause_before_wait();
             self.wait_for(None);
         }
         let until = self.clock.now().checked_add(RUN_SCAN);
@@ -57,6 +64,8 @@ impl Feed {
             if until.is_none_or(|until| self.clock.now() >= until) {
                 return;
             }
+            #[cfg(test)]
+            self.pause_before_wait();
             self.wait_for(until);
         }
     }
@@ -84,6 +93,18 @@ impl Feed {
                     .unwrap_or_else(PoisonError::into_inner),
             });
         });
+    }
+
+    #[cfg(test)]
+    fn pause_before_wait(&self) {
+        let Some(pause) = lock(&self.settle_pause).take() else {
+            return;
+        };
+        pause.arrived.send(()).unwrap_or(());
+        assert!(
+            pause.release.recv_timeout(PAUSE_DEADLINE).is_ok(),
+            "the settle wait is released"
+        );
     }
 
     /// Every running session's latest status, in the feed's order, copied

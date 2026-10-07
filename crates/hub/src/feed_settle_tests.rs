@@ -95,6 +95,23 @@ fn stop_within(feed: &Arc<Feed>) {
     assert!(rx.recv_timeout(DEADLINE).is_ok(), "stop returns");
 }
 
+fn pause_settle_wait(feed: &Feed) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
+    let (arrived_tx, arrived_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    *lock(&feed.settle_pause) = Some(super::super::SettlePause {
+        arrived: arrived_tx,
+        release: release_rx,
+    });
+    (arrived_rx, release_tx)
+}
+
+fn await_pause(arrived: &mpsc::Receiver<()>) {
+    assert!(
+        arrived.recv_timeout(DEADLINE).is_ok(),
+        "the listing reaches its wait"
+    );
+}
+
 fn say_idle(session: &FakeSession, id: &str) {
     session.say(&status_line(id, &status("n", "/w", "idle", None)));
 }
@@ -161,6 +178,45 @@ fn stopping_the_feed_releases_a_listing_before_any_scan() {
     assert!(rx.try_recv().is_err(), "no scan yet, so not answered");
     stop_within(&feed);
     assert_eq!(rx.recv_timeout(DEADLINE).unwrap(), Vec::<String>::new());
+}
+
+#[test]
+fn a_stop_between_the_first_scan_check_and_wait_releases_a_listing() {
+    let temp = Temp::new();
+    let (feed, _) = new_feed(&temp);
+    let (arrived, release) = pause_settle_wait(&feed);
+    let rx = listing(&feed);
+    await_pause(&arrived);
+    stop_within(&feed);
+    release.send(()).unwrap();
+    assert_eq!(rx.recv_timeout(DEADLINE).unwrap(), Vec::<String>::new());
+}
+
+#[test]
+fn a_scan_finish_between_the_first_scan_check_and_wait_releases_a_listing() {
+    let temp = Temp::new();
+    let (feed, clock) = new_feed(&temp);
+    let (arrived, release) = pause_settle_wait(&feed);
+    let rx = listing(&feed);
+    await_pause(&arrived);
+    start(&feed, &clock);
+    release.send(()).unwrap();
+    assert_eq!(rx.recv_timeout(DEADLINE).unwrap(), Vec::<String>::new());
+    stop_within(&feed);
+}
+
+#[test]
+fn a_status_between_the_post_scan_check_and_wait_releases_a_listing() {
+    let temp = Temp::new();
+    let (feed, _clock, _session, _until) = parked_on_silent(&temp);
+    let (arrived, release) = pause_settle_wait(&feed);
+    let rx = listing(&feed);
+    await_pause(&arrived);
+    let line = status_line(&id(1), &status("n", "/w", "idle", None));
+    assert!(feed.on_line(&id(1), line.as_bytes(), None));
+    release.send(()).unwrap();
+    assert_eq!(rx.recv_timeout(DEADLINE).unwrap(), [id(1)]);
+    stop_within(&feed);
 }
 
 #[test]
