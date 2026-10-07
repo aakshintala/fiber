@@ -2120,6 +2120,19 @@ fn budgeted(home: &Path, name: &str, content: &str, budget: Option<u64>) -> (Pat
     (path.clone(), vec![(name.into(), vec![path], budget)])
 }
 
+/// The prune lines a call to `tool` declaring `effects` over `paths` gets.
+fn pruned_with(
+    state: &State,
+    workspace: &Path,
+    tool: &str,
+    effects: Vec<Effect>,
+    paths: &[&str],
+) -> Vec<String> {
+    let mut call = declared(Some(paths));
+    call.effects = effects;
+    state.prune_lines(workspace, tool, &call)
+}
+
 /// The prune lines a `tool` call declaring `paths` gets.
 fn pruned(state: &State, workspace: &Path, tool: &str, paths: Option<&[&str]>) -> Vec<String> {
     state.prune_lines(workspace, tool, &declared(paths))
@@ -2246,4 +2259,50 @@ fn prune_lines_two_over_budget_sections_come_in_name_order() {
             "Fiber: these files are 8 bytes, over their budget of 7 bytes. Prune them.".to_owned(),
         ]
     );
+}
+
+#[test]
+fn prune_line_follows_a_declared_write_not_the_tool_name() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let (path, sections) = budgeted(&home, "fiber.test/notes", "123456", Some(5));
+    let fake = clock();
+    let state = initial_sectioned(&home, &workspace, &fake, sections);
+    let key = path.display().to_string();
+    let line = "Fiber: these files are 6 bytes, over their budget of 5 bytes. Prune them.";
+    // A tool of any name that declares `writes` gets the line.
+    assert_eq!(
+        pruned_with(
+            &state,
+            &workspace,
+            "notes",
+            vec![Effect::Writes],
+            &[key.as_str()]
+        ),
+        vec![line.to_owned()]
+    );
+    // Writes among other effects still counts.
+    assert_eq!(
+        pruned_with(
+            &state,
+            &workspace,
+            "notes",
+            vec![Effect::Reads, Effect::Writes],
+            &[key.as_str()]
+        ),
+        vec![line.to_owned()]
+    );
+    // A tool named `write` that declares only a read gets none.
+    assert!(
+        pruned_with(
+            &state,
+            &workspace,
+            "write",
+            vec![Effect::Reads],
+            &[key.as_str()]
+        )
+        .is_empty()
+    );
+    assert!(pruned_with(&state, &workspace, "write", Vec::new(), &[key.as_str()]).is_empty());
 }
