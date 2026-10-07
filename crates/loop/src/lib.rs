@@ -72,7 +72,7 @@ pub use prompt::PromptInputs;
 pub use resume::{Resumed, resumed};
 pub use retry::Retry;
 pub use reviewer::{BlockLimits, NO_MODEL_MESSAGE, Reviewer};
-pub use switch::{NO_SWITCH, Prepare, Prepared, Switchable};
+pub use switch::{Hosted, NO_SWITCH, Prepare, Prepared, Switchable};
 
 /// The model a session's calls reach, and the prices those calls are logged
 /// at (`docs/model-routing.md`, "Cost").

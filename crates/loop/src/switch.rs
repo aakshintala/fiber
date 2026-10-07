@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use contract::events::{Event, ModelSettings, Notice, SwitchSource};
 use contract::inbox::{Ack, Rejection};
+use contract::tool::Tool;
 use contract::{ErrorCode, ThinkingLevel};
 
 use crate::inbox::{CLOSING, accept, reject};
@@ -41,24 +42,38 @@ pub struct Prepared {
     pub handoff: crate::HandoffSettings,
     /// Who judges step 7's calls under the new model.
     pub reviewer: Result<crate::Reviewer, contract::shapes::Failure>,
-    /// The new model's hosted search type.
-    pub web_search: Option<String>,
+    /// What applying the switch does to the hosted search tool
+    /// (`docs/tools.md`, "Hosted by the provider").
+    pub web_search: Hosted,
     /// A configured thinking level the new model lacks.
     pub notice: Option<Notice>,
+    /// Runs once, when the switch applies; never for a rejected switch or
+    /// one that changes no setting.
+    pub applied: Option<Box<dyn FnOnce() + Send>>,
 }
 
-/// What the session started with: the session's own thinking choice and
-/// its hosted search type.
+/// The hosted search tool after a switch applies. The tool set changes
+/// only when the preamble is built, so the switch's rebuild declares it
+/// (`docs/tools.md`, "Which tools the model sees").
+pub enum Hosted {
+    /// The tools stay as they are.
+    Keep,
+    /// Registers the tool by `builtin` under its own name, replacing any
+    /// tool of that name.
+    Declare(Arc<dyn Tool>),
+    /// Removes the tool of this name.
+    Withdraw(String),
+}
+
+/// What the session started with: the session's own thinking choice.
 #[derive(Debug, Clone)]
 pub struct Switchable {
     /// The session's own explicit choice at start.
     pub chosen: Option<ThinkingLevel>,
-    /// The hosted search type the session started with.
-    pub web_search: Option<String>,
 }
 
 /// Prepares a switch without changing any state: resolves the typed
-/// reference, thinking, credential, reviewer and search type from what
+/// reference, thinking, credential, reviewer and hosted search from what
 /// startup built. A rejection leaves nothing changed.
 pub type Prepare = Arc<
     dyn Fn(&contract::commands::ModelArgs, Option<ThinkingLevel>) -> Result<Prepared, Rejection>
@@ -71,8 +86,7 @@ pub const NO_SWITCH: &str = "This session cannot switch model.";
 
 impl Loop {
     /// Prepares switches with `prepare`: what startup composed for a
-    /// second model. `at_start` is the session's own choice and its
-    /// hosted search type at start.
+    /// second model. `at_start` is the session's own choice at start.
     pub fn switcher(mut self, prepare: Prepare, at_start: Switchable) -> Self {
         // A resumed `chosen` stands when the switcher names none: the
         // fold already seeded it from the last `model_changed`.
@@ -110,7 +124,7 @@ impl Loop {
             reject(ack, ErrorCode::Closing, CLOSING);
             return Ok(());
         }
-        let Some((prepare, switchable)) = self.switcher.as_ref() else {
+        let Some((prepare, _)) = self.switcher.as_ref() else {
             reject(ack, ErrorCode::InvalidArguments, NO_SWITCH);
             return Ok(());
         };
@@ -135,21 +149,6 @@ impl Loop {
                 ErrorCode::InvalidArguments,
                 &format!(
                     "`{}` is this session's reviewer model; set `reviewer.model` to another model first.",
-                    prepared.model.reference
-                ),
-            );
-            return Ok(());
-        }
-        // debt: the switch keeps the session's hosted search (#1094);
-        // #1094 lifts it after #649 merges.
-        if let Some(started) = &switchable.web_search
-            && prepared.web_search.as_ref() != Some(started)
-        {
-            reject(
-                ack,
-                ErrorCode::InvalidArguments,
-                &format!(
-                    "`{}` does not host the session's search `{started}`.",
                     prepared.model.reference
                 ),
             );
@@ -218,6 +217,22 @@ impl Loop {
             self.handoff.settings = prepared.handoff;
             self.reviewer = prepared.reviewer;
             self.reviewer_sent = None;
+            match prepared.web_search {
+                Hosted::Keep => {}
+                Hosted::Declare(tool) => {
+                    let definition = tool.definition();
+                    self.tools.insert(
+                        definition.name.clone(),
+                        ("builtin".to_owned(), tool, definition),
+                    );
+                }
+                Hosted::Withdraw(name) => {
+                    self.tools.remove(&name);
+                }
+            }
+            if let Some(applied) = prepared.applied {
+                applied();
+            }
             self.chosen = prepared.chosen;
             self.preamble = None;
             self.preamble_reason = contract::events::PreambleReason::Switch;

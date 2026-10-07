@@ -12,6 +12,7 @@
 
 mod support;
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
@@ -21,7 +22,7 @@ use contract::inbox::{Ack, Answer, Delivery, Rejection};
 use contract::provider::Provider;
 use contract::{Envelope, ErrorCode, ThinkingLevel};
 use fakes::{Scripted, ScriptedProvider};
-use r#loop::{HandoffSettings, Model, NO_SWITCH, Prepare, Prepared, Reviewer, Switchable};
+use r#loop::{HandoffSettings, Hosted, Model, NO_SWITCH, Prepare, Prepared, Reviewer, Switchable};
 
 use support::{DEADLINE, MODEL, Session, delivery, kinds, model};
 
@@ -83,18 +84,16 @@ fn prepare_to(
                 addendum: None,
                 handoff: HandoffSettings::default(),
                 reviewer: no_reviewer(),
-                web_search: None,
+                web_search: Hosted::Keep,
                 notice: None,
+                applied: None,
             })
         },
     )
 }
 
 fn switchable() -> Switchable {
-    Switchable {
-        chosen: None,
-        web_search: None,
-    }
+    Switchable { chosen: None }
 }
 
 fn with_switch(session: &mut Session, prepare: Prepare, switchable: Switchable) {
@@ -328,8 +327,9 @@ fn after_close_prepare_is_not_called() {
             addendum: None,
             handoff: HandoffSettings::default(),
             reviewer: no_reviewer(),
-            web_search: None,
+            web_search: Hosted::Keep,
             notice: None,
+            applied: None,
         })
     });
     let mut session = Session::new(vec![Scripted::text("Old.")], None);
@@ -864,8 +864,9 @@ fn a_new_model_lacking_the_chosen_level_is_invalid_arguments() {
                 addendum: None,
                 handoff: HandoffSettings::default(),
                 reviewer: no_reviewer(),
-                web_search: None,
+                web_search: Hosted::Keep,
                 notice: None,
+                applied: None,
             })
         },
     );
@@ -911,8 +912,9 @@ fn reviewer_collision_is_invalid_arguments_and_changes_nothing() {
                 cache_lifetime: CacheLifetime::OneHour,
                 context_window: fakes::CONTEXT_WINDOW,
             }),
-            web_search: None,
+            web_search: Hosted::Keep,
             notice: None,
+            applied: None,
         })
     });
     let mut session = Session::new(
@@ -940,52 +942,288 @@ fn reviewer_collision_is_invalid_arguments_and_changes_nothing() {
     assert!(of_kind(&lines, "model_changed").is_empty());
 }
 
+/// A tool the provider hosts, of the vendor type `kind`.
+struct HostedFake(&'static str);
+
+impl contract::tool::Tool for HostedFake {
+    fn definition(&self) -> contract::provider::ToolDefinition {
+        contract::provider::ToolDefinition {
+            name: "web_search".into(),
+            description: String::new(),
+            input_schema: serde_json::json!({}),
+            deferred: false,
+            hosted: Some(self.0.into()),
+        }
+    }
+
+    fn effects(
+        &self,
+        _arguments: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<contract::tool::Effects, contract::tool::EffectsError> {
+        Ok(contract::tool::Effects {
+            declared: contract::shapes::DeclaredEffects {
+                effects: vec![Effect::Network],
+                reversible: true,
+                paths: None,
+            },
+            subject: Some(String::new()),
+            prefix: None,
+        })
+    }
+
+    fn run(
+        &self,
+        _arguments: &serde_json::Map<String, serde_json::Value>,
+        _cancel: &dyn contract::tool::Cancel,
+        _emit: &dyn contract::emit::Emit,
+    ) -> contract::tool::Output {
+        contract::tool::Output::default()
+    }
+}
+
+/// A `Prepare` that switches to `NEW_MODEL` on `provider` with the hosted
+/// search `hosted` makes, counting each `applied` call in `applied`.
+fn prepare_hosted(
+    provider: Arc<ScriptedProvider>,
+    hosted: impl Fn() -> Hosted + Send + Sync + 'static,
+    applied: Arc<AtomicUsize>,
+) -> Prepare {
+    Arc::new(move |_, chosen| {
+        let count = Arc::clone(&applied);
+        Ok(Prepared {
+            provider: Arc::clone(&provider) as Arc<dyn Provider>,
+            model: model_of(NEW_MODEL),
+            thinking: None,
+            chosen,
+            credential: Some("work".into()),
+            cache_lifetime: CacheLifetime::OneHour,
+            context_window: fakes::CONTEXT_WINDOW,
+            addendum: None,
+            handoff: HandoffSettings::default(),
+            reviewer: no_reviewer(),
+            web_search: hosted(),
+            notice: None,
+            applied: Some(Box::new(move || {
+                count.fetch_add(1, Ordering::SeqCst);
+            })),
+        })
+    })
+}
+
+/// The hosted type of the `web_search` a request declares, if it declares one.
+fn hosted_in(request: &contract::provider::ModelRequest) -> Option<Option<String>> {
+    request
+        .tools
+        .iter()
+        .find(|tool| tool.name == "web_search")
+        .map(|tool| tool.hosted.clone())
+}
+
+/// One session started with the hosted search of type `type_a`, switched
+/// between turns with `hosted`: the start's request, the switched
+/// request, and the switched turn's lines.
+fn switch_hosted(
+    hosted: impl Fn() -> Hosted + Send + Sync + 'static,
+) -> (
+    contract::provider::ModelRequest,
+    contract::provider::ModelRequest,
+    Vec<Envelope>,
+) {
+    let next = new_provider(vec![Scripted::text("New.")]);
+    let mut session = Session::with_tools(
+        vec![Scripted::text("Old.")],
+        None,
+        vec![Arc::new(HostedFake("type_a")) as Arc<dyn contract::tool::Tool>],
+    );
+    with_switch(
+        &mut session,
+        prepare_hosted(Arc::clone(&next), hosted, Arc::default()),
+        switchable(),
+    );
+    let (outcome, first) = run(&mut session, "hi");
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(&first, &[OPENING, STEP, REPLY, ENDED]);
+    session.inbox.send(model(NEW_MODEL, None)).unwrap();
+    let (outcome, lines) = run(&mut session, "again");
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(&lines, &[SWITCHED_OPENING, STEP, REPLY, ENDED]);
+    let started = session.requests().remove(0);
+    let switched = next.requests().remove(0);
+    (started, switched, lines)
+}
+
+/// The names `preamble_built` declares in `lines`, with each one's
+/// `registered_by`.
+fn declared(lines: &[Envelope]) -> Vec<(String, String)> {
+    let built = of_kind(lines, "preamble_built");
+    built[0].payload["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| {
+            (
+                tool["name"].as_str().unwrap().to_owned(),
+                tool["registered_by"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect()
+}
+
 #[test]
-fn hosted_search_mismatch_is_invalid_arguments_in_both_directions() {
-    for prepared_search in [None, Some("other_search".to_owned())] {
-        let provider = new_provider(vec![]);
-        let prepare: Prepare = Arc::new(move |_, _| {
-            Ok(Prepared {
+fn a_declared_hosted_search_replaces_the_one_the_session_started_with() {
+    let (started, switched, lines) =
+        switch_hosted(|| Hosted::Declare(Arc::new(HostedFake("type_b"))));
+    assert_eq!(hosted_in(&started), Some(Some("type_a".into())));
+    assert_eq!(hosted_in(&switched), Some(Some("type_b".into())));
+    assert_eq!(
+        declared(&lines),
+        vec![("web_search".to_owned(), "builtin".to_owned())]
+    );
+}
+
+#[test]
+fn a_withdrawn_hosted_search_is_not_declared() {
+    let (started, switched, lines) = switch_hosted(|| Hosted::Withdraw("web_search".into()));
+    assert_eq!(hosted_in(&started), Some(Some("type_a".into())));
+    assert_eq!(hosted_in(&switched), None);
+    assert!(declared(&lines).is_empty());
+}
+
+#[test]
+fn a_kept_hosted_search_stays() {
+    let (_, switched, lines) = switch_hosted(|| Hosted::Keep);
+    assert_eq!(hosted_in(&switched), Some(Some("type_a".into())));
+    assert_eq!(
+        declared(&lines),
+        vec![("web_search".to_owned(), "builtin".to_owned())]
+    );
+}
+
+#[test]
+fn applied_runs_once_when_the_switch_applies() {
+    // Idle: the switch applies at once.
+    let applied = Arc::new(AtomicUsize::new(0));
+    let next = new_provider(vec![Scripted::text("New.")]);
+    let mut session = Session::new(vec![Scripted::text("Old.")], None);
+    with_switch(
+        &mut session,
+        prepare_hosted(Arc::clone(&next), || Hosted::Keep, Arc::clone(&applied)),
+        switchable(),
+    );
+    session.inbox.send(model(NEW_MODEL, None)).unwrap();
+    let (outcome, _) = run(&mut session, "hi");
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_eq!(applied.load(Ordering::SeqCst), 1);
+
+    // Admitted during a turn: it runs after `turn_completed`, when the
+    // next turn applies the switch.
+    let applied = Arc::new(AtomicUsize::new(0));
+    let next = new_provider(vec![Scripted::text("New.")]);
+    let mut session = Session::with_tools_injecting(
+        vec![Scripted::text("Old.")],
+        vec![model(NEW_MODEL, None)],
+        Vec::new(),
+    );
+    with_switch(
+        &mut session,
+        prepare_hosted(Arc::clone(&next), || Hosted::Keep, Arc::clone(&applied)),
+        switchable(),
+    );
+    let (outcome, first) = run(&mut session, "hi");
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(&first, &[OPENING, STEP, REPLY, ENDED]);
+    assert_eq!(applied.load(Ordering::SeqCst), 0, "not before the boundary");
+    let (outcome, lines) = run(&mut session, "again");
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(&lines, &[SWITCHED_OPENING, STEP, REPLY, ENDED]);
+    assert_eq!(applied.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn applied_never_runs_for_a_rejected_or_noop_switch() {
+    // Rejected by the loop's own check: the new reviewer is the new model.
+    let applied = Arc::new(AtomicUsize::new(0));
+    let provider = new_provider(vec![]);
+    let count = Arc::clone(&applied);
+    let prepare: Prepare = Arc::new(move |_, _| {
+        let count = Arc::clone(&count);
+        Ok(Prepared {
+            provider: Arc::clone(&provider) as Arc<dyn Provider>,
+            model: model_of(NEW_MODEL),
+            thinking: None,
+            chosen: None,
+            credential: Some("work".into()),
+            cache_lifetime: CacheLifetime::OneHour,
+            context_window: fakes::CONTEXT_WINDOW,
+            addendum: None,
+            handoff: HandoffSettings::default(),
+            reviewer: Ok(Reviewer {
                 provider: Arc::clone(&provider) as Arc<dyn Provider>,
                 model: model_of(NEW_MODEL),
-                thinking: None,
-                chosen: None,
-                credential: Some("work".into()),
                 cache_lifetime: CacheLifetime::OneHour,
                 context_window: fakes::CONTEXT_WINDOW,
-                addendum: None,
-                handoff: HandoffSettings::default(),
-                reviewer: no_reviewer(),
-                web_search: prepared_search.clone(),
-                notice: None,
-            })
-        });
-        let mut session = Session::new(
-            vec![Scripted::text("Old."), Scripted::text("Old again.")],
-            None,
-        );
-        with_switch(
-            &mut session,
-            prepare,
-            Switchable {
-                chosen: None,
-                web_search: Some("web_search_20250305".into()),
-            },
-        );
-        let (tx, rx) = mpsc::channel::<Answer>();
-        session
-            .inbox
-            .send(support::model_reported(NEW_MODEL, None, tx))
-            .unwrap();
-        let (outcome, first) = run(&mut session, "hi");
-        assert_eq!(outcome, Some(TurnOutcome::Completed));
-        assert_kinds(&first, &[OPENING, STEP, REPLY, ENDED]);
-        let rejected = rx
-            .recv_timeout(DEADLINE)
-            .expect("the model is answered")
-            .unwrap_err();
-        assert_eq!(rejected.code, ErrorCode::InvalidArguments);
-    }
+            }),
+            web_search: Hosted::Keep,
+            notice: None,
+            applied: Some(Box::new(move || {
+                count.fetch_add(1, Ordering::SeqCst);
+            })),
+        })
+    });
+    let mut session = Session::new(vec![Scripted::text("Old.")], None);
+    with_switch(&mut session, prepare, switchable());
+    let (tx, rx) = mpsc::channel::<Answer>();
+    session
+        .inbox
+        .send(support::model_reported(NEW_MODEL, None, tx))
+        .unwrap();
+    let (outcome, lines) = run(&mut session, "hi");
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(&lines, &[OPENING, STEP, REPLY, ENDED]);
+    let rejected = rx
+        .recv_timeout(DEADLINE)
+        .expect("the model is answered")
+        .unwrap_err();
+    assert_eq!(rejected.code, ErrorCode::InvalidArguments);
+    assert_eq!(applied.load(Ordering::SeqCst), 0);
+
+    // A no-op: the same model, thinking, credential and lifetime.
+    let applied = Arc::new(AtomicUsize::new(0));
+    let same = new_provider(vec![]);
+    let count = Arc::clone(&applied);
+    let noop: Prepare = Arc::new(move |_, chosen| {
+        let count = Arc::clone(&count);
+        Ok(Prepared {
+            provider: Arc::clone(&same) as Arc<dyn Provider>,
+            model: model_of(MODEL),
+            thinking: None,
+            chosen,
+            credential: Some("work".into()),
+            cache_lifetime: CacheLifetime::OneHour,
+            context_window: fakes::CONTEXT_WINDOW,
+            addendum: None,
+            handoff: HandoffSettings::default(),
+            reviewer: no_reviewer(),
+            web_search: Hosted::Withdraw("web_search".into()),
+            notice: None,
+            applied: Some(Box::new(move || {
+                count.fetch_add(1, Ordering::SeqCst);
+            })),
+        })
+    });
+    let mut session = Session::new(
+        vec![Scripted::text("Old."), Scripted::text("Old again.")],
+        None,
+    );
+    with_switch(&mut session, noop, switchable());
+    let (outcome, first) = run(&mut session, "hi");
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(&first, &[OPENING, STEP, REPLY, ENDED]);
+    session.inbox.send(model(MODEL, None)).unwrap();
+    let (outcome, lines) = run(&mut session, "again");
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(&lines, &[&["turn_started"] as &[&str], STEP, REPLY, ENDED]);
+    assert_eq!(applied.load(Ordering::SeqCst), 0);
 }
 
 #[test]
@@ -1015,8 +1253,9 @@ fn two_switches_apply_in_order_with_one_rebuild() {
                 addendum: None,
                 handoff: HandoffSettings::default(),
                 reviewer: no_reviewer(),
-                web_search: None,
+                web_search: Hosted::Keep,
                 notice: None,
+                applied: None,
             })
         },
     );
@@ -1095,12 +1334,13 @@ fn a_notice_is_written_after_model_changed() {
             addendum: None,
             handoff: HandoffSettings::default(),
             reviewer: no_reviewer(),
-            web_search: None,
+            web_search: Hosted::Keep,
             notice: Some(Notice {
                 code: ErrorCode::ConfigKeyIgnored,
                 message: "Thinking `high` is not a level of `fake/model-2`.".into(),
                 extension: None,
             }),
+            applied: None,
         })
     });
     let mut session = Session::new(vec![Scripted::text("Old.")], None);
@@ -1155,8 +1395,9 @@ fn a_switch_replaces_the_reviewer() {
                 cache_lifetime: CacheLifetime::OneHour,
                 context_window: fakes::CONTEXT_WINDOW,
             }),
-            web_search: None,
+            web_search: Hosted::Keep,
             notice: None,
+            applied: None,
         })
     });
     let tool = executes_tool();
@@ -1321,8 +1562,9 @@ fn resume_interleaving_holds_arrival_order() {
                 addendum: None,
                 handoff: HandoffSettings::default(),
                 reviewer: no_reviewer(),
-                web_search: None,
+                web_search: Hosted::Keep,
                 notice: None,
+                applied: None,
             })
         },
     );

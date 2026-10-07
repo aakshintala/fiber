@@ -27,6 +27,39 @@ use support::*;
 /// the fake server, and makes `fake/m` the configured model. `n` takes
 /// `low` and `high`, defaulting to `low`.
 fn install_switch_provider(setup: &Setup, server: &ProviderServer) {
+    install_models(
+        setup,
+        &json!([
+            {"id": "m", "protocol": "openai-responses",
+             "base_url": format!("{}/v1", server.url()), "context_window": 100000},
+            {"id": "n", "protocol": "openai-responses",
+             "base_url": format!("{}/v1", server.url()), "context_window": 100000,
+             "thinking_levels": ["low", "high"], "thinking_default": "low"},
+        ]),
+        "fake/m",
+    );
+}
+
+/// Installs a provider `fake` with `m` on `openai-responses` and `w` on
+/// `anthropic-messages` with the hosted search `web_search_20250305`, both
+/// at the fake server, and makes `configured` the configured model.
+fn install_hosted_provider(setup: &Setup, server: &ProviderServer, configured: &str) {
+    install_models(
+        setup,
+        &json!([
+            {"id": "m", "protocol": "openai-responses",
+             "base_url": format!("{}/v1", server.url()), "context_window": 100000},
+            {"id": "w", "protocol": "anthropic-messages",
+             "base_url": format!("{}/v1", server.url()), "context_window": 100000,
+             "web_search": "web_search_20250305"},
+        ]),
+        configured,
+    );
+}
+
+/// Installs a provider `fake` whose models are `models`, reading its key
+/// from `FIBER_TEST_FAKE_KEY`, and makes `configured` the configured model.
+fn install_models(setup: &Setup, models: &Value, configured: &str) {
     let source = setup.root.path().join("src");
     write_json(
         &source.join("extension.json"),
@@ -37,13 +70,7 @@ fn install_switch_provider(setup: &Setup, server: &ProviderServer) {
         &json!({
             "name": "fake",
             "credential": {"env": "FIBER_TEST_FAKE_KEY"},
-            "models": [
-                {"id": "m", "protocol": "openai-responses",
-                 "base_url": format!("{}/v1", server.url()), "context_window": 100000},
-                {"id": "n", "protocol": "openai-responses",
-                 "base_url": format!("{}/v1", server.url()), "context_window": 100000,
-                 "thinking_levels": ["low", "high"], "thinking_default": "low"},
-            ]
+            "models": models,
         }),
     );
     extensions::plan(
@@ -58,7 +85,7 @@ fn install_switch_provider(setup: &Setup, server: &ProviderServer) {
     .unwrap();
     write_json(
         &setup.home().join("config.json"),
-        &json!({"model": "fake/m"}),
+        &json!({"model": configured}),
     );
 }
 
@@ -1026,4 +1053,239 @@ fn a_resume_restores_the_switched_model_and_level() {
     assert_eq!(seen.len(), 3, "{seen:?}");
     assert_eq!(seen[2]["model"], "n");
     assert_eq!(seen[2]["reasoning"]["effort"], "high");
+}
+
+/// An `anthropic-messages` reply of `Hello.`.
+fn anthropic_hello() -> Response {
+    let events = [
+        json!({"type": "message_start", "message": {"id": "msg_1"}}),
+        json!({"type": "content_block_start", "index": 0,
+            "content_block": {"type": "text", "text": ""}}),
+        json!({"type": "content_block_delta", "index": 0,
+            "delta": {"type": "text_delta", "text": "Hello."}}),
+        json!({"type": "content_block_stop", "index": 0}),
+        json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"},
+            "usage": {"input_tokens": 10, "output_tokens": 3}}),
+        json!({"type": "message_stop"}),
+    ];
+    Response::stream(
+        events
+            .iter()
+            .map(|event| format!("data: {event}\n\n"))
+            .collect::<String>(),
+    )
+}
+
+/// Each request body the fake server saw, by path, in arrival order.
+fn all_bodies(server: &ProviderServer) -> Vec<(String, Value)> {
+    server
+        .requests()
+        .into_iter()
+        .map(|request| (request.path, serde_json::from_slice(&request.body).unwrap()))
+        .collect()
+}
+
+/// The `web_search` entries of a request body's `tools`.
+fn searches(body: &Value) -> Vec<Value> {
+    body["tools"]
+        .as_array()
+        .map(|tools| {
+            tools
+                .iter()
+                .filter(|tool| tool["name"] == "web_search")
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Asks for the `tools` answer as `id` and returns its lines and its
+/// `web_search` entries.
+fn tools_answer(client: &Socket, id: &str) -> (Vec<Value>, Vec<Value>) {
+    client.send(&format!(r#"{{"id":"{id}","command":"tools"}}"#));
+    let lines = until(client, "the tools answer", |line| {
+        line["payload"]["command_id"] == id
+    });
+    let answer = lines.last().unwrap();
+    assert_eq!(answer["kind"], "command_accepted", "{answer}");
+    let tools = answer["payload"]["result"]["tools"].as_array().unwrap();
+    let mut names: Vec<&str> = tools
+        .iter()
+        .map(|tool| tool["name"].as_str().unwrap())
+        .collect();
+    let listed = names.clone();
+    names.sort_unstable();
+    assert!(
+        names.windows(2).all(|pair| pair[0] != pair[1]),
+        "{listed:?}"
+    );
+    let found = tools
+        .iter()
+        .filter(|tool| tool["name"] == "web_search")
+        .cloned()
+        .collect();
+    (lines, found)
+}
+
+/// A switched session's stream, its two `web_search` answers and its
+/// request bodies by path.
+type Switched = (Vec<Value>, [Vec<Value>; 2], Vec<(String, Value)>);
+
+/// Runs one session started on `from`: a turn, the `tools` answer, a
+/// switch to `to`, a turn, the `tools` answer, then `close`. Returns the
+/// stream, the two `web_search` answers and the request bodies.
+fn switch_and_list(from: &str, to: &str, replies: [Response; 2]) -> Switched {
+    let setup = Setup::new();
+    let server = ProviderServer::start(replies).unwrap();
+    install_hosted_provider(&setup, &server, from);
+    let id = doors::mint("s_");
+    let running = start_session(&setup, &id, &[]);
+    let client = running.connect(&setup.session_socket(&id));
+    running.wait_for("extensions_loaded");
+    let mut stream = vec![subscribe(&client)];
+    prompt(&client, "c_prompt", "hi");
+    stream.extend(until(&client, "turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    }));
+    let (lines, before) = tools_answer(&client, "c_t0");
+    stream.extend(lines);
+    model(&client, "c_model", to, None);
+    stream.extend(until(&client, "model_changed", |line| {
+        line["kind"] == "model_changed"
+    }));
+    // The switch applied before the next turn starts, so the answer after
+    // that turn shows it.
+    prompt(&client, "c_again", "again");
+    stream.extend(until(&client, "turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    }));
+    let (lines, after) = tools_answer(&client, "c_t1");
+    stream.extend(lines);
+    close(&client);
+    stream.extend(until_close(&client));
+    drop(client);
+    let (status, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+    let reply: &[&str] = &[
+        "step_started",
+        "assistant_message_started",
+        "assistant_message_delta",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+    ];
+    let openai_reply: &[&str] = &[
+        "step_started",
+        "assistant_message_started",
+        "assistant_message_delta",
+        "assistant_message_delta",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+    ];
+    let (first, second) = if from.ends_with("/w") {
+        (reply, openai_reply)
+    } else {
+        (openai_reply, reply)
+    };
+    let expected = [
+        &[
+            "command_accepted",
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "clients",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "command_accepted",
+        ] as &[&str],
+        first,
+        &[
+            "turn_completed",
+            "command_accepted",
+            "command_accepted",
+            "model_changed",
+            "preamble_built",
+            "turn_started",
+            "command_accepted",
+        ],
+        second,
+        &[
+            "turn_completed",
+            "command_accepted",
+            "command_accepted",
+            "fiber_exited",
+        ],
+    ]
+    .concat();
+    assert_eq!(kinds(&stream), expected);
+    let built = stream
+        .iter()
+        .rev()
+        .find(|line| line["kind"] == "preamble_built")
+        .unwrap();
+    assert_eq!(built["payload"]["reason"], "switch");
+    (stream, [before, after], all_bodies(&server))
+}
+
+#[test]
+fn a_switch_to_a_model_without_hosted_search_withdraws_it() {
+    let (stream, [before, after], seen) =
+        switch_and_list("fake/w", "fake/m", [anthropic_hello(), hello()]);
+    assert_eq!(before.len(), 1, "{before:?}");
+    assert_eq!(before[0]["source"], "builtin");
+    assert!(after.is_empty(), "{after:?}");
+    let built = stream
+        .iter()
+        .rev()
+        .find(|line| line["kind"] == "preamble_built")
+        .unwrap();
+    assert!(
+        built["payload"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|tool| tool["name"] != "web_search"),
+        "{built}"
+    );
+    assert_eq!(seen.len(), 2, "{seen:?}");
+    assert_eq!(seen[0].0, "/v1/messages");
+    assert_eq!(
+        searches(&seen[0].1),
+        vec![json!({"type": "web_search_20250305", "name": "web_search"})]
+    );
+    assert_eq!(seen[1].0, "/v1/responses");
+    assert!(searches(&seen[1].1).is_empty(), "{:?}", seen[1].1);
+}
+
+#[test]
+fn a_switch_to_a_model_with_hosted_search_declares_it() {
+    let (stream, [before, after], seen) =
+        switch_and_list("fake/m", "fake/w", [hello(), anthropic_hello()]);
+    assert!(before.is_empty(), "{before:?}");
+    assert_eq!(after.len(), 1, "{after:?}");
+    assert_eq!(after[0]["source"], "builtin");
+    assert_eq!(after[0]["state"], "full");
+    let built = stream
+        .iter()
+        .rev()
+        .find(|line| line["kind"] == "preamble_built")
+        .unwrap();
+    let declared: Vec<&Value> = built["payload"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|tool| tool["name"] == "web_search")
+        .collect();
+    assert_eq!(declared.len(), 1, "{built}");
+    assert_eq!(declared[0]["registered_by"], "builtin");
+    assert_eq!(seen.len(), 2, "{seen:?}");
+    assert_eq!(seen[0].0, "/v1/responses");
+    assert!(searches(&seen[0].1).is_empty(), "{:?}", seen[0].1);
+    assert_eq!(seen[1].0, "/v1/messages");
+    assert_eq!(
+        searches(&seen[1].1),
+        vec![json!({"type": "web_search_20250305", "name": "web_search"})]
+    );
 }

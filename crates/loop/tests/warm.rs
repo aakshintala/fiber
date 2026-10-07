@@ -760,8 +760,9 @@ fn a_switch_while_warming_sends_no_refresh_and_restarts_idle_from_the_switch() {
                     retry_after_ms: None,
                     provider: None,
                 }),
-                web_search: None,
+                web_search: r#loop::Hosted::Keep,
                 notice: None,
+                applied: None,
             })
         },
     );
@@ -770,13 +771,11 @@ fn a_switch_while_warming_sends_no_refresh_and_restarts_idle_from_the_switch() {
         CacheLifetime::FiveMinutes,
     );
     {
-        let looped = session.looped.take().unwrap().switcher(
-            prepare,
-            r#loop::Switchable {
-                chosen: None,
-                web_search: None,
-            },
-        );
+        let looped = session
+            .looped
+            .take()
+            .unwrap()
+            .switcher(prepare, r#loop::Switchable { chosen: None });
         session.looped = Some(looped);
     }
     arm(&mut session, MINUTE, Some(2));
@@ -870,8 +869,9 @@ fn a_during_turn_switch_followed_by_a_turn_keeps_warming_the_new_cache() {
                     retry_after_ms: None,
                     provider: None,
                 }),
-                web_search: None,
+                web_search: r#loop::Hosted::Keep,
                 notice: None,
+                applied: None,
             })
         },
     );
@@ -883,13 +883,11 @@ fn a_during_turn_switch_followed_by_a_turn_keeps_warming_the_new_cache() {
         Vec::new(),
     );
     {
-        let looped = session.looped.take().unwrap().switcher(
-            prepare,
-            r#loop::Switchable {
-                chosen: None,
-                web_search: None,
-            },
-        );
+        let looped = session
+            .looped
+            .take()
+            .unwrap()
+            .switcher(prepare, r#loop::Switchable { chosen: None });
         session.looped = Some(looped);
     }
     arm(&mut session, MINUTE, Some(2));

@@ -17,7 +17,7 @@ use contract::{ErrorCode, ThinkingLevel};
 use extensions::Providers;
 use serde_json::json;
 
-use super::{Credentials, Switching, prepare, resolve, sentence};
+use super::{Credentials, Door, Switching, hosted_stands, prepare, resolve, sentence};
 
 /// The fixture home, workspace and config: `fake` with `m`, `n` (low and
 /// high, defaulting low, with an addendum) and `r`; `claude` with the
@@ -176,6 +176,43 @@ fn args(model: &str) -> ModelArgs {
     }
 }
 
+/// A door whose `tools` answer goes nowhere.
+fn quiet() -> Door {
+    Door {
+        declare: Arc::new(|_, _| {}),
+        hosted_stands: false,
+    }
+}
+
+/// A door recording every `tools` change, by name and hosted type.
+type Declared = Arc<std::sync::Mutex<Vec<(String, Option<String>)>>>;
+
+fn recording(hosted_stands: bool) -> (Door, Declared) {
+    let declared: Declared = Arc::default();
+    let seen = Arc::clone(&declared);
+    let door = Door {
+        declare: Arc::new(move |name, info| {
+            seen.lock()
+                .unwrap()
+                .push((name.to_owned(), info.map(|info| info.name)));
+        }),
+        hosted_stands,
+    };
+    (door, declared)
+}
+
+/// The tool a `Declare` registers, its registrant left to the loop.
+fn declared_type(hosted: &r#loop::Hosted) -> Option<Option<String>> {
+    match hosted {
+        r#loop::Hosted::Declare(tool) => {
+            let definition = tool.definition();
+            assert_eq!(definition.name, "web_search");
+            Some(definition.hosted)
+        }
+        r#loop::Hosted::Keep | r#loop::Hosted::Withdraw(_) => None,
+    }
+}
+
 /// A prepared switch: `prepare` succeeds, and `Prepared` is no `Debug`, so
 /// no `unwrap`.
 fn prepared(
@@ -183,7 +220,7 @@ fn prepared(
     args: &ModelArgs,
     chosen: Option<ThinkingLevel>,
 ) -> r#loop::Prepared {
-    match prepare(switching, args, chosen) {
+    match prepare(switching, &quiet(), args, chosen) {
         Ok(prepared) => prepared,
         Err(rejection) => panic!("the switch rejected: {}", rejection.message),
     }
@@ -196,7 +233,7 @@ fn rejected(
     args: &ModelArgs,
     chosen: Option<ThinkingLevel>,
 ) -> contract::inbox::Rejection {
-    match prepare(switching, args, chosen) {
+    match prepare(switching, &quiet(), args, chosen) {
         Ok(_) => panic!("the switch prepared"),
         Err(rejection) => rejection,
     }
@@ -712,7 +749,6 @@ fn the_prepared_fields_follow_the_new_model() {
     );
     assert!(!made.handoff.enabled);
     let searched = prepared(&switching, &args("claude/w"), None);
-    assert_eq!(searched.web_search, Some("web_search_20250305".to_owned()));
     assert_eq!(searched.context_window, 500);
 }
 
@@ -1069,4 +1105,74 @@ fn a_switch_to_a_retained_cost_only_provider_carries_its_lookup() {
     let made = prepared(&switching, &args("openrouter/z-ai/glm-5.3-flash"), None);
     assert_eq!(made.model.reference, "openrouter/z-ai/glm-5.3-flash");
     assert!(made.provider.cost_lookup().is_some());
+}
+
+#[test]
+fn a_model_with_hosted_search_declares_it_and_applying_publishes_it() {
+    let fixture = fixture("fiber-switch-hosted-declare");
+    let switching = switching(&fixture, &["tools.web_search.max_result_bytes=100"]);
+    let (door, declared) = recording(false);
+    let Ok(made) = prepare(&switching, &door, &args("claude/w"), None) else {
+        panic!("the switch rejected");
+    };
+    assert_eq!(
+        declared_type(&made.web_search),
+        Some(Some("web_search_20250305".to_owned()))
+    );
+    assert!(
+        declared.lock().unwrap().is_empty(),
+        "nothing during preparation"
+    );
+    (made.applied.expect("applying publishes"))();
+    assert_eq!(
+        *declared.lock().unwrap(),
+        vec![("web_search".to_owned(), Some("web_search".to_owned()))]
+    );
+}
+
+#[test]
+fn a_model_without_hosted_search_withdraws_it_and_applying_removes_it() {
+    let fixture = fixture("fiber-switch-hosted-withdraw");
+    let switching = switching(&fixture, &[]);
+    let (door, declared) = recording(false);
+    let Ok(made) = prepare(&switching, &door, &args("fake/m"), None) else {
+        panic!("the switch rejected");
+    };
+    assert!(matches!(&made.web_search, r#loop::Hosted::Withdraw(name) if name == "web_search"));
+    (made.applied.expect("applying publishes"))();
+    assert_eq!(
+        *declared.lock().unwrap(),
+        vec![("web_search".to_owned(), None)]
+    );
+}
+
+#[test]
+fn a_standing_web_search_is_kept_and_nothing_is_published() {
+    let fixture = fixture("fiber-switch-hosted-keep");
+    let switching = switching(&fixture, &[]);
+    for model in ["claude/w", "fake/m"] {
+        let (door, declared) = recording(true);
+        let Ok(made) = prepare(&switching, &door, &args(model), None) else {
+            panic!("the switch rejected");
+        };
+        assert!(matches!(made.web_search, r#loop::Hosted::Keep), "{model}");
+        assert!(made.applied.is_none(), "{model}");
+        assert!(declared.lock().unwrap().is_empty(), "{model}");
+    }
+}
+
+#[test]
+fn only_a_web_search_from_another_registrant_stands() {
+    let hosted = || -> Arc<dyn contract::tool::Tool> {
+        let (tool, _) = crate::builtin::hosted("web_search_20250305").unwrap();
+        tool
+    };
+    let other: Arc<dyn contract::tool::Tool> = Arc::new(tools::Handoff);
+    assert!(!hosted_stands(&[]));
+    assert!(!hosted_stands(&[("builtin".to_owned(), hosted())]));
+    assert!(!hosted_stands(&[("search-ext".to_owned(), other)]));
+    assert!(hosted_stands(&[
+        ("builtin".to_owned(), hosted()),
+        ("search-ext".to_owned(), hosted()),
+    ]));
 }

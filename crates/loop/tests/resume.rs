@@ -5162,18 +5162,15 @@ fn resumed_thinking_seeds_the_session_choice_for_the_next_switch() {
                     retry_after_ms: None,
                     provider: None,
                 }),
-                web_search: None,
+                web_search: r#loop::Hosted::Keep,
                 notice: None,
+                applied: None,
             })
         },
     );
-    let looped = history.resume(Vec::new()).switcher(
-        prepare,
-        r#loop::Switchable {
-            chosen: None,
-            web_search: None,
-        },
-    );
+    let looped = history
+        .resume(Vec::new())
+        .switcher(prepare, r#loop::Switchable { chosen: None });
     // A model-only switch after the resume is given the folded choice.
     history
         .inbox_tx

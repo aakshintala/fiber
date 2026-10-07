@@ -102,7 +102,7 @@ struct Parts {
     mcp: mcp_servers::Specs,
     /// The second-model preparation, for `Loop::switcher`.
     switching: switch::Switching,
-    /// The session's own thinking choice and hosted search type at start.
+    /// The session's own thinking choice at start.
     switchable: r#loop::Switchable,
     /// The session model's hosted search type, such as `web_search_20250305`.
     web_search: Option<String>,
@@ -641,7 +641,6 @@ fn parts_in(
         // stands.
         switchable: r#loop::Switchable {
             chosen: model.thinking,
-            web_search: model.model.web_search.clone(),
         },
         web_search: model.model.web_search.clone(),
     })

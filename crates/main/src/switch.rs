@@ -35,7 +35,28 @@ pub(crate) struct Switching {
     registry: Providers,
     naming: Vec<(String, String)>,
     config: Config,
+    /// Each configured `tools."<name>".max_result_bytes`, for a hosted
+    /// search the switch declares.
+    caps: r#loop::ResultCaps,
     credentials: Credentials,
+}
+
+/// What a switch publishes to the session's door when it applies.
+pub(crate) struct Door {
+    /// Replaces or removes one entry of the `tools` answer.
+    pub(crate) declare: doors::Declare,
+    /// A `web_search` an extension or MCP server registered at start
+    /// replaced the hosted one, and it stands across switches.
+    pub(crate) hosted_stands: bool,
+}
+
+/// Whether a `web_search` registered by anything other than `builtin` is
+/// among `tools`: that one replaced the hosted search at start
+/// (`docs/architecture.md`, "Tool seam").
+pub(crate) fn hosted_stands(tools: &[(String, Arc<dyn contract::tool::Tool>)]) -> bool {
+    tools
+        .iter()
+        .any(|(by, tool)| by != "builtin" && tool.definition().name == "web_search")
 }
 
 impl Switching {
@@ -68,27 +89,30 @@ impl Switching {
         Ok(Self {
             registry,
             naming,
+            caps: crate::settings::result_caps(&config),
             config,
             credentials,
         })
     }
 
-    /// The `Loop::switcher` closure: `prepare` over the shared `Switching`.
-    pub(crate) fn closure(self) -> r#loop::Prepare {
+    /// The `Loop::switcher` closure: `prepare` over the shared `Switching`,
+    /// publishing to `door` when a switch applies.
+    pub(crate) fn closure(self, door: Door) -> r#loop::Prepare {
         let shared = Arc::new(self);
-        Arc::new(move |args, chosen| prepare(&shared, args, chosen))
+        Arc::new(move |args, chosen| prepare(&shared, &door, args, chosen))
     }
 }
 
 /// Prepares a switch without changing any state, from the same calls
 /// `parts_in` makes for the startup model: resolving, the credential the
 /// map holds, thinking, connecting, the re-chosen reviewer, the cache
-/// lifetime, the handoff settings and the addendum. A rejection changes
-/// nothing. The reviewer's failure is not a rejection: the loop gets it,
-/// and every reviewed call escalates it (`docs/permissions.md`, "How it
-/// runs").
+/// lifetime, the handoff settings, the addendum and the hosted search. A
+/// rejection changes nothing. The reviewer's failure is not a rejection:
+/// the loop gets it, and every reviewed call escalates it
+/// (`docs/permissions.md`, "How it runs").
 pub(crate) fn prepare(
     switching: &Switching,
+    door: &Door,
     args: &ModelArgs,
     chosen: Option<ThinkingLevel>,
 ) -> Result<r#loop::Prepared, Rejection> {
@@ -133,6 +157,7 @@ pub(crate) fn prepare(
         code: failure.code,
         message: failure.message,
     })?;
+    let (web_search, applied) = hosted(switching, door, resolved.model.web_search.as_deref())?;
     let lua = switching.registry.lua(&resolved.provider.name);
     let provider = crate::connect(resolved, key, signer, lua).map_err(|failure| Rejection {
         code: ErrorCode::InvalidArguments,
@@ -155,10 +180,51 @@ pub(crate) fn prepare(
         addendum: switching.registry.addendum(&resolved).map(str::to_owned),
         handoff: crate::handoff::handoff_settings(&switching.config, &reference),
         reviewer: reviewer_for(switching, &resolved),
-        web_search: resolved.model.web_search.clone(),
+        web_search,
         // At most one notice: a configured level the model lacks.
         notice: notices.into_iter().next(),
+        applied,
     })
+}
+
+/// What `Prepared.applied` runs when the switch applies.
+type Applied = Box<dyn FnOnce() + Send>;
+
+/// The hosted search after the switch, and what applying it publishes to
+/// the door's `tools` answer: the new model's hosted search when it has
+/// one, else none, unless another registrant's `web_search` stands
+/// (`docs/tools.md`, "Hosted by the provider").
+fn hosted(
+    switching: &Switching,
+    door: &Door,
+    kind: Option<&str>,
+) -> Result<(r#loop::Hosted, Option<Applied>), Rejection> {
+    if door.hosted_stands {
+        return Ok((r#loop::Hosted::Keep, None));
+    }
+    let declare = Arc::clone(&door.declare);
+    let Some(kind) = kind else {
+        let applied = Box::new(move || declare("web_search", None));
+        return Ok((
+            r#loop::Hosted::Withdraw("web_search".to_owned()),
+            Some(applied),
+        ));
+    };
+    let (tool, info) = crate::builtin::hosted(kind).map_err(|failure| Rejection {
+        code: failure.code,
+        message: failure.message,
+    })?;
+    let tool = r#loop::capped(
+        vec![("builtin".to_owned(), Arc::clone(&tool))],
+        &switching.caps,
+    )
+    .pop()
+    .map_or(tool, |(_, capped)| capped);
+    let applied = Box::new(move || {
+        let name = info.name.clone();
+        declare(&name, Some(info));
+    });
+    Ok((r#loop::Hosted::Declare(tool), Some(applied)))
 }
 
 /// Who judges step 7's calls under the new `session` model: the
