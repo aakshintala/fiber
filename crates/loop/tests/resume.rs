@@ -4711,3 +4711,84 @@ fn resumed_keeps_the_switch_thinking_as_the_session_choice() {
     assert_eq!(resumed.model.as_deref(), Some("fake/second"));
     assert_eq!(resumed.credential.as_deref(), Some("work"));
 }
+
+#[test]
+fn resumed_thinking_seeds_the_session_choice_for_the_next_switch() {
+    use std::sync::{Arc, Mutex};
+
+    let mut history = History::new(vec![Scripted::text("Hello."), Scripted::text("Again.")]);
+    history.write(preamble(Some("work")), None);
+    history.write(switched("fake/second", Some("high"), Some("work")), None);
+    history.freeze();
+
+    let recorded: Arc<Mutex<Vec<Option<contract::ThinkingLevel>>>> =
+        Arc::new(Mutex::new(Vec::new()));
+    let seen = Arc::clone(&recorded);
+    let next = Arc::new(ScriptedProvider::new(vec![Scripted::text("New.")]));
+    let prepare: r#loop::Prepare = Arc::new(
+        move |args: &contract::commands::ModelArgs, chosen: Option<contract::ThinkingLevel>| {
+            seen.lock().unwrap().push(chosen);
+            let thinking = match &args.thinking {
+                Some(level) => Some(level.parse().map_err(|_| contract::inbox::Rejection {
+                    code: contract::ErrorCode::InvalidArguments,
+                    message: "bad thinking".into(),
+                })?),
+                None => chosen,
+            };
+            let kept = thinking.or(chosen);
+            Ok(r#loop::Prepared {
+                provider: Arc::clone(&next) as Arc<dyn contract::provider::Provider>,
+                model: r#loop::Model {
+                    reference: "fake/third".into(),
+                    cost: None,
+                    subscription: false,
+                },
+                thinking: kept,
+                chosen: kept,
+                credential: Some("work".into()),
+                cache_lifetime: contract::events::CacheLifetime::OneHour,
+                context_window: None,
+                addendum: None,
+                handoff: r#loop::HandoffSettings::default(),
+                reviewer: Err(contract::shapes::Failure {
+                    code: contract::ErrorCode::NoModel,
+                    message: r#loop::NO_MODEL_MESSAGE.into(),
+                    retry_after: None,
+                    provider: None,
+                }),
+                web_search: None,
+                notice: None,
+            })
+        },
+    );
+    let looped = history.resume(Vec::new()).switcher(
+        prepare,
+        r#loop::Switchable {
+            chosen: None,
+            web_search: None,
+        },
+    );
+    // A model-only switch after the resume is given the folded choice.
+    history
+        .inbox_tx
+        .send(Delivery::Model(
+            contract::commands::ModelArgs {
+                model: "fake/third".into(),
+                thinking: None,
+            },
+            support::ignore(),
+        ))
+        .unwrap();
+    history
+        .inbox_tx
+        .send(Delivery::Prompt(support::message("go"), support::ignore()))
+        .unwrap();
+    let (looped, outcome) = history.step(looped);
+    let _ = looped;
+    assert_eq!(outcome, Some(contract::events::TurnOutcome::Completed));
+    assert_eq!(
+        *recorded.lock().unwrap(),
+        vec![Some(contract::ThinkingLevel::High)],
+        "the folded thinking seeds `chosen`"
+    );
+}

@@ -70,7 +70,11 @@ impl Loop {
     /// second model. `at_start` is the session's own choice and its
     /// hosted search type at start.
     pub fn switcher(mut self, prepare: Prepare, at_start: Switchable) -> Self {
-        self.chosen = at_start.chosen;
+        // A resumed `chosen` stands when the switcher names none: the
+        // fold already seeded it from the last `model_changed`.
+        if at_start.chosen.is_some() {
+            self.chosen = at_start.chosen;
+        }
         self.switcher = Some((prepare, at_start));
         self
     }
