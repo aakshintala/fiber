@@ -153,6 +153,10 @@ struct Opened {
 }
 
 fn open() -> Opened {
+    open_with(Vec::new())
+}
+
+fn open_with(tools: Vec<contract::events::ToolInfo>) -> Opened {
     let temp = fakes::TempDir::new("fd");
     let home = temp.path().join("h");
     let sessions = home.join("projects/p/sessions");
@@ -162,8 +166,7 @@ fn open() -> Opened {
     let timed = Arc::clone(&clock);
     let timed: Arc<dyn Clock> = timed;
     let log = Arc::new(Log::create(&sessions, id.clone(), Arc::clone(&timed)).unwrap());
-    let session =
-        Session::open(&home, &dir, &log, timed, Vec::new(), Box::new(io::sink())).unwrap();
+    let session = Session::open(&home, &dir, &log, timed, tools, Box::new(io::sink())).unwrap();
     Opened {
         _temp: temp,
         clock,
@@ -2278,4 +2281,107 @@ fn close_keeps_a_session_whose_log_holds_an_offer_and_no_turn() {
     });
     assert!(kept_after_close(vec![offered]));
     assert!(!kept_after_close(Vec::new()));
+}
+
+fn tool_info(name: &str, bytes: u64) -> contract::events::ToolInfo {
+    contract::events::ToolInfo {
+        name: name.into(),
+        source: contract::events::ToolSource::Builtin,
+        state: contract::events::ToolState::Full,
+        bytes,
+        tokens: None,
+    }
+}
+
+/// The `tools` answer's names and byte sizes, in answer order.
+fn tools_answer(client: &Client, id: &str) -> Vec<(String, u64)> {
+    send_bare(client, id, "tools");
+    let answer = answer_of(client, id);
+    assert_eq!(answer["kind"], "command_accepted", "{answer}");
+    answer["payload"]["result"]["tools"]
+        .as_array()
+        .expect("a tools list")
+        .iter()
+        .map(|tool| {
+            (
+                tool["name"].as_str().unwrap().to_owned(),
+                tool["bytes"].as_u64().unwrap(),
+            )
+        })
+        .collect()
+}
+
+fn named(entries: &[(&str, u64)]) -> Vec<(String, u64)> {
+    entries
+        .iter()
+        .map(|(name, bytes)| ((*name).to_owned(), *bytes))
+        .collect()
+}
+
+#[test]
+fn the_declarer_changes_the_tools_answer() {
+    reset();
+    let opened = open_with(vec![tool_info("edit", 1), tool_info("write", 2)]);
+    let socket = opened.socket.clone();
+    let declare = opened.session.declarer();
+    opened
+        .session
+        .serve(None, Arc::new(|| false), move |_inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "summary");
+            let _ack = answer_of(&client, "c_sub");
+            declare("web_search", Some(tool_info("web_search", 52)));
+            assert_eq!(
+                tools_answer(&client, "c_1"),
+                named(&[("edit", 1), ("web_search", 52), ("write", 2)]),
+                "added in name order"
+            );
+            declare("web_search", Some(tool_info("web_search", 60)));
+            assert_eq!(
+                tools_answer(&client, "c_2"),
+                named(&[("edit", 1), ("web_search", 60), ("write", 2)]),
+                "replaced, not added twice"
+            );
+            declare("web_search", None);
+            assert_eq!(
+                tools_answer(&client, "c_3"),
+                named(&[("edit", 1), ("write", 2)]),
+                "removed"
+            );
+            declare("absent", None);
+            assert_eq!(
+                tools_answer(&client, "c_4"),
+                named(&[("edit", 1), ("write", 2)])
+            );
+            declare("zz", Some(tool_info("zz", 3)));
+            assert_eq!(
+                tools_answer(&client, "c_5"),
+                named(&[("edit", 1), ("write", 2), ("zz", 3)]),
+                "a name after every other goes last"
+            );
+            Ok(())
+        })
+        .unwrap();
+    close_within(opened.session, opened.log);
+}
+
+#[test]
+fn the_declarer_does_nothing_once_the_session_closes() {
+    reset();
+    let opened = open_with(vec![tool_info("edit", 1)]);
+    let declare = opened.session.declarer();
+    let gate = Arc::clone(&opened.session.gate);
+    close_within(opened.session, opened.log);
+    declare("web_search", Some(tool_info("web_search", 52)));
+    declare("edit", None);
+    assert_eq!(
+        lock(&gate.tools)
+            .iter()
+            .map(|tool| tool.name.clone())
+            .collect::<Vec<_>>(),
+        ["edit"]
+    );
+    drop(gate);
+    // With the gate gone, a call still neither panics nor changes anything.
+    declare("web_search", None);
 }

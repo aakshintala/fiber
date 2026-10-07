@@ -31,7 +31,7 @@ use contract::shapes::Failure;
 use contract::{ErrorCode, PreSessionExit};
 
 pub use attach::attach;
-pub use session::Session;
+pub use session::{Declare, Session};
 pub use signals::{Signals, signal_code};
 
 /// A failure with Fiber's own sentence and nothing from a provider.
