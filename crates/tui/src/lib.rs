@@ -6,6 +6,7 @@
 //! while nothing happens.
 
 mod app;
+mod approvals;
 mod keys;
 mod link;
 mod term;
