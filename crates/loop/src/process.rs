@@ -5,12 +5,12 @@
 
 use std::path::Path;
 
+use contract::RequestId;
 use contract::events::{
     Event, ExtensionsLoaded, FiberExited, FiberStarted, FinalMessage, LoadedExtension,
     McpServerFailed, MessageOutcome, Notice, TurnOutcome,
 };
 use contract::shapes::{Failure, Question};
-use contract::RequestId;
 use log::Log;
 
 use crate::Error;

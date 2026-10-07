@@ -9,9 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 
-use contract::events::{
-    DecidedBy, Decision, Event, Grant, JobCompleted, Outcome, TurnOutcome,
-};
+use contract::events::{DecidedBy, Decision, Event, Grant, JobCompleted, Outcome, TurnOutcome};
 use contract::inbox::Delivery;
 use contract::provider::Provider;
 use contract::shapes::Failure;
@@ -21,8 +19,8 @@ use log::Log;
 
 use crate::calls;
 use crate::cancel::Commit;
-use crate::retry::Retry;
 use crate::handoff::Carry;
+use crate::retry::Retry;
 use crate::reviewer::{BlockLimits, NO_MODEL_MESSAGE, Reviewed, render_reviewed};
 use crate::{Error, Loop, Model, Permissions, Step};
 
@@ -123,59 +121,56 @@ pub fn resumed(dir: &Path) -> Result<Resumed, Error> {
         render_reviewed(&mut reviewed, &event, line.action_id.as_ref());
         orphans.fold(&event);
         running.fold_jobs(&event);
-        match &event {
-            Event::SessionStarted(started) if first.is_none() => {
-                first = Some((line.session_id.0.clone(), started.workspace.clone()));
+        if let Event::SessionStarted(started) = &event
+            && first.is_none()
+        {
+            first = Some((line.session_id.0.clone(), started.workspace.clone()));
+        } else if let Event::UsageRecorded(recorded) = &event {
+            model = Some(recorded.model.clone());
+            ledger.record(recorded);
+        } else if let Event::PreambleBuilt(built) = &event {
+            credential.clone_from(&built.credential);
+        } else if let Event::PermissionResolved(resolved) = &event {
+            if let Some(grant) = &resolved.grant {
+                grants.push(grant.clone());
             }
-            Event::UsageRecorded(recorded) => {
-                model = Some(recorded.model.clone());
-                ledger.record(recorded);
+            // A model's block: the spending-budget denial and
+            // a reviewer failure carry no `reviewer` object
+            // and are not counted. Escalated blocks a person
+            // answered are not distinguished in the log.
+            // debt: undercounts session blocks that a person
+            // answered or a reviewer failure caused; fixed
+            // when the log records blocks.
+            if resolved.decision == Decision::Deny
+                && resolved.decided_by == DecidedBy::Reviewer
+                && resolved.reviewer.is_some()
+            {
+                session_blocks += 1;
             }
-            Event::PreambleBuilt(built) => credential.clone_from(&built.credential),
-            Event::PermissionResolved(resolved) => {
-                if let Some(grant) = &resolved.grant {
-                    grants.push(grant.clone());
-                }
-                // A model's block: the spending-budget denial and
-                // a reviewer failure carry no `reviewer` object
-                // and are not counted. Escalated blocks a person
-                // answered are not distinguished in the log.
-                // debt: undercounts session blocks that a person
-                // answered or a reviewer failure caused; fixed
-                // when the log records blocks.
-                if resolved.decision == Decision::Deny
-                    && resolved.decided_by == DecidedBy::Reviewer
-                    && resolved.reviewer.is_some()
-                {
-                    session_blocks += 1;
-                }
+        } else if let Event::OpeningMessage(message) = &event {
+            running
+                .session_log
+                .clone_from(&message.environment.session_log);
+        } else if let Event::TurnStarted(_) = &event {
+            if let (Some(turn), Some(seq)) = (&line.turn_id, line.seq) {
+                let state = Carry {
+                    jobs: running.jobs.clone(),
+                    session_log: running.session_log.clone(),
+                    ..Carry::default()
+                };
+                starts.insert(turn.clone(), (seq.0, state));
             }
-            Event::OpeningMessage(message) => {
-                running
-                    .session_log
-                    .clone_from(&message.environment.session_log);
-            }
-            Event::TurnStarted(_) => {
-                if let (Some(turn), Some(seq)) = (&line.turn_id, line.seq) {
-                    let state = Carry {
-                        jobs: running.jobs.clone(),
-                        session_log: running.session_log.clone(),
-                        ..Carry::default()
-                    };
-                    starts.insert(turn.clone(), (seq.0, state));
-                }
-            }
-            Event::HandoffCompleted(done) if done.outcome == Outcome::Completed => {
-                let turn = line.turn_id.as_ref();
-                window = turn
-                    .and_then(|turn| starts.get(turn))
-                    .cloned()
-                    .unwrap_or_default();
-                // Only this turn can complete another handoff before its
-                // next `turn_started`.
-                starts.retain(|started, _| Some(started) == turn);
-            }
-            _ => {}
+        } else if let Event::HandoffCompleted(done) = &event
+            && done.outcome == Outcome::Completed
+        {
+            let turn = line.turn_id.as_ref();
+            window = turn
+                .and_then(|turn| starts.get(turn))
+                .cloned()
+                .unwrap_or_default();
+            // Only this turn can complete another handoff before its
+            // next `turn_started`.
+            starts.retain(|started, _| Some(started) == turn);
         }
     }
     let Some((session, workspace)) = first else {

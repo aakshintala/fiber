@@ -773,5 +773,8 @@ fn a_line_that_is_not_an_envelope_fails_the_exit_log_corrupt() {
     let exited = fiber_exited(&session.log, &session.dir, Ok(()), true, None).unwrap();
 
     assert_eq!(exited.code, 1);
-    assert_eq!(exited.error.map(|error| error.code), Some(ErrorCode::LogCorrupt));
+    assert_eq!(
+        exited.error.map(|error| error.code),
+        Some(ErrorCode::LogCorrupt)
+    );
 }

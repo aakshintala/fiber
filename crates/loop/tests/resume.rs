@@ -1536,7 +1536,11 @@ fn resume_fails_log_corrupt_on_an_unreadable_line_in_its_window() {
         )
         .unwrap();
     created
-        .append(&user_turn("one"), Some(contract::TurnId("t_1".into())), None)
+        .append(
+            &user_turn("one"),
+            Some(contract::TurnId("t_1".into())),
+            None,
+        )
         .unwrap();
     drop(created);
     let dir = root.path().join("s_9");
