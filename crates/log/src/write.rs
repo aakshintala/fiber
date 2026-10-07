@@ -170,7 +170,7 @@ impl Log {
             }
             Class::Ephemeral => {}
         }
-        inner.remember(&line);
+        keep_latest(&mut inner.latest, &line);
         inner.watchers.retain(|w| match w.upgrade() {
             Some(queue) => {
                 queue.push(&line);
@@ -379,12 +379,6 @@ impl Inner {
             latest: BTreeMap::new(),
             failed: None,
         }
-    }
-
-    /// Keeps `line` when its kind is one whose latest wins
-    /// (`session_status`, `extensions_loaded`, `steering_queue`).
-    fn remember(&mut self, line: &Envelope) {
-        keep_latest(&mut self.latest, line);
     }
 
     /// Appends one line in one write, and fsyncs it when `sync` says. A write
