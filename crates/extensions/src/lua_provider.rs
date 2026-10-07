@@ -283,7 +283,9 @@ impl LuaProvider {
         inner.map_err(|e| {
             if matches!(
                 e,
-                Error::RefreshRejected { .. } | Error::RefreshUnreachable { .. }
+                Error::RefreshRejected { .. }
+                    | Error::RefreshUnreachable { .. }
+                    | Error::Unattended { .. }
             ) {
                 e
             } else {

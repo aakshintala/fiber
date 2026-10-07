@@ -84,7 +84,7 @@ asked for the session.
 | `model_ambiguous` | a bare model id matches models of two or more installed providers; the message lists every match (`docs/model-routing.md`, "Naming a model") | 1 |
 | `credential_missing` | the session model's credential cannot be found, or its credential label names none | 1 |
 | `credential_failed` | a stored credential is found but cannot be used, the provider's `credential()` call errors, or its `sign()` fails or returns unusable headers (`docs/model-routing.md`, "Credentials") | 1 |
-| `authentication_failed` | the startup OAuth refresh of the session model's token was rejected by the token endpoint (`docs/model-routing.md`, "Keys, tokens and OAuth") | 1 |
+| `authentication_failed` | the startup OAuth refresh of the session model's token was rejected by the token endpoint, or its `credential()` needed a person to log in and nobody was attached (`docs/model-routing.md`, "Keys, tokens and OAuth") | 1 |
 | `connection_failed` | the startup OAuth refresh could not reach the token endpoint | 1 |
 | `session_not_found` | a resume names no session | 1 |
 | `session_held` | another process holds the session's lock | 1 |
@@ -103,7 +103,7 @@ The credential check happens at startup, before `fiber_started`, so a headless
 caller learns in milliseconds rather than at the first model call.
 `credential_missing` means no key was found. `credential_failed` means Fiber
 found one and could not use it. `authentication_failed` means the provider saw a
-key and rejected it.
+key and rejected it, or a login was needed and nobody was attached to answer.
 
 Each code names one fix. `no_model` means nothing chose a model: choose one.
 `model_ambiguous` means the id matches several providers: prefix the provider,
@@ -127,7 +127,7 @@ policy is `docs/model-routing.md`, "When a model call fails".
 | `connection_failed` | DNS, TLS, a refused or dropped connection | yes |
 | `stream_incomplete` | a stream that ended before its protocol's terminal event, an `openai-responses` terminal event whose status is `in_progress` or `queued`, or an error inside an HTTP 200 response that no other code matches | yes |
 | `quota_exceeded` | quota, billing or a subscription limit, as an HTTP status or inside the stream ("Recognising a quota or billing error") | never |
-| `authentication_failed` | HTTP 401, a rejected key, an OAuth refresh the token endpoint rejected | never |
+| `authentication_failed` | HTTP 401, a rejected key, an OAuth refresh the token endpoint rejected, or a login with nobody attached | never |
 | `context_overflow` | the request does not fit the model's context window | the overflow rule (`docs/handoff.md`, "Overflow") |
 | `refused` | the provider declined to answer on policy grounds, including an `openai-completions` `finish_reason` of `content_filter` and a Gemini safety finish reason | never |
 | `model_not_found` | the provider's error body says it does not know the model: a code `model_not_found`, a `not_found_error` whose message names the model, Gemini's `NOT_FOUND` for a `models/` name, or OpenRouter's "is not a valid model ID" (`research/provider-errors/README.md`, "Unknown model"). A 404 alone is not enough, since a wrong base URL also returns 404 | never |
@@ -252,7 +252,7 @@ the lines that carry it.
 | Code | Where | Meaning |
 |---|---|---|
 | `ambiguous_match` | tool call | an edit block's text occurs more than once (`docs/tools.md`, "File tools") |
-| `authentication_failed` | exit, model call, turn | the provider rejected the credential, or an OAuth refresh was rejected |
+| `authentication_failed` | exit, model call, turn | the provider rejected the credential, an OAuth refresh was rejected, or a login was needed with nobody attached |
 | `blocked` | turn | the block budget ran out with no human to answer |
 | `blocked_host` | tool call | `web_fetch` named a link-local address or a cloud metadata host (`docs/tools.md`, "Web fetch and web search") |
 | `budget_exceeded` | turn | the spending budget was reached, or an extension refused a model request (`docs/loop.md`, "Spending budget") |

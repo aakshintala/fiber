@@ -187,6 +187,11 @@ fn run(
     for (extension, provider) in extensions.lua_providers() {
         let _notices = providers.add_lua(extension, provider, &config);
     }
+    // debt: notices from placeholders are dropped, as above; surfaced
+    // when #382 lands.
+    providers
+        .fill_placeholders(&config, &|name| std::env::var(name).ok())
+        .map_err(|e| failed(e.code(), e))?;
     // A stale list refreshes in the background for the next run: the
     // detached child, never waited on. A spawn that fails is ignored:
     // `fiber models` still prints from the cache and exits 0.

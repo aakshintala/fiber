@@ -26,13 +26,25 @@ pub(crate) type KeyAndSigner = (Option<Secret>, Option<Arc<dyn Signer>>);
 /// background, once across the processes sharing a Fiber home. Background
 /// threads are detached; the cache write is atomic, so an interrupted
 /// refresh leaves the old copy. A refresh never touches `providers`, so a
-/// running session's tool definitions never change.
-pub(crate) fn add_lua(extensions: &SessionExtensions, providers: &mut Providers, config: &Config) {
+/// running session's tool definitions never change. Then fills per-account
+/// host placeholders, so a session chooses from filled URLs.
+// debt: notices from discovery are dropped, as `parts_with` drops
+// them; surfaced when #382 lands.
+pub(crate) fn add_lua(
+    extensions: &SessionExtensions,
+    providers: &mut Providers,
+    config: &Config,
+) -> Result<(), Failure> {
     for (extension, provider) in extensions.lua_providers() {
         // debt: notices from discovery are dropped, as `parts_with` drops
         // them; surfaced when #382 lands.
         let _notices = providers.add_lua(extension, provider, config);
     }
+    // debt: notices from placeholders are dropped, as above; surfaced
+    // when #382 lands.
+    let _notices = providers
+        .fill_placeholders(config, &|name| std::env::var(name).ok())
+        .map_err(|e| failed(e.code(), e))?;
     // Detached: nothing joins them, and `fiber ask` does not wait on them
     // to exit.
     let started = extensions::refresh_lists(
@@ -46,6 +58,7 @@ pub(crate) fn add_lua(extensions: &SessionExtensions, providers: &mut Providers,
         Some(config::refresh_after(config)),
     );
     let _detached = started;
+    Ok(())
 }
 
 /// The session's key and signer for `provider`: no key when it registered
@@ -82,3 +95,7 @@ pub(crate) fn signer(lua: Option<&Arc<LuaProvider>>) -> Result<Option<Arc<dyn Si
         None => Ok(None),
     }
 }
+
+#[cfg(test)]
+#[path = "lua_providers_tests.rs"]
+mod tests;

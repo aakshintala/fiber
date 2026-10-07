@@ -14,11 +14,12 @@ const DATABRICKS: &str = r#"{
   "name": "databricks",
   "credential": { "env": "DATABRICKS_TOKEN" },
   "headers": { "x-databricks-client": "fiber" },
+  "placeholders": { "workspace": { "env": "DATABRICKS_HOST" } },
   "models": [
     {
       "id": "databricks-claude-opus-5",
       "protocol": "anthropic-messages",
-      "base_url": "https://example.cloud.databricks.com/ai-gateway/anthropic",
+      "base_url": "https://{workspace}/ai-gateway/anthropic",
       "compat": { "store": false },
       "deferred_tools": true,
       "extra_body": {},
@@ -197,6 +198,25 @@ fn the_documented_provider_data_reads() {
     assert_eq!(gpt.protocol, Protocol::OpenaiResponses);
     assert!(gpt.subscription && !gpt.deferred_tools);
     assert_eq!(gpt.cost, None);
+    assert_eq!(
+        data.placeholders["workspace"].env.as_deref(),
+        Some("DATABRICKS_HOST")
+    );
+    assert_eq!(opus.base_url, "https://{workspace}/ai-gateway/anthropic");
+}
+
+#[test]
+fn placeholders_default_to_none_and_env_is_optional() {
+    let setup = Setup::new();
+    let dir = setup.root().join("ext");
+    setup.write(&dir.join("providers/p.json"), r#"{"name":"p","models":[]}"#);
+    assert!(read_providers(&dir).unwrap()[0].placeholders.is_empty());
+    setup.write(
+        &dir.join("providers/p.json"),
+        r#"{"name":"p","placeholders":{"region":{}},"models":[]}"#,
+    );
+    let data = &read_providers(&dir).unwrap()[0];
+    assert_eq!(data.placeholders["region"].env, None);
 }
 
 #[test]

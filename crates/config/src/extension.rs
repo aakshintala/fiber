@@ -92,6 +92,15 @@ pub struct Process {
     pub args: Vec<String>,
 }
 
+/// One per-account host placeholder a provider's models name
+/// (`docs/model-routing.md`, "A per-account host").
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct Placeholder {
+    /// The environment variable read when the extension's setting is unset.
+    #[serde(default)]
+    pub env: Option<String>,
+}
+
 /// `providers/<name>.json`: one provider an extension registers as data.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct ProviderData {
@@ -107,6 +116,10 @@ pub struct ProviderData {
     /// Headers sent on every request.
     #[serde(default)]
     pub headers: BTreeMap<String, String>,
+    /// The per-account host placeholders its models' `base_url`s name, by
+    /// name; absent means none.
+    #[serde(default)]
+    pub placeholders: BTreeMap<String, Placeholder>,
     /// Its models.
     pub models: Vec<ModelData>,
     /// A small, fast model of this provider for the reviewer when

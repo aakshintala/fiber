@@ -1240,6 +1240,7 @@ dependencies = [
  "contract",
  "fakes",
  "log 0.0.0",
+ "proptest",
  "serde_json",
  "similar",
  "thiserror 2.0.21",

@@ -62,6 +62,9 @@ pub(crate) type Deliver = Arc<dyn Fn(Reply) + Send + Sync>;
 pub trait Browser: Send + Sync {
     /// Shows `url` and tries to open it.
     fn open(&self, url: &str);
+    /// Whether a person is attached to answer a login now. Read before each
+    /// interactive step.
+    fn attended(&self) -> bool;
 }
 
 /// The system's browser: the URL goes to stderr to copy, then `open` (macOS)
@@ -114,13 +117,21 @@ impl Browser for SystemBrowser {
             }
         }
     }
+
+    /// Never attached: a headless run refuses an interactive login with
+    /// `authentication_failed` (`docs/model-routing.md`, "Keys, tokens and
+    /// OAuth"). `fiber login` for a Lua OAuth provider supplies an attended
+    /// browser.
+    fn attended(&self) -> bool {
+        false
+    }
 }
 
 /// The Lua half of `host.oauth`: the calls that wait. Run with the `host`
 /// table, the yield tag and a function that says whether the entry script is
 /// running, which can wait on nothing.
 const LUA: &str = r#"
-local host, tag, in_entry, refresh_failed = ...
+local host, tag, in_entry, refresh_failed, need_person = ...
 local oauth = host.oauth
 local yield, resume, status = coroutine.yield, coroutine.resume, coroutine.status
 -- The armed `coroutine.create` the prelude installed.
@@ -150,7 +161,7 @@ local function attempt(f, ...)
   local unreached = false
   while true do
     local r = pack(resume(co, unpack(args, 1, args.n)))
-    if not r[1] then refresh_failed(not unreached, tostring(r[2])) end
+    if not r[1] then refresh_failed(not unreached, tostring(r[2]), r[2]) end
     if status(co) == "dead" then return r[2] end
     local http = r[2] == tag and r[3] == "http"
     args = pack(yield(unpack(r, 2, r.n)))
@@ -170,6 +181,7 @@ function oauth.callback(opts)
   if math.type(port) ~= "integer" or port < 1 or port > 65535 then
     error("host.oauth.callback: `port` must be a whole number from 1 to 65535", 2)
   end
+  need_person("callback")
   local query, err = yield(tag, "callback", { port = port })
   if query == nil then error(err, 0) end
   return query
@@ -193,6 +205,7 @@ function oauth.poll(opts)
     body = opts.body,
   }
   while true do
+    need_person("poll")
     local reply = host.http(request)
     local ok, body = pcall(json.decode, reply.body)
     if not ok or type(body) ~= "table" then
@@ -246,9 +259,15 @@ pub(crate) fn install(
     entry: Rc<Cell<bool>>,
 ) -> mlua::Result<()> {
     let oauth = lua.create_table()?;
+    let need_browser = Arc::clone(&browser);
     oauth.set(
         "open",
         lua.create_function(move |_, url: String| {
+            if !browser.attended() {
+                return Err::<(), _>(mlua::Error::external(Unattended {
+                    call: "open".to_owned(),
+                }));
+            }
             browser.open(&url);
             Ok(())
         })?,
@@ -265,14 +284,30 @@ pub(crate) fn install(
     )?;
     host.set("oauth", oauth)?;
     let in_entry = lua.create_function(move |_, ()| Ok(entry.get()))?;
-    let refresh_failed = lua.create_function(|_, (reached, message): (bool, String)| {
-        Err::<(), _>(mlua::Error::external(RefreshFailed { reached, message }))
+    let refresh_failed =
+        lua.create_function(|_, (reached, message, raised): (bool, String, LuaValue)| {
+            if let LuaValue::Error(e) = &raised
+                && let Some(unattended) = e.downcast_ref::<Unattended>()
+            {
+                return Err::<(), _>(mlua::Error::external(Unattended {
+                    call: unattended.call.clone(),
+                }));
+            }
+            Err::<(), _>(mlua::Error::external(RefreshFailed { reached, message }))
+        })?;
+    let need_person = lua.create_function(move |_, call: String| {
+        if need_browser.attended() {
+            Ok(())
+        } else {
+            Err(mlua::Error::external(Unattended { call }))
+        }
     })?;
     lua.load(LUA).set_name("=host.oauth").call::<()>((
         host.clone(),
         tag.clone(),
         in_entry,
         refresh_failed,
+        need_person,
     ))
 }
 
@@ -285,6 +320,15 @@ pub(crate) fn install(
 pub(crate) struct RefreshFailed {
     pub(crate) reached: bool,
     pub(crate) message: String,
+}
+
+/// An interactive `host.oauth` helper called with nobody attached to answer
+/// (`docs/model-routing.md`, "Keys, tokens and OAuth"). `open`, `callback`
+/// and `poll` raise this before they open, listen or send anything.
+#[derive(Debug, thiserror::Error)]
+#[error("host.oauth.{call} needs a person to log in, and nobody is attached")]
+pub(crate) struct Unattended {
+    pub(crate) call: String,
 }
 
 /// 32 random bytes as base64url without padding, 43 characters (RFC 7636,

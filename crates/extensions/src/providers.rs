@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use config::{Config, ModelData, ProviderData};
+use config::{Config, ConfigError, ModelData, ProviderData};
 use contract::ErrorCode;
 use contract::events::Notice;
 use serde_json::Value;
@@ -18,10 +18,15 @@ use serde_json::Value;
 use crate::{API, Error, LuaProvider};
 use contract::ThinkingLevel;
 
+mod placeholders;
+
 /// Every provider the installed extensions register, by name.
 #[derive(Clone, Default)]
 pub struct Providers {
     by_name: BTreeMap<String, ProviderData>,
+    /// The extension whose data or `models()` supplied each provider's
+    /// current models, by provider name.
+    extension_of: BTreeMap<String, String>,
     /// Each provider's models' addendum texts, by provider name then
     /// model id: read with the data that declared them and replaced
     /// together with it.
@@ -246,6 +251,9 @@ impl Providers {
             } else {
                 for (data, addenda) in buffered {
                     providers.addenda.insert(data.name.clone(), addenda);
+                    providers
+                        .extension_of
+                        .insert(data.name.clone(), manifest.name.clone());
                     providers.by_name.insert(data.name.clone(), data);
                 }
             }
@@ -301,10 +309,12 @@ impl Providers {
         match self.by_name.get_mut(&name) {
             Some(data) => {
                 data.models = models;
-                self.addenda.insert(name, addenda);
+                self.addenda.insert(name.clone(), addenda);
+                self.extension_of.insert(name, extension.to_owned());
             }
             None => {
                 self.addenda.insert(name.clone(), addenda);
+                self.extension_of.insert(name.clone(), extension.to_owned());
                 self.by_name.insert(
                     name.clone(),
                     ProviderData {
@@ -313,12 +323,86 @@ impl Providers {
                         credential: None,
                         credential_name: None,
                         headers: BTreeMap::new(),
+                        placeholders: BTreeMap::new(),
                         reviewer_model: None,
                     },
                 );
             }
         }
         notices
+    }
+
+    /// Fills every `{name}` in every model's `base_url` from the provider's
+    /// extension's setting `name`, never the repository's file, else the
+    /// environment variable `placeholders.<name>.env` names, read through
+    /// `env` (`docs/model-routing.md`, "A per-account host"). A model with a
+    /// placeholder that has no value is removed, with one `model_unconfigured`
+    /// notice. Runs once, after `load` and every `add_lua`, before a model is
+    /// chosen or listed; the model cache keeps the template. An extension
+    /// settings file that cannot be read is `Error::Config`.
+    pub fn fill_placeholders(
+        &mut self,
+        config: &Config,
+        env: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<Vec<Notice>, Error> {
+        let mut notices = Vec::new();
+        let names: Vec<String> = self.by_name.keys().cloned().collect();
+        for provider_name in names {
+            let extension = self
+                .extension_of
+                .get(&provider_name)
+                .cloned()
+                .unwrap_or_else(|| provider_name.clone());
+            let placeholders = self
+                .by_name
+                .get(&provider_name)
+                .map(|data| data.placeholders.clone())
+                .unwrap_or_default();
+            if let Some(data) = self.by_name.get_mut(&provider_name) {
+                let mut kept = Vec::new();
+                for mut model in data.models.drain(..) {
+                    let template = model.base_url.clone();
+                    let lookup = |name: &str| -> Result<Option<Value>, ConfigError> {
+                        match config.extension_setting(&extension, &[], name)? {
+                            Some(Value::String(value)) if !value.is_empty() => {
+                                Ok(Some(Value::String(value)))
+                            }
+                            _ => {
+                                if let Some(variable) = placeholders
+                                    .get(name)
+                                    .and_then(|placeholder| placeholder.env.as_deref())
+                                    && let Some(value) = env(variable)
+                                    && !value.is_empty()
+                                {
+                                    return Ok(Some(Value::String(value)));
+                                }
+                                Ok(None)
+                            }
+                        }
+                    };
+                    match placeholders::fill(&template, &lookup)? {
+                        placeholders::Filled::Url(url) => {
+                            model.base_url = url;
+                            kept.push(model);
+                        }
+                        placeholders::Filled::Missing(name) => {
+                            let variable = placeholders
+                                .get(&name)
+                                .and_then(|placeholder| placeholder.env.as_deref());
+                            notices.push(placeholders::unconfigured(
+                                &provider_name,
+                                &model.id,
+                                &extension,
+                                &name,
+                                variable,
+                            ));
+                        }
+                    }
+                }
+                data.models = kept;
+            }
+        }
+        Ok(notices)
     }
 
     /// The installed data of `name`: the data file's, else one naming only
@@ -330,6 +414,7 @@ impl Providers {
             credential: None,
             credential_name: None,
             headers: BTreeMap::new(),
+            placeholders: BTreeMap::new(),
             reviewer_model: None,
         })
     }

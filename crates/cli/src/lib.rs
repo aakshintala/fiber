@@ -1,6 +1,8 @@
 //! The commands that run no session: `fiber config`, `fiber login`,
 //! `fiber logout`, `fiber approve`, `fiber sessions export`,
-//! `fiber sessions delete` and `fiber models`
+//! `fiber sessions delete`, `fiber models`, `fiber extension install`,
+//! `fiber extension update`, `fiber extension remove` and
+//! `fiber extension list`
 //! (`docs/architecture.md`, "The modules"). `main` parses argv and
 //! dispatches here; this crate takes plain values.
 
@@ -14,12 +16,14 @@ use doors::failure;
 
 mod approve;
 mod config;
+mod extension;
 mod login;
 mod models;
 mod sessions;
 
 pub use approve::approve;
 pub use config::{config_get, config_set};
+pub use extension::{extension_install, extension_list, extension_remove, extension_update};
 pub use login::{LogoutTarget, run_login, run_logout};
 pub use models::{models, refresh_model_lists};
 pub use sessions::{delete, export};

@@ -145,6 +145,9 @@ impl Request {
 #[derive(Default)]
 struct State {
     script: VecDeque<Response>,
+    /// Responses claimed by request path: the first request to a path takes
+    /// its route, ahead of the script.
+    routes: Vec<(String, Response)>,
     /// The response of every request past the script.
     fallback: Option<Response>,
     requests: Vec<Request>,
@@ -201,6 +204,22 @@ impl ProviderServer {
             arrived,
             accept: Some(accept),
         })
+    }
+
+    /// Like [`ProviderServer::start_with_fallback`], but each of `routes` is
+    /// answered to the first request for its path (the target without its
+    /// query), whenever that request arrives. A request no route claims gets
+    /// `fallback`. For clients whose concurrent requests have no fixed order.
+    pub fn start_routed<'a>(
+        routes: impl IntoIterator<Item = (&'a str, Response)>,
+        fallback: Response,
+    ) -> io::Result<Self> {
+        let server = Self::start_with_fallback([], fallback)?;
+        lock(&server.state).routes = routes
+            .into_iter()
+            .map(|(path, response)| (path.to_owned(), response))
+            .collect();
+        Ok(server)
     }
 
     /// The base URL, such as `http://127.0.0.1:49152`, for a provider
@@ -338,6 +357,7 @@ fn accept_loop(listener: &TcpListener, state: &Arc<Mutex<State>>, arrived: &Arc<
 fn serve(stream: TcpStream, state: &Mutex<State>, arrived: &Condvar) -> io::Result<()> {
     let mut reader = BufReader::new(stream);
     let (request, malformed) = read_request(&mut reader)?;
+    let request_path = request.path.clone();
     let response = {
         let mut state = lock(state);
         state.requests.push(request);
@@ -349,11 +369,15 @@ fn serve(stream: TcpStream, state: &Mutex<State>, arrived: &Condvar) -> io::Resu
                 400,
                 format!(r#"{{"error":"fakes: malformed chunked body: {why}"}}"#),
             ),
-            None => state
-                .script
-                .pop_front()
-                .or_else(|| state.fallback.clone())
-                .unwrap_or_else(no_scripted_response),
+            None => {
+                let target = request_path.split('?').next().unwrap_or_default();
+                let route = state.routes.iter().position(|(path, _)| path == target);
+                route
+                    .map(|index| state.routes.remove(index).1)
+                    .or_else(|| state.script.pop_front())
+                    .or_else(|| state.fallback.clone())
+                    .unwrap_or_else(no_scripted_response)
+            }
         };
         if response.drop_connection {
             // Recorded above; the open stream drops here, so the client

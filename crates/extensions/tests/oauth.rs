@@ -16,6 +16,7 @@ use std::io::{Read, Write};
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -136,6 +137,82 @@ fiber.provider("acme", { credential = { timeout = 60000, run = function()
 end } })
 "#;
 
+/// A provider whose `credential()` builds its login from one interactive
+/// `host.oauth` helper, named by the secret `mode`.
+const LOGIN: &str = r#"
+-- Like `pcall(host.http, opts)`, which cannot yield across the VM's `pcall`:
+-- the call runs in a coroutine and its yield is passed up.
+local function try_http(opts)
+  local co = coroutine.create(host.http)
+  local r = table.pack(coroutine.resume(co, opts))
+  local answer = table.pack(coroutine.yield(table.unpack(r, 2, r.n)))
+  return coroutine.resume(co, table.unpack(answer, 1, answer.n))
+end
+
+fiber.provider("acme", { credential = { timeout = 60000, run = function()
+  local mode = host.secret("mode")
+  local url = host.secret("url")
+  if mode == "open" then host.oauth.open(url .. "/verify") end
+  if mode == "callback" then host.oauth.callback({ port = tonumber(host.secret("port")) }) end
+  if mode == "poll" then
+    local reply = host.oauth.poll({
+      url = url .. "/device/token",
+      body = "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code&device_code=d",
+      headers = { ["content-type"] = "application/x-www-form-urlencoded" },
+    })
+    return { token = reply.access_token, expires_at = 1700003600 }
+  end
+  if mode == "device" then
+    host.oauth.open(url .. "/verify")
+    local reply = host.oauth.poll({
+      url = url .. "/device/token",
+      body = "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code&device_code=d",
+      headers = { ["content-type"] = "application/x-www-form-urlencoded" },
+    })
+    return { token = reply.access_token, expires_at = 1700003600 }
+  end
+  if mode == "refresh_poll" then
+    return host.oauth.refresh(function(stored)
+      try_http({ url = host.secret("dead") .. "/token" })
+      local reply = host.oauth.poll({
+        url = host.secret("url") .. "/device/token",
+        body = "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code&device_code=d",
+        headers = { ["content-type"] = "application/x-www-form-urlencoded" },
+      })
+      return { token = reply.access_token, expires_at = 1700003600 }
+    end)
+  end
+  return { token = "unreached", expires_at = 1700003600 }
+end } })
+"#;
+
+/// The `LOGIN` fixture with the default browser, which has nobody attached.
+fn login(env: &Env) -> Arc<LuaExtension> {
+    let dir = env.setup.root().join("extensions").join("login");
+    write(&dir.join("init.lua"), LOGIN);
+    Arc::new(LuaExtension::new(
+        "login",
+        dir,
+        env.home(),
+        env.clock.clone(),
+    ))
+}
+
+/// The `LOGIN` fixture opening URLs with `browser`.
+fn login_with(env: &Env, browser: Arc<dyn Browser>) -> Arc<LuaExtension> {
+    let dir = env.setup.root().join("extensions").join("login");
+    write(&dir.join("init.lua"), LOGIN);
+    Arc::new(LuaExtension::new("login", dir, env.home(), env.clock.clone()).with_browser(browser))
+}
+
+/// An entry script that opens a login URL before it registers anything.
+const ENTRY_OPEN: &str = r#"
+host.oauth.open("https://auth.example/")
+fiber.provider("acme", { credential = { timeout = 60000, run = function()
+  return { token = "t", expires_at = 1700003600 }
+end } })
+"#;
+
 /// `require("go_spin")` signals that the code reached it, then reads an empty
 /// module, so the code runs on (a fifo opened for write returns once the
 /// loader has opened it for read).
@@ -182,6 +259,7 @@ impl Env {
         let dir = self.setup.root().join("extensions").join(name);
         write(&dir.join("init.lua"), init);
         LuaExtension::new(name, dir, self.home(), self.clock.clone())
+            .with_browser(Arc::new(Recording::always()))
     }
 
     fn secret(&self, name: &str, value: &str) {
@@ -315,27 +393,57 @@ fn listening(
 // ---------------------------------------------------------------- open, pkce
 
 #[derive(Default)]
-struct Recording(Mutex<Vec<String>>);
+struct Recording {
+    opened: Mutex<Vec<String>>,
+    attended: AtomicUsize,
+}
+
+impl Recording {
+    /// A browser with a person attached.
+    fn always() -> Self {
+        Self::times(usize::MAX)
+    }
+
+    /// A browser with nobody attached.
+    fn never() -> Self {
+        Self::times(0)
+    }
+
+    /// A browser with a person attached for the next `n` checks.
+    fn times(n: usize) -> Self {
+        Self {
+            opened: Mutex::new(Vec::new()),
+            attended: AtomicUsize::new(n),
+        }
+    }
+
+    fn opened(&self) -> Vec<String> {
+        self.opened.lock().unwrap().clone()
+    }
+}
 
 impl Browser for Recording {
     fn open(&self, url: &str) {
-        self.0.lock().unwrap().push(url.to_owned());
+        self.opened.lock().unwrap().push(url.to_owned());
+    }
+
+    fn attended(&self) -> bool {
+        self.attended
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .is_ok()
     }
 }
 
 #[test]
 fn open_reaches_the_browser_with_the_url() {
     let env = Env::new();
-    let browser = Arc::new(Recording::default());
+    let browser = Arc::new(Recording::always());
     let ext = Arc::new(env.bare(INIT, "fixture").with_browser(browser.clone()));
     assert_eq!(
         run(&ext, "open", "https://auth.example/authorize?x=1").unwrap(),
         "opened"
     );
-    assert_eq!(
-        *browser.0.lock().unwrap(),
-        ["https://auth.example/authorize?x=1"]
-    );
+    assert_eq!(browser.opened(), ["https://auth.example/authorize?x=1"]);
 }
 
 #[test]
@@ -964,4 +1072,108 @@ fn a_symbolic_link_credentials_directory_is_refused() {
     assert!(matches!(error, Error::Credential(_)), "{error}");
     assert_eq!(server.request_count(), 0);
     assert!(fs::read_dir(&elsewhere).unwrap().next().is_none());
+}
+
+#[test]
+fn a_poll_with_nobody_attached_is_authentication_failed_and_sends_nothing() {
+    let env = Env::new();
+    let ext = login(&env);
+    let server = OauthServer::start(vec![OauthReply::token("at", "rt", 3600)]);
+    let provider = env.provider(&ext, &server, "poll");
+    let error = finish(&start_token(&provider)).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::AuthenticationFailed, "{error}");
+    assert!(error.to_string().contains("host.oauth.poll"), "{error}");
+    assert!(server.requests().is_empty());
+}
+
+#[test]
+fn open_with_nobody_attached_is_authentication_failed_and_opens_nothing() {
+    let env = Env::new();
+    let browser = Arc::new(Recording::never());
+    let ext = login_with(&env, browser.clone());
+    let server = OauthServer::start(vec![]);
+    let provider = env.provider(&ext, &server, "open");
+    let error = finish(&start_token(&provider)).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::AuthenticationFailed, "{error}");
+    assert!(error.to_string().contains("host.oauth.open"), "{error}");
+    assert!(browser.opened().is_empty());
+}
+
+#[test]
+fn callback_with_nobody_attached_is_authentication_failed_and_listens_on_nothing() {
+    let env = Env::new();
+    let browser = Arc::new(Recording::never());
+    let ext = login_with(&env, browser.clone());
+    let server = OauthServer::start(vec![]);
+    let provider = env.provider(&ext, &server, "callback");
+    let port = free_port();
+    env.secret("port", &port.to_string());
+    let error = finish(&start_token(&provider)).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::AuthenticationFailed, "{error}");
+    assert!(error.to_string().contains("host.oauth.callback"), "{error}");
+    TcpListener::bind((Ipv4Addr::LOCALHOST, port)).unwrap();
+}
+
+#[test]
+fn a_person_who_detaches_between_polls_stops_the_next_poll() {
+    let env = Env::new();
+    let browser = Arc::new(Recording::times(1));
+    let ext = login_with(&env, browser);
+    let server = OauthServer::start(vec![
+        OauthReply::pending(),
+        OauthReply::token("at", "rt", 3600),
+    ]);
+    let provider = env.provider(&ext, &server, "poll");
+    let rx = start_token(&provider);
+    assert!(env.clock.await_parked(wake(&env, 5), WAIT));
+    env.clock.advance(Duration::from_secs(5));
+    let error = finish(&rx).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::AuthenticationFailed, "{error}");
+    assert!(error.to_string().contains("host.oauth.poll"), "{error}");
+    assert_eq!(server.request_count(), 1);
+}
+
+#[test]
+fn an_attended_device_login_opens_polls_and_returns_the_token() {
+    let env = Env::new();
+    let browser = Arc::new(Recording::always());
+    let ext = login_with(&env, browser.clone());
+    let server = OauthServer::start(vec![OauthReply::token("at", "rt", 3600)]);
+    let provider = env.provider(&ext, &server, "device");
+    assert_eq!(finish(&start_token(&provider)).unwrap(), "at");
+    assert_eq!(browser.opened(), [format!("{}/verify", server.url())]);
+    assert_eq!(server.request_count(), 1);
+}
+
+#[test]
+fn an_entry_script_that_opens_with_nobody_attached_is_authentication_failed() {
+    let env = Env::new();
+    let browser: Arc<Recording> = Arc::new(Recording::never());
+    let dir = env.setup.root().join("extensions").join("entry_open");
+    write(&dir.join("init.lua"), ENTRY_OPEN);
+    let ext = Arc::new(
+        LuaExtension::new("entry_open", dir, env.home(), env.clock.clone())
+            .with_browser(browser.clone()),
+    );
+    let provider = LuaProvider::new(ext, "acme");
+    let error = finish(&start_token(&provider)).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::AuthenticationFailed, "{error}");
+    assert!(error.to_string().contains("host.oauth.open"), "{error}");
+    assert!(browser.opened().is_empty());
+}
+
+#[test]
+fn a_refresh_function_refused_after_a_failed_request_is_authentication_failed() {
+    let env = Env::new();
+    let ext = login_with(&env, Arc::new(Recording::never()));
+    let server = OauthServer::start(vec![]);
+    let provider = env.provider(&ext, &server, "refresh_poll");
+    env.secret("dead", &dead_url());
+    env.store(&json!({ "token": "old", "expires_at": WALL + 100 }));
+    let before = env.stored().unwrap();
+    let error = finish(&start_token(&provider)).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::AuthenticationFailed, "{error}");
+    assert!(error.to_string().contains("host.oauth.poll"), "{error}");
+    assert_eq!(env.stored().unwrap(), before);
+    assert_eq!(server.request_count(), 0);
 }

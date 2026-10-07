@@ -15,7 +15,6 @@ mod connect;
 mod cost;
 mod crash;
 mod credential;
-mod extension_command;
 mod handoff;
 mod hub_command;
 mod late_emit;
@@ -171,9 +170,18 @@ fn run() -> i32 {
             ::cli::refresh_model_lists(&providers, clock, Arc::new(tools::PathLocks::new()));
             0
         }
-        cli::Invocation::Run(Some(cli::Commands::Extension(cmd))) => {
-            extension_command::extension(cmd, clock.as_ref())
-        }
+        cli::Invocation::Run(Some(cli::Commands::Extension(cmd))) => match cmd {
+            cli::ExtensionCommands::Install { name_or_path } => {
+                ::cli::extension_install(&name_or_path, env!("CARGO_PKG_VERSION"), clock.as_ref())
+            }
+            cli::ExtensionCommands::Update { name } => {
+                ::cli::extension_update(name.as_deref(), env!("CARGO_PKG_VERSION"), clock.as_ref())
+            }
+            cli::ExtensionCommands::Remove { name } => {
+                ::cli::extension_remove(&name, clock.as_ref())
+            }
+            cli::ExtensionCommands::List => ::cli::extension_list(clock.as_ref()),
+        },
         cli::Invocation::Run(Some(cli::Commands::Approve(args))) => ::cli::approve(args.yes),
         cli::Invocation::Run(Some(cli::Commands::Config(cmd))) => match cmd {
             cli::ConfigCommands::Get { key } => ::cli::config_get(&key),
@@ -452,7 +460,7 @@ fn parts_in(
     let session_locks: Arc<dyn contract::files::PathLock> = locks.clone();
     let mut extensions =
         extensions::SessionExtensions::load(&home, &config, Arc::clone(&clock), session_locks);
-    lua_providers::add_lua(&extensions, &mut providers, &config);
+    lua_providers::add_lua(&extensions, &mut providers, &config)?;
     // Every `file` credential source configuration declares, after the Lua
     // providers are added so their sources are protected too: a relative
     // path joins the workspace the reader reads it from, an absolute one

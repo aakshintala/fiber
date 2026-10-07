@@ -33,7 +33,7 @@ pub use contract::Secret;
 pub use credential_file::{CredentialFile, CredentialLock};
 pub use error::ConfigError;
 pub use extension::{
-    Binary, Cost, Manifest, ModelData, Opening, Process, Protocol, ProviderData, Tier,
+    Binary, Cost, Manifest, ModelData, Opening, Placeholder, Process, Protocol, ProviderData, Tier,
     read_manifest, read_package_text, read_providers,
 };
 pub use home::{ProjectKey, fiber_home, fiber_home_from_env};

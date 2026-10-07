@@ -286,6 +286,18 @@ pub enum Error {
         /// What the refresh function raised.
         message: String,
     },
+    /// An interactive `host.oauth` helper needed a person to log in, and
+    /// nobody was attached (`docs/model-routing.md`, "Keys, tokens and
+    /// OAuth").
+    #[error(
+        "`{extension}`: host.oauth.{call} needs a person to log in, and nobody is attached. Log in again."
+    )]
+    Unattended {
+        /// The extension.
+        extension: String,
+        /// `open`, `callback` or `poll`.
+        call: String,
+    },
     /// A callback ran past the timeout it declared, and was stopped.
     #[error("`{extension}`: `{callback}` passed its {timeout_ms} ms timeout and was stopped.")]
     Timeout {
@@ -413,7 +425,9 @@ impl Error {
             Self::UnknownModel { .. } | Self::NoModel => ErrorCode::NoModel,
             Self::Ambiguous { .. } => ErrorCode::ModelAmbiguous,
             Self::Credential(_) => ErrorCode::CredentialFailed,
-            Self::RefreshRejected { .. } => ErrorCode::AuthenticationFailed,
+            Self::RefreshRejected { .. } | Self::Unattended { .. } => {
+                ErrorCode::AuthenticationFailed
+            }
             Self::RefreshUnreachable { .. } => ErrorCode::ConnectionFailed,
         }
     }

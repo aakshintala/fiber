@@ -16,6 +16,7 @@ thiserror.workspace = true
 
 [dev-dependencies]
 fakes = { path = "../fakes" }
+proptest.workspace = true
 
 # The jig (docs/testing.md, "Jigs").
 [[example]]

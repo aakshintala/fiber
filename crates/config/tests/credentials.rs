@@ -18,6 +18,7 @@ fn acme(credential: Option<CredentialSource>) -> ProviderData {
         credential,
         credential_name: None,
         headers: Default::default(),
+        placeholders: Default::default(),
         models: Vec::new(),
         reviewer_model: None,
     }
@@ -29,6 +30,7 @@ fn shared(name: &str, stored: &str, credential: Option<CredentialSource>) -> Pro
         credential,
         credential_name: Some(stored.into()),
         headers: Default::default(),
+        placeholders: Default::default(),
         models: Vec::new(),
         reviewer_model: None,
     }
