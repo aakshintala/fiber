@@ -13,6 +13,7 @@ mod error;
 mod extension;
 mod home;
 mod keys;
+mod names;
 mod path;
 mod rules;
 mod secret;
@@ -35,6 +36,7 @@ pub use extension::{
     read_manifest, read_package_text, read_providers,
 };
 pub use home::{ProjectKey, fiber_home, fiber_home_from_env};
+pub use names::{SHORT_NAMES, dir_name, full_name, short_name};
 pub use rules::RulesFiles;
 pub use secret::{
     CredentialSource, Secret, credential_labels, delete_credential, delete_credential_held,
