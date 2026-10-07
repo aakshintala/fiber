@@ -979,3 +979,134 @@ fn a_refreshed_provider_the_session_does_not_use_is_unloaded() {
         "the provider and its VM are gone once the refresh is written"
     );
 }
+
+#[derive(Default)]
+struct SealRecorder {
+    events: std::sync::Mutex<Vec<contract::events::Event>>,
+}
+
+impl contract::emit::Emit for SealRecorder {
+    fn emit(&self, event: &contract::events::Event) {
+        self.events.lock().unwrap().push(event.clone());
+    }
+}
+
+fn read_head(sock: &mut impl std::io::Read) {
+    let mut buf = [0; 1];
+    let mut seen = Vec::new();
+    loop {
+        match std::io::Read::read(&mut *sock, &mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => seen.push(buf[0]),
+        }
+        if seen.ends_with(b"\r\n\r\n") {
+            break;
+        }
+    }
+}
+
+/// A test HTTP server that parks the extension's `host.http` call until the
+/// test releases it, then answers `ok`. The accepted signal proves the
+/// command parked; each wait has the one named deadline.
+fn reply_server() -> (String, mpsc::Receiver<()>, mpsc::Sender<()>) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/", listener.local_addr().unwrap());
+    let (accepted_tx, accepted_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut sock = listener.accept().unwrap().0;
+        read_head(&mut sock);
+        let _sent = accepted_tx.send(());
+        let _got = release_rx.recv_timeout(WAIT);
+        let _wrote = std::io::Write::write_all(
+            &mut sock,
+            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+        );
+    });
+    (url, accepted_rx, release_tx)
+}
+
+fn hold_init(url: &str) -> String {
+    format!(
+        "fiber.command(\"hold\", {{ timeout = 8000, run = function() local r = host.http({{ url = \"{url}\" }}) host.status(\"late\") host.log(\"late\") host.emit({{x=1}}) return r.body end }})\n"
+    )
+}
+
+#[test]
+fn session_seal_drops_late_status_log_and_emit_from_a_parked_command() {
+    // Through the session-level `ExtensionDoor::seal`: a command parked on
+    // `host.http` resumes after the seal, and its later `host.status`,
+    // `host.log` and `host.emit` reach neither the Emit nor the inbox.
+    let (url, accepted_rx, release_tx) = reply_server();
+    let home = Home::new();
+    home.install("a", Some(&hold_init(&url)));
+    let session = home.load(&[]);
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    let recorder = Arc::new(SealRecorder::default());
+    session.emit_to(Arc::clone(&recorder) as Arc<dyn contract::emit::Emit>);
+    let (inbox_tx, inbox_rx) = mpsc::channel();
+    session.deliver_to(inbox_tx);
+    let lua = Arc::clone(&session.lua[0]);
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _sent = done_tx.send(lua.command("hold", ""));
+    });
+    accepted_rx
+        .recv_timeout(WAIT)
+        .expect("waited for the command to park on host.http");
+    contract::extension::ExtensionDoor::seal(&*session);
+    let _sent = release_tx.send(());
+    let result = done_rx
+        .recv_timeout(WAIT)
+        .expect("waited for the parked command to return");
+    assert_eq!(result.unwrap(), "ok");
+    assert!(
+        recorder.events.lock().unwrap().is_empty(),
+        "nothing reaches the Emit after the session seal"
+    );
+    assert!(
+        inbox_rx.try_recv().is_err(),
+        "nothing reaches the inbox after the session seal"
+    );
+}
+
+#[test]
+fn lua_seal_directly_drops_late_status_log_and_emit_from_a_parked_command() {
+    // Through `LuaExtension::seal` directly: same parked command, same
+    // silence afterwards.
+    let (url, accepted_rx, release_tx) = reply_server();
+    let dir = fakes::TempDir::new("fiber-seal-direct");
+    std::fs::write(dir.path().join("init.lua"), hold_init(&url)).unwrap();
+    let lua = Arc::new(crate::lua::LuaExtension::new(
+        "fiber.test/a",
+        dir.path(),
+        dir.path(),
+        FakeClock::new(),
+    ));
+    let recorder = Arc::new(SealRecorder::default());
+    lua.set_emit(Arc::clone(&recorder) as Arc<dyn contract::emit::Emit>);
+    let (inbox_tx, inbox_rx) = mpsc::channel();
+    lua.deliver_to(inbox_tx);
+    let running = Arc::clone(&lua);
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _sent = done_tx.send(running.command("hold", ""));
+    });
+    accepted_rx
+        .recv_timeout(WAIT)
+        .expect("waited for the command to park on host.http");
+    lua.seal();
+    let _sent = release_tx.send(());
+    let result = done_rx
+        .recv_timeout(WAIT)
+        .expect("waited for the parked command to return");
+    assert_eq!(result.unwrap(), "ok");
+    assert!(
+        recorder.events.lock().unwrap().is_empty(),
+        "nothing reaches the Emit after LuaExtension::seal"
+    );
+    assert!(
+        inbox_rx.try_recv().is_err(),
+        "nothing reaches the inbox after LuaExtension::seal"
+    );
+}

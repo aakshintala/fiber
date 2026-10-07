@@ -40,13 +40,9 @@ pub(crate) fn run(conn: &mut crate::client::Conn, id: CommandId, args: &RunComma
         }
     };
     // The call is on the extension's queue and held: `command_accepted`
-    // always precedes `run` starting. Session order is push order.
+    // always precedes `run` starting. Session order is push order. Released
+    // even when the acceptance never reached the client, so the stream
+    // does not hold a held job forever.
     accept(conn, id, None);
-    if conn.gone() {
-        // The acceptance never reached the client; still release, so the
-        // stream does not hold a held job forever.
-        release();
-        return;
-    }
     release();
 }

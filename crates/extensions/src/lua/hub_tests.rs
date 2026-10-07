@@ -420,3 +420,76 @@ fn a_buffered_flush_holds_the_lock_past_seal() {
         "nothing is emitted after the seal"
     );
 }
+
+#[derive(Default)]
+struct Recorder {
+    events: std::sync::Mutex<Vec<Event>>,
+}
+
+impl Emit for Recorder {
+    fn emit(&self, event: &Event) {
+        self.events.lock().unwrap().push(event.clone());
+    }
+}
+
+#[test]
+fn set_emit_after_dispose_installs_nothing_and_flushes_nothing() {
+    // Disposed but not sealed: `set_emit` installs no emitter and flushes
+    // nothing, so the `||` becoming `&&` would wrongly install and flush.
+    let hub = Hub::new(FakeClock::new());
+    hub.emit(status("early"));
+    assert_eq!(hub.lock().emit_buffer.len(), 1);
+    hub.dispose("ext");
+    assert!(!hub.lock().sealed, "dispose alone does not seal");
+    let recorder = Arc::new(Recorder::default());
+    hub.set_emit(Arc::clone(&recorder) as Arc<dyn Emit>);
+    assert!(
+        recorder.events.lock().unwrap().is_empty(),
+        "nothing flushes after dispose"
+    );
+    assert!(
+        hub.lock().emitter.is_none(),
+        "no emitter is installed after dispose"
+    );
+    assert_eq!(
+        hub.lock().emit_buffer.len(),
+        1,
+        "the buffered line stays buffered"
+    );
+    hub.emit(status("late"));
+    assert!(
+        recorder.events.lock().unwrap().is_empty(),
+        "nothing is emitted after dispose"
+    );
+}
+
+#[test]
+fn set_emit_after_seal_installs_nothing_and_flushes_nothing() {
+    // Sealed but not disposed: `set_emit` installs no emitter and flushes
+    // nothing, so the `||` becoming `&&` would wrongly install and flush.
+    let hub = Hub::new(FakeClock::new());
+    hub.emit(status("early"));
+    assert_eq!(hub.lock().emit_buffer.len(), 1);
+    hub.seal();
+    assert!(!hub.lock().disposed, "seal alone does not dispose");
+    let recorder = Arc::new(Recorder::default());
+    hub.set_emit(Arc::clone(&recorder) as Arc<dyn Emit>);
+    assert!(
+        recorder.events.lock().unwrap().is_empty(),
+        "nothing flushes after seal"
+    );
+    assert!(
+        hub.lock().emitter.is_none(),
+        "no emitter is installed after seal"
+    );
+    assert_eq!(
+        hub.lock().emit_buffer.len(),
+        1,
+        "the buffered line stays buffered"
+    );
+    hub.emit(status("late"));
+    assert!(
+        recorder.events.lock().unwrap().is_empty(),
+        "nothing is emitted after seal"
+    );
+}

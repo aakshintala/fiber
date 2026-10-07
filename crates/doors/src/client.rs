@@ -56,12 +56,6 @@ pub(crate) struct Conn {
     gone: bool,
 }
 
-impl Conn {
-    pub(crate) fn gone(&self) -> bool {
-        self.gone
-    }
-}
-
 /// Reads `stream` until the client hangs up. `id` is the slot [`Gate`] stored
 /// the reader in, with the shutdown that unblocks it. The writer is the
 /// socket's other clone.

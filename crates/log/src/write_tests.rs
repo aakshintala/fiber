@@ -538,3 +538,60 @@ fn watch_all_seeded_delivers_seeds_before_later_lines() {
         }
     );
 }
+
+#[test]
+fn watch_all_seeded_prunes_a_dropped_watcher_and_keeps_a_live_one() {
+    // The `>` becoming `==`, `<` or `>=` must fail: `>=` keeps the dead
+    // entry, so the registry grows; `==` and `<` drop the live watcher, so
+    // it never receives a later line.
+    let sessions = fakes::TempDir::new("log-unit-seeded-prune");
+    let log = Log::create(
+        sessions.path(),
+        SessionId("s_1".into()),
+        fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    let live = log.watch();
+    {
+        let dead = log.watch();
+        assert_eq!(log.lock().watchers.len(), 2);
+        drop(dead);
+    }
+    assert_eq!(log.lock().watchers.len(), 2);
+    assert_eq!(
+        log.lock()
+            .watchers
+            .iter()
+            .filter(|w| w.strong_count() > 0)
+            .count(),
+        1
+    );
+    let seeded = log.watch_all_seeded().unwrap();
+    assert_eq!(
+        log.lock().watchers.len(),
+        2,
+        "the dead weak entry is pruned"
+    );
+    assert_eq!(
+        log.lock()
+            .watchers
+            .iter()
+            .filter(|w| w.strong_count() > 0)
+            .count(),
+        2,
+        "the live watcher is kept"
+    );
+    let live_rx = relay(live);
+    let seeded_rx = relay(seeded);
+    let line = log.append(&step(), None, None).unwrap();
+    let got = live_rx
+        .recv_timeout(DEADLINE)
+        .expect("the live watcher still receives a later line")
+        .expect("open");
+    assert_eq!(got.seq, line.seq);
+    let got = seeded_rx
+        .recv_timeout(DEADLINE)
+        .expect("the reseeded watcher receives a later line")
+        .expect("open");
+    assert_eq!(got.seq, line.seq);
+}
