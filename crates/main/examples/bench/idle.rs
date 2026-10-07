@@ -84,14 +84,14 @@ fn start_session(ctx: &Ctx<'_>) -> Result<(Session, String), String> {
         .arg(&id)
         .arg("--workspace")
         .arg(&workspace);
-    Ok((Session::spawn(&mut command)?, id))
+    Ok((Session::spawn(&mut command, ctx.clock)?, id))
 }
 
 /// From just before the spawn to the first complete stdout line, which
 /// must be `session_started`.
 fn session_start(ctx: &Ctx<'_>, _notes: &mut Vec<String>) -> Result<Samples, String> {
-    let started = ctx.clock.now();
     let (session, _) = start_session(ctx)?;
+    let started = session.proc.spawned;
     let first = session.line(ctx.clock, started + READY, "the first stdout line");
     let took = ms(ctx.clock, started);
     let stopped = session.proc.stop(ctx.clock);
@@ -211,8 +211,8 @@ fn quit(ctx: &Ctx<'_>, mut terminal: Terminal, notes: &mut Vec<String>) -> Resul
 
 /// From just before the spawn to the pty output first holding `>`.
 fn terminal_first_frame(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, String> {
-    let started = ctx.clock.now();
-    let terminal = Terminal::spawn(ctx.home, ctx.path.as_deref())?;
+    let terminal = Terminal::spawn(ctx.home, ctx.path.as_deref(), ctx.clock)?;
+    let started = terminal.proc.spawned;
     let framed = terminal.wait_for(ctx.clock, started + READY, ">");
     let took = ms(ctx.clock, started);
     // The hub is up before the quit, so it idles out rather than starting
@@ -227,7 +227,7 @@ fn terminal_first_frame(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Sample
 /// The window starts once the first frame is drawn and the terminal holds
 /// its hub connection.
 fn terminal_idle(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, String> {
-    let terminal = Terminal::spawn(ctx.home, ctx.path.as_deref())?;
+    let terminal = Terminal::spawn(ctx.home, ctx.path.as_deref(), ctx.clock)?;
     let pid = terminal.proc.pid();
     let measured = terminal
         .wait_for(ctx.clock, ctx.clock.now() + READY, ">")

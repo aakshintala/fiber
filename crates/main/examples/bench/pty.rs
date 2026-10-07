@@ -34,7 +34,11 @@ fn err(what: &str) -> impl Fn(rustix::io::Errno) -> String + '_ {
 
 impl Terminal {
     /// Starts the copy of `fiber` in `home`'s workspace on a new pty.
-    pub(crate) fn spawn(home: &Home, path: Option<&OsStr>) -> Result<Self, String> {
+    pub(crate) fn spawn(
+        home: &Home,
+        path: Option<&OsStr>,
+        clock: &dyn Clock,
+    ) -> Result<Self, String> {
         let main = pty::openpt(pty::OpenptFlags::RDWR | pty::OpenptFlags::NOCTTY)
             .map_err(err("opening a pty"))?;
         // Not inherited: a hub the terminal starts would hold the master open.
@@ -72,7 +76,7 @@ impl Terminal {
             .stdin(side()?)
             .stdout(side()?)
             .stderr(side()?);
-        let proc = Proc::spawn(&mut command)?;
+        let proc = Proc::spawn(&mut command, clock)?;
         drop(command);
         drop(terminal);
         let main = fs::File::from(main);

@@ -107,13 +107,17 @@ pub(crate) struct Proc {
     child: Child,
     group: u32,
     watchdog: Option<Watchdog>,
+    /// Read from the clock just before the spawn, after every piece of
+    /// harness setup: a startup timing starts here.
+    pub(crate) spawned: Instant,
 }
 
 impl Proc {
     /// Starts `command` in a new process group.
-    pub(crate) fn spawn(command: &mut Command) -> Result<Self, String> {
+    pub(crate) fn spawn(command: &mut Command, clock: &dyn Clock) -> Result<Self, String> {
+        command.process_group(0);
+        let spawned = clock.now();
         let child = command
-            .process_group(0)
             .spawn()
             .map_err(|err| format!("starting {:?}: {err}", command.get_program()))?;
         let group = child.id();
@@ -121,6 +125,7 @@ impl Proc {
             child,
             group,
             watchdog: Some(Watchdog::group(group)),
+            spawned,
         })
     }
 
@@ -214,12 +219,12 @@ pub(crate) struct Session {
 
 impl Session {
     /// Starts `command` with stdout and stderr piped.
-    pub(crate) fn spawn(command: &mut Command) -> Result<Self, String> {
+    pub(crate) fn spawn(command: &mut Command, clock: &dyn Clock) -> Result<Self, String> {
         command
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        let mut proc = Proc::spawn(command)?;
+        let mut proc = Proc::spawn(command, clock)?;
         let stdout = proc
             .child
             .stdout

@@ -3,7 +3,12 @@ use std::path::Path;
 
 use serde_json::json;
 
-use super::{Startup, command, parse_line};
+use std::process::Command;
+use std::time::Duration;
+
+use contract::clock::Clock;
+
+use super::{Proc, Startup, command, parse_line};
 
 const PROXIES: [&str; 8] = [
     "HTTP_PROXY",
@@ -87,4 +92,14 @@ fn startup_finishes_at_the_first_session_status_after_extensions_loaded() {
         assert_eq!(startup.line(&json!({"kind": kind})), done, "{kind}");
     }
     assert!(!Startup::default().line(&json!({"no_kind": 1})));
+}
+
+#[test]
+fn a_startup_timing_starts_at_the_clock_read_just_before_the_spawn() {
+    let clock = fakes::clock::FakeClock::new();
+    let before = clock.now();
+    clock.advance(Duration::from_millis(7));
+    let proc = Proc::spawn(&mut Command::new("true"), &*clock).unwrap();
+    assert_eq!(proc.spawned, before + Duration::from_millis(7));
+    proc.stop(&super::System).unwrap();
 }
