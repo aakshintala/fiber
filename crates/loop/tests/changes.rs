@@ -715,6 +715,39 @@ fn a_tool_declaring_a_write_gets_the_prune_line_whatever_its_name() {
     session.inbox.send(delivery("hi")).unwrap();
     session.turn();
     let lines = session.lines();
+    // The complete turn, in order: as in
+    // `an_over_budget_write_ends_its_result_with_the_prune_line`, the
+    // own edit lands with its call's completion and the prune line ends
+    // the call's result; only the tool's name differs.
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "text_completed",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+            "instruction_file",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     let done = lines
         .iter()
         .find(|line| line.kind == "tool_call_completed")
@@ -750,6 +783,37 @@ fn a_tool_named_write_declaring_only_a_read_gets_no_prune_line() {
     session.inbox.send(delivery("hi")).unwrap();
     session.turn();
     let lines = session.lines();
+    // The complete turn, in order: declaring only a read, the call takes
+    // the permission fast path, so no `permission_resolved`; the file is
+    // still rewritten, so the own edit is recorded.
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "text_completed",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "instruction_file",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     let done = lines
         .iter()
         .find(|line| line.kind == "tool_call_completed")
