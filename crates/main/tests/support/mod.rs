@@ -264,6 +264,22 @@ pub(crate) fn recv(client: &Socket, what: &str) -> Value {
     }
 }
 
+/// The next socket line that is not an `attention` hub line: a turn can
+/// end between a command and its acknowledgement. Waits [`DEADLINE`] for
+/// each line, like [`recv`].
+pub(crate) fn recv_reply(client: &Socket, what: &str) -> Value {
+    let mut got = Vec::new();
+    loop {
+        match client.next(what, &got) {
+            Some(line) if line.get("kind").and_then(Value::as_str) == Some("attention") => {
+                got.push(line);
+            }
+            Some(line) => return line,
+            None => panic!("the socket closed while waiting for {what}"),
+        }
+    }
+}
+
 /// Collects socket lines until `done`, waiting `DEADLINE` for each: expiry
 /// panics naming `what`, and the socket closing first panics too.
 pub(crate) fn until(
@@ -441,7 +457,7 @@ pub(crate) fn start_session(client: &Socket, workspace: &str, content: &str) -> 
     client.send(&format!(
         "{{\"id\":\"c_start\",\"command\":\"start\",\"args\":{{\"workspace\":\"{workspace}\",\"content\":[{{\"type\":\"text\",\"text\":\"{content}\"}}]}}}}"
     ));
-    let ack = recv(client, "the start acknowledgement");
+    let ack = recv_reply(client, "the start acknowledgement");
     assert_eq!(ack["kind"], "command_accepted", "{ack}");
     ack["payload"]["result"]["session_id"]
         .as_str()
@@ -454,7 +470,7 @@ pub(crate) fn subscribe(client: &Socket, session: &str) {
     client.send(&format!(
         "{{\"id\":\"c_sub\",\"session_id\":\"{session}\",\"command\":\"subscribe\",\"args\":{{\"level\":\"full\"}}}}"
     ));
-    let ack = recv(client, "the subscribe acknowledgement");
+    let ack = recv_reply(client, "the subscribe acknowledgement");
     assert_eq!(ack["kind"], "command_accepted", "{ack}");
 }
 
