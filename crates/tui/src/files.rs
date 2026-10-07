@@ -69,8 +69,10 @@ pub(crate) fn rank(
         let name = lower.rsplit('/').next().unwrap_or_default();
         found.push((!name.contains(&query), path.len(), path));
     }
-    if found.len() > KEPT {
-        found.select_nth_unstable(KEPT.saturating_sub(1));
+    // Past the first KEPT, a partial select keeps the smallest without
+    // sorting the rest.
+    if found.get(KEPT).is_some() {
+        found.select_nth_unstable(KEPT);
         found.truncate(KEPT);
     }
     found.sort_unstable();
@@ -89,12 +91,18 @@ pub(crate) struct Search {
     jobs: Sender<(u64, String)>,
     /// The newest generation asked for.
     current: Arc<AtomicU64>,
+    /// Why the worker could not start, and where each search is answered
+    /// with it.
+    unstarted: Option<(String, Sender<Input>)>,
 }
 
 impl Search {
     /// Starts the worker on its own thread: `listing` runs there, and each
     /// result goes to `out` as [`Input::Files`]. The thread is detached;
-    /// it ends once this handle is dropped or `out` hangs up.
+    /// it ends once this handle is dropped or `out` hangs up. A worker
+    /// that cannot start answers every search with why, as [`unstarted`].
+    ///
+    /// [`unstarted`]: Self::unstarted
     pub(crate) fn spawn(
         listing: impl FnOnce() -> Result<Vec<String>, String> + Send + 'static,
         out: Sender<Input>,
@@ -102,6 +110,7 @@ impl Search {
         let (jobs, inbox) = mpsc::channel::<(u64, String)>();
         let current = Arc::new(AtomicU64::new(0));
         let newest = Arc::clone(&current);
+        let failed = out.clone();
         let worker = thread::Builder::new()
             .name("tui-files".to_owned())
             .spawn(move || {
@@ -126,13 +135,34 @@ impl Search {
                     }
                 }
             });
-        // A worker that cannot start leaves the panel empty.
-        drop(worker);
-        Self { jobs, current }
+        match worker {
+            Ok(_) => Self {
+                jobs,
+                current,
+                unstarted: None,
+            },
+            Err(error) => Self::unstarted(error.to_string(), failed),
+        }
+    }
+
+    /// A worker that never started: every search is answered at once on
+    /// `out` with `error`, which the panel shows as its error row.
+    pub(crate) fn unstarted(error: String, out: Sender<Input>) -> Self {
+        Self {
+            jobs: mpsc::channel().0,
+            current: Arc::new(AtomicU64::new(0)),
+            unstarted: Some((error, out)),
+        }
     }
 
     /// Asks for `query` at `generation`, abandoning the search before it.
     pub(crate) fn search(&self, generation: u64, query: String) {
+        if let Some((error, out)) = &self.unstarted {
+            let result = Err(error.clone());
+            // A loop gone has no panel to show the error in.
+            drop(out.send(Input::Files { generation, result }));
+            return;
+        }
         self.current.store(generation, Ordering::Relaxed);
         // A worker gone has nothing left to search.
         drop(self.jobs.send((generation, query)));

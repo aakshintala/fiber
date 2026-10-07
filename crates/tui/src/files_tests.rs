@@ -113,6 +113,17 @@ fn only_the_first_fifty_are_kept() {
 }
 
 #[test]
+fn exactly_fifty_matches_are_all_kept_and_one_more_is_cut() {
+    for count in [KEPT, KEPT + 1] {
+        let paths: Vec<String> = (0..count).rev().map(|at| format!("g{at:03}")).collect();
+        let found = rank(&paths, "g", || false).unwrap_or_default();
+        assert_eq!(found.len(), KEPT, "{count} matches");
+        assert_eq!(found.first().map(String::as_str), Some("g000"), "{count}");
+        assert_eq!(found.last().map(String::as_str), Some("g049"), "{count}");
+    }
+}
+
+#[test]
 fn cancellation_is_checked_every_1024_paths() {
     assert_eq!(CHECK_EVERY, 1024);
     let paths: Vec<String> = (0..3000).map(|at| format!("p{at}")).collect();
@@ -184,6 +195,22 @@ fn a_failed_listing_answers_every_search_with_its_error() {
     let search = Search::spawn(|| Err("no git".to_owned()), out);
     search.search(4, "x".to_owned());
     assert_eq!(next_result(&rx, "the error"), (4, Err("no git".to_owned())));
+}
+
+#[test]
+fn a_worker_that_never_started_answers_every_search_with_why() {
+    let (out, rx) = mpsc::channel();
+    let search = Search::unstarted("no threads".to_owned(), out);
+    search.search(5, "x".to_owned());
+    assert_eq!(
+        next_result(&rx, "the error"),
+        (5, Err("no threads".to_owned()))
+    );
+    search.search(6, String::new());
+    assert_eq!(
+        next_result(&rx, "the next error"),
+        (6, Err("no threads".to_owned()))
+    );
 }
 
 #[test]

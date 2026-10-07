@@ -315,6 +315,24 @@ fn close_while_idle_sends_close_and_goes_home() {
 }
 
 #[test]
+fn a_rejected_close_gives_only_its_notice_on_the_home_draft() {
+    let mut app = attached();
+    let lines = sent(enter(&mut app, "/close"));
+    let rejected = contract::HubLine {
+        kind: "command_rejected".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: json!({"command_id": lines[0]["id"], "code": "busy", "message": "Busy."})
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+    };
+    assert!(app.on_line(Line::Hub(rejected)).is_empty());
+    assert_eq!(app.draft(), "");
+    assert_eq!(app.notice(), Some("Busy."));
+}
+
+#[test]
 fn close_during_a_turn_cancels_first() {
     let mut app = attached();
     turn_starts(&mut app);

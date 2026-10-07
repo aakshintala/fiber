@@ -7,6 +7,7 @@ use crate::link::Line;
 use contract::clock::Clock;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::Modifier;
 use std::path::PathBuf;
 
 const WIDTH: u16 = 60;
@@ -719,6 +720,25 @@ fn slash_panel() {
         app.on_key(Key::Char(ch), now);
     }
     insta::assert_snapshot!("slash_panel", sized(&mut app, 80, 24));
+}
+
+#[test]
+fn the_selected_completion_is_reversed_and_the_others_are_not() {
+    let mut app = empty();
+    let now = fakes::clock::FakeClock::new().now();
+    for ch in "/h".chars() {
+        app.on_key(Key::Char(ch), now);
+    }
+    let (shown, buf) = wide(&mut app);
+    let rows: Vec<&str> = shown.lines().collect();
+    assert!(rows[HEIGHT as usize - 4].starts_with("/home"), "{shown}");
+    let reversed = |row: u16| {
+        buf.cell((0, row))
+            .is_some_and(|cell| cell.modifier.contains(Modifier::REVERSED))
+    };
+    assert!(reversed(HEIGHT - 4), "{shown}");
+    assert!(!reversed(HEIGHT - 3), "{shown}");
+    assert!(!reversed(HEIGHT - 2), "{shown}");
 }
 
 #[test]

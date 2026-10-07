@@ -323,8 +323,8 @@ impl App {
         }
         let id = mint();
         lines.push(session_command(&id, "close", &session, None).to_string());
-        self.pending
-            .insert(id, (Kind::Command, mem::take(&mut self.draft)));
+        // Home has a fresh draft: a rejected `close` gives only its notice.
+        self.pending.insert(id, (Kind::Command, String::new()));
         self.go_home();
         Effect::Send(lines)
     }
