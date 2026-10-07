@@ -672,7 +672,11 @@ fn a_blocked_writer_holds_close_until_the_grace_passes() {
         done_rx.try_recv().is_err(),
         "close has not returned before the grace passes"
     );
-    clock.advance(super::GRACE.saturating_sub(Duration::from_millis(1)));
+    let mark = clock.advance_marked(super::GRACE.saturating_sub(Duration::from_millis(1)));
+    assert!(
+        clock.await_parked_since(&mark, Some(until), DEADLINE),
+        "close waits again one millisecond short of the grace"
+    );
     assert!(
         done_rx.try_recv().is_err(),
         "close has not returned one millisecond before the grace"

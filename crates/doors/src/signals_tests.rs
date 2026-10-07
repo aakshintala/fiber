@@ -155,9 +155,9 @@ fn the_bound_kills_then_exits_only_once_five_seconds_pass() {
         clock.await_parked(until, DEADLINE),
         "the bound waits on the clock"
     );
-    clock.advance(BOUND.checked_sub(Duration::from_millis(1)).unwrap());
+    let mark = clock.advance_marked(BOUND.checked_sub(Duration::from_millis(1)).unwrap());
     assert!(
-        clock.await_parked(until, DEADLINE),
+        clock.await_parked_since(&mark, Some(until), DEADLINE),
         "short of the bound it waits again"
     );
     assert!(calls.try_recv().is_err(), "nothing killed before the bound");
