@@ -761,3 +761,740 @@ fn rebuild_stamps_a_tool_call_with_the_model_in_force() {
     };
     assert_eq!(model, "p/m");
 }
+
+// The resume window (`docs/events.md`, "Resume"; `docs/handoff.md`,
+// "Resume"): one pass folds the session-wide facts and finds the window, and
+// the window's rebuild equals the whole log's.
+
+mod window {
+    use std::collections::{BTreeMap, HashSet};
+    use std::path::PathBuf;
+
+    use contract::events::{
+        AskStep, DecidedBy, Decision, Empty, Environment, Event, FiberExited, FiberStarted, Grant,
+        HandoffCompleted, HandoffStarted, HandoffTrigger, InputItem, JobCompleted, JobStarted,
+        Note, OpeningMessage, Outcome, PermissionRequested, PermissionResolved, ReviewerRef,
+        RuleScope, SessionStarted, StandingRule, TextCompleted, TurnStarted, UsageRecorded,
+        Variables, VariablesSource,
+    };
+    use contract::shapes::{
+        ContentPart, DeclaredEffects, Effect, Origin, Sender, Tokens, Usage,
+    };
+    use contract::{ActionId, Envelope, ErrorCode, GenerationId, JobId, RequestId, SessionId};
+
+    use crate::handoff::Carry;
+    use crate::resume::{Resumed, resumed, suspended};
+    use crate::reviewer::render_reviewed;
+
+    const MODEL: &str = "fake/model-1";
+
+    /// A session log in a temporary directory, written through the log so
+    /// every line has its `seq`.
+    struct Session {
+        root: fakes::TempDir,
+        log: log::Log,
+    }
+
+    impl Session {
+        fn new() -> Self {
+            let root = fakes::TempDir::new("fiber-window");
+            let log = log::Log::create(
+                root.path(),
+                SessionId("s_1".into()),
+                fakes::clock::FakeClock::new(),
+            )
+            .unwrap();
+            let session = Self { root, log };
+            session.write(
+                &Event::SessionStarted(SessionStarted {
+                    workspace: "/w".into(),
+                    variables: Variables {
+                        path: String::new(),
+                        names: Vec::new(),
+                        source: VariablesSource::Inherited,
+                    },
+                    parent: None,
+                    forked_from: None,
+                    rewind: None,
+                }),
+                None,
+                None,
+            );
+            session
+        }
+
+        fn dir(&self) -> PathBuf {
+            self.root.path().join("s_1")
+        }
+
+        /// Appends `event` under `turn` and `action`; returns its `seq`.
+        fn write(&self, event: &Event, turn: Option<&str>, action: Option<&str>) -> u64 {
+            self.log
+                .append(
+                    event,
+                    turn.map(|turn| contract::TurnId(turn.into())),
+                    action.map(|action| ActionId(action.into())),
+                )
+                .unwrap()
+                .seq
+                .unwrap()
+                .0
+        }
+
+        /// Appends a raw line past the writer.
+        fn raw(&self, line: &str) {
+            use std::io::Write as _;
+            let mut file = std::fs::OpenOptions::new()
+                .append(true)
+                .open(self.dir().join("events.jsonl"))
+                .unwrap();
+            writeln!(file, "{line}").unwrap();
+        }
+
+        fn lines(&self) -> Vec<Envelope> {
+            log::read(&self.dir()).unwrap()
+        }
+    }
+
+    fn turn(text: &str) -> Event {
+        Event::TurnStarted(TurnStarted {
+            input: vec![InputItem::Message {
+                content: vec![ContentPart::Text { text: text.into() }],
+                sender: Sender {
+                    origin: Origin::Driver,
+                    command_id: None,
+                },
+                changed_by: None,
+            }],
+        })
+    }
+
+    fn reply() -> Event {
+        Event::AssistantMessageStarted(Empty {})
+    }
+
+    fn text(text: &str) -> Event {
+        Event::TextCompleted(TextCompleted {
+            text: text.into(),
+            provider_item: None,
+        })
+    }
+
+    fn opening(session_log: &str) -> Event {
+        Event::OpeningMessage(OpeningMessage {
+            environment: Environment {
+                date: "2023-11-14".into(),
+                os: "test-os".into(),
+                arch: "test-arch".into(),
+                shell: "/bin/sh".into(),
+                workspace: "/w".into(),
+                git: None,
+                session_log: session_log.into(),
+            },
+            instruction_files: Vec::new(),
+            extension_sections: Vec::new(),
+            skills: Vec::new(),
+        })
+    }
+
+    fn handoff_started() -> Event {
+        Event::HandoffStarted(HandoffStarted {
+            trigger: HandoffTrigger::Auto,
+        })
+    }
+
+    fn handoff_done(outcome: Outcome, note: &str) -> Event {
+        Event::HandoffCompleted(HandoffCompleted {
+            outcome,
+            error: None,
+            note: (outcome == Outcome::Completed).then(|| Note::Actions {
+                note: vec![ActionId(note.into())],
+            }),
+            tokens_before: 1000,
+            instructions: None,
+        })
+    }
+
+    /// One handoff in `turn`: its window, the note under `note`, and its
+    /// end with `outcome`.
+    fn handoff(session: &Session, turn: &str, note: &str, outcome: Outcome) {
+        session.write(&handoff_started(), Some(turn), None);
+        session.write(&reply(), Some(turn), Some(note));
+        session.write(&text(note), Some(turn), Some(note));
+        session.write(&handoff_done(outcome, note), Some(turn), None);
+    }
+
+    fn job_started(id: &str) -> Event {
+        Event::JobStarted(JobStarted {
+            job_id: JobId(id.into()),
+            tool: None,
+            extension: None,
+            description: format!("job {id}"),
+            output_path: format!("artifacts/{id}"),
+        })
+    }
+
+    fn job_completed(id: &str) -> Event {
+        Event::JobCompleted(JobCompleted {
+            job_id: JobId(id.into()),
+            status: Outcome::Completed,
+            error: None,
+            process: None,
+            output_tail: None,
+        })
+    }
+
+    fn call() -> Event {
+        Event::ToolCallRequested(contract::events::ToolCallRequested {
+            name: "read".into(),
+            arguments: serde_json::json!({"path": "a"}),
+            provider_id: None,
+            repair: None,
+            ran_by: None,
+            provider_item: None,
+        })
+    }
+
+    fn result(artifact: Option<&str>) -> Event {
+        Event::ToolCallCompleted(contract::events::ToolCallCompleted {
+            status: contract::events::CallStatus::Completed,
+            reason: None,
+            error: None,
+            process: None,
+            content: vec![ContentPart::Text { text: "ok".into() }],
+            details: None,
+            artifact: artifact.map(str::to_owned),
+            changes: None,
+            control: None,
+            changed_by: None,
+            provider_item: None,
+        })
+    }
+
+    fn request(id: &str) -> Event {
+        Event::PermissionRequested(PermissionRequested {
+            request_id: RequestId(id.into()),
+            declared: DeclaredEffects {
+                effects: vec![Effect::Executes],
+                reversible: true,
+                paths: None,
+            },
+            step: AskStep::StandingAsk {
+                standing_rule: StandingRule {
+                    scope: RuleScope::Project,
+                    prefix: "run".into(),
+                },
+            },
+        })
+    }
+
+    fn resolved(decided_by: DecidedBy, grant: Option<&str>, reviewer: bool) -> Event {
+        Event::PermissionResolved(PermissionResolved {
+            request_id: None,
+            decision: if grant.is_some() {
+                Decision::Allow
+            } else {
+                Decision::Deny
+            },
+            decided_by,
+            reason: None,
+            feedback: None,
+            grant: grant.map(|prefix| Grant {
+                tool: "shell".into(),
+                prefix: prefix.into(),
+            }),
+            rule: None,
+            reviewer: reviewer.then(|| ReviewerRef {
+                model: MODEL.into(),
+                stage: 1,
+            }),
+        })
+    }
+
+    fn usage(id: &str, model: &str) -> Event {
+        Event::UsageRecorded(UsageRecorded {
+            generation_id: GenerationId(id.into()),
+            model: model.into(),
+            tokens: Tokens {
+                input: 10,
+                cache_read: 0,
+                cache_write: BTreeMap::new(),
+                output: 3,
+            },
+            web_searches: None,
+            cost: Some(1.0),
+            subscription: None,
+            extension: None,
+            origin_session_id: None,
+        })
+    }
+
+    fn fiber_started() -> Event {
+        Event::FiberStarted(FiberStarted {
+            version: "0.0.0".into(),
+            resumed: true,
+        })
+    }
+
+    fn fiber_exited(suspended_on: Option<&str>) -> Event {
+        Event::FiberExited(FiberExited {
+            exit_code: 0,
+            usage: Usage {
+                tokens: Tokens {
+                    input: 0,
+                    cache_read: 0,
+                    cache_write: BTreeMap::new(),
+                    output: 0,
+                },
+                cost: Some(0.0),
+                subscription_cost: 0.0,
+            },
+            final_message: None,
+            error: None,
+            suspended_on: suspended_on.map(|id| RequestId(id.into())),
+            questions: None,
+        })
+    }
+
+    fn nudged() -> Event {
+        Event::ContextNudged(contract::events::ContextNudged {
+            tokens: 900,
+            trigger_at: 1000,
+        })
+    }
+
+    /// The first context: an opening message, a job still running, one
+    /// ended, one that ends in a later context; a turn with a call whose
+    /// result has an artifact; a grant, a reviewer block and two refusals
+    /// that are not blocks; usage; and a nudge. Every fact the pass folds
+    /// is set before any later window.
+    fn first_context(session: &Session) {
+        session.write(&opening("old-log"), Some("t_1"), None);
+        session.write(&job_started("j_run"), None, None);
+        session.write(&job_started("j_done"), None, None);
+        session.write(&job_completed("j_done"), None, None);
+        session.write(&job_started("j_late"), None, None);
+        session.write(&turn("one"), Some("t_1"), None);
+        session.write(&reply(), Some("t_1"), Some("a_0"));
+        session.write(&call(), Some("t_1"), Some("a_1"));
+        session.write(
+            &resolved(DecidedBy::Person, Some("cargo"), false),
+            Some("t_1"),
+            Some("a_1"),
+        );
+        session.write(
+            &resolved(DecidedBy::Reviewer, None, true),
+            Some("t_1"),
+            Some("a_1"),
+        );
+        session.write(
+            &resolved(DecidedBy::Reviewer, None, false),
+            Some("t_1"),
+            Some("a_1"),
+        );
+        session.write(
+            &resolved(DecidedBy::StandingRule, None, true),
+            Some("t_1"),
+            Some("a_1"),
+        );
+        session.write(&result(Some("artifacts/a_1")), Some("t_1"), Some("a_1"));
+        session.write(&usage("g_1", "fake/first"), Some("t_1"), Some("a_0"));
+        session.write(&nudged(), Some("t_1"), None);
+        session.write(&reply(), Some("t_1"), Some("a_2"));
+        session.write(&text("answer"), Some("t_1"), Some("a_2"));
+        session.write(&usage("g_2", "fake/second"), Some("t_1"), Some("a_2"));
+    }
+
+    /// What the whole log rebuilds, and what `resumed`'s window rebuilds,
+    /// asserted equal; returns the pass.
+    fn same_as_whole(session: &Session) -> Resumed {
+        let folded = resumed(&session.dir()).unwrap();
+        let all = session.lines();
+        assert_eq!(folded.end, u64::try_from(all.len()).unwrap());
+        let start = usize::try_from(folded.window).unwrap();
+        let window = &all[start..];
+
+        let whole_halt = suspended(&all).unwrap();
+        let window_halt = suspended(window).unwrap();
+        let halt = |halted: &Option<crate::resume::Suspended>| {
+            halted.as_ref().map(|halted| {
+                (
+                    halted.turn.clone(),
+                    halted.action.clone(),
+                    halted.batch.clone(),
+                    halted.request.clone(),
+                )
+            })
+        };
+        assert_eq!(halt(&window_halt), halt(&whole_halt));
+        let open: HashSet<ActionId> = whole_halt
+            .map(|halted| halted.batch.into_iter().collect())
+            .unwrap_or_default();
+
+        let whole = super::super::rebuild_and_sent(&all, MODEL, &open, Carry::default()).unwrap();
+        let rebuilt =
+            super::super::rebuild_and_sent(window, MODEL, &open, folded.seed.clone()).unwrap();
+        assert_eq!(rebuilt, whole);
+
+        // The session-wide folds equal today's fold over the whole log.
+        let mut reviewed = Vec::new();
+        for line in &all {
+            if let Some(event) = Event::from_envelope(line).unwrap() {
+                render_reviewed(&mut reviewed, &event, line.action_id.as_ref());
+            }
+        }
+        assert_eq!(folded.reviewed, reviewed);
+        folded
+    }
+
+    #[test]
+    fn with_no_handoff_the_window_is_the_whole_log() {
+        let session = Session::new();
+        first_context(&session);
+        session.write(&job_completed("j_late"), None, None);
+
+        let folded = same_as_whole(&session);
+
+        assert_eq!(folded.window, 0);
+        assert_eq!(folded.session, "s_1");
+        assert_eq!(folded.workspace, "/w");
+        assert_eq!(folded.model.as_deref(), Some("fake/second"));
+    }
+
+    #[test]
+    fn the_window_starts_at_the_completed_handoffs_turn() {
+        let session = Session::new();
+        first_context(&session);
+        let start = session.write(&turn("two"), Some("t_2"), None);
+        // A call requested before the window and completed in it, and a
+        // job started before it and ended in it.
+        session.write(&job_completed("j_late"), None, None);
+        handoff(&session, "t_2", "a_note", Outcome::Completed);
+        session.write(&opening("new-log"), Some("t_2"), None);
+        session.write(&turn("three"), Some("t_3"), None);
+        session.write(&reply(), Some("t_3"), Some("a_3"));
+        session.write(&text("after"), Some("t_3"), Some("a_3"));
+
+        let folded = same_as_whole(&session);
+
+        assert_eq!(folded.window, start);
+        // The jobs running at the window start, and the path before it.
+        assert_eq!(
+            folded.seed.jobs,
+            [
+                ("j_run".to_owned(), "job j_run".to_owned()),
+                ("j_late".to_owned(), "job j_late".to_owned()),
+            ]
+        );
+        assert_eq!(folded.seed.session_log, "old-log");
+        // The session-wide facts from before the window are kept.
+        assert_eq!(
+            folded.grants,
+            [Grant {
+                tool: "shell".into(),
+                prefix: "cargo".into(),
+            }]
+        );
+        assert_eq!(folded.session_blocks, 1);
+        assert_eq!(folded.ledger.usage().tokens.input, 20);
+        assert_eq!(folded.model.as_deref(), Some("fake/second"));
+        // Only the job never ended is orphaned.
+        let orphans: Vec<&str> = folded
+            .orphans
+            .iter()
+            .map(|job| job.job_id.0.as_str())
+            .collect();
+        assert_eq!(orphans, ["j_run"]);
+        assert!(folded.orphans.iter().all(|job| {
+            job.status == Outcome::Failed
+                && job.error.as_ref().map(|error| &error.code) == Some(&ErrorCode::Orphaned)
+        }));
+    }
+
+    #[test]
+    fn a_call_requested_before_the_window_and_completed_in_it_rebuilds_the_same() {
+        let session = Session::new();
+        first_context(&session);
+        session.write(&reply(), Some("t_1"), Some("a_8"));
+        session.write(&call(), Some("t_1"), Some("a_9"));
+        let start = session.write(&turn("two"), Some("t_2"), None);
+        session.write(&result(Some("artifacts/a_9")), Some("t_2"), Some("a_9"));
+        handoff(&session, "t_2", "a_note", Outcome::Completed);
+        session.write(&opening("new-log"), Some("t_2"), None);
+
+        assert_eq!(same_as_whole(&session).window, start);
+    }
+
+    #[test]
+    fn a_failed_handoff_after_a_completed_one_keeps_the_completed_window() {
+        let session = Session::new();
+        first_context(&session);
+        let start = session.write(&turn("two"), Some("t_2"), None);
+        handoff(&session, "t_2", "a_note", Outcome::Completed);
+        session.write(&opening("new-log"), Some("t_2"), None);
+        session.write(&turn("three"), Some("t_3"), None);
+        handoff(&session, "t_3", "a_note2", Outcome::Failed);
+        // A handoff that never completed changes nothing either.
+        session.write(&turn("four"), Some("t_4"), None);
+        session.write(&handoff_started(), Some("t_4"), None);
+        session.write(&reply(), Some("t_4"), Some("a_note3"));
+
+        assert_eq!(same_as_whole(&session).window, start);
+    }
+
+    #[test]
+    fn only_a_failed_handoff_leaves_the_whole_log() {
+        let session = Session::new();
+        first_context(&session);
+        session.write(&turn("two"), Some("t_2"), None);
+        handoff(&session, "t_2", "a_note", Outcome::Failed);
+
+        assert_eq!(same_as_whole(&session).window, 0);
+    }
+
+    #[test]
+    fn the_latest_of_two_completed_handoffs_starts_the_window() {
+        let session = Session::new();
+        first_context(&session);
+        session.write(&turn("two"), Some("t_2"), None);
+        handoff(&session, "t_2", "a_note", Outcome::Completed);
+        session.write(&opening("mid-log"), Some("t_2"), None);
+        session.write(&job_started("j_mid"), None, None);
+        let start = session.write(&turn("three"), Some("t_3"), None);
+        handoff(&session, "t_3", "a_note2", Outcome::Completed);
+        session.write(&opening("new-log"), Some("t_3"), None);
+
+        let folded = same_as_whole(&session);
+
+        assert_eq!(folded.window, start);
+        assert_eq!(folded.seed.session_log, "mid-log");
+        assert_eq!(folded.seed.jobs.len(), 3);
+    }
+
+    #[test]
+    fn a_second_handoff_in_the_same_turn_starts_at_that_turn() {
+        let session = Session::new();
+        first_context(&session);
+        let start = session.write(&turn("two"), Some("t_2"), None);
+        handoff(&session, "t_2", "a_note", Outcome::Completed);
+        session.write(&opening("mid-log"), Some("t_2"), None);
+        handoff(&session, "t_2", "a_note2", Outcome::Completed);
+        session.write(&opening("new-log"), Some("t_2"), None);
+
+        assert_eq!(same_as_whole(&session).window, start);
+    }
+
+    #[test]
+    fn the_latest_turn_started_of_the_handoffs_turn_wins() {
+        let session = Session::new();
+        first_context(&session);
+        session.write(&turn("two"), Some("t_2"), None);
+        session.write(&turn("three"), Some("t_3"), None);
+        let start = session.write(&turn("two again"), Some("t_2"), None);
+        handoff(&session, "t_2", "a_note", Outcome::Completed);
+        session.write(&opening("new-log"), Some("t_2"), None);
+
+        assert_eq!(same_as_whole(&session).window, start);
+    }
+
+    #[test]
+    fn an_earlier_turn_named_by_the_handoff_still_starts_the_window() {
+        // Not the latest `turn_started`: the one whose turn the handoff names.
+        let session = Session::new();
+        first_context(&session);
+        let start = session.write(&turn("two"), Some("t_2"), None);
+        session.write(&turn("three"), Some("t_3"), None);
+        handoff(&session, "t_2", "a_note", Outcome::Completed);
+        session.write(&opening("new-log"), Some("t_2"), None);
+
+        assert_eq!(same_as_whole(&session).window, start);
+    }
+
+    #[test]
+    fn a_completed_handoff_with_no_turn_started_reads_the_whole_log() {
+        let session = Session::new();
+        first_context(&session);
+        handoff(&session, "t_x", "a_note", Outcome::Completed);
+        session.write(&opening("new-log"), Some("t_x"), None);
+
+        let folded = same_as_whole(&session);
+
+        assert_eq!(folded.window, 0);
+        assert_eq!(folded.seed, Carry::default());
+    }
+
+    #[test]
+    fn a_handoff_turn_finished_in_a_later_process_starts_at_its_turn() {
+        let session = Session::new();
+        first_context(&session);
+        let start = session.write(&turn("two"), Some("t_2"), None);
+        session.write(&reply(), Some("t_2"), Some("a_5"));
+        session.write(&call(), Some("t_2"), Some("a_6"));
+        session.write(&request("r_1"), Some("t_2"), Some("a_6"));
+        session.write(&fiber_exited(Some("r_1")), None, None);
+        session.write(&fiber_started(), None, None);
+        session.write(&request("r_1"), Some("t_2"), Some("a_6"));
+        session.write(
+            &resolved(DecidedBy::Person, Some("make"), false),
+            Some("t_2"),
+            Some("a_6"),
+        );
+        session.write(&result(None), Some("t_2"), Some("a_6"));
+        handoff(&session, "t_2", "a_note", Outcome::Completed);
+        session.write(&opening("new-log"), Some("t_2"), None);
+
+        let folded = same_as_whole(&session);
+
+        assert_eq!(folded.window, start);
+        assert_eq!(folded.grants.len(), 2);
+    }
+
+    #[test]
+    fn a_turn_suspended_after_a_completed_handoff_suspends_the_same() {
+        let session = Session::new();
+        first_context(&session);
+        session.write(&turn("two"), Some("t_2"), None);
+        handoff(&session, "t_2", "a_note", Outcome::Completed);
+        session.write(&opening("new-log"), Some("t_2"), None);
+        session.write(&turn("three"), Some("t_3"), None);
+        session.write(&reply(), Some("t_3"), Some("a_5"));
+        session.write(&call(), Some("t_3"), Some("a_6"));
+        session.write(&call(), Some("t_3"), Some("a_7"));
+        session.write(&request("r_9"), Some("t_3"), Some("a_6"));
+        session.write(&fiber_exited(Some("r_9")), None, None);
+
+        same_as_whole(&session);
+        assert!(suspended(&session.lines()).unwrap().is_some());
+    }
+
+    #[test]
+    fn a_turn_suspended_in_its_own_handoff_turn_suspends_the_same() {
+        let session = Session::new();
+        first_context(&session);
+        session.write(&turn("two"), Some("t_2"), None);
+        handoff(&session, "t_2", "a_note", Outcome::Completed);
+        session.write(&opening("new-log"), Some("t_2"), None);
+        session.write(&reply(), Some("t_2"), Some("a_5"));
+        session.write(&call(), Some("t_2"), Some("a_6"));
+        session.write(&request("r_9"), Some("t_2"), Some("a_6"));
+        session.write(&fiber_exited(Some("r_9")), None, None);
+
+        same_as_whole(&session);
+        assert!(suspended(&session.lines()).unwrap().is_some());
+    }
+
+    #[test]
+    fn a_log_ending_at_a_completed_handoff_keeps_the_old_path() {
+        let session = Session::new();
+        first_context(&session);
+        session.write(&turn("two"), Some("t_2"), None);
+        handoff(&session, "t_2", "a_note", Outcome::Completed);
+
+        let folded = same_as_whole(&session);
+
+        assert_eq!(folded.seed.session_log, "old-log");
+    }
+
+    #[test]
+    fn a_job_a_rewind_handed_on_or_started_twice_is_orphaned_at_most_once() {
+        let session = Session::new();
+        session.write(&job_started("j_1"), None, None);
+        session.write(&job_started("j_1"), None, None);
+        session.write(&job_started("j_2"), None, None);
+        session.write(
+            &Event::Rewound(contract::events::Rewound {
+                new_session_id: SessionId("s_2".into()),
+                seq: contract::Seq(0),
+                jobs: vec![JobId("j_2".into())],
+            }),
+            None,
+            None,
+        );
+
+        let folded = resumed(&session.dir()).unwrap();
+
+        let orphans: Vec<&str> = folded
+            .orphans
+            .iter()
+            .map(|job| job.job_id.0.as_str())
+            .collect();
+        assert_eq!(orphans, ["j_1"]);
+    }
+
+    /// A line whose envelope reads and whose payload does not.
+    fn unreadable(kind: &str, seq: u64) -> String {
+        format!(
+            r#"{{"kind":"{kind}","session_id":"s_1","ts":1,"schema_version":{},"seq":{seq},"payload":{{"text":7}}}}"#,
+            contract::SCHEMA_VERSION
+        )
+    }
+
+    #[test]
+    fn an_unreadable_payload_the_pass_does_not_use_is_never_parsed() {
+        let session = Session::new();
+        first_context(&session);
+        let bad = session.lines().len();
+        session.raw(&unreadable("text_completed", u64::try_from(bad).unwrap()));
+        drop(session.log);
+        let log = log::Log::open(
+            session.root.path(),
+            SessionId("s_1".into()),
+            fakes::clock::FakeClock::new(),
+        )
+        .unwrap();
+        let after = Session {
+            root: session.root,
+            log,
+        };
+        let start = after.write(&turn("two"), Some("t_2"), None);
+        handoff(&after, "t_2", "a_note", Outcome::Completed);
+
+        let folded = resumed(&after.dir()).unwrap();
+
+        assert_eq!(folded.window, start);
+        assert!(start > u64::try_from(bad).unwrap());
+    }
+
+    #[test]
+    fn an_unreadable_payload_the_pass_uses_fails_log_corrupt() {
+        let session = Session::new();
+        session.raw(&unreadable("turn_started", 1));
+
+        let error = match resumed(&session.dir()) {
+            Ok(_) => panic!("an unreadable turn_started resumes"),
+            Err(error) => error,
+        };
+        assert_eq!(error.code(), ErrorCode::LogCorrupt);
+    }
+
+    #[test]
+    fn a_line_that_is_not_an_envelope_fails_log_corrupt() {
+        let session = Session::new();
+        first_context(&session);
+        session.raw("not an envelope");
+
+        let error = match resumed(&session.dir()) {
+            Ok(_) => panic!("a bad envelope resumes"),
+            Err(error) => error,
+        };
+        assert_eq!(error.code(), ErrorCode::LogCorrupt);
+    }
+
+    #[test]
+    fn a_log_with_no_session_started_fails_log_corrupt() {
+        let root = fakes::TempDir::new("fiber-window");
+        let log = log::Log::create(
+            root.path(),
+            SessionId("s_1".into()),
+            fakes::clock::FakeClock::new(),
+        )
+        .unwrap();
+        log.append(&turn("one"), None, None).unwrap();
+
+        let error = match resumed(&root.path().join("s_1")) {
+            Ok(_) => panic!("a log with no session_started resumes"),
+            Err(error) => error,
+        };
+        assert_eq!(error.code(), ErrorCode::LogCorrupt);
+    }
+}
