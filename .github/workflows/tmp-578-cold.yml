@@ -14,7 +14,7 @@ jobs:
           persist-credentials: false
       - run: rustup toolchain install
       - run: |
-          uname -a; lscpu | head -20; df -hT / /mnt; which fincore
+          uname -a; lscpu | head -20; df -hT / /mnt; (command -v fincore || ls -l /usr/bin/fincore /usr/sbin/fincore /sbin/fincore || true); (dpkg -s util-linux | grep Version || true)
           sudo mkdir -p /mnt/fiber-session-search
           sudo chown "$USER" /mnt/fiber-session-search
           CORPUS=/mnt/fiber-session-search bash research/session-search/run.sh
