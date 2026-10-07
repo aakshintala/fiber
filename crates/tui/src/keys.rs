@@ -28,6 +28,12 @@ pub(crate) enum Key {
     Down,
     /// Alt+A (`ESC a` in one read).
     AltA,
+    /// Tab (`0x09`).
+    Tab,
+    /// Shift+Tab (`CSI Z`).
+    BackTab,
+    /// F1 (`SS3 P`, `CSI 11~`, `CSI P`).
+    F1,
 }
 
 /// One key that edits the draft (`docs/tui.md`, "The input box",
@@ -204,6 +210,7 @@ fn step(buf: &[u8]) -> Step {
         0x0f => key(Key::CtrlO),
         0x08 | 0x7f => key(Key::Backspace),
         0x0a => Some((vec![Event::Edit(Edit::CtrlJ)], 1)),
+        0x09 => key(Key::Tab),
         0x0d => key(Key::Enter),
         // A lone ESC ending the read is Esc; ESC followed by bytes in the
         // same read starts a sequence.
@@ -264,12 +271,15 @@ fn parse_csi(buf: &[u8]) -> Step {
             [b'6'] => vec![Event::Key(Key::PageDown)],
             [b'4'] => vec![Event::Key(Key::End)],
             [b'3'] => vec![Event::Edit(Edit::Delete)],
+            [b'1', b'1'] => vec![Event::Key(Key::F1)],
             _ => Vec::new(),
         },
         0x46 if params.is_empty() => vec![Event::Key(Key::End)],
         0x41 if params.is_empty() => vec![Event::Key(Key::Up)],
         0x42 if params.is_empty() => vec![Event::Key(Key::Down)],
         0x43 | 0x44 => arrow(final_byte == 0x43, params).into_iter().collect(),
+        0x5a if params.is_empty() => vec![Event::Key(Key::BackTab)],
+        0x50 if params.is_empty() => vec![Event::Key(Key::F1)],
         _ => Vec::new(),
     };
     Some((events, end.saturating_add(1)))
@@ -283,6 +293,7 @@ fn parse_ss3(buf: &[u8]) -> Step {
         b'B' => vec![Event::Key(Key::Down)],
         b'C' => vec![Event::Edit(Edit::Right)],
         b'D' => vec![Event::Edit(Edit::Left)],
+        b'P' => vec![Event::Key(Key::F1)],
         _ => Vec::new(),
     };
     Some((events, 3))
@@ -323,6 +334,8 @@ fn kitty_key(params: &[u8]) -> Option<Event> {
         (99, CTRL) => Event::Key(Key::CtrlC),
         (111, CTRL) => Event::Key(Key::CtrlO),
         (106, CTRL) => Event::Edit(Edit::CtrlJ),
+        (9, 0) => Event::Key(Key::Tab),
+        (9, SHIFT) => Event::Key(Key::BackTab),
         (97, ALT) => Event::Key(Key::AltA),
         (98, ALT) => Event::Edit(Edit::WordLeft),
         (102, ALT) => Event::Edit(Edit::WordRight),

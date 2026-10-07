@@ -89,7 +89,10 @@ impl Draft {
             | Key::PageUp
             | Key::PageDown
             | Key::End
-            | Key::AltA => return false,
+            | Key::AltA
+            | Key::Tab
+            | Key::BackTab
+            | Key::F1 => return false,
         }
         true
     }
@@ -253,6 +256,60 @@ impl Draft {
     /// Empties the draft; token numbers start from 1 again.
     pub(crate) fn clear(&mut self) {
         *self = Self::default();
+    }
+
+    /// Replaces the draft with `text`, typed, the cursor at its end.
+    pub(crate) fn set(&mut self, text: &str) {
+        self.clear();
+        for ch in text.chars() {
+            self.put(Piece::Char(ch));
+        }
+    }
+
+    /// The cursor: the number of pieces before it.
+    pub(crate) fn position(&self) -> usize {
+        self.cursor
+    }
+
+    /// Whether the cursor is at the draft's start or after whitespace.
+    pub(crate) fn after_space(&self) -> bool {
+        match self.before(self.cursor) {
+            None => true,
+            Some(Piece::Char(ch)) => ch.is_whitespace(),
+            Some(Piece::Paste { .. }) => false,
+        }
+    }
+
+    /// The `@` file query whose `@` is the piece at `anchor`: the
+    /// characters after it up to whitespace, a token or the end, and the
+    /// position where they end. `None` when that piece is no `@`, or the
+    /// cursor is not after the `@` and within the query.
+    pub(crate) fn mention(&self, anchor: usize) -> Option<(String, usize)> {
+        if self.pieces.get(anchor) != Some(&Piece::Char('@')) {
+            return None;
+        }
+        let start = anchor.saturating_add(1);
+        let mut end = start;
+        let mut query = String::new();
+        while let Some(Piece::Char(ch)) = self.pieces.get(end)
+            && !ch.is_whitespace()
+        {
+            query.push(*ch);
+            end = end.saturating_add(1);
+        }
+        (start..=end).contains(&self.cursor).then_some((query, end))
+    }
+
+    /// Replaces the pieces in `range` with `text`, typed, the cursor after
+    /// it.
+    pub(crate) fn replace(&mut self, range: std::ops::Range<usize>, text: &str) {
+        let start = range.start.min(self.pieces.len());
+        let end = range.end.clamp(start, self.pieces.len());
+        self.pieces.drain(start..end);
+        self.cursor = start;
+        for ch in text.chars() {
+            self.put(Piece::Char(ch));
+        }
     }
 
     /// The text to send: every token as its full text.

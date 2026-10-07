@@ -17,10 +17,13 @@ use serde_json::{Map, Value, json};
 
 use crate::approvals::{self, Panel, PanelKey, Queue};
 use crate::input::Draft;
-use crate::keys::{Edit, Key};
+use crate::keys::Key;
 use crate::link::Line;
 use crate::shell;
 use crate::turn::{Fold, Row, Turn};
+
+#[path = "app_commands.rs"]
+mod commands;
 
 /// A line's payload as `$kind`; `None` when it does not parse, and the
 /// line is skipped.
@@ -36,9 +39,6 @@ pub(crate) const QUIT_WINDOW: Duration = Duration::from_secs(1);
 
 /// What the quit hint says.
 pub(crate) const QUIT_HINT: &str = "Press Ctrl+C again to quit";
-
-/// The draft that reopens the waiting queue.
-const APPROVALS: &str = "/approvals";
 
 /// What the terminal is attached to.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,6 +68,16 @@ pub(crate) enum Effect {
     Send(Vec<String>),
     /// Quit the terminal.
     Quit,
+    /// Start the `@` panel's search worker on a listing of the workspace's
+    /// files, searching for an empty query at the current generation.
+    ListFiles,
+    /// Search the listed files for `query`, the text after the `@`.
+    Search {
+        /// The generation the result is tagged with.
+        generation: u64,
+        /// The query.
+        query: String,
+    },
 }
 
 /// Which command the terminal sent and waits on.
@@ -79,6 +89,8 @@ enum Kind {
     Cancel,
     Reply,
     Shell,
+    /// A built-in command such as `handoff`, `reload` or `close`.
+    Command,
 }
 
 /// The hub connection, as the terminal sees it.
@@ -133,6 +145,8 @@ pub(crate) struct App {
     kitty: bool,
     /// Approval requests from every session.
     queue: Queue,
+    /// The `/` and `@` panels and the key map overlay.
+    overlays: commands::Overlays,
 }
 
 impl App {
@@ -156,6 +170,7 @@ impl App {
             armed_at: None,
             kitty: false,
             queue: Queue::default(),
+            overlays: commands::Overlays::default(),
         }
     }
 
@@ -168,19 +183,26 @@ impl App {
         };
     }
 
-    /// Handles one key at `now`, read from the injected clock.
-    pub(crate) fn on_key(&mut self, key: Key, now: Instant) -> Effect {
+    /// Hands one key to what is on top: the key map, the approval panel, a
+    /// completion panel, then the input box.
+    fn route_key(&mut self, key: Key, now: Instant) -> Effect {
         if key == Key::CtrlC {
             return self.on_ctrl_c(now);
         }
         self.armed_at = None;
+        if let Some(effect) = self.keymap_key(&key) {
+            return effect;
+        }
         match self.queue.on_key(&key) {
             Some(PanelKey::Handled) => return Effect::None,
             Some(PanelKey::Answer) => return self.answer(),
             None => {}
         }
-        if self.draft.key(&key, self.width) {
-            return Effect::None;
+        if let Some(effect) = self.completion_key(&key) {
+            return effect;
+        }
+        if let Some(effect) = self.draft_key(&key) {
+            return effect;
         }
         match key {
             Key::Enter => self.on_enter(),
@@ -201,15 +223,12 @@ impl App {
                 self.follow();
                 Effect::None
             }
-            Key::Char(_) | Key::Backspace | Key::Up | Key::Down => Effect::None,
+            Key::F1 => self.open_keymap(),
+            Key::Char(_) | Key::Backspace | Key::Up | Key::Down | Key::Tab | Key::BackTab => {
+                Effect::None
+            }
             Key::AltA => self.open_first(),
         }
-    }
-
-    /// Handles one key that edits the draft, the approval panel first.
-    pub(crate) fn on_edit(&mut self, edit: Edit) {
-        self.armed_at = None;
-        crate::input::route(edit, &mut self.draft, &mut self.queue);
     }
 
     /// Folds one line from the hub, returning command lines to send.
@@ -334,6 +353,7 @@ impl App {
                 .sum()
         });
         let below = input
+            + self.completion_rows()
             + usize::from(self.badge().is_some())
             + usize::from(self.hint())
             + usize::from(self.notice.is_some());
@@ -429,82 +449,6 @@ impl App {
         Effect::None
     }
 
-    /// Enter sends the draft, its tokens expanded: `start` with no session,
-    /// `prompt` when idle, `steer` during a turn, and `shell` for a `!`
-    /// command whenever attached.
-    fn on_enter(&mut self) -> Effect {
-        let text = self.draft.expand();
-        if text.trim() == APPROVALS {
-            self.draft.clear();
-            return self.open_first();
-        }
-        // A command sent after the connection is lost goes nowhere, so the
-        // draft stays.
-        if text.trim().is_empty() || self.link == Link::Down {
-            return Effect::None;
-        }
-        let id = mint();
-        let content = json!([{"type": "text", "text": text}]);
-        let (kind, line) = match (&self.phase, shell::parse(&text)) {
-            (Phase::Starting | Phase::Pending { .. }, Some(_)) => {
-                self.notice = Some("Start a session first.".to_owned());
-                return Effect::None;
-            }
-            (Phase::Pending { .. }, None) => return Effect::None,
-            (Phase::Starting, None) => {
-                let workspace = self.workspace.display().to_string();
-                let args = json!({"workspace": workspace, "content": content});
-                let line = json!({"id": id, "command": "start", "args": args});
-                (Kind::Start, line)
-            }
-            (Phase::Attached { session, .. }, Some((command, send))) => {
-                (Kind::Shell, shell::command(&id, session, command, send))
-            }
-            (Phase::Attached { session, busy }, None) => {
-                let (kind, command) = if *busy {
-                    (Kind::Steer, "steer")
-                } else {
-                    (Kind::Prompt, "prompt")
-                };
-                let args = json!({ "content": content });
-                (kind, session_command(&id, command, session, Some(args)))
-            }
-        };
-        if kind == Kind::Start {
-            self.phase = Phase::Pending {
-                command_id: id.clone(),
-            };
-        }
-        self.draft.clear();
-        self.pending.insert(id, (kind, text));
-        let line = line.to_string();
-        if self.link == Link::Up {
-            Effect::Send(vec![line])
-        } else {
-            // An Enter before the hub connects is held, not lost: `start`
-            // goes out once the hub speaks `hub_hello`.
-            self.held.push(line);
-            Effect::None
-        }
-    }
-
-    /// Esc with nothing open interrupts the turn: `cancel`, only when busy.
-    fn on_esc(&mut self) -> Effect {
-        let session = match &self.phase {
-            Phase::Attached {
-                session,
-                busy: true,
-            } if self.connected() => session.clone(),
-            Phase::Starting | Phase::Pending { .. } | Phase::Attached { .. } => {
-                return Effect::None;
-            }
-        };
-        let id = mint();
-        let line = session_command(&id, "cancel", &session, None).to_string();
-        self.pending.insert(id, (Kind::Cancel, String::new()));
-        Effect::Send(vec![line])
-    }
-
     fn on_hub(&mut self, hub: &HubLine) -> Vec<String> {
         let command_id = hub_string(&hub.payload, "command_id");
         match hub.kind.as_str() {
@@ -562,7 +506,15 @@ impl App {
             Some((Kind::Cancel, _)) => {
                 self.pending.remove(id);
             }
-            Some((Kind::Start | Kind::Prompt | Kind::Steer | Kind::Reply | Kind::Shell, _)) => {
+            Some((
+                Kind::Start
+                | Kind::Prompt
+                | Kind::Steer
+                | Kind::Reply
+                | Kind::Shell
+                | Kind::Command,
+                _,
+            )) => {
                 self.notice = Some(message);
                 self.fail(id);
             }
@@ -639,6 +591,7 @@ impl App {
                 }
                 false
             }
+            "opening_message" => self.opening(envelope),
             "turn_started" => read!(envelope, TurnStarted).is_some_and(|started| {
                 self.set_busy(true);
                 let prompts = started

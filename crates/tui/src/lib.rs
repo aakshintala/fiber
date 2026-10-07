@@ -7,11 +7,15 @@
 
 mod app;
 mod approvals;
+mod bindings;
+mod files;
 mod format;
 mod input;
+mod keymap;
 mod keys;
 mod link;
 mod shell;
+mod slash;
 mod term;
 mod turn;
 mod view;
@@ -59,6 +63,15 @@ pub(crate) enum Input {
     Disconnected,
     /// The terminal was resized.
     Resize,
+    /// A file search result for the `@` panel, tagged with the generation
+    /// it searched for: matching paths, or why there are none (the listing
+    /// failed). A result for a generation no longer current is dropped.
+    Files {
+        /// The generation searched for.
+        generation: u64,
+        /// The paths found, or the listing's error.
+        result: Result<Vec<String>, String>,
+    },
 }
 
 /// Runs the terminal on `tty`, starting sessions in `workspace`. Returns 0
@@ -95,6 +108,8 @@ pub fn run(
         on_attach,
         clock,
         wakeups: 0,
+        files_out: None,
+        search: None,
     };
     // The first frame waits on nothing: the queries are out, and nothing
     // reads the tty or the hub until it is drawn.
@@ -102,6 +117,7 @@ pub fn run(
         return 1;
     }
     let (tx, rx) = mpsc::channel();
+    terminal.files_out = Some(tx.clone());
     if let Some(tty) = &terminal.tty {
         spawn_input(tty, tx.clone());
     }
@@ -279,6 +295,10 @@ struct Loop<B: Backend> {
     clock: Arc<dyn Clock>,
     /// Inputs handled, for the idle test.
     wakeups: u64,
+    /// Where a file search worker posts its results.
+    files_out: Option<Sender<Input>>,
+    /// The `@` panel's search worker, while the panel is open.
+    search: Option<files::Search>,
 }
 
 impl<B: Backend> Loop<B> {
@@ -300,15 +320,25 @@ impl<B: Backend> Loop<B> {
         match input {
             Input::Bytes(bytes) => {
                 for event in self.parser.feed(&bytes) {
-                    match event {
-                        Event::Key(key) => match self.app.on_key(key, self.clock.now()) {
-                            Effect::None => {}
-                            Effect::Send(lines) => self.send(&lines),
-                            Effect::Quit => return Some(0),
-                        },
-                        Event::Reply(Reply::KittyFlags(_)) => self.kitty(),
+                    let effect = match event {
+                        Event::Key(key) => self.app.on_key(key, self.clock.now()),
                         Event::Edit(edit) => self.app.on_edit(edit),
-                        Event::Reply(Reply::DeviceAttributes) => {}
+                        Event::Reply(Reply::KittyFlags(_)) => {
+                            self.kitty();
+                            Effect::None
+                        }
+                        Event::Reply(Reply::DeviceAttributes) => Effect::None,
+                    };
+                    match effect {
+                        Effect::None => {}
+                        Effect::Send(lines) => self.send(&lines),
+                        Effect::Quit => return Some(0),
+                        Effect::ListFiles => self.list_files(),
+                        Effect::Search { generation, query } => {
+                            if let Some(search) = &self.search {
+                                search.search(generation, query);
+                            }
+                        }
                     }
                 }
             }
@@ -338,6 +368,7 @@ impl<B: Backend> Loop<B> {
                 self.hub = None;
                 self.app.disconnected();
             }
+            Input::Files { generation, result } => self.app.on_files(generation, result),
             Input::Resize => {
                 if let Some(Ok((width, height))) = self.tty.as_ref().map(term::size) {
                     self.app.set_size(width, height);
@@ -346,6 +377,10 @@ impl<B: Backend> Loop<B> {
                     }
                 }
             }
+        }
+        // A closed `@` panel drops its worker and the listing it holds.
+        if !self.app.files_open() {
+            self.search = None;
         }
         if self.screen.draw(&self.app).is_err() {
             return Some(1);
@@ -366,6 +401,18 @@ impl<B: Backend> Loop<B> {
         {
             self.parser.set_kitty();
         }
+    }
+
+    /// Starts the `@` panel's search worker on a listing of the workspace,
+    /// searching for an empty query at the current generation.
+    fn list_files(&mut self) {
+        let Some(out) = &self.files_out else {
+            return;
+        };
+        let workspace = self.app.workspace().to_path_buf();
+        let search = files::Search::spawn(move || files::list(&workspace), out.clone());
+        search.search(self.app.generation(), String::new());
+        self.search = Some(search);
     }
 
     /// Writes command lines to the hub. A failed write hangs up: the

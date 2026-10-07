@@ -372,3 +372,52 @@ fn a_token_wider_than_the_row_wraps_and_the_cursor_steps_over_it() {
     draft.left();
     assert_eq!(draft.cursor(12), (0, 2));
 }
+
+#[test]
+fn a_mention_is_the_word_after_its_at_while_the_cursor_is_in_it() {
+    let mut draft = typed("a @src x");
+    // The cursor at the end is past the query.
+    assert_eq!(draft.mention(2), None);
+    for _ in 0.." x".len() {
+        draft.left();
+    }
+    assert_eq!(draft.mention(2), Some(("src".to_owned(), 6)));
+    draft.left();
+    draft.left();
+    draft.left();
+    assert_eq!(draft.position(), 3);
+    assert_eq!(draft.mention(2), Some(("src".to_owned(), 6)));
+    // On the `@` itself, or a piece that is no `@`, there is none.
+    draft.left();
+    assert_eq!(draft.mention(2), None);
+    assert_eq!(draft.mention(0), None);
+    // A token ends the query.
+    let mut draft = typed("@ab");
+    draft.paste(&lines(11));
+    draft.left();
+    assert_eq!(draft.mention(0), Some(("ab".to_owned(), 3)));
+}
+
+#[test]
+fn after_space_is_true_at_the_start_and_after_whitespace_only() {
+    let mut draft = Draft::default();
+    assert!(draft.after_space());
+    draft.insert('a');
+    assert!(!draft.after_space());
+    draft.line_break();
+    assert!(draft.after_space());
+    draft.paste(&lines(11));
+    assert!(!draft.after_space());
+}
+
+#[test]
+fn replace_and_set_type_the_text_with_the_cursor_after_it() {
+    let mut draft = typed("x @ab y");
+    draft.replace(2..5, "file ");
+    assert_eq!(shown(&draft), "x file | y");
+    // A range past the end is cut to it.
+    draft.replace(8..99, "!");
+    assert_eq!(shown(&draft), "x file  !|");
+    draft.set("/new");
+    assert_eq!(shown(&draft), "/new|");
+}

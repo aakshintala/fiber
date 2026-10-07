@@ -112,8 +112,8 @@ fn esc_o_split_across_reads_is_held() {
 fn esc_with_any_other_byte_is_dropped_whole() {
     // Alt+x: ESC and the byte after it go; the parser moves on.
     assert_eq!(feed_all(&[b"\x1bxa"]), vec![Event::Key(Key::Char('a'))]);
-    // An SS3 key this slice does not bind is dropped.
-    assert_eq!(feed_all(&[b"\x1bOPa"]), vec![Event::Key(Key::Char('a'))]);
+    // An SS3 key this slice does not bind (F2) is dropped.
+    assert_eq!(feed_all(&[b"\x1bOQa"]), vec![Event::Key(Key::Char('a'))]);
 }
 
 #[test]
@@ -159,9 +159,9 @@ fn a_csi_with_a_stray_byte_drops_esc_bracket_and_reads_on() {
 
 #[test]
 fn control_characters_are_dropped_whole() {
-    // A tab, and C1's first control as two bytes: neither is a key, and
+    // Ctrl+A, and C1's first control as two bytes: neither is a key, and
     // the byte after each is read.
-    assert_eq!(feed_all(&[b"\ta"]), vec![Event::Key(Key::Char('a'))]);
+    assert_eq!(feed_all(&[b"\x01a"]), vec![Event::Key(Key::Char('a'))]);
     assert_eq!(feed_all(&[b"\xc2\x80b"]), vec![Event::Key(Key::Char('b'))]);
 }
 
@@ -266,6 +266,8 @@ fn kitty_keys_read_as_their_legacy_meaning() {
     assert_eq!(feed_all(&[b"\x1b[97;3u"]), vec![Event::Key(Key::AltA)]);
     assert_eq!(feed_all(&[b"\x1b[98;3u"]), edit(Edit::WordLeft));
     assert_eq!(feed_all(&[b"\x1b[102;3u"]), edit(Edit::WordRight));
+    assert_eq!(feed_all(&[b"\x1b[9u"]), vec![Event::Key(Key::Tab)]);
+    assert_eq!(feed_all(&[b"\x1b[9;2u"]), vec![Event::Key(Key::BackTab)]);
     // A lock modifier, and an event type or alternate key after a colon,
     // do not change the key.
     assert_eq!(feed_all(&[b"\x1b[99;69u"]), vec![Event::Key(Key::CtrlC)]);
@@ -294,6 +296,8 @@ fn kitty_keys_with_other_modifiers_or_codes_drop_silently() {
         b"\x1b[97;5u",
         b"\x1b[97;7u",
         b"\x1b[98;5u",
+        b"\x1b[9;3u",
+        b"\x1b[9;5u",
         b"\x1b[57441u",
         b"\x1b[:;5u",
         b"\x1b[;5u",
@@ -411,4 +415,23 @@ fn with_kitty_pushed_a_lone_esc_ending_a_read_is_held() {
     assert_eq!(parser.feed(b"[27u"), vec![Event::Key(Key::Esc)]);
     // An ESC with bytes after it in the same read is not held.
     assert_eq!(parser.feed(b"\x1ba"), vec![Event::Key(Key::AltA)]);
+}
+
+#[test]
+fn tab_and_shift_tab() {
+    assert_eq!(feed_all(&[b"\t"]), vec![Event::Key(Key::Tab)]);
+    assert_eq!(feed_all(&[b"\x1b[Z"]), vec![Event::Key(Key::BackTab)]);
+    // A modified CSI Z is no plain Shift+Tab.
+    assert!(feed_all(&[b"\x1b[1;2Z"]).is_empty());
+}
+
+#[test]
+fn f1_in_its_three_forms() {
+    assert_eq!(feed_all(&[b"\x1bOP"]), vec![Event::Key(Key::F1)]);
+    assert_eq!(feed_all(&[b"\x1b[11~"]), vec![Event::Key(Key::F1)]);
+    assert_eq!(feed_all(&[b"\x1b[P"]), vec![Event::Key(Key::F1)]);
+    // Neighbours are not F1: F2 as `CSI 12~` and a modified `CSI P`.
+    assert!(feed_all(&[b"\x1b[12~"]).is_empty());
+    assert!(feed_all(&[b"\x1b[1;2P"]).is_empty());
+    assert!(feed_all(&[b"\x1b[1~"]).is_empty());
 }
