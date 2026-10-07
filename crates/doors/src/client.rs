@@ -461,7 +461,7 @@ fn deliver_message(conn: &mut Conn, id: CommandId, content: Vec<ContentPart>, pr
     };
     let ack = inbox_ack(conn, id);
     if prompt {
-        let ack = match conn.gate.history() {
+        let ack = match conn.gate.history.get().cloned().flatten() {
             Some(path) => recorded(ack, path, &conn.gate, message.content.clone()),
             None => ack,
         };
