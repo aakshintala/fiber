@@ -492,7 +492,8 @@ fn two_process_calls_get_different_stems() {
     let dir = workspace();
     let fiber = stub(
         dir.path(),
-        r#"mkdir -p "$3"
+        r#"cat >/dev/null
+mkdir -p "$3"
 : > "$3/$4.png"
 printf '{"file":"%s.png","mime_type":"image/png","width":1,"height":1}\n' "$4""#,
     );
@@ -549,7 +550,7 @@ fn process_unparseable_extra_or_incomplete_output_is_failed() {
         ),
         ("", "not JSON"),
     ] {
-        let fiber = stub(dir.path(), body);
+        let fiber = stub(dir.path(), &format!("cat >/dev/null; {body}"));
         let Err(ImageError::Failed(message)) =
             process_with(dir.path(), &fiber, b"bytes", &CancelToken::new())
         else {
@@ -696,7 +697,10 @@ fn process_bad_file_names_are_failed_and_read_calls_them_tool_error() {
         "stem",
     ];
     for label in labels {
-        let fiber = stub(dir.path(), &bad_body_for(label));
+        let fiber = stub(
+            dir.path(),
+            &format!("cat >/dev/null\n{}", bad_body_for(label)),
+        );
         let Err(ImageError::Failed(failure)) =
             process_with(dir.path(), &fiber, b"bytes", &CancelToken::new())
         else {
@@ -718,7 +722,8 @@ fn process_bad_file_names_are_failed_and_read_calls_them_tool_error() {
         let fiber = stub(
             dir.path(),
             &format!(
-                r#"mkdir -p "$3"
+                r#"cat >/dev/null
+mkdir -p "$3"
 : > "$3/$4.{ext}"
 printf '{{"file":"%s.{ext}","mime_type":"image/png","width":1,"height":1}}\n' "$4""#
             ),
