@@ -119,12 +119,13 @@ only that crate, in KiB; the empty program is 323 KiB.
 | thiserror | error types in library crates | ~0 | ~0 | ~0 | 6 | 325 |
 | signal-hook | SIGTERM, SIGINT and SIGHUP | ~0 | ~0 | ~0 | 4 | 352 |
 | ring | SHA-256, for PKCE, extension binary checksums, the content hash a repository's approvals pin, and an MCP tool's cut-short name; HMAC-SHA256, for `host.hmac_sha256`; credential fingerprints in the fake provider server | ~0 | ~0 | ~0 | 8 | 341 |
-| base64 | PKCE, and attachments sent to providers | ~0 | ~0 | ~0 | 1 | 328 |
+| base64 | PKCE, attachments sent to providers, and the terminal's copy through OSC 52 (`docs/tui.md`, "Selection and copy") | ~0 | ~0 | ~0 | 1 | 328 |
 | rustix | the shell tool's pseudo-terminal, new session and process group, and reading a key without echo; `host.exec`'s process groups; and signalling MCP servers | ~0 | ~0 | ~0 | 4 | 330 |
 | ignore, grep-searcher, grep-regex, grep-matcher | the search behind the shell's `grep` and `find` (`docs/tools.md`, "Search") | 2,656 | 2,480 | 1,904 | 25 | 2,886 |
 | similar | an edit's diff in `details` (`docs/tools.md`, "edit"), the lines a `write` added and removed (`docs/tools.md`, "write"), an instruction file's diff (`docs/system-prompt.md`, "When something changes"), and a repository's changed code against its approved copy (`docs/extensions.md`, "Code a repository ships") | ~0 | 380 | ~0 | 1 | 389 |
 | html5ever | `web_fetch`'s tokenizer, without its tree builder | 808 | 960 | 480 | 19 | 1,058 |
 | encoding_rs | `web_fetch`'s decoding by the declared character set | 224 | 332 | 272 | 5 | 490 |
+| pulldown-cmark | the terminal's markdown in replies (`docs/tui.md`, "Look") | 428 | 384 | ~0 | 4 | 724 |
 | all of the above together | | 7,616 | 6,864 | 4,720 | 150 | 7,150 |
 | image, fast_image_resize | the image child; png, jpeg, gif and webp only (`docs/model-routing.md`, "Image limits") | 68,076 | 67,604 | 72,352 | 32 | 5,234 |
 
@@ -159,6 +160,9 @@ Notes:
   counting tokens in the sink, as the converter does without a tree.
 - encoding_rs's figure is decoding a 64 KiB windows-1252 page by its declared
   character set.
+- pulldown-cmark's figure is parsing a 2 KiB reply of headings, emphasis,
+  lists and code blocks. The together row was measured before the terminal
+  admitted it; `run.sh` includes it from the next run.
 - `web_fetch` converts a page with html5ever's tokenizer feeding Fiber's own
   single-pass writer (`crates/tools/src/web_fetch/markdown.rs`), not with a
   parser that builds the page's document tree. The smallest maintained crate
@@ -245,14 +249,8 @@ already.
 | Crate | Needed if | Linux x86_64 | Linux arm64 | macOS arm64 | Crates | Binary |
 |---|---|---:|---:|---:|---:|---:|
 | rusqlite, SQLite bundled | Fiber keeps a derived database, such as an index for session search; today listing and searching sessions read the logs (`docs/state.md`, `docs/tools.md` "Searching past sessions") | 2,236 | 1,984 | ~0 | 14 | 2,268 |
-| pulldown-cmark | the terminal UI renders markdown ([Epic: TUI](https://github.com/aakshintala/fiber/issues/82)) | 428 | 384 | ~0 | 4 | 724 |
 
 rusqlite carries SQLite's C source.
-
-Syntax highlighting is the terminal UI's decision. The obvious crate, syntect,
-costs 8,704 KiB on Linux x86_64 just to load its syntax definitions. It has 44
-crates, and cargo-deny fails it out of the box on two unmaintained crates,
-yaml-rust and bincode.
 
 ## Written ourselves
 
@@ -268,6 +266,7 @@ yaml-rust and bincode.
 | Percent-encoding OAuth URLs and parsing the callback query | a fixed format from RFC 3986, a few dozen lines |
 | File locking | `std::fs::File::lock`, stable since Rust 1.89 |
 | Timestamps | the log's `ts` is milliseconds since the epoch, from `std::time` |
+| Syntax highlighting in the terminal | see below |
 
 Tool arguments are checked against a subset of JSON Schema: `type`,
 `properties`, `required`, `additionalProperties`, `enum`, `items`, `minimum`,
@@ -282,6 +281,21 @@ server whose schema uses one still works. Checking those schemas is best
 effort. The jsonschema
 crate covers the whole specification, but it costs 14,808 KiB on Linux x86_64
 and brings 79 crates, more than every runtime crate together.
+
+The terminal highlights code blocks with its own lexer
+(`crates/tui/src/highlight.rs`): each language's keywords, strings, comments,
+numbers, types, constants, function names and operators, from a table per
+language. The obvious crate, syntect,
+costs 8,704 KiB on Linux x86_64 just to load its syntax definitions. It has 44
+crates, and cargo-deny fails it out of the box on two unmaintained crates,
+yaml-rust and bincode. arborium 2.18, tree-sitter grammars behind a feature
+per language, passes cargo-deny with 33 crates, but the grammars for the 18
+languages the terminal highlights add 25,500 KiB to the stripped binary on
+macOS arm64, about 9,500 KiB of it SQL's and 5,300 KiB C++'s. That alone is
+over the 20 MiB cap, on a binary already 12.3 MiB. Highlighting one block in
+each of three languages peaks 6,832 KiB over an empty program (macOS arm64
+footprint, October 6, 2026). tree-sitter-highlight with the same grammar
+crates compiles the same parse tables.
 
 The shell tool's recogniser splits a command on `&&`, `||`, `;` and `|` and
 reads each part as plain words. Anything it cannot read plainly makes the
@@ -306,7 +320,7 @@ dependency.
 | cargo-about | tool | the release's third-party notices file |
 | xtask | tool | the workspace's own CI helper, `cargo xtask`: selection, the `CI` verdict and the gate's checks (`docs/ci.md`). It uses serde_json, proc-macro2 and pulldown-cmark, and no Fiber crate depends on it |
 | proc-macro2 | xtask dependency | tokenising Rust source for the `unsafe` table check (`docs/code-quality.md`, "`unsafe`") |
-| pulldown-cmark | xtask dependency | reading Markdown for the docs check (`docs/ci.md`, "The docs check"); the terminal UI's use waits below |
+| pulldown-cmark | xtask dependency | reading Markdown for the docs check (`docs/ci.md`, "The docs check"); the terminal's use is in the runtime table |
 
 ## Supply chain
 
