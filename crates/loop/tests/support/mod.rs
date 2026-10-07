@@ -335,6 +335,7 @@ pub(crate) struct WriteFile {
     pub(crate) name: &'static str,
     pub(crate) target: PathBuf,
     pub(crate) content: String,
+    pub(crate) effect: Effect,
 }
 
 impl Tool for WriteFile {
@@ -356,7 +357,7 @@ impl Tool for WriteFile {
     fn effects(&self, _: &Map<String, Value>) -> Result<Effects, EffectsError> {
         Ok(Effects {
             declared: DeclaredEffects {
-                effects: vec![Effect::Writes],
+                effects: vec![self.effect],
                 reversible: true,
                 paths: Some(vec![self.target.display().to_string()]),
             },
