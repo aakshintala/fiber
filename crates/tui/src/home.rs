@@ -1,7 +1,4 @@
-//! Home's data: what the terminal knows about where it was launched,
-//! the session list's rows, and what home draws (`docs/tui.md`, "Home",
-//! "The session list"). Later parts add the subscriptions and the picker
-//! state.
+//! Home's data: the session rows, the subscriptions and what home draws (`docs/tui.md`, "Home").
 
 use std::collections::HashMap;
 use std::path::PathBuf;
