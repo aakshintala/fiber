@@ -24,7 +24,7 @@ impl App {
                 Effect::None
             }
             TargetId::NewBelow => {
-                self.scroll.follow();
+                self.screen.follow();
                 Effect::None
             }
             TargetId::Steering(at) => {

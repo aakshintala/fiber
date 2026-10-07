@@ -213,7 +213,7 @@ impl App {
 
     /// The steering queue's rows, oldest first.
     pub(crate) fn steering(&self) -> Vec<String> {
-        self.steering.lines(self.width)
+        self.steering.lines(self.screen.width())
     }
 
     /// For each steering row, oldest first, whether it draws a ✕.

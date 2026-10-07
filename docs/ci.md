@@ -150,6 +150,9 @@ under 20 MiB and runs the benchmarks that gate each pull request
 (`docs/performance.md`). A timing gate compares against the base binary
 measured in the same job on the same runner.
 
+The release profile sets `lto = "fat"` and `codegen-units = 1`, which
+shrinks the binary and lengthens the release build.
+
 Nothing in CI writes a snapshot, calls a live provider or reaches the public
 network (`docs/testing.md`).
 
@@ -255,6 +258,10 @@ changes a widely used function, so its bound is twice that slow group, not
 twice the median. The median behind each bound is a comment beside its
 `timeout-minutes` line. A job that gains work past its bound has the bound
 raised in its workflow.
+
+Every `apt-get` step sets a 5-minute `timeout-minutes` and passes the workflow's
+`APT_OPTS` (three retries, 20-second HTTP and HTTPS timeouts), so a silent mirror
+fails the step, not the job.
 
 ## Waiting on CI
 
