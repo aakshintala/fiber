@@ -83,6 +83,9 @@ impl Loop {
             Delivery::Prompt(_, ack) | Delivery::Steer(_, ack) | Delivery::Handoff(_, _, ack) => {
                 reject(ack, ErrorCode::Closing, CLOSING);
             }
+            Delivery::Model(_, ack) => {
+                reject(ack, ErrorCode::Closing, CLOSING);
+            }
             Delivery::SteerDrop(_, ack) => reject(ack, ErrorCode::StaleRequest, STALE_STEER),
             Delivery::Reply(_, ack) => reject(ack, ErrorCode::StaleRequest, STALE_REPLY),
             Delivery::Close(ack) => accept(ack),

@@ -213,6 +213,7 @@ fn prompt_of(inbox: &Receiver<Delivery>) -> (Vec<ContentPart>, CommandId, Ack) {
         | Delivery::Steer(..)
         | Delivery::SteerDrop(..)
         | Delivery::Handoff(..)
+        | Delivery::Model(..)
         | Delivery::Reply(..)
         | Delivery::Job(_)
         | Delivery::JobLine(_)
@@ -412,6 +413,7 @@ fn a_prompt_rejected_busy_is_a_failure_printing_nothing() {
             Delivery::Steer(..)
             | Delivery::SteerDrop(..)
             | Delivery::Handoff(..)
+            | Delivery::Model(..)
             | Delivery::Reply(..)
             | Delivery::Cancelled
             | Delivery::Job(_)

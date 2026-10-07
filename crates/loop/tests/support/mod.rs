@@ -521,6 +521,34 @@ pub(crate) fn steer(text: &str) -> Delivery {
     Delivery::Steer(message(text), ignore())
 }
 
+/// A driver's `model` command on the loop's inbox, with `thinking`.
+pub(crate) fn model(model: &str, thinking: Option<&str>) -> Delivery {
+    Delivery::Model(
+        contract::commands::ModelArgs {
+            model: model.into(),
+            thinking: thinking.map(str::to_owned),
+        },
+        ignore(),
+    )
+}
+
+/// A driver's `model` command reporting its answer on `answered`.
+pub(crate) fn model_reported(
+    model: &str,
+    thinking: Option<&str>,
+    answered: std::sync::mpsc::Sender<contract::inbox::Answer>,
+) -> Delivery {
+    Delivery::Model(
+        contract::commands::ModelArgs {
+            model: model.into(),
+            thinking: thinking.map(str::to_owned),
+        },
+        Ack(Box::new(move |answer| {
+            answered.send(answer).unwrap();
+        })),
+    )
+}
+
 /// A person's `handoff` on the loop's inbox, with `instructions`.
 pub(crate) fn handoff(id: &str, instructions: Option<&str>) -> Delivery {
     Delivery::Handoff(

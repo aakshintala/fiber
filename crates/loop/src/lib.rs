@@ -56,6 +56,7 @@ mod shutdown;
 mod skill_header;
 mod skills;
 mod status;
+mod switch;
 mod usage;
 mod util;
 mod warm;
@@ -72,6 +73,7 @@ pub use prompt::PromptInputs;
 pub use resume::{Resumed, resumed};
 pub use retry::Retry;
 pub use reviewer::{BlockLimits, NO_MODEL_MESSAGE, Reviewer};
+pub use switch::{NO_SWITCH, Prepare, Prepared, Switchable};
 
 /// The model a session's calls reach, and the prices those calls are logged
 /// at (`docs/model-routing.md`, "Cost").
@@ -209,6 +211,14 @@ pub struct Loop {
     /// the last refresh's send: what a refresh resends and counts from.
     /// Kept only while warming is on.
     last_request: Option<(ModelRequest, std::time::Instant)>,
+    /// How a `model` command is prepared, with what the session started with.
+    switcher: Option<(Prepare, Switchable)>,
+    /// Switches admitted during a turn, applied at the next turn boundary.
+    pending: Vec<Prepared>,
+    /// The session's own thinking choice.
+    chosen: Option<contract::ThinkingLevel>,
+    /// When a switch cleared the last request while warming.
+    warm_stopped: Option<std::time::Instant>,
 }
 
 /// The one built preamble: what every request sends and what
@@ -325,6 +335,10 @@ impl Loop {
             ending: jobs::Ending::default(),
             warm: None,
             last_request: None,
+            switcher: None,
+            pending: Vec::new(),
+            chosen: None,
+            warm_stopped: None,
         })
     }
 
@@ -393,6 +407,7 @@ impl Loop {
     /// Returns how the turn ended, or `None` once `close` was taken while
     /// idle or every sender of the inbox is gone.
     pub fn turn(&mut self) -> Result<Option<TurnOutcome>, Error> {
+        self.apply_switches()?;
         // A shutdown starts no turn and finishes none.
         if self.shutting_down() {
             return Ok(None);

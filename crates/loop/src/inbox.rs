@@ -201,6 +201,12 @@ impl Loop {
             None => self.idle_deadline(),
         };
         self.start_unattended();
+        // A switch applied at the last turn's top cleared the last
+        // request: warming is over and the idle clock starts there.
+        if let Some(at) = self.warm_stopped.take() {
+            warming = None;
+            deadline = self.idle_from(at);
+        }
         loop {
             let mut input = TurnInput::of(Vec::new());
             // Deliveries held aside across the finishing turn go first, in
@@ -235,6 +241,10 @@ impl Loop {
                 for delivery in self.inbox.try_iter().collect::<Vec<_>>() {
                     self.admit_idle(delivery, &mut input)?;
                 }
+                if let Some(at) = self.warm_stopped.take() {
+                    warming = None;
+                    deadline = self.idle_from(at);
+                }
             } else {
                 let due = warming.and_then(|stop| self.warm_due(stop));
                 if let (Some(stop), None) = (warming, due) {
@@ -247,6 +257,10 @@ impl Loop {
                         batch.extend(self.inbox.try_iter());
                         for delivery in batch {
                             self.admit_idle(delivery, &mut input)?;
+                        }
+                        if let Some(at) = self.warm_stopped.take() {
+                            warming = None;
+                            deadline = self.idle_from(at);
                         }
                     }
                     InboxRecv::Unattended => self.check_jobs(&mut input.pieces),
@@ -413,6 +427,7 @@ impl Loop {
             | Delivery::Steer(..)
             | Delivery::SteerDrop(..)
             | Delivery::Handoff(..)
+            | Delivery::Model(..)
             | Delivery::Reply(..)
             | Delivery::Job(_)
             | Delivery::JobLine(_)
@@ -465,6 +480,11 @@ impl Loop {
                     accept(ack);
                     input.pieces.push(Queued::Handoff(id, args.instructions));
                 }
+            }
+            // A switch admitted while idle applies at once, before the
+            // next `turn_started`.
+            Delivery::Model(args, ack) => {
+                self.take_switch(args, ack, true)?;
             }
             Delivery::Reply(_, ack) => reject(ack, ErrorCode::StaleRequest, STALE_REPLY),
             Delivery::Close(ack) => self.take_close(ack),
@@ -543,6 +563,20 @@ impl Loop {
                 accept(ack);
                 self.queued
                     .push_back(Queued::Handoff(id, args.instructions));
+            }
+            // A switch admitted during a turn waits for the next turn
+            // boundary. While `deferred` still holds one, a live one
+            // waits behind it in arrival order.
+            Delivery::Model(args, ack) => {
+                if self
+                    .deferred
+                    .iter()
+                    .any(|held| matches!(held, Delivery::Model(..)))
+                {
+                    self.deferred.push_back(Delivery::Model(args, ack));
+                } else {
+                    self.take_switch(args, ack, false)?;
+                }
             }
             Delivery::Reply(_, ack) => reject(ack, ErrorCode::StaleRequest, STALE_REPLY),
             Delivery::Close(ack) => self.take_close(ack),

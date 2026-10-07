@@ -57,6 +57,8 @@ pub enum Delivery {
     /// Removes the steering message sent by the `steer` command `CommandId`
     /// names, when that message is still unapplied.
     SteerDrop(crate::CommandId, Ack),
+    /// Switches model or thinking at the next turn boundary.
+    Model(crate::commands::ModelArgs, Ack),
     /// A person's `handoff`. While a turn runs it is held until the next
     /// step boundary; while the loop is idle it starts a turn of its own
     /// (`docs/handoff.md`, "A person").

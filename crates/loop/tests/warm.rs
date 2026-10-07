@@ -701,3 +701,82 @@ fn a_failed_refresh_after_its_generation_writes_its_usage_then_the_notice() {
         vec!["usage_recorded"]
     );
 }
+
+#[test]
+fn a_switch_while_warming_sends_no_refresh_and_restarts_idle_from_the_switch() {
+    use support::model as model_delivery;
+
+    let next: Arc<ScriptedProvider> = Arc::new(ScriptedProvider::new(vec![]));
+    let prepare: r#loop::Prepare = Arc::new(
+        move |args: &contract::commands::ModelArgs, chosen: Option<contract::ThinkingLevel>| {
+            let _ = chosen;
+            Ok(r#loop::Prepared {
+                provider: Arc::clone(&next) as Arc<dyn contract::provider::Provider>,
+                model: r#loop::Model {
+                    reference: args.model.clone(),
+                    cost: None,
+                    subscription: false,
+                },
+                thinking: None,
+                chosen: None,
+                credential: Some("work".into()),
+                cache_lifetime: CacheLifetime::FiveMinutes,
+                context_window: None,
+                addendum: None,
+                handoff: r#loop::HandoffSettings::default(),
+                reviewer: Err(contract::shapes::Failure {
+                    code: ErrorCode::NoModel,
+                    message: r#loop::NO_MODEL_MESSAGE.into(),
+                    retry_after: None,
+                    provider: None,
+                }),
+                web_search: None,
+                notice: None,
+            })
+        },
+    );
+    let mut session = session(
+        vec![Scripted::text("ok."), refresh_reply()],
+        CacheLifetime::FiveMinutes,
+    );
+    {
+        let looped = session.looped.take().unwrap().switcher(
+            prepare,
+            r#loop::Switchable {
+                chosen: None,
+                web_search: None,
+            },
+        );
+        session.looped = Some(looped);
+    }
+    arm(&mut session, MINUTE, Some(2));
+    let start = session.clock.now();
+    session.inbox.send(delivery("hi")).unwrap();
+    let finished = spawn_run(&mut session);
+    // Warming after the turn: the first refresh is due 30 s before 5 min.
+    parked(
+        &session.clock,
+        start + Duration::from_secs(270),
+        "the refresh is due",
+    );
+    assert_refreshes(&session, 0);
+    // A switch at t1, before anything refreshes.
+    let switched = start + Duration::from_secs(100);
+    advance_to(&session, switched);
+    session
+        .inbox
+        .send(model_delivery("fake/model-2", None))
+        .unwrap();
+    // The idle exit lands at the switch plus the delay, not at the cap plus it.
+    let exit = switched + MINUTE;
+    parked(&session.clock, exit, "idle counts from the switch");
+    advance_to(&session, exit);
+    ended(&finished);
+    assert_refreshes(&session, 0);
+    let after = after_turns(&session);
+    assert_eq!(
+        after.iter().map(|l| l.kind.as_str()).collect::<Vec<_>>(),
+        vec!["model_changed"],
+        "the switch writes one line and no refresh usage"
+    );
+}
