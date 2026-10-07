@@ -89,8 +89,10 @@ fn deferred_tools_leave_their_guidelines_out() {
 fn unattended_line_only_when_unattended() {
     let plain = system_prompt(&empty_inputs(), "m", false, &[]);
     assert!(!plain.contains("Nobody is present"));
+    assert!(!plain.contains("`ask_user`"));
     let away = system_prompt(&empty_inputs(), "m", true, &[]);
     assert!(away.contains("Nobody is present"));
+    assert!(away.contains("Ask with `ask_user` only when you cannot go on"));
 }
 
 #[test]
@@ -164,8 +166,8 @@ fn opening_md_bytes_are_pinned() {
 fn messages_md_bytes_are_pinned() {
     pinned(
         include_bytes!("../prompt/messages.md"),
-        3577,
-        0xd945e988bba2030c,
+        3712,
+        0x36b8f2b544455ca5,
     );
 }
 

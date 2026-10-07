@@ -18,7 +18,7 @@ You are running as {model}.
 
 ## unattended
 
-Nobody is present to answer questions in this session. Work through to the end on your own judgment, and state every assumption you made in your final reply.
+Nobody is present to answer questions in this session. Work through to the end on your own judgment, and state every assumption you made in your final reply. Ask with `ask_user` only when you cannot go on without an answer: asking ends the run, and the caller answers by resuming the session.
 
 ## instruction-file
 
