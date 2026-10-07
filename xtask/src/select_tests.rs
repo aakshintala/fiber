@@ -1390,3 +1390,30 @@ fn an_include_str_in_a_comment_is_ignored() {
         Vec::<String>::new()
     );
 }
+
+#[test]
+fn docs_only_passes_for_docs_files() {
+    for files in [
+        vec!["docs/ci.md"],
+        vec!["GLOSSARY.md"],
+        vec!["docs/adr/0002-x.md"],
+        vec!["README.md", "docs/events.md"],
+        vec!["research/x/notes.txt"],
+    ] {
+        assert!(docs_only(&strings(&files)), "{files:?}");
+    }
+}
+
+#[test]
+fn docs_only_fails_for_empty_or_code_lists() {
+    for files in [
+        vec![],
+        vec!["scripts/bug-red"],
+        vec!["docs/ci.md", "crates/a/src/lib.rs"],
+        vec!["extensions/foo/README.md"],
+        vec!["providers/p/README.md"],
+        vec![".github/workflows/ci.yml"],
+    ] {
+        assert!(!docs_only(&strings(&files)), "{files:?}");
+    }
+}

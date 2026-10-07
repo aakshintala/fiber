@@ -121,7 +121,9 @@ reproduces the bug and any new signature or test seam that test needs, but
 not the fix. The red commit builds, and at least one new or changed test
 fails there. The head passes. CI runs the new and changed tests at both
 commits (`docs/testing.md`, "Proving a test bites"). The squash merge still
-lands one commit.
+lands one commit. A pull request whose every changed file is a docs file, as
+"Selection" defines it, passes the check with a message saying so: the doc
+was wrong and the code was right, so no test can show the bug.
 
 A ticket whose defect is in test code, such as a flaky test, carries the
 `test-only` label, never `bug`. Its pull request states the root cause and

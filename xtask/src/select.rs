@@ -108,6 +108,12 @@ fn is_docs_file(path: &str) -> bool {
     path.ends_with(".md") || path.starts_with("docs/") || path.starts_with("research/")
 }
 
+/// Whether a pull request changing `files` changes only docs: non-empty
+/// and every path is a docs file, never a package file.
+pub(crate) fn docs_only(files: &[String]) -> bool {
+    !files.is_empty() && files.iter().all(|f| is_docs_file(f) && !is_package_file(f))
+}
+
 fn string_literal(text: &str) -> Option<String> {
     if let Some(inner) = text.strip_prefix('"') {
         return inner.strip_suffix('"').map(str::to_owned);

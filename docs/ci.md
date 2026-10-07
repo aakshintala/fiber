@@ -124,7 +124,9 @@ On Linux x86_64 alone:
   `bug`, its new and changed tests run at its first commit, the red commit,
   and at its head: the red commit must build and at least one of them must
   fail there, and all must pass at the head (`docs/workflow.md`, "The pull
-  request")
+  request"). A pull request whose every changed file is a docs file, as
+  "Selection" defines it, passes the check with a message saying so: the
+  doc was wrong and the code was right, so no test can show the bug.
 
 One more Linux x86_64 job builds the release profile for the target that
 ships, `x86_64-unknown-linux-musl` (`docs/releasing.md`), at the pull

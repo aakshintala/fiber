@@ -19,6 +19,8 @@
 //!   only one, or with several the first one labelled `bug`, else the first
 //! - `bug-filter FILE...`: the nextest filter and packages for the test files among FILE,
 //!   as tab-separated lines
+//! - `docs-only FILE...`: whether every file is a docs file, as `docs-only: yes` or
+//!   `docs-only: no`
 //! - `line-cap`, `unsafe-table`, `signal-sites`, `compiled-in`, `dependency-list`, `image-isolation`, `check-docs`: the checks
 
 #![allow(
@@ -168,6 +170,11 @@ fn run(args: &[String]) -> Result<bool, String> {
                 println!("package\t{package}");
             }
             Ok(true)
+        }
+        "docs-only" => {
+            let yes = select::docs_only(rest);
+            println!("docs-only: {}", if yes { "yes" } else { "no" });
+            Ok(yes)
         }
         "line-cap" => report(
             "line-cap",

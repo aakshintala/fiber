@@ -484,6 +484,28 @@ fn a_check_without_its_doc_is_an_error() {
 }
 
 #[test]
+fn docs_only_reports_whether_the_files_are_docs() {
+    let dir = TestDir::new("docs-only");
+    assert_eq!(
+        xtask(&dir, &["docs-only", "docs/ci.md", "GLOSSARY.md"], &[], ""),
+        (0, "docs-only: yes\n".to_owned())
+    );
+    assert_eq!(
+        xtask(
+            &dir,
+            &["docs-only", "docs/ci.md", "crates/a/src/lib.rs"],
+            &[],
+            ""
+        ),
+        (1, "docs-only: no\n".to_owned())
+    );
+    assert_eq!(
+        xtask(&dir, &["docs-only"], &[], ""),
+        (1, "docs-only: no\n".to_owned())
+    );
+}
+
+#[test]
 fn an_unknown_or_missing_command_is_an_error() {
     let dir = TestDir::new("unknown");
     assert_eq!(
