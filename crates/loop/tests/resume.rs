@@ -3807,3 +3807,95 @@ fn a_shutdown_after_the_refusal_ends_the_finishing_turn_interrupted() {
     let exited = exited_on_signal(&history);
     assert_eq!(exited.payload.get("suspended_on"), None);
 }
+
+// A resume after a completed handoff reads its window only (#874).
+
+/// A history whose first context ends in a completed handoff: the early
+/// turn's lines, then the handoff turn, the note and the new opening.
+fn handed_off(script: Vec<Scripted>) -> History {
+    let history = History::new(script);
+    history.write(opening_of("old-os"), None);
+    history.write(user_turn("one"), None);
+    history.write(message_started(), Some("a_0"));
+    history.write(assistant("early answer"), Some("a_0"));
+    history.write(user_turn("two"), None);
+    history.write(handoff_started(), None);
+    history.write(message_started(), Some("a_note"));
+    history.write(assistant("the note"), Some("a_note"));
+    history.write(
+        handoff_done(contract::events::Outcome::Completed, &["a_note"]),
+        None,
+    );
+    history.write(opening_of("new-os"), None);
+    history
+}
+
+#[test]
+fn a_resume_after_a_completed_handoff_sends_the_note_and_what_came_after_only() {
+    let mut history = handed_off(vec![Scripted::text("Hello.")]);
+    history.write(message_started(), Some("a_3"));
+    history.write(assistant("after"), Some("a_3"));
+    history.freeze();
+
+    let looped = history.resume(Vec::new());
+    history.run(looped, "three");
+
+    let requests = history.provider.requests();
+    assert_eq!(requests.len(), 1);
+    let seen: Vec<&str> = requests[0]
+        .conversation
+        .iter()
+        .filter_map(|input| match input {
+            Input::User { text } | Input::Assistant { text, .. } => Some(text.as_str()),
+            Input::Reasoning { .. } | Input::ToolCall { .. } | Input::ToolResult { .. } => None,
+        })
+        .collect();
+    assert!(seen[0].contains("new-os"), "{seen:?}");
+    assert_eq!(seen[1..], ["two", "the note", "after", "three"]);
+}
+
+#[test]
+fn a_turn_suspended_after_a_handoff_re_raises_its_request_past_lines_written_after_the_pass() {
+    // `main`'s order: the pass, then `fiber_started` and the like, then the
+    // resume. The window ends where the pass ended, so the suspension it
+    // read still stands.
+    let mut history = handed_off(vec![Scripted::text("Hello.")]);
+    history.write(user_turn("three"), None);
+    history.write(message_started(), Some("a_5"));
+    history.write(requested("read"), Some("a_1"));
+    history.write(standing_request("r_9"), Some("a_1"));
+    history.write(fiber_started(), None);
+    history.write(fiber_exited(Some("r_9")), None);
+    let folded = r#loop::resumed(&history.dir).unwrap();
+    history.write(fiber_started(), None);
+    history.freeze();
+
+    let looped = Loop::resume(
+        Arc::clone(&history.log),
+        folded,
+        Arc::clone(&history.provider) as Arc<dyn Provider>,
+        History::model(),
+        history.prompt(),
+        history.inbox_rx.take().unwrap(),
+        Vec::new(),
+        r#loop::Permissions {
+            workspace: history.workspace.clone(),
+            credentials: history.credentials.clone(),
+            rules: history.rules.clone(),
+        },
+    )
+    .unwrap()
+    .answerable(false);
+    let (looped, outcome) = history.step(looped);
+    assert_eq!(outcome, Some(contract::events::TurnOutcome::Completed));
+    drop(looped);
+
+    let raised: Vec<Envelope> = history
+        .new_lines()
+        .into_iter()
+        .filter(|line| line.kind == "permission_requested")
+        .collect();
+    assert_eq!(raised.len(), 1, "{:?}", history.new_kinds());
+    assert_eq!(raised[0].payload["request_id"], "r_9");
+    assert_eq!(raised[0].action_id, Some(ActionId("a_1".into())));
+}
