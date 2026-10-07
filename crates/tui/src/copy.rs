@@ -1,6 +1,6 @@
 //! The conversation's click targets, and a code block's `copy` cells,
-//! which copy its code and show "Copied" until the next key or click on a
-//! target (`docs/tui.md`, "Look", "Selection and copy").
+//! which copy its code and show "Copied" until the next key or click
+//! (`docs/tui.md`, "Look", "Selection and copy").
 
 use std::ops::Range;
 
@@ -29,6 +29,11 @@ impl App {
         let code = crate::turn::copy_target(&self.turns, target, self.width);
         self.copied = code.is_some();
         code.map_or(Effect::None, |copy| Effect::Copy(copy.code))
+    }
+
+    /// Hides "Copied": a left press, on a target or not, starts a click.
+    pub(crate) fn clear_copied(&mut self) {
+        self.copied = false;
     }
 
     /// Whether "Copied" shows.

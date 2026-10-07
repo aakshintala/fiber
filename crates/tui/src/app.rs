@@ -182,8 +182,7 @@ pub(crate) struct App {
     overlays: commands::Overlays,
     /// Prompt recall and the Ctrl+R panel.
     history: history::History,
-    /// "Copied" shows, from a click on `copy` to the next key or click on a
-    /// target.
+    /// "Copied" shows, from a click on `copy` to the next key or click.
     copied: bool,
 }
 

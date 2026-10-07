@@ -1251,6 +1251,9 @@ fn a_copy_writes_osc_52_and_pipes_the_code_to_the_command() {
     );
     feed(&mut lp, vec![at(0, 57, row, 'M'), at(0, 57, row, 'm')]);
     assert!(lp.app.copied());
+    // A left click off any target, here on blank cells, clears "Copied".
+    feed(&mut lp, vec![at(0, 2, 0, 'M'), at(0, 2, 0, 'm')]);
+    assert!(!lp.app.copied());
     let osc = b"\x1b]52;c;bGV0IGEgPSAxOw==\x07";
     assert_eq!(read_exact(&pair.main, osc.len(), "the OSC 52 bytes"), osc);
     ready.wait(DEADLINE);

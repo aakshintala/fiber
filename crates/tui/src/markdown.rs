@@ -204,10 +204,8 @@ impl Writer {
             Event::Rule => {
                 self.flush();
                 self.block();
-                let rule = "─".repeat(usize::from(self.width));
-                self.out
-                    .lines
-                    .push(Line::from(Span::styled(rule, style(Role::Dim))));
+                let rule = "─".repeat(usize::from(self.inner_width()));
+                self.put(Line::from(Span::styled(rule, style(Role::Dim))));
             }
             Event::TaskListMarker(_) => {}
         }
@@ -314,7 +312,9 @@ impl Writer {
             }
             TagEnd::Table => {
                 if let Some(table) = self.table.take() {
-                    self.out.lines.extend(table.layout(usize::from(self.width)));
+                    for line in table.layout(usize::from(self.inner_width())) {
+                        self.put(line);
+                    }
                 }
             }
             TagEnd::Emphasis => self.emphasis = self.emphasis.saturating_sub(1),
@@ -378,6 +378,24 @@ impl Writer {
             .collect()
     }
 
+    /// The cells the quote bars take.
+    fn quote_width(&self) -> u16 {
+        let bars: usize = self.quote_prefix().iter().map(Span::width).sum();
+        u16::try_from(bars).unwrap_or(u16::MAX)
+    }
+
+    /// The width a block lays out in, inside the quote bars.
+    fn inner_width(&self) -> u16 {
+        self.width.saturating_sub(self.quote_width())
+    }
+
+    /// Adds a block's row after the quote bars.
+    fn put(&mut self, line: Line<'static>) {
+        let mut spans = self.quote_prefix();
+        spans.extend(line.spans);
+        self.out.lines.push(Line::from(spans));
+    }
+
     /// The first row's prefix and the other rows': the quote bars, the
     /// list's indent, and the item's marker or its width in spaces.
     fn prefixes(&mut self) -> (Vec<Span<'static>>, Vec<Span<'static>>) {
@@ -418,19 +436,21 @@ impl Writer {
     /// line numbered, all on the tint across the width.
     fn code_block(&mut self, info: &str, code: &str) {
         let code = code.strip_suffix('\n').unwrap_or(code);
-        let width = usize::from(self.width);
+        let inner = self.inner_width();
+        let width = usize::from(inner);
         let label = info
             .split(|ch: char| ch.is_whitespace() || ch == ',')
             .next()
             .unwrap_or_default();
-        if let Some(cols) = copy_cols(self.width) {
+        if let Some(cols) = copy_cols(inner) {
+            let bars = self.quote_width();
             self.out.targets.push(CopyTarget {
                 line: self.out.lines.len(),
-                cols,
+                cols: cols.start.saturating_add(bars)..cols.end.saturating_add(bars),
                 code: code.to_owned(),
             });
         }
-        self.out.lines.push(header(label, width));
+        self.put(header(label, width));
         let runs = highlight::spans(info, code).unwrap_or_else(|| {
             code.split('\n')
                 .map(|line| vec![(Role::CodeText, line.to_owned())])
@@ -463,7 +483,7 @@ impl Writer {
                 let pad = width.saturating_sub(row.width());
                 row.spans
                     .push(Span::styled(" ".repeat(pad), tinted(Role::CodeText)));
-                self.out.lines.push(row);
+                self.put(row);
             }
         }
     }

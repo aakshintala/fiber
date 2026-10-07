@@ -44,7 +44,7 @@ use signal_hook::consts::{SIGINT, SIGQUIT, SIGWINCH};
 use signal_hook::iterator::Signals;
 
 use crate::app::{App, Effect};
-use crate::keys::{Event, Parser, Reply};
+use crate::keys::{Button, Event, MouseKind, Parser, Reply};
 use crate::link::Line;
 use crate::mouse::{Pointer, Target};
 
@@ -429,6 +429,11 @@ impl<B: Backend> Loop<B> {
                         Event::Key(key) => self.app.on_key(key, self.clock.now()),
                         Event::Edit(edit) => self.app.on_edit(edit),
                         Event::Mouse(mouse) => {
+                            // Every left click, on a target or not, clears
+                            // "Copied"; a click on `copy` sets it again.
+                            if mouse.kind == MouseKind::Press(Button::Left) {
+                                self.app.clear_copied();
+                            }
                             let clicked =
                                 self.pointer
                                     .on_mouse(&mouse, &self.screen.targets, self.hover);

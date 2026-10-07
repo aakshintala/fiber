@@ -466,3 +466,56 @@ fn wrapping_by_cells_ignores_words() {
     assert_eq!(wrapped("ab cd", 3, 3, false), vec!["ab ", "cd"]);
     assert_eq!(wrapped("a\n\nb", 3, 3, false), vec!["a", "", "b"]);
 }
+
+/// The text of `line` in the cells `cols`.
+fn cells(line: &Line<'_>, cols: std::ops::Range<u16>) -> String {
+    text(line)
+        .chars()
+        .skip(usize::from(cols.start))
+        .take(usize::from(cols.end.saturating_sub(cols.start)))
+        .collect()
+}
+
+#[test]
+fn a_code_block_in_a_quote_keeps_the_bars_and_its_copy_cells() {
+    for (markdown, bars) in [
+        ("> ```rust\n> let a = 1;\n> ```", "│ "),
+        ("> > ```rust\n> > let a = 1;\n> > ```", "│ │ "),
+    ] {
+        let rendered = render(markdown, 24);
+        let lines: Vec<String> = rendered.lines.iter().map(text).collect();
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        for line in &lines {
+            assert!(line.starts_with(bars), "{line:?}");
+            assert_eq!(line.chars().count(), 24, "{line:?}");
+        }
+        let tail = 24usize.saturating_sub(bars.chars().count());
+        assert_eq!(lines[0], format!("{bars}{:<w$}copy", "rust", w = tail - 4));
+        assert!(lines[1].starts_with(&format!("{bars}1 │ let a = 1;")));
+        assert_eq!(style_at(&rendered.lines[0], 0).fg, fg(Role::Dim));
+        let target = rendered.target(0).expect("a copy target");
+        assert_eq!(target.line, 0);
+        assert_eq!(target.cols, 20..24);
+        assert_eq!(cells(&rendered.lines[0], target.cols), "copy");
+    }
+}
+
+#[test]
+fn a_table_in_a_quote_keeps_the_bars_and_shrinks_inside_them() {
+    let markdown = "> | aaaaaaaaaa | bbbbbbb |\n> |---|---|\n> | x | y |";
+    assert_eq!(
+        texts(markdown, 19),
+        vec![
+            "│ aaaaaaaa  bbbbbbb",
+            "│ aa               ",
+            "│ ─────────────────",
+            "│ x         y      ",
+        ]
+    );
+}
+
+#[test]
+fn a_rule_in_a_quote_fills_the_width_inside_the_bars() {
+    assert_eq!(texts("> ***", 8), vec!["│ ──────"]);
+    assert_eq!(texts("> > ***", 8), vec!["│ │ ────"]);
+}

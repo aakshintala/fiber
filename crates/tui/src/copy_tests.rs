@@ -59,9 +59,11 @@ fn row_of(app: &App, width: u16, height: u16, needle: &str) -> Option<u16> {
         .and_then(|at| u16::try_from(at).ok())
 }
 
-/// A click at a 0-based cell of the app drawn at its size: the target
-/// drawn there, if any, clicked.
+/// A left click at a 0-based cell of the app drawn at its size, as the
+/// loop handles one: the press clears "Copied", then the target drawn
+/// there, if any, is clicked.
 fn click(app: &mut App, col: u16, row: u16) -> Effect {
+    app.clear_copied();
     let area = ratatui::layout::Rect::new(0, 0, app.width, app.height);
     let mut buf = ratatui::buffer::Buffer::empty(area);
     let targets = crate::view::render(app, area, &mut buf, None);
@@ -85,11 +87,13 @@ fn a_click_on_copy_copies_that_blocks_code_and_shows_copied() {
         Effect::Copy("echo b".to_owned())
     );
     // The cells left of `copy` and the rows around it copy nothing, and a
-    // click on another target clears "Copied".
+    // click clears "Copied".
     for (col, row) in [(25, first), (0, first), (26, first + 1), (26, first - 1)] {
+        click(&mut app, 29, second);
         assert_eq!(click(&mut app, col, row), Effect::None, "{col},{row}");
+        assert!(!app.copied());
     }
-    assert!(app.copied());
+    click(&mut app, 29, second);
     app.on_click(crate::mouse::TargetId::NewBelow);
     assert!(!app.copied());
 }
@@ -210,4 +214,16 @@ fn a_click_copies_from_the_reply_it_lands_on() {
         click(&mut app, 29, second),
         Effect::Copy("echo b".to_owned())
     );
+}
+
+#[test]
+fn a_copy_target_in_a_quote_is_on_its_drawn_copy_cells() {
+    let mut app = with_reply(30, 12, "> ```rust\n> let a = 1;\n> ```");
+    let header = row_of(&app, 30, 12, "copy").expect("header");
+    assert_eq!(
+        click(&mut app, 26, header),
+        Effect::Copy("let a = 1;".to_owned())
+    );
+    assert_eq!(click(&mut app, 25, header), Effect::None);
+    assert_eq!(click(&mut app, 0, header), Effect::None);
 }
