@@ -594,9 +594,7 @@ fn resume_failures_end_stdout_with_a_pre_session_fiber_exited() {
     // Two sessions sharing the prefix `s_`: the id is `s_` plus hex, so a
     // manual pair under it is ambiguous.
     for id in ["s_aaa", "s_aab"] {
-        let dir = setup.sessions().join(id);
-        fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("events.jsonl"), "").unwrap();
+        hand_built(&setup, id, vec![]);
     }
 
     // `--resume` with no value, and with an empty value, are usage errors.

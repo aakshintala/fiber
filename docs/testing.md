@@ -280,11 +280,8 @@ against each one. An edit that no test notices fails CI.
 An edit that genuinely changes no behaviour is exempted in the code, with a
 written reason. The exemption goes on a function: move the code that changes
 nothing into its own function and mark that, since an exemption on a statement
-or block is not reliably honoured. The exemption is written
-`#[cfg_attr(false, mutants::skip)]`, under a comment saying why no test can
-tell the mutant apart. cargo-mutants reads the attribute from the source, and
-`cfg_attr(false, …)` keeps the compiler from ever seeing it, so no crate
-depends on `mutants`. How many runners share the mutants is CI's to set.
+or block is not reliably honoured. How many runners share the mutants is CI's
+to set.
 
 Code is written so a mutant fails fast. A loop that steps an index by hand can
 spin forever when a mutant breaks the arithmetic, and a hung mutant fails CI as
