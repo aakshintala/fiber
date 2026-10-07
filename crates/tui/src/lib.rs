@@ -21,9 +21,9 @@ use std::thread;
 
 use contract::clock::Clock;
 use contract::{Envelope, HubLine, SessionId};
-use ratatui::backend::{Backend, CrosstermBackend};
-use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
+use ratatui::backend::{Backend, ClearType, CrosstermBackend, WindowSize};
+use ratatui::buffer::{Buffer, Cell};
+use ratatui::layout::{Position, Rect, Size};
 use ratatui::{Terminal, TerminalOptions, Viewport};
 use signal_hook::consts::SIGWINCH;
 use signal_hook::iterator::Signals;
@@ -145,7 +145,7 @@ pub fn draw(events: &str, width: u16, height: u16) -> Result<String, String> {
 
 /// The screen: ratatui on a fixed viewport, and the last frame drawn.
 struct Screen<B: Backend> {
-    terminal: Terminal<B>,
+    terminal: Terminal<TtySized<B>>,
     area: Rect,
     last: Option<Buffer>,
 }
@@ -154,7 +154,10 @@ impl<B: Backend> Screen<B> {
     fn new(backend: B, width: u16, height: u16) -> Result<Self, B::Error> {
         let area = Rect::new(0, 0, width, height);
         let terminal = Terminal::with_options(
-            backend,
+            TtySized {
+                inner: backend,
+                size: area.as_size(),
+            },
             TerminalOptions {
                 viewport: Viewport::Fixed(area),
             },
@@ -184,7 +187,72 @@ impl<B: Backend> Screen<B> {
     fn resize(&mut self, width: u16, height: u16) -> Result<(), B::Error> {
         self.area = Rect::new(0, 0, width, height);
         self.last = None;
+        self.terminal.backend_mut().size = self.area.as_size();
         self.terminal.resize(self.area)
+    }
+}
+
+/// A backend that reports the size read from the injected tty. ratatui
+/// asks its backend for the size when it clears a fixed viewport on
+/// resize, and crossterm answers from `/dev/tty`, standard output or
+/// `tput`, never from the injected tty: with none of those, as under a
+/// test harness, the answer is an error and the resize fails.
+struct TtySized<B> {
+    inner: B,
+    size: Size,
+}
+
+impl<B: Backend> Backend for TtySized<B> {
+    type Error = B::Error;
+
+    fn draw<'a, I>(&mut self, content: I) -> Result<(), Self::Error>
+    where
+        I: Iterator<Item = (u16, u16, &'a Cell)>,
+    {
+        self.inner.draw(content)
+    }
+
+    fn append_lines(&mut self, n: u16) -> Result<(), Self::Error> {
+        self.inner.append_lines(n)
+    }
+
+    fn hide_cursor(&mut self) -> Result<(), Self::Error> {
+        self.inner.hide_cursor()
+    }
+
+    fn show_cursor(&mut self) -> Result<(), Self::Error> {
+        self.inner.show_cursor()
+    }
+
+    fn get_cursor_position(&mut self) -> Result<Position, Self::Error> {
+        self.inner.get_cursor_position()
+    }
+
+    fn set_cursor_position<P: Into<Position>>(&mut self, position: P) -> Result<(), Self::Error> {
+        self.inner.set_cursor_position(position)
+    }
+
+    fn clear(&mut self) -> Result<(), Self::Error> {
+        self.inner.clear()
+    }
+
+    fn clear_region(&mut self, clear_type: ClearType) -> Result<(), Self::Error> {
+        self.inner.clear_region(clear_type)
+    }
+
+    fn size(&self) -> Result<Size, Self::Error> {
+        Ok(self.size)
+    }
+
+    fn window_size(&mut self) -> Result<WindowSize, Self::Error> {
+        Ok(WindowSize {
+            columns_rows: self.size,
+            pixels: Size::default(),
+        })
+    }
+
+    fn flush(&mut self) -> Result<(), Self::Error> {
+        self.inner.flush()
     }
 }
 
