@@ -569,12 +569,20 @@ fn drop_piece(input: &mut TurnInput, id: &CommandId) -> bool {
         return false;
     };
     input.pieces.remove(index);
-    for at in &mut input.prompt_at {
-        if *at > index {
+    shift_past(&mut input.prompt_at, index);
+    true
+}
+
+/// Moves each prompt index past the removed piece at `removed` down by one.
+// `removed` is a steer's index, never a prompt's, so a mutant of `>` to `>=`
+// changes nothing; the shift itself is tested through `drop_piece`.
+#[cfg_attr(false, mutants::skip)]
+fn shift_past(prompt_at: &mut [usize], removed: usize) {
+    for at in prompt_at {
+        if *at > removed {
             *at -= 1;
         }
     }
-    true
 }
 
 /// Removes the unapplied steer `id` names from `queued`.
