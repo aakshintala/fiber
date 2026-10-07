@@ -123,7 +123,7 @@ fn a_hook_and_a_server_summary_name_what_runs_and_what_is_pinned() {
         lines(&items[0]),
         [
             "hook: warn",
-            "declared in: .fiber/config/github.com-aakshintala-fiber-extensions-hooks.json",
+            "declared in: .fiber/config/hooks.json",
             "point: session_start",
             "tools: edit",
             "runs: scripts/warn.sh now",

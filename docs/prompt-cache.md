@@ -168,7 +168,8 @@ applies only where a protocol offers a choice.
 
 By default Fiber sends no request only to keep a cache warm, so an idle Fiber
 does no work. With `cache.warm_idle` set, an idle session refreshes its cache
-shortly before the lifetime ends, with a request that reads the cached prefix
+30 seconds before the lifetime ends (`picked`: one request's latency),
+counted from the last request's send, with a request that reads the cached prefix
 and asks for one token of output, so a person who returns after a long pause finds the
 cache still warm. The refresh is logged as `usage_recorded` like any request,
 so its cost shows in the session's spend.
@@ -184,16 +185,22 @@ The refresh would miss and pay for a full rebuild. A level sent as
 adaptive thinking or an effort parameter does not depend on the cap, and
 warms.
 
+A refresh checks `budget.usd` first: when the spend has reached it, warming
+stops and no turn fails. It runs no `before_model_call` hook: the hooks
+already ran on that request, and a hook that changed it would make the
+refresh miss.
+
 Warming stops at `cache.warm_cap` after the last turn, whether or not a client
 is connected. A connected client is not a signal: a terminal left open is
 connected all weekend (`docs/invocation.md`, "Lifecycle"). While warming, the
 session is not idle; when warming stops, the idle clock starts.
 
-The cap has a ceiling. A refresh costs 0.05 to 0.1 times the prompt's input
-price and a 1-hour rebuild 2 times, so warming through N lifetimes on a session
-nobody returns to wastes at most 0.1 × N. Below 19 lifetimes, that is always
-less than the one rebuild warming guards against. The default cap is 2
-lifetimes, `"2h"`. Fiber has no savings threshold. The replay is
+The cap is counted in lifetimes and has a ceiling. A refresh costs 0.05 to
+0.1 times the prompt's input price; a rebuild costs 1.25 times at the
+5-minute lifetime and 2 times at the 1-hour one. Warming through N lifetimes
+on a session nobody returns to wastes at most 0.1 × N, so below 12 lifetimes
+it always costs less than the one rebuild it guards against, at either
+lifetime. The default cap is 2 lifetimes. Fiber has no savings threshold. The replay is
 [research/prompt-cache/warm-cap.md](../research/prompt-cache/warm-cap.md).
 
 A `fiber ask` session and a delegate never warm: each exits when its run ends.

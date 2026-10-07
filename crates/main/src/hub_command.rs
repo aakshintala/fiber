@@ -90,10 +90,11 @@ fn fail(failure: Failure) -> i32 {
 }
 
 /// Starts the internal session command: `<current_exe> session --id <id>
-/// --workspace <workspace> [--model <model>]`, never `--prompt`. Whoever
-/// starts a session generates its id and passes it on that command's line,
-/// so the starter knows the id before the process runs and nothing is read
-/// back (`docs/invocation.md`, "The hub").
+/// --workspace <workspace> [--model <model>]`, never `--prompt`, or with
+/// `--resume` for a session the log holds. Whoever starts a session
+/// generates its id and passes it on that command's line, so the starter
+/// knows the id before the process runs and nothing is read back
+/// (`docs/invocation.md`, "The hub").
 struct SpawnStarter;
 
 impl hub::Starter for SpawnStarter {
@@ -104,52 +105,78 @@ impl hub::Starter for SpawnStarter {
         model: Option<&str>,
     ) -> std::io::Result<Box<dyn hub::Started>> {
         let exe = std::env::current_exe()?;
-        let mut command = Command::new(exe);
-        command
-            .arg("session")
-            .arg("--id")
-            .arg(&id.0)
-            .arg("--workspace")
-            .arg(workspace);
-        if let Some(model) = model {
-            command.arg("--model").arg(model);
-        }
-        command
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .process_group(0);
-        // The child starts first, then the drain thread takes it: a thread
-        // that never starts leaves the child behind, so it is killed and
-        // reaped here.
-        let child = command.spawn()?;
-        let state = Arc::new(Mutex::new(State {
-            exited: false,
-            failure: None,
-        }));
-        let child = Arc::new(Mutex::new(child));
-        let watch = Arc::clone(&state);
-        match thread::Builder::new().name("hub-drain".to_owned()).spawn({
-            let child = Arc::clone(&child);
-            move || drain(&child, &watch)
-        }) {
-            Ok(_) => Ok(Box::new(Spawned {
-                id: id.clone(),
-                state,
-            })),
-            Err(error) => {
-                let mut child = lock(&child);
-                match child.kill() {
-                    Ok(()) | Err(_) => {}
-                }
-                match child.wait() {
-                    Ok(_) | Err(_) => {}
-                }
-                Err(std::io::Error::new(
-                    error.kind(),
-                    format!("hub drain: {error}"),
-                ))
+        spawn(id, session_command(&exe, id, workspace, model, false))
+    }
+
+    fn resume(&self, id: &SessionId, workspace: &Path) -> std::io::Result<Box<dyn hub::Started>> {
+        let exe = std::env::current_exe()?;
+        spawn(id, session_command(&exe, id, workspace, None, true))
+    }
+}
+
+/// `exe session --id <id> --workspace <workspace>`, with `--model` when
+/// one is named and `--resume` for a resume, in its own process group with
+/// stdout piped for the drain.
+fn session_command(
+    exe: &Path,
+    id: &SessionId,
+    workspace: &Path,
+    model: Option<&str>,
+    resume: bool,
+) -> Command {
+    let mut command = Command::new(exe);
+    command
+        .arg("session")
+        .arg("--id")
+        .arg(&id.0)
+        .arg("--workspace")
+        .arg(workspace);
+    if let Some(model) = model {
+        command.arg("--model").arg(model);
+    }
+    if resume {
+        command.arg("--resume");
+    }
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .process_group(0);
+    command
+}
+
+/// Spawns `command` for session `id` and drains its stdout on a thread.
+fn spawn(id: &SessionId, mut command: Command) -> std::io::Result<Box<dyn hub::Started>> {
+    // The child starts first, then the drain thread takes it: a thread
+    // that never starts leaves the child behind, so it is killed and
+    // reaped here.
+    let child = command.spawn()?;
+    let state = Arc::new(Mutex::new(State {
+        exited: false,
+        failure: None,
+    }));
+    let child = Arc::new(Mutex::new(child));
+    let watch = Arc::clone(&state);
+    match thread::Builder::new().name("hub-drain".to_owned()).spawn({
+        let child = Arc::clone(&child);
+        move || drain(&child, &watch)
+    }) {
+        Ok(_) => Ok(Box::new(Spawned {
+            id: id.clone(),
+            state,
+        })),
+        Err(error) => {
+            let mut child = lock(&child);
+            match child.kill() {
+                Ok(()) | Err(_) => {}
             }
+            match child.wait() {
+                Ok(_) | Err(_) => {}
+            }
+            Err(std::io::Error::new(
+                error.kind(),
+                format!("hub drain: {error}"),
+            ))
         }
     }
 }

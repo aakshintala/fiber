@@ -7,7 +7,6 @@ use std::path::PathBuf;
 
 use crate::ErrorCode;
 use crate::events::{JobCompleted, JobLine, JobStarted};
-use crate::shapes::Failure;
 
 /// What opening a job asks for. The opener supplies [`Stop`]; the registry
 /// mints the id and the output file.
@@ -90,52 +89,12 @@ pub struct Opened {
     pub lines: Option<Lines>,
 }
 
-/// Reports how the job ended, once. Dropped uncalled, the job is recorded
-/// failed: a runner that returns on an error path without reporting would
-/// otherwise leave the job running. Calling [`End::end`] disarms the drop,
-/// so a job is recorded once. A panic aborts the process; this is not a
-/// panic handler.
-pub struct End {
-    job_id: crate::JobId,
-    report: Option<Box<dyn FnOnce(JobCompleted) + Send>>,
-}
-
-impl End {
-    /// An end that reports through `report`. The registry builds one per job.
-    pub fn new(job_id: crate::JobId, report: Box<dyn FnOnce(JobCompleted) + Send>) -> Self {
-        Self {
-            job_id,
-            report: Some(report),
-        }
-    }
-
-    /// Reports `completed` and disarms the drop.
-    pub fn end(mut self, completed: JobCompleted) {
-        if let Some(report) = self.report.take() {
-            report(completed);
-        }
-    }
-}
-
-impl Drop for End {
-    fn drop(&mut self) {
-        let Some(report) = self.report.take() else {
-            return;
-        };
-        report(JobCompleted {
-            job_id: self.job_id.clone(),
-            status: crate::events::Outcome::Failed,
-            error: Some(Failure {
-                code: ErrorCode::ToolError,
-                message: "The job ended without a result.".to_owned(),
-                retry_after: None,
-                provider: None,
-            }),
-            process: None,
-            output_tail: None,
-        });
-    }
-}
+/// Reports how the job ended, once. The registry records a job whose `End`
+/// is dropped uncalled as failed `indeterminate` (`jobs::Registry::open`).
+pub struct End(
+    /// The registry's report.
+    pub Box<dyn FnOnce(JobCompleted) + Send>,
+);
 
 impl fmt::Debug for End {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

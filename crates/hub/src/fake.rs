@@ -4,10 +4,11 @@
 
 use std::fs::DirBuilder;
 use std::io::{BufRead, BufReader, Write};
+use std::net::Shutdown;
 use std::os::unix::fs::DirBuilderExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::Duration;
 
@@ -37,6 +38,19 @@ pub(crate) struct FakeStarter {
     exited: Option<Failure>,
     handshake: Arc<Mutex<Option<Handshake>>>,
     received: Arc<Mutex<Vec<String>>>,
+    /// Each `resume` call's session and workspace, in order.
+    resumed: Arc<Mutex<Vec<(SessionId, PathBuf)>>>,
+    /// The connections the fake sessions accepted and still serve.
+    serving: Arc<Serving>,
+}
+
+/// The connections the fake sessions serve: a clone of each, to shut it
+/// down, and how many are still served.
+#[derive(Debug, Default)]
+struct Serving {
+    streams: Mutex<Vec<UnixStream>>,
+    live: Mutex<usize>,
+    ended: Condvar,
 }
 
 impl FakeStarter {
@@ -60,6 +74,12 @@ impl FakeStarter {
         Self::new(home, false, None, None)
     }
 
+    /// Binds `run/<id>` and reports the process exited with `failure`, as
+    /// a process that lost the session to another that bound it does.
+    pub(crate) fn bind_and_exit(home: &Path, failure: Failure) -> Self {
+        Self::new(home, true, Some(failure), None)
+    }
+
     fn new(home: &Path, bind: bool, exited: Option<Failure>, handshake: Option<Handshake>) -> Self {
         Self {
             home: home.to_path_buf(),
@@ -67,6 +87,8 @@ impl FakeStarter {
             exited,
             handshake: Arc::new(Mutex::new(handshake)),
             received: Arc::new(Mutex::new(Vec::new())),
+            resumed: Arc::new(Mutex::new(Vec::new())),
+            serving: Arc::new(Serving::default()),
         }
     }
 
@@ -74,15 +96,32 @@ impl FakeStarter {
     pub(crate) fn received(&self) -> Vec<String> {
         lock(&self.received).clone()
     }
-}
 
-impl Starter for FakeStarter {
-    fn start(
-        &self,
-        id: &SessionId,
-        _workspace: &Path,
-        _model: Option<&str>,
-    ) -> std::io::Result<Box<dyn Started>> {
+    /// Each `resume` call's session and workspace, in order.
+    pub(crate) fn resumed(&self) -> Vec<(SessionId, PathBuf)> {
+        lock(&self.resumed).clone()
+    }
+
+    /// Ends session `id` as an exiting process does: its socket is gone,
+    /// and every connection it served is closed, waiting at most `within`
+    /// for each to end. True once all have ended.
+    pub(crate) fn stop(&self, id: &SessionId, within: Duration) -> bool {
+        std::fs::remove_file(self.home.join("run").join(&id.0)).unwrap_or(());
+        for stream in lock(&self.serving.streams).drain(..) {
+            stream.shutdown(Shutdown::Both).unwrap_or(());
+        }
+        let live = lock(&self.serving.live);
+        let (live, _) = self
+            .serving
+            .ended
+            .wait_timeout_while(live, within, |live| *live > 0)
+            .unwrap_or_else(PoisonError::into_inner);
+        *live == 0
+    }
+
+    /// Binds `run/<id>` when the fake binds, serving each connection on a
+    /// thread of its own.
+    fn launch(&self, id: &SessionId) -> std::io::Result<Box<dyn Started>> {
         if self.bind {
             let run = self.home.join("run");
             DirBuilder::new()
@@ -94,10 +133,11 @@ impl Starter for FakeStarter {
             let listener = UnixListener::bind(&socket).map_err(|error| refused(&socket, &error))?;
             let received = Arc::clone(&self.received);
             let handshake = Arc::clone(&self.handshake);
+            let serving = Arc::clone(&self.serving);
             // The listener lives in the accept loop's thread.
             thread::Builder::new()
                 .name("fake-session".to_owned())
-                .spawn(move || accept_loop(listener, &received, &handshake))
+                .spawn(move || accept_loop(listener, &received, &handshake, &serving))
                 .map_err(|error| {
                     std::io::Error::new(error.kind(), format!("fake session: {error}"))
                 })?;
@@ -105,6 +145,22 @@ impl Starter for FakeStarter {
         Ok(Box::new(FakeStarted {
             exited: self.exited.clone(),
         }))
+    }
+}
+
+impl Starter for FakeStarter {
+    fn start(
+        &self,
+        id: &SessionId,
+        _workspace: &Path,
+        _model: Option<&str>,
+    ) -> std::io::Result<Box<dyn Started>> {
+        self.launch(id)
+    }
+
+    fn resume(&self, id: &SessionId, workspace: &Path) -> std::io::Result<Box<dyn Started>> {
+        lock(&self.resumed).push((id.clone(), workspace.to_path_buf()));
+        self.launch(id)
     }
 }
 
@@ -133,16 +189,27 @@ fn accept_loop(
     listener: UnixListener,
     received: &Arc<Mutex<Vec<String>>>,
     handshake: &Arc<Mutex<Option<Handshake>>>,
+    serving: &Arc<Serving>,
 ) {
     loop {
         let Ok((stream, _)) = listener.accept() else {
             return;
         };
+        let Ok(clone) = stream.try_clone() else {
+            return;
+        };
+        lock(&serving.streams).push(clone);
+        *lock(&serving.live) += 1;
         let received = Arc::clone(received);
         let handshake = Arc::clone(handshake);
+        let serving = Arc::clone(serving);
         let spawned = thread::Builder::new()
             .name("fake-session-conn".to_owned())
-            .spawn(move || serve_one(stream, &received, &handshake));
+            .spawn(move || {
+                serve_one(stream, &received, &handshake);
+                *lock(&serving.live) -= 1;
+                serving.ended.notify_all();
+            });
         if spawned.is_err() {
             return;
         }
@@ -183,8 +250,11 @@ fn serve_one(
                             return;
                         }
                     }
-                    // Any other connection is held until EOF.
-                    _ => hold(&mut read),
+                    // Any other command is accepted, as a session that
+                    // takes it does.
+                    Some(_) => write_accepted(&mut writer, &text),
+                    // Anything else is held until EOF.
+                    None => hold(&mut read),
                 }
             }
             // Nothing sent yet: hold until EOF.
@@ -271,4 +341,202 @@ fn refused(path: &Path, error: &std::io::Error) -> std::io::Error {
 
 fn lock<'a, T>(mutex: &'a Mutex<T>) -> MutexGuard<'a, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// A `session_status` payload: `state` is `"idle"`, or `"waiting"` with a
+/// pending approval; `parent` marks a delegate.
+pub(crate) fn status(name: &str, workspace: &str, state: &str, parent: Option<&str>) -> Value {
+    let usage = serde_json::json!({
+        "tokens": {"input": 0, "cache_read": 0, "cache_write": {}, "output": 0},
+        "cost": 0.0,
+        "subscription_cost": 0.0,
+    });
+    let mut payload = serde_json::json!({
+        "name": name, "workspace": workspace, "model": "p/m", "state": state,
+        "since": 1, "spend": usage, "delegates": 0, "jobs": 0,
+    });
+    if state == "waiting" {
+        payload["waiting"] = serde_json::json!({
+            "request_id": "r1", "kind": "approval", "summary": "run ls",
+        });
+    }
+    if let Some(parent) = parent {
+        payload["parent"] = Value::String(parent.to_owned());
+    }
+    payload
+}
+
+/// A `session_status` line for session `id`, as the session sends it.
+pub(crate) fn status_line(id: &str, payload: &Value) -> String {
+    let line = serde_json::json!({
+        "kind": "session_status", "session_id": id, "ts": 5, "schema_version": 1,
+        "payload": payload,
+    });
+    let mut text = serde_json::to_string(&line).unwrap_or_default();
+    text.push('\n');
+    text
+}
+
+/// A fake running session at `run/<id>`: each connection that sends
+/// `subscribe` gets `command_accepted`, then every line [`FakeSession::say`]
+/// queued so far and every one after it. [`FakeSession::close`] unlinks the
+/// socket and shuts every connection, as a session's exit does.
+pub(crate) struct FakeSession {
+    socket: PathBuf,
+    shared: Arc<(Mutex<SessionState>, std::sync::Condvar)>,
+    accept: Mutex<Option<thread::JoinHandle<()>>>,
+}
+
+#[derive(Default)]
+struct SessionState {
+    said: Vec<String>,
+    conns: Vec<UnixStream>,
+    subscribed: usize,
+    closed: bool,
+}
+
+impl FakeSession {
+    /// Binds `run/<id>` under `home`.
+    pub(crate) fn bind(home: &Path, id: &str) -> Self {
+        let run = home.join("run");
+        DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&run)
+            .unwrap_or(());
+        let socket = run.join(id);
+        let shared: Arc<(Mutex<SessionState>, std::sync::Condvar)> = Arc::default();
+        let accept = UnixListener::bind(&socket).ok().and_then(|listener| {
+            let for_thread = Arc::clone(&shared);
+            thread::Builder::new()
+                .name("fake-feed-session".to_owned())
+                .spawn(move || session_accept(&listener, &for_thread))
+                .ok()
+        });
+        Self {
+            socket,
+            shared,
+            accept: Mutex::new(accept),
+        }
+    }
+
+    /// Stops accepting: marks the session closed, wakes the accept loop
+    /// and waits until it has dropped the listener. Returns the open
+    /// connections for the caller to shut.
+    fn stop_accepting(&self) -> Vec<UnixStream> {
+        let conns = {
+            let mut state = lock(&self.shared.0);
+            state.closed = true;
+            std::mem::take(&mut state.conns)
+        };
+        drop(UnixStream::connect(&self.socket));
+        if let Some(accept) = lock(&self.accept).take() {
+            accept.join().unwrap_or(());
+        }
+        conns
+    }
+
+    /// Sends `line` to every subscriber now and every later one.
+    pub(crate) fn say(&self, line: &str) {
+        let mut state = lock(&self.shared.0);
+        state.said.push(line.to_owned());
+        for conn in &state.conns {
+            let mut conn = conn;
+            conn.write_all(line.as_bytes()).unwrap_or(());
+        }
+    }
+
+    /// Waits, at most `within` of real time, until `count` connections
+    /// have subscribed. True once they have.
+    pub(crate) fn await_subscribed(&self, count: usize, within: Duration) -> bool {
+        let (state, cv) = &*self.shared;
+        let state = lock(state);
+        let (state, _) = cv
+            .wait_timeout_while(state, within, |state| state.subscribed < count)
+            .unwrap_or_else(PoisonError::into_inner);
+        state.subscribed >= count
+    }
+
+    /// Exits: unlinks the socket, then shuts every connection.
+    pub(crate) fn close(&self) {
+        let conns = self.stop_accepting();
+        std::fs::remove_file(&self.socket).unwrap_or(());
+        for conn in conns {
+            conn.shutdown(std::net::Shutdown::Both).unwrap_or(());
+        }
+    }
+
+    /// Exits and is resumed at once: a new session binds `run/<id>`
+    /// before this one shuts its connections.
+    pub(crate) fn resumed(&self, home: &Path, id: &str) -> Self {
+        let conns = self.stop_accepting();
+        std::fs::remove_file(&self.socket).unwrap_or(());
+        let next = Self::bind(home, id);
+        for conn in conns {
+            conn.shutdown(std::net::Shutdown::Both).unwrap_or(());
+        }
+        next
+    }
+
+    /// Dies: shuts every connection and leaves the socket file behind.
+    pub(crate) fn kill(&self) {
+        // The listener is gone before any connection ends, as with a
+        // process that died; the file stays and refuses connections.
+        for conn in self.stop_accepting() {
+            conn.shutdown(std::net::Shutdown::Both).unwrap_or(());
+        }
+    }
+}
+
+fn session_accept(
+    listener: &UnixListener,
+    shared: &Arc<(Mutex<SessionState>, std::sync::Condvar)>,
+) {
+    loop {
+        let Ok((stream, _)) = listener.accept() else {
+            return;
+        };
+        if lock(&shared.0).closed {
+            return;
+        }
+        let shared = Arc::clone(shared);
+        thread::Builder::new()
+            .name("fake-feed-conn".to_owned())
+            .spawn(move || session_serve(stream, &shared))
+            .map(drop)
+            .unwrap_or(());
+    }
+}
+
+fn session_serve(stream: UnixStream, shared: &Arc<(Mutex<SessionState>, std::sync::Condvar)>) {
+    let Ok(writer) = stream.try_clone() else {
+        return;
+    };
+    let mut read = BufReader::new(stream);
+    let mut buf = Vec::new();
+    // A probe that sends nothing closes; only a subscriber is held.
+    match read.read_until(b'\n', &mut buf) {
+        Ok(0) | Err(_) => return,
+        Ok(_) => {}
+    }
+    let text = String::from_utf8_lossy(&buf).into_owned();
+    let mut ack = writer.try_clone().map(Some).unwrap_or(None);
+    if let Some(ack) = ack.as_mut() {
+        write_accepted(ack, &text);
+    }
+    {
+        let (state, cv) = &**shared;
+        let mut state = lock(state);
+        if state.closed {
+            return;
+        }
+        for line in &state.said {
+            let mut out = &writer;
+            out.write_all(line.as_bytes()).unwrap_or(());
+        }
+        state.conns.push(writer);
+        state.subscribed += 1;
+        cv.notify_all();
+    }
+    hold(&mut read);
 }

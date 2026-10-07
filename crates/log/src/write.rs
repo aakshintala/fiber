@@ -525,6 +525,7 @@ fn fsyncs(event: &Event, in_action: bool) -> bool {
         | Event::Notice(_)
         | Event::ExtensionUi(_)
         | Event::ExtensionMessage(_)
+        | Event::ExtensionLog(_)
         | Event::JobDelta(_)
         | Event::CommandAccepted(_)
         | Event::CommandRejected(_) => false,

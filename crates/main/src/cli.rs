@@ -295,6 +295,12 @@ pub(crate) struct SessionArgs {
     /// The first prompt. With none the session waits for a client.
     #[arg(long, value_name = "text")]
     pub(crate) prompt: Option<String>,
+
+    /// Resume the session `--id` names instead of starting it; the
+    /// workspace is the one its log recorded (`docs/invocation.md`, "The
+    /// hub").
+    #[arg(long, conflicts_with = "prompt")]
+    pub(crate) resume: bool,
 }
 
 #[derive(Debug, clap::Args)]

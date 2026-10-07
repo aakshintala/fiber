@@ -15,6 +15,41 @@ use contract::inbox::{Claim, Delivery, JobNotice};
 use contract::jobs::{End, Foreground, Jobs, Lines, OpenError, Opened, Opening};
 use contract::tool::Cancel;
 
+/// A job's end not yet reported, as `jobs` keeps one: reporting consumes
+/// it, and dropped unreported it reports the job failed `indeterminate`.
+struct Unreported {
+    job_id: JobId,
+    /// Taken by the one report.
+    report: Option<Box<dyn FnOnce(JobCompleted) + Send>>,
+}
+
+impl Unreported {
+    fn report(mut self, completed: JobCompleted) {
+        if let Some(report) = self.report.take() {
+            report(completed);
+        }
+    }
+}
+
+impl Drop for Unreported {
+    fn drop(&mut self) {
+        if let Some(report) = self.report.take() {
+            report(JobCompleted {
+                job_id: self.job_id.clone(),
+                status: contract::events::Outcome::Failed,
+                error: Some(contract::shapes::Failure {
+                    code: contract::ErrorCode::Indeterminate,
+                    message: "The job ended without a result.".to_owned(),
+                    retry_after: None,
+                    provider: None,
+                }),
+                process: None,
+                output_tail: None,
+            });
+        }
+    }
+}
+
 type Typer = Arc<dyn Fn(&[u8], &dyn Clock, &dyn Cancel) -> std::io::Result<usize> + Send + Sync>;
 
 struct Inner {
@@ -236,9 +271,9 @@ impl Jobs for FakeJobs {
         let tx = self.completed_tx.clone();
         let expected = job_id.clone();
         let book = Arc::clone(&self.inner);
-        let end = End::new(
+        let unreported = Unreported {
             job_id,
-            Box::new(move |completed| {
+            report: Some(Box::new(move |completed: JobCompleted| {
                 // The same id the open minted, whatever the payload names.
                 let completed = JobCompleted {
                     job_id: expected.clone(),
@@ -266,8 +301,9 @@ impl Jobs for FakeJobs {
                 match tx.send(completed) {
                     Ok(()) | Err(_) => {}
                 }
-            }),
-        );
+            })),
+        };
+        let end = End(Box::new(move |completed| unreported.report(completed)));
         Ok(Opened {
             started,
             path,

@@ -99,7 +99,7 @@ impl Setup {
 
     /// Writes `content` to the fixture's machine data directory.
     fn machine_file(&self, name: &str, content: &str) -> PathBuf {
-        let slug = FIXTURE.replace('/', "-");
+        let slug = config::dir_name(FIXTURE);
         let path = self.home().join("data").join(slug).join(name);
         write(&path, content);
         path

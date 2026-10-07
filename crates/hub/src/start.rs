@@ -67,28 +67,11 @@ pub(crate) fn run(
         }
     };
     let socket = hub.home.join("run").join(&id.0);
-    let deadline = hub.clock.now() + START_DEADLINE;
-    let stream = loop {
-        if started.exited().is_some() {
-            return exited_or_io(hub, &id, started.as_ref());
-        }
-        match UnixStream::connect(&socket) {
-            Ok(stream) => break stream,
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
-                ) =>
-            {
-                if hub.clock.now() >= deadline {
-                    return io_failed(hub, &id, "it did not bind its socket.");
-                }
-                hub.clock.sleep(START_POLL);
-            }
-            Err(error) => {
-                return io_failed(hub, &id, &format!("{error}."));
-            }
-        }
+    let stream = match await_bind(hub, &socket, started.as_ref()) {
+        Bind::Connected(stream) => stream,
+        Bind::Exited => return exited_or_io(hub, &id, started.as_ref()),
+        Bind::TimedOut => return io_failed(hub, &id, "it did not bind its socket."),
+        Bind::Failed(detail) => return io_failed(hub, &id, &detail),
     };
     if let Some(content) = content {
         match deliver(stream, &id, content, started.as_ref(), hub) {
@@ -99,6 +82,46 @@ pub(crate) fn run(
     hub.diag
         .info_session(&id, "session_started", "Session started for local.");
     Outcome::Accepted { session_id: id }
+}
+
+/// How waiting for a started session process to bind its socket ended.
+pub(crate) enum Bind {
+    /// `run/<id>` accepted a connection.
+    Connected(UnixStream),
+    /// The process exited before its socket accepted.
+    Exited,
+    /// [`START_DEADLINE`] passed with the socket missing or refusing.
+    TimedOut,
+    /// Connecting failed in a way waiting cannot mend: the error, as a
+    /// sentence.
+    Failed(String),
+}
+
+/// Waits for the process `started` to bind `socket`, retrying every
+/// [`START_POLL`] on the injected clock until [`START_DEADLINE`]: shared by
+/// `start` and the resume a relayed command makes.
+pub(crate) fn await_bind(hub: &Hub, socket: &Path, started: &dyn crate::Started) -> Bind {
+    let deadline = hub.clock.now() + START_DEADLINE;
+    loop {
+        if started.exited().is_some() {
+            return Bind::Exited;
+        }
+        match UnixStream::connect(socket) {
+            Ok(stream) => return Bind::Connected(stream),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+                ) =>
+            {
+                if hub.clock.now() >= deadline {
+                    return Bind::TimedOut;
+                }
+                hub.clock.sleep(START_POLL);
+            }
+            Err(error) => return Bind::Failed(format!("{error}.")),
+        }
+    }
 }
 
 /// Sends `content` as the session's first prompt on a short connection of
@@ -255,7 +278,7 @@ fn write_line(stream: &mut UnixStream, line: &Value) -> std::io::Result<()> {
 
 /// A new id from random bytes, as `doors::mint` makes one. `hub` keeps its
 /// own copy because it may not depend on `doors`.
-fn mint(prefix: &str) -> String {
+pub(crate) fn mint(prefix: &str) -> String {
     format!("{prefix}{:016x}", RandomState::new().hash_one(()))
 }
 

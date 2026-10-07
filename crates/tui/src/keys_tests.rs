@@ -39,6 +39,14 @@ fn backspace_enter_ctrl_c_and_esc() {
 }
 
 #[test]
+fn ctrl_o_is_its_own_key() {
+    assert_eq!(
+        feed_all(&[&[0x0fu8, b'a'] as &[u8]]),
+        vec![Event::Key(Key::CtrlO), Event::Key(Key::Char('a'))]
+    );
+}
+
+#[test]
 fn page_up_page_down_and_end() {
     assert_eq!(feed_all(&[b"\x1b[5~"]), vec![Event::Key(Key::PageUp)]);
     assert_eq!(feed_all(&[b"\x1b[6~"]), vec![Event::Key(Key::PageDown)]);
@@ -104,8 +112,8 @@ fn esc_o_split_across_reads_is_held() {
 fn esc_with_any_other_byte_is_dropped_whole() {
     // Alt+x: ESC and the byte after it go; the parser moves on.
     assert_eq!(feed_all(&[b"\x1bxa"]), vec![Event::Key(Key::Char('a'))]);
-    // An SS3 key this slice does not bind is dropped.
-    assert_eq!(feed_all(&[b"\x1bOPa"]), vec![Event::Key(Key::Char('a'))]);
+    // An SS3 key this slice does not bind (F2) is dropped.
+    assert_eq!(feed_all(&[b"\x1bOQa"]), vec![Event::Key(Key::Char('a'))]);
 }
 
 #[test]
@@ -151,9 +159,9 @@ fn a_csi_with_a_stray_byte_drops_esc_bracket_and_reads_on() {
 
 #[test]
 fn control_characters_are_dropped_whole() {
-    // A tab, and C1's first control as two bytes: neither is a key, and
+    // Ctrl+A, and C1's first control as two bytes: neither is a key, and
     // the byte after each is read.
-    assert_eq!(feed_all(&[b"\ta"]), vec![Event::Key(Key::Char('a'))]);
+    assert_eq!(feed_all(&[b"\x01a"]), vec![Event::Key(Key::Char('a'))]);
     assert_eq!(feed_all(&[b"\xc2\x80b"]), vec![Event::Key(Key::Char('b'))]);
 }
 
@@ -183,4 +191,23 @@ fn esc_ending_a_read_then_a_is_esc_then_a() {
         feed_all(&[b"\x1b", b"a"]),
         vec![Event::Key(Key::Esc), Event::Key(Key::Char('a'))]
     );
+}
+
+#[test]
+fn tab_and_shift_tab() {
+    assert_eq!(feed_all(&[b"\t"]), vec![Event::Key(Key::Tab)]);
+    assert_eq!(feed_all(&[b"\x1b[Z"]), vec![Event::Key(Key::BackTab)]);
+    // A modified CSI Z is no plain Shift+Tab.
+    assert!(feed_all(&[b"\x1b[1;2Z"]).is_empty());
+}
+
+#[test]
+fn f1_in_its_three_forms() {
+    assert_eq!(feed_all(&[b"\x1bOP"]), vec![Event::Key(Key::F1)]);
+    assert_eq!(feed_all(&[b"\x1b[11~"]), vec![Event::Key(Key::F1)]);
+    assert_eq!(feed_all(&[b"\x1b[P"]), vec![Event::Key(Key::F1)]);
+    // Neighbours are not F1: F2 as `CSI 12~` and a modified `CSI P`.
+    assert!(feed_all(&[b"\x1b[12~"]).is_empty());
+    assert!(feed_all(&[b"\x1b[1;2P"]).is_empty());
+    assert!(feed_all(&[b"\x1b[1~"]).is_empty());
 }

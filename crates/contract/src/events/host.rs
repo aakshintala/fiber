@@ -168,6 +168,15 @@ pub struct ExtensionMessage {
     pub data: Value,
 }
 
+/// `extension_log`: a line an extension wrote with `host.log`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExtensionLog {
+    /// The extension's name.
+    pub extension: String,
+    /// The line, as the extension wrote it.
+    pub message: String,
+}
+
 /// `extension_exec`: a program an extension ran outside a tool call.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExtensionExec {

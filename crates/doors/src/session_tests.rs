@@ -1812,3 +1812,162 @@ fn serve_without_a_prompt_delivers_nothing_until_a_client_sends() {
         .unwrap();
     close_within(opened.session, opened.log);
 }
+
+/// The prompt history of the project [`open`] puts its session in.
+fn history_file(opened: &Opened) -> std::path::PathBuf {
+    let home = opened.socket.parent().unwrap().parent().unwrap();
+    home.join("projects/p/history.jsonl")
+}
+
+fn history_lines(file: &std::path::Path) -> Vec<Value> {
+    match fs::read_to_string(file) {
+        Ok(text) => lines_of(&text),
+        Err(error) => {
+            assert_eq!(error.kind(), io::ErrorKind::NotFound);
+            Vec::new()
+        }
+    }
+}
+
+fn send_text(client: &Client, id: &str, command: &str, text: &str) {
+    client
+        .send(&format!(
+            r#"{{"id":"{id}","command":"{command}","args":{{"content":[{{"type":"text","text":"{text}"}}]}}}}"#
+        ))
+        .unwrap();
+}
+
+/// The acknowledgement of command `id`, skipping any other line.
+fn answer_of(client: &Client, id: &str) -> Value {
+    loop {
+        let line = recv(client);
+        let acknowledges = matches!(
+            line["kind"].as_str(),
+            Some("command_accepted" | "command_rejected")
+        );
+        if acknowledges && line["payload"]["command_id"] == id {
+            return line;
+        }
+    }
+}
+
+/// The next delivery, which must be a prompt; returns its acknowledgement.
+fn next_prompt(inbox: &mpsc::Receiver<Delivery>) -> contract::inbox::Ack {
+    let delivery = inbox.recv_timeout(DEADLINE).expect("a delivery arrives");
+    let Delivery::Prompt(_, ack) = delivery else {
+        panic!("expected a prompt, got {delivery:?}");
+    };
+    ack
+}
+
+fn busy() -> contract::inbox::Rejection {
+    contract::inbox::Rejection {
+        code: ErrorCode::Busy,
+        message: "busy".into(),
+    }
+}
+
+#[test]
+fn a_served_session_appends_each_accepted_prompt_in_order() {
+    reset();
+    let opened = open();
+    let socket = opened.socket.clone();
+    let file = history_file(&opened);
+    let session_id = opened.session.gate.session_id.0.clone();
+    let ts = super::now_ms(opened.clock.as_ref());
+    let watched = file.clone();
+    opened
+        .session
+        .serve(None, Arc::new(|| false), move |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "summary");
+            let _ack = answer_of(&client, "c_sub");
+            send_text(&client, "c_1", "prompt", "one");
+            (next_prompt(&inbox).0)(Ok(None));
+            assert_eq!(answer_of(&client, "c_1")["kind"], "command_accepted");
+            assert_eq!(
+                history_lines(&watched).len(),
+                1,
+                "the line is written before the acceptance"
+            );
+            send_text(&client, "c_2", "prompt", "two");
+            (next_prompt(&inbox).0)(Ok(None));
+            assert_eq!(answer_of(&client, "c_2")["kind"], "command_accepted");
+            Ok(())
+        })
+        .unwrap();
+    let lines = history_lines(&file);
+    let texts: Vec<&Value> = lines
+        .iter()
+        .map(|line| &line["content"][0]["text"])
+        .collect();
+    assert_eq!(texts, ["one", "two"]);
+    for line in &lines {
+        assert_eq!(line["ts"], ts);
+        assert_eq!(line["session_id"], session_id.as_str());
+        assert_eq!(line["content"][0]["type"], "text");
+        assert_eq!(line.as_object().unwrap().len(), 3);
+    }
+    close_within(opened.session, opened.log);
+}
+
+#[test]
+fn a_served_session_appends_no_rejected_dropped_steered_or_own_prompt() {
+    reset();
+    let opened = open();
+    let socket = opened.socket.clone();
+    let file = history_file(&opened);
+    opened
+        .session
+        .serve(Some("own".into()), Arc::new(|| false), |inbox| {
+            (next_prompt(&inbox).0)(Ok(None));
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "summary");
+            let _ack = answer_of(&client, "c_sub");
+            send_text(&client, "c_busy", "prompt", "rejected");
+            (next_prompt(&inbox).0)(Err(busy()));
+            assert_eq!(answer_of(&client, "c_busy")["kind"], "command_rejected");
+            send_text(&client, "c_drop", "prompt", "dropped");
+            drop(next_prompt(&inbox));
+            let dropped = answer_of(&client, "c_drop");
+            assert_eq!(dropped["kind"], "command_rejected");
+            assert_eq!(dropped["payload"]["code"], "closing");
+            send_text(&client, "c_steer", "steer", "steered");
+            let Delivery::Steer(_, ack) = inbox.recv_timeout(DEADLINE).unwrap() else {
+                panic!("the steer arrives");
+            };
+            (ack.0)(Ok(None));
+            assert_eq!(answer_of(&client, "c_steer")["kind"], "command_accepted");
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(history_lines(&file), Vec::<Value>::new());
+    close_within(opened.session, opened.log);
+}
+
+#[test]
+fn an_ask_session_appends_no_prompt_even_one_a_client_sends() {
+    reset();
+    let opened = open();
+    let socket = opened.socket.clone();
+    let file = history_file(&opened);
+    opened
+        .session
+        .ask("asked".into(), Arc::new(|| false), |inbox| {
+            (next_prompt(&inbox).0)(Ok(None));
+            let Delivery::Close(close) = inbox.recv_timeout(DEADLINE).unwrap() else {
+                panic!("ask queues close after its prompt");
+            };
+            (close.0)(Ok(None));
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "summary");
+            let _ack = answer_of(&client, "c_sub");
+            send_text(&client, "c_1", "prompt", "attached");
+            (next_prompt(&inbox).0)(Ok(None));
+            assert_eq!(answer_of(&client, "c_1")["kind"], "command_accepted");
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(history_lines(&file), Vec::<Value>::new());
+    close_within(opened.session, opened.log);
+}

@@ -14,7 +14,7 @@ use std::thread;
 use std::time::Duration;
 
 use contract::clock::Clock as _;
-use contract::events::{JobCompleted, JobLine, Outcome};
+use contract::events::{ExtensionLog, JobCompleted, JobLine, Outcome};
 use contract::inbox::{Ack, Claim, Delivery, JobNotice, Message, Rejection};
 use contract::jobs::{Foreground, Jobs, OpenError, Opened, Opening};
 use contract::rules::{Rules, RulesError, StandingRules};
@@ -451,6 +451,103 @@ fn a_reply_taken_as_the_shutdown_lands_leaves_the_request_pending() {
         .unwrap();
     assert!(matches!(waited, crate::inbox::Waited::Again));
     assert!(answer.recv_timeout(DEADLINE).unwrap().is_ok());
+}
+
+/// An `extension_log` taken while the jobs settle is written live and to
+/// the diagnostic log, never saved.
+#[test]
+fn an_extension_log_taken_while_settling_is_written_and_never_saved() {
+    let home = fakes::TempDir::new("fiber-shutdown-log");
+    let workspace = home.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let clock: Arc<dyn contract::clock::Clock> = FakeClock::new();
+    let log =
+        Arc::new(Log::create(home.path(), SessionId("s_test".into()), Arc::clone(&clock)).unwrap());
+    let (_inbox, rx) = mpsc::channel::<Delivery>();
+    let mut looped = Loop::start(
+        Arc::clone(&log),
+        Arc::new(fakes::ScriptedProvider::new(Vec::new())),
+        Model {
+            reference: "fake/model".into(),
+            cost: None,
+            subscription: false,
+        },
+        crate::prompt::PromptInputs::new(
+            home.path().to_path_buf(),
+            "/bin/sh".into(),
+            home.path()
+                .join("s_test/events.jsonl")
+                .display()
+                .to_string(),
+            clock,
+        ),
+        rx,
+        Vec::new(),
+        crate::Permissions {
+            workspace: workspace.display().to_string(),
+            credentials: home.path().join("credentials"),
+            rules: Arc::new(NoRules),
+        },
+    )
+    .unwrap();
+    let mut watched = log.watch();
+    looped
+        .settle_one(Delivery::ExtensionLog(ExtensionLog {
+            extension: "fiber.test/notes".into(),
+            message: "hello".into(),
+        }))
+        .unwrap();
+    let line = watched
+        .recv_timeout(DEADLINE)
+        .expect("extension_log arrives in time")
+        .expect("the log outlives the settle")
+        .expect("the log ended before extension_log");
+    assert_eq!(line.kind, "extension_log");
+    assert!(line.seq.is_none(), "extension_log is ephemeral");
+    let saved: Vec<String> = log::read(&home.path().join("s_test"))
+        .unwrap_or_default()
+        .into_iter()
+        .map(|line| line.kind)
+        .collect();
+    assert!(!saved.contains(&"extension_log".to_owned()));
+    let diag =
+        std::fs::read_to_string(home.path().join("logs").join("session-s_test.log")).unwrap();
+    assert!(diag.ends_with("\"message\":\"fiber.test/notes: hello\"}\n"));
+}
+
+/// An `extension_log` delivered after `run` has returned is dropped:
+/// nothing reads the inbox past the settle, so it reaches neither the
+/// watchers nor the diagnostic log. (`run` returning is where the
+/// process writes `fiber_exited`, the last line, after which no status
+/// follows.)
+#[test]
+fn an_extension_log_delivered_after_run_returns_is_dropped() {
+    let (jobs, _stops) = Listed::new(&[]);
+    let world = World::new(jobs);
+    world.cancel.shutdown(143);
+    let (finished, inbox, held) = world.spawn_run();
+    ran(&finished);
+    // The inbox has no reader left: the delivery goes nowhere, whether
+    // the channel still accepts it or is already disconnected.
+    let _dropped = inbox.send(Delivery::ExtensionLog(ExtensionLog {
+        extension: "fiber.test/notes".into(),
+        message: "late".into(),
+    }));
+    assert!(
+        !held.kinds().contains(&"extension_log".to_owned()),
+        "extension_log after run returns is never saved"
+    );
+    let diag = held
+        .dir
+        .parent()
+        .unwrap()
+        .join("logs")
+        .join("session-s_test.log");
+    let text = std::fs::read_to_string(&diag).unwrap_or_default();
+    assert!(
+        !text.contains("extension_log"),
+        "extension_log after run returns writes no diagnostic line"
+    );
 }
 
 /// An allow of `pending`, answered on the returned receiver.
