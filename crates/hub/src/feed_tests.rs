@@ -12,7 +12,7 @@
 
 use std::collections::BTreeSet;
 use std::fs;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, mpsc};
@@ -646,6 +646,51 @@ fn recent_answers_a_page_without_running_sessions() {
         [id(1)]
     );
     stop_within(&feed);
+}
+
+#[test]
+fn stop_waits_for_a_writer_still_draining_its_backlog() {
+    let temp = Temp::new();
+    let (feed, _) = new_feed(&temp);
+    let (writer, mut far) = UnixStream::pair().unwrap();
+    far.set_read_timeout(Some(DEADLINE)).unwrap();
+    let kept = Arc::new(Mutex::new(writer));
+    feed.subscribe(Arc::clone(&kept)).unwrap();
+    // Megabytes queued, far more than the socket buffer holds: the writer
+    // thread cannot end until the far end has read nearly all of it.
+    let line: Line = Arc::from(vec![b'x'; 2_000]);
+    let count = 4_000;
+    {
+        let mut state = lock(&feed.state);
+        for _ in 0..count {
+            broadcast(&mut state, &line);
+        }
+    }
+    let total = line.len() * count;
+    let (go_tx, go_rx) = mpsc::channel::<()>();
+    let drained = thread::spawn(move || {
+        go_rx.recv_timeout(DEADLINE).unwrap();
+        let mut buf = vec![0; 64 * 1024];
+        let mut read = 0;
+        while read < total {
+            read += far.read(&mut buf).unwrap();
+        }
+        read
+    });
+    let (tx, rx) = mpsc::channel();
+    let stopping = Arc::clone(&feed);
+    let watched = Arc::clone(&kept);
+    thread::spawn(move || {
+        // The far end starts reading only as stop is called, so the
+        // writer is still busy unless stop waits for it.
+        go_tx.send(()).unwrap();
+        stopping.stop();
+        tx.send(Arc::strong_count(&watched)).unwrap_or(());
+    });
+    let left = rx.recv_timeout(DEADLINE).expect("stop returns");
+    // The test's handle, `watched`, and none from the writer thread.
+    assert_eq!(left, 2, "stop returned before its writer thread ended");
+    assert_eq!(drained.join().unwrap(), total);
 }
 
 #[test]
