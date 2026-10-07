@@ -310,3 +310,59 @@ fn the_nudge_is_one_dim_line_where_it_happened() {
                 .contains(ratatui::style::Modifier::DIM))
     );
 }
+
+/// A band whose note streamed as `deltas` (action and text) and then
+/// `done` (action and full text), completed; its note opened.
+fn note_of(deltas: &[(&str, &str)], done: &[(&str, &str)]) -> Vec<String> {
+    let mut app = app();
+    start(&mut app);
+    started(&mut app, "person");
+    for (action, text) in deltas {
+        feed(
+            &mut app,
+            "assistant_message_delta",
+            Some(action),
+            json!({ "text": text }),
+        );
+    }
+    for (action, text) in done {
+        feed(
+            &mut app,
+            "text_completed",
+            Some(action),
+            json!({ "text": text }),
+        );
+    }
+    completed(
+        &mut app,
+        json!({"outcome": "completed", "tokens_before": 1_000}),
+    );
+    let note = app
+        .targets()
+        .into_iter()
+        .find_map(|(_, target)| matches!(target, Target::Note(_)).then_some(target));
+    assert!(note.is_some(), "{:?}", texts(&app));
+    if let Some(note) = note {
+        app.open(note);
+    }
+    texts(&app)[3..].to_vec()
+}
+
+#[test]
+fn a_streamed_note_joins_each_parts_deltas() {
+    // A part's deltas join; the note keeps them with no completion.
+    assert_eq!(
+        note_of(&[("a_1", "## No"), ("a_1", "te")], &[]),
+        ["    ## Note"]
+    );
+    // Each part streams on its own.
+    assert_eq!(
+        note_of(&[("a_1", "one"), ("a_2", "two"), ("a_1", " more")], &[]),
+        ["    one more", "    two"]
+    );
+    // A completion replaces its own part only.
+    assert_eq!(
+        note_of(&[("a_1", "one")], &[("a_2", "two")]),
+        ["    one", "    two"]
+    );
+}

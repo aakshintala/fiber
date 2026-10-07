@@ -269,3 +269,36 @@ fn orphans_found_while_a_turn_resumes_join_its_card() {
     );
     assert_eq!(texts(&app)[1], "Orphaned jobs: j_1, j_2");
 }
+
+#[test]
+fn each_orphaned_jobs_line_takes_and_opens_only_its_own_jobs() {
+    let mut app = app();
+    start(&mut app, 0);
+    resumed(&mut app, true, 9_000);
+    job_completed(&mut app, "j_1", Some("orphaned"));
+    resumed(&mut app, true, 20_000);
+    job_completed(&mut app, "j_2", Some("orphaned"));
+    // A later orphan joins the latest line, not the first.
+    job_completed(&mut app, "j_3", Some("orphaned"));
+    assert_eq!(
+        texts(&app),
+        [
+            " go ",
+            "▣ cut short: Fiber stopped",
+            "↺ resumed",
+            "Orphaned jobs: j_1",
+            "Orphaned jobs: j_2, j_3",
+        ]
+    );
+    // Opening the second line opens it alone.
+    open(&mut app, "Orphaned jobs: j_2, j_3");
+    assert_eq!(
+        texts(&app)[3..],
+        [
+            "Orphaned jobs: j_1",
+            "Orphaned jobs: j_2, j_3",
+            "  j_2: j_2 orphaned.",
+            "  j_3: j_3 orphaned.",
+        ]
+    );
+}

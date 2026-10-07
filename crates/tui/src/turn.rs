@@ -449,7 +449,6 @@ impl Turn {
                     id: fold.id(),
                     open: fold.ledgers,
                     first: ts,
-                    last: ts,
                     ..Group::default()
                 });
                 let at = self.groups.len().saturating_sub(1);

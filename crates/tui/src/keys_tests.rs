@@ -473,3 +473,13 @@ fn esc_then_an_arrow_in_one_read_is_the_alt_arrow() {
     // ESC before another sequence is no Alt arrow.
     assert!(feed_all(&[b"\x1b\x1b[5~"]).is_empty());
 }
+
+#[test]
+fn esc_esc_before_another_byte_is_no_alt_arrow() {
+    // The two ESCs are dropped and the parser reads on.
+    assert_eq!(
+        feed_all(&[b"\x1b\x1bxa"]),
+        vec![Event::Key(Key::Char('x')), Event::Key(Key::Char('a'))]
+    );
+    assert_eq!(feed_all(&[b"\x1b\x1bx"]), vec![Event::Key(Key::Char('x'))]);
+}
