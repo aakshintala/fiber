@@ -171,8 +171,8 @@ pub(crate) fn wrap(text: &str, max: usize) -> Vec<String> {
     for line in text.split('\n') {
         let mut row = String::new();
         for word in line.split(' ') {
-            let gap = usize::from(!row.is_empty());
-            if !row.is_empty() && width(&row) + gap + width(word) > max {
+            // The space before the word counts only after another word.
+            if !row.is_empty() && width(&row) + 1 + width(word) > max {
                 rows.push(std::mem::take(&mut row));
             } else if !row.is_empty() {
                 row.push(' ');

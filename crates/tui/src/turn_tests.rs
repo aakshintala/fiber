@@ -1119,7 +1119,12 @@ fn only_a_line_that_changes_a_card_raises_the_overlay() {
         Some("r_1"),
         thought.clone()
     ));
-    assert!(flags(&mut app, "reasoning_completed", Some("r_1"), thought));
+    assert!(flags(
+        &mut app,
+        "reasoning_completed",
+        Some("r_1"),
+        thought.clone()
+    ));
     let raw = json!({"index": 0, "name": "read", "text": "{"});
     assert!(flags(
         &mut app,
@@ -1141,6 +1146,25 @@ fn only_a_line_that_changes_a_card_raises_the_overlay() {
     ));
     let read = json!({"name": "read", "arguments": {"path": "a.rs"}});
     assert!(flags(&mut app, "tool_call_requested", Some("a_1"), read));
+    // With a group to search, an unknown action still changes nothing.
+    assert!(!flags(
+        &mut app,
+        "tool_call_started",
+        Some("a_9"),
+        json!({})
+    ));
+    assert!(!flags(
+        &mut app,
+        "reasoning_delta",
+        Some("r_9"),
+        thought.clone()
+    ));
+    assert!(!flags(
+        &mut app,
+        "reasoning_completed",
+        Some("r_9"),
+        thought.clone()
+    ));
     assert!(flags(&mut app, "tool_call_started", Some("a_1"), json!({})));
     assert!(flags(
         &mut app,

@@ -122,7 +122,7 @@ pub(crate) struct Turn {
     ended: Option<(TurnCompleted, u64)>,
     calls: u64,
     step: u64,
-    /// The latest assistant message.
+    /// The message whose raw arguments arrived last.
     message: Option<String>,
     /// How many non-empty `text_completed` each message has had.
     parts: HashMap<String, usize>,
@@ -166,11 +166,6 @@ impl Turn {
     /// `step_started`.
     pub(crate) fn step_started(&mut self) {
         self.step = self.step.saturating_add(1);
-    }
-
-    /// `assistant_message_started`.
-    pub(crate) fn message_started(&mut self, action: &str) {
-        self.message = Some(action.to_owned());
     }
 
     /// `assistant_message_completed`: whatever it was still emitting is no
@@ -519,10 +514,6 @@ pub(crate) fn fold_action(
                 return false;
             };
             match kind {
-                "assistant_message_started" => {
-                    turn.message_started(action);
-                    false
-                }
                 "assistant_message_completed" => turn.message_completed(action),
                 "assistant_message_delta" => read!(envelope, TextDelta)
                     .is_some_and(|delta| turn.text_delta(action, &delta.text)),

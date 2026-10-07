@@ -190,6 +190,9 @@ fn the_latest_heading_is_the_last_one_so_far() {
 fn wrapping_breaks_at_spaces_and_inside_long_words() {
     assert_eq!(wrap("one two three", 7), vec!["one two", "three"]);
     assert_eq!(wrap("one two", 7), vec!["one two"]);
+    // The space between two words counts toward the row.
+    assert_eq!(wrap("ab cd", 5), vec!["ab cd"]);
+    assert_eq!(wrap("ab cd", 4), vec!["ab", "cd"]);
     assert_eq!(wrap("abcdefghij", 4), vec!["abcd", "efgh", "ij"]);
     assert_eq!(wrap("a\nb", 10), vec!["a", "b"]);
     // A wide character takes two columns.
