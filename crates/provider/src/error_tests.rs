@@ -38,6 +38,7 @@ fn a_recorded_unknown_model_is_model_not_found() {
         "retry-signals/raw/muse.unknown-model.json",
         "retry-signals/raw/openai.unknown-model.json",
         "retry-signals/raw/anthropic.unknown-model.json",
+        "retry-signals/raw/gemini.unknown-model.json",
         "retry-signals/raw/openrouter.unknown-model.json",
         "provider-errors/raw/or-completions-haiku.unknown-model.json",
     ] {
@@ -47,13 +48,14 @@ fn a_recorded_unknown_model_is_model_not_found() {
 
 #[test]
 fn only_the_unknown_model_shapes_are_model_not_found() {
-    assert_eq!(status(404, "{}"), ErrorCode::InvalidRequest);
+    assert_eq!(status(404, "{}"), ErrorCode::ModelNotFound);
+    assert_eq!(status(400, "{}"), ErrorCode::InvalidRequest);
     assert_eq!(
         status(400, r#"{"error":{"code":"model_not_found"}}"#),
         ErrorCode::ModelNotFound,
     );
     assert_eq!(
-        status(404, r#"{"error":{"type":"not_found_error"}}"#),
+        status(400, r#"{"error":{"type":"not_found_error"}}"#),
         ErrorCode::ModelNotFound,
     );
     assert_eq!(

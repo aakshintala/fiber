@@ -144,6 +144,7 @@ fn status_code(status: u16, body: &str) -> ErrorCode {
         400 if has_reason(body, "API_KEY_INVALID") => ErrorCode::AuthenticationFailed,
         429 => ErrorCode::RateLimited,
         408 | 409 | 500..=599 => ErrorCode::ProviderUnavailable,
+        404 => ErrorCode::ModelNotFound,
         _ if unknown_model(body) => ErrorCode::ModelNotFound,
         _ if overflow(body_code(body).as_deref(), &body_message(body)) => {
             ErrorCode::ContextOverflow
@@ -152,7 +153,7 @@ fn status_code(status: u16, body: &str) -> ErrorCode {
     }
 }
 
-/// Whether an error body says the provider does not know the model: the
+/// Whether an error body, on a status other than 404, says the provider does not know the model: the
 /// code `model_not_found` (muse, OpenAI), the type `not_found_error`
 /// (Anthropic, muse on messages), or OpenRouter's "is not a valid model ID"
 /// (`research/provider-errors`, "Unknown model").
