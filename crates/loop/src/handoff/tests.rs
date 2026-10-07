@@ -2,9 +2,9 @@
 
 use std::collections::BTreeMap;
 
-use contract::events::{HandoffCompleted, Note, Outcome, ToolCallRequested};
+use contract::events::{Control, HandoffCompleted, Note, Outcome, ToolCallRequested};
 use contract::provider::Input;
-use contract::shapes::Tokens;
+use contract::shapes::{Question, Tokens};
 use contract::{ActionId, events::ContextNudged};
 use serde_json::json;
 
@@ -266,4 +266,54 @@ fn the_nudge_names_its_numbers_and_the_log() {
     assert!(text.contains("holds 266700 tokens"), "{text}");
     assert!(text.contains("At 400000 tokens"), "{text}");
     assert!(text.contains("/log/events.jsonl"), "{text}");
+}
+
+fn question(text: &str) -> Question {
+    Question {
+        header: "h".into(),
+        question: text.into(),
+        options: Vec::new(),
+        multi_select: None,
+    }
+}
+
+fn asking(texts: &[&str]) -> Control {
+    Control {
+        handoff: None,
+        questions: Some(texts.iter().map(|text| question(text)).collect()),
+    }
+}
+
+/// A carry whose last reply requested `a_1`, `a_2` and `a_3`, in that order.
+fn three_calls() -> (Carry, [ActionId; 3]) {
+    let mut carry = Carry::default();
+    let ids = [1, 2, 3].map(|n| ActionId(format!("a_{n}")));
+    for id in &ids {
+        carry.call_requested(id, &call("ask_user", json!({})));
+    }
+    (carry, ids)
+}
+
+#[test]
+fn the_questions_asked_follow_call_order_not_completion_order() {
+    let (mut carry, [first, second, third]) = three_calls();
+    carry.call_completed(&third, &user("r3"), None, Some(&asking(&["c"])));
+    carry.call_completed(&second, &user("r2"), None, None);
+    carry.call_completed(&first, &user("r1"), None, Some(&asking(&["a", "b"])));
+    assert_eq!(carry.asked(), [question("a"), question("b"), question("c")]);
+    assert!(carry.noted().is_empty());
+}
+
+#[test]
+fn a_handoff_note_alone_asks_nothing() {
+    let (mut carry, [first, second, _]) = three_calls();
+    let note = Control {
+        handoff: Some("the note".into()),
+        questions: None,
+    };
+    carry.call_completed(&first, &user("r1"), None, Some(&note));
+    carry.call_completed(&second, &user("r2"), None, None);
+    assert!(carry.asked().is_empty());
+    assert_eq!(carry.noted(), [first]);
+    assert_eq!(carry.step[0].note.as_deref(), Some("the note"));
 }

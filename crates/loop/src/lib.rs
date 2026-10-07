@@ -48,6 +48,7 @@ mod permission;
 mod process;
 mod progress;
 mod prompt;
+mod questions;
 mod resume;
 mod retry;
 mod reviewer;
@@ -790,7 +791,6 @@ impl Loop {
             // (`docs/permissions.md`, "Headless").
             return Ok(Step::Ended(ended(TurnOutcome::Failed, Some(error))));
         }
-        self.handoff_from_tools(turn)?;
-        Ok(Step::Next)
+        Ok(self.after_calls(turn)?.map_or(Step::Next, Step::Ended))
     }
 }

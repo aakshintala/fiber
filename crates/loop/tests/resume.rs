@@ -2725,6 +2725,77 @@ fn a_resumed_credential_refusal_hands_off_from_a_later_call() {
     assert_eq!(handed[0].payload["note"], json!(["a_3"]));
 }
 
+/// A tool whose calls return `control.questions` holding one question.
+fn asking(name: &'static str) -> Arc<support::TestTool> {
+    let mut tool = support::TestTool::reads(name, "Asked.");
+    tool.output.control = Some(contract::events::Control {
+        handoff: None,
+        questions: Some(vec![contract::shapes::Question {
+            header: "h".into(),
+            question: "Which?".into(),
+            options: Vec::new(),
+            multi_select: None,
+        }]),
+    });
+    Arc::new(tool)
+}
+
+/// The one new `turn_completed` holds the asked question and no request
+/// was sent.
+fn ended_on_the_question(history: &History) {
+    let ended = new_of(history, "turn_completed");
+    assert_eq!(ended.len(), 1, "{:?}", history.new_kinds());
+    assert_eq!(
+        serde_json::Value::Object(ended[0].payload.clone()),
+        json!({"outcome": "completed",
+            "questions": [{"header": "h", "question": "Which?"}]})
+    );
+    assert!(history.provider.requests().is_empty());
+    assert!(
+        !history
+            .new_kinds()
+            .iter()
+            .any(|kind| kind == "step_started"),
+        "{:?}",
+        history.new_kinds()
+    );
+}
+
+#[test]
+fn a_resumed_credential_refusal_ends_the_turn_on_a_later_calls_questions() {
+    let keys = fakes::TempDir::new("fiber-resume-keys");
+    let key = keys.path().join("openrouter");
+    std::fs::write(&key, "sk-file-secret").unwrap();
+    let denied = Arc::new(support::TestTool::declaring(
+        "read",
+        "sk-file-secret",
+        vec![contract::shapes::Effect::Reads],
+        Some(vec![key.display().to_string()]),
+    ));
+    let ask = asking("ask");
+    let mut history = History::new(Vec::new());
+    history.write(user_turn("one"), None);
+    history.write(message_started(), Some("a_0"));
+    history.write(requested("read"), Some("a_1"));
+    history.write(requested("ask"), Some("a_2"));
+    history.write(standing_request("r_9"), Some("a_1"));
+    history.write(fiber_started(), None);
+    history.write(fiber_exited(Some("r_9")), None);
+    history.freeze();
+
+    let looped = history.resume_headless_with_files(
+        vec![
+            ("builtin".into(), denied.clone() as Arc<dyn Tool>),
+            ("builtin".into(), ask.clone() as Arc<dyn Tool>),
+        ],
+        vec![key.clone()],
+    );
+    let (_looped, finishing) = history.step(looped);
+    assert_eq!(finishing, Some(contract::events::TurnOutcome::Completed));
+    assert_eq!(ask.ran().len(), 1, "a call after the refusal runs");
+    ended_on_the_question(&history);
+}
+
 #[test]
 fn a_cancel_after_a_resumed_credential_refusal_skips_the_tool_handoff() {
     // The batch ran with a note in hand but a cancel ended it, so the
@@ -4517,6 +4588,21 @@ fn an_allowed_call_that_sets_control_handoff_hands_off_after_the_batch() {
     assert_eq!(handed.len(), 1, "{:?}", history.new_kinds());
     assert_eq!(handed[0].payload["outcome"], "completed");
     assert_eq!(handed[0].payload["note"], json!(["a_1"]));
+}
+
+#[test]
+fn an_allowed_call_that_asks_ends_the_finishing_turn_with_its_questions() {
+    let mut history = suspended_batch(Vec::new(), &["ask"], 1);
+    let ask = asking("ask");
+    let looped = history.resume(tools_of(&[&ask]));
+    let (delivery, seen) = reply_delivery("r_9", Decision::Allow);
+    history.inbox_tx.send(delivery).unwrap();
+    let (_looped, outcome) = history.step(looped);
+
+    assert_eq!(outcome, Some(contract::events::TurnOutcome::Completed));
+    assert!(is_accepted(&seen), "the reply was accepted");
+    assert_eq!(ask.ran().len(), 1);
+    ended_on_the_question(&history);
 }
 
 #[test]

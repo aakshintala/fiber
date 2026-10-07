@@ -1,8 +1,9 @@
 //! Owns the render state a handoff reads and the restart conversation.
 
 use contract::ActionId;
-use contract::events::{ContextNudged, Event, HandoffCompleted, Note};
+use contract::events::{ContextNudged, Control, Event, HandoffCompleted, Note};
 use contract::provider::Input;
+use contract::shapes::Question;
 
 use crate::prompt::{body, fill};
 
@@ -35,13 +36,15 @@ pub(crate) struct Carry {
 }
 
 /// One call of the last reply: the call, its result once written, and the
-/// note its result set as `control.handoff`.
+/// note and questions its result set as `control.handoff` and
+/// `control.questions`.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct StepCall {
     pub(crate) action: ActionId,
     pub(crate) call: Input,
     pub(crate) result: Option<Input>,
     pub(crate) note: Option<String>,
+    pub(crate) questions: Vec<Question>,
 }
 
 impl Carry {
@@ -125,25 +128,38 @@ impl Carry {
             call: call.clone(),
             result: None,
             note: None,
+            questions: Vec::new(),
         });
     }
 
     /// A call of the last reply completed, with its result, its artifact and
-    /// the note its `control.handoff` set, when it completed.
+    /// its `control`, when it completed.
     pub(crate) fn call_completed(
         &mut self,
         action: &ActionId,
         result: &Input,
         artifact: Option<&str>,
-        note: Option<&str>,
+        control: Option<&Control>,
     ) {
         if let Some(path) = artifact {
             self.artifacts.push((action.clone(), path.to_owned()));
         }
         if let Some(call) = self.step.iter_mut().find(|call| call.action == *action) {
             call.result = Some(result.clone());
-            call.note = note.map(str::to_owned);
+            call.note = control.and_then(|control| control.handoff.clone());
+            call.questions = control
+                .and_then(|control| control.questions.clone())
+                .unwrap_or_default();
         }
+    }
+
+    /// The questions the last reply's completed calls set, concatenated in
+    /// call order (`docs/tools.md`, "What a result carries").
+    pub(crate) fn asked(&self) -> Vec<Question> {
+        self.step
+            .iter()
+            .flat_map(|call| call.questions.iter().cloned())
+            .collect()
     }
 
     /// The calls of the last reply whose result set `control.handoff`, in
