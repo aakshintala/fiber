@@ -8,10 +8,12 @@ use std::fs;
 use std::io::ErrorKind;
 use std::process::{Command, Stdio};
 
+use contract::Secret;
+
 use crate::Config;
 use crate::error::ConfigError;
 use crate::extension::ProviderData;
-use crate::secret::{CredentialSource, Secret, credential_labels, read_credential};
+use crate::secret::{CredentialSource, credential_labels, read_credential};
 
 /// The label of the source a provider's data declares, and of the key
 /// `fiber login` stores without a label.

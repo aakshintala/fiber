@@ -4,11 +4,11 @@
 //! `credentials/<name>/`. Configuration itself never holds one; it holds only
 //! where a provider's credential comes from.
 
-use std::fmt;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use contract::Secret;
 use serde::{Deserialize, Serialize};
 
 use crate::credential_file::{CredentialFile, CredentialLock, credential_path, is_lock_or_tmp};
@@ -27,29 +27,6 @@ pub enum CredentialSource {
     File(PathBuf),
     /// A program and its arguments that print the key.
     Command(Vec<String>),
-}
-
-/// A secret's value. It never prints: `Debug` shows only that it is a secret,
-/// and there is no `Display`.
-#[derive(Clone, PartialEq, Eq)]
-pub struct Secret(String);
-
-impl Secret {
-    /// Wraps a value, such as one `fiber login` was given.
-    pub fn new(value: String) -> Self {
-        Self(value)
-    }
-
-    /// The value itself, for the one place that sends it.
-    pub fn expose(&self) -> &str {
-        &self.0
-    }
-}
-
-impl fmt::Debug for Secret {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("Secret(redacted)")
-    }
 }
 
 /// `credentials/<name>` in Fiber home, refusing a name that is not one file
@@ -72,7 +49,7 @@ pub fn read_secret(home: &Path, name: &str) -> Result<Option<Secret>, ConfigErro
         return Ok(None);
     }
     match fs::read_to_string(&path) {
-        Ok(value) => Ok(Some(Secret(value))),
+        Ok(value) => Ok(Some(Secret::new(value))),
         Err(source) => Err(ConfigError::Io { file: path, source }),
     }
 }
@@ -81,7 +58,7 @@ pub fn read_secret(home: &Path, name: &str) -> Result<Option<Secret>, ConfigErro
 /// `credentials/` mode 0700.
 pub fn store_secret(home: &Path, name: &str, secret: &Secret) -> Result<(), ConfigError> {
     let path = secret_path(home, name)?;
-    write_atomic(&path, secret.0.as_bytes(), 0o600)
+    write_atomic(&path, secret.expose().as_bytes(), 0o600)
 }
 
 /// Reads `credentials/<name>/<label>`. `None` when there is no such file; a
@@ -96,7 +73,7 @@ pub fn read_credential(
         return Ok(None);
     }
     match fs::read_to_string(&path) {
-        Ok(value) => Ok(Some(Secret(value))),
+        Ok(value) => Ok(Some(Secret::new(value))),
         Err(source) => Err(ConfigError::Io { file: path, source }),
     }
 }
@@ -110,7 +87,7 @@ pub fn store_credential(
     secret: &Secret,
 ) -> Result<(), ConfigError> {
     let path = credential_path(home, name, label)?;
-    write_atomic(&path, secret.0.as_bytes(), 0o600)
+    write_atomic(&path, secret.expose().as_bytes(), 0o600)
 }
 
 /// Deletes `credentials/<name>/<label>` (`fiber logout`) under the label's

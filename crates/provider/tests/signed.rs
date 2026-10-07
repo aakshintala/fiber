@@ -72,7 +72,7 @@ fn endpoint(provider: &str, server: &ProviderServer, signer: Arc<dyn Signer>) ->
         provider: provider.into(),
         model: "m".into(),
         base_url: format!("{}/v1", server.url()),
-        key: Some("sk-secret".into()),
+        key: Some(contract::Secret::new("sk-secret".into())),
         signer: Some(signer),
         direct: true,
         ..Endpoint::default()

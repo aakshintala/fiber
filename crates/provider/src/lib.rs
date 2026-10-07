@@ -23,6 +23,7 @@ pub use error::Error;
 
 use std::sync::Arc;
 
+use contract::Secret;
 use contract::signing::Signer;
 use serde_json::{Map, Value};
 
@@ -38,7 +39,7 @@ pub struct Endpoint {
     /// `/responses`.
     pub base_url: String,
     /// The key, sent as a bearer token; `None` sends no `Authorization`.
-    pub key: Option<String>,
+    pub key: Option<Secret>,
     /// Headers sent on every request, in order.
     pub headers: Vec<(String, String)>,
     /// Signs each request just before it is sent, a retry included
