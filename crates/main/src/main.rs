@@ -82,6 +82,10 @@ struct Parts {
     /// How many cache lifetimes an idle session keeps its cache warm;
     /// `None` never warms.
     warm: Option<u32>,
+    /// Every configured `file` credential source, relative paths joined
+    /// with the workspace the reader reads them from
+    /// (`docs/permissions.md`, "Credentials").
+    credential_files: Vec<PathBuf>,
     /// The installed extensions, started, and their hooks.
     extensions: Arc<extensions::SessionExtensions>,
     /// The session's per-path lock, shared by the file tools and `host.fs`.
@@ -268,12 +272,13 @@ fn ask_permissions(
     home: &Path,
     project: &config::ProjectKey,
     workspace: String,
+    credential_files: Vec<PathBuf>,
     clock: &Arc<dyn contract::clock::Clock>,
 ) -> r#loop::Permissions {
     r#loop::Permissions {
         workspace,
         credentials: home.join("credentials"),
-        credential_files: Vec::new(),
+        credential_files,
         rules: Arc::new(config::RulesFiles::new(
             home.to_path_buf(),
             project.clone(),
@@ -410,6 +415,21 @@ fn parts_with(
     let mut extensions =
         extensions::SessionExtensions::load(&home, &config, Arc::clone(&clock), session_locks);
     lua_providers::add_lua(&extensions, &mut providers, &config);
+    // Every `file` credential source configuration declares, after the Lua
+    // providers are added so their sources are protected too: a relative
+    // path joins the workspace the reader reads it from, an absolute one
+    // stands (`docs/permissions.md`, "Credentials").
+    let credential_files: Vec<PathBuf> = {
+        let datas: Vec<_> = providers
+            .names()
+            .filter_map(|name| providers.get(name))
+            .collect();
+        config
+            .credential_files(datas)
+            .into_iter()
+            .map(|file| workspace.join(file))
+            .collect()
+    };
     // `recorded` first, then `--model` and configuration's `model`
     // (`docs/model-routing.md`, "Choosing the model").
     let model = providers
@@ -497,6 +517,7 @@ fn parts_with(
         handoff,
         idle,
         warm,
+        credential_files,
         locks,
         extensions: Arc::new(extensions),
         mcp: mcp_servers::specs(&config),

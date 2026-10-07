@@ -84,6 +84,7 @@ pub(crate) fn new_session(
         project,
         workspace,
         sessions,
+        credential_files,
         extensions,
         locks,
         mcp,
@@ -111,6 +112,7 @@ pub(crate) fn new_session(
         &home,
         &project,
         workspace.to_string_lossy().into_owned(),
+        credential_files,
         &clock,
     );
     let log = match Log::create(&sessions, id, Arc::clone(&clock)) {
