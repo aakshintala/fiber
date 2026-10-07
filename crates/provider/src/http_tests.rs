@@ -29,11 +29,24 @@ fn a_socket_is_open_until_a_read_finds_the_peer_closed() {
     assert!(socket.is_open());
 
     peer.write_all(b"x").unwrap();
-    assert!(socket.await_input(wait()).unwrap());
+    let (mut socket, arrived) = fakes::within(
+        "the socket to see the peer's byte",
+        CALL_WITHIN,
+        move || {
+            let arrived = socket.await_input(wait());
+            (socket, arrived)
+        },
+    );
+    assert!(arrived.unwrap());
     assert!(socket.is_open(), "a read that got bytes leaves it open");
 
     drop(peer);
-    assert!(!socket.await_input(wait()).unwrap());
+    let (mut socket, arrived) =
+        fakes::within("the socket to see the peer close", CALL_WITHIN, move || {
+            let arrived = socket.await_input(wait());
+            (socket, arrived)
+        });
+    assert!(!arrived.unwrap());
     assert!(!socket.is_open(), "a read that found the peer closed");
 }
 
@@ -98,18 +111,17 @@ fn a_signer_is_asked_on_every_send_and_its_headers_are_sent() {
     ])
     .unwrap();
     let url = format!("{}/v1/responses", server.url());
-    let signer = Recorder(std::sync::Mutex::default());
+    let signer = std::sync::Arc::new(Recorder(std::sync::Mutex::default()));
     let headers = [("x-client".to_owned(), "fiber".to_owned())];
     for _ in 0..2 {
         // An explicit direct connection, so the test holds without a
         // proxy whatever the developer's shell names.
-        let sent = super::post_with(
-            &url,
+        let (sent, _) = posted(
+            url.clone(),
             &headers,
             b"{\"a\":1}",
-            Some(&signer),
+            Some(std::sync::Arc::clone(&signer) as std::sync::Arc<dyn contract::signing::Signer>),
             &std::sync::Arc::default(),
-            &mut crate::redact::Secrets::default(),
             None,
         );
         assert!(sent.is_ok());
@@ -127,13 +139,12 @@ fn a_signer_is_asked_on_every_send_and_its_headers_are_sent() {
 #[test]
 fn a_request_that_cannot_be_signed_is_never_sent() {
     let server = fakes::ProviderServer::start([fakes::Response::status(200, "{}")]).unwrap();
-    let sent = super::post_with(
-        &format!("{}/v1", server.url()),
+    let (sent, _) = posted(
+        format!("{}/v1", server.url()),
         &[],
         b"",
-        Some(&Refuses),
+        Some(std::sync::Arc::new(Refuses) as std::sync::Arc<dyn contract::signing::Signer>),
         &std::sync::Arc::default(),
-        &mut crate::redact::Secrets::default(),
         None,
     );
     let Err(err) = sent.map(|_| ()) else {
@@ -155,17 +166,16 @@ fn a_request_that_cannot_be_signed_is_never_sent() {
 #[test]
 fn unusable_signed_headers_are_never_sent() {
     for signer in [
-        &BadHeaderValue as &dyn contract::signing::Signer,
-        &BadHeaderName,
+        std::sync::Arc::new(BadHeaderValue) as std::sync::Arc<dyn contract::signing::Signer>,
+        std::sync::Arc::new(BadHeaderName) as std::sync::Arc<dyn contract::signing::Signer>,
     ] {
         let server = fakes::ProviderServer::start([fakes::Response::status(200, "{}")]).unwrap();
-        let sent = super::post_with(
-            &format!("{}/v1", server.url()),
+        let (sent, _) = posted(
+            format!("{}/v1", server.url()),
             &[],
             b"",
             Some(signer),
             &std::sync::Arc::default(),
-            &mut crate::redact::Secrets::default(),
             None,
         );
         let Err(err) = sent.map(|_| ()) else {
@@ -213,13 +223,12 @@ fn retry_after_is_kept_only_when_finite_and_non_negative() {
             fakes::Response::status(429, "{}").header("retry-after", header)
         ])
         .unwrap();
-        let Err(crate::Error::Status { retry_after, .. }) = super::post_with(
-            &format!("{}/v1", server.url()),
+        let (Err(crate::Error::Status { retry_after, .. }), _) = posted(
+            format!("{}/v1", server.url()),
             &[],
             b"{}",
             None,
             &std::sync::Arc::default(),
-            &mut crate::redact::Secrets::default(),
             None,
         ) else {
             panic!("a 429 with retry-after: {header} was not a status failure");
@@ -231,8 +240,59 @@ fn retry_after_is_kept_only_when_finite_and_non_negative() {
 /// How long the test waits for the server to see the call.
 const REQUEST_WITHIN: std::time::Duration = std::time::Duration::from_secs(2);
 
-/// How long the test waits for a cancelled call's thread to return.
+/// How long a test waits for one call to return.
+///
+/// The worst test, `retry_after_is_kept_only_when_finite_and_non_negative`,
+/// makes eight (8 x 5 s = 40 s <= 60 s, half of nextest's 120 s kill). A
+/// passing run never waits on it; it only bounds a hang.
 const CALL_WITHIN: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// One call's outcome, its body read to a `String` on success, with the
+/// secrets it reported.
+type Posted = (
+    Result<(String, Option<bool>), crate::Error>,
+    crate::redact::Secrets,
+);
+
+/// Runs one `post_with` with a fresh [`Secrets`] on its own thread and
+/// returns its outcome with the secrets it reported. Calling code that
+/// blocks is a wait too (`docs/testing.md`, "Waits and timeouts"): on
+/// expiry the test fails naming the call. A signer the test inspects
+/// afterwards is held as an `Arc` and passed as a clone.
+fn posted(
+    url: String,
+    headers: &[(String, String)],
+    body: &'static [u8],
+    signer: Option<std::sync::Arc<dyn contract::signing::Signer>>,
+    cancel: &std::sync::Arc<super::Cancel>,
+    proxy: Option<ureq::Proxy>,
+) -> Posted {
+    let headers = headers.to_vec();
+    let cancel = std::sync::Arc::clone(cancel);
+    fakes::within(&format!("the call to {url}"), CALL_WITHIN, move || {
+        let mut secrets = crate::redact::Secrets::default();
+        let sent = super::post_with(
+            &url,
+            &headers,
+            body,
+            signer.as_deref(),
+            &cancel,
+            &mut secrets,
+            proxy,
+        );
+        let outcome = match sent {
+            Ok((mut stream, flag)) => {
+                let mut text = String::new();
+                match std::io::Read::read_to_string(&mut stream, &mut text) {
+                    Ok(_) => Ok((text, flag)),
+                    Err(err) => Err(crate::Error::Connection(err.to_string())),
+                }
+            }
+            Err(err) => Err(err),
+        };
+        (outcome, secrets)
+    })
+}
 
 #[test]
 fn cancelling_a_call_mid_stream_closes_the_socket_without_a_proxy() {
@@ -301,18 +361,15 @@ fn a_call_with_a_proxy_value_tunnels_through_the_proxy() {
     let proxy = fakes::ConnectProxy::start().unwrap();
     let target = target_of(&server);
     let url = format!("{}/v1", server.url());
-    let (mut body, _) = super::post_with(
-        &url,
+    let (sent, _) = posted(
+        url,
         &[],
         b"{}",
         None,
         &std::sync::Arc::default(),
-        &mut crate::redact::Secrets::default(),
         Some(proxy_through(&proxy)),
-    )
-    .unwrap();
-    let mut text = String::new();
-    std::io::Read::read_to_string(&mut body, &mut text).unwrap();
+    );
+    let (text, _) = sent.unwrap();
     assert_eq!(text, "{}");
     assert!(
         proxy.await_connects(1, CONNECT_WITHIN),
@@ -333,18 +390,15 @@ fn a_call_past_no_proxy_bypasses_the_proxy() {
         .build()
         .unwrap();
     let url = format!("{}/v1", server.url());
-    let (mut body, _) = super::post_with(
-        &url,
+    let (sent, _) = posted(
+        url,
         &[],
         b"{}",
         None,
         &std::sync::Arc::default(),
-        &mut crate::redact::Secrets::default(),
         Some(bypass),
-    )
-    .unwrap();
-    let mut text = String::new();
-    std::io::Read::read_to_string(&mut body, &mut text).unwrap();
+    );
+    let (text, _) = sent.unwrap();
     assert_eq!(text, "{}");
     assert!(
         proxy.connects().is_empty(),
@@ -405,7 +459,10 @@ fn tls_runs_end_to_end_inside_the_tunnel() {
         matches!(result, Err(crate::Error::Connection(_))),
         "a tunnel to nowhere fails to connect: {result:?}"
     );
-    origin.join().unwrap();
+    fakes::within("the origin thread to return", HANDSHAKE_WITHIN, move || {
+        origin.join()
+    })
+    .unwrap();
 }
 
 #[test]
@@ -462,16 +519,15 @@ fn a_call_cancelled_before_it_starts_never_connects_to_the_proxy() {
     let proxy = fakes::ConnectProxy::start().unwrap();
     let cancel: std::sync::Arc<super::Cancel> = std::sync::Arc::default();
     cancel.cancel();
-    let result = super::post_with(
-        &format!("{}/v1", server.url()),
+    let (result, _) = posted(
+        format!("{}/v1", server.url()),
         &[],
         b"{}",
         None,
         &cancel,
-        &mut crate::redact::Secrets::default(),
         Some(proxy_through(&proxy)),
-    )
-    .map(|_| ());
+    );
+    let result = result.map(|_| ());
     assert!(
         matches!(result, Err(crate::Error::Connection(_))),
         "a pre-cancelled call fails before connecting: {result:?}"
@@ -513,21 +569,25 @@ fn a_proxy_that_refuses_connect_fails_the_call() {
         .port(port)
         .build()
         .unwrap();
-    let result = super::post_with(
-        &format!("{}/v1", server.url()),
+    let (result, _) = posted(
+        format!("{}/v1", server.url()),
         &[],
         b"{}",
         None,
         &std::sync::Arc::default(),
-        &mut crate::redact::Secrets::default(),
         Some(denied),
-    )
-    .map(|_| ());
+    );
+    let result = result.map(|_| ());
     let Err(crate::Error::Connection(why)) = result else {
         panic!("a refused CONNECT was not a connection failure: {result:?}");
     };
     assert!(why.contains("403"), "the refusal names its status: {why}");
-    refused.join().unwrap();
+    fakes::within(
+        "the refusing proxy thread to return",
+        CONNECT_WITHIN,
+        move || refused.join(),
+    )
+    .unwrap();
 }
 
 /// Present in the re-executed child, absent in the parent.
@@ -641,14 +701,12 @@ impl contract::signing::Signer for TwoHeaders {
 #[test]
 fn signed_header_values_join_the_secrets() {
     let server = fakes::ProviderServer::start([fakes::Response::status(200, "{}")]).unwrap();
-    let mut secrets = crate::redact::Secrets::default();
-    let sent = super::post_with(
-        &format!("{}/v1", server.url()),
+    let (sent, secrets) = posted(
+        format!("{}/v1", server.url()),
         &[],
         b"{}",
-        Some(&TwoHeaders),
+        Some(std::sync::Arc::new(TwoHeaders) as std::sync::Arc<dyn contract::signing::Signer>),
         &std::sync::Arc::default(),
-        &mut secrets,
         None,
     );
     assert!(sent.is_ok());
@@ -660,14 +718,12 @@ fn signed_header_values_join_the_secrets() {
 #[test]
 fn a_signer_that_fails_adds_nothing() {
     let server = fakes::ProviderServer::start([fakes::Response::status(200, "{}")]).unwrap();
-    let mut secrets = crate::redact::Secrets::default();
-    let sent = super::post_with(
-        &format!("{}/v1", server.url()),
+    let (sent, secrets) = posted(
+        format!("{}/v1", server.url()),
         &[],
         b"{}",
-        Some(&Refuses),
+        Some(std::sync::Arc::new(Refuses) as std::sync::Arc<dyn contract::signing::Signer>),
         &std::sync::Arc::default(),
-        &mut secrets,
         None,
     );
     assert!(sent.is_err());
@@ -694,14 +750,12 @@ impl contract::signing::Signer for HiddenCredential {
 #[test]
 fn signer_credentials_join_the_secrets_even_when_no_header_carries_them() {
     let server = fakes::ProviderServer::start([fakes::Response::status(200, "{}")]).unwrap();
-    let mut secrets = crate::redact::Secrets::default();
-    let sent = super::post_with(
-        &format!("{}/v1", server.url()),
+    let (sent, secrets) = posted(
+        format!("{}/v1", server.url()),
         &[],
         b"{}",
-        Some(&HiddenCredential),
+        Some(std::sync::Arc::new(HiddenCredential) as std::sync::Arc<dyn contract::signing::Signer>),
         &std::sync::Arc::default(),
-        &mut secrets,
         None,
     );
     assert!(sent.is_ok());
