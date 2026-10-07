@@ -8,16 +8,18 @@
 //! finishes. Each parked callback still ends at its own deadline. The thread
 //! quits once the extension is stopped.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::Sender;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use contract::events::ExtensionExec;
+use contract::shapes::Process;
 use mlua::Thread;
 
 use crate::Error;
-use crate::host::{self, Reply, Request};
+use crate::host::{self, Reply, Request, exec};
 use crate::oauth::{self, Browser, Deliver};
 
 use super::hub::{Hub, Job, Phase, Progress, Shared, not_registered, timed_out};
@@ -91,7 +93,7 @@ pub(super) fn start(extension: &LuaExtension, shared: &mut Shared) -> Result<(),
 /// Runs the entry script, under the deadline `load_by`, then serves calls
 /// until the extension is stopped.
 pub(super) fn serve(hub: Arc<Hub>, start: Start) {
-    let loaded = Vm::load(hub.clock_handle(), &start);
+    let loaded = Vm::load(&hub, &start);
     let vm = {
         let mut shared = hub.lock();
         if !matches!(shared.phase, Phase::Registering { .. }) {
@@ -119,16 +121,16 @@ pub(super) fn serve(hub: Arc<Hub>, start: Start) {
     while let Some(work) = next(&start.name, &hub, &mut parked) {
         // The call has started or resumed.
         hub.notify();
-        let (id, step) = match work {
+        let (id, target, step) = match work {
             Work::Start(job, timeout, deadline) => {
                 let step = vm.step(&job.target, &job.arg, timeout, deadline);
-                (job.id, step)
+                (job.id, job.target, step)
             }
             Work::Resume(p, reply) => {
                 let step = host::resume_values(&vm.lua, &hub.clock_handle(), reply)
                     .map_err(|e| vm.error(&e))
                     .and_then(|args| vm.after(p.thread, args, &p.target, p.timeout, p.deadline));
-                (p.id, step)
+                (p.id, p.target.clone(), step)
             }
             Work::Collect => {
                 vm.collect();
@@ -138,15 +140,16 @@ pub(super) fn serve(hub: Arc<Hub>, start: Start) {
         // A callback that ended in an error may have left a held credential
         // in its coroutine.
         let failed = step.is_err();
-        settle(
-            &start.name,
-            &start.dir,
-            &start.home,
-            &hub,
-            &mut parked,
-            id,
-            step,
-        );
+        settle(&start, &hub, &mut parked, id, &target, step);
+        // A finished timer leaves its Lua function, which the thread frees.
+        for timer_id in hub.take_timer_cleanup() {
+            match vm.timer_funcs.set(
+                i64::try_from(timer_id).unwrap_or(i64::MAX),
+                mlua::Value::Nil,
+            ) {
+                Ok(()) | Err(_) => {}
+            }
+        }
         if failed {
             vm.collect();
         }
@@ -157,8 +160,9 @@ pub(super) fn serve(hub: Arc<Hub>, start: Start) {
 }
 
 /// Waits for the next thing to do: a parked callback past its deadline is
-/// failed here, a reply or a sleeper's wake resumes its callback, and a
-/// queued call starts if it may. None once the extension is stopped.
+/// failed here, a reply or a sleeper's wake resumes its callback, a queued
+/// call starts if it may, and a due timer fires in the gaps. None once the
+/// extension is stopped.
 fn next(name: &str, hub: &Hub, parked: &mut Vec<Parked>) -> Option<Work> {
     let mut shared = hub.lock();
     loop {
@@ -168,7 +172,13 @@ fn next(name: &str, hub: &Hub, parked: &mut Vec<Parked>) -> Option<Work> {
         }
         if let Some(pos) = parked.iter().position(|p| expired(p.deadline, now)) {
             let p = parked.swap_remove(pos);
-            shared.finish(p.id, Err(timed_out(name, &p.target, p.timeout)));
+            if let Target::Timer { id: timer_id } = p.target {
+                // A firing past its timeout ends; an `every` keeps firing.
+                shared.calls.remove(&p.id);
+                shared.timer_end(timer_id, now);
+            } else {
+                shared.finish(p.id, Err(timed_out(name, &p.target, p.timeout)));
+            }
             hub.notify();
             // The coroutine goes with `p`; the VM frees what it held.
             drop(p);
@@ -200,11 +210,15 @@ fn next(name: &str, hub: &Hub, parked: &mut Vec<Parked>) -> Option<Work> {
         let command_parked = parked
             .iter()
             .any(|p| matches!(p.target, Target::Command(_)));
+        // A command queued behind a parked command cannot start, so a timer
+        // may run then.
         let startable = shared
             .queue
             .iter()
             .position(|job| !(command_parked && matches!(job.target, Target::Command(_))));
-        if let Some(job) = startable.and_then(|pos| shared.queue.remove(pos)) {
+        if let Some(pos) = startable
+            && let Some(job) = shared.queue.remove(pos)
+        {
             let declared = if let Phase::Ready(timeouts) = &shared.phase {
                 timeouts.timeout(&job.target)
             } else {
@@ -225,25 +239,43 @@ fn next(name: &str, hub: &Hub, parked: &mut Vec<Parked>) -> Option<Work> {
             );
             return Some(Work::Start(job, timeout, deadline));
         }
+        // Timers run in the gaps: the block above returns when a queued
+        // call started, so reaching here means none could start. One firing
+        // at a time.
+        if let Some((timer_id, timeout)) = shared.timer_fire(now) {
+            let (job, timeout, deadline) = shared.push_timer(timer_id, timeout, now);
+            return Some(Work::Start(job, timeout, deadline));
+        }
         let wake = parked
             .iter()
             .flat_map(|p| [p.deadline, p.wake])
             .flatten()
+            .chain(shared.timer_wake())
             .min();
         shared = hub.wait(shared, wake);
     }
 }
 
-/// Records a finished callback's result, or parks it on its host call.
+/// Records a finished callback's result, or parks it on its host call. A
+/// finished timer firing ends the firing instead: its result goes nowhere,
+/// and an `every` that was not cancelled fires again.
 fn settle(
-    name: &str,
-    dir: &Path,
-    home: &Path,
+    start: &Start,
     hub: &Arc<Hub>,
     parked: &mut Vec<Parked>,
     id: u64,
+    target: &Target,
     step: Result<Step, Error>,
 ) {
+    let name = start.name.as_str();
+    let dir = start.dir.as_path();
+    let home = start.home.as_path();
+    if let Target::Timer { id: timer_id } = target
+        && !matches!(step, Ok(Step::Suspend { .. }))
+    {
+        hub.timer_call_done(id, *timer_id);
+        return;
+    }
     let (thread, target, deadline, timeout, request) = match step {
         Ok(Step::Done(value)) => return hub.finish(id, Ok(value)),
         Err(e) => return hub.finish(id, Err(e)),
@@ -276,6 +308,44 @@ fn settle(
             (None, None)
         }
         Request::Callback { port } => (oauth::listen(port, &deliver), None),
+        Request::Exec(request) => {
+            let hub_exec = Arc::clone(hub);
+            let (cancel_tx, cancel_rx) = std::sync::mpsc::channel::<()>();
+            let meta = ExecMeta {
+                extension: name.to_owned(),
+                program: request.program.clone(),
+                args: request.args.clone(),
+                cwd: request.cwd.clone(),
+            };
+            let clock = hub.clock_handle();
+            let spawned = thread::Builder::new()
+                .name(format!("exec {name}"))
+                .spawn(move || {
+                    let outcome = exec::run(&request, clock.as_ref(), deadline, cancel_rx);
+                    match &outcome {
+                        Ok(ran) => hub_exec.send_exec(meta.exec(ran)),
+                        Err(failed) => {
+                            if let Some(ran) = &failed.ran {
+                                hub_exec.send_exec(meta.exec(ran));
+                            }
+                        }
+                    }
+                    deliver(match outcome {
+                        Ok(ran) => Reply::Exec(Ok(ran)),
+                        Err(failed) => Reply::Exec(Err(failed.message)),
+                    });
+                });
+            if let Err(source) = spawned {
+                return hub.finish(
+                    id,
+                    Err(Error::Io {
+                        path: dir.to_owned(),
+                        source,
+                    }),
+                );
+            }
+            (Some(cancel_tx), None)
+        }
         Request::Lock => {
             let cancel = match &target {
                 Target::Provider { name, .. } => oauth::lock(home, name, &deliver),
@@ -289,6 +359,13 @@ fn settle(
                 Target::Hook { .. } => {
                     deliver(Reply::Lock(Err(
                         "host.oauth.refresh: a hook has no provider credential to refresh"
+                            .to_owned(),
+                    )));
+                    None
+                }
+                Target::Timer { .. } => {
+                    deliver(Reply::Lock(Err(
+                        "host.oauth.refresh: a timer has no provider credential to refresh"
                             .to_owned(),
                     )));
                     None
@@ -315,4 +392,29 @@ fn settle(
         };
     }
     hub.notify();
+}
+
+/// What a finished `host.exec` run is logged as: the extension, the program
+/// with its arguments and working directory, and how it ended.
+struct ExecMeta {
+    extension: String,
+    program: String,
+    args: Vec<String>,
+    cwd: PathBuf,
+}
+
+impl ExecMeta {
+    fn exec(&self, ran: &exec::Ran) -> ExtensionExec {
+        ExtensionExec {
+            extension: self.extension.clone(),
+            program: self.program.clone(),
+            args: self.args.clone(),
+            cwd: self.cwd.display().to_string(),
+            process: Process {
+                exit_code: ran.exit_code,
+                signal: ran.signal.clone(),
+                timed_out: ran.timed_out,
+            },
+        }
+    }
 }

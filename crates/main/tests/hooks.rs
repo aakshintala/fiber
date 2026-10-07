@@ -557,3 +557,47 @@ fn hooks_run_by_phase_then_hooks_order_then_name() {
     );
     assert_eq!(output_sent(&server), "x|b-s|c|a|b-t");
 }
+
+#[test]
+fn an_after_tool_hook_running_host_exec_logs_one_extension_exec() {
+    let setup = Setup::new();
+    setup.lua(
+        "exec",
+        "fiber.hook(\"after_tool\", { timeout = 10000, on_failure = \"non-blocking\",\n\
+           run = function(call) host.exec(\"sh\", {\"-c\", \"true\"}) end })\n",
+    );
+    let (run, _server) = setup.read_note("nothing secret\n", &json!({}));
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    // The hook sends the run while the loop is blocked in the hook, so the
+    // loop writes it at the next step's drain, after that step's
+    // `step_started`: the complete ordered list pins a misplaced event.
+    let mut expected = read_kinds(&[], &[]);
+    let at = expected
+        .iter()
+        .position(|kind| *kind == "tool_call_completed")
+        .unwrap()
+        + 2;
+    assert_eq!(expected[at - 1], "step_started");
+    assert_eq!(expected[at], "assistant_message_started");
+    expected.insert(at, "extension_exec");
+    assert_eq!(run.kinds(), expected);
+    let execs = run.all("extension_exec");
+    assert_eq!(execs.len(), 1, "one run outside a tool call logs one line");
+    let payload = &execs[0]["payload"];
+    assert_eq!(payload["extension"], "fiber.test/exec");
+    assert_eq!(payload["program"], "sh");
+    assert_eq!(payload["args"], json!(["-c", "true"]));
+    assert_eq!(
+        payload["cwd"],
+        serde_json::Value::String(
+            std::fs::canonicalize(setup.workspace())
+                .unwrap()
+                .display()
+                .to_string()
+        ),
+        "the run happens in the workspace"
+    );
+    assert_eq!(payload["process"]["exit_code"], 0);
+    assert_eq!(payload["process"]["timed_out"], false);
+    assert!(payload["process"].get("signal").is_none());
+}

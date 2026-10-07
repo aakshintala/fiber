@@ -2,6 +2,7 @@ use super::*;
 
 fn lua() -> Lua {
     let lua = Lua::new();
+    let hub = crate::lua::Hub::new(fakes::clock::FakeClock::new());
     install(
         &lua,
         HostContext {
@@ -13,6 +14,7 @@ fn lua() -> Lua {
         },
         Arc::new(crate::SystemBrowser::default()),
         Rc::default(),
+        &hub,
     )
     .unwrap();
     lua

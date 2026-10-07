@@ -72,6 +72,9 @@ pub enum Delivery {
     /// A batch of a monitor's lines (`docs/tools.md`, "Background jobs").
     /// It wakes the model as a job's end does; no claim applies.
     JobLine(crate::events::JobLine),
+    /// A program an extension ran outside a tool call: written as
+    /// `extension_exec`, starts nothing.
+    ExtensionExec(crate::events::ExtensionExec),
     /// Wakes a loop blocked on its inbox after an accepted `cancel` or a
     /// clock move. It carries no ack and no meaning: every drain discards
     /// it, and an approval wait reads the cancel signal after it wakes

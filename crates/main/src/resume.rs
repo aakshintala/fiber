@@ -141,6 +141,7 @@ pub(crate) fn ask_resume(
     };
     session.shell(driver);
     session.jobs(jobs.clone());
+    session.hooks(Arc::clone(&extensions) as Arc<dyn contract::hook::Hooks>);
     let cancel = Arc::new(r#loop::TurnCancel::default());
     // A signal while armed: the log stays as it was.
     if let Some(code) = crate::shutdown::start(signals, &cancel, &session, jobs.clone()) {

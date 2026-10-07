@@ -31,6 +31,7 @@ use contract::ErrorCode;
 pub use git::{Origin, SHORT_NAMES, full_name, is_path};
 pub use hooks::SessionExtensions;
 pub use host::Session;
+pub use host::exec::kill_every_group;
 pub use install::Provenance;
 pub use installed::{Damaged, Installed, Listing, Removal, list, removal};
 pub use lua::{LuaExtension, MEMORY_CAP};

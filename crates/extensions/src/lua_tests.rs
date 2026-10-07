@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::io::Read;
 use std::net::TcpListener;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -26,8 +27,9 @@ const WAIT_SERVER: Duration = Duration::from_secs(3);
 #[test]
 fn a_panic_in_a_host_function_passes_the_extensions_pcall() {
     let clock = FakeClock::new();
+    let hub = Hub::new(clock.clone());
     let vm = Vm::load(
-        clock.clone(),
+        &hub,
         &schedule::Start {
             name: "fixture".to_owned(),
             dir: fakes::lua_fixture(),
@@ -727,4 +729,96 @@ fn a_lock_reply_for_a_ready_extension_is_kept_with_its_lock() {
     hub.deliver(7, reply);
     assert_eq!(hub.lock().replies.len(), 1);
     assert!(file.try_lock().unwrap().is_none());
+}
+
+/// A timer target names its id: `timer <id>`.
+#[test]
+fn a_timer_target_displays_its_id() {
+    assert_eq!(Target::Timer { id: 7 }.to_string(), "timer 7");
+}
+
+/// The scheduler starts the earliest due timer that waits: due, neither
+/// cancelled nor firing.
+#[test]
+fn timer_fire_starts_the_earliest_due_timer_that_waits() {
+    let clock = FakeClock::new();
+    let hub = Hub::new(clock.clone());
+    let mut shared = hub.lock();
+    let now = clock.now();
+    shared.next_timer = 3;
+    for (id, due, cancelled, firing) in [
+        (0, now, false, true),
+        (1, now, true, false),
+        (
+            2,
+            now.checked_add(Duration::from_secs(60)).unwrap(),
+            false,
+            false,
+        ),
+    ] {
+        shared.next_timer = shared.next_timer.max(id + 1);
+        shared.timers.insert(
+            id,
+            hub::Timer {
+                id,
+                every: None,
+                due,
+                timeout: Duration::from_millis(100),
+                cancelled,
+                firing,
+            },
+        );
+    }
+    assert!(shared.timer_fire(now).is_none(), "nothing due waits");
+    let late = now.checked_add(Duration::from_secs(60)).unwrap();
+    let (id, _) = shared.timer_fire(late).unwrap();
+    assert_eq!(id, 2, "the future one is due at its time");
+    shared.timer_end(2, late);
+    shared.timers.get_mut(&1).unwrap().cancelled = false;
+    let (id, timeout) = shared.timer_fire(late).unwrap();
+    assert_eq!(id, 1, "the earliest due id fires");
+    assert_eq!(timeout, Duration::from_millis(100));
+    assert!(shared.timers.get(&1).unwrap().firing);
+}
+
+/// An `every` ended uncancelled fires again `ms` after its end; anything
+/// else leaves, freeing its Lua function on the extension's thread.
+#[test]
+fn timer_end_reschedules_an_uncancelled_every_and_removes_the_rest() {
+    let clock = FakeClock::new();
+    let hub = Hub::new(clock.clone());
+    let mut shared = hub.lock();
+    let now = clock.now();
+    for (id, every) in [
+        (0, None),
+        (1, Some(Duration::from_millis(50))),
+        (2, Some(Duration::from_millis(50))),
+    ] {
+        shared.timers.insert(
+            id,
+            hub::Timer {
+                id,
+                every,
+                due: now,
+                timeout: Duration::from_millis(100),
+                cancelled: id == 2,
+                firing: true,
+            },
+        );
+    }
+    shared.timer_end(0, now);
+    shared.timer_end(1, now);
+    shared.timer_end(2, now);
+    assert!(!shared.timers.contains_key(&0), "an `after` leaves");
+    assert!(
+        !shared.timers.contains_key(&2),
+        "a cancelled `every` leaves"
+    );
+    let timer = shared.timers.get(&1).unwrap();
+    assert_eq!(
+        timer.due,
+        now.checked_add(Duration::from_millis(50)).unwrap()
+    );
+    assert!(!timer.firing);
+    assert_eq!(shared.timer_cleanup, vec![0, 2]);
 }

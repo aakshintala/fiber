@@ -74,6 +74,8 @@ impl Hooks for FakeHooks {
         });
         self.answer.clone()
     }
+
+    fn deliver_to(&self, _inbox: std::sync::mpsc::Sender<Delivery>) {}
 }
 
 /// Rules that hold nothing.

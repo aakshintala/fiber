@@ -15,6 +15,7 @@ use contract::clock::Clock;
 use contract::events::{LoadedExtension, Notice};
 use contract::files::PathLock;
 use contract::hook::{AfterToolAnswer, AfterToolCall, AfterToolOutcome, Hooks};
+use contract::inbox::Delivery;
 use serde_json::{Map, Value};
 
 use crate::git::short_name;
@@ -416,6 +417,14 @@ impl Hooks for SessionExtensions {
             outcome,
             changed_by,
             notices,
+        }
+    }
+
+    fn deliver_to(&self, inbox: std::sync::mpsc::Sender<Delivery>) {
+        // A later `deliver_to` (a resume hands a new sender) replaces the
+        // sender; each extension flushes what ended before the first one.
+        for extension in &self.lua {
+            extension.deliver_to(inbox.clone());
         }
     }
 }
