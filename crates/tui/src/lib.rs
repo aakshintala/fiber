@@ -153,7 +153,7 @@ struct Screen<B: Backend> {
 }
 
 impl<B: Backend> Screen<B> {
-    fn new(backend: B, width: u16, height: u16) -> io::Result<Self> {
+    fn new(backend: B, width: u16, height: u16) -> Result<Self, B::Error> {
         let area = Rect::new(0, 0, width, height);
         let terminal = Terminal::with_options(
             backend,
@@ -170,7 +170,7 @@ impl<B: Backend> Screen<B> {
 
     /// Draws `app`. A frame equal to the last one writes nothing; otherwise
     /// only the cells that changed are written.
-    fn draw(&mut self, app: &App) -> io::Result<()> {
+    fn draw(&mut self, app: &App) -> Result<(), B::Error> {
         let mut next = Buffer::empty(self.area);
         view::render(app, self.area, &mut next);
         if self.last.as_ref() == Some(&next) {
@@ -183,7 +183,7 @@ impl<B: Backend> Screen<B> {
     }
 
     /// Resizes the viewport; the next draw repaints it whole.
-    fn resize(&mut self, width: u16, height: u16) -> io::Result<()> {
+    fn resize(&mut self, width: u16, height: u16) -> Result<(), B::Error> {
         self.area = Rect::new(0, 0, width, height);
         self.last = None;
         self.terminal.resize(self.area)
