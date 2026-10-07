@@ -405,10 +405,11 @@ fn overlap(source: &Path, root: &Path) -> Result<(), Error> {
     Ok(())
 }
 
-/// `extensions/<name>/`'s directory name: every `/` becomes `-`, as for a
-/// project key (`docs/state.md`, "Extensions").
+/// `extensions/<name>/`'s directory name ([`config::dir_name`]): the short
+/// name of a first-party extension, else every `/` becomes `-`, as for a
+/// project key (`docs/state.md`, "What each part holds").
 pub(crate) fn slug(name: &str) -> Result<String, Error> {
-    let slug = name.replace('/', "-");
+    let slug = config::dir_name(name);
     if slug.is_empty() || slug.starts_with('.') || slug.contains('\0') {
         return Err(Error::BadName { name: name.into() });
     }

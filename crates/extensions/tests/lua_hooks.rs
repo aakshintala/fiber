@@ -63,7 +63,10 @@ fn installed(setup: &Setup, short: &str, init: &str) -> PathBuf {
     let src = setup.source(short, &manifest(&name), &[]);
     write(&src.join("init.lua"), init);
     install(&setup.home(), &src, "0.1.0").unwrap();
-    setup.home().join("extensions").join(name.replace('/', "-"))
+    setup
+        .home()
+        .join("extensions")
+        .join(config::dir_name(&name))
 }
 
 /// `require("go_spin")` in `dir` signals that the hook has started: the

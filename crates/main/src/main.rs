@@ -79,6 +79,9 @@ struct Parts {
     handoff: r#loop::HandoffSettings,
     /// How long an idle session waits before it exits.
     idle: Option<Duration>,
+    /// How many cache lifetimes an idle session keeps its cache warm;
+    /// `None` never warms.
+    warm: Option<u32>,
     /// The installed extensions, started, and their hooks.
     extensions: Arc<extensions::SessionExtensions>,
     /// The session's per-path lock, shared by the file tools and `host.fs`.
@@ -291,6 +294,7 @@ fn finish(
     looped: Result<Loop, r#loop::Error>,
     budget: Option<f64>,
     idle: Option<Duration>,
+    warm: Option<u32>,
     answerable: bool,
     reviewer: Result<r#loop::Reviewer, Failure>,
     limits: r#loop::BlockLimits,
@@ -302,6 +306,9 @@ fn finish(
             looped
                 .budget(budget)
                 .idle_exit(idle)
+                // Only one-turn `fiber ask` is not answerable, and it exits
+                // when its run ends: it never warms.
+                .warm(warm.filter(|_| answerable))
                 .answerable(answerable)
                 .reviewer(reviewer, limits)
                 .retry(retry)
@@ -436,6 +443,10 @@ fn parts_with(
     let retry = settings::retry_policy(&config);
     let handoff = handoff::handoff_settings(&config, &model.reference());
     let idle = settings::idle_exit(&config);
+    // A Lua provider builds its own request body, so Fiber cannot show that
+    // capping the output changes nothing else in it: it never warms
+    // (`docs/prompt-cache.md`, "Warming while idle").
+    let warm = settings::warm(&config).filter(|_| providers.lua(&model.provider.name).is_none());
     let thinking = settings::thinking(
         model.thinking,
         None,
@@ -484,6 +495,7 @@ fn parts_with(
         retry,
         handoff,
         idle,
+        warm,
         locks,
         extensions: Arc::new(extensions),
         mcp: mcp_servers::specs(&config),

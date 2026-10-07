@@ -28,6 +28,12 @@ pub(crate) enum Key {
     Down,
     /// Alt+A (`ESC a` in one read).
     AltA,
+    /// Tab (`0x09`).
+    Tab,
+    /// Shift+Tab (`CSI Z`).
+    BackTab,
+    /// F1 (`SS3 P`, `CSI 11~`, `CSI P`).
+    F1,
     /// Alt+Up (`CSI 1;3A`, or `ESC` then `CSI A` in one read):
     /// `select_steering`.
     AltUp,
@@ -93,6 +99,7 @@ fn step(buf: &[u8]) -> Step {
         0x03 => key(Key::CtrlC),
         0x0f => key(Key::CtrlO),
         0x08 | 0x7f => key(Key::Backspace),
+        0x09 => key(Key::Tab),
         0x0d => key(Key::Enter),
         // A lone ESC ending the read is Esc; ESC followed by bytes in the
         // same read starts a sequence.
@@ -162,11 +169,14 @@ fn parse_csi(buf: &[u8]) -> Step {
             [b'5'] => vec![Event::Key(Key::PageUp)],
             [b'6'] => vec![Event::Key(Key::PageDown)],
             [b'4'] => vec![Event::Key(Key::End)],
+            [b'1', b'1'] => vec![Event::Key(Key::F1)],
             _ => Vec::new(),
         },
         0x46 if params.is_empty() => vec![Event::Key(Key::End)],
         0x41 if params.is_empty() => vec![Event::Key(Key::Up)],
         0x42 if params.is_empty() => vec![Event::Key(Key::Down)],
+        0x5a if params.is_empty() => vec![Event::Key(Key::BackTab)],
+        0x50 if params.is_empty() => vec![Event::Key(Key::F1)],
         0x41 if params == b"1;3" => vec![Event::Key(Key::AltUp)],
         0x42 if params == b"1;3" => vec![Event::Key(Key::AltDown)],
         _ => Vec::new(),
@@ -180,6 +190,7 @@ fn parse_ss3(buf: &[u8]) -> Step {
         b'F' => vec![Event::Key(Key::End)],
         b'A' => vec![Event::Key(Key::Up)],
         b'B' => vec![Event::Key(Key::Down)],
+        b'P' => vec![Event::Key(Key::F1)],
         _ => Vec::new(),
     };
     Some((events, 3))

@@ -5,7 +5,7 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 
@@ -40,10 +40,12 @@ pub(crate) fn rows(line: Line<'_>, width: u16) -> usize {
 }
 
 /// Draws `app` into `area` of `buf`, from the bottom up: the input line
-/// on the last row, or the approval panel in its place, then the steering
-/// queue, the badge and the quit hint when shown, and the conversation in
-/// the rows left, the notices floating over its top-right corner. A screen
-/// too short for them all drops the hint first, then the badge. A panel taller than the screen keeps its top.
+/// on the last row with a completion panel above it, or the approval panel
+/// in their place, then the steering queue, the badge and the quit hint
+/// when shown, and the conversation in the rows left with the notices
+/// floating over its top-right corner, or the key map over them while it
+/// is open. A screen too short for them all drops the hint first, then the
+/// badge. A panel taller than the screen keeps its top.
 pub(crate) fn render(app: &App, area: Rect, buf: &mut Buffer) {
     let width = usize::from(area.width);
     let mut bottom = area.bottom();
@@ -66,33 +68,54 @@ pub(crate) fn render(app: &App, area: Rect, buf: &mut Buffer) {
             .render(rect, buf);
         bottom = top;
     }
-    let mut put = |text: &str| {
-        if let Some(row) = bottom.checked_sub(1).filter(|row| *row >= area.y) {
-            buf.set_stringn(area.x, row, text, width, Style::default());
-            bottom = row;
-        }
-    };
     if app.panel().is_none() {
         // The input line keeps the end of a draft wider than the screen.
         let input = format!("> {}", app.draft());
         let skip = input.chars().count().saturating_sub(width);
         let shown: String = input.chars().skip(skip).collect();
-        put(&shown);
+        put(buf, area, &mut bottom, &shown, Style::default());
+        if let Some(completions) = app.completions() {
+            for (at, line) in completions.lines.iter().enumerate().rev() {
+                let style = if completions.selected == Some(at) {
+                    Style::new().add_modifier(Modifier::REVERSED)
+                } else {
+                    Style::default()
+                };
+                put(buf, area, &mut bottom, line, style);
+            }
+        }
     }
     // The steering queue sits above the input box, its newest row lowest.
     for row in app.steering().iter().rev() {
-        put(row);
+        put(buf, area, &mut bottom, row, Style::default());
     }
     if let Some(badge) = app.badge() {
-        put(&badge);
+        put(buf, area, &mut bottom, &badge, Style::default());
     }
     if app.hint() {
-        put(QUIT_HINT);
+        put(buf, area, &mut bottom, QUIT_HINT, Style::default());
     }
     let rows = bottom.saturating_sub(area.y);
     let conversation = Rect::new(area.x, area.y, area.width, rows);
-    conversation_rows(app, conversation, buf);
-    notices(app, conversation, buf);
+    match app.keymap_top() {
+        Some(top) => Paragraph::new(crate::keymap::lines().join("\n"))
+            .wrap(Wrap { trim: false })
+            .scroll((to_u16(top), 0))
+            .render(conversation, buf),
+        None => {
+            conversation_rows(app, conversation, buf);
+            notices(app, conversation, buf);
+        }
+    }
+}
+
+/// Puts `text` on the row above `bottom` and moves `bottom` up to it;
+/// nothing once `bottom` reaches the top of `area`.
+fn put(buf: &mut Buffer, area: Rect, bottom: &mut u16, text: &str, style: Style) {
+    if let Some(row) = bottom.checked_sub(1).filter(|row| *row >= area.y) {
+        buf.set_stringn(area.x, row, text, usize::from(area.width), style);
+        *bottom = row;
+    }
 }
 
 /// Floats the notices over the conversation's top-right corner, newest on

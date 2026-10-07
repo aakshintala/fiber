@@ -25,6 +25,9 @@ mod notices;
 #[path = "steering.rs"]
 mod steering;
 
+#[path = "app_commands.rs"]
+mod commands;
+
 /// A line's payload as `$kind`; `None` when it does not parse, and the
 /// line is skipped.
 macro_rules! read {
@@ -39,9 +42,6 @@ pub(crate) const QUIT_WINDOW: Duration = Duration::from_secs(1);
 
 /// What the quit hint says.
 pub(crate) const QUIT_HINT: &str = "Press Ctrl+C again to quit";
-
-/// The draft that reopens the waiting queue.
-const APPROVALS: &str = "/approvals";
 
 /// The command that names the session.
 const NAME: &str = "/name";
@@ -74,6 +74,16 @@ pub(crate) enum Effect {
     Send(Vec<String>),
     /// Quit the terminal.
     Quit,
+    /// Start the `@` panel's search worker on a listing of the workspace's
+    /// files, searching for an empty query at the current generation.
+    ListFiles,
+    /// Search the listed files for `query`, the text after the `@`.
+    Search {
+        /// The generation the result is tagged with.
+        generation: u64,
+        /// The query.
+        query: String,
+    },
 }
 
 /// Which command the terminal sent and waits on.
@@ -86,6 +96,8 @@ enum Kind {
     Reply,
     SteerDrop,
     Name,
+    /// A built-in command such as `handoff`, `reload` or `close`.
+    Command,
 }
 
 /// The hub connection, as the terminal sees it.
@@ -146,6 +158,8 @@ pub(crate) struct App {
     steering: Steering,
     /// The session's name, from the latest `session_named`.
     name: Option<String>,
+    /// The `/` and `@` panels and the key map overlay.
+    overlays: commands::Overlays,
 }
 
 impl App {
@@ -169,6 +183,7 @@ impl App {
             queue: Queue::default(),
             steering: Steering::default(),
             name: None,
+            overlays: commands::Overlays::default(),
         }
     }
 
@@ -181,26 +196,27 @@ impl App {
         };
     }
 
-    /// Handles one key at `now`, read from the injected clock.
-    pub(crate) fn on_key(&mut self, key: Key, now: Instant) -> Effect {
+    /// Hands one key to what is on top: the key map, the approval panel, a
+    /// completion panel, then the input box.
+    fn route_key(&mut self, key: Key, now: Instant) -> Effect {
         if key == Key::CtrlC {
             return self.on_ctrl_c(now);
         }
         self.armed_at = None;
+        if let Some(effect) = self.keymap_key(&key) {
+            return effect;
+        }
         match self.queue.on_key(&key) {
             Some(PanelKey::Handled) => return Effect::None,
             Some(PanelKey::Answer) => return self.answer(),
             None => {}
         }
+        if let Some(effect) = self.completion_key(&key) {
+            return effect;
+        }
         match key {
-            Key::Char(ch) => {
-                self.draft.push(ch);
-                Effect::None
-            }
-            Key::Backspace => {
-                self.draft.pop();
-                Effect::None
-            }
+            Key::Char(ch) => self.type_char(ch),
+            Key::Backspace => self.backspace(),
             Key::Enter => self.on_enter(),
             Key::Esc if self.notices.close() => Effect::None,
             // Esc with a queued row selected puts the draft back, and
@@ -222,7 +238,8 @@ impl App {
                 self.scroll.follow();
                 Effect::None
             }
-            Key::Up | Key::Down => Effect::None,
+            Key::F1 => self.open_keymap(),
+            Key::Up | Key::Down | Key::Tab | Key::BackTab => Effect::None,
             Key::AltA => self.open_first(),
             Key::AltUp | Key::AltDown | Key::AltX => self.steering_key(&key),
         }
@@ -345,6 +362,7 @@ impl App {
                 .sum()
         });
         let below = input
+            + self.completion_rows()
             + self.steering().len()
             + usize::from(self.badge().is_some())
             + usize::from(self.hint());
@@ -452,9 +470,8 @@ impl App {
     /// Enter sends the draft: `start` with no session, `prompt` when idle,
     /// `steer` during a turn.
     fn on_enter(&mut self) -> Effect {
-        if self.draft.trim() == APPROVALS {
-            self.draft.clear();
-            return self.open_first();
+        if let Some(effect) = self.built_in() {
+            return effect;
         }
         // A command sent after the connection is lost goes nowhere, so the
         // draft stays.
@@ -607,7 +624,10 @@ impl App {
             Some((Kind::Cancel | Kind::SteerDrop, _)) => {
                 self.pending.remove(id);
             }
-            Some((Kind::Start | Kind::Prompt | Kind::Steer | Kind::Reply | Kind::Name, _)) => {
+            Some((
+                Kind::Start | Kind::Prompt | Kind::Steer | Kind::Reply | Kind::Command | Kind::Name,
+                _,
+            )) => {
                 self.notices.push(message);
                 self.fail(id);
             }
@@ -678,6 +698,7 @@ impl App {
                 }
                 false
             }
+            "opening_message" => self.opening(envelope),
             "session_named" => {
                 if let Some(named) = read!(envelope, SessionNamed) {
                     self.name = named.name;

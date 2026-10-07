@@ -43,7 +43,9 @@ fn one_line(effect: Effect) -> String {
             assert_eq!(lines.len(), 1);
             lines.into_iter().next().unwrap_or_default()
         }
-        Effect::None | Effect::Quit => panic!("expected one line"),
+        Effect::None | Effect::Quit | Effect::ListFiles | Effect::Search { .. } => {
+            panic!("expected one line")
+        }
     }
 }
 
@@ -204,7 +206,9 @@ fn esc_busy_sends_cancel() {
             let value = parse(&lines[0]);
             assert_eq!(value.get("command"), Some(&serde_json::json!("cancel")));
         }
-        Effect::None | Effect::Quit => panic!("expected cancel"),
+        Effect::None | Effect::Quit | Effect::ListFiles | Effect::Search { .. } => {
+            panic!("expected cancel")
+        }
     }
 }
 
@@ -428,7 +432,9 @@ fn rejected_cancel_shows_nothing() {
             .and_then(serde_json::Value::as_str)
             .unwrap_or_default()
             .to_owned(),
-        Effect::None | Effect::Quit => panic!("expected cancel"),
+        Effect::None | Effect::Quit | Effect::ListFiles | Effect::Search { .. } => {
+            panic!("expected cancel")
+        }
     };
     let rejected = session_line(
         "s_aaaaaaaaaaaaaaaa",
@@ -779,7 +785,7 @@ fn steering_queue(session: &str, rows: &[(&str, Option<&str>)]) -> Line {
 fn sent(effect: Effect) -> Vec<serde_json::Value> {
     match effect {
         Effect::Send(lines) => lines.iter().map(|line| parse(line)).collect(),
-        Effect::None | Effect::Quit => Vec::new(),
+        Effect::None | Effect::Quit | Effect::ListFiles | Effect::Search { .. } => Vec::new(),
     }
 }
 

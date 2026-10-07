@@ -278,14 +278,16 @@ other file in `credentials/` (`docs/permissions.md`, "Credentials").
 
 **Recently exited sessions.** `recent.jsonl` at the top of Fiber home: one
 JSON line per session that exited, appended by the session itself as it
-exits, with its id, workspace, name and what it stopped on. A session whose
+exits. Its keys are `session_id`, `ts`, `project` (the project's key), `workspace`,
+`name`, `how` and `status`, the session's last `session_status`, which says
+what it stopped on and carries `parent` for a delegate. A session whose
 process died cannot append, so the hub appends its row when it sees the
 crash (`docs/invocation.md`, "The hub"). A session
 appends whether or not a hub is running, and nothing rewrites it, so an
 append is never lost to a rewrite. Deleting a session leaves its row, and
 every reader skips a row whose session directory is gone. The hub reads its tail at start and keeps
-the newest 100. It grows by about 200 bytes per exited session: 10,000
-sessions is about 2 MB. It is a derived index, rebuildable from the logs, and never the
+the newest 100. It grows by about 400 to 600 bytes per exited session: 10,000
+sessions is about 5 MB. It is a derived index, rebuildable from the logs, and never the
 truth ([ADR 0001](adr/0001-session-log-is-the-only-state-of-record.md)).
 
 **Prompt history.** Per project, `history.jsonl`: one JSON line per prompt,

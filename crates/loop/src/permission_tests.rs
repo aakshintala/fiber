@@ -196,6 +196,26 @@ fn data_markdown(home: &std::path::Path) -> String {
 }
 
 #[test]
+fn a_markdown_write_in_the_memory_data_directories_takes_the_fast_path() {
+    let (_root, workspace, home, credentials) = dirs();
+    for dir in ["data/memory", "projects/k/data/memory"] {
+        std::fs::create_dir_all(home.join(dir)).unwrap();
+        let page = home.join(dir).join("x.md").display().to_string();
+        let effects = call(vec![Effect::Writes], Some(vec![page.as_str()]), Some(""));
+        let verdict = judge(
+            "write",
+            &effects,
+            &rules(Vec::new(), Vec::new()),
+            &[],
+            &workspace,
+            &home,
+            &credentials,
+        );
+        assert!(matches!(verdict, Verdict::Allow(None)), "{dir}");
+    }
+}
+
+#[test]
 fn a_standing_deny_beats_the_data_directory_fast_path() {
     let (_root, workspace, home, credentials) = dirs();
     let kept = data_markdown(&home);

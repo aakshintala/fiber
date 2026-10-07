@@ -7,6 +7,7 @@ use crate::link::Line;
 use contract::clock::Clock;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::Modifier;
 use std::path::PathBuf;
 
 const WIDTH: u16 = 60;
@@ -720,6 +721,56 @@ fn styles_reach_the_screen() {
     let reset = Some(ratatui::style::Color::Reset);
     assert_ne!(cell(WIDTH - 1, bubble).bg, reset);
     assert_eq!(cell(0, bubble).bg, reset);
+}
+
+#[test]
+fn slash_panel() {
+    let mut app = empty();
+    let now = fakes::clock::FakeClock::new().now();
+    for ch in "/h".chars() {
+        app.on_key(Key::Char(ch), now);
+    }
+    insta::assert_snapshot!("slash_panel", sized(&mut app, 80, 24));
+}
+
+#[test]
+fn the_selected_completion_is_reversed_and_the_others_are_not() {
+    let mut app = empty();
+    let now = fakes::clock::FakeClock::new().now();
+    for ch in "/h".chars() {
+        app.on_key(Key::Char(ch), now);
+    }
+    let (shown, buf) = wide(&mut app);
+    let rows: Vec<&str> = shown.lines().collect();
+    assert!(rows[HEIGHT as usize - 4].starts_with("/home"), "{shown}");
+    let reversed = |row: u16| {
+        buf.cell((0, row))
+            .is_some_and(|cell| cell.modifier.contains(Modifier::REVERSED))
+    };
+    assert!(reversed(HEIGHT - 4), "{shown}");
+    assert!(!reversed(HEIGHT - 3), "{shown}");
+    assert!(!reversed(HEIGHT - 2), "{shown}");
+}
+
+#[test]
+fn key_map() {
+    let mut app = empty();
+    let now = fakes::clock::FakeClock::new().now();
+    app.on_key(Key::F1, now);
+    insta::assert_snapshot!("key_map_80x24", sized(&mut app, 80, 24));
+    insta::assert_snapshot!("key_map_40x12", sized(&mut app, 40, 12));
+}
+
+#[test]
+fn file_panel() {
+    let mut app = empty();
+    let now = fakes::clock::FakeClock::new().now();
+    for ch in "look at @ma".chars() {
+        app.on_key(Key::Char(ch), now);
+    }
+    let found = ["src/main.rs", "crates/tui/src/main.rs"].map(str::to_owned);
+    app.on_files(app.generation(), Ok(found.to_vec()));
+    insta::assert_snapshot!("file_panel", sized(&mut app, 80, 24));
 }
 
 #[test]

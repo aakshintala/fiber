@@ -164,6 +164,8 @@ fn new_loop<B: Backend>(backend: B, tty: Option<File>) -> (Loop<B>, Arc<Mutex<Ve
         }),
         clock: fakes::clock::FakeClock::new(),
         wakeups: 0,
+        files_out: None,
+        search: None,
     };
     (lp, attached)
 }

@@ -22,6 +22,8 @@ pub(crate) enum Kind {
     Bool,
     /// A whole number of zero or more.
     Count,
+    /// A whole number below the given ceiling: `cache.warm_cap`.
+    CountBelow(u64),
     Number,
     OneOf(&'static [&'static str]),
     StrList,
@@ -42,6 +44,7 @@ impl Kind {
             Self::Str => value.is_string(),
             Self::Bool => value.is_boolean(),
             Self::Count => value.is_u64(),
+            Self::CountBelow(ceiling) => value.as_u64().is_some_and(|n| n < ceiling),
             Self::Number => value.is_number(),
             Self::OneOf(allowed) => value.as_str().is_some_and(|s| allowed.contains(&s)),
             Self::StrList => value
@@ -77,6 +80,7 @@ impl Kind {
             Self::Str => "a string".into(),
             Self::Bool => "true or false".into(),
             Self::Count => "a whole number of zero or more".into(),
+            Self::CountBelow(ceiling) => format!("a whole number less than {ceiling}"),
             Self::Number => "a number".into(),
             Self::OneOf(allowed) => format!("one of \"{}\"", allowed.join("\", \"")),
             Self::StrList => "a list of strings".into(),
@@ -128,7 +132,7 @@ const fn repo_only(path: &'static str, kind: Kind) -> Key {
 }
 
 use Kind::{
-    Bool, BoolMap, Count, Credential, Duration as DurationKind, Number, OneOf,
+    Bool, BoolMap, Count, CountBelow, Credential, Duration as DurationKind, Number, OneOf,
     RepositoryExtensions, Str, StrList, StrMap,
 };
 
@@ -156,6 +160,8 @@ pub(crate) const KEYS: &[Key] = &[
     key("handoff.window_fraction", Number, YES, Some("0.7")),
     key("handoff.nudge", Bool, YES, Some("true")),
     key("cache.lifetime", OneOf(LIFETIMES), YES, Some("\"1h\"")),
+    key("cache.warm_idle", Bool, YES, Some("false")),
+    key("cache.warm_cap", CountBelow(12), YES, Some("2")),
     key("thinking", OneOf(LEVELS), YES, None),
     key("models.*.handoff.enabled", Bool, YES, None),
     key("models.*.handoff.tokens", Count, YES, None),
