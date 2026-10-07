@@ -10,6 +10,12 @@
 //! A session whose log ends in `fiber_exited` may still be shutting down:
 //! its socket or its lock is waited out for up to [`SHUTDOWN_BOUND`]
 //! before the client gets `session_held`.
+//!
+//! A delegate, a session whose `session_started` names a `parent`, is never
+//! resumed through the hub: it resumes only through its parent
+//! (`docs/delegates.md`, "Talking to a delegate"). A command for one that
+//! is not running is refused `session_not_found`, at once when its process
+//! is still shutting down. A running delegate is attached to as any session.
 
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -61,6 +67,14 @@ pub(crate) fn resume_exited(hub: &Hub, session: &SessionId) -> Result<UnixStream
 /// while its process is still shutting down.
 pub(crate) fn exited(home: &Path, session: &SessionId) -> bool {
     find_log(home, session).is_some_and(|log| ends_exited(&log))
+}
+
+/// Whether `session`'s log is a delegate's. A log whose first line cannot
+/// be read is not.
+fn is_delegate(home: &Path, session: &SessionId) -> bool {
+    find_log(home, session)
+        .and_then(|log| recorded(&log))
+        .is_some_and(|recorded| recorded.delegate)
 }
 
 fn ends_exited(log: &Path) -> bool {
@@ -115,13 +129,18 @@ fn attempt(hub: &Hub, session: &SessionId, socket: &Path, trusted: bool) -> Step
         if trusted || !exited(&hub.home, session) {
             return Step::Done(Ok(stream));
         }
+        // A delegate is never resumed, so its exiting process is not
+        // waited out.
+        if is_delegate(&hub.home, session) {
+            return Step::Done(Err(delegate_refused()));
+        }
         // The exiting process still answers on its socket.
         return Step::Wait(None);
     }
     let Some(log) = find_log(&hub.home, session) else {
         return Step::Done(Err(not_found(session)));
     };
-    let Some(workspace) = recorded_workspace(&log) else {
+    let Some(recorded) = recorded(&log) else {
         hub.diag.warn_session(
             session,
             "log_corrupt",
@@ -135,7 +154,10 @@ fn attempt(hub: &Hub, session: &SessionId, socket: &Path, trusted: bool) -> Step
             ),
         }));
     };
-    let started = match hub.starter.resume(session, &workspace) {
+    if recorded.delegate {
+        return Step::Done(Err(delegate_refused()));
+    }
+    let started = match hub.starter.resume(session, &recorded.workspace) {
         Ok(started) => started,
         Err(error) => return Step::Done(Err(io_failed(hub, session, &format!("{error}.")))),
     };
@@ -188,6 +210,15 @@ pub(crate) fn not_found(session: &SessionId) -> Refused {
     }
 }
 
+/// The rejection for a delegate that is not running: it resumes only
+/// through its parent, so the hub has no session to reach.
+fn delegate_refused() -> Refused {
+    Refused {
+        code: ErrorCode::SessionNotFound,
+        message: "A delegate resumes only through its parent.".to_owned(),
+    }
+}
+
 /// The first `projects/*/sessions/<session>/events.jsonl` under `home`, in
 /// project-key order. `session` has the minted shape, so the path never
 /// leaves the project's `sessions/`.
@@ -208,9 +239,18 @@ pub(crate) fn find_log(home: &Path, session: &SessionId) -> Option<PathBuf> {
         .find(|log| log.is_file())
 }
 
-/// The workspace the log's first line, its `session_started`, recorded.
-/// `None` when that line cannot be read or holds no string workspace.
-fn recorded_workspace(log: &Path) -> Option<PathBuf> {
+/// What the log's first line, its `session_started`, recorded.
+struct Recorded {
+    /// The session's workspace.
+    workspace: PathBuf,
+    /// Whether it names a `parent` that is not `null`: a delegate's. A
+    /// parent of any shape counts, so a malformed one is never resumed.
+    delegate: bool,
+}
+
+/// What the log's first line recorded. `None` when that line cannot be
+/// read, is not `session_started` or holds no string workspace.
+fn recorded(log: &Path) -> Option<Recorded> {
     let mut first = String::new();
     BufReader::new(File::open(log).ok()?)
         .read_line(&mut first)
@@ -219,8 +259,14 @@ fn recorded_workspace(log: &Path) -> Option<PathBuf> {
     if line.get("kind")?.as_str()? != "session_started" {
         return None;
     }
-    let workspace = line.get("payload")?.get("workspace")?.as_str()?;
-    Some(PathBuf::from(workspace))
+    let payload = line.get("payload")?;
+    let workspace = payload.get("workspace")?.as_str()?;
+    Some(Recorded {
+        workspace: PathBuf::from(workspace),
+        delegate: payload
+            .get("parent")
+            .is_some_and(|parent| !parent.is_null()),
+    })
 }
 
 fn io_failed(hub: &Hub, session: &SessionId, detail: &str) -> Refused {

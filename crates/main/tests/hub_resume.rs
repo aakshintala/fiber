@@ -23,6 +23,8 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 
+use contract::events::{Event, Parent, SessionStarted, Variables, VariablesSource};
+use contract::{JobId, SessionId};
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
 
@@ -179,6 +181,13 @@ impl Setup {
 
     fn hub_log(&self) -> String {
         fs::read_to_string(self.home().join("logs").join("hub.log")).unwrap_or_default()
+    }
+
+    /// The `sessions` directory of the workspace's project.
+    fn sessions(&self) -> PathBuf {
+        let workspace = fs::canonicalize(self.workspace()).unwrap();
+        let key = workspace.to_string_lossy().replace('/', "-");
+        self.home().join("projects").join(key).join("sessions")
     }
 }
 
@@ -682,5 +691,59 @@ fn a_fresh_connection_answers_a_request_raised_again_on_resume() {
     until_exited(&client, &setup);
     drop(client);
     assert_one_continued_log(&setup.log(&id), 2);
+    hub.lock().unwrap().take().expect("the hub ran").finish();
+}
+
+#[test]
+fn a_subscribe_through_the_hub_to_an_exited_delegate_is_refused() {
+    let setup = Setup::new();
+    let id = "s_00000000000000d1";
+    let log = log::Log::create(
+        &setup.sessions(),
+        SessionId(id.into()),
+        fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    log.append(
+        &Event::SessionStarted(SessionStarted {
+            workspace: fs::canonicalize(setup.workspace())
+                .unwrap()
+                .display()
+                .to_string(),
+            variables: Variables {
+                path: String::new(),
+                names: Vec::new(),
+                source: VariablesSource::Inherited,
+            },
+            parent: Some(Parent {
+                session_id: SessionId("s_1111111111111111".into()),
+                delegate_id: JobId("j_1".into()),
+            }),
+            forked_from: None,
+            rewind: None,
+        }),
+        None,
+        None,
+    )
+    .unwrap();
+    drop(log);
+
+    let hub = Arc::new(Mutex::new(None));
+    let client = connect_hub(&setup, &hub);
+    client.send(&subscribe("c_sub", id));
+    let rejected = client.next("the rejection", &[]);
+    assert_eq!(rejected["kind"], "command_rejected", "{rejected}");
+    assert_eq!(rejected["payload"]["code"], "session_not_found");
+    assert_eq!(rejected["payload"]["command_id"], "c_sub");
+    assert_eq!(
+        rejected["payload"]["message"],
+        "A delegate resumes only through its parent."
+    );
+    // No session process started: it would have bound its socket and
+    // appended `fiber_started`.
+    assert!(!setup.hub_log().contains("session_resumed"));
+    assert!(!setup.home().join("run").join(id).exists());
+    assert_eq!(setup.log(id).len(), 1);
+    drop(client);
     hub.lock().unwrap().take().expect("the hub ran").finish();
 }
