@@ -272,26 +272,31 @@ fn group_empties_reports_an_empty_group_and_a_live_one() {
 }
 
 #[test]
-fn group_empties_keeps_probing_until_a_group_that_is_still_alive_empties() {
-    let child = Command::new("sh")
-        .args(["-c", "sleep 0.4"])
+fn group_empties_keeps_waiting_while_the_group_lives_and_returns_once_it_empties() {
+    let mut child = Command::new("sh")
+        .args(["-c", "read line"])
         .process_group(0)
+        .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
     let group = child.id();
-    let (done, finished) = mpsc::channel();
-    thread::spawn(move || {
-        let mut child = child;
-        done.send(child.wait()).unwrap();
-    });
+    let stdin = child.stdin.take().unwrap();
+    let (answered, answer) = mpsc::channel();
+    thread::spawn(move || answered.send(group_empties(group, DEADLINE)).unwrap());
+    // The group lives until its stdin closes, so the wait must still be
+    // running after several probe intervals: a wait that gave up after one
+    // live probe would have answered `false` by now.
     assert!(
-        group_empties(group, DEADLINE),
-        "waited {DEADLINE:?} for a group alive at the first probe to empty"
+        answer.recv_timeout(Duration::from_millis(500)).is_err(),
+        "group_empties answered while the group was alive"
     );
-    assert!(
-        finished.recv_timeout(DEADLINE).is_ok(),
-        "waited {DEADLINE:?} for the group leader to be reaped"
+    drop(stdin);
+    reaped(child, "the group leader to exit once its stdin closed");
+    assert_eq!(
+        answer.recv_timeout(DEADLINE),
+        Ok(true),
+        "waited {DEADLINE:?} for group_empties to see the emptied group"
     );
 }
