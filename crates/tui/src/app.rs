@@ -24,8 +24,7 @@ use crate::turn::{Fold, Row, Turn};
 /// line is skipped.
 macro_rules! read {
     ($envelope:expr, $kind:ty) => {
-        serde_json::from_value::<$kind>(serde_json::Value::Object($envelope.payload.clone()))
-            .ok()
+        serde_json::from_value::<$kind>(serde_json::Value::Object($envelope.payload.clone())).ok()
     };
 }
 pub(crate) use read;

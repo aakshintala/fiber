@@ -1005,9 +1005,19 @@ fn only_a_line_that_changes_a_card_raises_the_overlay() {
     let steer = json!({"content": [{"type": "text", "text": "x"}], "source": "driver"});
     // With no turn open, nothing has a card to change.
     assert!(!flags(&mut app, "notice", None, json!({"message": "hi"})));
-    assert!(!flags(&mut app, "usage_recorded", Some("a_m"), usage.clone()));
+    assert!(!flags(
+        &mut app,
+        "usage_recorded",
+        Some("a_m"),
+        usage.clone()
+    ));
     assert!(!flags(&mut app, "steering_applied", None, steer.clone()));
-    assert!(!flags(&mut app, "turn_completed", None, json!({"outcome": "completed"})));
+    assert!(!flags(
+        &mut app,
+        "turn_completed",
+        None,
+        json!({"outcome": "completed"})
+    ));
     let prompt = json!({"input": [{"type": "message", "source": "driver",
         "content": [{"type": "text", "text": "go"}]}]});
     assert!(flags(&mut app, "turn_started", None, prompt));
@@ -1015,34 +1025,134 @@ fn only_a_line_that_changes_a_card_raises_the_overlay() {
     assert!(flags(&mut app, "steering_applied", None, steer));
     assert!(flags(&mut app, "usage_recorded", Some("a_m"), usage));
     // Lines about an action the fold never saw, or that add nothing.
-    assert!(!flags(&mut app, "tool_call_started", Some("a_9"), json!({})));
+    assert!(!flags(
+        &mut app,
+        "tool_call_started",
+        Some("a_9"),
+        json!({})
+    ));
     let done = json!({"status": "completed", "content": []});
-    assert!(!flags(&mut app, "tool_call_completed", Some("a_9"), done.clone()));
-    assert!(!flags(&mut app, "permission_requested", Some("a_9"), json!({})));
+    assert!(!flags(
+        &mut app,
+        "tool_call_completed",
+        Some("a_9"),
+        done.clone()
+    ));
+    assert!(!flags(
+        &mut app,
+        "permission_requested",
+        Some("a_9"),
+        json!({})
+    ));
     let thought = json!({"text": "t"});
-    assert!(!flags(&mut app, "reasoning_completed", Some("r_9"), thought.clone()));
-    assert!(!flags(&mut app, "reasoning_delta", Some("r_9"), thought.clone()));
-    assert!(!flags(&mut app, "assistant_message_started", Some("a_m"), json!({})));
-    assert!(!flags(&mut app, "assistant_message_delta", Some("a_m"), json!({"text": ""})));
-    assert!(!flags(&mut app, "text_completed", Some("a_m"), json!({"text": ""})));
-    assert!(!flags(&mut app, "assistant_message_completed", Some("a_m"), json!({})));
-    assert!(!flags(&mut app, "tool_call_requested", Some("a_1"), json!({})));
-    assert!(!flags(&mut app, "model_call_failed", Some("a_m"), json!({})));
+    assert!(!flags(
+        &mut app,
+        "reasoning_completed",
+        Some("r_9"),
+        thought.clone()
+    ));
+    assert!(!flags(
+        &mut app,
+        "reasoning_delta",
+        Some("r_9"),
+        thought.clone()
+    ));
+    assert!(!flags(
+        &mut app,
+        "assistant_message_started",
+        Some("a_m"),
+        json!({})
+    ));
+    assert!(!flags(
+        &mut app,
+        "assistant_message_delta",
+        Some("a_m"),
+        json!({"text": ""})
+    ));
+    assert!(!flags(
+        &mut app,
+        "text_completed",
+        Some("a_m"),
+        json!({"text": ""})
+    ));
+    assert!(!flags(
+        &mut app,
+        "assistant_message_completed",
+        Some("a_m"),
+        json!({})
+    ));
+    assert!(!flags(
+        &mut app,
+        "tool_call_requested",
+        Some("a_1"),
+        json!({})
+    ));
+    assert!(!flags(
+        &mut app,
+        "model_call_failed",
+        Some("a_m"),
+        json!({})
+    ));
     // Lines that change the card.
-    assert!(flags(&mut app, "assistant_message_delta", Some("a_m"), json!({"text": "h"})));
-    assert!(flags(&mut app, "text_completed", Some("a_m"), json!({"text": "hi"})));
+    assert!(flags(
+        &mut app,
+        "assistant_message_delta",
+        Some("a_m"),
+        json!({"text": "h"})
+    ));
+    assert!(flags(
+        &mut app,
+        "text_completed",
+        Some("a_m"),
+        json!({"text": "hi"})
+    ));
     assert!(flags(&mut app, "reasoning_started", Some("r_1"), json!({})));
-    assert!(!flags(&mut app, "reasoning_started", Some("r_1"), json!({})));
-    assert!(flags(&mut app, "reasoning_delta", Some("r_1"), thought.clone()));
+    assert!(!flags(
+        &mut app,
+        "reasoning_started",
+        Some("r_1"),
+        json!({})
+    ));
+    assert!(flags(
+        &mut app,
+        "reasoning_delta",
+        Some("r_1"),
+        thought.clone()
+    ));
     assert!(flags(&mut app, "reasoning_completed", Some("r_1"), thought));
     let raw = json!({"index": 0, "name": "read", "text": "{"});
-    assert!(flags(&mut app, "tool_call_arguments_delta", Some("a_n"), raw));
-    assert!(flags(&mut app, "assistant_message_completed", Some("a_n"), json!({})));
-    assert!(!flags(&mut app, "assistant_message_completed", Some("a_n"), json!({})));
+    assert!(flags(
+        &mut app,
+        "tool_call_arguments_delta",
+        Some("a_n"),
+        raw
+    ));
+    assert!(flags(
+        &mut app,
+        "assistant_message_completed",
+        Some("a_n"),
+        json!({})
+    ));
+    assert!(!flags(
+        &mut app,
+        "assistant_message_completed",
+        Some("a_n"),
+        json!({})
+    ));
     let read = json!({"name": "read", "arguments": {"path": "a.rs"}});
     assert!(flags(&mut app, "tool_call_requested", Some("a_1"), read));
     assert!(flags(&mut app, "tool_call_started", Some("a_1"), json!({})));
-    assert!(flags(&mut app, "permission_requested", Some("a_1"), json!({})));
+    assert!(flags(
+        &mut app,
+        "permission_requested",
+        Some("a_1"),
+        json!({})
+    ));
     assert!(flags(&mut app, "tool_call_completed", Some("a_1"), done));
-    assert!(flags(&mut app, "turn_completed", None, json!({"outcome": "completed"})));
+    assert!(flags(
+        &mut app,
+        "turn_completed",
+        None,
+        json!({"outcome": "completed"})
+    ));
 }

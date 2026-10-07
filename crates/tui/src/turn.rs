@@ -528,20 +528,21 @@ pub(crate) fn fold_action(
                     .is_some_and(|delta| turn.text_delta(action, &delta.text)),
                 "text_completed" => read!(envelope, TextCompleted)
                     .is_some_and(|done| turn.text_completed(action, done.text)),
-                "tool_call_arguments_delta" => read!(envelope, ToolCallArgumentsDelta)
-                    .is_some_and(|delta| {
+                "tool_call_arguments_delta" => {
+                    read!(envelope, ToolCallArgumentsDelta).is_some_and(|delta| {
                         turn.arguments_delta(action, delta, ts, fold);
                         true
-                    }),
+                    })
+                }
                 "reasoning_started" => turn.reasoning_started(action, ts, fold),
                 "reasoning_delta" => read!(envelope, TextDelta)
                     .is_some_and(|delta| turn.reasoning_delta(action, &delta.text, ts)),
-                "tool_call_requested" => read!(envelope, ToolCallRequested).is_some_and(
-                    |requested| {
+                "tool_call_requested" => {
+                    read!(envelope, ToolCallRequested).is_some_and(|requested| {
                         turn.call_requested(action, requested, ts, fold);
                         true
-                    },
-                ),
+                    })
+                }
                 _ => false,
             }
         }
