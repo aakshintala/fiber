@@ -71,6 +71,12 @@ pub(crate) struct Gate {
     /// The session's hooks, which receive the loop's inbox so an extension's
     /// program run can be logged as `extension_exec`.
     hooks: Mutex<Option<Arc<dyn contract::hook::Hooks>>>,
+    /// The session's extensions as the door reaches them, for the `command`
+    /// driver command.
+    door: Mutex<Option<Arc<dyn contract::extension::ExtensionDoor>>>,
+    /// Ids of accepted `command` commands, remembered for as long as the
+    /// process runs, so a retransmission is rejected `duplicate_command`.
+    accepted_commands: Mutex<std::collections::BTreeSet<String>>,
     /// The project's `history.jsonl`, set by [`Session::serve`] alone, so
     /// `fiber ask` and a bare [`Session::run`] append no prompt.
     pub(crate) history: OnceLock<Option<PathBuf>>,
@@ -218,6 +224,11 @@ impl Session {
         *lock(&self.gate.hooks) = Some(hooks);
     }
 
+    /// The session's extensions as the `command` driver command reaches them.
+    pub fn extensions(&self, door: Arc<dyn contract::extension::ExtensionDoor>) {
+        *lock(&self.gate.door) = Some(door);
+    }
+
     /// What a shutdown calls to stop the door side's work
     /// (`docs/invocation.md`, "Shutdown"): every driver shell is cancelled,
     /// a later one is cancelled as it starts, and the loop is woken. Once
@@ -237,6 +248,9 @@ impl Session {
     pub fn quiesce(&self) {
         // An emission holds this lock, so one in flight finishes first.
         lock(&self.gate.clients).1 = true;
+        if let Some(door) = lock(&self.gate.door).clone() {
+            door.seal();
+        }
         self.gate.cancel_shells();
         self.gate.wait_shells();
     }
@@ -291,7 +305,7 @@ impl Session {
 
 impl Gate {
     #[cfg(test)]
-    fn note(&self, point: tests::Probe) {
+    pub(crate) fn note(&self, point: tests::Probe) {
         let probe = lock(&self.probe).clone();
         if let Some(probe) = probe {
             probe(point);
@@ -325,6 +339,23 @@ impl Gate {
 
     pub(crate) fn commands(&self) -> Vec<CommandInfo> {
         lock(&self.commands).clone()
+    }
+
+    pub(crate) fn door(&self) -> Option<Arc<dyn contract::extension::ExtensionDoor>> {
+        lock(&self.door).clone()
+    }
+
+    /// Remembers `id` as an accepted `command` id. Returns false when the id
+    /// was already accepted, across connections, for as long as the process
+    /// runs. A rejected `command` records nothing.
+    pub(crate) fn admit_command_id(&self, id: &contract::CommandId) -> bool {
+        lock(&self.accepted_commands).insert(id.0.clone())
+    }
+
+    /// Forgets `id`, so a rejected `command` records nothing and a corrected
+    /// resend with the same id is admitted.
+    pub(crate) fn forget_command_id(&self, id: &contract::CommandId) {
+        lock(&self.accepted_commands).remove(&id.0);
     }
 
     pub(crate) fn jobs(&self) -> Option<Arc<dyn contract::jobs::Jobs>> {
@@ -388,6 +419,8 @@ fn open_in(
         driver_shell: Mutex::new(None),
         jobs: Mutex::new(None),
         hooks: Mutex::new(None),
+        door: Mutex::new(None),
+        accepted_commands: Mutex::new(std::collections::BTreeSet::new()),
         history: OnceLock::new(),
         shells: Mutex::new(RunningShells {
             stopped: false,
@@ -506,4 +539,4 @@ fn print(mut watcher: Watcher, mut out: Box<dyn Write + Send>) {
 
 #[cfg(test)]
 #[path = "session_tests.rs"]
-mod tests;
+pub(crate) mod tests;

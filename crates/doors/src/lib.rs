@@ -11,6 +11,7 @@ mod attach;
 mod client;
 pub mod hub;
 mod prompt_history;
+mod run_command;
 mod session;
 mod shell;
 mod signals;

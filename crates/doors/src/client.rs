@@ -44,15 +44,21 @@ fn not_built(command: &str) -> String {
     format!("`{command}` is not built in this Fiber yet.")
 }
 
-struct Conn {
-    id: u64,
-    gate: Arc<Gate>,
+pub(crate) struct Conn {
+    pub(crate) id: u64,
+    pub(crate) gate: Arc<Gate>,
     direct: Option<UnixStream>,
     writer: Option<Box<dyn Write + Send>>,
     subscribed: bool,
     full: bool,
     injector: Option<Injector>,
     gone: bool,
+}
+
+impl Conn {
+    pub(crate) fn gone(&self) -> bool {
+        self.gone
+    }
 }
 
 /// Reads `stream` until the client hangs up. `id` is the slot [`Gate`] stored
@@ -239,6 +245,7 @@ fn built(command: &str) -> bool {
             | "job_stop"
             | "background"
             | "handoff"
+            | "command"
     )
 }
 
@@ -302,13 +309,13 @@ fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
             let moving = conn.gate.jobs().is_some_and(|jobs| jobs.background() > 0);
             answer(conn, id, moving, NO_CALL);
         }
+        Command::Command(args) => crate::run_command::run(conn, id, &args),
         Command::Message(_)
         | Command::Reload
         | Command::Model(_)
         | Command::Credential(_)
         | Command::Name(_)
-        | Command::Rewind(_)
-        | Command::Command(_) => unknown(conn, id, name),
+        | Command::Rewind(_) => unknown(conn, id, name),
     }
 }
 
@@ -379,49 +386,37 @@ fn shell(conn: &mut Conn, id: CommandId, args: &contract::commands::Shell, name:
     }
 }
 
-/// Queues a full subscriber's latest `session_status` and `steering_queue`
-/// after its fold. Both are ephemeral, so the fold does not have them and
-/// a catch-up cannot recover them: they are pushed kept, like every line
-/// doors itself queues.
-pub(crate) fn queue_latest(injector: &Injector, status: Option<Envelope>, queue: Option<Envelope>) {
-    for line in [status, queue].into_iter().flatten() {
-        injector.push_kept(line);
-    }
-}
-
 fn subscribe(conn: &mut Conn, id: CommandId, level: contract::commands::SubscribeLevel) {
     let summary = matches!(level, contract::commands::SubscribeLevel::Summary);
-    // The watcher is registered before `latest` is read. A line written in
-    // between is queued and may also be in `latest`; the latest wins. The
-    // log is dropped here so this connection does not hold the session lock.
-    let (watcher, status, queue, extensions) = {
+    // The watcher is registered and its seed queued under the one log lock
+    // that `append` takes, so no later line can be queued before an older
+    // snapshot. The log is dropped here so this connection does not hold
+    // the session lock.
+    let (watcher, status, extensions) = {
         let Some(log) = conn.gate.log.upgrade() else {
             reject(conn, Some(id), ErrorCode::Closing, ENDED);
             return;
         };
-        let watcher = if summary {
-            log.watch()
+        if summary {
+            let watcher = log.watch();
+            let status = log.latest("session_status");
+            let extensions = log.latest("extensions_loaded");
+            (watcher, status, extensions)
         } else {
-            match log.watch_all() {
+            let watcher = match log.watch_all_seeded() {
                 Ok(watcher) => watcher,
                 Err(_) => {
                     reject(conn, Some(id), ErrorCode::InvalidArguments, UNFIT);
                     return;
                 }
-            }
-        };
-        let status = log.latest("session_status");
-        let queue = if summary {
-            None
-        } else {
-            log.latest("steering_queue")
-        };
-        let extensions = if summary {
-            log.latest("extensions_loaded")
-        } else {
-            None
-        };
-        (watcher, status, queue, extensions)
+            };
+            // Probe point: the watcher is obtained and its seed queued under
+            // the one log lock, before the writer starts.
+            #[cfg(test)]
+            conn.gate
+                .note(crate::session::tests::Probe::SubscribeSeeded);
+            (watcher, None, None)
+        }
     };
     let injector = watcher.injector();
     // The acknowledgement is written here, before the writer starts, so it
@@ -439,8 +434,6 @@ fn subscribe(conn: &mut Conn, id: CommandId, level: contract::commands::Subscrib
                 return;
             }
         }
-    } else {
-        queue_latest(&injector, status, queue);
     }
     conn.subscribed = true;
     conn.full = !summary;
@@ -519,7 +512,7 @@ fn history(
         .collect())
 }
 
-fn accept(conn: &mut Conn, id: CommandId, result: Option<CommandResult>) {
+pub(crate) fn accept(conn: &mut Conn, id: CommandId, result: Option<CommandResult>) {
     send(
         conn,
         Event::CommandAccepted(CommandAccepted {
@@ -529,7 +522,7 @@ fn accept(conn: &mut Conn, id: CommandId, result: Option<CommandResult>) {
     );
 }
 
-fn reject(conn: &mut Conn, id: Option<CommandId>, code: ErrorCode, message: &str) {
+pub(crate) fn reject(conn: &mut Conn, id: Option<CommandId>, code: ErrorCode, message: &str) {
     send(
         conn,
         Event::CommandRejected(CommandRejected {

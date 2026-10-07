@@ -447,7 +447,6 @@ fn subscribe_is_first_and_unknown_or_unfit_commands_are_rejected() {
                 "credential",
                 "name",
                 "rewind",
-                "command",
             ] {
                 send(
                     &client,
@@ -2074,6 +2073,278 @@ fn commands_with_none_given_answers_an_empty_list() {
             assert_eq!(
                 answer["payload"]["result"],
                 serde_json::json!({"commands": []})
+            );
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+struct FakeDoor {
+    calls: Mutex<Vec<(String, String)>>,
+}
+
+impl FakeDoor {
+    fn new() -> Self {
+        Self {
+            calls: Mutex::new(Vec::new()),
+        }
+    }
+}
+
+impl contract::extension::ExtensionDoor for FakeDoor {
+    fn command(
+        &self,
+        name: &str,
+        text: &str,
+    ) -> Result<Box<dyn FnOnce() + Send>, contract::inbox::Rejection> {
+        if name == "known" {
+            self.calls
+                .lock()
+                .unwrap()
+                .push((name.to_owned(), text.to_owned()));
+            Ok(Box::new(|| {}))
+        } else {
+            Err(contract::inbox::Rejection {
+                code: ErrorCode::UnknownCommand,
+                message: format!("`{name}` names no extension command."),
+            })
+        }
+    }
+
+    fn seal(&self) {}
+
+    fn reply(
+        &self,
+        reply: contract::commands::Reply,
+        ack: contract::inbox::Ack,
+    ) -> Option<(contract::commands::Reply, contract::inbox::Ack)> {
+        Some((reply, ack))
+    }
+}
+
+struct HeldDoor {
+    admitted: Mutex<Vec<mpsc::Sender<()>>>,
+}
+
+impl contract::extension::ExtensionDoor for HeldDoor {
+    fn command(
+        &self,
+        name: &str,
+        _text: &str,
+    ) -> Result<Box<dyn FnOnce() + Send>, contract::inbox::Rejection> {
+        if name != "slow" {
+            return Err(contract::inbox::Rejection {
+                code: ErrorCode::UnknownCommand,
+                message: format!("`{name}` names no extension command."),
+            });
+        }
+        let (tx, rx) = mpsc::channel();
+        self.admitted.lock().unwrap().push(tx);
+        // The release runs only after `command_accepted` is on the queue;
+        // the fake records the order by releasing the waiter then.
+        Ok(Box::new(move || {
+            let _ = rx.recv_timeout(DEADLINE).ok();
+        }))
+    }
+
+    fn seal(&self) {}
+
+    fn reply(
+        &self,
+        reply: contract::commands::Reply,
+        ack: contract::inbox::Ack,
+    ) -> Option<(contract::commands::Reply, contract::inbox::Ack)> {
+        Some((reply, ack))
+    }
+}
+
+#[test]
+fn command_accepted_arrives_before_run_starts_and_text_absent_is_empty() {
+    // `command_accepted` is on the client's stream before the fake's release
+    // is called; `text` absent is `""`.
+    let opened = Opened::open(vec![]);
+    let door = Arc::new(HeldDoor {
+        admitted: Mutex::new(Vec::new()),
+    });
+    opened.session.extensions(door.clone());
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(
+                &client,
+                r#"{"id":"c_1","command":"command","args":{"name":"slow"}}"#,
+            );
+            let accepted = response(&client, "c_1");
+            assert_eq!(kind(&accepted), "command_accepted");
+            // The fake's release blocks until the test lets it go; the
+            // acceptance above arrived first, which is the order asserted.
+            let tx = door.admitted.lock().unwrap().pop().expect("admitted");
+            tx.send(()).unwrap();
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn command_ids_are_admitted_once_across_connections() {
+    // The same id sent again on the same connection, and again on a second
+    // connection after the first disconnects, is rejected `duplicate_command`
+    // and the fake's `command` is called once. A rejected `command` resent
+    // with the same id after the name exists is admitted.
+    let opened = Opened::open(vec![]);
+    let door = Arc::new(FakeDoor::new());
+    opened.session.extensions(door.clone());
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(
+                &client,
+                r#"{"id":"c_1","command":"command","args":{"name":"known","text":"hi"}}"#,
+            );
+            let accepted = response(&client, "c_1");
+            assert_eq!(kind(&accepted), "command_accepted");
+            send(
+                &client,
+                r#"{"id":"c_1","command":"command","args":{"name":"known","text":"hi"}}"#,
+            );
+            let duplicate = response(&client, "c_1");
+            assert_eq!(
+                rejection(&duplicate),
+                ("duplicate_command", "`c_1` was already accepted.")
+            );
+            drop(client);
+            let second = Client::connect(&socket).unwrap();
+            subscribe(&second, "c_sub2", "full");
+            send(
+                &second,
+                r#"{"id":"c_1","command":"command","args":{"name":"known","text":"hi"}}"#,
+            );
+            let retransmit = response(&second, "c_1");
+            assert_eq!(
+                rejection(&retransmit),
+                ("duplicate_command", "`c_1` was already accepted.")
+            );
+            // Unknown name rejects without recording the id...
+            send(
+                &second,
+                r#"{"id":"c_2","command":"command","args":{"name":"nope"}}"#,
+            );
+            let unknown = response(&second, "c_2");
+            assert_eq!(
+                rejection(&unknown),
+                ("unknown_command", "`nope` names no extension command.")
+            );
+            // ...and missing `name` rejects `invalid_arguments`.
+            send(&second, r#"{"id":"c_3","command":"command","args":{}}"#);
+            let missing = response(&second, "c_3");
+            assert_eq!(
+                rejection(&missing),
+                ("invalid_arguments", UNFIT),
+                "a missing name does not fit the command"
+            );
+            assert_eq!(door.calls.lock().unwrap().len(), 1);
+            assert_eq!(
+                door.calls.lock().unwrap()[0],
+                ("known".to_owned(), "hi".to_owned())
+            );
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn command_without_a_door_rejects_unknown_command() {
+    let opened = Opened::open(vec![]);
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(
+                &client,
+                r#"{"id":"c_1","command":"command","args":{"name":"known"}}"#,
+            );
+            let rejected = response(&client, "c_1");
+            assert_eq!(
+                rejection(&rejected),
+                ("unknown_command", "`known` names no extension command.")
+            );
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn quiesce_seals_the_door() {
+    struct Sealed {
+        sealed: AtomicBool,
+    }
+    impl contract::extension::ExtensionDoor for Sealed {
+        fn command(
+            &self,
+            _name: &str,
+            _text: &str,
+        ) -> Result<Box<dyn FnOnce() + Send>, contract::inbox::Rejection> {
+            Err(contract::inbox::Rejection {
+                code: ErrorCode::UnknownCommand,
+                message: "none".into(),
+            })
+        }
+        fn seal(&self) {
+            self.sealed.store(true, Ordering::SeqCst);
+        }
+        fn reply(
+            &self,
+            reply: contract::commands::Reply,
+            ack: contract::inbox::Ack,
+        ) -> Option<(contract::commands::Reply, contract::inbox::Ack)> {
+            Some((reply, ack))
+        }
+    }
+    let opened = Opened::open(vec![]);
+    let door = Arc::new(Sealed {
+        sealed: AtomicBool::new(false),
+    });
+    opened.session.extensions(door.clone());
+    opened.session.quiesce();
+    assert!(door.sealed.load(Ordering::SeqCst));
+    opened.close();
+}
+
+#[test]
+fn a_full_subscriber_after_an_extension_ui_line_receives_it_as_seed() {
+    let opened = Opened::open(vec![]);
+    let socket = opened.socket.clone();
+    let log = Arc::clone(&opened.log);
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            log.emit(&Event::ExtensionUi(contract::events::ExtensionUi {
+                extension: "fiber.test/a".to_owned(),
+                ui: contract::events::Ui::Status {
+                    status: "syncing".to_owned(),
+                },
+            }));
+            let full = Client::connect(&socket).unwrap();
+            subscribe(&full, "c_full", "full");
+            let lines = until(&full, |line| kind(line) == "extension_ui");
+            assert!(
+                lines
+                    .iter()
+                    .any(|line| line["payload"]["extension"] == "fiber.test/a"
+                        && line["payload"]["status"] == "syncing"),
+                "a late `full` subscriber receives the kept ui line as seed"
             );
             Ok(())
         })
