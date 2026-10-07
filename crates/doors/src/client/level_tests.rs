@@ -325,3 +325,44 @@ fn a_lowering_drains_a_lagged_writer_through_the_cutoff() {
         "the prelude snapshot is the first line after the acknowledgement"
     );
 }
+
+#[test]
+fn a_line_at_the_cutoff_is_skipped_never_written() {
+    let (_temp, log, id, _clock) = open_log();
+    log.append(&step(), None, None).unwrap();
+    log.append(&step(), None, None).unwrap();
+    let cutoff = log.count();
+    // Both watchers start at the cutoff, so the next durable line is
+    // exactly at the bound. It arrives after the reader read the count,
+    // queued in the old watcher ahead of the control line.
+    let old = log.watch();
+    let new = log.watch();
+    log.append(&step(), None, None).unwrap();
+    assert_eq!(log.count(), cutoff + 1);
+    drop(log);
+    let mut writing = Writing {
+        watcher: old,
+        summary: false,
+        cutoff: 0,
+        written: None,
+    };
+    let (tx, rx) = mpsc::channel();
+    tx.send(Switch {
+        watcher: new,
+        summary: true,
+        cutoff,
+        prelude: vec![control_line(&id, "x.ack", 7)],
+    })
+    .unwrap();
+    let mut buf = Vec::new();
+    let drained = apply(&mut writing, &rx, &mut buf);
+    assert!(
+        drained.is_err(),
+        "the bound line is skipped, so the drain meets the ended watcher"
+    );
+    assert!(
+        buf.is_empty(),
+        "neither the bound line nor the prelude is written"
+    );
+    assert_eq!(writing.written, None, "nothing below the cutoff was owed");
+}

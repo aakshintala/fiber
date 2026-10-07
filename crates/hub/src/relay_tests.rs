@@ -269,3 +269,58 @@ fn an_acknowledgement_names_its_command_and_whether_it_is_closing() {
         None
     );
 }
+
+#[test]
+fn an_accepted_prompt_ack_settles_to_nothing() {
+    let held = fakes::TempDir::new("rs");
+    let dir = held.path().join("h");
+    std::fs::create_dir_all(&dir).unwrap();
+    let clock = fakes::clock::FakeClock::new();
+    let timed: std::sync::Arc<dyn contract::clock::Clock> = clock;
+    let hub = crate::connection::Hub::new(
+        &dir,
+        "0.0.0",
+        std::sync::Arc::new(crate::fake::FakeStarter::hang(&dir)),
+        std::sync::Arc::clone(&timed),
+        crate::diag::Diag::open(&dir, timed),
+    );
+    let sid = "s_aaaaaaaaaaaaaaaa";
+    let command = |id: &str, command: &str| {
+        json!({"id": id, "command": command, "args": {}})
+            .as_object()
+            .unwrap()
+            .clone()
+    };
+    let ack = |id: &str| {
+        serde_json::to_vec(&json!({
+            "kind": "command_accepted",
+            "payload": {"command_id": id},
+        }))
+        .unwrap()
+    };
+    // The kept subscription stays what the connection first sent: an
+    // accepted prompt is not a level, so settling it changes nothing.
+    let mut relays = Relays::default();
+    let subscribed = command("c_0", "subscribe");
+    relays.keep(sid, &subscribed);
+    let kept: Kept = std::sync::Arc::new(std::sync::Mutex::new(vec![(
+        "c_1".to_owned(),
+        command("c_1", "prompt"),
+    )]));
+    assert!(settle(&ack("c_1"), &kept, &hub, sid, false).is_none());
+    assert!(kept.lock().unwrap().is_empty(), "the ack is consumed");
+    assert_eq!(
+        relays.subscription(sid),
+        Some(subscribed),
+        "no replacement to replay on a reconnect"
+    );
+    // The subscribe path still replaces: the positive fact this feature ran.
+    let kept: Kept = std::sync::Arc::new(std::sync::Mutex::new(vec![(
+        "c_2".to_owned(),
+        command("c_2", "subscribe"),
+    )]));
+    match settle(&ack("c_2"), &kept, &hub, sid, false) {
+        Some(Settled::Subscribed(line)) => assert_eq!(line, command("c_2", "subscribe")),
+        settled => panic!("an accepted subscribe replaces, got {}", settled.is_some()),
+    }
+}
