@@ -850,18 +850,215 @@ fn resumed_state_folds_changes_deletes_and_the_date() {
     assert_eq!(out.files[0].sent, InstructionSent::Full);
 }
 
+/// `envelope` for the call `action`.
+fn action_envelope(kind: &str, event: &Event, action: &str) -> Envelope {
+    Envelope {
+        action_id: Some(contract::ActionId(action.into())),
+        ..envelope(kind, event)
+    }
+}
+
+/// The `tool_call_started` line of a call `action` declaring `paths`.
+fn started(action: &str, paths: Option<&[&str]>) -> Envelope {
+    let event = Event::ToolCallStarted(contract::events::ToolCallStarted {
+        declared: declared(paths),
+        arguments: None,
+        changed_by: None,
+    });
+    action_envelope("tool_call_started", &event, action)
+}
+
+/// The `tool_call_completed` line of the call `action`.
+fn finished(action: &str) -> Envelope {
+    let event = Event::ToolCallCompleted(contract::events::ToolCallCompleted {
+        status: contract::events::CallStatus::Completed,
+        reason: None,
+        error: None,
+        process: None,
+        content: Vec::new(),
+        details: None,
+        artifact: None,
+        changes: None,
+        control: None,
+        changed_by: None,
+        provider_item: None,
+    });
+    action_envelope("tool_call_completed", &event, action)
+}
+
+/// A resume over `lines`, then `sub/AGENTS.md` created in `workspace`:
+/// what the next turn-start check sends.
+fn resumed_then_created(
+    lines: &[Envelope],
+    home: &Path,
+    workspace: &Path,
+    fake: &Arc<FakeClock>,
+) -> Vec<contract::events::InstructionFile> {
+    let mut state = State::resumed(lines, workspace, &inputs(home, fake)).unwrap();
+    assert!(state.take_queued().is_empty());
+    write(&workspace.join("sub/AGENTS.md"), "Late rules.\n");
+    state.check(&**fake).files
+}
+
 #[test]
-fn resumed_state_forgets_subdirectories_that_held_no_file() {
+fn resumed_state_restores_subdirectories_its_context_touched() {
     let (home, _held) = root();
     let workspace = home.join("workspace");
-    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::create_dir_all(workspace.join("sub/deep")).unwrap();
+    let workspace = canon(&workspace);
     let fake = clock();
     let message = opening::collect(&inputs(&home, &fake), &workspace).message;
-    let lines = vec![envelope("opening_message", &Event::OpeningMessage(message))];
-    let state = State::resumed(&lines, &workspace, &inputs(&home, &fake)).unwrap();
-    // `lonely/` was checked before the resume but never sent a file, so
-    // the log cannot restore it: touching it again checks it.
-    assert!(!state.dirs.contains(&workspace.join("lonely")));
+    let lines = vec![
+        envelope("opening_message", &Event::OpeningMessage(message)),
+        started("a_1", Some(&["sub/deep/x.txt"])),
+        finished("a_1"),
+    ];
+    // Nothing is sent at the resume: the touched directories held no file.
+    let mut state = State::resumed(&lines, &workspace, &inputs(&home, &fake)).unwrap();
+    assert!(state.take_queued().is_empty());
+    assert!(state.check(&*fake).files.is_empty());
+    // A file created later in an ancestor the call reached is `created`
+    // at the next turn start, as in the live session.
+    write(&workspace.join("sub/AGENTS.md"), "Late rules.\n");
+    let out = state.check(&*fake);
+    assert_eq!(out.files.len(), 1);
+    assert_eq!(
+        out.files[0].path,
+        workspace.join("sub/AGENTS.md").display().to_string()
+    );
+    assert_eq!(out.files[0].reason, InstructionReason::Created);
+    assert_eq!(out.files[0].sent, InstructionSent::Full);
+    // And in the path's own parent.
+    write(&workspace.join("sub/deep/AGENTS.md"), "Deeper.\n");
+    let out = state.check(&*fake);
+    assert_eq!(out.files.len(), 1);
+    assert_eq!(out.files[0].reason, InstructionReason::Created);
+}
+
+#[test]
+fn resumed_state_restores_a_declared_directory() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(workspace.join("sub")).unwrap();
+    let workspace = canon(&workspace);
+    let fake = clock();
+    let message = opening::collect(&inputs(&home, &fake), &workspace).message;
+    let lines = vec![
+        envelope("opening_message", &Event::OpeningMessage(message)),
+        started("a_1", Some(&["sub"])),
+        finished("a_1"),
+    ];
+    let files = resumed_then_created(&lines, &home, &workspace, &fake);
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].reason, InstructionReason::Created);
+}
+
+#[test]
+fn resumed_state_restores_a_declared_directory_removed_before_the_resume() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(workspace.join("sub")).unwrap();
+    let workspace = canon(&workspace);
+    let fake = clock();
+    let message = opening::collect(&inputs(&home, &fake), &workspace).message;
+    let lines = vec![
+        envelope("opening_message", &Event::OpeningMessage(message)),
+        started("a_1", Some(&["sub"])),
+        finished("a_1"),
+    ];
+    // The call declared `sub/` while it existed; it is gone at the resume
+    // and made again after it, as the live session still checks it.
+    std::fs::remove_dir(workspace.join("sub")).unwrap();
+    let mut state = State::resumed(&lines, &workspace, &inputs(&home, &fake)).unwrap();
+    assert!(state.take_queued().is_empty());
+    assert!(state.check(&*fake).files.is_empty());
+    write(&workspace.join("sub/AGENTS.md"), "Late rules.\n");
+    let out = state.check(&*fake);
+    assert_eq!(out.files.len(), 1);
+    assert_eq!(
+        out.files[0].path,
+        workspace.join("sub/AGENTS.md").display().to_string()
+    );
+    assert_eq!(out.files[0].reason, InstructionReason::Created);
+}
+
+#[test]
+fn resumed_state_checks_a_declared_file_without_a_notice() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    write(&workspace.join("sub/x.txt"), "data\n");
+    let workspace = canon(&workspace);
+    let fake = clock();
+    let message = opening::collect(&inputs(&home, &fake), &workspace).message;
+    let lines = vec![
+        envelope("opening_message", &Event::OpeningMessage(message)),
+        started("a_1", Some(&["sub/x.txt"])),
+        finished("a_1"),
+    ];
+    // The restored `sub/x.txt` is a file: checking it finds no candidate
+    // under it, sends nothing and names no failure.
+    let mut state = State::resumed(&lines, &workspace, &inputs(&home, &fake)).unwrap();
+    assert!(state.maybe_dirs.contains(&workspace.join("sub/x.txt")));
+    let out = state.check(&*fake);
+    assert!(out.files.is_empty());
+    assert!(out.notices.is_empty());
+}
+
+#[test]
+fn resumed_state_skips_calls_that_touched_nothing_it_counts() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(workspace.join("sub")).unwrap();
+    let workspace = canon(&workspace);
+    let fake = clock();
+    let message = opening::collect(&inputs(&home, &fake), &workspace).message;
+    // A call with no paths, one never completed, one whose completion
+    // names another call, a path outside the workspace, and one that does
+    // not resolve: none restores `sub/`, and the outside directory is not
+    // checked.
+    let elsewhere = canon(&home).join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    let outside = elsewhere.display().to_string();
+    let lines = vec![
+        envelope("opening_message", &Event::OpeningMessage(message)),
+        started("a_1", None),
+        finished("a_1"),
+        started("a_2", Some(&["sub/x.txt"])),
+        started(
+            "a_3",
+            Some(&[outside.as_str(), "../../../../../../../../../../../../.."]),
+        ),
+        finished("a_3"),
+        finished("a_4"),
+    ];
+    let mut state = State::resumed(&lines, &workspace, &inputs(&home, &fake)).unwrap();
+    assert!(!state.dirs.contains(&elsewhere));
+    // Not even once it holds a candidate: the next check sends nothing.
+    write(&elsewhere.join("AGENTS.md"), "Outside rules.\n");
+    assert!(state.check(&*fake).files.is_empty());
+    std::fs::remove_file(elsewhere.join("AGENTS.md")).unwrap();
+    let files = resumed_then_created(&lines, &home, &workspace, &fake);
+    assert!(files.is_empty());
+}
+
+#[test]
+fn resumed_state_forgets_subdirectories_an_earlier_context_touched() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(workspace.join("sub")).unwrap();
+    let workspace = canon(&workspace);
+    let fake = clock();
+    let message = opening::collect(&inputs(&home, &fake), &workspace).message;
+    // The call ran in the context before a handoff's new opening message:
+    // the new context has not touched `sub/`.
+    let lines = vec![
+        envelope("opening_message", &Event::OpeningMessage(message.clone())),
+        started("a_1", Some(&["sub/x.txt"])),
+        finished("a_1"),
+        envelope("opening_message", &Event::OpeningMessage(message)),
+    ];
+    let files = resumed_then_created(&lines, &home, &workspace, &fake);
+    assert!(files.is_empty());
 }
 
 #[test]
