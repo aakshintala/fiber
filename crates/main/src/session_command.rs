@@ -19,7 +19,8 @@ use crate::{
 /// `run/<session_id>` (`docs/invocation.md`, "Processes"). The workspace
 /// is entered before signals are installed or any thread starts, so the
 /// shared path reads it as the current directory exactly as `ask` does.
-/// Stdin is never read.
+/// With `--resume` the workspace is the one the log recorded, and the
+/// session is resumed instead of started. Stdin is never read.
 pub(crate) fn run(args: cli::SessionArgs, clock: Arc<dyn contract::clock::Clock>) -> i32 {
     if let Err(e) = std::env::set_current_dir(&args.workspace) {
         return ask_failed(failed(
@@ -32,6 +33,9 @@ pub(crate) fn run(args: cli::SessionArgs, clock: Arc<dyn contract::clock::Clock>
         Ok(signals) => signals,
         Err(e) => return ask_failed(failed(ErrorCode::IoFailed, format!("signals: {e}"))),
     };
+    if args.resume {
+        return crate::resume::session_resume(SessionId(args.id), args.model, clock, &signals);
+    }
     new_session(
         SessionId(args.id),
         args.model,
