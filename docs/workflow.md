@@ -62,11 +62,9 @@ push, the implementer runs the checks for the crates they changed:
 `cargo clippy -p <crate> --all-targets -- -D warnings` and
 `cargo nextest run -p <crate>`.
 
-`scripts/check` runs, for the crates `docs/ci.md`, "Selection", chooses,
-`cargo fmt --check`, clippy with the workspace lints, the tests under
-nextest, and doc-tests. It also runs the cheap checks from `docs/ci.md`: the
-800-line file cap, the `unsafe` table, the compiled-in list, the dependency
-list and the docs check. CI runs these cheap checks on Linux x86_64 only.
+`scripts/check` runs what CI runs, for the crates `docs/ci.md`, "Selection",
+chooses. The list of checks is `docs/ci.md`, "On every pull request that
+changes code" and "The docs check".
 
 Mutation testing runs in CI only.
 
