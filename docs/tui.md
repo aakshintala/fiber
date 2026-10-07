@@ -451,7 +451,11 @@ Thinking belongs to the group it starts, since a group runs from one reply to
 the next. The summary line counts it ("thought once") and, while it streams,
 ends with "Thinking: <latest heading>". Thinking with no tool call before the
 next reply is one dim line, "+ Thought: <first heading> · 22s", and clicking it
-shows the text.
+shows the text. A heading is the first line of the thinking text that is a
+Markdown heading (`#…`) or wholly bold (`**…**`), with the markers stripped,
+or the first non-empty line when there is none, cut to fit the line.
+"Thinking:" shows the latest heading in the step so far, and "+ Thought:" the
+first.
 
 ### Steering
 
