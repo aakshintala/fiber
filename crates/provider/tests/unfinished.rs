@@ -365,6 +365,12 @@ fn completions_usage() -> Value {
         "completion_tokens": 3, "prompt_tokens_details": {"cached_tokens": 4}}})
 }
 
+fn completions_usage_with_write() -> Value {
+    json!({"id": "gen-1", "choices": [], "usage": {"prompt_tokens": 18,
+        "completion_tokens": 3, "prompt_tokens_details": {"cached_tokens": 4,
+            "cache_write_tokens": 8}}})
+}
+
 #[test]
 fn completions_failed_after_usage_carries_what_it_saw() {
     let body = {
@@ -391,6 +397,47 @@ fn completions_failed_after_usage_carries_what_it_saw() {
     };
     assert_eq!(usage.generation_id.0, "gen-1");
     assert_eq!(usage.tokens, tokens(6, 4, 3));
+    assert_input_size(&usage, &server);
+}
+
+#[test]
+fn completions_failed_after_cache_write_carries_it_under_the_hour_lifetime() {
+    let body = {
+        let mut out = format!(
+            "data: {}\n\ndata: {}\n\n",
+            completions_chunk("Hi"),
+            completions_usage_with_write()
+        );
+        out.push_str(&format!(
+            "data: {}\n\ndata: [DONE]\n\n",
+            json!({"error": {"message": "boom", "code": "server_error"}})
+        ));
+        out.into_bytes()
+    };
+    let server = ProviderServer::start([Response::stream(body)]).unwrap();
+    let request = ModelRequest {
+        cache_lifetime: CacheLifetime::OneHour,
+        ..request()
+    };
+    let call = provider::openai_completions::Completions::new(endpoint("openai", "gpt-5", &server))
+        .call(&request);
+    let (result, _) = run(call);
+    let Err(CallError::Failed {
+        usage: Some(usage), ..
+    }) = result
+    else {
+        panic!("{result:?}");
+    };
+    assert_eq!(usage.generation_id.0, "gen-1");
+    assert_eq!(
+        usage.tokens,
+        Tokens {
+            input: 6,
+            cache_read: 4,
+            cache_write: std::collections::BTreeMap::from([("1h".to_owned(), 8)]),
+            output: 3,
+        }
+    );
     assert_input_size(&usage, &server);
 }
 
