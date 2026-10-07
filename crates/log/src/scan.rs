@@ -112,15 +112,15 @@ const STEP: u64 = 64 * 1024;
 /// newline: read backwards in [`STEP`] steps, the offset strictly
 /// decreasing on every step, stopping at 0.
 fn last_complete_line(mut file: File, len: u64) -> Option<Vec<u8>> {
-    let mut offset = len;
     let mut line_end = None;
     let mut bounds = None;
+    let step_size = usize::try_from(STEP).ok()?;
 
-    'scan: while offset > 0 {
-        let step = STEP.min(offset);
-        let start = offset - step;
+    'scan: for last in (0..len).rev().step_by(step_size) {
+        let end = last + 1;
+        let start = end.saturating_sub(STEP);
         file.seek(SeekFrom::Start(start)).ok()?;
-        let size = usize::try_from(step).ok()?;
+        let size = usize::try_from(end - start).ok()?;
         let mut chunk = vec![0_u8; size];
         file.read_exact(&mut chunk).ok()?;
 
@@ -135,7 +135,6 @@ fn last_complete_line(mut file: File, len: u64) -> Option<Vec<u8>> {
             }
             line_end = Some(newline);
         }
-        offset = start;
     }
 
     let (start, end) = bounds.or_else(|| line_end.map(|end| (0, end)))?;
