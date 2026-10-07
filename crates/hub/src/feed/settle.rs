@@ -119,5 +119,5 @@ impl Feed {
 }
 
 #[cfg(test)]
-#[path = "feed_settle_tests.rs"]
+#[path = "settle_tests.rs"]
 mod tests;

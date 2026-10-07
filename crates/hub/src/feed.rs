@@ -40,7 +40,6 @@ use crate::connection::{Hub, accept_result, reject, send as send_line};
 use crate::recent::{self, Left, PageError, RecentRow};
 use crate::relay::valid_session_id;
 
-#[path = "feed_settle.rs"]
 mod settle;
 use settle::Settle;
 
