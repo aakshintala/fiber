@@ -1765,7 +1765,7 @@ fn blocked_write_kinds() -> Vec<&'static str> {
     ]
 }
 
-/// A run whose one `write` the reviewer blocked (`docs/testing.md`, "What
+/// A run whose one reviewed call the reviewer blocked (`docs/testing.md`, "What
 /// a test asserts"): the call is refused, it never starts, and the target
 /// bytes are unchanged. The `permission_resolved` line names the reviewer
 /// as decider, and the provider server saw the reviewer's two stages
@@ -1898,4 +1898,35 @@ fn a_markdown_write_escaping_its_data_directory_through_a_link_is_reviewed_and_b
             .file_type()
             .is_symlink()
     );
+}
+
+#[test]
+fn a_shell_read_of_proc_environ_is_reviewed_and_blocked() {
+    // The provider's key comes from `FIBER_TEST_FAKE_KEY`, an `env` source,
+    // so the session's own environment holds it (`docs/configuration.md`,
+    // "Secrets").
+    let setup = Setup::new();
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "cat_environ",
+            "shell",
+            &json!({"command": "cat /proc/self/environ"}),
+        )]),
+        text_reply("check"),
+        text_reply("block it reads the environment"),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    with_reviewer(&setup);
+
+    let run = setup.run(&["ask", "show the environment"]);
+
+    assert_blocked_by_reviewer(&run, &server);
+    for (index, request) in server.requests().iter().enumerate() {
+        assert!(
+            !holds_marker(&request.body, "FIBER_TEST_FAKE_KEY="),
+            "request {index} holds the environment"
+        );
+    }
 }

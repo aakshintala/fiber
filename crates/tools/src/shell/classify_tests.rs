@@ -596,3 +596,25 @@ fn a_search_or_diff_of_fiber_home_declares_fiber_home_or_the_workdir() {
         assert_eq!(classified(command).declared.paths, Some(paths), "{command}");
     }
 }
+
+#[test]
+fn an_operand_under_proc_is_not_read_only() {
+    // `/proc/<pid>/environ` holds every variable the process was given,
+    // an `env` credential source's key among them.
+    for command in [
+        "cat /proc/self/environ",
+        "head -c 100000 /proc/1/environ",
+        "grep -r KEY /proc",
+        "ls /proc",
+        "cat ../../proc/self/environ",
+        "cat /work/../proc/self/environ",
+        "find /proc -name environ",
+        "cat notes.txt /proc/self/environ",
+        "ls && cat /proc/self/environ",
+    ] {
+        assert_closed(command);
+    }
+    for command in ["cat proc/self/environ", "cat /procfs/x", "ls /work/proc"] {
+        assert_reads(command);
+    }
+}
