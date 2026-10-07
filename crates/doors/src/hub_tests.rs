@@ -172,25 +172,23 @@ fn an_unexpected_connect_error_fails_without_starting() {
 fn eof_before_hello_retries_the_whole_connect_once() {
     let temp = Temp::new();
     let listener = UnixListener::bind(temp.run().join("hub")).unwrap();
-    let served = Arc::new(AtomicUsize::new(0));
-    let server = thread::spawn({
-        let served = Arc::clone(&served);
-        move || {
-            // The first connection dies silent: the idle-exit race. The
-            // second gets its hello.
-            let (closed, _) = listener.accept().unwrap();
-            drop(closed);
-            served.fetch_add(1, Ordering::SeqCst);
-            serve_once(listener, &hello_line());
-            served.fetch_add(1, Ordering::SeqCst);
-        }
+    let (served_tx, served_rx) = mpsc::channel();
+    thread::spawn(move || {
+        // The first connection dies silent: the idle-exit race. The
+        // second gets its hello.
+        let (closed, _) = listener.accept().unwrap();
+        drop(closed);
+        serve_once(listener, &hello_line());
+        served_tx.send(()).unwrap();
     });
     let hub = run_connect(temp.dir.clone(), || Ok(()), fakes::clock::FakeClock::new()).unwrap();
     assert_eq!(hub.1.kind, "hub_hello");
     // `connect` returns once the hello is read, which can be before the
-    // server counts its second connection.
-    server.join().unwrap();
-    assert_eq!(served.load(Ordering::SeqCst), 2);
+    // server finishes its second connection.
+    assert!(
+        served_rx.recv_timeout(DEADLINE).is_ok(),
+        "waited {DEADLINE:?} for the server to serve both connections"
+    );
 }
 
 #[test]
