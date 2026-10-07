@@ -7,7 +7,7 @@
 //! serve after.
 
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
@@ -263,6 +263,7 @@ pub fn models(
     json: bool,
     clock: Arc<dyn Clock>,
     locks: Arc<dyn PathLock>,
+    _exe: Result<PathBuf, String>,
 ) -> i32 {
     let ran = config::fiber_home_from_env()
         .map_err(|e| failed(e.code(), e))
