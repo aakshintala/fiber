@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, SystemTime};
 
 use contract::SessionId;
-use contract::clock::Clock;
+use contract::clock::{Clock, wall_ms};
 use serde::Serialize;
 
 /// Past this size `hub.log` is renamed to `hub.log.1` before the next write
@@ -109,15 +109,6 @@ struct Line<'a> {
     session_id: Option<&'a SessionId>,
     code: &'a str,
     message: &'a str,
-}
-
-/// `wall` as milliseconds since the Unix epoch: 0 before it, `u64::MAX` past it.
-pub fn wall_ms(wall: SystemTime) -> u64 {
-    wall.duration_since(SystemTime::UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or(0)
-        .try_into()
-        .unwrap_or(u64::MAX)
 }
 
 /// Renames a `hub.log` over 10 MiB to `hub.log.1`, replacing any older one.

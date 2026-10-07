@@ -26,7 +26,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use contract::clock::{Clock, Wake};
+use contract::clock::{Clock, Wake, wall_ms};
 use contract::events::SessionStatus;
 use contract::{CommandId, Envelope, ErrorCode, HubLine, SCHEMA_VERSION, SessionId};
 use serde_json::{Map, Value};
@@ -482,7 +482,7 @@ impl Feed {
     fn append_crashed(&self, id: &str, project: &str, status: Option<&SessionStatus>) {
         let row = RecentRow {
             session_id: SessionId(id.to_owned()),
-            ts: crate::diag::wall_ms(self.clock.wall()),
+            ts: wall_ms(self.clock.wall()),
             project: project.to_owned(),
             workspace: status
                 .map(|status| status.workspace.clone())
@@ -505,7 +505,7 @@ impl Feed {
         );
         let line = HubLine {
             kind: "session_left".to_owned(),
-            ts: crate::diag::wall_ms(self.clock.wall()),
+            ts: wall_ms(self.clock.wall()),
             schema_version: SCHEMA_VERSION,
             payload,
         };
