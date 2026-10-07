@@ -42,6 +42,8 @@ pub(crate) struct Fold {
     /// The context size an automatic handoff runs at, from the latest
     /// `preamble_built`.
     trigger_at: Option<u64>,
+    /// What the fold knows of the process and its jobs.
+    crash: crash::Crash,
 }
 
 impl Fold {
@@ -68,7 +70,7 @@ enum Entry {
 }
 
 /// Everything between two pieces of assistant text.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub(crate) struct Group {
     pub(crate) id: usize,
     /// Whether its ledger is open.
@@ -78,10 +80,12 @@ pub(crate) struct Group {
     pub(crate) sections: Vec<Section>,
     /// Calls the model is still emitting.
     pub(crate) streaming: Vec<Streaming>,
+    /// Its turn was cut short.
+    pub(crate) cut: bool,
 }
 
 /// One step's part of a group.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub(crate) struct Section {
     pub(crate) step: u64,
     pub(crate) thoughts: Vec<Thought>,
@@ -91,7 +95,7 @@ pub(crate) struct Section {
 }
 
 /// One thinking block.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub(crate) struct Thought {
     pub(crate) id: usize,
     pub(crate) action: String,
@@ -102,7 +106,7 @@ pub(crate) struct Thought {
 }
 
 /// One tool call.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub(crate) struct Call {
     pub(crate) id: usize,
     pub(crate) action: String,
@@ -116,6 +120,8 @@ pub(crate) struct Call {
     pub(crate) open: bool,
     /// A `permission_requested` for it is open.
     pub(crate) asking: bool,
+    /// It had `tool_call_started`.
+    pub(crate) started: bool,
 }
 
 /// A call still streaming: its message, position, name and raw text.
@@ -128,7 +134,7 @@ pub(crate) struct Streaming {
 }
 
 /// One turn's card.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub(crate) struct Turn {
     prompts: Vec<String>,
     entries: Vec<Entry>,
@@ -136,7 +142,9 @@ pub(crate) struct Turn {
     /// The group new non-text items join, until the next reply.
     open_group: Option<usize>,
     started: u64,
-    ended: Option<(TurnCompleted, u64)>,
+    /// The time of the last line folded into it.
+    last: u64,
+    ended: Option<(Ending, u64)>,
     calls: u64,
     step: u64,
     /// The message whose raw arguments arrived last.
@@ -149,22 +157,23 @@ pub(crate) struct Turn {
     retry: Option<RetryScheduled>,
 }
 
+/// How a turn ended.
+#[derive(Debug)]
+enum Ending {
+    /// Its `turn_completed`.
+    Done(TurnCompleted),
+    /// Fiber stopped before it completed.
+    CutShort,
+}
+
 impl Turn {
     /// A turn started at `ts` by `prompts`.
     pub(crate) fn new(prompts: Vec<String>, ts: u64) -> Self {
         Self {
             prompts,
-            entries: Vec::new(),
-            groups: Vec::new(),
-            open_group: None,
             started: ts,
-            ended: None,
-            calls: 0,
-            step: 0,
-            message: None,
-            parts: HashMap::new(),
-            spend: format::Spend::default(),
-            retry: None,
+            last: ts,
+            ..Self::default()
         }
     }
 
@@ -175,7 +184,7 @@ impl Turn {
 
     /// Closes the card.
     pub(crate) fn complete(&mut self, done: TurnCompleted, ts: u64) {
-        self.ended = Some((done, ts));
+        self.ended = Some((Ending::Done(done), ts));
     }
 
     /// A steering message, in place; it does not end a group.
@@ -315,10 +324,8 @@ impl Turn {
         group.section(step).thoughts.push(Thought {
             id,
             action: action.to_owned(),
-            text: String::new(),
             started: ts,
-            ended: None,
-            open: false,
+            ..Thought::default()
         });
         true
     }
@@ -391,18 +398,18 @@ impl Turn {
             action: action.to_owned(),
             name: requested.name,
             arguments,
-            status: None,
-            changes: Vec::new(),
-            detail: String::new(),
-            open: false,
-            asking: false,
+            ..Call::default()
         });
     }
 
     /// `tool_call_started`; false when the call is not in this turn.
     pub(crate) fn call_started(&mut self, action: &str, ts: u64) -> bool {
-        self.groups_mut()
-            .any(|group| group.call(action).is_some() && group.touched(ts))
+        self.groups_mut().any(|group| {
+            group.call(action).is_some_and(|call| {
+                call.started = true;
+                true
+            }) && group.touched(ts)
+        })
     }
 
     /// `tool_call_completed`; false when the call is not in this turn.
@@ -443,8 +450,7 @@ impl Turn {
                     open: fold.ledgers,
                     first: ts,
                     last: ts,
-                    sections: Vec::new(),
-                    streaming: Vec::new(),
+                    ..Group::default()
                 });
                 let at = self.groups.len().saturating_sub(1);
                 self.entries.push(Entry::Group(at));
@@ -511,15 +517,20 @@ impl Turn {
                 Entry::Band(band) => band.rows(out),
             }
         }
-        if let Some((done, ts)) = &self.ended {
-            let head = match done.outcome {
-                TurnOutcome::Completed => "▣ completed",
-                TurnOutcome::Interrupted => "▣ interrupted",
-                TurnOutcome::Failed => "▣ failed",
+        if let Some((ending, ts)) = &self.ended {
+            let head = match ending {
+                Ending::Done(done) => {
+                    if let (TurnOutcome::Failed, Some(error)) = (done.outcome, &done.error) {
+                        format::failure(error, out);
+                    }
+                    match done.outcome {
+                        TurnOutcome::Completed => "▣ completed",
+                        TurnOutcome::Interrupted => "▣ interrupted",
+                        TurnOutcome::Failed => "▣ failed",
+                    }
+                }
+                Ending::CutShort => "▣ cut short: Fiber stopped",
             };
-            if let (TurnOutcome::Failed, Some(error)) = (done.outcome, &done.error) {
-                format::failure(error, out);
-            }
             let ms = ts.saturating_sub(self.started);
             let closing = format::closing(head, ms, self.calls, &self.spend.usage());
             out.push((format::dim(closing), None));
@@ -544,7 +555,7 @@ pub(crate) fn fold_line(turns: &mut Vec<Turn>, fold: &mut Fold, envelope: &Envel
     {
         turn.retry = None;
     }
-    match kind {
+    let changed = match kind {
         "turn_started" => read!(envelope, TurnStarted).is_some_and(|started| {
             let prompts = started
                 .input
@@ -601,12 +612,17 @@ pub(crate) fn fold_line(turns: &mut Vec<Turn>, fold: &mut Fold, envelope: &Envel
                 true
             })
         }),
-        "mcp_server_failed" => crash::fold(turns, fold, envelope),
+        "mcp_server_failed" | "fiber_started" | "fiber_exited" | "job_started"
+        | "job_completed" => crash::fold(turns, fold, envelope),
         "preamble_built" | "handoff_started" | "handoff_completed" | "context_nudged" => {
             handoff::fold(turns, fold, envelope)
         }
         _ => action.is_some_and(|action| fold_action(turns, fold, envelope, action)),
+    };
+    if let Some(turn) = open(turns) {
+        turn.last = turn.last.max(ts);
     }
+    changed
 }
 
 /// The turn still running, if any.
@@ -694,9 +710,7 @@ impl Group {
         if self.sections.last().is_none_or(|last| last.step != step) {
             self.sections.push(Section {
                 step,
-                thoughts: Vec::new(),
-                calls: Vec::new(),
-                failed: Vec::new(),
+                ..Section::default()
             });
         }
         let at = self.sections.len().saturating_sub(1);
@@ -745,7 +759,7 @@ impl Group {
                 .flat_map(|section| section.calls.iter_mut())
                 .find(|call| call.id == id)
                 .map(|call| &mut call.open),
-            Target::Login | Target::Note(_) => None,
+            Target::Login | Target::Note(_) | Target::Orphans(_) => None,
         };
         flag.map(|open| *open = !*open).is_some()
     }

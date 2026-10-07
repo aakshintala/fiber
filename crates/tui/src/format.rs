@@ -583,6 +583,9 @@ impl Group {
                     row.push_str(&format!(" +{added} −{removed}"));
                 }
                 match call.status {
+                    None if self.cut && call.started => {
+                        row.push_str(" · ? may have run; not run again");
+                    }
                     None => row.push_str(" · running"),
                     Some(CallStatus::Completed) => {}
                     Some(CallStatus::Failed) => row.push_str(" · failed"),

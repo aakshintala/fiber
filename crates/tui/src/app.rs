@@ -109,6 +109,8 @@ pub(crate) enum Target {
     Login,
     /// A handoff's note.
     Note(usize),
+    /// The jobs a resumed process marked orphaned.
+    Orphans(usize),
 }
 
 /// The terminal's state.

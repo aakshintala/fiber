@@ -607,7 +607,8 @@ fn tool_group_ledger_open_with_a_call_open() {
             crate::app::Target::Group(_)
             | crate::app::Target::Thought(_)
             | crate::app::Target::Login
-            | crate::app::Target::Note(_) => None,
+            | crate::app::Target::Note(_)
+            | crate::app::Target::Orphans(_) => None,
         })
         .nth(1);
     if let Some(edit) = edit {
