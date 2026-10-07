@@ -12,6 +12,9 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 
 use contract::ErrorCode;
 
@@ -330,6 +333,9 @@ fn a_corrupt_index_is_a_ls_files_error() {
     }
 }
 
+/// How long the ignored-listing child may run before the test kills it and fails.
+const CHILD_DEADLINE: Duration = Duration::from_secs(60);
+
 #[test]
 fn git_environment_cannot_redirect_the_ignored_listing() {
     if let Ok(path) = std::env::var("FIBER_WORKTREE_IGNORED_ENV_CHILD") {
@@ -359,7 +365,7 @@ fn git_environment_cannot_redirect_the_ignored_listing() {
     let wrong_index = home.path().join("wrong-index");
     fs::write(&wrong_index, "not an index").unwrap();
     let name = module_path!().split_once("::").unwrap().1;
-    let status = Command::new(std::env::current_exe().unwrap())
+    let mut child = Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
             &format!("{name}::git_environment_cannot_redirect_the_ignored_listing"),
@@ -372,8 +378,15 @@ fn git_environment_cannot_redirect_the_ignored_listing() {
         .env("GIT_INDEX_FILE", &wrong_index)
         .env("FIBER_WORKTREE_IGNORED_ENV_CHILD", &path)
         .stdin(std::process::Stdio::null())
-        .status()
+        .spawn()
         .unwrap();
+    let pid = child.id();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || tx.send(child.wait().unwrap()));
+    let Ok(status) = rx.recv_timeout(CHILD_DEADLINE) else {
+        fakes::kill_pid(pid, "KILL").unwrap();
+        panic!("waited {CHILD_DEADLINE:?} for the ignored-listing child to exit");
+    };
     assert!(status.success(), "the listing must see past the redirect");
 }
 

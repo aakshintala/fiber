@@ -29,7 +29,6 @@ fn groups_sum_only_the_listed_paths() {
     fs::write(home.path().join("sub/t"), "x".repeat(10 * 1024)).unwrap();
     let summary = summarize(home.path(), &[entry("sub/build", true)]);
     assert_eq!(summary.groups, vec![("sub/".to_owned(), 5)]);
-    assert_eq!(summary.bytes, 5);
     assert_eq!(summary.unreadable, 0);
 }
 
@@ -74,7 +73,6 @@ fn summarize_orders_by_bytes_then_label() {
             ("b".to_owned(), 6),
         ]
     );
-    assert_eq!(summary.bytes, 22);
 }
 
 #[test]
@@ -137,19 +135,16 @@ fn a_control_character_in_a_name_prints_escaped() {
 fn segment_strings() {
     let one = Summary {
         groups: vec![("target/".to_owned(), 5)],
-        bytes: 5,
         unreadable: 0,
     };
     assert_eq!(segment(&one), "  ignored 5 B: target/");
     let two = Summary {
         groups: vec![("target/".to_owned(), 8192), (".env".to_owned(), 6)],
-        bytes: 8198,
         unreadable: 0,
     };
     assert_eq!(segment(&two), "  ignored 8.0 KiB: target/, .env");
     let unread = Summary {
         groups: vec![("target/".to_owned(), 5120)],
-        bytes: 5120,
         unreadable: 1,
     };
     assert_eq!(
@@ -158,7 +153,6 @@ fn segment_strings() {
     );
     let empty = Summary {
         groups: Vec::new(),
-        bytes: 0,
         unreadable: 0,
     };
     assert_eq!(segment(&empty), "");

@@ -11,8 +11,6 @@ use std::path::{Path, PathBuf};
 pub(crate) struct Summary {
     /// Each top-level label with its bytes, by bytes descending then label.
     pub(crate) groups: Vec<(String, u64)>,
-    /// The sum of the group bytes.
-    pub(crate) bytes: u64,
     /// How many entries could not be read.
     pub(crate) unreadable: u64,
 }
@@ -52,10 +50,8 @@ pub(crate) fn summarize(root: &Path, entries: &[worktree::IgnoredEntry]) -> Summ
         })
         .collect();
     labeled.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-    let bytes = labeled.iter().map(|(_, size)| size).sum();
     Summary {
         groups: labeled,
-        bytes,
         unreadable,
     }
 }
@@ -72,9 +68,10 @@ pub(crate) fn segment(summary: &Summary) -> String {
         .iter()
         .map(|(label, _)| label.as_str())
         .collect();
+    let bytes: u64 = summary.groups.iter().map(|(_, size)| size).sum();
     let mut out = format!(
         "  ignored {}: {}",
-        super::format_size(summary.bytes),
+        super::format_size(bytes),
         labels.join(", ")
     );
     if summary.unreadable > 0 {
