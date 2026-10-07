@@ -12,7 +12,7 @@
 use contract::ErrorCode;
 use mlua::{Lua, LuaSerdeExt, Value as LuaValue};
 
-use super::{as_failure, code_name, fail, install};
+use super::{Failure, as_failure, code_name, install};
 use crate::lua::Deadline;
 
 fn lua() -> Lua {
@@ -26,6 +26,13 @@ fn lib(lua: &Lua) -> super::FailureLib {
 fn converted(lua: &Lua, err: LuaValue) -> LuaValue {
     let lib = lib(lua);
     lib.convert.call(err).unwrap()
+}
+
+fn external_failure(code: ErrorCode, message: &str) -> mlua::Error {
+    mlua::Error::external(Failure {
+        code,
+        message: message.to_owned(),
+    })
 }
 
 fn external(err: impl std::error::Error + Send + Sync + 'static) -> LuaValue {
@@ -202,7 +209,10 @@ fn pcall_converts_a_rust_host_failure_to_its_table() {
         .set(
             "boom",
             lua.create_function(|_, ()| {
-                Err::<(), _>(fail(ErrorCode::ConnectionFailed, "host.http: nope".into()))
+                Err::<(), _>(external_failure(
+                    ErrorCode::ConnectionFailed,
+                    "host.http: nope",
+                ))
             })
             .unwrap(),
         )
@@ -214,6 +224,53 @@ fn pcall_converts_a_rust_host_failure_to_its_table() {
         ),
         serde_json::json!([false, "connection_failed", "host.http: nope"])
     );
+}
+
+/// The failure a raw `coroutine.resume` of `code` catches: its code and
+/// message. The value is the table at its source, not userdata.
+fn resumed(lua: &Lua, code: &str) -> (String, String) {
+    let (ok, err): (bool, LuaValue) = lua
+        .load(format!(
+            "return coroutine.resume(coroutine.create(function() {code} end))"
+        ))
+        .eval()
+        .unwrap();
+    assert!(!ok, "{code} unexpectedly succeeded");
+    let LuaValue::Table(failed) = err else {
+        panic!("{code} raised no failure table");
+    };
+    (failed.get("code").unwrap(), failed.get("message").unwrap())
+}
+
+#[test]
+fn wrap_raises_the_table_at_its_source() {
+    let lua = lua();
+    let lib = lib(&lua);
+    // A coded failure returns `(nil, code, message)`; the wrapper raises
+    // the table, which even a raw `coroutine.resume` catches as a table.
+    let raw = lua
+        .create_function(|lua, ()| {
+            Ok(mlua::MultiValue::from_vec(vec![
+                LuaValue::Nil,
+                LuaValue::String(lua.create_string("connection_failed")?),
+                LuaValue::String(lua.create_string("host.http: nope")?),
+            ]))
+        })
+        .unwrap();
+    let wrapped = super::wrap(&lua, raw, &lib.failure).unwrap();
+    lua.globals().set("wrapped", wrapped).unwrap();
+    assert_eq!(
+        resumed(&lua, "return wrapped()"),
+        ("connection_failed".into(), "host.http: nope".into())
+    );
+    // Success passes through: a value, and nil for a missing one.
+    let raw = lua
+        .create_function(|_, ()| Ok(mlua::MultiValue::from_vec(vec![LuaValue::Nil])))
+        .unwrap();
+    let wrapped = super::wrap(&lua, raw, &lib.failure).unwrap();
+    lua.globals().set("missing", wrapped).unwrap();
+    let value: LuaValue = lua.load("return missing()").eval().unwrap();
+    assert_eq!(value, LuaValue::Nil);
 }
 
 #[test]
@@ -240,7 +297,7 @@ fn xpcall_calls_its_handler_with_the_error_and_keeps_every_return() {
         .set(
             "boom",
             lua.create_function(|_, ()| {
-                Err::<(), _>(fail(ErrorCode::Timeout, "host.http: slow".into()))
+                Err::<(), _>(external_failure(ErrorCode::Timeout, "host.http: slow"))
             })
             .unwrap(),
         )
@@ -251,5 +308,29 @@ fn xpcall_calls_its_handler_with_the_error_and_keeps_every_return() {
             "local ok, code = xpcall(boom, function(e) return e.code end) return { ok, code }",
         ),
         serde_json::json!([false, "timeout"])
+    );
+}
+
+#[test]
+fn xpcall_forwards_extra_arguments_to_the_function() {
+    let lua = prelude();
+    assert_eq!(
+        json(
+            &lua,
+            "return table.pack(xpcall(function(a, b) return a + b, a - b end, tostring, 3, 1))"
+        ),
+        serde_json::json!([true, 4, 2])
+    );
+}
+
+#[test]
+fn xpcall_runs_a_failing_handler_protected() {
+    let lua = prelude();
+    assert_eq!(
+        json(
+            &lua,
+            "return table.pack(xpcall(function() error('boom', 0) end, function(e) error('handler:' .. e, 0) end))"
+        ),
+        serde_json::json!([false, "handler:boom"])
     );
 }

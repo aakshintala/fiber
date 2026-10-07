@@ -304,6 +304,42 @@ fn pcall_of(lua: &Lua, code: &str) -> (String, String) {
 }
 
 #[test]
+fn a_secret_failure_is_the_table_at_its_source() {
+    // Even a raw `coroutine.resume`, which the prelude's `pcall` never
+    // sees, catches the table: the Lua half raises it at the call.
+    let lua = lua();
+    let (ok, err): (bool, LuaValue) = lua
+        .load("return coroutine.resume(coroutine.create(function() return host.secret('a/b') end))")
+        .eval()
+        .unwrap();
+    assert!(!ok);
+    let LuaValue::Table(failed) = err else {
+        panic!("host.secret raised no failure table");
+    };
+    let (code, message): (String, String) =
+        (failed.get("code").unwrap(), failed.get("message").unwrap());
+    assert_eq!(code, "invalid_arguments");
+    assert!(message.contains("not a secret's name"), "{message}");
+}
+
+#[test]
+fn pkce_resolves_through_its_wrapper() {
+    let lua = lua();
+    let (ok, pair): (bool, LuaValue) = lua
+        .load("return coroutine.resume(coroutine.create(host.oauth.pkce))")
+        .eval()
+        .unwrap();
+    assert!(ok);
+    let LuaValue::Table(pair) = pair else {
+        panic!("host.oauth.pkce returned no table");
+    };
+    for field in ["challenge", "verifier"] {
+        let value: String = pair.get(field).unwrap();
+        assert_eq!(value.len(), 43, "{field}");
+    }
+}
+
+#[test]
 fn a_secret_with_a_bad_name_is_invalid_arguments() {
     let lua = lua_prelude(PathBuf::from("/nonexistent-fiber-home"));
     let (code, message) = pcall_of(&lua, "return host.secret('a/b')");

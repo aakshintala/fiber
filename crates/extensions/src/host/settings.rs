@@ -21,12 +21,14 @@ pub(crate) struct Settings {
 }
 
 /// Installs `host.config` on `host`. Without a session both calls raise:
-/// there is no configuration to read and no file to write.
+/// there is no configuration to read and no file to write. `failure` is
+/// the `{ code, message }` constructor the Lua halves raise.
 pub(crate) fn install(
     lua: &Lua,
     host: &Table,
     extension: &str,
     session: Option<super::Session>,
+    failure: &mlua::Function,
 ) -> mlua::Result<()> {
     let session = session.map(|session| Settings {
         extension: extension.to_owned(),
@@ -34,72 +36,79 @@ pub(crate) fn install(
         config: Rc::new(RefCell::new(session.config)),
     });
     let table = lua.create_table()?;
+    // A coded I/O failure returns `(nil, code, message)` for the Lua half
+    // to raise as the table; a wrong key, scope or value stays a string.
     {
         let session = session.clone();
-        table.set(
-            "get",
-            lua.create_function(move |lua, key: LuaString| {
-                let Some(session) = session.as_ref() else {
-                    return Err(no_session("get"));
-                };
-                let key = key_text("get", &key)?;
-                let repo: Vec<&str> = session.repo_settings.iter().map(String::as_str).collect();
-                let value = session
-                    .config
-                    .borrow()
-                    .extension_setting(&session.extension, &repo, &key)
-                    .map_err(|err| key_error("get", &key, err))?;
-                match value {
-                    Some(value) => to_lua(lua, &value),
-                    None => Ok(LuaValue::Nil),
-                }
-            })?,
-        )?;
+        let raw = lua.create_function(move |lua, key: LuaString| {
+            let Some(session) = session.as_ref() else {
+                return Err(no_session("get"));
+            };
+            let key = key_text("get", &key)?;
+            let repo: Vec<&str> = session.repo_settings.iter().map(String::as_str).collect();
+            match session
+                .config
+                .borrow()
+                .extension_setting(&session.extension, &repo, &key)
+            {
+                Ok(Some(value)) => Ok(mlua::MultiValue::from_vec(vec![to_lua(lua, &value)?])),
+                Ok(None) => Ok(mlua::MultiValue::from_vec(vec![LuaValue::Nil])),
+                Err(err) => match coded("get", &key, err) {
+                    Ok(message) => Err(runtime(message)),
+                    Err((code, message)) => failure::raw_failure(lua, &code, message),
+                },
+            }
+        })?;
+        table.set("get", failure::wrap(lua, raw, failure)?)?;
     }
     {
         let session = session.clone();
-        table.set(
-            "set",
-            lua.create_function(
-                move |_, (key, value, scope): (LuaString, LuaValue, LuaValue)| {
-                    let Some(session) = session.as_ref() else {
-                        return Err(no_session("set"));
-                    };
-                    if matches!(value, LuaValue::Nil) {
-                        return Err(runtime("host.config.set: value must not be nil".into()));
-                    }
-                    let scope = if let LuaValue::String(s) = &scope {
-                        s.as_bytes()
-                    } else {
+        let raw = lua.create_function(
+            move |lua, (key, value, scope): (LuaString, LuaValue, LuaValue)| {
+                let Some(session) = session.as_ref() else {
+                    return Err(no_session("set"));
+                };
+                if matches!(value, LuaValue::Nil) {
+                    return Err(runtime("host.config.set: value must not be nil".into()));
+                }
+                let scope = if let LuaValue::String(s) = &scope {
+                    s.as_bytes()
+                } else {
+                    return Err(runtime(
+                        "host.config.set: scope must be \"machine\" or \"project\"".into(),
+                    ));
+                };
+                let scope = match scope.as_ref() {
+                    b"machine" => Scope::Machine,
+                    b"project" => Scope::Project,
+                    _ => {
                         return Err(runtime(
                             "host.config.set: scope must be \"machine\" or \"project\"".into(),
                         ));
-                    };
-                    let scope = match scope.as_ref() {
-                        b"machine" => Scope::Machine,
-                        b"project" => Scope::Project,
-                        _ => {
-                            return Err(runtime(
-                                "host.config.set: scope must be \"machine\" or \"project\"".into(),
-                            ));
-                        }
-                    };
-                    let key = key_text("set", &key)?;
-                    let json = to_json(&value).map_err(|err| {
-                        runtime(format!(
-                            "host.config.set: {}",
-                            err.to_string().lines().next().unwrap_or_default()
-                        ))
-                    })?;
-                    session
-                        .config
-                        .borrow_mut()
-                        .set_extension_setting(&session.extension, scope, &key, json)
-                        .map_err(|err| key_error("set", &key, err))?;
-                    Ok(())
-                },
-            )?,
+                    }
+                };
+                let key = key_text("set", &key)?;
+                let json = to_json(&value).map_err(|err| {
+                    runtime(format!(
+                        "host.config.set: {}",
+                        err.to_string().lines().next().unwrap_or_default()
+                    ))
+                })?;
+                match session.config.borrow_mut().set_extension_setting(
+                    &session.extension,
+                    scope,
+                    &key,
+                    json,
+                ) {
+                    Ok(()) => Ok(mlua::MultiValue::from_vec(vec![])),
+                    Err(err) => match coded("set", &key, err) {
+                        Ok(message) => Err(runtime(message)),
+                        Err((code, message)) => failure::raw_failure(lua, &code, message),
+                    },
+                }
+            },
         )?;
+        table.set("set", failure::wrap(lua, raw, failure)?)?;
     }
     host.set("config", table)?;
     Ok(())
@@ -127,16 +136,16 @@ fn key_text(op: &str, key: &LuaString) -> Result<String, mlua::Error> {
 
 /// A failure of `extension_setting` or `set_extension_setting`: an
 /// unparseable key, or one the layer may not take, is an error in the
-/// calling code; anything the files did is the failure the call raises,
-/// under the registry's own code.
-fn key_error(op: &str, key: &str, err: ConfigError) -> mlua::Error {
+/// calling code; anything the files did is the coded failure the call's Lua
+/// half raises, under the registry's own code.
+fn coded(op: &str, key: &str, err: ConfigError) -> Result<String, (contract::ErrorCode, String)> {
     if matches!(err, ConfigError::Override { .. }) {
-        runtime(format!("host.config.{op}: `{key}` is not a dotted key"))
+        Ok(format!("host.config.{op}: `{key}` is not a dotted key"))
     } else if matches!(err, ConfigError::Refused { .. }) {
-        runtime(format!("host.config.{op}: {err}"))
+        Ok(format!("host.config.{op}: {err}"))
     } else {
         let code = err.code();
-        failure::fail(code, format!("host.config.{op}: {err}"))
+        Err((code, format!("host.config.{op}: {err}")))
     }
 }
 

@@ -14,7 +14,7 @@ use contract::files::PathLock;
 use mlua::{Lua, LuaString, Table, Value as LuaValue};
 use serde_json::Value;
 
-use super::{FakeLock, Fs, install};
+use super::{Ctx, FakeLock, Fs, install};
 
 /// How long a test waits for a lock or a thread before failing.
 const DEADLINE: Duration = Duration::from_secs(10);
@@ -89,14 +89,18 @@ impl Setup {
         let session = self.session();
         let lua = Lua::new();
         let host = lua.create_table().unwrap();
+        let failure = crate::host::failure::install(&lua).unwrap().failure;
         install(
             &lua,
             &host,
-            self.workspace(),
-            self.home(),
-            extension,
-            crate::MEMORY_CAP,
-            Some(&session),
+            Ctx {
+                workspace: self.workspace(),
+                home: self.home(),
+                extension,
+                memory_cap: crate::MEMORY_CAP,
+                session: Some(&session),
+            },
+            &failure,
         )
         .unwrap();
         lua.globals().set("host", host).unwrap();
@@ -109,14 +113,18 @@ impl Setup {
     fn lua_without_session(&self) -> Lua {
         let lua = Lua::new();
         let host = lua.create_table().unwrap();
+        let failure = crate::host::failure::install(&lua).unwrap().failure;
         install(
             &lua,
             &host,
-            std::env::current_dir().unwrap(),
-            self.home(),
-            "fiber.test/notes",
-            crate::MEMORY_CAP,
-            None,
+            Ctx {
+                workspace: std::env::current_dir().unwrap(),
+                home: self.home(),
+                extension: "fiber.test/notes",
+                memory_cap: crate::MEMORY_CAP,
+                session: None,
+            },
+            &failure,
         )
         .unwrap();
         lua.globals().set("host", host).unwrap();
@@ -714,6 +722,22 @@ fn pcall_of(lua: &Lua, code: &str) -> (String, String) {
     (failed.get("code").unwrap(), failed.get("message").unwrap())
 }
 
+/// The failure a raw `coroutine.resume` of `code` catches: its code and
+/// message. The value is the table at its source, not userdata.
+fn resume_of(lua: &Lua, code: &str) -> (String, String) {
+    let (ok, err): (bool, LuaValue) = lua
+        .load(format!(
+            "return coroutine.resume(coroutine.create(function() {code} end))"
+        ))
+        .eval()
+        .unwrap();
+    assert!(!ok, "{code} unexpectedly succeeded");
+    let LuaValue::Table(failed) = err else {
+        panic!("{code} raised no failure table");
+    };
+    (failed.get("code").unwrap(), failed.get("message").unwrap())
+}
+
 #[test]
 fn every_failure_carries_its_code_for_pcall() {
     let setup = Setup::new();
@@ -758,6 +782,28 @@ fn every_failure_carries_its_code_for_pcall() {
     ] {
         let (name, message) = pcall_of(&lua, code);
         assert_eq!(name, lua_code, "{code}");
+        assert!(message.starts_with(starts), "{code}: {message}");
+    }
+}
+
+#[test]
+fn a_resumed_failure_is_the_table_at_its_source() {
+    let setup = Setup::new();
+    let lua = setup.lua();
+    for (code, want, starts) in [
+        (
+            "return host.fs.read(\"missing.md\")",
+            "not_found",
+            "host.fs.read",
+        ),
+        (
+            "host.fs.write(\"no/parent/x.md\", \"x\")",
+            "not_found",
+            "host.fs.write",
+        ),
+    ] {
+        let (name, message) = resume_of(&lua, code);
+        assert_eq!(name, want, "{code}");
         assert!(message.starts_with(starts), "{code}: {message}");
     }
 }

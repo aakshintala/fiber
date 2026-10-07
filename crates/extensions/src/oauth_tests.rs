@@ -333,24 +333,37 @@ fn a_credential_file_that_cannot_be_read_or_written_is_io_failed() {
     let cred_dir = dir.path().join("credentials").join("acme");
     let path = cred_dir.join("default");
     // Each phase runs in its own VM: dropping it frees the held lock.
+    // The methods return `(nil, code, message)` on a coded failure, which
+    // the refresh half raises as the table; assert the triple and the
+    // table it builds.
     let failed = |held: Held, method: &str| {
         let lua = Lua::new();
         let lib = crate::host::failure::install(&lua).unwrap();
         lua.globals().set("held", held).unwrap();
-        let err = lua.load(method).eval::<LuaValue>().unwrap_err();
-        let converted: LuaValue = lib.convert.call(LuaValue::Error(Box::new(err))).unwrap();
-        let LuaValue::Table(table) = converted else {
-            panic!("{method} raised no failure table");
+        let values: mlua::MultiValue = lua.load(format!("return {method}")).eval().unwrap();
+        let mut values = values.into_vec();
+        assert_eq!(values.len(), 3, "{method} returned no failure triple");
+        let message = values.pop().unwrap();
+        let code = values.pop().unwrap();
+        assert_eq!(values.pop().unwrap(), mlua::Value::Nil);
+        let (code, message) = match (code, message) {
+            (mlua::Value::String(code), mlua::Value::String(message)) => (
+                code.to_str().unwrap().to_owned(),
+                message.to_str().unwrap().to_owned(),
+            ),
+            _ => panic!("{method} raised no failure triple"),
         };
-        let (code, message): (String, String) =
+        let table: mlua::Table = lib.failure.call((code.clone(), message.clone())).unwrap();
+        let (tcode, tmessage): (String, String) =
             (table.get("code").unwrap(), table.get("message").unwrap());
+        assert_eq!((tcode, tmessage), (code.clone(), message.clone()));
         (code, message)
     };
     // An unreadable file fails the read.
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
     let clock = fakes::clock::FakeClock::new();
     let held = Held::new(file.try_lock().unwrap().unwrap(), clock);
-    let (code, message) = failed(held, "return held:read()");
+    let (code, message) = failed(held, "held:read()");
     assert_eq!(code, "io_failed");
     assert!(message.contains("default"), "{message}");
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
@@ -358,7 +371,7 @@ fn a_credential_file_that_cannot_be_read_or_written_is_io_failed() {
     let clock = fakes::clock::FakeClock::new();
     let held = Held::new(file.try_lock().unwrap().unwrap(), clock);
     std::fs::set_permissions(&cred_dir, std::fs::Permissions::from_mode(0o555)).unwrap();
-    let (code, message) = failed(held, "return held:write({ token = 't', expires_at = 1 })");
+    let (code, message) = failed(held, "held:write({ token = 't', expires_at = 1 })");
     assert_eq!(code, "io_failed");
     assert!(message.contains("default"), "{message}");
     std::fs::set_permissions(&cred_dir, std::fs::Permissions::from_mode(0o700)).unwrap();

@@ -139,28 +139,36 @@ pub(crate) fn install(
     } = ctx;
     let host = lua.create_table()?;
     let secret_home = home.clone();
-    host.set(
-        "secret",
-        lua.create_function(move |_, name: String| {
-            config::read_secret(&secret_home, &name)
-                .map(|secret| secret.map(|s| s.expose().trim().to_owned()))
-                // The failure's code is the registry's own: an unreadable
-                // file is `io_failed`, a name that is not one file name
-                // `invalid_arguments`. Uncaught, the callback fails as it
-                // does today; `pcall` catches the table.
-                .map_err(|source| failure::fail(source.code(), source.to_string()))
-        })?,
-    )?;
+    let secret_raw = lua.create_function(move |lua, name: String| {
+        // A coded failure returns `(nil, code, message)` for the Lua half
+        // to raise as the table; a wrong name stays a string error.
+        match config::read_secret(&secret_home, &name) {
+            Ok(secret) => Ok(match secret.map(|s| s.expose().trim().to_owned()) {
+                Some(secret) => {
+                    MultiValue::from_vec(vec![LuaValue::String(lua.create_string(secret)?)])
+                }
+                None => MultiValue::from_vec(vec![LuaValue::Nil]),
+            }),
+            Err(source) => {
+                let (code, message) = (source.code(), source.to_string());
+                failure::raw_failure(lua, &code, message)
+            }
+        }
+    })?;
+    host.set("secret", failure::wrap(lua, secret_raw, &failure)?)?;
     fs::install(
         lua,
         &host,
-        workspace,
-        home,
-        &extension,
-        memory_cap,
-        session.as_ref(),
+        fs::Ctx {
+            workspace,
+            home,
+            extension: &extension,
+            memory_cap,
+            session: session.as_ref(),
+        },
+        &failure,
     )?;
-    settings::install(lua, &host, &extension, session)?;
+    settings::install(lua, &host, &extension, session, &failure)?;
     let tag = lua.create_table()?;
     lua.load(HTTP).set_name("=host.http").call::<()>((
         host.clone(),

@@ -78,7 +78,8 @@ impl Setup {
     fn lua(&self, session: Option<crate::host::Session>) -> Lua {
         let lua = Lua::new();
         let host = lua.create_table().unwrap();
-        install(&lua, &host, EXTENSION, session).unwrap();
+        let failure = crate::host::failure::install(&lua).unwrap().failure;
+        install(&lua, &host, EXTENSION, session, &failure).unwrap();
         lua.globals().set("host", host).unwrap();
         lua
     }
@@ -280,7 +281,8 @@ fn two_sequential_sets_both_land() {
             };
             let lua = Lua::new();
             let host = lua.create_table().unwrap();
-            install(&lua, &host, EXTENSION, Some(session)).unwrap();
+            let failure = crate::host::failure::install(&lua).unwrap().failure;
+            install(&lua, &host, EXTENSION, Some(session), &failure).unwrap();
             lua.globals().set("host", host).unwrap();
             lua.load(format!(
                 "host.config.set(\"slot{value}\", {value}, \"machine\")"
@@ -332,6 +334,34 @@ fn pcall_of(lua: &Lua, code: &str) -> (String, String) {
         panic!("{code} raised no failure table");
     };
     (failed.get("code").unwrap(), failed.get("message").unwrap())
+}
+
+/// The failure a raw `coroutine.resume` of `code` catches: its code and
+/// message. The value is the table at its source, not userdata.
+fn resume_of(lua: &Lua, code: &str) -> (String, String) {
+    let (ok, err): (bool, LuaValue) = lua
+        .load(format!(
+            "return coroutine.resume(coroutine.create(function() {code} end))"
+        ))
+        .eval()
+        .unwrap();
+    assert!(!ok, "{code} unexpectedly succeeded");
+    let LuaValue::Table(failed) = err else {
+        panic!("{code} raised no failure table");
+    };
+    (failed.get("code").unwrap(), failed.get("message").unwrap())
+}
+
+#[test]
+fn a_resumed_coded_failure_is_the_table_at_its_source() {
+    let setup = Setup::new();
+    let config = setup.load(&[]);
+    let lua = setup.lua(Some(setup.session(config, &[])));
+    // Another session left invalid JSON on disk after this one loaded.
+    setup.write(&setup.config_file("machine"), "{invalid");
+    let (code, message) = resume_of(&lua, "host.config.set(\"a\", 1, \"machine\")");
+    assert_eq!(code, "config_invalid");
+    assert!(message.starts_with("host.config.set: "), "{message}");
 }
 
 #[test]

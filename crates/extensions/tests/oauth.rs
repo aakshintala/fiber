@@ -106,6 +106,7 @@ fiber.provider("acme", { credential = { timeout = 60000, run = function()
   return host.oauth.refresh(function(stored)
     local mode = host.secret("mode")
     if mode == "raise" then error("boom") end
+    if mode == "literal" then error({ code = "connection_failed", message = "offline" }) end
     if mode == "pcall_dead" then
       try_http({ url = host.secret("dead") .. "/token" })
       error("my own failure")
@@ -1226,6 +1227,13 @@ fiber.provider("acme", { credential = { timeout = 60000, run = function()
   if mode == "string" then
     return caught(pcall(host.oauth.refresh, function() error("boom") end))
   end
+  if mode == "literal" then
+    local ok, err = pcall(host.oauth.refresh, function()
+      error({ code = "connection_failed", message = "offline" })
+    end)
+    if ok then return { token = "unexpected-ok", expires_at = 1700003600 } end
+    return { token = "caught:" .. err.code .. ":" .. err.message, expires_at = 1700003600 }
+  end
   if mode == "table" then
     return caught(pcall(host.oauth.refresh, function()
       host.http({ url = host.secret("dead") .. "/token", method = "POST" })
@@ -1347,6 +1355,35 @@ fn a_refresh_function_that_raises_a_table_passes_it_through_for_pcall() {
         caught_token(&env, &ext, &server, "table"),
         "caught:connection_failed"
     );
+}
+
+#[test]
+fn a_refresh_function_that_raises_a_failure_table_keeps_its_message() {
+    // The exact table passes through refresh handling unchanged: its own
+    // code and its own message, not the stringified table.
+    let env = Env::new();
+    let ext = caught(&env, Arc::new(Recording::never()));
+    let server = OauthServer::start(vec![]);
+    env.store(&json!({ "token": "old", "expires_at": WALL + 100 }));
+    assert_eq!(
+        caught_token(&env, &ext, &server, "literal"),
+        "caught:connection_failed:offline"
+    );
+}
+
+#[test]
+fn an_uncaught_failure_table_keeps_todays_reached_code_and_its_message() {
+    // Nothing went out on the wire, so uncaught this is `authentication_failed`
+    // (today's reached code), with the table's own message.
+    let env = Env::new();
+    let ext = env.extension();
+    let server = OauthServer::start(vec![]);
+    let provider = env.provider(&ext, &server, "literal");
+    env.store(&json!({ "token": "old", "expires_at": WALL + 100 }));
+    let error = finish(&start_token(&provider)).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::AuthenticationFailed, "{error}");
+    assert!(error.to_string().contains("offline"), "{error}");
+    assert!(!error.to_string().contains("table:"), "{error}");
 }
 
 #[test]

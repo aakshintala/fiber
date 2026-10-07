@@ -235,10 +235,12 @@ function oauth.refresh(fn)
   local held, code, message = yield(tag, "lock")
   if held == nil then error(failure(code, message), 0) end
   local ok, result = run(function()
-    local stored = held:read()
+    local stored, code, message = held:read()
+    if code ~= nil then error(failure(code, message), 0) end
     if stored ~= nil and not held:due(stored) then return stored end
     local fresh = attempt(fn, stored)
-    held:write(fresh)
+    local _, wcode, wmessage = held:write(fresh)
+    if wcode ~= nil then error(failure(wcode, wmessage), 0) end
     return fresh
   end)
   held:release()
@@ -259,6 +261,9 @@ pub(crate) fn install(
 ) -> mlua::Result<()> {
     let oauth = lua.create_table()?;
     let need_browser = Arc::clone(&browser);
+    // `open` with nobody attached raises `Unattended`, which the prelude's
+    // `pcall` converts to the `authentication_failed` table and uncaught
+    // maps to `Error::Unattended`; a wrong argument stays a string error.
     oauth.set(
         "open",
         lua.create_function(move |_, url: String| {
@@ -271,18 +276,23 @@ pub(crate) fn install(
             Ok(())
         })?,
     )?;
-    oauth.set(
-        "pkce",
-        lua.create_function(|lua, ()| {
-            let verifier = verifier().map_err(|message| {
-                crate::host::failure::fail(contract::ErrorCode::IoFailed, message)
-            })?;
-            let pair = lua.create_table()?;
-            pair.set("challenge", challenge(&verifier))?;
-            pair.set("verifier", verifier)?;
-            Ok(pair)
-        })?,
-    )?;
+    let pkce_raw = lua.create_function(|lua, ()| {
+        let verifier = match verifier() {
+            Ok(verifier) => verifier,
+            Err(message) => {
+                return crate::host::failure::raw_failure(
+                    lua,
+                    &contract::ErrorCode::IoFailed,
+                    message,
+                );
+            }
+        };
+        let pair = lua.create_table()?;
+        pair.set("challenge", challenge(&verifier))?;
+        pair.set("verifier", verifier)?;
+        Ok(mlua::MultiValue::from_vec(vec![mlua::Value::Table(pair)]))
+    })?;
+    oauth.set("pkce", crate::host::failure::wrap(lua, pkce_raw, &failure)?)?;
     host.set("oauth", oauth)?;
     let in_entry = lua.create_function(move |_, ()| Ok(entry.get()))?;
     let refresh_failed =
@@ -294,11 +304,19 @@ pub(crate) fn install(
                     call: unattended.call.clone(),
                 }));
             }
-            let table_code = crate::host::failure::as_failure(&raised).map(|(code, _)| code);
+            // A failure table passes through unchanged: its own code and
+            // its own message, not the stringified table.
+            if let Some((code, table_message)) = crate::host::failure::as_failure(&raised) {
+                return Err::<(), _>(mlua::Error::external(RefreshFailed {
+                    reached,
+                    message: table_message,
+                    table_code: Some(code),
+                }));
+            }
             Err::<(), _>(mlua::Error::external(RefreshFailed {
                 reached,
                 message,
-                table_code,
+                table_code: None,
             }))
         })?;
     let need_person = lua.create_function(move |_, call: String| {
@@ -372,14 +390,6 @@ impl Held {
         }
     }
 
-    fn with<T>(&self, f: impl FnOnce(&CredentialLock) -> mlua::Result<T>) -> mlua::Result<T> {
-        let held = self.lock.borrow();
-        let lock = held.as_ref().ok_or_else(|| {
-            mlua::Error::runtime("host.oauth.refresh: the credential is no longer held")
-        })?;
-        f(lock)
-    }
-
     /// Whether `stored` needs refreshing: not a usable credential, or one
     /// that expires within [`REFRESH_BEFORE`].
     fn due(&self, stored: &Value) -> bool {
@@ -406,28 +416,46 @@ fn usable(value: &Value) -> Option<i64> {
 impl UserData for Held {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         methods.add_method("read", |lua, this, ()| {
-            let stored = this.with(|lock| {
-                lock.read().map_err(|e| {
-                    crate::host::failure::fail(contract::ErrorCode::IoFailed, e.to_string())
-                })
-            })?;
-            stored.map_or(Ok(LuaValue::Nil), |value| host::to_lua(lua, &value))
+            // A coded failure returns `(nil, code, message)` for the refresh
+            // half to raise as the table; no longer held stays a string.
+            let held = this.lock.borrow();
+            let Some(lock) = held.as_ref() else {
+                return Err(mlua::Error::runtime(
+                    "host.oauth.refresh: the credential is no longer held",
+                ));
+            };
+            match lock.read() {
+                Ok(None) => Ok(mlua::MultiValue::from_vec(vec![LuaValue::Nil])),
+                Ok(Some(value)) => Ok(mlua::MultiValue::from_vec(vec![host::to_lua(lua, &value)?])),
+                Err(e) => {
+                    let (code, message) = (e.code(), e.to_string());
+                    crate::host::failure::raw_failure(lua, &code, message)
+                }
+            }
         });
         methods.add_method("due", |_, this, stored: LuaValue| {
             Ok(host::to_json(&stored).map_or(true, |value| this.due(&value)))
         });
-        methods.add_method("write", |_, this, fresh: LuaValue| {
+        methods.add_method("write", |lua, this, fresh: LuaValue| {
             let value = host::to_json(&fresh)?;
             if usable(&value).is_none() {
                 return Err(mlua::Error::runtime(
                     "host.oauth.refresh: the function must return a table with a `token` string and an `expires_at` whole number of seconds",
                 ));
             }
-            this.with(|lock| {
-                lock.write(&value).map_err(|e| {
-                    crate::host::failure::fail(contract::ErrorCode::IoFailed, e.to_string())
-                })
-            })
+            let held = this.lock.borrow();
+            let Some(lock) = held.as_ref() else {
+                return Err(mlua::Error::runtime(
+                    "host.oauth.refresh: the credential is no longer held",
+                ));
+            };
+            match lock.write(&value) {
+                Ok(()) => Ok(mlua::MultiValue::from_vec(vec![])),
+                Err(e) => {
+                    let (code, message) = (e.code(), e.to_string());
+                    crate::host::failure::raw_failure(lua, &code, message)
+                }
+            }
         });
         methods.add_method("release", |_, this, ()| {
             this.lock.borrow_mut().take();

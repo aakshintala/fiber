@@ -7,21 +7,20 @@
 //! Instead each failing call has a Lua half, as `host.http` and `host.exec`
 //! already have, that receives `(nil, code, message)` from Rust or from
 //! `coroutine.yield` and raises `error(failure(code, message), 0)`. Calls
-//! implemented wholly in Rust (`host.fs`, `host.secret`, `host.config`,
-//! `host.data_dir`, `host.oauth.open`) raise [`Failure`] as an external
-//! error, which the prelude's `pcall` converts to the same table with
-//! [`convert`]; uncaught, mlua stringifies the table through `__tostring`
-//! (or the external through its `Display`), so the callback's failure text
-//! is `message` either way. A wrong argument stays a string error, "an
+//! implemented wholly in Rust (`host.secret`, `host.fs`, `host.config`,
+//! `host.oauth.pkce` and the held credential's methods) return `(nil,
+//! code, message)` from Rust for a coded failure, and the Lua half [`wrap`]
+//! raises the same table at the call site; uncaught, mlua stringifies the
+//! failure text is `message` either way. A wrong argument stays a string error, "an
 //! error in the calling code", as do the entry-script refusals.
 
 use contract::ErrorCode;
-use mlua::{Function, Lua, Table, Value as LuaValue};
+use mlua::{Function, Lua, MultiValue, Table, Value as LuaValue};
 
-/// A host call's failure: its stable code and what a person reads. Raised
-/// from Rust host functions; the prelude's `pcall` converts it to the same
-/// table [`install`] builds, and uncaught it fails the callback as any Lua
-/// error does, with [`message`](Failure::message) as its text.
+/// A host call's failure: its stable code and what a person reads. The
+/// prelude's `pcall` converts a caught one to the same table [`install`]
+/// builds; direct host calls instead return `(nil, code, message)` for
+/// [`wrap`] to raise, so the value is the table at its source.
 #[derive(Debug)]
 pub(crate) struct Failure {
     /// The stable label a caller switches on, never parsing the message.
@@ -37,13 +36,6 @@ impl std::fmt::Display for Failure {
 }
 
 impl std::error::Error for Failure {}
-
-/// Raises the host call's failure: its code and message reach Lua as
-/// `(nil, code, message)` for the call's Lua half, or as a table through
-/// the prelude's `pcall`.
-pub(crate) fn fail(code: ErrorCode, message: String) -> mlua::Error {
-    mlua::Error::external(Failure { code, message })
-}
 
 /// The code's name as Lua sees it: the registry's snake_case label.
 pub(crate) fn code_name(code: &ErrorCode) -> String {
@@ -83,6 +75,42 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<FailureLib> {
         converted(lua, &convert_mt, &err).map(|table| table.map_or(LuaValue::Nil, LuaValue::Table))
     })?;
     Ok(FailureLib { failure, convert })
+}
+
+/// Wraps a raw host function that returns its value on success and
+/// `(nil, code, message)` on a coded failure: the wrapper raises
+/// `error(failure(code, message), 0)` at the call site, so the value is
+/// the table at its source even for a caller catching it with
+/// `coroutine.resume`. A wrong argument stays a string error: the raw
+/// function raises it, and the wrapper never sees it.
+pub(crate) fn wrap(lua: &Lua, raw: Function, failure: &Function) -> mlua::Result<Function> {
+    lua.load(
+        r#"
+local raw, failure = ...
+local pack, unpack = table.pack, table.unpack
+return function(...)
+  local r = pack(raw(...))
+  if r[2] ~= nil then error(failure(r[2], r[3]), 0) end
+  return unpack(r, 1, r.n)
+end
+"#,
+    )
+    .set_name("=host failure wrap")
+    .call((raw, failure.clone()))
+}
+
+/// The `(nil, code, message)` a raw host function returns for a coded
+/// failure, so [`wrap`] raises it as the table.
+pub(crate) fn raw_failure(
+    lua: &Lua,
+    code: &ErrorCode,
+    message: String,
+) -> mlua::Result<MultiValue> {
+    Ok(MultiValue::from_vec(vec![
+        LuaValue::Nil,
+        LuaValue::String(lua.create_string(code_name(code))?),
+        LuaValue::String(lua.create_string(message)?),
+    ]))
 }
 
 /// The `{ code, message }` table with the shared metatable.

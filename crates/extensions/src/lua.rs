@@ -87,19 +87,12 @@ pcall = function(f, ...)
   end
 end
 
-xpcall = function(f, errfunc)
-  local co = create(f)
-  local args = pack()
-  while true do
-    local r = pack(resume(co, unpack(args, 1, args.n)))
-    if not r[1] then
-      local err = convert_error(r[2])
-      if err == nil then err = r[2] end
-      return false, errfunc(err)
-    end
-    if status(co) == "dead" then return true, unpack(r, 2, r.n) end
-    args = pack(yield(unpack(r, 2, r.n)))
-  end
+xpcall = function(f, errfunc, ...)
+  local r = pack(pcall(f, ...))
+  if r[1] then return true, unpack(r, 2, r.n) end
+  local h = pack(pcall(errfunc, r[2]))
+  if h[1] then return false, unpack(h, 2, h.n) end
+  return false, h[2]
 end
 
 local loaded = {}
