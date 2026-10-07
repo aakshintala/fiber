@@ -20,5 +20,9 @@ insta = "1"
 name = "draw"
 test = true
 
+[[example]]
+name = "paging"
+test = true
+
 [lints]
 workspace = true

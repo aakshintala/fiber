@@ -423,20 +423,12 @@ impl App {
     }
 
     /// Scrolls so `row` is the top row, as dragging the scroll bar does.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the paging jig calls it from the next commit")
-    )]
     pub(crate) fn jump(&mut self, row: usize) {
         self.top = Some(row);
         self.settle();
     }
 
     /// The pages.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the paging jig calls it from the next commit")
-    )]
     pub(crate) fn pages(&self) -> &Pages {
         &self.pages
     }

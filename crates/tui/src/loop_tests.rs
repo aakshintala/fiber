@@ -430,3 +430,41 @@ fn a_history_command_that_cannot_be_written_loses_the_connection() {
     );
     assert!(!lp.app.pages().part(0).is_some());
 }
+
+#[test]
+fn the_paging_jig_opens_the_ended_turns_and_appends_the_running_one() {
+    let mut lines = session();
+    let next = lines.len() as u64;
+    lines.push(line(
+        "turn_started",
+        Some(next),
+        None,
+        json!({"input": [{"type": "message", "source": "driver", "content": [{"type": "text", "text": "more"}]}]}),
+    ));
+    lines.push(line(
+        "assistant_message_delta",
+        None,
+        Some("a_live"),
+        json!({"text": "streaming"}),
+    ));
+    let events: String = lines
+        .iter()
+        .map(|line| serde_json::to_string(line).unwrap_or_default() + "\n")
+        .collect();
+    let report = super::measure_paging(&events, 60, 12, fakes::clock::FakeClock::new());
+    let report = report.unwrap_or_else(|error| panic!("{error}"));
+    assert!(
+        report.starts_with(&format!("lines: {}\n", next + 1)),
+        "{report}"
+    );
+    assert!(report.contains("turns: 6\n"), "{report}");
+    assert!(report.contains("calls: 102\n"), "{report}");
+    assert!(
+        report.contains("slowest append frame: 0.00 ms, of 2;"),
+        "{report}"
+    );
+    assert!(report.contains(", of 6 paging up"), "{report}");
+    // An unreadable line names its number.
+    let error = super::measure_paging("{\n", 60, 12, fakes::clock::FakeClock::new());
+    assert!(error.is_err_and(|error| error.starts_with("line 1:")));
+}
