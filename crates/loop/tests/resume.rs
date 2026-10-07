@@ -654,6 +654,16 @@ impl History {
     }
 
     fn resume(&mut self, tools: Vec<(String, Arc<dyn Tool>)>) -> Loop {
+        self.resume_with_files(tools, Vec::new())
+    }
+
+    /// As [`History::resume`], with `files` as the configured `file`
+    /// credential sources (`docs/permissions.md`, "Credentials").
+    fn resume_with_files(
+        &mut self,
+        tools: Vec<(String, Arc<dyn Tool>)>,
+        files: Vec<std::path::PathBuf>,
+    ) -> Loop {
         Loop::resume(
             Arc::clone(&self.log),
             r#loop::resumed(&self.dir).unwrap(),
@@ -665,6 +675,7 @@ impl History {
             r#loop::Permissions {
                 workspace: self.workspace.clone(),
                 credentials: self.credentials.clone(),
+                credential_files: files,
                 rules: self.rules.clone(),
             },
         )
@@ -1008,6 +1019,7 @@ fn reviewer_denies_from_before_the_resume_count_toward_the_session_limit() {
         r#loop::Permissions {
             workspace: history.workspace.clone(),
             credentials: history.credentials.clone(),
+            credential_files: Vec::new(),
             rules: history.rules.clone(),
         },
     )
@@ -1110,6 +1122,7 @@ fn non_reviewer_denies_from_before_the_resume_do_not_count() {
         r#loop::Permissions {
             workspace: history.workspace.clone(),
             credentials: history.credentials.clone(),
+            credential_files: Vec::new(),
             rules: history.rules.clone(),
         },
     )
@@ -1200,6 +1213,7 @@ fn the_reviewers_first_request_contains_the_earlier_tool_calls() {
         r#loop::Permissions {
             workspace: history.workspace.clone(),
             credentials: history.credentials.clone(),
+            credential_files: Vec::new(),
             rules: history.rules.clone(),
         },
     )
@@ -1566,6 +1580,7 @@ fn resume_fails_log_corrupt_on_an_unreadable_line_in_its_window() {
         r#loop::Permissions {
             workspace: root.path().display().to_string(),
             credentials: root.path().to_path_buf(),
+            credential_files: Vec::new(),
             rules: Arc::new(support::FakeRules::empty()),
         },
     ) {
@@ -1717,15 +1732,27 @@ impl History {
     /// Resumes with `tools` as an unattended session answers: no person
     /// can answer an approval.
     fn resume_headless(&mut self, tools: Vec<(String, Arc<dyn Tool>)>) -> Loop {
-        let provider = Arc::clone(&self.provider) as Arc<dyn Provider>;
-        self.resume_headless_on(provider, tools)
+        self.resume_headless_with_files(tools, Vec::new())
     }
 
-    /// As [`History::resume_headless`], its model calls reaching `provider`.
-    fn resume_headless_on(
+    /// As [`History::resume_headless`], with `files` as the configured
+    /// `file` credential sources (`docs/permissions.md`, "Credentials").
+    fn resume_headless_with_files(
+        &mut self,
+        tools: Vec<(String, Arc<dyn Tool>)>,
+        files: Vec<std::path::PathBuf>,
+    ) -> Loop {
+        let provider = Arc::clone(&self.provider) as Arc<dyn Provider>;
+        self.resume_headless_on_with_files(provider, tools, files)
+    }
+
+    /// As [`History::resume_headless_with_files`], its model calls reaching
+    /// `provider`.
+    fn resume_headless_on_with_files(
         &mut self,
         provider: Arc<dyn Provider>,
         tools: Vec<(String, Arc<dyn Tool>)>,
+        files: Vec<std::path::PathBuf>,
     ) -> Loop {
         Loop::resume(
             Arc::clone(&self.log),
@@ -1738,11 +1765,21 @@ impl History {
             r#loop::Permissions {
                 workspace: self.workspace.clone(),
                 credentials: self.credentials.clone(),
+                credential_files: files,
                 rules: self.rules.clone(),
             },
         )
         .unwrap()
         .answerable(false)
+    }
+
+    /// As [`History::resume_headless`], its model calls reaching `provider`.
+    fn resume_headless_on(
+        &mut self,
+        provider: Arc<dyn Provider>,
+        tools: Vec<(String, Arc<dyn Tool>)>,
+    ) -> Loop {
+        self.resume_headless_on_with_files(provider, tools, Vec::new())
     }
 
     /// Runs one turn on its own thread, returning the loop for the next
@@ -2364,6 +2401,380 @@ fn a_suspended_turn_is_refused_then_the_prompt_runs_next() {
     assert!(
         matches!(second.last().unwrap(), Input::User { text } if text == "two"),
         "{second:?}"
+    );
+}
+
+#[test]
+fn a_suspended_call_touching_a_configured_credential_file_is_refused_without_asking() {
+    // The call was suspended on a standing ask before its path became a
+    // configured `file` credential source. The resume refuses it through
+    // the credential deny before it runs, without asking again: no
+    // `permission_requested` is raised.
+    let keys = fakes::TempDir::new("fiber-resume-keys");
+    let key = keys.path().join("openrouter");
+    std::fs::write(&key, "sk-file-secret").unwrap();
+    let tool = Arc::new(support::TestTool::declaring(
+        "read",
+        "sk-file-secret",
+        vec![contract::shapes::Effect::Reads],
+        Some(vec![key.display().to_string()]),
+    ));
+    let mut history = History::new(vec![Scripted::text("Hello.")]);
+    history.write(user_turn("one"), None);
+    history.write(message_started(), Some("a_0"));
+    history.write(requested("read"), Some("a_1"));
+    history.write(standing_request("r_9"), Some("a_1"));
+    history.write(fiber_started(), None);
+    history.write(fiber_exited(Some("r_9")), None);
+    history.freeze();
+
+    let looped = history.resume_headless_with_files(
+        vec![("builtin".into(), tool.clone() as Arc<dyn Tool>)],
+        vec![key.clone()],
+    );
+    let (looped, finishing) = history.step(looped);
+    assert_eq!(finishing, Some(contract::events::TurnOutcome::Completed));
+    let _ = looped;
+
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "opening_message",
+            "permission_resolved",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    let new = history.new_lines();
+    assert_eq!(new[2].payload["decision"], "deny");
+    assert_eq!(new[2].payload["decided_by"], "credential_deny");
+    assert_eq!(
+        new[2].payload["reason"],
+        "The call touches a configured credential file."
+    );
+    assert_eq!(new[2].payload["request_id"], "r_9");
+    assert_eq!(new[3].payload["status"], "denied");
+    assert_eq!(new[3].payload["reason"], "credentials");
+    assert!(
+        !new.iter().any(|l| l.kind == "tool_call_started"),
+        "a denied call never starts"
+    );
+    assert!(tool.ran().is_empty(), "a denied call never runs");
+}
+
+#[test]
+fn a_resumed_credential_refusal_answers_its_request_and_spares_later_calls() {
+    // The batch is `[a_1, a_2, a_3]` with the standing ask `r_9` pending
+    // on `a_2`, which touches a configured `file` credential source. The
+    // resume refuses `a_2` through the credential deny, answering `r_9`:
+    // the call before it is cancelled, as the batch path does, but the
+    // call after it is judged and runs normally (`docs/loop.md`, "Tool
+    // calls that do not run").
+    let keys = fakes::TempDir::new("fiber-resume-keys");
+    let key = keys.path().join("openrouter");
+    std::fs::write(&key, "sk-file-secret").unwrap();
+    let first = reads("first");
+    let denied = Arc::new(support::TestTool::declaring(
+        "read",
+        "sk-file-secret",
+        vec![contract::shapes::Effect::Reads],
+        Some(vec![key.display().to_string()]),
+    ));
+    let last = reads("last");
+    let mut history = History::new(vec![Scripted::text("Hello.")]);
+    history.write(user_turn("one"), None);
+    history.write(message_started(), Some("a_0"));
+    history.write(requested("first"), Some("a_1"));
+    history.write(requested("read"), Some("a_2"));
+    history.write(requested("last"), Some("a_3"));
+    history.write(standing_request("r_9"), Some("a_2"));
+    history.write(fiber_started(), None);
+    history.write(fiber_exited(Some("r_9")), None);
+    history.freeze();
+
+    let looped = history.resume_headless_with_files(
+        vec![
+            ("builtin".into(), first.clone() as Arc<dyn Tool>),
+            ("builtin".into(), denied.clone() as Arc<dyn Tool>),
+            ("builtin".into(), last.clone() as Arc<dyn Tool>),
+        ],
+        vec![key.clone()],
+    );
+    let (looped, finishing) = history.step(looped);
+    assert_eq!(finishing, Some(contract::events::TurnOutcome::Completed));
+    let _ = looped;
+
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "opening_message",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+            "tool_call_completed",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    let new = history.new_lines();
+    // The refusal answers the previously raised request.
+    assert_eq!(new[2].payload["request_id"], "r_9");
+    assert_eq!(new[2].payload["decision"], "deny");
+    assert_eq!(new[2].payload["decided_by"], "credential_deny");
+    // In request order: the call before is cancelled, the credential call
+    // denied, the call after completed. Only the call after started.
+    let done: Vec<(String, String)> = new[4..7]
+        .iter()
+        .map(|line| {
+            assert_eq!(line.kind, "tool_call_completed");
+            (
+                line.action_id.as_ref().unwrap().0.clone(),
+                line.payload["status"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        done,
+        [
+            ("a_1".to_owned(), "cancelled".to_owned()),
+            ("a_2".to_owned(), "denied".to_owned()),
+            ("a_3".to_owned(), "completed".to_owned()),
+        ]
+    );
+    let started: Vec<String> = history
+        .new_lines()
+        .into_iter()
+        .filter(|line| line.kind == "tool_call_started")
+        .map(|line| line.action_id.as_ref().unwrap().0.clone())
+        .collect();
+    assert_eq!(started, ["a_3".to_owned()]);
+    assert!(
+        first.ran().is_empty(),
+        "a call before the refusal never runs"
+    );
+    assert!(denied.ran().is_empty(), "a denied call never runs");
+    assert_eq!(last.ran().len(), 1, "a call after the refusal runs");
+}
+
+#[test]
+fn a_cancel_reaches_a_call_running_after_a_resumed_credential_refusal() {
+    // The credential-refusal branch arms cancellation with the refusal,
+    // as the re-raise does: a later call that is still running sees the
+    // cancel and the turn ends `interrupted` (`docs/loop.md`, "Interrupt").
+    let keys = fakes::TempDir::new("fiber-resume-keys");
+    let key = keys.path().join("openrouter");
+    std::fs::write(&key, "sk-file-secret").unwrap();
+    let denied = Arc::new(support::TestTool::declaring(
+        "read",
+        "sk-file-secret",
+        vec![contract::shapes::Effect::Reads],
+        Some(vec![key.display().to_string()]),
+    ));
+    let mut running = support::TestTool::reads("last", "Paris.");
+    running.script = vec![support::Script::WaitCancel];
+    let running = Arc::new(running);
+    let mut history = History::new(vec![Scripted::text("Hello.")]);
+    history.write(user_turn("one"), None);
+    history.write(message_started(), Some("a_0"));
+    history.write(requested("read"), Some("a_1"));
+    history.write(requested("last"), Some("a_2"));
+    history.write(standing_request("r_9"), Some("a_1"));
+    history.write(fiber_started(), None);
+    history.write(fiber_exited(Some("r_9")), None);
+    history.freeze();
+
+    let cancel = Arc::new(r#loop::TurnCancel::default());
+    let looped = history
+        .resume_headless_with_files(
+            vec![
+                ("builtin".into(), denied.clone() as Arc<dyn Tool>),
+                ("builtin".into(), running.clone() as Arc<dyn Tool>),
+            ],
+            vec![key.clone()],
+        )
+        .cancelled_by(Arc::clone(&cancel));
+    let tap = support::Tap::new(&history.log);
+    let cancelling = Arc::clone(&cancel);
+    std::thread::scope(|scope| {
+        scope.spawn(move || {
+            tap.wait_for("tool_call_started");
+            assert!(
+                cancelling.cancel(),
+                "the refusal armed cancellation for the calls that follow"
+            );
+        });
+        let (_looped, finishing) = history.step(looped);
+        assert_eq!(finishing, Some(contract::events::TurnOutcome::Interrupted));
+    });
+    assert!(
+        running.cancelled.lock().unwrap().contains(&true),
+        "the running call saw the cancel"
+    );
+    assert!(denied.ran().is_empty(), "a denied call never runs");
+}
+
+#[test]
+fn a_resumed_credential_refusal_hands_off_from_a_later_call() {
+    // The credential-refusal branch runs its batch uncancelled, so a later
+    // call whose result sets `control.handoff` restarts the context from
+    // its note through `handoff_from_tools`, as in any step: the `!cancelled`
+    // guard's effect, and the MISSED mutant that deletes the `!`.
+    let keys = fakes::TempDir::new("fiber-resume-keys");
+    let key = keys.path().join("openrouter");
+    std::fs::write(&key, "sk-file-secret").unwrap();
+    let first = reads("first");
+    let denied = Arc::new(support::TestTool::declaring(
+        "read",
+        "sk-file-secret",
+        vec![contract::shapes::Effect::Reads],
+        Some(vec![key.display().to_string()]),
+    ));
+    let mut wrapup = support::TestTool::reads("wrapup", "");
+    wrapup.output.content = Vec::new();
+    wrapup.output.control = Some(contract::events::Control {
+        handoff: "the note".into(),
+    });
+    let wrapup = Arc::new(wrapup);
+    let mut history = History::new(vec![Scripted::text("Hello.")]);
+    history.write(user_turn("one"), None);
+    history.write(message_started(), Some("a_0"));
+    history.write(requested("first"), Some("a_1"));
+    history.write(requested("read"), Some("a_2"));
+    history.write(requested("wrapup"), Some("a_3"));
+    history.write(standing_request("r_9"), Some("a_2"));
+    history.write(fiber_started(), None);
+    history.write(fiber_exited(Some("r_9")), None);
+    history.freeze();
+
+    let looped = history.resume_headless_with_files(
+        vec![
+            ("builtin".into(), first.clone() as Arc<dyn Tool>),
+            ("builtin".into(), denied.clone() as Arc<dyn Tool>),
+            ("builtin".into(), wrapup.clone() as Arc<dyn Tool>),
+        ],
+        vec![key.clone()],
+    );
+    let (_looped, finishing) = history.step(looped);
+    assert_eq!(finishing, Some(contract::events::TurnOutcome::Completed));
+
+    assert!(
+        first.ran().is_empty(),
+        "a call before the refusal never runs"
+    );
+    assert!(denied.ran().is_empty(), "a denied call never runs");
+    assert_eq!(wrapup.ran().len(), 1, "a call after the refusal runs");
+    let handed = new_of(&history, "handoff_completed");
+    assert_eq!(handed.len(), 1, "{:?}", history.new_kinds());
+    assert_eq!(handed[0].payload["outcome"], "completed");
+    assert_eq!(handed[0].payload["note"], json!(["a_3"]));
+}
+
+#[test]
+fn a_cancel_after_a_resumed_credential_refusal_skips_the_tool_handoff() {
+    // The batch ran with a note in hand but a cancel ended it, so the
+    // `!cancelled` guard skips `handoff_from_tools`: no `handoff_completed`
+    // is written, and the turn ends `interrupted`. Deleting the `!` hands
+    // off instead, which this test forbids.
+    let keys = fakes::TempDir::new("fiber-resume-keys");
+    let key = keys.path().join("openrouter");
+    std::fs::write(&key, "sk-file-secret").unwrap();
+    let denied = Arc::new(support::TestTool::declaring(
+        "read",
+        "sk-file-secret",
+        vec![contract::shapes::Effect::Reads],
+        Some(vec![key.display().to_string()]),
+    ));
+    let mut wrapup = support::TestTool::reads("wrapup", "");
+    wrapup.output.content = Vec::new();
+    wrapup.output.control = Some(contract::events::Control {
+        handoff: "the note".into(),
+    });
+    let wrapup = Arc::new(wrapup);
+    let mut slow = support::TestTool::reads("slow", "Paris.");
+    slow.script = vec![support::Script::WaitCancel];
+    let slow = Arc::new(slow);
+    let mut history = History::new(vec![Scripted::text("Hello.")]);
+    history.write(user_turn("one"), None);
+    history.write(message_started(), Some("a_0"));
+    history.write(requested("read"), Some("a_1"));
+    history.write(requested("wrapup"), Some("a_2"));
+    history.write(requested("slow"), Some("a_3"));
+    history.write(standing_request("r_9"), Some("a_1"));
+    history.write(fiber_started(), None);
+    history.write(fiber_exited(Some("r_9")), None);
+    history.freeze();
+
+    let cancel = Arc::new(r#loop::TurnCancel::default());
+    let looped = history
+        .resume_headless_with_files(
+            vec![
+                ("builtin".into(), denied.clone() as Arc<dyn Tool>),
+                ("builtin".into(), wrapup.clone() as Arc<dyn Tool>),
+                ("builtin".into(), slow.clone() as Arc<dyn Tool>),
+            ],
+            vec![key.clone()],
+        )
+        .cancelled_by(Arc::clone(&cancel));
+    let tap = support::Tap::new(&history.log);
+    let cancelling = Arc::clone(&cancel);
+    std::thread::scope(|scope| {
+        scope.spawn(move || {
+            // Both waits carry the test's deadline: the first is the
+            // refusal, the second the noted call. Cancelling only after the
+            // second keeps the note while the slow call still waits, so the
+            // cancel ends the batch with the note in hand.
+            tap.wait_for("tool_call_completed");
+            tap.wait_for("tool_call_completed");
+            assert!(cancelling.cancel(), "the cancel ended the batch");
+        });
+        let (_looped, finishing) = history.step(looped);
+        assert_eq!(finishing, Some(contract::events::TurnOutcome::Interrupted));
+    });
+    assert!(denied.ran().is_empty(), "a denied call never runs");
+    assert_eq!(wrapup.ran().len(), 1, "the noted call ran");
+    assert!(
+        slow.cancelled.lock().unwrap().contains(&true),
+        "the slow call saw the cancel"
+    );
+    // The note was in hand: the noted call completed with its handoff.
+    let done: Vec<(String, String)> = new_of(&history, "tool_call_completed")
+        .into_iter()
+        .map(|line| {
+            (
+                line.action_id.as_ref().unwrap().0.clone(),
+                line.payload["status"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        done,
+        [
+            ("a_1".to_owned(), "denied".to_owned()),
+            ("a_2".to_owned(), "completed".to_owned()),
+            ("a_3".to_owned(), "cancelled".to_owned()),
+        ]
+    );
+    let noted = new_of(&history, "tool_call_completed")
+        .into_iter()
+        .find(|line| line.action_id.as_ref().unwrap().0 == "a_2")
+        .unwrap();
+    assert_eq!(noted.payload["control"], json!({"handoff": "the note"}));
+    assert!(
+        new_of(&history, "handoff_completed").is_empty(),
+        "a cancel that ended the batch skips the tool handoff: {:?}",
+        history.new_kinds()
     );
 }
 
@@ -3891,6 +4302,7 @@ fn a_turn_suspended_after_a_handoff_re_raises_its_request_past_lines_written_aft
         r#loop::Permissions {
             workspace: history.workspace.clone(),
             credentials: history.credentials.clone(),
+            credential_files: Vec::new(),
             rules: history.rules.clone(),
         },
     )

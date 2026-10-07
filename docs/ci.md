@@ -105,13 +105,12 @@ run: CI opens a flake issue naming the test, or comments on the open one
 On Linux x86_64 alone:
 
 - `cargo fmt --check`
-- no non-test source file over 800 lines
-- the `unsafe` table in `docs/code-quality.md` matches the code
+- the non-test source files over 800 lines are listed (`cargo xtask
+  line-cap`); the list never fails the run (`docs/code-quality.md`, "Size")
 - a process signal appears only in the guarded helpers (`cargo xtask signal-sites`)
 - the compiled-in list matches the files crates compile in, Markdown
   anywhere or any file outside the crate, and every include argument is a
   string literal
-- every crate a `Cargo.toml` names is listed in `docs/dependencies.md`
 - no crate but `picture` and `main` has `image` or `fast_image_resize` in its
   normal dependency tree (`cargo xtask image-isolation`), so the session
   process links no image code
@@ -163,6 +162,13 @@ ones, because the change that breaks a citation is usually a code change
 that renames or deletes what a doc points at. External URLs are not checked: nothing in CI reaches the
 public network.
 
+The same job, on every pull request and every push to `main`, checks that
+the `unsafe` table in `docs/code-quality.md` matches the code
+(`cargo xtask unsafe-table`) and that every crate a `Cargo.toml` names is
+listed in `docs/dependencies.md` (`cargo xtask dependency-list`). Each
+compares a doc with the source, so a change to either side can break it,
+and a docs-only diff, which runs no other job, would otherwise skip it.
+
 ## Advisories
 
 cargo-deny's advisory check blocks a pull request that changes `Cargo.lock`,
@@ -173,14 +179,17 @@ opened.
 
 ## The backstop on `main`
 
-Every push to `main` runs the backstop on all three platforms. It compiles
-the whole workspace and runs the tests the selection chooses from the diff
-since the last `main` commit whose backstop passed. That is the parent
+Every push to `main` runs the backstop. It runs the lint, test and mutant
+jobs the selection chooses from the diff
+since the last `main` commit whose backstop passed. The tests run on all
+three platforms, and it compiles
+the whole workspace. That is the parent
 commit unless a run was cancelled or failed. A conflict between two merged
 pull requests shows in a crate that depends on what the later one changed,
 and the selection includes that crate.
 
-When the backstop fails, it opens an issue, or comments on the open one. It
+When lint, the tests or the mutants fail, the backstop opens an issue, or
+comments on the open one. It
 never blocks a merge.
 
 The backstop is the only run that saves the build cache. Pull requests

@@ -11,20 +11,23 @@
 //! running callback is still running a grace period past its own deadline.
 //! Dropping the extension stops it. Stopped is final.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
-use std::io;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use contract::clock::{Clock, Wake};
 use contract::inbox::Delivery;
-use mlua::Table;
 use serde_json::Value;
 
 use crate::Error;
 use crate::host::Reply;
 
-use super::{ENTRY, GRACE, Target, expired, timeout_ms};
+use super::{ENTRY, GRACE, Target, expired};
+
+pub(super) use super::declared::CallbackTimeouts;
+pub(crate) use super::declared::{DeclaredHooks, HookPhase};
+use super::errors::again;
+pub(super) use super::errors::{not_registered, stopped, timed_out};
 
 pub(crate) struct Hub {
     shared: Mutex<Shared>,
@@ -374,104 +377,6 @@ pub(super) struct Job {
     pub(super) asked: Instant,
 }
 
-/// What the entry script registered: commands, provider functions and hooks,
-/// in separate maps so a shared name cannot collide.
-#[derive(Default)]
-pub(super) struct CallbackTimeouts {
-    pub(super) commands: BTreeMap<String, Duration>,
-    pub(super) providers: BTreeMap<String, BTreeMap<String, Duration>>,
-    pub(super) hooks: DeclaredHooks,
-}
-
-impl CallbackTimeouts {
-    /// The timeout `target` declared, if the entry script registered it.
-    pub(super) fn timeout(&self, target: &Target) -> Option<Duration> {
-        match target {
-            Target::Command(name) => self.commands.get(name).copied(),
-            Target::Provider { name, function } => self
-                .providers
-                .get(name)
-                .and_then(|fns| fns.get(*function))
-                .copied(),
-            Target::Hook { point, index } => self
-                .hooks
-                .by_point
-                .get(point)
-                .and_then(|hooks| hooks.get(*index))
-                .map(|hook| hook.timeout),
-            // A timer firing carries its own timeout from its firing's
-            // start; it is never a queued call the timeout is looked up
-            // for.
-            Target::Timer { .. } => None,
-        }
-    }
-
-    /// Every hook runs under `timeout` instead of the one it declared.
-    pub(super) fn override_hooks(&mut self, timeout: Option<Duration>) {
-        let Some(timeout) = timeout else {
-            return;
-        };
-        for hook in self.hooks.by_point.values_mut().flatten() {
-            hook.timeout = timeout;
-        }
-    }
-}
-
-/// A hook's phase (`docs/extensions.md`, "When several hooks share a
-/// point"), in the order the phases run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum HookPhase {
-    Sanitize,
-    Transform,
-    Check,
-}
-
-/// One hook the entry script registered.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct DeclaredHook {
-    pub(crate) phase: HookPhase,
-    /// `on_failure` is `blocking`.
-    pub(crate) blocking: bool,
-    /// Its timeout, or the configured override.
-    pub(crate) timeout: Duration,
-}
-
-/// The hooks the entry script registered, by point in registration order,
-/// and a message for each it tried to register and could not.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct DeclaredHooks {
-    pub(crate) by_point: BTreeMap<String, Vec<DeclaredHook>>,
-    pub(crate) problems: Vec<String>,
-}
-
-impl DeclaredHooks {
-    /// The hooks in `hooks`, the table `fiber.hook` fills, and the
-    /// refusals in `problems`. The prelude checked each field.
-    pub(super) fn read(hooks: &Table, problems: &Table) -> Self {
-        let mut declared = Self::default();
-        for (point, list) in hooks.pairs::<String, Table>().flatten() {
-            let list = list
-                .sequence_values::<Table>()
-                .flatten()
-                .map(|spec| DeclaredHook {
-                    phase: match spec.get::<String>("phase").as_deref() {
-                        Ok("sanitize") => HookPhase::Sanitize,
-                        Ok("check") => HookPhase::Check,
-                        _ => HookPhase::Transform,
-                    },
-                    blocking: spec
-                        .get::<String>("on_failure")
-                        .is_ok_and(|failure| failure == "blocking"),
-                    timeout: Duration::from_millis(spec.get::<u64>("timeout").unwrap_or(0)),
-                })
-                .collect();
-            declared.by_point.insert(point, list);
-        }
-        declared.problems = problems.sequence_values::<String>().flatten().collect();
-        declared
-    }
-}
-
 /// What registration lets a waiter do.
 pub(super) enum Gate<'a> {
     Ready(&'a CallbackTimeouts),
@@ -690,105 +595,6 @@ impl Wake for Hub {
         // judged and not yet parked cannot miss this wake.
         let _guard = self.lock();
         self.changed.notify_all();
-    }
-}
-
-pub(super) fn stopped(name: &str) -> Error {
-    Error::Stopped {
-        extension: name.to_owned(),
-    }
-}
-
-pub(super) fn timed_out(name: &str, target: &Target, timeout: Duration) -> Error {
-    Error::Timeout {
-        extension: name.to_owned(),
-        callback: target.to_string(),
-        timeout_ms: timeout_ms(timeout),
-    }
-}
-
-pub(super) fn not_registered(name: &str, target: &Target) -> Error {
-    match target {
-        Target::Command(command) => Error::UnknownCommand {
-            extension: name.to_owned(),
-            command: command.clone(),
-        },
-        Target::Provider { .. } | Target::Hook { .. } | Target::Timer { .. } => {
-            Error::UnknownCallback {
-                extension: name.to_owned(),
-                callback: target.to_string(),
-            }
-        }
-    }
-}
-
-/// A copy of the error that stopped the extension, for the next caller.
-/// These are the errors a stopped extension can hold.
-fn again(name: &str, e: &Error) -> Error {
-    match e {
-        Error::Io { path, source } => Error::Io {
-            path: path.clone(),
-            source: io::Error::new(source.kind(), source.to_string()),
-        },
-        Error::Lua { extension, message } => Error::Lua {
-            extension: extension.clone(),
-            message: message.clone(),
-        },
-        Error::Damaged(inner) => Error::Damaged(inner.clone()),
-        Error::Timeout {
-            extension,
-            callback,
-            timeout_ms,
-        } => Error::Timeout {
-            extension: extension.clone(),
-            callback: callback.clone(),
-            timeout_ms: *timeout_ms,
-        },
-        Error::Abandoned {
-            extension,
-            callback,
-        } => Error::Abandoned {
-            extension: extension.clone(),
-            callback: callback.clone(),
-        },
-        Error::Stopped { .. }
-        | Error::Config(_)
-        | Error::Overlaps { .. }
-        | Error::NeedsNewerFiber { .. }
-        | Error::ApiVersion { .. }
-        | Error::BadVersion { .. }
-        | Error::BadName { .. }
-        | Error::GitMissing
-        | Error::Git { .. }
-        | Error::NoRepository { .. }
-        | Error::MajorConflict { .. }
-        | Error::NoVersion { .. }
-        | Error::Unresolved
-        | Error::NotInstalled { .. }
-        | Error::WrongName { .. }
-        | Error::Busy
-        | Error::SlugTaken { .. }
-        | Error::NoTag { .. }
-        | Error::BadRecord { .. }
-        | Error::InstallStep { .. }
-        | Error::InstallExited { .. }
-        | Error::Download { .. }
-        | Error::BinaryChecksum { .. }
-        | Error::Rollback { .. }
-        | Error::ProviderMissing { .. }
-        | Error::ModelMissing { .. }
-        | Error::UnknownModel { .. }
-        | Error::Ambiguous { .. }
-        | Error::UnknownCommand { .. }
-        | Error::UnknownCallback { .. }
-        | Error::BadReturn { .. }
-        | Error::Credential(_)
-        | Error::RefreshRejected { .. }
-        | Error::RefreshUnreachable { .. }
-        | Error::BadRepositoryPath { .. }
-        | Error::Pin { .. }
-        | Error::ChangedWhileCopying { .. }
-        | Error::NoModel => stopped(name),
     }
 }
 

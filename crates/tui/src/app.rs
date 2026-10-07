@@ -285,10 +285,7 @@ impl App {
     pub(crate) fn on_line(&mut self, line: Line) -> Vec<String> {
         let lines = match line {
             Line::Hub(hub) => self.on_hub(&hub),
-            Line::Session(envelope) => {
-                self.on_session(&envelope);
-                Vec::new()
-            }
+            Line::Session(envelope) => self.on_session(&envelope),
         };
         self.settle();
         lines
@@ -561,11 +558,15 @@ impl App {
         }
     }
 
-    /// `start` was accepted: attach with a `full` connection.
+    /// `start` was accepted: attach with a `full` connection, and ask for
+    /// the session's `/` commands.
     fn started(&mut self, session: SessionId) -> Vec<String> {
         self.attach(session.clone());
         let args = json!({"level": "full"});
-        vec![session_command(&mint(), "subscribe", &session, Some(args)).to_string()]
+        vec![
+            session_command(&mint(), "subscribe", &session, Some(args)).to_string(),
+            self.ask_commands(&session),
+        ]
     }
 
     /// A command the terminal sent was rejected: a notice, and its
@@ -632,15 +633,17 @@ impl App {
         Effect::None
     }
 
-    fn on_session(&mut self, envelope: &Envelope) {
+    /// Folds one session line, returning command lines to send.
+    fn on_session(&mut self, envelope: &Envelope) -> Vec<String> {
         // The queue takes every session's requests; everything else is the
         // attached session's alone.
         if approvals::KINDS.contains(&envelope.kind.as_str()) {
             self.queue.fold(envelope);
         }
         if self.session() != Some(&envelope.session_id) {
-            return;
+            return Vec::new();
         }
+        let mut send = Vec::new();
         if envelope.kind == "turn_started"
             && let Some(started) = read!(envelope, TurnStarted)
         {
@@ -652,6 +655,7 @@ impl App {
             "command_accepted" => {
                 if let Some(accepted) = read!(envelope, CommandAccepted) {
                     let sent = self.pending.remove(&accepted.command_id.0);
+                    self.commands_answered(&accepted);
                     let shell = sent.filter(|(kind, _)| *kind == Kind::Shell);
                     let item = shell.and_then(|(_, text)| shell::answered(&text, accepted.result));
                     changed |= self.pages.add_shell(item);
@@ -669,8 +673,10 @@ impl App {
                     self.rejected(&id.0, rejected.message);
                 }
             }
-            "opening_message" => {
-                self.opening(envelope);
+            "reloaded" => {
+                if self.link == Link::Up {
+                    send.push(self.ask_commands(&envelope.session_id));
+                }
             }
             "session_named" => {
                 if let Some(named) = read!(envelope, SessionNamed) {
@@ -695,7 +701,7 @@ impl App {
         if changed {
             self.scroll.changed();
         }
-        self.settle();
+        send
     }
 
     fn set_busy(&mut self, busy: bool) {

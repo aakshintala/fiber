@@ -397,6 +397,7 @@ fn start(rules: Arc<FakeRules>) -> (Loop, fakes::TempDir, PathBuf, PathBuf) {
         crate::Permissions {
             workspace: workspace.display().to_string(),
             credentials: credentials.clone(),
+            credential_files: Vec::new(),
             rules,
         },
     )
@@ -467,6 +468,7 @@ fn a_session_remember_adds_a_grant_the_next_call_judged_matches() {
         &workspace,
         home.path(),
         &credentials,
+        &[],
     );
     assert!(matches!(
         verdict,
@@ -802,6 +804,7 @@ fn run_turn(
         crate::Permissions {
             workspace: workspace.display().to_string(),
             credentials,
+            credential_files: Vec::new(),
             rules,
         },
     )

@@ -352,8 +352,7 @@ impl Loop {
         let (tools, replaced) = calls::register(tools);
         let workspace = PathBuf::from(&permissions.workspace);
         let workspace = workspace.canonicalize().unwrap_or(workspace);
-        let credentials =
-            calls::resolve(&permissions.credentials).unwrap_or(permissions.credentials);
+        let credentials = crate::permission::resolved(permissions.credentials);
         // A log that already holds an opening message keeps it: the
         // conversation rebuild renders it from the log, so the first turn
         // writes none. A log with none gets one at its first turn.
@@ -417,6 +416,9 @@ impl Loop {
             replaced,
             workspace,
             credentials,
+            credential_files: (permissions.credential_files.into_iter())
+                .map(crate::permission::resolved)
+                .collect(),
             rules: permissions.rules,
             grants,
             reviewer: Err(Failure {
@@ -480,6 +482,80 @@ impl Loop {
         self.ensure_preamble()?;
         self.cut_off = false;
         let turn = suspended.turn.clone();
+        // The credential deny applies to every call, including one
+        // suspended before its path became a configured credential file:
+        // it is refused without asking, as `judge` refuses it before any
+        // ask. A call that cannot be checked waits for its answer as ever.
+        // The refusal answers the previously raised request, and the batch
+        // completes through the run phase every step uses: the calls
+        // before the action complete `cancelled` without running, as an
+        // answered request's calls do, and the calls after it are judged
+        // and run with it (`docs/loop.md`, "Tool calls that do not run").
+        // Armed with the refusal: the calls after it run cancellably, as
+        // after the re-raise below. A shutdown before it writes nothing
+        // more, so the next resume refuses again.
+        if let Some((_, call)) = suspended
+            .batch
+            .iter()
+            .find(|(id, _)| *id == suspended.action)
+            && let Ok((_, _, effects)) = self.checked(call)
+            && let Some(why) = crate::permission::credential_why(
+                &effects.declared,
+                &self.workspace,
+                &self.credentials,
+                &self.credential_files,
+            )
+        {
+            let text = format!("{why} It did not run.");
+            let cancel = Arc::clone(&self.cancel);
+            let refused = cancel.commit(Commit::Arm, || {
+                self.decided(
+                    &suspended.action,
+                    &turn,
+                    crate::completion::resolved(
+                        Some(suspended.request.request_id.clone()),
+                        Decision::Deny,
+                        DecidedBy::CredentialDeny,
+                        Some(why),
+                        None,
+                    ),
+                )
+            });
+            let Some(refused) = refused else {
+                return Ok(None);
+            };
+            refused?;
+            let mut decision: Option<Decided> =
+                Some(Err(crate::completion::denied("credentials", text)));
+            let mut before = true;
+            let mut calls = Vec::with_capacity(suspended.batch.len());
+            for (id, call) in suspended.batch {
+                let already = if id == suspended.action {
+                    before = false;
+                    decision.take()
+                } else if before {
+                    Some(Err(self.cancelled_before_ran()))
+                } else {
+                    None
+                };
+                calls.push((id, call, already));
+            }
+            let cancelled = self.run_batch(calls, &turn)?;
+            // A later call's approval reached the idle delay: nothing more
+            // is written, as in any step.
+            if self.idle_left {
+                self.cancel.disarm();
+                return Ok(None);
+            }
+            // Orphan notices the resume logged behind the open batch.
+            self.conversation.append(&mut self.held);
+            // A cancel that ended the batch ends the turn `interrupted` at
+            // the next step's start, as a step's cancel does.
+            if !cancelled {
+                self.handoff_from_tools(&turn)?;
+            }
+            return self.run_steps(&turn);
+        }
         // Armed with the re-raise: a shutdown before it leaves the request
         // pending, so the next resume raises it again (`docs/invocation.md`,
         // "Shutdown"). Once raised, a headless request's answer is the

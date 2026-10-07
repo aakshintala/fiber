@@ -12,11 +12,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use contract::ErrorCode;
-use contract::events::{SkillListed, SkillSource};
+use contract::events::{CommandInfo, SkillListed, SkillSource};
 use contract::shapes::ContentPart;
 use fakes::clock::FakeClock;
 
-use super::{Found, discover, entry, expand, listing, size_notice, split_command};
+use super::{Found, commands, discover, entry, expand, listing, size_notice, split_command};
 use crate::prompt::PromptInputs;
 
 /// A temporary tree: `top` is the repository's top level, `home` is
@@ -585,6 +585,7 @@ fn sized(name: &str, place: &str, bytes: usize) -> Found {
     Found {
         listed,
         model_invocable: true,
+        argument_hint: None,
         place: place.into(),
     }
 }
@@ -939,4 +940,96 @@ fn only_the_first_text_part_expands_and_the_rest_is_kept() {
         }
     );
     assert_eq!(out[2], image);
+}
+
+fn row(name: &str, description: &str, hint: Option<&str>, tag: &str) -> CommandInfo {
+    CommandInfo {
+        name: name.into(),
+        description: description.into(),
+        argument_hint: hint.map(str::to_owned),
+        tag: tag.into(),
+    }
+}
+
+#[test]
+fn rows_tag_a_model_skill_skill_and_a_template_template() {
+    let tree = Tree::new();
+    let place = tree.top().join(".fiber/skills");
+    write(
+        &place,
+        "a",
+        "---\nname: review\ndescription: Review a diff.\nargument-hint: [base]\n\
+         disable-model-invocation: true\n---\n",
+    );
+    skill(&place, "b", "tdd", "Test first.");
+    let extension = tree.root.join("ext/acme");
+    write(
+        &extension.join("prompts"),
+        "a",
+        "---\nname: ship\ndescription: Ship it.\nargument-hint: <tag>\n---\n",
+    );
+    let mut inputs = tree.inputs();
+    inputs.extension_dirs = vec![("acme".into(), extension)];
+    let found = discover(&inputs, &tree.top());
+    assert_eq!(
+        commands(&found.skills, &[]),
+        [
+            row("review", "Review a diff.", Some("[base]"), "template"),
+            row("tdd", "Test first.", None, "skill"),
+            row("ship", "Ship it.", Some("<tag>"), "template"),
+        ]
+    );
+}
+
+#[test]
+fn a_switched_off_skill_or_template_has_no_row() {
+    let tree = Tree::new();
+    let place = tree.top().join(".fiber/skills");
+    skill(&place, "a", "off", "d");
+    write(
+        &place,
+        "b",
+        "---\nname: off-template\ndescription: d\ndisable-model-invocation: true\n---\n",
+    );
+    skill(&place, "c", "on", "d");
+    let found = tree.discover();
+    let disabled = vec!["off".to_owned(), "off-template".to_owned()];
+    assert_eq!(
+        commands(&found.skills, &disabled),
+        [row("on", "d", None, "skill")]
+    );
+}
+
+#[test]
+fn a_shared_name_has_one_row_the_winners() {
+    let tree = Tree::new();
+    skill(&tree.top().join(".fiber/skills"), "a", "same", "winner");
+    write(
+        &tree.home().join("skills"),
+        "a",
+        "---\nname: same\ndescription: loser\ndisable-model-invocation: true\n---\n",
+    );
+    let found = tree.discover();
+    assert_eq!(
+        commands(&found.skills, &[]),
+        [row("same", "winner", None, "skill")]
+    );
+}
+
+#[test]
+fn the_session_commands_are_read_from_the_repository_top_level() {
+    let tree = Tree::new();
+    std::fs::create_dir_all(tree.top().join(".git")).unwrap();
+    std::fs::write(tree.top().join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+    let workspace = tree.top().join("sub");
+    std::fs::create_dir_all(&workspace).unwrap();
+    skill(&tree.top().join(".fiber/skills"), "a", "top", "d");
+    write(&workspace.join(".fiber/skills"), "a", "---\nname: broken\n");
+    let mut inputs = tree.inputs();
+    inputs.skills_disabled = vec!["gone".into()];
+    skill(&tree.home().join("skills"), "a", "gone", "d");
+    assert_eq!(
+        crate::commands(&inputs, &workspace),
+        [row("top", "d", None, "skill")]
+    );
 }

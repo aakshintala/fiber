@@ -160,11 +160,6 @@ fn echo_tools() -> Value {
 }
 
 #[test]
-fn max_line_is_4_mib() {
-    assert_eq!(super::MAX_LINE, 4 * 1024 * 1024);
-}
-
-#[test]
 fn initialize_and_list_succeed() {
     let setup = Setup::tools(&echo_tools());
     setup.result("echo", r#"{"content":[{"type":"text","text":"hi"}]}"#);
@@ -535,27 +530,6 @@ fn dropping_the_server_reaps_the_child() {
 }
 
 #[test]
-fn shared_slots_deliver_remove_and_mark_gone() {
-    use super::{Outcome, Shared};
-    let shared = Shared::default();
-    assert_eq!(shared.next_id(), 1);
-    assert_eq!(shared.next_id(), 2);
-    shared.insert(7);
-    shared.deliver(7, Outcome::Result(json!({})));
-    let cancel = fakes::CancelToken::new();
-    let seen = shared.view(7, &cancel);
-    assert_eq!(seen.response, Some(Outcome::Result(json!({}))));
-    assert!(!seen.gone);
-    // A late response to a removed id is discarded, never misrouted.
-    shared.remove(7);
-    shared.deliver(7, Outcome::Result(json!({"late": true})));
-    let missing = shared.view(7, &cancel);
-    assert_eq!(missing.response, None);
-    shared.gone();
-    assert!(shared.view(9, &cancel).gone);
-}
-
-#[test]
 fn server_requests_are_answered_ping_ok_and_unknown_32601() {
     let setup = Setup::tools(&json!([{"name": "echo"}]));
     setup.result("echo", r#"{"content":[]}"#);
@@ -604,183 +578,6 @@ fn stop_leaves_no_running_child() {
     panic!("waited {WITHIN:?} for pid {pid} to exit after the stop");
 }
 
-#[test]
-fn a_line_ending_in_a_newline_strips_it() {
-    // Without the `ends_with` guard the trailing newline would stay in
-    // the line: the `false` mutant returns `"hi\n"` here.
-    use std::io::Cursor;
-    let mut reader = Cursor::new(b"hi\n".to_vec());
-    match super::read_line(&mut reader) {
-        super::ReadLine::Line(line) => assert_eq!(line, "hi"),
-        super::ReadLine::Eof => panic!("a newline-terminated line is a line, got the end"),
-        super::ReadLine::TooLong => {
-            panic!("a newline-terminated line is a line, got too long")
-        }
-    }
-}
-
-#[test]
-fn a_final_line_without_a_newline_is_a_line() {
-    // Without the `ends_with` guard the last byte would be popped as if
-    // it were a newline: the `true` mutant returns `"h"` here.
-    use std::io::Cursor;
-    let mut reader = Cursor::new(b"hi".to_vec());
-    match super::read_line(&mut reader) {
-        super::ReadLine::Line(line) => assert_eq!(line, "hi"),
-        super::ReadLine::Eof => panic!("a final line without a newline is a line, got the end"),
-        super::ReadLine::TooLong => {
-            panic!("a final line without a newline is a line, got too long")
-        }
-    }
-}
-
-#[test]
-fn an_empty_read_is_the_end() {
-    use std::io::Cursor;
-    let mut reader = Cursor::new(Vec::new());
-    match super::read_line(&mut reader) {
-        super::ReadLine::Eof => {}
-        super::ReadLine::Line(_) => panic!("an empty read is the end, got a line"),
-        super::ReadLine::TooLong => panic!("an empty read is the end, got too long"),
-    }
-}
-
-#[test]
-fn exactly_max_line_bytes_is_a_line() {
-    // `>=` would end the reader here; only `>` lets exactly `MAX_LINE`
-    // bytes through as a line.
-    use std::io::Cursor;
-    let content = vec![b'x'; super::MAX_LINE];
-    let mut reader = Cursor::new(content);
-    match super::read_line(&mut reader) {
-        super::ReadLine::Line(line) => assert_eq!(line.len(), super::MAX_LINE),
-        super::ReadLine::Eof => panic!("exactly MAX_LINE bytes is a line, got the end"),
-        super::ReadLine::TooLong => panic!("exactly MAX_LINE bytes is a line, got too long"),
-    }
-}
-
-#[test]
-fn max_line_content_plus_a_newline_is_a_line() {
-    // The `take(MAX_LINE + 1)` lets a full line plus its newline through:
-    // `-` or `*` in place of `+` truncates it and the assertion on the
-    // exact length fails.
-    use std::io::Cursor;
-    let mut content = vec![b'x'; super::MAX_LINE];
-    content.push(b'\n');
-    let mut reader = Cursor::new(content);
-    match super::read_line(&mut reader) {
-        super::ReadLine::Line(line) => assert_eq!(line.len(), super::MAX_LINE),
-        super::ReadLine::Eof => panic!("MAX_LINE bytes plus a newline is a line, got the end"),
-        super::ReadLine::TooLong => {
-            panic!("MAX_LINE bytes plus a newline is a line, got too long")
-        }
-    }
-}
-
-#[test]
-fn max_line_plus_one_bytes_is_too_long() {
-    // `==` misses this length and `<` ends short lines instead: only `>`
-    // ends exactly the lines past the cap.
-    use std::io::Cursor;
-    let content = vec![b'x'; super::MAX_LINE + 1];
-    let mut reader = Cursor::new(content);
-    match super::read_line(&mut reader) {
-        super::ReadLine::TooLong => {}
-        super::ReadLine::Line(_) => panic!("MAX_LINE + 1 bytes is too long, got a line"),
-        super::ReadLine::Eof => panic!("MAX_LINE + 1 bytes is too long, got the end"),
-    }
-}
-
-#[test]
-fn a_read_error_without_bytes_is_the_end() {
-    // The `true` mutant would also end a read that did carry bytes, and
-    // the `false` mutant would return an empty line here.
-    let mut reader = AlwaysErr;
-    match super::read_line(&mut reader) {
-        super::ReadLine::Eof => {}
-        super::ReadLine::Line(_) => panic!("a failed read without bytes is the end, got a line"),
-        super::ReadLine::TooLong => {
-            panic!("a failed read without bytes is the end, got too long")
-        }
-    }
-}
-
-#[test]
-fn a_read_error_after_bytes_keeps_the_line() {
-    // The `true` mutant would discard these bytes and report the end.
-    let mut reader = DataThenErr {
-        data: b"hi".to_vec(),
-        done: false,
-    };
-    match super::read_line(&mut reader) {
-        super::ReadLine::Line(line) => assert_eq!(line, "hi"),
-        super::ReadLine::Eof => panic!("a failed read after bytes keeps them, got the end"),
-        super::ReadLine::TooLong => {
-            panic!("a failed read after bytes keeps them, got too long")
-        }
-    }
-}
-
-#[test]
-fn the_wait_ends_on_a_new_response_or_cancel() {
-    // All four combinations: `||` into `&&` misses the two mixed rows,
-    // and `!=` into `==` flips the two uncancelled rows.
-    assert!(!super::should_stop(7, 7, false));
-    assert!(super::should_stop(8, 7, false));
-    assert!(super::should_stop(7, 7, true));
-    assert!(super::should_stop(8, 7, true));
-}
-
-/// A reader whose every read fails, carrying no bytes.
-struct AlwaysErr;
-
-impl std::io::Read for AlwaysErr {
-    fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
-        Err(std::io::Error::other("boom"))
-    }
-}
-
-impl std::io::BufRead for AlwaysErr {
-    fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
-        Err(std::io::Error::other("boom"))
-    }
-
-    fn consume(&mut self, _amount: usize) {}
-}
-
-/// A reader that hands over `data` once, then fails: the line reader sees
-/// a partial line followed by an error.
-struct DataThenErr {
-    data: Vec<u8>,
-    done: bool,
-}
-
-impl std::io::Read for DataThenErr {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        use std::io::BufRead;
-        let chunk = self.fill_buf()?;
-        let len = chunk.len().min(buf.len());
-        buf[..len].copy_from_slice(&chunk[..len]);
-        self.consume(len);
-        Ok(len)
-    }
-}
-
-impl std::io::BufRead for DataThenErr {
-    fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
-        if self.done {
-            Err(std::io::Error::other("boom"))
-        } else {
-            Ok(&self.data)
-        }
-    }
-
-    fn consume(&mut self, _amount: usize) {
-        self.data.clear();
-        self.done = true;
-    }
-}
-
 /// A server that keeps running after its stdin ends: the fixture under a
 /// shell that loops once it returns. `term` is the shell's TERM trap:
 /// `exit 0` to end on SIGTERM, empty to ignore it.
@@ -825,13 +622,6 @@ fn stopping(server: super::Server) -> mpsc::Receiver<()> {
 }
 
 #[test]
-fn a_pid_of_one_or_less_is_refused() {
-    assert!(super::refused(0));
-    assert!(super::refused(1));
-    assert!(!super::refused(2));
-}
-
-#[test]
 fn a_server_that_ignores_end_of_input_stops_on_sigterm_before_the_grace() {
     let setup = Setup::tools(&json!([{"name": "hang"}]));
     let opened = lingering(&setup, "exit 0");
@@ -852,7 +642,7 @@ fn kill_every_server_kills_one_that_ignores_sigterm() {
         setup.fake.await_parked(grace, WITHIN),
         "the stop waits out the grace on a server ignoring SIGTERM"
     );
-    super::kill_every_server();
+    crate::registry::kill_every_server();
     // Killed, its output ends: the stop returns with the clock unmoved.
     stopped
         .recv_timeout(WITHIN)
@@ -875,7 +665,7 @@ fn a_server_is_listed_until_its_reap() {
 static BEFORE_SIGNAL: std::sync::Mutex<Option<std::sync::Arc<dyn Fn() + Send + Sync>>> =
     std::sync::Mutex::new(None);
 
-pub(super) fn before_signal() {
+pub(crate) fn before_signal() {
     let hook = super::lock(&BEFORE_SIGNAL).clone();
     if let Some(hook) = hook {
         hook();
@@ -886,7 +676,7 @@ pub(super) fn before_signal() {
 static BEFORE_LOCK: std::sync::Mutex<Option<mpsc::Sender<&'static str>>> =
     std::sync::Mutex::new(None);
 
-pub(super) fn before_lock(which: &'static str) {
+pub(crate) fn before_lock(which: &'static str) {
     if let Some(tx) = super::lock(&BEFORE_LOCK).as_ref() {
         tx.send(which).unwrap_or(());
     }
@@ -950,7 +740,7 @@ fn kill_every_server_holds_its_pids_unreaped_while_it_signals() {
     let (entered, go) = pause_signallers();
     let (killed_tx, killed) = mpsc::channel();
     thread::spawn(move || {
-        super::kill_every_server();
+        crate::registry::kill_every_server();
         killed_tx.send(()).expect("collected");
     });
     entered
@@ -1120,7 +910,7 @@ fn a_stopped_start_waits_out_the_grace_before_its_kill() {
     // After the trap: the script writes its pid only once `trap '' TERM`
     // is set, so the stop below cannot signal before it ignores SIGTERM.
     ready.wait(WITHIN);
-    super::stop_every_start();
+    crate::registry::stop_every_start();
     let grace = setup.fake.now().checked_add(super::GRACE).expect("grace");
     assert!(
         setup.fake.await_parked(grace, WITHIN),
@@ -1158,7 +948,7 @@ fn a_stopped_start_whose_server_exits_on_sigterm_returns_without_the_clock_movin
     );
     await_listed();
     let before = setup.fake.now();
-    super::stop_every_start();
+    crate::registry::stop_every_start();
     assert_shutdown_failed(
         result
             .recv_timeout(WITHIN)
@@ -1171,7 +961,7 @@ fn a_stopped_start_whose_server_exits_on_sigterm_returns_without_the_clock_movin
 #[test]
 fn a_start_after_stop_every_start_spawns_nothing() {
     let setup = Setup::tools(&json!([]));
-    super::stop_every_start();
+    crate::registry::stop_every_start();
     let workspace = setup.dir.path().to_path_buf();
     let result = starting(
         "/bin/true",

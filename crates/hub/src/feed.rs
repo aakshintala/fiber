@@ -577,7 +577,7 @@ fn how_left(dir: &Path) -> Left {
 
 /// The `kind` of `log`'s last line, read from at most [`TAIL`] bytes of
 /// its end. `None` when it cannot be read or does not parse.
-fn last_kind(log: &Path) -> Option<String> {
+pub(crate) fn last_kind(log: &Path) -> Option<String> {
     let mut file = File::open(log).ok()?;
     let len = file.metadata().ok()?.len();
     let from = len.saturating_sub(TAIL);

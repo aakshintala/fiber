@@ -753,6 +753,29 @@ impl Session {
         Self::open(script, during, tools, unpriced())
     }
 
+    /// As [`Session::with_tools`], with `files` as the configured `file`
+    /// credential sources (`docs/permissions.md`, "Credentials").
+    pub(crate) fn with_credential_files(
+        script: Vec<Scripted>,
+        tools: Vec<Arc<dyn Tool>>,
+        files: Vec<PathBuf>,
+    ) -> Self {
+        let scripted = Arc::new(ScriptedProvider::new(script));
+        Self::assemble_with(
+            Arc::clone(&scripted) as Arc<dyn Provider>,
+            Vec::new(),
+            tools,
+            unpriced(),
+            scripted,
+            Arc::new(TurnCancel::default()),
+            (FakeClock::new(), 0),
+            Vec::new(),
+            CacheLifetime::OneHour,
+            None,
+            files,
+        )
+    }
+
     /// As [`Session::new`], and the first model call sends `during`.
     pub(crate) fn injecting(script: Vec<Scripted>, during: Vec<Delivery>) -> Self {
         Self::open(script, during, Vec::new(), unpriced())
@@ -773,6 +796,7 @@ impl Session {
             Vec::new(),
             lifetime,
             None,
+            Vec::new(),
         )
     }
 
@@ -797,6 +821,7 @@ impl Session {
             Vec::new(),
             lifetime,
             None,
+            Vec::new(),
         )
     }
 
@@ -949,6 +974,7 @@ impl Session {
             sections,
             CacheLifetime::OneHour,
             thinking,
+            Vec::new(),
         )
     }
 
@@ -975,6 +1001,7 @@ impl Session {
             Vec::new(),
             CacheLifetime::OneHour,
             None,
+            Vec::new(),
         )
     }
 
@@ -993,6 +1020,7 @@ impl Session {
             Vec::new(),
             CacheLifetime::OneHour,
             None,
+            Vec::new(),
         )
     }
 
@@ -1011,6 +1039,7 @@ impl Session {
         sections: Vec<(String, Vec<PathBuf>, Option<u64>)>,
         cache_lifetime: CacheLifetime,
         thinking: Option<contract::ThinkingLevel>,
+        credential_files: Vec<PathBuf>,
     ) -> Self {
         let home = TempDir::new();
         let workspace = home.0.join("workspace");
@@ -1056,6 +1085,7 @@ impl Session {
             r#loop::Permissions {
                 workspace: workspace.display().to_string(),
                 credentials: credentials.clone(),
+                credential_files,
                 rules: rules.clone(),
             },
         )

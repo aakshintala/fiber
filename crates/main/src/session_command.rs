@@ -85,6 +85,7 @@ pub(crate) fn new_session(
         project,
         workspace,
         sessions,
+        credential_files,
         extensions,
         locks,
         mcp,
@@ -112,6 +113,7 @@ pub(crate) fn new_session(
         &home,
         &project,
         workspace.to_string_lossy().into_owned(),
+        credential_files,
         &clock,
     );
     let log = match Log::create(&sessions, id, Arc::clone(&clock)) {
@@ -133,6 +135,7 @@ pub(crate) fn new_session(
     session.shell(driver);
     session.jobs(jobs.clone());
     session.hooks(Arc::clone(&extensions) as Arc<dyn contract::hook::Hooks>);
+    session.commands(r#loop::commands(&prompt_inputs, &workspace));
     let cancel = Arc::new(r#loop::TurnCancel::default());
     // A signal while armed: nothing was written, so nothing more is.
     if let Some(code) = shutdown::start(signals, &cancel, &session, jobs.clone()) {

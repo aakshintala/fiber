@@ -267,7 +267,9 @@ A cache entry also expires after its lifetime with no request.
   the call under review with its declared effects, then the stage's
   instruction. Both stages send byte-identical bytes up to the stage
   instruction, so every reviewer
-  pass of either stage extends one cache chain as the session grows. A call
+  pass of either stage extends one cache chain between handoffs. At a handoff
+  the chain restarts from the kept messages (`docs/permissions.md`, "At a
+  handoff"), so the reviewer misses the cache once, as the model does. A call
   must render identically when it later appears in history, because the chain
   depends on it. Where a provider routes by key, its key is the reviewed
   session's own id plus `reviewer`, a delegate's included.

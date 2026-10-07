@@ -173,6 +173,64 @@ fn a_call_touching_the_credentials_is_refused_and_never_runs() {
     assert!(tool.ran().is_empty(), "a denied call never runs");
 }
 
+#[test]
+fn a_read_of_a_configured_credential_file_is_refused_and_never_runs() {
+    // A configured `file` source outside the workspace and outside Fiber
+    // home: only its own entry protects it.
+    let keys = support::TempDir::new();
+    let key = keys.0.join("openrouter");
+    std::fs::write(&key, "sk-file-secret").unwrap();
+    assert_file_refused(&key, &key);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_configured_credential_file_spelled_through_a_symlink_is_resolved_at_start() {
+    // The configuration names a link; the call reads the file it targets.
+    let keys = support::TempDir::new();
+    let key = keys.0.join("openrouter");
+    std::fs::write(&key, "sk-file-secret").unwrap();
+    let link = keys.0.join("link");
+    std::os::unix::fs::symlink(&key, &link).unwrap();
+    assert_file_refused(&link, &key);
+}
+
+/// Runs one session whose configured `file` source is `configured`, in
+/// which the model reads `read`, and asserts the credential deny refused
+/// the read before it ran.
+fn assert_file_refused(configured: &std::path::Path, read: &std::path::Path) {
+    let tool = Arc::new(TestTool::declaring(
+        "read",
+        "sk-file-secret",
+        vec![Effect::Reads],
+        Some(vec![read.display().to_string()]),
+    ));
+    let mut session = Session::with_credential_files(
+        vec![
+            calls_reply("", &[("read", paris())]),
+            Scripted::text("Done."),
+        ],
+        vec![tool.clone() as Arc<dyn Tool>],
+        vec![configured.to_path_buf()],
+    );
+    let lines = go(&mut session);
+    let resolved = line(&lines, "permission_resolved");
+    assert_eq!(resolved.payload["decision"], "deny");
+    assert_eq!(resolved.payload["decided_by"], "credential_deny");
+    assert_eq!(
+        resolved.payload["reason"],
+        "The call touches a configured credential file."
+    );
+    let done = completed(&lines)[0];
+    assert_eq!(done.payload["status"], "denied");
+    assert_eq!(done.payload["reason"], "credentials");
+    assert!(
+        !kinds(&lines).contains(&"tool_call_started"),
+        "a denied call never starts"
+    );
+    assert!(tool.ran().is_empty(), "a denied call never runs");
+}
+
 /// Runs one read-only call of `subject` declaring `paths` (relative to the
 /// workspace, which sits in Fiber home beside `credentials/`), and asserts
 /// the credential deny refused it before it ran.

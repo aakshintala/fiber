@@ -486,6 +486,20 @@ fn an_extra_body_field_is_sent_as_given() {
 }
 
 #[test]
+fn an_extra_body_object_replaces_a_non_generation_config_object() {
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let extra = json!({"toolConfig": {"custom": "declared"}});
+    let declared = Endpoint {
+        extra_body: extra.as_object().unwrap().clone(),
+        ..endpoint(&server)
+    };
+    run(Box::new(Gemini::new(declared).request(&request())))
+        .0
+        .unwrap();
+    assert_eq!(sent_body(&server, 0)["toolConfig"], extra["toolConfig"]);
+}
+
+#[test]
 fn max_output_tokens_is_the_models_limit_and_never_exceeds_it() {
     let script: Vec<Response> = (0..3).map(|_| completed_reply()).collect();
     let server = ProviderServer::start(script).unwrap();

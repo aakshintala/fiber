@@ -40,6 +40,7 @@ pub(crate) fn answered(text: &str, result: Option<CommandResult>) -> Option<Stri
         } => Some(item(command, &output, &process)),
         CommandResult::Rewind { .. }
         | CommandResult::Tools { .. }
+        | CommandResult::Commands { .. }
         | CommandResult::History { .. } => None,
     }
 }

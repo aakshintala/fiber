@@ -324,7 +324,8 @@ pub enum PendingReason {
 pub struct CommandAccepted {
     /// The command's id.
     pub command_id: CommandId,
-    /// On `rewind`, `tools`, `history` and a `shell` sent with `send` false.
+    /// On `rewind`, `tools`, `commands`, `history` and a `shell` sent with
+    /// `send` false.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result: Option<CommandResult>,
 }
@@ -342,6 +343,11 @@ pub enum CommandResult {
     Tools {
         /// One per declared tool.
         tools: Vec<ToolInfo>,
+    },
+    /// For `commands`.
+    Commands {
+        /// One per `/name` the session runs.
+        commands: Vec<CommandInfo>,
     },
     /// For `history`: the durable lines in the requested range.
     History {
@@ -375,6 +381,21 @@ pub struct ToolInfo {
     /// Its estimated tokens; absent before the first request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tokens: Option<u64>,
+}
+
+/// One `/name` the session runs (`docs/invocation.md`, "What each command
+/// does", `commands`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommandInfo {
+    /// The name typed after `/`.
+    pub name: String,
+    /// A one-line description.
+    pub description: String,
+    /// The skill's `argument-hint`, when it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub argument_hint: Option<String>,
+    /// `skill`, `template`, or the extension's name.
+    pub tag: String,
 }
 
 /// Where a tool comes from, keyed by `source`.

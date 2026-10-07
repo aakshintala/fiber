@@ -105,6 +105,7 @@ fn the_credential_deny_runs_before_a_standing_allow() {
         &workspace,
         &home,
         &credentials,
+        &[],
     );
     assert!(matches!(verdict, Verdict::Deny { .. }));
 }
@@ -132,6 +133,7 @@ fn a_standing_deny_beats_an_allow_a_grant_and_a_fast_path() {
         &workspace,
         &home,
         &credentials,
+        &[],
     );
     assert!(matches!(
         verdict,
@@ -161,6 +163,7 @@ fn a_standing_ask_beats_a_fast_path_and_an_allow() {
         &workspace,
         &home,
         &credentials,
+        &[],
     );
     assert!(matches!(verdict, Verdict::Ask(_)));
 }
@@ -181,6 +184,7 @@ fn a_fast_path_beats_a_grant_and_an_allow() {
         &workspace,
         &home,
         &credentials,
+        &[],
     );
     assert!(matches!(verdict, Verdict::Allow(None)));
 }
@@ -210,6 +214,7 @@ fn a_markdown_write_in_the_memory_data_directories_takes_the_fast_path() {
             &workspace,
             &home,
             &credentials,
+            &[],
         );
         assert!(matches!(verdict, Verdict::Allow(None)), "{dir}");
     }
@@ -229,6 +234,7 @@ fn a_standing_deny_beats_the_data_directory_fast_path() {
         &workspace,
         &home,
         &credentials,
+        &[],
     );
     assert!(matches!(
         verdict,
@@ -254,6 +260,7 @@ fn a_standing_ask_beats_the_data_directory_fast_path() {
         &workspace,
         &home,
         &credentials,
+        &[],
     );
     assert!(matches!(verdict, Verdict::Ask(_)));
 }
@@ -280,6 +287,7 @@ fn the_credential_deny_beats_the_data_directory_fast_path() {
         &workspace,
         &home,
         &credentials,
+        &[],
     );
     assert!(matches!(
         verdict,
@@ -305,6 +313,7 @@ fn the_credential_deny_beats_the_data_directory_fast_path() {
             &workspace,
             &home,
             &credentials,
+            &[],
         );
         assert!(matches!(
             verdict,
@@ -331,6 +340,7 @@ fn a_data_directory_markdown_write_takes_the_fast_path_before_a_grant_and_an_all
         &workspace,
         &home,
         &credentials,
+        &[],
     );
     assert!(matches!(verdict, Verdict::Allow(None)));
     // A session grant and a standing allow do not change that.
@@ -347,6 +357,7 @@ fn a_data_directory_markdown_write_takes_the_fast_path_before_a_grant_and_an_all
         &workspace,
         &home,
         &credentials,
+        &[],
     );
     assert!(matches!(verdict, Verdict::Allow(None)));
 }
@@ -370,6 +381,7 @@ fn a_session_grant_beats_a_standing_allow() {
         &workspace,
         &home,
         &credentials,
+        &[],
     );
     assert!(matches!(
         verdict,
@@ -389,6 +401,7 @@ fn a_grant_added_by_an_answer_matches_the_next_call_judged() {
         &workspace,
         &home,
         &credentials,
+        &[],
     );
     assert!(matches!(before, Verdict::Review));
     // The grant is what applying the person's allow remembered, not a
@@ -411,6 +424,7 @@ fn a_grant_added_by_an_answer_matches_the_next_call_judged() {
         &workspace,
         &home,
         &credentials,
+        &[],
     );
     assert!(matches!(
         after,
@@ -442,6 +456,7 @@ fn a_grant_matches_only_its_tool_and_prefix() {
             &workspace,
             &home,
             &credentials,
+            &[],
         );
         assert!(matches!(verdict, Verdict::Review));
     }
@@ -458,6 +473,7 @@ fn no_match_on_an_executes_call_is_review() {
         &workspace,
         &home,
         &credentials,
+        &[],
     );
     assert!(matches!(verdict, Verdict::Review));
 }
@@ -477,6 +493,7 @@ fn a_call_no_rule_can_match_matches_no_deny() {
         &workspace,
         &home,
         &credentials,
+        &[],
     );
     assert!(matches!(verdict, Verdict::Review));
 }
@@ -496,6 +513,7 @@ fn at_the_same_step_the_project_rule_is_used() {
         &workspace,
         &home,
         &credentials,
+        &[],
     ) else {
         panic!("a standing ask matches");
     };
@@ -518,6 +536,7 @@ fn a_global_deny_beats_a_project_allow() {
         &workspace,
         &home,
         &credentials,
+        &[],
     );
     assert!(matches!(
         verdict,
@@ -551,6 +570,7 @@ fn credential_paths_match_inside_the_directory_and_fail_closed() {
             &workspace,
             &home,
             &credentials,
+            &[],
         )
     };
     let is_deny = |verdict: Verdict| {
@@ -596,7 +616,7 @@ fn a_path_that_contains_the_credentials_touches_them() {
     let (root, workspace, home, credentials) = dirs();
     let why = |path: &str| {
         let declared = declared(vec![Effect::Reads], Some(vec![path]));
-        credential_why(&declared, &workspace, &credentials)
+        credential_why(&declared, &workspace, &credentials, &[])
     };
     let spelled = |path: &std::path::Path| path.display().to_string();
     // Fiber home, the root, and the workspace's parent spelled `..`: a
@@ -622,6 +642,45 @@ fn a_path_that_contains_the_credentials_touches_them() {
 }
 
 #[test]
+fn a_path_touching_a_configured_credential_file_is_refused() {
+    let (root, workspace, _home, credentials) = dirs();
+    // A configured `file` source outside the workspace and Fiber home.
+    let keys = root.path().join("keys");
+    std::fs::create_dir_all(&keys).unwrap();
+    let key = keys.join("openrouter");
+    std::fs::write(&key, "sk-file-secret").unwrap();
+    std::fs::write(keys.join("notes"), "nothing").unwrap();
+    let files = [key.canonicalize().unwrap()];
+    let why = |path: &str, files: &[PathBuf]| {
+        let declared = declared(vec![Effect::Reads], Some(vec![path]));
+        credential_why(&declared, &workspace, &credentials, files)
+    };
+    let spelled = |path: &std::path::Path| path.display().to_string();
+    let file = Some("The call touches a configured credential file.".to_owned());
+    // The file itself, and the directory holding it.
+    assert_eq!(why(&spelled(&key), &files), file);
+    assert_eq!(why(&spelled(&keys), &files), file);
+    // A `..` spelling, from the workspace.
+    assert_eq!(why("../keys/openrouter", &files), file);
+    // A symlink to the file.
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(&key, workspace.join("key-link")).unwrap();
+        assert_eq!(why("key-link", &files), file);
+    }
+    // A sibling file, and a sibling sharing a string prefix, are not it.
+    assert_eq!(why(&spelled(&keys.join("notes")), &files), None);
+    assert_eq!(why(&spelled(&keys.join("openrouter-old")), &files), None);
+    // With no configured files, the file is not protected.
+    assert_eq!(why(&spelled(&key), &[]), None);
+    // The credentials directory keeps its own reason.
+    assert_eq!(
+        why(&spelled(&credentials), &files),
+        Some("The call touches Fiber's credential directory.".to_owned())
+    );
+}
+
+#[test]
 fn a_read_of_fiber_home_is_denied_before_the_read_fast_path() {
     let (_root, workspace, home, credentials) = dirs();
     let spelled = home.display().to_string();
@@ -633,6 +692,7 @@ fn a_read_of_fiber_home_is_denied_before_the_read_fast_path() {
         &workspace,
         &home,
         &credentials,
+        &[],
     );
     assert!(matches!(
         verdict,
@@ -670,6 +730,7 @@ fn an_unreadable_rules_file_denies_at_step_two() {
         &workspace,
         &home,
         &credentials,
+        &[],
     );
     assert!(matches!(
         verdict,
@@ -697,6 +758,7 @@ fn a_credential_path_is_denied_even_when_the_rules_are_unreadable() {
         &workspace,
         &home,
         &credentials,
+        &[],
     );
     assert!(matches!(
         verdict,

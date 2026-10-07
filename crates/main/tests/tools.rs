@@ -716,6 +716,80 @@ fn a_credential_path_is_denied_for_a_read_and_a_shell_cat_under_every_spelling()
 }
 
 #[test]
+fn a_configured_file_credential_source_is_denied_for_a_read() {
+    // A `file` source outside Fiber home and outside the workspace, named
+    // by the global configuration: the model reads it, and the credential
+    // deny refuses the read before it runs.
+    let setup = Setup::new();
+    let key = setup.root.path().join("keys").join("openrouter");
+    fs::create_dir_all(key.parent().unwrap()).unwrap();
+    fs::write(&key, format!("{MARKER}\n")).unwrap();
+    let path = fs::canonicalize(&key).unwrap().to_str().unwrap().to_owned();
+    assert!(!path.contains(MARKER), "{path}");
+    assert!(!path.contains(char::is_whitespace), "{path}");
+
+    let events = vec![function_call("read_0", "read", &json!({"path": path}))];
+    let script = serde_json::to_string(&events).unwrap();
+    assert!(
+        !script.contains(MARKER),
+        "the scripted arguments contain the credential file's text"
+    );
+    assert!(holds_marker(&fs::read(&key).unwrap(), MARKER));
+
+    let server = ProviderServer::start([stream(&events), hello()]).unwrap();
+    setup.provider(&server);
+    write(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m",
+            "providers": {"fake": {"credentials": {"work": {"file": path}}}}}),
+    );
+
+    let run = setup.run(&["ask", "show the secret"]);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), denied_kinds(1));
+    let requested: Vec<_> = run
+        .lines
+        .iter()
+        .filter(|line| line["kind"] == "tool_call_requested")
+        .collect();
+    let resolved: Vec<_> = run
+        .lines
+        .iter()
+        .filter(|line| line["kind"] == "permission_resolved")
+        .collect();
+    let completed: Vec<_> = run
+        .lines
+        .iter()
+        .filter(|line| line["kind"] == "tool_call_completed")
+        .collect();
+    assert_eq!(requested.len(), 1);
+    assert_eq!(resolved.len(), 1);
+    assert_eq!(completed.len(), 1);
+    assert_eq!(&resolved[0]["action_id"], &requested[0]["action_id"]);
+    assert_eq!(&completed[0]["action_id"], &requested[0]["action_id"]);
+    assert_eq!(resolved[0]["payload"]["decided_by"], "credential_deny");
+    assert_eq!(
+        resolved[0]["payload"]["reason"],
+        "The call touches a configured credential file."
+    );
+    assert_eq!(completed[0]["payload"]["status"], "denied");
+    assert_eq!(completed[0]["payload"]["reason"], "credentials");
+    assert!(
+        !run.lines
+            .iter()
+            .any(|line| line["kind"] == "tool_call_started"),
+        "a denied call never starts"
+    );
+    assert_no_marker("stdout", run.stdout.as_bytes());
+    assert_no_marker("stderr", run.stderr.as_bytes());
+    for (index, request) in server.requests().iter().enumerate() {
+        assert_no_marker(&format!("request {index}"), &request.body);
+    }
+    assert_session_has_no_marker(&run.session_dir(&setup));
+}
+
+#[test]
 fn a_grep_that_follows_a_link_below_its_operand_into_the_credentials_is_reviewed() {
     let setup = Setup::new();
     let credentials = setup.home().join("credentials");

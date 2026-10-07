@@ -551,3 +551,76 @@ fn a_provider_directory_that_is_a_symbolic_link_is_refused() {
     let err = default_key(&config, &acme(None)).unwrap_err();
     assert_eq!(err.code(), ErrorCode::ConfigInvalid);
 }
+
+fn files(config: &Config, providers: &[ProviderData]) -> Vec<std::path::PathBuf> {
+    let mut files = config.credential_files(providers);
+    files.sort();
+    files
+}
+
+#[test]
+fn every_configured_file_source_is_a_credential_file() {
+    let setup = Setup::new();
+    setup.write(
+        &setup.global(),
+        r#"{"providers": {
+            "acme": {"credentials": {
+                "work": {"file": "/keys/acme-work"},
+                "home": {"env": "ACME_KEY"},
+                "ci": {"command": ["printf", "k"]},
+                "blank": {"file": ""}
+            }},
+            "other": {"credentials": {"default": {"file": "relative/key"}}}
+        }}"#,
+    );
+    setup.write(
+        &setup.project(),
+        r#"{"providers": {"acme": {"credentials": {"project": {"file": "/keys/acme-project"}}}}}"#,
+    );
+    let config = setup.load(&[]).unwrap();
+    // Each label's file, the per-project layer's included, as written; an
+    // `env` or `command` source and an empty path name no file. A malformed
+    // source never reaches the list: loading rejects it (`Kind::Credential`).
+    assert_eq!(
+        files(&config, &[]),
+        ["/keys/acme-project", "/keys/acme-work", "relative/key"].map(std::path::PathBuf::from)
+    );
+}
+
+#[test]
+fn a_providers_own_file_source_is_a_credential_file_once() {
+    let setup = Setup::new();
+    setup.write(
+        &setup.global(),
+        r#"{"providers": {"acme": {"credentials": {"default": {"file": "/keys/acme"}}}}}"#,
+    );
+    let config = setup.load(&[]).unwrap();
+    let own = acme(Some(CredentialSource::File("/keys/acme".into())));
+    let other = shared(
+        "beta",
+        "beta",
+        Some(CredentialSource::File("/keys/beta".into())),
+    );
+    let env = shared(
+        "gamma",
+        "gamma",
+        Some(CredentialSource::Env("GAMMA".into())),
+    );
+    // Shadowed by the configured label, the provider's own source is still
+    // configured, and appears once.
+    assert_eq!(
+        files(&config, &[own, other, env]),
+        ["/keys/acme", "/keys/beta"].map(std::path::PathBuf::from)
+    );
+}
+
+#[test]
+fn a_repositorys_file_source_is_not_one_the_credential_reader_reads() {
+    let setup = Setup::new();
+    setup.write(
+        &setup.repository(),
+        r#"{"providers": {"acme": {"credentials": {"default": {"file": "/keys/repo"}}}}}"#,
+    );
+    let config = setup.load(&[]).unwrap();
+    assert_eq!(files(&config, &[]), Vec::<std::path::PathBuf>::new());
+}

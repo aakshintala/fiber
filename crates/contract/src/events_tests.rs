@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde_json::{Value, json};
 
 use super::*;
-use crate::{SessionId, TurnId};
+use crate::{CommandId, SessionId, TurnId};
 
 const DOC: &str = include_str!("../../../docs/events.md");
 
@@ -632,6 +632,13 @@ fn samples() -> Vec<(&'static str, Value)> {
             {"kind": "step_started", "session_id": "s", "ts": 1, "schema_version": 1,
              "seq": 0, "payload": {}}]}}),
         ),
+        (
+            "command_accepted",
+            json!({"command_id": "c", "result": {"commands": [
+            {"name": "review", "description": "Review a diff.", "argument_hint": "[base]",
+             "tag": "template"},
+            {"name": "tdd", "description": "Test first.", "tag": "skill"}]}}),
+        ),
         ("command_accepted", json!({"command_id": "c"})),
         (
             "command_rejected",
@@ -897,4 +904,76 @@ fn provider_item_is_read_from_a_hosted_call_and_absent_from_an_ordinary_one() {
     assert_eq!(ordinary.provider_item, None);
     let written = serde_json::to_value(&ordinary).unwrap();
     assert!(written.get("provider_item").is_none(), "{written}");
+}
+
+/// The variant a `command_accepted` sample's `result` reads as.
+fn result_of(payload: Value) -> CommandResult {
+    let Some(Event::CommandAccepted(accepted)) = read("command_accepted", payload).unwrap() else {
+        panic!("not a command_accepted");
+    };
+    accepted.result.expect("a result")
+}
+
+#[test]
+fn a_commands_result_reads_as_commands_with_and_without_a_hint() {
+    let result = result_of(json!({"command_id": "c_1", "result": {"commands": [
+        {"name": "review", "description": "Review a diff.", "argument_hint": "[base]",
+         "tag": "template"},
+        {"name": "tdd", "description": "Test first.", "tag": "skill"}]}}));
+    assert_eq!(
+        result,
+        CommandResult::Commands {
+            commands: vec![
+                CommandInfo {
+                    name: "review".into(),
+                    description: "Review a diff.".into(),
+                    argument_hint: Some("[base]".into()),
+                    tag: "template".into(),
+                },
+                CommandInfo {
+                    name: "tdd".into(),
+                    description: "Test first.".into(),
+                    argument_hint: None,
+                    tag: "skill".into(),
+                },
+            ]
+        }
+    );
+    let accepted = CommandAccepted {
+        command_id: CommandId("c_1".into()),
+        result: Some(result),
+    };
+    assert_eq!(
+        serde_json::to_string(&accepted).unwrap(),
+        r#"{"command_id":"c_1","result":{"commands":[{"name":"review","description":"Review a diff.","argument_hint":"[base]","tag":"template"},{"name":"tdd","description":"Test first.","tag":"skill"}]}}"#
+    );
+}
+
+#[test]
+fn an_empty_commands_result_reads_as_commands() {
+    assert_eq!(
+        result_of(json!({"command_id": "c", "result": {"commands": []}})),
+        CommandResult::Commands { commands: vec![] }
+    );
+}
+
+#[test]
+fn every_other_result_still_reads_as_its_own_variant() {
+    assert!(matches!(
+        result_of(json!({"command_id": "c", "result": {"tools": []}})),
+        CommandResult::Tools { .. }
+    ));
+    assert!(matches!(
+        result_of(json!({"command_id": "c", "result": {"lines": []}})),
+        CommandResult::History { .. }
+    ));
+    assert!(matches!(
+        result_of(json!({"command_id": "c", "result": {"new_session_id": "s2"}})),
+        CommandResult::Rewind { .. }
+    ));
+    let process = json!({"exit_code": 0, "signal": null, "timed_out": false});
+    assert!(matches!(
+        result_of(json!({"command_id": "c", "result": {"output": "o", "process": process}})),
+        CommandResult::Shell { .. }
+    ));
 }

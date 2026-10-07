@@ -151,6 +151,7 @@ fn resumed_session(
         warm,
         home,
         project,
+        credential_files,
         extensions,
         locks,
         mcp,
@@ -183,7 +184,13 @@ fn resumed_session(
     };
     let forget = Arc::clone(&session_servers.forget);
     let workspace = std::path::PathBuf::from(&folded.workspace);
-    let permissions = crate::ask_permissions(&home, &project, folded.workspace.clone(), &clock);
+    let permissions = crate::ask_permissions(
+        &home,
+        &project,
+        folded.workspace.clone(),
+        credential_files,
+        &clock,
+    );
     let session = match Session::resume(
         &home,
         dir,
@@ -201,6 +208,10 @@ fn resumed_session(
     session.shell(driver);
     session.jobs(jobs.clone());
     session.hooks(Arc::clone(&extensions) as Arc<dyn contract::hook::Hooks>);
+    session.commands(r#loop::commands(
+        &prompt_inputs,
+        Path::new(&folded.workspace),
+    ));
     let cancel = Arc::new(r#loop::TurnCancel::default());
     // A signal while armed: the log stays as it was.
     if let Some(code) = crate::shutdown::start(signals, &cancel, &session, jobs.clone()) {

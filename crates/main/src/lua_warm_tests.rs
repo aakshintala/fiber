@@ -179,6 +179,7 @@ fn a_lua_providers_session_refreshes_its_cache_signed_with_only_the_cap_changed(
         &parts.home,
         &parts.project,
         workspace.display().to_string(),
+        parts.credential_files,
         &shared,
     );
     let (inbox, deliveries) = mpsc::channel();

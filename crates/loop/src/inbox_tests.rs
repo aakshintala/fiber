@@ -82,6 +82,7 @@ fn started() -> (Loop, Arc<Log>, log::Watcher, fakes::TempDir) {
         crate::Permissions {
             workspace: workspace.display().to_string(),
             credentials,
+            credential_files: Vec::new(),
             rules: Arc::new(NoRules),
         },
     )
