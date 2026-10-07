@@ -145,10 +145,7 @@ fn an_extension_exec_mid_turn_is_written_once_and_queues_nothing() {
 #[test]
 fn an_extension_log_idle_is_live_ephemeral_and_diagnostic_and_starts_no_turn() {
     let (mut looped, _log, mut watched, home) = started();
-    let mut input = TurnInput {
-        pieces: Vec::new(),
-        prompt: None,
-    };
+    let mut input = TurnInput::of(Vec::new());
     looped
         .admit_idle(Delivery::ExtensionLog(logged("hello")), &mut input)
         .unwrap();

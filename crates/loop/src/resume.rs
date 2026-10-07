@@ -388,7 +388,7 @@ impl Loop {
         // shared constructor once a third constructor needs the same fields.
         let diag = crate::diag::SessionDiag::new(
             &prompt.home,
-            contract::SessionId(folded.session.clone()),
+            contract::SessionId(session.clone()),
             Arc::clone(log.clock()),
         );
         let mut resumed = Self {
