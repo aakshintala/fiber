@@ -249,6 +249,11 @@ fn scrub_env(cmd: &mut Command) {
         if key == "BASH_ENV" {
             continue;
         }
+        // `bash -c` imports each `BASH_FUNC_<name>%%` as a function, and
+        // shell functions are not carried.
+        if key.as_encoded_bytes().starts_with(b"BASH_FUNC_") {
+            continue;
+        }
         cmd.env(key, value);
     }
 }
