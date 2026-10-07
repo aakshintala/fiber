@@ -1140,6 +1140,43 @@ fn a_blocked_address_is_refused_even_through_a_proxy() {
 }
 
 #[test]
+fn a_redirect_to_a_blocked_name_is_refused_through_a_proxy() {
+    let server = serve([
+        redirect(302, "http://evil.test:9/"),
+        ok("text/plain", "never"),
+    ]);
+    let proxy = ConnectProxy::start().unwrap();
+    let rig = Rig::new().with(|tool| {
+        tool.with_proxy(Some(proxy_through(&proxy)))
+            .with_resolver(resolver_for("evil.test", METADATA))
+    });
+    let target = format!("localhost:{}", port_of(&server));
+    let output = rig.fetch(&format!("http://{target}/"));
+    assert_eq!(code(&output), Some(ErrorCode::BlockedHost));
+    assert_eq!(proxy.connects(), [target]);
+}
+
+#[test]
+fn the_metadata_name_is_refused_through_a_proxy_resolving_or_not() {
+    for resolves in [true, false] {
+        let proxy = ConnectProxy::start().unwrap();
+        let rig = Rig::new().with(|tool| {
+            tool.with_proxy(Some(proxy_through(&proxy)))
+                .with_resolver(Arc::new(move |_, port| {
+                    if resolves {
+                        Ok(vec![SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port)])
+                    } else {
+                        Err(std::io::Error::other("no local name"))
+                    }
+                }))
+        });
+        let output = rig.fetch("http://metadata.google.internal/");
+        assert_eq!(code(&output), Some(ErrorCode::BlockedHost), "{resolves}");
+        assert!(proxy.connects().is_empty(), "{resolves}");
+    }
+}
+
+#[test]
 fn a_name_only_the_proxy_can_resolve_is_not_refused() {
     let server = serve([ok("text/plain", "resolved by the proxy")]);
     let proxy = ConnectProxy::start().unwrap();
