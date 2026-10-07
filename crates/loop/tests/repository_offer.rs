@@ -918,7 +918,16 @@ impl History {
     /// An earlier process that exited with its turn `t_1` suspended on the
     /// standing ask `r_9` for the call `a_1`.
     fn exited_on_approval(&self) {
+        self.exited_on_offer_then_approval(&[]);
+    }
+
+    /// As [`History::exited_on_approval`], with the offer `r_old` of
+    /// `items` raised first and left unresolved, unless `items` is empty.
+    fn exited_on_offer_then_approval(&self, items: &[Unapproved]) {
         self.start_process(false);
+        if !items.is_empty() {
+            self.write(&offered_event("r_old", items), None, None);
+        }
         self.write(
             &Event::TurnStarted(TurnStarted {
                 input: vec![InputItem::Message {
@@ -1394,4 +1403,53 @@ fn an_idle_exit_on_a_raised_again_offer_leaves_it_for_the_next_resume() {
         let exited = history.exit_process(Ok(()));
         assert_eq!(exited["suspended_on"], "r_old");
     }
+}
+
+#[test]
+fn an_answer_to_the_offer_sent_before_it_is_raised_again_is_taken_first() {
+    let items = [server("a")];
+    let code = Fake::new(items.to_vec());
+    let history = History::new(vec![Scripted::text("Done.")]);
+    history.exited_on_offer_then_approval(&items);
+    history.clients(1);
+    let watcher = history.log.watch();
+    let (looped, inbox) = history.resume(&code, true);
+    // Sent before the resumed loop runs: held, then taken by the offer.
+    let early = reply_on(&inbox, "r_old", decisions(&[Approve]));
+    let finished = run_on(looped);
+    assert!(answered(&early).is_ok());
+    let (watcher, lines) = until_kind(watcher, "permission_requested");
+    let raised: Vec<&Envelope> = lines
+        .iter()
+        .filter(|l| l.kind == "repository_code_offered")
+        .collect();
+    assert_eq!(raised.len(), 1);
+    assert_eq!(raised[0].payload["request_id"], "r_old");
+    assert!(lines.iter().any(|l| l.kind == "repository_code_resolved"));
+    let reply = reply_on(&inbox, "r_9", deny());
+    assert!(answered(&reply).is_ok());
+    let (_, _) = until_kind(watcher, "turn_completed");
+    inbox.send(Delivery::Close(ignore())).unwrap();
+    finished_ok(&finished);
+}
+
+#[test]
+fn a_close_sent_before_the_offer_is_raised_again_leaves_nobody_to_answer() {
+    let items = [server("a")];
+    let code = Fake::new(items.to_vec());
+    let history = History::new(vec![Scripted::text("Done.")]);
+    history.exited_on_offer_then_approval(&items);
+    history.clients(1);
+    let mut all = history.log.watch();
+    let (looped, inbox) = history.resume(&code, true);
+    inbox.send(Delivery::Close(ignore())).unwrap();
+    finished_ok(&run_on(looped));
+    let lines = drain(&mut all);
+    assert_eq!(notices(&lines), [skipped("a", "MCP server")]);
+    assert!(history.of("repository_code_resolved").is_empty());
+    // With nobody to answer, the approval is refused as headless.
+    let resolved = history.of("permission_resolved");
+    assert_eq!(resolved.len(), 1);
+    assert_eq!(resolved[0].payload["decided_by"], "standing_rule");
+    assert_eq!(history.of("turn_completed").len(), 1);
 }
