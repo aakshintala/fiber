@@ -841,12 +841,8 @@ pub(crate) fn fold(part: &mut Part, envelope: &Envelope) -> Folded {
     let changed = crate::turn::fold_line(&mut part.turns, &mut part.fold, envelope);
     match kind {
         "turn_started" if changed => Folded::Started,
-        // A resume that folded something closed the card it found open:
-        // `changed` alone says the rule below fired, closing nothing when
-        // the process is fresh or suspended the turn instead.
-        "fiber_started" if changed && was_open && !part.turns.last().is_some_and(Turn::is_open) => {
-            Folded::CutShort
-        }
+        // Only a resume that cuts an open turn changes the card.
+        "fiber_started" if changed => Folded::CutShort,
         // `changed` is redundant here: a completed line that folded
         // nothing re-reads as nothing below, so openness alone decides.
         "turn_completed" if was_open => {

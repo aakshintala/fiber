@@ -1471,15 +1471,71 @@ fn a_fresh_or_suspended_fiber_started_closes_no_card() {
     let mut page = part();
     let folded = fold(&mut page, &resumed(true));
     assert!(matches!(folded, Folded::Nothing), "{folded:?}");
-    // A process that did not resume leaves the running card alone, and a
-    // resume later still cuts it: forcing the guard true would idle here.
+
+    // A suspended resume leaves the running card alone: it does not fold a
+    // cut even though a turn was open before the line.
     let mut page = running_part();
-    let folded = fold(&mut page, &resumed(false));
+    let exited = envelope(
+        "fiber_exited",
+        None,
+        json!({"exit_code": 0, "usage": {"tokens": {"input": 0, "cache_read": 0,
+            "cache_write": {}, "output": 0}, "cost": 0, "subscription_cost": 0},
+            "suspended_on": "r_1"}),
+    );
+    fold(&mut page, &exited);
+    let folded = fold(&mut page, &resumed(true));
     assert!(matches!(folded, Folded::Nothing), "{folded:?}");
     assert!(
         page.turns.last().is_some_and(|turn| turn.is_open()),
         "the card closed"
     );
+}
+
+#[test]
+fn reloading_an_orphan_page_keeps_its_seeded_target_ids() {
+    let mut stream = Stream::new(false);
+    stream.durable(
+        "job_completed",
+        None,
+        json!({"job_id": "j_1", "status": "failed",
+            "error": {"code": "orphaned", "message": "lost one"}}),
+    );
+    stream.durable(
+        "fiber_started",
+        None,
+        json!({"version": "0.0.1", "resumed": true}),
+    );
+    stream.durable(
+        "job_completed",
+        None,
+        json!({"job_id": "j_2", "status": "failed",
+            "error": {"code": "orphaned", "message": "lost two"}}),
+    );
+    for _ in 0..61 {
+        stream.durable("unknown", None, json!({}));
+    }
+    stream.durable(
+        "turn_started",
+        None,
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "next"}]}]}),
+    );
+
+    let mut pages = Pages::new(80);
+    for line in &stream.lines {
+        pages.apply(line);
+    }
+    assert_eq!(pages.index().pages().len(), 2);
+    pages.seeds.first_mut().expect("first page seed").next = 40;
+
+    drop_all(&mut pages);
+    pages.load(&stream.lines);
+
+    let part = pages.part(0).expect("reloaded first page");
+    let mut rows = Vec::new();
+    pages.draw(0, part, &mut rows);
+    let targets: Vec<Target> = rows.into_iter().filter_map(|(_, target)| target).collect();
+    assert_eq!(targets, [Target::Orphans(40), Target::Orphans(41)]);
 }
 
 #[test]
