@@ -21,6 +21,7 @@ use serde_json::{Map, Value};
 
 use crate::Starter;
 use crate::diag::Diag;
+use crate::feed::{Feed, Refusal};
 use crate::relay::Relays;
 use crate::start::{self, Outcome};
 
@@ -36,6 +37,8 @@ pub(crate) struct Hub {
     /// The injected clock, for `ts`, `start`'s deadline and the idle wait.
     pub(crate) clock: Arc<dyn Clock>,
     pub(crate) diag: Diag,
+    /// The feed `feed`, `dismiss` and `recent` answer from.
+    pub(crate) feed: Arc<Feed>,
     next_client: AtomicU64,
     /// The open connections and the idle timer, under one lock.
     conns: Mutex<Conns>,
@@ -83,12 +86,14 @@ impl Hub {
         let wake: Arc<dyn Wake> = wake;
         clock.subscribe(Arc::downgrade(&wake));
         let zero_since = Some(clock.now());
+        let feed = Arc::new(Feed::new(home, Arc::clone(&clock)));
         Self {
             home: home.to_path_buf(),
             fiber_version: fiber_version.to_owned(),
             starter,
             clock,
             diag,
+            feed,
             next_client: AtomicU64::new(0),
             conns: Mutex::new(Conns {
                 open: Vec::new(),
@@ -317,14 +322,18 @@ pub(crate) fn serve_counted(stream: UnixStream, hub: Arc<Hub>, n: u64) {
     let relays: Arc<Mutex<Relays>> = Arc::new(Mutex::new(Relays::default()));
     let mut read = BufReader::new(stream);
     let mut buf = Vec::new();
+    let mut fed = None;
     loop {
         buf.clear();
         match read.read_until(b'\n', &mut buf) {
             Ok(0) | Err(_) => break,
             Ok(_) => {
-                on_command(&buf, &hub, &writer, &relays);
+                on_command(&buf, &hub, &writer, &relays, &mut fed);
             }
         }
+    }
+    if let Some(fed) = fed {
+        hub.feed.unsubscribe(fed);
     }
     lock(&relays).close_all();
     disconnect(&hub, n);
@@ -343,6 +352,7 @@ fn on_command(
     hub: &Arc<Hub>,
     writer: &Arc<Mutex<UnixStream>>,
     relays: &Arc<Mutex<Relays>>,
+    fed: &mut Option<u64>,
 ) {
     let line = match classify(bytes) {
         Ok(line) => line,
@@ -368,6 +378,9 @@ fn on_command(
             Ok(result) => accept_result(writer, hub, &line.id, result),
             Err((code, message)) => reject(writer, hub, Some(&line.id), &code, message),
         },
+        "feed" => on_feed(&line.id, &line.args, hub, writer, fed),
+        "dismiss" => answer(writer, hub, &line.id, hub.feed.dismiss(&line.args)),
+        "recent" => answer(writer, hub, &line.id, hub.feed.recent(&line.args)),
         command => {
             let message = format!("`{command}` is not a hub command.");
             reject(
@@ -482,6 +495,33 @@ fn on_status(
         id,
         serde_json::json!({"clients": hub.clients(), "fiber_version": hub.fiber_version, "running": true}),
     );
+}
+
+/// `feed`: accepted, then this connection's subscription, replacing any
+/// earlier one, so the snapshot follows the acknowledgement.
+fn on_feed(
+    id: &CommandId,
+    args: &Map<String, Value>,
+    hub: &Arc<Hub>,
+    writer: &Arc<Mutex<UnixStream>>,
+    fed: &mut Option<u64>,
+) {
+    if !args.is_empty() {
+        answer(writer, hub, id, Err(crate::feed::invalid()));
+        return;
+    }
+    accept_result(writer, hub, id, Value::Object(Map::new()));
+    if let Some(earlier) = fed.take() {
+        hub.feed.unsubscribe(earlier);
+    }
+    *fed = hub.feed.subscribe(Arc::clone(writer));
+}
+
+fn answer(writer: &Arc<Mutex<UnixStream>>, hub: &Hub, id: &CommandId, got: Result<Value, Refusal>) {
+    match got {
+        Ok(result) => accept_result(writer, hub, id, result),
+        Err((code, message)) => reject(writer, hub, Some(id), &code, &message),
+    }
 }
 
 /// `start`'s `args`: `workspace` (required string), `model` (optional

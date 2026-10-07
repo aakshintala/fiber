@@ -12,12 +12,13 @@ mod diag;
 mod error;
 #[cfg(test)]
 pub(crate) mod fake;
+mod feed;
 mod idle;
 mod listen;
 mod prompt_history;
+mod recent;
 mod relay;
 mod resume;
-mod recent;
 mod start;
 
 use std::io;
@@ -101,7 +102,9 @@ pub fn serve(
     hub.diag.info("hub_started", "The hub started.");
     let got = Arc::new(AtomicI32::new(0));
     arm(&got, hub.waker());
+    hub.feed.start();
     let exit = idle::run(&hub, &held, idle_exit, &got);
+    hub.feed.stop();
     held.stop();
     Ok(exit.code())
 }
