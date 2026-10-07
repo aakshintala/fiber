@@ -370,78 +370,73 @@ fn a_cancelled_call_is_mcp_cancel_requested() {
     panic!("waited {WITHIN:?} for `notifications/cancelled` to reach the server");
 }
 
+/// Runs `tool` on a detached thread and hands back its output's receiver.
+/// Detached, not scoped: a call parked on the fake clock would otherwise
+/// keep the scope's implicit join waiting after `recv_timeout` gave up, so
+/// the test would hang instead of failing.
+fn detached(tool: McpTool) -> std::sync::mpsc::Receiver<contract::tool::Output> {
+    let (done, result) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let output = tool.run(
+            &arguments(),
+            &fakes::CancelToken::new(),
+            &fakes::Recorder::default(),
+        );
+        done.send(output).expect("collected");
+    });
+    result
+}
+
 #[test]
 fn a_server_that_dies_mid_call_fails_it_and_records_the_death() {
     let live = Live::tools(&json!([{"name": "die"}]), &[("call-die.json", "exit")]);
-    let tool = live.tool("die", Hints::default(), Duration::from_secs(60));
-    let (done, result) = std::sync::mpsc::channel();
-    std::thread::scope(|scope| {
-        scope.spawn(|| {
-            let output = tool.run(
-                &arguments(),
-                &fakes::CancelToken::new(),
-                &fakes::Recorder::default(),
-            );
-            done.send(output).expect("collected");
-        });
-        let output = result.recv_timeout(WITHIN).expect("the call ends");
-        let error = output.error.expect("failed");
-        assert_eq!(error.code, ErrorCode::McpServerUnavailable);
-        assert_eq!(
-            error.message,
-            "The MCP server `fx` exited; Fiber restarts it on the next call."
-        );
-        match output.servers.as_slice() {
-            [ServerRecord::Failed(died)] => {
-                assert_eq!(died.server, "fx");
-                assert_eq!(died.reason, ServerFailure::Died);
-                assert!(died.will_restart);
-                assert_eq!(died.error, error);
-            }
-            other => panic!("one death record, got {other:?}"),
+    let result = detached(live.tool("die", Hints::default(), Duration::from_secs(60)));
+    let output = result.recv_timeout(WITHIN).expect("the call ends");
+    let error = output.error.expect("failed");
+    assert_eq!(error.code, ErrorCode::McpServerUnavailable);
+    assert_eq!(
+        error.message,
+        "The MCP server `fx` exited; Fiber restarts it on the next call."
+    );
+    match output.servers.as_slice() {
+        [ServerRecord::Failed(died)] => {
+            assert_eq!(died.server, "fx");
+            assert_eq!(died.reason, ServerFailure::Died);
+            assert!(died.will_restart);
+            assert_eq!(died.error, error);
         }
-    });
+        other => panic!("one death record, got {other:?}"),
+    }
 }
 
 #[test]
 fn a_call_ended_by_the_stop_records_no_death() {
     let live = Live::tools(&json!([{"name": "hang"}]), &[("call-hang.json", "hang")]);
-    let tool = live.tool("hang", Hints::default(), Duration::from_secs(60));
-    let (done, result) = std::sync::mpsc::channel();
-    std::thread::scope(|scope| {
-        scope.spawn(|| {
-            let output = tool.run(
-                &arguments(),
-                &fakes::CancelToken::new(),
-                &fakes::Recorder::default(),
-            );
-            done.send(output).expect("collected");
-        });
-        let deadline = live
-            .fake
-            .now()
-            .checked_add(Duration::from_secs(60))
-            .expect("deadline");
-        assert!(
-            live.fake.await_parked(deadline, WITHIN),
-            "the call waits on its timeout",
-        );
-        // Detached with a wall-clock limit: a lingering child would keep
-        // the stop parked on the fake clock forever.
-        let slot = Arc::clone(&live.slot);
-        let (stopped_tx, stopped) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            slot.stop();
-            stopped_tx.send(()).expect("collected");
-        });
-        let output = result.recv_timeout(WITHIN).expect("the call ends");
-        stopped.recv_timeout(WITHIN).expect("the stop ends");
-        let error = output.error.expect("failed");
-        assert_eq!(error.code, ErrorCode::McpServerUnavailable);
-        assert_eq!(
-            error.message,
-            "The MCP server `fx` did not start, or it has since exited."
-        );
-        assert!(output.servers.is_empty(), "a stop is not a death");
+    let result = detached(live.tool("hang", Hints::default(), Duration::from_secs(60)));
+    let deadline = live
+        .fake
+        .now()
+        .checked_add(Duration::from_secs(60))
+        .expect("deadline");
+    assert!(
+        live.fake.await_parked(deadline, WITHIN),
+        "the call waits on its timeout",
+    );
+    // Detached with a wall-clock limit: a lingering child would keep
+    // the stop parked on the fake clock forever.
+    let slot = Arc::clone(&live.slot);
+    let (stopped_tx, stopped) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        slot.stop();
+        stopped_tx.send(()).expect("collected");
     });
+    let output = result.recv_timeout(WITHIN).expect("the call ends");
+    stopped.recv_timeout(WITHIN).expect("the stop ends");
+    let error = output.error.expect("failed");
+    assert_eq!(error.code, ErrorCode::McpServerUnavailable);
+    assert_eq!(
+        error.message,
+        "The MCP server `fx` did not start, or it has since exited."
+    );
+    assert!(output.servers.is_empty(), "a stop is not a death");
 }

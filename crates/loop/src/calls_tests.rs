@@ -1285,6 +1285,31 @@ fn a_calls_server_lines_are_written_in_order_under_its_action() {
         Arc::new(crate::TurnCancel::default()),
     );
     assert_eq!(ran.outcome, Some(TurnOutcome::Completed));
+    assert_eq!(
+        kinds(&ran.lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "mcp_server_failed",
+            "mcp_server_ready",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     let lines = durable(&ran.lines);
     let index = lines
         .iter()
@@ -1347,6 +1372,24 @@ fn a_call_that_returns_an_error_after_its_turn_is_cancelled_ends_failed() {
     );
     watcher.join().unwrap();
     assert_eq!(ran.outcome, Some(TurnOutcome::Interrupted));
+    assert_eq!(
+        kinds(&ran.lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "turn_completed",
+        ]
+    );
     let lines = durable(&ran.lines);
     let completed = lines
         .iter()

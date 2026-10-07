@@ -1208,6 +1208,29 @@ fn call_words(lines: &[&Value]) -> Vec<String> {
         .collect()
 }
 
+/// The event kinds of a turn whose replies call one reads-only tool each,
+/// then [`hello`]: each call's server lines, from `servers`, fall between
+/// its `tool_call_started` and its `tool_call_completed`.
+fn call_kinds(servers: &[&[&'static str]]) -> Vec<&'static str> {
+    let read = read_kinds();
+    let start = read
+        .iter()
+        .position(|kind| *kind == "step_started")
+        .unwrap();
+    let completed = read
+        .iter()
+        .position(|kind| *kind == "tool_call_completed")
+        .unwrap();
+    let mut kinds = read[..start].to_vec();
+    for lines in servers {
+        kinds.extend_from_slice(&read[start..completed]);
+        kinds.extend_from_slice(lines);
+        kinds.push("tool_call_completed");
+    }
+    kinds.extend_from_slice(&read[completed + 1..]);
+    kinds
+}
+
 fn words(run: &Run) -> Vec<Vec<String>> {
     run.calls().iter().map(|lines| call_words(lines)).collect()
 }
@@ -1237,6 +1260,10 @@ fn a_server_that_dies_mid_session_restarts_on_the_next_call() {
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert_eq!(
+        run.kinds(),
+        call_kinds(&[&["mcp_server_failed"], &["mcp_server_ready"]]),
+    );
+    assert_eq!(
         words(&run),
         [
             vec!["failed died true", "failed mcp_server_unavailable"],
@@ -1265,6 +1292,15 @@ fn a_server_that_dies_twice_stays_dead_with_its_tools_declared() {
     let run = setup.run(&["ask", "die twice"]);
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        call_kinds(&[
+            &["mcp_server_failed"],
+            &["mcp_server_ready"],
+            &["mcp_server_failed"],
+            &[],
+        ]),
+    );
     assert_eq!(
         words(&run),
         [
@@ -1304,6 +1340,7 @@ fn a_list_changed_notice_changes_nothing_until_the_next_session() {
     // The first session caches `echo` and `notify`.
     let first = setup.run(&["ask", "hi"]);
     assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
+    assert_eq!(first.kinds(), hello_kinds(&[]));
     // The server gains a tool, and says so during the next call.
     fs::write(
         dir.join("tools.json"),
@@ -1322,6 +1359,7 @@ fn a_list_changed_notice_changes_nothing_until_the_next_session() {
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     // The call completed, so the notice sent before its answer was read.
+    assert_eq!(run.kinds(), read_kinds());
     assert_eq!(words(&run), [vec!["completed"]]);
     let log = fs::read_to_string(dir.join("requests.log")).unwrap();
     assert_eq!(
