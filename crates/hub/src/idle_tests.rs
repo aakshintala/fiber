@@ -194,6 +194,18 @@ fn with_no_clients_the_hub_exits_at_idle_exit() {
 }
 
 #[test]
+fn a_hub_whose_socket_was_removed_still_exits_at_idle_exit() {
+    let temp = Temp::new();
+    let clock = fakes::clock::FakeClock::new();
+    let done = serve_in(&temp, IDLE, Arc::clone(&clock));
+    await_idle_park(&clock, clock.origin(), "at start");
+    fs::remove_file(temp.socket()).unwrap();
+    clock.advance(IDLE);
+    assert_eq!(done.recv_timeout(DEADLINE).expect("the hub exits idle"), 0);
+    assert!(temp.log().contains("The hub stopped: idle."));
+}
+
+#[test]
 fn one_tick_before_idle_exit_the_hub_still_answers() {
     let temp = Temp::new();
     let clock = fakes::clock::FakeClock::new();
