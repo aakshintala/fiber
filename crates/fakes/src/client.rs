@@ -20,6 +20,9 @@ use serde_json::Value;
 /// on the failure path only.
 const READER_STOP: Duration = Duration::from_secs(2);
 
+/// The most [`Client::send_by`] writes under one reading of its deadline.
+const CHUNK: usize = 4096;
+
 /// A client connected to a session socket. It sends command lines and reads
 /// the JSON lines that come back. [`Client::slow`] stops it reading, so the
 /// session's writer blocks instead of the test.
@@ -70,6 +73,48 @@ impl Client {
             stream.write_all(b"\n")?;
         }
         stream.flush()
+    }
+
+    /// Sends one command line as [`Client::send`] does, every blocking write
+    /// bounded by what `left` says remains of the caller's deadline.
+    ///
+    /// The line goes in chunks of at most [`CHUNK`] bytes. Before each, `left`
+    /// is read once and becomes that write's timeout, so partial progress
+    /// never renews the deadline. At zero it returns a `TimedOut` error
+    /// without writing; a zero timeout never reaches the socket, which takes
+    /// it as an error. On return the socket has no write timeout, so a later
+    /// `send` is unbounded as before.
+    pub fn send_by(&self, line: &str, left: &dyn Fn() -> Duration) -> std::io::Result<()> {
+        let mut bytes = line.as_bytes().to_vec();
+        if !line.ends_with('\n') {
+            bytes.push(b'\n');
+        }
+        let mut stream = lock(&self.write);
+        let mut rest = bytes.as_slice();
+        let sent = loop {
+            if rest.is_empty() {
+                break Ok(());
+            }
+            let within = left();
+            if within.is_zero() {
+                break Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "the deadline passed before the line was written",
+                ));
+            }
+            if let Err(err) = stream.set_write_timeout(Some(within)) {
+                break Err(err);
+            }
+            let chunk = rest.get(..CHUNK).unwrap_or(rest);
+            match stream.write(chunk) {
+                Ok(0) => break Err(std::io::ErrorKind::WriteZero.into()),
+                Ok(n) => rest = rest.get(n..).unwrap_or_default(),
+                Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(err) => break Err(err),
+            }
+        };
+        let unbounded = stream.set_write_timeout(None);
+        sent.and(unbounded)
     }
 
     /// The first line `matches` accepts, parsed as JSON, or as a string when it
