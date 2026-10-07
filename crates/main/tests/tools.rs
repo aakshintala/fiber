@@ -1526,20 +1526,23 @@ fn a_monitors_lines_reach_the_log_before_its_end_and_ask_exits() {
         &reply,
     ]
     .concat();
-    // The batch wakes the model. The end arrives with it, at the turn's
-    // next step boundary, or after the turn, which starts another.
+    // The lines wake the model. The end arrives with them, at the turn's
+    // next step boundary, or after the turn, which starts another. How the
+    // lines split into deliveries is not fixed (one write can arrive as one
+    // batch or two), so the schedules leave `job_line` out and the checks
+    // below place the deliveries.
     let step = &reply[..reply.len() - 1];
     let schedules = [
         [
             &opening[..],
-            &["turn_started", "step_started", "job_line", "job_completed"],
+            &["turn_started", "step_started", "job_completed"],
             &reply,
             &["fiber_exited"],
         ]
         .concat(),
         [
             &opening[..],
-            &["turn_started", "step_started", "job_line"],
+            &["turn_started", "step_started"],
             step,
             &["step_started", "job_completed"],
             &reply,
@@ -1548,7 +1551,7 @@ fn a_monitors_lines_reach_the_log_before_its_end_and_ask_exits() {
         .concat(),
         [
             &opening[..],
-            &["turn_started", "step_started", "job_line"],
+            &["turn_started", "step_started"],
             &reply,
             &["turn_started", "step_started", "job_completed"],
             &reply,
@@ -1563,23 +1566,42 @@ fn a_monitors_lines_reach_the_log_before_its_end_and_ask_exits() {
         .iter()
         .filter(|line| line["kind"] != "job_delta")
         .collect();
-    let kinds: Vec<&str> = lines
+    let all_kinds: Vec<&str> = lines
         .iter()
         .map(|line| line["kind"].as_str().unwrap())
         .collect();
-    assert!(schedules.contains(&kinds), "{kinds:?}");
+    let kinds: Vec<&str> = all_kinds
+        .iter()
+        .copied()
+        .filter(|kind| *kind != "job_line")
+        .collect();
+    assert!(schedules.contains(&kinds), "{all_kinds:?}");
     let job_id = lines[13]["payload"]["job_id"].as_str().unwrap();
     let receipt = lines[14]["payload"]["content"][0]["text"].as_str().unwrap();
     assert!(receipt.starts_with("Started a monitor.\n"), "{receipt}");
-    let batch = &lines[kinds.iter().position(|kind| *kind == "job_line").unwrap()];
-    assert_eq!(batch["payload"]["job_id"], job_id);
-    assert_eq!(batch["payload"]["lines"], "one\ntwo");
-    assert!(batch["payload"].get("suppressed").is_none());
-    assert!(batch.get("action_id").is_none_or(Value::is_null));
-    let completed = &lines[kinds
+    // Each delivery lands after the notice and before the end; together they
+    // are exactly what the monitor printed.
+    let notified = all_kinds
+        .iter()
+        .position(|kind| *kind == "jobs_pending_notified")
+        .unwrap();
+    let ended_at = all_kinds
         .iter()
         .position(|kind| *kind == "job_completed")
-        .unwrap()];
+        .unwrap();
+    let mut delivered = Vec::new();
+    for (index, line) in lines.iter().enumerate() {
+        if line["kind"] == "job_line" {
+            assert!(notified < index && index < ended_at, "{all_kinds:?}");
+            assert_eq!(line["payload"]["job_id"], job_id);
+            assert!(line["payload"].get("suppressed").is_none());
+            assert!(line.get("action_id").is_none_or(Value::is_null));
+            delivered.push(line["payload"]["lines"].as_str().unwrap());
+        }
+    }
+    assert!(!delivered.is_empty(), "{all_kinds:?}");
+    assert_eq!(delivered.join("\n"), "one\ntwo", "{all_kinds:?}");
+    let completed = &lines[ended_at];
     assert_eq!(completed["payload"]["job_id"], job_id);
     assert_eq!(completed["payload"]["status"], "completed");
     // The deltas left out above: all of this job's, inside its life, and
