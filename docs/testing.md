@@ -348,12 +348,19 @@ changing" is not "the server is listening".
 Every wait has a deadline on the wall clock, also in a test that drives a fake
 clock: fake time passes only when the test advances it. On expiry the test
 fails with an assertion naming what it waited for. Calling code that blocks is a wait too, so the test runs
-it on a thread and receives its result with a deadline. nextest's per-test timeout is at least twice the sum of the
+it on a thread and receives its result with a deadline. A fake's own sleep or poll
+loop is a wait too, with a deadline on the wall clock. nextest's per-test timeout is at least twice the sum of the
 test's own deadlines, so a hang reports which wait expired, not a harness kill.
 
 A test advances a fake clock only after a signal that the code under test is
 waiting on that clock (past its own clock check); a parked caller alone is not
 that signal.
+
+Starting threads in order does not order their requests. A test that needs
+calls to reach a fake in a set order has the fake acknowledge each call it
+holds, and sends the next only after that acknowledgement. The MCP fixture
+(`crates/fakes/mcp-fixture/server.sh`) writes a line to a `held-<tool>` FIFO
+once it holds a call, and answers when the test writes to `release-<tool>`.
 
 A test that reproduces a race forces the bad interleaving with a pause point:
 a committed, test-only seam where the code under test waits until the test
