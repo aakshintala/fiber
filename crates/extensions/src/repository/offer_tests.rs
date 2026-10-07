@@ -432,3 +432,19 @@ fn a_watcher_and_a_phase_show_in_a_hook_summary() {
     assert!(lines.contains(&"phase: early"), "{}", item.summary);
     assert!(lines.contains(&"runs: notify"), "{}", item.summary);
 }
+
+#[test]
+fn a_never_marked_item_says_so_and_an_undecided_one_does_not() {
+    let repo = Repo::new();
+    repo.hooks(&json!({"a": {"point": "x"}, "b": {"point": "y"}}));
+    let store = store(&repo);
+    let b = repo.item(OfferedKind::Hook, "b");
+    let hash_b = hash(&mut Index::scratch(), &b).unwrap();
+    store.never(&b, &hash_b).unwrap();
+    let flags: Vec<(String, bool)> = pending(&store, &mut Index::scratch(), repo.items())
+        .unwrap()
+        .into_iter()
+        .map(|p| (p.offered.name, p.never))
+        .collect();
+    assert_eq!(flags, vec![("a".into(), false), ("b".into(), true)]);
+}

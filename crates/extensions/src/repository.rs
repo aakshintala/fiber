@@ -7,6 +7,7 @@
 mod content;
 mod declared;
 mod offer;
+mod session;
 mod store;
 
 #[cfg(test)]
@@ -19,6 +20,9 @@ mod declared_tests;
 #[path = "repository/offer_tests.rs"]
 mod offer_tests;
 #[cfg(test)]
+#[path = "repository/session_tests.rs"]
+mod session_tests;
+#[cfg(test)]
 #[path = "repository/store_tests.rs"]
 mod store_tests;
 
@@ -27,6 +31,7 @@ use contract::events::OfferedKind;
 pub use content::{Index, hash};
 pub use declared::{RepoItem, declared_items};
 pub use offer::{Pending, pending};
+pub use session::SessionOffer;
 pub use store::{Decision, Store};
 
 /// The kind as `docs/events.md` and the approval files spell it:
