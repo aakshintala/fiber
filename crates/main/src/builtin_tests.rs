@@ -1,6 +1,7 @@
 //! The driver shell `builtin` returns runs a command.
 
 use std::sync::{Arc, Weak};
+use std::time::Duration;
 
 use contract::clock::{Clock, Wake};
 use contract::emit::Emit;
@@ -22,6 +23,28 @@ struct Quiet;
 
 impl Emit for Quiet {
     fn emit(&self, _event: &Event) {}
+}
+
+/// How long a test waits for one builtin tool call, in real time.
+///
+/// Each wrapped call starts a child (bash for the driver shell; the image
+/// child for `read`), and a fresh exec can stall for seconds on macOS
+/// (`docs/testing.md`, "Waits and timeouts"). One call per test = 10 s,
+/// within half of nextest's 120 s kill. A passing run never waits on it;
+/// it only bounds a hang.
+const CALL_WITHIN: Duration = Duration::from_secs(10);
+
+/// Runs one builtin tool call on its own thread and returns its output.
+/// Calling code that blocks is a wait too (`docs/testing.md`, "Waits and
+/// timeouts"): on expiry the test fails naming the call.
+fn ran(
+    tool: Arc<dyn contract::tool::Tool>,
+    arguments: serde_json::Map<String, serde_json::Value>,
+) -> contract::tool::Output {
+    let name = tool.definition().name;
+    fakes::within(&format!("the {name} call"), CALL_WITHIN, move || {
+        tool.run(&arguments, &Never, &Quiet)
+    })
 }
 
 #[test]
@@ -48,7 +71,7 @@ fn the_driver_shell_runs_echo() {
         "command".to_owned(),
         serde_json::Value::String("echo hi".to_owned()),
     );
-    let output = driver.run(&arguments, &Never, &Quiet);
+    let output = ran(driver, arguments);
     let text = output
         .content
         .iter()
@@ -96,7 +119,7 @@ fn read_is_wired_to_the_image_child() {
         "path".to_owned(),
         serde_json::Value::String("a.png".to_owned()),
     );
-    let output = read.run(&arguments, &Never, &Quiet);
+    let output = ran(Arc::clone(read), arguments);
     assert_eq!(output.error, None);
     assert!(
         matches!(
