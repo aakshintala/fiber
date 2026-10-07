@@ -23,7 +23,9 @@ use contract::clock::Clock;
 
 use super::*;
 use crate::connection::Hub;
+use crate::diag::Diag;
 use crate::fake::FakeStarter;
+use crate::listen::Held;
 
 /// One named deadline per wait: the hub answers before it.
 const DEADLINE: Duration = Duration::from_secs(10);
@@ -96,10 +98,13 @@ fn serve_with_hub(
         &temp.dir,
         "0.0.0",
         Arc::new(FakeStarter::hang(&temp.dir)),
-        timed,
+        Arc::clone(&timed),
+        Diag::open(&temp.dir, timed),
     ));
     hub.diag.info("hub_started", "The hub started.");
-    let held = crate::listen::listen(&temp.dir).unwrap().unwrap();
+    let lock = crate::listen::lock(&temp.dir).unwrap().unwrap();
+    let bound = crate::listen::bind(&lock, &temp.dir).unwrap().unwrap();
+    let held = Held::new(lock, bound);
     let got = Arc::new(AtomicI32::new(0));
     let (done_tx, done_rx) = mpsc::channel();
     thread::Builder::new()
@@ -281,7 +286,8 @@ fn an_accept_after_the_exit_claim_gets_eof_without_hello() {
         &temp.dir,
         "0.0.0",
         Arc::new(FakeStarter::hang(&temp.dir)),
-        timed,
+        Arc::clone(&timed),
+        Diag::open(&temp.dir, timed),
     );
     // No thread waits on the clock: the idle wait below runs on this one.
     clock.advance(IDLE);

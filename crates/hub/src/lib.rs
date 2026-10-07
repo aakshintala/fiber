@@ -9,6 +9,7 @@
 
 mod connection;
 mod diag;
+mod error;
 #[cfg(test)]
 pub(crate) mod fake;
 mod idle;
@@ -27,6 +28,10 @@ use contract::clock::{Clock, Wake};
 use contract::shapes::Failure;
 
 use crate::connection::Hub;
+use crate::diag::Diag;
+use crate::listen::Held;
+
+pub use crate::error::StartError;
 
 /// Starts a session the hub was asked for: runs the internal session
 /// command in `workspace` with `id`, so the starter knows the id before the
@@ -60,12 +65,19 @@ pub fn serve(
     starter: Arc<dyn Starter>,
     clock: Arc<dyn Clock>,
 ) -> i32 {
-    let held = match listen::listen(home) {
-        Ok(Some(held)) => held,
+    let lock = match listen::lock(home) {
+        Ok(Some(lock)) => lock,
         Ok(None) => return 0,
         Err(_) => return 1,
     };
-    let hub = Arc::new(Hub::new(home, fiber_version, starter, clock));
+    let bound = match listen::bind(&lock, home) {
+        Ok(Some(bound)) => bound,
+        Ok(None) => return 0,
+        Err(_) => return 1,
+    };
+    let held = Held::new(lock, bound);
+    let diag = Diag::open(home, Arc::clone(&clock));
+    let hub = Arc::new(Hub::new(home, fiber_version, starter, clock, diag));
     hub.diag.info("hub_started", "The hub started.");
     let got = Arc::new(AtomicI32::new(0));
     arm(&got, hub.waker());
