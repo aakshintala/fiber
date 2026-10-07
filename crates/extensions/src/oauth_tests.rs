@@ -125,6 +125,11 @@ fn a_browser_that_cannot_start_is_not_an_error() {
 }
 
 #[test]
+fn the_system_browser_has_nobody_attached() {
+    assert!(!SystemBrowser::default().attended());
+}
+
+#[test]
 fn due_judges_a_stored_credential_by_the_clock() {
     let clock = fakes::clock::FakeClock::new();
     let wall = i64::try_from(clock.wall().duration_since(UNIX_EPOCH).unwrap().as_secs()).unwrap();

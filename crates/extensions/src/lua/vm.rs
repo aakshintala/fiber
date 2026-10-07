@@ -276,6 +276,12 @@ impl Vm {
                 Error::RefreshUnreachable { extension, message }
             };
         }
+        if let Some(unattended) = e.downcast_ref::<crate::oauth::Unattended>() {
+            return Error::Unattended {
+                extension: self.name.clone(),
+                call: unattended.call.clone(),
+            };
+        }
         Error::Lua {
             extension: self.name.clone(),
             message: setup::message(e),
