@@ -685,3 +685,20 @@ fn the_attached_session_with_a_row_gets_one_line() {
         ["s_aaaaaaaaaaaaaaaa  fiber resume s_aaaaaaaaaaaaaaaa"]
     );
 }
+
+#[test]
+fn a_closing_attached_session_gets_no_line() {
+    let mut app = home();
+    linked(&mut app);
+    app.attach(SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    app.phase = crate::app::Phase::Attached {
+        session: SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
+        busy: true,
+    };
+    assert_eq!(ctrl_c(&mut app), Effect::None);
+    let clock = fakes::clock::FakeClock::new();
+    let Effect::Exit(_) = app.on_key(Key::Char('c'), clock.now()) else {
+        panic!("`c` closes all");
+    };
+    assert!(app.exit_lines().is_empty());
+}

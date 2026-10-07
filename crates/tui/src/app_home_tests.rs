@@ -2990,3 +2990,29 @@ fn delete_edit_in_the_question_does_nothing() {
         "Delete old work (s_aaaaaaaaaaaaaaaa)? It cannot be undone · enter delete · esc keep"
     );
 }
+
+#[test]
+fn stop_on_a_key_with_no_row_does_nothing() {
+    let mut app = home();
+    two_rows(&mut app);
+    assert_eq!(app.home_click(Spot::Stop(999)), Effect::None);
+    assert_eq!(
+        foot(&app),
+        "↓ the session list · F1 the key map · Ctrl+C twice to quit"
+    );
+}
+
+#[test]
+fn y_on_a_focused_x_copies_nothing() {
+    let mut app = home();
+    two_rows(&mut app);
+    drawn(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Stop(keys(&app)[0])))
+    );
+    assert_eq!(app.on_key(Key::Char('y'), now), Effect::None);
+}
