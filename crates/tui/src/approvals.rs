@@ -274,7 +274,7 @@ impl Queue {
                     self.show(next);
                 }
             }
-            Key::PageUp | Key::PageDown | Key::End | Key::CtrlC => return None,
+            Key::PageUp | Key::PageDown | Key::End | Key::CtrlC | Key::CtrlO => return None,
         }
         Some(PanelKey::Handled)
     }

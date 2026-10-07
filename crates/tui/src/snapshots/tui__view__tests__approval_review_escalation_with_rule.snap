@@ -4,9 +4,9 @@ expression: shown
 ---
 
 
-
-
-› run it
+                                                                         run it
+• Ran 1 command · shell npm test --watch
+  0 shell npm test --watch · running
 approval · s_aaaaaaaaaaaaaaaa · 1 of 1
 the reviewer escalated: it blocked three in a row
 shell {"command":"npm test --watch"}
