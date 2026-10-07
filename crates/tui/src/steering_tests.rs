@@ -80,6 +80,7 @@ fn fibers_own_message_shows_but_cannot_be_selected() {
         &queue(&[("first", Some("c_1")), ("from fiber", None)]),
         &mut draft,
     );
+    assert_eq!(steering.lines(20), ["↳ first", "↳ from fiber"]);
     steering.up(&mut draft);
     assert_eq!(draft, "first");
     assert!(!steering.select(1, &mut draft));
