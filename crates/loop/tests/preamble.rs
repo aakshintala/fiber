@@ -522,3 +522,59 @@ fn a_thinking_level_is_recorded_and_sent_on_every_request() {
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].thinking, Some(contract::ThinkingLevel::High));
 }
+
+/// Bytes of the definitions a probe session sent in full.
+fn definition_bytes(tools: Vec<std::sync::Arc<dyn contract::tool::Tool>>) -> u64 {
+    let mut session = Session::windowed(vec![Scripted::text("Done.")], tools, 1_000_000);
+    session.inbox.send(delivery("hi")).unwrap();
+    session.turn();
+    let built = session
+        .lines()
+        .into_iter()
+        .find(|line| line.kind == "preamble_built")
+        .unwrap();
+    built.payload["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| serde_json::to_string(&tool["definition"]).unwrap().len() as u64)
+        .sum()
+}
+
+fn two_tools() -> Vec<std::sync::Arc<dyn contract::tool::Tool>> {
+    vec![
+        std::sync::Arc::new(support::TestTool::reads("get_weather", "Sunny.")),
+        std::sync::Arc::new(support::TestTool::reads("get_news", "Quiet.")),
+    ]
+}
+
+fn tool_notices(window: u64) -> Vec<Value> {
+    let mut session = Session::windowed(vec![Scripted::text("Done.")], two_tools(), window);
+    session.inbox.send(delivery("hi")).unwrap();
+    session.turn();
+    session
+        .lines()
+        .into_iter()
+        .filter(|line| line.kind == "notice")
+        .map(|line| Value::Object(line.payload))
+        .collect()
+}
+
+#[test]
+fn definitions_over_ten_percent_of_the_window_write_tool_definitions_large() {
+    let bytes = definition_bytes(two_tools());
+    // Four bytes a token: a window one token under 2.5 x bytes puts the
+    // definitions just over 10%.
+    let notices = tool_notices((bytes * 10).div_ceil(4) - 1);
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0]["code"], "tool_definitions_large");
+    let text = notices[0]["message"].as_str().unwrap();
+    assert!(text.contains("builtin"), "{text}");
+    assert!(text.contains("tools.disabled"), "{text}");
+}
+
+#[test]
+fn definitions_at_exactly_ten_percent_of_the_window_write_no_notice() {
+    let bytes = definition_bytes(two_tools());
+    assert!(tool_notices((bytes * 10).div_ceil(4)).is_empty());
+}
