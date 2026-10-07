@@ -2,11 +2,9 @@
 //! "Seeing the tools").
 
 use super::*;
-use contract::events::{
-    CacheLifetime, Empty, Event, PreambleBuilt, PreambleReason, SentTool, ToolReplaced,
-};
+use contract::events::{CacheLifetime, Empty, Event, PreambleBuilt, PreambleReason, SentTool};
 use contract::shapes::Tokens;
-use contract::{ActionId, GenerationId, SCHEMA_VERSION, Seq, SessionId, TurnId};
+use contract::{ActionId, GenerationId, SCHEMA_VERSION, SessionId};
 use serde_json::{Map, Value, json};
 
 fn envelope(kind: &str, action: Option<&str>, payload: Map<String, Value>) -> Envelope {
@@ -49,10 +47,6 @@ fn built(reason: PreambleReason, system_prompt: &str) -> PreambleBuilt {
 
 fn payload(event: &Event) -> Map<String, Value> {
     event.payload().unwrap()
-}
-
-fn sized(built: PreambleBuilt) -> u64 {
-    preamble_size(&payload(&Event::PreambleBuilt(built)))
 }
 
 fn preamble_line(built: &PreambleBuilt) -> Envelope {
@@ -132,84 +126,84 @@ fn assert_tokens(lines: Vec<Envelope>, expected: Vec<Option<u64>>) {
 }
 
 #[test]
-fn tokens_estimates_bytes_from_the_first_requests_cache_write() {
+fn tokens_estimates_bytes_from_the_first_requests_input() {
     let cases = [
         (
             Rate {
-                preamble: 0,
-                written: None,
+                input_tokens: None,
+                input_bytes: 0,
             },
             12,
             None,
         ),
         (
             Rate {
-                preamble: 200,
-                written: None,
+                input_tokens: None,
+                input_bytes: 200,
             },
             12,
             None,
         ),
         (
             Rate {
-                preamble: 0,
-                written: Some(5),
+                input_tokens: Some(5),
+                input_bytes: 0,
             },
             12,
             None,
         ),
         (
             Rate {
-                preamble: 200,
-                written: Some(100),
+                input_tokens: Some(100),
+                input_bytes: 200,
             },
             12,
             Some(6),
         ),
         (
             Rate {
-                preamble: 200,
-                written: Some(100),
+                input_tokens: Some(100),
+                input_bytes: 200,
             },
             3,
             Some(1),
         ),
         (
             Rate {
-                preamble: 200,
-                written: Some(100),
+                input_tokens: Some(100),
+                input_bytes: 200,
             },
             1,
             Some(0),
         ),
         (
             Rate {
-                preamble: 200,
-                written: Some(100),
+                input_tokens: Some(100),
+                input_bytes: 200,
             },
             0,
             Some(0),
         ),
         (
             Rate {
-                preamble: 200,
-                written: Some(0),
+                input_tokens: Some(0),
+                input_bytes: 200,
             },
             12,
             Some(0),
         ),
         (
             Rate {
-                preamble: u64::MAX,
-                written: Some(u64::MAX),
+                input_tokens: Some(u64::MAX),
+                input_bytes: u64::MAX,
             },
             u64::MAX,
             Some(u64::MAX),
         ),
         (
             Rate {
-                preamble: 1,
-                written: Some(u64::MAX),
+                input_tokens: Some(u64::MAX),
+                input_bytes: 1,
             },
             2,
             Some(u64::MAX),
@@ -218,92 +212,6 @@ fn tokens_estimates_bytes_from_the_first_requests_cache_write() {
     for (rate, bytes, expected) in cases {
         assert_eq!(rate.tokens(bytes), expected);
     }
-}
-
-#[test]
-fn preamble_size_counts_the_request_fields_compact_json() {
-    // {"cache_lifetime":"5m","model":"m","system_prompt":"hi",
-    //  "tool_choice":"pick","tools":[{"type":"object"}]}
-    assert_eq!(sized(built(PreambleReason::Start, "hi")), 105);
-}
-
-#[test]
-fn preamble_size_ignores_the_fields_no_request_sends() {
-    let base = sized(built(PreambleReason::Start, "hi"));
-    let mut reload = built(PreambleReason::Start, "hi");
-    reload.reason = PreambleReason::Reload;
-    assert_eq!(sized(reload), base);
-    let mut window = built(PreambleReason::Start, "hi");
-    window.context_window = 200_000;
-    assert_eq!(sized(window), base);
-    let mut trigger = built(PreambleReason::Start, "hi");
-    trigger.trigger_at = Some(7);
-    assert_eq!(sized(trigger), base);
-    let mut replaced = built(PreambleReason::Start, "hi");
-    replaced.replaced = vec![ToolReplaced {
-        name: "read".into(),
-        from: "a".into(),
-        to: "b".into(),
-    }];
-    assert_eq!(sized(replaced), base);
-    let mut by = built(PreambleReason::Start, "hi");
-    by.tools[0].registered_by = "an-extension".into();
-    assert_eq!(sized(by), base);
-    let mut deferred = built(PreambleReason::Start, "hi");
-    deferred.tools[0].deferred = true;
-    assert_eq!(sized(deferred), base);
-    let mut name = built(PreambleReason::Start, "hi");
-    name.tools[0].name = "write-a-longer-name".into();
-    assert_eq!(sized(name), base);
-    // A tool with no definition contributes nothing to the request.
-    let mut bare = payload(&Event::PreambleBuilt(built(PreambleReason::Start, "hi")));
-    bare.get_mut("tools")
-        .unwrap()
-        .as_array_mut()
-        .unwrap()
-        .push(json!({"name": "ghost"}));
-    assert_eq!(preamble_size(&bare), base);
-}
-
-#[test]
-fn preamble_size_counts_the_fields_each_request_sends() {
-    let base = sized(built(PreambleReason::Start, "hi"));
-    let mut system = built(PreambleReason::Start, "hi");
-    system.system_prompt = "hello".into();
-    assert!(sized(system) > base);
-    let mut model = built(PreambleReason::Start, "hi");
-    model.model = "mm".into();
-    assert!(sized(model) > base);
-    let mut choice = built(PreambleReason::Start, "hi");
-    choice.tool_choice = "choose".into();
-    assert!(sized(choice) > base);
-    // Both lifetimes serialize to two characters, so a longer stand-in
-    // proves the value flows into the size.
-    let mut lifetime = payload(&Event::PreambleBuilt(built(PreambleReason::Start, "hi")));
-    lifetime.insert("cache_lifetime".into(), Value::from("1hour"));
-    assert!(preamble_size(&lifetime) > base);
-    let mut thinking = built(PreambleReason::Start, "hi");
-    thinking.thinking = Some("high".into());
-    assert!(sized(thinking) > base);
-    let mut credential = built(PreambleReason::Start, "hi");
-    credential.credential = Some("work".into());
-    assert!(sized(credential) > base);
-    let mut definition = built(PreambleReason::Start, "hi");
-    definition.tools[0] = sent(json!({"type": "object", "required": []}));
-    assert!(sized(definition) > base);
-}
-
-#[test]
-fn preamble_size_ignores_the_lines_envelope() {
-    let base = built(PreambleReason::Start, "hi");
-    let mut line = preamble_line(&base);
-    line.ts = 99;
-    line.seq = Some(Seq(4));
-    line.turn_id = Some(TurnId("t_9".into()));
-    assert_tokens(
-        vec![line, start_line("a_1"), own_usage("g_1")],
-        vec![None, None, Some(11)],
-    );
 }
 
 #[test]
@@ -621,49 +529,40 @@ fn another_models_usage_never_counts() {
 }
 
 #[test]
-fn the_cache_write_sums_every_lifetime_saturating() {
+fn input_tokens_sums_every_kind_saturating() {
+    let full = UsageRecorded {
+        tokens: Tokens {
+            input: 1,
+            cache_read: 2,
+            cache_write: [("5m".to_owned(), 4), ("1h".to_owned(), 8)]
+                .into_iter()
+                .collect(),
+            output: 3,
+        },
+        ..recorded("g_1")
+    };
+    assert_eq!(input_tokens(&full), 15);
+    let saturated = UsageRecorded {
+        tokens: Tokens {
+            input: u64::MAX,
+            cache_read: 1,
+            cache_write: Default::default(),
+            output: 3,
+        },
+        ..recorded("g_1")
+    };
+    assert_eq!(input_tokens(&saturated), u64::MAX);
     let mut fold = RateFold::default();
     fold.fold(&preamble_line(&built(PreambleReason::Start, "hi")));
     fold.fold(&start_line("a_1"));
-    fold.fold(&usage_line(
-        Some("a_1"),
-        UsageRecorded {
-            tokens: Tokens {
-                input: 10,
-                cache_read: 0,
-                cache_write: [("5m".to_owned(), 40), ("1h".to_owned(), 60)]
-                    .into_iter()
-                    .collect(),
-                output: 3,
-            },
-            ..recorded("g_1")
-        },
-    ));
+    fold.fold(&usage_line(Some("a_1"), recorded("g_1")));
     assert_eq!(
         fold.rate(),
         Rate {
-            preamble: 105,
-            written: Some(100)
+            input_tokens: Some(100),
+            input_bytes: 105
         }
     );
-    let mut saturated = RateFold::default();
-    saturated.fold(&preamble_line(&built(PreambleReason::Start, "hi")));
-    saturated.fold(&start_line("a_1"));
-    saturated.fold(&usage_line(
-        Some("a_1"),
-        UsageRecorded {
-            tokens: Tokens {
-                input: 10,
-                cache_read: 0,
-                cache_write: [("5m".to_owned(), u64::MAX), ("1h".to_owned(), 1)]
-                    .into_iter()
-                    .collect(),
-                output: 3,
-            },
-            ..recorded("g_1")
-        },
-    ));
-    assert_eq!(saturated.rate().tokens(u64::MAX), Some(u64::MAX));
 }
 
 #[test]

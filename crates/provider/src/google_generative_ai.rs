@@ -68,6 +68,7 @@ impl Gemini {
         if let Some(name) = &self.cache_key_header {
             headers.push((name.clone(), request.cache_key.clone()));
         }
+        let body = body(endpoint, request);
         Call {
             url: format!(
                 "{}/models/{}:streamGenerateContent?alt=sse",
@@ -75,8 +76,8 @@ impl Gemini {
                 endpoint.model
             ),
             headers,
-            body: body(endpoint, request),
-            input_size: InputSize::default(),
+            input_size: crate::images::input_size(&body, request, endpoint.text_only),
+            body,
             provider: endpoint.provider.clone(),
             signer: endpoint.signer.clone(),
             direct: endpoint.direct,

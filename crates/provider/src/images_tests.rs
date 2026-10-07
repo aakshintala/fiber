@@ -1,10 +1,11 @@
 //! Tests beside [`super::prepare`]: the exact shapes, what a file that
 //! cannot be read does, and what a model that cannot take images gets.
 
-use contract::provider::ImageRef;
+use contract::events::CacheLifetime;
+use contract::provider::{ImageRef, Input, InputSize, ModelRequest};
 use serde_json::json;
 
-use super::{anthropic_content, data_url, prepare};
+use super::{anthropic_content, data_url, input_size, prepare};
 
 fn image(path: &str) -> ImageRef {
     ImageRef {
@@ -172,5 +173,111 @@ fn a_data_url_holds_the_mime_type_and_the_base64() {
     assert_eq!(
         data_url(&prepared.images[0]),
         "data:image/png;base64,YWJjZA=="
+    );
+}
+
+fn sized_request(conversation: Vec<Input>) -> ModelRequest {
+    ModelRequest {
+        system_prompt: String::new(),
+        tools: Vec::new(),
+        thinking: None,
+        tool_choice: "auto".into(),
+        cache_lifetime: CacheLifetime::FiveMinutes,
+        cache_key: String::new(),
+        conversation,
+        previous_end: None,
+        max_output_tokens: None,
+        session_dir: std::path::PathBuf::new(),
+    }
+}
+
+fn user_without_images() -> Input {
+    Input::User {
+        text: "hi".into(),
+        images: Vec::new(),
+    }
+}
+
+fn user_with_image() -> Input {
+    Input::User {
+        text: "look".into(),
+        images: vec![image("artifacts/i_1.png")],
+    }
+}
+
+#[test]
+fn input_size_counts_the_body_it_is_given() {
+    assert_eq!(
+        input_size(b"abc", &sized_request(vec![user_without_images()]), false),
+        InputSize {
+            bytes: 3,
+            media: false,
+        }
+    );
+    assert_eq!(
+        input_size(b"abc", &sized_request(vec![user_with_image()]), false),
+        InputSize {
+            bytes: 3,
+            media: true,
+        }
+    );
+    assert_eq!(
+        input_size(
+            b"abc",
+            &sized_request(vec![Input::ToolResult {
+                action_id: contract::ActionId("a_1".into()),
+                text: "done".into(),
+                is_error: false,
+                images: vec![image("artifacts/i_1.png")],
+            }]),
+            false,
+        ),
+        InputSize {
+            bytes: 3,
+            media: true,
+        }
+    );
+    assert_eq!(
+        input_size(b"abc", &sized_request(vec![user_with_image()]), true),
+        InputSize {
+            bytes: 3,
+            media: false,
+        }
+    );
+    assert_eq!(
+        input_size(b"", &sized_request(Vec::new()), false),
+        InputSize {
+            bytes: 0,
+            media: false,
+        }
+    );
+    assert_eq!(
+        input_size(
+            b"abc",
+            &sized_request(vec![
+                Input::Assistant {
+                    model: "p/m".into(),
+                    text: "hi".into(),
+                    provider_item: None,
+                },
+                Input::ToolCall {
+                    action_id: contract::ActionId("a_1".into()),
+                    call: contract::events::ToolCallRequested {
+                        name: "read".into(),
+                        arguments: json!({}),
+                        provider_id: None,
+                        repair: None,
+                        ran_by: None,
+                        provider_item: None,
+                    },
+                    model: "p/m".into(),
+                },
+            ]),
+            false,
+        ),
+        InputSize {
+            bytes: 3,
+            media: false,
+        }
     );
 }

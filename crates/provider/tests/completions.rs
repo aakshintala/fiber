@@ -382,7 +382,12 @@ fn a_recording_served_by_the_fake_server_runs_through_the_seam() {
     let provider: Box<dyn Provider> = Box::new(Completions::new(endpoint(&server)));
     let (reply, deltas) = run(provider.call(&request()));
     let (want, want_deltas) = decoded(&bytes);
-    assert_eq!(reply.unwrap(), want.unwrap());
+    let mut want = want.unwrap();
+    want.input_size = InputSize {
+        bytes: u64::try_from(server.requests()[0].body.len()).unwrap(),
+        media: false,
+    };
+    assert_eq!(reply.unwrap(), want);
     assert_eq!(deltas, want_deltas);
 
     let sent = &server.requests()[0];

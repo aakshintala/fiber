@@ -80,8 +80,8 @@ impl Completions {
                 endpoint.base_url.trim_end_matches('/')
             ),
             headers,
+            input_size: crate::images::input_size(&body, request, endpoint.text_only),
             body,
-            input_size: InputSize::default(),
             provider: endpoint.provider.clone(),
             signer: endpoint.signer.clone(),
             lifetime: request.cache_lifetime,
