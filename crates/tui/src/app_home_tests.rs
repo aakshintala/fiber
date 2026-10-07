@@ -1928,3 +1928,314 @@ fn the_file_listing_follows_the_picked_workspace() {
     assert_eq!(app.home_click(Spot::Pick(1)), Effect::None);
     assert_eq!(app.workspace(), PathBuf::from("/other"));
 }
+
+/// An app on home inside git: scoped to the launch project.
+fn git_home() -> App {
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_home(Launch {
+        workspace: PathBuf::from("/w"),
+        project: "-w".to_owned(),
+        git: true,
+        hover: true,
+        version: "0.0.1".to_owned(),
+        model: None,
+        thinking: None,
+        logo_glyph: "⌇".to_owned(),
+    });
+    app.set_size(80, 24);
+    app
+}
+
+/// A waiting `session_status` for `session` in `workspace` of `project`.
+fn waiting(session: &str, name: &str, workspace: &str, project: &str) -> Line {
+    live(
+        session,
+        name,
+        workspace,
+        project,
+        json!({"state": "waiting", "waiting": {"request_id": "r_1",
+            "kind": "approval", "summary": "shell"}}),
+    )
+}
+
+/// The scope toggle home draws, if any.
+fn toggle(app: &App) -> Option<String> {
+    app.home_screen().and_then(|screen| screen.toggle)
+}
+
+#[test]
+fn scoped_rows_keep_only_the_launch_project() {
+    let mut app = git_home();
+    linked(&mut app);
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "here",
+        "/w",
+        "-w",
+        json!({"state": "idle"}),
+    ));
+    app.on_line(live(
+        "s_bbbbbbbbbbbbbbbb",
+        "away",
+        "/lens",
+        "-other",
+        json!({"state": "idle"}),
+    ));
+    assert_eq!(rows(&app), ["✓  here"]);
+}
+
+#[test]
+fn recent_names_the_project_only_when_scoped() {
+    let mut app = git_home();
+    let lines = commands(app.on_line(hello()));
+    assert_eq!(lines[1]["args"], json!({"project": "-w"}));
+    let mut plain = home();
+    let lines = commands(plain.on_line(hello()));
+    assert!(lines[1].get("args").is_none());
+}
+
+#[test]
+fn the_toggle_shows_only_inside_git_with_rows_hidden_or_everything_shown() {
+    // Outside git, rows hiding elsewhere show no toggle.
+    let mut plain = home();
+    linked(&mut plain);
+    plain.on_line(live(
+        "s_bbbbbbbbbbbbbbbb",
+        "away",
+        "/lens",
+        "-other",
+        json!({"state": "idle"}),
+    ));
+    assert_eq!(toggle(&plain), None);
+    // Inside git with nothing hidden: no toggle while scoped.
+    let mut app = git_home();
+    linked(&mut app);
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "here",
+        "/w",
+        "-w",
+        json!({"state": "idle"}),
+    ));
+    assert_eq!(toggle(&app), None);
+    // A row waiting in another project shows the toggle with its count.
+    app.on_line(waiting("s_bbbbbbbbbbbbbbbb", "away", "/lens", "-other"));
+    assert_eq!(
+        toggle(&app),
+        Some("1 waiting in other projects · show all".to_owned())
+    );
+    // Showing everything shows how to scope back down.
+    assert!(matches!(app.home_click(Spot::Toggle), Effect::Send(_)));
+    assert_eq!(toggle(&app), Some("show this project only".to_owned()));
+}
+
+#[test]
+fn the_toggle_flips_the_scope_and_asks_recent_again() {
+    let mut app = git_home();
+    let mut out = commands(app.on_line(hello()));
+    let first = out.remove(1)["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("recent id"))
+        .to_owned();
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "here",
+        "/w",
+        "-w",
+        json!({"state": "idle"}),
+    ));
+    app.on_line(live(
+        "s_bbbbbbbbbbbbbbbb",
+        "away",
+        "/lens",
+        "-other",
+        json!({"state": "idle"}),
+    ));
+    assert_eq!(rows(&app), ["✓  here"]);
+    let Effect::Send(lines) = app.home_click(Spot::Toggle) else {
+        panic!("the toggle asks recent again");
+    };
+    assert_eq!(lines.len(), 1);
+    let second: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(second["command"], "recent");
+    assert!(second.get("args").is_none());
+    assert_ne!(second["id"], first);
+    assert_eq!(rows(&app), ["✓  here", "✓  away  lens"]);
+    // Back to the launch project only, naming it again.
+    let Effect::Send(lines) = app.home_click(Spot::Toggle) else {
+        panic!("the toggle asks recent again");
+    };
+    let third: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(third["command"], "recent");
+    assert_eq!(third["args"], json!({"project": "-w"}));
+    assert_eq!(rows(&app), ["✓  here"]);
+}
+
+#[test]
+fn only_the_latest_recent_answer_fills_the_list() {
+    let mut app = git_home();
+    let mut out = commands(app.on_line(hello()));
+    let first = out.remove(1)["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("recent id"))
+        .to_owned();
+    assert!(matches!(app.home_click(Spot::Toggle), Effect::Send(_)));
+    // The answer to the older `recent` changes nothing.
+    assert!(
+        app.on_line(accepted(
+            &first,
+            json!({"sessions": [exited("s_aaaaaaaaaaaaaaaa", "stale")]})
+        ))
+        .is_empty()
+    );
+    assert!(rows(&app).is_empty());
+}
+
+/// Focuses the last row home draws, through the frame's own targets.
+fn focus_last(app: &mut App) {
+    drawn(app);
+    let now = fakes::clock::FakeClock::new().now();
+    let last = keys(app)
+        .into_iter()
+        .last()
+        .unwrap_or_else(|| panic!("a row"));
+    for _ in 0..6 {
+        if app.focused() == Some(crate::mouse::TargetId::Home(Spot::Entry(last))) {
+            return;
+        }
+        assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    }
+    panic!("the last row never focused");
+}
+
+#[test]
+fn down_on_the_last_recent_row_asks_the_next_page() {
+    let mut app = home();
+    let (_, recent) = linked(&mut app);
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "fix the parser",
+        "/w",
+        "-w",
+        json!({"state": "streaming"}),
+    ));
+    answer_recent(&mut app, &recent, &[("s_bbbbbbbbbbbbbbbb", "old work")]);
+    focus_last(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    let Effect::Send(lines) = app.on_key(Key::Down, now) else {
+        panic!("the last row asks the next page");
+    };
+    assert_eq!(lines.len(), 1);
+    let line: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(line["command"], "recent");
+    assert_eq!(line["args"]["before"], "s_bbbbbbbbbbbbbbbb");
+    assert!(line["args"].get("project").is_none());
+    // Focus stays on the last row.
+    let row = keys(&app)[1];
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(row)))
+    );
+}
+
+#[test]
+fn no_page_is_asked_from_a_feed_row() {
+    let mut app = home();
+    let (_, recent) = linked(&mut app);
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "fix the parser",
+        "/w",
+        "-w",
+        json!({"state": "idle"}),
+    ));
+    // The `recent` page names only the feed row, so nothing lists, but
+    // the answer was not empty.
+    app.on_line(accepted(
+        &recent,
+        json!({"sessions": [exited("s_aaaaaaaaaaaaaaaa", "fix the parser")]}),
+    ));
+    assert!(app.home.as_ref().is_some_and(|home| home.sessions.more()));
+    focus_last(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+}
+
+#[test]
+fn none_while_one_is_in_flight() {
+    let mut app = git_home();
+    let (_, recent) = linked(&mut app);
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "here",
+        "/w",
+        "-w",
+        json!({"state": "idle"}),
+    ));
+    answer_recent(&mut app, &recent, &[("s_bbbbbbbbbbbbbbbb", "old work")]);
+    assert!(matches!(app.home_click(Spot::Toggle), Effect::Send(_)));
+    focus_last(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert!(
+        app.home
+            .as_ref()
+            .is_some_and(|home| home.recent_ask.is_some())
+    );
+}
+
+#[test]
+fn none_after_an_empty_page() {
+    let mut app = home();
+    let (_, recent) = linked(&mut app);
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "fix the parser",
+        "/w",
+        "-w",
+        json!({"state": "idle"}),
+    ));
+    answer_recent(&mut app, &recent, &[("s_bbbbbbbbbbbbbbbb", "old work")]);
+    focus_last(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    let Effect::Send(lines) = app.on_key(Key::Down, now) else {
+        panic!("the last row asks the next page");
+    };
+    let page: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("{err}"));
+    // An empty older page ends paging.
+    assert!(
+        app.on_line(accepted(
+            page["id"].as_str().unwrap_or_else(|| panic!("page id")),
+            json!({"sessions": []})
+        ))
+        .is_empty()
+    );
+    assert!(app.home.as_ref().is_some_and(|home| !home.sessions.more()));
+    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+}
+
+#[test]
+fn slash_resume_focuses_the_toggle_when_it_heads_the_list() {
+    let mut app = git_home();
+    linked(&mut app);
+    start_session(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(waiting("s_bbbbbbbbbbbbbbbb", "away", "/lens", "-other"));
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "here",
+        "/w",
+        "-w",
+        json!({"state": "streaming"}),
+    ));
+    drawn(&mut app);
+    assert!(matches!(enter_text(&mut app, "/resume"), Effect::Send(_)));
+    assert!(app.on_home());
+    let area = ratatui::layout::Rect::new(0, 0, 80, 24);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let targets = crate::view::render(&app, area, &mut buf, None);
+    app.drawn(&targets);
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Toggle))
+    );
+}

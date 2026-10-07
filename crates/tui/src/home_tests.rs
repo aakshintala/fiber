@@ -526,3 +526,40 @@ fn opening_from_each_level() {
         vec![Level::Summary, Level::Full]
     );
 }
+
+#[test]
+fn hidden_counts_waiting_rows_only() {
+    let mut sessions = Sessions::default();
+    let mut waiting = payload(json!({"state": "waiting", "waiting": {
+        "request_id": "r_1", "kind": "approval", "summary": "shell"}}));
+    waiting["project"] = json!(OTHER);
+    sessions.status(from_status(&Envelope {
+        payload: waiting.as_object().cloned().unwrap_or_default(),
+        ..envelope("s_aaaaaaaaaaaaaaaa", json!({"state": "waiting"}))
+    }));
+    let mut idle = payload(json!({"state": "idle"}));
+    idle["project"] = json!(OTHER);
+    sessions.status(from_status(&Envelope {
+        payload: idle.as_object().cloned().unwrap_or_default(),
+        ..envelope("s_bbbbbbbbbbbbbbbb", json!({"state": "idle"}))
+    }));
+    sessions.status(from_status(&envelope(
+        "s_cccccccccccccccc",
+        json!({"state": "idle"}),
+    )));
+    assert_eq!(sessions.hidden(PROJECT), (2, 1));
+    assert_eq!(sessions.hidden(OTHER), (1, 0));
+}
+
+#[test]
+fn toggle_line_names_waiting_or_scoping_back() {
+    assert_eq!(
+        super::toggle_line(2, false),
+        "2 waiting in other projects · show all"
+    );
+    assert_eq!(
+        super::toggle_line(0, false),
+        "0 waiting in other projects · show all"
+    );
+    assert_eq!(super::toggle_line(0, true), "show this project only");
+}

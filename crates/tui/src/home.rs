@@ -11,15 +11,18 @@ use contract::{Envelope, SessionId};
 use serde_json::Value;
 
 /// A click target on home: one row's line, by the key [`Sessions`]
-/// gave it when it first appeared, the workspace chip opening the
-/// workspace picker, and one picker row by its index in the list fixed
-/// at open. Later parts add the toggle, the stop crosses and the
-/// worktree switch.
+/// gave it when it first appeared, the scope toggle heading the list,
+/// the workspace chip opening the workspace picker, and one picker row
+/// by its index in the list fixed at open. Later parts add the stop
+/// crosses and the worktree switch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Spot {
     /// A session row: clicking it, or Enter on it while focused, opens
     /// the session.
     Entry(u64),
+    /// The scope toggle heading the list: clicking it, or Enter on it,
+    /// shows every project or only the launch one.
+    Toggle,
     /// The workspace chip: clicking it opens the workspace picker.
     Workspace,
     /// A picker row, by its index in the list fixed at open.
@@ -57,6 +60,9 @@ pub(crate) struct HomeScreen {
     /// The chip row, left to right: each chip's text, and its click
     /// target when it has one.
     pub(crate) chips: Vec<(Option<Spot>, String)>,
+    /// The toggle line heading the scope toggle: how many wait in other
+    /// projects, or how to scope back down.
+    pub(crate) toggle: Option<String>,
     /// The rows: their keys, their lines, and whether they end in a ✕.
     pub(crate) rows: Vec<(u64, String, bool)>,
     /// The workspace picker above the box: its list, fixed at open, and
@@ -204,6 +210,10 @@ pub(crate) struct Sessions {
     feed: Vec<Row>,
     recent: Vec<Row>,
     next_key: u64,
+    /// The scope toggle showed every project: unscoped.
+    show_all: bool,
+    /// The last `recent` answer carried rows: an older page may exist.
+    more: bool,
 }
 
 impl Sessions {
@@ -248,8 +258,9 @@ impl Sessions {
     /// Folds a `recent` page into the rows: the first page replaces them,
     /// an older page appends. Neither adds an id already in the feed or,
     /// for an older page, already listed; a first page listing an id
-    /// again keeps its key.
+    /// again keeps its key. An empty answer ends paging.
     pub(crate) fn recent(&mut self, rows: Vec<Row>, first: bool) {
+        self.more = !rows.is_empty();
         if first {
             let old = std::mem::take(&mut self.recent);
             let mut kept = Vec::with_capacity(rows.len());
@@ -287,6 +298,40 @@ impl Sessions {
             .chain(self.recent.iter())
             .filter(|row| !scoped || row.project == project)
             .collect()
+    }
+
+    /// Flips the scope toggle: showing every project, or only the launch
+    /// one.
+    pub(crate) fn toggle(&mut self) {
+        self.show_all = !self.show_all;
+    }
+
+    /// Whether the scope toggle showed every project.
+    pub(crate) fn show_all(&self) -> bool {
+        self.show_all
+    }
+
+    /// The feed rows outside `project` scope hides, and of them how many
+    /// wait on the person.
+    pub(crate) fn hidden(&self, project: &str) -> (usize, usize) {
+        let hidden: Vec<&Row> = self
+            .feed
+            .iter()
+            .filter(|row| row.project != project)
+            .collect();
+        let waiting = hidden.iter().filter(|row| row.waiting.is_some()).count();
+        (hidden.len(), waiting)
+    }
+
+    /// Whether an older `recent` page may exist: the last answer carried
+    /// rows.
+    pub(crate) fn more(&self) -> bool {
+        self.more
+    }
+
+    /// The last recent row, whose id pages the older `recent` rows.
+    pub(crate) fn last_recent(&self) -> Option<&Row> {
+        self.recent.last()
     }
 
     /// The row for `id`, live or exited.
@@ -447,6 +492,16 @@ pub(crate) fn recent_rows(result: &Value) -> Vec<Row> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// The scope toggle's line: how many wait in other projects while
+/// scoped, or how to scope back down while showing everything.
+pub(crate) fn toggle_line(waiting: usize, show_all: bool) -> String {
+    if show_all {
+        "show this project only".to_owned()
+    } else {
+        format!("{waiting} waiting in other projects · show all")
+    }
 }
 
 /// A row's line: the glyph, the name or the id, the detail, and the

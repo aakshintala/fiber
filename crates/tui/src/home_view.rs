@@ -236,20 +236,40 @@ pub(super) fn render(
         BOX_EDGE,
     );
     // The session list draws under the box, down to the row above the
-    // foot, scrolling past the screen. Each row is a target opening its
-    // session. The focused row is the last drawn one once it is past
-    // the first screenful, and the list draws from the top otherwise.
+    // foot, scrolling past the screen. The scope toggle heads it while
+    // it shows; each row is a target opening its session. The focused
+    // row is the last drawn one once it is past the first screenful,
+    // and the list draws from the top otherwise.
     let list_top = placed.edge.saturating_add(1);
     let capacity = usize::from(placed.foot.saturating_sub(list_top));
+    let mut row_y = list_top;
+    if let Some(toggle) = &screen.toggle
+        && row_y < placed.foot
+    {
+        put(
+            buf,
+            area,
+            placed.x,
+            row_y,
+            toggle,
+            placed.width,
+            Style::default(),
+        );
+        targets.push(Target {
+            id: TargetId::Home(Spot::Toggle),
+            rect: Rect::new(placed.x, row_y, placed.width, 1),
+        });
+        row_y = row_y.saturating_add(1);
+    }
+    let rows_capacity = capacity.saturating_sub(usize::from(screen.toggle.is_some()));
     let start = match app.focused() {
         Some(TargetId::Home(Spot::Entry(key))) => screen
             .rows
             .iter()
             .position(|(row, _, _)| *row == key)
-            .map_or(0, |at| (at + 1).saturating_sub(capacity)),
+            .map_or(0, |at| (at + 1).saturating_sub(rows_capacity)),
         _ => 0,
     };
-    let mut row_y = list_top;
     for (key, text, _has_x) in screen.rows.iter().skip(start) {
         if row_y >= placed.foot {
             break;

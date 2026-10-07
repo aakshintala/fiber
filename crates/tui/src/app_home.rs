@@ -10,6 +10,7 @@ use super::{App, Effect, Link, Phase, mint, session_command};
 use crate::focus::{Area, order};
 use crate::home::{
     HomeScreen, Launch, Left, Level, Sessions, Spot, Subs, from_status, line, opening, recent_rows,
+    toggle_line,
 };
 use crate::keys::Key;
 use crate::link::Line;
@@ -100,6 +101,9 @@ impl App {
     /// What home draws, or `None` unless [`App::on_home`] holds.
     pub(crate) fn home_screen(&self) -> Option<HomeScreen> {
         let home = self.home.as_ref().filter(|_| self.on_home())?;
+        // Scoped is inside git with the toggle off: only the launch
+        // project's rows show.
+        let scoped = home.launch.git && !home.sessions.show_all();
         // The workspace in use: the picked one, else the launch
         // directory. Clicking its chip opens the workspace picker.
         let workspace = home
@@ -134,11 +138,22 @@ impl App {
             ],
             rows: home
                 .sessions
-                .shown(&home.launch.project, false)
+                .shown(&home.launch.project, scoped)
                 .iter()
                 .map(|row| (row.key, line(row, &home.launch.project), false))
                 .collect(),
             picker: home.picker.clone(),
+            // The toggle shows inside git whenever a row hides, or
+            // while everything shows.
+            toggle: {
+                let (hidden, waiting) = if scoped {
+                    home.sessions.hidden(&home.launch.project)
+                } else {
+                    (0, 0)
+                };
+                (home.launch.git && (hidden > 0 || home.sessions.show_all()))
+                    .then(|| toggle_line(waiting, home.sessions.show_all()))
+            },
             foot: if self.armed_at.is_some() {
                 super::QUIT_HINT.to_owned()
             } else {
@@ -152,8 +167,8 @@ impl App {
     }
 
     /// The hub lines home asks for, once the link is up: `feed`, then the
-    /// first `recent` page. The session list fills in when the hub's feed
-    /// arrives.
+    /// first `recent` page, naming the launch project while scoped. The
+    /// session list fills in when the hub's feed arrives.
     pub(super) fn home_outgoing(&mut self) -> Vec<String> {
         if self.link != Link::Up {
             return Vec::new();
@@ -169,10 +184,10 @@ impl App {
         let recent = mint();
         home.feed_id = Some(feed.clone());
         home.recent_ask = Some((recent.clone(), true));
-        vec![
-            json!({"id": feed, "command": "feed"}).to_string(),
-            json!({"id": recent, "command": "recent"}).to_string(),
-        ]
+        let project = home.launch.project.clone();
+        let scoped = home.launch.git && !home.sessions.show_all();
+        let recent = recent_line(&recent, None, scoped.then_some(project.as_str()));
+        vec![json!({"id": feed, "command": "feed"}).to_string(), recent]
     }
 
     /// Folds one hub line into the session list, with the lines to send;
@@ -376,7 +391,7 @@ impl App {
         home.focus_list = false;
         self.focus = order(targets, &self.regions, Area::Conversation)
             .into_iter()
-            .find(|id| matches!(id, TargetId::Home(Spot::Entry(_))));
+            .find(|id| matches!(id, TargetId::Home(Spot::Entry(_) | Spot::Toggle)));
         true
     }
 
@@ -424,9 +439,10 @@ impl App {
             if !self.draft.is_empty() || self.completions().is_some() {
                 return None;
             }
+            // The toggle heads the list while it shows.
             let first = order(&self.stops, &self.regions, Area::Conversation)
                 .into_iter()
-                .find(|id| matches!(id, TargetId::Home(Spot::Entry(_))));
+                .find(|id| matches!(id, TargetId::Home(Spot::Entry(_) | Spot::Toggle)));
             if let Some(id) = first {
                 self.focus = Some(id);
                 return Some(Effect::None);
@@ -445,7 +461,8 @@ impl App {
             return None;
         }
         let next = self.home.as_ref().and_then(|home| {
-            let shown = home.sessions.shown(&home.launch.project, false);
+            let scoped = home.launch.git && !home.sessions.show_all();
+            let shown = home.sessions.shown(&home.launch.project, scoped);
             let at = shown.iter().position(|row| row.key == focused)?;
             shown.get(at + 1).map(|row| row.key)
         });
@@ -453,17 +470,78 @@ impl App {
             self.focus = Some(TargetId::Home(Spot::Entry(key)));
             return Some(Effect::None);
         }
-        None
+        // At the end of the list, ↓ asks the next `recent` page when
+        // the focused row is the last recent row, the last answer was
+        // not empty, and no `recent` is in flight. Focus stays.
+        self.page_recent(focused)
     }
 
-    /// Clicks `spot` on home: a row opens its session, the workspace chip
-    /// opens the picker, and a picker row chooses its workspace.
+    /// Clicks `spot` on home: a row opens its session, the toggle flips
+    /// the scope, the workspace chip opens the picker, and a picker row
+    /// chooses its workspace.
     pub(super) fn home_click(&mut self, spot: Spot) -> Effect {
         match spot {
             Spot::Entry(key) => self.open_row(key),
+            Spot::Toggle => self.toggle_scope(),
             Spot::Workspace => self.open_picker(),
             Spot::Pick(at) => self.pick(at),
         }
+    }
+
+    /// Flips the scope toggle and asks the first `recent` page again,
+    /// naming the launch project while scoped.
+    fn toggle_scope(&mut self) -> Effect {
+        let Some(home) = self.home.as_mut() else {
+            return Effect::None;
+        };
+        home.sessions.toggle();
+        if self.link != Link::Up {
+            return Effect::None;
+        }
+        let project = home.launch.project.clone();
+        let scoped = home.launch.git && !home.sessions.show_all();
+        let id = mint();
+        home.recent_ask = Some((id.clone(), true));
+        Effect::Send(vec![recent_line(
+            &id,
+            None,
+            scoped.then_some(project.as_str()),
+        )])
+    }
+
+    /// Asks the next `recent` page past the focused last row: `before`
+    /// its id, naming the launch project while scoped. `None` unless the
+    /// focused row is the whole list's last recent row, the last answer
+    /// was not empty, and no `recent` is in flight.
+    fn page_recent(&mut self, focused: u64) -> Option<Effect> {
+        let home = self.home.as_mut()?;
+        let project = home.launch.project.clone();
+        let scoped = home.launch.git && !home.sessions.show_all();
+        let shown = home.sessions.shown(&project, scoped);
+        let (at, _) = shown
+            .iter()
+            .enumerate()
+            .find(|(_, row)| row.key == focused)?;
+        if at + 1 != shown.len() {
+            return None;
+        }
+        if !home.sessions.more() || home.recent_ask.is_some() {
+            return None;
+        }
+        let before = home
+            .sessions
+            .last_recent()
+            .filter(|last| last.key == focused)?
+            .id
+            .0
+            .clone();
+        let id = mint();
+        home.recent_ask = Some((id.clone(), false));
+        Some(Effect::Send(vec![recent_line(
+            &id,
+            Some(before.as_str()),
+            scoped.then_some(project.as_str()),
+        )]))
     }
 
     /// Opens the workspace picker above the box: the launch directory
@@ -546,7 +624,7 @@ impl App {
                 let row = home.sessions.by_key(key)?;
                 Some(line(row, &home.launch.project))
             }
-            Spot::Workspace | Spot::Pick(_) => None,
+            Spot::Toggle | Spot::Workspace | Spot::Pick(_) => None,
         }
     }
 
@@ -750,6 +828,23 @@ impl App {
 
 /// The picker's rows: the launch directory and nine row workspaces.
 const PICKER_CAP: usize = 10;
+
+/// A `recent` line: the first page, or past `before`, naming `project`
+/// while scoped.
+fn recent_line(id: &str, before: Option<&str>, project: Option<&str>) -> String {
+    let mut args = serde_json::Map::new();
+    if let Some(before) = before {
+        args.insert("before".to_owned(), Value::String(before.to_owned()));
+    }
+    if let Some(project) = project {
+        args.insert("project".to_owned(), Value::String(project.to_owned()));
+    }
+    if args.is_empty() {
+        json!({"id": id, "command": "recent"}).to_string()
+    } else {
+        json!({"id": id, "command": "recent", "args": Value::Object(args)}).to_string()
+    }
+}
 
 /// A `subscribe` line for `session` at `level`, with its id.
 fn subscribe_line(session: &SessionId, level: Level) -> (String, String) {

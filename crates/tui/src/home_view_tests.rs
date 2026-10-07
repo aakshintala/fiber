@@ -32,6 +32,24 @@ fn home_with_glyph(width: u16, height: u16, glyph: &str) -> App {
     app
 }
 
+/// An app on home inside git at `width` by `height`: scoped to the
+/// launch project.
+fn git_home(width: u16, height: u16) -> App {
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_home(Launch {
+        workspace: PathBuf::from("/w"),
+        project: "-w".to_owned(),
+        git: true,
+        hover: true,
+        version: "0.0.1".to_owned(),
+        model: None,
+        thinking: None,
+        logo_glyph: "⌇".to_owned(),
+    });
+    app.set_size(width, height);
+    app
+}
+
 /// Renders `app` on a `width` by `height` screen as text.
 fn screen(app: &App, width: u16, height: u16) -> String {
     let area = Rect::new(0, 0, width, height);
@@ -298,6 +316,44 @@ fn home_picker_open() {
     app.on_line(status("s_aaaaaaaaaaaaaaaa", "fix the parser", live()));
     app.on_click(crate::mouse::TargetId::Home(Spot::Workspace));
     insta::assert_snapshot!("home_picker_open", screen(&app, 80, 24));
+}
+
+/// A waiting `session_status` for `session` in another project.
+fn away_waiting() -> Line {
+    Line::Session(contract::Envelope {
+        kind: "session_status".to_owned(),
+        session_id: contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: serde_json::json!({
+            "name": "away",
+            "workspace": "/lens",
+            "project": "-other",
+            "state": "waiting",
+            "waiting": {"request_id": "r_1", "kind": "approval",
+                "summary": "shell"},
+            "since": 0,
+            "spend": {"tokens": {"input": 1, "cache_read": 0,
+                "cache_write": {}, "output": 2},
+                "cost": 0.0, "subscription_cost": 0.0},
+            "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0,
+        })
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    })
+}
+
+#[test]
+fn home_scoped_with_the_toggle() {
+    let mut app = git_home(80, 24);
+    app.on_line(hello());
+    app.on_line(status("s_aaaaaaaaaaaaaaaa", "here", idle()));
+    app.on_line(away_waiting());
+    insta::assert_snapshot!("home_scoped_with_the_toggle", screen(&app, 80, 24));
 }
 
 #[test]
