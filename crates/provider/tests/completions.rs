@@ -59,7 +59,7 @@ fn endpoint(server: &ProviderServer) -> Endpoint {
         provider: "openrouter".into(),
         model: "z-ai/glm-5.3-flash".into(),
         base_url: format!("{}/v1", server.url()),
-        key: Some("sk-secret".into()),
+        key: Some(contract::Secret::new("sk-secret".into())),
         direct: true,
         ..Endpoint::default()
     }

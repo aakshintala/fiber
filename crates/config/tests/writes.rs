@@ -650,3 +650,39 @@ fn set_into_a_file_holding_invalid_json_leaves_it() {
         "{\"model\": \"a/b\",}"
     );
 }
+
+#[test]
+fn set_of_a_warm_cap_of_twelve_is_config_invalid_and_eleven_is_written() {
+    let setup = Setup::new();
+    let e = set(
+        &setup.home(),
+        &setup.workspace(),
+        &key(),
+        Layer::Repository,
+        "cache.warm_cap",
+        json!(12),
+    )
+    .unwrap_err();
+    assert_eq!(e.code(), ErrorCode::ConfigInvalid);
+    assert!(!setup.repository().exists());
+    for (name, value) in [
+        ("cache.warm_cap", json!(11)),
+        ("cache.warm_idle", json!(true)),
+    ] {
+        set(
+            &setup.home(),
+            &setup.workspace(),
+            &key(),
+            Layer::Repository,
+            name,
+            value,
+        )
+        .unwrap();
+    }
+    let written: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(setup.repository()).unwrap()).unwrap();
+    assert_eq!(
+        written,
+        json!({"cache": {"warm_cap": 11, "warm_idle": true}})
+    );
+}

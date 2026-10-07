@@ -148,6 +148,7 @@ fn resumed_session(
         retry,
         handoff,
         idle,
+        warm,
         home,
         project,
         extensions,
@@ -244,6 +245,7 @@ fn resumed_session(
                 }),
                 budget,
                 idle,
+                warm,
                 // `fiber ask --resume` runs one turn with no client.
                 !one_turn,
                 reviewer,

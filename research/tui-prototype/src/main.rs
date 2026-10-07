@@ -94,6 +94,22 @@ enum Act {
     Context,
     /// leaves a swapped view
     Back,
+    /// the rail's row for one fake session, by its index: moves the on-screen marker only
+    Rail(usize),
+    /// the rail's scope line: shows or hides sessions in other projects
+    RailAll,
+    /// a rail variant chip: switches the A/B/C design
+    RailVariant(u8),
+    /// a rail density chip: switches the B card density (0 full, 1 medium, 2 compact)
+    RailDensity(u8),
+    /// toggles the rail shown/hidden (⌥R, or the Session card's waiting line)
+    RailToggle,
+    /// a crashed card's ✕: dismisses it, leaving its number's gap
+    RailDismiss(usize),
+    /// a project header's "+" chip: starts a session in that project
+    RailNew(&'static str),
+    /// a project header's "N done": opens that project's session list
+    RailDone(&'static str),
     /// a click region an extension drew, by its interned id
     Ext(usize),
 }
@@ -576,6 +592,19 @@ fn dur(ms: i64) -> String {
         format!("{}m {:02}s", s / 60, s % 60)
     } else {
         format!("{}h {:02}m", s / 3600, s / 60 % 60)
+    }
+}
+/// A rail card's elapsed time in coarse units only, one unit, so the name gets the space.
+fn rail_age(ms: i64) -> String {
+    let s = (ms.max(0) + 500) / 1000;
+    if s < 60 {
+        format!("{s}s")
+    } else if s < 3600 {
+        format!("{}m", s / 60)
+    } else if s < 86400 {
+        format!("{}h", s / 3600)
+    } else {
+        format!("{}d", s / 86400)
     }
 }
 fn clock(ts: i64) -> String {
@@ -1366,7 +1395,7 @@ fn left_cut(p: &str, w: usize) -> String {
     let cs: Vec<char> = p.chars().collect();
     format!("…{}", cs[cs.len().saturating_sub(w.saturating_sub(1))..].iter().collect::<String>())
 }
-fn cards(f: &Fold, now: i64, keys: &str) -> (Vec<Card>, Vec<Vec<Span<'static>>>) {
+fn cards(f: &Fold, now: i64, keys: &str, pw: usize) -> (Vec<Card>, Vec<Vec<Span<'static>>>) {
     let mut c = vec![];
     let mut short = vec![];
     let hit = if f.input + f.cache_read + f.cache_write > 0 { 100 * f.cache_read / (f.input + f.cache_read + f.cache_write) } else { 0 };
@@ -1402,7 +1431,7 @@ fn cards(f: &Fold, now: i64, keys: &str) -> (Vec<Card>, Vec<Vec<Span<'static>>>)
         .take(5)
         .map(|(p, (a, r))| {
             let counts = vec![sp(format!("+{a}"), fg(BLUE)), sp(format!(" {:>3}", format!("−{r}")), fg(RED))];
-            let room = (PANEL as usize - 5).saturating_sub(width(&counts) + 1);
+            let room = (pw).saturating_sub(5 + width(&counts) + 1);
             [vec![sp(left_cut(p, room), Style::new()), t()], counts].concat()
         })
         .collect();
@@ -1434,19 +1463,21 @@ fn cards(f: &Fold, now: i64, keys: &str) -> (Vec<Card>, Vec<Vec<Span<'static>>>)
         title: vec![sp("Quota", bold()), t(), sp("extension", dim())],
         lines: vec![
             vec![sp("claude weekly", dim()), t(), sp("65%", Style::new())],
-            bar(0.65, (PANEL - 7) as usize, BLUE),
+            bar(0.65, pw.saturating_sub(7), BLUE),
             vec![sp("cursor monthly", dim()), t(), sp("1%", fg(RED))],
-            bar(0.01, (PANEL - 7) as usize, RED),
+            bar(0.01, pw.saturating_sub(7), RED),
         ],
         cap: 0,
     });
     short.push(vec![sp("Q ", dim()), sp("claude 65%", Style::new()), sp(" · ", dim()), sp("cursor 1%", fg(RED))]);
     (c, short)
 }
-fn panel_rows(f: &Fold, now: i64, keys: &str) -> Vec<Row> {
-    let w = PANEL as usize - 2;
+fn panel_rows(f: &Fold, now: i64, keys: &str, pw: usize, waiting: usize) -> Vec<Row> {
+    let w = pw.saturating_sub(2);
     let mut out = vec![];
-    for (ci, card) in cards(f, now, keys).0.into_iter().enumerate() {
+    // waiting sessions off screen (the rail is hidden) join the Session card when it
+    // is drawn, and clicking the line brings the rail back
+    for (ci, card) in cards(f, now, keys, pw).0.into_iter().enumerate() {
         let mut rows = vec![row([vec![sp("  ", Style::new())], fit(&card.title, w - 3), vec![sp(" ", Style::new())]].concat())];
         let body: Vec<_> = if card.cap > 0 { card.lines.into_iter().take(card.cap).collect() } else { card.lines };
         for (li, l) in body.into_iter().enumerate() {
@@ -1457,15 +1488,23 @@ fn panel_rows(f: &Fold, now: i64, keys: &str) -> Vec<Row> {
             }
             rows.push(r);
         }
+        if ci == 0 && waiting > 0 {
+            let line = [vec![sp("  ! ", fg(ORANGE).add_modifier(Modifier::BOLD))], fit(&[sp(format!("{waiting} waiting · rail hidden · show"), fg(ORANGE))], w - 7)].concat();
+            rows.push(Row { spans: line, act: Some(Act::RailToggle), ..Default::default() });
+        }
         out.extend(slab(rows, BC, Some(BP), w));
         out.push(Row::default());
     }
     out
 }
-fn status_rows(f: &Fold, now: i64, w: usize, keys: &str) -> Vec<Row> {
+fn status_rows(f: &Fold, now: i64, w: usize, keys: &str, rail_note: Option<String>) -> Vec<Row> {
     let mut rows: Vec<Vec<Span<'static>>> = vec![vec![sp(" ", Style::new())]];
+    // the rail is hidden: its waiting count joins the status rows
+    if let Some(n) = rail_note {
+        rows[0].push(sp(n, fg(ORANGE)));
+    }
     let mut ctx_at: Option<(usize, u16, u16)> = None;
-    for (k, it) in cards(f, now, keys).1.into_iter().enumerate() {
+    for (k, it) in cards(f, now, keys, PANEL as usize).1.into_iter().enumerate() {
         let cur = rows.last().unwrap();
         if cur.len() > 1 && width(cur) + 5 + width(&it) > w - 1 {
             if rows.len() == 2 {
@@ -1489,6 +1528,608 @@ fn status_rows(f: &Fold, now: i64, w: usize, keys: &str) -> Vec<Row> {
         .enumerate()
         .map(|(i, s)| Row { spans: s, bg: Some(BP), hot: ctx_at.filter(|c| c.0 == i).map(|c| (c.1, c.2, Act::Context)).into_iter().collect(), ..Default::default() })
         .collect()
+}
+
+// ============================================================ the session rail (#692)
+// Fake sessions: the replayed fixture is session 1, the rest are hard-coded so the
+// owner can judge the look. Clicking a row or pressing ⌥N moves the on-screen
+// marker only; the conversation stays the replayed session.
+const RAIL_A: u16 = 22;
+/// Below this rail width a B card drops its model row and its context bar (keeping the
+/// percentage), so the card still reads: rows 1, 2, 4 and spend-plus-percentage only.
+const RAIL_COMPACT: usize = 30;
+#[derive(Clone, Copy, PartialEq)]
+enum SState {
+    Working,
+    Retrying,
+    NeedsInput,
+    Ready,
+    Crashed,
+}
+struct Fake {
+    name: &'static str,
+    project: &'static str,
+    wait: String,
+    /// `model · thinking level`, replaced by `wait` while waiting
+    model: String,
+    branch: &'static str,
+    ws: &'static str,
+    spend: String,
+    /// live spend in dollars, summed into the project header
+    dollars: f64,
+    /// context fill, 0-100
+    ctx: u8,
+    age: String,
+    st: SState,
+}
+fn fake_sessions(f: &Fold, now: i64) -> Vec<Fake> {
+    // session 1 is the replayed one: it waits when the fixture waits on its approval or question
+    let (st0, wait0) = match f.pending.first() {
+        None => (SState::Working, String::new()),
+        Some(p) => match &p.what {
+            Asking::Approval { tool, args, .. } => (SState::NeedsInput, format!("approval: {tool} {}", primary(args))),
+            Asking::Form(qs) => (SState::NeedsInput, format!("question: {} question{}", qs.len(), if qs.len() == 1 { "" } else { "s" })),
+        },
+    };
+    let ws0: &'static str = Box::leak(f.cwd.rsplit('/').next().unwrap_or("fiber").to_string().into_boxed_str());
+    let branch0: &'static str = Box::leak(f.branch.clone().into_boxed_str());
+    let model0 = if f.model.is_empty() { "opus-5-5 · high".into() } else { format!("{} · {}", short_model(&f.model), f.effort) };
+    vec![
+        Fake { name: "fix flaky lock test", project: "fiber", wait: wait0, model: model0, branch: branch0, ws: ws0, spend: format!("${:.2}", f.cost), dollars: f.cost, ctx: (f.ctx * 100 / WINDOW.max(1)) as u8, age: rail_age((now - f.turn_start).max(0)), st: st0 },
+        Fake { name: "docs: rail spec", project: "fiber", wait: String::new(), model: "opus-5-5 · high".into(), branch: "docs/rail-692", ws: "fiber", spend: "$0.42".into(), dollars: 0.42, ctx: 27, age: "9m".into(), st: SState::Working },
+        Fake { name: "review #688", project: "fiber", wait: "approval: shell cargo publish --dry-run".into(), model: "gpt-6.1-sol · medium".into(), branch: "review-688", ws: "fiber", spend: "$1.10".into(), dollars: 1.10, ctx: 64, age: "22m".into(), st: SState::NeedsInput },
+        Fake { name: "bump ratatui", project: "fiber", wait: "question: 2 of 3 answered".into(), model: "gpt-6.1-sol · low".into(), branch: "deps/ratatui-0.30", ws: "fiber", spend: "$0.08".into(), dollars: 0.08, ctx: 41, age: "4m".into(), st: SState::NeedsInput },
+        Fake { name: "lsp probe", project: "fiber", wait: String::new(), model: "grok-4.7-high · low".into(), branch: "spike/lsp", ws: "fiber", spend: "$0.05".into(), dollars: 0.05, ctx: 78, age: "1h".into(), st: SState::Crashed },
+        Fake { name: "migrate every provider adapter to the new streaming contract", project: "pi-rig", wait: String::new(), model: "grok-4.7-high · max".into(), branch: "migrate/streaming", ws: "pi-rig", spend: "$2.31".into(), dollars: 2.31, ctx: 91, age: "31m".into(), st: SState::Working },
+        Fake { name: "backfill embeddings", project: "pi-rig", wait: String::new(), model: "grok-4.7-high · high".into(), branch: "backfill/embed", ws: "pi-rig", spend: "$0.87".into(), dollars: 0.87, ctx: 55, age: "12m".into(), st: SState::Retrying },
+        Fake { name: "rewrite onboarding tour", project: "beacon", wait: String::new(), model: "opus-5-5 · medium".into(), branch: "tour/rewrite", ws: "beacon", spend: "$0.35".into(), dollars: 0.35, ctx: 12, age: "47m".into(), st: SState::Ready },
+    ]
+}
+/// Shortens a model id to its last segment, so the card's model row stays short.
+fn short_model(m: &str) -> String {
+    m.rsplit('/').next().unwrap_or(m).to_string()
+}
+/// Fake "N done" counts per project, in first-seen order.
+fn rail_done() -> Vec<u32> {
+    vec![2, 0, 1]
+}
+/// The rail's sessions with the person's resume overrides applied: a resumed crash
+/// works again. Dismissed sessions are filtered where the shown set is built.
+fn live_sessions(f: &Fold, ui: &Ui, now: i64) -> Vec<Fake> {
+    let mut sess = fake_sessions(f, now);
+    for &i in &ui.resumed {
+        if let Some(s) = sess.get_mut(i) {
+            s.st = SState::Working;
+            s.wait = String::new();
+        }
+    }
+    sess
+}
+/// The sessions in display order: stable by start time, so ⌥N numbers never move.
+fn rail_seq(sess: &[Fake], _variant: u8) -> Vec<usize> {
+    (0..sess.len()).collect()
+}
+/// A `!` needing input draws attention: a slow pulse between two colours on the
+/// existing tick, so it costs no redraw of its own. Still when idle or reduced.
+fn wait_glyph(tick: u64, reduced: bool) -> Style {
+    if reduced {
+        return fg(ORANGE).add_modifier(Modifier::BOLD);
+    }
+    if tick / 4 % 2 == 0 { fg(ORANGE).add_modifier(Modifier::BOLD) } else { fg(CYAN) }
+}
+fn rail_glyph(s: &Fake, tick: u64, reduced: bool) -> Span<'static> {
+    match s.st {
+        // the braille spinner animates on the existing tick, the same frames as the
+        // working line; `●` under reduced motion
+        SState::Working if reduced => sp("●", fg(BLUE)),
+        SState::Working => sp(SPIN[tick as usize % SPIN.len()], fg(BLUE)),
+        SState::Retrying if reduced => sp("●", fg(ORANGE)),
+        SState::Retrying => sp(SPIN[tick as usize % SPIN.len()], fg(ORANGE)),
+        SState::NeedsInput => sp("!", wait_glyph(tick, reduced)),
+        SState::Ready => sp("✓", dim()),
+        SState::Crashed => sp("✗", fg(RED).add_modifier(Modifier::BOLD)),
+    }
+}
+/// The state word's style: bold in the state colour, dim for idle.
+fn rail_state_style(s: &Fake, tick: u64, reduced: bool) -> Style {
+    match s.st {
+        SState::Working => fg(BLUE).add_modifier(Modifier::BOLD),
+        SState::Retrying => fg(ORANGE).add_modifier(Modifier::BOLD),
+        SState::NeedsInput => wait_glyph(tick, reduced),
+        SState::Ready => dim(),
+        SState::Crashed => fg(RED).add_modifier(Modifier::BOLD),
+    }
+}
+fn rail_state_word(s: &Fake) -> &'static str {
+    match s.st {
+        SState::Working => "WORKING",
+        SState::Retrying => "RETRYING",
+        SState::NeedsInput => "NEEDS INPUT",
+        SState::Ready => "READY",
+        SState::Crashed => "CRASHED",
+    }
+}
+/// The card's surface tint by state; the on-screen card is brighter (SEL) than the rest.
+fn rail_card_bg(s: &Fake, on: bool) -> Color {
+    if on {
+        return SEL;
+    }
+    match s.st {
+        SState::Working => BC,
+        SState::Retrying => rgb(0x262014),
+        SState::NeedsInput => rgb(0x241a10),
+        SState::Ready => rgb(0x121217),
+        SState::Crashed => rgb(0x201114),
+    }
+}
+/// The stripe colour by state: the waiting stripe pulses with the glyph.
+fn rail_stripe(s: &Fake, tick: u64, reduced: bool) -> Span<'static> {
+    match s.st {
+        SState::Working => sp("▌", fg(BLUE)),
+        SState::Retrying => sp("▌", fg(ORANGE)),
+        SState::NeedsInput => sp("▌", wait_glyph(tick, reduced)),
+        SState::Ready => sp("▌", dim()),
+        SState::Crashed => sp("▌", fg(RED)),
+    }
+}
+/// The context bar's colour: normal under 60%, warning 60–85%, danger above.
+fn rail_ctx_color(pct: u8) -> Color {
+    if pct > 85 { RED } else if pct >= 60 { ORANGE } else { BLUE }
+}
+/// Cuts a name to `max` characters, ending in … so truncation shows.
+fn cut(s: &str, max: usize) -> String {
+    let cs: Vec<char> = s.chars().collect();
+    if cs.len() <= max {
+        return s.into();
+    }
+    cs[..max.saturating_sub(1)].iter().collect::<String>() + "…"
+}
+/// One row of the list (A): `1 ● name…`, the on-screen session on a tint with a stripe.
+fn rail_row_a(s: &Fake, n: usize, i: usize, on: bool, tick: u64, reduced: bool, w: usize) -> Vec<Row> {
+    let stripe = if on {
+        sp("▌", fg(BLUE))
+    } else if reduced && s.st == SState::NeedsInput {
+        sp("▌", fg(ORANGE))
+    } else {
+        sp(" ", Style::new())
+    };
+    let line = vec![stripe, sp(format!("{n} "), dim()), rail_glyph(s, tick, reduced), sp(" ", Style::new()), sp(s.name.to_string(), Style::new())];
+    let bg = on.then_some(SEL);
+    let spans = match bg {
+        Some(c) => tint(fit(&line, w), c),
+        None => fit(&line, w),
+    };
+    let mut out = vec![Row { spans, bg, act: Some(Act::Rail(i)), ..Default::default() }];
+    if s.st == SState::NeedsInput && !s.wait.is_empty() {
+        let ws = match bg {
+            Some(c) => tint(fit(&[sp("  ", Style::new()), sp(s.wait.clone(), dim())], w), c),
+            None => fit(&[sp("  ", Style::new()), sp(s.wait.clone(), dim())], w),
+        };
+        out.push(Row { spans: ws, bg, act: Some(Act::Rail(i)), ..Default::default() });
+    }
+    out
+}
+/// Fits card content rows to the inner width (2 cells of right margin, matching the
+/// stripe + space on the left), gives them the card's tint, and optionally wraps them
+/// in ▄/▀ edges. Hot regions span the whole card width.
+fn rail_card_rows(inner: Vec<Vec<Span<'static>>>, i: usize, bg: Color, w: usize, edged: bool) -> Vec<Row> {
+    let iw = w.saturating_sub(2);
+    let hot = vec![(0, w as u16, Act::Rail(i))];
+    let rows: Vec<Row> = inner
+        .into_iter()
+        .map(|spans| {
+            let mut fitted = fit(&spans, iw);
+            fitted.push(sp("  ", Style::new()));
+            Row { spans: fitted, bg: Some(bg), hot: hot.clone(), act: Some(Act::Rail(i)), ..Default::default() }
+        })
+        .collect();
+    if edged { slab(rows, bg, Some(BP), w) } else { rows }
+}
+/// Row 1 shared by the compact cards: number, glyph (state colour, pulsing when
+/// needing input), bold name, elapsed right-aligned. No state word; the glyph, stripe
+/// and tint carry the state. A crashed card shows ✕ instead of the elapsed, to dismiss it.
+fn rail_dense_top(s: &Fake, n: usize, tick: u64, reduced: bool, iw: usize) -> Vec<Span<'static>> {
+    vec![
+        rail_stripe(s, tick, reduced),
+        sp(format!("{n} "), dim()),
+        rail_glyph(s, tick, reduced),
+        sp(" ", Style::new()),
+        sp(cut(&s.name, iw.saturating_sub(5)), bold()),
+        t(),
+        rail_age_or_dismiss(s),
+    ]
+}
+/// Row 1 for the full and medium cards: number, glyph, state word, elapsed right.
+/// A crashed card shows ✕ instead of the elapsed, to dismiss it.
+fn rail_word_top(s: &Fake, n: usize, tick: u64, reduced: bool) -> Vec<Span<'static>> {
+    vec![
+        rail_stripe(s, tick, reduced),
+        sp(format!("{n} "), dim()),
+        rail_glyph(s, tick, reduced),
+        sp(" ", Style::new()),
+        sp(rail_state_word(s), rail_state_style(s, tick, reduced)),
+        t(),
+        rail_age_or_dismiss(s),
+    ]
+}
+/// A card row 1's right end: the coarse elapsed, or the dismiss ✕ on a crashed card.
+fn rail_age_or_dismiss(s: &Fake) -> Span<'static> {
+    if s.st == SState::Crashed {
+        sp("✕", fg(RED).add_modifier(Modifier::BOLD))
+    } else {
+        sp(s.age.clone(), dim())
+    }
+}
+/// Points a crashed card's row 1 at its dismiss ✕ instead of the whole-row marker
+/// move; clicking elsewhere still moves the marker. `x1` is the ✕ cell's right edge.
+fn rail_dismiss_hot(rows: &mut [Row], r1: usize, i: usize, w: usize, x1: u16) {
+    rows[r1].act = None;
+    rows[r1].hot = vec![(x1.saturating_sub(1), x1, Act::RailDismiss(i)), (0, w as u16, Act::Rail(i))];
+}
+/// The spend row: spend, a bar filling the rest, and the percentage; without the bar
+/// spend and percentage only.
+fn rail_spend_row(s: &Fake, tick: u64, reduced: bool, iw: usize, barred: bool) -> Vec<Span<'static>> {
+    let stripe = rail_stripe(s, tick, reduced);
+    let pad = sp("  ", Style::new());
+    if !barred {
+        return vec![stripe, pad, sp(s.spend.clone(), Style::new()), t(), sp(format!("{}%", s.ctx), dim())];
+    }
+    let pre = vec![stripe, pad, sp(format!("{} ", s.spend), Style::new())];
+    let suf = vec![sp(format!("  {}%", s.ctx), dim())];
+    let barw = iw.saturating_sub(width(&pre) + width(&suf));
+    [pre, bar(s.ctx as f64 / 100.0, barw, rail_ctx_color(s.ctx)), suf].concat()
+}
+/// One rich card of the cards (B): a tinted surface with half-block edges, grouped under
+/// project headers by the caller. Row 1 is number, glyph, state word and elapsed;
+/// row 2 the name; row 3 the model, or what it waits on while waiting; row 4 the
+/// workspace and branch; row 5 spend, a context bar filling the rest, and the
+/// percentage. Below RAIL_COMPACT columns row 3 and the bar go, keeping the percentage.
+fn rail_card_b(s: &Fake, n: usize, i: usize, on: bool, tick: u64, reduced: bool, w: usize) -> Vec<Row> {
+    // a right inner margin equal to the left (the stripe + space), so right-aligned
+    // items and cut names end 2 cells short of the card's edge: rows are fitted to
+    // the inner width, then given their 2 trailing cells
+    let iw = w.saturating_sub(2);
+    let stripe = || rail_stripe(s, tick, reduced);
+    let pad = || sp("  ", Style::new());
+    let r1 = rail_word_top(s, n, tick, reduced);
+    let r2 = vec![stripe(), pad(), sp(cut(&s.name, iw.saturating_sub(3)), bold())];
+    let r3 = if s.st == SState::NeedsInput {
+        vec![stripe(), pad(), sp(cut(&s.wait, iw.saturating_sub(3)), fg(ORANGE))]
+    } else {
+        vec![stripe(), pad(), sp(cut(&s.model, iw.saturating_sub(3)), dim())]
+    };
+    let r4 = vec![stripe(), pad(), sp(format!("⌂ {}  ", s.ws), Style::new()), sp("⎇ ", dim()), sp(cut(s.branch, iw.saturating_sub(6 + s.ws.width() + 4)), fg(BLUE))];
+    let pct = format!("{}%", s.ctx);
+    let r5 = if w < RAIL_COMPACT {
+        vec![stripe(), pad(), sp(s.spend.clone(), Style::new()), t(), sp(pct, dim())]
+    } else {
+        let pre = vec![stripe(), pad(), sp(format!("{}   ", s.spend), Style::new())];
+        let suf = vec![sp(format!("  {pct}"), dim())];
+        let barw = iw.saturating_sub(width(&pre) + width(&suf));
+        [pre, bar(s.ctx as f64 / 100.0, barw, rail_ctx_color(s.ctx)), suf].concat()
+    };
+    let mut inner = vec![r1, r2];
+    if w >= RAIL_COMPACT {
+        inner.push(r3);
+    }
+    inner.push(r4);
+    inner.push(r5);
+    let mut rows = rail_card_rows(inner, i, rail_card_bg(s, on), w, true);
+    if s.st == SState::Crashed {
+        rail_dismiss_hot(&mut rows, 1, i, w, iw as u16);
+    }
+    rows
+}
+/// The base model without its thinking level, which only the medium card shows.
+fn rail_base_model(model: &str) -> &str {
+    model.split(" · ").next().unwrap_or(model)
+}
+/// The branch row shared by the denser cards: `⎇ branch` with the branch in accent.
+fn rail_branch_row(s: &Fake, tick: u64, reduced: bool, iw: usize) -> Vec<Span<'static>> {
+    vec![
+        rail_stripe(s, tick, reduced),
+        sp("  ", Style::new()),
+        sp("⎇ ", dim()),
+        sp(cut(s.branch, iw.saturating_sub(5)), fg(BLUE)),
+    ]
+}
+/// The medium card: 4 content rows with ▄/▀ edges. Below RAIL_COMPACT the bar goes,
+/// keeping spend and percentage.
+fn rail_card_medium(s: &Fake, n: usize, i: usize, on: bool, tick: u64, reduced: bool, w: usize) -> Vec<Row> {
+    let inner = rail_medium_inner(s, n, tick, reduced, w.saturating_sub(2), w);
+    let mut rows = rail_card_rows(inner, i, rail_card_bg(s, on), w, true);
+    if s.st == SState::Crashed {
+        rail_dismiss_hot(&mut rows, 1, i, w, w.saturating_sub(2) as u16);
+    }
+    rows
+}
+/// The 4 content rows medium shares with three's lower rows: word-top, name, wait reason or branch,
+/// spend/bar/percentage (bar dropped below RAIL_COMPACT). `iw` is the content width.
+fn rail_medium_inner(s: &Fake, n: usize, tick: u64, reduced: bool, iw: usize, w: usize) -> Vec<Vec<Span<'static>>> {
+    let r2 = vec![rail_stripe(s, tick, reduced), sp("  ", Style::new()), sp(cut(&s.name, iw.saturating_sub(3)), bold())];
+    let r3 = if s.st == SState::NeedsInput {
+        vec![rail_stripe(s, tick, reduced), sp("  ", Style::new()), sp(cut(&s.wait, iw.saturating_sub(3)), fg(ORANGE))]
+    } else {
+        rail_branch_row(s, tick, reduced, iw)
+    };
+    vec![rail_word_top(s, n, tick, reduced), r2, r3, rail_spend_row(s, tick, reduced, iw, w >= RAIL_COMPACT)]
+}
+/// Row 1 for the three card: number, glyph and state word on the left; elapsed,
+/// spend and context percentage right-aligned with the 2-cell margin, the percentage
+/// coloured as the bar was. No bar. When it does not fit the elapsed goes first,
+/// then the spend; the state word is never cut. On a crashed card ✕ sits at the far
+/// right after the percentage and the elapsed is dropped.
+fn rail_three_top(s: &Fake, n: usize, tick: u64, reduced: bool, iw: usize) -> Vec<Span<'static>> {
+    let mut left = vec![
+        rail_stripe(s, tick, reduced),
+        sp(format!("{n} "), dim()),
+        rail_glyph(s, tick, reduced),
+        sp(" ", Style::new()),
+        sp(rail_state_word(s), rail_state_style(s, tick, reduced)),
+    ];
+    let lw = width(&left);
+    let pct = format!("{}%", s.ctx);
+    // the right cluster, front-pinned: elapsed, spend, percentage; crashed swaps the
+    // elapsed for a trailing ✕. Entries drop from the front, never past `min_keep`.
+    let mut items: Vec<(String, Style)> = if s.st == SState::Crashed {
+        vec![(s.spend.clone(), Style::new()), (pct, fg(rail_ctx_color(s.ctx))), ("✕".into(), fg(RED).add_modifier(Modifier::BOLD))]
+    } else {
+        vec![(s.age.clone(), dim()), (s.spend.clone(), Style::new()), (pct, fg(rail_ctx_color(s.ctx)))]
+    };
+    let min_keep = if s.st == SState::Crashed { 2 } else { 1 };
+    while items.len() > min_keep && lw + items.iter().map(|(t, _)| 2 + t.width()).sum::<usize>() > iw {
+        items.remove(0);
+    }
+    // double spaces, falling back to single when even that overflows
+    let sep = if lw + items.iter().map(|(t, _)| 2 + t.width()).sum::<usize>() > iw { " " } else { "  " };
+    for (t, st) in items {
+        left.push(sp(sep, Style::new()));
+        left.push(sp(t, st));
+    }
+    left
+}
+/// The three card: medium's rows with cost and context moved into row 1, both edges,
+/// 3 content rows. Narrow as medium: nothing further drops, the row-1 rules cover it.
+fn rail_card_three(s: &Fake, n: usize, i: usize, on: bool, tick: u64, reduced: bool, w: usize) -> Vec<Row> {
+    let iw = w.saturating_sub(2);
+    let mid = rail_medium_inner(s, n, tick, reduced, iw, w);
+    let top = rail_three_top(s, n, tick, reduced, iw);
+    let tx = width(&top) as u16;
+    let inner = vec![top, mid[1].clone(), mid[2].clone()];
+    let mut rows = rail_card_rows(inner, i, rail_card_bg(s, on), w, true);
+    if s.st == SState::Crashed {
+        rail_dismiss_hot(&mut rows, 1, i, w, tx);
+    }
+    rows
+}
+/// The compact card: 3 content rows, a flat tint with no edges, and one blank
+/// untinted row between cards (added by the caller). Below RAIL_COMPACT the bar goes,
+/// keeping spend and percentage.
+fn rail_card_compact(s: &Fake, n: usize, i: usize, on: bool, tick: u64, reduced: bool, w: usize) -> Vec<Row> {
+    let iw = w.saturating_sub(2);
+    let r2 = if s.st == SState::NeedsInput {
+        vec![rail_stripe(s, tick, reduced), sp("  ", Style::new()), sp(cut(&s.wait, iw.saturating_sub(3)), fg(ORANGE))]
+    } else {
+        let base = rail_base_model(&s.model);
+        // the branch gives way first, so the model survives truncation
+        let room = iw.saturating_sub(3 + 2 + 3 + base.width());
+        vec![
+            rail_stripe(s, tick, reduced),
+            sp("  ", Style::new()),
+            sp("⎇ ", dim()),
+            sp(cut(s.branch, room), fg(BLUE)),
+            sp(" · ", dim()),
+            sp(base.to_string(), dim()),
+        ]
+    };
+    let inner = vec![rail_dense_top(s, n, tick, reduced, iw), r2, rail_spend_row(s, tick, reduced, iw, w >= RAIL_COMPACT)];
+    let mut rows = rail_card_rows(inner, i, rail_card_bg(s, on), w, false);
+    if s.st == SState::Crashed {
+        rail_dismiss_hot(&mut rows, 0, i, w, iw as u16);
+    }
+    rows
+}
+/// A project header: the name in the accent colour, bold, with the group's live spend
+/// summed over its cards and a fake "N done" right-aligned.
+/// A project header: the name in the accent colour, bold, a "+" chip starting a session
+/// there, and the group's live spend summed over its cards with a fake "N done" opening
+/// the project's session list. Click targets are found by scanning the fitted row.
+fn rail_project_head(name: &'static str, dollars: f64, done: u32, w: usize) -> Row {
+    let done_text = format!("{done} done");
+    let mut spans = fit(
+        &[
+            sp(name.to_string(), fg(BLUE).add_modifier(Modifier::BOLD)),
+            sp(" ", Style::new()),
+            sp("+", Style::new().add_modifier(Modifier::BOLD).bg(SEL)),
+            t(),
+            sp(format!("${dollars:.2} · "), dim()),
+            sp(done_text.clone(), dim()),
+        ],
+        w.saturating_sub(2),
+    );
+    spans.push(sp("  ", Style::new()));
+    let (mut x, mut hot) = (0u16, vec![]);
+    for s in &spans {
+        let sw = s.content.width() as u16;
+        if s.content == "+" {
+            hot.push((x, x + sw, Act::RailNew(name)));
+        } else if s.content == done_text.as_str() {
+            hot.push((x, x + sw, Act::RailDone(name)));
+        }
+        x += sw;
+    }
+    Row { spans, hot, ..Default::default() }
+}
+/// The cards (B) design: every project shows, the launch project's group first and the
+/// rest after in start order; numbers follow start order across groups. `density` is
+/// 0 full, 1 medium, 2 compact.
+fn rail_full_b(sess: &[Fake], shown: &[usize], screen: usize, tick: u64, reduced: bool, w: usize, density: u8) -> (Vec<Row>, Vec<(usize, usize, usize)>) {
+    let mut out = vec![];
+    // (session index, first row, row count), so a jump can scroll the card into view
+    let mut map = vec![];
+    let mut projects: Vec<&str> = vec![];
+    for &i in shown {
+        if !projects.contains(&sess[i].project) {
+            projects.push(sess[i].project);
+        }
+    }
+    // the launch project's group first, the rest in start order
+    projects.sort_by_key(|p| if **p == *"fiber" { 0 } else { 1 });
+    let done = rail_done();
+    for (g, p) in projects.iter().enumerate() {
+        if g > 0 {
+            out.push(row(vec![sp(" ", Style::new())]));
+        }
+        let members: Vec<usize> = shown.iter().filter(|&&i| sess[i].project == *p).copied().collect();
+        let dollars: f64 = members.iter().map(|&i| sess[i].dollars).sum();
+        let di = projects.iter().position(|q| q == p).unwrap_or(0);
+        out.push(rail_project_head(*p, dollars, done.get(di).copied().unwrap_or(0), w));
+        for &i in &members {
+            // numbers are stable per session: a dismissal leaves its number's gap
+            let n = i + 1;
+            let start = out.len();
+            out.extend(match density {
+                0 => rail_card_b(&sess[i], n, i, i == screen, tick, reduced, w),
+                1 => rail_card_medium(&sess[i], n, i, i == screen, tick, reduced, w),
+                2 => rail_card_three(&sess[i], n, i, i == screen, tick, reduced, w),
+                _ => rail_card_compact(&sess[i], n, i, i == screen, tick, reduced, w),
+            });
+            map.push((i, start, out.len() - start));
+            // compact cards carry no edges of their own: one blank untinted row between them
+            if density == 3 {
+                out.push(Row::default());
+            }
+        }
+    }
+    out.push(row(vec![sp(" ", Style::new())]));
+    out.push(row(fit(&[sp("click moves marker", dim())], w)));
+    out.push(rail_chips(&[("A", Act::RailVariant(0)), ("B", Act::RailVariant(1)), ("C", Act::RailVariant(2))], 1));
+    out.push(rail_chips(&[("full", Act::RailDensity(0)), ("medium", Act::RailDensity(1)), ("three", Act::RailDensity(2)), ("compact", Act::RailDensity(3))], density as usize));
+    (out, map)
+}
+/// Clickable chips for the rail's bottom label: small tinted buttons, the current one
+/// highlighted. Function keys do not reach every shell, so the rail switches by click.
+fn rail_chips(opts: &[(&'static str, Act)], cur: usize) -> Row {
+    let mut parts: Vec<(Span<'static>, Option<Act>)> = vec![];
+    for (k, (name, act)) in opts.iter().enumerate() {
+        if k > 0 {
+            parts.push((sp(" ", Style::new()), None));
+        }
+        let st = if k == cur { Style::new().fg(Color::Black).bg(ORANGE).add_modifier(Modifier::BOLD) } else { dim() };
+        parts.push((sp(name.to_string(), st), Some(*act)));
+    }
+    hot_row(parts)
+}
+/// Moves the rail's scroll so the session's card is on screen; a no-op for A.
+fn rail_ensure(ui: &mut Ui, lay: &(usize, usize, Vec<(usize, usize, usize)>), i: usize) {
+    let (len, vis, map) = lay;
+    let max_top = len.saturating_sub(*vis);
+    for &(si, srow, slen) in map.iter() {
+        if si == i {
+            if srow < ui.rail_top {
+                ui.rail_top = srow;
+            } else if srow + slen > ui.rail_top + vis {
+                ui.rail_top = (srow + slen).saturating_sub(*vis);
+            }
+            ui.rail_top = ui.rail_top.min(max_top);
+        }
+    }
+}
+/// The footer's shared rows: the scope toggle, the marker hint, and the variant chips.
+fn rail_foot(hidden: usize, others: bool, w: usize) -> Vec<Row> {
+    let mut out = vec![];
+    if hidden > 0 {
+        out.push(hot_row(vec![(sp(format!("+{hidden} other · show all"), dim()), Some(Act::RailAll))]));
+    } else if others {
+        out.push(hot_row(vec![(sp("show less", dim()), Some(Act::RailAll))]));
+    }
+    out.push(row(fit(&[sp("click moves marker", dim())], w)));
+    out.push(rail_chips(&[("A", Act::RailVariant(0)), ("B", Act::RailVariant(1)), ("C", Act::RailVariant(2))], 0));
+    out
+}
+/// The full-height list (A) design, `w` columns wide; other projects hide behind the scope line.
+fn rail_full(sess: &[Fake], shown: &[usize], screen: usize, tick: u64, reduced: bool, w: usize, hidden: usize) -> Vec<Row> {
+    let mut out = vec![];
+    let each = |out: &mut Vec<Row>, ix: &[usize]| {
+        for &i in ix {
+            // numbers are stable per session: a dismissal leaves its number's gap
+            let n = i + 1;
+            let on = i == screen;
+            out.extend(rail_row_a(&sess[i], n, i, on, tick, reduced, w));
+        }
+    };
+    // own sessions first; sessions in other projects under a divider when shown
+    let own: Vec<usize> = shown.iter().filter(|&&i| sess[i].project == "fiber").copied().collect();
+    let autod: Vec<usize> = shown.iter().filter(|&&i| sess[i].project != "fiber").copied().collect();
+    each(&mut out, &own);
+    if !autod.is_empty() {
+        out.push(row(fit(&[sp("─ other projects ─", dim())], w)));
+        each(&mut out, &autod);
+    }
+    out.extend(rail_foot(hidden, !autod.is_empty(), w));
+    out
+}
+/// The tabs (C): a one-row strip across the top of the conversation column.
+fn rail_tabs(sess: &[Fake], shown: &[usize], screen: usize, cw: usize, tick: u64, reduced: bool, hidden: usize) -> Row {
+    // the variant chips are always kept, so C can be left by click; tabs take what is left
+    let room = cw.saturating_sub(10);
+    let mut keep;
+    let mut maxn = 18usize;
+    loop {
+        let mut w = 0;
+        keep = shown.len();
+        for (k, &i) in shown.iter().enumerate() {
+            // `n ◐ name`, plus ` │ ` between tabs
+            let tw = 4 + cut(sess[i].name, maxn).width() + if k > 0 { 3 } else { 0 };
+            if w + tw <= room {
+                w += tw;
+            } else {
+                keep = k;
+                break;
+            }
+        }
+        if keep == shown.len() || maxn <= 6 {
+            break;
+        }
+        maxn -= 2;
+    }
+    let mut parts: Vec<(Span<'static>, Option<Act>)> = vec![];
+    for (k, &i) in shown.iter().enumerate().take(keep) {
+        if k > 0 {
+            parts.push((sp(" │ ", dim()), None));
+        }
+        let s = &sess[i];
+        let on = i == screen;
+        let mut g = rail_glyph(s, tick, reduced);
+        let mut nm = if s.st == SState::NeedsInput && !on { fg(ORANGE) } else { Style::new() };
+        let mut nn = dim();
+        if on {
+            g = Span::styled(g.content, g.style.bg(SEL));
+            nm = nm.bg(SEL);
+            nn = nn.bg(SEL);
+        }
+        parts.push((sp(format!("{} ", i + 1), nn), Some(Act::Rail(i))));
+        parts.push((g, Some(Act::Rail(i))));
+        parts.push((sp(format!(" {}", cut(s.name, maxn)), nm), Some(Act::Rail(i))));
+    }
+    if keep < shown.len() {
+        parts.push((sp(" │ ", dim()), None));
+        parts.push((sp(format!("+{} ›", shown.len() - keep), dim()), None));
+    }
+    if hidden > 0 {
+        parts.push((sp(" │ ", dim()), None));
+        parts.push((sp(format!("+{hidden} ›"), dim()), Some(Act::RailAll)));
+    }
+    parts.push((sp(" │ ", dim()), None));
+    for (k, (name, v)) in [("A", 0u8), ("B", 1), ("C", 2)].iter().enumerate() {
+        if k > 0 {
+            parts.push((sp(" ", dim()), None));
+        }
+        let st = if *v == 2 { Style::new().fg(Color::Black).bg(ORANGE).add_modifier(Modifier::BOLD) } else { dim() };
+        parts.push((sp(name.to_string(), st), Some(Act::RailVariant(*v))));
+    }
+    let r = hot_row(parts);
+    Row { spans: fit(&r.spans, cw), hot: r.hot, act: None, ..Default::default() }
 }
 
 // ============================================================ bottom of the conversation column
@@ -1555,6 +2196,28 @@ struct Ui {
     ctx_view: bool,
     /// the view's own scroll, rows from its top
     vscroll: usize,
+    /// the rail design: 0 list, 1 cards, 2 tabs (`--rail`, or the A/B/C chips)
+    rail: u8,
+    /// the B card density: 0 full, 1 medium, 2 compact (`--density`, or the chips)
+    density: u8,
+    /// the person shut the rail (dragged shut, ⌥R): it stays shut until dragged out or toggled
+    rail_off: bool,
+    /// the rail shows sessions in other projects (design A; B always shows every project)
+    show_all: bool,
+    /// the session on screen, by its index: a click or ⌥N moves this only
+    screen: usize,
+    /// crashed sessions the person dismissed: their cards are gone, their numbers gap
+    dismissed: HashSet<usize>,
+    /// crashed sessions the person resumed: they show WORKING again
+    resumed: HashSet<usize>,
+    /// the rail's width as a share of the window (`--rail-share`), 15% clamped to [22, 48]
+    rail_share: f64,
+    /// the panel's width as a share of the window (`--panel-share`), 21% clamped to [30, 60]
+    panel_share: f64,
+    /// the rail's first visible row, when its cards overflow the screen
+    rail_top: usize,
+    /// a resize drag in progress: 0 the rail's right edge, 1 the panel's left edge
+    resize: Option<u8>,
     /// the person answered an approval or a form since the last input was handled
     answered: bool,
 }
@@ -1903,7 +2566,7 @@ fn form_panel(f: &Fold, ui: &Ui, k: usize, p: &Pending, fields: &[Value], w: usi
     slab(rows, BC, None, w)
 }
 
-fn bottom(f: &Fold, w: usize, tick: u64, now: i64, v: &View, narrow: bool, ui: &Ui) -> Vec<Row> {
+fn bottom(f: &Fold, w: usize, tick: u64, now: i64, v: &View, narrow: bool, ui: &Ui, rail_note: Option<String>) -> Vec<Row> {
     let mut out = vec![];
     let aside = f.pending.iter().filter(|p| ui.aside.contains(&p.rid)).count();
     if aside > 0 {
@@ -1949,7 +2612,7 @@ fn bottom(f: &Fold, w: usize, tick: u64, now: i64, v: &View, narrow: bool, ui: &
     };
     out.append(&mut ib);
     if narrow {
-        out.extend(status_rows(f, now, w, &ui.keys));
+        out.extend(status_rows(f, now, w, &ui.keys, rail_note));
     }
     out
 }
@@ -2437,6 +3100,14 @@ struct Args {
     bench: bool,
     no_pending: bool,
     hover: bool,
+    /// the rail design at start: 0 list, 1 cards, 2 tabs
+    rail: u8,
+    /// the B card density at start: 0 full, 1 medium, 2 compact
+    density: u8,
+    /// the rail's width at start, as a percent of the window
+    rail_share: f64,
+    /// the panel's width at start, as a percent of the window
+    panel_share: f64,
 }
 fn args() -> Args {
     let mut a = Args {
@@ -2460,6 +3131,10 @@ fn args() -> Args {
         bench: false,
         no_pending: false,
         hover: false,
+        rail: 1,
+        density: 2,
+        rail_share: 15.0,
+        panel_share: 21.0,
     };
     let mut it = std::env::args().skip(1);
     while let Some(x) = it.next() {
@@ -2483,8 +3158,27 @@ fn args() -> Args {
             "--paging-bench" => a.bench = true,
             "--no-pending" => a.no_pending = true,
             "--hover" => a.hover = true,
+            "--rail" => {
+                a.rail = match it.next().as_deref().map(|v| v.to_uppercase()).as_deref() {
+                    Some("A") => 0,
+                    Some("B") => 1,
+                    Some("C") => 2,
+                    _ => panic!("--rail A|B|C"),
+                }
+            }
+            "--rail-share" => a.rail_share = it.next().and_then(|v| v.parse().ok()).expect("--rail-share P"),
+            "--panel-share" => a.panel_share = it.next().and_then(|v| v.parse().ok()).expect("--panel-share P"),
+            "--density" => {
+                a.density = match it.next().as_deref().map(|v| v.to_lowercase()).as_deref() {
+                    Some("full") => 0,
+                    Some("medium") => 1,
+                    Some("three") => 2,
+                    Some("compact") => 3,
+                    _ => panic!("--density full|medium|three|compact"),
+                }
+            }
             "-h" | "--help" => {
-                println!("tui-prototype [FIXTURE] [--speed N] [--static] [--no-pending] [--reduced-motion] [--hover] [--commands FILE] [--log-input FILE] [--wheel-lines N] [--lua-renderer FILE.lua [--lua-uncached]] [--paged [--window SCREENS] [--page-lines N] [--verify-copy]] [--paging-bench] [--stats FILE --exit-after S [--warmup S] [--diff-audit]]");
+                println!("tui-prototype [FIXTURE] [--speed N] [--static] [--no-pending] [--reduced-motion] [--hover] [--rail A|B|C] [--density full|medium|three|compact] [--rail-share P] [--panel-share P] [--commands FILE] [--log-input FILE] [--wheel-lines N] [--lua-renderer FILE.lua [--lua-uncached]] [--paged [--window SCREENS] [--page-lines N] [--verify-copy]] [--paging-bench] [--stats FILE --exit-after S [--warmup S] [--diff-audit]]");
                 std::process::exit(0);
             }
             p => a.path = p.into(),
@@ -2643,11 +3337,16 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
     // `--hover`: the pointer's cell, the target tinted in the last frame, the target under the
     // pointer now, and motion events and target changes in the measurement window
     let mut ptr: Option<(u16, u16)> = None;
+    // whether OSC 22 last set the col-resize pointer: written only on change, restored on exit
+    let mut ptr_col_resize = false;
     let mut hovered: Option<(u16, u16, u16)> = None;
     let mut under: Option<(u16, u16, u16)> = None;
     let (mut motions, mut hover_changes) = (0u64, 0u64);
     let mut dirty = true;
-    let mut geom = (0u16, 0u16); // conversation column width, screen width
+    let mut geom = (0u16, 0u16, 0u16, false, 0u16); // conversation width, screen width, rail width, tabs, panel width
+    // the rail's row count and card map ((session, first row, rows)) from the last frame,
+    // so wheel and jump keys can scroll it without rebuilding its rows
+    let mut rail_lay: (usize, usize, Vec<(usize, usize, usize)>) = (0, 0, vec![]);
     // where the conversation's rows sit: first row shown, blank rows above it, rows shown,
     // height, and the first row shown at the end
     let mut lay = (0usize, 0usize, 0usize, 0usize, 0usize);
@@ -2665,6 +3364,10 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
     let mut frames: u64 = 0;
 
     let mut ui = Ui::default();
+    ui.rail = a.rail;
+    ui.density = a.density.min(2);
+    ui.rail_share = a.rail_share.clamp(1.0, 90.0);
+    ui.panel_share = a.panel_share.clamp(1.0, 90.0);
     let mut rd = input::Reader::new()?;
     let mut cmds = match &a.commands {
         Some(p) => Some(std::fs::OpenOptions::new().create(true).append(true).open(p)?),
@@ -2772,9 +3475,33 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
             };
             let size = term.size()?;
             let (cols, rows) = (size.width, size.height);
-            let narrow = cols < PANEL + CONV_MIN;
-            let conv_w = if narrow { cols } else { cols - PANEL };
-            let cw = conv_w as usize - 2;
+            // the rail takes columns from the left before the conversation column; both it
+            // and the panel are a share of the window, so they survive a resize as a share.
+            // The rail hides completely when shut or too narrow, leaving a 1-column
+            // handle; "N waiting" joins the status rows or the Session card. The
+            // conversation keeps CONV_MIN throughout.
+            let rail_full_w = ((cols as f64 * ui.rail_share / 100.0).round() as u16).clamp(22, 48);
+            let panel_full_w = ((cols as f64 * ui.panel_share / 100.0).round() as u16).clamp(30, 60);
+            let rail_cols: u16 = match ui.rail { 0 => RAIL_A, _ => rail_full_w };
+            // too narrow for rail floor + conversation minimum + panel: the rail goes;
+            // an auto-hidden rail returns by itself, a dragged-shut one stays shut
+            let rail_auto = cols < 22 + CONV_MIN + panel_full_w;
+            let rail_hidden = ui.rail != 2 && (ui.rail_off || rail_auto);
+            let mut rail_w: u16 = if ui.rail == 2 { 0 } else if rail_hidden { 1 } else { rail_cols };
+            if ui.rail != 2 && cols < rail_w + CONV_MIN {
+                rail_w = 0;
+            }
+            let avail = cols.saturating_sub(rail_w);
+            let narrow = avail < panel_full_w + CONV_MIN;
+            let panel_w = if narrow { 0 } else { panel_full_w };
+            let conv_w = avail - panel_w;
+            let cw = (conv_w as usize).saturating_sub(2);
+            let sess = live_sessions(f, &ui, vnow);
+            let waiting = sess.iter().enumerate().filter(|(idx, s)| s.st == SState::NeedsInput && !ui.dismissed.contains(idx)).count();
+            let rail_gone = rail_hidden || (ui.rail == 2 && cols < CONV_MIN);
+            let rail_note = (rail_gone && waiting > 0).then(|| format!("{waiting} waiting"));
+            // variant C takes one row from the top of the conversation column instead
+            let show_tabs = ui.rail == 2 && cols >= CONV_MIN;
             // the call asking the person has its group open
             v.force = ui.top(f).filter(|(_, p)| p.sid == f.session_id).and_then(|(_, p)| f.at.get(&p.aid)).map(|&(ti, bi, _)| Act::Group(ti, bi));
             v.q = ui.search.as_ref().map(|s| s.q.to_lowercase()).filter(|q| q.chars().count() >= 3).unwrap_or_default();
@@ -2795,8 +3522,11 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                     f.notices.push(("extension".into(), n, false));
                 }
             }
+            if narrow {
+                panel_cache = None;
+            }
             if panel_cache.is_none() && !narrow {
-                panel_cache = Some(panel_rows(f, vnow, &ui.keys));
+                panel_cache = Some(panel_rows(f, vnow, &ui.keys, panel_w as usize, if rail_hidden { waiting } else { 0 }));
             }
             let no_rows = vec![];
             let conv: &Vec<Row> = conv_cache.as_ref().map_or(&no_rows, |c| &c.2);
@@ -2806,25 +3536,27 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                 s.hits = find_all(conv, &s.q.to_lowercase());
                 s.i = s.i.min(s.hits.len().saturating_sub(1));
             }
-            let mut bot = bottom(f, conv_w as usize, tick, vnow, &v, narrow, &ui);
+            let mut bot = bottom(f, conv_w as usize, tick, vnow, &v, narrow, &ui, rail_note);
             // a bottom area taller than the screen keeps its last rows, the input box
             bot.drain(..bot.len().saturating_sub(rows as usize));
             let view_h = (rows as usize).saturating_sub(bot.len());
-            let max_top = total.saturating_sub(view_h);
+            let tabs_h = if show_tabs { 1 } else { 0 };
+            let vh = view_h.saturating_sub(tabs_h);
+            let max_top = total.saturating_sub(vh);
             if let Some(s) = ui.search.as_mut().filter(|s| s.jump) {
                 s.jump = false;
                 if let Some(&(r, _, _)) = s.hits.get(s.i) {
                     // centre the current match
-                    top = Some(r.saturating_sub(view_h / 2));
+                    top = Some(r.saturating_sub(vh / 2));
                 }
             }
             top = top.filter(|&t| t < max_top);
             let start = top.unwrap_or(max_top);
-            let end = (start + view_h).min(total);
+            let end = (start + vh).min(total);
             // paged: keep the pages of the viewport and `window` screens either side rendered
             let mut loaded = (0, Duration::ZERO, false);
             if let Some(pg) = pager.as_mut().filter(|_| end > start) {
-                let m = (a.window * view_h as f64) as usize;
+                let m = (a.window * vh as f64) as usize;
                 let miss = (pg.page_at(start)..=pg.page_at(end - 1)).any(|p| !pg.resident(p));
                 let t = Instant::now();
                 let n = pg.ensure(start.saturating_sub(m), (end + m).min(total), &v);
@@ -2834,7 +3566,7 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                 Some(pg) => (start..end).map(|r| pg.row(r)).collect(),
                 None => conv[start..end].iter().collect(),
             };
-            let top_pad = view_h - vis.len();
+            let top_pad = tabs_h + vh.saturating_sub(vis.len());
             // a swapped view: its header, then its rows from its own scroll
             let vrows: Option<Vec<Row>> = ui.ctx_view.then(|| {
                 let body = context_view(f, cw);
@@ -2845,10 +3577,28 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
             });
             lay = (start, top_pad, if vrows.is_some() { 0 } else { vis.len() }, view_h, max_top);
             hits.clear();
-            geom = (conv_w, cols);
+            geom = (conv_w, cols, rail_w, show_tabs, panel_w);
             let panel = panel_cache.as_ref();
             let uncached = v.lua.as_deref().filter(|x| !x.cached);
             let (search, sel, copied) = (ui.search.as_ref(), ui.sel, ui.copied.as_ref().map(|c| c.0.as_str()));
+            // the session rail's rows, built before the frame so jumps can clamp the scroll.
+            // B shows every project; A and C hide other projects behind the scope line.
+            let seq = rail_seq(&sess, ui.rail);
+            let shown: Vec<usize> = (if ui.rail == 1 { seq } else { seq.into_iter().filter(|&i| ui.show_all || sess[i].project == "fiber").collect() }).into_iter().filter(|&i| !ui.dismissed.contains(&i)).collect();
+            let hidden_n = if ui.rail == 1 { 0 } else { sess.iter().filter(|s| s.project != "fiber").count() - shown.iter().filter(|&&i| sess[i].project != "fiber").count() };
+            let (rrows, rmap): (Vec<Row>, Vec<(usize, usize, usize)>) = if rail_w <= 1 || ui.rail == 2 {
+                (vec![], vec![])
+            } else if ui.rail == 1 {
+                rail_full_b(&sess, &shown, ui.screen, tick, v.reduced, rail_w as usize, ui.density)
+            } else {
+                (rail_full(&sess, &shown, ui.screen, tick, v.reduced, rail_w as usize, hidden_n), vec![])
+            };
+            ui.rail_top = ui.rail_top.min(rrows.len().saturating_sub(rows as usize));
+            // a resize drag's live share, drawn as a dim pill over the conversation
+            let drag_lab: Option<String> = ui.resize.map(|r| {
+                let (name, share, w) = if r == 0 { ("rail", ui.rail_share, rail_w) } else { ("panel", ui.panel_share, panel_w) };
+                format!(" {name} {}% · {w} cols ", share.round() as u16)
+            });
             // synchronised output (DEC mode 2026): the terminal shows the frame only once it is
             // all written, however many writes and flushes it takes
             term.backend_mut().write_all(b"\x1b[?2026h")?;
@@ -2856,10 +3606,10 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                 let buf = fr.buffer_mut();
                 if let Some(vr) = &vrows {
                     for (k, r) in vr.iter().enumerate() {
-                        let (x, w) = if k == 0 { (0, conv_w) } else { (1, cw as u16) };
+                        let (x, w) = if k == 0 { (rail_w, conv_w) } else { (rail_w + 1, cw as u16) };
                         paint(buf, x, k as u16, w, r);
                         if let Some(act) = r.act {
-                            hits.push((k as u16, 0, conv_w, act));
+                            hits.push((k as u16, rail_w, rail_w + conv_w, act));
                         }
                     }
                 }
@@ -2869,14 +3619,14 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                     // uncached: Lua is called again for every visible row it drew, every frame
                     let fresh = r.lua.as_ref().zip(uncached).and_then(|(src, x)| x.frame_spans(src, cw, BW));
                     match fresh {
-                        Some(spans) => paint(buf, 1, y, cw as u16, &Row { spans, ..Default::default() }),
-                        None => paint(buf, 1, y, cw as u16, r),
+                        Some(spans) => paint(buf, rail_w + 1, y, cw as u16, &Row { spans, ..Default::default() }),
+                        None => paint(buf, rail_w + 1, y, cw as u16, r),
                     }
                     if let Some(act) = r.act {
-                        hits.push((y, 1, 1 + cw as u16, act));
+                        hits.push((y, rail_w + 1, rail_w + 1 + cw as u16, act));
                     }
                     for &(x0, x1, act) in &r.hot {
-                        hits.push((y, 1 + x0, 1 + x1, act));
+                        hits.push((y, rail_w + 1 + x0, rail_w + 1 + x1, act));
                     }
                 }
                 let ys = |r: usize| (r >= start && r < start + vis.len()).then(|| (top_pad + r - start) as u16);
@@ -2885,7 +3635,7 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                     for (i, &(r, c, w)) in s.hits.iter().enumerate() {
                         let Some(y) = ys(r) else { continue };
                         let st = if i == s.i { Style::new().bg(ORANGE).fg(Color::Black) } else { Style::new().bg(rgb(0x5a4a1a)).fg(Color::White) };
-                        buf.set_style(Rect::new(1 + c as u16, y, (w as u16).min(cw as u16 - c as u16), 1), st);
+                        buf.set_style(Rect::new(rail_w + 1 + c as u16, y, (w as u16).min(cw as u16 - c as u16), 1), st);
                     }
                 }
                 if let Some(s) = sel.filter(|s| s.moved) {
@@ -2895,16 +3645,16 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                         let x0 = if r == a.0 { a.1 } else { 0 }.min(cw);
                         let x1 = if r == b.0 { b.1 + 1 } else { cw }.min(cw);
                         if x1 > x0 {
-                            buf.set_style(Rect::new(1 + x0 as u16, y, (x1 - x0) as u16, 1), Style::new().bg(rgb(0x264f78)));
+                            buf.set_style(Rect::new(rail_w + 1 + x0 as u16, y, (x1 - x0) as u16, 1), Style::new().bg(rgb(0x264f78)));
                         }
                     }
                 }
                 // scroll thumb
-                if total > view_h && view_h > 0 && vrows.is_none() {
-                    let th = (view_h * view_h / total).max(1);
-                    let tt = (view_h - th) * start / (total - view_h);
+                if total > vh && vh > 0 && vrows.is_none() {
+                    let th = (vh * vh / total).max(1);
+                    let tt = (vh - th) * start / (total - vh);
                     for y in tt..tt + th {
-                        buf.set_string(conv_w - 1, y as u16, "┃", fg(rgb(0x808080)));
+                        buf.set_string(rail_w + conv_w - 1, (tabs_h + y) as u16, "┃", fg(rgb(0x808080)));
                     }
                 }
                 // scrolled up: a pill centred at the bottom of the conversation jumps to the end
@@ -2912,7 +3662,7 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                     // paged: the rows below are not all rendered, and the ruling needs no count
                     let label = if pager.is_some() { " ↓ New messages below · End ".to_string() } else { format!(" ↓ {} lines below · End ", max_top - start) };
                     let pw = label.width() as u16 + 2;
-                    let (x0, y) = (1 + (cw as u16).saturating_sub(pw) / 2, view_h as u16 - 1);
+                    let (x0, y) = (rail_w + 1 + (cw as u16).saturating_sub(pw) / 2, view_h as u16 - 1);
                     for x in x0..x0 + pw {
                         let under = buf[(x, y)].bg;
                         buf[(x, y)].reset();
@@ -2927,7 +3677,7 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                 // search floats over the conversation's top-right corner, as an editor's find box does
                 if let Some(s) = search.filter(|_| vrows.is_none() && view_h >= 3) {
                     let bw = SBOX_W.min(cw.saturating_sub(2));
-                    let x0 = 1 + (cw - bw) as u16;
+                    let x0 = rail_w + 1 + (cw - bw) as u16;
                     for x in x0..x0 + bw as u16 {
                         for (y, ch) in [(0, "▄"), (1, " "), (2, "▀")] {
                             let under = buf[(x, y)].bg;
@@ -2949,39 +3699,150 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                     let s = vec![sp(format!(" {m} "), fg(CYAN))];
                     let mw = width(&s).min(cw);
                     if y < view_h && mw > 0 {
-                        buf.set_line(1 + (cw - mw) as u16, y as u16, &Line::from(tint(fit(&s, mw), BI)), mw as u16);
+                        buf.set_line(rail_w + 1 + (cw - mw) as u16, y as u16, &Line::from(tint(fit(&s, mw), BI)), mw as u16);
                     }
                 }
                 for (k, r) in bot.iter().enumerate() {
                     let y = (view_h + k) as u16;
-                    paint(buf, 0, y, conv_w, r);
+                    paint(buf, rail_w, y, conv_w, r);
                     for &(x0, x1, act) in &r.hot {
-                        hits.push((y, x0, x1, act));
+                        hits.push((y, rail_w + x0, rail_w + x1, act));
                     }
                     if let Some(act) = r.act {
-                        hits.push((y, 0, conv_w, act));
+                        hits.push((y, rail_w, rail_w + conv_w, act));
                     }
                 }
                 // side panel
-                if let Some(p) = panel {
-                    buf.set_style(Rect::new(conv_w, 0, PANEL, rows), Style::new().bg(BP));
+                if let Some(p) = panel.filter(|_| panel_w > 0) {
+                    buf.set_style(Rect::new(rail_w + conv_w, 0, panel_w, rows), Style::new().bg(BP));
                     let ps = pscroll.min(p.len().saturating_sub(rows as usize));
                     for (k, r) in p.iter().skip(ps).take(rows as usize).enumerate() {
-                        paint(buf, conv_w + 1, k as u16, PANEL - 2, r);
+                        paint(buf, rail_w + conv_w + 1, k as u16, panel_w - 2, r);
                         if let Some(act) = r.act {
-                            hits.push((k as u16, conv_w, cols, act));
+                            hits.push((k as u16, rail_w + conv_w, cols, act));
                         }
+                    }
+                }
+                // the session rail: its own column on the left, or one row of tabs for variant C.
+                // Numbers follow start order and never move; a click moves the on-screen marker
+                // only. The cards scroll when they overflow the screen. Hidden, the rail
+                // leaves a 1-column handle at the left edge.
+                if rail_w > 1 {
+                    buf.set_style(Rect::new(0, 0, rail_w, rows), Style::new().bg(BP));
+                    for (k, r) in rrows.iter().skip(ui.rail_top).take(rows as usize).enumerate() {
+                        paint(buf, 0, k as u16, rail_w, r);
+                        if let Some(act) = r.act {
+                            hits.push((k as u16, 0, rail_w, act));
+                        }
+                        for &(x0, x1, act) in &r.hot {
+                            hits.push((k as u16, x0, x1.min(rail_w), act));
+                        }
+                    }
+                }
+                // the resize grips: a dim ⋮ on 3 rows centred on each draggable column —
+                // the rail's right edge, the panel's left edge, or the 1-column handle at
+                // the left edge while the rail is hidden. On hover or while dragging the
+                // whole column tints and the grip goes bright in the accent colour.
+                // Hidden, the dead margin column beside the handle is cleared too.
+                let rail_hid = ui.rail != 2 && rail_w == 1;
+                let rail_hx = if rail_hid { 0 } else { rail_w };
+                let rail_gap_hot = ptr.is_some_and(|(x, _)| x == rail_hx) && ui.rail != 2 && rail_w > 0;
+                let panel_gap_hot = ptr.is_some_and(|(x, _)| x == rail_w + conv_w) && panel_w > 0;
+                for (gx, active, clear_next) in [(rail_hx, ui.resize == Some(0) || rail_gap_hot, rail_hid), (rail_w + conv_w, ui.resize == Some(1) || panel_gap_hot, false)] {
+                    if gx >= cols || (gx == rail_w && (rail_w == 0 || ui.rail == 2)) || (gx == rail_w + conv_w && panel_w == 0) {
+                        continue;
+                    }
+                    let mid = rows / 2;
+                    for y in 0..rows {
+                        let grip_row = y >= mid.saturating_sub(1) && y <= mid + 1;
+                        let (sym, st) = match (grip_row, active) {
+                            (true, true) => ("⋮", fg(BLUE).add_modifier(Modifier::BOLD)),
+                            (true, false) => ("⋮", dim()),
+                            _ => (" ", Style::new()),
+                        };
+                        // Reset clears a stale tint when the drag ends; SEL tints the column
+                        paint(buf, gx, y, 1, &Row { spans: vec![sp(sym, st)], bg: Some(if active { SEL } else { Color::Reset }), ..Default::default() });
+                        if clear_next {
+                            paint(buf, gx + 1, y, 1, &Row { spans: vec![sp(" ", Style::new())], bg: Some(Color::Reset), ..Default::default() });
+                        }
+                    }
+                }
+                if show_tabs {
+                    let tabrow = rail_tabs(&sess, &shown, ui.screen, cw, tick, v.reduced, hidden_n);
+                    paint(buf, rail_w, 0, conv_w, &tabrow);
+                    for &(x0, x1, act) in &tabrow.hot {
+                        hits.push((0, rail_w + x0, rail_w + x1.min(cw as u16), act));
                     }
                 }
                 // the target under the pointer, found as a click finds it
                 hovered = ptr.and_then(|(x, y)| hits.iter().find(|(hy, x0, x1, _)| *hy == y && x >= *x0 && x < *x1)).map(|h| (h.0, h.1, h.2));
-                if let Some((y, x0, x1)) = hovered.filter(|&(y, _, _)| y < rows) {
+                // hovering a B card brightens the whole card, not just the hovered row
+                let hover_card: Option<usize> = if ui.rail == 1 && rail_w > 1 {
+                    hovered.and_then(|h| hits.iter().find(|j| (j.0, j.1, j.2) == h).map(|j| j.3)).and_then(|a| match a {
+                        Act::Rail(i) => Some(i),
+                        _ => None,
+                    })
+                } else {
+                    None
+                };
+                if let Some(i) = hover_card {
+                    for &(si, srow, len) in &rmap {
+                        if si == i {
+                            let end = (srow + len).saturating_sub(ui.rail_top).min(rows as usize);
+                            for y in srow.saturating_sub(ui.rail_top)..end {
+                                for x in 0..rail_w.min(cols) {
+                                    let c = &mut buf[(x, y as u16)];
+                                    c.set_bg(lift(c.bg));
+                                }
+                            }
+                        }
+                    }
+                } else if let Some((y, x0, x1)) = hovered.filter(|&(y, _, _)| y < rows) {
                     for x in x0..x1.min(cols) {
                         let c = &mut buf[(x, y)];
                         c.set_bg(lift(c.bg));
                     }
                 }
+                // `--hover` over a rail row (not a B card): one tooltip line with the full
+                // name, workspace and spend
+                if ui.rail != 1 {
+                    if let Some((hy, _, _)) = hovered {
+                        let act = hits.iter().find(|h| Some((h.0, h.1, h.2)) == hovered).map(|h| h.3);
+                        if let Some(Act::Rail(i)) = act {
+                            if let Some(s) = sess.get(i) {
+                                let tip = format!(" {} · {} · {} ", s.name, s.ws, s.spend);
+                                let tw = tip.width().min(cw).max(1);
+                                paint(buf, rail_w + 1, hy, tw as u16, &Row { spans: tint(vec![sp(tip, Style::new())], BI), bg: Some(BI), ..Default::default() });
+                            }
+                        }
+                    }
+                }
+                // compact hides the name behind truncation and drops the workspace and
+                // thinking level: hovering a card shows its full identity in a dim footer
+                // at the rail's bottom row, running over the conversation like the A
+                // tooltip when it needs the room (`--hover` only, like the brightening)
+                if ui.rail == 1 && (ui.density == 3) && rail_w > 1 {
+                    if let Some(i) = hover_card {
+                        if let Some(s) = sess.get(i) {
+                            let tip = format!(" {} · {} · {} · {} ", s.name, s.ws, s.model, s.spend);
+                            let tw = tip.width().min(rail_w as usize + cw).max(1);
+                            paint(buf, 0, rows - 1, tw as u16, &Row { spans: tint(vec![sp(cut(&tip, tw), dim())], BI), bg: Some(BI), ..Default::default() });
+                        }
+                    }
+                }
+                // a resize drag's live share, as a dim pill over the conversation's bottom edge
+                if let Some(lab) = &drag_lab {
+                    if view_h > 0 {
+                        let dw = lab.width() as u16 + 2;
+                        let dy = if start < max_top && vrows.is_none() { (view_h as u16).saturating_sub(2) } else { view_h as u16 - 1 };
+                        let dx = rail_w + 1 + (cw as u16).saturating_sub(dw) / 2;
+                        buf.set_string(dx, dy, "▐", fg(SEL));
+                        buf.set_string(dx + 1, dy, lab, dim().bg(SEL));
+                        buf.set_string(dx + dw - 1, dy, "▌", fg(SEL));
+                    }
+                }
             })?;
+            rail_lay = (rrows.len(), rows as usize, rmap);
             let frame_buf = (links_at != (conv_gen, start, ui.ctx_view, ui.search.is_some()) || a.audit).then(|| completed.buffer.clone());
             if a.audit && window.is_some() {
                 let cur = frame_buf.clone().unwrap();
@@ -3086,7 +3947,7 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                 let _ = writeln!(l, "{:>9} event  {e:?}", "");
             }
         }
-        let (conv_w, cols) = geom;
+        let (conv_w, cols, rail_w, show_tabs, panel_w) = geom;
         let (start, top_pad, shown, view_h, max_top) = lay;
         // only what changes the fold or the rows throws the caches away; scrolling and selecting do not
         let mut changed = false;
@@ -3097,7 +3958,7 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                 return None;
             }
             let r = start + (y as usize).saturating_sub(top_pad).min(shown - 1);
-            Some((r, (x as usize).saturating_sub(1)))
+            Some((r, (x as usize).saturating_sub((rail_w + 1) as usize)))
         };
         let ts = vnow;
         for ev in evs {
@@ -3159,6 +4020,54 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                             s.jump = true;
                         }
                         continue;
+                    }
+                    // the rail: function keys do not reach every shell, so the designs and
+                    // densities switch by clicking the chips in the rail's bottom label.
+                    // ⌥N jumps to a session, ⌥A to the oldest waiting one, ⌥R toggles the
+                    // rail shown/hidden. Alt+digit arrives with alt set both as legacy
+                    // ESC-prefix and kitty `CSI 49;3u`; ⌥A and ⌥R arrive as "å" and "®"
+                    // on macOS where Option is not Alt, like ⌥X arrives as "≈".
+                    if k == Key::Char('å') && !m.alt {
+                        let sess = live_sessions(f, &ui, vnow);
+                        if let Some(i) = sess.iter().position(|s| s.st == SState::NeedsInput) {
+                            ui.screen = i;
+                            rail_ensure(&mut ui, &rail_lay, i);
+                        }
+                        continue;
+                    }
+                    if k == Key::Char('®') && !m.alt {
+                        ui.rail_off = !ui.rail_off;
+                        panel_cache = None;
+                        continue;
+                    }
+                    if m.alt {
+                        if let Key::Char(c) = k {
+                            if c == 'a' || c == 'A' {
+                                let sess = live_sessions(f, &ui, vnow);
+                                if let Some(i) = sess.iter().position(|s| s.st == SState::NeedsInput) {
+                                    ui.screen = i;
+                                    rail_ensure(&mut ui, &rail_lay, i);
+                                }
+                                continue;
+                            }
+                            if c == 'r' || c == 'R' {
+                                ui.rail_off = !ui.rail_off;
+                                panel_cache = None;
+                                continue;
+                            }
+                            if let Some(d) = c.to_digit(10) {
+                                if (1..=9).contains(&d) {
+                                    let sess = live_sessions(f, &ui, vnow);
+                                    let shown: Vec<usize> = rail_seq(&sess, ui.rail).into_iter().filter(|&i| !ui.dismissed.contains(&i) && (ui.rail == 1 || ui.show_all || sess[i].project == "fiber")).collect();
+                                    // numbers are stable per session, so ⌥N maps the number to its index
+                                    if let Some(&i) = shown.iter().find(|&&i| i + 1 == d as usize) {
+                                        ui.screen = i;
+                                        rail_ensure(&mut ui, &rail_lay, i);
+                                    }
+                                    continue;
+                                }
+                            }
+                        }
                     }
                     if let Some(s) = ui.search.as_mut() {
                         let n = s.hits.len().max(1);
@@ -3335,27 +4244,66 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                     }
                 }
                 Ev::Mouse(kind, x, y, _) => {
-                    let over_panel = x >= conv_w && conv_w < cols && panel_cache.is_some();
+                    let over_panel = x >= rail_w + conv_w && rail_w + conv_w < cols && panel_cache.is_some();
+                    let over_rail = rail_w > 0 && ui.rail != 2 && x < rail_w;
                     let in_conv = !over_panel && (y as usize) < view_h;
-                    let in_sbox = ui.search.is_some() && y < 3 && (x as usize) + SBOX_W + 2 > conv_w as usize;
+                    let in_sbox = ui.search.is_some() && y < 3 && (x as usize) + SBOX_W + 2 > (rail_w + conv_w) as usize;
+                    // the resize handles: the rail's right edge and the panel's left edge,
+                    // the one-column gaps beside them; hidden, the rail's 1-column handle
+                    // at the screen's left edge
+                    let rail_hid = ui.rail != 2 && rail_w == 1;
+                    let rail_edge = ui.rail != 2 && rail_w > 0 && x == if rail_hid { 0 } else { rail_w };
+                    let panel_edge = panel_w > 0 && x == rail_w + conv_w;
                     let wl = a.wheel as isize;
                     match kind {
                         Mouse::WheelUp if over_panel => pscroll = pscroll.saturating_sub(a.wheel),
                         Mouse::WheelDown if over_panel => pscroll += a.wheel,
+                        Mouse::WheelUp if over_rail => ui.rail_top = ui.rail_top.saturating_sub(a.wheel),
+                        Mouse::WheelDown if over_rail => ui.rail_top = (ui.rail_top + a.wheel).min(rail_lay.0.saturating_sub(rail_lay.1)),
                         Mouse::WheelUp if ui.ctx_view => ui.vscroll = ui.vscroll.saturating_sub(a.wheel),
                         Mouse::WheelDown if ui.ctx_view => ui.vscroll += a.wheel,
                         Mouse::WheelUp => top = scroll_by(top, max_top, -wl),
                         Mouse::WheelDown => top = scroll_by(top, max_top, wl),
-                        Mouse::Down if in_conv && !ui.ctx_view && !in_sbox => {
+                        Mouse::Down if rail_edge || panel_edge => {
+                            ui.resize = Some(if rail_edge { 0 } else { 1 });
+                            ui.sel = None;
+                        }
+                        Mouse::Down if in_conv && !ui.ctx_view && !in_sbox && !(show_tabs && y == 0) => {
                             ui.sel = at(x, y).map(|p| Sel { a: p, b: p, moved: false, down: true });
                         }
                         Mouse::Down => {
                             ui.sel = None;
                             click = hits.iter().find(|(hy, x0, x1, _)| *hy == y && x >= *x0 && x < *x1).map(|h| h.3);
                         }
+                        Mouse::Drag if ui.resize.is_some() => {
+                            // a resize drag: the edge column is the new width, as a share that
+                            // survives terminal resizes. The conversation keeps CONV_MIN; the
+                            // drag stops there. Dragged below its floor the rail shuts (the
+                            // handle stays); dragged back out it restores at the dragged width.
+                            if ui.resize == Some(0) {
+                                if rail_hid {
+                                    if x >= 22 {
+                                        ui.rail_off = false;
+                                        ui.rail_share = x as f64 * 100.0 / cols.max(1) as f64;
+                                    }
+                                } else if (x as u16) < 22 {
+                                    ui.rail_off = true;
+                                } else {
+                                    let maxw = cols.saturating_sub(CONV_MIN + panel_w).max(22);
+                                    let w = (x as u16).clamp(22, 48).min(maxw);
+                                    ui.rail_share = w as f64 * 100.0 / cols.max(1) as f64;
+                                }
+                            } else {
+                                let maxw = cols.saturating_sub(CONV_MIN + rail_w).max(30);
+                                let w = (cols.saturating_sub(x)).clamp(30, 60).min(maxw);
+                                ui.panel_share = w as f64 * 100.0 / cols.max(1) as f64;
+                            }
+                            conv_cache = None;
+                            panel_cache = None;
+                        }
                         Mouse::Drag => {
                             if let Some(s) = ui.sel.as_mut().filter(|s| s.down) {
-                                if let Some(p) = at(x.min(conv_w.saturating_sub(2)), y) {
+                                if let Some(p) = at(x.min(rail_w + conv_w.saturating_sub(2)), y) {
                                     s.b = p;
                                     s.moved |= s.b != s.a;
                                 }
@@ -3364,6 +4312,7 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                         }
                         Mouse::Up => {
                             ui.drag_edge = 0;
+                            ui.resize = None;
                             if let Some(s) = ui.sel.as_mut().filter(|s| s.down) {
                                 s.down = false;
                                 if !s.moved {
@@ -3427,6 +4376,35 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                 }
                 Act::Notice(i) => f.notices[i].2 = true,
                 Act::End => top = None,
+                Act::Rail(i) => {
+                    // clicking a crashed card resumes it: a would-send row, then WORKING
+                    let live = live_sessions(f, &ui, ts);
+                    if live.get(i).is_some_and(|s| s.st == SState::Crashed) {
+                        send(&mut ui, &mut cmds, "resume", Some(live[i].name), json!({}));
+                        ui.resumed.insert(i);
+                    }
+                    ui.screen = i;
+                    rail_ensure(&mut ui, &rail_lay, i);
+                }
+                Act::RailAll => ui.show_all = !ui.show_all,
+                Act::RailVariant(v) => {
+                    ui.rail = v.min(2);
+                }
+                Act::RailDensity(d) => {
+                    ui.density = d.min(3);
+                }
+                Act::RailToggle => {
+                    ui.rail_off = !ui.rail_off;
+                }
+                Act::RailDismiss(i) => {
+                    ui.dismissed.insert(i);
+                }
+                Act::RailNew(p) => {
+                    say(&mut ui, format!("→ would start a session in {p}"));
+                }
+                Act::RailDone(p) => {
+                    say(&mut ui, format!("→ would open the session list for {p}"));
+                }
                 Act::Context => {
                     ui.search = None;
                     ui.ctx_view = true;
@@ -3474,11 +4452,25 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
             finish_turn(f, ts);
             changed = true;
         }
+        // the resize pointer (OSC 22): col-resize over either handle or while dragging,
+        // default otherwise; written only when it changes, so idle frames stay silent
+        let rail_hx = if ui.rail != 2 && rail_w == 1 { 0 } else { rail_w };
+        let want_col = ui.resize.is_some()
+            || ptr.is_some_and(|(x, _)| (rail_w > 0 && ui.rail != 2 && x == rail_hx) || (panel_w > 0 && x == rail_w + conv_w));
+        if want_col != ptr_col_resize {
+            ptr_col_resize = want_col;
+            let be = term.backend_mut();
+            be.write_all(if want_col { b"\x1b]22;col-resize\x1b\\".as_slice() } else { b"\x1b]22;default\x1b\\".as_slice() })?;
+            be.flush()?;
+        }
         // a key or click that reached the panels or the input box may change the fold
         if changed {
             conv_cache = None;
             panel_cache = None;
         }
+    }
+    if ptr_col_resize {
+        term.backend_mut().write_all(b"\x1b]22;default\x1b\\")?;
     }
     if pushed {
         term.backend_mut().write_all(b"\x1b[<u")?;

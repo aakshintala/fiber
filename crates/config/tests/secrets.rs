@@ -8,8 +8,8 @@ use std::fs;
 
 use common::{Setup, mode};
 use config::{
-    CredentialFile, Secret, credential_labels, delete_credential, delete_credential_held,
-    read_credential, read_secret, store_credential, store_secret,
+    CredentialFile, CredentialSource, Secret, credential_labels, delete_credential,
+    delete_credential_held, read_credential, read_secret, store_credential, store_secret,
 };
 use contract::ErrorCode;
 
@@ -83,6 +83,14 @@ fn a_secret_never_prints() {
     let secret = Secret::new(VALUE.into());
     assert_eq!(format!("{secret:?}"), "Secret(redacted)");
     assert_eq!(format!("{:?}", Some(&secret)), "Some(Secret(redacted))");
+}
+
+#[test]
+fn a_command_source_debug_prints_no_argument() {
+    let source = CredentialSource::Command(vec!["echo".into(), VALUE.into()]);
+    let printed = format!("{source:?}");
+    assert!(printed.contains("echo"), "{printed}");
+    assert!(!printed.contains(VALUE), "{printed}");
 }
 
 #[test]

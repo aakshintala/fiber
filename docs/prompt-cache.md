@@ -190,6 +190,14 @@ stops and no turn fails. It runs no `before_model_call` hook: the hooks
 already ran on that request, and a hook that changed it would make the
 refresh miss.
 
+A refresh that fails, from the network or the provider, is not retried.
+Warming stops, the idle clock starts, and an ephemeral `notice` carries the
+error code. A refresh buys a saving that is not certain, so a retry would
+spend more on a cache the failure may already have let expire. A prompt that
+arrives while a refresh is in flight waits for the refresh to return, then
+starts its turn. The wait is one request's latency, and cancelling the refresh
+might still be billed.
+
 Warming stops at `cache.warm_cap` after the last turn, whether or not a client
 is connected. A connected client is not a signal: a terminal left open is
 connected all weekend (`docs/invocation.md`, "Lifecycle"). While warming, the

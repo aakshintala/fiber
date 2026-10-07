@@ -11,9 +11,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
-use contract::clock::{Clock, Wake};
+use contract::clock::{Clock, Wake, wall_ms};
 use contract::emit::Emit;
 use contract::events::{Clients, CommandInfo, Event, ToolInfo};
 use contract::inbox::{Ack, Delivery, Message};
@@ -781,14 +781,6 @@ fn print(mut watcher: Watcher, mut out: Box<dyn Write + Send>) {
     }
 }
 
-/// Milliseconds since the epoch, for an acknowledgement's `ts`.
-pub(crate) fn now_ms(clock: &dyn Clock) -> u64 {
-    clock
-        .wall()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
-}
-
 /// An envelope doors builds itself: an acknowledgement, or a control line
 /// that never leaves the process.
 pub(crate) fn envelope(
@@ -799,7 +791,7 @@ pub(crate) fn envelope(
     contract::Envelope {
         kind: event.kind().to_owned(),
         session_id: session.clone(),
-        ts: now_ms(clock),
+        ts: wall_ms(clock.wall()),
         schema_version: SCHEMA_VERSION,
         turn_id: None,
         action_id: None,

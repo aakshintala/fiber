@@ -969,6 +969,7 @@ version = "0.0.0"
 dependencies = [
  "contract",
  "fakes",
+ "log 0.0.0",
  "serde",
  "serde_json",
  "signal-hook",
@@ -2713,9 +2714,11 @@ dependencies = [
 name = "tui"
 version = "0.0.0"
 dependencies = [
+ "base64 0.23.1",
  "contract",
  "fakes",
  "insta",
+ "pulldown-cmark",
  "ratatui",
  "rustix",
  "serde_json",

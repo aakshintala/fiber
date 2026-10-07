@@ -22,6 +22,7 @@ pub mod thinking;
 
 pub use thinking::ThinkingLevel;
 pub mod rules;
+mod secret;
 pub mod shapes;
 pub mod signing;
 pub mod tool;
@@ -33,3 +34,4 @@ pub use ids::{
 };
 pub use pre_session::{PreSessionExit, PreSessionPayload};
 pub use rules::{Rule, RuleDecision, Rules, RulesError, StandingRules};
+pub use secret::Secret;

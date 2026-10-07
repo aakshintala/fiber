@@ -233,6 +233,50 @@ fn a_short_name_installs_the_first_party_extension() {
     );
     assert_eq!(install(&setup, &repos, "muse").unwrap(), [name]);
     assert_eq!(extensions::full_name("muse"), name);
+    assert_eq!(dirs(&setup), ["muse"]);
+}
+
+#[test]
+fn memory_lives_under_its_short_name_and_a_third_party_under_its_slug() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let memory = "github.com/aakshintala/fiber/extensions/memory";
+    let lint = "github.com/acme/lint";
+    repos.tag(
+        "github.com/aakshintala/fiber",
+        "extensions/memory",
+        "v0.1.0",
+        &manifest(memory),
+        &[],
+    );
+    repos.tag(lint, "", "v1.0.0", &manifest(lint), &[]);
+    assert_eq!(install(&setup, &repos, "memory").unwrap(), [memory]);
+    assert_eq!(install(&setup, &repos, lint).unwrap(), [lint]);
+    assert_eq!(dirs(&setup), ["github.com-acme-lint", "memory"]);
+    let home = setup.home();
+    let mine = [
+        home.join("data/memory/index.md"),
+        home.join("projects/p/data/memory/index.md"),
+        home.join("config/memory.json"),
+        home.join("projects/p/config/memory.json"),
+    ];
+    let theirs = [
+        home.join("data/github.com-acme-lint/index"),
+        home.join("config/github.com-acme-lint.json"),
+    ];
+    for file in mine.iter().chain(&theirs) {
+        write(file, "x");
+    }
+    removal(&home, "memory", &*fakes::clock::FakeClock::new())
+        .unwrap()
+        .commit()
+        .unwrap();
+    assert!(mine.iter().all(|f| !f.exists()));
+    assert!(!home.join("extensions/memory").exists());
+    assert!(!home.join("data/memory").exists());
+    assert!(!home.join("projects/p/data/memory").exists());
+    assert!(theirs.iter().all(|f| f.exists()));
+    assert_eq!(dirs(&setup), ["github.com-acme-lint"]);
 }
 
 #[test]
@@ -525,7 +569,7 @@ fn an_update_moves_to_the_newest_tag_and_shows_what_changed() {
         setup
             .home()
             .join("extensions")
-            .join(LIB.replace('/', "-"))
+            .join(config::dir_name(LIB))
             .join(".fiber.json"),
     )
     .unwrap();
@@ -1206,9 +1250,7 @@ fn a_damaged_messages_name_the_extension_and_the_fix() {
     let name = "github.com/aakshintala/fiber/providers/opencode";
     let source = setup.source("broken", &manifest(name), &[]);
     common::install(&setup.home(), &source, FIBER).unwrap();
-    let dir = setup
-        .home()
-        .join("extensions/github.com-aakshintala-fiber-providers-opencode");
+    let dir = setup.home().join("extensions/opencode");
     fs::remove_file(dir.join(".fiber.json")).unwrap();
     let listing = list(&setup.home(), &*fakes::clock::FakeClock::new()).unwrap();
     assert_eq!(listing.damaged.len(), 1);
@@ -1313,9 +1355,7 @@ fn install_or_update_of_a_damaged_name_fails_as_damaged() {
         let name = "github.com/aakshintala/fiber/providers/opencode";
         let source = setup.source("broken", &manifest(name), &[]);
         common::install(&setup.home(), &source, FIBER).unwrap();
-        let dir = setup
-            .home()
-            .join("extensions/github.com-aakshintala-fiber-providers-opencode");
+        let dir = setup.home().join("extensions/opencode");
         if damaged_record {
             fs::remove_file(dir.join(".fiber.json")).unwrap();
         } else {
@@ -1377,7 +1417,7 @@ fn a_damaged_extension_removes_by_its_displayed_name() {
     for invalid in [false, true] {
         let setup = Setup::new();
         let name = "github.com/aakshintala/fiber/providers/opencode";
-        let slug = "github.com-aakshintala-fiber-providers-opencode";
+        let slug = "opencode";
         let healthy = setup.source("healthy", &manifest("example.com/acme/healthy"), &[]);
         let broken = setup.source("broken", &manifest(name), &[]);
         common::install(&setup.home(), &healthy, FIBER).unwrap();

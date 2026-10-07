@@ -182,6 +182,32 @@ fn no_key_anywhere_is_credential_missing_and_says_why() {
 }
 
 #[test]
+fn a_failing_command_is_named_by_its_program_alone() {
+    let setup = Setup::new();
+    let config = setup.load(&[]).unwrap();
+    for (argv, why) in [
+        (
+            &["false", "sk-in-argument"][..],
+            "`false` failed (exit status: 1)",
+        ),
+        (
+            &["printf", "%.0s", "sk-in-argument"],
+            "`printf` printed no key",
+        ),
+        (
+            &["/nonexistent/fiber-test-program", "sk-in-argument"],
+            "`/nonexistent/fiber-test-program` could not be started",
+        ),
+    ] {
+        let message = default_key(&config, &acme(command(argv)))
+            .unwrap_err()
+            .to_string();
+        assert!(message.contains(why), "{message}");
+        assert!(!message.contains("sk-in-argument"), "{message}");
+    }
+}
+
+#[test]
 fn one_stored_credential_serves_both_opencode_providers() {
     let providers = opencode_providers();
     let go = named(&providers, "opencode-go");

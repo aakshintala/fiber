@@ -590,3 +590,17 @@ fn the_first_failing_required_server_in_spec_order_wins() {
     assert_eq!(failure.server, "first");
     stop_within(started.servers);
 }
+
+#[test]
+fn a_spec_debug_prints_no_env_value() {
+    let setup = Setup::new();
+    let planted = "ghp_planted4c1e9b";
+    let spec = ServerSpec {
+        env: BTreeMap::from([("GITHUB_TOKEN".to_owned(), planted.to_owned())]),
+        ..setup.spec("github")
+    };
+    let printed = format!("{spec:?}");
+    assert!(printed.contains("github"), "{printed}");
+    assert!(printed.contains("GITHUB_TOKEN"), "{printed}");
+    assert!(!printed.contains(planted), "{printed}");
+}

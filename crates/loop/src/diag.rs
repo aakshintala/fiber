@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use contract::SessionId;
-use contract::clock::Clock;
+use contract::clock::{Clock, wall_ms};
 
 /// Writes `host.log` lines to the session's diagnostic file. One writer
 /// per file, owned by the session's loop.
@@ -55,14 +55,6 @@ impl SessionDiag {
 
 fn quoted(value: &str) -> String {
     serde_json::to_string(value).unwrap_or_default()
-}
-
-fn wall_ms(wall: std::time::SystemTime) -> u64 {
-    wall.duration_since(std::time::SystemTime::UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or(0)
-        .try_into()
-        .unwrap_or(u64::MAX)
 }
 
 fn append(log: &Path, bytes: &[u8]) {

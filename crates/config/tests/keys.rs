@@ -16,6 +16,7 @@ const BOOL: &str = "true or false";
 const COUNT: &str = "a whole number of zero or more";
 const NUMBER: &str = "a number";
 const LIST: &str = "a list of strings";
+const WARM_CAP: &str = "a whole number less than 12";
 
 /// (path, a good value, a wrong value, what the error says it must be,
 /// whether a repository may set it)
@@ -100,6 +101,14 @@ fn rows() -> Vec<(&'static [&'static str], Value, Value, &'static str, bool)> {
             "one of \"5m\", \"1h\"",
             true,
         ),
+        (
+            &["cache", "warm_idle"],
+            json!(true),
+            json!("yes"),
+            BOOL,
+            true,
+        ),
+        (&["cache", "warm_cap"], json!(11), json!(12), WARM_CAP, true),
         (
             &["model_lists", "refresh_after"],
             json!("7d"),
@@ -607,7 +616,7 @@ fn with_no_files_the_configuration_is_the_built_in_defaults() {
     assert_eq!(
         config.merged(None),
         json!({
-            "cache": {"lifetime": "1h"},
+            "cache": {"lifetime": "1h", "warm_cap": 2, "warm_idle": false},
             "handoff": {"enabled": true, "nudge": true, "tokens": 400000, "window_fraction": 0.7},
             "model_lists": {"refresh_after": "24h"},
             "quota": {"notice_at": 80},
@@ -743,4 +752,41 @@ fn refresh_after_defaults_to_a_day_and_reads_ninety_minutes() {
     );
     let config = setup.load(&[]).unwrap();
     assert_eq!(config::refresh_after(&config), Duration::from_secs(5400));
+}
+
+#[test]
+fn warm_cap_refuses_twelve_or_more_and_anything_not_a_whole_number() {
+    for good in [0, 2, 11] {
+        let setup = Setup::new();
+        setup.write(
+            &setup.global(),
+            &nest(&["cache", "warm_cap"], json!(good)).to_string(),
+        );
+        let config = setup.load(&[]).unwrap();
+        assert_eq!(config.get("cache.warm_cap", None).unwrap().0, json!(good));
+    }
+    for bad in [json!(12), json!(100), json!(2.5), json!(-1), json!("2")] {
+        let setup = Setup::new();
+        setup.write(
+            &setup.global(),
+            &nest(&["cache", "warm_cap"], bad.clone()).to_string(),
+        );
+        let e = setup.load(&[]).unwrap_err();
+        assert_eq!(e.code(), ErrorCode::ConfigInvalid, "{bad}");
+        assert!(e.to_string().contains(WARM_CAP), "{e}");
+    }
+}
+
+#[test]
+fn warming_is_off_by_default_with_a_cap_of_two_lifetimes() {
+    let setup = Setup::new();
+    let config = setup.load(&[]).unwrap();
+    assert_eq!(
+        config.get("cache.warm_idle", None),
+        Some((json!(false), Source::Default))
+    );
+    assert_eq!(
+        config.get("cache.warm_cap", None),
+        Some((json!(2), Source::Default))
+    );
 }

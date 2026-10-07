@@ -1,6 +1,6 @@
 //! Classifies a shell command (`docs/tools.md`, "Shell", "Effects").
 
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
 use contract::shapes::{DeclaredEffects, Effect};
 use contract::tool::Effects;
@@ -167,7 +167,28 @@ fn part_outcome(part: &Part, workdir: &Path) -> Outcome {
         };
         paths.push(path);
     }
+    if paths.iter().any(|path| under_proc(path)) {
+        return Outcome::Executes;
+    }
     Outcome::Reads(paths)
+}
+
+/// Whether `path`, with `.` and `..` taken as written, is `/proc` or under
+/// it, where `/proc/<pid>/environ` holds every variable a process was given.
+fn under_proc(path: &str) -> bool {
+    let mut normal = PathBuf::new();
+    for component in Path::new(path).components() {
+        match component {
+            Component::ParentDir => {
+                normal.pop();
+            }
+            Component::CurDir => {}
+            kept @ (Component::Prefix(_) | Component::RootDir | Component::Normal(_)) => {
+                normal.push(kept);
+            }
+        }
+    }
+    normal.starts_with("/proc")
 }
 
 enum WordAt {

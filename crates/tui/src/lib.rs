@@ -8,22 +8,30 @@
 mod app;
 mod approvals;
 mod bindings;
+mod clipboard;
+mod editor;
 mod files;
 mod format;
+mod highlight;
+mod input;
 mod keymap;
 mod keys;
 mod link;
+mod markdown;
+mod mouse;
+mod shell;
 mod slash;
 mod term;
 mod turn;
 mod view;
 
 use std::fs::File;
-use std::io;
+use std::io::{self, PipeReader, PipeWriter};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread;
 
 use contract::clock::Clock;
@@ -32,12 +40,13 @@ use ratatui::backend::{Backend, ClearType, CrosstermBackend, WindowSize};
 use ratatui::buffer::{Buffer, Cell};
 use ratatui::layout::{Position, Rect, Size};
 use ratatui::{Terminal, TerminalOptions, Viewport};
-use signal_hook::consts::SIGWINCH;
+use signal_hook::consts::{SIGINT, SIGQUIT, SIGWINCH};
 use signal_hook::iterator::Signals;
 
 use crate::app::{App, Effect};
-use crate::keys::{Event, Parser, Reply};
+use crate::keys::{Button, Event, MouseKind, Parser, Reply};
 use crate::link::Line;
+use crate::mouse::{Pointer, Target};
 
 /// Connects to the hub, starting one when none runs: the stream and the
 /// `hub_hello` it spoke first.
@@ -72,21 +81,26 @@ pub(crate) enum Input {
     },
 }
 
-/// Runs the terminal on `tty`, starting sessions in `workspace`. Returns 0
-/// on quit and 1 when the terminal cannot be set up or drawn. The terminal
-/// is restored on every return.
+/// Runs the terminal on `tty`, starting sessions in `workspace`, whose
+/// project key (`docs/state.md`, "Projects") is `project`. `hover` is
+/// `tui.hover`: with it off, mouse mode 1003 is never sent and nothing is
+/// tinted under the pointer. Returns 0 on quit and 1 when the terminal
+/// cannot be set up or drawn. The terminal is restored on every return.
 pub fn run(
     tty: File,
     workspace: PathBuf,
+    project: String,
     connect: Connect,
     on_attach: OnAttach,
     clock: Arc<dyn Clock>,
+    hover: bool,
 ) -> i32 {
     // SIGWINCH is caught from before the size is read, so no resize is
     // missed; its thread starts after the first frame.
     let signals = Signals::new([SIGWINCH]).ok();
+    catch_interrupts();
     let _restore = term::Guard;
-    let Ok((width, height)) = term::setup(&tty) else {
+    let Ok((width, height)) = term::setup(&tty, hover) else {
         return 1;
     };
     let Ok(out) = tty.try_clone() else {
@@ -96,6 +110,7 @@ pub fn run(
         return 1;
     };
     let mut app = App::new(workspace);
+    app.set_project(project);
     app.set_size(width, height);
     let mut terminal = Loop {
         app,
@@ -108,17 +123,24 @@ pub fn run(
         wakeups: 0,
         files_out: None,
         search: None,
+        reader: None,
+        pointer: Pointer::default(),
+        hover,
+        var: Box::new(|name| std::env::var(name).ok()),
+        copy_command: clipboard::command(|name| std::env::var_os(name), clipboard::on_path)
+            .map(|argv| argv.into_iter().map(str::to_owned).collect()),
     };
     // The first frame waits on nothing: the queries are out, and nothing
     // reads the tty or the hub until it is drawn.
-    if terminal.screen.draw(&terminal.app).is_err() {
+    if terminal.screen.draw(&terminal.app, None).is_err() {
         return 1;
     }
     let (tx, rx) = mpsc::channel();
     terminal.files_out = Some(tx.clone());
-    if let Some(tty) = &terminal.tty {
-        spawn_input(tty, tx.clone());
-    }
+    terminal.reader = terminal
+        .tty
+        .as_ref()
+        .and_then(|tty| Reader::spawn(tty, tx.clone()));
     spawn_hub(connect, tx.clone());
     if let Some(signals) = signals {
         spawn_resize(signals, tx);
@@ -130,8 +152,23 @@ pub fn run(
     code
 }
 
-/// Restores the terminal [`run`] set up: leaves the alternate screen, shows
-/// the cursor and restores the saved terminal modes. Idempotent, takes no
+/// Catches SIGINT and SIGQUIT for the rest of the process's life, so `Ctrl+C`
+/// or `Ctrl+\` typed while the editor has the terminal in cooked mode ends
+/// only the editor. In raw mode the tty sends neither. Never unregistered:
+/// unregistering does not restore the default disposition. The editor,
+/// after `exec`, has the default one.
+fn catch_interrupts() {
+    let caught = Arc::new(AtomicBool::new(false));
+    for signal in [SIGINT, SIGQUIT] {
+        match signal_hook::flag::register(signal, Arc::clone(&caught)) {
+            Ok(_) | Err(_) => {}
+        }
+    }
+}
+
+/// Restores the terminal [`run`] set up: turns mouse reporting off, leaves
+/// the alternate screen, shows the cursor and restores the saved terminal
+/// modes. Idempotent, takes no
 /// lock, and does nothing when [`run`] never set the terminal up. The panic
 /// hook calls it first.
 pub fn restore() {
@@ -143,6 +180,61 @@ pub fn restore() {
 /// trimmed of trailing spaces. An unreadable line is an error naming its
 /// number. The `draw` jig prints it (`docs/testing.md`, "Jigs").
 pub fn draw(events: &str, width: u16, height: u16) -> Result<String, String> {
+    let app = fold(events, width, height)?;
+    let area = Rect::new(0, 0, width, height);
+    let mut buf = Buffer::empty(area);
+    view::render(&app, area, &mut buf, None);
+    Ok(view::text(&buf))
+}
+
+/// Folds `events` as [`draw`] does and puts the request the panel shows
+/// aside, so it waits on the badge, a click target. Then draws them at
+/// `width` by `height` through the loop's screen, and moves the pointer to
+/// each of `pointer` in turn, drawing after each as the loop does for a
+/// motion report. Returns the bytes each report wrote. The `hover` jig
+/// times it (`docs/tui.md`, "Mouse and hover").
+pub fn hover_frames(
+    events: &str,
+    width: u16,
+    height: u16,
+    pointer: &[(u16, u16)],
+) -> Result<Vec<usize>, String> {
+    let mut app = fold(events, width, height)?;
+    app.put_aside();
+    let written = Counter::default();
+    let mut screen = Screen::new(CrosstermBackend::new(written.clone()), width, height)
+        .map_err(|error| error.to_string())?;
+    screen.draw(&app, None).map_err(|error| error.to_string())?;
+    let mut bytes = Vec::with_capacity(pointer.len());
+    for at in pointer {
+        let before = written.0.get();
+        screen
+            .draw(&app, Some(*at))
+            .map_err(|error| error.to_string())?;
+        bytes.push(written.0.get().saturating_sub(before));
+    }
+    Ok(bytes)
+}
+
+/// Counts the bytes written through it.
+#[derive(Clone, Default)]
+struct Counter(std::rc::Rc<std::cell::Cell<usize>>);
+
+impl io::Write for Counter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0.set(self.0.get().saturating_add(bytes.len()));
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+/// An app at `width` by `height` with `events` folded, one envelope per
+/// line as one session's stream. An unreadable line is an error naming
+/// its number.
+fn fold(events: &str, width: u16, height: u16) -> Result<App, String> {
     let mut app = App::new(PathBuf::new());
     app.set_size(width, height);
     for (at, line) in events.lines().enumerate() {
@@ -156,17 +248,20 @@ pub fn draw(events: &str, width: u16, height: u16) -> Result<String, String> {
         }
         app.on_line(Line::Session(envelope));
     }
-    let area = Rect::new(0, 0, width, height);
-    let mut buf = Buffer::empty(area);
-    view::render(&app, area, &mut buf);
-    Ok(view::text(&buf))
+    Ok(app)
 }
 
-/// The screen: ratatui on a fixed viewport, and the last frame drawn.
+/// One frame: the cells, and where the cursor shows, if anywhere.
+type Frame = (Buffer, Option<Position>);
+
+/// The screen: ratatui on a fixed viewport, and the last frame drawn with
+/// its click targets.
 struct Screen<B: Backend> {
     terminal: Terminal<TtySized<B>>,
     area: Rect,
-    last: Option<Buffer>,
+    last: Option<Frame>,
+    /// The click targets of the last frame drawn: what a click hits.
+    targets: Vec<Target>,
 }
 
 impl<B: Backend> Screen<B> {
@@ -185,19 +280,27 @@ impl<B: Backend> Screen<B> {
             terminal,
             area,
             last: None,
+            targets: Vec::new(),
         })
     }
 
-    /// Draws `app`. A frame equal to the last one writes nothing; otherwise
-    /// only the cells that changed are written.
-    fn draw(&mut self, app: &App) -> Result<(), B::Error> {
-        let mut next = Buffer::empty(self.area);
-        view::render(app, self.area, &mut next);
+    /// Draws `app`, the cursor shown at the draft's cursor or hidden,
+    /// tinting the click target under `pointer`, and keeps the frame's
+    /// targets. A frame whose cells and cursor equal the last one's writes
+    /// nothing; otherwise only the cells that changed are written.
+    fn draw(&mut self, app: &App, pointer: Option<(u16, u16)>) -> Result<(), B::Error> {
+        let mut cells = Buffer::empty(self.area);
+        self.targets = view::render(app, self.area, &mut cells, pointer);
+        let next = (cells, view::cursor(app, self.area));
         if self.last.as_ref() == Some(&next) {
             return Ok(());
         }
-        self.terminal
-            .draw(|frame| frame.buffer_mut().clone_from(&next))?;
+        self.terminal.draw(|frame| {
+            frame.buffer_mut().clone_from(&next.0);
+            if let Some(cursor) = next.1 {
+                frame.set_cursor_position(cursor);
+            }
+        })?;
         self.last = Some(next);
         Ok(())
     }
@@ -271,6 +374,9 @@ impl<B: Backend> Backend for TtySized<B> {
     }
 }
 
+/// Reads an environment variable by name.
+type Var = Box<dyn Fn(&str) -> Option<String> + Send>;
+
 /// The loop's state.
 struct Loop<B: Backend> {
     app: App,
@@ -288,6 +394,16 @@ struct Loop<B: Backend> {
     files_out: Option<Sender<Input>>,
     /// The `@` panel's search worker, while the panel is open.
     search: Option<files::Search>,
+    /// The tty's reader, paused while the editor has the terminal.
+    reader: Option<Reader>,
+    /// The pointer's last cell and a pending click.
+    pointer: Pointer,
+    /// `tui.hover`: whether the pointer's cell is recorded and tinted.
+    hover: bool,
+    /// Reads an environment variable: `$VISUAL` and `$EDITOR` for Ctrl+G.
+    var: Var,
+    /// The system clipboard command a copy is piped to, beside OSC 52.
+    copy_command: Option<Vec<String>>,
 }
 
 impl<B: Backend> Loop<B> {
@@ -309,20 +425,44 @@ impl<B: Backend> Loop<B> {
         match input {
             Input::Bytes(bytes) => {
                 for event in self.parser.feed(&bytes) {
-                    match event {
-                        Event::Key(key) => match self.app.on_key(key, self.clock.now()) {
-                            Effect::None => {}
-                            Effect::Send(lines) => self.send(&lines),
-                            Effect::Quit => return Some(0),
-                            Effect::ListFiles => self.list_files(),
-                            Effect::Search { generation, query } => {
-                                if let Some(search) = &self.search {
-                                    search.search(generation, query);
-                                }
+                    let effect = match event {
+                        Event::Key(key) => self.app.on_key(key, self.clock.now()),
+                        Event::Edit(edit) => self.app.on_edit(edit),
+                        Event::Mouse(mouse) => {
+                            // Every left click, on a target or not, clears
+                            // "Copied"; a click on `copy` sets it again.
+                            if mouse.kind == MouseKind::Press(Button::Left) {
+                                self.app.clear_copied();
                             }
-                        },
-                        Event::Reply(Reply::KittyFlags(_)) => self.app.set_kitty(),
-                        Event::Reply(Reply::DeviceAttributes) => {}
+                            let clicked =
+                                self.pointer
+                                    .on_mouse(&mouse, &self.screen.targets, self.hover);
+                            clicked.map_or(Effect::None, |target| self.app.on_click(target))
+                        }
+                        Event::Reply(Reply::KittyFlags(_)) => {
+                            self.kitty();
+                            Effect::None
+                        }
+                        Event::Reply(Reply::DeviceAttributes) => Effect::None,
+                    };
+                    match effect {
+                        Effect::None => {}
+                        Effect::Copy(text) => {
+                            clipboard::copy(self.tty.as_ref(), self.copy_command.as_deref(), text);
+                        }
+                        Effect::Send(lines) => self.send(&lines),
+                        Effect::Quit => return Some(0),
+                        Effect::ListFiles => self.list_files(),
+                        Effect::Search { generation, query } => {
+                            if let Some(search) = &self.search {
+                                search.search(generation, query);
+                            }
+                        }
+                        Effect::Editor { target, text } => {
+                            if let Some(code) = self.open_editor(target, &text) {
+                                return Some(code);
+                            }
+                        }
                     }
                 }
             }
@@ -366,10 +506,25 @@ impl<B: Backend> Loop<B> {
         if !self.app.files_open() {
             self.search = None;
         }
-        if self.screen.draw(&self.app).is_err() {
+        if self.screen.draw(&self.app, self.pointer.at).is_err() {
             return Some(1);
         }
         None
+    }
+
+    /// Kitty's flags reply: the first pushes the flags the bindings need
+    /// (`docs/tui.md`, "Keys", "Rules"). A failed write leaves the legacy
+    /// keys, which every binding also has.
+    fn kitty(&mut self) {
+        if self.app.kitty() {
+            return;
+        }
+        self.app.set_kitty();
+        if let Some(mut tty) = self.tty.as_ref()
+            && io::Write::write_all(&mut tty, term::KITTY_PUSH).is_ok()
+        {
+            self.parser.set_kitty();
+        }
     }
 
     /// Starts the `@` panel's search worker on a listing of the workspace,
@@ -400,6 +555,49 @@ impl<B: Backend> Loop<B> {
         }
     }
 
+    /// Ctrl+G: opens `text` in the editor `$VISUAL` or `$EDITOR` names,
+    /// with the terminal handed over, and gives the app what it returned.
+    /// `Some(1)` when the terminal cannot be taken back.
+    fn open_editor(&mut self, target: editor::Target, text: &str) -> Option<i32> {
+        let Some(command) = editor::command(&self.var) else {
+            self.app
+                .editor_returned(target, Err(editor::NO_EDITOR.to_owned()));
+            return None;
+        };
+        let mut result = Err(String::new());
+        let code = self.hand_over(|| result = editor::run(&command, text));
+        if code.is_none() {
+            self.app.editor_returned(target, result);
+        }
+        code
+    }
+
+    /// Hands the terminal to `program`, run in the foreground on this
+    /// thread: the reader paused, the terminal restored, then both taken
+    /// back and the whole screen repainted at the size read again. `Some(1)`
+    /// when the terminal cannot be taken back.
+    fn hand_over(&mut self, program: impl FnOnce()) -> Option<i32> {
+        if let Some(reader) = &mut self.reader {
+            reader.pause();
+        }
+        // A failed suspend still runs the program: the terminal may be
+        // left part set up, and resume sets it up whole.
+        term::suspend().unwrap_or(());
+        program();
+        if term::resume(self.parser.kitty(), self.hover).is_err() {
+            return Some(1);
+        }
+        if let Some(reader) = &self.reader {
+            reader.resume();
+        }
+        let (width, height) = match self.tty.as_ref().map(term::size) {
+            Some(Ok(size)) => size,
+            Some(Err(_)) | None => (self.screen.area.width, self.screen.area.height),
+        };
+        self.app.set_size(width, height);
+        self.screen.resize(width, height).err().map(|_| 1)
+    }
+
     /// Shuts the hub stream down both ways and drops it. The reader thread,
     /// on its clone, then sees the end.
     fn hang_up(&mut self) {
@@ -409,28 +607,143 @@ impl<B: Backend> Loop<B> {
     }
 }
 
-/// Reads the tty on its own thread. Left blocked on quit; it ends with the
-/// process.
-fn spawn_input(tty: &File, tx: Sender<Input>) {
-    let Ok(mut tty) = tty.try_clone() else {
-        return;
-    };
-    let reader = thread::Builder::new()
-        .name("tui-input".to_owned())
-        .spawn(move || {
-            let mut buf = [0u8; 4096];
-            while let Ok(read) = io::Read::read(&mut tty, &mut buf) {
-                let Some(bytes) = buf.get(..read).filter(|bytes| !bytes.is_empty()) else {
-                    return;
-                };
-                if tx.send(Input::Bytes(bytes.to_vec())).is_err() {
-                    return;
-                }
-            }
-        });
-    // A thread that cannot start leaves the terminal unable to read keys;
-    // the hub thread may still report, and Ctrl+C from the shell ends it.
-    drop(reader);
+/// The input reader's state, shared with the loop under one mutex.
+#[derive(Debug, Default)]
+struct ReaderState {
+    /// The loop asked the reader to stop reading the tty.
+    paused: bool,
+    /// The reader stopped and waits for `paused` to clear.
+    parked: bool,
+    /// The reader returned, or never started: nothing to wait for.
+    ended: bool,
+}
+
+/// The pause handshake: the state and the condition variable each change
+/// is announced on.
+#[derive(Debug, Default)]
+struct Gate {
+    state: Mutex<ReaderState>,
+    changed: Condvar,
+}
+
+impl Gate {
+    /// The state, even after a thread panicked holding it.
+    fn lock(&self) -> MutexGuard<'_, ReaderState> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Waits on the condition variable while `blocked` holds.
+    fn wait_while<'a>(
+        &self,
+        guard: MutexGuard<'a, ReaderState>,
+        blocked: impl FnMut(&mut ReaderState) -> bool,
+    ) -> MutexGuard<'a, ReaderState> {
+        self.changed
+            .wait_while(guard, blocked)
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Records that the reader returned.
+    fn end(&self) {
+        self.lock().ended = true;
+        self.changed.notify_all();
+    }
+}
+
+/// Reads the tty on its own thread, polling it and a wake pipe, so the loop
+/// can stop it from reading while another program has the terminal. Left
+/// blocked on quit; it ends with the process.
+struct Reader {
+    gate: Arc<Gate>,
+    /// Written to wake the reader from its poll.
+    wake: PipeWriter,
+}
+
+impl Reader {
+    /// Starts reading `tty`, sending each read as [`Input::Bytes`]. `None`
+    /// when the reader cannot start: the terminal then reads no keys, the
+    /// hub thread may still report, and Ctrl+C from the shell ends it.
+    fn spawn(tty: &File, tx: Sender<Input>) -> Option<Self> {
+        let tty = tty.try_clone().ok()?;
+        let (woken, wake) = io::pipe().ok()?;
+        let gate = Arc::new(Gate::default());
+        let shared = Arc::clone(&gate);
+        thread::Builder::new()
+            .name("tui-input".to_owned())
+            .spawn(move || {
+                read_input(tty, &woken, &shared, &tx);
+                shared.end();
+            })
+            .ok()?;
+        Some(Self { gate, wake })
+    }
+
+    /// Stops the reader from reading the tty, returning once it has parked
+    /// or ended. Bytes it read before parking are already sent.
+    fn pause(&mut self) {
+        let mut state = self.gate.lock();
+        state.paused = true;
+        drop(state);
+        // A failed write leaves a reader blocked in poll; it parks on the
+        // next tty byte, or the loop waits for it until it does.
+        io::Write::write_all(&mut self.wake, &[0]).unwrap_or(());
+        let state = self.gate.lock();
+        drop(
+            self.gate
+                .wait_while(state, |state| !state.parked && !state.ended),
+        );
+    }
+
+    /// Lets a paused reader read the tty again.
+    fn resume(&self) {
+        self.gate.lock().paused = false;
+        self.gate.changed.notify_all();
+    }
+}
+
+/// The reader thread: polls `tty` and `woken`; after every wake drains the
+/// pipe, parks while paused, and otherwise reads the tty. Returns on the
+/// tty's end, a failed read or poll, or a closed channel.
+fn read_input(mut tty: File, mut woken: &PipeReader, gate: &Gate, tx: &Sender<Input>) {
+    use rustix::event::{PollFd, PollFlags, poll};
+    let mut buf = [0u8; 4096];
+    loop {
+        let mut fds = [
+            PollFd::new(&tty, PollFlags::IN),
+            PollFd::new(woken, PollFlags::IN),
+        ];
+        match poll(&mut fds, None) {
+            Ok(_) | Err(rustix::io::Errno::INTR) => {}
+            Err(_) => return,
+        }
+        let [tty_ready, wake_ready] = fds.map(|fd| !fd.revents().is_empty());
+        if wake_ready && io::Read::read(&mut woken, &mut buf).is_err() {
+            return;
+        }
+        let mut state = gate.lock();
+        if state.paused {
+            state.parked = true;
+            gate.changed.notify_all();
+            state = gate.wait_while(state, |state| state.paused);
+            state.parked = false;
+            continue;
+        }
+        drop(state);
+        if !tty_ready {
+            continue;
+        }
+        let Ok(read) = io::Read::read(&mut tty, &mut buf) else {
+            return;
+        };
+        let Some(bytes) = buf.get(..read).filter(|bytes| !bytes.is_empty()) else {
+            return;
+        };
+        if tx.send(Input::Bytes(bytes.to_vec())).is_err() {
+            return;
+        }
+    }
 }
 
 /// Connects to the hub on its own thread, after the first frame, then
@@ -473,3 +786,7 @@ fn spawn_resize(mut signals: Signals, tx: Sender<Input>) {
 #[cfg(test)]
 #[path = "lib_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "lib_mouse_tests.rs"]
+mod mouse_tests;

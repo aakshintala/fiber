@@ -13,6 +13,7 @@ mod error;
 mod extension;
 mod home;
 mod keys;
+mod names;
 mod path;
 mod rules;
 mod secret;
@@ -28,6 +29,7 @@ use contract::events::Notice;
 use serde_json::{Map, Value};
 
 pub use cache::{model_cache_age, model_cache_lock_file, read_model_cache, write_model_cache};
+pub use contract::Secret;
 pub use credential_file::{CredentialFile, CredentialLock};
 pub use error::ConfigError;
 pub use extension::{
@@ -35,9 +37,10 @@ pub use extension::{
     read_manifest, read_package_text, read_providers,
 };
 pub use home::{ProjectKey, fiber_home, fiber_home_from_env};
+pub use names::{SHORT_NAMES, dir_name, full_name, short_name};
 pub use rules::RulesFiles;
 pub use secret::{
-    CredentialSource, Secret, credential_labels, delete_credential, delete_credential_held,
+    CredentialSource, credential_labels, delete_credential, delete_credential_held,
     read_credential, read_secret, store_credential, store_secret,
 };
 pub use write::{Layer, Scope, remove_extension_settings, set, set_global, set_global_if_unset};
@@ -146,6 +149,8 @@ impl Config {
             }
         }
 
+        let run_settings = full_names(run_settings, &Source::Run, &["settings"])?;
+
         let home = sources.home;
         let fiber = sources.workspace.join(".fiber");
         let project_dir = home.join("projects").join(sources.project.as_str());
@@ -223,6 +228,7 @@ impl Config {
         key: &str,
     ) -> Result<Option<Value>, ConfigError> {
         let key = path::parse(key).ok_or_else(|| ConfigError::Override { arg: key.into() })?;
+        // `extension_settings` reads its name as either spelling.
         let (merged, _) = self.extension_settings(extension, repo_settings)?;
         Ok(path::get(&merged, &key).cloned())
     }
@@ -267,7 +273,12 @@ impl Config {
     /// `fiber config get` prints them. An object merged from several layers
     /// names the highest.
     pub fn get(&self, key: &str, model: Option<&str>) -> Option<(Value, Source)> {
-        let key = path::parse(key)?;
+        let mut key = path::parse(key)?;
+        if let [area, name, ..] = key.as_mut_slice()
+            && area == "extensions"
+        {
+            *name = full_name(name);
+        }
         let from = self
             .layers
             .iter()
@@ -315,6 +326,7 @@ impl Config {
         extension: &str,
         repo_settings: &[&str],
     ) -> Result<(Value, Vec<Notice>), ConfigError> {
+        let extension = &full_name(extension);
         let files = [
             (write::settings_file(&self.home, extension), false),
             (
@@ -372,6 +384,7 @@ impl Config {
         key: &str,
         value: Value,
     ) -> Result<(), ConfigError> {
+        let extension = &full_name(extension);
         let dir = match scope {
             Scope::Machine => self.home.clone(),
             Scope::Project => self.home.join("projects").join(self.project.as_str()),
@@ -544,8 +557,65 @@ fn check_layer(
     source: &Source,
     notices: &mut Vec<Notice>,
 ) -> Result<Value, ConfigError> {
-    let Value::Object(map) = value else {
+    let Value::Object(mut map) = value else {
         return Err(top_level(&source.to_string()));
     };
+    if let Some(Value::Object(extensions)) = map.get_mut("extensions") {
+        *extensions = full_names(std::mem::take(extensions), source, &[])?;
+    }
     keys::check(map, source, notices).map(Value::Object)
+}
+
+/// Renames every extension in `by_name`, the object under
+/// `extensions.<name>.<within>`, to its full name (`docs/configuration.md`,
+/// "Keys"). Where both spellings of one extension appear, their objects
+/// merge; one key set under both is an error.
+fn full_names(
+    by_name: Map<String, Value>,
+    source: &Source,
+    within: &[&str],
+) -> Result<Map<String, Value>, ConfigError> {
+    let mut out = Map::new();
+    for (typed, value) in by_name {
+        let name = full_name(&typed);
+        match out.get_mut(&name) {
+            None => {
+                out.insert(name, value);
+            }
+            Some(existing) => {
+                let mut at = vec!["extensions".to_owned(), short_name(&name).to_owned()];
+                at.extend(within.iter().map(|s| (*s).to_owned()));
+                merge_disjoint(existing, value, &mut at).map_err(|key| {
+                    ConfigError::DuplicateExtension {
+                        source_name: source.to_string(),
+                        key,
+                    }
+                })?;
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Lays `upper` into `lower` where the two set different keys; the dotted
+/// path of the first key both set is the error.
+fn merge_disjoint(lower: &mut Value, upper: Value, at: &mut Vec<String>) -> Result<(), String> {
+    match (lower, upper) {
+        (Value::Object(below), Value::Object(above)) => {
+            for (name, value) in above {
+                match below.get_mut(&name) {
+                    None => {
+                        below.insert(name, value);
+                    }
+                    Some(existing) => {
+                        at.push(name);
+                        merge_disjoint(existing, value, at)?;
+                        at.pop();
+                    }
+                }
+            }
+            Ok(())
+        }
+        _ => Err(path::display(at)),
+    }
 }

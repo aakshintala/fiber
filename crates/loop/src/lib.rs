@@ -55,6 +55,7 @@ mod skills;
 mod status;
 mod usage;
 mod util;
+mod warm;
 
 pub use cancel::TurnCancel;
 
@@ -248,6 +249,14 @@ pub struct Loop {
     handoff: handoff::State,
     /// The session's jobs, and how far the loop is in ending with them.
     ending: jobs::Ending,
+    /// `cache.warm_cap` when `cache.warm_idle` is set: how many cache
+    /// lifetimes after the last turn an idle wait keeps the cache warm.
+    /// `None` never warms (`docs/prompt-cache.md`, "Warming while idle").
+    warm: Option<u32>,
+    /// The last step's request and when it was handed to the provider, or
+    /// the last refresh's send: what a refresh resends and counts from.
+    /// Kept only while warming is on.
+    last_request: Option<(ModelRequest, std::time::Instant)>,
 }
 
 /// The one built preamble: what every request sends and what
@@ -358,6 +367,8 @@ impl Loop {
             hooks: None,
             handoff: handoff::State::new(handoff::Carry::default()),
             ending: jobs::Ending::default(),
+            warm: None,
+            last_request: None,
         })
     }
 

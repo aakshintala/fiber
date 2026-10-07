@@ -79,7 +79,7 @@ fn record(
         provider: "record".into(),
         model: model.into(),
         base_url: base_url.into(),
-        key: Some(key.trim().to_owned()),
+        key: Some(contract::Secret::new(key.trim().to_owned())),
         headers,
         ..Endpoint::default()
     };

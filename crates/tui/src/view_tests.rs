@@ -1,12 +1,12 @@
 //! Screen snapshots: the whole in-memory screen against stored files.
 
-use super::{render, text};
+use super::{cursor, render, text};
 use crate::app::App;
-use crate::keys::Key;
+use crate::keys::{Edit, Key};
 use crate::link::Line;
 use contract::clock::Clock;
 use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
+use ratatui::layout::{Position, Rect};
 use ratatui::style::Modifier;
 use std::path::PathBuf;
 
@@ -17,7 +17,7 @@ const HEIGHT: u16 = 12;
 fn screen(app: &App) -> String {
     let area = Rect::new(0, 0, WIDTH, HEIGHT);
     let mut buf = Buffer::empty(area);
-    render(app, area, &mut buf);
+    render(app, area, &mut buf, None);
     text(&buf)
 }
 
@@ -234,10 +234,12 @@ fn a_long_draft_shows_its_end() {
     for ch in std::iter::repeat_n('a', 70).chain("end".chars()) {
         app.on_key(Key::Char(ch), fakes::clock::FakeClock::new().now());
     }
+    // The draft wraps: its start on the row above, its end on the last.
     let shown = screen(&app);
-    let last = shown.lines().last().unwrap_or_default();
-    assert_eq!(last.chars().count(), usize::from(WIDTH));
-    assert!(last.ends_with("aend"));
+    let rows: Vec<&str> = shown.lines().collect();
+    assert_eq!(rows.get(10).map(|row| row.chars().count()), Some(60));
+    assert!(rows.get(10).is_some_and(|row| row.starts_with("> a")));
+    assert_eq!(rows.last().copied(), Some("  aaaaaaaaaaaaend"));
 }
 
 #[test]
@@ -266,7 +268,7 @@ fn sized(app: &mut App, width: u16, height: u16) -> String {
     app.set_size(width, height);
     let area = Rect::new(0, 0, width, height);
     let mut buf = Buffer::empty(area);
-    render(app, area, &mut buf);
+    render(app, area, &mut buf, None);
     text(&buf)
 }
 
@@ -279,14 +281,18 @@ fn a_short_screen_keeps_the_input_line_last() {
     app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "two"));
     app.connect_failed("lost".to_owned());
     app.on_key(Key::CtrlC, now);
-    // The input line wins the last row, then the hint, then the notice;
-    // the conversation gets what is left.
+    // The input line wins the last row, then the hint; the conversation
+    // gets what is left, the notice floating over its top row.
+    let notice = "lost   ✕";
     assert_eq!(sized(&mut app, 20, 1), ">\n");
     assert_eq!(sized(&mut app, 20, 2), "Press Ctrl+C again t\n>\n");
-    assert_eq!(sized(&mut app, 20, 3), "lost\nPress Ctrl+C again t\n>\n");
+    assert_eq!(
+        sized(&mut app, 20, 3),
+        format!("{notice:>20}\nPress Ctrl+C again t\n>\n")
+    );
     assert_eq!(
         sized(&mut app, 20, 4),
-        format!("{:>19}\nlost\nPress Ctrl+C again t\n>\n", "two")
+        format!("{notice:>20}\n{:>19}\nPress Ctrl+C again t\n>\n", "two")
     );
 }
 
@@ -312,7 +318,7 @@ fn wide(app: &mut App) -> (String, Buffer) {
     app.set_size(80, HEIGHT);
     let area = Rect::new(0, 0, 80, HEIGHT);
     let mut buf = Buffer::empty(area);
-    render(app, area, &mut buf);
+    render(app, area, &mut buf, None);
     (text(&buf), buf)
 }
 
@@ -464,7 +470,7 @@ fn approval_feedback_typed_on_deny() {
 }
 
 #[test]
-fn a_short_screen_drops_the_badge_after_the_hint_and_notice() {
+fn a_short_screen_drops_the_badge_after_the_hint() {
     let now = fakes::clock::FakeClock::new().now();
     let mut app = asked();
     app.on_line(standing(S_A, "a_1", "r_1"));
@@ -480,7 +486,10 @@ fn a_short_screen_drops_the_badge_after_the_hint_and_notice() {
     );
     assert_eq!(
         sized(&mut app, 40, 4),
-        format!("lost\nPress Ctrl+C again to quit\n{badge}\n>\n")
+        format!(
+            "{:>40}\nPress Ctrl+C again to quit\n{badge}\n>\n",
+            "lost           ✕"
+        )
     );
 }
 
@@ -492,6 +501,102 @@ fn a_panel_taller_than_the_screen_keeps_its_header() {
         sized(&mut app, 40, 2),
         format!("approval · {S_A} · 1 of 1\nasked by a global rule: echo hi\n")
     );
+}
+
+/// Types `text` into the draft, `\n` as Shift+Enter.
+fn type_draft(app: &mut App, text: &str) {
+    let now = fakes::clock::FakeClock::new().now();
+    for ch in text.chars() {
+        if ch == '\n' {
+            app.on_edit(Edit::ShiftEnter);
+        } else {
+            app.on_key(Key::Char(ch), now);
+        }
+    }
+}
+
+/// Where the cursor shows on the 60x12 screen.
+fn cursor_at(app: &App) -> Option<Position> {
+    cursor(app, Rect::new(0, 0, WIDTH, HEIGHT))
+}
+
+#[test]
+fn a_draft_of_three_lines() {
+    let mut app = empty();
+    attach(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "hi"));
+    type_draft(&mut app, "first\nsecond\nthird");
+    insta::assert_snapshot!("draft_of_three_lines", screen(&app));
+    assert_eq!(cursor_at(&app), Some(Position::new(7, 11)));
+}
+
+#[test]
+fn a_draft_taller_than_a_third_scrolls_with_the_cursor() {
+    let mut app = empty();
+    type_draft(&mut app, "l1\nl2\nl3\nl4\nl5\nl6");
+    // 12 rows: the box shows 4, the last four while the cursor is there.
+    insta::assert_snapshot!("draft_taller_than_the_cap", screen(&app));
+    assert_eq!(cursor_at(&app), Some(Position::new(4, 11)));
+    let now = fakes::clock::FakeClock::new().now();
+    for _ in 0..5 {
+        app.on_key(Key::Up, now);
+    }
+    // On the first line, the box shows the first four.
+    insta::assert_snapshot!("draft_scrolled_to_its_top", screen(&app));
+    assert_eq!(cursor_at(&app), Some(Position::new(4, 8)));
+}
+
+#[test]
+fn a_paste_token_in_the_draft() {
+    let mut app = empty();
+    type_draft(&mut app, "see ");
+    let pasted: Vec<String> = (1..=312).map(|n| format!("line {n}")).collect();
+    app.on_edit(Edit::Paste(pasted.join("\n")));
+    insta::assert_snapshot!("draft_with_a_paste_token", screen(&app));
+    assert_eq!(cursor_at(&app), Some(Position::new(34, 11)));
+}
+
+#[test]
+fn a_draft_wider_than_the_screen_wraps() {
+    let mut app = empty();
+    let long: String = std::iter::repeat_n('w', 70).collect();
+    type_draft(&mut app, &long);
+    let shown = screen(&app);
+    let rows: Vec<&str> = shown.lines().collect();
+    assert_eq!(
+        rows.get(10).copied(),
+        Some(format!("> {}", "w".repeat(58)).as_str())
+    );
+    assert_eq!(
+        rows.get(11).copied(),
+        Some(format!("  {}", "w".repeat(12)).as_str())
+    );
+    assert_eq!(cursor_at(&app), Some(Position::new(14, 11)));
+}
+
+#[test]
+fn the_cursor_hides_while_the_panel_is_open() {
+    let mut app = empty();
+    attach(&mut app, "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(cursor_at(&app), Some(Position::new(2, 11)));
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "permission_requested",
+        serde_json::json!({"request_id": "r_1", "effects": ["executes"],
+            "reversible": true, "step": "review"}),
+        Some("a_1"),
+    ));
+    assert!(app.panel().is_some());
+    assert_eq!(cursor_at(&app), None);
+}
+
+#[test]
+fn the_cursor_stays_on_a_screen_one_column_wide() {
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_size(1, 3);
+    type_draft(&mut app, "ab");
+    let area = Rect::new(0, 0, 1, 3);
+    assert_eq!(cursor(&app, area).map(|at| at.x), Some(0));
 }
 
 /// One session envelope at `ts` milliseconds.
@@ -598,7 +703,12 @@ fn tool_group_ledger_open_with_a_call_open() {
         .into_iter()
         .filter_map(|(_, target)| match target {
             crate::app::Target::Call(_) => Some(target),
-            crate::app::Target::Group(_) | crate::app::Target::Thought(_) => None,
+            crate::app::Target::Group(_)
+            | crate::app::Target::Thought(_)
+            | crate::app::Target::Login
+            | crate::app::Target::Note(_)
+            | crate::app::Target::Orphans(_)
+            | crate::app::Target::Copy { .. } => None,
         })
         .nth(1);
     if let Some(edit) = edit {
@@ -639,11 +749,10 @@ fn tool_group_running_with_raw_arguments() {
     insta::assert_snapshot!("tool_group_running_with_raw_arguments", screen(&app));
 }
 
-#[test]
-fn thought_line_opened_and_tokens_only() {
+/// A completed turn that thought, then replied, with token-only usage.
+fn thought_turn(app: &mut App) {
     use serde_json::json;
-    let mut app = empty();
-    attach(&mut app, "s_aaaaaaaaaaaaaaaa");
+    attach(app, "s_aaaaaaaaaaaaaaaa");
     app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "why"));
     app.on_line(at("reasoning_started", Some("a_t"), 0, json!({})));
     app.on_line(at(
@@ -672,6 +781,12 @@ fn thought_line_opened_and_tokens_only() {
         24_000,
         json!({"outcome": "completed"}),
     ));
+}
+
+#[test]
+fn thought_line_opened_and_tokens_only() {
+    let mut app = empty();
+    thought_turn(&mut app);
     let before = screen(&app);
     if let Some((_, thought)) = app.targets().into_iter().next() {
         app.open(thought);
@@ -687,7 +802,7 @@ fn styles_reach_the_screen() {
     tool_turn(&mut app);
     let area = Rect::new(0, 0, WIDTH, HEIGHT);
     let mut buf = Buffer::empty(area);
-    render(&app, area, &mut buf);
+    render(&app, area, &mut buf, None);
     let rows: Vec<String> = text(&buf).lines().map(str::to_owned).collect();
     let row = |start: &str| {
         rows.iter()
@@ -803,4 +918,618 @@ fn file_panel() {
     let found = ["src/main.rs", "crates/tui/src/main.rs"].map(str::to_owned);
     app.on_files(app.generation(), Ok(found.to_vec()));
     insta::assert_snapshot!("file_panel", sized(&mut app, 80, 24));
+}
+
+#[test]
+fn search_panel() {
+    let mut app = empty();
+    let now = fakes::clock::FakeClock::new().now();
+    attach(&mut app, "s_aaaaaaaaaaaaaaaa");
+    for prompt in [
+        "fix the build",
+        "run the tests",
+        "Fix the docs\nand the build",
+    ] {
+        app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", prompt));
+    }
+    for ch in "draft".chars() {
+        app.on_key(Key::Char(ch), now);
+    }
+    app.on_key(Key::CtrlR, now);
+    for ch in "fix".chars() {
+        app.on_key(Key::Char(ch), now);
+    }
+    app.on_key(Key::Down, now);
+    insta::assert_snapshot!("search_panel", sized(&mut app, 80, 24));
+    let (shown, buf) = wide(&mut app);
+    let rows: Vec<&str> = shown.lines().collect();
+    assert_eq!(rows[HEIGHT as usize - 4], "search prompts: fix", "{shown}");
+    let reversed = |row: u16| {
+        buf.cell((0, row))
+            .is_some_and(|cell| cell.modifier.contains(Modifier::REVERSED))
+    };
+    assert!(!reversed(HEIGHT - 4), "{shown}");
+    assert!(!reversed(HEIGHT - 3), "{shown}");
+    assert!(reversed(HEIGHT - 2), "{shown}");
+    // Nothing matching says so.
+    app.on_key(Key::Char('z'), now);
+    let (shown, _) = wide(&mut app);
+    assert!(shown.contains("no matching prompts"), "{shown}");
+}
+
+#[test]
+fn steering_rows_above_the_input() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = empty();
+    attach(&mut app, S_A);
+    app.on_line(turn_started(S_A, "hi"));
+    app.on_line(session_line(
+        S_A,
+        "steering_queue",
+        serde_json::json!({"messages": [
+            {"content": [{"type": "text", "text": "use the parser"}], "source": "driver", "command_id": "c_1"},
+            {"content": [{"type": "text", "text": "and test it"}], "source": "driver", "command_id": "c_2"},
+        ]}),
+        None,
+    ));
+    app.on_key(Key::AltUp, clock.now());
+    insta::assert_snapshot!("steering_rows_above_the_input", screen(&app));
+}
+
+#[test]
+fn zero_width_draws_no_steering_drop_target() {
+    use crate::mouse::TargetId;
+    let mut app = empty();
+    attach(&mut app, S_A);
+    app.on_line(turn_started(S_A, "hi"));
+    app.on_line(session_line(
+        S_A,
+        "steering_queue",
+        serde_json::json!({"messages": [
+            {"content": [{"type": "text", "text": "use the parser"}], "source": "driver", "command_id": "c_1"},
+        ]}),
+        None,
+    ));
+    assert!(
+        app.steering_drops().iter().any(|drop| *drop),
+        "the fixture needs a selectable steering row"
+    );
+    let area = Rect::new(0, 0, 0, HEIGHT);
+    let mut buf = Buffer::empty(area);
+    let targets = render(&app, area, &mut buf, None);
+    assert!(
+        targets
+            .iter()
+            .all(|target| !matches!(target.id, TargetId::DropSteering(_))),
+        "{targets:?}"
+    );
+    for target in &targets {
+        assert!(
+            target.rect.x >= area.x
+                && target.rect.right() <= area.right()
+                && target.rect.y >= area.y
+                && target.rect.bottom() <= area.bottom(),
+            "{target:?} outside {area:?}"
+        );
+    }
+}
+
+#[test]
+fn notices_float_and_nothing_below_the_conversation_moves() {
+    let mut app = empty();
+    attach(&mut app, S_A);
+    for n in 1..=4 {
+        app.on_line(turn_started(S_A, &format!("prompt {n}")));
+        app.on_line(turn_completed(S_A, "completed"));
+    }
+    let before = screen(&app);
+    app.connect_failed("Could not reach the hub: the socket refused the connection".to_owned());
+    for n in 1..=3 {
+        app.on_line(session_line(
+            S_A,
+            "notice",
+            serde_json::json!({"code": "extension_failed", "message": format!("Notice {n}.")}),
+            None,
+        ));
+    }
+    let after = screen(&app);
+    let below = |screen: &str| screen.lines().last().map(str::to_owned);
+    assert_eq!(below(&before), below(&after));
+    assert_eq!(before.lines().count(), after.lines().count());
+    insta::assert_snapshot!("notices_float", after);
+    app.open_more_notices();
+    insta::assert_snapshot!("notices_listed", screen(&app));
+}
+
+/// Renders `app` at `width` by `height` with the pointer at `pointer`,
+/// returning the buffer and the click targets.
+fn pointed(
+    app: &mut App,
+    width: u16,
+    height: u16,
+    pointer: Option<(u16, u16)>,
+) -> (Buffer, Vec<crate::mouse::Target>) {
+    app.set_size(width, height);
+    let area = Rect::new(0, 0, width, height);
+    let mut buf = Buffer::empty(area);
+    let targets = render(app, area, &mut buf, pointer);
+    (buf, targets)
+}
+
+/// An app with one request put aside, so the badge shows.
+fn badged() -> App {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = asked();
+    app.on_line(standing(S_A, "a_1", "r_1"));
+    app.on_key(Key::Esc, now);
+    app
+}
+
+/// Renders `app` at `width` by `height`, returning the buffer.
+fn buffer(app: &App, width: u16, height: u16) -> Buffer {
+    let area = Rect::new(0, 0, width, height);
+    let mut buf = Buffer::empty(area);
+    render(app, area, &mut buf, None);
+    buf
+}
+
+/// Clicks the target drawn at `col`, `row` of `app` at `width` by
+/// `height`, if any.
+fn click(app: &mut App, width: u16, height: u16, col: u16, row: u16) {
+    let (_, targets) = pointed(app, width, height, None);
+    if let Some(target) = crate::mouse::hit(&targets, col, row) {
+        app.on_click(target);
+    }
+}
+
+/// A reply in markdown, as one model streams it.
+const MARKDOWN: &str = "# Plan\n\n- read the **file**\n- write it\n\n```rust\nfn main() {\n    let x = 1;\n}\n```\n\n| step | ms |\n|---|---|\n| parse | 12 |\n| draw | 3 |";
+
+/// An app at `width` by `height` with `text` streamed as one reply.
+fn replying(width: u16, height: u16, text: &str) -> App {
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_size(width, height);
+    attach(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "plan it"));
+    app.on_line(delta("s_aaaaaaaaaaaaaaaa", "a_1", text));
+    app
+}
+
+#[test]
+fn the_badge_is_a_target_over_the_cells_it_drew() {
+    use crate::mouse::{Target, TargetId};
+    let mut app = badged();
+    // The badge's 30 characters on the row above the input line.
+    let (_, targets) = pointed(&mut app, 40, 12, None);
+    let badge = Target {
+        id: TargetId::Badge,
+        rect: Rect::new(0, 10, 30, 1),
+    };
+    assert_eq!(targets, vec![badge]);
+    // Narrower than its text, it takes the whole row.
+    let (_, targets) = pointed(&mut app, 20, 12, None);
+    assert_eq!(targets.first().map(|target| target.rect.width), Some(20));
+    // A screen with no row for the badge draws no target.
+    let (_, targets) = pointed(&mut app, 40, 1, None);
+    assert!(targets.is_empty());
+}
+
+#[test]
+fn new_messages_below_is_a_target_over_the_cells_it_drew() {
+    use crate::mouse::{Target, TargetId};
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = empty();
+    attach(&mut app, S_A);
+    app.on_line(turn_started(S_A, "one"));
+    app.on_key(Key::PageUp, now);
+    app.on_line(delta(S_A, "a_1", "streamed"));
+    // "↓ New messages below" is 20 cells, centred on the row above the
+    // input line.
+    let (_, targets) = pointed(&mut app, 30, 2, None);
+    let below = Target {
+        id: TargetId::NewBelow,
+        rect: Rect::new(5, 0, 20, 1),
+    };
+    assert_eq!(targets, vec![below]);
+    let (_, targets) = pointed(&mut app, 10, 2, None);
+    assert_eq!(
+        targets.first().map(|target| target.rect),
+        Some(Rect::new(0, 0, 10, 1))
+    );
+    // No conversation row, no overlay and no target.
+    let (_, targets) = pointed(&mut app, 30, 1, None);
+    assert!(targets.is_empty());
+}
+
+#[test]
+fn the_target_under_the_pointer_gets_the_hover_background_only() {
+    let mut app = badged();
+    let (plain, _) = pointed(&mut app, 40, 12, None);
+    let (hovered, _) = pointed(&mut app, 40, 12, Some((7, 10)));
+    for y in 0..12 {
+        for x in 0..40 {
+            let (Some(before), Some(after)) = (plain.cell((x, y)), hovered.cell((x, y))) else {
+                panic!("no cell at {x},{y}");
+            };
+            let mut expected = before.clone();
+            if y == 10 && x < 30 {
+                expected.bg = super::HOVER_TINT.bg.unwrap_or_default();
+            }
+            assert_eq!(after, &expected, "cell {x},{y}");
+        }
+    }
+    // Off every target, the frame is the one with no pointer.
+    for pointer in [(30, 10), (0, 11), (0, 9), (39, 0)] {
+        let (off, _) = pointed(&mut app, 40, 12, Some(pointer));
+        assert_eq!(off, plain, "{pointer:?}");
+    }
+}
+
+/// The conversation-line targets drawn, as what each opens and its cells.
+fn lines(targets: &[crate::mouse::Target]) -> Vec<(crate::app::Target, Rect)> {
+    targets
+        .iter()
+        .filter_map(|target| match target.id {
+            crate::mouse::TargetId::Line(line) => Some((line, target.rect)),
+            crate::mouse::TargetId::Badge
+            | crate::mouse::TargetId::NewBelow
+            | crate::mouse::TargetId::Token(_)
+            | crate::mouse::TargetId::Steering(_)
+            | crate::mouse::TargetId::DropSteering(_)
+            | crate::mouse::TargetId::Notice(_)
+            | crate::mouse::TargetId::DismissNotice(_)
+            | crate::mouse::TargetId::MoreNotices => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_collapsed_groups_line_is_a_target_over_its_rows() {
+    use crate::app::Target;
+    let mut app = empty();
+    tool_turn(&mut app);
+    // The summary wraps to rows 6 and 7 of `tool_group_collapsed`.
+    let (_, targets) = pointed(&mut app, WIDTH, HEIGHT, None);
+    let group = app.targets().first().map(|(_, target)| *target);
+    assert!(matches!(group, Some(Target::Group(_))), "{group:?}");
+    let drawn: Vec<_> = lines(&targets).into_iter().map(|(_, rect)| rect).collect();
+    assert_eq!(drawn, vec![Rect::new(0, 6, WIDTH, 2)]);
+    assert_eq!(
+        lines(&targets).first().map(|(target, _)| Some(*target)),
+        Some(group)
+    );
+}
+
+#[test]
+fn ledger_rows_are_targets_over_their_rows() {
+    use crate::app::Target;
+    let mut app = empty();
+    tool_turn(&mut app);
+    app.on_key(Key::CtrlO, fakes::clock::FakeClock::new().now());
+    let edit = app.targets().get(3).map(|(_, target)| *target);
+    if let Some(edit) = edit {
+        app.open(edit);
+    }
+    // As `tool_group_ledger_open_with_a_call_open` draws them: the
+    // summary, the thought, the read, the edit and the shell row; the
+    // edit's diff below it opens nothing.
+    let (_, targets) = pointed(&mut app, WIDTH, 16, None);
+    let drawn = lines(&targets);
+    let kinds: Vec<_> = drawn
+        .iter()
+        .map(|(target, _)| match target {
+            Target::Group(_) => 'g',
+            Target::Thought(_) => 't',
+            Target::Call(_) => 'c',
+            Target::Login | Target::Note(_) | Target::Orphans(_) => 'o',
+            Target::Copy { .. } => 'y',
+        })
+        .collect();
+    assert_eq!(kinds, vec!['g', 't', 'c', 'c', 'c']);
+    let rects: Vec<_> = drawn.iter().map(|(_, rect)| *rect).collect();
+    assert_eq!(
+        rects,
+        vec![
+            Rect::new(0, 4, WIDTH, 2),
+            Rect::new(0, 6, WIDTH, 1),
+            Rect::new(0, 7, WIDTH, 1),
+            Rect::new(0, 8, WIDTH, 1),
+            Rect::new(0, 11, WIDTH, 1),
+        ]
+    );
+    let opens: Vec<_> = app
+        .targets()
+        .into_iter()
+        .map(|(_, target)| target)
+        .collect();
+    let drawn: Vec<_> = drawn.into_iter().map(|(target, _)| target).collect();
+    assert_eq!(drawn, opens);
+}
+
+#[test]
+fn a_thought_line_is_a_target_over_its_row() {
+    use crate::app::Target;
+    let mut app = empty();
+    thought_turn(&mut app);
+    // Row 8 of `thought_line`.
+    let (_, targets) = pointed(&mut app, WIDTH, HEIGHT, None);
+    let drawn = lines(&targets);
+    assert_eq!(drawn.len(), 1);
+    assert!(matches!(drawn.first(), Some((Target::Thought(_), _))));
+    assert_eq!(
+        drawn.first().map(|(_, rect)| *rect),
+        Some(Rect::new(0, 8, WIDTH, 1))
+    );
+}
+
+#[test]
+fn a_line_partly_scrolled_off_targets_only_its_rows_shown() {
+    let mut app = empty();
+    tool_turn(&mut app);
+    // Four conversation rows: the summary's second row, the reply and the
+    // two-row footer.
+    let (_, targets) = pointed(&mut app, WIDTH, 5, None);
+    let rects: Vec<_> = lines(&targets).into_iter().map(|(_, rect)| rect).collect();
+    assert_eq!(rects, vec![Rect::new(0, 0, WIDTH, 1)]);
+    // Three rows: the summary is wholly out of view.
+    let (_, targets) = pointed(&mut app, WIDTH, 4, None);
+    assert!(lines(&targets).is_empty());
+}
+
+#[test]
+fn the_overlay_row_hits_new_messages_below_not_the_line_under_it() {
+    use crate::mouse::{TargetId, hit};
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = empty();
+    tool_turn(&mut app);
+    app.set_size(WIDTH, 4);
+    app.on_key(Key::PageUp, now);
+    app.on_line(turn_started(S_A, "next"));
+    assert!(app.has_new());
+    // From the third row of the turn: the summary's two rows, the second
+    // under the overlay.
+    let (buf, targets) = pointed(&mut app, WIDTH, 3, None);
+    assert!(text(&buf).contains("New messages below"), "{}", text(&buf));
+    let rects: Vec<_> = lines(&targets).into_iter().map(|(_, rect)| rect).collect();
+    assert_eq!(rects, vec![Rect::new(0, 0, WIDTH, 1)]);
+    assert_eq!(hit(&targets, WIDTH / 2, 1), Some(TargetId::NewBelow));
+    assert_eq!(hit(&targets, 0, 1), None);
+    assert!(matches!(hit(&targets, 0, 0), Some(TargetId::Line(_))));
+}
+
+/// An empty app with `see ` and then a 312-line paste token typed.
+fn with_token() -> App {
+    let mut app = empty();
+    type_draft(&mut app, "see ");
+    let pasted: Vec<String> = (1..=312).map(|n| format!("line {n}")).collect();
+    app.on_edit(Edit::Paste(pasted.join("\n")));
+    app
+}
+
+/// The rects of the targets for paste token 1.
+fn token_rects(targets: &[crate::mouse::Target]) -> Vec<Rect> {
+    targets
+        .iter()
+        .filter(|target| target.id == crate::mouse::TargetId::Token(1))
+        .map(|target| target.rect)
+        .collect()
+}
+
+/// The text in `rects` of `buf`, in order.
+fn cells(buf: &Buffer, rects: &[Rect]) -> String {
+    rects
+        .iter()
+        .flat_map(|rect| rect.positions())
+        .filter_map(|at| buf.cell(at).map(|cell| cell.symbol().to_owned()))
+        .collect()
+}
+
+const LABEL: &str = "[Pasted text #1 · 312 lines]";
+
+#[test]
+fn a_paste_token_is_a_target_over_its_label_on_every_row() {
+    let mut app = with_token();
+    let (buf, targets) = pointed(&mut app, WIDTH, HEIGHT, None);
+    let rects = token_rects(&targets);
+    assert_eq!(rects, vec![Rect::new(6, 11, 28, 1)]);
+    assert_eq!(cells(&buf, &rects), LABEL);
+    // Wrapped, one target per row the label takes.
+    let (buf, targets) = pointed(&mut app, 20, HEIGHT, None);
+    let rects = token_rects(&targets);
+    assert_eq!(rects.len(), 2, "{rects:?}");
+    assert_eq!(cells(&buf, &rects), LABEL);
+}
+
+#[test]
+fn a_paste_token_scrolled_out_of_the_box_is_no_target() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = with_token();
+    type_draft(&mut app, "\n2\n3\n4\n5");
+    // The box shows its last four rows; the token's row is above them.
+    let (_, targets) = pointed(&mut app, WIDTH, HEIGHT, None);
+    assert!(token_rects(&targets).is_empty(), "{targets:?}");
+    for _ in 0..4 {
+        app.on_key(Key::Up, now);
+    }
+    // Scrolled to its top, the token is on the box's first row.
+    let (buf, targets) = pointed(&mut app, WIDTH, HEIGHT, None);
+    let rects = token_rects(&targets);
+    assert_eq!(rects, vec![Rect::new(6, 8, 28, 1)]);
+    assert_eq!(cells(&buf, &rects), LABEL);
+}
+
+#[test]
+fn a_click_on_a_token_opens_it_and_a_click_elsewhere_in_the_box_does_not() {
+    use crate::app::Effect;
+    use crate::keys::{Button, Mouse, MouseKind};
+    use crate::mouse::Pointer;
+    let mut app = with_token();
+    let (_, targets) = pointed(&mut app, 20, HEIGHT, None);
+    let mut pointer = Pointer::default();
+    let mut click = |col: u16, row: u16| {
+        let press = Mouse {
+            kind: MouseKind::Press(Button::Left),
+            col,
+            row,
+        };
+        pointer.on_mouse(&press, &targets, true);
+        let release = Mouse {
+            kind: MouseKind::Release,
+            ..press
+        };
+        pointer.on_mouse(&release, &targets, true)
+    };
+    // The prompt, `see ` and the cell after the label are no token.
+    let rects = token_rects(&targets);
+    let (first, last) = (rects[0], rects[rects.len() - 1]);
+    for (col, row) in [(0, first.y), (first.x - 1, first.y), (last.right(), last.y)] {
+        assert_eq!(click(col, row), None, "{col},{row}");
+    }
+    let text = app.input().token_text(1).unwrap_or_default().to_owned();
+    for (col, row) in [(first.x, first.y), (last.right() - 1, last.y)] {
+        let clicked = click(col, row);
+        assert_eq!(clicked, Some(crate::mouse::TargetId::Token(1)));
+        let effect = clicked.map(|target| app.on_click(target));
+        let expected = Effect::Editor {
+            target: crate::editor::Target::Token(1),
+            text: text.clone(),
+        };
+        assert_eq!(effect, Some(expected), "{col},{row}");
+    }
+}
+
+#[test]
+fn hovering_a_token_tints_every_cell_of_its_label_only() {
+    let mut app = with_token();
+    let (plain, targets) = pointed(&mut app, 20, HEIGHT, None);
+    let rects = token_rects(&targets);
+    let first = rects[0];
+    let (hovered, _) = pointed(&mut app, 20, HEIGHT, Some((first.x, first.y)));
+    for y in 0..HEIGHT {
+        for x in 0..20 {
+            let (Some(before), Some(after)) = (plain.cell((x, y)), hovered.cell((x, y))) else {
+                panic!("no cell at {x},{y}");
+            };
+            let mut expected = before.clone();
+            if rects.iter().any(|rect| rect.contains(Position::new(x, y))) {
+                expected.bg = super::HOVER_TINT.bg.unwrap_or_default();
+            }
+            assert_eq!(after, &expected, "cell {x},{y}");
+        }
+    }
+}
+
+#[test]
+fn a_paste_token_below_the_box_or_with_no_room_is_no_target() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = empty();
+    type_draft(&mut app, "1\n2\n3\n4\n");
+    let pasted: Vec<String> = (1..=312).map(|n| format!("line {n}")).collect();
+    app.on_edit(Edit::Paste(pasted.join("\n")));
+    for _ in 0..4 {
+        app.on_key(Key::Up, now);
+    }
+    // The box shows rows 0 to 3; the token is on row 4, just below it.
+    let (_, targets) = pointed(&mut app, WIDTH, HEIGHT, None);
+    assert!(token_rects(&targets).is_empty(), "{targets:?}");
+    // Two columns wide, the label starts past the last column: no cells.
+    let mut app = with_token();
+    let (_, targets) = pointed(&mut app, 2, HEIGHT, None);
+    assert!(token_rects(&targets).is_empty(), "{targets:?}");
+}
+
+#[test]
+fn a_streaming_reply_renders_its_markdown_in_place() {
+    // Mid-stream: the fence is open, so the rest is code.
+    let cut = MARKDOWN.find("}\n```").unwrap_or_default();
+    let mut app = replying(40, 18, &MARKDOWN[..cut]);
+    insta::assert_snapshot!("markdown_reply_streaming", text(&buffer(&app, 40, 18)));
+    app.on_line(delta("s_aaaaaaaaaaaaaaaa", "a_1", &MARKDOWN[cut..]));
+    let buf = buffer(&app, 40, 18);
+    insta::assert_snapshot!("markdown_reply", text(&buf));
+    let fg = |x, y| buf.cell((x, y)).map(|cell| cell.fg);
+    let bg = |x, y| buf.cell((x, y)).map(|cell| cell.bg);
+    let shown = text(&buf);
+    let row = |needle: &str| {
+        let at = shown.lines().position(|line| line.contains(needle));
+        u16::try_from(at.unwrap_or_else(|| panic!("{needle} on screen"))).unwrap_or(0)
+    };
+    use crate::markdown::Role;
+    assert_eq!(fg(0, row("Plan")), Some(Role::Heading.color()));
+    assert_eq!(fg(0, row("read the")), Some(Role::Accent.color()));
+    assert_eq!(fg(2, row("read the")), Some(Role::Text.color()));
+    let header = row("rust");
+    assert_eq!(fg(36, header), Some(Role::Accent.color()));
+    for x in 0..40 {
+        assert_eq!(
+            bg(x, header),
+            Some(Role::CodeTint.color()),
+            "header col {x}"
+        );
+        assert_eq!(
+            bg(x, header + 2),
+            Some(Role::CodeTint.color()),
+            "code col {x}"
+        );
+    }
+    assert_eq!(fg(8, header + 2), Some(Role::Keyword.color()));
+    assert_eq!(fg(16, header + 2), Some(Role::Number.color()));
+    assert_eq!(fg(0, row("────")), Some(Role::Dim.color()));
+}
+
+#[test]
+fn a_resize_renders_the_reply_again_at_the_new_width() {
+    let mut app = replying(40, 18, "```rust\nlet x = 1;\n```");
+    assert!(text(&buffer(&app, 40, 18)).contains(&format!("rust{}copy", " ".repeat(32))));
+    app.set_size(20, 18);
+    assert!(text(&buffer(&app, 20, 18)).contains(&format!("rust{}copy", " ".repeat(12))));
+}
+
+#[test]
+fn text_completed_replaces_and_renders_the_reply_again() {
+    let mut app = replying(40, 8, "# Draft");
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "text_completed",
+        serde_json::json!({"text": "- done"}),
+        Some("a_1"),
+    ));
+    let shown = text(&buffer(&app, 40, 8));
+    assert!(shown.contains("• done"));
+    assert!(!shown.contains("Draft"));
+}
+
+#[test]
+fn copied_shows_on_the_conversations_top_row_until_the_next_key() {
+    let mut app = replying(30, 10, "```rust\nlet x = 1;\n```");
+    let shown = text(&buffer(&app, 30, 10));
+    let header = shown
+        .lines()
+        .position(|line| line.contains("rust"))
+        .and_then(|at| u16::try_from(at).ok())
+        .unwrap_or_default();
+    click(&mut app, 30, 10, 27, header);
+    let buf = buffer(&app, 30, 10);
+    insta::assert_snapshot!("copied", text(&buf));
+    assert_eq!(
+        buf.cell((24, 0)).map(|cell| cell.fg),
+        Some(crate::markdown::Role::Accent.color())
+    );
+    app.on_key(Key::Char('x'), fakes::clock::FakeClock::new().now());
+    assert!(!text(&buffer(&app, 30, 10)).contains("Copied"));
+}
+
+#[test]
+fn copied_needs_a_conversation_row_to_show_on() {
+    let mut app = replying(30, 10, "```rust\nlet x = 1;\n```");
+    assert!(
+        text(&buffer(&app, 30, 10))
+            .lines()
+            .nth(7)
+            .is_some_and(|row| row.starts_with("rust"))
+    );
+    click(&mut app, 30, 10, 27, 7);
+    assert!(app.copied());
+    app.set_size(30, 1);
+    assert_eq!(text(&buffer(&app, 30, 1)), ">\n");
 }

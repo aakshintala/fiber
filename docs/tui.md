@@ -732,7 +732,13 @@ keyboard's reach.
   cursor on it, opens it in the editor.
 - Ctrl+V with an image shows "[Image #1]" and sends the image as an image
   part in the prompt, which the session processes as it enters
-  (`docs/invocation.md`).
+  (`docs/invocation.md`). The terminal reads the image with the system
+  clipboard command on the machine it runs on: `osascript` reading
+  `«class PNGf»` on macOS, and on Linux `wl-paste --type image/png` under
+  Wayland, else `xclip -selection clipboard -t image/png -o`. No terminal
+  protocol carries the read. Where that machine has no readable clipboard,
+  such as an SSH login, Ctrl+V shows a notice saying so and leaves the draft
+  as it is.
 - `!cmd` runs a shell command and sends its output with the next prompt.
   `!!cmd` runs it and shows the output only to the person (`shell` with
   `send` false, `docs/invocation.md`).
@@ -879,6 +885,24 @@ Measured in the prototype on macOS arm64
 costs about 115 µs; each change of target costs one frame, about 1.8 ms and
 255 bytes; a fast sweep costs 6.8% of a core. The timings do not carry over to
 Linux; the byte and frame counts do.
+
+Measured in Fiber on macOS arm64 (Darwin 25.6.0) with the `hover` jig,
+`cargo run --release -p tui --example hover -- crates/tui/examples/hover.jsonl`,
+at 160 by 48, 20,000 motion reports per case, the median of 5 runs: every
+report draws the screen in memory and compares it with the last frame, 75
+to 80 µs, and writes nothing unless the target under the pointer changed; a
+report that moves along one target, or repeats one cell, costs the same and
+writes nothing; each change of target costs one frame, 140 to 145 µs and 79
+bytes for the badge; a fast sweep over a conversation whose lines are targets
+wrote 1,332 frames and 358,360 bytes in 20,000 reports.
+
+Measured in Fiber on Linux x86_64 (6.18.44, a 4-core Intel Xeon at 2.30
+GHz) with the same jig, command, size and runs: a still pointer, and a
+pointer moving along one target, wrote 1 frame and 86 bytes in 20,000
+reports, 115 to 120 µs a report; a change of target on every report wrote
+20,000 frames and 1,580,000 bytes, 79 bytes a frame, 271 µs a report; the
+fast sweep wrote 1,332 frames and 358,360 bytes, 129 µs a report. The frames
+and bytes match the macOS run; the times are 1.4 to 1.9 times as long.
 
 ## Look
 
@@ -1267,9 +1291,9 @@ server's or an extension's `tools.enabled` and `tools.disabled`.
   and the span shape that kept selection, copy and search working.
 - [research/tui-prototype/CHECK.md](../research/tui-prototype/CHECK.md): the
   checks run by eye in Ghostty.
-- Branch `prototype-692-rail`: the rail's prototype, never merged. The owner
-  compared a list, cards and tabs, then card heights, in Ghostty, and chose
-  the cards above (#692).
+- [research/tui-prototype/README.md](../research/tui-prototype/README.md),
+  "The rail (#692)": the rail's prototype. The owner compared a list, cards
+  and tabs, then card heights, in Ghostty, and chose the cards above (#692).
 
 ## Related
 

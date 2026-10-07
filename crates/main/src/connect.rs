@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use config::Protocol;
 use contract::ErrorCode;
+use contract::Secret;
 use contract::provider::Provider;
 use contract::shapes::Failure;
 use doors::failure;
@@ -23,7 +24,7 @@ use serde_json::Value;
 /// and OAuth").
 pub(crate) fn connect(
     model: extensions::Model<'_>,
-    key: Option<String>,
+    key: Option<Secret>,
     signer: Option<Arc<dyn contract::signing::Signer>>,
 ) -> Result<Arc<dyn Provider>, Failure> {
     let endpoint = Endpoint {
