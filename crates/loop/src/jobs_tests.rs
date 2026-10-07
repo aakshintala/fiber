@@ -567,7 +567,7 @@ fn a_prompt_after_a_notice_is_accepted_into_the_same_turn() {
 }
 
 #[test]
-fn a_second_prompt_after_a_notice_is_busy() {
+fn a_second_prompt_after_a_notice_joins_its_turn() {
     let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new());
     let (answered, answer) = mpsc::channel();
     world.send(held(JOB));
@@ -577,9 +577,13 @@ fn a_second_prompt_after_a_notice_is_busy() {
         reported(answered),
     ));
     assert_eq!(world.turn(), Some(TurnOutcome::Completed));
-    assert_eq!(answer.recv_timeout(DEADLINE), Ok(false));
+    assert_eq!(answer.recv_timeout(DEADLINE), Ok(true));
     let input = world.turn_lines()[0].payload["input"].clone();
-    assert_eq!(input.as_array().unwrap().len(), 2);
+    let input = input.as_array().unwrap();
+    assert_eq!(input.len(), 3);
+    assert_eq!(input[0], json!({"type": "jobs", "job_ids": [JOB]}));
+    assert_eq!(input[1]["content"][0]["text"], "Hello.");
+    assert_eq!(input[2]["content"][0]["text"], "Again.");
 }
 
 #[test]
