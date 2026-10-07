@@ -534,7 +534,7 @@ fn the_menu_lists_completion_under_fiber_itself() {
         [
             "Fiber itself:",
             "  approve [--yes]                           Show what this repository ships and approve it",
-            "  login [<provider>] [--as <label>]         Store a provider's key",
+            "  login [<name>] [--as <label>]             Store a provider's key or an extension's secret",
             "  logout <provider> [--as <label> | --all]  Delete a provider's stored key",
             "  completion <shell>                        Print a completion script for bash, zsh or fish",
             "  help [<command>]                          Print this menu, or a command's help",
