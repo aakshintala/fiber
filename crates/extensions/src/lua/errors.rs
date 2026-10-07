@@ -48,6 +48,10 @@ pub(super) fn again(name: &str, e: &Error) -> Error {
             extension: extension.clone(),
             message: message.clone(),
         },
+        Error::Unattended { extension, call } => Error::Unattended {
+            extension: extension.clone(),
+            call: call.clone(),
+        },
         Error::Damaged(inner) => Error::Damaged(inner.clone()),
         Error::Timeout {
             extension,
