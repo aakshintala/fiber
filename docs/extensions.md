@@ -234,7 +234,7 @@ extension sends the same calls as messages.
 
 ```
 fiber.tool(name, { description, input_schema, effects, timeout, run })
-fiber.provider(name, { models, quota, credential, sign })
+fiber.provider(name, { models, quota, credential, sign, cost })
 fiber.harness(name, { auto, models, command, line, quota })
 fiber.search_backend(name, { timeout, run })
 fiber.hook(point, { phase, on_failure, timeout, run })

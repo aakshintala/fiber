@@ -153,6 +153,10 @@ impl Setup {
             let file = entry.unwrap().file_name();
             files.push(format!("providers/{}", file.to_str().unwrap()));
         }
+        // A Lua package's entry script, such as `openrouter`'s `cost()`.
+        if from.join("init.lua").exists() {
+            files.push("init.lua".to_owned());
+        }
         for file in files {
             let text = fs::read_to_string(from.join(&file)).unwrap();
             fs::create_dir_all(to.join(&file).parent().unwrap()).unwrap();
@@ -2217,6 +2221,76 @@ fn openrouter_installed_by_path_records_the_inline_cost_on_a_completed_turn() {
     assert_eq!(recorded.len(), 1);
     assert_eq!(recorded[0]["payload"]["cost"], json!(0.0000072));
     assert_eq!(recorded[0]["payload"]["generation_id"], "gen-abc123");
+}
+
+#[test]
+fn an_openrouter_stream_closed_early_records_its_generation_at_once() {
+    let setup = Setup::new();
+    // The first stream names its generation and closes: no usage, no
+    // `[DONE]`. The retry completes with the vendor's own figure.
+    let early = json!({"id": "gen-early", "object": "chat.completion.chunk", "choices": [
+        {"index": 0, "delta": {"role": "assistant", "content": "Hel"}}]});
+    let server = ProviderServer::start([
+        Response::stream(format!("data: {early}\n\n")),
+        completions_hello("gen-ok", json!(0.0000072)),
+    ])
+    .unwrap();
+    install(
+        &setup,
+        &setup.package("openrouter", "https://openrouter.ai", &server.url()),
+    );
+    // The retry's backoff is real time in the binary: kept short.
+    write(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "retry": {"initial_delay_ms": 1}}),
+    );
+
+    let run = setup.fiber_with_env(
+        &["ask", "--model", "openrouter/z-ai/glm-5.3-flash", "hi"],
+        &[("OPENROUTER_API_KEY", "sk-test-openrouter")],
+    );
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    // The package's `init.lua` ran and `fiber.provider` took `cost`: the
+    // package loaded, and no notice says it failed.
+    let loaded = run
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "extensions_loaded")
+        .unwrap();
+    assert!(
+        loaded["payload"]["extensions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["name"] == "github.com/aakshintala/fiber/providers/openrouter"),
+        "{loaded}"
+    );
+    assert!(
+        run.lines.iter().all(|line| line["kind"] != "notice"),
+        "{:?}",
+        run.kinds()
+    );
+    let recorded: Vec<_> = run
+        .lines
+        .iter()
+        .filter(|line| line["kind"] == "usage_recorded")
+        .collect();
+    assert_eq!(recorded.len(), 2, "{:?}", run.kinds());
+    assert_eq!(recorded[0]["payload"]["generation_id"], "gen-early");
+    // No usage was seen, so the declared prices give 0 for its tokens.
+    assert_eq!(recorded[0]["payload"]["cost"], json!(0.0));
+    assert_eq!(recorded[1]["payload"]["generation_id"], "gen-ok");
+    assert_eq!(recorded[1]["payload"]["cost"], json!(0.0000072));
+    // `ask` ended before the lookup's 30 s.
+    assert!(
+        server
+            .requests()
+            .iter()
+            .all(|request| !request.path.starts_with("/api/v1/generation")),
+        "{:?}",
+        server.requests()
+    );
 }
 
 #[test]
