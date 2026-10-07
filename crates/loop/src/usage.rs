@@ -3,12 +3,13 @@
 //! spending budget, so the two cannot drift.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
-use contract::GenerationId;
-use contract::events::{Event, UsageRecorded};
-use contract::provider::{CallUsage, Cost, Tier};
+use contract::events::{Event, Notice, UsageRecorded};
+use contract::provider::{CallUsage, Cost, CostLookup, Tier};
 use contract::shapes::{Tokens, Usage};
 use contract::{ActionId, TurnId};
+use contract::{ErrorCode, GenerationId};
 
 /// The call's cost in US dollars (`docs/model-routing.md`, "Cost").
 ///
@@ -102,8 +103,85 @@ impl crate::Loop {
         let prices = self.model.cost.clone();
         let subscription = self.model.subscription;
         let recorded = recorded(usage.clone(), None, &model, prices.as_ref(), subscription);
-        self.append(&Event::UsageRecorded(recorded.clone()), turn, Some(message))?;
-        self.ledger.record(&recorded);
+        let lookup = self.provider.cost_lookup();
+        self.write_usage(recorded, None, lookup, Some(turn), Some(message))
+    }
+
+    /// Writes and ledgers one call's `usage_recorded`: the one path every
+    /// call's usage takes. A call without the vendor's own figure (`inline`
+    /// `None`) whose provider has a lookup is looked up once, later
+    /// (`docs/model-routing.md`, "Cost").
+    pub(crate) fn write_usage(
+        &mut self,
+        recorded: UsageRecorded,
+        inline: Option<f64>,
+        lookup: Option<Arc<dyn CostLookup>>,
+        turn: Option<&TurnId>,
+        action: Option<&ActionId>,
+    ) -> Result<(), crate::Error> {
+        self.put_usage(&recorded, turn, action)?;
+        let Some(lookup) = lookup.filter(|_| inline.is_none()) else {
+            return Ok(());
+        };
+        let clock = Arc::clone(self.log.clock());
+        let scheduled =
+            self.late_cost
+                .schedule(lookup, recorded, turn.cloned(), action.cloned(), &clock);
+        if let Err(e) = scheduled {
+            self.log.append(
+                &Event::Notice(Notice {
+                    code: ErrorCode::IoFailed,
+                    message: format!(
+                        "The cost lookup could not start: {e}. The call's cost stays as first recorded."
+                    ),
+                    extension: None,
+                }),
+                turn.cloned(),
+                None,
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Writes every record whose cost settled late, each in its first
+    /// record's turn and action (`docs/events.md`, "Usage and notices").
+    pub(crate) fn write_settled(&mut self) -> Result<(), crate::Error> {
+        for settled in self.late_cost.take_settled() {
+            self.put_usage(
+                &settled.record,
+                settled.turn.as_ref(),
+                settled.action.as_ref(),
+            )?;
+        }
+        Ok(())
+    }
+
+    /// At the session's end: stops the lookups, so nothing settles after
+    /// this, then writes what already settled. A lookup still waiting is
+    /// never made.
+    pub(crate) fn write_last_settled(&mut self) -> Result<(), crate::Error> {
+        self.late_cost.stop();
+        self.write_settled()
+    }
+
+    fn put_usage(
+        &mut self,
+        recorded: &UsageRecorded,
+        turn: Option<&TurnId>,
+        action: Option<&ActionId>,
+    ) -> Result<(), crate::Error> {
+        crate::util::write(
+            &self.log,
+            &mut self.conversation,
+            &mut self.reviewed,
+            &self.model.reference,
+            &Event::UsageRecorded(recorded.clone()),
+            turn,
+            action,
+            &mut self.changes.had,
+            &mut self.handoff.carry,
+        )?;
+        self.ledger.record(recorded);
         Ok(())
     }
 }
@@ -118,8 +196,11 @@ pub(crate) struct Ledger {
 
 impl Ledger {
     /// Keeps `line`, replacing any earlier line with its `generation_id`.
-    pub(crate) fn record(&mut self, line: &UsageRecorded) {
-        self.calls.insert(line.generation_id.clone(), line.clone());
+    /// True when it replaced one: `line` corrects a call already counted.
+    pub(crate) fn record(&mut self, line: &UsageRecorded) -> bool {
+        self.calls
+            .insert(line.generation_id.clone(), line.clone())
+            .is_some()
     }
 
     /// The docs' `usage` shape over the lines kept.

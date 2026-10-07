@@ -341,3 +341,18 @@ fn a_generation_scheduled_twice_is_looked_up_once() {
     assert_eq!(seen.calls(), ["gen-1"]);
     assert_eq!(late.take_settled().len(), 1);
 }
+
+#[test]
+fn dropping_the_queue_stops_the_worker_before_the_due() {
+    let (clock, dyn_clock) = clocks();
+    let due = clock.now() + LOOKUP_AFTER;
+    let (lookup, seen) = lookup(Some(1.0));
+    let mut late = LateCost::default();
+    late.schedule(lookup, first("gen-1"), turn(), action(), &dyn_clock)
+        .unwrap();
+    assert!(clock.await_parked(due, WAIT), "the worker parks at the due");
+    drop(late);
+    clock.advance(LOOKUP_AFTER);
+    seen.await_dropped();
+    assert!(seen.calls().is_empty());
+}

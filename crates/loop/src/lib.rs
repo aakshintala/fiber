@@ -15,7 +15,7 @@ use std::sync::mpsc::Receiver;
 pub(crate) use completion::Step;
 use contract::events::{
     AssistantMessageCompleted, CacheLifetime, Empty, Event, Grant, MessageOutcome, PreambleReason,
-    SessionStarted, ToolReplaced, TurnCompleted, TurnOutcome, TurnStarted, UsageRecorded,
+    SessionStarted, ToolReplaced, TurnCompleted, TurnOutcome, TurnStarted,
 };
 use contract::inbox::Delivery;
 use contract::provider::{
@@ -43,7 +43,6 @@ mod hooks;
 mod hosted;
 mod inbox;
 mod jobs;
-#[allow(dead_code, reason = "the loop wires it in next")]
 mod late_cost;
 mod opening;
 mod permission;
@@ -190,6 +189,8 @@ pub struct Loop {
     cut_off: bool,
     /// Usage lines this loop has written, latest per generation.
     ledger: usage::Ledger,
+    /// Costs looked up after their calls ended, to write as they settle.
+    late_cost: late_cost::LateCost,
     /// `budget.usd` for this session. `None` is no limit.
     budget: Option<f64>,
     /// How a failed model call is retried (`docs/model-routing.md`, "When
@@ -329,6 +330,7 @@ impl Loop {
             changes,
             cut_off: false,
             ledger: usage::Ledger::default(),
+            late_cost: late_cost::LateCost::default(),
             budget: None,
             retry: Retry::default(),
             idle_exit: None,
@@ -395,6 +397,7 @@ impl Loop {
                 Err(e) => break Err(e),
             }
         };
+        let result = result.and_then(|()| self.write_last_settled());
         let result = self.settled(result);
         // `fiber_exited` is the last line a process writes: no status
         // follows it.
@@ -421,6 +424,7 @@ impl Loop {
         let Some(started) = self.wait_for_turn()? else {
             return Ok(None);
         };
+        self.write_settled()?;
         // The one preamble build, before `turn_started`: `answerable` is
         // already what the builder set, so an unattended loop's prompt
         // carries its line. A loop that never takes a turn writes none.
@@ -552,6 +556,7 @@ impl Loop {
 
     /// One step (`docs/loop.md`, "One step").
     fn step(&mut self, turn: &TurnId) -> Result<Step, Error> {
+        self.write_settled()?;
         // A cancel that landed ends the turn before anything is sent: no
         // `step_started`, no request, and queued steers stay queued for
         // the next turn.
@@ -685,6 +690,7 @@ impl Loop {
         message: &ActionId,
     ) -> Result<(handoff::Calls, Finish), Error> {
         let mut calls = Vec::new();
+        let usage = reply.usage();
         for action in reply.actions {
             match action {
                 ReplyAction::Text(completed) => {
@@ -715,21 +721,16 @@ impl Loop {
                 ReplyAction::Hosted(hosted) => self.write_hosted(&hosted, turn)?,
             }
         }
-        let cost = usage::call_cost(reply.cost, self.model.cost.as_ref(), &reply.tokens);
-        let recorded = UsageRecorded {
-            generation_id: reply.generation_id,
-            model: self.model.reference.clone(),
-            tokens: reply.tokens,
-            input_bytes: reply.input_size.bytes,
-            input_media: reply.input_size.media.then_some(true),
-            web_searches: reply.web_searches,
-            cost,
-            subscription: self.model.subscription.then_some(true),
-            extension: None,
-            origin_session_id: None,
-        };
-        self.append(&Event::UsageRecorded(recorded.clone()), turn, Some(message))?;
-        self.ledger.record(&recorded);
+        let model = &self.model;
+        let recorded = usage::recorded(
+            usage,
+            reply.cost,
+            &model.reference,
+            model.cost.as_ref(),
+            model.subscription,
+        );
+        let lookup = self.provider.cost_lookup();
+        self.write_usage(recorded, reply.cost, lookup, Some(turn), Some(message))?;
         self.append(
             &Event::AssistantMessageCompleted(AssistantMessageCompleted {
                 outcome: MessageOutcome::Completed,
