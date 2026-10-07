@@ -170,6 +170,7 @@ fn a_resumed_session_writes_one_status_for_its_history() {
             "/bin/sh".into(),
             session.dir.join("events.jsonl").display().to_string(),
             clock,
+            fakes::CONTEXT_WINDOW,
         ),
         rx,
         Vec::new(),

@@ -34,7 +34,7 @@ pub struct Prepared {
     /// The prompt-cache lifetime.
     pub cache_lifetime: contract::events::CacheLifetime,
     /// The model's context window, in tokens.
-    pub context_window: Option<u64>,
+    pub context_window: u64,
     /// The model's addendum.
     pub addendum: Option<String>,
     /// Automatic handoff's settings for the new model.

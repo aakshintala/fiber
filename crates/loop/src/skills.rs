@@ -320,14 +320,8 @@ pub(crate) fn entry(skill: &SkillListed) -> String {
 /// The `skills_large` notice, when the rendered listing of `listed`
 /// passes 10% of the context window (`docs/system-prompt.md`, "Size"),
 /// estimated at four bytes a token. Exactly 10% is not over, so `>`
-/// compares the unrounded cross products. `None` when the window is
-/// unknown.
-pub(crate) fn size_notice(listed: &[&Found], window: Option<u64>) -> Option<Notice> {
-    let window = window.unwrap_or(0);
-    // Unknown context window: the 10% check has nothing to compare with.
-    if window == 0 {
-        return None;
-    }
+/// compares the unrounded cross products.
+pub(crate) fn size_notice(listed: &[&Found], window: u64) -> Option<Notice> {
     let mut places: Vec<(&str, u128)> = Vec::new();
     let mut total: u128 = 0;
     for skill in listed {

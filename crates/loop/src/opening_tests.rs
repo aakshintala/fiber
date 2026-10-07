@@ -34,6 +34,7 @@ fn inputs(home: &Path, clock: &Arc<FakeClock>) -> PromptInputs {
         "/bin/sh".into(),
         home.join("events.jsonl").display().to_string(),
         clock,
+        fakes::CONTEXT_WINDOW,
     )
 }
 
@@ -639,7 +640,7 @@ fn large_instruction_text_writes_instructions_large_naming_three() {
     write(&workspace.join("AGENTS.md"), &"b".repeat(150));
     let fake = clock();
     let mut with = inputs(&home, &fake);
-    with.context_window = Some(1_000);
+    with.context_window = 1_000;
     // 200 + 150 + 51 system bytes = 401: over 10% of 1,000 tokens.
     with.system = Some("s".repeat(51));
     let collected = collect(&with, &workspace);
@@ -664,7 +665,7 @@ fn exactly_ten_percent_is_not_large() {
     write(&workspace.join("AGENTS.md"), &"a".repeat(400));
     let fake = clock();
     let mut with = inputs(&home, &fake);
-    with.context_window = Some(1_000);
+    with.context_window = 1_000;
     assert!(collect(&with, &workspace).notices.is_empty());
 }
 
@@ -675,7 +676,7 @@ fn one_byte_over_ten_percent_is_large() {
     write(&workspace.join("AGENTS.md"), &"a".repeat(401));
     let fake = clock();
     let mut with = inputs(&home, &fake);
-    with.context_window = Some(1_000);
+    with.context_window = 1_000;
     let collected = collect(&with, &workspace);
     assert_eq!(collected.notices.len(), 1);
     assert_eq!(
@@ -685,26 +686,13 @@ fn one_byte_over_ten_percent_is_large() {
 }
 
 #[test]
-fn unknown_context_window_skips_the_size_check() {
-    let (home, _held) = dir();
-    let workspace = home.join("workspace");
-    write(&workspace.join("AGENTS.md"), &"a".repeat(10_000));
-    let fake = clock();
-    let mut unknown = inputs(&home, &fake);
-    unknown.context_window = None;
-    assert!(collect(&unknown, &workspace).notices.is_empty());
-    unknown.context_window = Some(0);
-    assert!(collect(&unknown, &workspace).notices.is_empty());
-}
-
-#[test]
 fn extension_texts_and_append_count_toward_the_size() {
     let (home, _held) = dir();
     let workspace = home.join("workspace");
     std::fs::create_dir_all(&workspace).unwrap();
     let fake = clock();
     let mut with = inputs(&home, &fake);
-    with.context_window = Some(1_000);
+    with.context_window = 1_000;
     with.append = Some("a".repeat(300));
     with.extensions = vec![("ext".into(), "b".repeat(150))];
     let collected = collect(&with, &workspace);
@@ -721,7 +709,7 @@ fn whitespace_only_texts_do_not_count_toward_the_size() {
     std::fs::create_dir_all(&workspace).unwrap();
     let fake = clock();
     let mut with = inputs(&home, &fake);
-    with.context_window = Some(1_000);
+    with.context_window = 1_000;
     // 500 blank bytes would pass 10% if counted; left-out parts are not.
     with.system = Some(" ".repeat(500));
     with.extensions = vec![("ext".into(), "\n  \n".into())];
@@ -862,7 +850,7 @@ fn notices_come_in_the_documented_order() {
     let fake = clock();
     let mut with = inputs(&home, &fake);
     // The system text and the listing both pass 10% of this window.
-    with.context_window = Some(10);
+    with.context_window = 10;
     with.system = Some("s".repeat(100));
     let codes: Vec<_> = collect(&with, &workspace)
         .notices
@@ -1027,7 +1015,7 @@ fn size_notice_names_a_large_section_file() {
         &fake,
         vec![("fiber.test/notes".into(), vec![big.clone()], None)],
     );
-    with.context_window = Some(1_000);
+    with.context_window = 1_000;
     let collected = collect(&with, &workspace);
     assert_eq!(collected.notices.len(), 1);
     assert_eq!(

@@ -731,7 +731,7 @@ fn a_switch_while_warming_sends_no_refresh_and_restarts_idle_from_the_switch() {
                 chosen: None,
                 credential: Some("work".into()),
                 cache_lifetime: CacheLifetime::FiveMinutes,
-                context_window: None,
+                context_window: fakes::CONTEXT_WINDOW,
                 addendum: None,
                 handoff: r#loop::HandoffSettings::default(),
                 reviewer: Err(contract::shapes::Failure {
@@ -841,7 +841,7 @@ fn a_during_turn_switch_followed_by_a_turn_keeps_warming_the_new_cache() {
                 chosen: None,
                 credential: Some("work".into()),
                 cache_lifetime: CacheLifetime::FiveMinutes,
-                context_window: None,
+                context_window: fakes::CONTEXT_WINDOW,
                 addendum: None,
                 handoff: r#loop::HandoffSettings::default(),
                 reviewer: Err(contract::shapes::Failure {

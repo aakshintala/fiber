@@ -345,6 +345,7 @@ impl World {
                     .display()
                     .to_string(),
                 clock,
+                fakes::CONTEXT_WINDOW,
             ),
             rx,
             tools(&inbox)

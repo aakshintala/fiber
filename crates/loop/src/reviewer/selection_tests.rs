@@ -56,12 +56,10 @@ fn fallback_notice_says_what_was_kept_and_why() {
 #[test]
 fn dropped_oldest_drops_only_past_the_window() {
     for (sizes, window, expected) in [
-        (vec![5, 1, 1], None, 0),
-        (vec![5, 1, 1], Some(0), 0),
-        (vec![1, 1], Some(2), 0),
-        (vec![1, 1, 1], Some(2), 1),
-        (vec![5], Some(2), 1),
-        (vec![5, 1, 1], Some(2), 1),
+        (vec![1, 1], 2, 0),
+        (vec![1, 1, 1], 2, 1),
+        (vec![5], 2, 1),
+        (vec![5, 1, 1], 2, 1),
     ] {
         assert_eq!(dropped_oldest(&sizes, window), expected, "{sizes:?}");
     }

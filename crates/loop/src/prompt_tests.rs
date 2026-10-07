@@ -21,6 +21,7 @@ fn empty_inputs() -> PromptInputs {
         "/bin/sh".into(),
         "/test-home/s_test/events.jsonl".into(),
         clock,
+        fakes::CONTEXT_WINDOW,
     )
 }
 
@@ -326,9 +327,7 @@ fn definitions_notice_names_the_three_largest_sources_by_size() {
 }
 
 #[test]
-fn definitions_notice_ignores_deferred_tools_and_an_unknown_window() {
+fn definitions_notice_ignores_deferred_tools() {
     let deferred = vec![sent("a", "mcp__s", true, 10_000)];
     assert!(super::definitions_notice(&built(100, deferred)).is_none());
-    let full = vec![sent("a", "builtin", false, 10_000)];
-    assert!(super::definitions_notice(&built(0, full)).is_none());
 }

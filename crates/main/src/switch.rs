@@ -101,6 +101,13 @@ pub(crate) fn prepare(
     let in_map = |name: &str| switching.credentials.contains_key(name);
     let resolved = resolve(&switching.registry, &switching.naming, &in_map, &args.model)?;
     let reference = resolved.reference();
+    let context_window =
+        crate::settings::context_window(resolved.model, &reference).map_err(|failure| {
+            Rejection {
+                code: ErrorCode::InvalidArguments,
+                message: failure.message,
+            }
+        })?;
     let Some((label, (key, signer))) = switching
         .credentials
         .get(resolved.provider.name.as_str())
@@ -140,7 +147,7 @@ pub(crate) fn prepare(
         chosen: resolved.thinking.or(asked).or(chosen),
         credential: Some(label),
         cache_lifetime: crate::settings::cache_lifetime(&switching.config, &reference),
-        context_window: resolved.model.context_window,
+        context_window,
         addendum: switching.registry.addendum(&resolved).map(str::to_owned),
         handoff: crate::handoff::handoff_settings(&switching.config, &reference),
         reviewer: reviewer_for(switching, &resolved),

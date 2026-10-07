@@ -35,6 +35,7 @@ fn inputs(home: &Path, clock: &Arc<FakeClock>) -> PromptInputs {
         "/bin/sh".into(),
         home.join("events.jsonl").display().to_string(),
         clock,
+        fakes::CONTEXT_WINDOW,
     )
 }
 

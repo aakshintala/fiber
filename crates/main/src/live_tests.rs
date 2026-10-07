@@ -264,6 +264,7 @@ fn live_reviewer() {
                 .display()
                 .to_string(),
             clock,
+            fakes::CONTEXT_WINDOW,
         ),
         rx,
         vec![("builtin".to_owned(), Arc::new(Shell) as Arc<dyn Tool>)],
@@ -285,7 +286,7 @@ fn live_reviewer() {
                 subscription: false,
             },
             cache_lifetime: contract::events::CacheLifetime::OneHour,
-            context_window: None,
+            context_window: fakes::CONTEXT_WINDOW,
         }),
         r#loop::BlockLimits::default(),
     );

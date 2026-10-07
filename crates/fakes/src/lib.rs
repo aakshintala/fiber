@@ -39,6 +39,11 @@ pub use temp_dir::TempDir;
 pub use watchdog::Watchdog;
 pub use within::within;
 
+/// The context window every fake model declares, in tokens: the window
+/// fixtures build sessions with, so size notices and the handoff trigger
+/// run as they do in production.
+pub const CONTEXT_WINDOW: u64 = 1_000_000;
+
 /// A stand-in script the kernel may exec: `dir/name` is a symlink to the
 /// checked-in trampoline, and the freshly written `body` runs through
 /// `/bin/sh` as `dir/name.sh` (`docs/testing.md`, "Waits and timeouts": a

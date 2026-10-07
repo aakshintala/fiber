@@ -27,6 +27,10 @@ use support::{DEADLINE, MODEL, Session, delivery, kinds, model};
 
 const NEW_MODEL: &str = "fake/model-2";
 
+/// The window a prepared switch declares: the switched preamble is built
+/// for it, not for the start model's window.
+const NEW_WINDOW: u64 = 200_000;
+
 fn new_provider(script: Vec<Scripted>) -> Arc<ScriptedProvider> {
     Arc::new(ScriptedProvider::new(script))
 }
@@ -75,7 +79,7 @@ fn prepare_to(
                 chosen: kept,
                 credential: Some("work".into()),
                 cache_lifetime: CacheLifetime::OneHour,
-                context_window: None,
+                context_window: NEW_WINDOW,
                 addendum: None,
                 handoff: HandoffSettings::default(),
                 reviewer: no_reviewer(),
@@ -172,6 +176,7 @@ fn between_turns_switches_before_the_next_turn_started() {
     assert_eq!(built.len(), 1);
     assert_eq!(built[0].payload["reason"], "switch");
     assert_eq!(built[0].payload["model"], NEW_MODEL);
+    assert_eq!(built[0].payload["context_window"], NEW_WINDOW);
 
     assert_eq!(
         session.requests().len(),
@@ -319,7 +324,7 @@ fn after_close_prepare_is_not_called() {
             chosen: None,
             credential: Some("work".into()),
             cache_lifetime: CacheLifetime::OneHour,
-            context_window: None,
+            context_window: fakes::CONTEXT_WINDOW,
             addendum: None,
             handoff: HandoffSettings::default(),
             reviewer: no_reviewer(),
@@ -855,7 +860,7 @@ fn a_new_model_lacking_the_chosen_level_is_invalid_arguments() {
                 chosen: None,
                 credential: Some("work".into()),
                 cache_lifetime: CacheLifetime::OneHour,
-                context_window: None,
+                context_window: fakes::CONTEXT_WINDOW,
                 addendum: None,
                 handoff: HandoffSettings::default(),
                 reviewer: no_reviewer(),
@@ -897,14 +902,14 @@ fn reviewer_collision_is_invalid_arguments_and_changes_nothing() {
             chosen: None,
             credential: Some("work".into()),
             cache_lifetime: CacheLifetime::OneHour,
-            context_window: None,
+            context_window: fakes::CONTEXT_WINDOW,
             addendum: None,
             handoff: HandoffSettings::default(),
             reviewer: Ok(Reviewer {
                 provider: Arc::clone(&review_provider) as Arc<dyn Provider>,
                 model: model_of(NEW_MODEL),
                 cache_lifetime: CacheLifetime::OneHour,
-                context_window: None,
+                context_window: fakes::CONTEXT_WINDOW,
             }),
             web_search: None,
             notice: None,
@@ -947,7 +952,7 @@ fn hosted_search_mismatch_is_invalid_arguments_in_both_directions() {
                 chosen: None,
                 credential: Some("work".into()),
                 cache_lifetime: CacheLifetime::OneHour,
-                context_window: None,
+                context_window: fakes::CONTEXT_WINDOW,
                 addendum: None,
                 handoff: HandoffSettings::default(),
                 reviewer: no_reviewer(),
@@ -1006,7 +1011,7 @@ fn two_switches_apply_in_order_with_one_rebuild() {
                 chosen,
                 credential: Some("work".into()),
                 cache_lifetime: CacheLifetime::OneHour,
-                context_window: None,
+                context_window: fakes::CONTEXT_WINDOW,
                 addendum: None,
                 handoff: HandoffSettings::default(),
                 reviewer: no_reviewer(),
@@ -1086,7 +1091,7 @@ fn a_notice_is_written_after_model_changed() {
             chosen: None,
             credential: Some("work".into()),
             cache_lifetime: CacheLifetime::OneHour,
-            context_window: None,
+            context_window: fakes::CONTEXT_WINDOW,
             addendum: None,
             handoff: HandoffSettings::default(),
             reviewer: no_reviewer(),
@@ -1141,14 +1146,14 @@ fn a_switch_replaces_the_reviewer() {
             chosen: None,
             credential: Some("work".into()),
             cache_lifetime: CacheLifetime::OneHour,
-            context_window: None,
+            context_window: fakes::CONTEXT_WINDOW,
             addendum: None,
             handoff: HandoffSettings::default(),
             reviewer: Ok(Reviewer {
                 provider: Arc::clone(&review_handle) as Arc<dyn Provider>,
                 model: model_of("fake/reviewer-2"),
                 cache_lifetime: CacheLifetime::OneHour,
-                context_window: None,
+                context_window: fakes::CONTEXT_WINDOW,
             }),
             web_search: None,
             notice: None,
@@ -1312,7 +1317,7 @@ fn resume_interleaving_holds_arrival_order() {
                 chosen,
                 credential: Some("work".into()),
                 cache_lifetime: CacheLifetime::OneHour,
-                context_window: None,
+                context_window: fakes::CONTEXT_WINDOW,
                 addendum: None,
                 handoff: HandoffSettings::default(),
                 reviewer: no_reviewer(),
@@ -1326,8 +1331,13 @@ fn resume_interleaving_holds_arrival_order() {
     let home = root.path().to_path_buf();
     let session_log = dir.join("events.jsonl").display().to_string();
     let prompt_clock = Arc::clone(&clock) as Arc<dyn contract::clock::Clock>;
-    let mut prompt =
-        r#loop::PromptInputs::new(home.clone(), "/bin/sh".into(), session_log, prompt_clock);
+    let mut prompt = r#loop::PromptInputs::new(
+        home.clone(),
+        "/bin/sh".into(),
+        session_log,
+        prompt_clock,
+        fakes::CONTEXT_WINDOW,
+    );
     prompt.credential = Some("work".into());
     let rules = Arc::new(support::FakeRules::empty());
     let tool = Arc::new(support::TestTool::reads("read", "ok"));

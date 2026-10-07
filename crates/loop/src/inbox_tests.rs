@@ -76,6 +76,7 @@ fn started() -> (Loop, Arc<Log>, log::Watcher, fakes::TempDir) {
                 .display()
                 .to_string(),
             Arc::clone(&clock) as Arc<dyn contract::clock::Clock>,
+            fakes::CONTEXT_WINDOW,
         ),
         rx,
         Vec::new(),

@@ -372,7 +372,13 @@ fn a_resume_rebuilds_the_reviewers_input_from_the_selection() {
     let session_log = session_b.dir.join("events.jsonl").display().to_string();
     let uncoerced = Arc::clone(&session_b.clock);
     let clock: Arc<dyn contract::clock::Clock> = uncoerced;
-    let mut prompt = PromptInputs::new(home, "/bin/sh".into(), session_log, clock);
+    let mut prompt = PromptInputs::new(
+        home,
+        "/bin/sh".into(),
+        session_log,
+        clock,
+        fakes::CONTEXT_WINDOW,
+    );
     prompt.credential = Some("work".into());
     let rules: Arc<dyn contract::rules::Rules> = session_b.rules.clone();
     let tool = shell();
@@ -406,7 +412,7 @@ fn a_resume_rebuilds_the_reviewers_input_from_the_selection() {
                 subscription: false,
             },
             cache_lifetime: CacheLifetime::OneHour,
-            context_window: None,
+            context_window: fakes::CONTEXT_WINDOW,
         }),
         BlockLimits::default(),
     );
@@ -879,8 +885,8 @@ fn the_oldest_kept_messages_drop_past_the_reviewers_window() {
     // "The person: say hi" is 19 bytes, 5 tokens; "The person: never
     // push to main" is 31 bytes, 8 tokens. A window of 5 fits only the
     // newest.
-    let window = Some("The person: say hi".len().div_ceil(4) as u64);
-    assert_eq!(window, Some(5));
+    let window = "The person: say hi".len().div_ceil(4) as u64;
+    assert_eq!(window, 5);
 
     // A selection of both keeps only the second, with no notice.
     let mut session = Session::with_tools(

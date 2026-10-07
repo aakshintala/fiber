@@ -40,9 +40,8 @@ pub struct Reviewer {
     /// resolved for the reviewer's model (`docs/prompt-cache.md`, "Cache
     /// lifetime").
     pub cache_lifetime: CacheLifetime,
-    /// The reviewer model's context window, in tokens; `None` or `Some(0)`
-    /// when unknown.
-    pub context_window: Option<u64>,
+    /// The reviewer model's context window, in tokens.
+    pub context_window: u64,
 }
 
 /// When a reviewer block hands the call to a person

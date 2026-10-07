@@ -196,6 +196,27 @@ mod thinking_tests;
 #[path = "warm_tests.rs"]
 mod warm_tests;
 
+/// The model's declared context window, in tokens
+/// (`docs/configuration.md`, "Keys"): `context_window` is required, so a
+/// model that declares none — or a zero window — is `no_model` before any
+/// credential is read or any connection made. The loop holds the window
+/// as a plain `u64` and trusts it to be positive.
+pub(crate) fn context_window(model: &ModelData, reference: &str) -> Result<u64, Failure> {
+    match model.context_window {
+        Some(window) if window > 0 => Ok(window),
+        _ => Err(Failure {
+            code: ErrorCode::NoModel,
+            message: format!("The model `{reference}` declares no `context_window`."),
+            retry_after_ms: None,
+            provider: None,
+        }),
+    }
+}
+
+#[cfg(test)]
+#[path = "context_window_tests.rs"]
+mod context_window_tests;
+
 /// Each configured `tools."<name>".max_result_bytes`, by the tool's
 /// registered name (`docs/configuration.md`, "Keys"; `docs/tools.md`,
 /// "Bounded results"). The key is not a per-model key, so the caps are
