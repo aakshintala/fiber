@@ -23,11 +23,17 @@ merge_base=$(git merge-base "$base" "$prhead")
 # A docs-only diff has no code for a test to show the bug, so the check
 # passes before the one-commit check. Only exit 0 means docs-only; exit 1
 # falls through, and any other xtask failure fails the script.
-set +e
-# shellcheck disable=SC2046
-cargo xtask docs-only $(git diff --name-only --no-renames "$merge_base" "$prhead") >/dev/null
-docs_only_status=$?
-set -e
+# NUL-delimited: a spaced name stays one word and a glob character in a
+# name never expands. git diff failing exits the script under set -e.
+names=$(mktemp)
+git diff --name-only --no-renames -z "$merge_base" "$prhead" > "$names"
+files=()
+while IFS= read -r -d '' f; do
+  files+=("$f")
+done < "$names"
+rm -f "$names"
+docs_only_status=0
+cargo xtask docs-only ${files[@]+"${files[@]}"} >/dev/null || docs_only_status=$?
 if [ "$docs_only_status" -eq 0 ]; then
   echo "bug-red: ok, the pull request changes only docs, so it has no code for a test to show the bug"
   exit 0

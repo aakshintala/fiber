@@ -172,13 +172,9 @@ fn run(args: &[String]) -> Result<bool, String> {
             Ok(true)
         }
         "docs-only" => {
-            let files: Vec<String> = rest.to_vec();
-            let failures = if select::docs_only(&files) {
-                Vec::new()
-            } else {
-                vec!["no".to_owned()]
-            };
-            report("docs-only", &failures, "yes")
+            let yes = select::docs_only(rest);
+            println!("docs-only: {}", if yes { "yes" } else { "no" });
+            Ok(yes)
         }
         "line-cap" => report(
             "line-cap",
