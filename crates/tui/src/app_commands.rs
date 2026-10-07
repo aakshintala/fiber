@@ -105,7 +105,9 @@ impl App {
             | Key::AltA
             | Key::Tab
             | Key::BackTab
-            | Key::F1 => None,
+            | Key::F1
+            | Key::CtrlG
+            | Key::CtrlR => None,
         }
     }
 
@@ -314,7 +316,9 @@ impl App {
             | Key::AltA
             | Key::BackTab
             | Key::F1
-            | Key::CtrlO => return None,
+            | Key::CtrlO
+            | Key::CtrlG
+            | Key::CtrlR => return None,
         }
         Some(Effect::None)
     }
@@ -452,7 +456,9 @@ impl App {
             | Key::Tab
             | Key::BackTab
             | Key::F1
-            | Key::CtrlO => Some(top),
+            | Key::CtrlO
+            | Key::CtrlG
+            | Key::CtrlR => Some(top),
         };
         Some(Effect::None)
     }

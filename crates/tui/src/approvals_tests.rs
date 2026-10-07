@@ -790,3 +790,12 @@ mod through_the_app {
         );
     }
 }
+
+#[test]
+fn ctrl_g_and_ctrl_r_do_nothing_in_the_panel() {
+    let mut queue = folded(&[offering(S_A, "r_1")]);
+    let before = panel(&queue);
+    press(&mut queue, Key::CtrlG, 1);
+    press(&mut queue, Key::CtrlR, 1);
+    assert_eq!(panel(&queue), before);
+}

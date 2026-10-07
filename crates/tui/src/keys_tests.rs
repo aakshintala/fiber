@@ -435,3 +435,23 @@ fn f1_in_its_three_forms() {
     assert!(feed_all(&[b"\x1b[1;2P"]).is_empty());
     assert!(feed_all(&[b"\x1b[1~"]).is_empty());
 }
+
+#[test]
+fn ctrl_g_and_ctrl_r_in_legacy_and_kitty_forms() {
+    assert_eq!(feed_all(&[b"\x07"]), vec![Event::Key(Key::CtrlG)]);
+    assert_eq!(feed_all(&[b"\x12"]), vec![Event::Key(Key::CtrlR)]);
+    assert_eq!(feed_all(&[b"\x1b[103;5u"]), vec![Event::Key(Key::CtrlG)]);
+    assert_eq!(feed_all(&[b"\x1b[114;5u"]), vec![Event::Key(Key::CtrlR)]);
+    // A lock key changes nothing; another modifier or a plain code is no
+    // binding.
+    assert_eq!(feed_all(&[b"\x1b[114;69u"]), vec![Event::Key(Key::CtrlR)]);
+    for bytes in [
+        b"\x1b[103u".as_slice(),
+        b"\x1b[103;3u",
+        b"\x1b[103;6u",
+        b"\x1b[114u",
+        b"\x1b[114;7u",
+    ] {
+        assert!(feed_all(&[bytes]).is_empty(), "{bytes:?}");
+    }
+}

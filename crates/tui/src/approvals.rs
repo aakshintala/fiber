@@ -274,9 +274,10 @@ impl Queue {
                     self.show(next);
                 }
             }
-            // Tab and Shift+Tab move nothing in the panel; F1 opens the
-            // key map over it.
-            Key::Tab | Key::BackTab => {}
+            // Tab, Shift+Tab, Ctrl+G and Ctrl+R do nothing in the panel,
+            // which stands in the input box's place; F1 opens the key map
+            // over it.
+            Key::Tab | Key::BackTab | Key::CtrlG | Key::CtrlR => {}
             Key::PageUp | Key::PageDown | Key::End | Key::CtrlC | Key::F1 | Key::CtrlO => {
                 return None;
             }

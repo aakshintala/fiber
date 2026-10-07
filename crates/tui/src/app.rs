@@ -231,6 +231,7 @@ impl App {
                 Effect::None
             }
             Key::AltA => self.open_first(),
+            Key::CtrlG | Key::CtrlR => Effect::None,
         }
     }
 

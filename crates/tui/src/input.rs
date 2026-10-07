@@ -92,7 +92,9 @@ impl Draft {
             | Key::AltA
             | Key::Tab
             | Key::BackTab
-            | Key::F1 => return false,
+            | Key::F1
+            | Key::CtrlG
+            | Key::CtrlR => return false,
         }
         true
     }
