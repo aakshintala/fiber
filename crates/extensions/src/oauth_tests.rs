@@ -389,10 +389,10 @@ fn a_malformed_or_symlinked_credential_is_io_failed_through_held() {
         let values: mlua::MultiValue = lua.load(format!("return {method}")).eval().unwrap();
         let values = values.into_vec();
         assert_eq!(values.len(), 3, "{method} returned no failure triple");
-        match &values[1] {
-            mlua::Value::String(code) => code.to_str().unwrap().to_owned(),
-            other => panic!("{method} raised no code: {other:?}"),
-        }
+        let mlua::Value::String(code) = &values[1] else {
+            panic!("{method} raised no code");
+        };
+        code.to_str().unwrap().to_owned()
     };
     let dir = fakes::TempDir::new("fiber-oauth-held-shape");
     let file = CredentialFile::new(dir.path(), "acme", LABEL).unwrap();
