@@ -325,6 +325,8 @@ A filter that matches no
 tests fails: nextest exits 4 with "no tests to run", where `cargo test` prints
 "0 passed" and exits 0. Doc-tests run under `cargo test --doc`.
 
+The completion tests need bash, zsh and fish on PATH, on Linux and macOS: they never skip at runtime for a missing shell, so a machine without one fails them.
+
 The tests need a user other than root: root bypasses file modes, so the tests
 that deny a file or socket by mode fail with a message saying so.
 

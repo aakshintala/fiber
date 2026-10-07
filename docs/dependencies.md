@@ -116,6 +116,7 @@ only that crate, in KiB; the empty program is 323 KiB.
 | crossterm | terminal input, raw mode and output | ~0 | 256 | ~0 | 28 | 443 |
 | mlua | the extension runtime, Lua 5.4 vendored | 912 | 704 | ~0 | 23 | 785 |
 | clap | the command line | 452 | 448 | ~0 | 17 | 782 |
+| clap_complete | the shell completion scripts `fiber completion` prints (`docs/invocation.md`, "Commands and flags") | 796 | 1,020 | 1,136 | 18 | 967 |
 | thiserror | error types in library crates | ~0 | ~0 | ~0 | 6 | 325 |
 | signal-hook | SIGTERM, SIGINT and SIGHUP | ~0 | ~0 | ~0 | 4 | 352 |
 | ring | SHA-256, for PKCE, extension binary checksums, the content hash a repository's approvals pin, and an MCP tool's cut-short name; HMAC-SHA256, for `host.hmac_sha256`; credential fingerprints in the fake provider server | ~0 | ~0 | ~0 | 8 | 341 |
@@ -127,7 +128,7 @@ only that crate, in KiB; the empty program is 323 KiB.
 | html5ever | `web_fetch`'s tokenizer, without its tree builder | 808 | 960 | 480 | 19 | 1,058 |
 | encoding_rs | `web_fetch`'s decoding by the declared character set | 224 | 332 | 272 | 5 | 490 |
 | pulldown-cmark | the terminal's markdown in replies (`docs/tui.md`, "Look") | 428 | 384 | ~0 | 4 | 724 |
-| all of the above together | | 7,616 | 6,864 | 4,720 | 150 | 7,150 |
+| all of the above together | | 8,292 | 7,532 | 5,376 | 153 | 7,729 |
 | image, fast_image_resize | the image child; png, jpeg, gif and webp only (`docs/model-routing.md`, "Image limits") | 68,076 | 67,604 | 72,352 | 32 | 5,234 |
 
 Notes:
@@ -156,15 +157,23 @@ Notes:
   file. Alone, `regex` measured 1,780 KiB and `ignore` 1,392 KiB on Linux
   x86_64; about 440 KiB of `regex`'s binary is Unicode tables. The search and
   similar rows were measured on September 26, 2026.
-- The html5ever, encoding_rs and together rows were measured on macOS on
+- The html5ever and encoding_rs rows were measured on macOS on
   October 5, 2026, and on Linux on October 6, 2026.
 - html5ever's figure is a generated 64 KiB page through the tokenizer alone,
   counting tokens in the sink, as the converter does without a tree.
 - encoding_rs's figure is decoding a 64 KiB windows-1252 page by its declared
   character set.
 - pulldown-cmark's figure is parsing a 2 KiB reply of headings, emphasis,
-  lists and code blocks. The together row was measured before the terminal
-  admitted it; `run.sh` includes it from the next run.
+  lists and code blocks.
+- clap_complete's figure is generating the bash, zsh and fish scripts for a
+  command shaped like the clap row's. It includes clap: on macOS it is
+  1,040 KiB over the clap row from the same run, and its binary 179 KiB
+  larger. Only `fiber completion` generates a script; a session never does.
+  The clap_complete and together rows were measured on macOS on October 7,
+  2026, with rustc 1.99.0. In that run the together binary with
+  clap_complete peaked within noise of the one without it (peak footprints
+  of 6,048 and 6,064 KiB against 5,760 and 6,128 KiB in two rounds),
+  because its peak is the busiest other workload.
 - `web_fetch` converts a page with html5ever's tokenizer feeding Fiber's own
   single-pass writer (`crates/tools/src/web_fetch/markdown.rs`), not with a
   parser that builds the page's document tree. The smallest maintained crate
@@ -327,6 +336,7 @@ dependency.
 | cargo-mutants | tool | the mutation check on every pull request |
 | cargo-deny | tool | licences, advisories and crate sources |
 | cargo-about | tool | the release's third-party notices file |
+| zsh, fish | tool | the completion tests load `fiber completion`'s scripts in each shell (`docs/testing.md`, "Running tests"); bash is on every runner already, and macOS ships zsh. CI installs zsh and fish on Linux and fish on macOS |
 | xtask | tool | the workspace's own CI helper, `cargo xtask`: selection, the `CI` verdict and the gate's checks (`docs/ci.md`). It uses serde_json, proc-macro2 and pulldown-cmark, `fakes` in its tests, and no Fiber crate depends on it |
 | proc-macro2 | xtask dependency | tokenising Rust source for the `unsafe` table check (`docs/code-quality.md`, "`unsafe`") |
 | pulldown-cmark | xtask dependency | reading Markdown for the docs check (`docs/ci.md`, "The docs check"); the terminal's use is in the runtime table |

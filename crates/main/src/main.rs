@@ -11,6 +11,7 @@
 mod builtin;
 mod cli;
 mod clock;
+mod completion;
 mod connect;
 mod cost;
 mod crash;
@@ -132,6 +133,7 @@ fn run() -> i32 {
             write!(io::stdout().lock(), "{}", cli::version_line()).unwrap_or(());
             0
         }
+        cli::Invocation::Run(Some(cli::Commands::Completion { shell })) => completion::print(shell),
         cli::Invocation::Run(Some(cli::Commands::Help { command })) => {
             print_help(command.as_slice())
         }

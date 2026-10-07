@@ -4,6 +4,8 @@ use std::path::PathBuf;
 
 use clap::error::ContextValue;
 
+use crate::completion::Shell;
+
 use super::{
     Commands, ConfigCommands, ExtensionCommands, HubCommands, Invocation, MENU, SessionsCommands,
     command, parse_from, usage_sentence, version_line,
@@ -443,6 +445,105 @@ fn the_menu_lists_login_and_logout_under_fiber_itself() {
 }
 
 #[test]
+fn completion_takes_bash_zsh_or_fish() {
+    for (word, shell) in [
+        ("bash", Shell::Bash),
+        ("zsh", Shell::Zsh),
+        ("fish", Shell::Fish),
+    ] {
+        let parsed = parse_from(["fiber", "completion", word]);
+        assert!(
+            matches!(parsed, Invocation::Run(Some(Commands::Completion { shell: parsed })) if parsed == shell),
+            "{word}: {parsed:?}"
+        );
+    }
+}
+
+#[test]
+fn an_unknown_shell_names_claps_suggestion() {
+    for (word, suggested) in [("bsh", "bash"), ("f", "fish"), ("Bash", "bash")] {
+        assert_eq!(
+            usage(&["fiber", "completion", word]),
+            (
+                false,
+                format!(
+                    "Invalid value '{word}' for '<shell>' [possible values: bash, zsh, fish]; did you mean '{suggested}'? Run `fiber --help` for usage."
+                )
+            ),
+            "{word}"
+        );
+    }
+    for word in ["zhs", "powershell"] {
+        assert_eq!(
+            usage(&["fiber", "completion", word]),
+            (
+                false,
+                format!(
+                    "Invalid value '{word}' for '<shell>' [possible values: bash, zsh, fish]. Run `fiber --help` for usage."
+                )
+            ),
+            "{word}"
+        );
+    }
+}
+
+#[test]
+fn completion_without_one_shell_is_a_usage_error() {
+    assert_eq!(
+        usage(&["fiber", "completion"]),
+        (
+            false,
+            "The following required arguments were not provided: <shell>. Run `fiber --help` for usage."
+                .to_owned()
+        )
+    );
+    assert_eq!(
+        usage(&["fiber", "completion", "bash", "extra"]),
+        (
+            false,
+            "Unexpected argument 'extra' found. Run `fiber --help` for usage.".to_owned()
+        )
+    );
+    let parsed = parse_from([
+        OsString::from("fiber"),
+        OsString::from("completion"),
+        OsString::from_vec(vec![0xff, 0xfe]),
+    ]);
+    let Invocation::Usage { ask, sentence } = parsed else {
+        panic!("{parsed:?}");
+    };
+    // clap reads the shell as a possible value, so a byte that is not
+    // UTF-8 is an invalid value, shown lossily, like any other.
+    assert!(!ask);
+    assert_eq!(
+        sentence,
+        "Invalid value '\u{fffd}\u{fffd}' for '<shell>' [possible values: bash, zsh, fish]. Run `fiber --help` for usage."
+    );
+}
+
+#[test]
+fn the_menu_lists_completion_under_fiber_itself() {
+    let menu = menu();
+    let itself = menu
+        .split("\n\n")
+        .find(|group| group.starts_with("Fiber itself:"))
+        .unwrap();
+    let lines: Vec<&str> = itself.lines().collect();
+    assert_eq!(
+        lines,
+        [
+            "Fiber itself:",
+            "  approve [--yes]                           Show what this repository ships and approve it",
+            "  login [<name>] [--as <label>]             Store a provider's key or an extension's secret",
+            "  logout <provider> [--as <label> | --all]  Delete a provider's stored key",
+            "  completion <shell>                        Print a completion script for bash, zsh or fish",
+            "  help [<command>]                          Print this menu, or a command's help",
+            "  version                                   Print the version",
+        ]
+    );
+}
+
+#[test]
 fn extension_alone_is_a_one_line_usage_sentence() {
     assert_eq!(
         sentence(&["fiber", "extension"]),
@@ -728,6 +829,7 @@ fn the_search_subcommands_stay_hidden_but_parse_everything_after() {
             "config",
             "login",
             "logout",
+            "completion",
             "version",
             "help"
         ]
@@ -791,6 +893,7 @@ fn the_image_subcommand_is_hidden_and_passes_its_arguments_through() {
             "config",
             "login",
             "logout",
+            "completion",
             "version",
             "help"
         ]
