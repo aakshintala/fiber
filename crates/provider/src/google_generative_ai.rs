@@ -176,6 +176,7 @@ fn retry_info(error: Error) -> Error {
         | Error::ReplyFailed { .. }
         | Error::UnknownStopReason(_)
         | Error::ContextOverflow(_)
+        | Error::QuotaExceeded(_)
         | Error::Refused(_)
         | Error::Sign(_)) => other,
     }

@@ -53,13 +53,13 @@ impl Decoder {
     /// Takes one `GenerateContentResponse`.
     fn chunk(&mut self, chunk: &Value, sink: &mut dyn FnMut(Delta)) -> Result<(), Error> {
         if let Some(error) = chunk.get("error") {
-            return Err(Error::ReplyFailed {
-                code: error
+            return Err(crate::error::stream_failure(
+                error,
+                error
                     .get("status")
                     .and_then(Value::as_str)
                     .map(str::to_owned),
-                message: str_at(error, "message").to_owned(),
-            });
+            ));
         }
         if self.id.is_empty() {
             str_at(chunk, "responseId").clone_into(&mut self.id);
