@@ -16,7 +16,7 @@
 mod support;
 
 use std::fs;
-use std::io::{BufRead, BufReader, ErrorKind, Write};
+use std::io::{BufReader, ErrorKind};
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -130,8 +130,8 @@ impl Setup {
         command
     }
 
-    /// Runs `fiber` once with `args` to its exit under [`DEADLINE`]:
-    /// its exit code and stdout lines.
+    /// Runs `fiber` once with `args` to its exit under the test's
+    /// [`Deadline`]: its exit code and stdout lines.
     fn run(&self, args: &[&str]) -> (Option<i32>, Vec<Value>) {
         let child = self.fiber(args).spawn().unwrap();
         let group = child.id();
@@ -140,13 +140,12 @@ impl Setup {
         thread::spawn(move || done.send(child.wait_with_output()).unwrap());
         let output = match finished.recv_timeout(self.deadline.left()) {
             Ok(output) => output.unwrap(),
-            Err(_) => {
-                support::kill_group(self.deadline, group, "KILL").unwrap();
-                panic!(
-                    "waited until the deadline for `fiber {}` to exit",
-                    args.join(" ")
-                );
-            }
+            Err(_) => support::expired(
+                self.deadline,
+                group,
+                &finished,
+                &format!("`fiber {}` to exit", args.join(" ")),
+            ),
         };
         assert!(
             !group_alive(self.deadline, group),
@@ -201,8 +200,6 @@ fn write_json(file: &Path, value: &Value) {
     fs::write(file, value.to_string()).unwrap();
 }
 
-/// Whether any process remains in process group `group`.
-
 /// The process clock behind `contract::clock::Clock`.
 struct SystemClock;
 
@@ -253,13 +250,15 @@ struct Hub {
     watchdog: Option<Watchdog>,
     sessions: Option<Watchdog>,
     workspace: String,
+    deadline: Deadline,
 }
 
 impl Hub {
-    fn spawn(setup: &Setup) -> Self {
-        let workspace = setup.workspace_text();
+    /// Spawns the `hub serve` command `serve`, guarding every session that
+    /// holds `workspace` on its command line.
+    fn spawn_command(deadline: Deadline, serve: &mut Command, workspace: String) -> Self {
         let sessions = Watchdog::matching(&workspace);
-        let mut child = setup.fiber(&["hub", "serve"]).spawn().unwrap();
+        let mut child = serve.spawn().unwrap();
         let group = child.id();
         let _ = child.stdout.take();
         let _ = child.stderr.take();
@@ -269,6 +268,7 @@ impl Hub {
             watchdog: Some(Watchdog::group(group)),
             sessions: Some(sessions),
             workspace,
+            deadline,
         }
     }
 
@@ -279,10 +279,15 @@ impl Hub {
         if let Some(mut child) = self.child.take() {
             let (done, finished) = mpsc::channel();
             thread::spawn(move || done.send(child.wait().is_ok()).unwrap_or(()));
-            assert!(
-                finished.recv_timeout(self.deadline.left()).is_ok(),
-                "the hub exited"
-            );
+            match finished.recv_timeout(self.deadline.left()) {
+                Ok(_) => {}
+                Err(_) => support::expired(
+                    self.deadline,
+                    self.group,
+                    &finished,
+                    "the killed hub to exit",
+                ),
+            }
         }
         assert!(
             fakes::matching_exits(&self.workspace, self.deadline.left()),
@@ -298,35 +303,43 @@ impl Hub {
 }
 
 impl Drop for Hub {
+    /// Sends the kills without waiting on them, then reaps the hub on a
+    /// thread until the cleanup deadline: a drop never blocks past it and
+    /// never panics.
     fn drop(&mut self) {
-        match support::kill_group_detached(self.group, "KILL") {
-            Ok(_) | Err(_) => {}
-        }
-        match support::kill_matching_detached(&self.workspace) {
-            Ok(()) | Err(_) => {}
-        }
-        if let Some(child) = self.child.as_mut() {
-            match child.wait() {
+        support::kill_group_detached(self.group, "KILL");
+        support::kill_matching_detached(&self.workspace);
+        if let Some(mut child) = self.child.take() {
+            let (done, reaped) = mpsc::channel();
+            // A thread that cannot start drops `done`, so the receive below
+            // returns at once.
+            match thread::Builder::new().spawn(move || match done.send(child.wait()) {
+                Ok(()) | Err(_) => {}
+            }) {
+                Ok(_) | Err(_) => {}
+            }
+            match reaped.recv_timeout(self.deadline.cleanup()) {
                 Ok(_) | Err(_) => {}
             }
         }
     }
 }
 
-/// A client on the hub's socket. Reads wait [`DEADLINE`] each: expiry
-/// panics naming what was awaited.
+/// A client on the hub's socket. Every read and write takes what remains
+/// of the test's [`Deadline`]: expiry panics naming what was awaited.
 struct Socket {
     write: Mutex<UnixStream>,
     read: Mutex<BufReader<UnixStream>>,
+    deadline: Deadline,
 }
 
 impl Socket {
-    fn from(stream: UnixStream) -> Self {
+    fn from(deadline: Deadline, stream: UnixStream) -> Self {
         let read = stream.try_clone().unwrap();
-        read.set_read_timeout(Some(DEADLINE)).unwrap();
         Self {
             write: Mutex::new(stream),
             read: Mutex::new(BufReader::new(read)),
+            deadline,
         }
     }
 
@@ -334,18 +347,17 @@ impl Socket {
         let mut write = self.write.lock().unwrap();
         let mut bytes = serde_json::to_vec(line).unwrap();
         bytes.push(b'\n');
-        write.write_all(&bytes).unwrap();
-        write.flush().unwrap();
+        if let Err(error) = support::write_line(&mut write, self.deadline, &bytes, "sending a line")
+        {
+            panic!("writing the hub socket: {error}");
+        }
     }
 
     fn next(&self, what: &str, got: &[Value]) -> Value {
-        let mut buf = String::new();
-        match self.read.lock().unwrap().read_line(&mut buf) {
-            Ok(0) => panic!("the hub closed the socket while waiting for {what}; got {got:?}"),
-            Ok(_) => serde_json::from_str(buf.trim_end()).unwrap(),
-            Err(error)
-                if error.kind() == ErrorKind::TimedOut || error.kind() == ErrorKind::WouldBlock =>
-            {
+        match support::read_line(&mut self.read.lock().unwrap(), self.deadline, what) {
+            Ok(None) => panic!("the hub closed the socket while waiting for {what}; got {got:?}"),
+            Ok(Some(buf)) => serde_json::from_str(buf.trim_end()).unwrap(),
+            Err(error) if error.kind() == ErrorKind::TimedOut => {
                 panic!("waited until the deadline for {what}; got {got:?}")
             }
             Err(error) => panic!("reading the hub socket while waiting for {what}: {error}"),
@@ -353,7 +365,8 @@ impl Socket {
     }
 }
 
-/// Collects lines until `done`, waiting [`DEADLINE`] for each.
+/// Collects lines until `done`, each taking what remains of the test's
+/// [`Deadline`].
 fn until(client: &Socket, what: &str, mut done: impl FnMut(&Value) -> bool) -> Vec<Value> {
     let mut lines = Vec::new();
     loop {
@@ -366,15 +379,25 @@ fn until(client: &Socket, what: &str, mut done: impl FnMut(&Value) -> bool) -> V
     }
 }
 
-/// Connects to the hub, starting `fiber hub serve` when none runs.
+/// Connects to the hub, starting `fiber hub serve` when none runs. The
+/// connect blocks, so it runs on a thread bounded by the test's
+/// [`Deadline`]; the serve command, workspace and home are built first.
 fn connect_hub(setup: &Setup, hub: &Arc<Mutex<Option<Hub>>>) -> Socket {
     let slot = Arc::clone(hub);
-    let mut start = move || {
-        *slot.lock().unwrap() = Some(Hub::spawn(setup));
-        Ok(())
-    };
-    let (stream, _hello) = doors::hub::connect(&setup.home(), &mut start, &SystemClock).unwrap();
-    Socket::from(setup.deadline, stream)
+    let deadline = setup.deadline;
+    let mut serve = setup.fiber(&["hub", "serve"]);
+    let workspace = setup.workspace_text();
+    let home = setup.home();
+    let connected = support::bounded(deadline, "the hub to start and say hub_hello", move || {
+        let mut start = move || {
+            *slot.lock().unwrap() =
+                Some(Hub::spawn_command(deadline, &mut serve, workspace.clone()));
+            Ok(())
+        };
+        doors::hub::connect(&home, &mut start, &SystemClock)
+    });
+    let (stream, _hello) = connected.unwrap();
+    Socket::from(deadline, stream)
 }
 
 fn command(id: &str, session: &str, command: &str, args: Value) -> Value {

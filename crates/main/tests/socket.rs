@@ -18,6 +18,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 
 use fakes::{Client, ProviderServer, Response};
 use serde_json::{Value, json};
@@ -136,7 +137,9 @@ struct Watchdog {
 }
 
 impl Watchdog {
-    fn stand_down(mut self) {
+    /// Tells the watchdog to exit without signalling, and reaps it within
+    /// `within`.
+    fn stand_down(mut self, within: Duration) {
         if let Some(mut stdin) = self.stdin.take() {
             match writeln!(stdin) {
                 Ok(()) | Err(_) => {}
@@ -164,22 +167,41 @@ struct KillGroup(u32);
 
 impl Drop for KillGroup {
     fn drop(&mut self) {
-        match support::kill_group_detached(self.0, "KILL") {
-            Ok(_) | Err(_) => {}
-        }
+        support::kill_group_detached(self.0, "KILL");
     }
 }
 
-fn send(client: &Client, line: &str) {
-    client.send(line).unwrap();
+/// Sends `line`, its write bounded by the test's [`Deadline`].
+fn send(deadline: Deadline, client: &Client, line: &str) {
+    client.send_by(line, &|| deadline.left()).unwrap();
 }
 
-fn recv(client: &Client) -> Value {
-    client.recv(deadline.left()).expect("a line arrived")
+fn recv(deadline: Deadline, client: &Client) -> Value {
+    client
+        .recv(deadline.left())
+        .expect("waited until the deadline for a line")
 }
 
-/// Collects lines until `done`, waiting `DEADLINE` for each.
-fn until(client: &Client, what: &str, mut done: impl FnMut(&Value) -> bool) -> Vec<Value> {
+/// Connects a client to the session socket `path`, on a thread bounded by
+/// the test's [`Deadline`].
+fn client(deadline: Deadline, path: &Path) -> Client {
+    let target = path.to_owned();
+    support::bounded(
+        deadline,
+        &format!("a connection to {}", path.display()),
+        move || Client::connect(&target),
+    )
+    .unwrap()
+}
+
+/// Collects lines until `done`, each taking what remains of the test's
+/// [`Deadline`].
+fn until(
+    deadline: Deadline,
+    client: &Client,
+    what: &str,
+    mut done: impl FnMut(&Value) -> bool,
+) -> Vec<Value> {
     let mut lines = Vec::new();
     loop {
         let line = client
@@ -209,6 +231,7 @@ struct Running {
     guard: KillGroup,
     stdout: mpsc::Receiver<String>,
     stderr: Arc<Mutex<String>>,
+    deadline: Deadline,
 }
 
 fn start(setup: &Setup) -> Running {
@@ -255,14 +278,15 @@ fn start(setup: &Setup) -> Running {
         guard,
         stdout: stdout_rx,
         stderr: stderr_text,
+        deadline: setup.deadline,
     }
 }
 
-fn first_line(stdout: &mpsc::Receiver<String>) -> Value {
+fn first_line(deadline: Deadline, stdout: &mpsc::Receiver<String>) -> Value {
     serde_json::from_str(
         &stdout
             .recv_timeout(deadline.left())
-            .expect("waited for fiber_started"),
+            .expect("waited until the deadline for fiber_started"),
     )
     .unwrap()
 }
@@ -282,13 +306,14 @@ fn finish(running: Running) {
         guard,
         stdout,
         stderr,
+        deadline,
     } = running;
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait()).unwrap());
-    let status = finished
-        .recv_timeout(deadline.left())
-        .expect("waited for fiber to exit")
-        .unwrap();
+    let status = match finished.recv_timeout(deadline.left()) {
+        Ok(status) => status.unwrap(),
+        Err(_) => support::expired(deadline, group, &finished, "fiber to exit"),
+    };
     assert!(status.success(), "stderr: {}", stderr.lock().unwrap());
     assert!(
         !group_alive(deadline, group),
@@ -297,7 +322,7 @@ fn finish(running: Running) {
     // The group is empty. Skip the drop, which would kill it again.
     std::mem::forget(guard);
     drop(stdout);
-    watchdog.stand_down();
+    watchdog.stand_down(deadline.cleanup());
 }
 
 #[test]
@@ -307,7 +332,7 @@ fn two_clients_see_the_log_while_ask_is_held() {
     server.hold();
     setup.provider(&server);
     let running = start(&setup);
-    let started = first_line(&running.stdout);
+    let started = first_line(setup.deadline, &running.stdout);
     assert_eq!(started["kind"], "session_started");
     let session_id = started["session_id"].as_str().unwrap().to_owned();
     assert!(
@@ -316,46 +341,71 @@ fn two_clients_see_the_log_while_ask_is_held() {
     );
 
     let socket = setup.home().join("run").join(&session_id);
-    let first = Client::connect(&socket).unwrap();
-    let second = Client::connect(&socket).unwrap();
+    let first = client(setup.deadline, &socket);
+    let second = client(setup.deadline, &socket);
     send(
+        setup.deadline,
         &first,
         r#"{"id":"c_a","command":"subscribe","args":{"level":"full"}}"#,
     );
     send(
+        setup.deadline,
         &second,
         r#"{"id":"c_b","command":"subscribe","args":{"level":"full"}}"#,
     );
-    assert_eq!(recv(&first)["payload"]["command_id"], "c_a");
-    assert_eq!(recv(&second)["payload"]["command_id"], "c_b");
+    assert_eq!(recv(setup.deadline, &first)["payload"]["command_id"], "c_a");
+    assert_eq!(
+        recv(setup.deadline, &second)["payload"]["command_id"],
+        "c_b"
+    );
     send(
+        setup.deadline,
         &first,
         r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"again"}]}}"#,
     );
     send(
+        setup.deadline,
         &first,
         r#"{"id":"c_steer","command":"steer","args":{"content":[{"type":"text","text":"more"}]}}"#,
     );
     // A missing `args` is read as `{}`: `rewind` takes it and is refused only
     // as unbuilt, while `shell` has a required key.
-    send(&first, r#"{"id":"c_rewind","command":"rewind"}"#);
-    send(&first, r#"{"id":"c_shell","command":"shell"}"#);
+    send(
+        setup.deadline,
+        &first,
+        r#"{"id":"c_rewind","command":"rewind"}"#,
+    );
+    send(
+        setup.deadline,
+        &first,
+        r#"{"id":"c_shell","command":"shell"}"#,
+    );
     // The reader hands a line to the inbox before it reads the next, so the
     // answer to `tools` proves the prompt and the steer are queued. Released
     // earlier, the turn can end and drop them: "The session ended before
     // answering." instead of the loop's answer, or none.
-    send(&first, r#"{"id":"c_queued","command":"tools"}"#);
-    let mut own = until(&first, "the answer to c_queued", |line| {
+    send(
+        setup.deadline,
+        &first,
+        r#"{"id":"c_queued","command":"tools"}"#,
+    );
+    let mut own = until(setup.deadline, &first, "the answer to c_queued", |line| {
         line["payload"]["command_id"] == "c_queued"
     });
     server.release();
 
-    own.extend(until(&first, "fiber_exited on the first client", |line| {
-        line["kind"] == "fiber_exited"
-    }));
-    let other = until(&second, "fiber_exited on the second client", |line| {
-        line["kind"] == "fiber_exited"
-    });
+    own.extend(until(
+        setup.deadline,
+        &first,
+        "fiber_exited on the first client",
+        |line| line["kind"] == "fiber_exited",
+    ));
+    let other = until(
+        setup.deadline,
+        &second,
+        "fiber_exited on the second client",
+        |line| line["kind"] == "fiber_exited",
+    );
     let prompt = answered(&own, "c_prompt");
     assert_eq!(prompt["kind"], "command_rejected");
     assert_eq!(prompt["payload"]["code"], "closing");
@@ -404,23 +454,27 @@ fn a_summary_subscriber_is_sent_the_session_status_and_each_change_through_idle(
     server.hold();
     setup.provider(&server);
     let running = start(&setup);
-    let started = first_line(&running.stdout);
+    let started = first_line(setup.deadline, &running.stdout);
     let session_id = started["session_id"].as_str().unwrap().to_owned();
     assert!(
         server.await_requests(1, setup.deadline.left()),
         "the held response was requested"
     );
 
-    let client = Client::connect(&setup.home().join("run").join(&session_id)).unwrap();
+    let client = client(setup.deadline, &setup.home().join("run").join(&session_id));
     send(
+        setup.deadline,
         &client,
         r#"{"id":"c_sum","command":"subscribe","args":{"level":"summary"}}"#,
     );
     // The reply is held, so the turn is streaming: the subscriber is sent
     // that status at once, whenever it was written.
-    let held = until(&client, "a streaming session_status", |line| {
-        line["kind"] == "session_status" && line["payload"]["state"] == "streaming"
-    });
+    let held = until(
+        setup.deadline,
+        &client,
+        "a streaming session_status",
+        |line| line["kind"] == "session_status" && line["payload"]["state"] == "streaming",
+    );
     // A summary subscriber reads the latest `session_status` and
     // `extensions_loaded`, and the acknowledgement of its own command.
     assert!(held.iter().all(|line| matches!(
@@ -437,7 +491,7 @@ fn a_summary_subscriber_is_sent_the_session_status_and_each_change_through_idle(
     assert_eq!(streaming["payload"]["model"], "fake/m");
     assert_eq!(streaming["session_id"], session_id);
     server.release();
-    let rest = until(&client, "the idle session_status", |line| {
+    let rest = until(setup.deadline, &client, "the idle session_status", |line| {
         line["kind"] == "session_status" && line["payload"]["state"] == "idle"
     });
     // `extensions_loaded` follows the first status on subscribe.
@@ -497,7 +551,7 @@ fn session_status_carries_the_project_and_counts_full_connections() {
     server.hold();
     setup.provider(&server);
     let running = start(&setup);
-    let started = first_line(&running.stdout);
+    let started = first_line(setup.deadline, &running.stdout);
     let session_id = started["session_id"].as_str().unwrap().to_owned();
     assert!(
         server.await_requests(1, setup.deadline.left()),
@@ -505,8 +559,9 @@ fn session_status_carries_the_project_and_counts_full_connections() {
     );
 
     let socket = setup.home().join("run").join(&session_id);
-    let summary = Client::connect(&socket).unwrap();
+    let summary = client(setup.deadline, &socket);
     send(
+        setup.deadline,
         &summary,
         r#"{"id":"c_sum","command":"subscribe","args":{"level":"summary"}}"#,
     );
@@ -519,6 +574,7 @@ fn session_status_carries_the_project_and_counts_full_connections() {
     let mut replayed = false;
     let mut streaming_seen = false;
     let held = until(
+        setup.deadline,
         &summary,
         "the extensions replay and a streaming session_status",
         |line| {
@@ -544,14 +600,18 @@ fn session_status_carries_the_project_and_counts_full_connections() {
     assert_eq!(streaming["payload"]["clients"], 0);
     let since = streaming["payload"]["since"].clone();
 
-    let full = Client::connect(&socket).unwrap();
+    let full = client(setup.deadline, &socket);
     send(
+        setup.deadline,
         &full,
         r#"{"id":"c_full","command":"subscribe","args":{"level":"full"}}"#,
     );
-    let full_lines = until(&full, "a session_status with one client", |line| {
-        line["kind"] == "session_status" && line["payload"]["clients"] == 1
-    });
+    let full_lines = until(
+        setup.deadline,
+        &full,
+        "a session_status with one client",
+        |line| line["kind"] == "session_status" && line["payload"]["clients"] == 1,
+    );
     // The durable lines equal the log so far.
     let sessions = log::sessions_dir(&setup.home(), &doors::project(&setup.workspace()));
     let file = fs::read_to_string(sessions.join(&session_id).join("events.jsonl")).unwrap();
@@ -590,9 +650,12 @@ fn session_status_carries_the_project_and_counts_full_connections() {
     assert_eq!(counts.len(), 1);
     assert_eq!(counts[0]["payload"]["count"], 1);
 
-    let one = until(&summary, "a session_status with one client", |line| {
-        line["kind"] == "session_status" && line["payload"]["clients"] == 1
-    });
+    let one = until(
+        setup.deadline,
+        &summary,
+        "a session_status with one client",
+        |line| line["kind"] == "session_status" && line["payload"]["clients"] == 1,
+    );
     // Nothing else reaches a summary client between the sync and the
     // count: the complete, ordered kinds.
     let one_kinds: Vec<&str> = one
@@ -609,9 +672,12 @@ fn session_status_carries_the_project_and_counts_full_connections() {
     assert_eq!(latest["payload"]["since"], since);
 
     drop(full);
-    let none = until(&summary, "a session_status with no clients", |line| {
-        line["kind"] == "session_status" && line["payload"]["clients"] == 0
-    });
+    let none = until(
+        setup.deadline,
+        &summary,
+        "a session_status with no clients",
+        |line| line["kind"] == "session_status" && line["payload"]["clients"] == 0,
+    );
     // Nothing else reaches a summary client on detach either.
     let none_kinds: Vec<&str> = none
         .iter()
@@ -649,23 +715,35 @@ fn an_empty_args_matches_a_missing_one_on_the_socket() {
     server.hold();
     setup.provider(&server);
     let running = start(&setup);
-    let started = first_line(&running.stdout);
+    let started = first_line(setup.deadline, &running.stdout);
     let session_id = started["session_id"].as_str().unwrap().to_owned();
     assert!(
         server.await_requests(1, setup.deadline.left()),
         "the held response was requested"
     );
 
-    let client = Client::connect(&setup.home().join("run").join(&session_id)).unwrap();
+    let client = client(setup.deadline, &setup.home().join("run").join(&session_id));
     send(
+        setup.deadline,
         &client,
         r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
     );
-    assert_eq!(recv(&client)["payload"]["command_id"], "c_sub");
+    assert_eq!(
+        recv(setup.deadline, &client)["payload"]["command_id"],
+        "c_sub"
+    );
     // `tools` takes no `args`: a missing `args` and `"args":{}` read the same.
-    send(&client, r#"{"id":"c_missing","command":"tools"}"#);
-    send(&client, r#"{"id":"c_empty","command":"tools","args":{}}"#);
-    let lines = until(&client, "the answer to c_empty", |line| {
+    send(
+        setup.deadline,
+        &client,
+        r#"{"id":"c_missing","command":"tools"}"#,
+    );
+    send(
+        setup.deadline,
+        &client,
+        r#"{"id":"c_empty","command":"tools","args":{}}"#,
+    );
+    let lines = until(setup.deadline, &client, "the answer to c_empty", |line| {
         line["payload"]["command_id"] == "c_empty"
     });
     let missing = answered(&lines, "c_missing");
@@ -677,7 +755,7 @@ fn an_empty_args_matches_a_missing_one_on_the_socket() {
         "an empty args reads as a missing one"
     );
     server.release();
-    until(&client, "fiber_exited", |line| {
+    until(setup.deadline, &client, "fiber_exited", |line| {
         line["kind"] == "fiber_exited"
     });
     finish(running);
@@ -691,15 +769,16 @@ fn cancel_on_the_same_socket_stops_a_driver_shell() {
     server.hold();
     setup.provider(&server);
     let running = start(&setup);
-    let started = first_line(&running.stdout);
+    let started = first_line(setup.deadline, &running.stdout);
     let session_id = started["session_id"].as_str().unwrap().to_owned();
     assert!(
         server.await_requests(1, setup.deadline.left()),
         "the held response was requested"
     );
 
-    let client = Client::connect(&setup.home().join("run").join(&session_id)).unwrap();
+    let client = client(setup.deadline, &setup.home().join("run").join(&session_id));
     send(
+        setup.deadline,
         &client,
         r#"{"id":"c_sub","command":"subscribe","args":{"level":"summary"}}"#,
     );
@@ -708,8 +787,15 @@ fn cancel_on_the_same_socket_stops_a_driver_shell() {
     // every deadline here, so only the cancel ends it; a bare `sleep` this
     // long is refused before it starts.
     let fifo = setup.root.path().join("started");
-    let made = Command::new("mkfifo").arg(&fifo).status().unwrap();
-    assert!(made.success(), "mkfifo failed");
+    let mut mkfifo = Command::new("mkfifo");
+    mkfifo
+        .arg(&fifo)
+        .process_group(0)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let made = support::run_to_exit(setup.deadline, "mkfifo", mkfifo);
+    assert!(made.status.success(), "mkfifo: {made:?}");
     let (opened, started) = mpsc::channel();
     let reading = fifo.clone();
     thread::spawn(move || {
@@ -717,6 +803,7 @@ fn cancel_on_the_same_socket_stops_a_driver_shell() {
         if let Ok(()) = opened.send(read.is_ok()) {}
     });
     send(
+        setup.deadline,
         &client,
         &json!({"id": "c_shell", "command": "shell", "args": {
             "command": format!("echo > '{}'; sleep 60", fifo.display())
@@ -728,14 +815,23 @@ fn cancel_on_the_same_socket_stops_a_driver_shell() {
         Ok(true),
         "waited until the deadline for the shell to start"
     );
-    send(&client, r#"{"id":"c_cancel","command":"cancel"}"#);
+    send(
+        setup.deadline,
+        &client,
+        r#"{"id":"c_cancel","command":"cancel"}"#,
+    );
     // The cancel wakes the shell before its own answer is queued, so either
     // answer can come first.
     let mut pending = vec!["c_cancel", "c_shell"];
-    let lines = until(&client, "the answers to c_cancel and c_shell", |line| {
-        pending.retain(|id| line["payload"]["command_id"] != *id);
-        pending.is_empty()
-    });
+    let lines = until(
+        setup.deadline,
+        &client,
+        "the answers to c_cancel and c_shell",
+        |line| {
+            pending.retain(|id| line["payload"]["command_id"] != *id);
+            pending.is_empty()
+        },
+    );
     assert_eq!(answered(&lines, "c_cancel")["kind"], "command_accepted");
     let shell = answered(&lines, "c_shell");
     assert_eq!(shell["kind"], "command_accepted", "{shell}");

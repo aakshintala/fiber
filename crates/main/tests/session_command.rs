@@ -14,7 +14,7 @@
 mod support;
 
 use std::fs;
-use std::io::{BufRead, BufReader, ErrorKind, Write};
+use std::io::{BufRead, BufReader, ErrorKind};
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -182,10 +182,11 @@ impl Setup {
             lines,
             stderr: stderr_rx,
             first: Vec::new(),
+            deadline: self.deadline,
         }
     }
 
-    /// Runs `fiber` once with `args`, waiting under [`DEADLINE`]. The
+    /// Runs `fiber` once with `args`, waiting under the test's [`Deadline`]. The
     /// wait runs on a thread and is received under the deadline, so a
     /// hang reports what it waited for (`docs/testing.md`, "Waits and
     /// timeouts").
@@ -199,27 +200,12 @@ impl Setup {
         thread::spawn(move || done.send(child.wait_with_output()).unwrap());
         let output = match finished.recv_timeout(self.deadline.left()) {
             Ok(output) => output.unwrap(),
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                support::kill_group(self.deadline, group, "KILL").unwrap();
-                let reaped = match finished.recv_timeout(self.deadline.cleanup()) {
-                    Ok(_) => true,
-                    Err(mpsc::RecvTimeoutError::Timeout) => false,
-                    Err(mpsc::RecvTimeoutError::Disconnected) => {
-                        panic!(
-                            "the `fiber {}` wait thread ended without an exit after the kill",
-                            args.join(" ")
-                        )
-                    }
-                };
-                assert!(
-                    !group_alive(self.deadline, group),
-                    "`fiber` left a process in its group behind"
-                );
-                panic!(
-                    "waited until the deadline for `fiber {}` to exit (reaped after the kill: {reaped})",
-                    args.join(" ")
-                );
-            }
+            Err(mpsc::RecvTimeoutError::Timeout) => support::expired(
+                self.deadline,
+                group,
+                &finished,
+                &format!("`fiber {}` to exit", args.join(" ")),
+            ),
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 panic!(
                     "the `fiber {}` wait thread ended before it exited",
@@ -251,17 +237,13 @@ fn write_json(file: &Path, value: &Value) {
     fs::write(file, value.to_string()).unwrap();
 }
 
-/// Whether any process remains in process group `group`.
-
 /// Kills process group `group` on drop. After the child is reaped and the
 /// group is empty, [`std::mem::forget`] skips that kill.
 struct KillGroup(u32);
 
 impl Drop for KillGroup {
     fn drop(&mut self) {
-        match support::kill_group_detached(self.0, "KILL") {
-            Ok(_) | Err(_) => {}
-        }
+        support::kill_group_detached(self.0, "KILL");
     }
 }
 
@@ -277,10 +259,11 @@ struct Running {
     /// Stdout lines taken as the readiness signal, as written, prepended
     /// to what [`Running::wait`] returns.
     first: Vec<String>,
+    deadline: Deadline,
 }
 
 impl Running {
-    /// Waits under [`DEADLINE`] for the child's first stdout line, then
+    /// Waits under the test's [`Deadline`] for the child's first stdout line, then
     /// connects once. The socket is bound in `Session::open` before the
     /// loop writes that line, so the line is the signal the socket
     /// accepts (`docs/testing.md`, "Waits and timeouts").
@@ -295,11 +278,12 @@ impl Running {
             }
         };
         self.first.push(line);
-        Socket::connect(socket).expect("the session's socket accepted before the deadline")
+        Socket::connect(self.deadline, socket)
+            .expect("the session's socket accepted before the deadline")
     }
 
-    /// Reads stdout lines until one of `kind` arrives, waiting [`DEADLINE`]
-    /// for each, and keeps every line for [`Running::wait`]. Only kinds the
+    /// Reads stdout lines until one of `kind` arrives, each taking what
+    /// remains of the test's [`Deadline`], and keeps every line for [`Running::wait`]. Only kinds the
     /// loop writes before waiting for a prompt qualify: `preamble_built`
     /// and later need a turn, which needs the test's prompt.
     fn wait_for(&mut self, kind: &str) {
@@ -322,7 +306,7 @@ impl Running {
         }
     }
 
-    /// Waits under [`DEADLINE`] for the process to exit, and asserts that
+    /// Waits under the test's [`Deadline`] for the process to exit, and asserts that
     /// nothing it started is left in its group.
     fn wait(self) -> (ExitStatus, Vec<Value>, String) {
         let (status, raw, stderr) = self.wait_raw();
@@ -340,7 +324,7 @@ impl Running {
         let status = match finished.recv_timeout(self.deadline.left()) {
             Ok(status) => status.unwrap(),
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                panic!("waited until the deadline for the session to exit")
+                support::expired(self.deadline, self.group, &finished, "the session to exit")
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 panic!("the session's wait thread ended before the session exited")
@@ -352,7 +336,8 @@ impl Running {
         );
         std::mem::forget(self.guard);
         // The process is gone, so its stdout is closed: the drain ends
-        // and every line arrives, each waited under DEADLINE. A deadline
+        // and every line arrives, each taking what remains of the test's
+        // deadline. A deadline
         // with no line is a hang, not the end: only the drain thread
         // ending (the channel disconnecting) ends the run. Lines taken
         // as the readiness signal come first.
@@ -421,49 +406,56 @@ fn hello() -> Response {
 }
 
 /// A client on the session's socket that tells a read deadline from the
-/// session closing the socket. Reads wait [`DEADLINE`] each: expiry
-/// panics naming what was awaited, while the session closing the socket
+/// session closing the socket. Every read and write takes what remains of
+/// the test's [`Deadline`]: expiry panics naming what was awaited, while the session closing the socket
 /// ends [`until_close`] and panics from [`recv`] and [`until`] naming
 /// the wait the close cut short.
 struct Socket {
     write: Mutex<UnixStream>,
     read: Mutex<BufReader<UnixStream>>,
+    deadline: Deadline,
 }
 
 impl Socket {
-    fn connect(path: &Path) -> std::io::Result<Self> {
-        let write = UnixStream::connect(path)?;
+    /// Connects to `path` on a thread bounded by the deadline.
+    fn connect(deadline: Deadline, path: &Path) -> std::io::Result<Self> {
+        let target = path.to_owned();
+        let write = support::bounded(
+            deadline,
+            &format!("a connection to {}", path.display()),
+            move || UnixStream::connect(target),
+        )?;
         let read = write.try_clone()?;
-        read.set_read_timeout(Some(DEADLINE))?;
         Ok(Self {
             write: Mutex::new(write),
             read: Mutex::new(BufReader::new(read)),
+            deadline,
         })
     }
 
     fn send(&self, line: &str) {
-        let mut write = self.write.lock().unwrap();
-        write.write_all(line.as_bytes()).unwrap();
+        let mut bytes = line.as_bytes().to_vec();
         if !line.ends_with('\n') {
-            write.write_all(b"\n").unwrap();
+            bytes.push(b'\n');
         }
-        write.flush().unwrap();
+        let mut write = self.write.lock().unwrap();
+        if let Err(error) = support::write_line(&mut write, self.deadline, &bytes, "sending a line")
+        {
+            panic!("writing the session socket: {error}");
+        }
     }
 
     /// One socket line: a line, or `None` when the session closed the
-    /// socket. A [`DEADLINE`] with neither panics naming `what`, with
-    /// the lines before it.
+    /// socket. The deadline passing with neither panics naming `what`,
+    /// with the lines before it.
     fn next(&self, what: &str, got: &[Value]) -> Option<Value> {
-        let mut buf = String::new();
-        match self.read.lock().unwrap().read_line(&mut buf) {
-            Ok(0) => None,
-            Ok(_) => {
+        match support::read_line(&mut self.read.lock().unwrap(), self.deadline, what) {
+            Ok(None) => None,
+            Ok(Some(buf)) => {
                 let line = buf.trim_end_matches(&['\r', '\n'][..]).to_owned();
                 Some(serde_json::from_str(&line).unwrap_or(Value::String(line)))
             }
-            Err(error)
-                if error.kind() == ErrorKind::TimedOut || error.kind() == ErrorKind::WouldBlock =>
-            {
+            Err(error) if error.kind() == ErrorKind::TimedOut => {
                 panic!("waited until the deadline for {what}; got {got:?}")
             }
             Err(error) => {
@@ -484,8 +476,8 @@ fn recv(client: &Socket, what: &str) -> Value {
     }
 }
 
-/// Collects socket lines until the session closes the socket, waiting
-/// [`DEADLINE`] for each.
+/// Collects socket lines until the session closes the socket, each taking
+/// what remains of the test's [`Deadline`].
 fn until_close(client: &Socket) -> Vec<Value> {
     let mut lines = Vec::new();
     while let Some(line) = client.next("the session to close the socket", &lines) {
@@ -557,7 +549,8 @@ fn until_clients(client: &Socket) -> Vec<Value> {
     until(client, "the clients line", |line| line["kind"] == "clients")
 }
 
-/// Collects lines until `done`, waiting `DEADLINE` for each: expiry panics
+/// Collects lines until `done`, each taking what remains of the test's
+/// [`Deadline`]: expiry panics
 /// naming `what`, and the socket closing first panics too.
 fn until(client: &Socket, what: &str, mut done: impl FnMut(&Value) -> bool) -> Vec<Value> {
     let mut lines = Vec::new();
@@ -1942,7 +1935,17 @@ fn job_session(
     server: &ProviderServer,
     after_prompt: impl FnOnce(),
 ) -> (Running, Socket, u32) {
-    let ready = fakes::children::Ready::new(setup.root.path());
+    let fifo = setup.root.path().join("ready.fifo");
+    let mut mkfifo = Command::new("mkfifo");
+    mkfifo
+        .arg(&fifo)
+        .process_group(0)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let made = support::run_to_exit(setup.deadline, "mkfifo", mkfifo);
+    assert!(made.status.success(), "mkfifo: {made:?}");
+    let ready = fakes::children::Ready::at(&fifo, &|| setup.deadline.left());
     fs::write(
         setup.workspace().join("job.sh"),
         script.replace("<ready>", &ready.path().display().to_string()),
