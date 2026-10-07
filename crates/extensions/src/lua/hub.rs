@@ -25,7 +25,7 @@ use crate::host::Reply;
 use super::{ENTRY, GRACE, Target, expired};
 
 pub(super) use super::declared::CallbackTimeouts;
-pub(crate) use super::declared::{DeclaredHook, DeclaredHooks, HookPhase};
+pub(crate) use super::declared::{DeclaredHooks, HookPhase};
 use super::errors::again;
 pub(super) use super::errors::{not_registered, stopped, timed_out};
 
