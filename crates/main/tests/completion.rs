@@ -133,30 +133,40 @@ fn run_bounded(what: &str, mut command: Command, tag: &Path) -> Output {
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait_with_output()).unwrap_or(()));
     let Ok(output) = finished.recv_timeout(RUN) else {
-        let cleanup = within(&format!("the cleanup after {what}"), REAP, move || {
-            let group_killed = kill_group(group, "KILL");
-            let group_gone = group_empties(group, REAP);
-            let tag_killed = kill_matching(&tag);
-            let tag_gone = matching_exits(&tag, REAP);
-            drop((group_dog, tag_dog));
-            format!(
-                "killing its group: {group_killed:?}, group empty: {group_gone}; \
-                 killing processes matching {tag}: {tag_killed:?}, all gone: {tag_gone}"
-            )
-        });
-        panic!("waited {RUN:?} for {what} to exit; {cleanup}");
+        let group_killed = kill_group(group, "KILL");
+        let tag_killed = kill_matching(&tag);
+        let tag_for_wait = tag.clone();
+        let (group_gone, tag_gone) =
+            within(&format!("the cleanup after {what}"), REAP, move || {
+                let group_gone = group_empties(group, REAP / 2);
+                let tag_gone = matching_exits(&tag_for_wait, REAP / 2);
+                (group_gone, tag_gone)
+            });
+        drop((group_dog, tag_dog));
+        panic!(
+            "waited {RUN:?} for {what} to exit; killing its group: {group_killed:?}, \
+             group empty: {group_gone}; killing processes matching {tag}: {tag_killed:?}, \
+             all gone: {tag_gone}"
+        );
     };
+    let tag_for_wait = tag.clone();
     let (group_gone, tag_gone) =
         within(&format!("{what}'s processes to be gone"), REAP, move || {
-            let group_gone = group_empties(group, REAP);
-            let tag_gone = matching_exits(&tag, REAP);
-            // A watchdog that is dropped, not stood down, kills what is left.
-            if group_gone && tag_gone {
-                group_dog.stand_down(REAP);
-                tag_dog.stand_down(REAP);
-            }
+            let group_gone = group_empties(group, REAP / 2);
+            let tag_gone = matching_exits(&tag_for_wait, REAP / 2);
             (group_gone, tag_gone)
         });
+    if group_gone && tag_gone {
+        // Watchdogs stay on this thread, not in the `within` closure: on a
+        // timeout the closure's thread is detached, so dogs moved into it
+        // would never drop and kill what is left.
+        group_dog.stand_down(REAP);
+        tag_dog.stand_down(REAP);
+    } else {
+        // A watchdog that is dropped, not stood down, kills what is left.
+        // Drop before the asserts so the kill starts before the failure.
+        drop((group_dog, tag_dog));
+    }
     drop(stdin);
     assert!(group_gone, "{what} left a process in its group behind");
     assert!(
