@@ -596,8 +596,6 @@ fn how_left(dir: &Path) -> Left {
     }
 }
 
-/// The `kind` of `log`'s last line, read from at most [`TAIL`] bytes of
-/// its end. `None` when it cannot be read or does not parse.
 /// Whether `reason` can read `unseen` for `now`: a non-delegate `idle`.
 // `reason` returns None for a delegate and reads `unseen` only for `idle`, so
 // a mutant of `&&` to `||` changes no attention, only how often the log is read.
@@ -606,6 +604,8 @@ fn may_be_unseen(now: &SessionStatus) -> bool {
     matches!(now.state, SessionState::Idle) && now.parent.is_none()
 }
 
+/// The `kind` of `log`'s last line, read from at most [`TAIL`] bytes of
+/// its end. `None` when it cannot be read or does not parse.
 pub(crate) fn last_kind(log: &Path) -> Option<String> {
     let mut file = File::open(log).ok()?;
     let len = file.metadata().ok()?.len();
