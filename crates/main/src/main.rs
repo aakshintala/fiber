@@ -600,7 +600,8 @@ fn terminal() -> i32 {
         };
         doors::hub::connect(&home, &mut start, hub_clock.as_ref())
     });
-    tui::run(tty, workspace, connect, Box::new(crash::attach), clock)
+    let project = log::project_key(&doors::project(&workspace));
+    tui::run(tty, workspace, project, connect, Box::new(crash::attach), clock)
 }
 
 fn usage(message: impl Into<String>) -> Failure {

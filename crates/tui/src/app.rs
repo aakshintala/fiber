@@ -121,6 +121,8 @@ pub(crate) enum Target {
 pub(crate) struct App {
     /// The launch directory `start` names.
     workspace: PathBuf,
+    /// The project key `prompt_history` names.
+    project: String,
     draft: Draft,
     phase: Phase,
     link: Link,
@@ -154,6 +156,7 @@ impl App {
     pub(crate) fn new(workspace: PathBuf) -> Self {
         Self {
             workspace,
+            project: String::new(),
             draft: Draft::default(),
             phase: Phase::Starting,
             link: Link::Waiting,
@@ -291,6 +294,11 @@ impl App {
             Phase::Attached { session, .. } => Some(session),
             Phase::Starting | Phase::Pending { .. } => None,
         }
+    }
+
+    /// Sets the project key `prompt_history` names.
+    pub(crate) fn set_project(&mut self, project: String) {
+        self.project = project;
     }
 
     /// Sets the screen size for wrapping and paging.

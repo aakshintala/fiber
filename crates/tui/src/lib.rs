@@ -74,12 +74,14 @@ pub(crate) enum Input {
     },
 }
 
-/// Runs the terminal on `tty`, starting sessions in `workspace`. Returns 0
-/// on quit and 1 when the terminal cannot be set up or drawn. The terminal
-/// is restored on every return.
+/// Runs the terminal on `tty`, starting sessions in `workspace`, whose
+/// project key (`docs/state.md`, "Projects") is `project`. Returns 0 on
+/// quit and 1 when the terminal cannot be set up or drawn. The terminal is
+/// restored on every return.
 pub fn run(
     tty: File,
     workspace: PathBuf,
+    project: String,
     connect: Connect,
     on_attach: OnAttach,
     clock: Arc<dyn Clock>,
@@ -98,6 +100,7 @@ pub fn run(
         return 1;
     };
     let mut app = App::new(workspace);
+    app.set_project(project);
     app.set_size(width, height);
     let mut terminal = Loop {
         app,

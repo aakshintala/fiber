@@ -609,6 +609,7 @@ fn run_quits_on_double_ctrl_c_with_the_reader_blocked() {
             let code = super::run(
                 slave,
                 PathBuf::from("/w"),
+                "-w".to_owned(),
                 Box::new(move || Ok((hub, hello))),
                 Box::new(|_| {}),
                 clock,
@@ -669,6 +670,7 @@ fn run_shows_a_failed_connect_and_still_quits_restored() {
             let code = super::run(
                 slave,
                 PathBuf::from("/w"),
+                "-w".to_owned(),
                 Box::new(|| Err(io::Error::other("refused"))),
                 Box::new(|_| {}),
                 fakes::clock::FakeClock::new(),
@@ -715,6 +717,7 @@ fn run_redraws_on_sigwinch_at_the_new_size() {
             let code = super::run(
                 slave,
                 PathBuf::from("/w"),
+                "-w".to_owned(),
                 Box::new(|| Err(io::Error::other("refused"))),
                 Box::new(|_| {}),
                 fakes::clock::FakeClock::new(),
