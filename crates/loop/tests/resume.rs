@@ -4753,7 +4753,7 @@ fn resumed_thinking_seeds_the_session_choice_for_the_next_switch() {
                 reviewer: Err(contract::shapes::Failure {
                     code: contract::ErrorCode::NoModel,
                     message: r#loop::NO_MODEL_MESSAGE.into(),
-                    retry_after: None,
+                    retry_after_ms: None,
                     provider: None,
                 }),
                 web_search: None,

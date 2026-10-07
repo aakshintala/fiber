@@ -727,7 +727,7 @@ fn a_switch_while_warming_sends_no_refresh_and_restarts_idle_from_the_switch() {
                 reviewer: Err(contract::shapes::Failure {
                     code: ErrorCode::NoModel,
                     message: r#loop::NO_MODEL_MESSAGE.into(),
-                    retry_after: None,
+                    retry_after_ms: None,
                     provider: None,
                 }),
                 web_search: None,

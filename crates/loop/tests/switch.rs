@@ -43,7 +43,7 @@ fn no_reviewer() -> Result<Reviewer, contract::shapes::Failure> {
     Err(contract::shapes::Failure {
         code: ErrorCode::NoModel,
         message: r#loop::NO_MODEL_MESSAGE.into(),
-        retry_after: None,
+        retry_after_ms: None,
         provider: None,
     })
 }
