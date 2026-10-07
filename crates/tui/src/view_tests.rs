@@ -278,14 +278,18 @@ fn a_short_screen_keeps_the_input_line_last() {
     app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "two"));
     app.connect_failed("lost".to_owned());
     app.on_key(Key::CtrlC, now);
-    // The input line wins the last row, then the hint, then the notice;
-    // the conversation gets what is left.
+    // The input line wins the last row, then the hint; the conversation
+    // gets what is left, the notice floating over its top row.
+    let notice = "lost   ✕";
     assert_eq!(sized(&mut app, 20, 1), ">\n");
     assert_eq!(sized(&mut app, 20, 2), "Press Ctrl+C again t\n>\n");
-    assert_eq!(sized(&mut app, 20, 3), "lost\nPress Ctrl+C again t\n>\n");
+    assert_eq!(
+        sized(&mut app, 20, 3),
+        format!("{notice:>20}\nPress Ctrl+C again t\n>\n")
+    );
     assert_eq!(
         sized(&mut app, 20, 4),
-        format!("{:>19}\nlost\nPress Ctrl+C again t\n>\n", "two")
+        format!("{notice:>20}\n{:>19}\nPress Ctrl+C again t\n>\n", "two")
     );
 }
 
@@ -463,7 +467,7 @@ fn approval_feedback_typed_on_deny() {
 }
 
 #[test]
-fn a_short_screen_drops_the_badge_after_the_hint_and_notice() {
+fn a_short_screen_drops_the_badge_after_the_hint() {
     let now = fakes::clock::FakeClock::new().now();
     let mut app = asked();
     app.on_line(standing(S_A, "a_1", "r_1"));
@@ -479,7 +483,10 @@ fn a_short_screen_drops_the_badge_after_the_hint_and_notice() {
     );
     assert_eq!(
         sized(&mut app, 40, 4),
-        format!("lost\nPress Ctrl+C again to quit\n{badge}\n>\n")
+        format!(
+            "{:>40}\nPress Ctrl+C again to quit\n{badge}\n>\n",
+            "lost           ✕"
+        )
     );
 }
 
@@ -730,4 +737,31 @@ fn steering_rows_above_the_input() {
     ));
     app.on_key(Key::AltUp, clock.now());
     insta::assert_snapshot!("steering_rows_above_the_input", screen(&app));
+}
+
+#[test]
+fn notices_float_and_nothing_below_the_conversation_moves() {
+    let mut app = empty();
+    attach(&mut app, S_A);
+    for n in 1..=4 {
+        app.on_line(turn_started(S_A, &format!("prompt {n}")));
+        app.on_line(turn_completed(S_A, "completed"));
+    }
+    let before = screen(&app);
+    app.connect_failed("Could not reach the hub: the socket refused the connection".to_owned());
+    for n in 1..=3 {
+        app.on_line(session_line(
+            S_A,
+            "notice",
+            serde_json::json!({"code": "extension_failed", "message": format!("Notice {n}.")}),
+            None,
+        ));
+    }
+    let after = screen(&app);
+    let below = |screen: &str| screen.lines().last().map(str::to_owned);
+    assert_eq!(below(&before), below(&after));
+    assert_eq!(before.lines().count(), after.lines().count());
+    insta::assert_snapshot!("notices_float", after);
+    app.open_more_notices();
+    insta::assert_snapshot!("notices_listed", screen(&app));
 }

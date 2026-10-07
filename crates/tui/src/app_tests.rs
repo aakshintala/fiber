@@ -713,21 +713,22 @@ fn keys_feed_into_the_draft() {
 }
 
 #[test]
-fn the_conversation_gives_up_a_row_each_for_input_hint_and_notice() {
+fn the_conversation_gives_up_a_row_each_for_input_hint_and_steering() {
     let now = fakes::clock::FakeClock::new().now();
     let mut app = app();
     app.set_size(60, 12);
     assert_eq!(app.conversation_height(), 11);
     app.on_key(Key::CtrlC, now);
     assert_eq!(app.conversation_height(), 10);
+    // A notice floats over the conversation and takes no row.
     connect(&mut app);
     app.disconnected();
-    assert_eq!(app.conversation_height(), 9);
-    app.on_key(Key::Char('x'), now);
     assert_eq!(app.conversation_height(), 10);
+    app.on_key(Key::Char('x'), now);
+    assert_eq!(app.conversation_height(), 11);
     app.attach(contract::SessionId(S_A.to_owned()));
     app.on_line(steering_queue(S_A, &[("a", Some("c_1")), ("b", None)]));
-    assert_eq!(app.conversation_height(), 8);
+    assert_eq!(app.conversation_height(), 9);
     app.set_size(60, 1);
     assert_eq!(app.conversation_height(), 0);
 }

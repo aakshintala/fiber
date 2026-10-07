@@ -7,7 +7,7 @@ use std::hash::{BuildHasher, RandomState};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use contract::events::{CommandAccepted, CommandRejected, SteeringQueue};
+use contract::events::{CommandAccepted, CommandRejected, Notice, SteeringQueue};
 use contract::shapes::ContentPart;
 use contract::{Envelope, HubLine, SessionId};
 use serde_json::{Map, Value, json};
@@ -16,8 +16,11 @@ use crate::approvals::{self, Panel, PanelKey, Queue};
 use crate::keys::Key;
 use crate::link::Line;
 use crate::turn::{Fold, Row, Turn};
+use notices::Notices;
 use steering::Steering;
 
+#[path = "notices.rs"]
+mod notices;
 #[path = "steering.rs"]
 mod steering;
 
@@ -117,8 +120,8 @@ pub(crate) struct App {
     held: Vec<String>,
     /// Commands waiting for their answer: kind and the text they carried.
     pending: HashMap<String, (Kind, String)>,
-    /// The one notice line, the latest.
-    notice: Option<String>,
+    /// The notices floating over the conversation.
+    notices: Notices,
     turns: Vec<Turn>,
     fold: Fold,
     /// The top wrapped row while scrolled up; `None` follows new output.
@@ -147,7 +150,7 @@ impl App {
             link: Link::Waiting,
             held: Vec::new(),
             pending: HashMap::new(),
-            notice: None,
+            notices: Notices::default(),
             turns: Vec::new(),
             fold: Fold::default(),
             top: None,
@@ -191,6 +194,7 @@ impl App {
                 Effect::None
             }
             Key::Enter => self.on_enter(),
+            Key::Esc if self.notices.close() => Effect::None,
             // Esc with a queued row selected puts the draft back, and
             // interrupts nothing.
             Key::Esc if self.steering.is_selected() => {
@@ -235,7 +239,7 @@ impl App {
     /// read: the notice, and a held `start` fails as if rejected.
     pub(crate) fn connect_failed(&mut self, notice: String) {
         self.link = Link::Down;
-        self.notice = Some(notice);
+        self.notices.push(notice);
         self.held.clear();
         if let Phase::Pending { command_id } = &self.phase {
             let id = command_id.clone();
@@ -249,7 +253,7 @@ impl App {
     pub(crate) fn disconnected(&mut self) {
         if self.link == Link::Up {
             self.link = Link::Down;
-            self.notice = Some("Connection lost.".to_owned());
+            self.notices.push("Connection lost.".to_owned());
         }
     }
 
@@ -304,11 +308,6 @@ impl App {
         &self.draft
     }
 
-    /// The notice line, if any.
-    pub(crate) fn notice(&self) -> Option<&str> {
-        self.notice.as_deref()
-    }
-
     /// Whether the quit hint shows: armed by a first Ctrl+C.
     pub(crate) fn hint(&self) -> bool {
         self.armed_at.is_some()
@@ -325,8 +324,8 @@ impl App {
     }
 
     /// The conversation's rows: the screen less the input line or the
-    /// panel in its place, the badge, the hint and the notice. None on a
-    /// screen too short for them.
+    /// panel in its place, the steering queue, the badge and the hint. None
+    /// on a screen too short for them.
     pub(crate) fn conversation_height(&self) -> usize {
         let input = self.panel().map_or(1, |panel| {
             panel
@@ -338,8 +337,7 @@ impl App {
         let below = input
             + self.steering().len()
             + usize::from(self.badge().is_some())
-            + usize::from(self.hint())
-            + usize::from(self.notice.is_some());
+            + usize::from(self.hint());
         usize::from(self.height).saturating_sub(below)
     }
 
@@ -567,7 +565,7 @@ impl App {
         vec![session_command(&mint(), "subscribe", &session, Some(args)).to_string()]
     }
 
-    /// A command the terminal sent was rejected: one notice line, and its
+    /// A command the terminal sent was rejected: a notice, and its
     /// text back in the draft when the draft is empty. A rejected `cancel`
     /// shows nothing; after a rejected `start` the next Enter tries again.
     fn rejected(&mut self, id: &str, message: String) {
@@ -578,7 +576,7 @@ impl App {
                 self.pending.remove(id);
             }
             Some((Kind::Start | Kind::Prompt | Kind::Steer | Kind::Reply, _)) => {
-                self.notice = Some(message);
+                self.notices.push(message);
                 self.fail(id);
             }
         }
@@ -618,7 +616,7 @@ impl App {
     /// first request waiting, or a notice says none waits.
     fn open_first(&mut self) -> Effect {
         if !self.queue.open_first() {
-            self.notice = Some("No requests waiting.".to_owned());
+            self.notices.push("No requests waiting.".to_owned());
         }
         Effect::None
     }
@@ -645,6 +643,12 @@ impl App {
                     && let Some(id) = rejected.command_id
                 {
                     self.rejected(&id.0, rejected.message);
+                }
+                false
+            }
+            "notice" => {
+                if let Some(notice) = read!(envelope, Notice) {
+                    self.notices.push(notice.message);
                 }
                 false
             }

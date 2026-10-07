@@ -699,8 +699,18 @@ fn run_redraws_on_sigwinch_at_the_new_size() {
     // test's `run`.
     signal_hook::low_level::raise(signal_hook::consts::SIGWINCH)
         .unwrap_or_else(|err| panic!("raise: {err}"));
-    // The input line moves to the new last row.
-    read_until(&pair.main, b"\x1b[10;1H>", "the input line on row 10");
+    // The input line moves to the new last row: the cursor goes there, and
+    // the next character printed, after any colour change, is its `>`.
+    read_until(&pair.main, b"\x1b[10;1H", "the move to row 10");
+    let next = read_until(&pair.main, b">", "the input line on row 10");
+    let between = next.split_last().map_or(&[][..], |(_, rest)| rest);
+    assert!(
+        between
+            .iter()
+            .all(|byte| *byte == 0x1b || b"[;m0123456789".contains(byte)),
+        "{:?}",
+        String::from_utf8_lossy(&next)
+    );
     pair.main
         .write_all(&[0x03, 0x03])
         .unwrap_or_else(|err| panic!("write: {err}"));

@@ -1,6 +1,7 @@
-//! Drawing the terminal: the conversation's styled lines, the notice, the
-//! quit hint, the approval badge, and the input line or the approval panel
-//! in its place (`docs/tui.md`, "Turns", "Approvals and questions").
+//! Drawing the terminal: the conversation's styled lines, the notices over
+//! it, the quit hint, the approval badge, the steering queue, and the input
+//! line or the approval panel in its place (`docs/tui.md`, "Turns",
+//! "Steering", "Notices", "Approvals and questions").
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -23,6 +24,11 @@ pub(crate) const APPROVAL_TINT: Style = Style::new().bg(Color::Indexed(17));
 /// (see #685).
 pub(crate) const ALERT_TINT: Style = Style::new().bg(Color::Indexed(52));
 
+/// A notice's tint.
+/// debt: a fixed colour, not a theme role; upgrade when colour roles land
+/// (see #685).
+const NOTICE_TINT: Style = Style::new().bg(Color::Indexed(236));
+
 /// One line, wrapped the way it draws.
 fn paragraph(line: Line<'_>) -> Paragraph<'_> {
     Paragraph::new(line).wrap(Wrap { trim: false })
@@ -35,10 +41,9 @@ pub(crate) fn rows(line: Line<'_>, width: u16) -> usize {
 
 /// Draws `app` into `area` of `buf`, from the bottom up: the input line
 /// on the last row, or the approval panel in its place, then the steering
-/// queue, the badge, the
-/// quit hint and the notice when shown, and the conversation in the rows
-/// left. A screen too short for them all drops the notice first, then the
-/// hint, then the badge. A panel taller than the screen keeps its top.
+/// queue, the badge and the quit hint when shown, and the conversation in
+/// the rows left, the notices floating over its top-right corner. A screen
+/// too short for them all drops the hint first, then the badge. A panel taller than the screen keeps its top.
 pub(crate) fn render(app: &App, area: Rect, buf: &mut Buffer) {
     let width = usize::from(area.width);
     let mut bottom = area.bottom();
@@ -84,11 +89,44 @@ pub(crate) fn render(app: &App, area: Rect, buf: &mut Buffer) {
     if app.hint() {
         put(QUIT_HINT);
     }
-    if let Some(notice) = app.notice() {
-        put(notice);
-    }
     let rows = bottom.saturating_sub(area.y);
-    conversation_rows(app, Rect::new(area.x, area.y, area.width, rows), buf);
+    let conversation = Rect::new(area.x, area.y, area.width, rows);
+    conversation_rows(app, conversation, buf);
+    notices(app, conversation, buf);
+}
+
+/// Floats the notices over the conversation's top-right corner, newest on
+/// top, or the notice overlay over the whole conversation while it is open.
+fn notices(app: &App, area: Rect, buf: &mut Buffer) {
+    let mut y = area.y;
+    if let Some(texts) = app.notice_overlay() {
+        let rows: Vec<String> = texts
+            .iter()
+            .flat_map(|text| crate::format::wrap(text, usize::from(area.width)))
+            .collect();
+        for row in rows {
+            if y >= area.bottom() {
+                return;
+            }
+            let width = usize::from(area.width);
+            let blank = " ".repeat(width);
+            buf.set_stringn(area.x, y, blank, width, NOTICE_TINT);
+            buf.set_stringn(area.x, y, &row, width, NOTICE_TINT);
+            y = y.saturating_add(1);
+        }
+        return;
+    }
+    for notice in app.notices() {
+        for row in notice.rows {
+            if y >= area.bottom() {
+                return;
+            }
+            let wide = to_u16(crate::format::width(&row)).min(area.width);
+            let x = area.right().saturating_sub(wide);
+            buf.set_stringn(x, y, &row, usize::from(wide), NOTICE_TINT);
+            y = y.saturating_add(1);
+        }
+    }
 }
 
 /// Draws the conversation's visible rows, bottom-aligned while it is
