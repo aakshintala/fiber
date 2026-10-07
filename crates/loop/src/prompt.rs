@@ -321,6 +321,46 @@ pub(crate) fn build(
     (system, definitions, event)
 }
 
+/// The `tool_definitions_large` notice, when the definitions declared in
+/// full pass 10% of the context window (`docs/tools.md`, "Size warning").
+/// A definition's size is its serialized bytes at four bytes a token, and
+/// its source is the `registered_by` the event records. `None` when the
+/// window is unknown (`0`). Exactly 10% is not over, so `>` compares the
+/// unrounded cross products.
+pub(crate) fn definitions_notice(
+    event: &contract::events::PreambleBuilt,
+) -> Option<contract::events::Notice> {
+    let window = u128::from(event.context_window);
+    if window == 0 {
+        return None;
+    }
+    let mut sources: std::collections::BTreeMap<&str, u128> = std::collections::BTreeMap::new();
+    for tool in event.tools.iter().filter(|tool| !tool.deferred) {
+        let bytes = serde_json::to_string(&tool.definition).map_or(0, |text| text.len() as u128);
+        *sources.entry(tool.registered_by.as_str()).or_default() += bytes;
+    }
+    let total: u128 = sources.values().sum();
+    if total * 10 <= window * 4 {
+        return None;
+    }
+    let mut ranked: Vec<(&str, u128)> = sources.into_iter().collect();
+    ranked.sort_by_key(|source| std::cmp::Reverse(source.1));
+    let largest: Vec<String> = ranked
+        .into_iter()
+        .take(3)
+        .map(|(name, bytes)| format!("{name} ({bytes} bytes)"))
+        .collect();
+    Some(contract::events::Notice {
+        code: contract::ErrorCode::ToolDefinitionsLarge,
+        message: format!(
+            "Tool definitions declared in full are about {} tokens, over 10% of the {window}-token context window. Largest: {}. Leave tools out with `tools.disabled` in an MCP server's or extension's configuration, or defer one with `tools.\"<name>\".deferred`.",
+            total / 4,
+            largest.join(", ")
+        ),
+        extension: None,
+    })
+}
+
 #[cfg(test)]
 #[path = "prompt_tests.rs"]
 mod tests;

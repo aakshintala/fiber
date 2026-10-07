@@ -456,6 +456,7 @@ impl Loop {
         );
         self.log
             .append(&Event::PreambleBuilt(event.clone()), None, None)?;
+        let large = prompt::definitions_notice(&event);
         self.preamble = Some(Preamble {
             system_prompt,
             tools,
@@ -463,7 +464,11 @@ impl Loop {
             cache_lifetime: event.cache_lifetime,
             thinking: self.prompt.thinking,
         });
-        self.ensure_opening()
+        let opened = self.ensure_opening()?;
+        if let Some(notice) = large {
+            self.append_early(&Event::Notice(notice))?;
+        }
+        Ok(opened)
     }
 
     /// Writes the opening message and its notices, once per session: after

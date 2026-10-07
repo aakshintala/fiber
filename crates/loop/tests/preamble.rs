@@ -522,3 +522,87 @@ fn a_thinking_level_is_recorded_and_sent_on_every_request() {
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].thinking, Some(contract::ThinkingLevel::High));
 }
+
+/// Bytes of the definitions a probe session sent in full.
+fn definition_bytes(tools: Vec<std::sync::Arc<dyn contract::tool::Tool>>) -> u64 {
+    let mut session = Session::windowed(vec![Scripted::text("Done.")], tools, 1_000_000);
+    session.inbox.send(delivery("hi")).unwrap();
+    session.turn();
+    let built = session
+        .lines()
+        .into_iter()
+        .find(|line| line.kind == "preamble_built")
+        .unwrap();
+    built
+        .payload
+        .get("tools")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| serde_json::to_string(&tool["definition"]).unwrap().len() as u64)
+        .sum()
+}
+
+fn two_tools() -> Vec<std::sync::Arc<dyn contract::tool::Tool>> {
+    vec![
+        std::sync::Arc::new(support::TestTool::reads("get_weather", "Sunny.")),
+        std::sync::Arc::new(support::TestTool::reads("get_news", "Quiet.")),
+    ]
+}
+
+const TURN_KINDS: [&str; 12] = [
+    "session_started",
+    "preamble_built",
+    "opening_message",
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "assistant_message_delta",
+    "assistant_message_delta",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+];
+
+/// The turn's event kinds and its notices' payloads, for a window of
+/// `window` tokens.
+fn tool_turn(window: u64) -> (Vec<String>, Vec<Value>) {
+    let mut session = Session::windowed(vec![Scripted::text("Done.")], two_tools(), window);
+    session.inbox.send(delivery("hi")).unwrap();
+    session.turn();
+    let lines = session.lines();
+    let kinds = kinds(&lines).into_iter().map(str::to_owned).collect();
+    let notices = lines
+        .into_iter()
+        .filter(|line| line.kind == "notice")
+        .map(|line| Value::Object(line.payload))
+        .collect();
+    (kinds, notices)
+}
+
+#[test]
+fn definitions_over_ten_percent_of_the_window_write_tool_definitions_large() {
+    let bytes = definition_bytes(two_tools());
+    // Four bytes a token: a window one token under 2.5 x bytes puts the
+    // definitions just over 10%.
+    let (kinds, notices) = tool_turn((bytes * 10).div_ceil(4) - 1);
+    let mut expected = TURN_KINDS.to_vec();
+    expected.insert(3, "notice");
+    assert_eq!(kinds, expected);
+    assert_eq!(notices.len(), 1);
+    let notice = notices.first().unwrap();
+    assert_eq!(notice["code"], "tool_definitions_large");
+    let text = notice["message"].as_str().unwrap();
+    assert!(text.contains("builtin"), "{text}");
+    assert!(text.contains("tools.disabled"), "{text}");
+}
+
+#[test]
+fn definitions_at_exactly_ten_percent_of_the_window_write_no_notice() {
+    let bytes = definition_bytes(two_tools());
+    let (kinds, notices) = tool_turn((bytes * 10).div_ceil(4));
+    assert_eq!(kinds, TURN_KINDS);
+    assert!(notices.is_empty());
+}
