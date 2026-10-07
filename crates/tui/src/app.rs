@@ -244,6 +244,12 @@ impl App {
         }
     }
 
+    /// Puts the request the panel shows aside, as Esc does, so it waits on
+    /// the badge. The `hover` jig's way to a badge from an events file.
+    pub(crate) fn put_aside(&mut self) {
+        self.queue.on_key(&Key::Esc);
+    }
+
     /// Folds one line from the hub, returning command lines to send.
     pub(crate) fn on_line(&mut self, line: Line) -> Vec<String> {
         match line {

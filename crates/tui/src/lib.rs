@@ -159,18 +159,20 @@ pub fn draw(events: &str, width: u16, height: u16) -> Result<String, String> {
     Ok(view::text(&buf))
 }
 
-/// Folds `events` as [`draw`] does, draws them at `width` by `height`
-/// through the loop's screen, then moves the pointer to each of `pointer`
-/// in turn, drawing after each as the loop does for a motion report.
-/// Returns the bytes each report wrote. The `hover` jig times it
-/// (`docs/tui.md`, "Mouse and hover").
+/// Folds `events` as [`draw`] does and puts the request the panel shows
+/// aside, so it waits on the badge, a click target. Then draws them at
+/// `width` by `height` through the loop's screen, and moves the pointer to
+/// each of `pointer` in turn, drawing after each as the loop does for a
+/// motion report. Returns the bytes each report wrote. The `hover` jig
+/// times it (`docs/tui.md`, "Mouse and hover").
 pub fn hover_frames(
     events: &str,
     width: u16,
     height: u16,
     pointer: &[(u16, u16)],
 ) -> Result<Vec<usize>, String> {
-    let app = fold(events, width, height)?;
+    let mut app = fold(events, width, height)?;
+    app.put_aside();
     let written = Counter::default();
     let mut screen = Screen::new(CrosstermBackend::new(written.clone()), width, height)
         .map_err(|error| error.to_string())?;

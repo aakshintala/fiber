@@ -312,9 +312,8 @@ fn parse_csi(buf: &[u8]) -> Step {
         },
         b'M' | b'm' if params.first() == Some(&b'<') => {
             let params = params.get(1..).unwrap_or_default();
-            sgr_mouse(params, final_byte == b'm').map_or_else(Vec::new, |mouse| {
-                vec![Event::Mouse(mouse)]
-            })
+            sgr_mouse(params, final_byte == b'm')
+                .map_or_else(Vec::new, |mouse| vec![Event::Mouse(mouse)])
         }
         0x46 if params.is_empty() => vec![Event::Key(Key::End)],
         0x41 if params.is_empty() => vec![Event::Key(Key::Up)],

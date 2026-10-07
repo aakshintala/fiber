@@ -196,3 +196,20 @@ impl Backend for Cells {
         Ok(())
     }
 }
+
+#[test]
+fn hover_frames_counts_the_bytes_each_report_wrote() {
+    let events = include_str!("../examples/hover.jsonl");
+    // The request is put aside: the badge is on row 10 of 60x12.
+    let bytes = crate::hover_frames(events, 60, 12, &[(3, 10), (4, 10), (3, 0), (3, 0)])
+        .unwrap_or_else(|error| panic!("hover_frames: {error}"));
+    assert_eq!(bytes.len(), 4);
+    assert!(bytes[0] > 0);
+    assert_eq!(bytes[1], 0);
+    assert!(bytes[2] > 0);
+    assert_eq!(bytes[3], 0);
+    assert_eq!(
+        crate::hover_frames("not json", 60, 12, &[]).map_err(|e| e.starts_with("line 1:")),
+        Err(true)
+    );
+}

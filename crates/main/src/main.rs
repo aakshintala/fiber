@@ -616,7 +616,14 @@ fn terminal() -> i32 {
         };
         doors::hub::connect(&home, &mut start, hub_clock.as_ref())
     });
-    tui::run(tty, workspace, connect, Box::new(crash::attach), clock, hover)
+    tui::run(
+        tty,
+        workspace,
+        connect,
+        Box::new(crash::attach),
+        clock,
+        hover,
+    )
 }
 
 fn usage(message: impl Into<String>) -> Failure {
