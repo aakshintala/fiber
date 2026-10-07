@@ -87,11 +87,16 @@ fn effects_come_from_the_resolved_hints_for_any_arguments() {
 #[test]
 fn a_dead_link_is_unavailable() {
     let tool = declare("fx", "echo", Hints::default(), std::sync::Weak::new());
-    let output = tool.run(
-        &arguments(),
-        &fakes::CancelToken::new(),
-        &fakes::Recorder::default(),
-    );
+    // Calling code that blocks is a wait too (`docs/testing.md`, "Waits and
+    // timeouts"): the call runs on a thread and its result is received
+    // with a deadline naming the wait.
+    let output = fakes::within("the call to `echo` on a dead server", WITHIN, move || {
+        tool.run(
+            &arguments(),
+            &fakes::CancelToken::new(),
+            &fakes::Recorder::default(),
+        )
+    });
     assert_eq!(
         output.error.as_ref().map(|error| &error.code),
         Some(&ErrorCode::McpServerUnavailable)
@@ -194,11 +199,13 @@ fn text_blocks_come_back_in_order() {
         )],
     );
     let tool = live.tool("echo", Hints::default(), Duration::from_secs(30));
-    let output = tool.run(
-        &arguments(),
-        &fakes::CancelToken::new(),
-        &fakes::Recorder::default(),
-    );
+    let output = fakes::within("the call to `echo`", WITHIN, move || {
+        tool.run(
+            &arguments(),
+            &fakes::CancelToken::new(),
+            &fakes::Recorder::default(),
+        )
+    });
     assert!(output.error.is_none());
     assert_eq!(
         output.content,
@@ -223,11 +230,13 @@ fn non_text_parts_are_dropped() {
         )],
     );
     let tool = live.tool("show", Hints::default(), Duration::from_secs(30));
-    let output = tool.run(
-        &arguments(),
-        &fakes::CancelToken::new(),
-        &fakes::Recorder::default(),
-    );
+    let output = fakes::within("the call to `show`", WITHIN, move || {
+        tool.run(
+            &arguments(),
+            &fakes::CancelToken::new(),
+            &fakes::Recorder::default(),
+        )
+    });
     assert!(output.error.is_none());
     assert_eq!(
         output.content,
@@ -247,11 +256,13 @@ fn an_error_result_is_tool_error_with_the_text() {
         )],
     );
     let tool = live.tool("bad", Hints::default(), Duration::from_secs(30));
-    let output = tool.run(
-        &arguments(),
-        &fakes::CancelToken::new(),
-        &fakes::Recorder::default(),
-    );
+    let output = fakes::within("the call to `bad`", WITHIN, move || {
+        tool.run(
+            &arguments(),
+            &fakes::CancelToken::new(),
+            &fakes::Recorder::default(),
+        )
+    });
     let error = output.error.expect("failed");
     assert_eq!(error.code, ErrorCode::ToolError);
     assert_eq!(error.message, "no such thing");
@@ -268,10 +279,16 @@ fn a_json_rpc_error_is_tool_error() {
     let live = Live::tools(&json!([{"name": "echo"}]), &[]);
     // No `call-echo.json`: the fixture answers `-32602`.
     let tool = live.tool("echo", Hints::default(), Duration::from_secs(30));
-    let output = tool.run(
-        &arguments(),
-        &fakes::CancelToken::new(),
-        &fakes::Recorder::default(),
+    let output = fakes::within(
+        "the call to `echo` for a missing result",
+        WITHIN,
+        move || {
+            tool.run(
+                &arguments(),
+                &fakes::CancelToken::new(),
+                &fakes::Recorder::default(),
+            )
+        },
     );
     let error = output.error.expect("failed");
     assert_eq!(error.code, ErrorCode::ToolError);
@@ -286,16 +303,8 @@ fn a_json_rpc_error_is_tool_error() {
 fn a_timed_out_call_is_timeout() {
     let live = Live::tools(&json!([{"name": "hang"}]), &[("call-hang.json", "hang")]);
     let tool = live.tool("hang", Hints::default(), Duration::from_secs(60));
-    let (done, result) = std::sync::mpsc::channel();
-    std::thread::scope(|scope| {
-        scope.spawn(|| {
-            let output = tool.run(
-                &arguments(),
-                &fakes::CancelToken::new(),
-                &fakes::Recorder::default(),
-            );
-            done.send(output).expect("collected");
-        });
+    let result = detached(tool, fakes::CancelToken::new());
+    {
         let deadline = live
             .fake
             .now()
@@ -313,7 +322,7 @@ fn a_timed_out_call_is_timeout() {
             error.message,
             "The MCP server `fx` did not answer `hang` within 60000 ms."
         );
-    });
+    }
 }
 
 #[test]
@@ -321,12 +330,8 @@ fn a_cancelled_call_is_mcp_cancel_requested() {
     let live = Live::tools(&json!([{"name": "hang"}]), &[("call-hang.json", "hang")]);
     let tool = live.tool("hang", Hints::default(), Duration::from_secs(60));
     let cancel = fakes::CancelToken::new();
-    let (done, result) = std::sync::mpsc::channel();
-    std::thread::scope(|scope| {
-        scope.spawn(|| {
-            let output = tool.run(&arguments(), &cancel, &fakes::Recorder::default());
-            done.send(output).expect("collected");
-        });
+    let result = detached(tool, cancel.clone());
+    {
         let deadline = live
             .fake
             .now()
@@ -344,7 +349,7 @@ fn a_cancelled_call_is_mcp_cancel_requested() {
             error.message,
             "The call to `hang` on the MCP server `fx` was cancelled; the server may still act on it."
         );
-    });
+    }
     // The server was told: `notifications/cancelled` names the call's id.
     let log = live._dir.path().join("requests.log");
     let (_held, probe) = std::sync::mpsc::channel::<()>();
@@ -374,14 +379,13 @@ fn a_cancelled_call_is_mcp_cancel_requested() {
 /// Detached, not scoped: a call parked on the fake clock would otherwise
 /// keep the scope's implicit join waiting after `recv_timeout` gave up, so
 /// the test would hang instead of failing.
-fn detached(tool: McpTool) -> std::sync::mpsc::Receiver<contract::tool::Output> {
+fn detached(
+    tool: McpTool,
+    cancel: fakes::CancelToken,
+) -> std::sync::mpsc::Receiver<contract::tool::Output> {
     let (done, result) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let output = tool.run(
-            &arguments(),
-            &fakes::CancelToken::new(),
-            &fakes::Recorder::default(),
-        );
+        let output = tool.run(&arguments(), &cancel, &fakes::Recorder::default());
         done.send(output).expect("collected");
     });
     result
@@ -390,7 +394,10 @@ fn detached(tool: McpTool) -> std::sync::mpsc::Receiver<contract::tool::Output> 
 #[test]
 fn a_server_that_dies_mid_call_fails_it_and_records_the_death() {
     let live = Live::tools(&json!([{"name": "die"}]), &[("call-die.json", "exit")]);
-    let result = detached(live.tool("die", Hints::default(), Duration::from_secs(60)));
+    let result = detached(
+        live.tool("die", Hints::default(), Duration::from_secs(60)),
+        fakes::CancelToken::new(),
+    );
     let output = result.recv_timeout(WITHIN).expect("the call ends");
     let error = output.error.expect("failed");
     assert_eq!(error.code, ErrorCode::McpServerUnavailable);
@@ -412,7 +419,10 @@ fn a_server_that_dies_mid_call_fails_it_and_records_the_death() {
 #[test]
 fn a_call_ended_by_the_stop_records_no_death() {
     let live = Live::tools(&json!([{"name": "hang"}]), &[("call-hang.json", "hang")]);
-    let result = detached(live.tool("hang", Hints::default(), Duration::from_secs(60)));
+    let result = detached(
+        live.tool("hang", Hints::default(), Duration::from_secs(60)),
+        fakes::CancelToken::new(),
+    );
     let deadline = live
         .fake
         .now()

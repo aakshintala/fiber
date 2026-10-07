@@ -56,8 +56,25 @@ fn args(command: &str) -> Map<String, Value> {
 }
 
 fn run(dir: &Path, command: &str) -> contract::tool::Output {
-    let shell = Shell::new(dir.to_path_buf(), FakeClock::new());
-    shell.run(&args(command), &CancelToken::new(), &Recorder::default())
+    let shell = Arc::new(Shell::new(dir.to_path_buf(), FakeClock::new()));
+    run_on(&shell, args(command), &Arc::new(Recorder::default()))
+}
+
+/// Runs one shell call on its own thread and returns its output. Calling
+/// code that blocks is a wait too (`docs/testing.md`, "Waits and
+/// timeouts"): on expiry the test fails naming the command.
+fn run_on(
+    shell: &Arc<Shell>,
+    arguments: Map<String, Value>,
+    recorder: &Arc<Recorder>,
+) -> contract::tool::Output {
+    let shell = Arc::clone(shell);
+    let recorder = Arc::clone(recorder);
+    fakes::within(
+        &format!("the shell command {}", arguments["command"]),
+        DEADLINE,
+        move || shell.run(&arguments, &CancelToken::new(), recorder.as_ref()),
+    )
 }
 
 fn group_alive(group: u32) -> bool {
@@ -253,10 +270,10 @@ fn the_workdir_defaults_to_the_workspace_and_a_relative_path_is_resolved() {
             .unwrap(),
         workspace.canonicalize().unwrap()
     );
-    let shell = Shell::new(workspace.clone(), FakeClock::new());
+    let shell = Arc::new(Shell::new(workspace.clone(), FakeClock::new()));
     let mut arguments = args("pwd -P");
     arguments.insert("workdir".into(), json!("sub"));
-    let output = shell.run(&arguments, &CancelToken::new(), &Recorder::default());
+    let output = run_on(&shell, arguments, &Arc::new(Recorder::default()));
     assert!(output.error.is_none(), "{}", text(&output));
     assert_eq!(
         Path::new(text(&output).lines().next().unwrap())
@@ -269,16 +286,16 @@ fn the_workdir_defaults_to_the_workspace_and_a_relative_path_is_resolved() {
 #[test]
 fn a_cd_does_not_carry_to_the_next_call() {
     let dir = fakes::TempDir::new("fiber-shell-cd");
-    let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new());
+    let shell = Arc::new(Shell::new(dir.path().to_path_buf(), FakeClock::new()));
     let elsewhere = dir.path().join("elsewhere");
     std::fs::create_dir(&elsewhere).unwrap();
-    let first = shell.run(
-        &args(&format!("cd {} && pwd -P", quote(&elsewhere))),
-        &CancelToken::new(),
-        &Recorder::default(),
+    let first = run_on(
+        &shell,
+        args(&format!("cd {} && pwd -P", quote(&elsewhere))),
+        &Arc::new(Recorder::default()),
     );
     assert!(text(&first).contains("elsewhere"), "{}", text(&first));
-    let second = shell.run(&args("pwd -P"), &CancelToken::new(), &Recorder::default());
+    let second = run_on(&shell, args("pwd -P"), &Arc::new(Recorder::default()));
     assert_eq!(
         Path::new(text(&second).lines().next().unwrap())
             .canonicalize()
@@ -496,10 +513,10 @@ fn with_no_timeout_the_run_parks_at_ten_minutes() {
 #[test]
 fn a_zero_timeout_stops_at_once() {
     let dir = fakes::TempDir::new("fiber-shell-zero");
-    let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new());
+    let shell = Arc::new(Shell::new(dir.path().to_path_buf(), FakeClock::new()));
     let mut arguments = args("echo hi");
     arguments.insert("timeout_ms".into(), json!(0));
-    let output = shell.run(&arguments, &CancelToken::new(), &Recorder::default());
+    let output = run_on(&shell, arguments, &Arc::new(Recorder::default()));
     assert_eq!(code(&output), Some(ErrorCode::Timeout));
     assert!(output.process.as_ref().unwrap().timed_out);
     assert!(text(&output).contains("Timed out after 0 ms and stopped."));
@@ -808,9 +825,9 @@ fn output_streams_before_the_call_returns() {
 #[test]
 fn a_completed_command_streams_its_whole_output() {
     let dir = fakes::TempDir::new("fiber-shell-stream-done");
-    let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new());
-    let recorder = Recorder::default();
-    let output = shell.run(&args("printf 'hi\\n'"), &CancelToken::new(), &recorder);
+    let shell = Arc::new(Shell::new(dir.path().to_path_buf(), FakeClock::new()));
+    let recorder = Arc::new(Recorder::default());
+    let output = run_on(&shell, args("printf 'hi\\n'"), &recorder);
     assert!(output.error.is_none());
     assert_eq!(text(&output), "hi\nExit code 0.\n");
     assert_eq!(recorder.text(), "hi\n");
@@ -819,13 +836,9 @@ fn a_completed_command_streams_its_whole_output() {
 #[test]
 fn a_failing_command_streams_what_it_printed() {
     let dir = fakes::TempDir::new("fiber-shell-stream-failing");
-    let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new());
-    let recorder = Recorder::default();
-    let output = shell.run(
-        &args("printf 'oops\\n'; exit 3"),
-        &CancelToken::new(),
-        &recorder,
-    );
+    let shell = Arc::new(Shell::new(dir.path().to_path_buf(), FakeClock::new()));
+    let recorder = Arc::new(Recorder::default());
+    let output = run_on(&shell, args("printf 'oops\\n'; exit 3"), &recorder);
     assert_eq!(code(&output), Some(ErrorCode::NonzeroExit));
     assert_eq!(text(&output), "oops\nExit code 3.\n");
     assert_eq!(recorder.text(), "oops\n");
@@ -1563,13 +1576,14 @@ fn tty_is_a_boolean_and_needs_jobs() {
         .definition()
         .input_schema;
     assert_eq!(schema["properties"]["tty"]["type"], "boolean");
-    let with_jobs =
-        Shell::new(dir.path().to_path_buf(), FakeClock::new()).with_jobs(FakeJobs::new(dir.path()));
-    let without = Shell::new(dir.path().to_path_buf(), FakeClock::new());
+    let with_jobs = Arc::new(
+        Shell::new(dir.path().to_path_buf(), FakeClock::new()).with_jobs(FakeJobs::new(dir.path())),
+    );
+    let without = Arc::new(Shell::new(dir.path().to_path_buf(), FakeClock::new()));
     for value in [json!("yes"), json!(1)] {
         let mut arguments = args(&touch);
         arguments.insert("tty".into(), value);
-        let output = with_jobs.run(&arguments, &CancelToken::new(), &Recorder::default());
+        let output = run_on(&with_jobs, arguments, &Arc::new(Recorder::default()));
         assert_eq!(code(&output), Some(ErrorCode::InvalidArguments));
         assert!(
             text(&output).contains("`tty` must be a boolean"),
@@ -1579,7 +1593,7 @@ fn tty_is_a_boolean_and_needs_jobs() {
     }
     let mut arguments = args(&touch);
     arguments.insert("tty".into(), json!(true));
-    let output = without.run(&arguments, &CancelToken::new(), &Recorder::default());
+    let output = run_on(&without, arguments, &Arc::new(Recorder::default()));
     assert_eq!(code(&output), Some(ErrorCode::InvalidArguments));
     assert!(
         text(&output).contains("Background jobs are not available in this session."),
@@ -1869,13 +1883,14 @@ fn a_tty_command_is_still_a_bare_wait() {
     let dir = fakes::TempDir::new("fiber-shell-tty-sleep");
     let marker = dir.path().join("marker");
     let jobs = FakeJobs::new(dir.path());
-    let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new()).with_jobs(jobs.clone());
+    let shell =
+        Arc::new(Shell::new(dir.path().to_path_buf(), FakeClock::new()).with_jobs(jobs.clone()));
     // Only `run_in_background` skips the refusal. A zero timeout, so a
     // command that wrongly starts stops at once.
     let mut arguments = args(&format!("sleep 30; touch {}", quote(&marker)));
     arguments.insert("tty".into(), json!(true));
     arguments.insert("timeout_ms".into(), json!(0));
-    let output = shell.run(&arguments, &CancelToken::new(), &Recorder::default());
+    let output = run_on(&shell, arguments, &Arc::new(Recorder::default()));
     assert_eq!(code(&output), Some(ErrorCode::InvalidArguments));
     assert!(text(&output).contains("jobs wait"), "{}", text(&output));
     assert!(jobs.started().is_empty());
@@ -2075,11 +2090,12 @@ fn a_monitor_whose_errors_file_cannot_be_created_says_its_standard_error_is_disc
 fn a_monitor_with_a_zero_deadline_times_out_in_the_foreground() {
     let dir = fakes::TempDir::new("fiber-shell-monitor-zero");
     let jobs = FakeJobs::new(dir.path());
-    let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new()).with_jobs(jobs.clone());
+    let shell =
+        Arc::new(Shell::new(dir.path().to_path_buf(), FakeClock::new()).with_jobs(jobs.clone()));
     let mut arguments = args("echo hi");
     arguments.insert("monitor".into(), json!(true));
     arguments.insert("deadline_ms".into(), json!(0));
-    let output = shell.run(&arguments, &CancelToken::new(), &Recorder::default());
+    let output = run_on(&shell, arguments, &Arc::new(Recorder::default()));
     assert_eq!(code(&output), Some(ErrorCode::Timeout));
     assert!(output.process.as_ref().unwrap().timed_out);
     let line = "The monitor's deadline of 0 ms passed; start it again if you still need it.";

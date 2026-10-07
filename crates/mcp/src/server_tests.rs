@@ -196,7 +196,9 @@ fn initialize_and_list_succeed() {
         log.contains("notifications/initialized"),
         "missing initialized notification: {log}"
     );
-    opened.server.stop();
+    stopping(opened.server)
+        .recv_timeout(WITHIN)
+        .unwrap_or_else(|_| panic!("the stop ends within {WITHIN:?}"));
 }
 
 #[test]
@@ -204,32 +206,28 @@ fn a_call_round_trips() {
     let setup = Setup::tools(&echo_tools());
     setup.result("echo", r#"{"content":[{"type":"text","text":"hi"}]}"#);
     let opened = setup.start(Duration::from_secs(5));
-    // Threaded with a wall-clock limit: without `send` the call would sit
-    // parked forever, so a bare direct call would hang the test instead of
-    // failing it.
-    let (done, result) = mpsc::channel();
-    thread::scope(|scope| {
-        scope.spawn(|| {
-            let answer = opened.server.call(
-                "echo",
-                &json!({"text": "hi"}),
-                Duration::from_secs(30),
-                &fakes::CancelToken::new(),
-            );
-            done.send(answer).expect("collected");
-        });
-        let answer = result
-            .recv_timeout(WITHIN)
-            .unwrap_or_else(|_| panic!("the call answers within {WITHIN:?}"));
-        assert_eq!(
-            answer.expect("the call answers"),
-            json!({"content": [{"type": "text", "text": "hi"}]})
+    // Calling code that blocks is a wait too (`docs/testing.md`, "Waits and
+    // timeouts"): the call runs on a thread and its result is received
+    // with a deadline naming the wait.
+    let (answer, opened) = fakes::within("the call to `echo`", WITHIN, move || {
+        let answer = opened.server.call(
+            "echo",
+            &json!({"text": "hi"}),
+            Duration::from_secs(30),
+            &fakes::CancelToken::new(),
         );
+        (answer, opened)
     });
+    assert_eq!(
+        answer.expect("the call answers"),
+        json!({"content": [{"type": "text", "text": "hi"}]})
+    );
     let log = std::fs::read_to_string(setup.dir.path().join("requests.log")).expect("requests");
     assert!(log.contains(r#""method":"tools/call""#));
     assert!(log.contains(r#""name":"echo""#));
-    opened.server.stop();
+    stopping(opened.server)
+        .recv_timeout(WITHIN)
+        .unwrap_or_else(|_| panic!("the stop ends within {WITHIN:?}"));
 }
 
 #[test]
@@ -367,46 +365,51 @@ fn cancel_ends_the_wait_and_sends_cancelled() {
     let deadline = setup.fake.now().checked_add(timeout).expect("deadline");
     let cancel = fakes::CancelToken::new();
     let (done, result) = mpsc::channel();
-    // Scoped: the server stays alive until the log below was read, so the
-    // fixture cannot die under the assertion (`Server::drop` kills it).
-    thread::scope(|scope| {
-        scope.spawn(|| {
-            let answer = opened.server.call("hang", &json!({}), timeout, &cancel);
+    // Detached holding a clone: the server stays alive until the log below
+    // was read, so the fixture cannot die under the assertion
+    // (`Server::drop` kills it). Detached, not scoped: a caller parked on
+    // the fake clock would otherwise keep the scope's implicit join waiting
+    // after a failed assertion, so the test would hang instead of failing.
+    let server = std::sync::Arc::new(opened.server);
+    {
+        let server = std::sync::Arc::clone(&server);
+        let cancel = cancel.clone();
+        thread::spawn(move || {
+            let answer = server.call("hang", &json!({}), timeout, &cancel);
             done.send(answer).expect("collected");
         });
-        assert!(
-            setup.fake.await_parked(deadline, WITHIN),
-            "the caller waits on the call deadline within {WITHIN:?}",
-        );
-        cancel.cancel();
-        // The wake proves the bridge: without it the waiter would sit
-        // parked until the clock moves. On a miss, move the clock so the
-        // scoped join can still finish, then fail naming the wake.
-        match result.recv_timeout(WITHIN) {
-            Ok(answer) => assert_eq!(answer, Err(CallError::Cancelled)),
-            Err(_) => {
-                setup.fake.advance(timeout);
-                match result.recv_timeout(WITHIN) {
-                    Ok(_) | Err(_) => {}
-                }
-                panic!("cancel did not wake the waiter within {WITHIN:?} without a clock move");
+    }
+    assert!(
+        setup.fake.await_parked(deadline, WITHIN),
+        "the caller waits on the call deadline within {WITHIN:?}",
+    );
+    cancel.cancel();
+    // The wake proves the bridge: without it the waiter would sit
+    // parked until the clock moves. On a miss, move the clock so the
+    // parked caller can still answer, then fail naming the wake.
+    match result.recv_timeout(WITHIN) {
+        Ok(answer) => assert_eq!(answer, Err(CallError::Cancelled)),
+        Err(_) => {
+            setup.fake.advance(timeout);
+            match result.recv_timeout(WITHIN) {
+                Ok(_) | Err(_) => {}
             }
+            panic!("cancel did not wake the waiter within {WITHIN:?} without a clock move");
         }
-        // The waiter sends `notifications/cancelled` before it answers,
-        // but the fixture appends it when it reads it: poll the log.
-        let (_held, tick) = mpsc::channel::<()>();
-        for _ in 0..POLLS {
-            let log =
-                std::fs::read_to_string(setup.dir.path().join("requests.log")).expect("requests");
-            if log.contains("notifications/cancelled") {
-                return;
-            }
-            match tick.recv_timeout(POLL) {
-                Ok(()) | Err(_) => {}
-            }
+    }
+    // The waiter sends `notifications/cancelled` before it answers,
+    // but the fixture appends it when it reads it: poll the log.
+    let (_held, tick) = mpsc::channel::<()>();
+    for _ in 0..POLLS {
+        let log = std::fs::read_to_string(setup.dir.path().join("requests.log")).expect("requests");
+        if log.contains("notifications/cancelled") {
+            return;
         }
-        panic!("waited {WITHIN:?} for notifications/cancelled in requests.log");
-    });
+        match tick.recv_timeout(POLL) {
+            Ok(()) | Err(_) => {}
+        }
+    }
+    panic!("waited {WITHIN:?} for notifications/cancelled in requests.log");
 }
 
 #[test]
@@ -524,26 +527,26 @@ fn garbage_on_stdout_is_ignored() {
     setup.result("echo", r#"{"content":[{"type":"text","text":"hi"}]}"#);
     write(&setup.dir, "noise", "not json at all\n[1, 2, 3]\n");
     let opened = setup.start(Duration::from_secs(5));
-    let (done, result) = mpsc::channel();
-    thread::scope(|scope| {
-        scope.spawn(|| {
+    let (answer, opened) = fakes::within(
+        "the call to `echo` past garbage on stdout",
+        WITHIN,
+        move || {
             let answer = opened.server.call(
                 "echo",
                 &json!({"text": "hi"}),
                 Duration::from_secs(30),
                 &fakes::CancelToken::new(),
             );
-            done.send(answer).expect("collected");
-        });
-        let answer = result
-            .recv_timeout(WITHIN)
-            .unwrap_or_else(|_| panic!("calls answer within {WITHIN:?}"));
-        assert_eq!(
-            answer.expect("calls work past the garbage"),
-            json!({"content": [{"type": "text", "text": "hi"}]})
-        );
-    });
-    opened.server.stop();
+            (answer, opened)
+        },
+    );
+    assert_eq!(
+        answer.expect("calls work past the garbage"),
+        json!({"content": [{"type": "text", "text": "hi"}]})
+    );
+    stopping(opened.server)
+        .recv_timeout(WITHIN)
+        .unwrap_or_else(|_| panic!("the stop ends within {WITHIN:?}"));
 }
 
 #[test]
@@ -593,6 +596,9 @@ fn server_requests_are_answered_ping_ok_and_unknown_32601() {
     setup.result("echo", r#"{"content":[]}"#);
     write(&setup.dir, "ping-on-start", "");
     let opened = setup.start(Duration::from_secs(5));
+    // `Some` until the stop below moves it out: the stop runs inside the
+    // poll loop, where a plain move would read as a repeated move.
+    let mut server = Some(opened.server);
     // The fixture's ping answers land in its own log as received lines:
     // `ping` gets `result {}`, the unknown method gets `-32601`.
     let (_held, tick) = mpsc::channel::<()>();
@@ -603,7 +609,9 @@ fn server_requests_are_answered_ping_ok_and_unknown_32601() {
             && log.contains("\"id\":\"bogus\"")
             && log.contains("-32601")
         {
-            opened.server.stop();
+            stopping(server.take().expect("the stop runs once"))
+                .recv_timeout(WITHIN)
+                .unwrap_or_else(|_| panic!("the stop ends within {WITHIN:?}"));
             return;
         }
         match tick.recv_timeout(POLL) {
@@ -623,7 +631,9 @@ fn stop_leaves_no_running_child() {
         fakes::kill_pid(pid, "0").expect("probe"),
         "the server runs before the stop",
     );
-    opened.server.stop();
+    stopping(opened.server)
+        .recv_timeout(WITHIN)
+        .unwrap_or_else(|_| panic!("the stop ends within {WITHIN:?}"));
     let (_held, probe) = mpsc::channel::<()>();
     for _ in 0..POLLS {
         if !fakes::kill_pid(pid, "0").expect("probe") {
