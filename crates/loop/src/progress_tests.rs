@@ -10,7 +10,7 @@ use contract::ActionId;
 use contract::clock::Wake;
 use contract::emit::Emit;
 use contract::events::{Event, Progress};
-use contract::tool::Output;
+use contract::tool::{Ask, Output};
 use fakes::clock::FakeClock;
 use serde_json::json;
 
@@ -195,7 +195,11 @@ fn a_details_only_delta_is_held_and_taken_without_text() {
 
 #[test]
 fn take_finished_returns_the_output_with_whatever_is_held() {
-    let stream = Stream::new(Arc::new(SharedWake::default()), ActionId("a_1".into()));
+    let stream = Stream::new(
+        Arc::new(SharedWake::default()),
+        ActionId("a_1".into()),
+        true,
+    );
     assert_eq!(stream.take_finished(), None);
     stream.emit(&Event::ToolCallDelta(Progress {
         text: Some("late".into()),
@@ -218,7 +222,11 @@ fn take_finished_returns_the_output_with_whatever_is_held() {
 
 #[test]
 fn take_flush_returns_the_held_change_only_once_the_call_returns() {
-    let stream = Stream::new(Arc::new(SharedWake::default()), ActionId("a_2".into()));
+    let stream = Stream::new(
+        Arc::new(SharedWake::default()),
+        ActionId("a_2".into()),
+        true,
+    );
     stream.emit(&Event::ToolCallDelta(Progress {
         text: Some("held".into()),
         details: None,
@@ -233,6 +241,15 @@ fn take_flush_returns_the_held_change_only_once_the_call_returns() {
         })
     );
     assert_eq!(stream.take_flush(), None);
+}
+
+#[test]
+fn a_stream_is_answerable_as_it_was_built() {
+    let wake = Arc::new(SharedWake::default());
+    let yes = Stream::new(Arc::clone(&wake), ActionId("a_1".into()), true);
+    let no = Stream::new(wake, ActionId("a_2".into()), false);
+    assert!(yes.answerable());
+    assert!(!no.answerable());
 }
 
 /// Wall-clock bound on every wait for a helper thread.

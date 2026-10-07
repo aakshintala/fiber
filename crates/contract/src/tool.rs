@@ -37,6 +37,12 @@ pub trait Ask: Send + Sync {
     /// The call's own `action_id`.
     fn action(&self) -> ActionId;
 
+    /// Whether a person can answer an interaction this call raises: false
+    /// in a session a program drives, after `close`, and with no inbox to
+    /// read the reply (`docs/tools.md`, "Asking the person"). When false,
+    /// [`Ask::ask`] returns [`Answered::NoAnswer`] at once.
+    fn answerable(&self) -> bool;
+
     /// Raises `asking` under this call and blocks until it is resolved: by a
     /// `reply`, or by Fiber. Returns [`Answered::NoAnswer`] at once when
     /// nobody can answer (`docs/permissions.md`, "Headless").

@@ -220,11 +220,15 @@ pub(crate) struct Stream {
     action: ActionId,
     /// The call's interaction, while it asks.
     asking: AskSlot,
+    /// Whether a person can answer its interaction, read when the call
+    /// was spawned.
+    answerable: bool,
 }
 
 impl Stream {
-    /// The stream of the call `action`, waking `wake`.
-    pub(crate) fn new(wake: Arc<SharedWake>, action: ActionId) -> Self {
+    /// The stream of the call `action`, waking `wake`; `answerable` is
+    /// what its [`Ask::answerable`] reports.
+    pub(crate) fn new(wake: Arc<SharedWake>, action: ActionId, answerable: bool) -> Self {
         Self {
             inner: Mutex::new(StreamInner {
                 pacer: Pacer::default(),
@@ -233,6 +237,7 @@ impl Stream {
             wake,
             action,
             asking: AskSlot::default(),
+            answerable,
         }
     }
 
@@ -296,6 +301,10 @@ impl Emit for Stream {
 impl Ask for Stream {
     fn action(&self) -> ActionId {
         self.action.clone()
+    }
+
+    fn answerable(&self) -> bool {
+        self.answerable
     }
 
     fn ask(&self, asking: Asking) -> Answered {

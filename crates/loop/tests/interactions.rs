@@ -535,6 +535,86 @@ fn a_loop_without_an_inbox_wake_declines_at_once_without_a_request() {
     nobody_answers(session(&["asks"], vec![tool]), &answers);
 }
 
+/// A tool whose call returns what its asker says of `answerable`, and
+/// never asks.
+struct Answerable;
+
+impl Tool for Answerable {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: "answerable".into(),
+            description: "Says whether a person can answer.".into(),
+            input_schema: json!({"type": "object"}),
+            deferred: false,
+            hosted: None,
+        }
+    }
+
+    fn effects(&self, _: &Map<String, Value>) -> Result<Effects, EffectsError> {
+        Ok(Effects {
+            declared: DeclaredEffects {
+                effects: vec![Effect::Reads],
+                reversible: true,
+                paths: None,
+            },
+            subject: Some(String::new()),
+            prefix: None,
+        })
+    }
+
+    fn run(&self, _: &Map<String, Value>, _: &dyn Cancel, _: &dyn Emit) -> Output {
+        panic!("the loop runs a call through run_asking")
+    }
+
+    fn run_asking(
+        &self,
+        _: &Map<String, Value>,
+        _: &dyn Cancel,
+        _: &dyn Emit,
+        ask: &dyn Ask,
+    ) -> Output {
+        Output {
+            content: vec![ContentPart::Text {
+                text: ask.answerable().to_string(),
+            }],
+            ..Output::default()
+        }
+    }
+}
+
+/// Runs a turn whose one call reports `answerable`, and returns what it
+/// said; the log holds no interaction line.
+fn answerable_in(mut session: Session) -> Value {
+    session.inbox.send(delivery("go")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    let lines = session.lines();
+    assert_kinds(
+        &lines,
+        &[OPENING, &["tool_call_started", "tool_call_completed"], DONE],
+    );
+    of_kind(&lines, "tool_call_completed")[0].payload["content"][0]["text"].clone()
+}
+
+#[test]
+fn a_call_is_answerable_with_an_inbox_wake_in_an_answerable_session() {
+    let session = session(&["answerable"], vec![Arc::new(Answerable)]).inbox_woken();
+    assert_eq!(answerable_in(session), "true");
+}
+
+#[test]
+fn a_call_is_not_answerable_in_a_session_nobody_can_answer() {
+    let session = session(&["answerable"], vec![Arc::new(Answerable)])
+        .inbox_woken()
+        .answerable(false);
+    assert_eq!(answerable_in(session), "false");
+}
+
+#[test]
+fn a_call_is_not_answerable_without_an_inbox_wake() {
+    let session = session(&["answerable"], vec![Arc::new(Answerable)]);
+    assert_eq!(answerable_in(session), "false");
+}
+
 #[test]
 fn close_while_pending_declines_it_and_every_later_ask() {
     let (tool, answers) = Asks::new(vec![plain(confirm()), plain(confirm())]);
