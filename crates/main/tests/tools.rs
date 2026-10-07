@@ -715,6 +715,47 @@ fn a_credential_path_is_denied_for_a_read_and_a_shell_cat_under_every_spelling()
     assert_session_has_no_marker(&run.session_dir(&setup));
 }
 
+#[test]
+fn a_grep_that_follows_a_link_below_its_operand_into_the_credentials_is_reviewed() {
+    let setup = Setup::new();
+    let credentials = setup.home().join("credentials");
+    fs::create_dir_all(&credentials).unwrap();
+    fs::write(credentials.join("secret.txt"), format!("{MARKER}\n")).unwrap();
+    // The declared path is `ws`, which neither is nor contains
+    // `credentials/`; only the link below it leads there.
+    let ws = setup.workspace().join("ws");
+    fs::create_dir_all(&ws).unwrap();
+    std::os::unix::fs::symlink(fs::canonicalize(&credentials).unwrap(), ws.join("link")).unwrap();
+    let events = [function_call(
+        "call_grep",
+        "shell",
+        &json!({"command": "grep -R quorum ws"}),
+    )];
+    let server = ProviderServer::start([stream(&events), hello()]).unwrap();
+    setup.provider(&server);
+
+    let run = setup.run(&["ask", "search the workspace"]);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_no_marker("stdout", run.stdout.as_bytes());
+    assert!(
+        !run.kinds().contains(&"tool_call_started"),
+        "a link-following grep ran without review"
+    );
+    let resolved = run
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "permission_resolved")
+        .unwrap();
+    assert_eq!(resolved["payload"]["decided_by"], "reviewer");
+    assert_eq!(resolved["payload"]["decision"], "deny");
+    assert_eq!(completed_call(&run)["payload"]["status"], "denied");
+    for (index, request) in server.requests().iter().enumerate() {
+        assert_no_marker(&format!("request {index}"), &request.body);
+    }
+    assert_session_has_no_marker(&run.session_dir(&setup));
+}
+
 /// A 1x1 PNG, 69 bytes: within every cap, so the image child stores it byte
 /// for byte.
 const PIXEL: [u8; 69] = [
