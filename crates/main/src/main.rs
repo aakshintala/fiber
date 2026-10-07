@@ -512,12 +512,14 @@ fn parts_in(
     let handoff = handoff::handoff_settings(&config, &model.reference());
     let idle = settings::idle_exit(&config);
     let warm = settings::warm(&config);
+    let mut startup_notices = Vec::new();
     let thinking = settings::thinking(
         model.thinking,
         None,
         &config,
         model.model,
         &model.reference(),
+        &mut startup_notices,
     )
     .map_err(|e| failed(e.code, e.message))?;
     // The extensions loaded above, started before the model was chosen:
@@ -542,6 +544,10 @@ fn parts_in(
     prompt.credential = Some(label);
     prompt.cache_lifetime = settings::cache_lifetime(&config, &model.reference());
     prompt.thinking = thinking;
+    // The thinking notice is written with the MCP notices, after
+    // `fiber_started`.
+    let mut mcp = mcp_servers::specs(&config);
+    mcp.notices.splice(0..0, startup_notices);
     Ok(Parts {
         sessions,
         home,
@@ -565,7 +571,7 @@ fn parts_in(
         credential_files,
         locks,
         extensions: Arc::new(extensions),
-        mcp: mcp_servers::specs(&config),
+        mcp,
         web_search: model.model.web_search.clone(),
     })
 }

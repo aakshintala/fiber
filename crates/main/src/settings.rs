@@ -4,7 +4,7 @@
 use std::time::Duration;
 
 use config::{Config, ModelData};
-use contract::events::CacheLifetime;
+use contract::events::{CacheLifetime, Notice};
 use contract::shapes::Failure;
 use contract::{ErrorCode, ThinkingLevel};
 use serde_json::Value;
@@ -105,46 +105,78 @@ mod idle_tests;
 /// The session's one reasoning setting (`docs/model-routing.md`,
 /// "Thinking"): the `:level` suffix first, then the session's own choice,
 /// then the configured value (`models."<reference>".thinking` over the
-/// top-level `thinking` key), else the model's own default. A chosen level
-/// the model does not take is `invalid_arguments` before `session_started`.
-/// A model with no levels and no default resolves to `None`.
+/// top-level `thinking` key), else the model's own default. A level asked
+/// for now (suffix or session) that the model does not take is
+/// `invalid_arguments` before `session_started`. A configured level it does
+/// not take is ignored: the model's default applies and a
+/// `config_key_ignored` notice is pushed to `notices`. A model with no
+/// levels and no default resolves to `None`.
 pub(crate) fn thinking(
     suffix: Option<ThinkingLevel>,
     session: Option<ThinkingLevel>,
     config: &Config,
     model: &ModelData,
     reference: &str,
+    notices: &mut Vec<Notice>,
 ) -> Result<Option<ThinkingLevel>, Failure> {
-    let configured = config
-        .get("thinking", Some(reference))
-        .and_then(|(value, _)| value.as_str().map(str::to_owned))
-        .and_then(|name| name.parse::<ThinkingLevel>().ok());
-    if let Some(level) = suffix.or(session).or(configured) {
-        if model.thinking_levels.contains(&level) {
+    if let Some(level) = suffix.or(session) {
+        return if model.thinking_levels.contains(&level) {
             Ok(Some(level))
         } else {
-            let takes = model
-                .thinking_levels
-                .iter()
-                .map(|l| format!("`{l}`"))
-                .collect::<Vec<_>>()
-                .join(", ");
-            let takes = if takes.is_empty() {
-                "takes no thinking level".to_owned()
-            } else {
-                format!("takes {takes}")
-            };
             Err(Failure {
                 code: ErrorCode::InvalidArguments,
                 message: format!(
-                    "The thinking level `{level}` is not one model `{reference}` takes: it {takes}.",
+                    "The thinking level `{level}` is not one model `{reference}` takes: it {}.",
+                    takes(model),
                 ),
                 retry_after_ms: None,
                 provider: None,
             })
+        };
+    }
+    // The layer that set the winning value also names its key: a layer's
+    // per-model key beats its own top-level key, but a higher layer's
+    // top-level key beats a lower layer's per-model key.
+    let per_model = format!("models.\"{reference}\".thinking");
+    let winner = config.get("thinking", Some(reference));
+    let key = match (&winner, config.get(&per_model, None)) {
+        (Some((_, layer)), Some((_, own))) if *layer == own => per_model,
+        _ => "thinking".to_owned(),
+    };
+    let configured = winner
+        .and_then(|(value, _)| value.as_str().map(str::to_owned))
+        .and_then(|name| name.parse::<ThinkingLevel>().ok());
+    match configured {
+        Some(level) if model.thinking_levels.contains(&level) => Ok(Some(level)),
+        Some(level) => {
+            notices.push(Notice {
+                code: ErrorCode::ConfigKeyIgnored,
+                message: format!(
+                    "The `{key}` setting `{level}` was ignored: model `{reference}` {}. \
+                     The model's own default applies.",
+                    takes(model),
+                ),
+                extension: None,
+            });
+            Ok(model.thinking_default)
         }
+        None => Ok(model.thinking_default),
+    }
+}
+
+/// What a model takes, for a message: "takes `low`, `high`" or "takes no
+/// thinking level".
+fn takes(model: &ModelData) -> String {
+    let levels = model
+        .thinking_levels
+        .iter()
+        .map(|l| format!("`{l}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    if levels.is_empty() {
+        "takes no thinking level".to_owned()
     } else {
-        Ok(model.thinking_default)
+        format!("takes {levels}")
     }
 }
 
