@@ -1,0 +1,8 @@
+{
+  "case": "openai.insufficient-quota-429",
+  "source": "https://developers.openai.com/api/docs/guides/error-codes",
+  "status": 429,
+  "headers": {},
+  "body": "{\"error\":{\"type\":\"insufficient_quota\",\"code\":null,\"message\":\"You exceeded your current quota, please check your plan and billing details.\",\"param\":null}}",
+  "note": "Type insufficient_quota is documented; message is the docs' own sentence (illustrative)."
+}

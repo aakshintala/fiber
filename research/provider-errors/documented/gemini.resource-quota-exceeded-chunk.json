@@ -1,0 +1,6 @@
+{
+  "case": "gemini.resource-quota-exceeded-chunk",
+  "source": "https://github.com/googleapis/googleapis/blob/master/google/api/error_reason.proto",
+  "raw_sse": "data: {\"error\":{\"code\":429,\"message\":\"Quota exceeded for quota metric.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.ErrorInfo\",\"reason\":\"RESOURCE_QUOTA_EXCEEDED\",\"domain\":\"googleapis.com\"}]}}\n\n",
+  "note": "G3 applied to the stream. Only google_quota matches (code 429 with RESOURCE_EXHAUSTED alone is a rate limit)."
+}

@@ -275,10 +275,7 @@ impl Decoder {
                 .iter()
                 .find_map(|p| error.pointer(p).and_then(Value::as_str))
                 .map(str::to_owned);
-            return Err(Error::ReplyFailed {
-                code,
-                message: str_at(error, "message").to_owned(),
-            });
+            return Err(crate::error::stream_failure(error, code));
         }
         if self.id.is_empty() {
             str_at(chunk, "id").clone_into(&mut self.id);

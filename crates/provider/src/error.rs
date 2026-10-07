@@ -5,6 +5,7 @@ use contract::ErrorCode;
 use contract::shapes::{Failure, ProviderFailure};
 use serde_json::Value;
 
+use crate::google_generative_ai::str_at;
 use crate::redact::Secrets;
 
 /// A failed model call. Each message is a phrase that follows the
@@ -49,6 +50,11 @@ pub enum Error {
     /// The provider declined to answer on policy grounds.
     #[error("declined to answer: {0}.")]
     Refused(String),
+    /// The provider reported a quota, billing or subscription limit, as an
+    /// HTTP status or inside the reply stream (`docs/errors.md`,
+    /// "Recognising a quota or billing error").
+    #[error("reported a quota or billing limit in the reply stream.")]
+    QuotaExceeded(String),
     /// The request could not be signed, so it was never sent.
     #[error("could not be signed: {0}")]
     Sign(contract::signing::Error),
@@ -59,10 +65,16 @@ impl Error {
     pub fn code(&self) -> ErrorCode {
         match self {
             Self::Connection(_) => ErrorCode::ConnectionFailed,
-            Self::Status { status, body, .. } => status_code(*status, body),
+            Self::Status {
+                status,
+                body,
+                retry_after,
+                ..
+            } => status_code(*status, *retry_after, body),
             Self::StreamIncomplete(_) => ErrorCode::StreamIncomplete,
             Self::ReplyFailed { code, message } => reply_failed_code(code.as_deref(), message),
             Self::UnknownStopReason(_) => ErrorCode::UnknownStopReason,
+            Self::QuotaExceeded(_) => ErrorCode::QuotaExceeded,
             Self::ContextOverflow(_) => ErrorCode::ContextOverflow,
             Self::Refused(_) => ErrorCode::Refused,
             // A credential failure carries its own code: a failed `sign()`
@@ -84,6 +96,7 @@ impl Error {
             | Self::ReplyFailed { .. }
             | Self::UnknownStopReason(_)
             | Self::ContextOverflow(_)
+            | Self::QuotaExceeded(_)
             | Self::Refused(_) => None,
         }
     }
@@ -105,6 +118,7 @@ impl Error {
                 Some((*status, secrets.redact(&body_message(body)))),
             ),
             Self::ReplyFailed { message, .. } => (None, Some((200, secrets.redact(message)))),
+            Self::QuotaExceeded(message) => (None, Some((200, secrets.redact(message)))),
             Self::Connection(_)
             | Self::StreamIncomplete(_)
             | Self::UnknownStopReason(_)
@@ -135,13 +149,20 @@ impl Error {
 }
 
 /// The code for an HTTP status, reading the body where the status alone
-/// cannot classify.
-fn status_code(status: u16, body: &str) -> ErrorCode {
+/// cannot classify. Authentication wins over everything; a documented quota
+/// or billing shape wins over every other code (`docs/errors.md`,
+/// "Recognising a quota or billing error").
+fn status_code(status: u16, retry_after: Option<f64>, body: &str) -> ErrorCode {
     match status {
         401 => ErrorCode::AuthenticationFailed,
         // Gemini answers a bad key with 400 `API_KEY_INVALID`
         // (`research/google-generative-ai-probe`, `raw/auth-badheader.json`).
         400 if has_reason(body, "API_KEY_INVALID") => ErrorCode::AuthenticationFailed,
+        // OpenRouter's in-flight budget 402 is a wait-and-retry case only
+        // with a `Retry-After` in seconds (`research/provider-errors/quota.md`, N6).
+        402 if in_flight_budget(body) && retry_after.is_some() => ErrorCode::RateLimited,
+        402 => ErrorCode::QuotaExceeded,
+        _ if quota_status(status, body) => ErrorCode::QuotaExceeded,
         429 => ErrorCode::RateLimited,
         408 | 409 | 500..=599 => ErrorCode::ProviderUnavailable,
         404 => ErrorCode::ModelNotFound,
@@ -151,6 +172,100 @@ fn status_code(status: u16, body: &str) -> ErrorCode {
         }
         _ => ErrorCode::InvalidRequest,
     }
+}
+
+/// Whether a status body carries a documented quota or billing shape
+/// (`research/provider-errors/quota.md`). Each clause matches its shape
+/// exactly, including the documented status.
+fn quota_status(status: u16, body: &str) -> bool {
+    let value: Value = match serde_json::from_str(body) {
+        Ok(value) => value,
+        Err(_) => return false,
+    };
+    let error = value.pointer("/error").unwrap_or(&Value::Null);
+    match status {
+        429 => {
+            matches!(
+                error.get("code").and_then(Value::as_str),
+                Some(
+                    "credit_balance_exhausted"
+                        | "organization_spend_limit_exceeded"
+                        | "project_spend_limit_exceeded"
+                        | "organization_usage_limit_exceeded"
+                        | "insufficient_quota"
+                )
+            ) || error.get("type").and_then(Value::as_str) == Some("insufficient_quota")
+                || anthropic_spend_cap(error)
+                || google_quota(error)
+        }
+        400 => {
+            (error.get("type").and_then(Value::as_str) == Some("invalid_request_error") && {
+                let message = error.get("message").and_then(Value::as_str).unwrap_or("");
+                message.starts_with("You have reached your specified API usage limits")
+                    || message
+                        .starts_with("You have reached your specified workspace API usage limits")
+            }) || google_quota(error)
+        }
+        _ => google_quota(error),
+    }
+}
+
+/// Whether an Anthropic error object is the spend-cap shape: a 429
+/// `rate_limit_error` the `enforced_spend_limit_reached` detail tells apart
+/// from a rate limit (`research/provider-errors/quota.md`, A2).
+fn anthropic_spend_cap(error: &Value) -> bool {
+    error.get("type").and_then(Value::as_str) == Some("rate_limit_error")
+        && error.pointer("/details/error_code").and_then(Value::as_str)
+            == Some("enforced_spend_limit_reached")
+}
+
+/// Whether an error object carries a Google quota `ErrorInfo`: a `details[]`
+/// entry whose `@type` is `google.rpc.ErrorInfo` and whose reason is
+/// `BILLING_DISABLED` or `RESOURCE_QUOTA_EXCEEDED`
+/// (`research/provider-errors/quota.md`, G2 and G3).
+fn google_quota(error: &Value) -> bool {
+    error
+        .get("details")
+        .and_then(Value::as_array)
+        .is_some_and(|details| {
+            details.iter().any(|entry| {
+                error_info_reason(entry, "BILLING_DISABLED")
+                    || error_info_reason(entry, "RESOURCE_QUOTA_EXCEEDED")
+            })
+        })
+}
+
+/// Whether a 402 body is OpenRouter's in-flight budget case
+/// (`research/provider-errors/quota.md`, N6).
+fn in_flight_budget(body: &str) -> bool {
+    let value: Option<Value> = serde_json::from_str(body).ok();
+    value
+        .as_ref()
+        .and_then(|v| v.pointer("/error/metadata/limit_source"))
+        .and_then(Value::as_str)
+        == Some("openrouter_in_flight_budget")
+}
+
+/// Whether an in-stream error object is a documented quota or billing shape:
+/// an Anthropic `billing_error` or spend-cap event, a numeric 402 code, or a
+/// Google quota `ErrorInfo` (`research/provider-errors/quota.md`, S1-S4).
+fn stream_quota(error: &Value) -> bool {
+    error.get("type").and_then(Value::as_str) == Some("billing_error")
+        || anthropic_spend_cap(error)
+        || error.get("code").and_then(Value::as_u64) == Some(402)
+        || google_quota(error)
+}
+
+/// The error for a failure inside a 200 stream: `QuotaExceeded` for a
+/// documented quota or billing shape, else the provider's own `ReplyFailed`.
+/// Each decoder passes the code it computes today, so `reply_failed_code`
+/// is unchanged.
+pub(crate) fn stream_failure(error: &Value, code: Option<String>) -> Error {
+    let message = str_at(error, "message").to_owned();
+    if stream_quota(error) {
+        return Error::QuotaExceeded(message);
+    }
+    Error::ReplyFailed { code, message }
 }
 
 /// Whether an error body, on a status other than 404, says the provider does not know the model: the
@@ -225,8 +340,18 @@ fn body_code(body: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// Whether one `error.details[]` entry is a `google.rpc.ErrorInfo` naming
+/// `reason`. Only the quota match requires the `@type`: Google's quota
+/// shape always carries it, while a bare `API_KEY_INVALID` reason without
+/// it still fails authentication.
+fn error_info_reason(entry: &Value, reason: &str) -> bool {
+    entry.get("@type").and_then(Value::as_str) == Some("type.googleapis.com/google.rpc.ErrorInfo")
+        && entry.get("reason").and_then(Value::as_str) == Some(reason)
+}
+
 /// Whether a Google error body's `error.details` names `reason`
-/// (`google.rpc.ErrorInfo`).
+/// (`google.rpc.ErrorInfo`). A bare reason without the `@type` still
+/// matches: only the quota match requires it.
 fn has_reason(body: &str, reason: &str) -> bool {
     serde_json::from_str::<Value>(body)
         .ok()

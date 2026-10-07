@@ -112,13 +112,13 @@ impl Decoder {
             }
             "message_stop" => return self.finish().map(Some),
             "error" => {
-                return Err(Error::ReplyFailed {
-                    code: event
+                return Err(crate::error::stream_failure(
+                    &event["error"],
+                    event
                         .pointer("/error/type")
                         .and_then(Value::as_str)
                         .map(str::to_owned),
-                    message: str_at(&event["error"], "message").to_owned(),
-                });
+                ));
             }
             // `ping` and anything Fiber does not act on.
             _ => {}

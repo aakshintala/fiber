@@ -1,0 +1,6 @@
+{
+  "case": "openrouter.payment-required-chunk",
+  "source": "https://openrouter.ai/docs/api/reference/errors-and-debugging",
+  "raw_sse": "data: {\"id\":\"gen-1\",\"error\":{\"code\":402,\"message\":\"Your account or API key has insufficient credits.\",\"metadata\":{\"error_type\":\"payment_required\"}},\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"error\"}]}\n\n",
+  "note": "Documented mid-stream shape; code 402 as a number. No Retry-After can arrive mid-stream, and a 402 without the header is not a wait-and-retry case."
+}
