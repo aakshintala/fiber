@@ -362,11 +362,28 @@ fn unnamed_failure() -> Scripted {
     Scripted::failed_after(failure(), unnamed_usage())
 }
 
-/// One turn of `session`, and its one `usage_recorded` payload.
-fn only_record(session: &mut Session) -> UsageRecorded {
+/// The complete ordered event kinds of a turn whose call fails after an
+/// unnamed generation (`docs/testing.md`, "Event streams").
+const FAILED_UNNAMED_KINDS: [&str; 9] = [
+    "session_started",
+    "preamble_built",
+    "opening_message",
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+];
+
+/// One turn of `session`, and its one `usage_recorded` payload. `expected`
+/// is the complete ordered list of event kinds, so a duplicated, missing or
+/// reordered event fails (`docs/testing.md`, "Event streams").
+fn only_record(session: &mut Session, expected: &[&str]) -> UsageRecorded {
     session.inbox.send(delivery("hi")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Failed));
     let lines = session.lines();
+    assert_eq!(kinds(&lines), expected);
     let recorded: Vec<_> = lines
         .iter()
         .filter(|l| l.kind == "usage_recorded")
@@ -379,9 +396,9 @@ fn only_record(session: &mut Session) -> UsageRecorded {
 #[test]
 fn a_delegate_s_unnamed_call_copied_into_its_parent_is_counted_once() {
     let mut child = Session::new(vec![unnamed_failure()], None);
-    let copied = only_record(&mut child);
+    let copied = only_record(&mut child, &FAILED_UNNAMED_KINDS);
     let mut parent = Session::new(vec![unnamed_failure()], None);
-    let own = only_record(&mut parent);
+    let own = only_record(&mut parent, &FAILED_UNNAMED_KINDS);
     assert_ne!(copied.generation_id, own.generation_id);
     // The copy as the delegate's stream delivers it, then the copy a resume
     // writes for a delegate marked `orphaned` (`docs/delegates.md`,
@@ -409,7 +426,7 @@ fn a_delegate_s_unnamed_call_copied_into_its_parent_is_counted_once() {
 #[test]
 fn a_call_failed_before_its_generation_records_the_tokens_it_saw() {
     let mut session = Session::new(vec![unnamed_failure()], None);
-    let recorded = only_record(&mut session);
+    let recorded = only_record(&mut session, &FAILED_UNNAMED_KINDS);
     assert_eq!(recorded.tokens.input, 10);
     assert_eq!(recorded.tokens.output, 3);
     assert_eq!(recorded.input_bytes, 1000);
@@ -430,7 +447,7 @@ fn a_minted_record_s_cost_is_null_on_a_priced_model() {
         subscription: false,
     };
     let mut session = Session::open(vec![unnamed_failure()], Vec::new(), Vec::new(), model);
-    let recorded = only_record(&mut session);
+    let recorded = only_record(&mut session, &FAILED_UNNAMED_KINDS);
     assert_eq!(recorded.tokens.input, 10);
     assert_eq!(recorded.cost, None);
 }
