@@ -17,22 +17,22 @@ use std::sync::{Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 
+use crate::support::{Deadline, group_alive};
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
 
-/// How long one `fiber` run, or one socket line, may take.
-pub(crate) const DEADLINE: Duration = Duration::from_secs(20);
-
 pub(crate) struct Setup {
     pub(crate) root: fakes::TempDir,
+    pub(crate) deadline: Deadline,
 }
 
 impl Setup {
     pub(crate) fn new() -> Self {
+        let deadline = Deadline::start();
         let root = fakes::TempDir::new("fm");
         fs::create_dir_all(root.path().join("h")).unwrap();
         fs::create_dir_all(root.path().join("w")).unwrap();
-        Self { root }
+        Self { deadline, root }
     }
 
     pub(crate) fn home(&self) -> PathBuf {
@@ -169,15 +169,11 @@ pub(crate) fn write_json(file: &Path, value: &Value) {
     fs::write(file, value.to_string()).unwrap();
 }
 
-pub(crate) fn group_alive(group: u32) -> bool {
-    fakes::kill_group(group, "0").unwrap()
-}
-
 pub(crate) struct KillGroup(u32);
 
 impl Drop for KillGroup {
     fn drop(&mut self) {
-        match fakes::kill_group(self.0, "KILL") {
+        match crate::support::kill_group_detached(self.0, "KILL") {
             Ok(_) | Err(_) => {}
         }
     }
@@ -207,10 +203,10 @@ impl Running {
     }
 
     fn first_line(&mut self) -> String {
-        match self.lines.recv_timeout(DEADLINE) {
+        match self.lines.recv_timeout(self.deadline.left()) {
             Ok(line) => line,
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                panic!("waited {DEADLINE:?} for the session's first stdout line")
+                panic!("waited until the deadline for the session's first stdout line")
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 panic!("the session exited before its first stdout line")
@@ -220,10 +216,10 @@ impl Running {
 
     pub(crate) fn wait_for(&mut self, kind: &str) {
         loop {
-            let line = match self.lines.recv_timeout(DEADLINE) {
+            let line = match self.lines.recv_timeout(self.deadline.left()) {
                 Ok(line) => line,
                 Err(mpsc::RecvTimeoutError::Timeout) => {
-                    panic!("waited {DEADLINE:?} for {kind} on the session's stdout")
+                    panic!("waited until the deadline for {kind} on the session's stdout")
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
                     panic!("the session's stdout closed before {kind}")
@@ -250,10 +246,10 @@ impl Running {
     fn wait_raw(mut self) -> (ExitStatus, Vec<String>, String) {
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(self.child.wait()).unwrap());
-        let status = match finished.recv_timeout(DEADLINE) {
+        let status = match finished.recv_timeout(self.deadline.left()) {
             Ok(status) => status.unwrap(),
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                panic!("waited {DEADLINE:?} for the session to exit")
+                panic!("waited until the deadline for the session to exit")
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 panic!("the session wait thread ended before it exited")
@@ -263,13 +259,16 @@ impl Running {
         while let Ok(line) = self.lines.try_recv() {
             lines.push(line);
         }
-        let stderr = self.stderr.recv_timeout(DEADLINE).unwrap_or_default();
+        let stderr = self
+            .stderr
+            .recv_timeout(self.deadline.left())
+            .unwrap_or_default();
         assert!(
-            !group_alive(self.group),
+            !group_alive(self.deadline, self.group),
             "`fiber` left a process in its group behind"
         );
         std::mem::forget(self.guard);
-        self.watchdog.stand_down(DEADLINE);
+        self.watchdog.stand_down(self.deadline.cleanup());
         (status, lines, stderr)
     }
 }
@@ -310,7 +309,7 @@ impl Socket {
             Err(error)
                 if error.kind() == ErrorKind::TimedOut || error.kind() == ErrorKind::WouldBlock =>
             {
-                panic!("waited {DEADLINE:?} for {what}; got {got:?}")
+                panic!("waited until the deadline for {what}; got {got:?}")
             }
             Err(error) => {
                 panic!("reading the session socket while waiting for {what}: {error}")

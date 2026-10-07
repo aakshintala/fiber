@@ -8,6 +8,8 @@
     reason = "test helpers; a failure is the test's"
 )]
 
+mod support;
+
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::process::CommandExt;
@@ -16,24 +18,23 @@ use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
 
 use fakes::{Client, ProviderServer, Response};
 use serde_json::{Value, json};
-
-/// How long one `fiber` run, or one socket line, may take.
-const DEADLINE: Duration = Duration::from_secs(20);
+use support::{Deadline, group_alive};
 
 struct Setup {
     root: fakes::TempDir,
+    deadline: Deadline,
 }
 
 impl Setup {
     fn new() -> Self {
+        let deadline = Deadline::start();
         let root = fakes::TempDir::new("fa");
         fs::create_dir_all(root.path().join("h")).unwrap();
         fs::create_dir_all(root.path().join("w")).unwrap();
-        Self { root }
+        Self { deadline, root }
     }
 
     fn home(&self) -> PathBuf {
@@ -147,8 +148,8 @@ impl Watchdog {
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(child.wait()).unwrap());
         assert!(
-            finished.recv_timeout(DEADLINE).is_ok(),
-            "waited {DEADLINE:?} for the watchdog to exit"
+            finished.recv_timeout(within).is_ok(),
+            "waited until the deadline for the watchdog to exit"
         );
     }
 }
@@ -163,14 +164,10 @@ struct KillGroup(u32);
 
 impl Drop for KillGroup {
     fn drop(&mut self) {
-        match fakes::kill_group(self.0, "KILL") {
+        match support::kill_group_detached(self.0, "KILL") {
             Ok(_) | Err(_) => {}
         }
     }
-}
-
-fn group_alive(group: u32) -> bool {
-    fakes::kill_group(group, "0").unwrap()
 }
 
 fn send(client: &Client, line: &str) {
@@ -178,7 +175,7 @@ fn send(client: &Client, line: &str) {
 }
 
 fn recv(client: &Client) -> Value {
-    client.recv(DEADLINE).expect("a line arrived")
+    client.recv(deadline.left()).expect("a line arrived")
 }
 
 /// Collects lines until `done`, waiting `DEADLINE` for each.
@@ -186,8 +183,8 @@ fn until(client: &Client, what: &str, mut done: impl FnMut(&Value) -> bool) -> V
     let mut lines = Vec::new();
     loop {
         let line = client
-            .recv(DEADLINE)
-            .unwrap_or_else(|| panic!("waited {DEADLINE:?} for {what}; got {lines:?}"));
+            .recv(deadline.left())
+            .unwrap_or_else(|| panic!("waited until the deadline for {what}; got {lines:?}"));
         let stop = done(&line);
         lines.push(line);
         if stop {
@@ -264,7 +261,7 @@ fn start(setup: &Setup) -> Running {
 fn first_line(stdout: &mpsc::Receiver<String>) -> Value {
     serde_json::from_str(
         &stdout
-            .recv_timeout(DEADLINE)
+            .recv_timeout(deadline.left())
             .expect("waited for fiber_started"),
     )
     .unwrap()
@@ -289,11 +286,14 @@ fn finish(running: Running) {
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait()).unwrap());
     let status = finished
-        .recv_timeout(DEADLINE)
+        .recv_timeout(deadline.left())
         .expect("waited for fiber to exit")
         .unwrap();
     assert!(status.success(), "stderr: {}", stderr.lock().unwrap());
-    assert!(!group_alive(group), "fiber left a process in its group");
+    assert!(
+        !group_alive(deadline, group),
+        "fiber left a process in its group"
+    );
     // The group is empty. Skip the drop, which would kill it again.
     std::mem::forget(guard);
     drop(stdout);
@@ -311,7 +311,7 @@ fn two_clients_see_the_log_while_ask_is_held() {
     assert_eq!(started["kind"], "session_started");
     let session_id = started["session_id"].as_str().unwrap().to_owned();
     assert!(
-        server.await_requests(1, DEADLINE),
+        server.await_requests(1, setup.deadline.left()),
         "the held response was requested"
     );
 
@@ -407,7 +407,7 @@ fn a_summary_subscriber_is_sent_the_session_status_and_each_change_through_idle(
     let started = first_line(&running.stdout);
     let session_id = started["session_id"].as_str().unwrap().to_owned();
     assert!(
-        server.await_requests(1, DEADLINE),
+        server.await_requests(1, setup.deadline.left()),
         "the held response was requested"
     );
 
@@ -466,7 +466,7 @@ fn a_summary_subscriber_is_sent_the_session_status_and_each_change_through_idle(
         let line: Value = serde_json::from_str(
             &running
                 .stdout
-                .recv_timeout(DEADLINE)
+                .recv_timeout(setup.deadline.left())
                 .expect("waited for fiber_exited"),
         )
         .unwrap();
@@ -477,7 +477,7 @@ fn a_summary_subscriber_is_sent_the_session_status_and_each_change_through_idle(
         }
     }
     assert_eq!(
-        running.stdout.recv_timeout(DEADLINE),
+        running.stdout.recv_timeout(setup.deadline.left()),
         Err(mpsc::RecvTimeoutError::Disconnected),
         "nothing follows fiber_exited"
     );
@@ -500,7 +500,7 @@ fn session_status_carries_the_project_and_counts_full_connections() {
     let started = first_line(&running.stdout);
     let session_id = started["session_id"].as_str().unwrap().to_owned();
     assert!(
-        server.await_requests(1, DEADLINE),
+        server.await_requests(1, setup.deadline.left()),
         "the held response was requested"
     );
 
@@ -630,7 +630,7 @@ fn session_status_carries_the_project_and_counts_full_connections() {
         let line: Value = serde_json::from_str(
             &running
                 .stdout
-                .recv_timeout(DEADLINE)
+                .recv_timeout(setup.deadline.left())
                 .expect("waited for fiber_exited"),
         )
         .unwrap();
@@ -652,7 +652,7 @@ fn an_empty_args_matches_a_missing_one_on_the_socket() {
     let started = first_line(&running.stdout);
     let session_id = started["session_id"].as_str().unwrap().to_owned();
     assert!(
-        server.await_requests(1, DEADLINE),
+        server.await_requests(1, setup.deadline.left()),
         "the held response was requested"
     );
 
@@ -694,7 +694,7 @@ fn cancel_on_the_same_socket_stops_a_driver_shell() {
     let started = first_line(&running.stdout);
     let session_id = started["session_id"].as_str().unwrap().to_owned();
     assert!(
-        server.await_requests(1, DEADLINE),
+        server.await_requests(1, setup.deadline.left()),
         "the held response was requested"
     );
 
@@ -724,9 +724,9 @@ fn cancel_on_the_same_socket_stops_a_driver_shell() {
         .to_string(),
     );
     assert_eq!(
-        started.recv_timeout(DEADLINE),
+        started.recv_timeout(setup.deadline.left()),
         Ok(true),
-        "waited {DEADLINE:?} for the shell to start"
+        "waited until the deadline for the shell to start"
     );
     send(&client, r#"{"id":"c_cancel","command":"cancel"}"#);
     // The cancel wakes the shell before its own answer is queued, so either

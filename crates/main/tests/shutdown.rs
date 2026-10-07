@@ -10,6 +10,8 @@
     reason = "test helpers; a failure is the test's"
 )]
 
+mod support;
+
 use std::fs;
 use std::io::{BufRead, BufReader, Read as _, Write as _};
 use std::os::unix::process::CommandExt;
@@ -17,27 +19,26 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
 
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
-
-/// How long one `fiber` run, or one of its lines, may take.
-const DEADLINE: Duration = Duration::from_secs(20);
+use support::Deadline;
 
 /// A temporary root holding Fiber home and the workspace, removed on drop.
 /// Its name is short: a session's socket path must fit in 103 bytes on
 /// macOS.
 struct Setup {
     root: fakes::TempDir,
+    deadline: Deadline,
 }
 
 impl Setup {
     fn new() -> Self {
+        let deadline = Deadline::start();
         let root = fakes::TempDir::new("fs");
         fs::create_dir_all(root.path().join("h")).unwrap();
         fs::create_dir_all(root.path().join("w")).unwrap();
-        Self { root }
+        Self { deadline, root }
     }
 
     fn home(&self) -> PathBuf {
@@ -220,8 +221,10 @@ impl Fiber {
             }
             let line = self
                 .lines
-                .recv_timeout(DEADLINE)
-                .unwrap_or_else(|_| panic!("waited {DEADLINE:?} for {kind}; saw {:?}", self.seen));
+                .recv_timeout(self.deadline.left())
+                .unwrap_or_else(|_| {
+                    panic!("waited until the deadline for {kind}; saw {:?}", self.seen)
+                });
             self.seen.push(serde_json::from_slice(&line).unwrap());
             self.raw.push(line);
         }
@@ -229,7 +232,7 @@ impl Fiber {
 
     /// Sends `signal` to `fiber`'s pid alone.
     fn signal(&self, signal: &str) {
-        assert!(fakes::kill_pid(self.child.id(), signal).unwrap());
+        assert!(support::kill_pid(self.deadline, self.child.id(), signal).unwrap());
     }
 
     /// Waits for the exit under [`DEADLINE`], reads the rest of stdout, and
@@ -250,20 +253,20 @@ impl Fiber {
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(child.wait()).unwrap());
         let status = finished
-            .recv_timeout(DEADLINE)
+            .recv_timeout(deadline.left())
             .expect("fiber exited in time")
             .unwrap();
         // The pipe's end comes once the process is gone.
-        while let Ok(line) = lines.recv_timeout(DEADLINE) {
+        while let Ok(line) = lines.recv_timeout(deadline.left()) {
             seen.push(serde_json::from_slice(&line).unwrap());
             raw.push(line);
         }
         assert!(
-            !fakes::kill_group(group, "0").unwrap(),
+            !support::kill_group(deadline, group, "0").unwrap(),
             "fiber left a process in its group"
         );
         std::mem::forget(guard);
-        watchdog.stand_down(DEADLINE);
+        watchdog.stand_down(deadline.cleanup());
         Ended {
             code: status.code(),
             raw: raw
@@ -273,7 +276,7 @@ impl Fiber {
                 .map(|(text, _)| text)
                 .collect(),
             lines: seen.into_iter().filter(|line| !is_status(line)).collect(),
-            stderr: stderr.recv_timeout(DEADLINE).unwrap_or_default(),
+            stderr: stderr.recv_timeout(deadline.left()).unwrap_or_default(),
         }
     }
 }
@@ -289,7 +292,7 @@ struct KillGroup(u32);
 
 impl Drop for KillGroup {
     fn drop(&mut self) {
-        match fakes::kill_group(self.0, "KILL") {
+        match support::kill_group_detached(self.0, "KILL") {
             Ok(_) | Err(_) => {}
         }
     }
@@ -374,7 +377,7 @@ fn held_ask(signal: &str, code: i32) {
     setup.provider(&server);
     let fiber = setup.start(&["ask", "hi"], Stdio::null());
     assert!(
-        server.await_requests(1, DEADLINE),
+        server.await_requests(1, setup.deadline.left()),
         "the model request arrived"
     );
     fiber.signal(signal);
@@ -460,7 +463,7 @@ fn a_shutdown_stops_a_background_job_before_fiber_exited() {
     // The prompt's turn, then the ending notice's: the session now waits
     // for the job.
     fiber.wait_for("turn_completed", 2);
-    let job_group = ready.wait(DEADLINE)[0];
+    let job_group = ready.wait(setup.deadline.left())[0];
     let job_watchdog = Watchdog::group(job_group);
     fiber.signal("TERM");
     let ended = fiber.end();
@@ -516,10 +519,10 @@ fn a_shutdown_stops_a_background_job_before_fiber_exited() {
     assert_eq!(ended.lines[job_end]["payload"]["status"], "cancelled");
     assert!(job_end < kinds.len() - 1);
     assert!(
-        !fakes::kill_group(job_group, "0").unwrap(),
+        !support::kill_group(setup.deadline, job_group, "0").unwrap(),
         "the job's group outlived fiber"
     );
-    job_watchdog.stand_down(DEADLINE);
+    job_watchdog.stand_down(setup.deadline.cleanup());
 }
 
 #[test]
@@ -537,7 +540,7 @@ fn sigterm_while_the_prompt_is_read_exits_143_writing_nothing() {
         written.send((stdin, outcome)).unwrap();
     });
     let (stdin, outcome) = result
-        .recv_timeout(DEADLINE)
+        .recv_timeout(setup.deadline.left())
         .expect("fiber read stdin in time");
     outcome.unwrap();
     fiber.signal("TERM");
@@ -565,7 +568,7 @@ fn sigterm_mid_turn_of_a_resumed_session_exits_143() {
     server.hold();
     let fiber = setup.start(&["ask", "--resume", &id, "again"], Stdio::null());
     assert!(
-        server.await_requests(2, DEADLINE),
+        server.await_requests(2, setup.deadline.left()),
         "the resumed request arrived"
     );
     fiber.signal("TERM");
@@ -656,11 +659,11 @@ fn sigterm_while_an_mcp_server_starts_kills_it_and_exits_143_writing_nothing() {
     );
     let fiber = setup.start(&["ask", "hi"], Stdio::null());
     // The server runs, so the signals were armed before it started.
-    let _pid = ready.wait(DEADLINE)[0];
+    let _pid = ready.wait(setup.deadline.left())[0];
     fiber.signal("TERM");
     // Before `end`, whose group check would otherwise catch a server
     // left alive first: this wait is the one that pins the stop's kill.
-    died.recv_timeout(DEADLINE)
+    died.recv_timeout(setup.deadline.left())
         .expect("the MCP server outlived fiber");
     let ended = fiber.end();
 
@@ -704,7 +707,7 @@ fn sigterm_while_an_mcp_server_starts_sends_it_sigterm() {
     let fiber = setup.start(&["ask", "hi"], Stdio::null());
     // The server runs past its trap, so the signals were armed before
     // it started.
-    let _pid = ready.wait(DEADLINE)[0];
+    let _pid = ready.wait(setup.deadline.left())[0];
     fiber.signal("TERM");
     // The group check inside fails first when a server is left alive.
     let ended = fiber.end();

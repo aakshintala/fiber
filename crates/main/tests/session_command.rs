@@ -11,6 +11,8 @@
     reason = "test helpers; a failure is the test's"
 )]
 
+mod support;
+
 use std::fs;
 use std::io::{BufRead, BufReader, ErrorKind, Write};
 use std::os::unix::net::UnixStream;
@@ -19,27 +21,26 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::{Mutex, mpsc};
 use std::thread;
-use std::time::Duration;
 
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
-
-/// How long one `fiber` run, or one socket line, may take.
-const DEADLINE: Duration = Duration::from_secs(20);
+use support::{Deadline, group_alive};
 
 /// A temporary root holding Fiber home and the workspace, removed on drop.
 /// Its name is short: a session's socket path must fit in 103 bytes on
 /// macOS.
 struct Setup {
     root: fakes::TempDir,
+    deadline: Deadline,
 }
 
 impl Setup {
     fn new() -> Self {
+        let deadline = Deadline::start();
         let root = fakes::TempDir::new("fm");
         fs::create_dir_all(root.path().join("h")).unwrap();
         fs::create_dir_all(root.path().join("w")).unwrap();
-        Self { root }
+        Self { deadline, root }
     }
 
     fn home(&self) -> PathBuf {
@@ -196,11 +197,11 @@ impl Setup {
         let watchdog = Watchdog::group(group);
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-        let output = match finished.recv_timeout(DEADLINE) {
+        let output = match finished.recv_timeout(self.deadline.left()) {
             Ok(output) => output.unwrap(),
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                fakes::kill_group(group, "KILL").unwrap();
-                let reaped = match finished.recv_timeout(DEADLINE) {
+                support::kill_group(self.deadline, group, "KILL").unwrap();
+                let reaped = match finished.recv_timeout(self.deadline.cleanup()) {
                     Ok(_) => true,
                     Err(mpsc::RecvTimeoutError::Timeout) => false,
                     Err(mpsc::RecvTimeoutError::Disconnected) => {
@@ -211,11 +212,11 @@ impl Setup {
                     }
                 };
                 assert!(
-                    !group_alive(group),
+                    !group_alive(self.deadline, group),
                     "`fiber` left a process in its group behind"
                 );
                 panic!(
-                    "waited {DEADLINE:?} for `fiber {}` to exit (reaped after the kill: {reaped})",
+                    "waited until the deadline for `fiber {}` to exit (reaped after the kill: {reaped})",
                     args.join(" ")
                 );
             }
@@ -227,11 +228,11 @@ impl Setup {
             }
         };
         assert!(
-            !group_alive(group),
+            !group_alive(self.deadline, group),
             "`fiber` left a process in its group behind"
         );
         std::mem::forget(guard);
-        watchdog.stand_down(DEADLINE);
+        watchdog.stand_down(self.deadline.cleanup());
         let lines = String::from_utf8(output.stdout).unwrap();
         let parsed = lines
             .lines()
@@ -251,9 +252,6 @@ fn write_json(file: &Path, value: &Value) {
 }
 
 /// Whether any process remains in process group `group`.
-fn group_alive(group: u32) -> bool {
-    fakes::kill_group(group, "0").unwrap()
-}
 
 /// Kills process group `group` on drop. After the child is reaped and the
 /// group is empty, [`std::mem::forget`] skips that kill.
@@ -261,7 +259,7 @@ struct KillGroup(u32);
 
 impl Drop for KillGroup {
     fn drop(&mut self) {
-        match fakes::kill_group(self.0, "KILL") {
+        match support::kill_group_detached(self.0, "KILL") {
             Ok(_) | Err(_) => {}
         }
     }
@@ -287,10 +285,10 @@ impl Running {
     /// loop writes that line, so the line is the signal the socket
     /// accepts (`docs/testing.md`, "Waits and timeouts").
     fn connect(&mut self, socket: &Path) -> Socket {
-        let line = match self.lines.recv_timeout(DEADLINE) {
+        let line = match self.lines.recv_timeout(self.deadline.left()) {
             Ok(line) => line,
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                panic!("waited {DEADLINE:?} for the session's first stdout line")
+                panic!("waited until the deadline for the session's first stdout line")
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 panic!("the session exited before its first stdout line")
@@ -306,10 +304,10 @@ impl Running {
     /// and later need a turn, which needs the test's prompt.
     fn wait_for(&mut self, kind: &str) {
         loop {
-            let line = match self.lines.recv_timeout(DEADLINE) {
+            let line = match self.lines.recv_timeout(self.deadline.left()) {
                 Ok(line) => line,
                 Err(mpsc::RecvTimeoutError::Timeout) => {
-                    panic!("waited {DEADLINE:?} for {kind} on the session's stdout")
+                    panic!("waited until the deadline for {kind} on the session's stdout")
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
                     panic!("the session's stdout closed before {kind}")
@@ -339,17 +337,17 @@ impl Running {
     fn wait_raw(mut self) -> (ExitStatus, Vec<String>, String) {
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(self.child.wait()).unwrap());
-        let status = match finished.recv_timeout(DEADLINE) {
+        let status = match finished.recv_timeout(self.deadline.left()) {
             Ok(status) => status.unwrap(),
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                panic!("waited {DEADLINE:?} for the session to exit")
+                panic!("waited until the deadline for the session to exit")
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 panic!("the session's wait thread ended before the session exited")
             }
         };
         assert!(
-            !group_alive(self.group),
+            !group_alive(self.deadline, self.group),
             "the session left a process in its group behind"
         );
         std::mem::forget(self.guard);
@@ -360,22 +358,22 @@ impl Running {
         // as the readiness signal come first.
         let mut out = std::mem::take(&mut self.first);
         loop {
-            match self.lines.recv_timeout(DEADLINE) {
+            match self.lines.recv_timeout(self.deadline.left()) {
                 Ok(line) => out.push(line),
                 Err(mpsc::RecvTimeoutError::Timeout) => {
-                    panic!("waited {DEADLINE:?} for the session's stdout to close")
+                    panic!("waited until the deadline for the session's stdout to close")
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
             }
         }
-        let stderr = match self.stderr.recv_timeout(DEADLINE) {
+        let stderr = match self.stderr.recv_timeout(self.deadline.left()) {
             Ok(text) => text,
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                panic!("waited {DEADLINE:?} for the session's stderr")
+                panic!("waited until the deadline for the session's stderr")
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => String::new(),
         };
-        self.watchdog.stand_down(DEADLINE);
+        self.watchdog.stand_down(self.deadline.cleanup());
         (status, out, stderr)
     }
 }
@@ -466,7 +464,7 @@ impl Socket {
             Err(error)
                 if error.kind() == ErrorKind::TimedOut || error.kind() == ErrorKind::WouldBlock =>
             {
-                panic!("waited {DEADLINE:?} for {what}; got {got:?}")
+                panic!("waited until the deadline for {what}; got {got:?}")
             }
             Err(error) => {
                 panic!("reading the session socket while waiting for {what}: {error}")
@@ -726,7 +724,7 @@ fn an_idle_session_exits_with_a_client_still_connected() {
     // reply writes nothing until it is released.
     let client = running.connect(&setup.socket(&id));
     assert!(
-        server.await_requests(1, DEADLINE),
+        server.await_requests(1, setup.deadline.left()),
         "the held response was requested"
     );
     send(
@@ -809,7 +807,7 @@ fn a_session_started_with_a_prompt_keeps_serving_after_that_turn() {
 
     let client = running.connect(&setup.socket(&id));
     assert!(
-        server.await_requests(1, DEADLINE),
+        server.await_requests(1, setup.deadline.left()),
         "the held first response was requested"
     );
     send(
@@ -844,7 +842,7 @@ fn a_session_started_with_a_prompt_keeps_serving_after_that_turn() {
         r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"again"}]}}"#,
     );
     assert!(
-        server.await_requests(2, DEADLINE),
+        server.await_requests(2, setup.deadline.left()),
         "the held second response was requested"
     );
     server.release();
@@ -1714,7 +1712,7 @@ fn a_steered_image_is_applied_and_sent_on_the_next_request() {
         r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"go"}]}}"#,
     );
     assert!(
-        server.await_requests(1, DEADLINE),
+        server.await_requests(1, setup.deadline.left()),
         "the first request is in flight"
     );
     send(
@@ -1974,7 +1972,7 @@ fn job_session(
         r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"start the job"}]}}"#,
     );
     after_prompt();
-    let job_group = ready.wait(DEADLINE)[0];
+    let job_group = ready.wait(setup.deadline.left())[0];
     // The session must stop the job: dropping the watchdog here would kill
     // the group first, so it is forgotten and only fires if the test
     // process dies.
@@ -2027,7 +2025,7 @@ fn close_now_mid_turn_stops_the_turn_and_a_background_job_and_exits_0() {
     // The first response is through, the job runs, and the second request
     // is held: the turn is in flight.
     assert!(
-        server.await_requests(2, DEADLINE),
+        server.await_requests(2, setup.deadline.left()),
         "the held second response was requested"
     );
     send_close_now(&client);
@@ -2047,7 +2045,7 @@ fn close_now_mid_turn_stops_the_turn_and_a_background_job_and_exits_0() {
         .expect("the background job completed");
     assert_eq!(job["payload"]["status"], "cancelled");
     assert!(
-        !group_alive(job_group),
+        !group_alive(setup.deadline, job_group),
         "the job's group outlived the session"
     );
     assert_eq!(server.requests().len(), 2);
@@ -2083,7 +2081,7 @@ fn close_now_while_idle_with_a_job_starts_no_turn() {
         .expect("the background job completed");
     assert_eq!(job["payload"]["status"], "cancelled");
     assert!(
-        !group_alive(job_group),
+        !group_alive(setup.deadline, job_group),
         "the job's group outlived the session"
     );
     assert_eq!(server.requests().len(), 2, "no ending-notice request ran");
@@ -2227,7 +2225,7 @@ fn close_without_now_waits_for_the_job_to_finish() {
         running.child.try_wait().unwrap().is_none(),
         "the session waits for the job"
     );
-    assert!(group_alive(job_group), "the job still runs");
+    assert!(group_alive(setup.deadline, job_group), "the job still runs");
     fs::write(setup.workspace().join("go"), "").unwrap();
     let _tail = until_close(&client);
     drop(client);
@@ -2297,7 +2295,7 @@ fn close_now_after_close_stops_the_job_it_was_waiting_for() {
         .expect("the background job completed");
     assert_eq!(job["payload"]["status"], "cancelled");
     assert!(
-        !group_alive(job_group),
+        !group_alive(setup.deadline, job_group),
         "the job's group outlived the session"
     );
     assert_eq!(server.requests().len(), 3);

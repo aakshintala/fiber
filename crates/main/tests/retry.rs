@@ -11,31 +11,35 @@
     reason = "test helpers; a failure is the test's"
 )]
 
+mod support;
+
 use std::fs;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
 
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
-
-/// How long one `fiber` run may take.
-const DEADLINE: Duration = Duration::from_secs(20);
+use support::{Deadline, group_alive};
 
 /// A temporary root holding Fiber home and the workspace, removed on drop.
 struct Setup {
     root: fakes::TempDir,
+    deadline: Deadline,
 }
 
 impl Setup {
     fn new() -> Self {
+        Self::within(Deadline::start())
+    }
+
+    fn within(deadline: Deadline) -> Self {
         let root = fakes::TempDir::new("fa-retry");
         fs::create_dir_all(root.path().join("h")).unwrap();
         fs::create_dir_all(root.path().join("w")).unwrap();
-        Self { root }
+        Self { deadline, root }
     }
 
     fn home(&self) -> PathBuf {
@@ -102,20 +106,20 @@ impl Setup {
         drop(child.stdin.take());
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-        let output = match finished.recv_timeout(DEADLINE) {
+        let output = match finished.recv_timeout(self.deadline.left()) {
             Ok(output) => output.unwrap(),
             Err(_) => {
-                fakes::kill_group(group, "KILL").unwrap();
-                let reaped = finished.recv_timeout(DEADLINE).is_ok();
-                panic!("waited {DEADLINE:?} for `fiber ask` to exit (reaped: {reaped})");
+                support::kill_group(self.deadline, group, "KILL").unwrap();
+                let reaped = finished.recv_timeout(self.deadline.cleanup()).is_ok();
+                panic!("waited until the deadline for `fiber ask` to exit (reaped: {reaped})");
             }
         };
         assert!(
-            !group_alive(group),
+            !group_alive(self.deadline, group),
             "`fiber` left a process in its group behind"
         );
         std::mem::forget(guard);
-        watchdog.stand_down(DEADLINE);
+        watchdog.stand_down(self.deadline.cleanup());
         Run::from(output)
     }
 }
@@ -126,9 +130,6 @@ fn write_file(file: &std::path::Path, value: &Value) {
 }
 
 /// Whether any process remains in process group `group`.
-fn group_alive(group: u32) -> bool {
-    fakes::kill_group(group, "0").unwrap()
-}
 
 /// Spawns `command` in a new process group beside a watchdog that kills the
 /// group if this process dies first.
@@ -146,7 +147,7 @@ struct KillGroup(u32);
 
 impl Drop for KillGroup {
     fn drop(&mut self) {
-        match fakes::kill_group(self.0, "KILL") {
+        match support::kill_group_detached(self.0, "KILL") {
             Ok(_) | Err(_) => {}
         }
     }
@@ -431,7 +432,7 @@ fn a_dropped_connection_is_retried() {
     assert_eq!(run.last()["payload"]["text"], "Hello.");
     assert_eq!(run.retried(), ["connection_failed"]);
     assert!(
-        server.await_requests(2, DEADLINE),
+        server.await_requests(2, setup.deadline.left()),
         "both attempts reach the server"
     );
     assert_eq!(server.requests().len(), 2);

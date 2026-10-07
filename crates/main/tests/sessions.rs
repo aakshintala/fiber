@@ -12,19 +12,18 @@
     reason = "test helpers; a failure is the test's"
 )]
 
+mod support;
+
 use std::fs;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
 
 use fakes::Watchdog;
 use serde_json::json;
-
-/// How long one `fiber` run may take.
-const DEADLINE: Duration = Duration::from_secs(20);
+use support::Deadline;
 
 /// The `session_started` first line of session `id` in `workspace`: a full
 /// envelope, so `resolve` keeps it, in this project's workspace.
@@ -46,11 +45,14 @@ const TORN: &str = "{\"seq\":2,\"kin";
 /// drop.
 struct Setup {
     root: fakes::TempDir,
+    deadline: Deadline,
 }
 
 impl Setup {
     fn new() -> Self {
+        let deadline = Deadline::start();
         let setup = Self {
+            deadline,
             root: fakes::TempDir::new("fiber-export"),
         };
         fs::create_dir_all(setup.home()).unwrap();
@@ -116,15 +118,17 @@ impl Setup {
         let group = child.id();
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-        let output = match finished.recv_timeout(DEADLINE) {
+        let output = match finished.recv_timeout(self.deadline.left()) {
             Ok(output) => output.unwrap(),
             Err(_) => {
-                fakes::kill_group(group, "KILL").unwrap();
-                let reaped = finished.recv_timeout(DEADLINE).is_ok();
-                panic!("waited {DEADLINE:?} for `fiber` to exit (reaped after the kill: {reaped})");
+                support::kill_group(self.deadline, group, "KILL").unwrap();
+                let reaped = finished.recv_timeout(self.deadline.cleanup()).is_ok();
+                panic!(
+                    "waited until the deadline for `fiber` to exit (reaped after the kill: {reaped})"
+                );
             }
         };
-        watchdog.stand_down(DEADLINE);
+        watchdog.stand_down(self.deadline.cleanup());
         Run {
             code: output.status.code(),
             stdout: String::from_utf8(output.stdout).unwrap(),

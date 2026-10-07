@@ -13,6 +13,8 @@
     reason = "test helpers; a failure is the test's"
 )]
 
+mod support;
+
 use std::ffi::OsStr;
 use std::fs;
 use std::io::{Read, Write};
@@ -26,29 +28,28 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
-use std::time::Duration;
 
 use fakes::Watchdog;
 use rustix::pty;
 use rustix::termios::{self, LocalModes};
 use serde_json::{Value, json};
-
-/// How long one `fiber` run, or one wait on its terminal, may take.
-const DEADLINE: Duration = Duration::from_secs(20);
+use support::{Deadline, group_alive};
 
 const KEY: &str = "sk-live-7f3a9c0d1e2b";
 
 /// A temporary root holding Fiber home and the workspace, removed on drop.
 struct Setup {
     root: fakes::TempDir,
+    deadline: Deadline,
 }
 
 impl Setup {
     fn new() -> Self {
+        let deadline = Deadline::start();
         let root = fakes::TempDir::new("fl");
         fs::create_dir_all(root.path().join("h")).unwrap();
         fs::create_dir_all(root.path().join("w")).unwrap();
-        Self { root }
+        Self { deadline, root }
     }
 
     fn home(&self) -> PathBuf {
@@ -120,21 +121,27 @@ impl Setup {
         feed(&mut child, input);
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-        let output = match finished.recv_timeout(DEADLINE) {
+        let output = match finished.recv_timeout(self.deadline.left()) {
             Ok(output) => output.unwrap(),
             Err(_) => {
-                fakes::kill_group(group, "KILL").unwrap();
-                let reaped = finished.recv_timeout(DEADLINE).is_ok();
-                assert!(!group_alive(group), "`fiber` left a process behind");
+                support::kill_group(self.deadline, group, "KILL").unwrap();
+                let reaped = finished.recv_timeout(self.deadline.cleanup()).is_ok();
+                assert!(
+                    !group_alive(self.deadline, group),
+                    "`fiber` left a process behind"
+                );
                 panic!(
-                    "waited {DEADLINE:?} for `fiber {}` to exit (reaped after the kill: {reaped})",
+                    "waited until the deadline for `fiber {}` to exit (reaped after the kill: {reaped})",
                     args.join(" ")
                 );
             }
         };
-        assert!(!group_alive(group), "`fiber` left a process behind");
+        assert!(
+            !group_alive(self.deadline, group),
+            "`fiber` left a process behind"
+        );
         std::mem::forget(guard);
-        watchdog.stand_down(DEADLINE);
+        watchdog.stand_down(self.deadline.cleanup());
         Run {
             code: output.status.code(),
             stdout: String::from_utf8(output.stdout).unwrap(),
@@ -243,16 +250,13 @@ impl Drop for KillGroup {
     fn drop(&mut self) {
         // A panic between spawn and reap still kills the group. Failure
         // here is ignored: the process may already be gone.
-        match fakes::kill_group(self.0, "KILL") {
+        match support::kill_group_detached(self.0, "KILL") {
             Ok(_) | Err(_) => {}
         }
     }
 }
 
 /// Whether any process remains in process group `group`.
-fn group_alive(group: u32) -> bool {
-    fakes::kill_group(group, "0").unwrap()
-}
 
 /// A pseudo-terminal, opened through rustix's safe calls.
 struct Terminal {
@@ -301,9 +305,9 @@ impl Terminal {
                 thread::yield_now();
             }
         });
-        if is_off.recv_timeout(DEADLINE).is_err() {
+        if is_off.recv_timeout(deadline.left()).is_err() {
             stop.store(true, Ordering::Relaxed);
-            panic!("waited {DEADLINE:?} for `fiber` to turn echo off");
+            panic!("waited until the deadline for `fiber` to turn echo off");
         }
     }
 }
@@ -355,7 +359,7 @@ impl Screen {
         let mark = self.seen.len();
         while !self.seen[mark..].contains(text) {
             // Each chunk has the deadline: a terminal that goes quiet fails.
-            match self.chunks.recv_timeout(DEADLINE) {
+            match self.chunks.recv_timeout(self.deadline.left()) {
                 Ok(Some(chunk)) => self.seen.push_str(&chunk),
                 Ok(None) | Err(mpsc::RecvTimeoutError::Disconnected) => {
                     panic!(
@@ -365,7 +369,7 @@ impl Screen {
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     panic!(
-                        "waited {DEADLINE:?} for {text:?} on the terminal: {:?}",
+                        "waited until the deadline for {text:?} on the terminal: {:?}",
                         &self.seen[mark..]
                     )
                 }
@@ -396,18 +400,29 @@ impl OnTerminal {
         let mut child = self.child.take().unwrap();
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(child.wait()).unwrap());
-        let status = match finished.recv_timeout(DEADLINE) {
+        let status = match finished.recv_timeout(self.deadline.left()) {
             Ok(status) => status.unwrap(),
             Err(_) => {
-                fakes::kill_group(self.group, "KILL").unwrap();
-                let reaped = finished.recv_timeout(DEADLINE).is_ok();
-                assert!(!group_alive(self.group), "`fiber` left a process behind");
-                panic!("waited {DEADLINE:?} for `fiber` to exit (reaped after the kill: {reaped})");
+                support::kill_group(self.deadline, self.group, "KILL").unwrap();
+                let reaped = finished.recv_timeout(self.deadline.cleanup()).is_ok();
+                assert!(
+                    !group_alive(self.deadline, self.group),
+                    "`fiber` left a process behind"
+                );
+                panic!(
+                    "waited until the deadline for `fiber` to exit (reaped after the kill: {reaped})"
+                );
             }
         };
-        assert!(!group_alive(self.group), "`fiber` left a process behind");
+        assert!(
+            !group_alive(self.deadline, self.group),
+            "`fiber` left a process behind"
+        );
         std::mem::forget(self.guard.take());
-        self.watchdog.take().unwrap().stand_down(DEADLINE);
+        self.watchdog
+            .take()
+            .unwrap()
+            .stand_down(self.deadline.cleanup());
         status
     }
 }
@@ -648,7 +663,7 @@ fn an_interrupt_at_the_key_prompt_restores_echo_and_ends_the_login() {
     run.screen.wait_for("Key for acme: ");
     run.terminal.wait_for_echo_off();
     // The guarded helper: it refuses a group of 1 or less.
-    assert!(fakes::kill_group(run.group, "INT").unwrap());
+    assert!(support::kill_group(setup.deadline, run.group, "INT").unwrap());
     let status = run.finish();
     assert_eq!(status.signal(), Some(2), "{status:?}");
     assert!(run.terminal.echoes(), "echo was not restored");

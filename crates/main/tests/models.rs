@@ -12,6 +12,8 @@
     reason = "test helpers; a failure is the test's"
 )]
 
+mod support;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -23,18 +25,14 @@ use std::os::unix::process::{CommandExt, ExitStatusExt};
 
 use fakes::Watchdog;
 use serde_json::{Value, json};
-
-/// How long one `fiber` run may take.
-const DEADLINE: Duration = Duration::from_secs(20);
-
-/// How long a killed process may take to be reaped or to disappear.
-const REAP_DEADLINE: Duration = Duration::from_secs(10);
+use support::{Deadline, group_alive};
 
 /// A temporary root holding Fiber home and the workspace, removed on drop.
 struct Setup {
     root: fakes::TempDir,
     /// `<CARGO_TARGET_TMPDIR>/<root's name>`, holding the `fiber` link.
     bin: PathBuf,
+    deadline: Deadline,
 }
 
 impl Drop for Setup {
@@ -47,6 +45,7 @@ impl Drop for Setup {
 
 impl Setup {
     fn new() -> Self {
+        let deadline = Deadline::start();
         let root = fakes::TempDir::new("fm");
         fs::create_dir_all(root.path().join("h")).unwrap();
         fs::create_dir_all(root.path().join("w")).unwrap();
@@ -62,7 +61,11 @@ impl Setup {
         if let Err(err) = fs::hard_link(env!("CARGO_BIN_EXE_fiber"), &exe) {
             panic!("hard-linking `fiber` to {}: {err}", exe.display());
         }
-        Self { root, bin }
+        Self {
+            deadline,
+            root,
+            bin,
+        }
     }
 
     /// This test's own path to the built `fiber`.
@@ -130,25 +133,34 @@ impl Setup {
         let guard = KillGroup(group);
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-        let output = match finished.recv_timeout(DEADLINE) {
+        let output = match finished.recv_timeout(self.deadline.left()) {
             Ok(output) => output.unwrap(),
             Err(_) => {
-                fakes::kill_group(group, "KILL").unwrap();
+                support::kill_group(self.deadline, group, "KILL").unwrap();
                 let killed = finished
-                    .recv_timeout(REAP_DEADLINE)
+                    .recv_timeout(self.deadline.cleanup())
                     .map(|output| output.map(|output| output.status.signal()));
                 assert!(
                     matches!(killed, Ok(Ok(Some(9)))),
-                    "`fiber {}` was not reaped as killed within {REAP_DEADLINE:?}: {killed:?}",
+                    "`fiber {}` was not reaped as killed before the cleanup deadline: {killed:?}",
                     args.join(" ")
                 );
-                assert!(!group_alive(group), "`fiber` left a process behind");
-                panic!("waited {DEADLINE:?} for `fiber {}` to exit", args.join(" "));
+                assert!(
+                    !group_alive(self.deadline, group),
+                    "`fiber` left a process behind"
+                );
+                panic!(
+                    "waited until the deadline for `fiber {}` to exit",
+                    args.join(" ")
+                );
             }
         };
-        assert!(!group_alive(group), "`fiber` left a process behind");
+        assert!(
+            !group_alive(self.deadline, group),
+            "`fiber` left a process behind"
+        );
         std::mem::forget(guard);
-        watchdog.stand_down(DEADLINE);
+        watchdog.stand_down(self.deadline.cleanup());
         Run {
             code: output.status.code(),
             stdout: String::from_utf8(output.stdout).unwrap(),
@@ -183,16 +195,13 @@ struct KillGroup(u32);
 
 impl Drop for KillGroup {
     fn drop(&mut self) {
-        match fakes::kill_group(self.0, "KILL") {
+        match support::kill_group_detached(self.0, "KILL") {
             Ok(_) | Err(_) => {}
         }
     }
 }
 
 /// Whether any process remains in process group `group`.
-fn group_alive(group: u32) -> bool {
-    fakes::kill_group(group, "0").unwrap()
-}
 
 #[test]
 fn models_lists_the_installed_models_as_text() {
@@ -304,7 +313,7 @@ fn await_refreshed(file: &std::path::Path, old: &[u8]) {
         }
         let _waited = rx.recv_timeout(Duration::from_millis(100));
     }
-    panic!("waited {DEADLINE:?} for the cached model list to refresh");
+    panic!("waited until the deadline for the cached model list to refresh");
 }
 
 /// Waits until this test's refresh child is gone, up to [`DEADLINE`]: the
@@ -312,15 +321,15 @@ fn await_refreshed(file: &std::path::Path, old: &[u8]) {
 /// alone never proves it did. On expiry it kills the child and its group,
 /// checks they are gone within [`REAP_DEADLINE`], and fails.
 fn await_refresh_exit(pattern: &str) {
-    if fakes::matching_exits(pattern, DEADLINE) {
+    if fakes::matching_exits(pattern, deadline.left()) {
         return;
     }
-    fakes::kill_matching(pattern).unwrap();
+    support::kill_matching(deadline, pattern).unwrap();
     assert!(
-        fakes::matching_exits(pattern, REAP_DEADLINE),
-        "the refresh child outlived SIGKILL by {REAP_DEADLINE:?}"
+        fakes::matching_exits(pattern, deadline.cleanup()),
+        "the refresh child outlived SIGKILL past the cleanup deadline"
     );
-    panic!("waited {DEADLINE:?} for the refresh child to exit");
+    panic!("waited until the deadline for the refresh child to exit");
 }
 
 #[test]
@@ -405,5 +414,5 @@ fn models_prints_a_stale_list_at_once_and_it_is_fresh_on_the_next_run() {
     // the guard without an exit would kill it instead of checking it,
     // and a timeout above drops it, so no run leaves one behind.
     await_refresh_exit(&setup.refresh_pattern());
-    refresh_guard.stand_down(DEADLINE);
+    refresh_guard.stand_down(setup.deadline.cleanup());
 }

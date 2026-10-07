@@ -12,6 +12,8 @@
     reason = "test helpers; a failure is the test's; a live test prints its outcome"
 )]
 
+mod support;
+
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::os::unix::process::CommandExt;
@@ -19,7 +21,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
 
 use contract::events::{
     Event, SessionStarted, ToolCallRequested, ToolCallStarted, TurnStarted, UsageRecorded,
@@ -29,23 +30,23 @@ use contract::shapes::{ContentPart, DeclaredEffects, Origin, Sender};
 use contract::{ActionId, CommandId, SessionId, TurnId};
 use fakes::{ProviderServer, Request, Response};
 use serde_json::{Value, json};
-
-/// How long one `fiber` run may take.
-const DEADLINE: Duration = Duration::from_secs(20);
+use support::{Deadline, group_alive};
 
 /// A temporary root holding Fiber home and the workspace, removed on drop.
 /// Its name is short: a session's socket path must fit in 103 bytes on
 /// macOS.
 struct Setup {
     root: fakes::TempDir,
+    deadline: Deadline,
 }
 
 impl Setup {
     fn new() -> Self {
+        let deadline = Deadline::start();
         let root = fakes::TempDir::new("fa");
         fs::create_dir_all(root.path().join("h")).unwrap();
         fs::create_dir_all(root.path().join("w")).unwrap();
-        Self { root }
+        Self { deadline, root }
     }
 
     fn home(&self) -> PathBuf {
@@ -124,27 +125,27 @@ impl Setup {
         let guard = KillGroup(group);
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-        let output = match finished.recv_timeout(DEADLINE) {
+        let output = match finished.recv_timeout(self.deadline.left()) {
             Ok(output) => output.unwrap(),
             Err(_) => {
-                fakes::kill_group(group, "KILL").unwrap();
-                let reaped = finished.recv_timeout(DEADLINE).is_ok();
+                support::kill_group(self.deadline, group, "KILL").unwrap();
+                let reaped = finished.recv_timeout(self.deadline.cleanup()).is_ok();
                 assert!(
-                    !group_alive(group),
+                    !group_alive(self.deadline, group),
                     "`fiber` left a process in its group behind"
                 );
                 panic!(
-                    "waited {DEADLINE:?} for `fiber {}` to exit (reaped after the kill: {reaped})",
+                    "waited until the deadline for `fiber {}` to exit (reaped after the kill: {reaped})",
                     args.join(" ")
                 );
             }
         };
         assert!(
-            !group_alive(group),
+            !group_alive(self.deadline, group),
             "`fiber` left a process in its group behind"
         );
         std::mem::forget(guard);
-        watchdog.stand_down(DEADLINE);
+        watchdog.stand_down(self.deadline.cleanup());
         Run::from(output)
     }
 }
@@ -155,9 +156,6 @@ fn write(file: &Path, value: &Value) {
 }
 
 /// Whether any process remains in process group `group`.
-fn group_alive(group: u32) -> bool {
-    fakes::kill_group(group, "0").unwrap()
-}
 
 /// Spawns `command` in a new process group, then a watchdog in its own
 /// group.
@@ -175,7 +173,7 @@ struct KillGroup(u32);
 
 impl Drop for KillGroup {
     fn drop(&mut self) {
-        match fakes::kill_group(self.0, "KILL") {
+        match support::kill_group_detached(self.0, "KILL") {
             Ok(_) | Err(_) => {}
         }
     }
@@ -943,7 +941,7 @@ fn start(setup: &Setup, args: &[&str]) -> Running {
 fn first_line(stdout: &mpsc::Receiver<String>) -> Value {
     serde_json::from_str(
         &stdout
-            .recv_timeout(DEADLINE)
+            .recv_timeout(deadline.left())
             .expect("waited for fiber_started"),
     )
     .unwrap()
@@ -953,7 +951,7 @@ fn first_line(stdout: &mpsc::Receiver<String>) -> Value {
 fn until_clients(stdout: &mpsc::Receiver<String>) -> Value {
     loop {
         let line = stdout
-            .recv_timeout(DEADLINE)
+            .recv_timeout(deadline.left())
             .expect("waited for a clients line");
         let line: Value = serde_json::from_str(&line).unwrap();
         if line["kind"] == "clients" {
@@ -975,18 +973,21 @@ fn finish(running: Running) {
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait()).unwrap());
     let status = finished
-        .recv_timeout(DEADLINE)
+        .recv_timeout(deadline.left())
         .expect("waited for fiber to exit")
         .unwrap();
     let stderr = stderr
-        .recv_timeout(DEADLINE)
+        .recv_timeout(deadline.left())
         .expect("waited for stderr to close");
     assert!(status.success(), "stderr: {stderr}");
-    assert!(!group_alive(group), "fiber left a process in its group");
+    assert!(
+        !group_alive(deadline, group),
+        "fiber left a process in its group"
+    );
     // The group is empty. Skip the drop, which would kill it again.
     std::mem::forget(guard);
     drop(stdout);
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(deadline.cleanup());
 }
 
 /// One finished background run: its exit code, stdout's lines, and stderr.
@@ -1011,31 +1012,33 @@ fn finish_output(running: Running) -> Finished {
     } = running;
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait()).unwrap());
-    let status = match finished.recv_timeout(DEADLINE) {
+    let status = match finished.recv_timeout(deadline.left()) {
         Ok(status) => status.unwrap(),
         Err(_) => {
-            fakes::kill_group(group, "KILL").unwrap();
-            let reaped = finished.recv_timeout(DEADLINE).is_ok();
-            panic!("waited {DEADLINE:?} for `fiber` to exit (reaped after the kill: {reaped})");
+            support::kill_group(deadline, group, "KILL").unwrap();
+            let reaped = finished.recv_timeout(deadline.cleanup()).is_ok();
+            panic!(
+                "waited until the deadline for `fiber` to exit (reaped after the kill: {reaped})"
+            );
         }
     };
     assert!(
-        !group_alive(group),
+        !group_alive(deadline, group),
         "`fiber` left a process in its group behind"
     );
     std::mem::forget(guard);
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(deadline.cleanup());
     let stderr = stderr
-        .recv_timeout(DEADLINE)
+        .recv_timeout(deadline.left())
         .expect("waited for stderr to close");
     let mut lines = Vec::new();
     loop {
-        match stdout.recv_timeout(DEADLINE) {
+        match stdout.recv_timeout(deadline.left()) {
             Ok(line) if is_status(&line) => {}
             Ok(line) => lines.push(serde_json::from_str(&line).unwrap()),
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                panic!("waited {DEADLINE:?} for stdout to close");
+                panic!("waited until the deadline for stdout to close");
             }
         }
     }
@@ -1057,7 +1060,7 @@ fn a_second_ask_while_the_first_turn_runs_attaches_and_is_rejected() {
     assert_eq!(started["kind"], "session_started");
     let id = started["session_id"].as_str().unwrap().to_owned();
     assert!(
-        server.await_requests(1, DEADLINE),
+        server.await_requests(1, setup.deadline.left()),
         "the held response was requested"
     );
 

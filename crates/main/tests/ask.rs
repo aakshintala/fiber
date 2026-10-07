@@ -11,6 +11,8 @@
     reason = "test helpers; a failure is the test's; a live test prints its outcome"
 )]
 
+mod support;
+
 use std::ffi::OsStr;
 use std::fs;
 use std::io::{BufRead, Write};
@@ -26,12 +28,10 @@ use std::time::Duration;
 use fakes::{ProviderServer, Request, Response, Watchdog, fingerprint};
 use rustix::pty;
 use serde_json::{Value, json};
+use support::{Deadline, group_alive};
 
 #[path = "../../provider/tests/support/probes.rs"]
 mod probes;
-
-/// How long one `fiber` run may take.
-const DEADLINE: Duration = Duration::from_secs(20);
 
 /// Set on the re-exec of [`sleep_stands_in_for_fiber`]. Unset, that test
 /// returns without spawning anything.
@@ -42,14 +42,19 @@ const WATCHDOG_STAND_IN_ENV: &str = "FIBER_WATCHDOG_STAND_IN";
 /// macOS.
 struct Setup {
     root: fakes::TempDir,
+    deadline: Deadline,
 }
 
 impl Setup {
     fn new() -> Self {
+        Self::within(Deadline::start())
+    }
+
+    fn within(deadline: Deadline) -> Self {
         let root = fakes::TempDir::new("fa");
         fs::create_dir_all(root.path().join("h")).unwrap();
         fs::create_dir_all(root.path().join("w")).unwrap();
-        Self { root }
+        Self { deadline, root }
     }
 
     fn home(&self) -> PathBuf {
@@ -222,31 +227,31 @@ impl Setup {
         }
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-        let output = match finished.recv_timeout(DEADLINE) {
+        let output = match finished.recv_timeout(self.deadline.left()) {
             Ok(output) => output.unwrap(),
             Err(_) => {
-                fakes::kill_group(group, "KILL").unwrap();
+                support::kill_group(self.deadline, group, "KILL").unwrap();
                 // Reaps the killed child, so the check below sees the group
                 // as the kill left it.
-                let reaped = finished.recv_timeout(DEADLINE).is_ok();
+                let reaped = finished.recv_timeout(self.deadline.cleanup()).is_ok();
                 assert!(
-                    !group_alive(group),
+                    !group_alive(self.deadline, group),
                     "`fiber` left a process in its group behind"
                 );
                 panic!(
-                    "waited {DEADLINE:?} for `fiber {}` to exit (reaped after the kill: {reaped})",
+                    "waited until the deadline for `fiber {}` to exit (reaped after the kill: {reaped})",
                     args.join(" ")
                 );
             }
         };
         assert!(
-            !group_alive(group),
+            !group_alive(self.deadline, group),
             "`fiber` left a process in its group behind"
         );
         // The group is empty. Skip the drop, which would kill it again,
         // and tell the watchdog to exit without signalling.
         std::mem::forget(guard);
-        watchdog.stand_down(DEADLINE);
+        watchdog.stand_down(self.deadline.cleanup());
         Run::from(output)
     }
 
@@ -278,9 +283,6 @@ fn write(file: &Path, value: &Value) {
 }
 
 /// Whether any process remains in process group `group`.
-fn group_alive(group: u32) -> bool {
-    fakes::kill_group(group, "0").unwrap()
-}
 
 /// A pseudo-terminal, opened through rustix's safe calls. The main side
 /// stays open while the run uses the terminal side.
@@ -332,7 +334,7 @@ impl Drop for KillGroup {
     fn drop(&mut self) {
         // A panic between spawn and reap still kills the group. Failure
         // here is ignored: the process may already be gone.
-        match fakes::kill_group(self.0, "KILL") {
+        match support::kill_group_detached(self.0, "KILL") {
             Ok(_) | Err(_) => {}
         }
     }
@@ -351,12 +353,12 @@ fn dropping_the_group_guard_kills_the_group() {
     // reaped, so the group is checked after `wait`.
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait()).unwrap());
-    let status = match finished.recv_timeout(DEADLINE) {
+    let status = match finished.recv_timeout(deadline.left()) {
         Ok(status) => status.unwrap(),
-        Err(_) => panic!("waited {DEADLINE:?} for the process group to die"),
+        Err(_) => panic!("waited until the deadline for the process group to die"),
     };
     assert_eq!(status.signal(), Some(9));
-    assert!(!group_alive(group));
+    assert!(!group_alive(deadline, group));
 }
 
 /// Run by [`a_killed_test_kills_the_stand_in_group`]: `sleep` through
@@ -406,10 +408,10 @@ fn a_killed_test_kills_the_stand_in_group() {
         }
         send_group(&tx, None);
     });
-    let group = match rx.recv_timeout(DEADLINE) {
+    let group = match rx.recv_timeout(deadline.left()) {
         Ok(Some(group)) => group,
         Ok(None) => panic!("the stand-in exited before printing its group"),
-        Err(_) => panic!("waited {DEADLINE:?} for the stand-in to print its group"),
+        Err(_) => panic!("waited until the deadline for the stand-in to print its group"),
     };
     // Dropping this kills the group if the test fails before the watchdog does.
     let _guard = KillGroup(group);
@@ -420,15 +422,15 @@ fn a_killed_test_kills_the_stand_in_group() {
     thread::spawn(move || match done.send(helper.wait()) {
         Ok(()) | Err(mpsc::SendError(_)) => {}
     });
-    let status = match finished.recv_timeout(DEADLINE) {
+    let status = match finished.recv_timeout(deadline.left()) {
         Ok(status) => status.unwrap(),
-        Err(_) => panic!("waited {DEADLINE:?} for the killed test process to exit"),
+        Err(_) => panic!("waited until the deadline for the killed test process to exit"),
     };
     assert_eq!(status.signal(), Some(9));
-    match rx.recv_timeout(DEADLINE) {
+    match rx.recv_timeout(deadline.left()) {
         Ok(None) => {}
         Ok(Some(_)) | Err(_) => {
-            panic!("waited {DEADLINE:?} for stand-in group {group} to die")
+            panic!("waited until the deadline for stand-in group {group} to die")
         }
     }
 }
@@ -3089,7 +3091,7 @@ fn a_cached_list_serves_the_model_while_the_refresh_runs_in_the_background() {
     assert_eq!(exited["exit_code"], 0);
     assert_eq!(exited["text"], "Hello.");
     assert!(
-        server.await_requests(3, DEADLINE),
+        server.await_requests(3, setup.deadline.left()),
         "waited for the refresh, the token and the model request"
     );
     let mut paths: Vec<String> = server
@@ -3168,7 +3170,7 @@ fn a_lua_provider_without_credential_uses_the_stored_key() {
     assert_eq!(run.kinds(), HELLO_KINDS);
     assert_eq!(run.last()["payload"]["text"], "Hello.");
     assert!(
-        server.await_requests(1, DEADLINE),
+        server.await_requests(1, setup.deadline.left()),
         "waited for the model request"
     );
     let requests = server.requests();

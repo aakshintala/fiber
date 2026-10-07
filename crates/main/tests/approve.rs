@@ -11,6 +11,8 @@
     reason = "test helpers; a failure is the test's"
 )]
 
+mod support;
+
 use std::fs;
 use std::io::Write;
 use std::os::unix::fs::symlink;
@@ -19,13 +21,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
 
 use fakes::Watchdog;
 use serde_json::{Value, json};
-
-/// How long one `fiber` run may take.
-const DEADLINE: Duration = Duration::from_secs(20);
+use support::Deadline;
 
 const HOOKS_FILE: &str = ".fiber/config/hooks.json";
 
@@ -33,11 +32,14 @@ const HOOKS_FILE: &str = ".fiber/config/hooks.json";
 /// drop.
 struct Setup {
     root: fakes::TempDir,
+    deadline: Deadline,
 }
 
 impl Setup {
     fn new() -> Self {
+        let deadline = Deadline::start();
         let setup = Self {
+            deadline,
             root: fakes::TempDir::new("fiber-approve"),
         };
         fs::create_dir_all(setup.home()).unwrap();
@@ -110,17 +112,17 @@ impl Setup {
         drop(stdin);
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-        let output = match finished.recv_timeout(DEADLINE) {
+        let output = match finished.recv_timeout(self.deadline.left()) {
             Ok(output) => output.unwrap(),
             Err(_) => {
-                fakes::kill_group(group, "KILL").unwrap();
-                let reaped = finished.recv_timeout(DEADLINE).is_ok();
+                support::kill_group(self.deadline, group, "KILL").unwrap();
+                let reaped = finished.recv_timeout(self.deadline.cleanup()).is_ok();
                 panic!(
-                    "waited {DEADLINE:?} for `fiber approve` to exit (reaped after the kill: {reaped})"
+                    "waited until the deadline for `fiber approve` to exit (reaped after the kill: {reaped})"
                 );
             }
         };
-        watchdog.stand_down(DEADLINE);
+        watchdog.stand_down(self.deadline.cleanup());
         Run {
             code: output.status.code(),
             stdout: String::from_utf8(output.stdout).unwrap(),
@@ -533,18 +535,18 @@ fn script_output(script: &Path) -> String {
     let group = child.id();
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-    let output = match finished.recv_timeout(DEADLINE) {
+    let output = match finished.recv_timeout(deadline.left()) {
         Ok(output) => output.unwrap(),
         Err(_) => {
-            fakes::kill_group(group, "KILL").unwrap();
-            let reaped = finished.recv_timeout(DEADLINE).is_ok();
+            support::kill_group(deadline, group, "KILL").unwrap();
+            let reaped = finished.recv_timeout(deadline.cleanup()).is_ok();
             panic!(
-                "waited {DEADLINE:?} for `{}` to exit (reaped after the kill: {reaped})",
+                "waited until the deadline for `{}` to exit (reaped after the kill: {reaped})",
                 script.display()
             );
         }
     };
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(deadline.cleanup());
     assert!(output.status.success(), "{output:?}");
     String::from_utf8(output.stdout).unwrap()
 }

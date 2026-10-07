@@ -9,6 +9,8 @@
     reason = "test helpers; a failure is the test's"
 )]
 
+mod support;
+
 use std::fs;
 use std::io::Write;
 use std::os::unix::process::CommandExt;
@@ -16,28 +18,25 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
 
 use contract::shapes::ContentPart;
 use contract::tool::Tool;
 use fakes::clock::FakeClock;
 use fakes::{CancelToken, Watchdog};
 use serde_json::{Map, Value};
-
-/// How long one `fiber` run may take.
-const DEADLINE: Duration = Duration::from_secs(20);
-
-/// How long a process group may take to empty after `fiber` exits.
-const GROUP_DEADLINE: Duration = Duration::from_secs(5);
+use support::Deadline;
 
 /// A temporary workspace, removed on drop.
 struct Setup {
     root: fakes::TempDir,
+    deadline: Deadline,
 }
 
 impl Setup {
     fn new() -> Self {
+        let deadline = Deadline::start();
         let setup = Self {
+            deadline,
             root: fakes::TempDir::new("fa"),
         };
         fs::create_dir_all(setup.workspace()).unwrap();
@@ -78,27 +77,27 @@ impl Setup {
         }
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-        let output = match finished.recv_timeout(DEADLINE) {
+        let output = match finished.recv_timeout(self.deadline.left()) {
             Ok(output) => output.unwrap(),
             Err(_) => {
-                fakes::kill_group(group, "KILL").unwrap();
-                let reaped = finished.recv_timeout(DEADLINE).is_ok();
+                support::kill_group(self.deadline, group, "KILL").unwrap();
+                let reaped = finished.recv_timeout(self.deadline.cleanup()).is_ok();
                 assert!(
-                    fakes::group_empties(group, GROUP_DEADLINE),
+                    fakes::group_empties(group, self.deadline.cleanup()),
                     "`fiber` left a process in its group behind"
                 );
                 panic!(
-                    "waited {DEADLINE:?} for `fiber {}` to exit (reaped after the kill: {reaped})",
+                    "waited until the deadline for `fiber {}` to exit (reaped after the kill: {reaped})",
                     args.join(" ")
                 );
             }
         };
         assert!(
-            fakes::group_empties(group, GROUP_DEADLINE),
+            fakes::group_empties(group, self.deadline.left()),
             "`fiber` left a process in its group behind"
         );
         std::mem::forget(guard);
-        watchdog.stand_down(DEADLINE);
+        watchdog.stand_down(self.deadline.cleanup());
         Run::from(output)
     }
 }
@@ -119,7 +118,7 @@ struct KillGroup(u32);
 
 impl Drop for KillGroup {
     fn drop(&mut self) {
-        match fakes::kill_group(self.0, "KILL") {
+        match support::kill_group_detached(self.0, "KILL") {
             Ok(_) | Err(_) => {}
         }
     }

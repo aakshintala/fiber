@@ -11,22 +11,18 @@
     reason = "test helpers; a failure is the test's"
 )]
 
+mod support;
+
 use std::fs;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
 
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
-
-/// How long one `fiber` run may take.
-const DEADLINE: Duration = Duration::from_secs(20);
-
-/// How long a stopped MCP server may take to exit once `fiber` did.
-const SERVER_EXIT: Duration = Duration::from_secs(5);
+use support::Deadline;
 
 /// The built-in tool order, when no MCP server declares anything.
 const TOOL_NAMES: [&str; 8] = [
@@ -45,14 +41,16 @@ const TOOL_NAMES: [&str; 8] = [
 /// macOS.
 struct Setup {
     root: fakes::TempDir,
+    deadline: Deadline,
 }
 
 impl Setup {
     fn new() -> Self {
+        let deadline = Deadline::start();
         let root = fakes::TempDir::new("fa");
         fs::create_dir_all(root.path().join("h")).unwrap();
         fs::create_dir_all(root.path().join("w")).unwrap();
-        Self { root }
+        Self { deadline, root }
     }
 
     fn home(&self) -> PathBuf {
@@ -139,27 +137,27 @@ impl Setup {
         let guard = KillGroup(group);
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-        let output = match finished.recv_timeout(DEADLINE) {
+        let output = match finished.recv_timeout(self.deadline.left()) {
             Ok(output) => output.unwrap(),
             Err(_) => {
-                fakes::kill_group(group, "KILL").unwrap();
-                let reaped = finished.recv_timeout(DEADLINE).is_ok();
+                support::kill_group(self.deadline, group, "KILL").unwrap();
+                let reaped = finished.recv_timeout(self.deadline.cleanup()).is_ok();
                 assert!(
-                    fakes::group_empties(group, GROUP_DEADLINE),
+                    fakes::group_empties(group, self.deadline.cleanup()),
                     "`fiber` left a process in its group behind"
                 );
                 panic!(
-                    "waited {DEADLINE:?} for `fiber {}` to exit (reaped after the kill: {reaped})",
+                    "waited until the deadline for `fiber {}` to exit (reaped after the kill: {reaped})",
                     args.join(" ")
                 );
             }
         };
         assert!(
-            fakes::group_empties(group, GROUP_DEADLINE),
+            fakes::group_empties(group, self.deadline.left()),
             "`fiber` left a process in its group behind"
         );
         std::mem::forget(guard);
-        watchdog.stand_down(DEADLINE);
+        watchdog.stand_down(self.deadline.cleanup());
         Run::from(output)
     }
 }
@@ -168,9 +166,6 @@ fn write(file: &Path, value: &Value) {
     fs::create_dir_all(file.parent().unwrap()).unwrap();
     fs::write(file, value.to_string()).unwrap();
 }
-
-/// How long a process group may take to empty after `fiber` exits.
-const GROUP_DEADLINE: Duration = Duration::from_secs(5);
 
 /// Spawns `command` in a new process group, then a watchdog in its own
 /// group. The watchdog's stdin is a pipe only this process holds: a newline
@@ -192,7 +187,7 @@ struct KillGroup(u32);
 
 impl Drop for KillGroup {
     fn drop(&mut self) {
-        match fakes::kill_group(self.0, "KILL") {
+        match support::kill_group_detached(self.0, "KILL") {
             Ok(_) | Err(_) => {}
         }
     }
@@ -505,8 +500,8 @@ fn the_server_runs_in_the_workspace_and_stops_with_the_session() {
     assert!(pid > 1);
     // The server's pid is gone after `fiber` exits.
     assert!(
-        fakes::pids_exit(&[pid], SERVER_EXIT),
-        "waited {SERVER_EXIT:?} for pid {pid} to exit after `fiber`"
+        fakes::pids_exit(&[pid], setup.deadline.left()),
+        "waited until the deadline for pid {pid} to exit after `fiber`"
     );
 }
 
@@ -990,8 +985,8 @@ fn a_required_server_that_fails_to_start_exits_before_the_session() {
         .unwrap();
     // The healthy server started, then stopped with the failed session.
     assert!(
-        fakes::pids_exit(&[pid], SERVER_EXIT),
-        "waited {SERVER_EXIT:?} for pid {pid} to exit after the required failure"
+        fakes::pids_exit(&[pid], setup.deadline.left()),
+        "waited until the deadline for pid {pid} to exit after the required failure"
     );
 }
 
