@@ -120,9 +120,9 @@ fn usable(value: &str) -> Option<Secret> {
 }
 
 /// What the command prints on stdout when it succeeds, or why it gave no
+/// key. The command is named by its program alone: its arguments may hold a
 /// key.
 fn run(argv: &[String]) -> Result<Secret, String> {
-    let shown = argv.join(" ");
     let Some((program, args)) = argv.split_first() else {
         return Err("the configured command is empty".into());
     };
@@ -131,10 +131,10 @@ fn run(argv: &[String]) -> Result<Secret, String> {
         .stdin(Stdio::null())
         .stderr(Stdio::null())
         .output()
-        .map_err(|e| format!("`{shown}` could not be started: {e}"))?;
+        .map_err(|e| format!("`{program}` could not be started: {e}"))?;
     if !output.status.success() {
-        return Err(format!("`{shown}` failed ({})", output.status));
+        return Err(format!("`{program}` failed ({})", output.status));
     }
     usable(&String::from_utf8_lossy(&output.stdout))
-        .ok_or_else(|| format!("`{shown}` printed no key"))
+        .ok_or_else(|| format!("`{program}` printed no key"))
 }
