@@ -245,6 +245,7 @@ fn an_id_past_the_pid_range_is_an_error_and_sends_nothing() {
 fn each_signal_name_reads_as_its_signal_and_others_are_refused() {
     let names = [
         ("0", None),
+        ("HUP", Some(Signal::HUP)),
         ("INT", Some(Signal::INT)),
         ("KILL", Some(Signal::KILL)),
         ("TERM", Some(Signal::TERM)),
@@ -253,7 +254,7 @@ fn each_signal_name_reads_as_its_signal_and_others_are_refused() {
     for (name, signal) in names {
         assert_eq!(signal_named(name).unwrap(), signal, "{name}");
     }
-    for name in ["", "SIGKILL", "kill", "9", "HUP"] {
+    for name in ["", "SIGKILL", "kill", "9", "QUIT"] {
         assert_eq!(
             signal_named(name).unwrap_err().kind(),
             io::ErrorKind::InvalidInput,

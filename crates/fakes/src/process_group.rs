@@ -24,7 +24,7 @@ use rustix::process::{Pid, Signal};
 pub const WATCHDOG_SCRIPT: &str =
     r#"[ "$1" -gt 1 ] || exit 2; read -r line || kill -s KILL -- "-$1""#;
 
-/// Sends `signal` (`INT`, `KILL`, `TERM`, `WINCH`, or `0` to probe) to
+/// Sends `signal` (`HUP`, `INT`, `KILL`, `TERM`, `WINCH`, or `0` to probe) to
 /// process group `group` through kill(-group, signal), starting no process,
 /// and returns whether the kernel accepted it. A refused send (no such
 /// group, no permission) is `Ok(false)`.
@@ -91,6 +91,7 @@ fn send(
 fn signal_named(name: &str) -> io::Result<Option<Signal>> {
     match name {
         "0" => Ok(None),
+        "HUP" => Ok(Some(Signal::HUP)),
         "INT" => Ok(Some(Signal::INT)),
         "KILL" => Ok(Some(Signal::KILL)),
         "TERM" => Ok(Some(Signal::TERM)),
@@ -135,7 +136,7 @@ pub fn group_empties(group: u32, deadline: Duration) -> bool {
     result
 }
 
-/// Sends `signal` (`INT`, `KILL`, `TERM`, `WINCH`, or `0` to probe) to
+/// Sends `signal` (`HUP`, `INT`, `KILL`, `TERM`, `WINCH`, or `0` to probe) to
 /// process `pid` through kill(pid, signal), starting no process, and
 /// returns whether the kernel accepted it. A refused send (no such process,
 /// no permission) is `Ok(false)`.
