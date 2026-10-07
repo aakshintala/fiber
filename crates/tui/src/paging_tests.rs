@@ -694,6 +694,177 @@ fn a_late_usage_line_moves_only_its_turns_closing_rows() {
     assert_ne!(layout(&app).1, before.1);
 }
 
+/// A session with crash lines across its pages: a resume cuts the first
+/// turn short and orphans a job, then a long turn cuts the pages whose
+/// seeds would clone the fold holding that text.
+fn crashed_session() -> Vec<Envelope> {
+    let mut stream = Stream::new(false);
+    stream.durable(
+        "turn_started",
+        None,
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "go"}]}]}),
+    );
+    stream.durable(
+        "fiber_started",
+        None,
+        json!({"version": "0.0.1", "resumed": true}),
+    );
+    stream.durable(
+        "job_started",
+        None,
+        json!({"job_id": "j_zz", "description": "zz describe the indescribable",
+            "output_path": "/tmp/o"}),
+    );
+    stream.durable(
+        "job_completed",
+        None,
+        json!({"job_id": "j_zz", "status": "failed",
+            "error": {"code": "orphaned", "message": "zz orphaned away"}}),
+    );
+    stream.turn(1, 30);
+    stream.lines
+}
+
+#[test]
+fn dropped_pages_leave_no_rendered_text_in_their_seeds() {
+    let lines = crashed_session();
+    let mut pages = Pages::new(80);
+    for line in &lines {
+        pages.apply(line);
+    }
+    assert!(pages.index().pages().len() > 2, "too few pages");
+    // The resident pages draw the orphan line under its job's description.
+    let live: Vec<String> = pages
+        .rows()
+        .iter()
+        .map(|(line, _)| line.to_string())
+        .collect();
+    assert!(
+        live.iter()
+            .any(|line| line.contains("zz describe the indescribable")),
+        "{live:?}"
+    );
+    drop_all(&mut pages);
+    // Every other page is dropped: its seed keeps the continuation state,
+    // and no aside or job text from the dropped pages.
+    let seeds = format!("{:?}", pages.seeds);
+    for needle in [
+        "zz describe the indescribable",
+        "zz orphaned away",
+        "Orphaned jobs",
+        "↺ resumed",
+    ] {
+        assert!(!seeds.contains(needle), "a seed keeps {needle:?}");
+    }
+}
+
+/// A turn the process leaves suspended on one page and resumes on the
+/// next, with a page cut between the exit and the resume.
+fn suspended_session() -> Vec<Envelope> {
+    let mut stream = Stream::new(false);
+    stream.durable(
+        "turn_started",
+        None,
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "go"}]}]}),
+    );
+    stream.durable("step_started", None, json!({}));
+    for step in 0..70 {
+        stream.text(&format!("a_m{step}"), "hello there");
+    }
+    stream.durable(
+        "fiber_exited",
+        None,
+        json!({"exit_code": 0, "suspended_on": "r_1", "usage": {"tokens":
+            {"input": 0, "cache_read": 0, "cache_write": {}, "output": 0},
+            "cost": 0, "subscription_cost": 0}}),
+    );
+    stream.durable("step_started", None, json!({}));
+    stream.text("a_mcut", "after the cut");
+    stream.durable(
+        "fiber_started",
+        None,
+        json!({"version": "0.0.1", "resumed": true}),
+    );
+    for step in 70..75 {
+        stream.text(&format!("a_m{step}"), "still going");
+    }
+    stream.durable("turn_completed", None, json!({"outcome": "completed"}));
+    stream.lines
+}
+
+#[test]
+fn a_suspended_resume_across_pages_reloads_unchanged() {
+    let lines = suspended_session();
+    let mut pages = Pages::new(80);
+    for line in &lines {
+        pages.apply(line);
+    }
+    let live = pages.rows();
+    // The turn resumed: no cut-short card and no resume band.
+    let texts: Vec<String> = live.iter().map(|(line, _)| line.to_string()).collect();
+    assert!(
+        !texts
+            .iter()
+            .any(|line| line.starts_with("▣ cut short") || line.starts_with("↺")),
+        "{texts:?}"
+    );
+    drop_all(&mut pages);
+    let got = joined(&mut pages, &lines);
+    assert_eq!(differs(&got, &live), None);
+}
+
+/// A handoff whose sizing preamble stands pages before it starts.
+fn handoff_session() -> Vec<Envelope> {
+    let mut stream = Stream::new(false);
+    stream.durable(
+        "turn_started",
+        None,
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "go"}]}]}),
+    );
+    stream.durable(
+        "preamble_built",
+        None,
+        json!({"reason": "start", "model": "fake/m", "context_window": 1_000_000,
+            "tool_choice": "auto", "cache_lifetime": "5m", "system_prompt": "",
+            "tools": [], "trigger_at": 400_000}),
+    );
+    stream.durable("step_started", None, json!({}));
+    for step in 0..70 {
+        stream.text(&format!("a_m{step}"), "hello there");
+    }
+    stream.durable("step_started", None, json!({}));
+    stream.text("a_mcut", "after the cut");
+    stream.durable("handoff_started", None, json!({"trigger": "auto"}));
+    for step in 70..75 {
+        stream.text(&format!("a_m{step}"), "still going");
+    }
+    stream.durable("turn_completed", None, json!({"outcome": "completed"}));
+    stream.lines
+}
+
+#[test]
+fn a_handoff_sized_pages_earlier_reloads_unchanged() {
+    let lines = handoff_session();
+    let mut pages = Pages::new(80);
+    for line in &lines {
+        pages.apply(line);
+    }
+    let live = pages.rows();
+    // The band read the trigger the preamble set pages earlier, under the
+    // same target id a reload must keep.
+    let texts: Vec<String> = live.iter().map(|(line, _)| line.to_string()).collect();
+    assert!(
+        texts.iter().any(|line| line.contains("400.0k")),
+        "{texts:?}"
+    );
+    drop_all(&mut pages);
+    let got = joined(&mut pages, &lines);
+    assert_eq!(differs(&got, &live), None);
+}
+
 #[test]
 fn close_keeps_the_open_page_as_a_closed_one() {
     let mut pages = Pages::new(20);

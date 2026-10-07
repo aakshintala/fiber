@@ -29,6 +29,41 @@ pub(crate) struct Crash {
     orphans: Option<usize>,
 }
 
+impl Fold {
+    /// The scalars a page seed keeps from the live fold: the next target
+    /// id, the ledger default, the handoff trigger and whether the process
+    /// suspended. Rendered asides and job descriptions stay only in the
+    /// resident pages that drew them.
+    pub(crate) fn seed_scalars(&self) -> (usize, bool, Option<u64>, bool) {
+        (
+            self.next,
+            self.ledgers,
+            self.trigger_at,
+            self.crash.suspended,
+        )
+    }
+
+    /// A page's starting fold from its seed's scalars, with no rendered
+    /// text: the reload folds the page's own lines into it.
+    pub(crate) fn seeded(
+        next: usize,
+        ledgers: bool,
+        trigger_at: Option<u64>,
+        suspended: bool,
+    ) -> Self {
+        Self {
+            next,
+            ledgers,
+            trigger_at,
+            crash: Crash {
+                suspended,
+                ..Crash::default()
+            },
+            ..Self::default()
+        }
+    }
+}
+
 /// A line outside a turn's own items.
 #[derive(Debug, Clone)]
 pub(crate) enum Aside {

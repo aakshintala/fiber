@@ -16,8 +16,10 @@ use crate::format::{self, Spend};
 use crate::pages::{Cut, Index};
 use crate::turn::{Fold, Row, Turn};
 
-/// Where folding a page begins.
-#[derive(Debug, Clone)]
+/// Where folding a page begins: its turn and step, and the live fold's
+/// scalar continuation state. Rendered asides and job descriptions stay
+/// only in resident pages, so a dropped page keeps no history text here.
+#[derive(Debug, Clone, Default)]
 struct Seed {
     /// The summary of the page's first card.
     first: usize,
@@ -27,8 +29,31 @@ struct Seed {
     /// The next page begins inside the same turn, with the text that ends
     /// this page's last group.
     cut: bool,
-    /// The turn fold's state at the start of this page.
-    fold: Fold,
+    /// The next target id.
+    next: usize,
+    /// Whether a new group starts with its ledger open.
+    ledgers: bool,
+    /// The context size an automatic handoff runs at.
+    trigger_at: Option<u64>,
+    /// The last `fiber_exited` carried `suspended_on`.
+    suspended: bool,
+}
+
+impl Seed {
+    /// The seed a page opening on `open`'s cards starts from: its turn and
+    /// step, and the fold's continuation state.
+    fn live(first: usize, step: Option<u64>, open: &Part) -> Self {
+        let (next, ledgers, trigger_at, suspended) = open.fold.seed_scalars();
+        Self {
+            first,
+            step,
+            cut: false,
+            next,
+            ledgers,
+            trigger_at,
+            suspended,
+        }
+    }
 }
 
 /// One page's cards: the turns from summary `first` on.
@@ -46,8 +71,8 @@ impl Part {
         Self {
             first: seed.first,
             turns: seed.step.map(Turn::part).into_iter().collect(),
-            fold: seed.fold.clone(),
-            aside_start: seed.fold.asides.len(),
+            fold: Fold::seeded(seed.next, seed.ledgers, seed.trigger_at, seed.suspended),
+            aside_start: 0,
         }
     }
 }
@@ -170,13 +195,7 @@ pub(crate) struct Pages {
 impl Pages {
     /// An empty conversation at `width`.
     pub(crate) fn new(width: u16) -> Self {
-        let fold = Fold::default();
-        let seed = Seed {
-            first: 0,
-            step: None,
-            cut: false,
-            fold: fold.clone(),
-        };
+        let seed = Seed::default();
         Self {
             index: Index::default(),
             seeds: vec![seed.clone()],
@@ -184,7 +203,7 @@ impl Pages {
             open: Part::seeded(seed),
             pending: None,
             summaries: Vec::new(),
-            fold,
+            fold: Fold::default(),
             shells: Vec::new(),
             overrides: BTreeMap::new(),
             stale: BTreeSet::new(),
@@ -330,12 +349,7 @@ impl Pages {
 
     /// Closes the open page at a `turn_started`.
     fn close(&mut self) {
-        let seed = Seed {
-            first: self.summaries.len(),
-            step: None,
-            cut: false,
-            fold: self.open.fold.clone(),
-        };
+        let seed = Seed::live(self.summaries.len(), None, &self.open);
         self.pending = None;
         let at = self.closed.len();
         let part = std::mem::replace(&mut self.open, Part::seeded(seed.clone()));
@@ -347,18 +361,12 @@ impl Pages {
     /// A candidate cut at a `step_started` not yet folded.
     fn candidate(&self) -> Pending {
         let seed = match self.running() {
-            Some(at) => Seed {
-                first: at,
-                step: self.summaries.get(at).map(|summary| summary.step),
-                cut: false,
-                fold: self.open.fold.clone(),
-            },
-            None => Seed {
-                first: self.summaries.len(),
-                step: None,
-                cut: false,
-                fold: self.open.fold.clone(),
-            },
+            Some(at) => Seed::live(
+                at,
+                self.summaries.get(at).map(|summary| summary.step),
+                &self.open,
+            ),
+            None => Seed::live(self.summaries.len(), None, &self.open),
         };
         Pending {
             before: self.open.clone(),
@@ -560,10 +568,10 @@ impl Pages {
         self.fold.ledgers = open;
         self.open.fold.ledgers = open;
         for seed in &mut self.seeds {
-            seed.fold.ledgers = open;
+            seed.ledgers = open;
         }
         if let Some(pending) = &mut self.pending {
-            pending.seed.fold.ledgers = open;
+            pending.seed.ledgers = open;
         }
         self.overrides
             .retain(|target, _| !matches!(target, Target::Group(_)));
