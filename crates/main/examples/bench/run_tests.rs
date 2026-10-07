@@ -166,12 +166,12 @@ fn output_held_open_by_a_process_outside_the_group_errs_instead_of_hanging() {
     let watchdog = Watchdog::matching(&marker);
     let escaped = dir.path().join("escaped");
     // The leader waits for the descendant's marker before exiting, so
-    // `Proc::stop` cannot catch the holder while it is still in the
-    // group. Bounded: a counted wait, not a sleep-then-hope.
+    // `Proc::stop` cannot catch the holder while it is still in the group.
+    // The wait has no timeout of its own: the wall-clock limit below fails
+    // the test naming "output held open" if the descendant never escapes.
     let script = format!(
-        "perl -MPOSIX -e 'POSIX::setsid(); open my $f, \">>\", $ARGV[1] or die $!; print $f \"x\\n\"; close $f; sleep 3600' '{}' '{}' & i=0; while [ ! -e '{}' ] && [ \"$i\" -lt 100 ]; do sleep 0.05; i=$((i + 1)); done; [ -e '{}' ] || {{ echo 'the descendant never escaped its process group' >&2; exit 1; }}",
+        "perl -MPOSIX -e 'POSIX::setsid(); open my $f, \">>\", $ARGV[1] or die $!; print $f \"x\\n\"; close $f; sleep 3600' '{}' '{}' & while [ ! -e '{}' ]; do sleep 0.05; done",
         dir.path().display(),
-        escaped.display(),
         escaped.display(),
         escaped.display(),
     );
