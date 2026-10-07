@@ -1,6 +1,7 @@
 //! Binary-level tests of the terminal door (`docs/testing.md`, "Screens"):
 //! the real binary in a pseudo-terminal: the first frame, a journey that
-//! types a prompt, sees the answer and cancels a turn, resize, and no tty.
+//! types a prompt, sees the answer and cancels a turn, an approval
+//! answered from the panel, resize, and no tty.
 
 #![allow(
     clippy::unwrap_used,
@@ -378,6 +379,66 @@ fn typing_a_prompt_sees_the_answer_and_cancels_a_turn() {
     run.read_until("\x1b[?25h");
     let output = run.wait();
     assert_eq!(output.status.code(), Some(0));
+}
+
+/// A reply that calls the shell with `echo hi`.
+fn calls_echo_hi() -> Response {
+    let events = [
+        json!({"type": "response.output_item.done", "item": {
+            "type": "function_call", "id": "fc_call_1", "call_id": "call_1", "name": "shell",
+            "arguments": json!({"command": "echo hi"}).to_string()
+        }}),
+        json!({"type": "response.completed", "response": {
+            "id": "resp_1", "status": "completed",
+            "usage": {"input_tokens": 10, "input_tokens_details": {"cached_tokens": 4}, "output_tokens": 3}
+        }}),
+    ];
+    let body: String = events
+        .iter()
+        .map(|e| format!("event: {}\ndata: {e}\n\n", e["type"].as_str().unwrap()))
+        .collect();
+    Response::stream(body)
+}
+
+#[test]
+fn a_standing_ask_opens_the_approval_panel_and_allow_once_runs_the_call() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([calls_echo_hi(), hello()]).unwrap();
+    setup.provider(&server);
+    // A standing ask for this exact command: with the terminal connected
+    // the loop asks a person (`docs/permissions.md`, "Headless").
+    fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n",
+            json!({"decision": "ask", "tool": "shell", "prefix": "echo hi"})
+        ),
+    )
+    .unwrap();
+    let mut run = Run::terminal(&setup);
+    run.read_until(">");
+    run.write(b"run it\r");
+    run.read_until("asked by a global rule: echo hi");
+    run.read_until("allow once");
+    // Enter on the first choice allows once; the call runs and the turn
+    // finishes with the answer.
+    run.write(b"\r");
+    run.read_until("Hello.");
+    run.read_until("completed");
+    run.write(b"\x03\x03");
+    run.read_until("\x1b[?1049l");
+    let output = run.wait();
+    assert_eq!(output.status.code(), Some(0));
+    // The model got the call's output, not a denial.
+    let requests = server.requests();
+    let second: Value = serde_json::from_slice(&requests[1].body).unwrap();
+    let result = second["input"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["type"] == "function_call_output")
+        .unwrap();
+    assert_eq!(result["output"], "hi\nExit code 0.\n");
 }
 
 #[test]
