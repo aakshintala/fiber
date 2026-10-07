@@ -25,6 +25,7 @@ Fiber itself:
   approve [--yes]                           Show what this repository ships and approve it
   login [<name>] [--as <label>]             Store a provider's key or an extension's secret
   logout <provider> [--as <label> | --all]  Delete a provider's stored key
+  completion <shell>                        Print a completion script for bash, zsh or fish
   help [<command>]                          Print this menu, or a command's help
   version                                   Print the version
 
@@ -105,6 +106,12 @@ pub(crate) enum Commands {
     Login(LoginArgs),
     /// Delete a provider's stored key
     Logout(LogoutArgs),
+    /// Print a completion script for bash, zsh or fish
+    Completion {
+        /// The shell to complete in.
+        #[arg(value_name = "shell")]
+        shell: crate::completion::Shell,
+    },
     /// Print the version
     Version,
     /// Print this menu, or a command's help
@@ -471,7 +478,7 @@ fn passthrough(args: &[OsString], name: &str) -> Vec<OsString> {
     delimiter.cloned().collect()
 }
 
-fn command() -> clap::Command {
+pub(crate) fn command() -> clap::Command {
     // The derive marks a `bool` required before `ArgAction::Version` is
     // applied, so the flag is added here rather than as a field.
     Cli::command()

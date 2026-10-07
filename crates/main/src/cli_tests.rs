@@ -4,6 +4,8 @@ use std::path::PathBuf;
 
 use clap::error::ContextValue;
 
+use crate::completion::Shell;
+
 use super::{
     Commands, ConfigCommands, ExtensionCommands, HubCommands, Invocation, MENU, SessionsCommands,
     command, parse_from, usage_sentence, version_line,
@@ -443,6 +445,43 @@ fn the_menu_lists_login_and_logout_under_fiber_itself() {
 }
 
 #[test]
+fn completion_takes_bash_zsh_or_fish() {
+    for (word, shell) in [
+        ("bash", Shell::Bash),
+        ("zsh", Shell::Zsh),
+        ("fish", Shell::Fish),
+    ] {
+        let parsed = parse_from(["fiber", "completion", word]);
+        assert!(
+            matches!(parsed, Invocation::Run(Some(Commands::Completion { shell: parsed })) if parsed == shell),
+            "{word}: {parsed:?}"
+        );
+    }
+}
+
+#[test]
+fn the_menu_lists_completion_under_fiber_itself() {
+    let menu = menu();
+    let itself = menu
+        .split("\n\n")
+        .find(|group| group.starts_with("Fiber itself:"))
+        .unwrap();
+    let lines: Vec<&str> = itself.lines().collect();
+    assert_eq!(
+        lines,
+        [
+            "Fiber itself:",
+            "  approve [--yes]                           Show what this repository ships and approve it",
+            "  login [<provider>] [--as <label>]         Store a provider's key",
+            "  logout <provider> [--as <label> | --all]  Delete a provider's stored key",
+            "  completion <shell>                        Print a completion script for bash, zsh or fish",
+            "  help [<command>]                          Print this menu, or a command's help",
+            "  version                                   Print the version",
+        ]
+    );
+}
+
+#[test]
 fn extension_alone_is_a_one_line_usage_sentence() {
     assert_eq!(
         sentence(&["fiber", "extension"]),
@@ -728,6 +767,7 @@ fn the_search_subcommands_stay_hidden_but_parse_everything_after() {
             "config",
             "login",
             "logout",
+            "completion",
             "version",
             "help"
         ]
@@ -791,6 +831,7 @@ fn the_image_subcommand_is_hidden_and_passes_its_arguments_through() {
             "config",
             "login",
             "logout",
+            "completion",
             "version",
             "help"
         ]
