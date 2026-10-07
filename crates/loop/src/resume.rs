@@ -445,6 +445,10 @@ impl Loop {
             hooks: None,
             handoff: crate::handoff::State::new(carry),
             ending: crate::jobs::Ending::default(),
+            // The log does not hold requests: a resumed loop warms only
+            // after its own first step.
+            warm: None,
+            last_request: None,
         };
         resumed.mark_orphans(orphans)?;
         Ok(resumed)
