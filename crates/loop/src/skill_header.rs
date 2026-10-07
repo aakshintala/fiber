@@ -1,7 +1,7 @@
 //! The header of a `SKILL.md` (`docs/system-prompt.md`, "Skills"): the
 //! YAML subset Fiber reads between the opening and closing `---` lines.
-//! Only `name`, `description` and `disable-model-invocation` are kept;
-//! every other key is skipped by its indentation.
+//! Only `name`, `description`, `disable-model-invocation` and
+//! `argument-hint` are kept; every other key is skipped by its indentation.
 
 /// What a skill's header gives.
 #[derive(Debug, PartialEq, Eq)]
@@ -12,6 +12,9 @@ pub(crate) struct Header {
     pub(crate) description: String,
     /// `false` when `disable-model-invocation` is `true`.
     pub(crate) model_invocable: bool,
+    /// `argument-hint`, trimmed; `None` when absent, empty, or not a
+    /// string.
+    pub(crate) argument_hint: Option<String>,
 }
 
 /// Why a skill is left out.
@@ -124,6 +127,11 @@ pub(crate) fn parse(text: &str) -> Result<Header, Invalid> {
     let name = value("name")?.unwrap_or_default();
     let description = value("description")?.unwrap_or_default();
     let disabled = value("disable-model-invocation")?;
+    // A hint that does not read as a string is no hint; the skill stays.
+    let argument_hint = value("argument-hint")
+        .ok()
+        .flatten()
+        .filter(|hint| !hint.is_empty());
     if name.is_empty() {
         return Err(Invalid::NoName);
     }
@@ -134,6 +142,7 @@ pub(crate) fn parse(text: &str) -> Result<Header, Invalid> {
         name,
         description,
         model_invocable: !disabled.is_some_and(|text| text.eq_ignore_ascii_case("true")),
+        argument_hint,
     })
 }
 

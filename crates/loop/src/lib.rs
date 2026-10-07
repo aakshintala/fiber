@@ -57,6 +57,26 @@ mod usage;
 mod util;
 
 pub use cancel::TurnCancel;
+
+/// Every `/name` the session runs, for the `commands` driver command
+/// (`docs/invocation.md`, "What each command does"): its skills and prompt
+/// templates, read from the places the opening message reads, from the
+/// repository's top level above `workspace`. Reads skill places only,
+/// writes nothing and raises no notice: the opening message raises
+/// discovery's.
+#[must_use]
+pub fn commands(
+    inputs: &PromptInputs,
+    workspace: &std::path::Path,
+) -> Vec<contract::events::CommandInfo> {
+    let workspace = opening::canonical(workspace);
+    let (chain, _) = opening::repo_chain(&workspace);
+    let top = chain.first().unwrap_or(&workspace);
+    skills::commands(
+        &skills::discover(inputs, top).skills,
+        &inputs.skills_disabled,
+    )
+}
 pub use conversation::rebuild;
 pub use handoff::HandoffSettings;
 pub use process::{Exited, extensions_loaded, fiber_exited, fiber_started, mcp_servers_started};

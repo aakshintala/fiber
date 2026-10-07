@@ -5,7 +5,7 @@
 use std::path::{Path, PathBuf};
 
 use contract::ErrorCode;
-use contract::events::{Notice, SkillListed, SkillSource};
+use contract::events::{CommandInfo, Notice, SkillListed, SkillSource};
 use contract::shapes::ContentPart;
 
 use crate::opening::canonical;
@@ -19,6 +19,8 @@ pub(crate) struct Found {
     /// Whether the model may load it: its header does not switch that off
     /// and it is not in an extension's `prompts/`.
     pub(crate) model_invocable: bool,
+    /// Its header's `argument-hint`, when it has one.
+    pub(crate) argument_hint: Option<String>,
     /// The place it was read from: the canonical directory, or
     /// `extension <name>`.
     pub(crate) place: String,
@@ -150,6 +152,7 @@ pub(crate) fn discover(inputs: &PromptInputs, top: &Path) -> Discovered {
                     source: place.source,
                 },
                 model_invocable: header.model_invocable && !place.prompts,
+                argument_hint: header.argument_hint,
                 place: label.clone(),
             });
         }
@@ -285,6 +288,28 @@ pub(crate) fn listing<'a>(found: &'a [Found], disabled: &[String]) -> Vec<&'a Fo
         .collect();
     listed.sort_by(|a, b| a.listed.name.cmp(&b.listed.name));
     listed
+}
+
+/// The `commands` answer's rows (`docs/invocation.md`, "What each command
+/// does"): every skill `disabled` does not name, in discovery order, tagged
+/// `skill` when the model may load it and `template` when only a person
+/// runs it.
+pub(crate) fn commands(found: &[Found], disabled: &[String]) -> Vec<CommandInfo> {
+    found
+        .iter()
+        .filter(|skill| !disabled.contains(&skill.listed.name))
+        .map(|skill| CommandInfo {
+            name: skill.listed.name.clone(),
+            description: skill.listed.description.clone(),
+            argument_hint: skill.argument_hint.clone(),
+            tag: if skill.model_invocable {
+                "skill"
+            } else {
+                "template"
+            }
+            .to_owned(),
+        })
+        .collect()
 }
 
 /// One listing line.
