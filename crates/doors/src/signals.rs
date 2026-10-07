@@ -201,7 +201,9 @@ impl Signals {
         let (action, on_signal) = {
             let mut state = lock(&self.state);
             let action = decide_close(state.phase, state.seen);
-            state.seen = state.seen.saturating_add(1);
+            if matches!(action, Action::Shutdown(_)) {
+                state.seen = state.seen.saturating_add(1);
+            }
             (action, state.on_signal.clone())
         };
         self.run(action, None, on_signal, None);

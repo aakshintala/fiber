@@ -238,10 +238,28 @@ fn close_now_while_booting_or_armed_does_nothing() {
     assert!(calls.try_recv().is_err(), "no shutdown ran while booting");
     assert!(did.try_recv().is_err(), "nothing exited while booting");
     arm(&signals, &tx);
+    assert_eq!(start(&signals, &tx), None);
+    signals.handle(SIGTERM);
+    assert_eq!(
+        calls.try_recv().unwrap(),
+        Did::Signal(143),
+        "close_now while booting leaves the first signal available"
+    );
+
+    let clock = FakeClock::new();
+    let (signals, did) = recorded(&clock);
+    let (tx, calls) = mpsc::channel();
+    arm(&signals, &tx);
     signals.close_now();
     assert!(calls.try_recv().is_err(), "no shutdown ran while armed");
     assert!(did.try_recv().is_err(), "nothing exited while armed");
     assert_eq!(start(&signals, &tx), None);
+    signals.handle(SIGTERM);
+    assert_eq!(
+        calls.try_recv().unwrap(),
+        Did::Signal(143),
+        "close_now while armed leaves the first signal available"
+    );
 }
 
 #[test]
