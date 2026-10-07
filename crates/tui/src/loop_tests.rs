@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 use std::io::{BufRead, BufReader};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -472,4 +473,104 @@ fn the_paging_jig_opens_the_ended_turns_and_appends_the_running_one() {
     // An unreadable line names its number.
     let error = super::measure_paging("{\n", 60, 12, fakes::clock::FakeClock::new());
     assert!(error.is_err_and(|error| error.starts_with("line 1:")));
+}
+
+/// `lines` as the paging jig reads them, one envelope per line.
+fn events(lines: &[Envelope]) -> String {
+    lines
+        .iter()
+        .map(|line| serde_json::to_string(line).unwrap_or_default() + "\n")
+        .collect()
+}
+
+#[test]
+fn the_paging_report_counts_every_loaded_line() {
+    let report =
+        super::measure_paging(&events(&session()), 60, 12, fakes::clock::FakeClock::new())
+            .unwrap_or_else(|error| panic!("{error}"));
+    // Every page loaded while paging up keeps its first line: dropping one
+    // draws fewer rows.
+    assert!(report.contains("rows: 313\n"), "{report}");
+}
+
+/// A clock that ticks one millisecond per `now()`, so the paging jig's
+/// report holds nonzero durations. The origin is the fake clock's, since
+/// reading the process clock is banned in tests.
+struct TickClock {
+    origin: std::time::Instant,
+    ticks: AtomicU64,
+}
+
+impl TickClock {
+    fn clock(origin: std::time::Instant) -> Arc<Self> {
+        Arc::new(Self {
+            origin,
+            ticks: AtomicU64::new(0),
+        })
+    }
+}
+
+impl contract::clock::Clock for TickClock {
+    fn now(&self) -> std::time::Instant {
+        let ticks = self.ticks.fetch_add(1, Ordering::SeqCst);
+        self.origin
+            .checked_add(Duration::from_millis(ticks))
+            .unwrap_or(self.origin)
+    }
+
+    fn wall(&self) -> std::time::SystemTime {
+        std::time::SystemTime::UNIX_EPOCH
+    }
+
+    fn sleep(&self, _d: Duration) {}
+
+    fn wait_until(
+        &self,
+        _until: Option<std::time::Instant>,
+        wait: &mut dyn FnMut(Option<Duration>),
+    ) {
+        wait(Some(Duration::ZERO));
+    }
+
+    fn subscribe(&self, _waker: std::sync::Weak<dyn contract::clock::Wake>) {}
+}
+
+#[test]
+fn the_paging_report_prints_milliseconds() {
+    let origin = fakes::clock::FakeClock::new().origin();
+    let report = super::measure_paging(&events(&session()), 60, 12, TickClock::clock(origin))
+        .unwrap_or_else(|error| panic!("{error}"));
+    let line = report
+        .lines()
+        .find(|line| line.starts_with("open pass and first frame: "))
+        .unwrap_or_else(|| panic!("no open pass line in {report}"));
+    // Seconds per frame would print here as milliseconds: with a ticking
+    // clock the open pass takes whole milliseconds, never zero.
+    let ms: f64 = line
+        .trim_start_matches("open pass and first frame: ")
+        .trim_end_matches(" ms")
+        .parse()
+        .unwrap_or_else(|error| panic!("{error} in {report}"));
+    assert!(ms > 0.0, "{report}");
+}
+
+#[test]
+fn paging_up_ends_at_the_top() {
+    let events = events(&session());
+    let (done, finished) = mpsc::channel();
+    std::thread::spawn(move || {
+        done.send(super::measure_paging(
+            &events,
+            60,
+            12,
+            fakes::clock::FakeClock::new(),
+        ))
+        .unwrap_or(());
+    });
+    // On a thread with a wall-clock deadline: a loop bound that never ends
+    // fails here, instead of hanging the suite.
+    let report = finished
+        .recv_timeout(DEADLINE)
+        .unwrap_or_else(|error| panic!("waited {DEADLINE:?} for the paging jig: {error}"));
+    assert!(report.is_ok(), "{report:?}");
 }
