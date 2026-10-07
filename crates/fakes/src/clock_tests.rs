@@ -316,8 +316,8 @@ fn two_advances_both_move_the_clock() {
     assert_eq!(clock.now(), clock.origin() + Duration::from_millis(2));
 }
 
-/// An await expected true runs on a helper thread with a 30 s `within`, as
-/// `await_count` does, so a wait that never matches would block the test.
+/// An await expected true runs on a helper thread with a 5 s `within`,
+/// so a wait that never matches fails the test instead of blocking it.
 #[allow(clippy::expect_used, reason = "a test helper; a failure is the test's")]
 fn await_since(
     clock: &Arc<FakeClock>,
@@ -328,7 +328,7 @@ fn await_since(
     let clock = Arc::clone(clock);
     let mark = mark.clone();
     thread::spawn(move || {
-        match tx.send(clock.await_parked_since(&mark, until, Duration::from_secs(30))) {
+        match tx.send(clock.await_parked_since(&mark, until, Duration::from_secs(5))) {
             Ok(()) | Err(mpsc::SendError(_)) => {}
         }
     });
@@ -341,7 +341,7 @@ fn await_unbounded(clock: &Arc<FakeClock>) -> bool {
     let (tx, rx) = mpsc::channel();
     let clock = Arc::clone(clock);
     thread::spawn(
-        move || match tx.send(clock.await_parked_unbounded(Duration::from_secs(30))) {
+        move || match tx.send(clock.await_parked_unbounded(Duration::from_secs(5))) {
             Ok(()) | Err(mpsc::SendError(_)) => {}
         },
     );
@@ -573,8 +573,7 @@ fn advance_marked_moves_the_clock_and_wakes_subscribers() {
     let (tx, rx) = mpsc::channel();
     let wake: Arc<dyn Wake> = Arc::new(ChanWake(tx));
     clock.subscribe(Arc::downgrade(&wake));
-    let mark = clock.advance_marked(Duration::from_millis(5));
-    let _ = mark;
+    clock.advance_marked(Duration::from_millis(5));
     assert_eq!(clock.now(), clock.origin() + Duration::from_millis(5));
     assert_eq!(clock.wall(), wall_epoch() + Duration::from_millis(5));
     rx.recv_timeout(Duration::from_secs(2))
