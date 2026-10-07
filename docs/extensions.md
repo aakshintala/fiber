@@ -341,7 +341,9 @@ json.decode(str) / json.encode(value)   -- JSON, host-provided (Lua has none bui
   vendor's own steps. `host.oauth.refresh` takes the lock on the stored
   credential and re-reads it. It calls `fn` only if the token still needs
   refreshing, then stores what `fn` returns, so two sessions never refresh
-  one token twice.
+  one token twice. With nobody attached to answer, `open`, `callback` and
+  `poll` fail with `authentication_failed` before they open, listen or send
+  anything (`docs/model-routing.md`, "Keys, tokens and OAuth").
 - **`host.sha256`** and **`host.hmac_sha256`** exist so `sign()` never needs
   crypto written in Lua. `host.hmac_sha256` returns raw bytes because a
   signing scheme such as AWS SigV4 feeds each HMAC into the next as its key,
