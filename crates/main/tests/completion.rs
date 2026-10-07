@@ -259,7 +259,7 @@ fn the_bash_script_loads_and_completes_exactly_the_commands_and_flags() {
     expected.push(("fiber ask --model ".to_owned(), set(&[""])));
 
     let driver = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/completion/bash-driver.bash");
-    let mut bash = shell(&setup, "/bin/bash");
+    let mut bash = shell(&setup, "bash");
     bash.arg("--norc")
         .arg("--noprofile")
         .arg(&driver)
@@ -282,8 +282,6 @@ fn the_bash_script_loads_and_completes_exactly_the_commands_and_flags() {
     assert_cases("bash", &format!("CASE 1\n{rest}"), &expected);
 }
 
-/// zsh comes with macOS. Linux runners have no zsh.
-#[cfg(target_os = "macos")]
 #[test]
 fn the_zsh_script_loads_and_completes_exactly_the_commands_and_flags() {
     let setup = Setup::new();
@@ -306,7 +304,7 @@ fn the_zsh_script_loads_and_completes_exactly_the_commands_and_flags() {
     expected.push(("fiber ask --model ".to_owned(), set(&[])));
 
     let driver = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/completion/zsh-driver.zsh");
-    let mut zsh = shell(&setup, "/bin/zsh");
+    let mut zsh = shell(&setup, "zsh");
     zsh.arg("-f")
         .arg(&driver)
         .arg(&path)
@@ -320,6 +318,48 @@ fn the_zsh_script_loads_and_completes_exactly_the_commands_and_flags() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert_cases("zsh", &stdout, &expected);
+}
+
+#[test]
+fn the_fish_script_loads_and_completes_exactly_the_commands_and_flags() {
+    let setup = Setup::new();
+    let path = setup.root.path().join("fiber.fish");
+    fs::write(&path, script(&setup, "fish")).unwrap();
+
+    let mut expected = vec![
+        ("fiber ext".to_owned(), set(&["extension"])),
+        ("fiber extension in".to_owned(), set(&["install"])),
+    ];
+    for (path, subcommands, _) in GRAMMAR {
+        if !subcommands.is_empty() {
+            expected.push((line(path, ""), set(subcommands)));
+        }
+    }
+    for (path, _, flags) in GRAMMAR {
+        expected.push((line(path, "-"), set(flags)));
+    }
+    // A value is not completed, not even as a file name in this directory.
+    expected.push(("fiber ask --model ".to_owned(), set(&[])));
+    expected.push(("fiber ask ".to_owned(), set(&[])));
+
+    let driver = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/completion/fish-driver.fish");
+    let mut fish = shell(&setup, "fish");
+    fish.arg("--no-config")
+        .arg(&driver)
+        .arg(&path)
+        .args(expected.iter().map(|(case, _)| case));
+    let output = run_bounded("the fish driver", fish, setup.root.path());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let rest = stdout
+        .strip_prefix("SOURCE-STDERR\n\n")
+        .unwrap_or_else(|| panic!("sourcing the script wrote on stderr\n{stdout}"));
+    assert_cases("fish", rest, &expected);
 }
 
 #[test]
