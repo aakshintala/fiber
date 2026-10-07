@@ -6,9 +6,10 @@
 use std::os::unix::process::CommandExt as _;
 use std::process::Command;
 
-/// `EXC_MASK_CRASH` (the fatal-signal exception that `abort()` raises) and
-/// `EXC_MASK_CORPSE_NOTIFY`, the two exception types that reach ReportCrash.
-const CRASH_MASK: u32 = (1 << 10) | (1 << 13);
+/// `EXC_MASK_CRASH` (1 << 10, the fatal-signal exception that `abort()`
+/// raises) and `EXC_MASK_CORPSE_NOTIFY` (1 << 13), the two exception types
+/// that reach ReportCrash.
+const CRASH_MASK: u32 = 0x2400;
 
 /// `EXCEPTION_DEFAULT`.
 const BEHAVIOR: i32 = 1;
