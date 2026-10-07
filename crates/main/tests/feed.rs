@@ -433,8 +433,8 @@ fn a_killed_session_whose_listener_outlives_its_summary_connection_is_crashed() 
         &json!({
             "kind": "session_status", "session_id": id, "ts": 5, "schema_version": 1,
             "payload": {
-                "name": "doomed", "workspace": workspace, "model": "fake/m",
-                "state": "streaming", "since": 1, "delegates": 0, "jobs": 0,
+                "name": "doomed", "workspace": workspace, "project": "-w", "model": "fake/m",
+                "state": "streaming", "since": 1, "delegates": 0, "jobs": 0, "clients": 0,
                 "spend": {
                     "tokens": {"input": 0, "cache_read": 0, "cache_write": {}, "output": 0},
                     "cost": 0.0, "subscription_cost": 0.0,

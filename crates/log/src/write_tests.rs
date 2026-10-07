@@ -243,6 +243,8 @@ fn status(name: &str) -> Event {
         },
         delegates: 0,
         jobs: 0,
+        project: "-w".into(),
+        clients: 0,
     })
 }
 

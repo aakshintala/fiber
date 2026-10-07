@@ -429,6 +429,7 @@ sent the latest.
 |---|---|---|---|
 | `name` | string | yes | the session's name, or its first prompt when it has none |
 | `workspace` | string | yes | the workspace path |
+| `project` | string | yes | the project's key (`docs/state.md`, "Projects") |
 | `parent` | string | no | on a delegate, the parent's `session_id` |
 | `model` | string | yes | the model reference in use |
 | `state` | string | yes | `streaming`, `tool`, `retrying`, `waiting`, `jobs` (no turn running, jobs running) or `idle` (nothing in flight); a closed set |
@@ -440,6 +441,7 @@ sent the latest.
 | `spend` | `usage` | yes | the session's spend so far, delegates included, from the `usage` fold |
 | `delegates` | integer | yes | delegates running |
 | `jobs` | integer | yes | jobs running, delegates excluded |
+| `clients` | integer | yes | the `full` connections attached, as the latest `clients` line counts them; `summary` connections are not counted |
 
 #### `context_added`
 

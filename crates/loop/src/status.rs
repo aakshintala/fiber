@@ -357,6 +357,7 @@ impl Fold {
                 .or_else(|| self.first_prompt.clone())
                 .unwrap_or_default(),
             workspace: self.workspace.clone(),
+            project: String::new(),
             parent: self.parent.clone(),
             model: self.model.clone(),
             state: self.state(),
@@ -370,6 +371,7 @@ impl Fold {
             spend: self.spend.clone(),
             delegates: u32::try_from(self.delegates.len()).unwrap_or(u32::MAX),
             jobs: u32::try_from(jobs).unwrap_or(u32::MAX),
+            clients: 0,
         }
     }
 }

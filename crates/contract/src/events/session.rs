@@ -316,6 +316,8 @@ pub struct SessionStatus {
     pub name: String,
     /// The workspace path.
     pub workspace: String,
+    /// The project's key (`docs/state.md`, "Projects").
+    pub project: String,
     /// On a delegate, the parent's `session_id`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<SessionId>,
@@ -338,6 +340,8 @@ pub struct SessionStatus {
     pub delegates: u32,
     /// Jobs running, delegates excluded.
     pub jobs: u32,
+    /// The `full` connections attached, as the latest `clients` line counts them.
+    pub clients: u32,
 }
 
 /// The context's size at the latest request, on `session_status`.
