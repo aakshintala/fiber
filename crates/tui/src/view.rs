@@ -79,10 +79,12 @@ pub(crate) fn render(
         bottom = top;
     }
     if app.panel().is_none() {
-        let (rows, _, _) = input_box(app, area.width);
+        let (rows, top, _, _) = input_box(app, area.width);
+        let below = bottom;
         for row in rows.iter().rev() {
             put(buf, area, &mut bottom, row, Style::default());
         }
+        token_targets(app, area, below, (top, rows.len()), &mut targets);
         if let Some(completions) = app.completions() {
             for (at, line) in completions.lines.iter().enumerate().rev() {
                 let style = if completions.selected == Some(at) {
@@ -118,10 +120,44 @@ pub(crate) fn render(
             .render(conversation, buf),
         None => conversation_rows(app, conversation, buf, &mut targets),
     }
-    if let Some(target) = pointer.and_then(|(col, row)| mouse::under(&targets, col, row)) {
-        buf.set_style(target.rect, HOVER_TINT);
+    if let Some(id) = pointer.and_then(|(col, row)| mouse::hit(&targets, col, row)) {
+        for target in targets.iter().filter(|target| target.id == id) {
+            buf.set_style(target.rect, HOVER_TINT);
+        }
     }
     targets
+}
+
+/// Pushes a target over the cells of each paste token's label the input
+/// box shows: the box's `shown` rows, from draft row `top`, end on the row
+/// above `below`.
+fn token_targets(
+    app: &App,
+    area: Rect,
+    below: u16,
+    (top, shown): (usize, usize),
+    targets: &mut Vec<Target>,
+) {
+    for span in app.input().token_spans(area.width) {
+        let Some(up) = span
+            .row
+            .checked_sub(top)
+            .and_then(|at| shown.checked_sub(at))
+            .filter(|up| *up > 0)
+        else {
+            continue;
+        };
+        let Some(y) = below.checked_sub(to_u16(up)).filter(|y| *y >= area.y) else {
+            continue;
+        };
+        let end = span.end.min(area.width);
+        if span.start < end {
+            targets.push(Target {
+                id: TargetId::Token(span.number),
+                rect: Rect::new(area.x.saturating_add(span.start), y, end - span.start, 1),
+            });
+        }
+    }
 }
 
 /// Puts `text` on the row above `bottom` and moves `bottom` up to it,
@@ -134,9 +170,10 @@ fn put(buf: &mut Buffer, area: Rect, bottom: &mut u16, text: &str, style: Style)
     Some(Rect::new(area.x, row, end.saturating_sub(area.x), 1))
 }
 
-/// The input box's shown rows, and the cursor's row in them and column:
-/// at most [`App::input_height`] rows, scrolled so the cursor's row shows.
-fn input_box(app: &App, width: u16) -> (Vec<String>, usize, u16) {
+/// The input box's shown rows, the draft row they start at, and the
+/// cursor's row in them and column: at most [`App::input_height`] rows,
+/// scrolled so the cursor's row shows.
+fn input_box(app: &App, width: u16) -> (Vec<String>, usize, usize, u16) {
     let draft = app.input();
     let (row, col) = draft.cursor(width);
     let height = app.input_height();
@@ -147,7 +184,7 @@ fn input_box(app: &App, width: u16) -> (Vec<String>, usize, u16) {
         .skip(top)
         .take(height)
         .collect();
-    (rows, row.saturating_sub(top), col)
+    (rows, top, row.saturating_sub(top), col)
 }
 
 /// Where the terminal cursor shows: at the draft's cursor while the input
@@ -157,7 +194,7 @@ pub(crate) fn cursor(app: &App, area: Rect) -> Option<Position> {
     if app.panel().is_some() {
         return None;
     }
-    let (rows, row, col) = input_box(app, area.width);
+    let (rows, _, row, col) = input_box(app, area.width);
     let below = to_u16(rows.len().saturating_sub(row));
     let y = area.bottom().checked_sub(below).filter(|y| *y >= area.y)?;
     let x = area.x.saturating_add(col.min(area.width.saturating_sub(1)));

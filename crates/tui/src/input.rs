@@ -71,6 +71,21 @@ struct Layout {
     rows: Vec<String>,
     /// For each cursor position, 0 to the piece count: row and column.
     at: Vec<(usize, u16)>,
+    /// The cells each paste token's label takes, one span per row.
+    tokens: Vec<TokenSpan>,
+}
+
+/// The cells of one row a paste token's label takes in [`Draft::rows`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TokenSpan {
+    /// The token's number.
+    pub(crate) number: usize,
+    /// The row.
+    pub(crate) row: usize,
+    /// The first column.
+    pub(crate) start: u16,
+    /// The column after the last.
+    pub(crate) end: u16,
 }
 
 impl Draft {
@@ -359,6 +374,12 @@ impl Draft {
             .unwrap_or_default()
     }
 
+    /// The cells each paste token's label takes at `width`, in
+    /// [`Draft::rows`]' rows and columns: one span per row a label covers.
+    pub(crate) fn token_spans(&self, width: u16) -> Vec<TokenSpan> {
+        self.layout(width).tokens
+    }
+
     /// Inserts `piece` at the cursor and moves past it.
     fn put(&mut self, piece: Piece) {
         self.pieces.insert(self.cursor, piece);
@@ -430,6 +451,7 @@ impl Draft {
             .max(1);
         let mut rows = vec![PROMPT.to_owned()];
         let mut at = Vec::with_capacity(self.pieces.len().saturating_add(1));
+        let mut tokens: Vec<TokenSpan> = Vec::new();
         let mut col = 0usize;
         // Starts a new row when `need` columns do not fit after `col`.
         let wrap = |rows: &mut Vec<String>, col: &mut usize, need: usize| {
@@ -461,22 +483,33 @@ impl Draft {
                     push(&mut rows, ch);
                     col = col.saturating_add(w);
                 }
-                Piece::Paste { label, .. } => {
+                Piece::Paste { number, label, .. } => {
                     for (index, ch) in label.chars().enumerate() {
                         let w = char_width(ch);
                         wrap(&mut rows, &mut col, w);
+                        let (row, start) = place(&rows, col);
                         if index == 0 {
-                            at.push(place(&rows, col));
+                            at.push((row, start));
                         }
                         push(&mut rows, ch);
                         col = col.saturating_add(w);
+                        let end = place(&rows, col).1;
+                        match tokens.last_mut() {
+                            Some(span) if index > 0 && span.row == row => span.end = end,
+                            _ => tokens.push(TokenSpan {
+                                number: *number,
+                                row,
+                                start,
+                                end,
+                            }),
+                        }
                     }
                 }
             }
         }
         wrap(&mut rows, &mut col, 1);
         at.push(place(&rows, col));
-        Layout { rows, at }
+        Layout { rows, at, tokens }
     }
 }
 

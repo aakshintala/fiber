@@ -556,15 +556,27 @@ impl App {
     /// Ctrl+G: the paste token beside the cursor, or else the whole draft,
     /// every token expanded. A recall waiting for a page waits no more.
     pub(super) fn open_in_editor(&mut self) -> Effect {
+        if let Some(number) = self.draft.token_at_cursor() {
+            return self.open_token(number);
+        }
         self.history.cancel();
-        let (target, text) = match self.draft.token_at_cursor() {
-            Some(number) => (
-                Target::Token(number),
-                self.draft.token_text(number).unwrap_or_default().to_owned(),
-            ),
-            None => (Target::Draft, self.draft.expand()),
-        };
-        Effect::Editor { target, text }
+        Effect::Editor {
+            target: Target::Draft,
+            text: self.draft.expand(),
+        }
+    }
+
+    /// Paste token `number`'s text in the editor; nothing when the draft
+    /// holds no such token. A recall waiting for a page waits no more.
+    pub(super) fn open_token(&mut self, number: usize) -> Effect {
+        self.history.cancel();
+        match self.draft.token_text(number) {
+            Some(text) => Effect::Editor {
+                target: Target::Token(number),
+                text: text.to_owned(),
+            },
+            None => Effect::None,
+        }
     }
 
     /// The editor returned: its text replaces `target`'s, the whole draft's
