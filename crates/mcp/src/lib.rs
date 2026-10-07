@@ -7,6 +7,7 @@
 mod cache;
 mod effects;
 mod name;
+mod pipes;
 mod registry;
 mod rpc;
 mod server;
