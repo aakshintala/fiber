@@ -52,6 +52,15 @@ pub struct Launch {
     /// `tui.logo_glyph`: the one-row logo's mark, "⌇" or "≈". The
     /// four-row logo's wave is drawn pixels, and never changes.
     pub logo_glyph: String,
+    /// `tui.rail.width`: the rail's share of the screen's width, in
+    /// percent (`docs/tui.md`, "Layout").
+    pub rail_share: f64,
+    /// `tui.panel.width`: the panel's share of the screen's width, in
+    /// percent.
+    pub panel_share: f64,
+    /// `tui.panel.cards`: the panel's cards, in order (`docs/tui.md`,
+    /// "The panel").
+    pub panel_cards: Vec<String>,
 }
 
 /// What home draws, built by [`crate::app::App::home_screen`].

@@ -27,6 +27,9 @@ fn home_with_glyph(width: u16, height: u16, glyph: &str) -> App {
         model: None,
         thinking: None,
         logo_glyph: glyph.to_owned(),
+        rail_share: 15.0,
+        panel_share: 21.0,
+        panel_cards: Vec::new(),
     });
     app.set_size(width, height);
     app
@@ -45,6 +48,9 @@ fn git_home(width: u16, height: u16) -> App {
         model: None,
         thinking: None,
         logo_glyph: "⌇".to_owned(),
+        rail_share: 15.0,
+        panel_share: 21.0,
+        panel_cards: Vec::new(),
     });
     app.set_size(width, height);
     app
@@ -387,6 +393,9 @@ fn home_chips() {
         model: Some("test/model".to_owned()),
         thinking: Some("high".to_owned()),
         logo_glyph: "⌇".to_owned(),
+        rail_share: 15.0,
+        panel_share: 21.0,
+        panel_cards: Vec::new(),
     });
     app.set_size(80, 24);
     insta::assert_snapshot!("home_chips", screen(&app, 80, 24));
