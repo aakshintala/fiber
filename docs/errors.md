@@ -310,6 +310,7 @@ the lines that carry it.
 | `rate_limited` | extension call, model call, turn | the provider rate-limited the request |
 | `refused` | model call, turn | the provider declined on policy grounds |
 | `repository_code_skipped` | notice | an extension, hook or MCP server the repository declares was skipped, because nobody approved it and nobody could be asked (`docs/extensions.md`, "Code a repository ships") |
+| `reviewer_selection_failed` | notice | the reviewer could not choose which of the person's messages still bind at a handoff, so it kept every one |
 | `session_has_dependents` | exit, hub command | a delete names a session that forks or rewinds point at; the message lists them, and `--cascade` deletes them too (`docs/invocation.md`, "Deleting and pruning") |
 | `session_held` | exit, hub command | another process holds the session |
 | `session_not_found` | exit, hub command | a resume names no session, or a command whose `session_id` names no session, running or exited (`docs/invocation.md`, "The hub") |
@@ -349,6 +350,7 @@ Notices, for a failure outside any action:
 | `model_unconfigured` | a model's base URL names a per-account host whose setting has no value or a value that is not a host, so the model is left out of the model list; the message names the model and the setting (`docs/model-routing.md`, "A per-account host") |
 | `no_model` | nothing chose the reviewer's model; set `reviewer.model` (`docs/permissions.md`, "How it runs") |
 | `repository_code_skipped` | an extension, hook or MCP server the repository declares was skipped, unapproved, with nobody to ask; the message names it and says to run `fiber approve` |
+| `reviewer_selection_failed` | the reviewer could not choose which of the person's messages still bind at a handoff, so it kept every one; the message names the cause |
 | `skill_invalid` | a skill's `SKILL.md` header does not parse or lacks `name` or `description`, so it is left out; the message names its path (`docs/system-prompt.md`, "Skills") |
 | `skill_shadowed` | two skills share a name; the message names both paths and which one won (`docs/system-prompt.md`, "Skills") |
 | `skills_large` | the skills listing passes 10% of the context window; the message names the sources that add the most (`docs/system-prompt.md`, "Size") |

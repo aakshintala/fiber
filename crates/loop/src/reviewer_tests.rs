@@ -15,9 +15,10 @@ use contract::events::{
 };
 use contract::provider::Input;
 use contract::shapes::{ContentPart, Origin, Sender};
-use contract::{ActionId, CommandId};
+use contract::{ActionId, CommandId, Seq};
 use serde_json::{Map, Value, json};
 
+use super::shown::Shown;
 use super::{First, Second, read_first, read_second, render_reviewed, sections};
 
 const PROMPT: &str = include_str!("../prompt/reviewer.md");
@@ -86,11 +87,26 @@ fn sections_run_heading_to_heading_with_blank_ends_removed() {
         "{:?}",
         split.second
     );
+    assert!(
+        split.handoff.starts_with("## handoff\n"),
+        "{:?}",
+        split.handoff
+    );
+    assert!(
+        split.handoff_reask.starts_with("## handoff-reask\n"),
+        "{:?}",
+        split.handoff_reask
+    );
     assert!(!split.shared.ends_with('\n'));
     assert!(!split.first.ends_with('\n'));
+    assert!(!split.handoff.ends_with('\n'));
+    assert!(!split.handoff_reask.ends_with('\n'));
     assert!(!split.second.ends_with('\n'));
     assert_eq!(
-        format!("{}\n\n{}\n\n{}\n", split.shared, split.first, split.second),
+        format!(
+            "{}\n\n{}\n\n{}\n\n{}\n\n{}\n",
+            split.shared, split.first, split.handoff, split.handoff_reask, split.second
+        ),
         PROMPT,
     );
 }
@@ -108,6 +124,7 @@ fn only_the_persons_messages_reach_the_reviewer() {
             ],
         }),
         None,
+        Some(Seq(11)),
     );
     render_reviewed(
         &mut reviewed,
@@ -117,6 +134,7 @@ fn only_the_persons_messages_reach_the_reviewer() {
             changed_by: None,
         }),
         None,
+        Some(Seq(12)),
     );
     render_reviewed(
         &mut reviewed,
@@ -126,6 +144,7 @@ fn only_the_persons_messages_reach_the_reviewer() {
             changed_by: None,
         }),
         None,
+        Some(Seq(13)),
     );
     assert_eq!(
         reviewed
@@ -143,7 +162,11 @@ fn only_the_persons_messages_reach_the_reviewer() {
             },
         ],
     );
-    assert!(reviewed.iter().all(|item| item.action.is_none()));
+    assert!(
+        reviewed
+            .iter()
+            .all(|item| matches!(item.shown, Shown::Person(_)))
+    );
 }
 
 #[test]
@@ -178,7 +201,7 @@ fn the_models_prose_reasoning_and_results_are_left_out() {
             provider_item: None,
         }),
     ] {
-        render_reviewed(&mut reviewed, &event, Some(&action));
+        render_reviewed(&mut reviewed, &event, Some(&action), Some(Seq(20)));
     }
     assert!(reviewed.is_empty());
 }
@@ -198,11 +221,13 @@ fn a_call_renders_with_the_arguments_that_run() {
         &mut reviewed,
         &Event::ToolCallRequested(call("shell")),
         Some(&action),
+        Some(Seq(21)),
     );
     render_reviewed(
         &mut reviewed,
         &Event::ToolCallRequested(repaired),
         Some(&ActionId("a_8".into())),
+        Some(Seq(22)),
     );
     assert_eq!(reviewed.len(), 2);
     assert_eq!(
@@ -215,7 +240,7 @@ fn a_call_renders_with_the_arguments_that_run() {
     // The repaired arguments render: the same call renders identically under
     // review and later in history.
     assert_eq!(reviewed[0].input, reviewed[1].input);
-    assert_eq!(reviewed[0].action, Some(action));
+    assert!(matches!(&reviewed[0].shown, Shown::Call(call) if call == &action));
 }
 
 #[test]

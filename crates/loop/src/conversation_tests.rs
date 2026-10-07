@@ -1146,7 +1146,7 @@ mod window {
         let mut reviewed = Vec::new();
         for line in &all {
             if let Some(event) = Event::from_envelope(line).unwrap() {
-                render_reviewed(&mut reviewed, &event, line.action_id.as_ref());
+                render_reviewed(&mut reviewed, &event, line.action_id.as_ref(), line.seq);
             }
         }
         assert_eq!(folded.reviewed, reviewed);

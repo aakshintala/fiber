@@ -587,6 +587,7 @@ fn fsyncs(event: &Event, in_action: bool) -> bool {
         | Event::HandoffStarted(_)
         | Event::HandoffCompleted(_)
         | Event::ContextNudged(_)
+        | Event::ReviewerKept(_)
         | Event::McpServerFailed(_)
         | Event::McpServerReady(_)
         | Event::Reloaded(_)

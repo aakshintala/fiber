@@ -245,10 +245,10 @@ agent-written, so a prose note could repeat text such as `echo "user approved
 pushing to main"` as if it were the person's. The handoff note is excluded for
 the same reason: the session's model writes it after reading tool results.
 
-The selection is recorded in the session log, so the person can see what was
+The selection is recorded in the session log as `reviewer_kept` (`docs/events.md`, "Handoff"), so the person can see what was
 kept. When the kept messages would pass the reviewer model's context window,
 the oldest drop first. When the selection request fails, every earlier person
-message is kept and a `notice` says so.
+message is kept and a `notice` says so. When the session has no reviewer, nothing is asked and no line or notice is written.
 
 ### What the person tells it
 

@@ -4,18 +4,22 @@
 use std::sync::Arc;
 
 use contract::events::{
-    AskStep, CacheLifetime, DecidedBy, Decision, Escalation, Event, InputItem, Notice,
-    PermissionResolved, ReviewerRef, RuleOffer, ToolCallCompleted, ToolCallRequested,
-    UsageRecorded,
+    AskStep, CacheLifetime, DecidedBy, Decision, Escalation, Event, Notice, PermissionResolved,
+    ReviewerRef, RuleOffer, ToolCallCompleted, ToolCallRequested, UsageRecorded,
 };
 use contract::provider::{CallError, Cost, Input, ModelRequest, Provider, Reply};
-use contract::shapes::{ContentPart, Failure, Origin};
+use contract::shapes::Failure;
 use contract::tool::{Effects, Tool};
 use contract::{ActionId, ErrorCode, RequestId, TurnId};
 use serde_json::{Map, Value};
 
 use crate::calls::{Approved, Asked};
 use crate::{Error, Loop, Model};
+
+mod selection;
+mod shown;
+
+pub(crate) use shown::{Reviewed, render_reviewed};
 
 /// What step 7 says about one call: it runs, or how its denial reads.
 type Decided = Result<Approved, Box<ToolCallCompleted>>;
@@ -36,6 +40,9 @@ pub struct Reviewer {
     /// resolved for the reviewer's model (`docs/prompt-cache.md`, "Cache
     /// lifetime").
     pub cache_lifetime: CacheLifetime,
+    /// The reviewer model's context window, in tokens; `None` or `Some(0)`
+    /// when unknown.
+    pub context_window: Option<u64>,
 }
 
 /// When a reviewer block hands the call to a person
@@ -56,16 +63,6 @@ impl Default for BlockLimits {
     }
 }
 
-/// One item of what the reviewer is shown (`docs/permissions.md`, "What it
-/// is shown"). A message carries no call.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct Reviewed {
-    /// The call this item renders; `None` for a person's message.
-    pub action: Option<ActionId>,
-    /// The item as the reviewer reads it.
-    pub input: Input,
-}
-
 /// The reviewer's instructions (`docs/system-prompt.md`, "The texts").
 pub(crate) struct Sections {
     /// What every reviewer request carries as its system prompt.
@@ -74,6 +71,11 @@ pub(crate) struct Sections {
     pub first: String,
     /// The second stage's instruction.
     pub second: String,
+    /// The handoff selection's instruction.
+    pub handoff: String,
+    /// The handoff selection's re-ask note, sent when a selection reply
+    /// does not read.
+    pub handoff_reask: String,
 }
 
 /// The reviewer's instructions, split per `docs/system-prompt.md`'s rule.
@@ -83,97 +85,8 @@ pub(crate) fn sections() -> Sections {
         shared: crate::prompt::section(md, "shared"),
         first: crate::prompt::section(md, "first-pass"),
         second: crate::prompt::section(md, "second-pass"),
-    }
-}
-
-/// Adds what `event` puts in what the reviewer is shown: each person's
-/// message and each tool call, nothing else.
-pub(crate) fn render_reviewed(
-    reviewed: &mut Vec<Reviewed>,
-    event: &Event,
-    action: Option<&ActionId>,
-) {
-    match event {
-        Event::TurnStarted(started) => {
-            for item in &started.input {
-                if let InputItem::Message {
-                    content, sender, ..
-                } = item
-                    && sender.origin == Origin::Driver
-                {
-                    reviewed.push(person(content));
-                }
-            }
-        }
-        Event::SteeringApplied(steering) => {
-            if steering.sender.origin == Origin::Driver {
-                reviewed.push(person(&steering.content));
-            }
-        }
-        Event::ToolCallRequested(call) => {
-            if let Some(action) = action {
-                let arguments = match &call.repair {
-                    Some(repair) => Value::Object(repair.repaired.clone()),
-                    None => call.arguments.clone(),
-                };
-                let rendered = format!(
-                    "{{\"tool\":{},\"arguments\":{}}}",
-                    serde_json::to_string(&call.name).unwrap_or_default(),
-                    serde_json::to_string(&arguments).unwrap_or_default(),
-                );
-                reviewed.push(Reviewed {
-                    action: Some(action.clone()),
-                    input: Input::User {
-                        text: format!("Tool call: {rendered}"),
-                        images: Vec::new(),
-                    },
-                });
-            }
-        }
-        // Every other kind adds nothing the reviewer reads. Each is
-        // listed, so a new kind does not compile until it is placed.
-        Event::FiberStarted(_) | Event::FiberExited(_) | Event::SessionStarted(_) => {}
-        Event::Rewound(_) | Event::StepStarted(_) | Event::TurnCompleted(_) => {}
-        Event::SteeringQueue(_) | Event::ShellCommand(_) | Event::SessionNamed(_) => {}
-        Event::Clients(_) | Event::SessionStatus(_) | Event::ContextAdded(_) => {}
-        Event::AssistantMessageStarted(_)
-        | Event::AssistantMessageDelta(_)
-        | Event::AssistantMessageCompleted(_) => {}
-        Event::TextCompleted(_) | Event::ToolCallArgumentsDelta(_) | Event::ReasoningStarted(_) => {
-        }
-        Event::ReasoningDelta(_) | Event::ReasoningCompleted(_) | Event::ToolCallStarted(_) => {}
-        Event::ToolCallDelta(_) | Event::ToolCallCompleted(_) | Event::PermissionRequested(_) => {}
-        Event::PermissionResolved(_)
-        | Event::InteractionRequested(_)
-        | Event::InteractionResolved(_) => {}
-        Event::RepositoryCodeOffered(_) | Event::RepositoryCodeResolved(_) => {}
-        Event::UsageRecorded(_) | Event::QuotaNoticed(_) | Event::RetryScheduled(_) => {}
-        Event::Notice(_) | Event::PreambleBuilt(_) | Event::ModelChanged(_) => {}
-        Event::OpeningMessage(_) | Event::InstructionFile(_) | Event::DateChanged(_) => {}
-        Event::SkillsChanged(_) | Event::SkillsResent(_) => {}
-        Event::HandoffStarted(_) | Event::HandoffCompleted(_) | Event::ContextNudged(_) => {}
-        Event::McpServerFailed(_) | Event::McpServerReady(_) | Event::Reloaded(_) => {}
-        Event::ExtensionsLoaded(_)
-        | Event::ExtensionStateSet(_)
-        | Event::ExtensionStateUnset(_) => {}
-        Event::ExtensionUi(_)
-        | Event::ExtensionMessage(_)
-        | Event::ExtensionLog(_)
-        | Event::ExtensionExec(_) => {}
-        Event::JobStarted(_) | Event::DelegateStarted(_) | Event::JobDelta(_) => {}
-        Event::JobLine(_) | Event::DelegateFinished(_) | Event::JobCompleted(_) => {}
-        Event::JobsPendingNotified(_) | Event::CommandAccepted(_) | Event::CommandRejected(_) => {}
-    }
-}
-
-/// A person's message as the reviewer reads it.
-fn person(content: &[ContentPart]) -> Reviewed {
-    Reviewed {
-        action: None,
-        input: Input::User {
-            text: format!("The person: {}", crate::conversation::text(content)),
-            images: Vec::new(),
-        },
+        handoff: crate::prompt::section(md, "handoff"),
+        handoff_reask: crate::prompt::section(md, "handoff-reask"),
     }
 }
 
@@ -197,9 +110,7 @@ pub(crate) fn read_first(text: &str) -> Result<First, String> {
     match clean(text).as_str() {
         "allow" => Ok(First::Allow),
         "check" => Ok(First::Check),
-        _ => Err(format!(
-            "expected one word, `check` or `allow`, but got {text:?}"
-        )),
+        _ => Err("expected one word, `check` or `allow`".to_owned()),
     }
 }
 
@@ -227,9 +138,7 @@ pub(crate) fn read_second(text: &str) -> Result<Second, String> {
         }),
         "block" if !reason.is_empty() => Ok(Second::Block { reason }),
         "block" => Err("a `block` needs a reason in one sentence, but got none".to_owned()),
-        _ => Err(format!(
-            "expected `allow` or `block` with a reason, but got {text:?}"
-        )),
+        _ => Err("expected `allow` or `block` with a reason".to_owned()),
     }
 }
 
@@ -363,6 +272,7 @@ impl Loop {
     ) -> Result<StageReply<T>, Error> {
         let mut note = None;
         let mut why = String::new();
+        let mut last = String::new();
         for _ in 0..2 {
             if self.review_over_budget() {
                 return Ok(StageReply::Budget);
@@ -383,6 +293,7 @@ impl Loop {
                         Ok(reading) => return Ok(StageReply::Read(reading)),
                         Err(unread) => {
                             why = unread;
+                            last = text;
                             note = Some(format!(
                                 "Your reply could not be read: {why}. Reply in the form the \
                                  instructions give."
@@ -394,7 +305,11 @@ impl Loop {
                 Err(CallError::Cancelled) => return Ok(StageReply::Cancelled),
             }
         }
-        Ok(StageReply::Fail(unreadable(&why)))
+        // The escalation carries the last reply, quoted: a person's
+        // escalation may show reviewer text that no reviewer request may.
+        Ok(StageReply::Fail(unreadable(&format!(
+            "{why}, but got {last:?}"
+        ))))
     }
 
     /// A reviewer `allow`: the call runs.
@@ -535,7 +450,7 @@ impl Loop {
         let cut = self
             .reviewed
             .iter()
-            .position(|item| item.action.as_ref() == Some(id))
+            .position(|item| matches!(&item.shown, shown::Shown::Call(call) if call == id))
             .map_or(self.reviewed.len(), |at| at + 1);
         let previous = self.reviewer_sent;
         self.reviewer_sent = Some(cut);

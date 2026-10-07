@@ -162,6 +162,8 @@ codes! {
     /// Code a repository declares was skipped: nobody approved it and nobody
     /// could be asked.
     RepositoryCodeSkipped,
+    /// The reviewer could not choose which of the person's messages still bind at a handoff, so it kept every one.
+    ReviewerSelectionFailed,
     /// A delete names a session that forks or rewinds point at.
     SessionHasDependents,
     /// Another process holds the session.

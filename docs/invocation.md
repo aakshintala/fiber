@@ -1086,10 +1086,14 @@ that hold nothing to lose:
 - **Worktrees.** It lists each kept worktree under the project's `worktrees/`
   with its branch, whether it has uncommitted changes, and its age. It
   removes a worktree and its branch only when nothing is uncommitted and every
-  commit on the branch is also on another branch or a remote. Any other
-  worktree is skipped, and its line names what removing it would lose:
-  uncommitted files, commits found nowhere else, or both. `--force` removes
-  it anyway. A worktree a running session works in is never removed.
+  commit on the branch is also on another branch or a remote. Uncommitted
+  follows git: tracked changes, and untracked files that are not ignored.
+  Ignored files are not changes, so a worktree holding only those is removed,
+  and its line in prune's list names their total size and top-level paths,
+  such as "target/ 3.1 GiB, .env". Any other worktree is skipped, and its line names
+  what removing it would lose: uncommitted files, commits found nowhere else,
+  or both. `--force` removes it anyway. A worktree a running session works in
+  is never removed.
 - **Pinned copies.** It removes each copy in `pinned/` of this repository's
   code that no worktree's files match any more (`docs/extensions.md`, "Code a
   repository ships"). The worktrees that count are the repository's
