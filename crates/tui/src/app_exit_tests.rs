@@ -702,3 +702,26 @@ fn a_closing_attached_session_gets_no_line() {
     };
     assert!(app.exit_lines().is_empty());
 }
+
+#[test]
+fn an_attached_busy_session_with_an_idle_row_is_not_counted_twice() {
+    let mut app = home();
+    linked(&mut app);
+    // The attached session's feed row is idle, with no jobs: nothing
+    // works, so quitting asks nothing.
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        json!({"state": "idle"}),
+        0,
+        0,
+        0,
+    ));
+    app.attach(SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    app.phase = crate::app::Phase::Attached {
+        session: SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
+        busy: true,
+    };
+    let clock = fakes::clock::FakeClock::new();
+    assert_eq!(app.on_key(Key::CtrlC, clock.now()), Effect::None);
+    assert_eq!(app.on_key(Key::CtrlC, clock.now()), Effect::Quit);
+}

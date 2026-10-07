@@ -45,3 +45,42 @@ fn two_pixels_make_one_cell_by_the_half_block_rule() {
     assert_eq!(cell('#', '.', true), '▀');
     assert_eq!(cell('#', '#', false), '▀');
 }
+
+#[test]
+fn width_cells_counts_pixels_a_blank_and_the_version() {
+    assert_eq!(super::width_cells("0.0.1"), 32 + 1 + 5);
+    assert_eq!(super::width_cells(""), 32 + 1);
+}
+
+#[test]
+fn full_blocks_carry_no_background_and_two_tone_halves_carry_both() {
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+    use ratatui::style::Color;
+
+    let version = "0.0.1";
+    let wide = u16::try_from(super::width_cells(version)).unwrap_or(u16::MAX);
+    let area = Rect::new(0, 0, wide.saturating_add(2), 4);
+    let mut buf = Buffer::empty(area);
+    super::draw(&mut buf, 0, 0, version);
+    let mut full = 0;
+    let mut half = 0;
+    for y in 0..4 {
+        for x in 0..wide {
+            let cell = &buf[(x, y)];
+            if cell.symbol() == "█" {
+                // One colour on both halves: the foreground alone.
+                assert_eq!(cell.bg, Color::Reset, "a full block at ({x}, {y})");
+                full += 1;
+            }
+            if cell.symbol() == "▀" && cell.bg != Color::Reset {
+                // Two colours: the top as foreground, the bottom behind.
+                // Single-colour halves keep the default background.
+                assert_ne!(cell.fg, Color::Reset, "a half block at ({x}, {y})");
+                half += 1;
+            }
+        }
+    }
+    assert!(full > 0, "the letters draw full blocks");
+    assert!(half > 0, "the counters shade two-tone halves");
+}
