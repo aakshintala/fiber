@@ -759,6 +759,110 @@ fn dropped_pages_leave_no_rendered_text_in_their_seeds() {
     }
 }
 
+/// An open job crosses the cut between the first two turns, then becomes
+/// orphaned before the next page closes.
+fn job_completed_after_page_cut() -> Vec<Envelope> {
+    let mut stream = Stream::new(false);
+    stream.turn(0, 1);
+    stream.durable(
+        "job_started",
+        None,
+        json!({"job_id": "j_build", "description": "build the docs", "output_path": "/tmp/o"}),
+    );
+    for _ in 0..64 {
+        stream.durable("unknown", None, json!({}));
+    }
+    stream.turn(1, 1);
+    stream.durable(
+        "job_completed",
+        None,
+        json!({"job_id": "j_build", "status": "failed",
+            "error": {"code": "orphaned", "message": "j_build orphaned."}}),
+    );
+    stream.turn(2, 1);
+    stream.lines
+}
+
+#[test]
+fn open_job_descriptions_survive_live_page_cuts_and_reload() {
+    let lines = job_completed_after_page_cut();
+    let mut pages = Pages::new(80);
+    for line in &lines {
+        pages.apply(line);
+    }
+    let started = lines
+        .iter()
+        .find(|line| line.kind == "job_started")
+        .and_then(|line| line.seq)
+        .expect("job_started has a seq");
+    let completed = lines
+        .iter()
+        .find(|line| line.kind == "job_completed")
+        .and_then(|line| line.seq)
+        .expect("job_completed has a seq");
+    assert_ne!(
+        pages.index().page_of(started),
+        pages.index().page_of(completed),
+        "the job events must straddle a page cut"
+    );
+
+    let live = pages.rows();
+    let live_texts: Vec<String> = live.iter().map(|(line, _)| line.to_string()).collect();
+    assert!(
+        live_texts
+            .iter()
+            .any(|line| line == "Orphaned jobs: build the docs"),
+        "{live_texts:?}"
+    );
+
+    drop_all(&mut pages);
+    let reloaded = joined(&mut pages, &lines);
+    let reloaded_texts: Vec<String> = reloaded.iter().map(|(line, _)| line.to_string()).collect();
+    assert!(
+        reloaded_texts
+            .iter()
+            .any(|line| line == "Orphaned jobs: build the docs"),
+        "{reloaded_texts:?}"
+    );
+    assert_eq!(differs(&reloaded, &live), None);
+}
+
+#[test]
+fn page_seeds_keep_only_descriptions_of_open_jobs() {
+    let mut stream = Stream::new(false);
+    stream.turn(0, 1);
+    for index in 0..40 {
+        let id = format!("j_done_{index}");
+        stream.durable(
+            "job_started",
+            None,
+            json!({"job_id": id, "description": format!("completed job {index} description"),
+                "output_path": "/tmp/o"}),
+        );
+        stream.durable(
+            "job_completed",
+            None,
+            json!({"job_id": id, "status": "completed"}),
+        );
+    }
+    stream.durable(
+        "job_started",
+        None,
+        json!({"job_id": "j_open", "description": "active job description",
+            "output_path": "/tmp/o"}),
+    );
+    stream.turn(1, 1);
+
+    let mut pages = Pages::new(80);
+    for line in &stream.lines {
+        pages.apply(line);
+    }
+    let seed = pages.seeds.last().expect("the latest page has a seed");
+    let seed_debug = format!("{seed:?}");
+    assert_eq!(seed_debug.matches("active job description").count(), 1);
+    assert!(!seed_debug.contains("completed job"), "{seed_debug}");
+}
+
 /// A turn the process leaves suspended on one page and resumes on the
 /// next, with a page cut between the exit and the resume.
 fn suspended_session() -> Vec<Envelope> {
