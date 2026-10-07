@@ -23,6 +23,7 @@ fn a_plain_single_line_value() {
             name: "review".into(),
             description: "Reviews a diff.".into(),
             model_invocable: true,
+            argument_hint: None,
         }
     );
 }
@@ -462,4 +463,52 @@ fn a_body_starting_right_after_the_fence_uses_the_full_rest() {
 fn the_fences_must_be_exact_for_a_body() {
     assert_eq!(body("--- \nname: n\ndescription: d\n---\nBody.\n"), None);
     assert_eq!(body("---\nname: n\ndescription: d\n--- \nBody.\n"), None);
+}
+
+fn hint(body: &str) -> Option<String> {
+    parse(&header(&format!("name: n\ndescription: d\n{body}")))
+        .unwrap()
+        .argument_hint
+}
+
+#[test]
+fn argument_hint_reads_in_every_scalar_form() {
+    assert_eq!(hint("argument-hint: [file]"), Some("[file]".into()));
+    assert_eq!(hint("argument-hint: <base> # note"), Some("<base>".into()));
+    assert_eq!(hint("argument-hint: '[a]: b'"), Some("[a]: b".into()));
+    assert_eq!(hint("argument-hint: \"  [x]  \""), Some("[x]".into()));
+    assert_eq!(hint("argument-hint: |\n  [one]"), Some("[one]".into()));
+    assert_eq!(
+        hint("argument-hint: >-\n  [one]\n  [two]"),
+        Some("[one] [two]".into())
+    );
+    assert_eq!(
+        hint("argument-hint:\n  [next line]"),
+        Some("[next line]".into())
+    );
+}
+
+#[test]
+fn an_absent_or_empty_argument_hint_is_none() {
+    assert_eq!(hint(""), None);
+    assert_eq!(hint("argument-hint:"), None);
+    assert_eq!(hint("argument-hint: '   '"), None);
+    assert_eq!(hint("argument-hint: # only a comment"), None);
+}
+
+#[test]
+fn an_argument_hint_that_is_not_a_string_gives_no_hint_and_the_skill_stays() {
+    assert_eq!(hint("argument-hint:\n  first: a"), None);
+    assert_eq!(hint("argument-hint:\n  - a\n  - b"), None);
+    assert_eq!(hint("argument-hint: 'unclosed"), None);
+}
+
+#[test]
+fn a_repeated_argument_hint_does_not_parse() {
+    assert_eq!(
+        invalid(&header(
+            "name: n\ndescription: d\nargument-hint: a\nargument-hint: b"
+        )),
+        Invalid::DoesNotParse
+    );
 }

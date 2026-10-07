@@ -1,5 +1,5 @@
 //! Checks that the code matches the rules and tables in the docs: the
-//! 800-line cap (`docs/code-quality.md`, "Size"), the `unsafe` table in
+//! 800-line report (`docs/code-quality.md`, "Size"), the `unsafe` table in
 //! `docs/code-quality.md`, the crate list in `docs/dependencies.md`, and
 //! that process signals stay in the guarded helpers.
 
@@ -28,8 +28,12 @@ pub(crate) fn over_cap(files: &[RustFile]) -> Vec<String> {
         .filter(|f| !is_test_file(&f.rel))
         .filter_map(|f| {
             let lines = f.source.matches('\n').count();
-            (lines > LINE_CAP)
-                .then(|| format!("{}: {lines} lines, over the {LINE_CAP}-line cap", f.path))
+            (lines > LINE_CAP).then(|| {
+                format!(
+                    "{}: {lines} lines, over {LINE_CAP}; file a split ticket",
+                    f.path
+                )
+            })
         })
         .collect()
 }

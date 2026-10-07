@@ -208,6 +208,10 @@ fn resumed_session(
     session.shell(driver);
     session.jobs(jobs.clone());
     session.hooks(Arc::clone(&extensions) as Arc<dyn contract::hook::Hooks>);
+    session.commands(r#loop::commands(
+        &prompt_inputs,
+        Path::new(&folded.workspace),
+    ));
     let cancel = Arc::new(r#loop::TurnCancel::default());
     // A signal while armed: the log stays as it was.
     if let Some(code) = crate::shutdown::start(signals, &cancel, &session, jobs.clone()) {

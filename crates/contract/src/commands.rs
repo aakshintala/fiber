@@ -107,6 +107,8 @@ pub enum Command {
     Reload,
     /// Answers with every declared tool.
     Tools,
+    /// Answers with every `/name` the session runs.
+    Commands,
     /// Answers with durable log lines in a seq range.
     History(HistoryArgs),
     /// Switches model or thinking at the next turn boundary.

@@ -22,8 +22,9 @@ use std::time::Duration;
 use contract::clock::{Clock, Wake};
 use contract::emit::Emit;
 use contract::events::{
-    Empty, Event, ExtensionsLoaded, FiberExited, InputItem, LoadedExtension, Notice, QueuedMessage,
-    SessionState, SessionStatus, SteeringQueue, ToolInfo, ToolSource, ToolState, TurnStarted,
+    CommandInfo, Empty, Event, ExtensionsLoaded, FiberExited, InputItem, LoadedExtension, Notice,
+    QueuedMessage, SessionState, SessionStatus, SteeringQueue, ToolInfo, ToolSource, ToolState,
+    TurnStarted,
 };
 use contract::inbox::{Delivery, Message};
 use contract::jobs::{Foreground, Jobs, Opening, Stop};
@@ -2000,4 +2001,82 @@ fn background_with_no_call_moving_is_rejected_stale() {
         .unwrap();
     opened.close();
     drop(staying);
+}
+
+#[test]
+fn commands_answers_with_the_rows_it_was_given_while_the_inbox_is_unread() {
+    let opened = Opened::open(vec![]);
+    opened.session.commands(vec![
+        CommandInfo {
+            name: "review".into(),
+            description: "Review a diff.".into(),
+            argument_hint: Some("[base]".into()),
+            tag: "template".into(),
+        },
+        CommandInfo {
+            name: "tdd".into(),
+            description: "Test first.".into(),
+            argument_hint: None,
+            tag: "skill".into(),
+        },
+    ]);
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let client = Client::connect(&socket).unwrap();
+            send(&client, r#"{"id":"c_early","command":"commands"}"#);
+            assert_eq!(
+                rejection(&response(&client, "c_early")),
+                ("not_subscribed", NOT_SUBSCRIBED)
+            );
+            subscribe(&client, "c_sub", "full");
+            send(
+                &client,
+                r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"wait"}]}}"#,
+            );
+            send(&client, r#"{"id":"c_1","command":"commands"}"#);
+            let answer = response(&client, "c_1");
+            assert_eq!(kind(&answer), "command_accepted");
+            assert_eq!(
+                answer["payload"]["result"],
+                serde_json::json!({"commands": [
+                    {"name": "review", "description": "Review a diff.",
+                     "argument_hint": "[base]", "tag": "template"},
+                    {"name": "tdd", "description": "Test first.", "tag": "skill"}]})
+            );
+            send(
+                &client,
+                r#"{"id":"c_2","command":"commands","args":{"future":1}}"#,
+            );
+            assert_eq!(
+                rejection(&response(&client, "c_2")),
+                ("invalid_arguments", UNFIT)
+            );
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn commands_with_none_given_answers_an_empty_list() {
+    let opened = Opened::open(vec![]);
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(&client, r#"{"id":"c_1","command":"commands","args":{}}"#);
+            let answer = response(&client, "c_1");
+            assert_eq!(kind(&answer), "command_accepted");
+            assert_eq!(
+                answer["payload"]["result"],
+                serde_json::json!({"commands": []})
+            );
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
 }

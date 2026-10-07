@@ -4,11 +4,11 @@
 
 use std::time::Instant;
 
-use contract::Envelope;
-use contract::events::OpeningMessage;
+use contract::SessionId;
+use contract::events::{CommandAccepted, CommandResult};
 use serde_json::json;
 
-use super::{App, Effect, Kind, Link, Phase, mint, read, session_command};
+use super::{App, Effect, Kind, Link, Phase, mint, session_command};
 use crate::editor::Target;
 use crate::keymap;
 use crate::keys::{Edit, Key};
@@ -31,8 +31,11 @@ pub(super) struct FilePanel {
 /// The `/` and `@` panels' and the key map overlay's state.
 #[derive(Debug)]
 pub(super) struct Overlays {
-    /// The `/` list: built-in commands, then the attached session's skills.
+    /// The `/` list: built-in commands, then the attached session's
+    /// `commands` answer.
     slash_rows: Vec<slash::Row>,
+    /// The id of the latest `commands` sent; only its answer fills the list.
+    commands_id: Option<String>,
     /// Esc closed the `/` panel for this draft.
     slash_closed: bool,
     /// The selected row of the open completion panel.
@@ -50,6 +53,7 @@ impl Default for Overlays {
     fn default() -> Self {
         Self {
             slash_rows: slash::rows(&[]),
+            commands_id: None,
             slash_closed: false,
             selected: 0,
             files: None,
@@ -397,6 +401,7 @@ impl App {
         self.phase = Phase::Starting;
         self.turns.clear();
         self.overlays.slash_rows = slash::rows(&[]);
+        self.overlays.commands_id = None;
         self.scroll.follow();
     }
 
@@ -490,6 +495,27 @@ impl App {
             | Key::CtrlR => Some(top),
         };
         Some(Effect::None)
+    }
+
+    /// A `commands` line for `session`, sent on attach and after each
+    /// `reloaded`; its answer, and no older one, fills the `/` list.
+    pub(super) fn ask_commands(&mut self, session: &SessionId) -> String {
+        let id = mint();
+        let line = session_command(&id, "commands", session, None).to_string();
+        self.overlays.commands_id = Some(id);
+        line
+    }
+
+    /// A session's `command_accepted`: the answer to the latest `commands`
+    /// sent replaces the session's rows of the `/` list.
+    pub(super) fn commands_answered(&mut self, accepted: &CommandAccepted) {
+        if self.overlays.commands_id.as_deref() != Some(accepted.command_id.0.as_str()) {
+            return;
+        }
+        if let Some(CommandResult::Commands { commands }) = &accepted.result {
+            self.overlays.slash_rows = slash::rows(commands);
+            self.overlays.commands_id = None;
+        }
     }
 
     /// Enter sends the draft, its tokens expanded: `start` with no session,
@@ -608,14 +634,6 @@ impl App {
         self.overlays.selected = 0;
         self.edited();
         self.settle();
-    }
-
-    /// `opening_message`: the session's skills join the `/` list.
-    pub(super) fn opening(&mut self, envelope: &Envelope) -> bool {
-        if let Some(opening) = read!(envelope, OpeningMessage) {
-            self.overlays.slash_rows = slash::rows(&opening.skills);
-        }
-        false
     }
 }
 

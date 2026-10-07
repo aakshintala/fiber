@@ -685,8 +685,9 @@ marked with OSC 8 or handled on click.
 - **Slash commands.** Typing `/` opens one completion panel above the input
   box. Commands, skills, prompt templates and MCP prompts share one list,
   filtered as the person types. Each row is a name, a one-line description, a
-  skill's `argument-hint` when it has one, and a tag: command, skill, the
-  extension's name, or the MCP server's name. Tab completes and Enter runs. A
+  skill's `argument-hint` when it has one, and a tag: command, skill,
+  template, the extension's name, or the MCP server's name. Tab completes and
+  Enter runs. A
   skill the model has loaded shows in the transcript as a skill, not as a file
   read.
 - **File search.** Typing `@` opens a file search panel, and choosing a file
@@ -824,9 +825,14 @@ release still applies.
 | `/quit` | Quits ("Quit"). |
 | `/?`, `/help` | Opens the key map. |
 
-An extension's commands appear in the same list, tagged with the extension's
-name, and run with the `command` driver command (`docs/extensions.md`,
-"Commands and screens").
+The rest of the list is the session's answer to the `commands` driver command
+(`docs/invocation.md`, "What each command does"): its skills, prompt templates
+and extension commands, each with the tag the answer gives. The terminal sends
+`commands` when it attaches to a session and again after each `reloaded`, and
+fills the list from the answer to the latest one it sent; until that answer
+arrives, the list holds the commands above only. A row named like a command
+above is left out. An extension's commands run with the `command` driver
+command (`docs/extensions.md`, "Commands and screens").
 
 ### Logging in
 
