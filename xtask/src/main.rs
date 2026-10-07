@@ -176,11 +176,16 @@ fn run(args: &[String]) -> Result<bool, String> {
             println!("docs-only: {}", if yes { "yes" } else { "no" });
             Ok(yes)
         }
-        "line-cap" => report(
-            "line-cap",
-            &rules::over_cap(&rust_files(&workspace_members()?)?),
-            "ok",
-        ),
+        "line-cap" => {
+            let over = rules::over_cap(&rust_files(&workspace_members()?)?);
+            for line in &over {
+                println!("line-cap: {line}");
+            }
+            if over.is_empty() {
+                println!("line-cap: ok");
+            }
+            Ok(true)
+        }
         "unsafe-table" => {
             let files = rust_files(&workspace_members()?)?;
             report(

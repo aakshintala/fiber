@@ -168,14 +168,14 @@ fn file(krate: &str, rel: &str, source: String) -> RustFile {
 }
 
 #[test]
-fn the_line_cap_fails_a_source_file_over_800_lines() {
+fn the_line_cap_lists_a_source_file_over_800_lines() {
     let files = [
         file("log", "src/big.rs", "x\n".repeat(801)),
         file("log", "src/ok.rs", "x\n".repeat(800)),
     ];
     assert_eq!(
         over_cap(&files),
-        ["crates/log/src/big.rs: 801 lines, over the 800-line cap"]
+        ["crates/log/src/big.rs: 801 lines, over 800; file a split ticket"]
     );
 }
 

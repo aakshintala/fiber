@@ -371,7 +371,7 @@ fn the_checks_pass_on_a_clean_workspace() {
 }
 
 #[test]
-fn the_line_cap_fails_a_long_file() {
+fn the_line_cap_lists_a_long_file() {
     let dir = workspace();
     dir.write("crates/b/src/long.rs", &"x\n".repeat(801));
     dir.write("crates/b/src/long_tests.rs", &"x\n".repeat(900));
@@ -380,8 +380,8 @@ fn the_line_cap_fails_a_long_file() {
     assert_eq!(
         xtask(&dir, &["line-cap"], &[], ""),
         (
-            1,
-            "line-cap: crates/b/src/long.rs: 801 lines, over the 800-line cap\n".to_owned()
+            0,
+            "line-cap: crates/b/src/long.rs: 801 lines, over 800; file a split ticket\n".to_owned()
         )
     );
 }
