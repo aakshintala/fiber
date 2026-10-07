@@ -150,6 +150,9 @@ under 20 MiB and runs the benchmarks that gate each pull request
 (`docs/performance.md`). A timing gate compares against the base binary
 measured in the same job on the same runner.
 
+The release profile sets `lto = "fat"` and `codegen-units = 1`, which
+shrinks the binary and lengthens the release build.
+
 Nothing in CI writes a snapshot, calls a live provider or reaches the public
 network (`docs/testing.md`).
 
