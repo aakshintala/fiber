@@ -286,10 +286,42 @@ fn a_title_tag_is_case_insensitive() {
 fn head_contents_other_than_the_title_are_dropped() {
     assert_eq!(
         to_markdown(
-            "<head><meta charset=\"utf-8\"><link href=\"x\">stray<base href=\"/\"></head><p>x</p>"
+            "<head><meta charset=\"utf-8\"><link href=\"x\">\n <base href=\"/\"></head><p>x</p>"
         ),
         "x\n"
     );
+}
+
+#[test]
+fn a_head_never_closed_ends_at_its_first_text() {
+    // The HTML standard ends the head at the first text that is not
+    // whitespace, as a browser shows it.
+    assert_eq!(
+        to_markdown("<head><title>T</title> Hello<meta charset=\"utf-8\">"),
+        "# T\n\nHello\n"
+    );
+}
+
+#[test]
+fn a_head_never_closed_ends_at_a_tag_that_cannot_be_in_it() {
+    assert_eq!(
+        to_markdown("<head><title>T</title><p>Hello</p>"),
+        "# T\n\nHello\n"
+    );
+    assert_eq!(to_markdown("<head><svg></svg>x"), "x\n");
+    assert_eq!(to_markdown("<head></html>x"), "x\n");
+    assert_eq!(to_markdown("<head></br>x"), "x\n");
+}
+
+#[test]
+fn a_tag_that_cannot_be_in_svg_ends_it() {
+    // The HTML standard closes every open `svg` at these tags, so the text
+    // after them is shown, closed `svg` or not.
+    assert_eq!(to_markdown("a<svg><svg>s<p>b</p>"), "a\n\nb\n");
+    assert_eq!(to_markdown("a<svg><g><p>b</p></g></svg>c"), "a\n\nb\n\nc\n");
+    assert_eq!(to_markdown("a<svg></p>b"), "a\n\nb\n");
+    assert_eq!(to_markdown("a<svg></br>b"), "a\nb\n");
+    assert_eq!(to_markdown("a<svg><font>s<font color=\"red\">b"), "ab\n");
 }
 
 #[test]
@@ -633,8 +665,8 @@ fn a_title_close_is_not_an_opener() {
 }
 
 #[test]
-fn a_body_close_does_not_end_the_head() {
-    assert_eq!(to_markdown("<head></body><p>x</p>"), "");
+fn a_body_close_ends_the_head() {
+    assert_eq!(to_markdown("<head></body><p>x</p>"), "x\n");
 }
 
 #[test]
