@@ -27,6 +27,7 @@ pub mod thinking;
 pub use thinking::ThinkingLevel;
 pub mod rules;
 mod secret;
+pub mod session_search;
 pub mod shapes;
 pub mod signing;
 pub mod tool;
