@@ -28,6 +28,7 @@ jobs:
   select:
     name: Selection
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     permissions:
       contents: read
       issues: read
@@ -128,6 +129,7 @@ jobs:
     needs: select
     if: fromJSON(needs.select.outputs.jobs).lint
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     env:
       BASE: ${{ needs.select.outputs.base }}
     steps:
@@ -159,6 +161,7 @@ jobs:
         # A draft runs Linux x86_64 only; marking it ready runs all three (docs/ci.md).
         runner: ${{ github.event.pull_request.draft && fromJSON('["ubuntu-24.04"]') || fromJSON('["ubuntu-24.04", "ubuntu-24.04-arm", "macos-26"]') }}
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: ${{ matrix.runner == 'macos-26' && 15 || 10 }}
     env:
       BASE: ${{ needs.select.outputs.base }}
     steps:
@@ -187,6 +190,7 @@ jobs:
         # A skipped job still needs a non-empty matrix.
         shard: ${{ fromJSON(needs.select.outputs.shard_total) > 0 && fromJSON(needs.select.outputs.shards) || fromJSON('[0]') }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     env:
       BASE: ${{ needs.select.outputs.base }}
       SHARD: ${{ matrix.shard }}
@@ -214,6 +218,7 @@ jobs:
     needs: select
     if: fromJSON(needs.select.outputs.jobs).bug_red
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     env:
       BASE: ${{ needs.select.outputs.base }}
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -231,6 +236,7 @@ jobs:
     needs: [select, lint, test, mutants]
     if: failure() && github.event_name == 'push'
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     permissions:
       issues: write
     env:
@@ -255,6 +261,7 @@ jobs:
     needs: [select, lint, test, mutants, bug_red]
     if: always()
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

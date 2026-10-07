@@ -19,6 +19,7 @@ jobs:
     name: Advisories on main
     if: github.event_name == 'workflow_dispatch' || github.event.schedule == '17 6 * * *'
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     permissions:
       contents: read
       issues: write
@@ -53,6 +54,7 @@ jobs:
     name: Bump the toolchain
     if: github.event_name == 'workflow_dispatch' || github.event.schedule == '41 6 * * 1'
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     # A pull request opened with the default token starts no workflow, so
     # this job pushes and opens the pull request with a token that does.
     env:
