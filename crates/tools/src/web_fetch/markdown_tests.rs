@@ -867,3 +867,13 @@ fn a_slice_of_one_still_advances_past_a_multibyte_char() {
         "é\n"
     );
 }
+
+#[test]
+fn whitespace_in_the_head_writes_nothing() {
+    assert_eq!(to_markdown("a<head> <meta>b"), "ab\n");
+}
+
+#[test]
+fn an_end_tag_in_the_head_writes_nothing() {
+    assert_eq!(to_markdown("<head></b>x"), "x\n");
+}
