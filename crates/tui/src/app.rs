@@ -182,6 +182,7 @@ impl App {
                 self.page_down();
                 Effect::None
             }
+            Key::CtrlO => Effect::None,
             Key::End | Key::CtrlC => {
                 self.follow();
                 Effect::None

@@ -39,6 +39,14 @@ fn backspace_enter_ctrl_c_and_esc() {
 }
 
 #[test]
+fn ctrl_o_is_its_own_key() {
+    assert_eq!(
+        feed_all(&[&[0x0fu8, b'a'] as &[u8]]),
+        vec![Event::Key(Key::CtrlO), Event::Key(Key::Char('a'))]
+    );
+}
+
+#[test]
 fn page_up_page_down_and_end() {
     assert_eq!(feed_all(&[b"\x1b[5~"]), vec![Event::Key(Key::PageUp)]);
     assert_eq!(feed_all(&[b"\x1b[6~"]), vec![Event::Key(Key::PageDown)]);
