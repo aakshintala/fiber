@@ -358,9 +358,22 @@ fn a_reply_that_does_not_fit_the_form_is_rejected_and_the_form_stays_pending() {
     );
     hubbed.close();
     assert_eq!(
-        of_kind(&hubbed.log(), "interaction_resolved").len(),
-        1,
-        "exactly one resolution"
+        kinds_of_the_call(&hubbed.log()),
+        [
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "interaction_requested",
+            "interaction_resolved",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
     );
     hubbed.finish();
 }
@@ -386,6 +399,24 @@ fn a_declined_form_completes_with_declined() {
     assert_eq!(ended["payload"]["outcome"], "completed");
     assert!(ended["payload"].get("questions").is_none(), "{ended}");
     hubbed.close();
+    assert_eq!(
+        kinds_of_the_call(&hubbed.log()),
+        [
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "interaction_requested",
+            "interaction_resolved",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     hubbed.finish();
 }
 
@@ -396,26 +427,6 @@ fn a_cancel_while_the_form_is_pending_resolves_it_by_fiber() {
     let request = request_of(&requested);
     hubbed.send_a("c_cancel", "cancel", &json!({}));
     let lines = hubbed.until_a("turn_completed");
-    let kinds: Vec<&str> = lines
-        .iter()
-        .filter_map(|line| line["kind"].as_str())
-        .filter(|kind| {
-            [
-                "interaction_resolved",
-                "tool_call_completed",
-                "turn_completed",
-            ]
-            .contains(kind)
-        })
-        .collect();
-    assert_eq!(
-        kinds,
-        [
-            "interaction_resolved",
-            "tool_call_completed",
-            "turn_completed"
-        ]
-    );
     let resolved = of_kind(&lines, "interaction_resolved")[0];
     assert_eq!(resolved["payload"]["request_id"], request.as_str());
     assert_eq!(resolved["payload"]["by"], "fiber");
@@ -427,6 +438,19 @@ fn a_cancel_while_the_form_is_pending_resolves_it_by_fiber() {
     assert_eq!(ended["payload"]["outcome"], "interrupted");
     assert!(ended["payload"].get("questions").is_none(), "{ended}");
     hubbed.close();
+    assert_eq!(
+        kinds_of_the_call(&hubbed.log()),
+        [
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "interaction_requested",
+            "interaction_resolved",
+            "tool_call_completed",
+            "turn_completed",
+        ]
+    );
     hubbed.finish();
 }
 
@@ -436,28 +460,6 @@ fn a_close_while_the_form_is_pending_ends_the_turn_with_its_questions() {
     let (requested, _) = hubbed.requested();
     let request = request_of(&requested);
     let lines = hubbed.close();
-    let kinds: Vec<&str> = lines
-        .iter()
-        .filter_map(|line| line["kind"].as_str())
-        .filter(|kind| {
-            [
-                "interaction_resolved",
-                "tool_call_completed",
-                "turn_completed",
-                "fiber_exited",
-            ]
-            .contains(kind)
-        })
-        .collect();
-    assert_eq!(
-        kinds,
-        [
-            "interaction_resolved",
-            "tool_call_completed",
-            "turn_completed",
-            "fiber_exited"
-        ]
-    );
     let resolved = of_kind(&lines, "interaction_resolved")[0];
     assert_eq!(resolved["payload"]["request_id"], request.as_str());
     assert_eq!(resolved["payload"]["by"], "fiber");
@@ -477,6 +479,19 @@ fn a_close_while_the_form_is_pending_ends_the_turn_with_its_questions() {
     let exited = lines.last().unwrap();
     assert_eq!(exited["payload"]["questions"], base_and_name());
     assert_eq!(hubbed.server.requests().len(), 1, "no second model request");
+    assert_eq!(
+        kinds_of_the_call(&hubbed.log()),
+        [
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "interaction_requested",
+            "interaction_resolved",
+            "tool_call_completed",
+            "turn_completed",
+        ]
+    );
     hubbed.finish();
 }
 
@@ -510,5 +525,24 @@ fn a_form_waits_without_a_timeout() {
         "Base: skipped\nName: \"x\""
     );
     hubbed.close();
+    assert_eq!(
+        kinds_of_the_call(&hubbed.log()),
+        [
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "interaction_requested",
+            "interaction_resolved",
+            "tool_call_completed",
+            "step_started",
+            "steering_applied",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     hubbed.finish();
 }
