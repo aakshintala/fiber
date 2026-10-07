@@ -420,8 +420,8 @@ fn a_prompt_rejected_busy_is_a_failure_printing_nothing() {
             | Delivery::Cancelled
             | Delivery::Job(_)
             | Delivery::JobLine(_)
-        | Delivery::Interaction(_)
-        | Delivery::Resolved(..)
+            | Delivery::Interaction(_)
+            | Delivery::Resolved(..)
             | Delivery::ExtensionExec(_)
             | Delivery::ExtensionLog(_)
             | Delivery::Close(_) => panic!("the prompt arrives as a prompt"),

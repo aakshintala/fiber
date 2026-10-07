@@ -14,6 +14,7 @@ mod drive;
 pub mod hub;
 mod pasted;
 mod prompt_history;
+mod reply;
 mod run_command;
 mod session;
 mod shell;
