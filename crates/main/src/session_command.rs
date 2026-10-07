@@ -175,6 +175,7 @@ pub(crate) fn new_session(
         one_turn,
         cancel,
         |inbox, cancel| {
+            let _ = std::thread::Builder::new().spawn(std::thread::park);
             finish(
                 // `Loop::start` writes `session_started`, which `fiber_started`
                 // follows (`docs/events.md`).
