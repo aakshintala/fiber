@@ -173,6 +173,61 @@ fn a_call_touching_the_credentials_is_refused_and_never_runs() {
     assert!(tool.ran().is_empty(), "a denied call never runs");
 }
 
+/// Runs one read-only call of `subject` declaring `paths` (relative to the
+/// workspace, which sits in Fiber home beside `credentials/`), and asserts
+/// the credential deny refused it before it ran.
+fn assert_refused_as_credentials(subject: &str, paths: &[&str]) {
+    let mut search = TestTool::declaring(
+        "shell",
+        "Found it.",
+        vec![Effect::Reads],
+        Some(paths.iter().map(|p| (*p).to_owned()).collect()),
+    );
+    search.subject = Some(subject.to_owned());
+    let tool = Arc::new(search);
+    let mut session = Session::with_tools(
+        vec![
+            calls_reply("", &[("shell", paris())]),
+            Scripted::text("Done."),
+        ],
+        None,
+        vec![tool.clone() as Arc<dyn Tool>],
+    );
+    let lines = go(&mut session);
+    let resolved = line(&lines, "permission_resolved");
+    assert_eq!(resolved.payload["decision"], "deny", "{subject}");
+    assert_eq!(
+        resolved.payload["decided_by"], "credential_deny",
+        "{subject}"
+    );
+    let done = completed(&lines)[0];
+    assert_eq!(done.payload["status"], "denied", "{subject}");
+    assert_eq!(done.payload["reason"], "credentials", "{subject}");
+    assert!(
+        !kinds(&lines).contains(&"tool_call_started"),
+        "a denied call never starts: {subject}"
+    );
+    assert!(tool.ran().is_empty(), "a denied call never runs: {subject}");
+}
+
+#[test]
+fn a_recursive_grep_of_fiber_home_is_refused() {
+    // `..` from the workspace is Fiber home.
+    assert_refused_as_credentials("grep -r '' ..", &[".."]);
+}
+
+#[test]
+fn an_rg_with_no_operand_above_fiber_home_is_refused() {
+    // With no operand the search declares its workdir, here the directory
+    // that holds Fiber home.
+    assert_refused_as_credentials("rg sk-", &["../.."]);
+}
+
+#[test]
+fn a_git_diff_of_fiber_home_is_refused() {
+    assert_refused_as_credentials("git diff .. .", &["..", "."]);
+}
+
 #[test]
 fn a_standing_deny_refuses_and_never_runs() {
     let tool = shell(Some("npm publish"));

@@ -11,7 +11,7 @@ use contract::rules::{Rule, RuleDecision, RulesError, StandingRules};
 use contract::shapes::{DeclaredEffects, Effect};
 use contract::tool::Effects;
 
-use super::{Verdict, answer, judge, matches};
+use super::{Verdict, answer, credential_why, judge, matches};
 
 fn declared(effects: Vec<Effect>, paths: Option<Vec<&str>>) -> DeclaredEffects {
     DeclaredEffects {
@@ -569,6 +569,59 @@ fn credential_paths_match_inside_the_directory_and_fail_closed() {
     ]))));
     assert!(!is_deny(deny(Some(Vec::new()))));
     assert!(!is_deny(deny(None)));
+}
+
+#[test]
+fn a_path_that_contains_the_credentials_touches_them() {
+    let (root, workspace, home, credentials) = dirs();
+    let why = |path: &str| {
+        let declared = declared(vec![Effect::Reads], Some(vec![path]));
+        credential_why(&declared, &workspace, &credentials)
+    };
+    let spelled = |path: &std::path::Path| path.display().to_string();
+    // Fiber home, the root, and the workspace's parent spelled `..`: a
+    // recursive read of any of them reads every stored key.
+    assert!(why(&spelled(&home)).is_some());
+    assert!(why("/").is_some());
+    assert!(why("..").is_some());
+    // A symlink whose target is Fiber home.
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(&home, workspace.join("home-link")).unwrap();
+        assert!(why("home-link").is_some());
+    }
+    // Containment is by whole components: a sibling sharing a string
+    // prefix, and a directory in Fiber home beside the credentials, do not
+    // contain them.
+    std::fs::create_dir_all(root.path().join("home-other")).unwrap();
+    std::fs::create_dir_all(home.join("cred")).unwrap();
+    std::fs::create_dir_all(home.join("data")).unwrap();
+    assert!(why(&spelled(&root.path().join("home-other"))).is_none());
+    assert!(why(&spelled(&home.join("cred"))).is_none());
+    assert!(why(&spelled(&home.join("data"))).is_none());
+}
+
+#[test]
+fn a_read_of_fiber_home_is_denied_before_the_read_fast_path() {
+    let (_root, workspace, home, credentials) = dirs();
+    let spelled = home.display().to_string();
+    let verdict = judge(
+        "read",
+        &call(vec![Effect::Reads], Some(vec![spelled.as_str()]), Some("")),
+        &empty_rules(),
+        &[],
+        &workspace,
+        &home,
+        &credentials,
+    );
+    assert!(matches!(
+        verdict,
+        Verdict::Deny {
+            by: DecidedBy::CredentialDeny,
+            reason: "credentials",
+            ..
+        }
+    ));
 }
 
 /// `target` relative to `base`, both existing, without leaving the tree.
