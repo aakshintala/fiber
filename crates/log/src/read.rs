@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use contract::Envelope;
 
+use crate::offsets::Offsets;
 use crate::{EVENTS, Error, io_at};
 
 /// Every durable line in the session directory `dir`, in order, up to the
@@ -105,7 +106,8 @@ pub(crate) fn complete_len(bytes: &[u8]) -> usize {
 // debt: 1,024 is picked, not measured. The queue grows only as lines
 // wait in it. The busy-session memory budget (`docs/performance.md`) and a
 // slow watcher's measured lag would set it.
-/// How many events a watcher's queue holds before it falls behind.
+/// How many events a watcher's queue holds before it falls behind, and how
+/// many durable lines one catch-up page reads.
 pub(crate) const CAPACITY: usize = 1024;
 
 /// One watcher's bounded queue, shared by the log that fills it and the
@@ -226,11 +228,16 @@ impl Injector {
 /// log by `seq`, and loses the ephemeral ones.
 pub struct Watcher {
     queue: Arc<Queue>,
-    dir: PathBuf,
+    /// The log's offset table, which a catch-up reads by `seq` from.
+    offsets: Arc<Offsets>,
     /// The `seq` of the next durable line this watcher has not yet returned.
     next: u64,
     /// Lines re-read from the log, not yet returned.
     backlog: VecDeque<Envelope>,
+    /// The log may hold durable lines from `next` on that the watcher has
+    /// not read: the last page read was full, or a catch-up is due. Read
+    /// before anything is taken from the queue.
+    more: bool,
 }
 
 /// What the watcher takes from its queue.
@@ -253,24 +260,27 @@ enum Wait {
 }
 
 impl Watcher {
-    pub(crate) fn new(queue: Arc<Queue>, dir: PathBuf, next: u64) -> Self {
+    pub(crate) fn new(queue: Arc<Queue>, offsets: Arc<Offsets>, next: u64) -> Self {
         Self {
             queue,
-            dir,
+            offsets,
             next,
             backlog: VecDeque::new(),
+            more: false,
         }
     }
 
-    /// A watcher whose first lines are `lines`, then whatever arrives after
-    /// it was registered. `next` starts at 0 so a line already queued is
-    /// skipped once `lines` has returned it.
-    pub(crate) fn starting(queue: Arc<Queue>, dir: PathBuf, lines: Vec<Envelope>) -> Self {
+    /// A watcher from `seq` 0 whose first lines are `first`, the log's first
+    /// page, then the pages after it, then whatever arrives after it was
+    /// registered. `next` starts at 0 so a line already queued is skipped
+    /// once a page has returned it.
+    pub(crate) fn starting(queue: Arc<Queue>, offsets: Arc<Offsets>, first: Vec<Envelope>) -> Self {
         Self {
             queue,
-            dir,
+            offsets,
             next: 0,
-            backlog: VecDeque::from(lines),
+            more: first.len() == CAPACITY,
+            backlog: VecDeque::from(first),
         }
     }
 
@@ -310,6 +320,10 @@ impl Watcher {
         loop {
             let line = match self.backlog.pop_front() {
                 Some(line) => line,
+                None if self.more => match self.page() {
+                    Ok(()) => continue,
+                    Err(e) => return Some(Err(e)),
+                },
                 None => {
                     let taken = match wait {
                         Wait::Forever => Some(self.take()),
@@ -321,16 +335,8 @@ impl Watcher {
                         None => return None,
                         Some(Taken::Line(line)) => line,
                         Some(Taken::CatchUp) => {
-                            // debt: re-reads the whole log to find the lines it
-                            // missed; a read from an offset by `seq` when logs grow
-                            // large enough for a lagging watcher to notice.
-                            match read(&self.dir) {
-                                Ok(lines) => {
-                                    self.backlog = lines.into();
-                                    continue;
-                                }
-                                Err(e) => return Some(Err(e)),
-                            }
+                            self.more = true;
+                            continue;
                         }
                         Some(Taken::End(End::Failed { session, cause })) => {
                             return Some(Err(Error::Poisoned { session, cause }));
@@ -349,6 +355,16 @@ impl Watcher {
                 None => return Some(Ok(Some(line))),
             }
         }
+    }
+
+    /// Reads the next page of durable lines the watcher has not returned,
+    /// from `next`. A full page means there may be more. An error leaves
+    /// `more` set, so the next call reads the same page again.
+    fn page(&mut self) -> Result<(), Error> {
+        let page = self.offsets.range(self.next, CAPACITY)?;
+        self.more = page.len() == CAPACITY;
+        self.backlog = page.into();
+        Ok(())
     }
 
     /// Waits for a queued line, for the need to catch up, or for the end,

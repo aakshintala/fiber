@@ -200,3 +200,69 @@ fn emit_sends_an_ephemeral_line_to_every_watcher_and_refuses_a_durable_one() {
     assert!(!file.contains("assistant_message_delta"));
     assert!(!file.contains("session_started"));
 }
+
+/// Receives from `rx` until `count` durable lines have arrived, and returns
+/// them.
+fn durable(rx: &Receiver<Option<Envelope>>, count: usize) -> Vec<Envelope> {
+    let mut got = Vec::new();
+    while got.len() < count {
+        let line = next(rx).unwrap();
+        if line.is_durable() {
+            got.push(line);
+        }
+    }
+    got
+}
+
+/// A log of `count` durable lines and what each append returned.
+fn steps(name: &str, count: usize) -> (common::TestDir, Log, Vec<Envelope>) {
+    let (tmp, log) = open(name);
+    let written = (0..count)
+        .map(|_| log.append(&empty("step_started"), None, None).unwrap())
+        .collect();
+    (tmp, log, written)
+}
+
+#[test]
+fn watch_all_pages_through_a_log_longer_than_two_pages() {
+    let (_tmp, log, written) = steps("watch-all-pages", 2 * CAPACITY + 50);
+    let rx = relay(log.watch_all().unwrap());
+    let live = log.append(&empty("step_started"), None, None).unwrap();
+    assert_eq!(durable(&rx, written.len()), written);
+    assert_eq!(next(&rx), Some(live));
+}
+
+#[test]
+fn watch_all_on_a_log_of_whole_pages_carries_on_live() {
+    let (_tmp, log, written) = steps("watch-all-whole", 2 * CAPACITY);
+    let rx = relay(log.watch_all().unwrap());
+    assert_eq!(durable(&rx, written.len()), written);
+    let live = log.append(&empty("step_started"), None, None).unwrap();
+    assert_eq!(next(&rx), Some(live));
+}
+
+#[test]
+fn watch_all_refuses_an_unparseable_line_in_its_first_page() {
+    let (tmp, log, _) = steps("watch-all-bad", 3);
+    corrupt(&tmp.session(&id("s_1")), 2);
+    let Err(err) = log.watch_all() else {
+        panic!("watched a log whose first page does not parse");
+    };
+    assert!(err.to_string().contains("line 3"), "{err}");
+}
+
+#[test]
+fn watch_all_meets_an_unparseable_line_in_a_later_page_when_it_gets_there() {
+    let (tmp, log, written) = steps("watch-all-bad-later", CAPACITY + 10);
+    corrupt(&tmp.session(&id("s_1")), CAPACITY + 1);
+    let mut watcher = log.watch_all().unwrap();
+    for line in &written[..CAPACITY] {
+        assert_eq!(watcher.try_recv().unwrap().as_ref(), Some(line));
+    }
+    // The second page holds the bad line, so none of it is returned.
+    let err = watcher.try_recv().unwrap_err();
+    assert!(
+        err.to_string().contains(&format!("line {}", CAPACITY + 2)),
+        "{err}"
+    );
+}

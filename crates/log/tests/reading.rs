@@ -404,22 +404,6 @@ fn a_writer_in_another_process_holds_the_session() {
     assert!(Log::open(tmp.path(), id("s_1"), fakes::clock::FakeClock::new()).is_ok());
 }
 
-/// Overwrites line `index` (from 0) of the session's log in place with bytes
-/// that do not parse, keeping its length, so every offset stays true.
-fn corrupt(dir: &std::path::Path, index: usize) {
-    use std::os::unix::fs::FileExt;
-    let path = dir.join("events.jsonl");
-    let whole = fs::read(&path).unwrap();
-    let mut start = 0;
-    for line in whole.split_inclusive(|b| *b == b'\n').take(index) {
-        start += line.len();
-    }
-    let len = whole[start..].iter().position(|b| *b == b'\n').unwrap();
-    let file = fs::OpenOptions::new().write(true).open(&path).unwrap();
-    file.write_all_at(&vec![b'x'; len], u64::try_from(start).unwrap())
-        .unwrap();
-}
-
 /// A log of `count` durable lines and what each append returned.
 fn steps(name: &str, count: usize) -> (TestDir, Log, Vec<Envelope>) {
     let tmp = TestDir::new(name);
@@ -516,4 +500,61 @@ fn a_range_parses_only_its_own_lines() {
     assert_eq!(err.code(), contract::ErrorCode::LogCorrupt);
     let err = log.range(1, 1).unwrap_err();
     assert!(err.to_string().contains("line 2"), "{err}");
+}
+
+/// Receives from `rx` until `count` durable lines have arrived, and returns
+/// them.
+fn durable(rx: &Receiver<Option<Envelope>>, count: usize) -> Vec<Envelope> {
+    let mut got = Vec::new();
+    while got.len() < count {
+        let line = next(rx).unwrap();
+        if line.is_durable() {
+            got.push(line);
+        }
+    }
+    got
+}
+
+#[test]
+fn a_watcher_that_falls_behind_by_more_than_two_pages_gets_every_line_once() {
+    let (_tmp, log, _) = steps("watch-pages", 3);
+    let watcher = log.watch();
+    let written: Vec<Envelope> = (0..2 * CAPACITY + 50)
+        .map(|_| {
+            log.append(&delta("x"), None, None).unwrap();
+            log.append(&empty("step_started"), None, None).unwrap()
+        })
+        .collect();
+    let rx = relay(watcher);
+    assert_eq!(durable(&rx, written.len()), written);
+    // Once caught up, lines arrive as they are written, and none came twice.
+    let live = log.append(&empty("step_started"), None, None).unwrap();
+    assert_eq!(durable(&rx, 1), [live]);
+}
+
+#[test]
+fn a_catch_up_page_ending_at_the_end_of_the_log_carries_on_live() {
+    let (_tmp, log, _) = steps("watch-page-end", 0);
+    let watcher = log.watch();
+    // The queue holds the first `CAPACITY` lines; the catch-up reads the
+    // rest as exactly one full page, and finds nothing after it.
+    let written: Vec<Envelope> = (0..2 * CAPACITY)
+        .map(|_| log.append(&empty("step_started"), None, None).unwrap())
+        .collect();
+    let rx = relay(watcher);
+    assert_eq!(durable(&rx, written.len()), written);
+    let live = log.append(&empty("step_started"), None, None).unwrap();
+    assert_eq!(next(&rx), Some(live));
+}
+
+#[test]
+fn a_catch_up_never_parses_a_line_before_the_watcher_subscribed() {
+    let (tmp, log, _) = steps("watch-bad-before", 3);
+    let watcher = log.watch();
+    corrupt(&tmp.session(&id("s_1")), 1);
+    let written: Vec<Envelope> = (0..CAPACITY + 100)
+        .map(|_| log.append(&empty("step_started"), None, None).unwrap())
+        .collect();
+    let rx = relay(watcher);
+    assert_eq!(durable(&rx, written.len()), written);
 }

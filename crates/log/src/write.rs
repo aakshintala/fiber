@@ -17,7 +17,7 @@ use contract::tool::Bound;
 use contract::{ActionId, Envelope, SCHEMA_VERSION, Seq, SessionId, TurnId};
 
 use crate::offsets::Offsets;
-use crate::read::{Queue, Watcher};
+use crate::read::{CAPACITY, Queue, Watcher};
 use crate::{ARTIFACTS, EVENTS, Error, LOCK, io_at, session_path};
 
 /// A session's log, open for writing. Only one exists per session at a time,
@@ -208,13 +208,15 @@ impl Log {
     /// stopped by a failed write, one that returns the failure at once.
     pub fn watch(&self) -> Watcher {
         let armed = self.arm(false);
-        Watcher::new(armed.queue, armed.dir, armed.next)
+        Watcher::new(armed.queue, armed.offsets, armed.next)
     }
 
     /// A watcher that receives every durable line from `seq` 0, then
     /// everything written after it was registered. The queue is registered
     /// before the log is read, so a line written between the two is queued
-    /// and also read; [`Watcher`] returns it once.
+    /// and also read; [`Watcher`] returns it once. The first page of lines
+    /// is read now, so a first page that does not parse refuses the watch;
+    /// later pages are read as the watcher reaches them.
     pub fn watch_all(&self) -> Result<Watcher, Error> {
         let armed = self.arm(true);
         self.finish(armed)
@@ -234,15 +236,15 @@ impl Log {
         inner.watchers.push(Arc::downgrade(&queue));
         Armed {
             queue,
-            dir: inner.dir.clone(),
+            offsets: Arc::clone(&inner.offsets),
             next: if from_start { 0 } else { inner.next },
         }
     }
 
-    /// Reads the log into the watcher `armed` registered.
+    /// Reads the log's first page into the watcher `armed` registered.
     fn finish(&self, armed: Armed) -> Result<Watcher, Error> {
-        let lines = crate::read(&armed.dir)?;
-        Ok(Watcher::starting(armed.queue, armed.dir, lines))
+        let first = armed.offsets.range(0, CAPACITY)?;
+        Ok(Watcher::starting(armed.queue, armed.offsets, first))
     }
 
     /// `full` cut to `bound`, with a notice of how many bytes were cut and
@@ -344,7 +346,7 @@ impl Emit for Log {
 /// A queue registered on a log, before [`Log::watch_all`] reads the file.
 struct Armed {
     queue: Arc<Queue>,
-    dir: PathBuf,
+    offsets: Arc<Offsets>,
     next: u64,
 }
 
