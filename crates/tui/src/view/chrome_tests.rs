@@ -4,6 +4,7 @@
 use super::super::{cursor, render, text};
 use crate::app::App;
 use crate::home::Launch;
+use crate::layout::Layout;
 use crate::link::Line;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
@@ -118,4 +119,84 @@ fn header_with_a_long_name_is_cut() {
         .collect();
     assert_eq!(header.trim_end().chars().count(), 126);
     insta::assert_snapshot!("header_with_a_long_name_is_cut", text(&buf));
+}
+
+#[test]
+fn floor_centres_with_division() {
+    // `(area - text) / 2` centres; `% 2` would leave 0 or 1 instead.
+    for (width, height, expected_x) in [(10u16, 5u16, 4u16), (9u16, 4u16, 3u16)] {
+        let area = Rect::new(0, 0, width, height);
+        let mut buf = Buffer::empty(area);
+        super::floor("hi", area, &mut buf);
+        let expected_y = height / 2;
+        let symbol =
+            |x: u16, y: u16, buf: &Buffer| buf.cell((x, y)).map(|cell| cell.symbol().to_owned());
+        assert_eq!(symbol(expected_x, expected_y, &buf), Some("h".to_owned()));
+        assert_eq!(
+            symbol(expected_x + 1, expected_y, &buf),
+            Some("i".to_owned())
+        );
+        assert_eq!(symbol(0, expected_y, &buf), Some(" ".to_owned()));
+    }
+}
+
+#[test]
+fn header_draws_only_when_column_has_rows() {
+    let mut app = app(80, 10, false);
+    named(&mut app, "fix the parser");
+    let first: String = app.header().chars().take(1).collect();
+    assert!(!first.is_empty());
+    let area = Rect::new(0, 0, 30, 10);
+    let one = Layout {
+        rail: None,
+        grip: None,
+        column: Rect::new(5, 3, 20, 1),
+        panel: None,
+        narrow: false,
+    };
+    let mut buf = Buffer::empty(area);
+    super::draw(&app, &one, &mut buf);
+    assert_eq!(
+        buf.cell((5, 3)).map(|cell| cell.symbol().to_owned()),
+        Some(first)
+    );
+    let empty = Layout {
+        rail: None,
+        grip: None,
+        column: Rect::new(5, 3, 20, 0),
+        panel: None,
+        narrow: false,
+    };
+    let mut buf = Buffer::empty(area);
+    super::draw(&app, &empty, &mut buf);
+    assert_eq!(
+        buf.cell((5, 3)).map(|cell| cell.symbol().to_owned()),
+        Some(" ".to_owned())
+    );
+}
+
+#[test]
+fn grip_needs_both_bounds() {
+    // A one-row region: the mid window reaches past it on both sides.
+    // `||` would draw outside while `&&` clips.
+    let region = Rect::new(10, 5, 20, 1);
+    let mut buf = Buffer::empty(Rect::new(0, 0, 30, 10));
+    super::grip(&mut buf, 10, region);
+    let symbol = |y: u16, buf: &Buffer| buf.cell((10, y)).map(|cell| cell.symbol().to_owned());
+    assert_eq!(symbol(5, &buf), Some("⋮".to_owned()));
+    assert_eq!(symbol(4, &buf), Some(" ".to_owned()));
+    assert_eq!(symbol(6, &buf), Some(" ".to_owned()));
+}
+
+#[test]
+fn grip_excludes_the_bottom_edge() {
+    // The window reaches the region's bottom edge, which `<` excludes
+    // while `<=` would draw.
+    let region = Rect::new(10, 5, 20, 2);
+    let mut buf = Buffer::empty(Rect::new(0, 0, 30, 10));
+    super::grip(&mut buf, 10, region);
+    let symbol = |y: u16, buf: &Buffer| buf.cell((10, y)).map(|cell| cell.symbol().to_owned());
+    assert_eq!(symbol(5, &buf), Some("⋮".to_owned()));
+    assert_eq!(symbol(6, &buf), Some("⋮".to_owned()));
+    assert_eq!(symbol(7, &buf), Some(" ".to_owned()));
 }
