@@ -972,7 +972,7 @@ dependencies = [
  "serde",
  "serde_json",
  "signal-hook",
- "thiserror",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
