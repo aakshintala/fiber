@@ -16,9 +16,7 @@ use contract::events::Notice;
 use serde_json::Value;
 
 use crate::{API, Error, LuaProvider};
-
-/// The thinking levels a typed model may end in, after a `:`.
-const THINKING: [&str; 7] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+use contract::ThinkingLevel;
 
 /// Every provider the installed extensions register, by name.
 #[derive(Clone, Default)]
@@ -51,7 +49,7 @@ pub struct Model<'a> {
     /// The model's data.
     pub model: &'a ModelData,
     /// The thinking level a `:<level>` suffix asked for.
-    pub thinking: Option<&'static str>,
+    pub thinking: Option<ThinkingLevel>,
 }
 
 impl Model<'_> {
@@ -118,6 +116,20 @@ pub fn leave_out_invalid(
             });
             invalid = true;
         }
+        if let Some(default) = model.thinking_default
+            && !model.thinking_levels.contains(&default)
+        {
+            notices.push(Notice {
+                code: ErrorCode::ModelInvalid,
+                message: format!(
+                    "The model `{provider}/{}` names `{default}` as its `thinking_default`, \
+                     which is not among its `thinking_levels`.",
+                    model.id
+                ),
+                extension: Some(extension.to_owned()),
+            });
+            invalid = true;
+        }
         if !invalid {
             kept.push(model);
         }
@@ -158,15 +170,10 @@ impl Providers {
     /// A typed model reference without any `:<level>` suffix, and the level
     /// the suffix named, if any: the single strip of a `:<level>` suffix both
     /// `resolve` and the `config set` model check use.
-    pub fn split_thinking(typed: &str) -> (&str, Option<&'static str>) {
+    pub fn split_thinking(typed: &str) -> (&str, Option<ThinkingLevel>) {
         typed
             .rsplit_once(':')
-            .and_then(|(rest, level)| {
-                THINKING
-                    .iter()
-                    .find(|known| **known == level)
-                    .map(|known| (rest, Some(*known)))
-            })
+            .and_then(|(rest, level)| level.parse::<ThinkingLevel>().ok().map(|l| (rest, Some(l))))
             .unwrap_or((typed, None))
     }
 
@@ -416,7 +423,7 @@ impl Providers {
         })
     }
 
-    fn exact(&self, text: &str, thinking: Option<&'static str>) -> Option<Model<'_>> {
+    fn exact(&self, text: &str, thinking: Option<ThinkingLevel>) -> Option<Model<'_>> {
         let (name, id) = text.split_once('/')?;
         let provider = self.by_name.get(name)?;
         let model = provider.models.iter().find(|m| m.id == id)?;

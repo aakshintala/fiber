@@ -709,6 +709,24 @@ impl Session {
         Self::with_tools(script, during, Vec::new())
     }
 
+    /// As [`Session::new`], with the session's one reasoning setting.
+    pub(crate) fn with_thinking(
+        script: Vec<Scripted>,
+        thinking: Option<contract::ThinkingLevel>,
+    ) -> Self {
+        let scripted = Arc::new(ScriptedProvider::new(script));
+        Self::assemble(
+            Arc::clone(&scripted) as Arc<dyn Provider>,
+            Vec::new(),
+            Vec::new(),
+            unpriced(),
+            scripted,
+            Arc::new(TurnCancel::default()),
+            Vec::new(),
+            thinking,
+        )
+    }
+
     /// As [`Session::new`], with `tools` registered.
     pub(crate) fn with_tools(
         script: Vec<Scripted>,
@@ -754,6 +772,7 @@ impl Session {
             (FakeClock::new(), 0),
             Vec::new(),
             lifetime,
+            None,
         )
     }
 
@@ -786,6 +805,7 @@ impl Session {
             scripted,
             Arc::new(TurnCancel::default()),
             sections,
+            None,
         )
     }
 
@@ -829,6 +849,7 @@ impl Session {
             scripted,
             cancel,
             Vec::new(),
+            None,
         )
     }
 
@@ -855,6 +876,7 @@ impl Session {
             scripted,
             cancel,
             Vec::new(),
+            None,
         )
     }
 
@@ -873,10 +895,15 @@ impl Session {
             Arc::new(ScriptedProvider::new(Vec::new())),
             Arc::new(TurnCancel::default()),
             Vec::new(),
+            None,
         );
         (session, blocking)
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the one assembly takes each session input; tests pass thinking through it"
+    )]
     fn assemble(
         provider: Arc<dyn Provider>,
         during: Vec<Delivery>,
@@ -885,6 +912,7 @@ impl Session {
         scripted: Arc<ScriptedProvider>,
         cancel: Arc<TurnCancel>,
         sections: Vec<(String, Vec<PathBuf>, Option<u64>)>,
+        thinking: Option<contract::ThinkingLevel>,
     ) -> Self {
         Self::assemble_with(
             provider,
@@ -896,6 +924,7 @@ impl Session {
             (FakeClock::new(), 0),
             sections,
             CacheLifetime::OneHour,
+            thinking,
         )
     }
 
@@ -921,6 +950,7 @@ impl Session {
             (clock, 0),
             Vec::new(),
             CacheLifetime::OneHour,
+            None,
         )
     }
 
@@ -938,6 +968,7 @@ impl Session {
             (FakeClock::new(), window),
             Vec::new(),
             CacheLifetime::OneHour,
+            None,
         )
     }
 
@@ -955,6 +986,7 @@ impl Session {
         (clock, window): (Arc<FakeClock>, u64),
         sections: Vec<(String, Vec<PathBuf>, Option<u64>)>,
         cache_lifetime: CacheLifetime,
+        thinking: Option<contract::ThinkingLevel>,
     ) -> Self {
         let home = TempDir::new();
         let workspace = home.0.join("workspace");
@@ -989,6 +1021,7 @@ impl Session {
                 prompt.context_window = (window != 0).then_some(window);
                 prompt.extension_sections = sections;
                 prompt.cache_lifetime = cache_lifetime;
+                prompt.thinking = thinking;
                 prompt
             },
             rx,

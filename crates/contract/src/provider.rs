@@ -12,7 +12,7 @@ use crate::events::{
     ToolCallCompleted, ToolCallRequested,
 };
 use crate::shapes::{Failure, Tokens};
-use crate::{ActionId, GenerationId};
+use crate::{ActionId, GenerationId, ThinkingLevel};
 
 /// One model, reached through its protocol. A provider extension's model
 /// becomes one of these.
@@ -57,9 +57,10 @@ pub struct ModelRequest {
     /// The tools the model may call, in any order: the protocol sorts them by
     /// name.
     pub tools: Vec<ToolDefinition>,
-    /// The reasoning effort, where the model takes one.
+    /// The session's one reasoning setting (`docs/model-routing.md`,
+    /// "Thinking").
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub effort: Option<String>,
+    pub thinking: Option<ThinkingLevel>,
     /// The tool choice, as `preamble_built` records it. It does not change
     /// during a session (`docs/prompt-cache.md`, "Tools").
     pub tool_choice: String,

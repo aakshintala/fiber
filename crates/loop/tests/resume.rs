@@ -1435,7 +1435,6 @@ fn preamble(credential: Option<&str>) -> Event {
         model: MODEL.into(),
         context_window: 0,
         trigger_at: None,
-        effort: None,
         thinking: None,
         tool_choice: "auto".into(),
         cache_lifetime: contract::events::CacheLifetime::OneHour,
