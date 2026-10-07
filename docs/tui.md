@@ -1033,9 +1033,13 @@ Also measured in Fiber, on the same machine:
   session, one frame each. The slowest frame took 1.9 ms, and 1.1 ms on the
   larger session.
 
-Not yet measured:
-
-- Linux
+On Linux x86_64, in a 4-core shared Claude cloud container (16 GiB, so every
+timing is an upper bound), the same session gave: the opening pass and first
+frame 275 ms, the slowest frame that loaded pages 1.3 ms, the slowest jump
+frame 1.9 ms, counting every page again at a new width 22 ms, and the slowest
+append frame 1.1 ms with at most 5 pages holding cards. The counts match
+macOS: 2,915 rows in 120 pages. Peak resident memory on Linux: measured by
+[#1172](https://github.com/aakshintala/fiber/issues/1172).
 
 ## Extension seams
 
