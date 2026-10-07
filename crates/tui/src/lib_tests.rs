@@ -9,7 +9,8 @@ use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
@@ -466,7 +467,7 @@ fn restore_puts_back_what_setup_changed() {
         read_exact(&pair.main, start.len(), "the start bytes"),
         start.as_bytes()
     );
-    super::restore();
+    crate::restore();
     let end = "\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[23;2t\x1b[?1049l\x1b[?25h";
     assert_eq!(
         read_exact(&pair.main, end.len(), "the restore bytes"),
@@ -612,7 +613,7 @@ fn run_shows_a_failed_connect_and_still_quits_restored() {
         &rustix::termios::tcgetattr(&pair.slave).unwrap_or_else(|err| panic!("attr: {err}"))
     ));
     // A second restore writes nothing: the next bytes are the test's own.
-    super::restore();
+    crate::restore();
     (&pair.slave)
         .write_all(b"mark")
         .unwrap_or_else(|err| panic!("write: {err}"));
@@ -1458,4 +1459,92 @@ fn run_writes_the_title_once_until_it_changes() {
     ]
     .concat();
     assert_eq!(written, expected);
+}
+
+fn owned(paths: &[&str]) -> Vec<String> {
+    paths.iter().map(|path| (*path).to_owned()).collect()
+}
+
+/// Runs git with `args` in `dir`, which must succeed.
+fn git(dir: &Path, args: &[&str]) {
+    let dir = dir.to_path_buf();
+    let args: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
+    let what = format!("git {}", args.join(" "));
+    let status = within(&what, move || {
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(&dir)
+            .args(&args)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+    })
+    .unwrap_or_else(|err| panic!("{what}: {err}"));
+    assert!(status.success(), "{what}: {status}");
+}
+
+/// A repository with `a.txt` and `sub/b.rs` tracked and `c.txt` not.
+fn repository() -> fakes::TempDir {
+    let dir = fakes::TempDir::new("tui-files");
+    let root = dir.path();
+    std::fs::create_dir(root.join("sub")).unwrap_or_else(|err| panic!("mkdir: {err}"));
+    for file in ["a.txt", "sub/b.rs", "c.txt"] {
+        std::fs::write(root.join(file), "x").unwrap_or_else(|err| panic!("{file}: {err}"));
+    }
+    git(root, &["init", "-q"]);
+    git(root, &["add", "a.txt", "sub/b.rs"]);
+    dir
+}
+
+/// The next result the worker posts, within [`DEADLINE`].
+fn next_result(rx: &Receiver<Input>, what: &str) -> (u64, Result<Vec<String>, String>) {
+    match rx.recv_timeout(DEADLINE) {
+        Ok(Input::Files { generation, result }) => (generation, result),
+        Ok(_) => panic!("{what}: not a file search result"),
+        Err(err) => panic!("waited {DEADLINE:?} for {what}: {err}"),
+    }
+}
+
+#[test]
+fn the_loop_lists_searches_and_drops_the_worker_on_close() {
+    let dir = repository();
+    let mut app = App::new(dir.path().to_path_buf());
+    app.set_size(60, 12);
+    let (out, rx) = mpsc::channel();
+    let mut lp = Loop {
+        app,
+        parser: crate::keys::Parser::default(),
+        screen: Screen::new(TestBackend::new(60, 12), 60, 12)
+            .unwrap_or_else(|err| panic!("screen: {err}")),
+        hub: None,
+        tty: None,
+        on_attach: Box::new(|_| {}),
+        clock: fakes::clock::FakeClock::new(),
+        wakeups: 0,
+        files_out: Some(out),
+        search: None,
+        stash: std::collections::VecDeque::new(),
+        reader: None,
+        pointer: crate::mouse::Pointer::default(),
+        hover: true,
+        var: Box::new(|_| None),
+        copy_command: None,
+        title: crate::osc::Title::default(),
+    };
+    // No hub: a frame fetches no history, so nothing arrives here.
+    let (_hub, idle) = mpsc::channel();
+    assert_eq!(lp.step(Input::Bytes(b"@".to_vec()), &idle), None);
+    assert!(lp.search.is_some());
+    let (generation, result) = next_result(&rx, "the listing's first search");
+    assert_eq!(generation, lp.app.generation());
+    assert_eq!(lp.step(Input::Files { generation, result }, &idle), None);
+    let shown = lp.app.completions().map(|c| c.lines).unwrap_or_default();
+    assert_eq!(shown, owned(&["a.txt", "sub/b.rs"]));
+    assert_eq!(lp.step(Input::Bytes(b"b".to_vec()), &idle), None);
+    let (generation, result) = next_result(&rx, "the search for b");
+    assert_eq!(result, Ok(owned(&["sub/b.rs"])));
+    assert_eq!(lp.step(Input::Files { generation, result }, &idle), None);
+    assert_eq!(lp.step(Input::Bytes(b"\t".to_vec()), &idle), None);
+    assert_eq!(lp.app.draft(), "sub/b.rs ");
+    assert!(lp.search.is_none());
 }

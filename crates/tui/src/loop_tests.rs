@@ -458,7 +458,7 @@ fn the_paging_jig_opens_the_ended_turns_and_appends_the_running_one() {
         .iter()
         .map(|line| serde_json::to_string(line).unwrap_or_default() + "\n")
         .collect();
-    let report = super::measure_paging(&events, 60, 12, fakes::clock::FakeClock::new());
+    let report = crate::measure_paging(&events, 60, 12, fakes::clock::FakeClock::new());
     let report = report.unwrap_or_else(|error| panic!("{error}"));
     assert!(
         report.starts_with(&format!("lines: {}\n", next + 1)),
@@ -472,7 +472,7 @@ fn the_paging_jig_opens_the_ended_turns_and_appends_the_running_one() {
     );
     assert!(report.contains(", of 6 paging up"), "{report}");
     // An unreadable line names its number.
-    let error = super::measure_paging("{\n", 60, 12, fakes::clock::FakeClock::new());
+    let error = crate::measure_paging("{\n", 60, 12, fakes::clock::FakeClock::new());
     assert!(error.is_err_and(|error| error.starts_with("line 1:")));
 }
 
@@ -486,7 +486,7 @@ fn events(lines: &[Envelope]) -> String {
 
 #[test]
 fn the_paging_report_counts_every_loaded_line() {
-    let report = super::measure_paging(&events(&session()), 60, 12, fakes::clock::FakeClock::new())
+    let report = crate::measure_paging(&events(&session()), 60, 12, fakes::clock::FakeClock::new())
         .unwrap_or_else(|error| panic!("{error}"));
     // Every page loaded while paging up keeps its first line: dropping one
     // draws fewer rows.
@@ -538,7 +538,7 @@ impl contract::clock::Clock for TickClock {
 #[test]
 fn the_paging_report_prints_milliseconds() {
     let origin = fakes::clock::FakeClock::new().origin();
-    let report = super::measure_paging(&events(&session()), 60, 12, TickClock::clock(origin))
+    let report = crate::measure_paging(&events(&session()), 60, 12, TickClock::clock(origin))
         .unwrap_or_else(|error| panic!("{error}"));
     let line = report
         .lines()
@@ -559,7 +559,7 @@ fn paging_up_ends_at_the_top() {
     let events = events(&session());
     let (done, finished) = mpsc::channel();
     std::thread::spawn(move || {
-        done.send(super::measure_paging(
+        done.send(crate::measure_paging(
             &events,
             60,
             12,
@@ -577,7 +577,7 @@ fn paging_up_ends_at_the_top() {
 
 #[test]
 fn the_paging_report_names_the_furthest_jump_row() {
-    let report = super::measure_paging(&events(&session()), 60, 12, fakes::clock::FakeClock::new())
+    let report = crate::measure_paging(&events(&session()), 60, 12, fakes::clock::FakeClock::new())
         .unwrap_or_else(|error| panic!("{error}"));
     let total: usize = report
         .lines()
