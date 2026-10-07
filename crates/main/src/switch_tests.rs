@@ -461,6 +461,69 @@ fn a_literal_only_an_unloaded_provider_names_is_the_credential_sentence() {
 }
 
 #[test]
+fn an_unconfigured_literal_id_beats_stripped_id_ambiguity() {
+    let fixture = fixture("fiber-switch-unconfigured-literal");
+    let lit = fixture.home.join("extensions/lit");
+    std::fs::create_dir_all(lit.join("providers")).unwrap();
+    std::fs::write(
+        lit.join("extension.json"),
+        json!({"name": "lit", "version": "v0.0.0", "fiber": "0.0.0", "api": 1})
+            .to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        lit.join("providers/lit.json"),
+        json!({
+            "name": "lit",
+            "placeholders": {"workspace": {}},
+            "models": [
+                {"id": "n", "protocol": "openai-responses",
+                 "base_url": "http://127.0.0.1:9/v1", "context_window": 1000},
+                {"id": "n:high", "protocol": "openai-responses",
+                 "base_url": "https://{workspace}/v1", "context_window": 1000},
+            ],
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let config = config(&fixture, &[]);
+    let (providers, _) = Providers::load(&fixture.home).unwrap();
+    let credentials: Credentials = [("fake", keyed("default")), ("lit", keyed("default"))]
+        .into_iter()
+        .map(|(name, entry)| (name.to_owned(), entry))
+        .collect();
+    let naming = vec![
+        ("fake".to_owned(), "n".to_owned()),
+        ("lit".to_owned(), "n".to_owned()),
+        ("lit".to_owned(), "n:high".to_owned()),
+    ];
+    let switching = Switching::new(
+        providers.clone(),
+        &[],
+        naming.clone(),
+        config.clone(),
+        credentials.clone(),
+    )
+    .unwrap();
+    let rejection = rejected(&switching, &args("n:high"), None);
+    assert_eq!(rejection.code, ErrorCode::InvalidArguments);
+    assert_eq!(
+        rejection.message,
+        "The model `lit/n:high` needs the setting `workspace` for its base URL, which has no value."
+    );
+
+    // The exact unconfigured literal also wins when it is the only full-ID
+    // naming match; no stripped-id entry is needed to preserve its error.
+    let naming = vec![("lit".to_owned(), "n:high".to_owned())];
+    let switching = Switching::new(providers, &[], naming, config, credentials).unwrap();
+    let rejection = rejected(&switching, &args("n:high"), None);
+    assert_eq!(
+        rejection.message,
+        "The model `lit/n:high` needs the setting `workspace` for its base URL, which has no value."
+    );
+}
+
+#[test]
 fn an_unconfigured_model_counts_toward_ambiguity() {
     let fixture = fixture("fiber-switch-unconfigured");
     let acme = fixture.home.join("extensions/acme");
