@@ -2,8 +2,8 @@
 //! `recent` pages, keys, glyphs and lines.
 
 use super::{
-    Left, Level, Row, Sessions, State, Subs, delete_line, dependents, from_status, line,
-    opening, quit_line, recent_rows,
+    Left, Level, Row, Sessions, State, Subs, delete_line, dependents, from_status, line, opening,
+    quit_line, recent_rows,
 };
 use contract::{Envelope, SessionId};
 use serde_json::{Value, json};
