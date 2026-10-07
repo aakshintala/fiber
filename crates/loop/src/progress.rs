@@ -6,11 +6,14 @@
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
+use contract::ActionId;
 use contract::clock::{Clock, Wake};
 use contract::emit::Emit;
 use contract::events::{Event, Progress};
-use contract::tool::Output;
+use contract::tool::{Answered, Ask, Asking, Output};
 use serde_json::Value;
+
+use crate::asking::AskSlot;
 
 /// At most one delta every 100 ms (`docs/tools.md`, "Progress").
 const MIN_INTERVAL: Duration = Duration::from_millis(100);
@@ -97,14 +100,34 @@ impl Pacer {
 }
 
 /// Wakes the loop thread waiting in `run_calls`: one flag under one mutex,
-/// set by every emit, every call returning and every clock move, and
-/// checked across the wait, so a bump between the check and the wait is
-/// seen (`docs/tools.md`, "Progress"). The flag only ever asks
-/// for another pass, so clearing it on waking loses nothing.
-#[derive(Debug, Default)]
+/// set by every emit, every call returning, every ask and every clock
+/// move, and checked across the wait, so a bump between the check and the
+/// wait is seen (`docs/tools.md`, "Progress"). The flag only ever asks
+/// for another pass, so clearing it on waking loses nothing. While a call's
+/// interaction is pending the step waits on the inbox instead, and every
+/// bump is also forwarded to the inbox's wake (`docs/architecture.md`,
+/// "One inbox").
+#[derive(Default)]
 pub(crate) struct SharedWake {
-    inner: Mutex<bool>,
+    inner: Mutex<Flag>,
     cv: Condvar,
+}
+
+/// The wake's flag and where its bumps are forwarded, read under one lock.
+#[derive(Default)]
+struct Flag {
+    set: bool,
+    to: Option<Arc<dyn Wake>>,
+}
+
+impl std::fmt::Debug for SharedWake {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let flag = lock(&self.inner);
+        f.debug_struct("SharedWake")
+            .field("set", &flag.set)
+            .field("forwarding", &flag.to.is_some())
+            .finish()
+    }
 }
 
 impl SharedWake {
@@ -125,8 +148,8 @@ impl SharedWake {
             let Some(mut guard) = slot.take() else {
                 return;
             };
-            if *guard {
-                *guard = false;
+            if guard.set {
+                guard.set = false;
                 slot = Some(guard);
                 return;
             }
@@ -139,15 +162,43 @@ impl SharedWake {
                 }
                 None => self.cv.wait(guard).unwrap_or_else(PoisonError::into_inner),
             };
-            *guard = false;
+            guard.set = false;
             slot = Some(guard);
         });
     }
 
-    /// Sets the flag and wakes whoever parks on it.
+    /// Sets or clears the wake every later bump also fires. Setting it
+    /// passes on, once, a bump that landed before, clearing the flag;
+    /// clearing it keeps the flag, so a bump that landed while forwarding
+    /// ends the next park at once. Each wake runs after the lock is
+    /// released.
+    pub(crate) fn forward(&self, to: Option<Arc<dyn Wake>>) {
+        let mut flag = lock(&self.inner);
+        let pass = match &to {
+            Some(target) if flag.set => {
+                flag.set = false;
+                Some(Arc::clone(target))
+            }
+            Some(_) | None => None,
+        };
+        flag.to = to;
+        drop(flag);
+        if let Some(target) = pass {
+            target.wake();
+        }
+    }
+
+    /// Sets the flag, wakes whoever parks on it, and fires the forward
+    /// target, if any, after the lock is released.
     fn bump(&self) {
-        *lock(&self.inner) = true;
+        let mut flag = lock(&self.inner);
+        flag.set = true;
+        let to = flag.to.clone();
+        drop(flag);
         self.cv.notify_all();
+        if let Some(target) = to {
+            target.wake();
+        }
     }
 }
 
@@ -170,23 +221,35 @@ struct StreamInner {
 /// `tool_call_delta` into the call's pacer and wakes the loop thread; every
 /// other event is ignored, since it would not belong under the call's
 /// action. The loop thread takes what is due, flushes what is held when the
-/// call returns, and takes the returned output, each under one lock.
+/// call returns, and takes the returned output, each under one lock. Its
+/// [`Ask`] raises the call's interaction for the loop thread to write.
 #[derive(Debug)]
 pub(crate) struct Stream {
     inner: Mutex<StreamInner>,
     wake: Arc<SharedWake>,
+    /// The call's `action_id`.
+    action: ActionId,
+    /// The call's interaction, while it asks.
+    asking: AskSlot,
 }
 
 impl Stream {
-    /// A stream waking `wake`.
-    pub(crate) fn new(wake: Arc<SharedWake>) -> Self {
+    /// The stream of the call `action`, waking `wake`.
+    pub(crate) fn new(wake: Arc<SharedWake>, action: ActionId) -> Self {
         Self {
             inner: Mutex::new(StreamInner {
                 pacer: Pacer::default(),
                 done: None,
             }),
             wake,
+            action,
+            asking: AskSlot::default(),
         }
+    }
+
+    /// The call's interaction slot.
+    pub(crate) fn asking(&self) -> &AskSlot {
+        &self.asking
     }
 
     /// The delta due at `now`, if any, taking it.
@@ -238,6 +301,16 @@ impl Emit for Stream {
             lock(&self.inner).pacer.hold(delta);
         }
         self.wake.bump();
+    }
+}
+
+impl Ask for Stream {
+    fn action(&self) -> ActionId {
+        self.action.clone()
+    }
+
+    fn ask(&self, asking: Asking) -> Answered {
+        self.asking.ask(asking, self.wake.as_ref())
     }
 }
 

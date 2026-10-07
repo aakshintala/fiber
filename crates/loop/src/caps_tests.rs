@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 use contract::emit::Emit;
 use contract::provider::ToolDefinition;
 use contract::shapes::{ContentPart, DeclaredEffects};
-use contract::tool::{Bound, Cancel, Effects, EffectsError, Output, Tool};
+use contract::tool::{Answered, Ask, Asking, Bound, Cancel, Effects, EffectsError, Output, Tool};
 use serde_json::{Map, Value, json};
 
 use super::{ResultCaps, capped};
@@ -81,6 +81,20 @@ impl Tool for Fixed {
         _emit: &dyn Emit,
     ) -> Output {
         self.output.clone()
+    }
+
+    /// Answers with the asker's call id, so a test sees which asker came.
+    fn run_asking(
+        &self,
+        _arguments: &Map<String, Value>,
+        _cancel: &dyn Cancel,
+        _emit: &dyn Emit,
+        ask: &dyn Ask,
+    ) -> Output {
+        Output {
+            details: Some(json!(ask.action().0)),
+            ..Output::default()
+        }
     }
 
     fn bound(&self) -> Bound {
@@ -287,4 +301,31 @@ fn a_capped_tool_answers_as_the_tool_it_wraps() {
         wrapped.run(&arguments, &cancel, &emit),
         inner.run(&arguments, &cancel, &emit)
     );
+}
+
+/// An asker that names the call `a_9` and is never asked.
+struct Named;
+
+impl Ask for Named {
+    fn action(&self) -> contract::ActionId {
+        contract::ActionId("a_9".into())
+    }
+
+    fn ask(&self, _asking: Asking) -> Answered {
+        Answered::NoAnswer
+    }
+}
+
+#[test]
+fn a_capped_tool_runs_the_wrapped_tool_with_the_same_asker() {
+    let inner = Arc::new(Fixed::named("cat"));
+    let tools = vec![("builtin".to_owned(), inner as Arc<dyn Tool>)];
+    let out = capped(tools, &caps(&[("cat", 50)]));
+    let ran = out[0].1.run_asking(
+        &Map::new(),
+        &fakes::CancelToken::new(),
+        &fakes::Recorder::default(),
+        &Named,
+    );
+    assert_eq!(ran.details, Some(json!("a_9")));
 }

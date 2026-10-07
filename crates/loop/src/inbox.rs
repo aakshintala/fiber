@@ -550,7 +550,7 @@ impl Loop {
     }
 
     /// `delivery` while a turn is in flight and nothing is pending.
-    fn admit_running(&mut self, delivery: Delivery, turn: &TurnId) -> Result<(), Error> {
+    pub(crate) fn admit_running(&mut self, delivery: Delivery, turn: &TurnId) -> Result<(), Error> {
         match delivery {
             Delivery::Prompt(_, ack) => {
                 if self.closing {

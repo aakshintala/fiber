@@ -466,6 +466,7 @@ impl Loop {
             workspace_label: permissions.workspace,
             answerable: true,
             repository: crate::offer::State::resumed(offers),
+            inbox_wake: None,
             opened,
             changes,
             cut_off: false,
