@@ -4,6 +4,7 @@
 //! `credentials/<name>/`. Configuration itself never holds one; it holds only
 //! where a provider's credential comes from.
 
+use std::fmt;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -18,7 +19,7 @@ use crate::write::write_atomic;
 
 /// Where a provider's credential comes from, as
 /// `providers."<name>".credentials."<label>"` sets it. Only the global and per-project layers may set it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum CredentialSource {
     /// An environment variable holding the key.
@@ -27,6 +28,23 @@ pub enum CredentialSource {
     File(PathBuf),
     /// A program and its arguments that print the key.
     Command(Vec<String>),
+}
+
+// A command's arguments can hold a key, so only the program prints
+// (`docs/code-quality.md`, "Errors").
+impl fmt::Debug for CredentialSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Env(name) => f.debug_tuple("Env").field(name).finish(),
+            Self::File(path) => f.debug_tuple("File").field(path).finish(),
+            Self::Command(argv) => {
+                let program = argv.first().map(String::as_str);
+                let redacted = argv.iter().skip(1).map(|_| "redacted");
+                let argv: Vec<&str> = program.into_iter().chain(redacted).collect();
+                f.debug_tuple("Command").field(&argv).finish()
+            }
+        }
+    }
 }
 
 /// `credentials/<name>` in Fiber home, refusing a name that is not one file

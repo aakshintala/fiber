@@ -81,7 +81,8 @@ impl Endpoint {
 }
 
 // `Arc<dyn Signer>` has no `Debug`: a debug print names the field without
-// reaching into it.
+// reaching into it. A header value can hold a key, so only names print
+// (`docs/code-quality.md`, "Errors").
 impl std::fmt::Debug for Endpoint {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Endpoint")
@@ -89,7 +90,14 @@ impl std::fmt::Debug for Endpoint {
             .field("model", &self.model)
             .field("base_url", &self.base_url)
             .field("key", &self.key)
-            .field("headers", &self.headers)
+            .field(
+                "headers",
+                &self
+                    .headers
+                    .iter()
+                    .map(|(name, _)| (name, "redacted"))
+                    .collect::<Vec<_>>(),
+            )
             .field("signer", &self.signer.as_ref().map(|_| "Signer"))
             .field("compat", &self.compat)
             .field("max_output_tokens", &self.max_output_tokens)
