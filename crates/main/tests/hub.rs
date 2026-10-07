@@ -17,11 +17,10 @@ mod support;
 use std::fs;
 
 use std::path::Path;
-use std::process::Command;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 
-use fakes::{ProviderServer, Watchdog};
+use fakes::ProviderServer;
 use serde_json::{Value, json};
 use support::*;
 

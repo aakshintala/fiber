@@ -1,5 +1,6 @@
 //! One client connection: `hub_hello` first, hub-command dispatch for
-//! `start` and `status`, and the relay to session sockets.
+//! `start`, `status`, `prompt_history`, `feed`, `dismiss` and `recent`, and
+//! the relay to session sockets.
 //!
 //! A command with a `session_id` is for that session: the relay passes it
 //! to the session's socket (`crate::relay`). A command without one is for

@@ -661,3 +661,23 @@ fn how_left_names_both_exit_lines() {
     }
     assert_eq!(how_left(&temp.dir.join("none")), Left::Crashed);
 }
+
+#[test]
+fn a_session_resumed_before_its_end_is_read_is_not_crashed() {
+    let temp = Temp::new();
+    let (feed, clock) = new_feed(&temp);
+    // The resumed run has written past `fiber_exited` already.
+    let id = temp.session(1, "p", "fiber_started");
+    let (session, line) = running(&temp, &id, "idle");
+    let mut sub = Sub::new(&feed);
+    start(&feed, &clock);
+    assert_eq!(sub.raw("the status"), line);
+    let back = session.resumed(&temp.dir, &id);
+    let again = status_line(&id, &status("again", "/w", "idle", None));
+    back.say(&again);
+    sub.left(&id, "exited");
+    assert!(temp.rows().is_empty());
+    clock.advance(RUN_SCAN);
+    assert_eq!(sub.raw("the resumed status"), again);
+    feed.stop();
+}

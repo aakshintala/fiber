@@ -384,6 +384,7 @@ pub(crate) fn status_line(id: &str, payload: &Value) -> String {
 pub(crate) struct FakeSession {
     socket: PathBuf,
     shared: Arc<(Mutex<SessionState>, std::sync::Condvar)>,
+    accept: Mutex<Option<thread::JoinHandle<()>>>,
 }
 
 #[derive(Default)]
@@ -405,15 +406,34 @@ impl FakeSession {
             .unwrap_or(());
         let socket = run.join(id);
         let shared: Arc<(Mutex<SessionState>, std::sync::Condvar)> = Arc::default();
-        if let Ok(listener) = UnixListener::bind(&socket) {
+        let accept = UnixListener::bind(&socket).ok().and_then(|listener| {
             let for_thread = Arc::clone(&shared);
             thread::Builder::new()
                 .name("fake-feed-session".to_owned())
                 .spawn(move || session_accept(&listener, &for_thread))
-                .map(drop)
-                .unwrap_or(());
+                .ok()
+        });
+        Self {
+            socket,
+            shared,
+            accept: Mutex::new(accept),
         }
-        Self { socket, shared }
+    }
+
+    /// Stops accepting: marks the session closed, wakes the accept loop
+    /// and waits until it has dropped the listener. Returns the open
+    /// connections for the caller to shut.
+    fn stop_accepting(&self) -> Vec<UnixStream> {
+        let conns = {
+            let mut state = lock(&self.shared.0);
+            state.closed = true;
+            std::mem::take(&mut state.conns)
+        };
+        drop(UnixStream::connect(&self.socket));
+        if let Some(accept) = lock(&self.accept).take() {
+            accept.join().unwrap_or(());
+        }
+        conns
     }
 
     /// Sends `line` to every subscriber now and every later one.
@@ -439,30 +459,32 @@ impl FakeSession {
 
     /// Exits: unlinks the socket, then shuts every connection.
     pub(crate) fn close(&self) {
-        let conns = {
-            let mut state = lock(&self.shared.0);
-            state.closed = true;
-            std::mem::take(&mut state.conns)
-        };
-        // Wakes the accept loop, which sees `closed` and ends.
-        drop(UnixStream::connect(&self.socket));
+        let conns = self.stop_accepting();
         std::fs::remove_file(&self.socket).unwrap_or(());
         for conn in conns {
             conn.shutdown(std::net::Shutdown::Both).unwrap_or(());
         }
     }
 
-    /// Dies: shuts every connection and leaves the socket file behind.
-    pub(crate) fn kill(&self) {
-        let mut state = lock(&self.shared.0);
-        state.closed = true;
-        for conn in state.conns.drain(..) {
+    /// Exits and is resumed at once: a new session binds `run/<id>`
+    /// before this one shuts its connections.
+    pub(crate) fn resumed(&self, home: &Path, id: &str) -> Self {
+        let conns = self.stop_accepting();
+        std::fs::remove_file(&self.socket).unwrap_or(());
+        let next = Self::bind(home, id);
+        for conn in conns {
             conn.shutdown(std::net::Shutdown::Both).unwrap_or(());
         }
-        drop(state);
-        // Wakes the accept loop, which ends and drops the listener; the
-        // file stays and refuses connections.
-        drop(UnixStream::connect(&self.socket));
+        next
+    }
+
+    /// Dies: shuts every connection and leaves the socket file behind.
+    pub(crate) fn kill(&self) {
+        // The listener is gone before any connection ends, as with a
+        // process that died; the file stays and refuses connections.
+        for conn in self.stop_accepting() {
+            conn.shutdown(std::net::Shutdown::Both).unwrap_or(());
+        }
     }
 }
 

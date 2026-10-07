@@ -418,10 +418,18 @@ impl Feed {
     /// subscriber, and appends a crashed session's row. A session whose
     /// directory is gone was never prompted: it exited, leaving nothing.
     fn on_left(&self, id: &str, found: Option<(String, PathBuf)>) {
-        let how = found
+        let how = match found
             .as_ref()
             .filter(|(_, dir)| dir.is_dir())
-            .map(|(_, dir)| how_left(dir));
+            .map(|(_, dir)| how_left(dir))
+        {
+            // Resumed already: the log's last line is the new run's, and
+            // the socket accepts again. This run did not die.
+            Some(Left::Crashed) if UnixStream::connect(self.socket(id)).is_ok() => {
+                Some(Left::Exited)
+            }
+            how => how,
+        };
         // The row is written before `session_left` is sent, so a client
         // that sees the crash finds it in `recent`. `tracked` still holds
         // the session meanwhile, so no scan connects to it again.
