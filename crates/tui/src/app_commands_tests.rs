@@ -59,7 +59,8 @@ fn sent(effect: Effect) -> Vec<Value> {
         | Effect::Quit
         | Effect::ListFiles
         | Effect::Search { .. }
-        | Effect::Editor { .. } => Vec::new(),
+        | Effect::Editor { .. }
+        | Effect::Copy(_) => Vec::new(),
     }
 }
 

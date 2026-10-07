@@ -11,10 +11,14 @@ use ratatui::text::Line;
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 
 use crate::app::{App, QUIT_HINT};
+use crate::markdown::{Role, style};
 use crate::mouse::{self, Target, TargetId};
 
 /// The overlay shown while scrolled up once new output arrives.
 const NEW_BELOW: &str = "↓ New messages below";
+
+/// Shown on the conversation's top row after a copy.
+const COPIED: &str = "Copied";
 
 /// The approval panel's tint when a standing rule or review asked.
 /// debt: a fixed colour, not a theme role; upgrade when colour roles land
@@ -345,6 +349,12 @@ fn conversation_rows(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<
             id: TargetId::NewBelow,
             rect: Rect::new(x, row, end.saturating_sub(x), 1),
         });
+    }
+    if app.copied() && area.height > 0 {
+        let width = to_u16(COPIED.len());
+        let x = area.x.saturating_add(area.width.saturating_sub(width));
+        let shown = usize::from(area.width);
+        buf.set_stringn(x, area.y, COPIED, shown, style(Role::Accent));
     }
 }
 

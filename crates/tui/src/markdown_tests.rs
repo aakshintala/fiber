@@ -31,13 +31,6 @@ fn style_at(line: &Line<'_>, col: usize) -> Style {
     panic!("no cell {col} on {:?}", text(line));
 }
 
-/// The column where `needle` starts on `line`, in cells.
-fn col_of(line: &Line<'_>, needle: &str) -> usize {
-    let text = text(line);
-    let byte = text.find(needle).expect("needle on the line");
-    ratatui::text::Span::raw(&text[..byte]).width()
-}
-
 fn fg(role: Role) -> Option<ratatui::style::Color> {
     Some(role.color())
 }

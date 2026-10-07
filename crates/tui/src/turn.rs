@@ -19,7 +19,8 @@ use ratatui::text::Line;
 use serde_json::Value;
 
 use crate::app::{Target, read, text_of};
-use crate::format;
+use crate::format::{self, Kinds};
+use crate::markdown::{self, CopyTarget};
 
 #[path = "crash.rs"]
 pub(crate) mod crash;
@@ -58,7 +59,10 @@ impl Fold {
 #[derive(Debug)]
 enum Entry {
     /// One text part of a reply, updated as deltas arrive.
-    Reply { action: String, text: String },
+    Reply {
+        action: String,
+        reply: markdown::Reply,
+    },
     /// A steering message.
     Steer(String),
     /// A tool group, by its index in the turn's groups.
@@ -211,7 +215,7 @@ impl Turn {
 
     /// `assistant_message_delta`: appends to the message's reply, or starts
     /// a new one once a group has opened after it; false when empty.
-    pub(crate) fn text_delta(&mut self, action: &str, text: &str) -> bool {
+    pub(crate) fn text_delta(&mut self, action: &str, text: &str, fold: &mut Fold) -> bool {
         if text.is_empty() {
             return false;
         }
@@ -221,8 +225,8 @@ impl Turn {
         let mut found = None;
         for entry in self.entries.iter_mut().rev() {
             match entry {
-                Entry::Reply { action: has, text } if has == action => {
-                    found = Some(text);
+                Entry::Reply { action: has, reply } if has == action => {
+                    found = Some(reply);
                     break;
                 }
                 Entry::Group(_) | Entry::Band(_) => break,
@@ -230,8 +234,8 @@ impl Turn {
             }
         }
         match found {
-            Some(reply) => reply.push_str(text),
-            None => self.reply(action, text.to_owned()),
+            Some(reply) => reply.push(text),
+            None => self.reply(action, text.to_owned(), fold),
         }
         true
     }
@@ -239,7 +243,7 @@ impl Turn {
     /// `text_completed`: the message's next text part replaces the reply
     /// streamed for it, or is a new reply. An empty part shows nothing,
     /// and is false.
-    pub(crate) fn text_completed(&mut self, action: &str, text: String) -> bool {
+    pub(crate) fn text_completed(&mut self, action: &str, text: String, fold: &mut Fold) -> bool {
         if text.is_empty() {
             return false;
         }
@@ -253,7 +257,7 @@ impl Turn {
             .entries
             .iter_mut()
             .filter_map(|entry| match entry {
-                Entry::Reply { action: has, text } if has == action => Some(text),
+                Entry::Reply { action: has, reply } if has == action => Some(reply),
                 Entry::Reply { .. }
                 | Entry::Steer(_)
                 | Entry::Group(_)
@@ -262,17 +266,17 @@ impl Turn {
             })
             .nth(nth);
         match found {
-            Some(reply) => *reply = text,
-            None => self.reply(action, text),
+            Some(reply) => reply.set(text),
+            None => self.reply(action, text, fold),
         }
         true
     }
 
     /// A new reply, which ends the open group.
-    fn reply(&mut self, action: &str, text: String) {
+    fn reply(&mut self, action: &str, text: String, fold: &mut Fold) {
         self.entries.push(Entry::Reply {
             action: action.to_owned(),
-            text,
+            reply: markdown::Reply::new(text, fold.id()),
         });
         self.open_group = None;
     }
@@ -501,11 +505,7 @@ impl Turn {
         }
         for entry in &self.entries {
             match entry {
-                Entry::Reply { text, .. } => {
-                    for line in text.split('\n') {
-                        out.push((Line::raw(line.to_owned()), None));
-                    }
-                }
+                Entry::Reply { reply, .. } => reply.rows(width, out),
                 Entry::Steer(text) => out.push((Line::raw(format!("steer · {text}")), None)),
                 Entry::Group(at) => {
                     if let Some(group) = self.groups.get(*at) {
@@ -629,6 +629,24 @@ fn open(turns: &mut [Turn]) -> Option<&mut Turn> {
     turns.last_mut().filter(|turn| turn.is_open())
 }
 
+/// The code block `target` names among `turns`, rendered at `width`.
+pub(crate) fn copy_target(turns: &[Turn], target: Target, width: u16) -> Option<CopyTarget> {
+    let Target::Copy { reply: id, block } = target else {
+        return None;
+    };
+    turns
+        .iter()
+        .flat_map(|turn| &turn.entries)
+        .find_map(|entry| match entry {
+            Entry::Reply { reply, .. } if reply.id() == id => reply.rendered(width).target(block),
+            Entry::Reply { .. }
+            | Entry::Steer(_)
+            | Entry::Group(_)
+            | Entry::Aside(_)
+            | Entry::Band(_) => None,
+        })
+}
+
 /// Folds a line about one action into `turns`; false when it changed no
 /// card.
 fn fold_action(turns: &mut [Turn], fold: &mut Fold, envelope: &Envelope, action: &str) -> bool {
@@ -667,9 +685,9 @@ fn fold_action(turns: &mut [Turn], fold: &mut Fold, envelope: &Envelope, action:
             match kind {
                 "assistant_message_completed" => turn.message_completed(action),
                 "assistant_message_delta" => read!(envelope, TextDelta)
-                    .is_some_and(|delta| turn.text_delta(action, &delta.text)),
+                    .is_some_and(|delta| turn.text_delta(action, &delta.text, fold)),
                 "text_completed" => read!(envelope, TextCompleted)
-                    .is_some_and(|done| turn.text_completed(action, done.text)),
+                    .is_some_and(|done| turn.text_completed(action, done.text, fold)),
                 "tool_call_arguments_delta" => {
                     read!(envelope, ToolCallArgumentsDelta).is_some_and(|delta| {
                         turn.arguments_delta(action, delta, ts, fold);
@@ -758,7 +776,7 @@ impl Group {
                 .flat_map(|section| section.calls.iter_mut())
                 .find(|call| call.id == id)
                 .map(|call| &mut call.open),
-            Target::Login | Target::Note(_) | Target::Orphans(_) => None,
+            Target::Login | Target::Note(_) | Target::Orphans(_) | Target::Copy { .. } => None,
         };
         flag.map(|open| *open = !*open).is_some()
     }

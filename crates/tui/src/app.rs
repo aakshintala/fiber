@@ -97,6 +97,8 @@ pub(crate) enum Effect {
         /// What the editor opens.
         text: String,
     },
+    /// Copy this text to the clipboard.
+    Copy(String),
 }
 
 /// Which command the terminal sent and waits on.
@@ -141,6 +143,8 @@ pub(crate) enum Target {
     Note(usize),
     /// The jobs a resumed process marked orphaned.
     Orphans(usize),
+    /// A reply's `block`th code block's `copy` cells: they copy its code.
+    Copy { reply: usize, block: usize },
 }
 
 /// The terminal's state.
@@ -176,6 +180,8 @@ pub(crate) struct App {
     overlays: commands::Overlays,
     /// Prompt recall and the Ctrl+R panel.
     history: history::History,
+    /// "Copied" shows, from a click on `copy` to the next key or click.
+    copied: bool,
 }
 
 impl App {
@@ -202,6 +208,7 @@ impl App {
             name: None,
             overlays: commands::Overlays::default(),
             history: history::History::default(),
+            copied: false,
         }
     }
 
@@ -217,6 +224,7 @@ impl App {
     /// Hands one key to what is on top: the key map, the approval panel, a
     /// completion panel, then the input box.
     fn route_key(&mut self, key: Key, now: Instant) -> Effect {
+        self.copied = false;
         if key == Key::CtrlC {
             return self.on_ctrl_c(now);
         }
@@ -443,6 +451,23 @@ impl App {
 
     /// The turns' cards, each aside after the turns there were when it
     /// came.
+
+    /// A left click at a 0-based cell: on a code block's `copy` it copies
+    /// the code and shows "Copied", which any click first clears.
+    #[cfg_attr(not(test), expect(dead_code, reason = "#995's mouse events call it"))]
+    pub(crate) fn on_click(&mut self, col: u16, row: u16) -> Effect {
+        let code = crate::view::target_at(self, self.width, usize::from(row))
+            .and_then(|target| crate::turn::copy_target(&self.turns, target, self.width))
+            .filter(|copy| copy.cols.contains(&col));
+        self.copied = code.is_some();
+        code.map_or(Effect::None, |copy| Effect::Copy(copy.code))
+    }
+
+    /// Whether "Copied" shows.
+    pub(crate) fn copied(&self) -> bool {
+        self.copied
+    }
+
     fn rows(&self) -> Vec<Row> {
         let mut out = Vec::new();
         let mut asides = self.fold.asides.iter().peekable();

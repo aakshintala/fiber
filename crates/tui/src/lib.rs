@@ -436,7 +436,7 @@ impl<B: Backend> Loop<B> {
                         Event::Reply(Reply::DeviceAttributes) => Effect::None,
                     };
                     match effect {
-                        Effect::None => {}
+                        Effect::None | Effect::Copy(_) => {}
                         Effect::Send(lines) => self.send(&lines),
                         Effect::Quit => return Some(0),
                         Effect::ListFiles => self.list_files(),

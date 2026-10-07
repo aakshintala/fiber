@@ -533,7 +533,8 @@ mod through_the_app {
             | Effect::Quit
             | Effect::ListFiles
             | Effect::Search { .. }
-            | Effect::Editor { .. } => {
+            | Effect::Editor { .. }
+            | Effect::Copy(_) => {
                 panic!("expected one line")
             }
         }
