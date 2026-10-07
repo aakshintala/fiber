@@ -489,3 +489,45 @@ fn a_summary_subscriber_is_sent_the_session_status_and_each_change_through_idle(
     finish(running);
     drop(client);
 }
+
+#[test]
+fn an_empty_args_matches_a_missing_one_on_the_socket() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    server.hold();
+    setup.provider(&server);
+    let running = start(&setup);
+    let started = first_line(&running.stdout);
+    let session_id = started["session_id"].as_str().unwrap().to_owned();
+    assert!(
+        server.await_requests(1, DEADLINE),
+        "the held response was requested"
+    );
+
+    let client = Client::connect(&setup.home().join("run").join(&session_id)).unwrap();
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    assert_eq!(recv(&client)["payload"]["command_id"], "c_sub");
+    // `tools` takes no `args`: a missing `args` and `"args":{}` read the same.
+    send(&client, r#"{"id":"c_missing","command":"tools"}"#);
+    send(&client, r#"{"id":"c_empty","command":"tools","args":{}}"#);
+    let lines = until(&client, "the answer to c_empty", |line| {
+        line["payload"]["command_id"] == "c_empty"
+    });
+    let missing = answered(&lines, "c_missing");
+    let empty = answered(&lines, "c_empty");
+    assert_eq!(missing["kind"], "command_accepted", "{missing}");
+    assert_eq!(empty["kind"], "command_accepted", "{empty}");
+    assert_eq!(
+        missing["payload"]["result"], empty["payload"]["result"],
+        "an empty args reads as a missing one"
+    );
+    server.release();
+    until(&client, "fiber_exited", |line| {
+        line["kind"] == "fiber_exited"
+    });
+    finish(running);
+    drop(client);
+}
