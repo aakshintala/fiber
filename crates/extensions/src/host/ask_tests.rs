@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use contract::RequestId;
 use contract::commands::{Reply, ReplyAnswer};
-use contract::events::{InteractionRequested, ResolvedBy};
+use contract::events::{Interaction, InteractionRequested, ResolvedBy};
 use contract::inbox::{Ack, Delivery};
 use fakes::clock::FakeClock;
 
@@ -374,14 +374,18 @@ fn two_commands_asking_in_sequence_keep_the_stream() {
     let (first_tx, first_rx) = mpsc::channel();
     let (second_tx, second_rx) = mpsc::channel();
     let first_ext = Arc::clone(&ext);
-    let second_ext = Arc::clone(&ext);
     std::thread::spawn(move || {
         let _sent = first_tx.send(first_ext.command("first", ""));
     });
+    let first = interaction(&rx);
+    assert!(
+        matches!(&first.interaction, Interaction::Confirm { prompt } if prompt == "one?"),
+        "the first ask's request is observed before the second starts"
+    );
+    let second_ext = Arc::clone(&ext);
     std::thread::spawn(move || {
         let _sent = second_tx.send(second_ext.command("second", ""));
     });
-    let first = interaction(&rx);
     assert!(
         rx.recv_timeout(Duration::from_millis(200)).is_err(),
         "the second command does not start while the first is parked"

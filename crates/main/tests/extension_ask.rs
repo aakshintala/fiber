@@ -15,12 +15,12 @@
 mod extension_harness;
 
 use std::fs;
-use std::io::{BufRead, BufReader};
 use std::process::ExitStatus;
 
 use extension_harness::*;
 use fakes::Client;
 use fakes::ProviderServer;
+use fakes::Watchdog;
 use serde_json::{Value, json};
 
 /// How long one socket line may take.
@@ -193,47 +193,78 @@ fn an_unfit_reply_is_rejected_then_a_fitting_one_resolves_and_a_second_is_stale(
 }
 
 /// Runs `fiber ask` with `args` to completion and returns its exit status,
-/// stdout lines and stderr.
+/// stdout lines and stderr. `fiber` runs in its own process group under a
+/// watchdog, and the group is reaped and checked empty under [`DEADLINE`],
+/// including after a timeout (`docs/testing.md`, "Running tests").
 fn run_ask(setup: &Setup, args: &[&str]) -> (ExitStatus, Vec<Value>, String) {
-    use std::process::Stdio;
     let mut command = setup.fiber(args);
     command.current_dir(setup.workspace());
-    command.stdout(Stdio::piped());
-    let mut child = command.spawn().unwrap();
-    let stdout = child.stdout.take().unwrap();
-    let stderr = child.stderr.take().unwrap();
-    let (lines_tx, lines_rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let lines: Vec<String> = BufReader::new(stdout)
-            .lines()
-            .map(|line| line.unwrap())
-            .collect();
-        let _sent = lines_tx.send(lines);
-    });
-    let (err_tx, err_rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let mut text = String::new();
-        use std::io::Read;
-        let _ = std::io::BufReader::new(stderr)
-            .read_to_string(&mut text)
-            .ok();
-        let _sent = err_tx.send(text);
-    });
-    let (done_tx, done_rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let _sent = done_tx.send(child.wait());
-    });
-    let status = match done_rx.recv_timeout(DEADLINE) {
-        Ok(status) => status.unwrap(),
-        Err(_) => panic!("waited {DEADLINE:?} for fiber ask to exit"),
+    let (child, watchdog) = spawn_watched(&mut command);
+    let group = child.id();
+    let guard = KillGroup(group);
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || done.send(child.wait_with_output()).unwrap());
+    let output = match finished.recv_timeout(DEADLINE) {
+        Ok(output) => output.unwrap(),
+        Err(_) => {
+            fakes::kill_group(group, "KILL").unwrap();
+            // Reaps the killed child, so the check below sees the group
+            // as the kill left it.
+            let reaped = finished.recv_timeout(DEADLINE).is_ok();
+            assert!(
+                !group_alive(group),
+                "`fiber` left a process in its group behind"
+            );
+            panic!("waited {DEADLINE:?} for fiber ask to exit (reaped after the kill: {reaped})");
+        }
     };
-    let raw = lines_rx.recv_timeout(DEADLINE).unwrap_or_default();
-    let stderr = err_rx.recv_timeout(DEADLINE).unwrap_or_default();
-    let out = raw
-        .iter()
+    assert!(
+        !group_alive(group),
+        "`fiber` left a process in its group behind"
+    );
+    // The group is empty. Skip the drop, which would kill it again,
+    // and tell the watchdog to exit without signalling.
+    std::mem::forget(guard);
+    watchdog.stand_down(DEADLINE);
+    let status = output.status;
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    let out = String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
     (status, out, stderr)
+}
+
+/// Spawns `command` in a new process group, then a watchdog in its own
+/// group (see `Setup::fiber` in the shared harness, which already sets
+/// `process_group(0)`; as the sibling tests do).
+fn spawn_watched(command: &mut std::process::Command) -> (std::process::Child, Watchdog) {
+    use std::os::unix::process::CommandExt;
+    let child = command.process_group(0).spawn().unwrap();
+    let group = child.id();
+    // A failed watchdog spawn still kills the child on unwind.
+    let guard = KillGroup(group);
+    let watchdog = Watchdog::group(group);
+    std::mem::forget(guard);
+    (child, watchdog)
+}
+
+/// Kills process group `group` on drop. After the child is reaped and the
+/// group is empty, [`std::mem::forget`] skips that kill.
+struct KillGroup(u32);
+
+impl Drop for KillGroup {
+    fn drop(&mut self) {
+        match fakes::kill_group(self.0, "KILL") {
+            Ok(_) | Err(_) => {}
+        }
+    }
+}
+
+/// Whether any process remains in process group `group`.
+fn group_alive(group: u32) -> bool {
+    fakes::kill_group(group, "0").unwrap()
 }
 
 #[test]
