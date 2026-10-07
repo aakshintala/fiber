@@ -808,11 +808,11 @@ fn sent(effect: Effect) -> Vec<serde_json::Value> {
     match effect {
         Effect::Send(lines) => lines.iter().map(|line| parse(line)).collect(),
         Effect::None
+        | Effect::Copy(_)
         | Effect::Quit
         | Effect::ListFiles
         | Effect::Search { .. }
-        | Effect::Editor { .. }
-        | Effect::Copy(_) => Vec::new(),
+        | Effect::Editor { .. } => Vec::new(),
     }
 }
 
