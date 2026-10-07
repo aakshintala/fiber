@@ -10,6 +10,7 @@
 mod attach;
 mod client;
 mod close;
+mod drive;
 pub mod hub;
 mod pasted;
 mod prompt_history;

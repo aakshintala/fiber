@@ -1,0 +1,281 @@
+//! The in-process driver (`docs/extensions.md`, "Host calls"): one driver
+//! command each, answered through the host call's acknowledgement, with a
+//! fake inbox standing in for the loop.
+
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    reason = "test helpers; a failure is the test's"
+)]
+
+use std::io;
+use std::sync::Arc;
+use std::sync::mpsc;
+use std::time::Duration;
+
+use contract::clock::Clock;
+use contract::events::{CommandResult, ToolInfo, ToolSource, ToolState};
+use contract::extension::Drive;
+use contract::inbox::{Ack, Answer, Delivery, Rejection};
+use contract::shapes::Origin;
+use contract::{ErrorCode, SessionId};
+use fakes::clock::FakeClock;
+use log::Log;
+use serde_json::{Map, Value};
+
+use crate::Session;
+
+/// A hang bound for one answer or delivery.
+const DEADLINE: Duration = Duration::from_secs(5);
+
+struct Opened {
+    _temp: fakes::TempDir,
+    log: Arc<Log>,
+    session: Session,
+}
+
+fn open(tools: Vec<ToolInfo>) -> Opened {
+    let temp = fakes::TempDir::new("fd");
+    let home = temp.path().join("h");
+    let sessions = home.join("projects/p/sessions");
+    let id = SessionId(crate::mint("s_"));
+    let dir = sessions.join(&id.0);
+    let clock = FakeClock::new();
+    let timed = Arc::clone(&clock);
+    let timed: Arc<dyn Clock> = timed;
+    let log = Arc::new(Log::create(&sessions, id.clone(), Arc::clone(&timed)).unwrap());
+    let session = Session::open(&home, &dir, &log, timed, tools, Box::new(io::sink())).unwrap();
+    Opened {
+        _temp: temp,
+        log,
+        session,
+    }
+}
+
+fn tool() -> ToolInfo {
+    ToolInfo {
+        name: "read".into(),
+        source: ToolSource::Builtin,
+        state: ToolState::Full,
+        bytes: 12,
+        tokens: None,
+    }
+}
+
+fn object(value: Value) -> Map<String, Value> {
+    value.as_object().unwrap().clone()
+}
+
+fn text_args(text: &str) -> Value {
+    serde_json::json!({"content": [{"type": "text", "text": text}]})
+}
+
+/// Drives one command; the host call's answer arrives on the returned channel.
+fn drive(driver: &Arc<dyn Drive>, command: &str, args: Value) -> mpsc::Receiver<Answer> {
+    let (tx, rx) = mpsc::channel();
+    driver.drive(
+        "fiber.test/a",
+        command,
+        object(args),
+        Ack(Box::new(move |answer| tx.send(answer).unwrap())),
+    );
+    rx
+}
+
+fn rejected(answer: Answer) -> Rejection {
+    match answer {
+        Err(rejection) => rejection,
+        Ok(_) => panic!("the drive was accepted: {answer:?}"),
+    }
+}
+
+#[test]
+fn drive_steer_is_accepted_with_an_extension_sender() {
+    let opened = open(vec![]);
+    let driver = opened.session.driver();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let outcome = drive(&driver, "steer", text_args("use the other file"));
+            let Delivery::Steer(message, ack) = inbox.recv_timeout(DEADLINE).expect("the steer is delivered") else {
+                panic!("a steer is delivered");
+            };
+            // drive_steer_carries_extension_sender: the message carries
+            // `source: extension` and the extension's name, not `driver`.
+            assert!(matches!(&message.sender.origin, Origin::Extension { extension } if extension == "fiber.test/a"), "{:?}", message.sender);
+            assert!(
+                message.sender.command_id.as_ref().is_some_and(|id| id.0.starts_with("c_")),
+                "{:?}",
+                message.sender
+            );
+            ack.0(Ok(None));
+            let answered = outcome.recv_timeout(DEADLINE);
+            assert!(
+                matches!(answered, Ok(Ok(None))),
+                "an accepted steer answers no result: {answered:?}"
+            );
+            Ok(())
+        })
+        .unwrap();
+    opened.session.close(opened.log);
+}
+
+#[test]
+fn drive_prompt_answered_busy_rejects_busy() {
+    let opened = open(vec![]);
+    let driver = opened.session.driver();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let outcome = drive(&driver, "prompt", text_args("hi"));
+            let Delivery::Prompt(message, ack) = inbox.recv_timeout(DEADLINE).expect("the prompt is delivered") else {
+                panic!("a prompt is delivered");
+            };
+            assert!(matches!(&message.sender.origin, Origin::Extension { extension } if extension == "fiber.test/a"), "{:?}", message.sender);
+            ack.0(Err(Rejection {
+                code: ErrorCode::Busy,
+                message: "A turn is running; send `steer` to add to it.".into(),
+            }));
+            let rejection = rejected(outcome.recv_timeout(DEADLINE).expect("the drive is answered"));
+            assert_eq!(rejection.code, ErrorCode::Busy);
+            Ok(())
+        })
+        .unwrap();
+    opened.session.close(opened.log);
+}
+
+#[test]
+fn drive_tools_answers_with_its_result() {
+    let opened = open(vec![tool()]);
+    let driver = opened.session.driver();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let outcome = drive(&driver, "tools", Value::Object(Map::new()));
+            match outcome
+                .recv_timeout(DEADLINE)
+                .expect("the drive is answered")
+            {
+                Ok(Some(CommandResult::Tools { tools })) => {
+                    assert_eq!(tools.len(), 1);
+                    assert_eq!(tools[0].name, "read");
+                }
+                other => panic!("tools answers with its result: {other:?}"),
+            }
+            Ok(())
+        })
+        .unwrap();
+    opened.session.close(opened.log);
+}
+
+#[test]
+fn drive_approval_reply_is_rejected_before_the_inbox() {
+    let opened = open(vec![]);
+    let driver = opened.session.driver();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let outcome = drive(
+                &driver,
+                "reply",
+                serde_json::json!({"request_id": "r_1", "decision": "allow"}),
+            );
+            let rejection = rejected(
+                outcome
+                    .recv_timeout(DEADLINE)
+                    .expect("the drive is answered"),
+            );
+            // drive_approval_reply_is_rejected: an extension never answers an approval.
+            assert_eq!(rejection.code, ErrorCode::InvalidArguments);
+            assert_eq!(rejection.message, "An extension never answers an approval.");
+            assert!(
+                inbox.recv_timeout(Duration::from_millis(100)).is_err(),
+                "the refused reply never reaches the inbox"
+            );
+            Ok(())
+        })
+        .unwrap();
+    opened.session.close(opened.log);
+}
+
+#[test]
+fn drive_subscribe_is_rejected_as_a_second_one() {
+    let opened = open(vec![]);
+    let driver = opened.session.driver();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let outcome = drive(&driver, "subscribe", serde_json::json!({"level": "full"}));
+            let rejection = rejected(
+                outcome
+                    .recv_timeout(DEADLINE)
+                    .expect("the drive is answered"),
+            );
+            assert_eq!(rejection.code, ErrorCode::InvalidArguments);
+            Ok(())
+        })
+        .unwrap();
+    opened.session.close(opened.log);
+}
+
+#[test]
+fn drive_unknown_command_is_rejected() {
+    let opened = open(vec![]);
+    let driver = opened.session.driver();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let outcome = drive(&driver, "frobnicate", Value::Object(Map::new()));
+            let rejection = rejected(
+                outcome
+                    .recv_timeout(DEADLINE)
+                    .expect("the drive is answered"),
+            );
+            // drive_unknown_command_is_rejected: no `reply` to an unknown name.
+            assert_eq!(rejection.code, ErrorCode::UnknownCommand);
+            assert_eq!(
+                rejection.message,
+                "`frobnicate` is not built in this Fiber yet."
+            );
+            Ok(())
+        })
+        .unwrap();
+    opened.session.close(opened.log);
+}
+
+#[test]
+fn drive_after_close_answers_closing() {
+    let opened = open(vec![tool()]);
+    let driver = opened.session.driver();
+    opened.session.close(opened.log);
+    let (tx, rx) = mpsc::channel();
+    driver.drive(
+        "fiber.test/a",
+        "tools",
+        Map::new(),
+        Ack(Box::new(move |answer| tx.send(answer).unwrap())),
+    );
+    let rejection = rejected(rx.recv_timeout(DEADLINE).expect("the drive is answered"));
+    assert_eq!(rejection.code, ErrorCode::Closing);
+}
+
+#[test]
+fn drive_after_close_answers_closing_with_a_retained_handle() {
+    let opened = open(vec![tool()]);
+    let driver = opened.session.driver();
+    // A retained handle keeps the gate alive past `Session::close`: the
+    // stopped flag, not the upgrade, answers `closing`.
+    let _stopper = opened.session.stopper();
+    opened.session.close(opened.log);
+    let (tx, rx) = mpsc::channel();
+    driver.drive(
+        "fiber.test/a",
+        "tools",
+        Map::new(),
+        Ack(Box::new(move |answer| tx.send(answer).unwrap())),
+    );
+    let rejection = rejected(rx.recv_timeout(DEADLINE).expect("the drive is answered"));
+    assert_eq!(rejection.code, ErrorCode::Closing);
+}

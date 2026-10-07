@@ -28,14 +28,15 @@ use crate::session::{self, Gate};
 /// Wakes a connection's writer so it leaves `recv`.
 pub(crate) const STOP: &str = "doors.stop";
 
-const MALFORMED: &str = "A command is one JSON object per line, with a string `id` and `command`.";
+pub(crate) const MALFORMED: &str =
+    "A command is one JSON object per line, with a string `id` and `command`.";
 const NOT_SUBSCRIBED: &str = "Send `subscribe` first.";
-const DUPLICATE: &str = "A command with this id was already accepted.";
-const ALREADY: &str = "This connection is already subscribed at this level.";
-const UNFIT: &str = "The arguments do not fit this command.";
+pub(crate) const DUPLICATE: &str = "A command with this id was already accepted.";
+pub(crate) const ALREADY: &str = "This connection is already subscribed at this level.";
+pub(crate) const UNFIT: &str = "The arguments do not fit this command.";
 const PAST: &str = "`from_seq` is past the latest line.";
 const REVERSED: &str = "`to_seq` is before `from_seq`.";
-const ENDED: &str = "The session ended before answering.";
+pub(crate) const ENDED: &str = "The session ended before answering.";
 /// A `cancel` names no running turn.
 const NO_TURN: &str = "No turn is running.";
 /// A `job_stop` names no running job.
@@ -45,20 +46,24 @@ const NO_CALL: &str = "No shell call is running.";
 const HISTORY: usize = 256;
 
 /// A line that is not one of the commands this process answers.
-fn not_built(command: &str) -> String {
+pub(crate) fn not_built(command: &str) -> String {
     format!("`{command}` is not built in this Fiber yet.")
 }
 
 pub(crate) struct Conn {
     pub(crate) id: u64,
     pub(crate) gate: Arc<Gate>,
-    direct: Option<UnixStream>,
-    writer: Option<Box<dyn Write + Send>>,
-    subscribed: bool,
-    full: bool,
-    outbox: Option<level::Outbox>,
-    switches: Option<mpsc::Sender<level::Switch>>,
-    gone: bool,
+    pub(crate) direct: Option<UnixStream>,
+    pub(crate) writer: Option<Box<dyn Write + Send>>,
+    pub(crate) subscribed: bool,
+    pub(crate) full: bool,
+    pub(crate) outbox: Option<level::Outbox>,
+    pub(crate) switches: Option<mpsc::Sender<level::Switch>>,
+    pub(crate) gone: bool,
+    /// The in-process driver's answer and extension: `send` and `inbox_ack`
+    /// answer it, not a stream, and a driven `prompt` or `steer` carries it.
+    /// One takes it: each command answers at once or through the inbox.
+    pub(crate) drive: Option<(Ack, Origin)>,
 }
 
 /// Reads `stream` until the client hangs up. `id` is the slot [`Gate`] stored
@@ -98,6 +103,7 @@ pub(crate) fn serve_connection(
         outbox: None,
         switches: None,
         gone: false,
+        drive: None,
     };
     let mut read = BufReader::new(stream);
     let mut buf = Vec::new();
@@ -156,7 +162,7 @@ impl Drop for Finish {
 }
 
 fn on_line(bytes: &[u8], conn: &mut Conn) {
-    let line = match classify(bytes) {
+    let line = match crate::drive::classify(bytes) {
         Ok(line) => line,
         Err(id) => {
             reject(conn, id, ErrorCode::Malformed, MALFORMED);
@@ -180,57 +186,17 @@ fn on_line(bytes: &[u8], conn: &mut Conn) {
         unknown(conn, line.id, &line.command);
         return;
     }
-    let parsed = match serde_json::from_value::<CommandLine>(line.value) {
+    let (parsed, name) = match crate::drive::parse(line) {
         Ok(parsed) => parsed,
-        Err(_) => {
-            reject(conn, Some(line.id), ErrorCode::InvalidArguments, UNFIT);
+        Err((id, code, message)) => {
+            reject(conn, Some(id), code, &message);
             return;
         }
     };
-    dispatch(conn, parsed, &line.command);
+    dispatch(conn, parsed, &name);
 }
 
-struct Classified {
-    id: CommandId,
-    command: String,
-    value: Value,
-}
-
-/// `Err` carries `command_id` when the line had a string `id`.
-fn classify(bytes: &[u8]) -> Result<Classified, Option<CommandId>> {
-    let text = std::str::from_utf8(bytes).map_err(|_| None)?;
-    let value: Value = serde_json::from_str(text).map_err(|_| None)?;
-    let Some(map) = value.as_object() else {
-        return Err(None);
-    };
-    let id = match map.get("id") {
-        Some(Value::String(id)) => Some(CommandId(id.clone())),
-        _ => None,
-    };
-    if map
-        .keys()
-        .any(|key| key != "id" && key != "command" && key != "args")
-    {
-        return Err(id);
-    }
-    let Some(id) = id else {
-        return Err(None);
-    };
-    let Some(Value::String(command)) = map.get("command") else {
-        return Err(Some(id));
-    };
-    match map.get("args") {
-        None | Some(Value::Object(_)) => {}
-        Some(_) => return Err(Some(id)),
-    }
-    Ok(Classified {
-        id,
-        command: command.clone(),
-        value,
-    })
-}
-
-fn built(command: &str) -> bool {
+pub(crate) fn built(command: &str) -> bool {
     matches!(
         command,
         "subscribe"
@@ -252,7 +218,7 @@ fn built(command: &str) -> bool {
     )
 }
 
-fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
+pub(crate) fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
     let id = line.id;
     match line.command {
         Command::Subscribe(args) => {
@@ -303,7 +269,7 @@ fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
             let images = conn.gate.images();
             let pasting = Arc::clone(&conn.gate.pasting);
             match crate::pasted::content(args.content, images.as_deref(), pasting.as_ref()) {
-                Ok(content) => deliver_message(conn, id, content, true),
+                Ok(content) => deliver_message(conn, id, content, true, conn.origin()),
                 Err((code, message)) => reject(conn, Some(id), code, &message),
             }
         }
@@ -311,7 +277,7 @@ fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
             let images = conn.gate.images();
             let pasting = Arc::clone(&conn.gate.pasting);
             match crate::pasted::content(args.content, images.as_deref(), pasting.as_ref()) {
-                Ok(content) => deliver_message(conn, id, content, false),
+                Ok(content) => deliver_message(conn, id, content, false, conn.origin()),
                 Err((code, message)) => reject(conn, Some(id), code, &message),
             }
         }
@@ -489,11 +455,17 @@ fn subscribe(conn: &mut Conn, id: CommandId, level: contract::commands::Subscrib
     drop(conn.direct.take());
 }
 
-fn deliver_message(conn: &mut Conn, id: CommandId, content: Vec<ContentPart>, prompt: bool) {
+fn deliver_message(
+    conn: &mut Conn,
+    id: CommandId,
+    content: Vec<ContentPart>,
+    prompt: bool,
+    origin: Origin,
+) {
     let message = Message {
         content,
         sender: Sender {
-            origin: Origin::Driver,
+            origin,
             command_id: Some(id.clone()),
         },
     };
@@ -565,6 +537,24 @@ pub(crate) fn reject(conn: &mut Conn, id: Option<CommandId>, code: ErrorCode, me
 }
 
 fn send(conn: &mut Conn, event: Event) {
+    // The driver's acknowledgement goes to the host call, not to any stream.
+    if let Some((answer, _)) = conn.drive.take() {
+        if let Event::CommandAccepted(accepted) = event {
+            answer.0(Ok(accepted.result));
+        } else if let Event::CommandRejected(rejected) = event {
+            answer.0(Err(Rejection {
+                code: rejected.code,
+                message: rejected.message,
+            }));
+        } else {
+            // `send` carries only acknowledgements; anything else answers `closing`.
+            answer.0(Err(Rejection {
+                code: ErrorCode::Closing,
+                message: ENDED.to_owned(),
+            }));
+        }
+        return;
+    }
     let line = session::envelope(&conn.gate.session_id, conn.gate.clock.as_ref(), &event);
     if let Some(outbox) = &conn.outbox {
         outbox.push_kept(line);
@@ -587,7 +577,18 @@ fn unknown(conn: &mut Conn, id: CommandId, command: &str) {
     );
 }
 
-pub(crate) fn inbox_ack(conn: &Conn, id: CommandId) -> Ack {
+pub(crate) fn inbox_ack(conn: &mut Conn, id: CommandId) -> Ack {
+    // The driver's acknowledgement goes to the host call: a rejection frees
+    // the id as the socket path does.
+    if let Some((answer, _)) = conn.drive.take() {
+        let gate = Arc::clone(&conn.gate);
+        return guard(move |result| {
+            if result.is_err() {
+                gate.release(&id);
+            }
+            answer.0(result);
+        });
+    }
     let Some(outbox) = conn.outbox.clone() else {
         return guard(|_| {});
     };
