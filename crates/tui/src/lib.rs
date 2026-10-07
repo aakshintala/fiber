@@ -28,6 +28,7 @@ mod mouse;
 mod offer;
 mod osc;
 mod pages;
+mod screen;
 mod shell;
 mod slash;
 mod sources;
@@ -48,17 +49,15 @@ use std::sync::mpsc::{self, Receiver, Sender};
 
 use contract::clock::Clock;
 use contract::{Envelope, HubLine, Seq, SessionId};
-use ratatui::backend::{Backend, ClearType, CrosstermBackend, WindowSize};
-use ratatui::buffer::{Buffer, Cell};
-use ratatui::layout::{Position, Rect, Size};
-use ratatui::{Terminal, TerminalOptions, Viewport};
+use ratatui::backend::{Backend, CrosstermBackend};
 use signal_hook::consts::{SIGINT, SIGQUIT, SIGWINCH};
 use signal_hook::iterator::Signals;
 
 use crate::app::{App, Effect, mint, session_command};
 use crate::keys::{Button, Event, MouseKind, Parser, Reply};
 use crate::link::Line;
-use crate::mouse::{Pointer, Target};
+use crate::mouse::Pointer;
+use crate::screen::Screen;
 use crate::sources::{Reader, spawn_hub, spawn_resize};
 
 pub use home::Launch;
@@ -206,145 +205,6 @@ pub fn restore() {
     term::restore();
 }
 
-/// One frame: the cells, and where the cursor shows, if anywhere.
-type Frame = (Buffer, Option<Position>);
-
-/// The screen: ratatui on a fixed viewport, and the last frame drawn with
-/// its click targets.
-struct Screen<B: Backend> {
-    terminal: Terminal<TtySized<B>>,
-    area: Rect,
-    last: Option<Frame>,
-    /// The click targets of the last frame drawn: what a click hits.
-    targets: Vec<Target>,
-}
-
-impl<B: Backend> Screen<B> {
-    fn new(backend: B, width: u16, height: u16) -> Result<Self, B::Error> {
-        let area = Rect::new(0, 0, width, height);
-        let terminal = Terminal::with_options(
-            TtySized {
-                inner: backend,
-                size: area.as_size(),
-            },
-            TerminalOptions {
-                viewport: Viewport::Fixed(area),
-            },
-        )?;
-        Ok(Self {
-            terminal,
-            area,
-            last: None,
-            targets: Vec::new(),
-        })
-    }
-
-    /// Draws `app`, the cursor shown at the draft's cursor or hidden,
-    /// tinting the click target under `pointer`, and keeps the frame's
-    /// targets. When the frame drops the focused target, focus returns to
-    /// the input box and the frame is drawn again, so the cursor shows.
-    /// A frame whose cells and cursor equal the last one's writes
-    /// nothing; otherwise only the cells that changed are written.
-    fn draw(&mut self, app: &mut App, pointer: Option<(u16, u16)>) -> Result<(), B::Error> {
-        self.draw_with(app, pointer, view::render)
-    }
-
-    fn draw_with(
-        &mut self,
-        app: &mut App,
-        pointer: Option<(u16, u16)>,
-        mut render: impl FnMut(&App, Rect, &mut Buffer, Option<(u16, u16)>) -> Vec<Target>,
-    ) -> Result<(), B::Error> {
-        let mut cells = Buffer::empty(self.area);
-        self.targets = render(app, self.area, &mut cells, pointer);
-        if app.drawn(&self.targets) {
-            cells = Buffer::empty(self.area);
-            self.targets = render(app, self.area, &mut cells, pointer);
-            let _ = app.drawn(&self.targets);
-        }
-        let next = (cells, view::cursor(app, self.area));
-        if self.last.as_ref() == Some(&next) {
-            return Ok(());
-        }
-        self.terminal.draw(|frame| {
-            frame.buffer_mut().clone_from(&next.0);
-            if let Some(cursor) = next.1 {
-                frame.set_cursor_position(cursor);
-            }
-        })?;
-        self.last = Some(next);
-        Ok(())
-    }
-
-    /// Resizes the viewport; the next draw repaints it whole.
-    fn resize(&mut self, width: u16, height: u16) -> Result<(), B::Error> {
-        self.area = Rect::new(0, 0, width, height);
-        self.last = None;
-        self.terminal.backend_mut().size = self.area.as_size();
-        self.terminal.resize(self.area)
-    }
-}
-
-/// A backend that reports the size read from the injected tty. ratatui
-/// asks its backend for the size when it clears a fixed viewport on
-/// resize, and crossterm answers from `/dev/tty`, standard output or
-/// `tput`, never from the injected tty: with none of those, as under a
-/// test harness, the answer is an error and the resize fails.
-struct TtySized<B> {
-    inner: B,
-    size: Size,
-}
-
-impl<B: Backend> Backend for TtySized<B> {
-    type Error = B::Error;
-
-    fn draw<'a, I>(&mut self, content: I) -> Result<(), Self::Error>
-    where
-        I: Iterator<Item = (u16, u16, &'a Cell)>,
-    {
-        self.inner.draw(content)
-    }
-
-    fn hide_cursor(&mut self) -> Result<(), Self::Error> {
-        self.inner.hide_cursor()
-    }
-
-    fn show_cursor(&mut self) -> Result<(), Self::Error> {
-        self.inner.show_cursor()
-    }
-
-    fn get_cursor_position(&mut self) -> Result<Position, Self::Error> {
-        self.inner.get_cursor_position()
-    }
-
-    fn set_cursor_position<P: Into<Position>>(&mut self, position: P) -> Result<(), Self::Error> {
-        self.inner.set_cursor_position(position)
-    }
-
-    fn clear(&mut self) -> Result<(), Self::Error> {
-        self.inner.clear()
-    }
-
-    fn clear_region(&mut self, clear_type: ClearType) -> Result<(), Self::Error> {
-        self.inner.clear_region(clear_type)
-    }
-
-    fn size(&self) -> Result<Size, Self::Error> {
-        Ok(self.size)
-    }
-
-    fn window_size(&mut self) -> Result<WindowSize, Self::Error> {
-        Ok(WindowSize {
-            columns_rows: self.size,
-            pixels: Size::default(),
-        })
-    }
-
-    fn flush(&mut self) -> Result<(), Self::Error> {
-        self.inner.flush()
-    }
-}
-
 /// Reads an environment variable by name.
 type Var = Box<dyn Fn(&str) -> Option<String> + Send>;
 
@@ -427,7 +287,7 @@ impl<B: Backend> Loop<B> {
                             }
                             let clicked =
                                 self.pointer
-                                    .on_mouse(&mouse, &self.screen.targets, self.hover);
+                                    .on_mouse(&mouse, self.screen.targets(), self.hover);
                             clicked.map_or(Effect::None, |target| self.app.on_click(target))
                         }
                         Event::Reply(Reply::KittyFlags(_)) => {
@@ -711,7 +571,7 @@ impl<B: Backend> Loop<B> {
         }
         let (width, height) = match self.tty.as_ref().map(term::size) {
             Some(Ok(size)) => size,
-            Some(Err(_)) | None => (self.screen.area.width, self.screen.area.height),
+            Some(Err(_)) | None => (self.screen.area().width, self.screen.area().height),
         };
         self.app.set_size(width, height);
         self.screen.resize(width, height).err().map(|_| 1)

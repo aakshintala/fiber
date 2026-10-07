@@ -225,7 +225,7 @@ fn run(
 
 /// The screen the loop drew last.
 fn shown(lp: &Loop<TestBackend>) -> String {
-    crate::view::text(lp.screen.terminal.backend().inner.buffer())
+    crate::view::text(lp.screen.backend().buffer())
 }
 
 /// Enough PageUps to reach the top.
