@@ -1274,3 +1274,101 @@ fn stop_returns_after_the_observer_folded_what_was_written() {
     assert_eq!(last.payload["state"], "idle");
     assert_eq!(last.payload["name"], "go");
 }
+
+fn offer_items(n: usize) -> Value {
+    let item = json!({"kind": "mcp_server", "name": "db", "hash": "h", "required": false,
+        "summary": "MCP server: db"});
+    Value::Array(vec![item; n])
+}
+
+impl World {
+    fn offer(&mut self, request: &str, items: usize) {
+        self.feed(
+            "repository_code_offered",
+            None,
+            &json!({"request_id": request, "items": offer_items(items)}),
+        );
+    }
+
+    fn resolve_offer(&mut self, request: &str) {
+        self.feed(
+            "repository_code_resolved",
+            None,
+            &json!({"request_id": request, "decisions": []}),
+        );
+    }
+
+    fn preamble(&mut self) {
+        self.feed(
+            "preamble_built",
+            None,
+            &json!({
+                "reason": "start", "model": "fake/built", "context_window": 1000,
+                "tool_choice": "auto", "cache_lifetime": "5m", "system_prompt": "", "tools": []
+            }),
+        );
+    }
+}
+
+#[test]
+fn an_offer_waits_with_its_item_count_until_it_resolves() {
+    let mut w = world();
+    w.start();
+    w.offer("r_o", 3);
+    let waiting = waiting_of(&w);
+    assert_eq!(waiting.kind, WaitingKind::Offer);
+    assert_eq!(waiting.request_id.0, "r_o");
+    assert_eq!(waiting.summary, "3 items from the repository");
+    w.resolve_offer("r_o");
+    assert_eq!(w.status().state, SessionState::Idle);
+    w.offer("r_p", 1);
+    assert_eq!(waiting_of(&w).summary, "1 item from the repository");
+}
+
+#[test]
+fn an_offer_left_unanswered_stops_waiting_at_the_preamble() {
+    let mut w = world();
+    w.start();
+    w.offer("r_o", 2);
+    w.preamble();
+    assert_eq!(w.status().state, SessionState::Idle);
+}
+
+#[test]
+fn an_offer_shows_before_an_approval_an_earlier_process_left() {
+    let mut w = world();
+    w.start();
+    w.prompt("go");
+    w.ask("a1", "r1");
+    w.feed(
+        "fiber_started",
+        None,
+        &json!({"version": "0.0.1", "resumed": true}),
+    );
+    w.offer("r_o", 1);
+    assert_eq!(waiting_of(&w).request_id.0, "r_o");
+    w.resolve_offer("r_o");
+    let waiting = waiting_of(&w);
+    assert_eq!(waiting.request_id.0, "r1");
+    assert_eq!(waiting.kind, WaitingKind::Approval);
+}
+
+#[test]
+fn an_offer_raised_again_leaves_one_entry() {
+    let mut w = world();
+    w.start();
+    w.offer("r_o", 1);
+    w.offer("r_o", 1);
+    w.resolve_offer("r_o");
+    assert_eq!(w.status().state, SessionState::Idle);
+}
+
+#[test]
+fn the_preamble_leaves_a_pending_approval_waiting() {
+    let mut w = world();
+    w.start();
+    w.prompt("go");
+    w.ask("a1", "r1");
+    w.preamble();
+    assert_eq!(waiting_of(&w).request_id.0, "r1");
+}

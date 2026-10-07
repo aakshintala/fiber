@@ -204,6 +204,7 @@ fn resumed_session(
     };
     let forget = Arc::clone(&session_servers.forget);
     let workspace = std::path::PathBuf::from(&folded.workspace);
+    let offer = Arc::new(extensions::SessionOffer::new(&home, &project, &workspace));
     let permissions = crate::ask_permissions(
         &home,
         &project,
@@ -276,6 +277,7 @@ fn resumed_session(
                         .handoff(handoff)
                         .on_handoff(forget)
                         .switcher(switching.closure(), switchable)
+                        .repository_code(offer)
                 }),
                 budget,
                 idle,

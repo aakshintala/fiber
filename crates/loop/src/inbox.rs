@@ -191,6 +191,9 @@ impl Loop {
         if self.closing {
             return self.ending();
         }
+        if !self.reraise_offer()? {
+            return Ok(None);
+        }
         // Idle starts as the wait begins. A rejected command, a dropped
         // steer and a wake do not move it (`docs/invocation.md`, "Lifecycle").
         // While the cache is kept warm the session is not idle: the idle
@@ -278,6 +281,14 @@ impl Loop {
                 }
             }
             if !input.pieces.is_empty() {
+                // The repository's offer resolves before the first request;
+                // what arrived while it waited joins this turn.
+                if !self.offer(None)? {
+                    return Ok(None);
+                }
+                for delivery in std::mem::take(&mut self.deferred) {
+                    self.admit_idle(delivery, &mut input)?;
+                }
                 return Ok(Some(input));
             }
             if self.closing {
@@ -445,7 +456,11 @@ impl Loop {
     }
 
     /// `delivery` while the loop is still collecting a turn's input.
-    fn admit_idle(&mut self, delivery: Delivery, input: &mut TurnInput) -> Result<(), Error> {
+    pub(crate) fn admit_idle(
+        &mut self,
+        delivery: Delivery,
+        input: &mut TurnInput,
+    ) -> Result<(), Error> {
         match delivery {
             Delivery::Prompt(message, ack) => {
                 if self.closing {
@@ -606,7 +621,7 @@ impl Loop {
 
     /// Accepts `close`. No later turn starts, and no later approval can be
     /// answered (`docs/permissions.md`, "Headless").
-    fn take_close(&mut self, ack: Ack) {
+    pub(crate) fn take_close(&mut self, ack: Ack) {
         accept(ack);
         self.closing = true;
         self.answerable = false;

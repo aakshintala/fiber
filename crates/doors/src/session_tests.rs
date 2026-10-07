@@ -2239,3 +2239,43 @@ fn a_malformed_line_does_not_free_an_accepted_id() {
         .unwrap();
     close_within(opened.session, opened.log);
 }
+
+/// A resumed session whose log holds `events`, closed; whether its
+/// directory is left.
+fn kept_after_close(events: Vec<Event>) -> bool {
+    let temp = fakes::TempDir::new("fd");
+    let home = temp.path().join("h");
+    let sessions = home.join("projects/p/sessions");
+    let id = contract::SessionId(crate::mint("s_"));
+    let clock = FakeClock::new();
+    let timed: Arc<dyn Clock> = clock;
+    let log = Arc::new(Log::create(&sessions, id.clone(), Arc::clone(&timed)).unwrap());
+    let dir = sessions.join(&id.0);
+    for event in events {
+        log.append(&event, None, None).unwrap();
+    }
+    let session =
+        Session::resume(&home, &dir, &log, timed, Vec::new(), Box::new(io::sink())).unwrap();
+    close_within(session, log);
+    dir.exists()
+}
+
+#[test]
+fn close_keeps_a_session_whose_log_holds_an_offer_and_no_turn() {
+    use contract::events::{OfferedItem, OfferedKind, RepositoryCodeOffered};
+
+    let offered = Event::RepositoryCodeOffered(RepositoryCodeOffered {
+        request_id: contract::RequestId("r_1".into()),
+        items: vec![OfferedItem {
+            kind: OfferedKind::McpServer,
+            name: "db".into(),
+            hash: "0".repeat(64),
+            required: false,
+            summary: "MCP server: db".into(),
+            version: None,
+            diff: None,
+        }],
+    });
+    assert!(kept_after_close(vec![offered]));
+    assert!(!kept_after_close(Vec::new()));
+}

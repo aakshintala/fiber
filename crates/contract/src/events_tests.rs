@@ -297,6 +297,13 @@ fn samples() -> Vec<(&'static str, Value)> {
             "since": 1, "spend": usage, "delegates": 0, "jobs": 0, "project": "-w", "clients": 0}),
         ),
         (
+            "session_status",
+            json!({"name": "n", "workspace": "/w", "model": "p/m",
+            "state": "waiting",
+            "waiting": {"request_id": "r", "kind": "offer", "summary": "3 items from the repository"},
+            "since": 1, "spend": usage, "delegates": 0, "jobs": 0, "project": "-w", "clients": 0}),
+        ),
+        (
             "context_added",
             json!({"text": "t", "extension": "e", "hook": "turn_start"}),
         ),
@@ -1075,4 +1082,20 @@ fn a_session_id_result_reads_as_start_and_a_status_object_as_status() {
         result_of(json!({"command_id": "c", "result": {"new_session_id": "s2"}})),
         CommandResult::Rewind { .. }
     ));
+}
+
+#[test]
+fn a_waiting_offer_reads_as_its_kind() {
+    let (_, payload) = samples()
+        .into_iter()
+        .find(|(kind, payload)| *kind == "session_status" && payload["waiting"]["kind"] == "offer")
+        .unwrap();
+    let Some(Event::SessionStatus(status)) = read("session_status", payload).unwrap() else {
+        panic!("not a session_status");
+    };
+    let SessionState::Waiting { waiting } = status.state else {
+        panic!("not waiting");
+    };
+    assert_eq!(waiting.kind, WaitingKind::Offer);
+    assert_eq!(waiting.summary, "3 items from the repository");
 }

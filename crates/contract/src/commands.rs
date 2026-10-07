@@ -187,7 +187,7 @@ pub struct Reply {
 }
 
 /// A reply's answer: an interaction's answer keys (`interaction_resolved`),
-/// or an approval's.
+/// an approval's, or an offer's decisions.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged, deny_unknown_fields)]
 pub enum ReplyAnswer {
@@ -229,6 +229,11 @@ pub enum ReplyAnswer {
         /// With `allow`, on a request that offers a `rule`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         remember: Option<Remember>,
+    },
+    /// Answers a repository's offer, one per item in the offer's order.
+    Decisions {
+        /// `approve`, `skip` or `never` for each item.
+        decisions: Vec<crate::events::OfferDecision>,
     },
 }
 

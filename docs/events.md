@@ -284,7 +284,7 @@ Durable. The last line a process writes for a session.
 | `final_action_id` | string | no | the `action_id` of the final assistant message, when there is one |
 | `text` | string | no | that message's text: its `text_completed` parts joined in order; present exactly when `final_action_id` is |
 | `error` | `error` | no | why the process failed (`docs/errors.md`, "What a caller gets") |
-| `suspended_on` | string | no | the `request_id` of the pending approval or question the process exited on (`docs/invocation.md`, "Lifecycle") |
+| `suspended_on` | string | no | the `request_id` of the pending approval, question or repository offer the process exited on; with an offer and an approval or question both pending, the approval or question (`docs/invocation.md`, "Lifecycle") |
 | `questions` | `questions` | no | copied from the last `turn_completed`, when its turn ended on questions |
 
 A process is the unit these two lines bound (`GLOSSARY.md`, "Process"). They are
@@ -437,7 +437,7 @@ sent the latest.
 | `model` | string | yes | the model reference in use |
 | `state` | string | yes | `streaming`, `tool`, `retrying`, `waiting`, `jobs` (no turn running, jobs running) or `idle` (nothing in flight); a closed set |
 | `tool` | string | no | with `tool`, the running tool's name |
-| `waiting` | object | no | with `waiting`: `request_id` (string), `kind` (`approval` or `question`) and `summary` (string, one line) |
+| `waiting` | object | no | with `waiting`: `request_id` (string), `kind` (`approval`, `question` or `offer`, a repository's offer: "Repository code") and `summary` (string, one line) |
 | `since` | integer | yes | when this state began, as `ts` |
 | `git` | object | no | present in a git repository: `branch`, a string, or `null` when HEAD is detached |
 | `context` | object | no | after the first request: `tokens`, the context's size in tokens at the latest request, and `window`, the model's context window (integers) |
@@ -763,6 +763,13 @@ raises no offer and skips or fails each item instead
 (`docs/extensions.md`, "Code a repository ships"). The pair is durable so that
 a session that exited on a pending offer raises it again, with the same
 `request_id`, on resume.
+
+While an offer waits for its answer, the session is `waiting`:
+`session_status` names the offer with `kind` `offer` and a `summary` such as
+"3 items from the repository", and a process that exits on it names it in
+`fiber_exited.suspended_on`. A process stops waiting on an offer at its
+`repository_code_resolved`, or at its `preamble_built` when it went on without
+an answer after a `close`.
 
 ### Usage and notices
 

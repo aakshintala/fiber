@@ -25,6 +25,8 @@ pub struct Pending {
     pub item: RepoItem,
     /// The offer's entry for it.
     pub offered: OfferedItem,
+    /// A person recorded never for this content.
+    pub never: bool,
 }
 
 /// The items among `items` with no approval for their content, in order. An
@@ -38,7 +40,8 @@ pub fn pending(
     let mut out = Vec::new();
     for item in items {
         let hash = hash(index, &item)?;
-        if store.decision(item.kind, &hash) == Some(Decision::Approve) {
+        let decision = store.decision(item.kind, &hash);
+        if decision == Some(Decision::Approve) {
             continue;
         }
         let (summary, version) = summary(&item)?;
@@ -57,6 +60,7 @@ pub fn pending(
                 diff,
             },
             item,
+            never: decision == Some(Decision::Never),
         });
     }
     Ok(out)

@@ -21,6 +21,7 @@ pub mod inbox;
 pub mod jobs;
 mod pre_session;
 pub mod provider;
+pub mod repository;
 pub mod thinking;
 
 pub use thinking::ThinkingLevel;

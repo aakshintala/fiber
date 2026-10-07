@@ -240,7 +240,10 @@ holds"). The layers merge exactly as Fiber's own keys do.
   comes from the manifest of the installed or approved copy, never from a
   repository's working files. The `hooks` extension lists `hooks`, and each
   hook a repository declares there is withheld until a person approves it
-  (`docs/extensions.md`, "Hooks declared in configuration").
+  (`docs/extensions.md`, "Hooks declared in configuration"). A hook entry a
+  repository declares may set `required`, default false, read only from the
+  repository's file: a required hook nobody approved fails a run that has
+  nobody to ask, with `hook_unapproved`.
 - `fiber extension remove` deletes the extension's file in the global and every
   per-project layer, asking first in a terminal, as it does for its data
   directories.

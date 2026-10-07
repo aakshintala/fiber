@@ -547,7 +547,8 @@ bound has passed. A command after `close` and before `fiber_exited` still gets
 `closing`, except a `close` with `now`, which is accepted and upgrades the close.
 
 **A session that never got a prompt leaves nothing behind.** A session that
-exits with no `turn_started` in its log deletes its own directory.
+exits with no `turn_started` and no `repository_code_offered` in its log
+deletes its own directory.
 
 **`close` ends the session whoever else is attached.** It accepts no more
 prompts, finishes the turn in flight, then any running jobs (`docs/tools.md`,
@@ -872,7 +873,7 @@ websocket for everything it does.
 | `feed` | none | Subscribes the connection to the feed: the latest `session_status` of every running or waiting top-level session, and every change after it, then a `session_left` line (`docs/events.md`) when one ends. Crashed sessions not yet dismissed come first: each one's last `session_status`, then its `session_left`. |
 | `dismiss` | `session` (string) | Drops a crashed session from the feed, for every client; its log stays, and it can still be resumed from `recent`. Rejected `stale_request` unless the session is crashed. |
 | `recent` | `before` (string, optional), `project` (string, optional) | Answers with a page of exited sessions from `recent.jsonl`, newest first, skipping delegates, whose row's `status` carries `parent` (`docs/state.md`). `project` is the project's key, the name of its `projects/<key>/` directory. |
-| `start` | `workspace` (string), `model` (string, optional), `overrides` (array of strings, optional), `worktree` (boolean, optional), `content` (optional) | Starts a session in the workspace, any absolute path, and answers with its `session_id`. Each of `overrides` is a `key=value` passed to the session as `-c` ("Commands and flags"). With `worktree` true, the session runs in a new worktree of the workspace ("Isolation"). With `content`, its first prompt. |
+| `start` | `workspace` (string), `model` (string, optional), `overrides` (array of strings, optional), `worktree` (boolean, optional), `content` (optional) | Starts a session in the workspace, any absolute path, and answers with its `session_id`. Each of `overrides` is a `key=value` passed to the session as `-c` ("Commands and flags"). With `worktree` true, the session runs in a new worktree of the workspace ("Isolation"). With `content`, its first prompt. A client that wants to answer the repository's offer (`docs/extensions.md`, "Code a repository ships") subscribes `full` before the session's first prompt: a session started with `content` takes that prompt before any client subscribes, so it decides with nobody to answer. |
 | `delete` | `session` (string), `cascade` (boolean, optional), `expect` (array of strings, optional) | Deletes an exited session ("Deleting and pruning"). With `cascade`, `expect` is the sessions the person confirmed; the delete is rejected `stale_request` when the sessions it would remove differ. |
 | `prompt_history` | `project` (string), `before` (integer, optional) | Answers with a page of the project's prompt history, newest first (`docs/state.md`). `project` is the project's key, as for `recent`. |
 | `read_file` | `session` (string), `path` (string) | Answers with one file from the session's `artifacts/` ("A session's files"). |

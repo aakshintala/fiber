@@ -523,15 +523,21 @@ pub(crate) fn park_reader_for_test() {
     tests::park_reader();
 }
 
-/// Whether the session's log has a `turn_started`, read one line at a time
-/// up to the first. A log that cannot be read, or a line that does not
-/// parse before the first, keeps the session, so nothing is deleted on a
-/// guess.
+/// Whether the session's log has a `turn_started` or a
+/// `repository_code_offered`, read one line at a time up to the first: a
+/// session that exits on its first offer is kept, so the offer is raised
+/// again on resume. A log that cannot be read, or a line that does not parse
+/// before the first, keeps the session, so nothing is deleted on a guess.
 fn prompted(dir: &Path) -> bool {
     log::lines(dir).map_or(true, |mut lines| {
         lines.any(|line| {
             line.map_or(true, |line| {
-                matches!(Event::from_envelope(&line), Ok(Some(Event::TurnStarted(_))))
+                matches!(
+                    Event::from_envelope(&line),
+                    Ok(Some(
+                        Event::TurnStarted(_) | Event::RepositoryCodeOffered(_)
+                    ))
+                )
             })
         })
     })

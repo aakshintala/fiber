@@ -33,6 +33,21 @@ impl Driver {
 /// An extension never approves a tool call, here or in a hook.
 const NO_APPROVAL: &str = "An extension never answers an approval.";
 
+/// Why a driven `reply` answering an offer is refused.
+const NO_OFFER: &str = "An extension never answers an offer of a repository's code.";
+
+/// The refusal for an answer only a person gives: an approval's or an
+/// offer's.
+fn refused(answer: &ReplyAnswer) -> Option<&'static str> {
+    if matches!(answer, ReplyAnswer::Approval { .. }) {
+        Some(NO_APPROVAL)
+    } else if matches!(answer, ReplyAnswer::Decisions { .. }) {
+        Some(NO_OFFER)
+    } else {
+        None
+    }
+}
+
 impl contract::extension::Drive for Driver {
     /// `extension` becomes `Origin::Extension` on any message the command
     /// carries. After the session's door closed the answer is `closing`: the
@@ -98,13 +113,14 @@ impl contract::extension::Drive for Driver {
             }
         };
         if let Command::Reply(reply) = &parsed.command
-            && matches!(reply.answer, ReplyAnswer::Approval { .. })
+            && let Some(message) = refused(&reply.answer)
         {
-            // drive_approval_reply_is_rejected: never reaches the inbox.
+            // drive_approval_reply_is_rejected, drive_offer_reply_is_rejected:
+            // never reaches the inbox.
             gate.release(&parsed.id);
             answer.0(Err(Rejection {
                 code: ErrorCode::InvalidArguments,
-                message: NO_APPROVAL.to_owned(),
+                message: message.to_owned(),
             }));
             return;
         }

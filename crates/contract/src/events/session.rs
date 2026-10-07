@@ -278,7 +278,7 @@ pub enum SessionState {
     Retrying,
     /// Waiting on a person.
     Waiting {
-        /// The pending approval or question.
+        /// The pending approval, question or offer.
         waiting: Waiting,
     },
     /// No turn is running, and jobs are.
@@ -295,9 +295,11 @@ pub enum WaitingKind {
     Approval,
     /// An `ask_user` question.
     Question,
+    /// A repository's offer of its code.
+    Offer,
 }
 
-/// The pending approval or question `session_status` names when `state` is
+/// The pending approval, question or offer `session_status` names when `state` is
 /// `waiting`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Waiting {

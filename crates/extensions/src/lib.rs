@@ -43,7 +43,8 @@ pub use oauth::{Browser, SystemBrowser};
 pub use prepare::platform;
 pub use providers::{Model, Providers, StartedRefresh, leave_out_invalid, refresh_lists};
 pub use repository::{
-    Decision, Index, Pending, RepoItem, Store, declared_items, hash, kind_name, pending,
+    Decision, Index, Pending, RepoItem, SessionOffer, Store, declared_items, hash, kind_name,
+    pending,
 };
 
 /// The extension API's major version this Fiber speaks

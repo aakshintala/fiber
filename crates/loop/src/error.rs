@@ -14,6 +14,11 @@ pub enum Error {
     /// The log has no `session_started`.
     #[error("the log has no session_started")]
     NoSessionStarted,
+    /// The repository's code could not be read, or a `required` item nobody
+    /// approved could not be offered (`docs/extensions.md`, "Code a
+    /// repository ships").
+    #[error("{}", .0.message)]
+    RepositoryCode(contract::shapes::Failure),
 }
 
 impl Error {
@@ -22,6 +27,7 @@ impl Error {
         match self {
             Self::Log(error) => error.code(),
             Self::Unreadable(_) | Self::NoSessionStarted => ErrorCode::LogCorrupt,
+            Self::RepositoryCode(failure) => failure.code.clone(),
         }
     }
 }

@@ -77,6 +77,8 @@ pub struct Resumed {
     pub(crate) reviewed: Vec<Reviewed>,
     /// The jobs started and never ended, each as its `orphaned` completion.
     pub(crate) orphans: Vec<JobCompleted>,
+    /// The repository's offers: the session's skips and the pending offer.
+    pub(crate) offers: crate::offer::Folded,
 }
 
 /// The kinds the pass reads a payload of. Every other line's envelope is
@@ -96,6 +98,8 @@ const FOLDED: &[&str] = &[
     "opening_message",
     "handoff_completed",
     "reviewer_kept",
+    "repository_code_offered",
+    "repository_code_resolved",
 ];
 
 /// Folds the log in the session directory `dir` in one pass, one line at a
@@ -116,6 +120,7 @@ pub fn resumed(dir: &Path) -> Result<Resumed, Error> {
     // (`docs/permissions.md`, "At a handoff").
     let mut reviewed = Vec::new();
     let mut orphans = crate::jobs::Orphans::default();
+    let mut offers = crate::offer::Folded::default();
     // The jobs running and the session log's path as of the line read.
     let mut running = Carry::default();
     // Each turn's latest `turn_started` since the last completed handoff,
@@ -134,6 +139,7 @@ pub fn resumed(dir: &Path) -> Result<Resumed, Error> {
         };
         render_reviewed(&mut reviewed, &event, line.action_id.as_ref(), line.seq);
         orphans.fold(&event);
+        offers.fold(&event);
         running.fold_jobs(&event);
         if let Event::SessionStarted(started) = &event
             && first.is_none()
@@ -212,6 +218,7 @@ pub fn resumed(dir: &Path) -> Result<Resumed, Error> {
         session_blocks,
         reviewed,
         orphans: orphans.finish(),
+        offers,
     })
 }
 
@@ -237,7 +244,8 @@ pub(crate) struct Suspended {
 /// whose action is in the suspended batch. Anything else resumes as a
 /// cut-short turn. Only approvals re-raise: no tool raises an
 /// `interaction_requested` yet, so a `suspended_on` naming one resumes as
-/// cut short.
+/// cut short. A `suspended_on` naming a repository offer resumes no turn:
+/// the offer is raised again by the offer step.
 // debt: re-raises approvals only; an interaction_requested joins when a tool raises one (ask_user, docs/tools.md "Asking the person").
 pub(crate) fn suspended(lines: &[Envelope]) -> Result<Option<Suspended>, Error> {
     let Some(last) = lines.last() else {
@@ -350,6 +358,7 @@ impl Loop {
             reviewed,
             orphans,
             thinking,
+            offers,
             ..
         } = resumed;
         let lines = log.range(
@@ -456,6 +465,7 @@ impl Loop {
             turn_blocked: None,
             workspace_label: permissions.workspace,
             answerable: true,
+            repository: crate::offer::State::resumed(offers),
             opened,
             changes,
             cut_off: false,
@@ -483,6 +493,16 @@ impl Loop {
 }
 
 impl Loop {
+    /// Writes the suspended approval's `permission_requested` again, under
+    /// its turn and action, as its re-raise does.
+    fn keep_suspended(&mut self, suspended: &Suspended) -> Result<(), Error> {
+        self.append(
+            &Event::PermissionRequested(suspended.request.clone()),
+            &suspended.turn,
+            Some(&suspended.action),
+        )
+    }
+
     /// Finishes a turn cut short on a pending approval, then runs the
     /// prompt as the next turn (`docs/invocation.md`, "Lifecycle"): the
     /// request is raised again under the same `request_id` and answered,
@@ -504,6 +524,14 @@ impl Loop {
         suspended: Suspended,
     ) -> Result<Option<TurnOutcome>, Error> {
         self.deferred.extend(self.inbox.try_iter());
+        // The repository's offer resolves before the first request. A
+        // process that ends on it writes the suspended approval again, so it
+        // exits naming the approval and the next resume finishes the turn.
+        let offered = self.offer(Some(&suspended.request.request_id));
+        if !matches!(offered, Ok(true)) {
+            self.keep_suspended(&suspended)?;
+            return offered.map(|_| None);
+        }
         self.ensure_preamble()?;
         self.cut_off = false;
         let turn = suspended.turn.clone();

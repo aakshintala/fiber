@@ -398,3 +398,35 @@ fn reply_with_no_door_reaches_the_inbox() {
         .unwrap();
     opened.session.close(opened.log);
 }
+
+#[test]
+fn drive_offer_reply_is_rejected_before_the_inbox() {
+    let opened = open(vec![]);
+    let driver = opened.session.driver();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let outcome = drive(
+                &driver,
+                "reply",
+                serde_json::json!({"request_id": "r_1", "decisions": ["approve"]}),
+            );
+            let rejection = rejected(
+                outcome
+                    .recv_timeout(DEADLINE)
+                    .expect("the drive is answered"),
+            );
+            assert_eq!(rejection.code, ErrorCode::InvalidArguments);
+            assert_eq!(
+                rejection.message,
+                "An extension never answers an offer of a repository's code."
+            );
+            assert!(
+                inbox.recv_timeout(Duration::from_millis(100)).is_err(),
+                "the refused reply never reaches the inbox"
+            );
+            Ok(())
+        })
+        .unwrap();
+    opened.session.close(opened.log);
+}

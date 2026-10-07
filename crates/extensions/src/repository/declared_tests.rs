@@ -120,7 +120,8 @@ fn items_come_in_offer_order_with_their_names_paths_and_required() {
         "mcp": {"servers": {"z": {"command": "x", "required": true}, "y": {"url": "https://x"}}},
     }));
     repo.hooks(
-        &json!({"fmt": {"point": "after_tool", "command": "cargo"}, "build": {"point": "x"}}),
+        &json!({"fmt": {"point": "after_tool", "command": "cargo", "required": true},
+            "build": {"point": "x"}}),
     );
     let got: Vec<_> = repo
         .items()
@@ -145,7 +146,7 @@ fn items_come_in_offer_order_with_their_names_paths_and_required() {
                 false
             ),
             (OfferedKind::Hook, "build".into(), hooks_path.clone(), false),
-            (OfferedKind::Hook, "fmt".into(), hooks_path, false),
+            (OfferedKind::Hook, "fmt".into(), hooks_path, true),
             (
                 OfferedKind::McpServer,
                 "y".into(),
@@ -411,4 +412,37 @@ fn a_path_that_cannot_be_examined_fails_the_item_and_a_missing_one_is_skipped() 
     assert!(matches!(&e, Error::Pin { item, .. } if item == "db"), "{e}");
     repo.config(&server("missing.sh", &json!(["dir"])));
     assert!(rels(&repo.item(OfferedKind::McpServer, "db")).is_empty());
+}
+
+#[test]
+fn a_hooks_required_is_read_only_from_the_repository_and_only_as_a_boolean() {
+    let repo = Repo::new();
+    let global = repo.home().join("config/hooks.json");
+    fs::create_dir_all(global.parent().unwrap()).unwrap();
+    fs::write(
+        &global,
+        json!({"hooks": {"mine": {"point": "x", "required": true}}}).to_string(),
+    )
+    .unwrap();
+    assert!(repo.items().is_empty());
+    repo.hooks(&json!({"fmt": {"point": "x", "required": "yes"}}));
+    assert!(!repo.item(OfferedKind::Hook, "fmt").required);
+}
+
+#[test]
+fn marking_a_hook_required_changes_its_hash() {
+    let repo = Repo::new();
+    repo.hooks(&json!({"fmt": {"point": "x"}}));
+    let before = super::hash(
+        &mut super::Index::scratch(),
+        &repo.item(OfferedKind::Hook, "fmt"),
+    )
+    .unwrap();
+    repo.hooks(&json!({"fmt": {"point": "x", "required": true}}));
+    let after = super::hash(
+        &mut super::Index::scratch(),
+        &repo.item(OfferedKind::Hook, "fmt"),
+    )
+    .unwrap();
+    assert_ne!(before, after);
 }

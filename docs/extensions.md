@@ -793,6 +793,11 @@ entries instead of replacing the list:
   `on_failure`: a watcher changes nothing, so its failure only gives a
   `notice`. An entry missing `timeout` is not registered, and a `notice` names
   the entry and the missing field.
+- **`required`**, on an entry a repository declares, is a boolean, default
+  false, read only from the repository's file, as
+  `mcp.servers."<name>".required` is for a server. A required entry nobody
+  approved fails a run that has nobody to ask, with `hook_unapproved` ("Code a
+  repository ships").
 
 The command runs as `host.exec` runs a program ("Host calls"): in the
 session's workspace, in its own process group, with the session's

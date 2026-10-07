@@ -131,8 +131,8 @@ struct Fold {
     error: Option<Failure>,
     questions: Option<Vec<Question>>,
     ledger: Ledger,
-    /// The latest approval or question this process left unresolved.
-    /// Extension asks are never here; they are declined at exit instead.
+    /// The latest approval or question this process left unresolved, or
+    /// else its unresolved repository offer. Extension asks are never here; they are declined at exit instead.
     suspended_on: Option<RequestId>,
     /// The extension asks still unresolved, oldest first. Unlike `open`
     /// below, these survive `fiber_started`: a resumed session starts a new
@@ -176,6 +176,8 @@ fn fold(lines: log::Lines, keep_open: bool) -> Result<Fold, Error> {
     // `fiber_started`: an earlier process's ask, such as after a crash,
     // is declined too (an_ask_an_earlier_process_left_open_is_declined).
     let mut open_extension = Vec::new();
+    // Repository offers raised: `preamble_built` ends the wait on each.
+    let mut offers = Vec::new();
     // The first payload since the latest `fiber_started` that did not read.
     let mut unread = None;
     for line in lines {
@@ -219,6 +221,17 @@ fn fold(lines: log::Lines, keep_open: bool) -> Result<Fold, Error> {
             // already wrote the one resolution.
             open.retain(|pending| pending != &resolved.request_id);
             open_extension.retain(|pending| pending != &resolved.request_id);
+        } else if let Some(Event::RepositoryCodeOffered(offered)) = &event {
+            // An offer precedes every request its process raises, so it goes
+            // first: `suspended_on` names an approval or question whenever
+            // one is open too, and resume finds the suspended turn by it.
+            open.insert(0, offered.request_id.clone());
+            offers.push(offered.request_id.clone());
+        } else if let Some(Event::RepositoryCodeResolved(resolved)) = &event {
+            open.retain(|pending| pending != &resolved.request_id);
+        } else if let Some(Event::PreambleBuilt(_)) = &event {
+            // A process that built its preamble no longer waits on an offer.
+            open.retain(|pending| !offers.contains(pending));
         }
         if let Some(Event::TurnStarted(_)) = &event {
             fold.final_message = None;

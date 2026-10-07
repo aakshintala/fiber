@@ -3,8 +3,7 @@
 //! the documented defaults. A repository's servers need a person's approval
 //! (`docs/mcp.md`, "A repository's servers"), which lands with #599: until
 //! then a server whose `command`, `args` or `env` effectively comes from
-//! the repository is not started, and each skipped server yields a `notice`
-//! with code `repository_code_skipped`. Servers with a `url` and no
+//! the repository is not started. Servers with a `url` and no
 //! `command` are #593's and are skipped silently. A server with neither is
 //! skipped silently too: there is nothing to start.
 //!
@@ -26,7 +25,8 @@ use serde_json::Value;
 pub(crate) struct Specs {
     /// One per stdio server to start.
     pub specs: Vec<mcp::ServerSpec>,
-    /// One per repository-declared server that was skipped.
+    /// Notices for the log; startup adds its own. A skipped repository
+    /// server is named by the repository's offer instead.
     pub notices: Vec<Notice>,
 }
 
@@ -34,21 +34,14 @@ pub(crate) struct Specs {
 /// skipping the rest as above.
 pub(crate) fn specs(config: &Config) -> Specs {
     let mut specs = Vec::new();
-    let mut notices = Vec::new();
+    let notices = Vec::new();
     let Some((Value::Object(servers), _)) = config.get("mcp.servers", None) else {
         return Specs { specs, notices };
     };
     // `serde_json::Map` is a `BTreeMap` without `preserve_order`
     // (`docs/dependencies.md`), so this is name order.
     for name in servers.keys() {
-        match spec(config, name) {
-            Keep::Yes(spec) => specs.push(spec),
-            Keep::Skipped(notice) => {
-                if let Some(notice) = notice {
-                    notices.push(notice);
-                }
-            }
-        }
+        specs.extend(spec(config, name));
     }
     Specs { specs, notices }
 }
@@ -132,17 +125,13 @@ pub(crate) fn session_tools(
     Ok((tools, infos, driver, servers))
 }
 
-enum Keep {
-    Yes(mcp::ServerSpec),
-    Skipped(Option<Notice>),
-}
-
-fn spec(config: &Config, name: &str) -> Keep {
+/// The spec for the server `name`, or `None` when it is skipped.
+fn spec(config: &Config, name: &str) -> Option<mcp::ServerSpec> {
     let command = server_field(config, name, "command")
         .and_then(|(value, _)| value.as_str().map(str::to_owned));
     let Some(command) = command else {
         // A `url` server (#593) or nothing to start at all.
-        return Keep::Skipped(None);
+        return None;
     };
     // debt: approval covers the exact declaration (#599); until it lands, a
     // repository's `command` or `args` skips the server, as does any
@@ -153,18 +142,12 @@ fn spec(config: &Config, name: &str) -> Keep {
         || from_repository(config, name, "args")
         || env_from_repository(config, name)
     {
-        return Keep::Skipped(Some(Notice {
-            code: ErrorCode::RepositoryCodeSkipped,
-            message: format!(
-                "The repository declares the MCP server `{name}`, which nobody approved: it was not started. Run `fiber approve` in the repository to approve it.",
-            ),
-            extension: None,
-        }));
+        return None;
     }
     let args = server_field(config, name, "args").map_or(Vec::new(), |(value, _)| strings(&value));
     let env =
         server_field(config, name, "env").map_or(BTreeMap::new(), |(value, _)| string_map(&value));
-    Keep::Yes(mcp::ServerSpec {
+    Some(mcp::ServerSpec {
         name: name.to_owned(),
         command,
         args,

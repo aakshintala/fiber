@@ -70,24 +70,28 @@ pub fn declared_items(workspace: &Path) -> Result<Vec<RepoItem>, Error> {
             name,
             entry,
             &hooks_file,
-            false,
+            required(entry),
         )?);
     }
     for (name, entry) in &declared.mcp_servers {
-        let required = entry
-            .get("required")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
         items.push(entry_item(
             &root,
             OfferedKind::McpServer,
             name,
             entry,
             ".fiber/config.json",
-            required,
+            required(entry),
         )?);
     }
     Ok(items)
+}
+
+/// An entry's `required`: anything but `true` reads as false.
+fn required(entry: &Value) -> bool {
+    entry
+        .get("required")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
 }
 
 fn extension(root: &Path, ext: &RepositoryExtension) -> Result<RepoItem, Error> {
