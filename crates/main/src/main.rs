@@ -106,7 +106,10 @@ struct Parts {
     web_search: Option<String>,
 }
 
+static BLOAT: [u8; 21 << 20] = [7; 21 << 20];
+
 fn main() -> ExitCode {
+    std::hint::black_box(&BLOAT);
     ExitCode::from(u8::try_from(run()).unwrap_or(1))
 }
 
