@@ -551,6 +551,8 @@ fn the_logs_last_model_beats_the_flag_and_the_default() {
                 subscription: None,
                 extension: None,
                 origin_session_id: None,
+                input_bytes: 1,
+                input_media: None,
             }),
             Some(t()),
             Some(a("a_1")),

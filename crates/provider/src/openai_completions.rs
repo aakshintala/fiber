@@ -14,7 +14,8 @@ use contract::events::{
     ToolCallRequested,
 };
 use contract::provider::{
-    CallError, Delta, Finish, ModelCall, ModelRequest, Provider, Reply, ReplyAction, ToolDefinition,
+    CallError, Delta, Finish, InputSize, ModelCall, ModelRequest, Provider, Reply, ReplyAction,
+    ToolDefinition,
 };
 use contract::shapes::Tokens;
 use contract::{GenerationId, ProviderCallId};
@@ -80,6 +81,7 @@ impl Completions {
             ),
             headers,
             body,
+            input_size: InputSize::default(),
             provider: endpoint.provider.clone(),
             signer: endpoint.signer.clone(),
             lifetime: request.cache_lifetime,
@@ -105,6 +107,7 @@ pub struct Call {
     url: String,
     headers: Vec<(String, String)>,
     body: Vec<u8>,
+    input_size: InputSize,
     provider: String,
     signer: Option<Arc<dyn contract::signing::Signer>>,
     /// The request's cache lifetime, which a reported cache write is counted
@@ -140,10 +143,15 @@ impl ModelCall for Call {
         if self.cancel.is_cancelled() {
             return Err(CallError::Cancelled);
         }
-        reply.map_err(|e| CallError::Failed {
-            failure: e.failure(&self.provider, &secrets),
-            should_retry,
-        })
+        reply
+            .map(|reply| Reply {
+                input_size: self.input_size,
+                ..reply
+            })
+            .map_err(|e| CallError::Failed {
+                failure: e.failure(&self.provider, &secrets),
+                should_retry,
+            })
     }
 
     fn cancel(&self) {
@@ -512,6 +520,7 @@ impl Decoder {
             tokens: tokens(&self.usage, lifetime),
             web_searches: None,
             cost: cost(&self.usage),
+            input_size: InputSize::default(),
         })
     }
 }

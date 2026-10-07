@@ -71,17 +71,14 @@ fn start_line(action: &str) -> Envelope {
     )
 }
 
-fn recorded(generation: &str, cache_write: Vec<(&str, u64)>) -> UsageRecorded {
+fn recorded(generation: &str) -> UsageRecorded {
     UsageRecorded {
         generation_id: GenerationId(generation.into()),
         model: "m".into(),
         tokens: Tokens {
             input: 10,
             cache_read: 0,
-            cache_write: cache_write
-                .into_iter()
-                .map(|(lifetime, written)| (lifetime.to_owned(), written))
-                .collect(),
+            cache_write: [("5m".to_owned(), 90)].into_iter().collect(),
             output: 3,
         },
         web_searches: None,
@@ -89,6 +86,8 @@ fn recorded(generation: &str, cache_write: Vec<(&str, u64)>) -> UsageRecorded {
         subscription: None,
         extension: None,
         origin_session_id: None,
+        input_bytes: 105,
+        input_media: None,
     }
 }
 
@@ -100,8 +99,25 @@ fn usage_line(action: Option<&str>, recorded: UsageRecorded) -> Envelope {
     )
 }
 
-fn own_usage(generation: &str, cache_write: Vec<(&str, u64)>) -> Envelope {
-    usage_line(Some("a_1"), recorded(generation, cache_write))
+fn own_usage(generation: &str) -> Envelope {
+    usage_line(Some("a_1"), recorded(generation))
+}
+
+/// `recorded` with its token counts replaced; the byte size and media flag
+/// stay at their defaults.
+fn counted(generation: &str, input: u64, cache_read: u64, pairs: &[(&str, u64)]) -> UsageRecorded {
+    UsageRecorded {
+        tokens: Tokens {
+            input,
+            cache_read,
+            cache_write: pairs
+                .iter()
+                .map(|(lifetime, written)| ((*lifetime).to_owned(), *written))
+                .collect(),
+            output: 3,
+        },
+        ..recorded(generation)
+    }
 }
 
 /// Folds `lines` one at a time, asserting `tokens(12)` after every line.
@@ -285,7 +301,7 @@ fn preamble_size_ignores_the_lines_envelope() {
     line.seq = Some(Seq(4));
     line.turn_id = Some(TurnId("t_9".into()));
     assert_tokens(
-        vec![line, start_line("a_1"), own_usage("g_1", vec![("5m", 100)])],
+        vec![line, start_line("a_1"), own_usage("g_1")],
         vec![None, None, Some(11)],
     );
 }
@@ -294,7 +310,7 @@ fn preamble_size_ignores_the_lines_envelope() {
 fn a_usage_before_any_preamble_leaves_the_next_build_waiting() {
     assert_tokens(
         vec![
-            own_usage("g_0", vec![("5m", 100)]),
+            own_usage("g_0"),
             preamble_line(&built(PreambleReason::Start, "hi")),
         ],
         vec![None, None],
@@ -307,7 +323,7 @@ fn a_build_its_start_and_its_usage_give_a_rate() {
         vec![
             preamble_line(&built(PreambleReason::Start, "hi")),
             start_line("a_1"),
-            own_usage("g_1", vec![("5m", 100)]),
+            own_usage("g_1"),
         ],
         vec![None, None, Some(11)],
     );
@@ -320,7 +336,7 @@ fn a_line_of_another_kind_changes_nothing() {
             preamble_line(&built(PreambleReason::Start, "hi")),
             envelope("step_started", None, Map::new()),
             start_line("a_1"),
-            own_usage("g_1", vec![("5m", 100)]),
+            own_usage("g_1"),
         ],
         vec![None, None, None, Some(11)],
     );
@@ -330,24 +346,45 @@ fn a_line_of_another_kind_changes_nothing() {
 fn only_the_builds_first_own_usage_counts() {
     let preamble = preamble_line(&built(PreambleReason::Start, "hi"));
     let start = start_line("a_1");
-    let good = recorded("g_1", vec![("5m", 100)]);
+    let good = recorded("g_1");
     let ignored = [
-        usage_line(None, recorded("g_x", vec![("5m", 1000)])),
+        usage_line(None, recorded("g_x")),
         usage_line(
             Some("a_1"),
             UsageRecorded {
                 extension: Some("x".into()),
-                ..recorded("g_x", vec![("5m", 1000)])
+                ..recorded("g_x")
             },
         ),
         usage_line(
             Some("a_1"),
             UsageRecorded {
                 origin_session_id: Some(SessionId("s_2".into())),
-                ..recorded("g_x", vec![("5m", 1000)])
+                ..recorded("g_x")
             },
         ),
-        usage_line(Some("a_9"), recorded("g_x", vec![("5m", 1000)])),
+        usage_line(Some("a_9"), recorded("g_x")),
+        usage_line(
+            Some("a_1"),
+            UsageRecorded {
+                model: "other".into(),
+                ..recorded("g_x")
+            },
+        ),
+        usage_line(
+            Some("a_1"),
+            UsageRecorded {
+                input_media: Some(true),
+                ..recorded("g_x")
+            },
+        ),
+        usage_line(
+            Some("a_1"),
+            UsageRecorded {
+                input_bytes: 0,
+                ..recorded("g_x")
+            },
+        ),
         envelope("usage_recorded", Some("a_1"), Map::new()),
     ];
     for bad in ignored {
@@ -369,8 +406,8 @@ fn the_first_usage_for_a_request_wins() {
         vec![
             preamble_line(&built(PreambleReason::Start, "hi")),
             start_line("a_1"),
-            own_usage("g_1", vec![("5m", 100)]),
-            own_usage("g_1", vec![("5m", 555)]),
+            own_usage("g_1"),
+            own_usage("g_1"),
         ],
         vec![None, None, Some(11), Some(11)],
     );
@@ -378,17 +415,31 @@ fn the_first_usage_for_a_request_wins() {
 
 #[test]
 fn a_usage_for_a_request_started_before_the_latest_build_never_counts() {
-    let build_b = built(PreambleReason::Reload, "a much longer system prompt");
-    let rebuilt = Some(12 * 100 / sized(build_b.clone()));
+    let rebuilt = Some(2);
     assert_tokens(
         vec![
             preamble_line(&built(PreambleReason::Start, "hi")),
             start_line("a_1"),
-            own_usage("g_1", vec![("5m", 100)]),
-            preamble_line(&build_b),
-            own_usage("g_1", vec![("5m", 1000)]),
+            own_usage("g_1"),
+            preamble_line(&built(
+                PreambleReason::Reload,
+                "a much longer system prompt",
+            )),
+            own_usage("g_1"),
             start_line("a_2"),
-            usage_line(Some("a_2"), recorded("g_2", vec![("5m", 40), ("1h", 60)])),
+            usage_line(
+                Some("a_2"),
+                UsageRecorded {
+                    tokens: Tokens {
+                        input: 50,
+                        cache_read: 0,
+                        cache_write: Default::default(),
+                        output: 1,
+                    },
+                    input_bytes: 300,
+                    ..recorded("g_2")
+                },
+            ),
         ],
         vec![None, None, Some(11), None, None, None, rebuilt],
     );
@@ -401,7 +452,7 @@ fn a_request_in_flight_across_a_build_never_counts_for_the_new_build() {
         vec![
             start_line("a_1"),
             preamble_line(&built(PreambleReason::Reload, "hi")),
-            own_usage("g_1", vec![("5m", 100)]),
+            own_usage("g_1"),
         ],
         vec![None, None, None],
     );
@@ -414,7 +465,7 @@ fn a_request_that_recorded_nothing_leaves_the_rate_waiting() {
             preamble_line(&built(PreambleReason::Start, "hi")),
             start_line("a_1"),
             start_line("a_2"),
-            usage_line(Some("a_2"), recorded("g_2", vec![("5m", 100)])),
+            usage_line(Some("a_2"), recorded("g_2")),
         ],
         vec![None, None, None, Some(11)],
     );
@@ -422,18 +473,150 @@ fn a_request_that_recorded_nothing_leaves_the_rate_waiting() {
 
 #[test]
 fn a_new_build_resets_the_rate_until_its_first_usage() {
-    let build_b = built(PreambleReason::Reload, "hello");
-    let rebuilt = Some(12 * 100 / sized(build_b.clone()));
+    let rebuilt = Some(2);
     assert_tokens(
         vec![
             preamble_line(&built(PreambleReason::Start, "hi")),
             start_line("a_1"),
-            own_usage("g_1", vec![("5m", 100)]),
-            preamble_line(&build_b),
+            own_usage("g_1"),
+            preamble_line(&built(PreambleReason::Reload, "hello")),
             start_line("a_3"),
-            usage_line(Some("a_3"), recorded("g_3", vec![("5m", 100)])),
+            usage_line(
+                Some("a_3"),
+                UsageRecorded {
+                    tokens: Tokens {
+                        input: 50,
+                        cache_read: 0,
+                        cache_write: Default::default(),
+                        output: 1,
+                    },
+                    input_bytes: 300,
+                    ..recorded("g_3")
+                },
+            ),
         ],
         vec![None, None, Some(11), None, None, rebuilt],
+    );
+}
+
+#[test]
+fn every_input_token_counts_whether_cached_or_not() {
+    for (input, cache_read, pairs) in [
+        (100, 0, &[("5m", 0)][..]),
+        (10, 0, &[("5m", 90)][..]),
+        (1, 99, &[][..]),
+        (1, 9, &[("5m", 40), ("1h", 50)][..]),
+    ] {
+        assert_tokens(
+            vec![
+                preamble_line(&built(PreambleReason::Start, "hi")),
+                start_line("a_1"),
+                usage_line(Some("a_1"), counted("g_1", input, cache_read, pairs)),
+            ],
+            vec![None, None, Some(11)],
+        );
+    }
+}
+
+#[test]
+fn a_first_request_with_no_cache_write_gives_a_rate() {
+    assert_tokens(
+        vec![
+            preamble_line(&built(PreambleReason::Start, "hi")),
+            start_line("a_1"),
+            usage_line(
+                Some("a_1"),
+                UsageRecorded {
+                    input_bytes: 16_000,
+                    ..counted("g_1", 4000, 0, &[])
+                },
+            ),
+        ],
+        vec![None, None, Some(3)],
+    );
+}
+
+#[test]
+fn a_request_with_media_is_skipped_for_the_next_without() {
+    assert_tokens(
+        vec![
+            preamble_line(&built(PreambleReason::Start, "hi")),
+            start_line("a_1"),
+            usage_line(
+                Some("a_1"),
+                UsageRecorded {
+                    tokens: Tokens {
+                        input: 10,
+                        cache_read: 0,
+                        cache_write: [("5m".to_owned(), 5000)].into_iter().collect(),
+                        output: 3,
+                    },
+                    input_media: Some(true),
+                    ..recorded("g_1")
+                },
+            ),
+            start_line("a_2"),
+            usage_line(Some("a_2"), recorded("g_2")),
+        ],
+        vec![None, None, None, None, Some(11)],
+    );
+}
+
+#[test]
+fn input_media_false_counts_like_absent() {
+    assert_tokens(
+        vec![
+            preamble_line(&built(PreambleReason::Start, "hi")),
+            start_line("a_1"),
+            usage_line(
+                Some("a_1"),
+                UsageRecorded {
+                    input_media: Some(false),
+                    ..recorded("g_1")
+                },
+            ),
+        ],
+        vec![None, None, Some(11)],
+    );
+}
+
+#[test]
+fn a_zero_byte_request_is_skipped_for_the_next() {
+    assert_tokens(
+        vec![
+            preamble_line(&built(PreambleReason::Start, "hi")),
+            start_line("a_1"),
+            usage_line(
+                Some("a_1"),
+                UsageRecorded {
+                    input_bytes: 0,
+                    ..recorded("g_1")
+                },
+            ),
+            start_line("a_2"),
+            usage_line(Some("a_2"), recorded("g_2")),
+        ],
+        vec![None, None, None, None, Some(11)],
+    );
+}
+
+#[test]
+fn another_models_usage_never_counts() {
+    assert_tokens(
+        vec![
+            preamble_line(&built(PreambleReason::Start, "hi")),
+            start_line("a_1"),
+            usage_line(
+                Some("a_1"),
+                UsageRecorded {
+                    model: "other".into(),
+                    ..recorded("g_1")
+                },
+            ),
+            start_line("a_2"),
+            usage_line(Some("a_2"), recorded("g_2")),
+        ],
+        vec![None, None, None, None, Some(11)],
     );
 }
 
@@ -444,7 +627,17 @@ fn the_cache_write_sums_every_lifetime_saturating() {
     fold.fold(&start_line("a_1"));
     fold.fold(&usage_line(
         Some("a_1"),
-        recorded("g_1", vec![("5m", 40), ("1h", 60)]),
+        UsageRecorded {
+            tokens: Tokens {
+                input: 10,
+                cache_read: 0,
+                cache_write: [("5m".to_owned(), 40), ("1h".to_owned(), 60)]
+                    .into_iter()
+                    .collect(),
+                output: 3,
+            },
+            ..recorded("g_1")
+        },
     ));
     assert_eq!(
         fold.rate(),
@@ -458,7 +651,17 @@ fn the_cache_write_sums_every_lifetime_saturating() {
     saturated.fold(&start_line("a_1"));
     saturated.fold(&usage_line(
         Some("a_1"),
-        recorded("g_1", vec![("5m", u64::MAX), ("1h", 1)]),
+        UsageRecorded {
+            tokens: Tokens {
+                input: 10,
+                cache_read: 0,
+                cache_write: [("5m".to_owned(), u64::MAX), ("1h".to_owned(), 1)]
+                    .into_iter()
+                    .collect(),
+                output: 3,
+            },
+            ..recorded("g_1")
+        },
     ));
     assert_eq!(saturated.rate().tokens(u64::MAX), Some(u64::MAX));
 }
@@ -480,7 +683,7 @@ fn the_rate_folds_appended_lines_and_survives_a_reopen() {
     )
     .unwrap();
     log.append(
-        &Event::UsageRecorded(recorded("g_1", vec![("5m", 100)])),
+        &Event::UsageRecorded(recorded("g_1")),
         None,
         Some(ActionId("a_1".into())),
     )

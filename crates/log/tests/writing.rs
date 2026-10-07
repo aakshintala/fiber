@@ -228,6 +228,7 @@ fn a_model_call_outside_the_conversation_is_fsynced_once_its_usage_is_recorded()
             "generation_id": "g",
             "model": "p/m",
             "tokens": {"input": 1, "cache_read": 0, "cache_write": {}, "output": 1},
+            "input_bytes": 1,
             "cost": null,
         }),
     );

@@ -26,8 +26,8 @@ use std::time::Duration;
 
 use contract::events::{CacheLifetime, ReasoningCompleted, TextDelta, ToolCallRequested};
 use contract::provider::{
-    CallError, Delta, Finish, Input, ModelCall, ModelRequest, Provider, Reply, ReplyAction,
-    ToolDefinition,
+    CallError, Delta, Finish, Input, InputSize, ModelCall, ModelRequest, Provider, Reply,
+    ReplyAction, ToolDefinition,
 };
 use contract::{ActionId, ErrorCode, ProviderCallId};
 use fakes::{ProviderServer, Response};
@@ -1364,5 +1364,48 @@ fn a_users_image_is_left_out_for_a_text_only_model() {
         user_item(&server),
         json!({"role": "user",
             "content": "look\n[Image artifacts/i_1.png left out: this model does not take images.]"})
+    );
+}
+
+#[test]
+fn a_reply_carries_the_size_of_the_body_it_sent() {
+    let session = fakes::TempDir::new("fiber-responses-request-size");
+    std::fs::create_dir(session.path().join("artifacts")).unwrap();
+    std::fs::write(session.path().join("artifacts/i_1.png"), b"abcd").unwrap();
+    let request = ModelRequest {
+        conversation: image_conversation(
+            "Image: 2x1 image/png.\n",
+            vec![png_ref("artifacts/i_1.png")],
+        ),
+        session_dir: session.path().to_path_buf(),
+        ..request()
+    };
+    let reply = || Response::stream(stream(&[completed("completed", json!({}))]));
+    let server = ProviderServer::start([reply(), reply()]).unwrap();
+    let reply = run(Box::new(
+        Responses::new(endpoint(&server)).request(&request),
+    ))
+    .0
+    .unwrap();
+    assert_eq!(
+        reply.input_size,
+        InputSize {
+            bytes: u64::try_from(server.requests()[0].body.len()).unwrap(),
+            media: true,
+        }
+    );
+    let endpoint = Endpoint {
+        text_only: true,
+        ..endpoint(&server)
+    };
+    let reply = run(Box::new(Responses::new(endpoint).request(&request)))
+        .0
+        .unwrap();
+    assert_eq!(
+        reply.input_size,
+        InputSize {
+            bytes: u64::try_from(server.requests()[1].body.len()).unwrap(),
+            media: false,
+        }
     );
 }

@@ -27,8 +27,8 @@ use std::time::Duration;
 
 use contract::events::{CacheLifetime, ReasoningCompleted, TextDelta, ToolCallRequested};
 use contract::provider::{
-    CallError, Delta, Finish, Input, ModelCall, ModelRequest, Provider, Reply, ReplyAction,
-    ToolDefinition,
+    CallError, Delta, Finish, Input, InputSize, ModelCall, ModelRequest, Provider, Reply,
+    ReplyAction, ToolDefinition,
 };
 use contract::shapes::Tokens;
 use contract::{ActionId, ErrorCode, ProviderCallId};
@@ -2186,5 +2186,42 @@ fn the_previous_end_marker_lands_on_a_multi_block_users_last_block() {
              "cache_control": {"type": "ephemeral"}},
             {"type": "text", "text": "again", "cache_control": {"type": "ephemeral"}},
         ]}])
+    );
+}
+
+#[test]
+fn a_reply_carries_the_size_of_the_body_it_sent() {
+    let session = fakes::TempDir::new("fiber-anthropic-request-size");
+    std::fs::create_dir(session.path().join("artifacts")).unwrap();
+    std::fs::write(session.path().join("artifacts/i_1.png"), b"abcd").unwrap();
+    let request = ModelRequest {
+        conversation: image_conversation(false, vec![png_ref("artifacts/i_1.png")]),
+        session_dir: session.path().to_path_buf(),
+        ..request()
+    };
+    let server = ProviderServer::start([completed_reply(), completed_reply()]).unwrap();
+    let reply = run(Box::new(Messages::new(endpoint(&server)).request(&request)))
+        .0
+        .unwrap();
+    assert_eq!(
+        reply.input_size,
+        InputSize {
+            bytes: u64::try_from(server.requests()[0].body.len()).unwrap(),
+            media: true,
+        }
+    );
+    let endpoint = Endpoint {
+        text_only: true,
+        ..endpoint(&server)
+    };
+    let reply = run(Box::new(Messages::new(endpoint).request(&request)))
+        .0
+        .unwrap();
+    assert_eq!(
+        reply.input_size,
+        InputSize {
+            bytes: u64::try_from(server.requests()[1].body.len()).unwrap(),
+            media: false,
+        }
     );
 }

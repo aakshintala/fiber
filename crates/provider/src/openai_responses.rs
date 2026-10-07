@@ -12,8 +12,8 @@ use contract::events::{
     ReasoningCompleted, TextCompleted, TextDelta, ToolCallArgumentsDelta, ToolCallRequested,
 };
 use contract::provider::{
-    CallError, Delta, Finish, Input, ModelCall, ModelRequest, Provider, Reply, ReplyAction,
-    ToolDefinition,
+    CallError, Delta, Finish, Input, InputSize, ModelCall, ModelRequest, Provider, Reply,
+    ReplyAction, ToolDefinition,
 };
 use contract::shapes::Tokens;
 use contract::{ActionId, GenerationId, ProviderCallId};
@@ -74,6 +74,7 @@ impl Responses {
             url: format!("{}/responses", endpoint.base_url.trim_end_matches('/')),
             headers,
             body: body(endpoint, request),
+            input_size: InputSize::default(),
             provider: endpoint.provider.clone(),
             signer: endpoint.signer.clone(),
             direct: endpoint.direct,
@@ -98,6 +99,7 @@ pub struct Call {
     url: String,
     headers: Vec<(String, String)>,
     body: Vec<u8>,
+    input_size: InputSize,
     provider: String,
     signer: Option<Arc<dyn contract::signing::Signer>>,
     direct: bool,
@@ -144,10 +146,15 @@ impl ModelCall for Call {
         if self.cancel.is_cancelled() {
             return Err(CallError::Cancelled);
         }
-        reply.map_err(|e| CallError::Failed {
-            failure: e.failure(&self.provider, &secrets),
-            should_retry,
-        })
+        reply
+            .map(|reply| Reply {
+                input_size: self.input_size,
+                ..reply
+            })
+            .map_err(|e| CallError::Failed {
+                failure: e.failure(&self.provider, &secrets),
+                should_retry,
+            })
     }
 
     fn cancel(&self) {
@@ -543,6 +550,7 @@ impl Decoder {
             tokens: tokens(&response["usage"]),
             web_searches: None,
             cost: None,
+            input_size: InputSize::default(),
         })
     }
 }

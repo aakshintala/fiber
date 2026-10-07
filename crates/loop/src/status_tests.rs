@@ -163,6 +163,7 @@ fn usage(generation: &str, input: u64, cost: Option<f64>) -> Value {
         "generation_id": generation,
         "model": "fake/m",
         "tokens": {"input": input, "cache_read": 0, "cache_write": {}, "output": 5},
+        "input_bytes": 1,
         "cost": cost,
     })
 }
@@ -1072,6 +1073,8 @@ fn a_lagging_observer_folds_every_written_line_before_it_stops() {
         subscription: None,
         extension: None,
         origin_session_id: None,
+        input_bytes: 1,
+        input_media: None,
     }));
     append(Event::TurnCompleted(TurnCompleted {
         outcome: TurnOutcome::Completed,

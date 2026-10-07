@@ -774,6 +774,8 @@ none.
 | `generation_id` | string | yes | the provider's id for the generation |
 | `model` | string | yes | the model reference, `provider/model` |
 | `tokens` | `tokens` | yes | the call's tokens |
+| `input_bytes` | integer | yes | the size in bytes of the request body Fiber sent for the call: the system prompt, tool definitions and messages as serialised for the provider, with the request's settings |
+| `input_media` | boolean | no | `true` when the request carried an image or a PDF part; absent means none |
 | `web_searches` | integer | no | hosted web searches, where the provider reports them |
 | `cost` | number or null | yes | in US dollars: the vendor's own figure where it reports one, otherwise the model's declared prices applied to `tokens` (`docs/model-routing.md`, "Cost"); `null` when neither exists |
 | `subscription` | boolean | no | `true` when a subscription login covered the call, so `cost` is an API-price estimate, not money billed; absent means billed per token |

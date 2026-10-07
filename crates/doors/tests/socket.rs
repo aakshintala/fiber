@@ -775,7 +775,10 @@ fn tools_give_tokens_from_the_first_request_after_each_preamble() {
 
     fn usage(
         generation: &str,
+        input: u64,
         cache_write: Vec<(&str, u64)>,
+        input_bytes: u64,
+        input_media: Option<bool>,
         extension: Option<&str>,
         origin: Option<SessionId>,
     ) -> Event {
@@ -783,7 +786,7 @@ fn tools_give_tokens_from_the_first_request_after_each_preamble() {
             generation_id: GenerationId(generation.into()),
             model: "fake/m".into(),
             tokens: Tokens {
-                input: 10,
+                input,
                 cache_read: 0,
                 cache_write: cache_write
                     .into_iter()
@@ -796,6 +799,8 @@ fn tools_give_tokens_from_the_first_request_after_each_preamble() {
             subscription: None,
             extension: extension.map(str::to_owned),
             origin_session_id: origin,
+            input_bytes,
+            input_media,
         })
     }
 
@@ -832,10 +837,14 @@ fn tools_give_tokens_from_the_first_request_after_each_preamble() {
 
             let a1 = Some(ActionId("a_1".into()));
             log.append(&started(), None, a1.clone()).unwrap();
-            log.append(&usage("g_x", vec![("5m", 1000)], None, None), None, None)
-                .unwrap();
             log.append(
-                &usage("g_x", vec![("5m", 1000)], Some("x"), None),
+                &usage("g_x", 10, vec![("5m", 1000)], 500, None, None, None),
+                None,
+                None,
+            )
+            .unwrap();
+            log.append(
+                &usage("g_x", 10, vec![("5m", 1000)], 500, None, Some("x"), None),
                 None,
                 a1.clone(),
             )
@@ -843,7 +852,10 @@ fn tools_give_tokens_from_the_first_request_after_each_preamble() {
             log.append(
                 &usage(
                     "g_x",
+                    10,
                     vec![("5m", 1000)],
+                    500,
+                    None,
                     None,
                     Some(SessionId("s_other".into())),
                 ),
@@ -852,9 +864,15 @@ fn tools_give_tokens_from_the_first_request_after_each_preamble() {
             )
             .unwrap();
             log.append(
-                &usage("g_x", vec![("5m", 1000)], None, None),
+                &usage("g_x", 10, vec![("5m", 1000)], 500, None, None, None),
                 None,
                 Some(ActionId("a_9".into())),
+            )
+            .unwrap();
+            log.append(
+                &usage("g_x", 10, vec![("5m", 5000)], 500, Some(true), None, None),
+                None,
+                a1.clone(),
             )
             .unwrap();
             send(&client, r#"{"id":"c_t2","command":"tools"}"#);
@@ -863,23 +881,15 @@ fn tools_give_tokens_from_the_first_request_after_each_preamble() {
             assert!(tools_of(&t2)[0].get("tokens").is_none(), "{t2}");
 
             log.append(
-                &usage("g_1", vec![("5m", 100)], None, None),
+                &usage("g_1", 10, vec![("5m", 90)], 500, None, None, None),
                 None,
                 a1.clone(),
             )
             .unwrap();
             send(&client, r#"{"id":"c_t3","command":"tools"}"#);
             let t3 = response(&client, "c_t3");
-            let fields = serde_json::json!({
-                "cache_lifetime": "5m",
-                "model": "fake/m",
-                "system_prompt": "system-a",
-                "tool_choice": "auto",
-                "tools": [{"type": "object"}],
-            });
-            let preamble_bytes = serde_json::to_vec(&fields).unwrap().len() as u64;
-            let expected = 12 * 100 / preamble_bytes;
-            assert!(expected >= 2 && (12 * 100) % preamble_bytes != 0);
+            let expected = 12 * 100 / 500;
+            assert!(expected >= 2 && (12 * 100) % 500 != 0);
             assert_eq!(tools_of(&t3)[0]["bytes"], 12);
             assert_eq!(
                 tools_of(&t3)[0]["tokens"].as_u64().unwrap(),
@@ -888,7 +898,7 @@ fn tools_give_tokens_from_the_first_request_after_each_preamble() {
             );
 
             log.append(
-                &usage("g_1", vec![("5m", 555)], None, None),
+                &usage("g_1", 10, vec![("5m", 555)], 500, None, None, None),
                 None,
                 a1.clone(),
             )
@@ -910,7 +920,7 @@ fn tools_give_tokens_from_the_first_request_after_each_preamble() {
             assert!(tools_of(&t5)[0].get("tokens").is_none(), "{t5}");
 
             log.append(
-                &usage("g_1", vec![("5m", 1000)], None, None),
+                &usage("g_1", 10, vec![("5m", 1000)], 500, None, None, None),
                 None,
                 a1.clone(),
             )
@@ -923,7 +933,7 @@ fn tools_give_tokens_from_the_first_request_after_each_preamble() {
             log.append(&started(), None, Some(ActionId("a_2".into())))
                 .unwrap();
             log.append(
-                &usage("g_2", Vec::new(), None, None),
+                &usage("g_2", 0, Vec::new(), 500, None, None, None),
                 None,
                 Some(ActionId("a_2".into())),
             )

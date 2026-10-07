@@ -9,7 +9,7 @@ use std::sync::{Mutex, PoisonError};
 
 use contract::events::TextCompleted;
 use contract::provider::{
-    CallError, Delta, Finish, ModelCall, ModelRequest, Provider, Reply, ReplyAction,
+    CallError, Delta, Finish, InputSize, ModelCall, ModelRequest, Provider, Reply, ReplyAction,
 };
 use contract::shapes::{Failure, Tokens};
 use contract::{ErrorCode, GenerationId};
@@ -51,7 +51,7 @@ impl Scripted {
 }
 
 /// A completed reply of one text part, or none when `text` is `""`,
-/// generation `gen_1`, and 10 input and 3 output tokens.
+/// generation `gen_1`, 10 input and 3 output tokens, and 1000 input bytes.
 pub fn reply(text: &str) -> Reply {
     Reply {
         actions: if text.is_empty() {
@@ -72,6 +72,10 @@ pub fn reply(text: &str) -> Reply {
         },
         web_searches: None,
         cost: None,
+        input_size: InputSize {
+            bytes: 1000,
+            media: false,
+        },
     }
 }
 

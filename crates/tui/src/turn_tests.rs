@@ -117,7 +117,7 @@ fn call(app: &mut App, action: &str, name: &str, arguments: Value, ts: u64) {
 fn usage(app: &mut App, id: &str, tokens: u64, cost: Value, extra: Value) {
     let mut payload = json!({"generation_id": id, "model": "fake/m",
         "tokens": {"input": tokens, "cache_read": 0, "cache_write": {}, "output": 0},
-        "cost": cost});
+        "input_bytes": 0, "cost": cost});
     if let (Some(payload), Some(extra)) = (payload.as_object_mut(), extra.as_object()) {
         payload.extend(extra.clone());
     }
@@ -552,7 +552,7 @@ fn every_kind_of_token_counts_and_one_call_is_singular() {
         json!({"generation_id": "g1", "model": "fake/m",
             "tokens": {"input": 1, "cache_read": 10, "cache_write": {"5m": 100, "1h": 1000},
                 "output": 10000},
-            "cost": 0.004}),
+            "input_bytes": 0, "cost": 0.004}),
     );
     end(&mut app, "interrupted", 999);
     assert_eq!(last(&app), "▣ interrupted · 1 call · 11.1k tokens · <$0.01");
@@ -1001,7 +1001,7 @@ fn only_a_line_that_changes_a_card_raises_the_overlay() {
     let mut app = app();
     let usage = json!({"generation_id": "g_1", "model": "fake/m",
         "tokens": {"input": 1, "cache_read": 0, "cache_write": {}, "output": 0},
-        "cost": null});
+        "input_bytes": 0, "cost": null});
     let steer = json!({"content": [{"type": "text", "text": "x"}], "source": "driver"});
     // With no turn open, nothing has a card to change.
     assert!(!flags(&mut app, "notice", None, json!({"message": "hi"})));

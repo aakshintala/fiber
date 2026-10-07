@@ -13,7 +13,7 @@ use std::sync::Arc;
 use contract::ActionId;
 use contract::events::CacheLifetime;
 use contract::provider::{
-    CallError, Delta, Input, ModelCall, ModelRequest, Provider, Reply, ToolDefinition,
+    CallError, Delta, Input, InputSize, ModelCall, ModelRequest, Provider, Reply, ToolDefinition,
 };
 use serde_json::{Map, Value, json};
 
@@ -74,6 +74,7 @@ impl Messages {
             url: format!("{}/messages", endpoint.base_url.trim_end_matches('/')),
             headers,
             body: body(endpoint, request),
+            input_size: InputSize::default(),
             provider: endpoint.provider.clone(),
             signer: endpoint.signer.clone(),
             direct: endpoint.direct,
@@ -98,6 +99,7 @@ pub struct Call {
     url: String,
     headers: Vec<(String, String)>,
     body: Vec<u8>,
+    input_size: InputSize,
     provider: String,
     signer: Option<Arc<dyn contract::signing::Signer>>,
     direct: bool,
@@ -144,10 +146,15 @@ impl ModelCall for Call {
         if self.cancel.is_cancelled() {
             return Err(CallError::Cancelled);
         }
-        reply.map_err(|e| CallError::Failed {
-            failure: e.failure(&self.provider, &secrets),
-            should_retry,
-        })
+        reply
+            .map(|reply| Reply {
+                input_size: self.input_size,
+                ..reply
+            })
+            .map_err(|e| CallError::Failed {
+                failure: e.failure(&self.provider, &secrets),
+                should_retry,
+            })
     }
 
     fn cancel(&self) {

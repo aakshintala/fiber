@@ -219,6 +219,8 @@ fn a_stage_1_allow_runs_the_call_with_one_token() {
         .collect::<Vec<_>>();
     assert_eq!(recorded.len(), 1);
     assert_eq!(recorded[0].action_id, None);
+    assert_eq!(recorded[0].payload["input_bytes"], 1000);
+    assert!(recorded[0].payload.get("input_media").is_none());
     assert_eq!(usages(&lines).len(), 3);
 }
 

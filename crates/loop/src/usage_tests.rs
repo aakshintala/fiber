@@ -233,6 +233,8 @@ fn recorded(id: &str, input: u64, cache_read: u64, written: u64, output: u64) ->
         subscription: None,
         extension: None,
         origin_session_id: None,
+        input_bytes: 1,
+        input_media: None,
     }
 }
 
