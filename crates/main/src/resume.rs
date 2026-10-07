@@ -26,7 +26,7 @@ pub(crate) fn ask_resume(
     model: Option<String>,
     prompt: String,
     clock: Arc<dyn contract::clock::Clock>,
-    signals: &doors::Signals,
+    signals: &Arc<doors::Signals>,
     fiber: Result<PathBuf, String>,
 ) -> i32 {
     let home = match config::fiber_home_from_env() {
@@ -79,7 +79,7 @@ pub(crate) fn session_resume(
     id: SessionId,
     model: Option<String>,
     clock: Arc<dyn contract::clock::Clock>,
-    signals: &doors::Signals,
+    signals: &Arc<doors::Signals>,
     fiber: Result<PathBuf, String>,
 ) -> i32 {
     let home = match config::fiber_home_from_env() {
@@ -122,7 +122,7 @@ fn resumed_session(
     prompt: Option<String>,
     one_turn: bool,
     clock: Arc<dyn contract::clock::Clock>,
-    signals: &doors::Signals,
+    signals: &Arc<doors::Signals>,
     fiber: Result<PathBuf, String>,
 ) -> i32 {
     let folded = match r#loop::resumed(dir) {
@@ -221,10 +221,11 @@ fn resumed_session(
     session.jobs(jobs.clone());
     session.images(Arc::clone(&session_servers.images));
     session.hooks(Arc::clone(&extensions) as Arc<dyn contract::hook::Hooks>);
-    session.commands(r#loop::commands(
-        &prompt_inputs,
-        Path::new(&folded.workspace),
-    ));
+    session.extensions(Arc::clone(&extensions) as Arc<dyn contract::extension::ExtensionDoor>);
+    extensions.emit_to(Arc::new(log::WeakEmit::new(&log)));
+    let mut all_commands = r#loop::commands(&prompt_inputs, Path::new(&folded.workspace));
+    all_commands.extend(extensions.commands());
+    session.commands(all_commands);
     let cancel = Arc::new(r#loop::TurnCancel::default());
     // A signal while armed: the log stays as it was.
     if let Some(code) = crate::shutdown::start(signals, &cancel, &session, jobs.clone()) {

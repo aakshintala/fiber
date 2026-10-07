@@ -63,7 +63,7 @@ fn completed(app: &mut App, payload: Value) {
 fn usage(app: &mut App, id: &str, input: u64, extra: Value) {
     let mut payload = json!({"generation_id": id, "model": "fake/m",
         "tokens": {"input": input, "cache_read": 2_000, "cache_write": {"5m": 1_000}, "output": 50},
-        "cost": null});
+        "input_bytes": 0, "cost": null});
     if let (Some(payload), Some(extra)) = (payload.as_object_mut(), extra.as_object()) {
         payload.extend(extra.clone());
     }

@@ -1,7 +1,8 @@
 //! The images of a tool result, shared by all four protocols: one function
 //! turns (text, images, session_dir, text_only) into the final text plus the
-//! encoded images, and each protocol only wraps them in its own shape. The
-//! bytes are the stored file's, never re-encoded or resized
+//! encoded images, and each protocol only wraps them in its own shape; one
+//! function measures a request body's size and whether it carried an image.
+//! The bytes are the stored file's, never re-encoded or resized
 //! (`docs/model-routing.md`, "Image limits"), so a resume sends the same
 //! bytes.
 
@@ -9,7 +10,7 @@ use std::path::{Component, Path};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use contract::provider::ImageRef;
+use contract::provider::{ImageRef, Input, InputSize, ModelRequest};
 use serde_json::{Value, json};
 
 /// One stored image, base64-encoded for the wire.
@@ -82,6 +83,23 @@ fn append_line(text: &mut String, line: &str) {
 /// `data:<mime>;base64,<data>`, as both OpenAI protocols carry an image.
 pub(crate) fn data_url(image: &Encoded) -> String {
     format!("data:{};base64,{}", image.mime_type, image.data)
+}
+
+/// The input a protocol sent for one call: the request body's length in
+/// bytes, exactly as posted, and whether it carried an image. A text-only
+/// endpoint sends no image part, so it reports no media. An image whose file
+/// cannot be read is not sent but still counts as media: the rate waits
+/// rather than being skewed.
+pub(crate) fn input_size(body: &[u8], request: &ModelRequest, text_only: bool) -> InputSize {
+    let media = !text_only
+        && request.conversation.iter().any(|input| match input {
+            Input::User { images, .. } | Input::ToolResult { images, .. } => !images.is_empty(),
+            Input::Assistant { .. } | Input::Reasoning { .. } | Input::ToolCall { .. } => false,
+        });
+    InputSize {
+        bytes: u64::try_from(body.len()).unwrap_or(u64::MAX),
+        media,
+    }
 }
 
 /// A `tool_result`'s `content` as `anthropic-messages` carries it: the plain

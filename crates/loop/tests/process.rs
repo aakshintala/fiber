@@ -96,7 +96,7 @@ fn failure(code: ErrorCode, message: &str) -> Failure {
     Failure {
         code,
         message: message.into(),
-        retry_after: None,
+        retry_after_ms: None,
         provider: None,
     }
 }
@@ -116,6 +116,8 @@ fn usage(id: &str, output: u64, cost: Option<f64>, subscription: Option<bool>) -
         subscription,
         extension: None,
         origin_session_id: None,
+        input_bytes: 1,
+        input_media: None,
     })
 }
 
@@ -130,7 +132,6 @@ fn message() -> Event {
     Event::AssistantMessageCompleted(AssistantMessageCompleted {
         outcome: MessageOutcome::Completed,
         error: None,
-        attempt: None,
     })
 }
 

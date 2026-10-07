@@ -17,6 +17,7 @@ use contract::tool::Bound;
 use contract::{ActionId, Envelope, SCHEMA_VERSION, Seq, SessionId, TurnId};
 
 use crate::offsets::Offsets;
+use crate::rate::{Rate, RateFold};
 use crate::read::{CAPACITY, Queue, Watcher};
 use crate::{ARTIFACTS, EVENTS, Error, LOCK, io_at, session_path};
 
@@ -50,6 +51,8 @@ struct Inner {
     /// The newest line of each latest-wins kind. A subscriber reads it after
     /// registering, so a lagging connection cannot hide it.
     latest: BTreeMap<String, Envelope>,
+    /// The bytes-to-tokens rate folded from every line so far.
+    rate: RateFold,
     /// Why the log stopped, once a write or fsync failed.
     failed: Option<String>,
 }
@@ -110,6 +113,7 @@ impl Log {
         let mut lines = crate::read::lines(&dir)?;
         let mut starts = Vec::new();
         let mut latest = BTreeMap::new();
+        let mut rate = RateFold::default();
         let mut next = 0;
         loop {
             let start = lines.offset();
@@ -120,6 +124,7 @@ impl Log {
             starts.push(start);
             next = line.seq.map_or(0, |s| s.0 + 1);
             keep_latest(&mut latest, &line);
+            rate.fold(&line);
         }
         let end = lines.offset();
         // A no-op unless the tail is torn.
@@ -127,6 +132,7 @@ impl Log {
         let offsets = Offsets::new(path, starts, end);
         let mut inner = Inner::new(id, dir, events, lock, next, offsets);
         inner.latest = latest;
+        inner.rate = rate;
         Ok(Self::from_parts(inner, clock))
     }
 
@@ -171,6 +177,7 @@ impl Log {
             Class::Ephemeral => {}
         }
         keep_latest(&mut inner.latest, &line);
+        inner.rate.fold(&line);
         inner.watchers.retain(|w| match w.upgrade() {
             Some(queue) => {
                 queue.push(&line);
@@ -181,13 +188,19 @@ impl Log {
         Ok(line)
     }
 
-    /// The newest line of a latest-wins kind (`session_status` or
-    /// `extensions_loaded`), recorded as it was appended. Nothing for any
+    /// The newest line of a latest-wins kind (`session_status`,
+    /// `extensions_loaded`, `steering_queue` or `clients`), recorded as it
+    /// was appended. Nothing for any
     /// other kind, and nothing before that kind has been written. A
     /// subscriber registers its watcher first and then reads this, so a line
     /// written in between is queued and may also be here; the latest wins.
     pub fn latest(&self, kind: &str) -> Option<Envelope> {
         self.lock().latest.get(kind).cloned()
+    }
+
+    /// The bytes-to-tokens rate folded from every line so far.
+    pub fn rate(&self) -> Rate {
+        self.lock().rate.rate()
     }
 
     /// How many durable lines the log holds: the `seq` the next one gets.
@@ -219,6 +232,51 @@ impl Log {
     /// later pages are read as the watcher reaches them.
     pub fn watch_all(&self) -> Result<Watcher, Error> {
         let armed = self.arm(true);
+        self.finish(armed)
+    }
+
+    /// A watcher like [`Log::watch_all`], with the kept ephemeral lines
+    /// seeded first: the kept `session_status`, `steering_queue` and
+    /// `extension_ui` lines, in that order with `extension_ui` by key. The
+    /// watcher is registered and its seed queued under the one log lock
+    /// that `append` takes, so no later line can be queued before an older
+    /// snapshot.
+    pub fn watch_all_seeded(&self) -> Result<Watcher, Error> {
+        let armed = {
+            let mut inner = self.lock();
+            let queue = Arc::new(Queue::default());
+            if let Some(cause) = &inner.failed {
+                queue.fail(&inner.session_id.0, cause);
+            }
+            inner.watchers.retain(|w| w.strong_count() > 0);
+            inner.watchers.push(Arc::downgrade(&queue));
+            let mut seeds: Vec<Envelope> = Vec::new();
+            if let Some(line) = inner.latest.get("session_status") {
+                seeds.push(line.clone());
+            }
+            if let Some(line) = inner.latest.get("steering_queue") {
+                seeds.push(line.clone());
+            }
+            let mut ui_keys: Vec<&String> = inner
+                .latest
+                .keys()
+                .filter(|k| k.starts_with("extension_ui:"))
+                .collect();
+            ui_keys.sort();
+            for key in ui_keys {
+                if let Some(line) = inner.latest.get(key) {
+                    seeds.push(line.clone());
+                }
+            }
+            for line in &seeds {
+                queue.push_kept(line);
+            }
+            Armed {
+                queue,
+                offsets: Arc::clone(&inner.offsets),
+                next: 0,
+            }
+        };
         self.finish(armed)
     }
 
@@ -377,6 +435,7 @@ impl Inner {
             fsyncs: 0,
             watchers: Vec::new(),
             latest: BTreeMap::new(),
+            rate: RateFold::default(),
             failed: None,
         }
     }
@@ -415,13 +474,40 @@ impl Inner {
 }
 
 /// Keeps `line` in `latest` when its kind is one whose latest wins
-/// (`session_status`, `extensions_loaded`, `steering_queue`).
+/// (`session_status`, `extensions_loaded`, `steering_queue`, `clients`, and
+/// `extension_ui`). `extension_ui` is kept per extension and per widget id:
+/// one key for the status line and one per widget; a clearing line (`status`
+/// `""`, or empty `lines`) removes its key.
 fn keep_latest(latest: &mut BTreeMap<String, Envelope>, line: &Envelope) {
     if matches!(
         line.kind.as_str(),
-        "session_status" | "extensions_loaded" | "steering_queue"
+        "session_status" | "extensions_loaded" | "steering_queue" | "clients"
     ) {
         latest.insert(line.kind.clone(), line.clone());
+        return;
+    }
+    if line.kind.as_str() == "extension_ui" {
+        let ui: Result<contract::events::ExtensionUi, _> =
+            serde_json::from_value(serde_json::Value::Object(line.payload.clone()));
+        let Ok(ui) = ui else { return };
+        match &ui.ui {
+            contract::events::Ui::Status { status } => {
+                let key = format!("extension_ui:{}:status", ui.extension);
+                if status.is_empty() {
+                    latest.remove(&key);
+                } else {
+                    latest.insert(key, line.clone());
+                }
+            }
+            contract::events::Ui::Widget { widget, lines } => {
+                let key = format!("extension_ui:{}:widget:{}", ui.extension, widget);
+                if lines.is_empty() {
+                    latest.remove(&key);
+                } else {
+                    latest.insert(key, line.clone());
+                }
+            }
+        }
     }
 }
 

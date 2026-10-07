@@ -16,6 +16,14 @@ pub struct UsageRecorded {
     pub model: String,
     /// The call's tokens.
     pub tokens: Tokens,
+    /// The size in bytes of the input Fiber sent: system prompt, tool
+    /// definitions and messages, as serialised for the provider, with the
+    /// request's settings.
+    pub input_bytes: u64,
+    /// `true` when the input carried, or tried to carry, an image or a PDF
+    /// part; absent means none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_media: Option<bool>,
     /// Hosted web searches, where the provider reports them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub web_searches: Option<u64>,

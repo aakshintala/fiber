@@ -18,10 +18,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use contract::clock::Clock;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::oauth::{Browser, SystemBrowser};
-use crate::{Error, host};
+use crate::{CredentialPair, Error, host};
 
 /// Each Lua extension's default memory cap (`docs/extensions.md`, "Loading,
 /// and cost when nothing is loaded"). Past it, an allocation is a Lua error in
@@ -136,10 +136,30 @@ end
 
 fiber = {
   command = function(name, spec)
-    if type(name) ~= "string" then
-      error("fiber.command: the name must be a string", 2)
+    local shown = tostring(name)
+    local function refuse(why)
+      problems[#problems + 1] = "`" .. shown .. "` command not registered: " .. why
     end
-    commands[name] = callback("fiber.command", spec)
+    if type(name) ~= "string" then
+      return refuse("the name must be a string")
+    end
+    if name == "" or name:find("%s") or name:find("/") or name:find(":") then
+      return refuse("names are plain: `" .. shown .. "` is empty or holds whitespace, `/` or `:`")
+    end
+    if type(spec) ~= "table" then
+      return refuse("it takes a table of `timeout`, `run` and `description`")
+    end
+    if spec.timeout == nil then return refuse("missing `timeout`") end
+    if math.type(spec.timeout) ~= "integer" or spec.timeout <= 0 then
+      return refuse("`timeout` must be a whole number of milliseconds above 0")
+    end
+    if type(spec.run) ~= "function" then return refuse("`run` must be a function") end
+    local description = spec.description
+    if description == nil then description = "" end
+    if type(description) ~= "string" or description:find("\n") then
+      return refuse("`description` must be a single-line string")
+    end
+    commands[name] = { timeout = spec.timeout, run = spec.run, description = description }
   end,
   provider = function(name, spec)
     if type(name) ~= "string" or type(spec) ~= "table" then
@@ -285,6 +305,76 @@ impl LuaExtension {
         self.registered(|timeouts| timeouts.providers.keys().cloned().collect())
     }
 
+    /// Every command the entry script registered: its name and description.
+    /// Starts the extension.
+    pub fn commands(&self) -> Result<Vec<(String, String)>, Error> {
+        self.registered(|timeouts| {
+            timeouts
+                .commands
+                .iter()
+                .map(|(name, cmd)| (name.clone(), cmd.description.clone()))
+                .collect()
+        })
+    }
+
+    /// Queues the command `name` with `text` as a held call: it never starts
+    /// until `Queued::release`. Returns the queued call; `wait` returns the
+    /// run's end. Starts the extension.
+    pub(crate) fn queue_command(&self, name: &str, text: &str) -> Result<Queued, Error> {
+        let asked = self.hub.clock().now();
+        let mut shared = self.hub.lock();
+        self.start(&mut shared)?;
+        // Registration must have finished before admission: the door admits
+        // only listed names, so an unregistered name is refused here.
+        loop {
+            let now = self.hub.clock().now();
+            let registered = match shared.gate(&self.name, now) {
+                Gate::Ready(timeouts) => timeouts.commands.contains_key(name),
+                Gate::Stopped(e) => {
+                    self.hub.notify();
+                    return Err(e);
+                }
+                Gate::Wait(until) => {
+                    shared = self.hub.wait(shared, until);
+                    continue;
+                }
+            };
+            if !registered {
+                return Err(Error::UnknownCommand {
+                    extension: self.name.clone(),
+                    command: name.to_owned(),
+                });
+            }
+            break;
+        }
+        let target = Target::Command(name.to_owned());
+        let id = shared.push_held(target.clone(), Value::String(text.into()), asked);
+        drop(shared);
+        self.hub.notify();
+        Ok(Queued {
+            hub: Arc::clone(&self.hub),
+            name: self.name.clone(),
+            id,
+            target,
+            asked,
+        })
+    }
+
+    /// Hands the ephemeral emitter to `host.status`, `host.widget` and `host.emit`.
+    pub(crate) fn set_emit(&self, emit: std::sync::Arc<dyn contract::emit::Emit>) {
+        self.hub.set_emit(emit);
+    }
+
+    /// Emits an ephemeral event through the late-bound emitter.
+    pub(crate) fn emit(&self, event: contract::events::Event) {
+        self.hub.emit(event);
+    }
+
+    /// Drops every later emission and delivery from this extension.
+    pub(crate) fn seal(&self) {
+        self.hub.seal();
+    }
+
     /// Every hook the entry script registered, and why each one it tried
     /// and could not register was refused. Starts the extension.
     pub(crate) fn hooks(&self) -> Result<DeclaredHooks, Error> {
@@ -332,7 +422,9 @@ impl LuaExtension {
 
     /// Runs `function` (`models`, `quota`, `credential` or `sign`) of the
     /// provider `provider` registered, passing `arg`, and returns what it
-    /// returned, as JSON.
+    /// returned, as JSON. These calls carry no credential pair: only
+    /// `credential()` refreshes a stored credential
+    /// (`docs/model-routing.md`, "Keys, tokens and OAuth").
     pub(crate) fn provider_call(
         &self,
         provider: &str,
@@ -343,8 +435,29 @@ impl LuaExtension {
             Target::Provider {
                 name: provider.to_owned(),
                 function,
+                credential: None,
             },
             arg,
+        )
+    }
+
+    /// Runs `credential` of the provider `provider` for `pair`, passing the
+    /// session's label and the stored credential's name, and returns what it
+    /// returned, as JSON (`docs/model-routing.md`, "Keys, tokens and
+    /// OAuth"). The only call whose target carries a credential pair, so
+    /// the only one `host.oauth.refresh` refreshes.
+    pub(crate) fn provider_credential(
+        &self,
+        provider: &str,
+        pair: &CredentialPair,
+    ) -> Result<Value, Error> {
+        self.call(
+            Target::Provider {
+                name: provider.to_owned(),
+                function: "credential",
+                credential: Some(pair.clone()),
+            },
+            json!({"label": pair.label, "credential": pair.credential}),
         )
     }
 
@@ -388,6 +501,38 @@ impl Drop for LuaExtension {
     }
 }
 
+/// A held queued command: it never starts until `release`, and `wait`
+/// returns the run's end.
+pub(crate) struct Queued {
+    hub: Arc<Hub>,
+    name: String,
+    id: u64,
+    target: Target,
+    asked: Instant,
+}
+
+impl Queued {
+    /// Releases the call, so the stream may start it.
+    pub(crate) fn release(&self) {
+        self.hub.release(self.id);
+    }
+
+    /// Waits until the run ends, or its own limit passes.
+    pub(crate) fn wait(&self) -> Result<Value, Error> {
+        let mut shared = self.hub.lock();
+        loop {
+            let now = self.hub.clock().now();
+            match shared.judge(&self.name, self.id, &self.target, self.asked, now) {
+                Next::Return(result) => {
+                    self.hub.notify();
+                    return result;
+                }
+                Next::Sleep(until) => shared = self.hub.wait(shared, until),
+            }
+        }
+    }
+}
+
 /// What a call runs.
 #[derive(Clone)]
 enum Target {
@@ -399,6 +544,10 @@ enum Target {
         name: String,
         /// `models`, `quota`, `credential` or `sign`.
         function: &'static str,
+        /// The stored credential and label the call is for: `Some` only
+        /// for `credential`, whose `host.oauth.refresh` locks and reads
+        /// exactly this pair's file.
+        credential: Option<CredentialPair>,
     },
     /// A hook `fiber.hook` registered.
     Hook {
@@ -421,7 +570,7 @@ impl std::fmt::Display for Target {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Command(name) => f.write_str(name),
-            Self::Provider { name, function } => write!(f, "{name}.{function}"),
+            Self::Provider { name, function, .. } => write!(f, "{name}.{function}"),
             Self::Hook { point, .. } => f.write_str(point),
             Self::Timer { id } => write!(f, "timer {id}"),
         }

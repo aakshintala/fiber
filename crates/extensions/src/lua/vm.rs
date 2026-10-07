@@ -48,6 +48,10 @@ pub(super) struct Vm {
 }
 
 /// One step of a callback: it returned, or it suspended on a host call.
+#[allow(
+    clippy::large_enum_variant,
+    reason = "a suspend carries the call's target, which names its credential pair; boxing would allocate on every host call"
+)]
 pub(super) enum Step {
     Done(Value),
     Suspend {
@@ -163,7 +167,7 @@ impl Vm {
                 .and_then(|table| {
                     table.map_or(Ok(None), |table| table.get::<Option<Function>>("run"))
                 }),
-            Target::Provider { name, function } => self
+            Target::Provider { name, function, .. } => self
                 .providers
                 .get::<Option<Table>>(name.as_str())
                 .and_then(|table| {
@@ -239,7 +243,14 @@ impl Vm {
         let mut timeouts = CallbackTimeouts::default();
         for (name, spec) in self.commands.pairs::<String, Table>().flatten() {
             if let Ok(ms) = spec.get::<u64>("timeout") {
-                timeouts.commands.insert(name, Duration::from_millis(ms));
+                let description = spec.get::<String>("description").unwrap_or_default();
+                timeouts.commands.insert(
+                    name,
+                    super::declared::DeclaredCommand {
+                        timeout: Duration::from_millis(ms),
+                        description,
+                    },
+                );
             }
         }
         for (name, functions) in self.providers.pairs::<String, Table>().flatten() {
@@ -258,9 +269,16 @@ impl Vm {
     pub(super) fn returned(&self, target: &Target, value: mlua::Value) -> Result<Value, Error> {
         let fail = |e: mlua::Error| self.error(&e);
         match target {
-            Target::Command(_) => Option::<String>::from_lua(value, &self.lua)
-                .map(|text| Value::String(text.unwrap_or_default()))
-                .map_err(fail),
+            // A command reports through `host.status`, `host.widget`, `host.ask`
+            // or `host.emit`; its return value is ignored. A string is kept,
+            // anything else is `""`, so existing callers keep their returns.
+            // The conversion never fails: a table, boolean or function is
+            // `""`, never a failure notice for a successful command.
+            Target::Command(_) => Ok(Value::String(
+                Option::<String>::from_lua(value, &self.lua)
+                    .unwrap_or_default()
+                    .unwrap_or_default(),
+            )),
             Target::Provider { .. } | Target::Hook { .. } | Target::Timer { .. } => {
                 host::to_json(&value).map_err(fail)
             }

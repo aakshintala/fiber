@@ -25,6 +25,9 @@ use serde_json::{Value, json};
 /// How long one `fiber` run may take.
 const DEADLINE: Duration = Duration::from_secs(20);
 
+/// How long a process group may take to empty after `fiber` exits.
+const GROUP_DEADLINE: Duration = Duration::from_secs(5);
+
 /// The request's tool order: the loop keys tools by name, so this is name
 /// order, whatever order `main` pushes them in.
 const TOOL_NAMES: [&str; 7] = [
@@ -80,7 +83,7 @@ impl Setup {
             &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
         );
         let mut model = json!({"id": "m", "protocol": protocol,
-            "base_url": format!("{}/v1", server.url())});
+            "base_url": format!("{}/v1", server.url()), "context_window": 100000});
         if let Some(input) = input {
             model["input"] = json!(input);
         }
@@ -137,7 +140,7 @@ impl Setup {
                 fakes::kill_group(group, "KILL").unwrap();
                 let reaped = finished.recv_timeout(DEADLINE).is_ok();
                 assert!(
-                    !group_alive(group),
+                    fakes::group_empties(group, GROUP_DEADLINE),
                     "`fiber` left a process in its group behind"
                 );
                 panic!(
@@ -147,7 +150,7 @@ impl Setup {
             }
         };
         assert!(
-            !group_alive(group),
+            fakes::group_empties(group, GROUP_DEADLINE),
             "`fiber` left a process in its group behind"
         );
         std::mem::forget(guard);
@@ -228,7 +231,7 @@ impl Setup {
             .expect("fiber exited after closing stdout")
             .unwrap();
         assert!(
-            !group_alive(group),
+            fakes::group_empties(group, GROUP_DEADLINE),
             "`fiber` left a process in its group behind"
         );
         std::mem::forget(guard);
@@ -245,11 +248,6 @@ impl Setup {
 fn write(file: &Path, value: &Value) {
     fs::create_dir_all(file.parent().unwrap()).unwrap();
     fs::write(file, value.to_string()).unwrap();
-}
-
-/// Whether any process remains in process group `group`.
-fn group_alive(group: u32) -> bool {
-    fakes::kill_group(group, "0").unwrap()
 }
 
 /// Spawns `command` in a new process group, then a watchdog in its own

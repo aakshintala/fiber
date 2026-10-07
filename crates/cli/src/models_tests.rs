@@ -188,6 +188,7 @@ fn two_provider_setup() -> Setup {
             "id": "tiny",
             "protocol": "openai-responses",
             "base_url": "http://127.0.0.1:1/v1",
+            "context_window": 4000,
         }]),
     );
     setup.write_config(&json!({"model": "acme/big"}));
@@ -204,7 +205,7 @@ fn the_text_table_marks_exactly_the_default_row() {
         out,
         "  model           context  in $/M  out $/M\n\
          * acme/big        200000   3       15\n\
-         \x20 localhost/tiny  -        -       -\n"
+         \x20 localhost/tiny  4000     -       -\n"
     );
 }
 
@@ -218,7 +219,7 @@ fn json_prints_the_same_rows_in_the_same_order() {
         out,
         "{\"model\":\"acme/big\",\"context_window\":200000,\
          \"input\":3.0,\"output\":15.0,\"default\":true}\n\
-         {\"model\":\"localhost/tiny\",\"context_window\":null,\
+         {\"model\":\"localhost/tiny\",\"context_window\":4000,\
          \"input\":null,\"output\":null,\"default\":false}\n"
     );
 }
@@ -476,6 +477,7 @@ fn models_exits_zero_and_prints_the_row() {
             "id": "big",
             "protocol": "openai-responses",
             "base_url": "http://127.0.0.1:1/v1",
+            "context_window": 1000,
         }]),
     );
     let name = module_path!().split_once("::").unwrap().1;
@@ -578,7 +580,7 @@ fn models_spawns_its_refresh_child_from_the_recorded_path() {
         &setup.home(),
         "acme",
         &json!([{"id": "old", "protocol": "openai-responses",
-                 "base_url": "http://127.0.0.1:1/v1"}]),
+                 "base_url": "http://127.0.0.1:1/v1", "context_window": 1000}]),
         clock.wall(),
     );
     let dir = fakes::TempDir::new("fiber-models-recorded");
@@ -667,7 +669,7 @@ fn models_with_an_unusable_recorded_path_still_prints_from_the_cache() {
         &setup.home(),
         "acme",
         &json!([{"id": "old", "protocol": "openai-responses",
-                 "base_url": "http://127.0.0.1:1/v1"}]),
+                 "base_url": "http://127.0.0.1:1/v1", "context_window": 1000}]),
         clock.wall(),
     );
     let name = module_path!().split_once("::").unwrap().1;
@@ -709,11 +711,13 @@ fn padding_counts_characters_not_bytes() {
                 "id": "café",
                 "protocol": "openai-responses",
                 "base_url": "http://127.0.0.1:1/v1",
+                "context_window": 1000,
             },
             {
                 "id": "big",
                 "protocol": "openai-responses",
                 "base_url": "http://127.0.0.1:1/v1",
+                "context_window": 1000,
             },
         ]),
     );
@@ -724,8 +728,8 @@ fn padding_counts_characters_not_bytes() {
     assert_eq!(
         out,
         "  model      context  in $/M  out $/M\n\
-         \x20 acme/café  -        -       -\n\
-         * acme/big   -        -       -\n"
+         \x20 acme/café  1000     -       -\n\
+         * acme/big   1000     -       -\n"
     );
 }
 
@@ -811,7 +815,7 @@ fn write_stale_cache(home: &std::path::Path, name: &str, list: &Value, now: std:
 fn lua_list(id: &str) -> String {
     format!(
         "{{ {{ id = \"{id}\", protocol = \"openai-responses\", \
-         base_url = \"http://127.0.0.1:1/v1\" }} }}"
+         base_url = \"http://127.0.0.1:1/v1\", context_window = 1000 }} }}"
     )
 }
 
@@ -824,7 +828,7 @@ fn a_stale_list_prints_at_once_and_spawns_its_refresh() {
         &setup.home(),
         "acme",
         &json!([{"id": "old", "protocol": "openai-responses",
-                 "base_url": "http://127.0.0.1:1/v1"}]),
+                 "base_url": "http://127.0.0.1:1/v1", "context_window": 1000}]),
         clock.wall(),
     );
     let spawner = Recorder::fresh();
@@ -845,7 +849,7 @@ fn a_fresh_list_prints_at_once_and_spawns_nothing() {
         &setup.home(),
         "acme",
         &json!([{"id": "old", "protocol": "openai-responses",
-                 "base_url": "http://127.0.0.1:1/v1"}]),
+                 "base_url": "http://127.0.0.1:1/v1", "context_window": 1000}]),
     )
     .unwrap();
     let spawner = Recorder::fresh();
@@ -865,7 +869,7 @@ fn a_spawn_that_fails_still_prints_from_the_cache() {
         &setup.home(),
         "acme",
         &json!([{"id": "old", "protocol": "openai-responses",
-                 "base_url": "http://127.0.0.1:1/v1"}]),
+                 "base_url": "http://127.0.0.1:1/v1", "context_window": 1000}]),
         clock.wall(),
     );
     let spawner = Recorder {
@@ -893,7 +897,7 @@ fn the_refresh_child_leaves_an_unnamed_uncached_provider_alone() {
         &setup.home(),
         "stale",
         &json!([{"id": "old", "protocol": "openai-responses",
-                 "base_url": "http://127.0.0.1:1/v1"}]),
+                 "base_url": "http://127.0.0.1:1/v1", "context_window": 1000}]),
         clock.wall(),
     );
     let home = setup.home();
@@ -948,7 +952,7 @@ fn a_list_exactly_refresh_after_old_spawns_nothing() {
         &setup.home(),
         "acme",
         &json!([{"id": "old", "protocol": "openai-responses",
-                 "base_url": "http://127.0.0.1:1/v1"}]),
+                 "base_url": "http://127.0.0.1:1/v1", "context_window": 1000}]),
     )
     .unwrap();
     let file = setup.home().join("cache/models/acme.json");
@@ -1012,7 +1016,7 @@ fn the_refresh_entry_refreshes_a_stale_list() {
         &setup.home(),
         "stale",
         &json!([{"id": "old", "protocol": "openai-responses",
-                 "base_url": "http://127.0.0.1:1/v1"}]),
+                 "base_url": "http://127.0.0.1:1/v1", "context_window": 1000}]),
         clock.wall(),
     );
     let home = setup.home();
@@ -1062,7 +1066,7 @@ fn the_hidden_refresh_child_refreshes_a_stale_list() {
         &setup.home(),
         "stale",
         &json!([{"id": "old", "protocol": "openai-responses",
-                 "base_url": "http://127.0.0.1:1/v1"}]),
+                 "base_url": "http://127.0.0.1:1/v1", "context_window": 1000}]),
         fakes::clock::FakeClock::new().wall(),
     );
     let name = module_path!().split_once("::").unwrap().1;
@@ -1103,9 +1107,9 @@ fn an_unconfigured_model_is_not_listed() {
         "acme",
         &json!([
             {"id": "m", "protocol": "openai-responses",
-             "base_url": "https://{workspace}/v1"},
+             "base_url": "https://{workspace}/v1", "context_window": 1000},
             {"id": "plain", "protocol": "openai-responses",
-             "base_url": "http://127.0.0.1:1/v1"},
+             "base_url": "http://127.0.0.1:1/v1", "context_window": 1000},
         ]),
     );
     // The installed provider has no `placeholders` entry yet; add one so
@@ -1147,9 +1151,9 @@ fn a_repository_settings_file_cannot_supply_the_host() {
         "acme",
         &json!([
             {"id": "m", "protocol": "openai-responses",
-             "base_url": "https://{workspace}/v1"},
+             "base_url": "https://{workspace}/v1", "context_window": 1000},
             {"id": "plain", "protocol": "openai-responses",
-             "base_url": "http://127.0.0.1:1/v1"},
+             "base_url": "http://127.0.0.1:1/v1", "context_window": 1000},
         ]),
     );
     let dir = setup.home().join("extensions/acme");

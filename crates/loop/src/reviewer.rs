@@ -595,6 +595,8 @@ impl Loop {
                 generation_id: reply.generation_id.clone(),
                 model: endpoint.reference.clone(),
                 tokens: reply.tokens.clone(),
+                input_bytes: reply.input_size.bytes,
+                input_media: reply.input_size.media.then_some(true),
                 web_searches: reply.web_searches,
                 cost,
                 subscription: endpoint.subscription.then_some(true),
@@ -667,7 +669,7 @@ impl Loop {
                     "The reviewer blocked {} calls and no person can answer.",
                     self.session_blocks
                 ),
-                retry_after: None,
+                retry_after_ms: None,
                 provider: None,
             });
         }
@@ -775,7 +777,7 @@ fn unreadable(why: &str) -> Failure {
     Failure {
         code: ErrorCode::UnreadableReply,
         message: why.to_owned(),
-        retry_after: None,
+        retry_after_ms: None,
         provider: None,
     }
 }

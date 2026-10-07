@@ -291,7 +291,7 @@ impl Slot {
             State::NotStarted { .. } | State::Running { .. } | State::Down { .. } => Failure {
                 code: ErrorCode::McpServerUnavailable,
                 message: unavailable(&self.spec.name),
-                retry_after: None,
+                retry_after_ms: None,
                 provider: None,
             },
         };
@@ -326,7 +326,7 @@ fn died(server: &str, will_restart: bool) -> McpServerFailed {
         error: Failure {
             code: ErrorCode::McpServerUnavailable,
             message,
-            retry_after: None,
+            retry_after_ms: None,
             provider: None,
         },
     }

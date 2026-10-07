@@ -207,15 +207,35 @@ fn next(name: &str, hub: &Hub, parked: &mut Vec<Parked>) -> Option<Work> {
             }
             continue;
         }
-        let command_parked = parked
-            .iter()
-            .any(|p| matches!(p.target, Target::Command(_)));
-        // A command queued behind a parked command cannot start, so a timer
-        // may run then.
-        let startable = shared
-            .queue
-            .iter()
-            .position(|job| !(command_parked && matches!(job.target, Target::Command(_))));
+        /// One ordered stream: hooks, watcher deliveries and commands form one
+        /// stream, each finishing before the next starts. A queued stream job
+        /// starts only when no stream job is parked and no earlier stream job
+        /// in the queue is held. Provider functions still run in the gaps.
+        fn is_stream(target: &Target) -> bool {
+            matches!(target, Target::Command(_) | Target::Hook { .. })
+        }
+        let stream_busy = parked.iter().any(|p| is_stream(&p.target));
+        let mut blocked = false;
+        let mut startable = None;
+        for (pos, job) in shared.queue.iter().enumerate() {
+            if job.held {
+                // A held command does not start, and a held stream job blocks
+                // every stream job behind it; providers still run.
+                if is_stream(&job.target) {
+                    blocked = true;
+                }
+                continue;
+            }
+            if is_stream(&job.target) {
+                if stream_busy || blocked {
+                    continue;
+                }
+                startable = Some(pos);
+                break;
+            }
+            startable = Some(pos);
+            break;
+        }
         if let Some(pos) = startable
             && let Some(job) = shared.queue.remove(pos)
         {
@@ -351,7 +371,20 @@ fn settle(
         }
         Request::Lock => {
             let cancel = match &target {
-                Target::Provider { name, .. } => oauth::lock(home, name, &deliver),
+                Target::Provider {
+                    credential: Some(pair),
+                    ..
+                } => oauth::lock(home, pair, &deliver),
+                Target::Provider {
+                    name,
+                    function,
+                    credential: None,
+                } => {
+                    deliver(Reply::Lock(Err(format!(
+                        "host.oauth.refresh: {name}.{function} has no credential to refresh; only credential() refreshes"
+                    ))));
+                    None
+                }
                 Target::Command(_) => {
                     deliver(Reply::Lock(Err(
                         "host.oauth.refresh: a command has no provider credential to refresh"

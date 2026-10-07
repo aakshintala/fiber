@@ -363,6 +363,17 @@ holds, and sends the next only after that acknowledgement. The MCP fixture
 (`crates/fakes/mcp-fixture/server.sh`) writes a line to a `held-<tool>` FIFO
 once it holds a call, and answers when the test writes to `release-<tool>`.
 
+A test that proves a wait has not answered yet holds the awaited condition
+false with a real signal, such as a child blocked reading a stdin pipe the test
+holds open. It receives on the wait's result channel with a bounded
+`recv_timeout` that must time out, a bound of several of the wait's own probe
+intervals, then releases the signal and requires the answer within the wait's
+deadline. This is a receive with a bound, not a sleep: the test never sleeps to
+get a correct result.
+`group_empties_keeps_waiting_while_the_group_lives_and_returns_once_it_empties`
+(`crates/fakes/src/process_group_tests.rs`) holds a `sh -c "read line"` group
+alive this way, then drops its stdin.
+
 A test that reproduces a race forces the bad interleaving with a pause point:
 a committed, test-only seam where the code under test waits until the test
 releases it. The race then happens on every run, so the red commit fails every

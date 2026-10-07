@@ -94,6 +94,7 @@ fn provider(name: &str, urls: &[&str]) -> serde_json::Value {
                 "id": format!("m{i}"),
                 "protocol": "openai-responses",
                 "base_url": url,
+                "context_window": 1000,
             })
         })
         .collect();
@@ -287,6 +288,23 @@ fn install_in_a_terminal_shows_the_summary_and_installs_on_yes() {
             shown.display(),
         )
     );
+}
+
+#[test]
+fn install_in_a_terminal_shows_what_the_extension_replaces() {
+    let setup = Setup::new();
+    let mut manifest = manifest(NAME_A);
+    manifest["replaces"] = serde_json::json!(["shell", "read"]);
+    let source = setup.source("aaa", &manifest, &[]);
+    let mut input = io::Cursor::new(b"n\n".to_vec());
+    let (err, _) = run_install(
+        &setup.home(),
+        Request::Path(source),
+        &Origin::github(),
+        true,
+        &mut input,
+    );
+    assert!(err.contains("Replaces `shell`\nReplaces `read`\n"), "{err}");
 }
 
 #[test]

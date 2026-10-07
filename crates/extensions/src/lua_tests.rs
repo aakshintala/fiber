@@ -72,9 +72,13 @@ fn in_phase(phase: Phase) -> Shared {
 fn ready(commands: &[(&str, u64)]) -> Shared {
     let mut timeouts = CallbackTimeouts::default();
     for (name, ms) in commands {
-        timeouts
-            .commands
-            .insert((*name).to_owned(), Duration::from_millis(*ms));
+        timeouts.commands.insert(
+            (*name).to_owned(),
+            crate::lua::declared::DeclaredCommand {
+                timeout: Duration::from_millis(*ms),
+                description: String::new(),
+            },
+        );
     }
     in_phase(Phase::Ready(timeouts))
 }
@@ -490,6 +494,7 @@ fn a_command_queued_behind_a_parked_command_does_not_start() {
             Target::Provider {
                 name: "p".to_owned(),
                 function: "sign",
+                credential: None,
             },
             Value::Null,
             asked,
@@ -821,4 +826,326 @@ fn timer_end_reschedules_an_uncancelled_every_and_removes_the_rest() {
     );
     assert!(!timer.firing);
     assert_eq!(shared.timer_cleanup, vec![0, 2]);
+}
+
+/// A hook queued while a command is parked on `host.http` starts only after
+/// the command finishes: hooks, watcher deliveries and commands form one
+/// stream, in the order they happened.
+#[test]
+fn a_hook_queued_behind_a_parked_command_does_not_start() {
+    let (url, accepted_rx) = hold_server();
+    let dir = extension(
+        "hook-behind-parked-command",
+        &format!(
+            "fiber.command(\"hold\", {{ timeout = 5000, run = function() return host.http({{ url = \"{url}\" }}).body end }})\n\
+             fiber.hook(\"after_tool\", {{ timeout = 5000, on_failure = \"non-blocking\", run = function(call) return {{}} end }})\n\
+             fiber.provider(\"p\", {{ sign = {{ timeout = 1000, run = function() return {{}} end }} }})\n"
+        ),
+    );
+    let clock = FakeClock::new();
+    let (hub, hold, done) = serve_after(dir.path(), "hold", &clock);
+    accepted_rx
+        .recv_timeout(WAIT_UNTIL)
+        .expect("waited for hold to reach the server");
+    assert!(until(&hub, |s| matches!(
+        s.calls.get(&hold),
+        Some(Progress::Started { parked: true, .. })
+    )));
+    let asked = clock.now();
+    let (hook, sign) = {
+        let mut shared = hub.lock();
+        let hook = shared.push(
+            Target::Hook {
+                point: "after_tool".to_owned(),
+                index: 0,
+            },
+            serde_json::json!({}),
+            asked,
+        );
+        // A provider function queued behind the hook still runs, which proves
+        // the thread judged the queue with the hook in front of it.
+        let sign = shared.push(
+            Target::Provider {
+                name: "p".to_owned(),
+                function: "sign",
+                credential: None,
+            },
+            Value::Null,
+            asked,
+        );
+        (hook, sign)
+    };
+    hub.notify();
+    assert!(until(&hub, |s| matches!(
+        s.calls.get(&sign),
+        Some(Progress::Done(_))
+    )));
+    {
+        let shared = hub.lock();
+        assert!(
+            matches!(shared.calls.get(&hook), Some(Progress::Queued)),
+            "the hook started while hold was parked"
+        );
+        assert!(shared.queue.iter().any(|job| job.id == hook));
+    }
+    stop(&hub);
+    done.recv_timeout(WAIT_UNTIL)
+        .expect("waited for the extension thread to quit");
+}
+
+/// A command queued while a hook is parked likewise waits for the hook.
+#[test]
+fn a_command_queued_behind_a_parked_hook_does_not_start() {
+    let (url, accepted_rx) = hold_server();
+    let dir = extension(
+        "command-behind-parked-hook",
+        &format!(
+            "fiber.command(\"later\", {{ timeout = 5000, run = function() return \"later\" end }})\n\
+             fiber.hook(\"after_tool\", {{ timeout = 5000, on_failure = \"non-blocking\", run = function(call) return host.http({{ url = \"{url}\" }}) end }})\n\
+             fiber.provider(\"p\", {{ sign = {{ timeout = 1000, run = function() return {{}} end }} }})\n"
+        ),
+    );
+    let clock = FakeClock::new();
+    let hub = Hub::new(clock.clone());
+    let asked = clock.now();
+    let hook = {
+        let mut shared = hub.lock();
+        shared.phase = Phase::Registering { abandon_at: None };
+        shared.push(
+            Target::Hook {
+                point: "after_tool".to_owned(),
+                index: 0,
+            },
+            serde_json::json!({}),
+            asked,
+        )
+    };
+    let (thread_hub, dir) = (Arc::clone(&hub), dir.path().to_owned());
+    let (done_tx, done_rx) = mpsc::channel();
+    let load_by = asked.checked_add(LOAD_TIMEOUT);
+    thread::spawn(move || {
+        schedule::serve(
+            Arc::clone(&thread_hub),
+            schedule::Start {
+                name: "ext".to_owned(),
+                dir,
+                home: PathBuf::from("/nonexistent-fiber-home"),
+                load_by,
+                memory_cap: MEMORY_CAP,
+                browser: Arc::new(SystemBrowser::default()),
+                session: None,
+            },
+        );
+        match done_tx.send(()) {
+            Ok(()) | Err(mpsc::SendError(())) => {}
+        }
+    });
+    accepted_rx
+        .recv_timeout(WAIT_UNTIL)
+        .expect("waited for the hook to reach the server");
+    assert!(until(&hub, |s| matches!(
+        s.calls.get(&hook),
+        Some(Progress::Started { parked: true, .. })
+    )));
+    let asked = clock.now();
+    let (later, sign) = {
+        let mut shared = hub.lock();
+        let later = shared.push(command("later"), Value::Null, asked);
+        let sign = shared.push(
+            Target::Provider {
+                name: "p".to_owned(),
+                function: "sign",
+                credential: None,
+            },
+            Value::Null,
+            asked,
+        );
+        (later, sign)
+    };
+    hub.notify();
+    assert!(until(&hub, |s| matches!(
+        s.calls.get(&sign),
+        Some(Progress::Done(_))
+    )));
+    {
+        let shared = hub.lock();
+        assert!(
+            matches!(shared.calls.get(&later), Some(Progress::Queued)),
+            "the command started while the hook was parked"
+        );
+        assert!(shared.queue.iter().any(|job| job.id == later));
+    }
+    stop(&hub);
+    done_rx
+        .recv_timeout(WAIT_UNTIL)
+        .expect("waited for the extension thread to quit");
+}
+
+/// A held command does not start, and a hook queued after it waits too,
+/// until `release`; after `release` it runs.
+#[test]
+fn a_held_command_blocks_the_stream_until_released() {
+    let dir = extension(
+        "held-blocks-stream",
+        "fiber.command(\"held\", { timeout = 5000, run = function() host.log(\"held ran\") end })\n\
+         fiber.hook(\"after_tool\", { timeout = 5000, on_failure = \"non-blocking\", run = function(call) return {} end })\n\
+         fiber.provider(\"p\", { sign = { timeout = 1000, run = function() return {} end } })\n",
+    );
+    let clock = FakeClock::new();
+    let hub = Hub::new(clock.clone());
+    let asked = clock.now();
+    let held = {
+        let mut shared = hub.lock();
+        shared.phase = Phase::Registering { abandon_at: None };
+        shared.push_held(command("held"), Value::Null, asked)
+    };
+    let (thread_hub, dir) = (Arc::clone(&hub), dir.path().to_owned());
+    let (done_tx, done_rx) = mpsc::channel();
+    let load_by = asked.checked_add(LOAD_TIMEOUT);
+    thread::spawn(move || {
+        schedule::serve(
+            Arc::clone(&thread_hub),
+            schedule::Start {
+                name: "ext".to_owned(),
+                dir,
+                home: PathBuf::from("/nonexistent-fiber-home"),
+                load_by,
+                memory_cap: MEMORY_CAP,
+                browser: Arc::new(SystemBrowser::default()),
+                session: None,
+            },
+        );
+        match done_tx.send(()) {
+            Ok(()) | Err(mpsc::SendError(())) => {}
+        }
+    });
+    // Wait until the entry script has run: the held job is still queued.
+    assert!(until(&hub, |s| matches!(s.phase, Phase::Ready(_))));
+    let asked = clock.now();
+    let (hook, sign) = {
+        let mut shared = hub.lock();
+        let hook = shared.push(
+            Target::Hook {
+                point: "after_tool".to_owned(),
+                index: 0,
+            },
+            serde_json::json!({}),
+            asked,
+        );
+        let sign = shared.push(
+            Target::Provider {
+                name: "p".to_owned(),
+                function: "sign",
+                credential: None,
+            },
+            Value::Null,
+            asked,
+        );
+        (hook, sign)
+    };
+    hub.notify();
+    // The provider runs in the gap, proving the thread judged the queue; the
+    // held command and the hook behind it stay queued.
+    assert!(until(&hub, |s| matches!(
+        s.calls.get(&sign),
+        Some(Progress::Done(_))
+    )));
+    {
+        let shared = hub.lock();
+        assert!(
+            matches!(shared.calls.get(&held), Some(Progress::Queued)),
+            "the held command started before release"
+        );
+        assert!(
+            matches!(shared.calls.get(&hook), Some(Progress::Queued)),
+            "the hook queued after a held command started"
+        );
+    }
+    hub.release(held);
+    assert!(until(&hub, |s| !matches!(
+        s.calls.get(&held),
+        Some(Progress::Queued)
+    )));
+    stop(&hub);
+    done_rx
+        .recv_timeout(WAIT_UNTIL)
+        .expect("waited for the extension thread to quit");
+}
+
+/// Each bad `fiber.command` spec leaves one problem naming it, and the other
+/// registrations stand.
+#[test]
+fn each_bad_command_spec_leaves_one_problem_and_the_rest_stand() {
+    let dir = extension(
+        "bad-command-specs",
+        "fiber.command(\"\", { timeout = 1000, run = function() end })\n\
+         fiber.command(\"has space\", { timeout = 1000, run = function() end })\n\
+         fiber.command(\"a/b\", { timeout = 1000, run = function() end })\n\
+         fiber.command(\"a:b\", { timeout = 1000, run = function() end })\n\
+         fiber.command(\"no-timeout\", { run = function() end })\n\
+         fiber.command(\"no-run\", { timeout = 1000 })\n\
+         fiber.command(\"bad-desc\", { timeout = 1000, run = function() end, description = \"two\\nlines\" })\n\
+         fiber.command(\"good\", { timeout = 1000, description = \"fine\", run = function() return \"good\" end })\n",
+    );
+    let clock = FakeClock::new();
+    let ext = LuaExtension::new(
+        "ext",
+        dir.path(),
+        PathBuf::from("/nonexistent-fiber-home"),
+        clock,
+    );
+    let declared = ext.hooks().expect("the entry script runs");
+    assert_eq!(
+        declared.problems.len(),
+        7,
+        "one problem per bad spec: {:?}",
+        declared.problems
+    );
+    for name in [
+        "``",
+        "`has space`",
+        "`a/b`",
+        "`a:b`",
+        "`no-timeout`",
+        "`no-run`",
+        "`bad-desc`",
+    ] {
+        assert!(
+            declared.problems.iter().any(|p| p.contains(name)),
+            "a problem names {name}: {:?}",
+            declared.problems
+        );
+    }
+    let commands = ext.commands().expect("commands list");
+    assert_eq!(
+        commands,
+        vec![("good".to_owned(), "fine".to_owned())],
+        "the good registration stands"
+    );
+}
+
+/// A command registers with and without `description`; absent defaults to `""`.
+#[test]
+fn a_command_registers_with_and_without_description() {
+    let dir = extension(
+        "command-descriptions",
+        "fiber.command(\"plain\", { timeout = 1000, run = function() end })\n\
+         fiber.command(\"noted\", { timeout = 1000, description = \"Does things.\", run = function() end })\n",
+    );
+    let clock = FakeClock::new();
+    let ext = LuaExtension::new(
+        "ext",
+        dir.path(),
+        PathBuf::from("/nonexistent-fiber-home"),
+        clock,
+    );
+    let mut commands = ext.commands().expect("commands list");
+    commands.sort();
+    assert_eq!(
+        commands,
+        vec![
+            ("noted".to_owned(), "Does things.".to_owned()),
+            ("plain".to_owned(), String::new()),
+        ]
+    );
 }

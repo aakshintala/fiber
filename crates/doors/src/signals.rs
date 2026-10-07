@@ -14,6 +14,11 @@
 //!
 //! The first signal in the last two also starts the bound: 5 seconds later
 //! whatever is still alive is killed and the process exits with the code.
+//!
+//! A `close` with `now` takes the same path with exit code 0
+//! (`docs/invocation.md`, "Shutdown"): [`Signals::close_now`] starts the
+//! shutdown only once started with no signal seen yet, and otherwise does
+//! nothing, so a later SIGTERM or SIGINT is a second signal.
 
 use std::io;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
@@ -25,6 +30,10 @@ use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
 
 /// From the signal to exit, per process (`docs/invocation.md`, "Shutdown").
 const BOUND: Duration = Duration::from_secs(5);
+
+/// The exit code a `close` with `now` ends the process with: success, as an
+/// ordinary `close` would (`docs/invocation.md`, "Lifecycle").
+const CLOSE_NOW_CODE: i32 = 0;
 
 /// The exit code a signal ends the process with: 128 plus its number, so
 /// 143 for SIGTERM, 130 for SIGINT and 129 for SIGHUP
@@ -70,6 +79,17 @@ fn decide(phase: Phase, signal: i32, seen: u32) -> Action {
         // The doc names only these two for a second signal.
         Phase::Started if signal == SIGTERM || signal == SIGINT => Action::KillGroups,
         Phase::Armed | Phase::Started => Action::Nothing,
+    }
+}
+
+/// What a `close` with `now` does once started with no signal seen yet: the
+/// same shutdown a first signal starts, with exit code 0. Anywhere else it
+/// does nothing, and the shutdown keeps the first signal's code.
+fn decide_close(phase: Phase, seen: u32) -> Action {
+    if phase == Phase::Started && seen == 0 {
+        Action::Shutdown(CLOSE_NOW_CODE)
+    } else {
+        Action::Nothing
     }
 }
 
@@ -172,6 +192,23 @@ impl Signals {
         None
     }
 
+    /// Starts the same shutdown a first signal starts, with exit code 0
+    /// (`docs/invocation.md`, "Shutdown"). Only the first shutdown wins:
+    /// once started with no signal seen yet it starts the bound and calls
+    /// `on_signal` with 0, and anywhere else it does nothing. The callbacks
+    /// run outside the lock, as in [`Signals::handle`].
+    pub fn close_now(self: &Arc<Self>) {
+        let (action, on_signal) = {
+            let mut state = lock(&self.state);
+            let action = decide_close(state.phase, state.seen);
+            if matches!(action, Action::Shutdown(_)) {
+                state.seen = state.seen.saturating_add(1);
+            }
+            (action, state.on_signal.clone())
+        };
+        self.run(action, None, on_signal, None);
+    }
+
     /// Handles one signal. The callbacks run outside the lock.
     fn handle(self: &Arc<Self>, signal: i32) {
         let (action, on_record, on_signal, on_second) = {
@@ -188,6 +225,17 @@ impl Signals {
                 state.on_second.clone(),
             )
         };
+        self.run(action, on_record, on_signal, on_second);
+    }
+
+    /// Runs what `action` decided, outside the lock.
+    fn run(
+        self: &Arc<Self>,
+        action: Action,
+        on_record: Option<Callback>,
+        on_signal: Option<OnSignal>,
+        on_second: Option<Callback>,
+    ) {
         match action {
             Action::Exit(code) => (self.exit)(code),
             Action::Record(code) => {

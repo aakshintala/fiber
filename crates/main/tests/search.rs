@@ -27,6 +27,9 @@ use serde_json::{Map, Value};
 /// How long one `fiber` run may take.
 const DEADLINE: Duration = Duration::from_secs(20);
 
+/// How long a process group may take to empty after `fiber` exits.
+const GROUP_DEADLINE: Duration = Duration::from_secs(5);
+
 /// A temporary workspace, removed on drop.
 struct Setup {
     root: fakes::TempDir,
@@ -81,7 +84,7 @@ impl Setup {
                 fakes::kill_group(group, "KILL").unwrap();
                 let reaped = finished.recv_timeout(DEADLINE).is_ok();
                 assert!(
-                    !group_alive(group),
+                    fakes::group_empties(group, GROUP_DEADLINE),
                     "`fiber` left a process in its group behind"
                 );
                 panic!(
@@ -91,7 +94,7 @@ impl Setup {
             }
         };
         assert!(
-            !group_alive(group),
+            fakes::group_empties(group, GROUP_DEADLINE),
             "`fiber` left a process in its group behind"
         );
         std::mem::forget(guard);
@@ -120,10 +123,6 @@ impl Drop for KillGroup {
             Ok(_) | Err(_) => {}
         }
     }
-}
-
-fn group_alive(group: u32) -> bool {
-    fakes::kill_group(group, "0").unwrap()
 }
 
 /// What one `fiber` run wrote.

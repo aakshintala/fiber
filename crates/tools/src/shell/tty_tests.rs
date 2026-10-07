@@ -98,8 +98,11 @@ fn the_first_output_wait_ends_at_250_ms_and_not_before() {
         "the wait did not park at 250 ms"
     );
     assert!(done.try_recv().is_err());
-    clock.advance(Duration::from_millis(249));
-    assert!(clock.await_parked(due, DEADLINE));
+    let mark = clock.advance_marked(Duration::from_millis(249));
+    assert!(
+        clock.await_parked_since(&mark, Some(due), DEADLINE),
+        "the wait parks again a millisecond short of 250 ms"
+    );
     assert!(
         done.try_recv().is_err(),
         "the wait ended a millisecond early"
@@ -143,8 +146,13 @@ fn output_arriving_does_not_end_the_wait() {
         inner.output.extend_from_slice(b"chunk");
         crate::shell::output::bump(&mut inner);
     }
-    shared.wake();
-    assert!(clock.await_parked(due, DEADLINE));
+    // The clock's subscription delivers the wake, so advancing by zero wakes
+    // the wait without moving the deadline.
+    let mark = clock.advance_marked(Duration::ZERO);
+    assert!(
+        clock.await_parked_since(&mark, Some(due), DEADLINE),
+        "output arriving parks the wait again at 250 ms"
+    );
     assert!(done.try_recv().is_err());
     clock.advance(Duration::from_millis(250));
     done.recv_timeout(DEADLINE)

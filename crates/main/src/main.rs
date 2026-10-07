@@ -158,6 +158,21 @@ fn run() -> i32 {
                 sessions_delete(&id, cascade, yes, clock.as_ref(), fiber)
             }
             cli::SessionsCommands::Export { id, path } => ::cli::export(&id, path.as_deref()),
+            cli::SessionsCommands::Prune {
+                older_than,
+                cascade,
+                dry_run,
+                yes,
+                force,
+            } => sessions_prune(
+                older_than,
+                cascade,
+                dry_run,
+                yes,
+                force,
+                clock.as_ref(),
+                fiber,
+            ),
         },
         cli::Invocation::Run(Some(cli::Commands::Models(args))) => ::cli::models(
             args.search.as_deref(),
@@ -274,7 +289,7 @@ fn ask_new(
     model: Option<String>,
     prompt: String,
     clock: Arc<dyn contract::clock::Clock>,
-    signals: &doors::Signals,
+    signals: &Arc<doors::Signals>,
     fiber: Result<PathBuf, String>,
 ) -> i32 {
     session_command::new_session(
@@ -477,10 +492,11 @@ fn parts_in(
         .map_err(|e| failed(e.code(), e))?;
     let label =
         recorded_credential.map_or_else(|| config.credential_label(model.provider), str::to_owned);
-    let (key, signer) = lua_providers::session_credential(&providers, model.provider, || {
-        crate::credential::session_credential(&config, model.provider, recorded_credential)
-            .map(|(_, key)| key)
-    })?;
+    let (key, signer) =
+        lua_providers::session_credential(&providers, model.provider, &label, || {
+            crate::credential::session_credential(&config, model.provider, recorded_credential)
+                .map(|(_, key)| key)
+        })?;
     let session_credential = (key.clone(), signer.clone());
     let provider = connect(model, key, signer)?;
     let reviewer = choose_reviewer(&providers, &config, &model, &session_credential);
@@ -505,12 +521,14 @@ fn parts_in(
     let handoff = handoff::handoff_settings(&config, &model.reference());
     let idle = settings::idle_exit(&config);
     let warm = settings::warm(&config);
+    let mut startup_notices = Vec::new();
     let thinking = settings::thinking(
         model.thinking,
         None,
         &config,
         model.model,
         &model.reference(),
+        &mut startup_notices,
     )
     .map_err(|e| failed(e.code, e.message))?;
     // The extensions loaded above, started before the model was chosen:
@@ -535,6 +553,10 @@ fn parts_in(
     prompt.credential = Some(label);
     prompt.cache_lifetime = settings::cache_lifetime(&config, &model.reference());
     prompt.thinking = thinking;
+    // The thinking notice is written with the MCP notices, after
+    // `fiber_started`.
+    let mut mcp = mcp_servers::specs(&config);
+    mcp.notices.splice(0..0, startup_notices);
     Ok(Parts {
         sessions,
         home,
@@ -558,7 +580,7 @@ fn parts_in(
         credential_files,
         locks,
         extensions: Arc::new(extensions),
-        mcp: mcp_servers::specs(&config),
+        mcp,
         web_search: model.model.web_search.clone(),
     })
 }
@@ -596,9 +618,12 @@ fn choose_reviewer(
     let (key, signer) = if model.provider.name == session.provider.name {
         session_credential.clone()
     } else {
-        lua_providers::session_credential(providers, model.provider, || {
-            credential::session_credential(config, model.provider, None).map(|(_, key)| key)
-        })?
+        lua_providers::session_credential(
+            providers,
+            model.provider,
+            &config.credential_label(model.provider),
+            || credential::session_credential(config, model.provider, None).map(|(_, key)| key),
+        )?
     };
     // The token is read once, so a failing `credential()` fails here:
     // not a startup error, the loop gets it and every reviewed call
@@ -706,6 +731,34 @@ fn sessions_delete(
         doors::hub::connect(&home, &mut start, clock)
     };
     ::cli::delete(id, cascade, yes, &mut connect)
+}
+
+/// `fiber sessions prune`: the hub it reaches is started when none runs.
+fn sessions_prune(
+    older_than: Option<String>,
+    cascade: bool,
+    dry_run: bool,
+    yes: bool,
+    force: bool,
+    clock: &dyn contract::clock::Clock,
+    fiber: Result<PathBuf, String>,
+) -> i32 {
+    let mut connect = || {
+        let home = config::fiber_home_from_env().map_err(io::Error::other)?;
+        let mut start = || start_hub(fiber.clone());
+        doors::hub::connect(&home, &mut start, clock)
+    };
+    ::cli::prune(
+        &::cli::PruneArgs {
+            older_than,
+            cascade,
+            dry_run,
+            yes,
+            force,
+        },
+        clock,
+        &mut connect,
+    )
 }
 
 fn usage(message: impl Into<String>) -> Failure {

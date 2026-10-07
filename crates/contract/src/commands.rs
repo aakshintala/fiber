@@ -125,8 +125,8 @@ pub enum Command {
     Shell(Shell),
     /// Runs an extension's command by name.
     Command(RunCommand),
-    /// Accepts no more prompts, finishes what is running, and exits.
-    Close,
+    /// Accepts no more prompts, finishes what is running, and exits; with `now`, shuts down.
+    Close(CloseArgs),
 }
 
 /// A content part a client sends. An image is sent as its bytes; Fiber writes
@@ -388,6 +388,44 @@ pub struct RunCommand {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
 }
+
+/// The `args` of `close`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CloseArgs {
+    /// With `true`, shuts down instead of finishing what is running.
+    #[serde(default)]
+    pub now: bool,
+}
+
+/// The built-in commands are the terminal's (`docs/tui.md`, "Slash commands"):
+/// the names of that table, which the extension command check reads.
+pub const BUILT_IN_COMMANDS: &[&str] = &[
+    "home",
+    "new",
+    "resume",
+    "model",
+    "thinking",
+    "credential",
+    "scoped-models",
+    "context",
+    "usage",
+    "tools",
+    "rules",
+    "settings",
+    "keys",
+    "skills",
+    "rewind",
+    "handoff",
+    "name",
+    "login",
+    "approvals",
+    "reload",
+    "close",
+    "quit",
+    "?",
+    "help",
+];
 
 #[cfg(test)]
 #[path = "commands_tests.rs"]

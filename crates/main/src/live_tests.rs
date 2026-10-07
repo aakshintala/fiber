@@ -14,7 +14,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use contract::inbox::{Ack, Delivery, Message};
-use contract::provider::{Finish, Provider, Reply, ReplyAction};
+use contract::provider::{Finish, InputSize, Provider, Reply, ReplyAction};
 use contract::rules::{Rules, RulesError, StandingRules};
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Origin, Sender};
 use contract::tool::{Effects, Output, Tool};
@@ -216,6 +216,7 @@ fn live_reviewer() {
                 },
                 web_searches: None,
                 cost: None,
+                input_size: InputSize::default(),
             }),
         },
         Scripted::text("Done."),

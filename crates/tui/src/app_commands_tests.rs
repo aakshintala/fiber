@@ -335,6 +335,7 @@ fn close_while_idle_sends_close_and_goes_home() {
     let commands: Vec<&Value> = lines.iter().map(|line| &line["command"]).collect();
     assert_eq!(commands, [&json!("close")]);
     assert_eq!(lines[0]["session_id"], SESSION);
+    assert_eq!(lines[0]["args"], json!({"now": true}));
     assert_eq!(app.session(), None);
 }
 
@@ -357,13 +358,14 @@ fn a_rejected_close_gives_only_its_notice_on_the_home_draft() {
 }
 
 #[test]
-fn close_during_a_turn_cancels_first() {
+fn close_during_a_turn_sends_only_close_with_now() {
     let mut app = attached();
     turn_starts(&mut app);
     let lines = sent(enter(&mut app, "/close"));
     let commands: Vec<&Value> = lines.iter().map(|line| &line["command"]).collect();
-    assert_eq!(commands, [&json!("cancel"), &json!("close")]);
+    assert_eq!(commands, [&json!("close")]);
     assert!(lines.iter().all(|line| line["session_id"] == SESSION));
+    assert_eq!(lines[0]["args"], json!({"now": true}));
     assert_eq!(app.session(), None);
     assert!(app.lines().is_empty());
 }

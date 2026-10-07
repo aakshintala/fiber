@@ -28,8 +28,8 @@ use r#loop::{HandoffSettings, Retry, rebuild};
 use serde_json::json;
 
 use support::{
-    DEADLINE, MODEL, Session, TestTool, calls_reply, delivery, handoff, ignore, kinds,
-    reasoning_reply, tool_call_reply, with_tokens,
+    DEADLINE, MODEL, Session, TestTool, assert_no_stored_attempt, attempt_numbers, calls_reply,
+    delivery, handoff, ignore, kinds, reasoning_reply, tool_call_reply, with_tokens,
 };
 
 /// The trigger in these tests.
@@ -85,7 +85,7 @@ fn failed(code: ErrorCode) -> Scripted {
     Scripted::failed(Failure {
         code,
         message: "The call failed.".into(),
-        retry_after: None,
+        retry_after_ms: None,
         provider: None,
     })
 }
@@ -1896,6 +1896,59 @@ fn a_provider_overflow_moves_the_last_steps_results_and_hands_off() {
     assert_eq!(next[1], user("hi"));
     assert_eq!(next[2], user("The note."));
     assert_eq!(requests[3].previous_end, None);
+    assert_eq!(attempt_numbers(&lines), [1, 1, 1, 1]);
+    assert_no_stored_attempt(&lines);
+}
+
+#[test]
+fn a_retried_note_request_counts_its_own_attempts() {
+    let mut session = Session::with_tools(
+        vec![
+            called_both(100),
+            overflowing(),
+            failed(ErrorCode::RateLimited),
+            Scripted::text("The note."),
+            said("Done.", 50),
+        ],
+        None,
+        both_tools(),
+    )
+    .handoff(settings())
+    .retry(no_wait());
+
+    let (outcome, lines) = run(&mut session, "hi");
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(
+        &lines,
+        &[
+            OPENING,
+            STEP,
+            TWO_CALLS,
+            STEP,
+            REJECTED,
+            &[
+                "handoff_started",
+                "assistant_message_started",
+                "assistant_message_completed",
+                "retry_scheduled",
+                "assistant_message_started",
+                "assistant_message_delta",
+                "assistant_message_delta",
+                "text_completed",
+                "usage_recorded",
+                "assistant_message_completed",
+                "handoff_completed",
+                "opening_message",
+            ],
+            REPLY,
+            ENDED,
+        ],
+    );
+    assert_eq!(attempt_numbers(&lines), [1, 1, 1, 2, 1]);
+    assert_no_stored_attempt(&lines);
+    let waits: Vec<&Envelope> = of_kind(&lines, "retry_scheduled");
+    assert_eq!(waits.len(), 1);
+    assert_eq!(waits[0].payload["attempt"], 2);
 }
 
 #[test]

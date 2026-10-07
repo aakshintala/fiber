@@ -8,6 +8,7 @@
 //! `sign()` (`docs/model-routing.md`, "Model discovery", "Signing a request"
 //! and "Credentials").
 
+mod commands;
 mod git;
 mod hooks;
 mod host;
@@ -35,7 +36,7 @@ pub use host::exec::kill_every_group;
 pub use install::Provenance;
 pub use installed::{Damaged, Installed, Listing, Removal, list, removal};
 pub use lua::{LuaExtension, MEMORY_CAP};
-pub use lua_provider::{LuaProvider, REFRESH_BEFORE};
+pub use lua_provider::{CredentialPair, LuaProvider, REFRESH_BEFORE};
 pub use manage::{Item, Plan, Request, plan};
 pub use oauth::{Browser, SystemBrowser};
 pub use prepare::platform;
@@ -245,12 +246,20 @@ pub enum Error {
         id: String,
     },
     /// An installed provider that does not list the model.
-    #[error("The provider `{provider}` has no model `{model}`.")]
+    #[error(
+        "The provider `{provider}` has no model `{model}`. Run `fiber models` and name one it lists."
+    )]
     UnknownModel {
         /// The provider.
         provider: String,
         /// The model id.
         model: String,
+    },
+    /// The session's model, or one named, is left out for its per-account host.
+    #[error("{message}")]
+    Unconfigured {
+        /// Its `model_unconfigured` message.
+        message: String,
     },
     /// A bare model id that more than one installed provider has.
     #[error("The model `{id}` is offered by more than one provider: {}. Name one as `provider/model`.", matches.join(", "))]
@@ -423,6 +432,7 @@ impl Error {
             | Self::Stopped { .. } => ErrorCode::ExtensionFailed,
             Self::UnknownCommand { .. } => ErrorCode::UnknownCommand,
             Self::UnknownModel { .. } | Self::NoModel => ErrorCode::NoModel,
+            Self::Unconfigured { .. } => ErrorCode::ModelUnconfigured,
             Self::Ambiguous { .. } => ErrorCode::ModelAmbiguous,
             Self::Credential(_) => ErrorCode::CredentialFailed,
             Self::RefreshRejected { .. } | Self::Unattended { .. } => {

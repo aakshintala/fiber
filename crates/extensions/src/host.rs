@@ -25,6 +25,7 @@ mod fs;
 mod log;
 mod settings;
 pub(crate) mod timers;
+mod ui;
 
 #[cfg(test)]
 pub(crate) use fs::FakeLock;
@@ -165,6 +166,7 @@ pub(crate) fn install(
     oauth::install(lua, &host, &tag, browser, entry)?;
     let timer_funcs = timers::install(lua, &host, hub)?;
     log::install(lua, &host, hub, &extension)?;
+    ui::install(lua, &host, hub, &extension)?;
     host.set(
         "sha256",
         lua.create_function(|_, bytes: LuaString| Ok(sha256_hex(&bytes.as_bytes())))?,

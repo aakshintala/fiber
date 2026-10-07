@@ -99,7 +99,7 @@ impl Pacer {
 /// Wakes the loop thread waiting in `run_calls`: one flag under one mutex,
 /// set by every emit, every call returning and every clock move, and
 /// checked across the wait, so a bump between the check and the wait is
-/// seen (`docs/tools.md`, "Progress"; Ruling 17). The flag only ever asks
+/// seen (`docs/tools.md`, "Progress"). The flag only ever asks
 /// for another pass, so clearing it on waking loses nothing.
 #[derive(Debug, Default)]
 pub(crate) struct SharedWake {

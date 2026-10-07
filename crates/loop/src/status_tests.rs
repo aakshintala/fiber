@@ -14,6 +14,8 @@ struct World {
     fold: Fold,
     running: Arc<Mutex<Vec<JobId>>>,
     branch: Arc<Mutex<Option<Git>>>,
+    count: Arc<Mutex<u32>>,
+    reads: Arc<Mutex<u32>>,
     ts: u64,
 }
 
@@ -32,18 +34,28 @@ fn job(id: &str) -> JobId {
 fn world() -> World {
     let running = Arc::new(Mutex::new(Vec::new()));
     let branch = Arc::new(Mutex::new(None));
+    let count = Arc::new(Mutex::new(0u32));
+    let reads = Arc::new(Mutex::new(0u32));
     let (r, b) = (Arc::clone(&running), Arc::clone(&branch));
+    let (c, n) = (Arc::clone(&count), Arc::clone(&reads));
     let fold = Fold::new(
+        "-w".to_owned(),
         "/w".to_owned(),
         "fake/m".to_owned(),
         None,
         Box::new(move || r.lock().unwrap().clone()),
         Box::new(move || b.lock().unwrap().clone()),
+        Box::new(move || {
+            *n.lock().unwrap() += 1;
+            *c.lock().unwrap()
+        }),
     );
     World {
         fold,
         running,
         branch,
+        count,
+        reads,
         ts: 1000,
     }
 }
@@ -151,6 +163,7 @@ fn usage(generation: &str, input: u64, cost: Option<f64>) -> Value {
         "generation_id": generation,
         "model": "fake/m",
         "tokens": {"input": input, "cache_read": 0, "cache_write": {}, "output": 5},
+        "input_bytes": 1,
         "cost": cost,
     })
 }
@@ -304,11 +317,13 @@ fn only_a_session_model_reply_sets_the_context() {
         let running = Arc::clone(&w.running);
         let branch = Arc::clone(&w.branch);
         Fold::new(
+            "-w".to_owned(),
             "/w".to_owned(),
             "fake/m".to_owned(),
             Some(1000),
             Box::new(move || running.lock().unwrap().clone()),
             Box::new(move || branch.lock().unwrap().clone()),
+            Box::new(|| 0),
         )
     };
     // The reviewer's line has no action; a copy names its origin; an
@@ -743,21 +758,215 @@ fn history_is_folded_without_reading_the_jobs_or_the_branch_until_live() {
     *w.branch.lock().unwrap() = Some(Git {
         branch: Some("main".into()),
     });
+    *w.count.lock().unwrap() = 2;
     w.start();
     w.prompt("go");
     w.feed("job_started", None, &job_started("j1"));
     w.finish();
     let s = w.status();
     assert_eq!((s.state, s.jobs, s.git), (SessionState::Idle, 0, None));
+    assert_eq!((s.clients, *w.reads.lock().unwrap()), (0, 0));
     w.live();
     let s = w.status();
     assert_eq!((s.state, s.jobs), (SessionState::Jobs, 1));
+    assert_eq!(s.clients, 2);
     assert_eq!(
         s.git,
         Some(Git {
             branch: Some("main".into())
         })
     );
+}
+
+#[test]
+fn a_clients_line_reads_the_count_and_leaves_since() {
+    let mut w = world();
+    w.start();
+    w.prompt("go");
+    w.live();
+    let since = w.status().since;
+    *w.count.lock().unwrap() = 2;
+    w.ts += 1;
+    let line = envelope("clients", w.ts, None, None, &json!({"count": 2}));
+    assert!(w.fold.observe(&line));
+    let s = w.status();
+    assert_eq!(s.clients, 2);
+    assert_eq!(s.since, since);
+    // The same count again changes nothing.
+    w.ts += 1;
+    let line = envelope("clients", w.ts, None, None, &json!({"count": 2}));
+    assert!(!w.fold.observe(&line));
+}
+
+#[test]
+fn the_count_is_read_from_live_on_at_each_durable_line_and_not_on_a_delta() {
+    let mut w = world();
+    *w.count.lock().unwrap() = 3;
+    w.start();
+    w.prompt("go");
+    assert_eq!(w.status().clients, 0);
+    assert_eq!(*w.reads.lock().unwrap(), 0);
+    w.live();
+    assert_eq!(w.status().clients, 3);
+    *w.count.lock().unwrap() = 1;
+    assert!(w.feed("step_started", None, &json!({})));
+    assert_eq!(w.status().clients, 1);
+    let reads = *w.reads.lock().unwrap();
+    let delta = envelope(
+        "assistant_message_delta",
+        5000,
+        Some("a1"),
+        None,
+        &json!({"text": "hi"}),
+    );
+    assert!(!w.fold.observe(&delta));
+    assert_eq!(*w.reads.lock().unwrap(), reads);
+}
+
+#[test]
+fn project_is_the_session_directorys_grandparent() {
+    use std::path::Path;
+    assert_eq!(
+        super::project_of(Path::new("/h/projects/-a-b/sessions/s_1")),
+        "-a-b"
+    );
+    assert_eq!(super::project_of(Path::new("/s_1")), "");
+    let mut w = world();
+    w.fold = Fold::new(
+        "-p".to_owned(),
+        "/w".to_owned(),
+        "fake/m".to_owned(),
+        None,
+        {
+            let running = Arc::clone(&w.running);
+            Box::new(move || running.lock().unwrap().clone())
+        },
+        {
+            let branch = Arc::clone(&w.branch);
+            Box::new(move || branch.lock().unwrap().clone())
+        },
+        {
+            let (count, reads) = (Arc::clone(&w.count), Arc::clone(&w.reads));
+            Box::new(move || {
+                *reads.lock().unwrap() += 1;
+                *count.lock().unwrap()
+            })
+        },
+    );
+    assert_eq!(w.status().project, "-p");
+    w.start();
+    w.prompt("go");
+    w.live();
+    assert_eq!(w.status().project, "-p");
+}
+
+/// A lagging status watcher drops the `clients` line, but the fold reads
+/// the latest count at the next durable line it folds while live, so the
+/// count shows in `session_status` by the next durable line at the latest.
+/// The hold is in the count reader's second call, which returns the value
+/// it read before the hold, so neither `go_live` nor the held line can
+/// supply the 2: only a later durable line can.
+#[test]
+fn a_dropped_clients_line_is_read_at_the_next_durable_line() {
+    use contract::events::{
+        Clients, Empty, Event, InputItem, TurnCompleted, TurnOutcome, TurnStarted,
+    };
+    use contract::shapes::{ContentPart, Origin, Sender};
+    use contract::{CommandId, TurnId};
+
+    let root = fakes::TempDir::new("status-clients-lag");
+    let log = Arc::new(
+        log::Log::create(
+            root.path(),
+            SessionId("s_1".into()),
+            fakes::clock::FakeClock::new(),
+        )
+        .unwrap(),
+    );
+    let weak = Arc::downgrade(&log);
+    let (held, observer_held) = std::sync::mpsc::channel::<()>();
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    let held_read = Mutex::new(Some((held, released)));
+    let calls = Mutex::new(0u32);
+    let status = super::start(
+        &log,
+        Fold::new(
+            "-w".to_owned(),
+            "/w".to_owned(),
+            "fake/m".to_owned(),
+            None,
+            Box::new(Vec::new),
+            Box::new(|| None),
+            Box::new(move || {
+                let mut calls = calls.lock().unwrap();
+                *calls += 1;
+                match *calls {
+                    1 => super::clients_of(&weak),
+                    2 => {
+                        let seen = super::clients_of(&weak);
+                        if let Some((held, released)) = held_read.lock().unwrap().take() {
+                            held.send(()).unwrap();
+                            // A mutant that never releases cannot hang the run.
+                            released.recv_timeout(DEADLINE).unwrap();
+                        }
+                        seen
+                    }
+                    _ => super::clients_of(&weak),
+                }
+            }),
+        ),
+    )
+    .expect("an observer");
+    let turn = Some(TurnId("t_1".into()));
+    log.append(
+        &Event::TurnStarted(TurnStarted {
+            input: vec![InputItem::Message {
+                content: vec![ContentPart::Text { text: "go".into() }],
+                sender: Sender {
+                    origin: Origin::Driver,
+                    command_id: Some(CommandId("c_1".into())),
+                },
+                changed_by: None,
+            }],
+        }),
+        turn.clone(),
+        None,
+    )
+    .unwrap();
+    observer_held
+        .recv_timeout(DEADLINE)
+        .expect("the observer is held");
+    // More lines than a watcher's queue holds: the rest are dropped.
+    for _ in 0..2_000 {
+        log.append(&Event::StepStarted(Empty {}), turn.clone(), None)
+            .unwrap();
+    }
+    log.append(&Event::Clients(Clients { count: 2 }), None, None)
+        .unwrap();
+    log.append(
+        &Event::TurnCompleted(TurnCompleted {
+            outcome: TurnOutcome::Completed,
+            error: None,
+            questions: None,
+        }),
+        turn,
+        None,
+    )
+    .unwrap();
+
+    status.signal();
+    release.send(()).unwrap();
+    let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+    std::thread::spawn(move || {
+        status.join();
+        done_tx.send(()).unwrap();
+    });
+    done_rx.recv_timeout(DEADLINE).expect("the observer ended");
+
+    // The log keeps the latest status it was handed.
+    let last = log.latest("session_status").expect("a session_status");
+    assert_eq!(last.payload["clients"], json!(2));
+    assert_eq!(last.payload["state"], "idle");
 }
 
 #[test]
@@ -814,6 +1023,7 @@ fn a_lagging_observer_folds_every_written_line_before_it_stops() {
     let status = super::start(
         &log,
         Fold::new(
+            "-w".to_owned(),
             "/w".to_owned(),
             "fake/m".to_owned(),
             None,
@@ -826,6 +1036,7 @@ fn a_lagging_observer_folds_every_written_line_before_it_stops() {
                 Vec::new()
             }),
             Box::new(|| None),
+            Box::new(|| 0),
         ),
     )
     .expect("an observer");
@@ -862,6 +1073,8 @@ fn a_lagging_observer_folds_every_written_line_before_it_stops() {
         subscription: None,
         extension: None,
         origin_session_id: None,
+        input_bytes: 1,
+        input_media: None,
     }));
     append(Event::TurnCompleted(TurnCompleted {
         outcome: TurnOutcome::Completed,
@@ -961,6 +1174,7 @@ fn stop_returns_after_the_observer_folded_what_was_written() {
     let status = super::start(
         &log,
         Fold::new(
+            "-w".to_owned(),
             "/w".to_owned(),
             "fake/m".to_owned(),
             None,
@@ -973,6 +1187,7 @@ fn stop_returns_after_the_observer_folded_what_was_written() {
                 Vec::new()
             }),
             Box::new(|| None),
+            Box::new(|| 0),
         ),
     )
     .expect("an observer");

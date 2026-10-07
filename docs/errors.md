@@ -24,7 +24,7 @@ Every failure is `error { code, message }`: on `tool_call_completed`,
 
 A failed model call adds two optional fields:
 
-- `retry_after`, in seconds, when the provider asked Fiber to wait.
+- `retry_after_ms`, in milliseconds, rounded up from the seconds the provider sent.
 - `provider { name, status, message }`: the provider's name, the HTTP status and
   the provider's own message. Provider messages can mislead (OpenRouter answers
   a bad key with "Missing Authentication header"), which is why they sit here
@@ -78,10 +78,11 @@ asked for the session.
 |---|---|---|
 | `usage` | the invocation or its environment is wrong: a bad flag, no prompt with stdin on a terminal, `fiber` without a tty, an empty or relative `FIBER_HOME`, `git` is not installed, `fiber ask --worktree` outside a git repository | 2 |
 | `config_invalid` | invalid JSON, a value of the wrong type, or one extension key set under both its full and short name in a configuration file (`docs/configuration.md`) | 1 |
-| `io_failed` | a filesystem failure: a log write or fsync, or a configuration or credential file that exists but cannot be read or written; the message names the path | 1 |
+| `io_failed` | a filesystem failure, or a `git` command on a worktree that failed: a log write or fsync, or a configuration or credential file that exists but cannot be read or written; the message names the path | 1 |
 | `log_corrupt` | a log line that cannot be encoded, or one read back that does not parse | 1 |
 | `no_model` | nothing chose a model, an installed provider lacks the named model, or no installed provider has a bare model id (`docs/model-routing.md`, "Naming a model") | 1 |
 | `model_ambiguous` | a bare model id matches models of two or more installed providers; the message lists every match (`docs/model-routing.md`, "Naming a model") | 1 |
+| `model_unconfigured` | the session's model names a per-account host whose setting has no value or a value that is not a host; the message names the model and the setting (`docs/model-routing.md`, "A per-account host") | 1 |
 | `credential_missing` | the session model's credential cannot be found, or its credential label names none | 1 |
 | `credential_failed` | a stored credential is found but cannot be used, the provider's `credential()` call errors, or its `sign()` fails or returns unusable headers (`docs/model-routing.md`, "Credentials") | 1 |
 | `authentication_failed` | the startup OAuth refresh of the session model's token was rejected by the token endpoint, or its `credential()` needed a person to log in and nobody was attached (`docs/model-routing.md`, "Keys, tokens and OAuth") | 1 |
@@ -109,7 +110,8 @@ Each code names one fix. `no_model` means nothing chose a model: choose one.
 `model_ambiguous` means the id matches several providers: prefix the provider,
 as `provider/model`. `no_model` also covers an installed provider that lacks the
 named model, and a bare id no installed provider has: run `fiber models` and
-name one it lists. `extension_missing` means the provider is not installed:
+name one it lists. `model_unconfigured` means the model needs its host: set
+the setting it names. `extension_missing` means the provider is not installed:
 install it. `protocol_unsupported` means the provider is installed
 but Fiber cannot speak its protocol: pick another model. None of these is
 retried.
@@ -117,7 +119,7 @@ retried.
 ## A failed model call
 
 A failed model call is an assistant message that completed with a failed
-outcome, a code and an attempt number (`docs/events.md`, "Actions"). The retry
+outcome and a code (`docs/events.md`, "Actions"). The retry
 policy is `docs/model-routing.md`, "When a model call fails".
 
 | Code | What it covers | Retried |
@@ -151,7 +153,7 @@ model call fails"). It never overrides `quota_exceeded` or
 `unknown_stop_reason`, which are never retried.
 
 A wait longer than 60 seconds fails at once as `rate_limited` with
-`retry_after` set, so a person or a caller can decide.
+`retry_after_ms` set, so a person or a caller can decide.
 
 ### Recognising a context overflow
 
@@ -280,7 +282,7 @@ the lines that carry it.
 | `indeterminate` | tool call, job | Fiber cannot tell whether the call completed |
 | `invalid_arguments` | tool call, driver command | the arguments failed the tool's schema or checks, or a driver command's `args` (`docs/invocation.md`, "Driver commands") |
 | `invalid_request` | model call, turn | the provider rejected the request for any other reason |
-| `io_failed` | exit | a filesystem failure: a log write or fsync, or a configuration or credential file that exists but cannot be read or written; the message names the path |
+| `io_failed` | exit | a filesystem failure, or a `git` command on a worktree that failed: a log write or fsync, or a configuration or credential file that exists but cannot be read or written; the message names the path |
 | `log_corrupt` | exit | a log line that cannot be encoded, or one read back that does not parse |
 | `mcp_cancel_requested` | tool call | a cancelled call the server may still act on |
 | `mcp_required_server_failed` | exit | a required MCP server failed to start |
@@ -291,7 +293,7 @@ the lines that carry it.
 | `model_ambiguous` | exit | a bare model id matches models of two or more installed providers; prefix the provider |
 | `model_invalid` | notice | a model's `extra_body` names a field Fiber builds, its `web_search` names a type its protocol does not read, it declares no `context_window`, or its `thinking_default` is not among its `thinking_levels`, so the model is left out of the model list (`docs/model-routing.md`, "Extra request body fields", "Hosted web search", "Thinking") |
 | `model_not_found` | model call, turn | the provider's error body says it does not know the model |
-| `model_unconfigured` | notice | a model's base URL names a per-account host whose setting has no value, so the model is left out of the model list; the message names the setting (`docs/model-routing.md`, "A per-account host") |
+| `model_unconfigured` | exit, notice | a model's base URL names a per-account host whose setting has no value or a value that is not a host, so the model is left out of the model list; the message names the model and the setting (`docs/model-routing.md`, "A per-account host") |
 | `name_pinned` | tool call | `name_session` was called while the person's name pins the session |
 | `no_match` | tool call | an edit block's text was not found in the file |
 | `no_model` | exit, notice | nothing chose a model, or an installed provider lacks the named model |
@@ -316,7 +318,7 @@ the lines that carry it.
 | `skill_shadowed` | notice | two skills share a name; the message names both paths and which one won (`docs/system-prompt.md`, "Skills") |
 | `skills_large` | notice | the skills listing passes 10% of the context window; the message names the sources that add the most (`docs/system-prompt.md`, "Size") |
 | `stale_file` | tool call | a write would replace a file the session has not seen in its current state |
-| `stale_request` | driver command | the command names a request, steering message, job or turn that is no longer pending, queued or running, or a `dismiss` names a session that is not a crashed session in the feed (`docs/invocation.md`) |
+| `stale_request` | driver command, hub command | the command names a request, steering message, job or turn that is no longer pending, queued or running, or a `dismiss` names a session that is not a crashed session in the feed, or a cascading `delete`'s `expect` differs from the sessions it would remove; the message names them (`docs/invocation.md`, "Deleting and pruning") |
 | `state_too_large` | extension call | a state value over 64 KiB |
 | `stream_incomplete` | model call, turn | the stream ended early or carried an unmatched error |
 | `summary_failed` | driver command | a `rewind` that asked for a summary could not get one, so no new session was created (`docs/events.md`, "Rewind") |
@@ -338,13 +340,13 @@ Notices, for a failure outside any action:
 |---|---|
 | `command_conflict` | two extensions registered the same command name |
 | `config_key_ignored` | an unknown key, a key a repository may not set, or a configured `thinking` level the session's model does not declare (`docs/model-routing.md`, "Thinking") |
-| `extension_failed` | an extension failed to start or missed its deadline, or its install record is missing or unreadable, so loading skipped it, or loading skipped one of its registrations; the message names which (`docs/extensions.md`, "Installing") |
+| `extension_failed` | an extension failed to start or missed its deadline, or its install record is missing or unreadable, so loading skipped it, or loading skipped one of its registrations, or one of its commands failed; the message names which (`docs/extensions.md`, "Installing") |
 | `extension_incompatible` | an extension needs a newer `fiber` or a different extension API version, so loading skipped it |
 | `extension_shadowed` | a repository's approved copy of an extension loads in place of the personal install of the same name; the message names both versions |
 | `hook_failed` | a `non-blocking` hook or a watcher failed |
 | `instructions_large` | the instruction text passes 10% of the context window (`docs/system-prompt.md`, "Size") |
 | `model_invalid` | a model's `extra_body` names a field Fiber builds, such as `tools`, its `web_search` names a type its protocol does not read, it declares no `context_window`, or its `thinking_default` is not among its `thinking_levels`, so the model is left out of the model list; the message names the model and the field or type (`docs/model-routing.md`, "Extra request body fields", "Hosted web search", "Thinking") |
-| `model_unconfigured` | a model's base URL names a per-account host whose setting has no value, so the model is left out of the model list; the message names the model and the setting (`docs/model-routing.md`, "A per-account host") |
+| `model_unconfigured` | a model's base URL names a per-account host whose setting has no value or a value that is not a host, so the model is left out of the model list; the message names the model and the setting (`docs/model-routing.md`, "A per-account host") |
 | `no_model` | nothing chose the reviewer's model; set `reviewer.model` (`docs/permissions.md`, "How it runs") |
 | `repository_code_skipped` | an extension, hook or MCP server the repository declares was skipped, unapproved, with nobody to ask; the message names it and says to run `fiber approve` |
 | `skill_invalid` | a skill's `SKILL.md` header does not parse or lacks `name` or `description`, so it is left out; the message names its path (`docs/system-prompt.md`, "Skills") |

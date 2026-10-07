@@ -310,6 +310,16 @@ fn a_failed_credential_or_sign_keeps_its_text_apart_from_fiber_s_sentence() {
             Some("init.lua:3: boom"),
         ),
         (
+            "unattended login",
+            SignError::Unattended {
+                message: "init.lua:3: boom".into(),
+            },
+            ErrorCode::AuthenticationFailed,
+            "acme's credential() failed: logging in needs a person, and nobody is attached. Run \
+             `fiber login acme`.",
+            Some("init.lua:3: boom"),
+        ),
+        (
             "unreachable refresh",
             SignError::Credential {
                 code: ErrorCode::ConnectionFailed,

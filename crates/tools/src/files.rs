@@ -492,7 +492,7 @@ pub(crate) fn failed(code: ErrorCode, message: String) -> Output {
         error: Some(Failure {
             code,
             message,
-            retry_after: None,
+            retry_after_ms: None,
             provider: None,
         }),
         ..Output::default()

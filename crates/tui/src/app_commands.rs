@@ -431,19 +431,15 @@ impl App {
         Effect::Send(vec![line])
     }
 
-    /// `/close`: `cancel` during a turn, then `close`, then home.
+    /// `/close`: one `close` with `now`, whether the session is busy or
+    /// idle, then home.
     fn close(&mut self) -> Effect {
-        let Some((session, busy)) = self.command_session() else {
+        let Some((session, _)) = self.command_session() else {
             return Effect::None;
         };
-        let mut lines = Vec::new();
-        if busy {
-            let id = mint();
-            lines.push(session_command(&id, "cancel", &session, None).to_string());
-            self.pending.insert(id, (Kind::Cancel, String::new()));
-        }
         let id = mint();
-        lines.push(session_command(&id, "close", &session, None).to_string());
+        let lines =
+            vec![session_command(&id, "close", &session, Some(json!({"now": true}))).to_string()];
         // Home has a fresh draft: a rejected `close` gives only its notice.
         self.pending.insert(id, (Kind::Command, String::new()));
         self.go_home();

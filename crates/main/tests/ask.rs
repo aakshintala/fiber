@@ -69,7 +69,7 @@ impl Setup {
             &json!({
                 "name": "fake",
                 "credential": {"env": "FIBER_TEST_FAKE_KEY"},
-                "models": [{"id": "m", "protocol": "openai-responses", "base_url": format!("{}/v1", server.url())}]
+                "models": [{"id": "m", "protocol": "openai-responses", "base_url": format!("{}/v1", server.url()), "context_window": 100000}]
             }),
         );
         extensions::plan(
@@ -102,7 +102,7 @@ impl Setup {
                 "name": "fake",
                 "credential": {"env": "FIBER_TEST_FAKE_KEY"},
                 "models": [{"id": "m", "protocol": "openai-responses",
-                    "base_url": format!("{}/v1", server.url()),
+                    "base_url": format!("{}/v1", server.url()), "context_window": 100000,
                     "thinking_levels": ["low", "high"], "thinking_default": "low"}]
             }),
         );
@@ -841,6 +841,42 @@ fn a_failure_before_any_session_ends_stdout_with_fiber_exited_and_no_session_id(
 }
 
 #[test]
+fn a_model_with_no_context_window_is_left_out_before_the_session() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([]).unwrap();
+    setup.provider(&server);
+    let source = setup.home().join("extensions/fake/providers/fake.json");
+    let text = fs::read_to_string(&source)
+        .unwrap()
+        .replace("\"context_window\":100000,", "");
+    assert!(!text.contains("context_window"), "{text}");
+    fs::write(&source, text).unwrap();
+
+    let run = setup.fiber(&["ask", "hi"], None);
+
+    assert_pre_session(&run, 1, "no_model");
+    assert!(server.requests().is_empty());
+}
+
+#[test]
+fn preamble_built_records_the_models_declared_window() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+
+    let run = setup.fiber(&["ask", "hi"], None);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
+    let built = run
+        .lines
+        .iter()
+        .find(|l| l["kind"] == "preamble_built")
+        .unwrap();
+    assert_eq!(built["payload"]["context_window"], 100_000);
+}
+
+#[test]
 fn a_missing_credential_fails_before_the_session() {
     let setup = Setup::new();
     let server = ProviderServer::start([]).unwrap();
@@ -885,7 +921,7 @@ fn a_bedrock_converse_model_fails_before_the_session() {
         &json!({
             "name": "fake",
             "credential": {"env": "FIBER_TEST_FAKE_KEY"},
-            "models": [{"id": "m", "protocol": "bedrock-converse", "base_url": format!("{}/v1", server.url())}]
+            "models": [{"id": "m", "protocol": "bedrock-converse", "base_url": format!("{}/v1", server.url()), "context_window": 100000}]
         }),
     );
     extensions::plan(
@@ -903,10 +939,15 @@ fn a_bedrock_converse_model_fails_before_the_session() {
         &json!({"model": "fake/m"}),
     );
 
-    assert_pre_session(
-        &setup.fiber_with_env(&["ask", "hi"], &[("FIBER_TEST_FAKE_KEY", "key")]),
-        1,
-        "protocol_unsupported",
+    let run = setup.fiber_with_env(&["ask", "hi"], &[("FIBER_TEST_FAKE_KEY", "key")]);
+    assert_pre_session(&run, 1, "protocol_unsupported");
+    let message = run.last()["payload"]["error"]["message"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        message.contains("fake/m") && message.contains("pick another model"),
+        "{message}"
     );
     assert!(server.requests().is_empty());
 }
@@ -939,6 +980,7 @@ Sessions:
   ask [--model <model>] [--resume <id>] [<prompt>] [-]  Run one session of one turn; its events go to stdout
   sessions delete [--cascade] [--yes] <id>              Delete a session, and with --cascade the sessions that continue it
   sessions export <id> [<path>]                         Write the session's log and its artifacts to <path>
+  sessions prune [--older-than <duration>] [--dry-run]  Delete old sessions, worktrees and diagnostic logs
   models [<search>] [--json]                            List the models the installed providers serve
 
 Fiber itself:
@@ -2926,7 +2968,7 @@ fn a_cached_list_serves_the_model_while_the_refresh_runs_in_the_background() {
         &json!([{
             "id": "m1",
             "protocol": "openai-responses",
-            "base_url": format!("{}/v1", server.url()),
+            "base_url": format!("{}/v1", server.url()), "context_window": 100000,
         }]),
     );
     // The copy is stale: backdated past `model_lists.refresh_after`, so
@@ -2991,7 +3033,7 @@ fn a_lua_provider_without_credential_uses_the_stored_key() {
     fs::write(
         source.join("init.lua"),
         format!(
-            "fiber.provider(\"plain\", {{\n models = {{\n   timeout = 5000,\n   run = function()\n     return {{ {{ id = \"m1\", protocol = \"openai-responses\", base_url = \"{}/v1\" }} }}\n   end,\n }},\n}})\n",
+            "fiber.provider(\"plain\", {{\n models = {{\n   timeout = 5000,\n   run = function()\n     return {{ {{ id = \"m1\", protocol = \"openai-responses\", base_url = \"{}/v1\", context_window = 100000 }} }}\n   end,\n }},\n}})\n",
             server.url()
         ),
     )
@@ -3060,6 +3102,35 @@ fn a_thinking_suffix_is_recorded_and_an_unsupported_level_fails_first() {
     );
 }
 
+#[test]
+fn a_configured_level_the_model_does_not_declare_logs_one_notice_and_runs() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider_with_thinking(&server);
+    write(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "thinking": "max"}),
+    );
+
+    let run = setup.fiber(&["ask", "hi"], None);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let mut expected = HELLO_KINDS.to_vec();
+    expected.insert(3, "notice");
+    assert_eq!(run.kinds(), expected);
+    let notice = run.lines.iter().find(|l| l["kind"] == "notice").unwrap();
+    assert_eq!(notice["payload"]["code"], "config_key_ignored");
+    let message = notice["payload"]["message"].as_str().unwrap();
+    for part in ["`thinking`", "`max`", "`fake/m`"] {
+        assert!(message.contains(part), "{message}");
+    }
+    let built = run
+        .lines
+        .iter()
+        .find(|l| l["kind"] == "preamble_built")
+        .unwrap();
+    assert_eq!(built["payload"]["thinking"], "low");
+}
+
 /// Installs an inline extension `name` with `init_lua`, and makes `name/m1`
 /// the configured model.
 fn inline_extension(setup: &Setup, name: &str, init_lua: &str) {
@@ -3093,7 +3164,7 @@ fn a_credential_error_at_startup_is_fiber_s_sentence_and_its_text_goes_in_provid
         &setup,
         "acme",
         &format!(
-            "fiber.provider(\"acme\", {{\n models = {{\n   timeout = 5000,\n   run = function()\n     return {{ {{ id = \"m1\", protocol = \"openai-responses\", base_url = \"{}/v1\" }} }}\n   end,\n }},\n credential = {{\n   timeout = 5000,\n   run = function()\n     error(\"refresh failed: body-xyz\")\n   end,\n }},\n}})\n",
+            "fiber.provider(\"acme\", {{\n models = {{\n   timeout = 5000,\n   run = function()\n     return {{ {{ id = \"m1\", protocol = \"openai-responses\", base_url = \"{}/v1\", context_window = 100000 }} }}\n   end,\n }},\n credential = {{\n   timeout = 5000,\n   run = function()\n     error(\"refresh failed: body-xyz\")\n   end,\n }},\n}})\n",
             server.url()
         ),
     );
@@ -3121,7 +3192,7 @@ fn a_sign_error_keeps_the_token_out_of_every_line() {
         &setup,
         "acme",
         &format!(
-            "fiber.provider(\"acme\", {{\n models = {{\n   timeout = 5000,\n   run = function()\n     return {{ {{ id = \"m1\", protocol = \"openai-responses\", base_url = \"{}/v1\" }} }}\n   end,\n }},\n credential = {{\n   timeout = 5000,\n   run = function()\n     return {{ token = \"tok-secret-1\", expires_at = {EXPIRES_AT} }}\n   end,\n }},\n sign = {{\n   timeout = 5000,\n   run = function(request)\n     error(\"bad signature for \" .. request.headers.authorization)\n   end,\n }},\n}})\n",
+            "fiber.provider(\"acme\", {{\n models = {{\n   timeout = 5000,\n   run = function()\n     return {{ {{ id = \"m1\", protocol = \"openai-responses\", base_url = \"{}/v1\", context_window = 100000 }} }}\n   end,\n }},\n credential = {{\n   timeout = 5000,\n   run = function()\n     return {{ token = \"tok-secret-1\", expires_at = {EXPIRES_AT} }}\n   end,\n }},\n sign = {{\n   timeout = 5000,\n   run = function(request)\n     error(\"bad signature for \" .. request.headers.authorization)\n   end,\n }},\n}})\n",
             server.url()
         ),
     );

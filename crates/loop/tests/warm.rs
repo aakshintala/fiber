@@ -153,6 +153,8 @@ fn assert_usage_only(session: &Session, count: usize) {
         assert!(line.turn_id.is_none(), "a refresh belongs to no turn");
         assert!(line.action_id.is_none(), "a refresh belongs to no action");
         assert!(line.is_durable());
+        assert_eq!(line.payload["input_bytes"], 1000);
+        assert!(line.payload.get("input_media").is_none());
     }
 }
 
@@ -377,7 +379,7 @@ fn a_failed_refresh_is_not_retried_and_stops_warming_with_a_notice() {
             Scripted::failed(Failure {
                 code: ErrorCode::ProviderUnavailable,
                 message: "Overloaded.".into(),
-                retry_after: None,
+                retry_after_ms: None,
                 provider: None,
             }),
             refresh_reply(),

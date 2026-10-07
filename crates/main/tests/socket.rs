@@ -55,7 +55,7 @@ impl Setup {
             &json!({
                 "name": "fake",
                 "credential": {"env": "FIBER_TEST_FAKE_KEY"},
-                "models": [{"id": "m", "protocol": "openai-responses", "base_url": format!("{}/v1", server.url())}]
+                "models": [{"id": "m", "protocol": "openai-responses", "base_url": format!("{}/v1", server.url()), "context_window": 100000}]
             }),
         );
         extensions::plan(
@@ -488,6 +488,158 @@ fn a_summary_subscriber_is_sent_the_session_status_and_each_change_through_idle(
     assert_eq!(last_status["payload"]["state"], "idle");
     finish(running);
     drop(client);
+}
+
+#[test]
+fn session_status_carries_the_project_and_counts_full_connections() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    server.hold();
+    setup.provider(&server);
+    let running = start(&setup);
+    let started = first_line(&running.stdout);
+    let session_id = started["session_id"].as_str().unwrap().to_owned();
+    assert!(
+        server.await_requests(1, DEADLINE),
+        "the held response was requested"
+    );
+
+    let socket = setup.home().join("run").join(&session_id);
+    let summary = Client::connect(&socket).unwrap();
+    send(
+        &summary,
+        r#"{"id":"c_sum","command":"subscribe","args":{"level":"summary"}}"#,
+    );
+    // A summary subscriber is sent the latest `session_status` and then the
+    // latest `extensions_loaded` on subscribe (`docs/events.md`,
+    // `extensions_loaded`); live lines follow. The replayed status may be
+    // older than streaming, so the sync waits for both the replay and a
+    // streaming status: anything left over would spill into the windows
+    // below.
+    let mut replayed = false;
+    let mut streaming_seen = false;
+    let held = until(
+        &summary,
+        "the extensions replay and a streaming session_status",
+        |line| {
+            replayed |= line["kind"] == "extensions_loaded";
+            streaming_seen |=
+                line["kind"] == "session_status" && line["payload"]["state"] == "streaming";
+            replayed && streaming_seen
+        },
+    );
+    let streaming = held
+        .iter()
+        .rfind(|line| line["kind"] == "session_status" && line["payload"]["state"] == "streaming")
+        .unwrap();
+    let projects: Vec<_> = fs::read_dir(setup.home().join("projects"))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(projects.len(), 1, "one project: {projects:?}");
+    assert_eq!(
+        streaming["payload"]["project"],
+        projects[0].file_name().to_str().unwrap()
+    );
+    assert_eq!(streaming["payload"]["clients"], 0);
+    let since = streaming["payload"]["since"].clone();
+
+    let full = Client::connect(&socket).unwrap();
+    send(
+        &full,
+        r#"{"id":"c_full","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    let full_lines = until(&full, "a session_status with one client", |line| {
+        line["kind"] == "session_status" && line["payload"]["clients"] == 1
+    });
+    // The durable lines equal the log so far.
+    let sessions = log::sessions_dir(&setup.home(), &doors::project(&setup.workspace()));
+    let file = fs::read_to_string(sessions.join(&session_id).join("events.jsonl")).unwrap();
+    let logged: Vec<Value> = file
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(durable(&full_lines), logged);
+    // The lines with no `seq`, in order: the stale status, then the count,
+    // then the new status.
+    let kinds: Vec<&str> = full_lines
+        .iter()
+        .filter(|line| line.get("seq").is_none())
+        .map(|line| line["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            "command_accepted",
+            "session_status",
+            "clients",
+            "session_status"
+        ]
+    );
+    let statuses: Vec<&Value> = full_lines
+        .iter()
+        .filter(|line| line["kind"] == "session_status")
+        .collect();
+    assert_eq!(statuses.len(), 2);
+    assert_eq!(statuses[0]["payload"]["clients"], 0);
+    assert_eq!(statuses[1]["payload"]["clients"], 1);
+    let counts: Vec<&Value> = full_lines
+        .iter()
+        .filter(|line| line["kind"] == "clients")
+        .collect();
+    assert_eq!(counts.len(), 1);
+    assert_eq!(counts[0]["payload"]["count"], 1);
+
+    let one = until(&summary, "a session_status with one client", |line| {
+        line["kind"] == "session_status" && line["payload"]["clients"] == 1
+    });
+    // Nothing else reaches a summary client between the sync and the
+    // count: the complete, ordered kinds.
+    let one_kinds: Vec<&str> = one
+        .iter()
+        .map(|line| line["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        one_kinds,
+        ["session_status"],
+        "only statuses on the summary client: {one:?}"
+    );
+    let latest = one.last().unwrap();
+    assert_eq!(latest["payload"]["state"], "streaming");
+    assert_eq!(latest["payload"]["since"], since);
+
+    drop(full);
+    let none = until(&summary, "a session_status with no clients", |line| {
+        line["kind"] == "session_status" && line["payload"]["clients"] == 0
+    });
+    // Nothing else reaches a summary client on detach either.
+    let none_kinds: Vec<&str> = none
+        .iter()
+        .map(|line| line["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        none_kinds,
+        ["session_status"],
+        "only statuses on the summary client: {none:?}"
+    );
+    assert_eq!(none.last().unwrap()["payload"]["since"], since);
+
+    server.release();
+    // `fiber_exited` is the last line on stdout, as the existing test does.
+    loop {
+        let line: Value = serde_json::from_str(
+            &running
+                .stdout
+                .recv_timeout(DEADLINE)
+                .expect("waited for fiber_exited"),
+        )
+        .unwrap();
+        if line["kind"] == "fiber_exited" {
+            break;
+        }
+    }
+    finish(running);
+    drop(summary);
 }
 
 #[test]

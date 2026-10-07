@@ -16,7 +16,7 @@ fn a_written_list_is_read_back_from_its_file() {
     let setup = Setup::new();
     let home = setup.home();
     assert_eq!(read_model_cache(&home, "acme").unwrap(), None);
-    let list = json!([{ "id": "m1", "protocol": "openai-responses", "base_url": "http://x/v1" }]);
+    let list = json!([{ "id": "m1", "protocol": "openai-responses", "base_url": "http://x/v1", "context_window": 1000 }]);
     write_model_cache(&home, "acme", &list).unwrap();
     let file = home.join("cache/models/acme.json");
     assert_eq!(
@@ -89,7 +89,7 @@ fn a_lists_age_is_now_minus_its_mtime() {
     let setup = Setup::new();
     let home = setup.home();
     let clock = fakes::clock::FakeClock::new();
-    let list = json!([{ "id": "m1", "protocol": "openai-responses", "base_url": "http://x/v1" }]);
+    let list = json!([{ "id": "m1", "protocol": "openai-responses", "base_url": "http://x/v1", "context_window": 1000 }]);
     write_model_cache(&home, "acme", &list).unwrap();
     set_mtime(&home, clock.wall() - std::time::Duration::from_secs(90));
     assert_eq!(
@@ -103,7 +103,7 @@ fn a_list_newer_than_the_clock_is_fresh() {
     let setup = Setup::new();
     let home = setup.home();
     let clock = fakes::clock::FakeClock::new();
-    let list = json!([{ "id": "m1", "protocol": "openai-responses", "base_url": "http://x/v1" }]);
+    let list = json!([{ "id": "m1", "protocol": "openai-responses", "base_url": "http://x/v1", "context_window": 1000 }]);
     write_model_cache(&home, "acme", &list).unwrap();
     set_mtime(&home, clock.wall() + std::time::Duration::from_secs(60));
     assert_eq!(

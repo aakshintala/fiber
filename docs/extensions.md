@@ -283,7 +283,7 @@ host.oauth.open(url)               -- open the browser at url, and show the URL 
 host.oauth.callback(opts)          -- serve one request on localhost; returns its query parameters
 host.oauth.pkce()                  -- returns { verifier, challenge }
 host.oauth.poll(opts)              -- poll a device-code token endpoint; returns the token reply
-host.oauth.refresh(fn)             -- lock this provider's credential file, re-read it, refresh once
+host.oauth.refresh(fn)             -- lock the call's stored credential file, re-read it, refresh once
 host.sha256(bytes)                 -- SHA-256; returns hex
 host.hmac_sha256(key, bytes)       -- HMAC-SHA256; returns raw bytes
 json.decode(str) / json.encode(value)   -- JSON, host-provided (Lua has none built in)
@@ -339,7 +339,8 @@ json.decode(str) / json.encode(value)   -- JSON, host-provided (Lua has none bui
 - **`host.oauth`** is what a provider's `credential()` builds an OAuth login
   from (`docs/model-routing.md`, "Credentials"). The extension adds its
   vendor's own steps. `host.oauth.refresh` takes the lock on the stored
-  credential and re-reads it. It calls `fn` only if the token still needs
+  credential, `credentials/<credential>/<label>` for the provider and label
+  the call was made for, and re-reads it. It calls `fn` only if the token still needs
   refreshing, then stores what `fn` returns, so two sessions never refresh
   one token twice. With nobody attached to answer, `open`, `callback` and
   `poll` fail with `authentication_failed` before they open, listen or send
@@ -472,7 +473,8 @@ A provider may have five pieces of Lua:
 
 - `models()`, which discovers its models
 - `quota()`, which reports its quota (`docs/model-routing.md`, "Quota")
-- `credential()`, which returns `{ token = <string>, expires_at = <Unix seconds> }`,
+- `credential()`, which receives `{ label, credential }` and returns
+  `{ token = <string>, expires_at = <Unix seconds> }`,
   and optionally `headers` sent with the token and the login's `email`, for a
   cloud sign-in or an OAuth login (`docs/model-routing.md`, "Keys, tokens and
   OAuth")

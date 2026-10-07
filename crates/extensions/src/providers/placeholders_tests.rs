@@ -6,18 +6,18 @@
 use std::cell::Cell;
 
 use config::ConfigError;
-use serde_json::{Value, json};
 
-use super::{Filled, fill};
+use super::{Filled, Source, fill, host};
 
-/// A lookup that serves `value` for `name` and nothing for anything else.
+/// A lookup that serves `value` from the setting for `name` and nothing
+/// for anything else.
 fn lookup_of(
     name: &'static str,
-    value: Value,
-) -> impl Fn(&str) -> Result<Option<Value>, ConfigError> {
+    value: &'static str,
+) -> impl Fn(&str) -> Result<Option<(String, Source)>, ConfigError> {
     move |at: &str| {
         if at == name {
-            Ok(Some(value.clone()))
+            Ok(Some((value.to_owned(), Source::Setting)))
         } else {
             Ok(None)
         }
@@ -38,7 +38,7 @@ fn a_template_with_no_placeholder_is_unchanged_and_looks_nothing_up() {
 
 #[test]
 fn a_repeated_name_gets_the_same_value_every_time() {
-    let lookup = lookup_of("r", json!("us"));
+    let lookup = lookup_of("r", "us");
     assert_eq!(
         fill("https://{r}-x/{r}/y", &lookup).unwrap(),
         Filled::Url("https://us-x/us/y".to_owned())
@@ -52,7 +52,7 @@ fn underscores_dashes_digits_and_capitals_are_name_characters() {
         ("{a-b}", "a-b", "two"),
         ("{A9}", "A9", "three"),
     ] {
-        let lookup = lookup_of(name, json!(value));
+        let lookup = lookup_of(name, value);
         assert_eq!(
             fill(template, &lookup).unwrap(),
             Filled::Url(value.to_owned()),
@@ -80,7 +80,7 @@ fn other_braces_stay_as_written_and_are_not_looked_up() {
 
 #[test]
 fn a_lone_brace_before_a_placeholder_stays_as_written() {
-    let lookup = lookup_of("a", json!("h"));
+    let lookup = lookup_of("a", "h");
     assert_eq!(
         fill("{{a}}", &lookup).unwrap(),
         Filled::Url("{h}".to_owned())
@@ -88,19 +88,75 @@ fn a_lone_brace_before_a_placeholder_stays_as_written() {
 }
 
 #[test]
-fn only_a_non_empty_string_fills() {
-    let lookup = lookup_of("a", json!("h"));
-    assert_eq!(fill("{a}", &lookup).unwrap(), Filled::Url("h".to_owned()));
-    for value in [json!(""), json!(5), json!(true), json!(null)] {
-        let lookup = lookup_of("a", value.clone());
-        assert_eq!(
-            fill("{a}", &lookup).unwrap(),
-            Filled::Missing("a".to_owned()),
-            "{value}"
-        );
+fn host_strips_one_scheme_and_slash_and_checks_the_grammar() {
+    for (value, expected) in [
+        ("adb-1.example", "adb-1.example"),
+        ("https://adb-1.example/", "adb-1.example"),
+        ("adb-1.example/", "adb-1.example"),
+        ("https://adb-1.example", "adb-1.example"),
+        ("a:0", "a:0"),
+        ("adb-1.example:8443", "adb-1.example:8443"),
+        ("a:65535", "a:65535"),
+    ] {
+        assert_eq!(host(value), Some(expected), "{value}");
     }
-    let none = |_name: &str| Ok(None);
-    assert_eq!(fill("{a}", &none).unwrap(), Filled::Missing("a".to_owned()));
+    for value in [
+        "",
+        "https://",
+        "/",
+        ":443",
+        "a:",
+        "a:+1",
+        "a:65536",
+        "a:1:2",
+        "a_b",
+        "a/b",
+        "a b",
+        "[::1]",
+        "HTTPS://a",
+        "https://https://a",
+        "a//",
+    ] {
+        assert_eq!(host(value), None, "{value}");
+    }
+}
+
+#[test]
+fn a_valid_host_is_filled_stripped() {
+    let lookup = lookup_of("a", "https://h.example/");
+    assert_eq!(
+        fill("{a}", &lookup).unwrap(),
+        Filled::Url("h.example".to_owned())
+    );
+}
+
+#[test]
+fn a_value_that_is_not_a_host_is_reported_with_its_source() {
+    let lookup = lookup_of("a", "x/y");
+    assert_eq!(
+        fill("{a}", &lookup).unwrap(),
+        Filled::NotHost {
+            name: "a".to_owned(),
+            source: Source::Setting,
+        }
+    );
+    let env = |at: &str| {
+        if at == "a" {
+            Ok(Some((
+                "x/y".to_owned(),
+                Source::Env("ACME_HOST".to_owned()),
+            )))
+        } else {
+            Ok(None)
+        }
+    };
+    assert_eq!(
+        fill("{a}", &env).unwrap(),
+        Filled::NotHost {
+            name: "a".to_owned(),
+            source: Source::Env("ACME_HOST".to_owned()),
+        }
+    );
 }
 
 #[test]
@@ -110,13 +166,13 @@ fn the_first_placeholder_with_no_value_is_reported_and_an_error_passes_on() {
         fill("{a}{b}", &none).unwrap(),
         Filled::Missing("a".to_owned())
     );
-    let lookup = lookup_of("a", json!("h"));
+    let lookup = lookup_of("a", "h");
     assert_eq!(
         fill("{a}{b}", &lookup).unwrap(),
         Filled::Missing("b".to_owned())
     );
     let err = fill("{a}", &|_name| {
-        Err::<Option<Value>, ConfigError>(ConfigError::Override { arg: "bad".into() })
+        Err::<Option<(String, Source)>, ConfigError>(ConfigError::Override { arg: "bad".into() })
     })
     .unwrap_err();
     assert_eq!(err.code(), contract::ErrorCode::Usage);

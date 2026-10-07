@@ -82,6 +82,9 @@ impl Error {
             // A credential failure carries its own code: a failed `sign()`
             // is `credential_failed`, a failed refresh keeps its own.
             Self::Sign(contract::signing::Error::Credential { code, .. }) => code.clone(),
+            Self::Sign(contract::signing::Error::Unattended { .. }) => {
+                ErrorCode::AuthenticationFailed
+            }
             Self::Sign(_) => ErrorCode::CredentialFailed,
         }
     }
@@ -109,21 +112,22 @@ impl Error {
     /// read the original body unchanged.
     pub fn failure(&self, provider: &str, secrets: &Secrets) -> Failure {
         let code = self.code();
-        let (retry_after, said) = match self {
+        let (retry_after_ms, said) = match self {
             Self::Status {
                 status,
                 body,
                 retry_after,
                 ..
             } => (
-                *retry_after,
+                (*retry_after).and_then(wait_ms),
                 Some((Some(*status), secrets.redact(&body_message(body)))),
             ),
             Self::ReplyFailed { message, .. } => (None, Some((Some(200), secrets.redact(message)))),
             Self::QuotaExceeded(message) => (None, Some((Some(200), secrets.redact(message)))),
             Self::Sign(
                 contract::signing::Error::Failed(text)
-                | contract::signing::Error::Credential { message: text, .. },
+                | contract::signing::Error::Credential { message: text, .. }
+                | contract::signing::Error::Unattended { message: text },
             ) => (None, Some((None, secrets.redact(text)))),
             Self::Connection(_)
             | Self::StreamIncomplete(_)
@@ -152,7 +156,7 @@ impl Error {
         Failure {
             code,
             message,
-            retry_after,
+            retry_after_ms,
             provider: said.map(|(status, message)| ProviderFailure {
                 name: provider.to_owned(),
                 status,
@@ -162,6 +166,20 @@ impl Error {
     }
 }
 
+/// The asked wait in milliseconds, rounded up and saturating at
+/// `u64::MAX`; absent when `seconds` is not finite or is negative.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "seconds is finite and non-negative, clamped to u64::MAX milliseconds"
+)]
+fn wait_ms(seconds: f64) -> Option<u64> {
+    if !seconds.is_finite() || seconds < 0.0 {
+        return None;
+    }
+    Some((seconds * 1000.0).ceil().clamp(0.0, u64::MAX as f64) as u64)
+}
+
 /// Fiber's own sentence for a signing failure (`docs/errors.md`, "The
 /// shape"): it names the provider and the function, never the signer's
 /// text, which stays in `provider.message`, redacted.
@@ -169,6 +187,10 @@ fn sign_sentence(provider: &str, error: &contract::signing::Error, secrets: &Sec
     use contract::signing::Error as Sign;
     match error {
         Sign::Failed(_) => format!("{provider}'s sign() failed."),
+        Sign::Unattended { .. } => format!(
+            "{provider}'s credential() failed: logging in needs a person, and nobody is attached. \
+             Run `fiber login {provider}`."
+        ),
         Sign::Credential { code, .. } if *code == ErrorCode::AuthenticationFailed => format!(
             "{provider}'s credential() failed: the token endpoint rejected the refresh. Run \
              `fiber login {provider}`."

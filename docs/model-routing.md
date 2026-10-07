@@ -47,7 +47,7 @@ With `gpt-6-luna` the endpoint accepted
 `usage_limit_reached` or `usage_not_included` to `quota_exceeded`, on any
 endpoint and whatever the HTTP status, and never retries it. No other vendor
 sends these codes, so the match needs no flag. When the body has `resets_at`
-(Unix seconds), the seconds until then become the error's `retry_after`, and
+(Unix seconds), the milliseconds until then become the error's `retry_after_ms`, and
 the message names the reset time. `rate_limit_exceeded` stays `rate_limited`.
 No usage-limit reply has been probed: the match rests on the reference
 implementations ([research/codex-responses-probe](../research/codex-responses-probe/README.md),
@@ -331,8 +331,20 @@ read when the setting is unset, such as `DATABRICKS_HOST`. A placeholder's
 setting is never a `repo_settings` key, so a repository never sets it, as it
 never changes a base URL ("Choosing the model").
 
-A model whose placeholder has no value is left out of the model list, with
-the notice `model_unconfigured` naming the model and the setting.
+Before a value fills its placeholder, Fiber strips one leading `https://`
+and one trailing `/`, so `DATABRICKS_HOST` can carry
+`https://adb-123.azuredatabricks.net/`. What remains must be a host: ASCII
+letters, digits, `.` and `-`, with an optional `:` and a port from 0 to
+65535. A setting that is not a host is not replaced by the environment
+variable.
+
+A model whose placeholder has no value, or a value that is not a host, is
+left out of the model list, with the notice `model_unconfigured` naming the
+model and the setting; for a value that is not a host it says so, without
+repeating the value. The model can still be named ("Naming a model"): a
+session that chooses it exits with `model_unconfigured`, and
+`fiber config set model` accepts it with that notice
+(`docs/configuration.md`, "When Fiber writes").
 
 ### openai-completions facts
 
@@ -552,6 +564,9 @@ When a person types a model:
    named model is `no_model`. A bare id that no installed provider has is
    `no_model` too, and its message says to run `fiber models`. Only a
    `provider/model` whose provider is not installed is `extension_missing`.
+   These rules match a model left out with `model_unconfigured` too, so naming
+   one is `model_unconfigured`, not `no_model`, and a bare id it shares with
+   another provider's model is `model_ambiguous`.
 
 The exact match comes first because OpenRouter model ids contain colons.
 
@@ -692,7 +707,12 @@ else.
 A provider whose credential is a token that expires declares a Lua
 `credential()` function. It returns `{ token = <string>, expires_at = <Unix
 seconds>, headers = { [name] = <string> }, email = <string> }`: the token, the
-time it expires, and two optional fields.
+time it expires, and two optional fields. It receives `{ label = <string>,
+credential = <string> }`: the session's credential label, and the stored
+credential's name, which is the shared credential name when the provider's
+data names one and the provider's own name otherwise. During `fiber login`,
+`label` is the `--as` value, and is absent when the label comes from the
+returned `email`.
 
 - `headers` are sent on every request that uses the token, and are cached and
   refreshed with it. ChatGPT/codex returns its `chatgpt-account-id` here. A
@@ -702,7 +722,8 @@ time it expires, and two optional fields.
   `--as` is absent ("Logging in"). Every other call ignores it.
 
 Fiber caches the
-token and calls the function again, off the request path, when a request
+token per credential name and label, so a `/credential` switch gets that
+label's token, never the previous one. It calls the function again, off the request path, when a request
 finds the token within 5 minutes of expiry. A request that finds the token
 already expired, because the session sat idle past it or the earlier refresh
 failed, waits for one call: an idle Fiber does no work, so nothing refreshes
@@ -734,7 +755,7 @@ A headless run whose credential has expired and cannot be refreshed fails with
 ## When a model call fails
 
 A failed model call is recorded as `docs/events.md` describes: an assistant
-message that completed with a failed outcome, an `error` and an attempt number.
+message that completed with a failed outcome and an `error`.
 A retry is a new action. Which failure gets which code, and which codes are
 retried, is `docs/errors.md`, "A failed model call".
 
@@ -761,7 +782,7 @@ reached a 429 (`research/retry-signals/`). No vendor sent `retry-after-ms`.
 The saved responses had statuses 200, 400, 401, 403, 404, 405 and 429; no 409,
 425 or 501 appeared, which does not show a vendor never sends them.
 
-The wait a provider asks for, in seconds, becomes the error's `retry_after`.
+The wait a provider asks for, in seconds, becomes the error's `retry_after_ms`, in milliseconds rounded up.
 Fiber reads it from `retry-after`. On `google-generative-ai`, Fiber reads
 `Retry-After` or the error body's `RetryInfo.retryDelay`, whichever is present.
 That is the shape Google documents, and it is unprobed: no Gemini 429 was

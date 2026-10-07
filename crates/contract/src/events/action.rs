@@ -45,10 +45,6 @@ pub struct AssistantMessageCompleted {
     /// On `failed` (`docs/errors.md`, "A failed model call").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<Failure>,
-    /// On `failed`: 1 for the first attempt at this request, 2 for its first
-    /// retry, and so on.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub attempt: Option<u32>,
 }
 
 /// `tool_call_arguments_delta`: a tool call the model is still emitting.

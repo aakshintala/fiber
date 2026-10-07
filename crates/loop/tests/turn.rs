@@ -15,7 +15,7 @@ mod support;
 use contract::events::{
     CacheLifetime, ReasoningCompleted, TextCompleted, TextDelta, ToolCallRequested, TurnOutcome,
 };
-use contract::provider::{Cost, Delta, Input, ReplyAction};
+use contract::provider::{Cost, Delta, Input, InputSize, ReplyAction};
 use contract::shapes::Failure;
 use contract::{ActionId, ErrorCode, Seq};
 use fakes::{Scripted, reply};
@@ -143,6 +143,8 @@ fn a_step_writes_its_events_and_ephemeral_deltas_carry_no_seq() {
     assert_eq!(usage.payload["model"], MODEL);
     assert_eq!(usage.payload["generation_id"], "gen_1");
     assert_eq!(usage.payload["tokens"]["input"], 10);
+    assert_eq!(usage.payload["input_bytes"], 1000);
+    assert!(usage.payload.get("input_media").is_none());
     assert_eq!(usage.payload["cost"], Value::Null);
     assert!(usage.payload.get("subscription").is_none());
     assert_eq!(lines.last().unwrap().payload["outcome"], "completed");
@@ -152,6 +154,39 @@ fn a_step_writes_its_events_and_ephemeral_deltas_carry_no_seq() {
     assert_eq!(log::read(&session.dir).unwrap(), durable);
     let seqs: Vec<Seq> = durable.iter().map(|l| l.seq.unwrap()).collect();
     assert_eq!(seqs, (0..10).map(Seq).collect::<Vec<_>>());
+}
+
+#[test]
+fn a_call_that_sent_media_records_input_media() {
+    let mut scripted = Scripted::text("Done.");
+    scripted.end.as_mut().unwrap().input_size = InputSize {
+        bytes: 2048,
+        media: true,
+    };
+    let mut session = Session::new(vec![scripted], None);
+    session.inbox.send(delivery("hi")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    let lines = session.lines();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    let usage = lines.iter().find(|l| l.kind == "usage_recorded").unwrap();
+    assert_eq!(usage.payload["input_bytes"], 2048);
+    assert_eq!(usage.payload["input_media"], true);
 }
 
 #[test]
@@ -524,7 +559,7 @@ fn a_failed_model_call_fails_the_turn_with_its_code() {
     let failure = Failure {
         code: ErrorCode::InvalidRequest,
         message: "The provider rejected the request.".into(),
-        retry_after: None,
+        retry_after_ms: None,
         provider: None,
     };
     let mut session = Session::new(vec![Scripted::failed(failure)], None);
@@ -546,7 +581,7 @@ fn a_failed_model_call_fails_the_turn_with_its_code() {
     );
     let call = &lines[6].payload;
     assert_eq!(call["outcome"], "failed");
-    assert_eq!(call["attempt"], 1);
+    assert!(call.get("attempt").is_none());
     assert_eq!(call["error"]["code"], "invalid_request");
     assert_eq!(lines[7].payload["outcome"], "failed");
     assert_eq!(lines[7].payload["error"], call["error"]);
@@ -1040,7 +1075,7 @@ fn a_steer_arriving_during_a_failed_reply_starts_the_next_turn() {
     let failure = Failure {
         code: ErrorCode::InvalidRequest,
         message: "The provider rejected the request.".into(),
-        retry_after: None,
+        retry_after_ms: None,
         provider: None,
     };
     let mut session = Session::new(

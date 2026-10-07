@@ -219,6 +219,8 @@ fn a_stage_1_allow_runs_the_call_with_one_token() {
         .collect::<Vec<_>>();
     assert_eq!(recorded.len(), 1);
     assert_eq!(recorded[0].action_id, None);
+    assert_eq!(recorded[0].payload["input_bytes"], 1000);
+    assert!(recorded[0].payload.get("input_media").is_none());
     assert_eq!(usages(&lines).len(), 3);
 }
 
@@ -525,7 +527,7 @@ fn a_failed_reviewer_call_escalates_with_its_failure() {
     let reviewer = session.reviewer(vec![Scripted::failed(Failure {
         code: ErrorCode::Timeout,
         message: "the reviewer timed out".into(),
-        retry_after: None,
+        retry_after_ms: None,
         provider: None,
     })]);
     let answered = on_request(&session, {
@@ -1131,13 +1133,13 @@ fn headless_failures_count_toward_the_block_budget() {
             Scripted::failed(Failure {
                 code: ErrorCode::Timeout,
                 message: "the reviewer timed out".into(),
-                retry_after: None,
+                retry_after_ms: None,
                 provider: None,
             }),
             Scripted::failed(Failure {
                 code: ErrorCode::Timeout,
                 message: "the reviewer timed out".into(),
-                retry_after: None,
+                retry_after_ms: None,
                 provider: None,
             }),
         ],
@@ -1272,7 +1274,7 @@ fn failures_without_an_answer_count_toward_the_consecutive_limit() {
         Scripted::failed(Failure {
             code: ErrorCode::Timeout,
             message: "the reviewer timed out".into(),
-            retry_after: None,
+            retry_after_ms: None,
             provider: None,
         })
     };

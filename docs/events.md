@@ -158,7 +158,7 @@ below names a shape from this section by its name.
 |---|---|---|---|
 | `code` | string | yes | a stable label from `docs/errors.md`, "Registry"; an open set, and an unknown code is a generic failure |
 | `message` | string | yes | Fiber's own sentence, saying what to do when there is a fix |
-| `retry_after` | number | no | on a failed model call, the seconds the provider asked Fiber to wait |
+| `retry_after_ms` | integer | no | on a failed model call, the wait the provider asked for, in milliseconds |
 | `provider` | object | no | on a failed model call, or a Lua provider's `credential()` that failed at startup: `name` (string), `status` (integer, the HTTP status; absent when an extension provider's `credential()` or `sign()` failed) and `message` (string, the provider's own message) |
 
 ### `process`
@@ -429,6 +429,7 @@ sent the latest.
 |---|---|---|---|
 | `name` | string | yes | the session's name, or its first prompt when it has none |
 | `workspace` | string | yes | the workspace path |
+| `project` | string | yes | the project's key (`docs/state.md`, "Projects") |
 | `parent` | string | no | on a delegate, the parent's `session_id` |
 | `model` | string | yes | the model reference in use |
 | `state` | string | yes | `streaming`, `tool`, `retrying`, `waiting`, `jobs` (no turn running, jobs running) or `idle` (nothing in flight); a closed set |
@@ -440,6 +441,7 @@ sent the latest.
 | `spend` | `usage` | yes | the session's spend so far, delegates included, from the `usage` fold |
 | `delegates` | integer | yes | delegates running |
 | `jobs` | integer | yes | jobs running, delegates excluded |
+| `clients` | integer | yes | the `full` connections attached, as the latest `clients` line counts them; `summary` connections are not counted |
 
 #### `context_added`
 
@@ -461,7 +463,7 @@ threading this rests on is the concurrency section of `docs/architecture.md`;
 the driver commands that send and withdraw one, `steer` and `steer_drop`, are
 `docs/invocation.md`.
 
-`clients` lets a client know whether it is the only one attached, which the terminal asks before quitting (`docs/tui.md`, "Quit"). The latest wins, and a client that attaches is sent the latest.
+`clients` lets a client know whether it is the only one attached, which the terminal asks before quitting (`docs/tui.md`, "Quit"). The latest wins, and a client that attaches is sent the latest. `session_status` carries the same count, so a client holding only a `summary` connection, such as the hub's feed, reads it there.
 
 `steering_queue` lets every attached client show and edit the queue, not only
 the client that sent a message. It is ephemeral because `steering_applied`
@@ -506,8 +508,7 @@ Durable.
 | Key | Type | Required | Meaning |
 |---|---|---|---|
 | `outcome` | string | yes | `completed` or `failed`; a closed set |
-| `error` | `error` | no | on `failed`, with `retry_after` and `provider` where they apply (`docs/errors.md`, "A failed model call") |
-| `attempt` | integer | no | on `failed`: 1 for the first attempt at this request, 2 for its first retry, and so on |
+| `error` | `error` | no | on `failed`, with `retry_after_ms` and `provider` where they apply (`docs/errors.md`, "A failed model call") |
 
 #### `text_completed`
 
@@ -619,7 +620,7 @@ Durable. The call's outcome.
 | `provider_item` | any JSON | no | on a call the provider ran, its result block exactly as it arrived, sent back unchanged only to the model that produced it (`docs/tools.md`, "Hosted by the provider"); absent on a call Fiber runs |
 
 A failed model call is an assistant message that completed with a failed
-outcome, an `error` and an attempt number; the retry is a new action. Its codes
+outcome and an `error`; the retry is a new action. Its codes
 are `docs/errors.md`, "A failed model call". There is no
 separate error channel, so no failure is ever reported twice.
 
@@ -773,6 +774,8 @@ none.
 | `generation_id` | string | yes | the provider's id for the generation |
 | `model` | string | yes | the model reference, `provider/model` |
 | `tokens` | `tokens` | yes | the call's tokens |
+| `input_bytes` | integer | yes | the size in bytes of the request body Fiber sent for the call: the system prompt, tool definitions and messages as serialised for the provider, with the request's settings |
+| `input_media` | boolean | no | `true` when the request carried, or tried to carry, an image or a PDF part (an image that could not be read still counts); absent means none |
 | `web_searches` | integer | no | hosted web searches, where the provider reports them |
 | `cost` | number or null | yes | in US dollars: the vendor's own figure where it reports one, otherwise the model's declared prices applied to `tokens` (`docs/model-routing.md`, "Cost"); `null` when neither exists |
 | `subscription` | boolean | no | `true` when a subscription login covered the call, so `cost` is an API-price estimate, not money billed; absent means billed per token |
@@ -1327,7 +1330,9 @@ Partial assistant text from an interrupted response is gone, because deltas are
 ephemeral. The log does not pay to store text a completion would supersede.
 
 An attempt count is derived by counting `assistant_message_started` lines, never
-from a stored counter, so it cannot drift from the record.
+from a stored counter, so it cannot drift from the record. A client that shows which attempt a model call is, such as the terminal's
+"attempt 2 of 4", counts the `assistant_message_started` lines of the request's
+retries in that step.
 
 ## Rewind
 

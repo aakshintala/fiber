@@ -22,6 +22,7 @@ fn reply(actions: Vec<ReplyAction>) -> Reply {
         },
         web_searches: None,
         cost: None,
+        input_size: InputSize::default(),
     }
 }
 

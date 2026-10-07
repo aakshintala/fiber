@@ -1,6 +1,6 @@
-//! Tests for `delete`: what it removes and leaves, the argument shape, a
-//! linked session directory, held sessions, dependents and `cascade`, and
-//! the feed entry it drops.
+//! Tests for `delete`: what it removes and leaves, the argument shape
+//! (including the confirmed `expect` set), a linked session directory,
+//! held sessions, dependents and `cascade`, and the feed entry it drops.
 
 #![allow(
     clippy::unwrap_used,
@@ -182,11 +182,43 @@ fn arguments_that_do_not_fit_are_invalid_and_remove_nothing() {
         json!({"session": "a/b"}),
         json!({"session": format!("../{}", id(1))}),
         json!({"session": "s_0123"}),
+        json!({"session": id(1), "cascade": true, "expect": id(1)}),
+        json!({"session": id(1), "cascade": true, "expect": null}),
+        json!({"session": id(1), "cascade": true, "expect": {}}),
+        json!({"session": id(1), "cascade": true, "expect": 1}),
+        json!({"session": id(1), "cascade": true, "expect": [1]}),
+        json!({"session": id(1), "cascade": true, "expect": [id(1), null]}),
+        json!({"session": id(1), "cascade": true, "expect": ["../x"]}),
+        json!({"session": id(1), "cascade": true, "expect": ["s_0123"]}),
+        json!({"session": id(1), "cascade": true, "expect": [format!("../{}", id(1))]}),
     ] {
         let (code, _) = refused(&hub, bad.clone());
         assert_eq!(code, ErrorCode::InvalidArguments, "{bad}");
     }
     assert!(dir.join("events.jsonl").is_file());
+}
+
+#[test]
+fn expect_without_cascade_is_checked_but_not_compared() {
+    let temp = Temp::new();
+    temp.session("-p", 1, None);
+    let root = temp.session("-p", 2, None);
+    let fork = temp.session("-p", 3, Some(2));
+    let hub = temp.hub();
+    // No dependents: a confirmed set naming another session still deletes.
+    assert_eq!(
+        delete(&hub, &args(json!({"session": id(1), "expect": [id(9)]}))),
+        Ok(None)
+    );
+    // Dependents still refuse without `cascade`, even with a matching set.
+    let (code, _) = refused(
+        &hub,
+        json!({"session": id(2), "cascade": false, "expect": [id(2), id(3)]}),
+    );
+    assert_eq!(code, ErrorCode::SessionHasDependents);
+    for dir in [&root, &fork] {
+        assert!(dir.join("events.jsonl").is_file(), "{}", dir.display());
+    }
 }
 
 #[test]
@@ -292,6 +324,165 @@ fn cascade_removes_the_session_and_everything_that_continues_it() {
         assert!(!dir.exists(), "{}", dir.display());
     }
     assert!(other.join("events.jsonl").is_file());
+}
+
+#[test]
+fn cascade_with_the_confirmed_set_deletes_exactly_it() {
+    let temp = Temp::new();
+    let root = temp.session("-p", 1, None);
+    let fork = temp.session("-q", 3, Some(1));
+    let rewind = temp.session("-p", 2, Some(1));
+    let deep = temp.session("-p", 4, Some(3));
+    let other = temp.session("-p", 5, None);
+    let hub = temp.hub();
+    let got = delete(
+        &hub,
+        &args(
+            json!({"session": id(1), "cascade": true, "expect": [id(4), id(1), id(3), id(2), id(1)]}),
+        ),
+    );
+    assert_eq!(got, Ok(None));
+    for dir in [&root, &fork, &rewind, &deep] {
+        assert!(!dir.exists(), "{}", dir.display());
+    }
+    assert!(other.join("events.jsonl").is_file());
+}
+
+#[test]
+fn cascade_with_no_dependents_and_expect_naming_only_it_deletes_it() {
+    let temp = Temp::new();
+    let dir = temp.session("-p", 1, None);
+    let hub = temp.hub();
+    assert_eq!(
+        delete(
+            &hub,
+            &args(json!({"session": id(1), "cascade": true, "expect": [id(1)]}))
+        ),
+        Ok(None)
+    );
+    assert!(!dir.exists());
+}
+
+#[test]
+fn a_dependent_added_after_the_question_is_stale_and_deletes_nothing() {
+    let temp = Temp::new();
+    let root = temp.session("-p", 5, None);
+    let fork = temp.session("-p", 2, Some(5));
+    let other = temp.session("-p", 3, Some(5));
+    let hub = temp.hub();
+    let late = temp.session("-p", 1, Some(3));
+    let (code, message) = refused(
+        &hub,
+        json!({"session": id(5), "cascade": true, "expect": [id(5), id(2), id(3)]}),
+    );
+    assert_eq!(code, ErrorCode::StaleRequest);
+    assert_eq!(
+        message,
+        format!(
+            "The sessions this delete would remove are now `{}`, `{}`, `{}`, `{}`. Nothing was deleted.",
+            id(1),
+            id(2),
+            id(3),
+            id(5)
+        )
+    );
+    for dir in [&root, &fork, &other, &late] {
+        assert!(dir.join("events.jsonl").is_file(), "{}", dir.display());
+    }
+    assert_eq!(
+        delete(
+            &hub,
+            &args(
+                json!({"session": id(5), "cascade": true, "expect": [id(5), id(2), id(3), id(1)]}),
+            )
+        ),
+        Ok(None)
+    );
+    for dir in [&root, &fork, &other, &late] {
+        assert!(!dir.exists(), "{}", dir.display());
+    }
+}
+
+#[test]
+fn an_expect_naming_more_than_the_set_is_stale() {
+    let temp = Temp::new();
+    let root = temp.session("-p", 1, None);
+    let fork = temp.session("-p", 2, Some(1));
+    let hub = temp.hub();
+    let (code, _) = refused(
+        &hub,
+        json!({"session": id(1), "cascade": true, "expect": [id(1), id(2), id(7)]}),
+    );
+    assert_eq!(code, ErrorCode::StaleRequest);
+    for dir in [&root, &fork] {
+        assert!(dir.join("events.jsonl").is_file(), "{}", dir.display());
+    }
+}
+
+#[test]
+fn an_empty_expect_with_cascade_is_stale() {
+    let temp = Temp::new();
+    let dir = temp.session("-p", 1, None);
+    let hub = temp.hub();
+    let (code, _) = refused(
+        &hub,
+        json!({"session": id(1), "cascade": true, "expect": []}),
+    );
+    assert_eq!(code, ErrorCode::StaleRequest);
+    assert!(dir.join("events.jsonl").is_file());
+}
+
+#[test]
+fn a_stale_expect_is_refused_before_a_held_dependent() {
+    let temp = Temp::new();
+    let root = temp.session("-p", 1, None);
+    let fork = temp.session("-p", 2, Some(1));
+    let deep = temp.session("-p", 3, Some(1));
+    let hub = temp.hub();
+    let _lock = hold(&fork);
+    let (code, _) = refused(
+        &hub,
+        json!({"session": id(1), "cascade": true, "expect": [id(1), id(2)]}),
+    );
+    assert_eq!(code, ErrorCode::StaleRequest);
+    for dir in [&root, &fork, &deep] {
+        assert!(dir.join("events.jsonl").is_file(), "{}", dir.display());
+    }
+    // No session lock was left taken by the refusal.
+    drop(hold(&root));
+    drop(hold(&deep));
+}
+
+#[test]
+fn a_missing_root_is_not_found_even_with_a_stale_expect() {
+    let temp = Temp::new();
+    temp.session("-p", 1, None);
+    let hub = temp.hub();
+    let (code, _) = refused(
+        &hub,
+        json!({"session": id(9), "cascade": true, "expect": [id(1)]}),
+    );
+    assert_eq!(code, ErrorCode::SessionNotFound);
+}
+
+#[test]
+fn a_stale_expect_over_the_wire_is_rejected_with_its_message() {
+    let temp = Temp::new();
+    temp.session("-p", 1, None);
+    temp.session("-p", 2, Some(1));
+    let hub = temp.hub();
+    let line = json!({
+        "id": "c_1",
+        "command": "delete",
+        "args": {"session": id(1), "cascade": true, "expect": [id(1)]}
+    });
+    let answer = over_the_wire(&hub, &line.to_string());
+    assert_eq!(answer["kind"], "command_rejected");
+    assert_eq!(answer["payload"]["command_id"], "c_1");
+    assert_eq!(answer["payload"]["code"], "stale_request");
+    let message = answer["payload"]["message"].as_str().unwrap();
+    assert!(message.contains(&id(1)), "{message}");
+    assert!(message.contains(&id(2)), "{message}");
 }
 
 #[test]

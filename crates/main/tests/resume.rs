@@ -63,7 +63,7 @@ impl Setup {
         let ids: Vec<Value> = models
             .iter()
             .map(|m| {
-                json!({"id": m, "protocol": "openai-responses", "base_url": format!("{}/v1", server.url())})
+                json!({"id": m, "protocol": "openai-responses", "base_url": format!("{}/v1", server.url()), "context_window": 100000})
             })
             .collect();
         write(
@@ -551,6 +551,8 @@ fn the_logs_last_model_beats_the_flag_and_the_default() {
                 subscription: None,
                 extension: None,
                 origin_session_id: None,
+                input_bytes: 1,
+                input_media: None,
             }),
             Some(t()),
             Some(a("a_1")),

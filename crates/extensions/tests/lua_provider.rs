@@ -12,7 +12,6 @@
 
 mod common;
 
-use std::io::Read;
 use std::sync::Arc;
 use std::sync::mpsc;
 use std::time::{Duration, UNIX_EPOCH};
@@ -22,7 +21,7 @@ use config::{Secret, store_secret};
 use contract::ErrorCode;
 use contract::clock::Clock;
 use contract::signing::{SignRequest, Signer};
-use extensions::{Error, LuaExtension, LuaProvider, REFRESH_BEFORE};
+use extensions::{CredentialPair, Error, LuaExtension, LuaProvider, REFRESH_BEFORE};
 use fakes::clock::FakeClock;
 use fakes::{ProviderServer, Response, fingerprint};
 use serde_json::json;
@@ -37,6 +36,14 @@ fn within<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
     std::thread::spawn(move || tx.send(f()));
     rx.recv_timeout(WAIT)
         .unwrap_or_else(|_| panic!("the call did not return within {WAIT:?}"))
+}
+
+/// The default-label pair for `provider`.
+fn pair(provider: &str) -> CredentialPair {
+    CredentialPair {
+        credential: provider.to_owned(),
+        label: "default".to_owned(),
+    }
 }
 
 /// The fixture's provider, with its server's address and key stored as
@@ -118,7 +125,7 @@ fn a_cached_list_is_served_without_running_lua_until_the_refresh_returns() {
     let setup = Setup::new();
     let server = ProviderServer::start([listing(&["new"])]).unwrap();
     let provider = fixture(&setup, &server);
-    let old = json!([{ "id": "old", "protocol": "openai-responses", "base_url": "http://x/v1" }]);
+    let old = json!([{ "id": "old", "protocol": "openai-responses", "base_url": "http://x/v1", "context_window": 1000 }]);
     write(
         &setup.home().join("cache/models/fixture.json"),
         &old.to_string(),
@@ -167,7 +174,12 @@ fn a_token_far_from_expiry_is_reused() {
     let provider = fixture(&setup, &server);
     for _ in 0..3 {
         let provider = Arc::clone(&provider);
-        assert_eq!(within(move || provider.token()).unwrap().expose(), "t1");
+        assert_eq!(
+            within(move || provider.token(&pair(provider.name())))
+                .unwrap()
+                .expose(),
+            "t1"
+        );
     }
     assert_eq!(server.requests().len(), 1);
     let request = &server.requests()[0];
@@ -192,7 +204,12 @@ fn a_token_within_five_minutes_of_expiry_is_refreshed_off_the_request_path() {
     let clock = FakeClock::new();
     let provider = fixture_on(&setup, &server, clock.clone());
     let first = Arc::clone(&provider);
-    assert_eq!(within(move || first.token()).unwrap().expose(), "t1");
+    assert_eq!(
+        within(move || first.token(&pair(first.name())))
+            .unwrap()
+            .expose(),
+        "t1"
+    );
     assert_eq!(server.requests().len(), 1);
     // Into the refresh window, still short of expiry.
     clock.advance(
@@ -201,7 +218,12 @@ fn a_token_within_five_minutes_of_expiry_is_refreshed_off_the_request_path() {
             .unwrap(),
     );
     let second = Arc::clone(&provider);
-    assert_eq!(within(move || second.token()).unwrap().expose(), "t1");
+    assert_eq!(
+        within(move || second.token(&pair(second.name())))
+            .unwrap()
+            .expose(),
+        "t1"
+    );
     assert!(
         server.await_requests(2, WAIT),
         "waited for the refresh request"
@@ -209,7 +231,7 @@ fn a_token_within_five_minutes_of_expiry_is_refreshed_off_the_request_path() {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         loop {
-            match provider.token() {
+            match provider.token(&pair(provider.name())) {
                 Ok(secret) if secret.expose() == "t2" => {
                     match tx.send(()) {
                         Ok(()) | Err(mpsc::SendError(())) => {}
@@ -230,7 +252,7 @@ fn an_expired_token_just_returned_is_an_error() {
     let setup = Setup::new();
     let server = ProviderServer::start([token("t1", Duration::ZERO)]).unwrap();
     let provider = fixture(&setup, &server);
-    let err = within(move || provider.token()).unwrap_err();
+    let err = within(move || provider.token(&pair(provider.name()))).unwrap_err();
     assert!(
         matches!(
             &err,
@@ -252,7 +274,7 @@ fn a_credential_with_no_usable_expiry_is_an_error() {
         let setup = Setup::new();
         let server = ProviderServer::start([Response::status(200, body)]).unwrap();
         let provider = fixture(&setup, &server);
-        let err = within(move || provider.token()).unwrap_err();
+        let err = within(move || provider.token(&pair(provider.name()))).unwrap_err();
         assert!(
             matches!(
                 &err,
@@ -270,7 +292,7 @@ fn a_credential_with_no_token_is_credential_failed() {
     let setup = Setup::new();
     let server = ProviderServer::start([Response::status(200, r#"{"expires_at": 1}"#)]).unwrap();
     let provider = fixture(&setup, &server);
-    let err = within(move || provider.token()).unwrap_err();
+    let err = within(move || provider.token(&pair(provider.name()))).unwrap_err();
     assert_eq!(err.code(), ErrorCode::CredentialFailed);
     let Error::Credential(inner) = &err else {
         panic!("{err:?}")
@@ -379,35 +401,10 @@ fn sign_sees_the_bodys_hash_never_the_body_and_adds_headers() {
 #[test]
 fn sign_returns_while_a_background_refresh_is_stuck_on_http() {
     let setup = Setup::new();
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let url = format!("http://{}", listener.local_addr().unwrap());
-    let (accepted_tx, accepted_rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let Ok((mut sock, _)) = listener.accept() else {
-            return;
-        };
-        let mut buf = [0; 1];
-        let mut seen = Vec::new();
-        loop {
-            match sock.read(&mut buf) {
-                Ok(0) | Err(_) => return,
-                Ok(_) => seen.push(buf[0]),
-            }
-            if seen.ends_with(b"\r\n\r\n") {
-                break;
-            }
-        }
-        if accepted_tx.send(()).is_err() {
-            return;
-        }
-        let (_hold_tx, hold_rx) = mpsc::channel::<()>();
-        match hold_rx.recv_timeout(Duration::from_secs(5)) {
-            Ok(())
-            | Err(mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected) => {}
-        }
-    });
+    let server = ProviderServer::start([listing(&["m1", "m2"])]).unwrap();
+    server.hold();
     let home = setup.home();
-    store_secret(&home, "fixture.url", &Secret::new(url)).unwrap();
+    store_secret(&home, "fixture.url", &Secret::new(server.url())).unwrap();
     store_secret(&home, "fixture.api_key", &Secret::new("k1".into())).unwrap();
     let extension = Arc::new(LuaExtension::new(
         "fixture",
@@ -417,9 +414,10 @@ fn sign_returns_while_a_background_refresh_is_stuck_on_http() {
     ));
     let provider = LuaProvider::new(extension, "fixture");
     let refresh = provider.refresh(None).unwrap();
-    accepted_rx
-        .recv_timeout(WAIT)
-        .expect("waited for models() to reach the server");
+    assert!(
+        server.await_requests(1, WAIT),
+        "waited for models() to reach the server"
+    );
     let signer = Arc::clone(&provider);
     let headers = within(move || {
         signer.sign(&SignRequest {
@@ -469,7 +467,7 @@ fn a_function_the_provider_never_registered_is_credential_failed() {
     ));
     let provider = LuaProvider::new(Arc::clone(&extension), "p");
     let tokens = Arc::clone(&provider);
-    let err = within(move || tokens.token()).unwrap_err();
+    let err = within(move || tokens.token(&pair(tokens.name()))).unwrap_err();
     assert!(
         matches!(
             &err,
@@ -521,40 +519,12 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Accepts one connection, reads its head, reports, and holds the socket
-/// for at most 5 seconds without answering.
-fn hold_after_head(listener: std::net::TcpListener, accepted: mpsc::Sender<()>) {
-    let Ok((mut sock, _)) = listener.accept() else {
-        return;
-    };
-    let mut buf = [0; 1];
-    let mut seen = Vec::new();
-    loop {
-        match sock.read(&mut buf) {
-            Ok(0) | Err(_) => return,
-            Ok(_) => seen.push(buf[0]),
-        }
-        if seen.ends_with(b"\r\n\r\n") {
-            break;
-        }
-    }
-    if accepted.send(()).is_err() {
-        return;
-    }
-    let (_tx, rx) = mpsc::channel::<()>();
-    match rx.recv_timeout(Duration::from_secs(5)) {
-        Ok(()) | Err(mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected) => {}
-    }
-    drop(sock);
-}
-
 #[test]
 fn a_host_http_call_gives_up_at_the_callbacks_deadline() {
     let setup = Setup::new();
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let url = format!("http://{}/", listener.local_addr().unwrap());
-    let (accepted_tx, accepted_rx) = mpsc::channel();
-    std::thread::spawn(move || hold_after_head(listener, accepted_tx));
+    let server = ProviderServer::start([Response::status(200, "held")]).unwrap();
+    server.hold();
+    let url = format!("{}/", server.url());
     let dir = setup.home().join("ext");
     write(
         &dir.join("init.lua"),
@@ -569,9 +539,10 @@ fn a_host_http_call_gives_up_at_the_callbacks_deadline() {
     let call = Arc::clone(&extension);
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || tx.send(call.command("get", "")));
-    accepted_rx
-        .recv_timeout(WAIT)
-        .expect("waited for get to reach the server");
+    assert!(
+        server.await_requests(1, WAIT),
+        "waited for get to reach the server"
+    );
     // The caller waits out the grace. The extension thread fails a parked
     // callback at the deadline, which is only the 200 ms.
     assert!(
@@ -660,7 +631,7 @@ fn the_token_rides_before_what_sign_returns_and_sign_sees_it() {
     );
     let signer = within({
         let provider = Arc::clone(&provider);
-        move || provider.signer()
+        move || provider.signer(pair(provider.name()))
     })
     .unwrap()
     .unwrap();
@@ -683,7 +654,7 @@ fn without_sign_only_the_token_is_sent() {
     let provider = script_provider(&setup, Some(TOKEN), None);
     let signer = within({
         let provider = Arc::clone(&provider);
-        move || provider.signer()
+        move || provider.signer(pair(provider.name()))
     })
     .unwrap()
     .unwrap();
@@ -699,7 +670,7 @@ fn without_credential_only_what_sign_returns_is_sent() {
     let provider = script_provider(&setup, None, Some("{ [\"x-s\"] = \"v\" }"));
     let signer = within({
         let provider = Arc::clone(&provider);
-        move || provider.signer()
+        move || provider.signer(pair(provider.name()))
     })
     .unwrap()
     .unwrap();
@@ -724,7 +695,7 @@ fn without_credential_or_sign_there_is_no_signer() {
     assert!(
         within({
             let provider = Arc::clone(&provider);
-            move || provider.signer()
+            move || provider.signer(pair(provider.name()))
         })
         .unwrap()
         .is_none()
@@ -767,7 +738,7 @@ fn sign_wins_over_the_token_header_whatever_its_case() {
     );
     let signer = within({
         let provider = Arc::clone(&provider);
-        move || provider.signer()
+        move || provider.signer(pair(provider.name()))
     })
     .unwrap()
     .unwrap();
@@ -787,7 +758,7 @@ fn signer_credentials_returns_the_cached_token_even_when_sign_replaces_authoriza
     );
     let signer = within({
         let provider = Arc::clone(&provider);
-        move || provider.signer()
+        move || provider.signer(pair(provider.name()))
     })
     .unwrap()
     .unwrap();
@@ -816,7 +787,7 @@ fn signer_credentials_is_empty_without_credential() {
     let provider = script_provider(&setup, None, Some("{ [\"x-s\"] = \"v\" }"));
     let signer = within({
         let provider = Arc::clone(&provider);
-        move || provider.signer()
+        move || provider.signer(pair(provider.name()))
     })
     .unwrap()
     .unwrap();
@@ -833,7 +804,7 @@ fn a_credential_error_at_send_time_is_credential_failed() {
     let provider = script_provider(&setup, Some("{}"), Some("{}"));
     let signer = within({
         let provider = Arc::clone(&provider);
-        move || provider.signer()
+        move || provider.signer(pair(provider.name()))
     })
     .unwrap()
     .unwrap();
@@ -847,7 +818,7 @@ fn a_credential_error_at_send_time_is_credential_failed() {
         })
     })
     .unwrap_err();
-    let contract::signing::Error::Credential { code, message } = &err else {
+    let contract::signing::Error::Credential { code, message, .. } = &err else {
         panic!("{err:?}")
     };
     assert_eq!(*code, ErrorCode::CredentialFailed);
@@ -883,7 +854,7 @@ fn refresh_provider(setup: &Setup, url: &str) -> Arc<LuaProvider> {
 fn sign_error(provider: &Arc<LuaProvider>) -> contract::signing::Error {
     let signer = within({
         let provider = Arc::clone(provider);
-        move || provider.signer()
+        move || provider.signer(pair(provider.name()))
     })
     .unwrap()
     .unwrap();
@@ -904,7 +875,7 @@ fn a_rejected_refresh_at_send_time_keeps_authentication_failed() {
     let setup = Setup::new();
     let server = fakes::OauthServer::start(vec![fakes::OauthReply::raw(400, "{}")]);
     let provider = refresh_provider(&setup, &server.url());
-    let contract::signing::Error::Credential { code, message } = &sign_error(&provider) else {
+    let contract::signing::Error::Credential { code, message, .. } = &sign_error(&provider) else {
         panic!("expected a credential error")
     };
     assert_eq!(*code, ErrorCode::AuthenticationFailed);
@@ -922,11 +893,31 @@ fn an_unreachable_refresh_at_send_time_keeps_connection_failed() {
         .unwrap()
         .port();
     let provider = refresh_provider(&setup, &format!("http://127.0.0.1:{port}"));
-    let contract::signing::Error::Credential { code, message } = &sign_error(&provider) else {
+    let contract::signing::Error::Credential { code, message, .. } = &sign_error(&provider) else {
         panic!("expected a credential error")
     };
     assert_eq!(*code, ErrorCode::ConnectionFailed);
     assert!(!message.starts_with('`'), "{message}");
+}
+
+#[test]
+fn an_unattended_login_at_send_time_marks_the_credential() {
+    let setup = Setup::new();
+    // Nobody is attached: the default browser never is, so `host.oauth.open`
+    // raises Unattended out of `credential()`.
+    let provider = script_provider(
+        &setup,
+        Some(
+            "(function() host.oauth.open(\"https://auth.example/\") return { token = \"t\", \
+             expires_at = 1700003600 } end)()",
+        ),
+        None,
+    );
+    let contract::signing::Error::Unattended { message } = &sign_error(&provider) else {
+        panic!("expected an unattended login")
+    };
+    assert!(message.contains("host.oauth.open"), "{message}");
+    assert!(!message.contains('\n'), "{message}");
 }
 
 #[test]
@@ -983,7 +974,7 @@ fn a_credential_error_is_its_own_first_line_with_its_code() {
     );
     let signer = within({
         let provider = Arc::clone(&provider);
-        move || provider.signer()
+        move || provider.signer(pair(provider.name()))
     })
     .unwrap()
     .unwrap();
@@ -997,7 +988,7 @@ fn a_credential_error_is_its_own_first_line_with_its_code() {
         })
     })
     .unwrap_err();
-    let contract::signing::Error::Credential { code, message } = &err else {
+    let contract::signing::Error::Credential { code, message, .. } = &err else {
         panic!("{err:?}")
     };
     assert_eq!(*code, ErrorCode::CredentialFailed);

@@ -673,7 +673,7 @@ fn a_cancel_after_a_failed_reply_leaves_the_turn_failed() {
         vec![fakes::Scripted::failed(Failure {
             code: ErrorCode::ToolError,
             message: "It broke.".into(),
-            retry_after: None,
+            retry_after_ms: None,
             provider: None,
         })],
         1,

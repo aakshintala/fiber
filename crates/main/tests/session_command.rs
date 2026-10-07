@@ -68,7 +68,7 @@ impl Setup {
             &source.join("extension.json"),
             &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
         );
-        let mut model = json!({"id": "m", "protocol": "openai-responses", "base_url": format!("{}/v1", server.url())});
+        let mut model = json!({"id": "m", "protocol": "openai-responses", "base_url": format!("{}/v1", server.url()), "context_window": 100000});
         for (key, value) in model_extra.as_object().unwrap() {
             model[key] = value.clone();
         }
@@ -1864,4 +1864,464 @@ fn unreadable_pasted_images_are_rejected_without_a_turn() {
     drop(client);
     let (status, _out, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
+}
+
+/// The stdout kinds every `close` test's session opens with: startup, the
+/// client's attach, and the prompt's turn starting. `clients` lands after
+/// `extensions_loaded` because each test connects after
+/// `running.wait_for("extensions_loaded")`, as the existing tests do.
+const CLOSE_START: [&str; 7] = [
+    "session_started",
+    "fiber_started",
+    "extensions_loaded",
+    "clients",
+    "preamble_built",
+    "opening_message",
+    "turn_started",
+];
+
+/// The stdout kinds of the backgrounding step: the model backgrounds a
+/// shell call, which the standing rule allows, and the job starts.
+const CLOSE_BG_STEP: [&str; 9] = [
+    "step_started",
+    "assistant_message_started",
+    "tool_call_requested",
+    "usage_recorded",
+    "assistant_message_completed",
+    "permission_resolved",
+    "tool_call_started",
+    "job_started",
+    "tool_call_completed",
+];
+
+/// The stdout kinds of a `Hello.` reply step and its turn end.
+const CLOSE_REPLY: [&str; 8] = [
+    "step_started",
+    "assistant_message_started",
+    "assistant_message_delta",
+    "assistant_message_delta",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+];
+
+/// The stdout kinds of a turn a `close` with `now` interrupts mid-request:
+/// the step starts, the assistant message starts, and the shutdown ends
+/// the turn.
+const CLOSE_HELD: [&str; 3] = [
+    "step_started",
+    "assistant_message_started",
+    "turn_completed",
+];
+
+/// A background job that writes its group id to `<ready>`, then runs
+/// forever: `close` with `now` must stop it.
+const JOB_SCRIPT_FOREVER: &str = "echo $$ > '<ready>'\nwhile :; do sleep 0.05; done\n";
+
+/// A background job that writes its group id to `<ready>`, then runs until
+/// `go` appears in the workspace: `close` without `now` waits for it.
+const JOB_SCRIPT_UNTIL_GO: &str = "echo $$ > '<ready>'\nwhile [ ! -e go ]; do sleep 0.05; done\n";
+
+/// The background call every `close` test's first response makes.
+fn bg_call() -> Value {
+    function_call(
+        "call_bg",
+        "shell",
+        &json!({"command": "sh job.sh", "run_in_background": true}),
+    )
+}
+
+/// Starts a session whose `c_prompt` backgrounds `script`, and returns the
+/// running session, its subscribed client and the background job's group.
+/// `script` names the ready FIFO as `<ready>`. Once the prompt is sent,
+/// `after_prompt` runs before the job's ready line is awaited: the held
+/// mid-turn test releases one held response there, so the job starts while
+/// the next request stays held.
+fn job_session(
+    setup: &Setup,
+    script: &str,
+    server: &ProviderServer,
+    after_prompt: impl FnOnce(),
+) -> (Running, Socket, u32) {
+    let ready = fakes::children::Ready::new(setup.root.path());
+    fs::write(
+        setup.workspace().join("job.sh"),
+        script.replace("<ready>", &ready.path().display().to_string()),
+    )
+    .unwrap();
+    fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n",
+            json!({"decision": "allow", "tool": "shell", "prefix": "sh job.sh"})
+        ),
+    )
+    .unwrap();
+    setup.provider(server);
+    let id = doors::mint("s_");
+    let mut running = setup.start_session(&id, &[]);
+    let client = running.connect(&setup.socket(&id));
+    running.wait_for("extensions_loaded");
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    let sub = recv(&client, "the subscribe acknowledgement");
+    assert_eq!(sub["payload"]["command_id"], "c_sub");
+    send(
+        &client,
+        r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"start the job"}]}}"#,
+    );
+    after_prompt();
+    let job_group = ready.wait(DEADLINE)[0];
+    // The session must stop the job: dropping the watchdog here would kill
+    // the group first, so it is forgotten and only fires if the test
+    // process dies.
+    std::mem::forget(Watchdog::group(job_group));
+    (running, client, job_group)
+}
+
+/// The session's stdout kinds without `job_delta`: it is ephemeral, and
+/// where it lands depends on when the job writes. Like [`kinds`], without
+/// `session_status`.
+fn stdout_kinds(out: &[Value]) -> Vec<&str> {
+    out.iter()
+        .filter(|line| line["kind"] != "job_delta" && line["kind"] != "session_status")
+        .map(|line| line["kind"].as_str().unwrap())
+        .collect()
+}
+
+/// A `close` with `now`, answered `command_accepted`.
+fn send_close_now(client: &Socket) {
+    send(
+        client,
+        r#"{"id":"c_close_now","command":"close","args":{"now":true}}"#,
+    );
+    let accepted = answer(client, "c_close_now");
+    assert_eq!(accepted["kind"], "command_accepted", "{accepted}");
+}
+
+fn assert_exited_0(status: ExitStatus, out: &[Value], stderr: &str) -> Value {
+    assert_eq!(status.code(), Some(0), "stderr: {stderr}");
+    let exited = out.last().expect("fiber_exited is the last stdout line");
+    assert_eq!(exited["kind"], "fiber_exited");
+    assert_eq!(exited["payload"]["exit_code"], 0);
+    exited.clone()
+}
+
+/// `fiber_exited` carries no `error`, `text` or `suspended_on`.
+fn assert_exited_clean(exited: &Value) {
+    assert_eq!(exited["payload"].get("error"), None);
+    assert_eq!(exited["payload"].get("text"), None);
+    assert_eq!(exited["payload"].get("suspended_on"), None);
+}
+
+#[test]
+fn close_now_mid_turn_stops_the_turn_and_a_background_job_and_exits_0() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([stream(&[bg_call()]), hello()]).unwrap();
+    server.hold();
+    let (running, client, job_group) =
+        job_session(&setup, JOB_SCRIPT_FOREVER, &server, || server.release_one());
+    // The first response is through, the job runs, and the second request
+    // is held: the turn is in flight.
+    assert!(
+        server.await_requests(2, DEADLINE),
+        "the held second response was requested"
+    );
+    send_close_now(&client);
+    let _tail = until_close(&client);
+    drop(client);
+    let (status, out, stderr) = running.wait();
+    server.release();
+    assert_exited_clean(&assert_exited_0(status, &out, &stderr));
+    let turn = out
+        .iter()
+        .find(|line| line["kind"] == "turn_completed")
+        .expect("the interrupted turn completed");
+    assert_eq!(turn["payload"]["outcome"], "interrupted");
+    let job = out
+        .iter()
+        .find(|line| line["kind"] == "job_completed")
+        .expect("the background job completed");
+    assert_eq!(job["payload"]["status"], "cancelled");
+    assert!(
+        !group_alive(job_group),
+        "the job's group outlived the session"
+    );
+    assert_eq!(server.requests().len(), 2);
+    assert_eq!(
+        stdout_kinds(&out),
+        [
+            CLOSE_START.as_slice(),
+            CLOSE_BG_STEP.as_slice(),
+            CLOSE_HELD.as_slice(),
+            &["job_completed", "fiber_exited"],
+        ]
+        .concat()
+    );
+}
+
+#[test]
+fn close_now_while_idle_with_a_job_starts_no_turn() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([stream(&[bg_call()]), hello()]).unwrap();
+    let (running, client, job_group) = job_session(&setup, JOB_SCRIPT_FOREVER, &server, || {});
+    // The prompt's turn completed: the session is idle with the job running.
+    let _done = until(&client, "the prompt's turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    send_close_now(&client);
+    let _tail = until_close(&client);
+    drop(client);
+    let (status, out, stderr) = running.wait();
+    assert_exited_clean(&assert_exited_0(status, &out, &stderr));
+    let job = out
+        .iter()
+        .find(|line| line["kind"] == "job_completed")
+        .expect("the background job completed");
+    assert_eq!(job["payload"]["status"], "cancelled");
+    assert!(
+        !group_alive(job_group),
+        "the job's group outlived the session"
+    );
+    assert_eq!(server.requests().len(), 2, "no ending-notice request ran");
+    assert_eq!(
+        stdout_kinds(&out),
+        [
+            CLOSE_START.as_slice(),
+            CLOSE_BG_STEP.as_slice(),
+            CLOSE_REPLY.as_slice(),
+            &["job_completed", "fiber_exited"],
+        ]
+        .concat()
+    );
+}
+
+#[test]
+fn close_now_on_a_pending_approval_leaves_it_pending_and_exits_0() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([stream(&[function_call(
+        "call_1",
+        "shell",
+        &json!({"command": "echo hi"}),
+    )])])
+    .unwrap();
+    setup.provider(&server);
+    // The standing ask, as `an_escalation_reaches_a_connected_client...`
+    // writes it.
+    fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n",
+            json!({"decision": "ask", "tool": "shell", "prefix": "echo hi"})
+        ),
+    )
+    .unwrap();
+    let id = doors::mint("s_");
+    let mut running = setup.start_session(&id, &[]);
+    let client = running.connect(&setup.socket(&id));
+    running.wait_for("extensions_loaded");
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    let sub = recv(&client, "the subscribe acknowledgement");
+    assert_eq!(sub["payload"]["command_id"], "c_sub");
+    send(
+        &client,
+        r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"run it"}]}}"#,
+    );
+    let asked = until(&client, "permission_requested", |line| {
+        line["kind"] == "permission_requested"
+    });
+    let request = asked.last().expect("the escalation was requested");
+    let request_id = request["payload"]["request_id"]
+        .as_str()
+        .expect("the request has an id")
+        .to_owned();
+    send_close_now(&client);
+    let _tail = until_close(&client);
+    drop(client);
+    let (status, out, stderr) = running.wait();
+    let exited = assert_exited_0(status, &out, &stderr);
+    // This asserts presence, unlike the other tests' clean exit.
+    assert_eq!(
+        exited["payload"]["suspended_on"].as_str(),
+        Some(request_id.as_str())
+    );
+    assert!(
+        out.iter().all(|line| line["kind"] != "permission_resolved"),
+        "the shutdown left the request pending"
+    );
+    assert!(
+        out.iter().all(|line| line["kind"] != "tool_call_completed"),
+        "the shutdown ran no call"
+    );
+    assert_eq!(
+        stdout_kinds(&out),
+        [
+            CLOSE_START.as_slice(),
+            &[
+                "step_started",
+                "assistant_message_started",
+                "tool_call_requested",
+                "usage_recorded",
+                "assistant_message_completed",
+                "permission_requested",
+                "fiber_exited",
+            ],
+        ]
+        .concat()
+    );
+}
+
+#[test]
+fn close_now_while_idle_with_no_jobs_exits_0() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    let id = doors::mint("s_");
+    let mut running = setup.start_session(&id, &[]);
+    let client = running.connect(&setup.socket(&id));
+    running.wait_for("extensions_loaded");
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    let sub = recv(&client, "the subscribe acknowledgement");
+    assert_eq!(sub["payload"]["command_id"], "c_sub");
+    send(
+        &client,
+        r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"hi"}]}}"#,
+    );
+    let _done = until(&client, "the prompt's turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    send_close_now(&client);
+    let _tail = until_close(&client);
+    drop(client);
+    let (status, out, stderr) = running.wait();
+    assert_exited_clean(&assert_exited_0(status, &out, &stderr));
+    assert_eq!(server.requests().len(), 1);
+    assert_eq!(stdout_kinds(&out), STDOUT_KINDS_ONE_TURN_AND_CLOSE);
+}
+
+#[test]
+fn close_without_now_waits_for_the_job_to_finish() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([stream(&[bg_call()]), hello(), hello(), hello()]).unwrap();
+    let (mut running, client, job_group) = job_session(&setup, JOB_SCRIPT_UNTIL_GO, &server, || {});
+    let _done = until(&client, "the prompt's turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let accepted = answer(&client, "c_close");
+    assert_eq!(accepted["kind"], "command_accepted", "{accepted}");
+    // The ending-notice turn completes, and the session waits for the job.
+    let _notice = until(&client, "the notice turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    assert!(
+        running.child.try_wait().unwrap().is_none(),
+        "the session waits for the job"
+    );
+    assert!(group_alive(job_group), "the job still runs");
+    fs::write(setup.workspace().join("go"), "").unwrap();
+    let _tail = until_close(&client);
+    drop(client);
+    let (status, out, stderr) = running.wait();
+    assert_exited_0(status, &out, &stderr);
+    let job = out
+        .iter()
+        .find(|line| line["kind"] == "job_completed")
+        .expect("the background job completed");
+    assert_eq!(job["payload"]["status"], "completed");
+    assert_eq!(
+        stdout_kinds(&out),
+        [
+            CLOSE_START.as_slice(),
+            CLOSE_BG_STEP.as_slice(),
+            CLOSE_REPLY.as_slice(),
+            &[
+                "turn_started",
+                "step_started",
+                "jobs_pending_notified",
+                "assistant_message_started",
+                "assistant_message_delta",
+                "assistant_message_delta",
+                "text_completed",
+                "usage_recorded",
+                "assistant_message_completed",
+                "turn_completed",
+                "turn_started",
+                "step_started",
+                "job_completed",
+                "assistant_message_started",
+                "assistant_message_delta",
+                "assistant_message_delta",
+                "text_completed",
+                "usage_recorded",
+                "assistant_message_completed",
+                "turn_completed",
+                "fiber_exited",
+            ],
+        ]
+        .concat()
+    );
+}
+
+#[test]
+fn close_now_after_close_stops_the_job_it_was_waiting_for() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([stream(&[bg_call()]), hello(), hello()]).unwrap();
+    let (running, client, job_group) = job_session(&setup, JOB_SCRIPT_UNTIL_GO, &server, || {});
+    let _done = until(&client, "the prompt's turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let accepted = answer(&client, "c_close");
+    assert_eq!(accepted["kind"], "command_accepted", "{accepted}");
+    let _notice = until(&client, "the notice turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    send_close_now(&client);
+    let _tail = until_close(&client);
+    drop(client);
+    let (status, out, stderr) = running.wait();
+    assert_exited_0(status, &out, &stderr);
+    let job = out
+        .iter()
+        .find(|line| line["kind"] == "job_completed")
+        .expect("the background job completed");
+    assert_eq!(job["payload"]["status"], "cancelled");
+    assert!(
+        !group_alive(job_group),
+        "the job's group outlived the session"
+    );
+    assert_eq!(server.requests().len(), 3);
+    assert_eq!(
+        stdout_kinds(&out),
+        [
+            CLOSE_START.as_slice(),
+            CLOSE_BG_STEP.as_slice(),
+            CLOSE_REPLY.as_slice(),
+            &[
+                "turn_started",
+                "step_started",
+                "jobs_pending_notified",
+                "assistant_message_started",
+                "assistant_message_delta",
+                "assistant_message_delta",
+                "text_completed",
+                "usage_recorded",
+                "assistant_message_completed",
+                "turn_completed",
+                "job_completed",
+                "fiber_exited",
+            ],
+        ]
+        .concat()
+    );
 }

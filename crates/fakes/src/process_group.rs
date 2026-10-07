@@ -3,9 +3,18 @@
 //! user owns, and `kill(-0)` or `kill -- 0` the caller's own group, so an id
 //! of 1 or less is refused before anything runs. The command-line form
 //! refuses an empty match, which reaches every process the user owns.
+//!
+//! The exit probes (`alive`, `group_lives`) and the waits built on them
+//! (`pids_exit`, `matching_exits`) learn through the safe `kill(pid, 0)`
+//! probes, starting no process per pass.
 
 use std::io;
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
+
+use rustix::process::Pid;
 
 /// The shell script of a watchdog: `sh -c WATCHDOG_SCRIPT watchdog <group>`.
 /// Reading a line from stdin means the run finished; EOF means the test
@@ -35,6 +44,39 @@ pub fn kill_group(group: u32, signal: &str) -> io::Result<bool> {
         .stderr(Stdio::null())
         .status()
         .map(|status| status.success())
+}
+
+/// Waits up to `deadline` on the wall clock for process group `group` to
+/// empty, and returns whether it did. One probe right after the group's
+/// leader exits is a race: a transient child, such as a `cat` in a command
+/// substitution, can outlive it for a moment under load. The probes run on
+/// a thread, so the deadline holds even when a probe is slow. Any probe
+/// error (no such group, no permission) counts as empty.
+///
+/// # Panics
+///
+/// When `group` is 1 or less (see [`kill_group`]), on the probe thread, so the
+/// wait then returns `false`.
+#[must_use]
+pub fn group_empties(group: u32, deadline: Duration) -> bool {
+    let (emptied, empty) = mpsc::channel();
+    let (stop, stopped) = mpsc::channel::<()>();
+    thread::spawn(move || {
+        while group_lives(group) {
+            if !matches!(
+                stopped.recv_timeout(Duration::from_millis(50)),
+                Err(mpsc::RecvTimeoutError::Timeout)
+            ) {
+                return;
+            }
+        }
+        match emptied.send(()) {
+            Ok(()) | Err(_) => {}
+        }
+    });
+    let result = empty.recv_timeout(deadline).is_ok();
+    drop(stop);
+    result
 }
 
 /// Sends `signal` (a name such as `KILL`, or `0` to probe) to process `pid`
@@ -141,6 +183,127 @@ pub fn kill_matching(text: &str) -> io::Result<()> {
         kill_pid(pid, "KILL")?;
     }
     Ok(())
+}
+
+/// Whether `pid` exists: kill(pid, 0), starting no process. Panics when
+/// `pid` is 1 or less.
+fn alive(pid: u32) -> bool {
+    assert!(
+        pid > 1,
+        "refusing to probe pid {pid}: kill -- 0 signals the caller's own process group"
+    );
+    let raw = i32::try_from(pid).ok().and_then(Pid::from_raw);
+    assert!(raw.is_some(), "pid {pid} does not fit in an i32");
+    match raw {
+        Some(id) => rustix::process::test_kill_process(id).is_ok(),
+        None => false,
+    }
+}
+
+/// Whether process group `group` has a member: kill(-group, 0), starting no
+/// process. Panics when `group` is 1 or less, with kill_group's message.
+fn group_lives(group: u32) -> bool {
+    assert!(
+        group > 1,
+        "refusing to signal process group {group}: kill(-1) signals every process the user owns"
+    );
+    let raw = i32::try_from(group).ok().and_then(Pid::from_raw);
+    assert!(
+        raw.is_some(),
+        "process group {group} does not fit in an i32"
+    );
+    match raw {
+        Some(id) => rustix::process::test_kill_process_group(id).is_ok(),
+        None => false,
+    }
+}
+
+/// The probe loop: true once every pid fails kill(pid, 0); false once
+/// `stop` disconnects.
+fn wait_exits(pids: &[u32], stop: &mpsc::Receiver<()>) -> bool {
+    loop {
+        if !pids.iter().any(|pid| alive(*pid)) {
+            return true;
+        }
+        match stop.try_recv() {
+            Err(mpsc::TryRecvError::Empty) => {}
+            Ok(()) | Err(mpsc::TryRecvError::Disconnected) => return false,
+        }
+        thread::yield_now();
+    }
+}
+
+/// Waits up to `deadline` on the wall clock for every pid in `pids` to exit,
+/// probing with kill(pid, 0) and starting no process. Runs on a thread.
+/// Panics (on that thread, so the result is `false`) when a pid is 1 or
+/// less.
+#[must_use]
+pub fn pids_exit(pids: &[u32], deadline: Duration) -> bool {
+    let pids = pids.to_vec();
+    let (done, finished) = mpsc::channel::<bool>();
+    let (stop, stopped) = mpsc::channel::<()>();
+    thread::spawn(move || {
+        let exited = wait_exits(&pids, &stopped);
+        match done.send(exited) {
+            Ok(()) | Err(_) => {}
+        }
+    });
+    let result = finished.recv_timeout(deadline).unwrap_or_default();
+    drop(stop);
+    result
+}
+
+/// `matching_exits` with the listing injected: `list` is called once before
+/// the probes and once after. The test seam for the final check.
+fn listed_exit(
+    list: impl FnMut() -> io::Result<Vec<u32>> + Send + 'static,
+    deadline: Duration,
+) -> bool {
+    let (done, finished) = mpsc::channel::<bool>();
+    let (stop, stopped) = mpsc::channel::<()>();
+    thread::spawn(move || {
+        let mut list = list;
+        let first = match list() {
+            Ok(pids) => pids,
+            Err(_) => {
+                match done.send(false) {
+                    Ok(()) | Err(_) => {}
+                }
+                return;
+            }
+        };
+        if !wait_exits(&first, &stopped) {
+            match done.send(false) {
+                Ok(()) | Err(_) => {}
+            }
+            return;
+        }
+        let last = match list() {
+            Ok(pids) => pids,
+            Err(_) => {
+                match done.send(false) {
+                    Ok(()) | Err(_) => {}
+                }
+                return;
+            }
+        };
+        match done.send(last.is_empty()) {
+            Ok(()) | Err(_) => {}
+        }
+    });
+    let result = finished.recv_timeout(deadline).unwrap_or_default();
+    drop(stop);
+    result
+}
+
+/// Waits up to `deadline` on the wall clock for every process whose command
+/// line contains `text` to exit: one `pgrep` lists the matches, the probes
+/// wait for each listed pid, and a second `pgrep` checks that nothing
+/// matches. One thread, one deadline, at most two `pgrep`s.
+#[must_use]
+pub fn matching_exits(text: &str, deadline: Duration) -> bool {
+    let text = text.to_owned();
+    listed_exit(move || matching(&text), deadline)
 }
 
 #[cfg(test)]

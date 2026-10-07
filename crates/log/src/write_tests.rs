@@ -5,7 +5,7 @@ use std::time::Duration;
 use super::*;
 use contract::ErrorCode;
 use contract::events::{
-    Empty, Event, ExtensionsLoaded, FiberStarted, LoadedExtension, Notice, SessionState,
+    Clients, Empty, Event, ExtensionsLoaded, FiberStarted, LoadedExtension, Notice, SessionState,
     SessionStatus, TextDelta,
 };
 use contract::shapes::{Tokens, Usage};
@@ -243,7 +243,13 @@ fn status(name: &str) -> Event {
         },
         delegates: 0,
         jobs: 0,
+        project: "-w".into(),
+        clients: 0,
     })
+}
+
+fn clients(count: u32) -> Event {
+    Event::Clients(Clients { count })
 }
 
 fn extensions(name: &str) -> Event {
@@ -268,13 +274,17 @@ fn latest_is_the_newest_line_of_each_kind_with_no_watcher() {
     )
     .unwrap();
     let mut last_status = None;
+    let mut last_clients = None;
     for n in 0..1_100 {
         log.append(&notice(&n.to_string()), None, None).unwrap();
         last_status = Some(log.append(&status(&format!("s{n}")), None, None).unwrap());
+        let count = u32::try_from(n).unwrap_or(u32::MAX);
+        last_clients = Some(log.append(&clients(count), None, None).unwrap());
     }
     log.append(&step(), None, None).unwrap();
     let last_extensions = log.append(&extensions("last"), None, None).unwrap();
     assert_eq!(log.latest("session_status").as_ref(), last_status.as_ref());
+    assert_eq!(log.latest("clients").as_ref(), last_clients.as_ref());
     assert_eq!(
         log.latest("extensions_loaded").as_ref(),
         Some(&last_extensions)
@@ -293,6 +303,7 @@ fn latest_is_the_newest_line_of_each_kind_with_no_watcher() {
         Some(&last_extensions)
     );
     assert!(reopened.latest("session_status").is_none());
+    assert!(reopened.latest("clients").is_none());
 }
 
 /// Reopening folds the whole log in one pass: across more lines than a
@@ -395,4 +406,203 @@ fn try_recv_returns_what_is_available_including_the_catch_up_and_never_waits() {
     let expected: Vec<u64> = (1..=u64::try_from(total).unwrap()).collect();
     assert_eq!(seqs, expected);
     assert!(watcher.try_recv().unwrap().is_none());
+}
+
+fn ui_status(extension: &str, status: &str) -> Event {
+    Event::ExtensionUi(contract::events::ExtensionUi {
+        extension: extension.to_owned(),
+        ui: contract::events::Ui::Status {
+            status: status.to_owned(),
+        },
+    })
+}
+
+fn ui_widget(extension: &str, widget: &str, lines: &[&str]) -> Event {
+    Event::ExtensionUi(contract::events::ExtensionUi {
+        extension: extension.to_owned(),
+        ui: contract::events::Ui::Widget {
+            widget: widget.to_owned(),
+            lines: lines.iter().map(|s| (*s).to_owned()).collect(),
+        },
+    })
+}
+
+#[test]
+fn newer_status_replaces_older_and_a_clear_removes_it() {
+    // Newer status replaces older; a clearing line removes its key; a
+    // non-empty update after a clear is kept again.
+    let sessions = fakes::TempDir::new("log-unit-ui-status");
+    let log = Log::create(
+        sessions.path(),
+        SessionId("s_1".into()),
+        fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    log.append(&ui_status("fiber.test/a", "one"), None, None)
+        .unwrap();
+    log.append(&ui_status("fiber.test/a", "two"), None, None)
+        .unwrap();
+    let seeded = log.watch_all_seeded().unwrap();
+    let rx = relay(seeded);
+    let first = rx
+        .recv_timeout(DEADLINE)
+        .expect("the seeded status arrives")
+        .expect("open");
+    assert_eq!(first.kind, "extension_ui");
+    log.append(&ui_status("fiber.test/a", ""), None, None)
+        .unwrap();
+    let log2 = log;
+    let seeded = log2.watch_all_seeded().unwrap();
+    let rx = relay(seeded);
+    // A clearing line removes its key: no `extension_ui` seed follows.
+    let mut seen_ui = false;
+    for _ in 0..16 {
+        match rx.recv_timeout(Duration::from_millis(200)) {
+            Ok(Some(line)) if line.kind == "extension_ui" => {
+                seen_ui = true;
+                break;
+            }
+            Ok(_) => continue,
+            Err(_) => break,
+        }
+    }
+    assert!(!seen_ui, "a cleared status leaves no seed");
+    log2.append(&ui_status("fiber.test/a", "back"), None, None)
+        .unwrap();
+    let seeded = log2.watch_all_seeded().unwrap();
+    let rx = relay(seeded);
+    let line = rx
+        .recv_timeout(DEADLINE)
+        .expect("the status after a clear arrives")
+        .expect("open");
+    assert_eq!(line.kind, "extension_ui");
+}
+
+#[test]
+fn widgets_are_kept_per_extension_and_id() {
+    let sessions = fakes::TempDir::new("log-unit-ui-widget");
+    let log = Log::create(
+        sessions.path(),
+        SessionId("s_1".into()),
+        fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    log.append(&ui_widget("fiber.test/a", "m", &["x"]), None, None)
+        .unwrap();
+    log.append(&ui_widget("fiber.test/a", "n", &["y"]), None, None)
+        .unwrap();
+    log.append(&ui_widget("fiber.test/b", "m", &["z"]), None, None)
+        .unwrap();
+    // Empty lines remove only that widget.
+    log.append(&ui_widget("fiber.test/a", "m", &[]), None, None)
+        .unwrap();
+    let seeded = log.watch_all_seeded().unwrap();
+    let rx = relay(seeded);
+    let mut widgets = Vec::new();
+    for _ in 0..8 {
+        match rx.recv_timeout(Duration::from_millis(200)) {
+            Ok(Some(line)) if line.kind == "extension_ui" => widgets.push(line),
+            Ok(_) => continue,
+            Err(_) => break,
+        }
+    }
+    assert_eq!(
+        widgets.len(),
+        2,
+        "only the two live widgets seed: {widgets:?}"
+    );
+}
+
+#[test]
+fn watch_all_seeded_delivers_seeds_before_later_lines() {
+    // The seed lines come off the watcher before a line appended after it returns.
+    let sessions = fakes::TempDir::new("log-unit-seeded-order");
+    let log = Log::create(
+        sessions.path(),
+        SessionId("s_1".into()),
+        fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    log.append(&status("idle"), None, None).unwrap();
+    log.append(&ui_status("fiber.test/a", "syncing"), None, None)
+        .unwrap();
+    let seeded = log.watch_all_seeded().unwrap();
+    let rx = relay(seeded);
+    log.append(&ui_status("fiber.test/a", "later"), None, None)
+        .unwrap();
+    let first = rx
+        .recv_timeout(DEADLINE)
+        .expect("the first seed arrives")
+        .expect("open");
+    assert_eq!(first.kind, "session_status");
+    let second = rx
+        .recv_timeout(DEADLINE)
+        .expect("the second seed arrives")
+        .expect("open");
+    assert_eq!(second.kind, "extension_ui");
+    let payload: contract::events::ExtensionUi =
+        serde_json::from_value(serde_json::Value::Object(second.payload.clone())).unwrap();
+    assert_eq!(
+        payload.ui,
+        contract::events::Ui::Status {
+            status: "syncing".to_owned(),
+        }
+    );
+}
+
+#[test]
+fn watch_all_seeded_prunes_a_dropped_watcher_and_keeps_a_live_one() {
+    // The `>` becoming `==`, `<` or `>=` must fail: `>=` keeps the dead
+    // entry, so the registry grows; `==` and `<` drop the live watcher, so
+    // it never receives a later line.
+    let sessions = fakes::TempDir::new("log-unit-seeded-prune");
+    let log = Log::create(
+        sessions.path(),
+        SessionId("s_1".into()),
+        fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    let live = log.watch();
+    {
+        let dead = log.watch();
+        assert_eq!(log.lock().watchers.len(), 2);
+        drop(dead);
+    }
+    assert_eq!(log.lock().watchers.len(), 2);
+    assert_eq!(
+        log.lock()
+            .watchers
+            .iter()
+            .filter(|w| w.strong_count() > 0)
+            .count(),
+        1
+    );
+    let seeded = log.watch_all_seeded().unwrap();
+    assert_eq!(
+        log.lock().watchers.len(),
+        2,
+        "the dead weak entry is pruned"
+    );
+    assert_eq!(
+        log.lock()
+            .watchers
+            .iter()
+            .filter(|w| w.strong_count() > 0)
+            .count(),
+        2,
+        "the live watcher is kept"
+    );
+    let live_rx = relay(live);
+    let seeded_rx = relay(seeded);
+    let line = log.append(&step(), None, None).unwrap();
+    let got = live_rx
+        .recv_timeout(DEADLINE)
+        .expect("the live watcher still receives a later line")
+        .expect("open");
+    assert_eq!(got.seq, line.seq);
+    let got = seeded_rx
+        .recv_timeout(DEADLINE)
+        .expect("the reseeded watcher receives a later line")
+        .expect("open");
+    assert_eq!(got.seq, line.seq);
 }

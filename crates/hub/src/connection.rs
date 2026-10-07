@@ -18,6 +18,7 @@ use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use contract::clock::{Clock, Wake, wall_ms};
+use contract::events::CommandResult;
 use contract::{CommandId, ErrorCode, HubLine, SCHEMA_VERSION};
 use serde_json::{Map, Value};
 
@@ -55,6 +56,9 @@ pub(crate) struct Hub {
     /// Tests only: a one-shot pause run before `hub_hello` is sent.
     #[cfg(test)]
     pub(crate) before_hello: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// Tests only: a one-shot pause before the next forwarded session line.
+    #[cfg(test)]
+    pub(crate) before_forward: ForwardHook,
 }
 
 /// The open connections and the idle timer. `zero_since` is `Some` exactly
@@ -109,6 +113,8 @@ impl Hub {
             resume_gate: Mutex::new(()),
             #[cfg(test)]
             before_hello: Mutex::new(None),
+            #[cfg(test)]
+            before_forward: Mutex::new(None),
         }
     }
 
@@ -265,6 +271,11 @@ impl Hub {
         }
     }
 }
+
+/// Tests only: a one-shot pause before the next forwarded session line:
+/// the line about to be written, and the relays, with no lock held.
+#[cfg(test)]
+type ForwardHook = Mutex<Option<Box<dyn FnOnce(&[u8], &Arc<Mutex<Relays>>) + Send>>>;
 
 /// What `poll_accept` decided for one accepted stream.
 pub(crate) enum Accept {
@@ -516,12 +527,15 @@ fn on_start(
         return;
     };
     match start::run(hub, workspace, model, content) {
-        Outcome::Accepted { session_id } => accept_result(
-            writer,
-            hub,
-            id,
-            serde_json::json!({"session_id": session_id.0}),
-        ),
+        Outcome::Accepted { session_id } => {
+            let result = CommandResult::Start { session_id };
+            accept_result(
+                writer,
+                hub,
+                id,
+                serde_json::to_value(&result).unwrap_or(Value::Null),
+            );
+        }
         Outcome::Rejected { code, message } => {
             reject(writer, hub, Some(id), &code, &message);
         }
@@ -544,11 +558,16 @@ fn on_status(
         );
         return;
     }
+    let result = CommandResult::Status {
+        running: true,
+        fiber_version: hub.fiber_version.clone(),
+        clients: hub.clients(),
+    };
     accept_result(
         writer,
         hub,
         id,
-        serde_json::json!({"clients": hub.clients(), "fiber_version": hub.fiber_version, "running": true}),
+        serde_json::to_value(&result).unwrap_or(Value::Null),
     );
 }
 

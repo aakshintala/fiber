@@ -22,16 +22,16 @@ use std::time::Duration;
 use contract::clock::{Clock, Wake};
 use contract::emit::Emit;
 use contract::events::{
-    CommandInfo, Empty, Event, ExtensionsLoaded, FiberExited, InputItem, LoadedExtension, Notice,
-    QueuedMessage, SessionState, SessionStatus, SteeringQueue, ToolInfo, ToolSource, ToolState,
-    TurnStarted,
+    CacheLifetime, CommandInfo, Empty, Event, ExtensionsLoaded, FiberExited, InputItem,
+    LoadedExtension, Notice, PreambleBuilt, PreambleReason, QueuedMessage, SentTool, SessionState,
+    SessionStatus, SteeringQueue, ToolInfo, ToolSource, ToolState, TurnStarted, UsageRecorded,
 };
 use contract::inbox::{Delivery, Message};
 use contract::jobs::{Foreground, Jobs, Opening, Stop};
 use contract::provider::ToolDefinition;
 use contract::shapes::{ContentPart, Failure, Origin, Process, Sender, Tokens, Usage};
 use contract::tool::{Bound, Cancel, Effects, EffectsError, Output, Tool};
-use contract::{CommandId, ErrorCode, SessionId};
+use contract::{ActionId, CommandId, ErrorCode, GenerationId, SessionId};
 use doors::{Session, mint};
 use fakes::Client;
 use fakes::clock::FakeClock;
@@ -44,7 +44,7 @@ const DEADLINE: Duration = Duration::from_secs(10);
 
 const MALFORMED: &str = "A command is one JSON object per line, with a string `id` and `command`.";
 const NOT_SUBSCRIBED: &str = "Send `subscribe` first.";
-const ALREADY: &str = "This connection is already subscribed.";
+const ALREADY: &str = "This connection is already subscribed at this level.";
 const UNFIT: &str = "The arguments do not fit this command.";
 const PAST: &str = "`from_seq` is past the latest line.";
 const REVERSED: &str = "`to_seq` is before `from_seq`.";
@@ -253,6 +253,8 @@ fn status(name: &str) -> Event {
         spend: usage(),
         delegates: 0,
         jobs: 0,
+        project: "-w".into(),
+        clients: 0,
     })
 }
 
@@ -428,7 +430,7 @@ fn subscribe_is_first_and_unknown_or_unfit_commands_are_rejected() {
             subscribe(&client, "c_sub", "full");
             send(
                 &client,
-                r#"{"id":"c_again","command":"subscribe","args":{"level":"summary"}}"#,
+                r#"{"id":"c_again","command":"subscribe","args":{"level":"full"}}"#,
             );
             let again = response(&client, "c_again");
             assert_eq!(rejection(&again), ("invalid_arguments", ALREADY));
@@ -447,7 +449,6 @@ fn subscribe_is_first_and_unknown_or_unfit_commands_are_rejected() {
                 "credential",
                 "name",
                 "rewind",
-                "command",
             ] {
                 send(
                     &client,
@@ -739,6 +740,208 @@ fn tools_and_history_answer_while_the_inbox_is_unread() {
                 matches!(inbox.try_recv(), Ok(Delivery::Prompt(_, _))),
                 "the prompt was waiting unread while tools and history answered"
             );
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn tools_give_tokens_from_the_first_request_after_each_preamble() {
+    fn definition() -> Map<String, Value> {
+        serde_json::from_value(serde_json::json!({"type": "object"})).unwrap()
+    }
+
+    fn preamble(reason: PreambleReason, system_prompt: &str) -> Event {
+        Event::PreambleBuilt(PreambleBuilt {
+            reason,
+            model: "fake/m".into(),
+            context_window: 200_000,
+            trigger_at: None,
+            thinking: None,
+            tool_choice: "auto".into(),
+            cache_lifetime: CacheLifetime::FiveMinutes,
+            credential: None,
+            system_prompt: system_prompt.into(),
+            tools: vec![SentTool {
+                name: "read".into(),
+                registered_by: "builtin".into(),
+                deferred: false,
+                definition: definition(),
+            }],
+            replaced: Vec::new(),
+        })
+    }
+
+    fn usage(
+        generation: &str,
+        input: u64,
+        cache_write: Vec<(&str, u64)>,
+        input_bytes: u64,
+        input_media: Option<bool>,
+        extension: Option<&str>,
+        origin: Option<SessionId>,
+    ) -> Event {
+        Event::UsageRecorded(UsageRecorded {
+            generation_id: GenerationId(generation.into()),
+            model: "fake/m".into(),
+            tokens: Tokens {
+                input,
+                cache_read: 0,
+                cache_write: cache_write
+                    .into_iter()
+                    .map(|(lifetime, written)| (lifetime.to_owned(), written))
+                    .collect(),
+                output: 3,
+            },
+            web_searches: None,
+            cost: None,
+            subscription: None,
+            extension: extension.map(str::to_owned),
+            origin_session_id: origin,
+            input_bytes,
+            input_media,
+        })
+    }
+
+    fn started() -> Event {
+        Event::AssistantMessageStarted(Empty {})
+    }
+
+    fn tools_of(answer: &Value) -> &Vec<Value> {
+        answer["payload"]["result"]["tools"].as_array().unwrap()
+    }
+
+    let opened = Opened::open(vec![tool()]);
+    let socket = opened.socket.clone();
+    let log = Arc::clone(&opened.log);
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+
+            send(&client, r#"{"id":"c_t0","command":"tools"}"#);
+            let t0 = response(&client, "c_t0");
+            assert_eq!(kind(&t0), "command_accepted", "{t0}");
+            assert_eq!(tools_of(&t0).len(), 1);
+            assert_eq!(tools_of(&t0)[0]["bytes"], 12);
+            assert!(tools_of(&t0)[0].get("tokens").is_none(), "{t0}");
+
+            log.append(&preamble(PreambleReason::Start, "system-a"), None, None)
+                .unwrap();
+            send(&client, r#"{"id":"c_t1","command":"tools"}"#);
+            let t1 = response(&client, "c_t1");
+            assert_eq!(tools_of(&t1)[0]["bytes"], 12);
+            assert!(tools_of(&t1)[0].get("tokens").is_none(), "{t1}");
+
+            let a1 = Some(ActionId("a_1".into()));
+            log.append(&started(), None, a1.clone()).unwrap();
+            log.append(
+                &usage("g_x", 10, vec![("5m", 1000)], 500, None, None, None),
+                None,
+                None,
+            )
+            .unwrap();
+            log.append(
+                &usage("g_x", 10, vec![("5m", 1000)], 500, None, Some("x"), None),
+                None,
+                a1.clone(),
+            )
+            .unwrap();
+            log.append(
+                &usage(
+                    "g_x",
+                    10,
+                    vec![("5m", 1000)],
+                    500,
+                    None,
+                    None,
+                    Some(SessionId("s_other".into())),
+                ),
+                None,
+                a1.clone(),
+            )
+            .unwrap();
+            log.append(
+                &usage("g_x", 10, vec![("5m", 1000)], 500, None, None, None),
+                None,
+                Some(ActionId("a_9".into())),
+            )
+            .unwrap();
+            log.append(
+                &usage("g_x", 10, vec![("5m", 5000)], 500, Some(true), None, None),
+                None,
+                a1.clone(),
+            )
+            .unwrap();
+            send(&client, r#"{"id":"c_t2","command":"tools"}"#);
+            let t2 = response(&client, "c_t2");
+            assert_eq!(tools_of(&t2)[0]["bytes"], 12);
+            assert!(tools_of(&t2)[0].get("tokens").is_none(), "{t2}");
+
+            log.append(
+                &usage("g_1", 10, vec![("5m", 90)], 500, None, None, None),
+                None,
+                a1.clone(),
+            )
+            .unwrap();
+            send(&client, r#"{"id":"c_t3","command":"tools"}"#);
+            let t3 = response(&client, "c_t3");
+            let expected = 12 * 100 / 500;
+            assert!(expected >= 2 && (12 * 100) % 500 != 0);
+            assert_eq!(tools_of(&t3)[0]["bytes"], 12);
+            assert_eq!(
+                tools_of(&t3)[0]["tokens"].as_u64().unwrap(),
+                expected,
+                "{t3}"
+            );
+
+            log.append(
+                &usage("g_1", 10, vec![("5m", 555)], 500, None, None, None),
+                None,
+                a1.clone(),
+            )
+            .unwrap();
+            send(&client, r#"{"id":"c_t4","command":"tools"}"#);
+            let t4 = response(&client, "c_t4");
+            assert_eq!(tools_of(&t4)[0]["bytes"], 12);
+            assert_eq!(
+                tools_of(&t4)[0]["tokens"].as_u64().unwrap(),
+                expected,
+                "{t4}"
+            );
+
+            log.append(&preamble(PreambleReason::Reload, "system-b"), None, None)
+                .unwrap();
+            send(&client, r#"{"id":"c_t5","command":"tools"}"#);
+            let t5 = response(&client, "c_t5");
+            assert_eq!(tools_of(&t5)[0]["bytes"], 12);
+            assert!(tools_of(&t5)[0].get("tokens").is_none(), "{t5}");
+
+            log.append(
+                &usage("g_1", 10, vec![("5m", 1000)], 500, None, None, None),
+                None,
+                a1.clone(),
+            )
+            .unwrap();
+            send(&client, r#"{"id":"c_t6","command":"tools"}"#);
+            let t6 = response(&client, "c_t6");
+            assert_eq!(tools_of(&t6)[0]["bytes"], 12);
+            assert!(tools_of(&t6)[0].get("tokens").is_none(), "{t6}");
+
+            log.append(&started(), None, Some(ActionId("a_2".into())))
+                .unwrap();
+            log.append(
+                &usage("g_2", 0, Vec::new(), 500, None, None, None),
+                None,
+                Some(ActionId("a_2".into())),
+            )
+            .unwrap();
+            send(&client, r#"{"id":"c_t7","command":"tools"}"#);
+            let t7 = response(&client, "c_t7");
+            assert_eq!(tools_of(&t7)[0]["bytes"], 12);
+            assert_eq!(tools_of(&t7)[0]["tokens"], 0, "{t7}");
             Ok(())
         })
         .unwrap();
@@ -1367,8 +1570,24 @@ fn shell_exit_zero_stays_on_the_sending_connection() {
                 seen.iter().all(|line| command_id(line) != Some("c_1")),
                 "the other client sees the shell answer"
             );
-            send(&client, r#"{"id":"c_cancel","command":"cancel"}"#);
-            let rejected = response(&client, "c_cancel");
+            // The shell answers before it leaves the running list, so a
+            // `cancel` right after the answer may still be accepted. The
+            // retries run on a thread so the whole wait has one deadline.
+            let (tx, rx) = mpsc::channel();
+            thread::spawn(move || {
+                for attempt in 0.. {
+                    let id = format!("c_cancel_{attempt}");
+                    send(&client, &format!(r#"{{"id":"{id}","command":"cancel"}}"#));
+                    let line = response(&client, &id);
+                    if kind(&line) != "command_accepted" {
+                        drop(tx.send(line));
+                        return;
+                    }
+                }
+            });
+            let rejected = rx
+                .recv_timeout(DEADLINE)
+                .expect("the finished shell left the running list");
             assert_eq!(
                 rejection(&rejected),
                 ("stale_request", "No turn is running.")
@@ -1771,7 +1990,7 @@ fn shell_without_a_process_is_invalid_arguments() {
             error: Some(Failure {
                 code: ErrorCode::InvalidArguments,
                 message: "Give one command.".to_owned(),
-                retry_after: None,
+                retry_after_ms: None,
                 provider: None,
             }),
             ..Output::default()
@@ -2081,6 +2300,219 @@ fn commands_with_none_given_answers_an_empty_list() {
     opened.close();
 }
 
+struct FakeDoor {
+    calls: Mutex<Vec<(String, String)>>,
+}
+
+impl FakeDoor {
+    fn new() -> Self {
+        Self {
+            calls: Mutex::new(Vec::new()),
+        }
+    }
+}
+
+impl contract::extension::ExtensionDoor for FakeDoor {
+    fn command(
+        &self,
+        name: &str,
+        text: &str,
+    ) -> Result<Box<dyn FnOnce() + Send>, contract::inbox::Rejection> {
+        if name == "known" {
+            self.calls
+                .lock()
+                .unwrap()
+                .push((name.to_owned(), text.to_owned()));
+            Ok(Box::new(|| {}))
+        } else {
+            Err(contract::inbox::Rejection {
+                code: ErrorCode::UnknownCommand,
+                message: format!("`{name}` names no extension command."),
+            })
+        }
+    }
+
+    fn seal(&self) {}
+}
+
+struct HeldDoor {
+    admitted: Mutex<Vec<mpsc::Sender<()>>>,
+}
+
+impl contract::extension::ExtensionDoor for HeldDoor {
+    fn command(
+        &self,
+        name: &str,
+        _text: &str,
+    ) -> Result<Box<dyn FnOnce() + Send>, contract::inbox::Rejection> {
+        if name != "slow" {
+            return Err(contract::inbox::Rejection {
+                code: ErrorCode::UnknownCommand,
+                message: format!("`{name}` names no extension command."),
+            });
+        }
+        let (tx, rx) = mpsc::channel();
+        self.admitted.lock().unwrap().push(tx);
+        // The release runs only after `command_accepted` is on the queue;
+        // the fake records the order by releasing the waiter then.
+        Ok(Box::new(move || {
+            let _ = rx.recv_timeout(DEADLINE).ok();
+        }))
+    }
+
+    fn seal(&self) {}
+}
+
+#[test]
+fn command_accepted_arrives_before_run_starts_and_text_absent_is_empty() {
+    // `command_accepted` is on the client's stream before the fake's release
+    // is called; `text` absent is `""`.
+    let opened = Opened::open(vec![]);
+    let door = Arc::new(HeldDoor {
+        admitted: Mutex::new(Vec::new()),
+    });
+    opened.session.extensions(door.clone());
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(
+                &client,
+                r#"{"id":"c_1","command":"command","args":{"name":"slow"}}"#,
+            );
+            let accepted = response(&client, "c_1");
+            assert_eq!(kind(&accepted), "command_accepted");
+            // The fake's release blocks until the test lets it go; the
+            // acceptance above arrived first, which is the order asserted.
+            let tx = door.admitted.lock().unwrap().pop().expect("admitted");
+            tx.send(()).unwrap();
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn command_ids_are_admitted_once_across_connections() {
+    // The same id sent again on the same connection, and again on a second
+    // connection after the first disconnects, is rejected `duplicate_command`
+    // and the fake's `command` is called once. A rejected `command` resent
+    // with the same id after the name exists is admitted.
+    let opened = Opened::open(vec![]);
+    let door = Arc::new(FakeDoor::new());
+    opened.session.extensions(door.clone());
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(
+                &client,
+                r#"{"id":"c_1","command":"command","args":{"name":"known","text":"hi"}}"#,
+            );
+            let accepted = response(&client, "c_1");
+            assert_eq!(kind(&accepted), "command_accepted");
+            send(
+                &client,
+                r#"{"id":"c_1","command":"command","args":{"name":"known","text":"hi"}}"#,
+            );
+            let duplicate = response(&client, "c_1");
+            assert_eq!(rejection(&duplicate).0, "duplicate_command");
+            drop(client);
+            let second = Client::connect(&socket).unwrap();
+            subscribe(&second, "c_sub2", "full");
+            send(
+                &second,
+                r#"{"id":"c_1","command":"command","args":{"name":"known","text":"hi"}}"#,
+            );
+            let retransmit = response(&second, "c_1");
+            assert_eq!(rejection(&retransmit).0, "duplicate_command");
+            // Unknown name rejects without recording the id...
+            send(
+                &second,
+                r#"{"id":"c_2","command":"command","args":{"name":"nope"}}"#,
+            );
+            let unknown = response(&second, "c_2");
+            assert_eq!(
+                rejection(&unknown),
+                ("unknown_command", "`nope` names no extension command.")
+            );
+            // ...and missing `name` rejects `invalid_arguments`.
+            send(&second, r#"{"id":"c_3","command":"command","args":{}}"#);
+            let missing = response(&second, "c_3");
+            assert_eq!(
+                rejection(&missing),
+                ("invalid_arguments", UNFIT),
+                "a missing name does not fit the command"
+            );
+            assert_eq!(door.calls.lock().unwrap().len(), 1);
+            assert_eq!(
+                door.calls.lock().unwrap()[0],
+                ("known".to_owned(), "hi".to_owned())
+            );
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn command_without_a_door_rejects_unknown_command() {
+    let opened = Opened::open(vec![]);
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(
+                &client,
+                r#"{"id":"c_1","command":"command","args":{"name":"known"}}"#,
+            );
+            let rejected = response(&client, "c_1");
+            assert_eq!(
+                rejection(&rejected),
+                ("unknown_command", "`known` names no extension command.")
+            );
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn quiesce_seals_the_door() {
+    struct Sealed {
+        sealed: AtomicBool,
+    }
+    impl contract::extension::ExtensionDoor for Sealed {
+        fn command(
+            &self,
+            _name: &str,
+            _text: &str,
+        ) -> Result<Box<dyn FnOnce() + Send>, contract::inbox::Rejection> {
+            Err(contract::inbox::Rejection {
+                code: ErrorCode::UnknownCommand,
+                message: "none".into(),
+            })
+        }
+        fn seal(&self) {
+            self.sealed.store(true, Ordering::SeqCst);
+        }
+    }
+    let opened = Opened::open(vec![]);
+    let door = Arc::new(Sealed {
+        sealed: AtomicBool::new(false),
+    });
+    opened.session.extensions(door.clone());
+    opened.session.quiesce();
+    assert!(door.sealed.load(Ordering::SeqCst));
+    opened.close();
+}
+
 /// How long a pasted-image test waits for the fake to start and for the
 /// rejection after the stopper. A wait that reaches it fails the test.
 const PASTE_LIMIT: Duration = Duration::from_secs(10);
@@ -2202,6 +2634,36 @@ fn prompt_with_an_image_is_delivered_with_the_processed_part() {
 }
 
 #[test]
+fn a_full_subscriber_after_an_extension_ui_line_receives_it_as_seed() {
+    let opened = Opened::open(vec![]);
+    let socket = opened.socket.clone();
+    let log = Arc::clone(&opened.log);
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            log.emit(&Event::ExtensionUi(contract::events::ExtensionUi {
+                extension: "fiber.test/a".to_owned(),
+                ui: contract::events::Ui::Status {
+                    status: "syncing".to_owned(),
+                },
+            }));
+            let full = Client::connect(&socket).unwrap();
+            subscribe(&full, "c_full", "full");
+            let lines = until(&full, |line| kind(line) == "extension_ui");
+            assert!(
+                lines
+                    .iter()
+                    .any(|line| line["payload"]["extension"] == "fiber.test/a"
+                        && line["payload"]["status"] == "syncing"),
+                "a late `full` subscriber receives the kept ui line as seed"
+            );
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
 fn steer_with_an_image_is_delivered_with_the_processed_part() {
     let opened = Opened::open(vec![]);
     opened.session.images(Arc::new(OkImage));
@@ -2293,6 +2755,146 @@ fn the_stopper_cancels_a_pasted_image_in_flight() {
                 rejection(&line),
                 ("closing", "Image 1 was not processed: the session is closing.")
             );
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn close_now_starts_the_shutdown_and_sends_the_loop_nothing() {
+    let opened = Opened::open(vec![]);
+    let socket = opened.socket.clone();
+    let (hook_tx, hook_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let release_rx = Mutex::new(release_rx);
+    opened.session.close_now(Arc::new(move || {
+        hook_tx.send(()).unwrap();
+        release_rx
+            .lock()
+            .unwrap()
+            .recv_timeout(DEADLINE)
+            .expect("the test releases the hook");
+    }));
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(
+                &client,
+                r#"{"id":"c_close_now","command":"close","args":{"now":true}}"#,
+            );
+            hook_rx.recv_timeout(DEADLINE).expect("the hook runs");
+            // The answer was queued before the hook ran: if the order were
+            // reversed, this read would wait out its deadline and fail.
+            let answer = response(&client, "c_close_now");
+            assert_eq!(kind(&answer), "command_accepted", "{answer}");
+            assert_eq!(command_id(&answer), Some("c_close_now"));
+            release_tx.send(()).unwrap();
+            assert!(hook_rx.try_recv().is_err(), "the hook ran once");
+            send(&client, r#"{"id":"c_tools","command":"tools"}"#);
+            let tools = response(&client, "c_tools");
+            assert_eq!(kind(&tools), "command_accepted", "{tools}");
+            // The reader handles lines in order, so every line before the
+            // tools answer has been handled: no `Close` reached the loop.
+            assert!(inbox.try_recv().is_err(), "no Close reached the loop");
+            send(
+                &client,
+                r#"{"id":"c_close_now_2","command":"close","args":{"now":true}}"#,
+            );
+            let second = response(&client, "c_close_now_2");
+            assert_eq!(kind(&second), "command_accepted", "{second}");
+            hook_rx
+                .recv_timeout(DEADLINE)
+                .expect("a repeat is answered too");
+            release_tx.send(()).unwrap();
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn close_without_now_starts_no_shutdown() {
+    let opened = Opened::open(vec![]);
+    let socket = opened.socket.clone();
+    let (hook_tx, hook_rx) = mpsc::channel::<()>();
+    opened.session.close_now(Arc::new(move || {
+        hook_tx.send(()).unwrap();
+    }));
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(&client, r#"{"id":"c_close_bare","command":"close"}"#);
+            send(
+                &client,
+                r#"{"id":"c_close_false","command":"close","args":{"now":false}}"#,
+            );
+            assert_eq!(take(&inbox), "close");
+            assert_eq!(take(&inbox), "close");
+            for id in ["c_close_bare", "c_close_false"] {
+                let answer = response(&client, id);
+                assert_eq!(kind(&answer), "command_accepted", "{answer}");
+            }
+            send(&client, r#"{"id":"c_tools","command":"tools"}"#);
+            let tools = response(&client, "c_tools");
+            assert_eq!(kind(&tools), "command_accepted", "{tools}");
+            // The reader handles lines in order, so a hook call would have
+            // come before the tools answer.
+            assert!(hook_rx.try_recv().is_err(), "no shutdown started");
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn close_now_with_no_shutdown_wired_is_a_plain_close() {
+    let opened = Opened::open(vec![]);
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(
+                &client,
+                r#"{"id":"c_close_now","command":"close","args":{"now":true}}"#,
+            );
+            assert_eq!(take(&inbox), "close");
+            let answer = response(&client, "c_close_now");
+            assert_eq!(kind(&answer), "command_accepted", "{answer}");
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn close_now_with_a_non_boolean_is_invalid_and_starts_nothing() {
+    let opened = Opened::open(vec![]);
+    let socket = opened.socket.clone();
+    let (hook_tx, hook_rx) = mpsc::channel::<()>();
+    opened.session.close_now(Arc::new(move || {
+        hook_tx.send(()).unwrap();
+    }));
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(
+                &client,
+                r#"{"id":"c_close_now","command":"close","args":{"now":"yes"}}"#,
+            );
+            let answer = response(&client, "c_close_now");
+            assert_eq!(rejection(&answer), ("invalid_arguments", UNFIT));
+            assert_eq!(command_id(&answer), Some("c_close_now"));
+            assert!(inbox.try_recv().is_err(), "no Close reached the loop");
+            assert!(hook_rx.try_recv().is_err(), "no shutdown started");
             Ok(())
         })
         .unwrap();

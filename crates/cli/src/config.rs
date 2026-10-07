@@ -7,7 +7,7 @@
 use std::io::{self, Write};
 use std::path::Path;
 
-use config::{Config, Layer, Sources};
+use config::{Config, Layer, ProjectKey, Sources};
 use contract::ErrorCode;
 use contract::shapes::Failure;
 use extensions::Providers;
@@ -59,13 +59,14 @@ fn run_set(
     layer: Layer,
     key: &str,
     value: &str,
+    err: &mut dyn Write,
 ) -> Result<(), Failure> {
     let (_, project) = project_of(home, workspace)?;
     let parsed = serde_json::from_str(value).unwrap_or_else(|_| Value::String(value.into()));
     if key == "model"
         && let Some(typed) = parsed.as_str()
     {
-        check_model(home, typed)?;
+        check_model(home, workspace, &project, typed, err)?;
     }
     config::set(home, workspace, &project, layer, key, parsed).map_err(|e| failed(e.code(), e))
 }
@@ -91,13 +92,21 @@ fn with_dirs(run: impl FnOnce(&Path, &Path) -> Result<(), Failure>) -> i32 {
 /// (`docs/configuration.md`, "When Fiber writes"). With no cached list
 /// the value is accepted, and no network is touched for any key. The typed
 /// text is written as typed, never normalised.
-fn check_model(home: &Path, typed: &str) -> Result<(), Failure> {
+fn check_model(
+    home: &Path,
+    workspace: &Path,
+    project: &ProjectKey,
+    typed: &str,
+    err: &mut dyn Write,
+) -> Result<(), Failure> {
     // debt: notices from loading are dropped, as `parts_with` drops them;
     // surfaced when #382 lands.
     let (providers, _notices) = Providers::load(home).map_err(|e| failed(e.code(), e))?;
     // Without a cached list the reference is accepted unchecked: one
     // naming a provider that is not installed, or one installed with an
-    // empty list, and a bare id when every installed list is empty.
+    // empty list, and a bare id when every installed list is empty. This
+    // runs on the unfilled load, so a provider whose every model is
+    // unconfigured still counts as cached.
     let (base, _) = Providers::split_thinking(typed);
     let uncached = match base.split_once('/') {
         Some((name, _)) => providers
@@ -112,8 +121,27 @@ fn check_model(home: &Path, typed: &str) -> Result<(), Failure> {
     if uncached {
         return Ok(());
     }
+    // The fill reads the person's own files with no overrides, and the
+    // process environment, touching no network: the person may set the
+    // host next, so a reference left out with `model_unconfigured` warns
+    // and is written. Notices for other left-out models are dropped.
+    let config = Config::load(Sources {
+        home: home.to_path_buf(),
+        workspace: workspace.to_path_buf(),
+        project: project.clone(),
+        overrides: Vec::new(),
+    })
+    .map_err(|e| failed(e.code(), e))?;
+    let mut providers = providers;
+    let _notices = providers
+        .fill_placeholders(&config, &|name| std::env::var(name).ok())
+        .map_err(|e| failed(e.code(), e))?;
     match providers.resolve(typed) {
         Ok(_) => Ok(()),
+        Err(e @ extensions::Error::Unconfigured { .. }) => {
+            writeln!(err, "fiber: {e}").unwrap_or(());
+            Ok(())
+        }
         Err(extensions::Error::UnknownModel { .. } | extensions::Error::ModelMissing { .. }) => {
             Err(no_model(&providers, typed))
         }
@@ -192,7 +220,7 @@ pub fn config_get(key: &str) -> i32 {
 /// `fiber config set [--project | --repo] <key> <value>` in the current
 /// directory: writes one key in one layer's file.
 pub fn config_set(layer: Layer, key: &str, value: &str) -> i32 {
-    with_dirs(|home, workspace| run_set(home, workspace, layer, key, value))
+    with_dirs(|home, workspace| run_set(home, workspace, layer, key, value, &mut io::stderr()))
 }
 
 #[cfg(test)]

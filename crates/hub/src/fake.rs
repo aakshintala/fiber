@@ -259,7 +259,7 @@ pub(crate) fn failure(code: ErrorCode, message: &str) -> Failure {
     Failure {
         code,
         message: message.to_owned(),
-        retry_after: None,
+        retry_after_ms: None,
         provider: None,
     }
 }
@@ -357,7 +357,14 @@ fn serve_one(
                 received.push(text.clone());
                 match command.as_deref() {
                     // The hub's handshake subscribes before its first prompt.
-                    Some("subscribe") => write_accepted(&mut writer, &text),
+                    Some("subscribe") => {
+                        let level = subscribe_level(&text);
+                        if level.as_deref() == Some("summary") || level.as_deref() == Some("full") {
+                            write_accepted(&mut writer, &text);
+                        } else {
+                            write_ack(&mut writer, &text, &invalid_arguments());
+                        }
+                    }
                     Some("prompt") => {
                         if let Some(reply) = lock(handshake).clone() {
                             write_ack(&mut writer, &text, &reply);
@@ -405,6 +412,23 @@ fn command_of(text: &str) -> Option<String> {
         .ok()
         .and_then(|line| line.get("command").cloned())
         .and_then(|command| command.as_str().map(str::to_owned))
+}
+
+/// The `args.level` of a `subscribe` line, when it parses.
+fn subscribe_level(text: &str) -> Option<String> {
+    serde_json::from_str::<Value>(text)
+        .ok()
+        .and_then(|line| line.get("args")?.get("level")?.as_str().map(str::to_owned))
+}
+
+/// What a session answers a `subscribe` whose level is neither `summary`
+/// nor `full` with.
+fn invalid_arguments() -> Handshake {
+    Handshake {
+        accept: false,
+        code: "invalid_arguments".to_owned(),
+        message: "The arguments do not fit this command.".to_owned(),
+    }
 }
 
 fn write_accepted(writer: &mut UnixStream, command: &str) {
@@ -475,8 +499,8 @@ pub(crate) fn status(name: &str, workspace: &str, state: &str, parent: Option<&s
         "subscription_cost": 0.0,
     });
     let mut payload = serde_json::json!({
-        "name": name, "workspace": workspace, "model": "p/m", "state": state,
-        "since": 1, "spend": usage, "delegates": 0, "jobs": 0,
+        "name": name, "workspace": workspace, "project": "-w", "model": "p/m", "state": state,
+        "since": 1, "spend": usage, "delegates": 0, "jobs": 0, "clients": 0,
     });
     if state == "waiting" {
         payload["waiting"] = serde_json::json!({

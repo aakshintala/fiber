@@ -23,13 +23,16 @@ use contract::shapes::Failure;
 use fakes::Scripted;
 use r#loop::Retry;
 
-use support::{DEADLINE, Session, TestTool, delivery, kinds};
+use support::{
+    DEADLINE, Session, TestTool, assert_no_stored_attempt, assert_scheduled_attempts,
+    attempt_numbers, delivery, kinds,
+};
 
 fn failed(code: ErrorCode) -> Scripted {
     Scripted::failed(Failure {
         code,
         message: "The call failed.".into(),
-        retry_after: None,
+        retry_after_ms: None,
         provider: None,
     })
 }
@@ -41,7 +44,7 @@ fn header_failed(code: ErrorCode, should_retry: Option<bool>) -> Scripted {
             failure: Failure {
                 code,
                 message: "The call failed.".into(),
-                retry_after: None,
+                retry_after_ms: None,
                 provider: None,
             },
             should_retry,
@@ -49,14 +52,14 @@ fn header_failed(code: ErrorCode, should_retry: Option<bool>) -> Scripted {
     }
 }
 
-fn waited(code: ErrorCode, retry_after: f64) -> Scripted {
+fn waited(code: ErrorCode, retry_after_ms: u64) -> Scripted {
     Scripted {
         deltas: Vec::new(),
         end: Err(CallError::Failed {
             failure: Failure {
                 code,
                 message: "The call failed.".into(),
-                retry_after: Some(retry_after),
+                retry_after_ms: Some(retry_after_ms),
                 provider: None,
             },
             should_retry: None,
@@ -73,13 +76,26 @@ fn no_wait() -> Retry {
     }
 }
 
-/// The `attempt` of every failed `assistant_message_completed`, in order.
+/// The derived attempt number of every failed `assistant_message_completed`,
+/// in order: the number of the start whose call failed.
 fn attempts(lines: &[contract::Envelope]) -> Vec<u32> {
+    let numbers = attempt_numbers(lines);
+    let by_action: std::collections::HashMap<String, u32> = lines
+        .iter()
+        .filter(|l| l.kind == "assistant_message_started")
+        .zip(numbers)
+        .filter_map(|(l, n)| l.action_id.clone().map(|a| (a.0.clone(), n)))
+        .collect();
     lines
         .iter()
         .filter(|l| l.kind == "assistant_message_completed")
-        .filter_map(|l| l.payload.get("attempt").and_then(|a| a.as_u64()))
-        .map(|a| u32::try_from(a).unwrap())
+        .filter(|l| l.payload.get("outcome").and_then(|o| o.as_str()) == Some("failed"))
+        .map(|l| {
+            l.action_id
+                .clone()
+                .and_then(|a| by_action.get(&a.0).copied())
+                .unwrap()
+        })
         .collect()
 }
 
@@ -126,6 +142,7 @@ fn a_rate_limit_then_a_reply_retries_after_2s() {
         assert_eq!(turn.join().unwrap(), Some(TurnOutcome::Completed));
     });
     let lines = session.lines();
+    assert_no_stored_attempt(&lines);
     assert_eq!(
         kinds(&lines),
         [
@@ -150,7 +167,7 @@ fn a_rate_limit_then_a_reply_retries_after_2s() {
     let failed_message = &lines[5];
     let completed = &lines[6].payload;
     assert_eq!(completed["outcome"], "failed");
-    assert_eq!(completed["attempt"], 1);
+    assert!(completed.get("attempt").is_none());
     assert_eq!(completed["error"]["code"], "rate_limited");
     // The retry is a new action: its `retry_scheduled` names the failed
     // message, the next attempt and the wait.
@@ -195,6 +212,7 @@ fn three_failures_then_success_waits_2_4_8s() {
         assert_eq!(turn.join().unwrap(), Some(TurnOutcome::Completed));
     });
     let lines = session.lines();
+    assert_no_stored_attempt(&lines);
     assert_eq!(
         kinds(&lines),
         [
@@ -258,6 +276,7 @@ fn four_failures_exhaust_the_retries_with_the_last_error() {
         assert_eq!(turn.join().unwrap(), Some(TurnOutcome::Failed));
     });
     let lines = session.lines();
+    assert_no_stored_attempt(&lines);
     assert_eq!(
         kinds(&lines),
         [
@@ -283,12 +302,14 @@ fn four_failures_exhaust_the_retries_with_the_last_error() {
     assert_eq!(attempts(&lines), [1, 2, 3, 4]);
     // No `retry_scheduled` after the last attempt.
     assert_eq!(scheduled(&lines), [(2, 2000), (3, 4000), (4, 8000)]);
+    assert_scheduled_attempts(&lines);
     let last = lines
         .iter()
         .rfind(|l| l.kind == "assistant_message_completed")
         .unwrap();
     assert_eq!(last.payload["outcome"], "failed");
-    assert_eq!(last.payload["attempt"], 4);
+    assert!(last.payload.get("attempt").is_none());
+    assert_eq!(attempt_numbers(&lines)[3], 4);
     assert_eq!(last.payload["error"]["code"], "rate_limited");
     assert_eq!(lines.last().unwrap().payload["outcome"], "failed");
     assert_eq!(
@@ -305,6 +326,7 @@ fn a_never_retried_code_fails_at_once() {
     session.inbox.send(delivery("hi")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Failed));
     let lines = session.lines();
+    assert_no_stored_attempt(&lines);
     assert_eq!(
         kinds(&lines),
         [
@@ -332,6 +354,7 @@ fn x_should_retry_false_stops_a_5xx_at_once() {
     session.inbox.send(delivery("hi")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Failed));
     let lines = session.lines();
+    assert_no_stored_attempt(&lines);
     assert_eq!(
         kinds(&lines),
         [
@@ -363,6 +386,7 @@ fn x_should_retry_true_retries_an_invalid_request() {
     session.inbox.send(delivery("hi")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     let lines = session.lines();
+    assert_no_stored_attempt(&lines);
     assert_eq!(
         kinds(&lines),
         [
@@ -384,6 +408,7 @@ fn x_should_retry_true_retries_an_invalid_request() {
         ]
     );
     assert_eq!(scheduled(&lines), [(2, 0)]);
+    assert_scheduled_attempts(&lines);
     assert_eq!(completed_count(&lines, "usage_recorded"), 1);
     assert_eq!(session.requests().len(), 2);
 }
@@ -392,7 +417,7 @@ fn x_should_retry_true_retries_an_invalid_request() {
 fn an_asked_wait_within_the_cap_waits_the_larger() {
     let mut session = Session::new(
         vec![
-            waited(ErrorCode::RateLimited, 30.0),
+            waited(ErrorCode::RateLimited, 30_000),
             Scripted::text("Recovered."),
         ],
         None,
@@ -410,6 +435,7 @@ fn an_asked_wait_within_the_cap_waits_the_larger() {
         assert_eq!(turn.join().unwrap(), Some(TurnOutcome::Completed));
     });
     let lines = session.lines();
+    assert_no_stored_attempt(&lines);
     assert_eq!(
         kinds(&lines),
         [
@@ -431,14 +457,16 @@ fn an_asked_wait_within_the_cap_waits_the_larger() {
         ]
     );
     assert_eq!(scheduled(&lines), [(2, 30_000)]);
+    assert_scheduled_attempts(&lines);
 }
 
 #[test]
 fn an_asked_wait_over_the_cap_fails_at_once_as_rate_limited() {
-    let mut session = Session::new(vec![waited(ErrorCode::RateLimited, 90.0)], None);
+    let mut session = Session::new(vec![waited(ErrorCode::RateLimited, 90_000)], None);
     session.inbox.send(delivery("hi")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Failed));
     let lines = session.lines();
+    assert_no_stored_attempt(&lines);
     assert_eq!(
         kinds(&lines),
         [
@@ -455,7 +483,7 @@ fn an_asked_wait_over_the_cap_fails_at_once_as_rate_limited() {
     assert_eq!(attempts(&lines), [1]);
     let completed = &lines[6].payload;
     assert_eq!(completed["error"]["code"], "rate_limited");
-    assert_eq!(completed["error"]["retry_after"], 90.0);
+    assert_eq!(completed["error"]["retry_after_ms"], 90_000);
     assert!(lines.iter().all(|l| l.kind != "retry_scheduled"));
     assert_eq!(session.requests().len(), 1);
 }
@@ -480,7 +508,7 @@ fn a_failed_stream_drops_its_partial_text_and_tool_calls() {
                     failure: Failure {
                         code: ErrorCode::StreamIncomplete,
                         message: "The stream ended early.".into(),
-                        retry_after: None,
+                        retry_after_ms: None,
                         provider: None,
                     },
                     should_retry: None,
@@ -495,6 +523,8 @@ fn a_failed_stream_drops_its_partial_text_and_tool_calls() {
     session.inbox.send(delivery("hi")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     let dropped = session.lines();
+    assert_no_stored_attempt(&dropped);
+    assert_scheduled_attempts(&dropped);
     assert_eq!(
         kinds(&dropped),
         [
@@ -534,6 +564,7 @@ fn zero_attempts_never_retries() {
     session.inbox.send(delivery("hi")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Failed));
     let lines = session.lines();
+    assert_no_stored_attempt(&lines);
     assert_eq!(
         kinds(&lines),
         [
@@ -569,6 +600,7 @@ fn a_cancel_during_the_wait_ends_the_turn_interrupted() {
         assert_eq!(turn.join().unwrap(), Some(TurnOutcome::Interrupted));
     });
     let lines = session.lines();
+    assert_no_stored_attempt(&lines);
     // The failed attempt's message already completed; no message is open,
     // and no second request was sent.
     assert_eq!(
@@ -587,6 +619,7 @@ fn a_cancel_during_the_wait_ends_the_turn_interrupted() {
     );
     assert_eq!(attempts(&lines), [1]);
     assert_eq!(scheduled(&lines), [(2, 2000)]);
+    assert_scheduled_attempts(&lines);
     assert_eq!(session.provider.requests().len(), 1);
     assert_eq!(lines.last().unwrap().payload["outcome"], "interrupted");
 }
@@ -599,6 +632,7 @@ fn a_cancel_during_the_failing_call_is_interrupted_with_no_wait() {
     session.inbox.send(delivery("hi")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Interrupted));
     let lines = session.lines();
+    assert_no_stored_attempt(&lines);
     assert_eq!(
         kinds(&lines),
         [
@@ -646,6 +680,7 @@ fn a_clock_advance_during_the_failing_call_does_not_shorten_the_wait() {
         assert_eq!(turn.join().unwrap(), Some(TurnOutcome::Completed));
     });
     let lines = session.lines();
+    assert_no_stored_attempt(&lines);
     assert_eq!(
         kinds(&lines),
         [
@@ -668,5 +703,6 @@ fn a_clock_advance_during_the_failing_call_does_not_shorten_the_wait() {
     );
     assert_eq!(attempts(&lines), [1]);
     assert_eq!(scheduled(&lines), [(2, 2000)]);
+    assert_scheduled_attempts(&lines);
     assert_eq!(session.provider.requests().len(), 2);
 }

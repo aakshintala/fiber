@@ -330,7 +330,7 @@ fn a_job_that_already_ended_is_returned_at_once_and_claimed_once() {
         error: Some(Failure {
             code: ErrorCode::NonzeroExit,
             message: "Exit code 1.".into(),
-            retry_after: None,
+            retry_after_ms: None,
             provider: None,
         }),
         process: Some(Process {
@@ -410,7 +410,7 @@ fn final_text_adds_a_newline_only_when_the_piece_has_none() {
         error: Some(Failure {
             code: ErrorCode::ToolError,
             message: "Stopped.\n".into(),
-            retry_after: None,
+            retry_after_ms: None,
             provider: None,
         }),
         process: Some(Process {
@@ -982,9 +982,14 @@ fn write_parks_at(arguments: Value, wait: Duration) {
     );
     assert!(rx.try_recv().is_err(), "the write returned before its wait");
     // One millisecond short is not the wait.
-    clock.advance(wait.checked_sub(Duration::from_millis(1)).unwrap());
+    let mark = clock.advance_marked(wait.checked_sub(Duration::from_millis(1)).unwrap());
     assert!(
-        rx.recv_timeout(Duration::from_millis(50)).is_err(),
+        clock.await_parked_since(&mark, Some(deadline), DEADLINE),
+        "the write waits again a millisecond short: {:?}",
+        clock.parked()
+    );
+    assert!(
+        rx.try_recv().is_err(),
         "the write returned a millisecond early"
     );
     clock.advance(Duration::from_millis(1));

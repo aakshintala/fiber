@@ -9,7 +9,7 @@ use std::sync::Arc;
 use config::{Config, ProviderData, Secret};
 use contract::shapes::Failure;
 use contract::signing::Signer;
-use extensions::{LuaProvider, Providers, SessionExtensions};
+use extensions::{CredentialPair, LuaProvider, Providers, SessionExtensions};
 use provider::redact::Secrets;
 
 use crate::failed;
@@ -69,29 +69,34 @@ pub(crate) fn add_lua(
 pub(crate) fn session_credential(
     providers: &Providers,
     provider: &ProviderData,
+    label: &str,
     key: impl FnOnce() -> Result<Secret, Failure>,
 ) -> Result<KeyAndSigner, Failure> {
     let lua = providers.lua(&provider.name);
+    let pair = CredentialPair::for_provider(provider, label);
     let key = match lua {
         Some(lua)
             if lua
                 .registers("credential")
                 .map_err(|e| failed(e.code(), e))? =>
         {
-            lua.credential_token().map(|_| ()).map_err(|e| {
+            lua.credential_token(&pair).map(|_| ()).map_err(|e| {
                 provider::Error::Sign(e).failure(&provider.name, &Secrets::default())
             })?;
             None
         }
         _ => Some(key()?),
     };
-    Ok((key, signer(lua)?))
+    Ok((key, signer(lua, pair)?))
 }
 
 /// Signs `lua`'s requests; `Some` when it registered `credential` or `sign`.
-pub(crate) fn signer(lua: Option<&Arc<LuaProvider>>) -> Result<Option<Arc<dyn Signer>>, Failure> {
+pub(crate) fn signer(
+    lua: Option<&Arc<LuaProvider>>,
+    pair: CredentialPair,
+) -> Result<Option<Arc<dyn Signer>>, Failure> {
     match lua {
-        Some(lua) => lua.signer().map_err(|e| failed(e.code(), e)),
+        Some(lua) => lua.signer(pair).map_err(|e| failed(e.code(), e)),
         None => Ok(None),
     }
 }

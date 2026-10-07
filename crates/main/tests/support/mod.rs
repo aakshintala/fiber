@@ -59,7 +59,7 @@ impl Setup {
             &json!({
                 "name": "fake",
                 "credential": {"env": "FIBER_TEST_FAKE_KEY"},
-                "models": [{"id": "m", "protocol": "openai-responses", "base_url": format!("{}/v1", server.url())}]
+                "models": [{"id": "m", "protocol": "openai-responses", "base_url": format!("{}/v1", server.url()), "context_window": 100000}]
             }),
         );
         extensions::plan(
@@ -170,7 +170,13 @@ pub(crate) struct HubProc {
 impl HubProc {
     /// Spawns `fiber hub serve` in its own process group.
     pub(crate) fn spawn(setup: &Setup) -> Self {
-        let mut child = setup.fiber(&["hub", "serve"]).spawn().unwrap();
+        Self::spawn_command(&mut setup.fiber(&["hub", "serve"]))
+    }
+
+    /// Spawns the `hub serve` command `serve`, which runs in its own
+    /// process group.
+    pub(crate) fn spawn_command(serve: &mut Command) -> Self {
+        let mut child = serve.spawn().unwrap();
         let group = child.id();
         let _ = child.stdout.take();
         let _ = child.stderr.take();
@@ -186,8 +192,8 @@ impl HubProc {
         fakes::kill_group(self.group, signal).unwrap();
     }
 
-    /// Waits under [`DEADLINE`] for the process to exit, and then for its
-    /// group to empty.
+    /// Waits under [`DEADLINE`] for a hub that exits on its own, then
+    /// asserts nothing remains in its group.
     pub(crate) fn wait(self) -> ExitStatus {
         let Self {
             mut child,
@@ -205,9 +211,35 @@ impl HubProc {
                 panic!("the hub's wait thread ended before the hub exited")
             }
         };
-        // A child the group kill caught, such as the startup `git`, is
-        // reaped by init after the hub: the group empties under a deadline.
-        until_gone(group, "the hub's process group");
+        assert!(
+            !group_alive(group),
+            "the hub left a process in its group behind"
+        );
+        watchdog.stand_down(DEADLINE);
+        status
+    }
+
+    /// Kills the hub's group, then waits under [`DEADLINE`] for the hub
+    /// to exit. For a test-sent SIGKILL: the hub's exit is proved by
+    /// reaping it, and other members are not waited on.
+    pub(crate) fn kill_and_wait(self) -> ExitStatus {
+        let Self {
+            mut child,
+            watchdog,
+            group,
+        } = self;
+        fakes::kill_group(group, "KILL").unwrap();
+        let (done, finished) = mpsc::channel();
+        thread::spawn(move || done.send(child.wait()).unwrap());
+        let status = match finished.recv_timeout(DEADLINE) {
+            Ok(status) => status.unwrap(),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                panic!("waited {DEADLINE:?} for the hub to exit")
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                panic!("the hub's wait thread ended before the hub exited")
+            }
+        };
         watchdog.stand_down(DEADLINE);
         status
     }
@@ -317,12 +349,79 @@ pub(crate) fn until_close(client: &Socket) -> Vec<Value> {
 /// `fiber hub serve` when none runs. The starter records the hub for the
 /// caller to kill and wait. Returns the client and the `hub_hello`.
 pub(crate) fn connect_hub(setup: &Setup, hub: &Arc<Mutex<Option<HubProc>>>) -> (Socket, Value) {
+    connect_hub_within(setup, hub, DEADLINE)
+}
+
+/// The process clock running `scale` times slower, so the product's 5 s
+/// connect deadline spans the test's own: a hub started from a freshly
+/// built executable can take longer than 5 s on a loaded machine.
+struct StretchedClock {
+    anchor: std::time::Instant,
+    scale: u32,
+}
+
+impl contract::clock::Clock for StretchedClock {
+    fn now(&self) -> std::time::Instant {
+        self.anchor + SystemClock.now().saturating_duration_since(self.anchor) / self.scale
+    }
+
+    fn wall(&self) -> std::time::SystemTime {
+        SystemClock.wall()
+    }
+
+    fn sleep(&self, d: Duration) {
+        SystemClock.sleep(d);
+    }
+
+    fn wait_until(
+        &self,
+        until: Option<std::time::Instant>,
+        wait: &mut dyn FnMut(Option<Duration>),
+    ) {
+        let bound = until.map(|until| until.saturating_duration_since(self.now()) * self.scale);
+        wait(bound);
+    }
+
+    fn subscribe(&self, _waker: std::sync::Weak<dyn contract::clock::Wake>) {}
+}
+
+/// [`connect_hub`] with the whole connect, the hub's start and the
+/// `hub_hello` read included, bounded by `wait` on the wall clock. `connect`
+/// blocks, so it runs on a thread whose result the test receives with the
+/// deadline.
+pub(crate) fn connect_hub_within(
+    setup: &Setup,
+    hub: &Arc<Mutex<Option<HubProc>>>,
+    wait: Duration,
+) -> (Socket, Value) {
+    use contract::clock::Clock as _;
     let slot = Arc::clone(hub);
-    let mut start = move || {
-        *slot.lock().unwrap() = Some(HubProc::spawn(setup));
-        Ok(())
+    let mut serve = setup.fiber(&["hub", "serve"]);
+    let home = setup.home();
+    let (done, connected) = mpsc::channel();
+    thread::spawn(move || {
+        let mut start = move || {
+            *slot.lock().unwrap() = Some(HubProc::spawn_command(&mut serve));
+            Ok(())
+        };
+        let clock = StretchedClock {
+            anchor: SystemClock.now(),
+            scale: u32::try_from(wait.as_millis() / doors::hub::CONNECT_DEADLINE.as_millis())
+                .unwrap_or(1)
+                .max(1),
+        };
+        done.send(doors::hub::connect(&home, &mut start, &clock))
+            .unwrap();
+    });
+    let connected = match connected.recv_timeout(wait) {
+        Ok(connected) => connected.unwrap(),
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            panic!("waited {wait:?} for the hub to start and say hub_hello")
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            panic!("the hub connect thread ended without a result")
+        }
     };
-    let connected = doors::hub::connect(&setup.home(), &mut start, &SystemClock).unwrap();
     let hello = serde_json::to_value(&connected.1).unwrap();
     (Socket::from(connected.0), hello)
 }
@@ -369,42 +468,6 @@ pub(crate) fn hello() -> Response {
     ])
 }
 
-/// Waits under [`DEADLINE`] for process group `group` to empty.
-pub(crate) fn until_gone(group: u32, what: &str) {
-    let (done, gone) = mpsc::channel();
-    thread::spawn(move || {
-        while group_alive(group) {
-            thread::yield_now();
-        }
-        match done.send(()) {
-            Ok(()) | Err(mpsc::SendError(())) => {}
-        }
-    });
-    assert!(
-        gone.recv_timeout(DEADLINE).is_ok(),
-        "waited {DEADLINE:?} for {what} to empty"
-    );
-}
-
-/// Waits under [`DEADLINE`] until `done` holds for the processes whose
-/// command line contains `text`, naming `what` on expiry.
-pub(crate) fn until_matching(text: &str, what: &str, done: fn(&[u32]) -> bool) {
-    let (tx, rx) = mpsc::channel();
-    let text = text.to_owned();
-    thread::spawn(move || {
-        while !done(&fakes::matching(&text).unwrap()) {
-            thread::yield_now();
-        }
-        match tx.send(()) {
-            Ok(()) | Err(mpsc::SendError(())) => {}
-        }
-    });
-    assert!(
-        rx.recv_timeout(DEADLINE).is_ok(),
-        "waited {DEADLINE:?} for {what}"
-    );
-}
-
 /// Guards every session the hub starts in `workspace`: each carries the
 /// workspace path on its command line. Dropping it kills every process
 /// whose command line holds the path, and its process group; its watchdog
@@ -431,13 +494,14 @@ impl SessionGuard {
         }
     }
 
-    /// Waits under [`DEADLINE`] until no process's command line holds the
-    /// workspace path, then stands the guard down.
+    /// Called after the signal that every session in the workspace is ending
+    /// (its socket closed, its session_left, or the guard's SIGKILL): waits
+    /// under [`DEADLINE`] for every process holding the workspace path to
+    /// exit, then stands the guard down.
     pub(crate) fn wait_gone(mut self) {
-        until_matching(
-            &self.workspace,
-            "every process holding the workspace path to exit",
-            <[u32]>::is_empty,
+        assert!(
+            fakes::matching_exits(&self.workspace, DEADLINE),
+            "waited {DEADLINE:?} for every process holding the workspace path to exit"
         );
         self.stand_down_watchdog();
     }

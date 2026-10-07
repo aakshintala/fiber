@@ -170,7 +170,7 @@ fn durable_and_ephemeral_events_say_so() {
 /// One payload per kind, or more where the doc makes keys exclusive, with
 /// every key the doc lists for it.
 fn samples() -> Vec<(&'static str, Value)> {
-    let error = json!({"code": "timeout", "message": "m", "retry_after": 1.5,
+    let error = json!({"code": "timeout", "message": "m", "retry_after_ms": 1500,
         "provider": {"name": "p", "status": 429, "message": "slow down"}});
     let process = json!({"exit_code": 1, "signal": "SIGKILL", "timed_out": false});
     let content = json!([{"type": "text", "text": "t"},
@@ -245,49 +245,49 @@ fn samples() -> Vec<(&'static str, Value)> {
         (
             "session_status",
             json!({"name": "n", "workspace": "/w", "parent": "s0", "model": "p/m",
-            "state": "idle", "since": 1, "spend": usage, "delegates": 0, "jobs": 0}),
+            "state": "idle", "since": 1, "spend": usage, "delegates": 0, "jobs": 0, "project": "-w", "clients": 0}),
         ),
         (
             "session_status",
             json!({"name": "n", "workspace": "/w", "model": "p/m",
             "state": "idle", "since": 1, "git": {"branch": "main"},
             "context": {"tokens": 3, "window": 4}, "spend": usage,
-            "delegates": 0, "jobs": 0}),
+            "delegates": 0, "jobs": 0, "project": "-w", "clients": 0}),
         ),
         (
             "session_status",
             json!({"name": "n", "workspace": "/w", "model": "p/m",
-            "state": "idle", "since": 1, "spend": usage, "delegates": 0, "jobs": 0}),
+            "state": "idle", "since": 1, "spend": usage, "delegates": 0, "jobs": 0, "project": "-w", "clients": 0}),
         ),
         (
             "session_status",
             json!({"name": "n", "workspace": "/w", "model": "p/m",
-            "state": "streaming", "since": 1, "spend": usage, "delegates": 0, "jobs": 0}),
+            "state": "streaming", "since": 1, "spend": usage, "delegates": 0, "jobs": 0, "project": "-w", "clients": 0}),
         ),
         (
             "session_status",
             json!({"name": "n", "workspace": "/w", "model": "p/m",
             "state": "tool", "tool": "shell", "since": 1, "spend": usage,
-            "delegates": 1, "jobs": 0}),
+            "delegates": 1, "jobs": 0, "project": "-w", "clients": 0}),
         ),
         (
             "session_status",
             json!({"name": "n", "workspace": "/w", "model": "p/m",
-            "state": "retrying", "since": 1, "spend": usage, "delegates": 0, "jobs": 1}),
+            "state": "retrying", "since": 1, "spend": usage, "delegates": 0, "jobs": 1, "project": "-w", "clients": 0}),
         ),
         (
             "session_status",
             json!({"name": "n", "workspace": "/w", "model": "p/m",
             "state": "waiting",
             "waiting": {"request_id": "r", "kind": "approval", "summary": "run npm"},
-            "since": 1, "spend": usage, "delegates": 0, "jobs": 0}),
+            "since": 1, "spend": usage, "delegates": 0, "jobs": 0, "project": "-w", "clients": 0}),
         ),
         (
             "session_status",
             json!({"name": "n", "workspace": "/w", "model": "p/m",
             "state": "waiting",
             "waiting": {"request_id": "r", "kind": "question", "summary": "which file?"},
-            "since": 1, "spend": usage, "delegates": 0, "jobs": 0}),
+            "since": 1, "spend": usage, "delegates": 0, "jobs": 0, "project": "-w", "clients": 0}),
         ),
         (
             "context_added",
@@ -297,7 +297,7 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("assistant_message_delta", json!({"text": "Hel"})),
         (
             "assistant_message_completed",
-            json!({"outcome": "failed", "error": error, "attempt": 2}),
+            json!({"outcome": "failed", "error": error}),
         ),
         (
             "text_completed",
@@ -459,6 +459,7 @@ fn samples() -> Vec<(&'static str, Value)> {
         (
             "usage_recorded",
             json!({"generation_id": "g", "model": "p/m", "tokens": tokens,
+            "input_bytes": 48213, "input_media": true,
             "web_searches": 1, "cost": 0.25, "subscription": true, "extension": "e",
             "origin_session_id": "s0"}),
         ),
@@ -608,6 +609,14 @@ fn samples() -> Vec<(&'static str, Value)> {
         (
             "jobs_pending_notified",
             json!({"job_ids": ["j"], "reason": "ending"}),
+        ),
+        (
+            "command_accepted",
+            json!({"command_id": "c", "result": {"session_id": "s2"}}),
+        ),
+        (
+            "command_accepted",
+            json!({"command_id": "c", "result": {"clients": 2, "fiber_version": "0.0.0", "running": true}}),
         ),
         (
             "command_accepted",
@@ -822,7 +831,7 @@ fn a_required_key_that_may_be_null_must_be_present() {
         ("session_named", json!({"by": "person"}), "name"),
         (
             "usage_recorded",
-            json!({"generation_id": "g", "model": "p/m", "tokens": tokens}),
+            json!({"generation_id": "g", "model": "p/m", "tokens": tokens, "input_bytes": 1}),
             "cost",
         ),
     ];
@@ -855,6 +864,16 @@ fn a_required_key_that_may_be_null_must_be_present() {
             .unwrap()
             .is_some()
     );
+}
+
+#[test]
+fn a_usage_without_input_bytes_does_not_read() {
+    let tokens = json!({"input": 1, "cache_read": 0, "cache_write": {}, "output": 1});
+    let without = json!({"generation_id": "g", "model": "p/m", "tokens": tokens, "cost": null});
+    assert!(read("usage_recorded", without.clone()).is_err());
+    let mut with = without;
+    with["input_bytes"] = json!(1);
+    assert!(read("usage_recorded", with).unwrap().is_some());
 }
 
 #[test]
@@ -975,5 +994,29 @@ fn every_other_result_still_reads_as_its_own_variant() {
     assert!(matches!(
         result_of(json!({"command_id": "c", "result": {"output": "o", "process": process}})),
         CommandResult::Shell { .. }
+    ));
+}
+
+#[test]
+fn a_session_id_result_reads_as_start_and_a_status_object_as_status() {
+    assert_eq!(
+        result_of(json!({"command_id": "c", "result": {"session_id": "s2"}})),
+        CommandResult::Start {
+            session_id: SessionId("s2".into())
+        }
+    );
+    assert_eq!(
+        result_of(
+            json!({"command_id": "c", "result": {"clients": 2, "fiber_version": "0.0.0", "running": true}})
+        ),
+        CommandResult::Status {
+            running: true,
+            fiber_version: "0.0.0".into(),
+            clients: 2,
+        }
+    );
+    assert!(matches!(
+        result_of(json!({"command_id": "c", "result": {"new_session_id": "s2"}})),
+        CommandResult::Rewind { .. }
     ));
 }

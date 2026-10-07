@@ -26,6 +26,9 @@ use serde_json::{Value, json};
 /// How long one `fiber` run may take.
 const DEADLINE: Duration = Duration::from_secs(20);
 
+/// How long a process group may take to empty after `fiber` exits.
+const GROUP_DEADLINE: Duration = Duration::from_secs(5);
+
 /// The fixture extension's name.
 const FIXTURE: &str = "fiber.test/notes";
 
@@ -118,7 +121,7 @@ impl Setup {
             &json!({
                 "name": "fake",
                 "credential": {"env": "FIBER_TEST_FAKE_KEY"},
-                "models": [{"id": "m", "protocol": "openai-responses", "base_url": format!("{}/v1", server.url())}]
+                "models": [{"id": "m", "protocol": "openai-responses", "base_url": format!("{}/v1", server.url()), "context_window": 100000}]
             })
             .to_string(),
         );
@@ -173,7 +176,7 @@ impl Setup {
             }
         };
         assert!(
-            !fakes::kill_group(group, "0").unwrap(),
+            fakes::group_empties(group, GROUP_DEADLINE),
             "`fiber` left a process in its group behind"
         );
         std::mem::forget(guard);
@@ -415,7 +418,7 @@ fn the_model_addendum_and_the_extension_prompt_reach_the_system_prompt() {
             "name": "fake",
             "credential": {"env": "FIBER_TEST_FAKE_KEY"},
             "models": [{"id": "m", "protocol": "openai-responses",
-                        "base_url": format!("{}/v1", server.url()),
+                        "base_url": format!("{}/v1", server.url()), "context_window": 100000,
                         "prompt_addendum": "prompts/m.md"}]
         })
         .to_string(),

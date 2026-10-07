@@ -361,7 +361,11 @@ set ("What a repository may set"), before it writes anything.
 `fiber config set model <ref>` also checks the reference against the cached
 model list, by the rules in `docs/model-routing.md`, "Naming a model". A
 reference that matches nothing fails with `no_model` and names the closest
-matches. With no cached list, the value is accepted.
+matches. With no cached list, the value is accepted. A reference to a model
+left out with `model_unconfigured` (`docs/model-routing.md`,
+"A per-account host") is written: Fiber prints that notice on stderr as one
+line, `fiber: ` and its message, and exits 0, so the person can set the host
+next.
 
 `cache.warm_cap` is refused with `config_invalid` when it is 12 or more
 (`docs/prompt-cache.md`, "Warming while idle"), whether
@@ -517,8 +521,8 @@ provider extension declares") lists:
 - A `{name}` in a `base_url` is a per-account host. Its value is the
   extension's setting of that name, which only the person sets; `placeholders`
   may name an environment variable read when the setting is unset. A model
-  whose placeholder has no value is left out with the notice
-  `model_unconfigured` (`docs/model-routing.md`, "A per-account host").
+  whose placeholder has no value, or a value that is not a host, is left out
+  with the notice `model_unconfigured` (`docs/model-routing.md`, "A per-account host").
 - `web_search` is the vendor's hosted-search tool type as it is sent; absent,
   the model hosts no search. A type its protocol does not read back leaves
   the model out with `model_invalid` (`docs/model-routing.md`, "Hosted web

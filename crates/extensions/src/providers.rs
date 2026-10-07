@@ -24,6 +24,10 @@ mod placeholders;
 #[derive(Clone, Default)]
 pub struct Providers {
     by_name: BTreeMap<String, ProviderData>,
+    /// Each model left out by [`Providers::fill_placeholders`], by
+    /// provider name: its id and its `model_unconfigured` message, in
+    /// model order. Never listed: only `resolve` reads it.
+    unconfigured: BTreeMap<String, Vec<(String, String)>>,
     /// The extension whose data or `models()` supplied each provider's
     /// current models, by provider name.
     extension_of: BTreeMap<String, String>,
@@ -64,8 +68,9 @@ impl Model<'_> {
     }
 }
 
-/// Removes every model whose `web_search` its protocol does not read or
-/// whose `extra_body` names a field Fiber builds, returning one
+/// Removes every model that declares no `context_window`, whose `web_search`
+/// its protocol does not read or whose `extra_body` names a field Fiber
+/// builds, returning one
 /// `model_invalid` notice per reason, in model order. A model it keeps is
 /// unchanged.
 pub fn leave_out_invalid(
@@ -135,6 +140,17 @@ pub fn leave_out_invalid(
             });
             invalid = true;
         }
+        if model.context_window.is_none_or(|window| window == 0) {
+            notices.push(Notice {
+                code: ErrorCode::ModelInvalid,
+                message: format!(
+                    "The model `{provider}/{}` declares no `context_window`.",
+                    model.id
+                ),
+                extension: Some(extension.to_owned()),
+            });
+            invalid = true;
+        }
         if !invalid {
             kept.push(model);
         }
@@ -169,6 +185,42 @@ fn read_addenda(
         }
     }
     Ok(addenda)
+}
+
+/// A model named by [`Providers::resolve`]: one it lists, or one left
+/// out with `model_unconfigured`.
+#[derive(Clone)]
+enum Found<'a> {
+    /// A configured model.
+    Model(Model<'a>),
+    /// A model [`Providers::fill_placeholders`] left out, with its
+    /// reference and its notice's message.
+    Unconfigured {
+        /// `provider/model`.
+        reference: String,
+        /// Its `model_unconfigured` message.
+        message: &'a str,
+    },
+}
+
+impl<'a> Found<'a> {
+    /// Its stored reference, `provider/model`.
+    fn reference(&self) -> String {
+        match self {
+            Self::Model(model) => model.reference(),
+            Self::Unconfigured { reference, .. } => reference.clone(),
+        }
+    }
+
+    /// The session's model, or the `model_unconfigured` naming it.
+    fn into_result(self) -> Result<Model<'a>, Error> {
+        match self {
+            Self::Model(model) => Ok(model),
+            Self::Unconfigured { message, .. } => Err(Error::Unconfigured {
+                message: message.to_owned(),
+            }),
+        }
+    }
 }
 
 impl Providers {
@@ -335,8 +387,9 @@ impl Providers {
     /// Fills every `{name}` in every model's `base_url` from the provider's
     /// extension's setting `name`, never the repository's file, else the
     /// environment variable `placeholders.<name>.env` names, read through
-    /// `env` (`docs/model-routing.md`, "A per-account host"). A model with a
-    /// placeholder that has no value is removed, with one `model_unconfigured`
+    /// `env` (`docs/model-routing.md`, "A per-account host"). A value fills
+    /// only when it is a host; a model with a placeholder that has no value
+    /// or a value that is not a host is removed, with one `model_unconfigured`
     /// notice. Runs once, after `load` and every `add_lua`, before a model is
     /// chosen or listed; the model cache keeps the template. An extension
     /// settings file that cannot be read is `Error::Config`.
@@ -358,26 +411,41 @@ impl Providers {
                 .get(&provider_name)
                 .map(|data| data.placeholders.clone())
                 .unwrap_or_default();
+            let mut left_out = Vec::new();
             if let Some(data) = self.by_name.get_mut(&provider_name) {
                 let mut kept = Vec::new();
                 for mut model in data.models.drain(..) {
                     let template = model.base_url.clone();
-                    let lookup = |name: &str| -> Result<Option<Value>, ConfigError> {
+                    let lookup = |name: &str| -> Result<
+                        Option<(String, placeholders::Source)>,
+                        ConfigError,
+                    > {
                         match config.extension_setting(&extension, &[], name)? {
                             Some(Value::String(value)) if !value.is_empty() => {
-                                Ok(Some(Value::String(value)))
+                                Ok(Some((value, placeholders::Source::Setting)))
                             }
-                            _ => {
+                            // Absent, JSON null, or an empty string leaves the
+                            // environment fallback in play. Any other present
+                            // value is the setting's: it is never a host, so it
+                            // fills as `Source::Setting` without consulting the
+                            // environment. The stand-in never reaches a URL or a
+                            // notice: `fill` reports it as not-a-host, and that
+                            // notice never repeats the value.
+                            Some(Value::String(_)) | Some(Value::Null) | None => {
                                 if let Some(variable) = placeholders
                                     .get(name)
                                     .and_then(|placeholder| placeholder.env.as_deref())
                                     && let Some(value) = env(variable)
                                     && !value.is_empty()
                                 {
-                                    return Ok(Some(Value::String(value)));
+                                    return Ok(Some((
+                                        value,
+                                        placeholders::Source::Env(variable.to_owned()),
+                                    )));
                                 }
                                 Ok(None)
                             }
+                            Some(_) => Ok(Some((" ".to_owned(), placeholders::Source::Setting))),
                         }
                     };
                     match placeholders::fill(&template, &lookup)? {
@@ -389,17 +457,33 @@ impl Providers {
                             let variable = placeholders
                                 .get(&name)
                                 .and_then(|placeholder| placeholder.env.as_deref());
-                            notices.push(placeholders::unconfigured(
+                            let notice = placeholders::unconfigured(
                                 &provider_name,
                                 &model.id,
                                 &extension,
                                 &name,
                                 variable,
-                            ));
+                            );
+                            left_out.push((model.id.clone(), notice.message.clone()));
+                            notices.push(notice);
+                        }
+                        placeholders::Filled::NotHost { name, source } => {
+                            let notice = placeholders::not_a_host(
+                                &provider_name,
+                                &model.id,
+                                &extension,
+                                &name,
+                                &source,
+                            );
+                            left_out.push((model.id.clone(), notice.message.clone()));
+                            notices.push(notice);
                         }
                     }
                 }
                 data.models = kept;
+            }
+            if !left_out.is_empty() {
+                self.unconfigured.insert(provider_name, left_out);
             }
         }
         Ok(notices)
@@ -456,7 +540,10 @@ impl Providers {
 
     /// A model as a person types it: the exact `provider/model`, then the
     /// same with a `:<thinking level>` suffix taken off, then a bare id that
-    /// exactly one installed provider has.
+    /// exactly one installed provider has. The configured and unconfigured
+    /// models are matched together: naming one left out with
+    /// `model_unconfigured` is that error, not `no_model`, and a bare id
+    /// two providers share is `model_ambiguous` whatever mix they are.
     pub fn resolve(&self, typed: &str) -> Result<Model<'_>, Error> {
         let (rest, thinking) = Self::split_thinking(typed);
         let mut tries = vec![(typed, None)];
@@ -465,32 +552,48 @@ impl Providers {
         }
         for (text, thinking) in &tries {
             if let Some(found) = self.exact(text, *thinking) {
-                return Ok(found);
+                return found.into_result();
             }
         }
         for (text, thinking) in &tries {
-            let matches: Vec<Model<'_>> = self
-                .by_name
-                .values()
-                .flat_map(|provider| {
-                    provider
-                        .models
-                        .iter()
-                        .filter(|model| model.id == *text)
-                        .map(move |model| Model {
-                            provider,
-                            model,
-                            thinking: *thinking,
-                        })
-                })
-                .collect();
+            let matches: Vec<Found<'_>> =
+                self.by_name
+                    .values()
+                    .flat_map(|provider| {
+                        let configured = provider
+                            .models
+                            .iter()
+                            .filter(|model| model.id == *text)
+                            .map(move |model| {
+                                Found::Model(Model {
+                                    provider,
+                                    model,
+                                    thinking: *thinking,
+                                })
+                            });
+                        let unconfigured =
+                            self.unconfigured
+                                .get(provider.name.as_str())
+                                .map(|left_out| {
+                                    left_out.iter().filter(|(id, _)| id == text).map(
+                                        |(id, message)| Found::Unconfigured {
+                                            reference: format!("{}/{id}", provider.name),
+                                            message,
+                                        },
+                                    )
+                                })
+                                .into_iter()
+                                .flatten();
+                        configured.chain(unconfigured)
+                    })
+                    .collect();
             match matches.as_slice() {
                 [] => {}
-                [one] => return Ok(*one),
+                [one] => return one.clone().into_result(),
                 [..] => {
                     return Err(Error::Ambiguous {
                         id: (*text).into(),
-                        matches: matches.iter().map(Model::reference).collect(),
+                        matches: matches.iter().map(Found::reference).collect(),
                     });
                 }
             }
@@ -508,14 +611,28 @@ impl Providers {
         })
     }
 
-    fn exact(&self, text: &str, thinking: Option<ThinkingLevel>) -> Option<Model<'_>> {
+    /// The exact `provider/model` in `text`: its configured model first,
+    /// then its model left out with `model_unconfigured`.
+    fn exact(&self, text: &str, thinking: Option<ThinkingLevel>) -> Option<Found<'_>> {
         let (name, id) = text.split_once('/')?;
         let provider = self.by_name.get(name)?;
-        let model = provider.models.iter().find(|m| m.id == id)?;
-        Some(Model {
-            provider,
-            model,
-            thinking,
+        if let Some(model) = provider.models.iter().find(|m| m.id == id) {
+            return Some(Found::Model(Model {
+                provider,
+                model,
+                thinking,
+            }));
+        }
+        let message = self
+            .unconfigured
+            .get(name)?
+            .iter()
+            .find(|(left, _)| left == id)?
+            .1
+            .as_str();
+        Some(Found::Unconfigured {
+            reference: format!("{name}/{id}"),
+            message,
         })
     }
 }

@@ -2,6 +2,8 @@
 //! that reads its commands and answers them, and, once it has subscribed, a
 //! thread that writes its events.
 
+mod level;
+
 use std::io::{BufRead, BufReader, Write};
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
@@ -16,8 +18,10 @@ use contract::events::{CommandAccepted, CommandRejected, CommandResult, Event};
 use contract::inbox::{Ack, Answer, Delivery, Message, Rejection};
 use contract::shapes::{ContentPart, Origin, Sender};
 use contract::{CommandId, Envelope, ErrorCode, SCHEMA_VERSION, SessionId};
-use log::Injector;
 use serde_json::{Map, Value};
+
+#[cfg(test)]
+use log::Injector;
 
 use crate::session::{self, Gate};
 
@@ -26,8 +30,8 @@ pub(crate) const STOP: &str = "doors.stop";
 
 const MALFORMED: &str = "A command is one JSON object per line, with a string `id` and `command`.";
 const NOT_SUBSCRIBED: &str = "Send `subscribe` first.";
-const ALREADY: &str = "This connection is already subscribed.";
 const DUPLICATE: &str = "A command with this id was already accepted.";
+const ALREADY: &str = "This connection is already subscribed at this level.";
 const UNFIT: &str = "The arguments do not fit this command.";
 const PAST: &str = "`from_seq` is past the latest line.";
 const REVERSED: &str = "`to_seq` is before `from_seq`.";
@@ -45,14 +49,15 @@ fn not_built(command: &str) -> String {
     format!("`{command}` is not built in this Fiber yet.")
 }
 
-struct Conn {
-    id: u64,
-    gate: Arc<Gate>,
+pub(crate) struct Conn {
+    pub(crate) id: u64,
+    pub(crate) gate: Arc<Gate>,
     direct: Option<UnixStream>,
     writer: Option<Box<dyn Write + Send>>,
     subscribed: bool,
     full: bool,
-    injector: Option<Injector>,
+    outbox: Option<level::Outbox>,
+    switches: Option<mpsc::Sender<level::Switch>>,
     gone: bool,
 }
 
@@ -90,7 +95,8 @@ pub(crate) fn serve_connection(
         writer: Some(writer),
         subscribed: false,
         full: false,
-        injector: None,
+        outbox: None,
+        switches: None,
         gone: false,
     };
     let mut read = BufReader::new(stream);
@@ -113,13 +119,14 @@ pub(crate) fn serve_connection(
     if conn.full {
         conn.gate.detach();
     }
-    if let Some(injector) = conn.injector.take() {
-        stop_writer(&injector, &conn.gate.session_id);
+    if let Some(outbox) = conn.outbox.take() {
+        outbox.stop(&conn.gate.session_id);
     }
 }
 
 /// Tells `injector`'s writer to exit. The line is kept when the queue is
 /// full, so a disconnect still reaches a writer that has fallen behind.
+#[cfg(test)]
 pub(crate) fn stop_writer(injector: &Injector, session: &SessionId) {
     injector.push_kept(control_line(session, STOP, 0));
 }
@@ -167,10 +174,6 @@ fn on_line(bytes: &[u8], conn: &mut Conn) {
             ErrorCode::NotSubscribed,
             NOT_SUBSCRIBED,
         );
-        return;
-    }
-    if conn.subscribed && line.command == "subscribe" {
-        reject(conn, Some(line.id), ErrorCode::InvalidArguments, ALREADY);
         return;
     }
     if !built(&line.command) {
@@ -244,15 +247,37 @@ fn built(command: &str) -> bool {
             | "job_stop"
             | "background"
             | "handoff"
+            | "command"
     )
 }
 
 fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
     let id = line.id;
     match line.command {
-        Command::Subscribe(args) => subscribe(conn, id, args.level),
+        Command::Subscribe(args) => {
+            if conn.subscribed {
+                level::change(conn, id, args.level);
+            } else {
+                subscribe(conn, id, args.level);
+            }
+        }
         Command::Tools => {
             let tools = conn.gate.tools.clone();
+            // The log is dropped once read, so this connection does not
+            // hold the session lock. Without a log the session is closing
+            // and the answer keeps its byte sizes.
+            let rate = conn.gate.log.upgrade().map(|log| {
+                let rate = log.rate();
+                drop(log);
+                rate
+            });
+            let tools = tools
+                .into_iter()
+                .map(|mut info| {
+                    info.tokens = rate.as_ref().and_then(|rate| rate.tokens(info.bytes));
+                    info
+                })
+                .collect();
             accept(conn, id, Some(CommandResult::Tools { tools }));
         }
         Command::Commands => {
@@ -299,10 +324,7 @@ fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
         }
         Command::Cancel => cancel(conn, id),
         Command::Shell(args) => shell(conn, id, &args, name),
-        Command::Close => {
-            let ack = inbox_ack(conn, id);
-            conn.gate.deliver(Delivery::Close(ack));
-        }
+        Command::Close(args) => crate::close::run(conn, id, args.now),
         Command::Handoff(args) => {
             let ack = inbox_ack(conn, id.clone());
             conn.gate.deliver(Delivery::Handoff(id, args, ack));
@@ -315,13 +337,13 @@ fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
             let moving = conn.gate.jobs().is_some_and(|jobs| jobs.background() > 0);
             answer(conn, id, moving, NO_CALL);
         }
+        Command::Command(args) => crate::run_command::run(conn, id, &args),
         Command::Message(_)
         | Command::Reload
         | Command::Model(_)
         | Command::Credential(_)
         | Command::Name(_)
-        | Command::Rewind(_)
-        | Command::Command(_) => unknown(conn, id, name),
+        | Command::Rewind(_) => unknown(conn, id, name),
     }
 }
 
@@ -392,51 +414,40 @@ fn shell(conn: &mut Conn, id: CommandId, args: &contract::commands::Shell, name:
     }
 }
 
-/// Queues a full subscriber's latest `session_status` and `steering_queue`
-/// after its fold. Both are ephemeral, so the fold does not have them and
-/// a catch-up cannot recover them: they are pushed kept, like every line
-/// doors itself queues.
-pub(crate) fn queue_latest(injector: &Injector, status: Option<Envelope>, queue: Option<Envelope>) {
-    for line in [status, queue].into_iter().flatten() {
-        injector.push_kept(line);
-    }
-}
-
 fn subscribe(conn: &mut Conn, id: CommandId, level: contract::commands::SubscribeLevel) {
     let summary = matches!(level, contract::commands::SubscribeLevel::Summary);
-    // The watcher is registered before `latest` is read. A line written in
-    // between is queued and may also be in `latest`; the latest wins. The
-    // log is dropped here so this connection does not hold the session lock.
-    let (watcher, status, queue, extensions) = {
+    // The watcher is registered and its seed queued under the one log lock
+    // that `append` takes, so no later line can be queued before an older
+    // snapshot. The log is dropped here so this connection does not hold
+    // the session lock.
+    let (watcher, status, extensions) = {
         let Some(log) = conn.gate.log.upgrade() else {
             reject(conn, Some(id), ErrorCode::Closing, ENDED);
             return;
         };
-        let watcher = if summary {
-            log.watch()
+        if summary {
+            let watcher = log.watch();
+            let status = log.latest("session_status");
+            let extensions = log.latest("extensions_loaded");
+            (watcher, status, extensions)
         } else {
-            match log.watch_all() {
+            let watcher = match log.watch_all_seeded() {
                 Ok(watcher) => watcher,
                 Err(_) => {
                     reject(conn, Some(id), ErrorCode::InvalidArguments, UNFIT);
                     return;
                 }
-            }
-        };
-        let status = log.latest("session_status");
-        let queue = if summary {
-            None
-        } else {
-            log.latest("steering_queue")
-        };
-        let extensions = if summary {
-            log.latest("extensions_loaded")
-        } else {
-            None
-        };
-        (watcher, status, queue, extensions)
+            };
+            // Probe point: the watcher is obtained and its seed queued under
+            // the one log lock, before the writer starts.
+            #[cfg(test)]
+            conn.gate
+                .note(crate::session::tests::Probe::SubscribeSeeded);
+            (watcher, None, None)
+        }
     };
     let injector = watcher.injector();
+    let outbox = level::Outbox::new(injector.clone());
     // The acknowledgement is written here, before the writer starts, so it
     // is the first line the client reads.
     accept(conn, id, None);
@@ -452,12 +463,10 @@ fn subscribe(conn: &mut Conn, id: CommandId, level: contract::commands::Subscrib
                 return;
             }
         }
-    } else {
-        queue_latest(&injector, status, queue);
     }
     conn.subscribed = true;
     conn.full = !summary;
-    conn.injector = Some(injector);
+    conn.outbox = Some(outbox);
     if conn.full {
         // The watcher is registered, so this connection receives the line.
         conn.gate.attach();
@@ -465,7 +474,13 @@ fn subscribe(conn: &mut Conn, id: CommandId, level: contract::commands::Subscrib
     let Some(stream) = conn.writer.take() else {
         return;
     };
-    spawn_writer(Arc::clone(&conn.gate), conn.id, watcher, stream, summary);
+    conn.switches = Some(spawn_writer(
+        Arc::clone(&conn.gate),
+        conn.id,
+        watcher,
+        stream,
+        summary,
+    ));
     // The writer is the only writer from here.
     drop(conn.direct.take());
 }
@@ -516,7 +531,7 @@ fn history(
         .collect())
 }
 
-fn accept(conn: &mut Conn, id: CommandId, result: Option<CommandResult>) {
+pub(crate) fn accept(conn: &mut Conn, id: CommandId, result: Option<CommandResult>) {
     send(
         conn,
         Event::CommandAccepted(CommandAccepted {
@@ -529,7 +544,7 @@ fn accept(conn: &mut Conn, id: CommandId, result: Option<CommandResult>) {
 /// A rejection frees the id for a retry, except one that never reserved it:
 /// `malformed` (the line's id may belong to an accepted command) and
 /// `duplicate_command` (the id is the earlier command's).
-fn reject(conn: &mut Conn, id: Option<CommandId>, code: ErrorCode, message: &str) {
+pub(crate) fn reject(conn: &mut Conn, id: Option<CommandId>, code: ErrorCode, message: &str) {
     if let Some(id) = &id
         && !matches!(code, ErrorCode::Malformed | ErrorCode::DuplicateCommand)
     {
@@ -547,8 +562,8 @@ fn reject(conn: &mut Conn, id: Option<CommandId>, code: ErrorCode, message: &str
 
 fn send(conn: &mut Conn, event: Event) {
     let line = session::envelope(&conn.gate.session_id, conn.gate.clock.as_ref(), &event);
-    if let Some(injector) = &conn.injector {
-        injector.push_kept(line);
+    if let Some(outbox) = &conn.outbox {
+        outbox.push_kept(line);
         return;
     }
     let Some(direct) = conn.direct.as_mut() else {
@@ -568,8 +583,8 @@ fn unknown(conn: &mut Conn, id: CommandId, command: &str) {
     );
 }
 
-fn inbox_ack(conn: &Conn, id: CommandId) -> Ack {
-    let Some(injector) = conn.injector.clone() else {
+pub(crate) fn inbox_ack(conn: &Conn, id: CommandId) -> Ack {
+    let Some(outbox) = conn.outbox.clone() else {
         return guard(|_| {});
     };
     let gate = Arc::clone(&conn.gate);
@@ -588,7 +603,7 @@ fn inbox_ack(conn: &Conn, id: CommandId) -> Ack {
                 })
             }
         };
-        injector.push_kept(session::envelope(
+        outbox.push_kept(session::envelope(
             &gate.session_id,
             gate.clock.as_ref(),
             &event,
@@ -647,10 +662,12 @@ pub(crate) fn spawn_writer(
     watcher: log::Watcher,
     stream: Box<dyn Write + Send>,
     summary: bool,
-) {
+) -> mpsc::Sender<level::Switch> {
     gate.begin_writer();
     let ended = Arc::clone(&gate);
+    let failed = Arc::clone(&gate);
     let (tx, rx) = mpsc::channel();
+    let (switch_tx, switches) = mpsc::channel();
     match thread::Builder::new()
         .name("writer".to_owned())
         .spawn(move || {
@@ -659,7 +676,12 @@ pub(crate) fn spawn_writer(
             if rx.recv().is_err() {
                 return;
             }
-            write_loop(watcher, stream, summary);
+            if write_loop(watcher, stream, summary, switches) == Ended::Failed {
+                // The watcher failed: the reader and socket stay open, so
+                // the connection is shut and the client sees EOF after
+                // every line before the bad page.
+                failed.shut(id);
+            }
         }) {
         Ok(handle) => {
             gate.push_writer(id, handle);
@@ -667,6 +689,7 @@ pub(crate) fn spawn_writer(
         }
         Err(_) => gate.end_writer(),
     }
+    switch_tx
 }
 
 struct WriterEnd(Arc<Gate>);
@@ -677,24 +700,53 @@ impl Drop for WriterEnd {
     }
 }
 
+/// How a writer ended: Failed on a watcher error, else Done. A failed
+/// write means the client already went, and the log's end is the session
+/// close path, which reaps on its own: neither shuts the connection.
+#[derive(PartialEq, Eq)]
+pub(crate) enum Ended {
+    Done,
+    Failed,
+}
+
 pub(crate) fn write_loop(
-    mut watcher: log::Watcher,
+    watcher: log::Watcher,
     mut stream: Box<dyn Write + Send>,
     summary: bool,
-) {
+    switches: mpsc::Receiver<level::Switch>,
+) -> Ended {
+    let mut writing = level::Writing {
+        watcher,
+        summary,
+        cutoff: 0,
+        written: None,
+    };
     loop {
-        let line = match watcher.recv() {
+        let line = match writing.watcher.recv() {
             Ok(Some(line)) => line,
-            Ok(None) | Err(_) => return,
+            Ok(None) => return Ended::Done,
+            Err(_) => return Ended::Failed,
         };
         if line.kind == STOP {
-            return;
+            return Ended::Done;
         }
-        if summary && !summary_line(&line.kind) {
+        if line.kind == level::LEVEL {
+            if level::apply(&mut writing, &switches, stream.as_mut()).is_err() {
+                return Ended::Failed;
+            }
+            continue;
+        }
+        if writing.summary && !summary_line(&line.kind) {
+            continue;
+        }
+        if line.seq.is_some_and(|seq| seq.0 < writing.cutoff) {
             continue;
         }
         if write_line(stream.as_mut(), &line).is_err() {
-            return;
+            return Ended::Done;
+        }
+        if let Some(seq) = line.seq {
+            writing.written = Some(seq.0);
         }
     }
 }

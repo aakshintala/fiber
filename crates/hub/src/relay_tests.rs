@@ -15,6 +15,47 @@ use serde_json::{Value, json};
 use super::*;
 
 #[test]
+fn a_stale_relay_never_overwrites_a_reconnects_subscription() {
+    fn entry(session: &str, epoch: u64) -> Relay {
+        let (writer, _) = UnixStream::pair().unwrap();
+        Relay {
+            session: session.to_owned(),
+            epoch,
+            writer,
+            kept: Kept::default(),
+        }
+    }
+    let line = |id: &str, level: &str| {
+        json!({"id": id, "command": "subscribe", "args": {"level": level}})
+            .as_object()
+            .unwrap()
+            .clone()
+    };
+    let sid = "s_aaaaaaaaaaaaaaaa";
+    let mut relays = Relays::default();
+    // The first relay accepts `full`; a failed write drops its entry and
+    // a reconnect mints the next epoch.
+    let stale = relays.mint();
+    relays.entries.push(entry(sid, stale));
+    relays.keep(sid, &line("c_1", "full"));
+    relays.entries.remove(0);
+    let fresh = relays.mint();
+    assert_ne!(fresh, stale);
+    relays.entries.push(entry(sid, fresh));
+    // The replacement accepts `summary` first; the stale relay's buffered
+    // `full` acknowledgement arrives after. Forced order, no sleeps.
+    relays.accepted(sid, fresh, line("c_2", "summary"));
+    assert_eq!(relays.subscription(sid), Some(line("c_2", "summary")));
+    relays.accepted(sid, stale, line("c_1", "full"));
+    assert_eq!(
+        relays.subscription(sid),
+        Some(line("c_2", "summary")),
+        "the stale acknowledgement keeps the replacement's level"
+    );
+    assert_eq!(relays.subscribed.len(), 1, "one entry per session");
+}
+
+#[test]
 fn a_stale_relay_never_drops_a_reconnect_to_the_same_session() {
     fn entry(epoch: u64) -> Relay {
         let (writer, _) = UnixStream::pair().unwrap();
@@ -92,6 +133,83 @@ fn only_the_first_subscribe_for_a_session_is_kept() {
 }
 
 #[test]
+fn an_accepted_subscribe_replaces_the_kept_one() {
+    fn entry(session: &str, epoch: u64) -> Relay {
+        let (writer, _) = UnixStream::pair().unwrap();
+        Relay {
+            session: session.to_owned(),
+            epoch,
+            writer,
+            kept: Kept::default(),
+        }
+    }
+    let line = |id: &str, command: &str| {
+        json!({"id": id, "command": command, "args": {"level": "full"}})
+            .as_object()
+            .unwrap()
+            .clone()
+    };
+    let mut relays = Relays::default();
+    let first = relays.mint();
+    relays.entries.push(entry("s_aaaaaaaaaaaaaaaa", first));
+    relays.keep("s_aaaaaaaaaaaaaaaa", &line("c_1", "subscribe"));
+    relays.accepted("s_aaaaaaaaaaaaaaaa", first, line("c_2", "subscribe"));
+    assert_eq!(
+        relays.subscription("s_aaaaaaaaaaaaaaaa"),
+        Some(line("c_2", "subscribe"))
+    );
+    assert_eq!(relays.subscribed.len(), 1, "one entry per session");
+    // Another session's entry is added or replaced on its own.
+    let second = relays.mint();
+    relays.entries.push(entry("s_bbbbbbbbbbbbbbbb", second));
+    relays.accepted("s_bbbbbbbbbbbbbbbb", second, line("c_3", "subscribe"));
+    assert_eq!(
+        relays.subscription("s_bbbbbbbbbbbbbbbb"),
+        Some(line("c_3", "subscribe"))
+    );
+    assert_eq!(relays.subscribed.len(), 2);
+    relays.accepted("s_bbbbbbbbbbbbbbbb", second, line("c_4", "subscribe"));
+    assert_eq!(
+        relays.subscription("s_bbbbbbbbbbbbbbbb"),
+        Some(line("c_4", "subscribe"))
+    );
+    assert_eq!(relays.subscribed.len(), 2);
+    assert_eq!(
+        relays.subscription("s_aaaaaaaaaaaaaaaa"),
+        Some(line("c_2", "subscribe"))
+    );
+}
+
+#[test]
+fn an_accepted_command_that_is_not_subscribe_changes_nothing() {
+    let line = |id: &str, command: &str| {
+        json!({"id": id, "command": command, "args": {"level": "full"}})
+            .as_object()
+            .unwrap()
+            .clone()
+    };
+    let mut relays = Relays::default();
+    let epoch = relays.mint();
+    relays.entries.push({
+        let (writer, _) = UnixStream::pair().unwrap();
+        Relay {
+            session: "s_aaaaaaaaaaaaaaaa".to_owned(),
+            epoch,
+            writer,
+            kept: Kept::default(),
+        }
+    });
+    relays.accepted("s_aaaaaaaaaaaaaaaa", epoch, line("c_1", "prompt"));
+    assert_eq!(relays.subscription("s_aaaaaaaaaaaaaaaa"), None);
+    relays.keep("s_aaaaaaaaaaaaaaaa", &line("c_2", "subscribe"));
+    relays.accepted("s_aaaaaaaaaaaaaaaa", epoch, line("c_3", "prompt"));
+    assert_eq!(
+        relays.subscription("s_aaaaaaaaaaaaaaaa"),
+        Some(line("c_2", "subscribe"))
+    );
+}
+
+#[test]
 fn only_an_acknowledgement_of_the_replayed_id_is_dropped() {
     let line = |kind: &str, id: &str| {
         let mut bytes = serde_json::to_vec(&json!({
@@ -120,22 +238,20 @@ fn an_acknowledgement_names_its_command_and_whether_it_is_closing() {
     let closing = json!({"command_id": "c_1", "code": "closing", "message": "m"});
     assert_eq!(
         acknowledgement(&line("command_rejected", closing.clone())),
-        Some(("c_1".to_owned(), true))
+        Some(("c_1".to_owned(), Verdict::Closing))
     );
-    // Accepted, or rejected with another code: an acknowledgement, not
-    // closing.
     assert_eq!(
         acknowledgement(&line("command_accepted", closing.clone())),
-        Some(("c_1".to_owned(), false))
+        Some(("c_1".to_owned(), Verdict::Accepted))
     );
     let other = json!({"command_id": "c_1", "code": "busy", "message": "m"});
     assert_eq!(
         acknowledgement(&line("command_rejected", other)),
-        Some(("c_1".to_owned(), false))
+        Some(("c_1".to_owned(), Verdict::Rejected))
     );
     assert_eq!(
         acknowledgement(&line("command_rejected", json!({"command_id": "c_1"}))),
-        Some(("c_1".to_owned(), false))
+        Some(("c_1".to_owned(), Verdict::Rejected))
     );
     // No acknowledgement at all.
     assert_eq!(acknowledgement(&line("session_status", closing)), None);
@@ -152,4 +268,59 @@ fn an_acknowledgement_names_its_command_and_whether_it_is_closing() {
         acknowledgement(&serde_json::to_vec(&json!({"payload": {"command_id": "c_1"}})).unwrap()),
         None
     );
+}
+
+#[test]
+fn an_accepted_prompt_ack_settles_to_nothing() {
+    let held = fakes::TempDir::new("rs");
+    let dir = held.path().join("h");
+    std::fs::create_dir_all(&dir).unwrap();
+    let clock = fakes::clock::FakeClock::new();
+    let timed: std::sync::Arc<dyn contract::clock::Clock> = clock;
+    let hub = crate::connection::Hub::new(
+        &dir,
+        "0.0.0",
+        std::sync::Arc::new(crate::fake::FakeStarter::hang(&dir)),
+        std::sync::Arc::clone(&timed),
+        crate::diag::Diag::open(&dir, timed),
+    );
+    let sid = "s_aaaaaaaaaaaaaaaa";
+    let command = |id: &str, command: &str| {
+        json!({"id": id, "command": command, "args": {}})
+            .as_object()
+            .unwrap()
+            .clone()
+    };
+    let ack = |id: &str| {
+        serde_json::to_vec(&json!({
+            "kind": "command_accepted",
+            "payload": {"command_id": id},
+        }))
+        .unwrap()
+    };
+    // The kept subscription stays what the connection first sent: an
+    // accepted prompt is not a level, so settling it changes nothing.
+    let mut relays = Relays::default();
+    let subscribed = command("c_0", "subscribe");
+    relays.keep(sid, &subscribed);
+    let kept: Kept = std::sync::Arc::new(std::sync::Mutex::new(vec![(
+        "c_1".to_owned(),
+        command("c_1", "prompt"),
+    )]));
+    assert!(settle(&ack("c_1"), &kept, &hub, sid, false).is_none());
+    assert!(kept.lock().unwrap().is_empty(), "the ack is consumed");
+    assert_eq!(
+        relays.subscription(sid),
+        Some(subscribed),
+        "no replacement to replay on a reconnect"
+    );
+    // The subscribe path still replaces: the positive fact this feature ran.
+    let kept: Kept = std::sync::Arc::new(std::sync::Mutex::new(vec![(
+        "c_2".to_owned(),
+        command("c_2", "subscribe"),
+    )]));
+    match settle(&ack("c_2"), &kept, &hub, sid, false) {
+        Some(Settled::Subscribed(line)) => assert_eq!(line, command("c_2", "subscribe")),
+        settled => panic!("an accepted subscribe replaces, got {}", settled.is_some()),
+    }
 }

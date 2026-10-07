@@ -732,7 +732,7 @@ fn failed_line(id: &str) -> contract::jobs::JobRecord {
         error: Some(Failure {
             code: ErrorCode::NonzeroExit,
             message: "Exit code 1.".into(),
-            retry_after: None,
+            retry_after_ms: None,
             provider: None,
         }),
         process: Some(Process {
@@ -1197,7 +1197,7 @@ fn a_calls_server_failed_is_written_under_its_action_before_its_completion() {
         error: Failure {
             code: ErrorCode::McpServerUnavailable,
             message: "The MCP server `fx` did not answer before its startup deadline of 5000 ms. Raise `startup_timeout_ms` under `mcp.servers.fx` if it needs longer.".into(),
-            retry_after: None,
+            retry_after_ms: None,
             provider: None,
         },
     };
@@ -1266,7 +1266,7 @@ fn a_calls_server_lines_are_written_in_order_under_its_action() {
         error: Failure {
             code: ErrorCode::McpServerUnavailable,
             message: "The MCP server `fx` exited; Fiber restarts it on the next call.".into(),
-            retry_after: None,
+            retry_after_ms: None,
             provider: None,
         },
     };
@@ -1362,7 +1362,7 @@ fn a_call_that_returns_an_error_after_its_turn_is_cancelled_ends_failed() {
             error: Some(Failure {
                 code: ErrorCode::McpCancelRequested,
                 message: "The call to `echo` on the MCP server `fx` was cancelled; the server may still act on it.".into(),
-                retry_after: None,
+                retry_after_ms: None,
                 provider: None,
             }),
             started,

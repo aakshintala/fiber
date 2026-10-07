@@ -100,7 +100,8 @@ fn samples() -> Vec<Value> {
             "summarise": true, "adopt": ["j"]}}),
         json!({"id": "c", "command": "shell", "args": {"command": "git status", "send": true}}),
         json!({"id": "c", "command": "command", "args": {"name": "review", "text": "all"}}),
-        json!({"id": "c", "command": "close"}),
+        json!({"id": "c", "command": "close", "args": {"now": true}}),
+        json!({"id": "c", "command": "close", "args": {"now": false}}),
     ]
 }
 
@@ -226,7 +227,36 @@ fn commands_writes_without_args() {
 
 #[test]
 fn close_reads_an_empty_args_as_a_missing_one() {
-    empty_args_read_as_missing("close", Command::Close);
+    empty_args_read_as_missing("close", Command::Close(CloseArgs { now: false }));
+}
+
+#[test]
+fn close_now_reads_a_boolean_and_refuses_anything_else() {
+    for (args, expected) in [
+        (r#"{"now":true}"#, Ok(true)),
+        (r#"{"now":false}"#, Ok(false)),
+        (r#"{}"#, Ok(false)),
+        (r#"{"now":null}"#, Err(())),
+        (r#"{"now":"yes"}"#, Err(())),
+        (r#"{"now":1}"#, Err(())),
+        (r#"{"now":true,"future":1}"#, Err(())),
+    ] {
+        let line = format!(r#"{{"id":"c","command":"close","args":{args}}}"#);
+        match expected {
+            Ok(now) => assert_eq!(
+                parse(&line)
+                    .unwrap_or_else(|e| panic!("{line}: {e}"))
+                    .command,
+                Command::Close(CloseArgs { now }),
+                "{line}"
+            ),
+            Err(()) => assert!(parse(&line).is_err(), "{line}"),
+        }
+    }
+    assert_eq!(
+        parse(r#"{"id":"c","command":"close"}"#).unwrap().command,
+        Command::Close(CloseArgs { now: false })
+    );
 }
 
 #[test]
@@ -343,4 +373,43 @@ fn declined_and_skipped_are_only_ever_true() {
 fn a_key_not_in_the_command_line_is_refused() {
     assert!(parse(r#"{"id":"c","command":"cancel","extra":1}"#).is_err());
     assert!(parse(r#"{"id":"c","command":"cancel","session_id":"s_1"}"#).is_err());
+}
+
+/// `BUILT_IN_COMMANDS` names the commands in `docs/tui.md`'s "Slash commands" table.
+#[test]
+fn built_in_commands_match_the_tui_doc_table() {
+    let doc = include_str!("../../../docs/tui.md");
+    let table = doc.split("### Slash commands").nth(1).unwrap();
+    let mut names = Vec::new();
+    for line in table.lines().skip_while(|l| !l.starts_with("| `")) {
+        if !line.starts_with("| `") {
+            break;
+        }
+        let cell = line.split('|').nth(1).unwrap_or("");
+        for part in cell.split(",") {
+            let part = part.trim().trim_matches('`');
+            // `/handoff [instructions]`, `/?`.
+            let name = part
+                .trim_start_matches('/')
+                .split_whitespace()
+                .next()
+                .unwrap_or("");
+            if !name.is_empty() {
+                names.push(name.to_owned());
+            }
+        }
+    }
+    let listed: Vec<&str> = BUILT_IN_COMMANDS.to_vec();
+    for name in &names {
+        assert!(
+            listed.contains(&name.as_str()),
+            "`{name}` from docs/tui.md not in BUILT_IN_COMMANDS"
+        );
+    }
+    for name in listed {
+        assert!(
+            names.iter().any(|n| n == name),
+            "`{name}` in BUILT_IN_COMMANDS not in docs/tui.md"
+        );
+    }
 }

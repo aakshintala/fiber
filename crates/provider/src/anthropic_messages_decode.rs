@@ -8,7 +8,7 @@ use contract::events::{
     CallStatus, ReasoningCompleted, TextCompleted, TextDelta, ToolCallArgumentsDelta,
     ToolCallCompleted, ToolCallRequested,
 };
-use contract::provider::{Delta, Finish, HostedCall, Reply, ReplyAction};
+use contract::provider::{Delta, Finish, HostedCall, InputSize, Reply, ReplyAction};
 use contract::shapes::{ContentPart, Failure, Tokens};
 use contract::{ErrorCode, GenerationId, ProviderCallId};
 use serde_json::{Map, Value, json};
@@ -334,6 +334,7 @@ impl Decoder {
             tokens: tokens(&Value::Object(std::mem::take(&mut self.usage))),
             web_searches,
             cost: None,
+            input_size: InputSize::default(),
         })
     }
 }
@@ -375,7 +376,7 @@ fn hosted_completion(block: &Value) -> ToolCallCompleted {
         let error = Failure {
             code: ErrorCode::ToolError,
             message: message.clone(),
-            retry_after: None,
+            retry_after_ms: None,
             provider: None,
         };
         (CallStatus::Failed, message, Some(error))

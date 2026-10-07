@@ -17,7 +17,7 @@ mod probes;
 #[path = "support/wire_tools.rs"]
 mod wire_tools;
 
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, mpsc};
@@ -26,8 +26,8 @@ use std::time::Duration;
 
 use contract::events::{CacheLifetime, ReasoningCompleted, TextDelta, ToolCallRequested};
 use contract::provider::{
-    CallError, Delta, Finish, Input, ModelCall, ModelRequest, Provider, Reply, ReplyAction,
-    ToolDefinition,
+    CallError, Delta, Finish, Input, InputSize, ModelCall, ModelRequest, Provider, Reply,
+    ReplyAction, ToolDefinition,
 };
 use contract::{ActionId, ErrorCode, ProviderCallId};
 use fakes::{ProviderServer, Response};
@@ -393,7 +393,12 @@ fn a_recording_served_by_the_fake_server_runs_through_the_seam() {
     let provider: Box<dyn Provider> = Box::new(Responses::new(endpoint(&server)));
     let (reply, deltas) = run(provider.call(&request()));
     let (want, want_deltas) = decoded(&bytes);
-    assert_eq!(reply.unwrap(), want.unwrap());
+    let mut want = want.unwrap();
+    want.input_size = InputSize {
+        bytes: u64::try_from(server.requests()[0].body.len()).unwrap(),
+        media: false,
+    };
+    assert_eq!(reply.unwrap(), want);
     assert_eq!(deltas, want_deltas);
 
     let sent = &server.requests()[0];
@@ -773,7 +778,7 @@ fn a_status_other_than_2xx_fails_with_its_code_and_the_providers_words() {
          with, or log in again with `fiber login opencode`."
     );
     assert_eq!(failures[0].code, ErrorCode::RateLimited);
-    assert_eq!(failures[0].retry_after, Some(7.0));
+    assert_eq!(failures[0].retry_after_ms, Some(7000));
     assert_eq!(failures[0].provider.as_ref().unwrap().message, "Slow down.");
     assert_eq!(failures[1].code, ErrorCode::InvalidRequest);
     assert_eq!(
@@ -816,47 +821,15 @@ fn a_policy_refusal_fails_the_call_as_refused() {
     assert!(message.contains("I can't help with that."), "{message}");
 }
 
-/// A server that answers one request with response headers and one text
-/// delta, then holds the socket open until `hold` is dropped.
-fn stalling_server() -> (String, mpsc::Sender<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let url = format!("http://{}", listener.local_addr().unwrap());
-    let (hold, held) = mpsc::channel::<()>();
-    thread::spawn(move || {
-        let (mut socket, _) = listener.accept().unwrap();
-        let mut reader = BufReader::new(socket.try_clone().unwrap());
-        let mut length = 0;
-        loop {
-            let mut line = String::new();
-            reader.read_line(&mut line).unwrap();
-            if line == "\r\n" {
-                break;
-            }
-            if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
-                length = v.trim().parse().unwrap();
-            }
-        }
-        reader.read_exact(&mut vec![0; length]).unwrap();
-        let event = format!("data: {}\n\n", text_delta("Hel"));
-        write!(
-            socket,
-            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\
-             transfer-encoding: chunked\r\n\r\n{:x}\r\n{event}\r\n",
-            event.len()
-        )
-        .unwrap();
-        socket.flush().unwrap();
-        // Hold the socket open, sending nothing more.
-        held.recv().unwrap_err();
-    });
-    (url, hold)
-}
-
 #[test]
 fn cancelling_from_another_thread_ends_a_blocked_read() {
-    let (url, _hold) = stalling_server();
+    let payload = format!("data: {}\n\n", text_delta("Hel")).into_bytes();
+    let server =
+        ProviderServer::start([Response::stall(200, payload.clone(), payload.len() + 1024)
+            .header("content-type", "text/event-stream")])
+        .unwrap();
     let endpoint = Endpoint {
-        base_url: url,
+        base_url: server.url(),
         direct: true,
         ..Endpoint::default()
     };
@@ -879,6 +852,10 @@ fn cancelling_from_another_thread_ends_a_blocked_read() {
         .recv_timeout(DEADLINE)
         .expect("waited for run to return after the cancel");
     assert_eq!(result, Err(CallError::Cancelled));
+    assert!(
+        server.await_closed(1, DEADLINE),
+        "waited for the server to see the client close"
+    );
 }
 
 #[test]
@@ -1392,5 +1369,48 @@ fn a_users_image_is_left_out_for_a_text_only_model() {
         user_item(&server),
         json!({"role": "user",
             "content": "look\n[Image artifacts/i_1.png left out: this model does not take images.]"})
+    );
+}
+
+#[test]
+fn a_reply_carries_the_size_of_the_body_it_sent() {
+    let session = fakes::TempDir::new("fiber-responses-request-size");
+    std::fs::create_dir(session.path().join("artifacts")).unwrap();
+    std::fs::write(session.path().join("artifacts/i_1.png"), b"abcd").unwrap();
+    let request = ModelRequest {
+        conversation: image_conversation(
+            "Image: 2x1 image/png.\n",
+            vec![png_ref("artifacts/i_1.png")],
+        ),
+        session_dir: session.path().to_path_buf(),
+        ..request()
+    };
+    let reply = || Response::stream(stream(&[completed("completed", json!({}))]));
+    let server = ProviderServer::start([reply(), reply()]).unwrap();
+    let reply = run(Box::new(
+        Responses::new(endpoint(&server)).request(&request),
+    ))
+    .0
+    .unwrap();
+    assert_eq!(
+        reply.input_size,
+        InputSize {
+            bytes: u64::try_from(server.requests()[0].body.len()).unwrap(),
+            media: true,
+        }
+    );
+    let endpoint = Endpoint {
+        text_only: true,
+        ..endpoint(&server)
+    };
+    let reply = run(Box::new(Responses::new(endpoint).request(&request)))
+        .0
+        .unwrap();
+    assert_eq!(
+        reply.input_size,
+        InputSize {
+            bytes: u64::try_from(server.requests()[1].body.len()).unwrap(),
+            media: false,
+        }
     );
 }

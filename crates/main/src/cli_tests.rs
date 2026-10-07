@@ -290,6 +290,62 @@ fn sessions_delete_takes_cascade_yes_and_an_id() {
 }
 
 #[test]
+fn sessions_prune_takes_older_than_cascade_dry_run_and_yes() {
+    let Invocation::Run(Some(Commands::Sessions(SessionsCommands::Prune {
+        older_than,
+        cascade,
+        dry_run,
+        yes,
+        force,
+    }))) = parse_from(["fiber", "sessions", "prune"])
+    else {
+        panic!("bare prune");
+    };
+    assert_eq!(
+        (older_than, cascade, dry_run, yes, force),
+        (None, false, false, false, false)
+    );
+    let Invocation::Run(Some(Commands::Sessions(SessionsCommands::Prune {
+        older_than,
+        cascade,
+        dry_run,
+        yes,
+        force,
+    }))) = parse_from([
+        "fiber",
+        "sessions",
+        "prune",
+        "--older-than",
+        "30d",
+        "--cascade",
+        "--dry-run",
+        "--yes",
+        "--force",
+    ])
+    else {
+        panic!("prune with every flag");
+    };
+    assert_eq!(
+        (older_than.as_deref(), cascade, dry_run, yes, force),
+        (Some("30d"), true, true, true, true)
+    );
+}
+
+#[test]
+fn the_menu_lists_sessions_prune_under_sessions() {
+    let menu = menu();
+    let sessions = menu
+        .split("\n\n")
+        .find(|group| group.starts_with("Sessions:"))
+        .unwrap();
+    assert!(
+        sessions.lines().any(|l|
+            l == "  sessions prune [--older-than <duration>] [--dry-run]  Delete old sessions, worktrees and diagnostic logs"),
+        "{sessions}"
+    );
+}
+
+#[test]
 fn the_menu_lists_sessions_delete_under_sessions() {
     let menu = menu();
     let sessions = menu
@@ -307,7 +363,7 @@ fn the_menu_lists_sessions_delete_under_sessions() {
 fn sessions_alone_is_a_one_line_usage_sentence() {
     assert_eq!(
         sentence(&["fiber", "sessions"]),
-        "'fiber sessions' requires a subcommand but one was not provided [subcommands: delete, export]. Run `fiber --help` for usage."
+        "'fiber sessions' requires a subcommand but one was not provided [subcommands: delete, export, prune]. Run `fiber --help` for usage."
     );
 }
 

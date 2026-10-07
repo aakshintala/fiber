@@ -210,7 +210,10 @@ fn an_error_names_the_extensions_file_and_line() {
 }
 
 #[test]
-fn a_registration_without_a_timeout_is_an_error_at_its_line() {
+fn a_registration_without_a_timeout_leaves_a_problem_and_registers_nothing() {
+    // Without its required timeout, a `fiber.command` spec leaves a problem
+    // (an `extension_failed` notice), and the entry script continues instead
+    // of raising. The command is never registered, so calling it is unknown.
     let setup = Setup::new();
     let dir = setup.home().join("ext");
     write(
@@ -223,13 +226,7 @@ fn a_registration_without_a_timeout_is_an_error_at_its_line() {
         "",
     )
     .unwrap_err();
-    let Error::Lua { message, .. } = &err else {
-        panic!("{err:?}")
-    };
-    assert!(
-        message.starts_with("init.lua:2: fiber.command"),
-        "{message}"
-    );
+    assert_eq!(err.code(), ErrorCode::UnknownCommand);
 }
 
 #[test]

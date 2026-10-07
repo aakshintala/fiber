@@ -70,7 +70,7 @@ pub(crate) fn new_session(
     prompt: Option<String>,
     one_turn: bool,
     clock: Arc<dyn contract::clock::Clock>,
-    signals: &doors::Signals,
+    signals: &Arc<doors::Signals>,
     fiber: Result<PathBuf, String>,
 ) -> i32 {
     let mut parts = match parts_with(model, None, None, Arc::clone(&clock)) {
@@ -150,7 +150,11 @@ pub(crate) fn new_session(
     session.jobs(jobs.clone());
     session.images(Arc::clone(&session_servers.images));
     session.hooks(Arc::clone(&extensions) as Arc<dyn contract::hook::Hooks>);
-    session.commands(r#loop::commands(&prompt_inputs, &workspace));
+    session.extensions(Arc::clone(&extensions) as Arc<dyn contract::extension::ExtensionDoor>);
+    extensions.emit_to(Arc::new(log::WeakEmit::new(&log)));
+    let mut all_commands = r#loop::commands(&prompt_inputs, &workspace);
+    all_commands.extend(extensions.commands());
+    session.commands(all_commands);
     let cancel = Arc::new(r#loop::TurnCancel::default());
     // A signal while armed: nothing was written, so nothing more is.
     if let Some(code) = shutdown::start(signals, &cancel, &session, jobs.clone()) {
