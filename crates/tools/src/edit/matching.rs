@@ -227,14 +227,22 @@ fn located(
     })
 }
 
-/// Non-overlapping matches: the search resumes at the end of each one, so
-/// overlapping copies of the needle count once. `(count, first byte)`.
+/// Every occurrence of `needle`, overlapping ones included: the search
+/// resumes one character after each match start. `(count, first byte)`.
+/// `needle` is never empty.
 fn hits(haystack: &str, needle: &str) -> (usize, usize) {
-    let mut found = haystack.match_indices(needle);
-    match found.next() {
-        Some((first, _)) => (1 + found.count(), first),
-        None => (0, 0),
+    let mut count = 0;
+    let mut first = 0;
+    let mut from = 0;
+    while let Some(at) = haystack[from..].find(needle) {
+        let start = from + at;
+        if count == 0 {
+            first = start;
+        }
+        count += 1;
+        from = start + haystack[start..].chars().next().map_or(1, char::len_utf8);
     }
+    (count, first)
 }
 
 /// Fold used by the second pass. Trailing spaces are dropped after Unicode
