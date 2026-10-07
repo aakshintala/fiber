@@ -566,6 +566,9 @@ fn suggestion(error: &clap::Error) -> Option<String> {
     if let Some(value) = error.get(ContextKind::SuggestedArg) {
         return one_suggestion(value);
     }
+    if let Some(value) = error.get(ContextKind::SuggestedValue) {
+        return one_suggestion(value);
+    }
     // Clap stores subcommand candidates worst-first. The nearest is last.
     // A typed prefix of a candidate (`instal` → `install`) wins over that
     // order when several pass the cutoff (`list` does too).

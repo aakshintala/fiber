@@ -460,6 +460,68 @@ fn completion_takes_bash_zsh_or_fish() {
 }
 
 #[test]
+fn an_unknown_shell_names_claps_suggestion() {
+    for (word, suggested) in [("bsh", "bash"), ("f", "fish"), ("Bash", "bash")] {
+        assert_eq!(
+            usage(&["fiber", "completion", word]),
+            (
+                false,
+                format!(
+                    "Invalid value '{word}' for '<shell>' [possible values: bash, zsh, fish]; did you mean '{suggested}'? Run `fiber --help` for usage."
+                )
+            ),
+            "{word}"
+        );
+    }
+    for word in ["zhs", "powershell"] {
+        assert_eq!(
+            usage(&["fiber", "completion", word]),
+            (
+                false,
+                format!(
+                    "Invalid value '{word}' for '<shell>' [possible values: bash, zsh, fish]. Run `fiber --help` for usage."
+                )
+            ),
+            "{word}"
+        );
+    }
+}
+
+#[test]
+fn completion_without_one_shell_is_a_usage_error() {
+    assert_eq!(
+        usage(&["fiber", "completion"]),
+        (
+            false,
+            "The following required arguments were not provided: <shell>. Run `fiber --help` for usage."
+                .to_owned()
+        )
+    );
+    assert_eq!(
+        usage(&["fiber", "completion", "bash", "extra"]),
+        (
+            false,
+            "Unexpected argument 'extra' found. Run `fiber --help` for usage.".to_owned()
+        )
+    );
+    let parsed = parse_from([
+        OsString::from("fiber"),
+        OsString::from("completion"),
+        OsString::from_vec(vec![0xff, 0xfe]),
+    ]);
+    let Invocation::Usage { ask, sentence } = parsed else {
+        panic!("{parsed:?}");
+    };
+    // clap reads the shell as a possible value, so a byte that is not
+    // UTF-8 is an invalid value, shown lossily, like any other.
+    assert!(!ask);
+    assert_eq!(
+        sentence,
+        "Invalid value '\u{fffd}\u{fffd}' for '<shell>' [possible values: bash, zsh, fish]. Run `fiber --help` for usage."
+    );
+}
+
+#[test]
 fn the_menu_lists_completion_under_fiber_itself() {
     let menu = menu();
     let itself = menu
