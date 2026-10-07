@@ -128,7 +128,7 @@ same key. A file that sets one key under both spellings is `config_invalid`.
 | `handoff.nudge` | true | yes | Whether the nudge is given. |
 | `cache.lifetime` | `"1h"` | yes | The prompt-cache lifetime, `"5m"` or `"1h"` (`docs/prompt-cache.md`). |
 | `cache.warm_idle` | false | yes | Whether an idle session keeps its prompt cache warm (`docs/prompt-cache.md`, "Warming while idle"). |
-| `cache.warm_cap` | `"2h"` | yes | How long after the last turn warming stops, as a duration such as `"4h"`; less than 19 cache lifetimes (`docs/prompt-cache.md`, "Warming while idle"). |
+| `cache.warm_cap` | `2` | yes | How many cache lifetimes after the last turn warming stops, an integer; less than 12 (`docs/prompt-cache.md`, "Warming while idle"). |
 | `keys."<action>"` | the binding in `docs/tui.md` | no | A key, or a list of keys, for a terminal action; `[]` unbinds it (`docs/tui.md`, "Bindings"). |
 | `retry.attempts` | 3 | yes | Retries of a failed model call (`docs/model-routing.md`, "When a model call fails"). |
 | `retry.initial_delay_ms` | 2000 | yes | The first backoff, doubling each retry. |
@@ -280,7 +280,9 @@ global or per-project file, with one of:
 A command runs once per process, and is named by its program alone in every
 message, because its arguments may hold a key. A repository can never set this, because a
 command runs a program and a changed source sends the key elsewhere. A
-credential stored under the same label comes first.
+credential stored under the same label comes first. A key from an `env`
+source stays in Fiber's environment, so it is visible to every command the
+session runs.
 
 Providers in one package that share a key read one stored credential: each
 names the stored directory in its provider data (`credential_name`, defaulting
@@ -361,8 +363,8 @@ model list, by the rules in `docs/model-routing.md`, "Naming a model". A
 reference that matches nothing fails with `no_model` and names the closest
 matches. With no cached list, the value is accepted.
 
-`cache.warm_cap` is refused with `config_invalid` when it is 19 cache
-lifetimes or more (`docs/prompt-cache.md`, "Warming while idle"), whether
+`cache.warm_cap` is refused with `config_invalid` when it is 12 or more
+(`docs/prompt-cache.md`, "Warming while idle"), whether
 it is set with `fiber config set` or by hand.
 
 ## Standing rules
