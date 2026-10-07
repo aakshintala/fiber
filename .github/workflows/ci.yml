@@ -223,8 +223,7 @@ jobs:
     if: fromJSON(needs.select.outputs.jobs).bug_red
     runs-on: ubuntu-24.04
     # One run, 3 min.
-    # No history: it makes only gh calls.
-    timeout-minutes: 5
+    timeout-minutes: 10
     env:
       BASE: ${{ needs.select.outputs.base }}
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -242,7 +241,8 @@ jobs:
     needs: [select, lint, test, mutants]
     if: failure() && github.event_name == 'push'
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    # No history: it makes only gh calls.
+    timeout-minutes: 5
     permissions:
       issues: write
     env:
