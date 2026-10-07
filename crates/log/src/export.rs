@@ -1,17 +1,18 @@
 //! Copying a session's log and artifacts into a new directory
-//! (`docs/invocation.md`, "Deleting and pruning"): `fiber sessions export`.
+//! (`docs/invocation.md`, "Exporting a session"): `fiber sessions export`.
 //! The export is the log as recorded: the complete lines written so far,
 //! and nothing but `events.jsonl` and `artifacts/`.
 
 use std::fs;
 use std::io;
+use std::os::unix::fs::DirBuilderExt;
 use std::path::Path;
 
 use crate::{ARTIFACTS, EVENTS, Error, io_at, read::complete_len};
 
 /// Copies the session in `dir` into `target`: its complete log lines as
-/// `events.jsonl` and its `artifacts/` tree. `target` itself is created;
-/// its missing parents are too. A `target` that already exists is refused,
+/// `events.jsonl` and its `artifacts/` tree. `target` itself is created
+/// with mode 0700; missing parents are created as usual. A `target` that already exists is refused,
 /// and on any later failure `target` is removed again, so an export never
 /// leaves a half-written directory behind.
 pub fn export(dir: &Path, target: &Path) -> Result<(), Error> {
@@ -30,7 +31,7 @@ pub fn export(dir: &Path, target: &Path) -> Result<(), Error> {
         fs::create_dir_all(parent).map_err(io_at(parent))?;
     }
     // The refusal is the creation itself failing, so no check races it.
-    if let Err(e) = fs::create_dir(target) {
+    if let Err(e) = fs::DirBuilder::new().mode(0o700).create(target) {
         if e.kind() == io::ErrorKind::AlreadyExists {
             return Err(Error::Exists(target.to_owned()));
         }
@@ -59,9 +60,10 @@ fn write_export(complete: &[u8], dir: &Path, target: &Path, excluded: &Path) -> 
     copy_artifacts(&dir.join(ARTIFACTS), &target.join(ARTIFACTS), excluded)
 }
 
-/// Copies the artifacts tree at `source` into `target`. A directory
-/// recurses; every other entry is copied as bytes, a symlink read through.
-/// A session with no `artifacts/` gets an empty one in the export.
+/// Copies the artifacts tree at `source` into `target`. A symlink is
+/// recreated as a link and never read through; a directory recurses;
+/// every other entry is copied as bytes. A session with no `artifacts/`
+/// gets an empty one in the export.
 fn copy_artifacts(source: &Path, target: &Path, excluded: &Path) -> Result<(), Error> {
     let entries = match fs::read_dir(source) {
         Ok(entries) => Some(entries),
@@ -76,7 +78,11 @@ fn copy_artifacts(source: &Path, target: &Path, excluded: &Path) -> Result<(), E
         let entry = entry.map_err(|e| io_at(source)(e))?;
         let from = entry.path();
         let to = target.join(entry.file_name());
-        if entry.file_type().map_err(|e| io_at(&from)(e))?.is_dir() {
+        let file_type = entry.file_type().map_err(|e| io_at(&from)(e))?;
+        if file_type.is_symlink() {
+            let original = fs::read_link(&from).map_err(|e| io_at(&from)(e))?;
+            std::os::unix::fs::symlink(&original, &to).map_err(|e| io_at(&to)(e))?;
+        } else if file_type.is_dir() {
             // The export directory is never part of what it exports: a
             // target inside the source tree would otherwise copy itself.
             if fs::canonicalize(&from).map_err(io_at(&from))?.as_path() == excluded {
