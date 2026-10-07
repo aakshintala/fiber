@@ -105,8 +105,9 @@ fn session_start(ctx: &Ctx<'_>, _notes: &mut Vec<String>) -> Result<Samples, Str
     Ok(vec![("session_start_ms", took)])
 }
 
-/// The window starts once `extensions_loaded` is on stdout, the end of the
-/// loop's startup. Threads are counted at its end with no client, then
+/// The window starts once the session's startup has finished: the first
+/// `session_status` after `extensions_loaded` is on stdout
+/// ([`run::Startup`]). Threads are counted at its end with no client, then
 /// again once one `full` client's writer has sent `session_status` with
 /// `clients` 1: the subscribe acknowledgement is written before the writer
 /// starts, so it is not that signal.
@@ -126,7 +127,7 @@ fn measure_session(
     notes: &mut Vec<String>,
 ) -> Result<Samples, String> {
     let pid = session.proc.pid();
-    session.wait_for(ctx.clock, ctx.clock.now() + READY, "extensions_loaded")?;
+    session.wait_started(ctx.clock, ctx.clock.now() + READY)?;
     let (switches, rss, idle_threads) = idle_window(ctx, pid, notes)?;
     let mut client = Client::connect(&ctx.home.socket(id))?;
     client.send(r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#)?;

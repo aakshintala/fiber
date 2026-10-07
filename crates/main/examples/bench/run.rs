@@ -176,6 +176,34 @@ pub(crate) fn parse_line(line: &str) -> Result<Value, String> {
     serde_json::from_str(line).map_err(|err| format!("a stdout line is not JSON ({err}): {line:?}"))
 }
 
+/// Whether a session's startup has finished, fed its stdout lines in order.
+/// The loop writes `extensions_loaded`, then starts the status observer,
+/// which probes the workspace's git branch and writes its first
+/// `session_status` once it has caught up with the log. That line is the
+/// last startup work any line shows, so startup has finished at the first
+/// `session_status` after `extensions_loaded`; one before it does not count.
+#[derive(Default)]
+pub(crate) struct Startup {
+    loaded: bool,
+}
+
+impl Startup {
+    /// What a wait for the end of startup names on expiry.
+    pub(crate) const WHAT: &'static str = "the first session_status after extensions_loaded";
+
+    /// Takes the next stdout line; true once startup has finished.
+    pub(crate) fn line(&mut self, line: &Value) -> bool {
+        match line.get("kind").and_then(Value::as_str) {
+            Some("extensions_loaded") => {
+                self.loaded = true;
+                false
+            }
+            Some("session_status") => self.loaded,
+            Some(_) | None => false,
+        }
+    }
+}
+
 /// The internal session command, its stdout read line by line on a thread
 /// and its stderr kept for an error.
 pub(crate) struct Session {
@@ -248,19 +276,11 @@ impl Session {
         }
     }
 
-    /// Reads stdout lines until one of `kind`, waiting until `until`.
-    pub(crate) fn wait_for(
-        &self,
-        clock: &dyn Clock,
-        until: Instant,
-        kind: &str,
-    ) -> Result<(), String> {
-        while self
-            .line(clock, until, kind)?
-            .get("kind")
-            .and_then(Value::as_str)
-            != Some(kind)
-        {}
+    /// Reads stdout lines until the session's startup has finished (see
+    /// [`Startup`]), waiting until `until`.
+    pub(crate) fn wait_started(&self, clock: &dyn Clock, until: Instant) -> Result<(), String> {
+        let mut startup = Startup::default();
+        while !startup.line(&self.line(clock, until, Startup::WHAT)?) {}
         Ok(())
     }
 }

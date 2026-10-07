@@ -1,7 +1,9 @@
 use std::ffi::OsStr;
 use std::path::Path;
 
-use super::{command, parse_line};
+use serde_json::json;
+
+use super::{Startup, command, parse_line};
 
 const PROXIES: [&str; 8] = [
     "HTTP_PROXY",
@@ -67,4 +69,22 @@ fn a_stdout_line_that_is_not_json_is_an_error() {
         parse_line(r#"{"kind":"session_started"}"#).unwrap()["kind"],
         "session_started"
     );
+}
+
+#[test]
+fn startup_finishes_at_the_first_session_status_after_extensions_loaded() {
+    let mut startup = Startup::default();
+    let lines = [
+        ("session_started", false),
+        // A status before the extensions are loaded is not the end.
+        ("session_status", false),
+        ("fiber_started", false),
+        ("extensions_loaded", false),
+        ("notice", false),
+        ("session_status", true),
+    ];
+    for (kind, done) in lines {
+        assert_eq!(startup.line(&json!({"kind": kind})), done, "{kind}");
+    }
+    assert!(!Startup::default().line(&json!({"no_kind": 1})));
 }
