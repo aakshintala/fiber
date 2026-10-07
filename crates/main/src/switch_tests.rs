@@ -664,7 +664,7 @@ fn the_reviewer_is_rechosen_for_the_new_provider() {
     let made = prepared(&switching, &args("fake/n"), None);
     let reviewer = made.reviewer.expect("the reviewer resolved");
     assert_eq!(reviewer.model.reference, "fake/r");
-    assert_eq!(reviewer.context_window, Some(1000));
+    assert_eq!(reviewer.context_window, 1000);
 }
 
 #[test]
@@ -704,7 +704,7 @@ fn the_prepared_fields_follow_the_new_model() {
     let fixture = fixture("fiber-switch-fields");
     let switching = switching(&fixture, &["cache.lifetime=5m", "handoff.enabled=false"]);
     let made = prepared(&switching, &args("fake/n"), None);
-    assert_eq!(made.context_window, Some(1000));
+    assert_eq!(made.context_window, 1000);
     assert_eq!(made.addendum, Some("The extra paragraph.\n".to_owned()));
     assert_eq!(
         made.cache_lifetime,
@@ -713,7 +713,7 @@ fn the_prepared_fields_follow_the_new_model() {
     assert!(!made.handoff.enabled);
     let searched = prepared(&switching, &args("claude/w"), None);
     assert_eq!(searched.web_search, Some("web_search_20250305".to_owned()));
-    assert_eq!(searched.context_window, Some(500));
+    assert_eq!(searched.context_window, 500);
 }
 
 #[test]

@@ -55,6 +55,7 @@ impl Tree {
             "/bin/sh".into(),
             self.root.join("events.jsonl").display().to_string(),
             clock,
+            fakes::CONTEXT_WINDOW,
         );
         inputs.agents_home = Some(self.person());
         inputs
@@ -590,7 +591,7 @@ fn sized(name: &str, place: &str, bytes: usize) -> Found {
     }
 }
 
-fn large(found: &[Found], window: Option<u64>) -> Option<String> {
+fn large(found: &[Found], window: u64) -> Option<String> {
     let listed = listing(found, &[]);
     size_notice(&listed, window).map(|notice| {
         assert_eq!(notice.code, ErrorCode::SkillsLarge);
@@ -602,22 +603,19 @@ fn large(found: &[Found], window: Option<u64>) -> Option<String> {
 fn a_listing_of_exactly_ten_percent_is_not_large_and_one_byte_over_is() {
     // 40 bytes at four bytes a token is 10 tokens; 10% of 100 is 10.
     let one = [sized("a", "/p", 40)];
-    assert_eq!(large(&one, Some(100)), None);
-    assert!(large(&one, Some(99)).is_some());
+    assert_eq!(large(&one, 100), None);
+    assert!(large(&one, 99).is_some());
     // Two entries and the line break between them: 20 + 1 + 19.
     let two = [sized("a", "/p", 20), sized("b", "/p", 19)];
-    assert_eq!(large(&two, Some(100)), None);
-    assert!(large(&two, Some(99)).is_some());
+    assert_eq!(large(&two, 100), None);
+    assert!(large(&two, 99).is_some());
     // A window where `*` and `+` read differently.
-    assert_eq!(large(&one, Some(2000)), None);
+    assert_eq!(large(&one, 2000), None);
 }
 
 #[test]
-fn an_unknown_window_or_an_empty_listing_is_never_large() {
-    let one = [sized("a", "/p", 40)];
-    assert_eq!(large(&one, None), None);
-    assert_eq!(large(&one, Some(0)), None);
-    assert_eq!(large(&[], Some(1)), None);
+fn an_empty_listing_is_never_large() {
+    assert_eq!(large(&[], 1), None);
 }
 
 #[test]
@@ -630,7 +628,7 @@ fn the_notice_names_the_three_largest_places_with_an_extensions_places_summed() 
         sized("e", "/mid", 60),
     ];
     // 20 + 100 + 40 + 50 + 60 and four line breaks: 274 bytes.
-    let message = large(&found, Some(10)).unwrap();
+    let message = large(&found, 10).unwrap();
     assert_eq!(
         message,
         "The skills listing is about 68 tokens, over 10% of the 10-token context window. \
@@ -643,7 +641,7 @@ fn a_skill_the_model_may_not_load_adds_nothing_to_the_size() {
     let mut hidden = sized("hidden", "/p", 400);
     hidden.model_invocable = false;
     let found = [sized("a", "/p", 40), hidden];
-    assert_eq!(large(&found, Some(100)), None);
+    assert_eq!(large(&found, 100), None);
 }
 
 fn builtin_dir(tree: &Tree) -> PathBuf {
@@ -722,7 +720,7 @@ fn the_size_notice_names_the_built_in_directory() {
     skill(&builtin_dir(&tree), "a", "alpha", "d");
     skill(&builtin_dir(&tree), "b", "beta", "d");
     let found = tree.discover();
-    let message = large(&found.skills, Some(10)).unwrap();
+    let message = large(&found.skills, 10).unwrap();
     assert!(
         message.contains(&format!("Largest: {} (", builtin_dir(&tree).display())),
         "{message}"

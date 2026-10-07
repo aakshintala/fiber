@@ -177,6 +177,7 @@ impl History {
                 "/bin/sh".into(),
                 root.join("events.jsonl").display().to_string(),
                 Arc::clone(&self.clock) as Arc<dyn contract::clock::Clock>,
+                fakes::CONTEXT_WINDOW,
             ),
             self.inbox_rx.take().unwrap(),
             tools,

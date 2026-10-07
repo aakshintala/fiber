@@ -540,6 +540,7 @@ fn resume_prompt(home: &std::path::Path) -> r#loop::PromptInputs {
         "/bin/sh".into(),
         home.join("events.jsonl").display().to_string(),
         clock,
+        fakes::CONTEXT_WINDOW,
     )
 }
 
@@ -1036,7 +1037,7 @@ fn reviewer_denies_from_before_the_resume_count_toward_the_session_limit() {
                 subscription: false,
             },
             cache_lifetime: contract::events::CacheLifetime::OneHour,
-            context_window: None,
+            context_window: fakes::CONTEXT_WINDOW,
         }),
         r#loop::BlockLimits::default(),
     );
@@ -1137,7 +1138,7 @@ fn resume_after_prior_denials(decided_by: DecidedBy) -> (History, contract::even
                 subscription: false,
             },
             cache_lifetime: contract::events::CacheLifetime::OneHour,
-            context_window: None,
+            context_window: fakes::CONTEXT_WINDOW,
         }),
         r#loop::BlockLimits::default(),
     );
@@ -1268,7 +1269,7 @@ fn the_reviewers_first_request_contains_the_earlier_tool_calls() {
                 subscription: false,
             },
             cache_lifetime: contract::events::CacheLifetime::OneHour,
-            context_window: None,
+            context_window: fakes::CONTEXT_WINDOW,
         }),
         r#loop::BlockLimits::default(),
     );
@@ -4799,7 +4800,7 @@ fn resumed_thinking_seeds_the_session_choice_for_the_next_switch() {
                 chosen: kept,
                 credential: Some("work".into()),
                 cache_lifetime: contract::events::CacheLifetime::OneHour,
-                context_window: None,
+                context_window: fakes::CONTEXT_WINDOW,
                 addendum: None,
                 handoff: r#loop::HandoffSettings::default(),
                 reviewer: Err(contract::shapes::Failure {

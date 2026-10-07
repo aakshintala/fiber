@@ -506,6 +506,7 @@ fn parts_in(
     let model = providers
         .choose(recorded, &config)
         .map_err(|e| failed(e.code(), e))?;
+    let context_window = settings::context_window(model.model, &model.reference())?;
     let label =
         recorded_credential.map_or_else(|| config.credential_label(model.provider), str::to_owned);
     let (key, signer) =
@@ -591,10 +592,10 @@ fn parts_in(
         std::env::var("SHELL").unwrap_or_else(|_| "unknown".into()),
         String::new(),
         clock,
+        context_window,
     );
     prompt.system = prompt_files::system(&home, &project);
     prompt.append = prompt_files::append(&home, &project);
-    prompt.context_window = model.model.context_window;
     prompt.agents_home = agents_home;
     prompt.addendum = providers.addendum(&model).map(str::to_owned);
     prompt.extensions = extensions.prompts();
@@ -685,6 +686,7 @@ fn choose_reviewer(
 ) -> Result<r#loop::Reviewer, Failure> {
     let typed = reviewer_reference(config, session)?;
     let model = providers.resolve(&typed).map_err(|e| failed(e.code(), e))?;
+    let context_window = settings::context_window(model.model, &model.reference())?;
     // Another provider's reviewer goes through the same path, so a Lua
     // reviewer model works: the token when it registered `credential`,
     // else the key.
@@ -701,7 +703,7 @@ fn choose_reviewer(
             subscription: model.model.subscription,
         },
         cache_lifetime: settings::cache_lifetime(config, &model.reference()),
-        context_window: model.model.context_window,
+        context_window,
     })
 }
 

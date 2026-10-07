@@ -294,6 +294,7 @@ fn live_rendering_equals_rebuild() {
         "/bin/sh".into(),
         home.join("events.jsonl").display().to_string(),
         clock,
+        fakes::CONTEXT_WINDOW,
     );
     let message = opening::collect(&inputs, &workspace).message;
     let path = message.instruction_files[0].path.clone();

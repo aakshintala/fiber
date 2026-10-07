@@ -391,6 +391,7 @@ fn start(rules: Arc<FakeRules>) -> (Loop, fakes::TempDir, PathBuf, PathBuf) {
                 .display()
                 .to_string(),
             prompt_clock,
+            fakes::CONTEXT_WINDOW,
         ),
         rx,
         Vec::new(),
@@ -795,6 +796,7 @@ fn run_turn(
                 .display()
                 .to_string(),
             Arc::clone(&clock),
+            fakes::CONTEXT_WINDOW,
         ),
         rx,
         tools

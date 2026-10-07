@@ -35,7 +35,8 @@ fn a_new_session_builds_the_preamble_before_its_first_turn() {
     let built = lines.iter().find(|l| l.kind == "preamble_built").unwrap();
     assert_eq!(built.payload["reason"], "start");
     assert_eq!(built.payload["model"], MODEL);
-    assert_eq!(built.payload["context_window"], 0);
+    assert_eq!(built.payload["context_window"], fakes::CONTEXT_WINDOW);
+    assert_ne!(built.payload["context_window"], 0);
     assert_eq!(built.payload["tool_choice"], "auto");
     assert_eq!(built.payload["cache_lifetime"], "1h");
     assert!(built.payload.get("effort").is_none());

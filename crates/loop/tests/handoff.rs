@@ -2302,19 +2302,6 @@ fn an_estimate_exactly_at_the_window_is_sent() {
 }
 
 #[test]
-fn an_unknown_window_skips_the_size_check() {
-    let mut session = windowed(
-        vec![called(WINDOW), said("Done.", 50)],
-        beyond_the_window(),
-        0,
-    );
-
-    let (_, lines) = run(&mut session, "hi");
-    assert_kinds(&lines, &[OPENING, STEP, CALL_BODY, STEP, REPLY, ENDED]);
-    assert_eq!(session.requests().len(), 2);
-}
-
-#[test]
 fn automatic_handoff_off_skips_the_size_check() {
     let mut session = windowed(
         vec![called(WINDOW), said("Done.", 50)],

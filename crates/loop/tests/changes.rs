@@ -1224,6 +1224,7 @@ impl Resumed {
             "/bin/sh".into(),
             self.dir.join("events.jsonl").display().to_string(),
             clock,
+            fakes::CONTEXT_WINDOW,
         )
     }
 

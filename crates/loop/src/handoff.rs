@@ -52,8 +52,7 @@ impl Default for HandoffSettings {
 
 /// The context size, in tokens, at which an automatic handoff runs: the
 /// token trigger, or the window fraction when that comes first. `None` when
-/// automatic handoff is off; the token trigger alone when the window is
-/// unknown, `0`.
+/// automatic handoff is off.
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
@@ -63,9 +62,6 @@ impl Default for HandoffSettings {
 pub(crate) fn trigger_at(settings: &HandoffSettings, window: u64) -> Option<u64> {
     if !settings.enabled {
         return None;
-    }
-    if window == 0 {
-        return Some(settings.tokens);
     }
     let by_window = (settings.window_fraction * window as f64).floor() as u64;
     Some(settings.tokens.min(by_window))
@@ -187,7 +183,7 @@ impl Loop {
 
     /// Sets the trigger the preamble records and the check compares with.
     pub(crate) fn set_trigger(&mut self) {
-        let window = self.prompt.context_window.unwrap_or(0);
+        let window = self.prompt.context_window;
         self.handoff.trigger_at = trigger_at(&self.handoff.settings, window);
     }
 
@@ -354,8 +350,8 @@ impl Loop {
         if let Some(completed) = self.over_budget() {
             return Ok(Step::Ended(completed));
         }
-        let window = self.prompt.context_window.unwrap_or(0);
-        if self.handoff.settings.enabled && window != 0 && self.context_estimate() > window {
+        let window = self.prompt.context_window;
+        if self.handoff.settings.enabled && self.context_estimate() > window {
             return self.overflowed(turn, None);
         }
         // A refused request leaves the previous request's end in place, so a

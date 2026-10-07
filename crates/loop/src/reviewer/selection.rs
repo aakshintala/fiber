@@ -50,15 +50,8 @@ pub(crate) fn read_selection(text: &str, listed: usize) -> Result<Vec<usize>, St
     Ok(numbers)
 }
 
-/// How many of the oldest `sizes` drop so that the rest fit `window`; 0
-/// when the window is unknown.
-pub(crate) fn dropped_oldest(sizes: &[u64], window: Option<u64>) -> usize {
-    let Some(window) = window else {
-        return 0;
-    };
-    if window == 0 {
-        return 0;
-    }
+/// How many of the oldest `sizes` drop so that the rest fit `window`.
+pub(crate) fn dropped_oldest(sizes: &[u64], window: u64) -> usize {
     let mut sum = sizes
         .iter()
         .fold(0u64, |sum, size| sum.saturating_add(*size));
@@ -241,7 +234,7 @@ impl Loop {
         &mut self,
         turn: &TurnId,
         persons: &[(KeptMessage, String, u64)],
-        window: Option<u64>,
+        window: u64,
         why: &str,
     ) -> Result<(), Error> {
         let sizes: Vec<u64> = persons.iter().map(|(_, _, size)| *size).collect();

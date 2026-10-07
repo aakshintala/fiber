@@ -19,8 +19,9 @@ pub struct PromptInputs {
     pub addendum: Option<String>,
     /// `(extension name, prompt text)`, any order.
     pub extensions: Vec<(String, String)>,
-    /// The model's context window, in tokens.
-    pub context_window: Option<u64>,
+    /// The model's context window, in tokens: its declared window, always
+    /// positive on the composition paths that build a session.
+    pub context_window: u64,
     /// Fiber home, for the global `AGENTS.md` and `skills/`.
     pub home: PathBuf,
     /// The person's home; `~/.agents/skills` is under it.
@@ -53,19 +54,21 @@ pub struct PromptInputs {
 impl PromptInputs {
     /// Every optional input absent, and the 1-hour lifetime: `home` is
     /// Fiber home, `shell` the shell or `unknown`, `session_log` the
-    /// session log's path and `clock` the clock the date is read from.
+    /// session log's path, `clock` the clock the date is read from, and
+    /// `context_window` the model's declared window, in tokens.
     pub fn new(
         home: PathBuf,
         shell: String,
         session_log: String,
         clock: Arc<dyn contract::clock::Clock>,
+        context_window: u64,
     ) -> Self {
         Self {
             system: None,
             append: None,
             addendum: None,
             extensions: Vec::new(),
-            context_window: None,
+            context_window,
             home,
             agents_home: None,
             extension_dirs: Vec::new(),
@@ -308,7 +311,7 @@ pub(crate) fn build(
     let event = contract::events::PreambleBuilt {
         reason,
         model: model.to_owned(),
-        context_window: inputs.context_window.unwrap_or(0),
+        context_window: inputs.context_window,
         trigger_at,
         thinking: inputs.thinking.map(|level| level.as_str().to_owned()),
         tool_choice,
@@ -324,16 +327,13 @@ pub(crate) fn build(
 /// The `tool_definitions_large` notice, when the definitions declared in
 /// full pass 10% of the context window (`docs/tools.md`, "Size warning").
 /// A definition's size is its serialized bytes at four bytes a token, and
-/// its source is the `registered_by` the event records. `None` when the
-/// window is unknown (`0`). Exactly 10% is not over, so `>` compares the
+/// its source is the `registered_by` the event records.
+/// Exactly 10% is not over, so `>` compares the
 /// unrounded cross products.
 pub(crate) fn definitions_notice(
     event: &contract::events::PreambleBuilt,
 ) -> Option<contract::events::Notice> {
     let window = u128::from(event.context_window);
-    if window == 0 {
-        return None;
-    }
     let mut sources: std::collections::BTreeMap<&str, u128> = std::collections::BTreeMap::new();
     for tool in event.tools.iter().filter(|tool| !tool.deferred) {
         let bytes = serde_json::to_string(&tool.definition).map_or(0, |text| text.len() as u128);

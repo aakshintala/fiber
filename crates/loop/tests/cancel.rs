@@ -430,7 +430,7 @@ fn a_cancelled_review_completes_cancelled() {
                 subscription: false,
             },
             cache_lifetime: contract::events::CacheLifetime::OneHour,
-            context_window: None,
+            context_window: fakes::CONTEXT_WINDOW,
         }),
         r#loop::BlockLimits::default(),
     );

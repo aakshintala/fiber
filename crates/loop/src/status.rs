@@ -472,7 +472,7 @@ pub(crate) fn spawn(looped: &Loop) -> Option<Status> {
         project,
         looped.workspace_label.clone(),
         looped.model.reference.clone(),
-        looped.prompt.context_window,
+        Some(looped.prompt.context_window),
         Box::new(move || jobs.as_ref().map(|jobs| jobs.running()).unwrap_or_default()),
         Box::new(move || branch(&workspace)),
         Box::new(move || clients_of(&weak)),

@@ -819,7 +819,7 @@ impl Session {
             unpriced(),
             scripted,
             Arc::new(TurnCancel::default()),
-            (FakeClock::new(), 0),
+            (FakeClock::new(), fakes::CONTEXT_WINDOW),
             Vec::new(),
             CacheLifetime::OneHour,
             None,
@@ -843,7 +843,7 @@ impl Session {
             unpriced(),
             scripted,
             Arc::new(TurnCancel::default()),
-            (FakeClock::new(), 0),
+            (FakeClock::new(), fakes::CONTEXT_WINDOW),
             Vec::new(),
             lifetime,
             None,
@@ -868,7 +868,7 @@ impl Session {
             unpriced(),
             scripted,
             Arc::new(TurnCancel::default()),
-            (clock, 0),
+            (clock, fakes::CONTEXT_WINDOW),
             Vec::new(),
             lifetime,
             None,
@@ -1021,7 +1021,7 @@ impl Session {
             model,
             scripted,
             cancel,
-            (FakeClock::new(), 0),
+            (FakeClock::new(), fakes::CONTEXT_WINDOW),
             sections,
             CacheLifetime::OneHour,
             thinking,
@@ -1048,7 +1048,7 @@ impl Session {
             unpriced(),
             inner,
             Arc::new(TurnCancel::default()),
-            (clock, 0),
+            (clock, fakes::CONTEXT_WINDOW),
             Vec::new(),
             CacheLifetime::OneHour,
             None,
@@ -1120,9 +1120,9 @@ impl Session {
                     "/bin/sh".into(),
                     session_log,
                     prompt_clock,
+                    window,
                 );
                 prompt.credential = Some("work".into());
-                prompt.context_window = (window != 0).then_some(window);
                 prompt.extension_sections = sections;
                 prompt.cache_lifetime = cache_lifetime;
                 prompt.thinking = thinking;
@@ -1187,7 +1187,13 @@ impl Session {
         limits: BlockLimits,
         cost: Option<contract::provider::Cost>,
     ) -> Arc<ScriptedProvider> {
-        self.reviewer_with(script, limits, cost, CacheLifetime::OneHour, None)
+        self.reviewer_with(
+            script,
+            limits,
+            cost,
+            CacheLifetime::OneHour,
+            fakes::CONTEXT_WINDOW,
+        )
     }
 
     /// As [`Session::reviewer`], with the reviewer's cache lifetime.
@@ -1196,14 +1202,20 @@ impl Session {
         script: Vec<Scripted>,
         cache_lifetime: CacheLifetime,
     ) -> Arc<ScriptedProvider> {
-        self.reviewer_with(script, BlockLimits::default(), None, cache_lifetime, None)
+        self.reviewer_with(
+            script,
+            BlockLimits::default(),
+            None,
+            cache_lifetime,
+            fakes::CONTEXT_WINDOW,
+        )
     }
 
     /// As [`Session::reviewer`], with the reviewer model's context window.
     pub(crate) fn reviewer_windowed(
         &mut self,
         script: Vec<Scripted>,
-        window: Option<u64>,
+        window: u64,
     ) -> Arc<ScriptedProvider> {
         self.reviewer_with(
             script,
@@ -1220,7 +1232,7 @@ impl Session {
         limits: BlockLimits,
         cost: Option<contract::provider::Cost>,
         cache_lifetime: CacheLifetime,
-        context_window: Option<u64>,
+        context_window: u64,
     ) -> Arc<ScriptedProvider> {
         let provider = Arc::new(ScriptedProvider::new(script));
         let looped = self.looped.take().unwrap().reviewer(

@@ -176,6 +176,7 @@ impl World {
                     .display()
                     .to_string(),
                 clock,
+                fakes::CONTEXT_WINDOW,
             ),
             rx,
             Vec::new(),
@@ -492,6 +493,7 @@ fn an_extension_log_taken_while_settling_is_written_and_never_saved() {
                 .display()
                 .to_string(),
             clock,
+            fakes::CONTEXT_WINDOW,
         ),
         rx,
         Vec::new(),

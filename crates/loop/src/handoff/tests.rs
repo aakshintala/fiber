@@ -31,12 +31,6 @@ fn the_defaults_are_the_documented_ones() {
 #[test]
 fn off_has_no_trigger() {
     assert_eq!(trigger_at(&settings(false, 400_000, 0.7), 1_000_000), None);
-    assert_eq!(trigger_at(&settings(false, 400_000, 0.7), 0), None);
-}
-
-#[test]
-fn an_unknown_window_leaves_the_token_trigger() {
-    assert_eq!(trigger_at(&settings(true, 400_000, 0.7), 0), Some(400_000));
 }
 
 #[test]

@@ -300,6 +300,7 @@ fn run_with(
                 .display()
                 .to_string(),
             Arc::clone(&clock),
+            fakes::CONTEXT_WINDOW,
         ),
         rx,
         vec![("builtin".to_owned(), Arc::new(tool) as Arc<dyn Tool>)],
