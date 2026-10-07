@@ -28,6 +28,14 @@ pub(crate) enum Key {
     Down,
     /// Alt+A (`ESC a` in one read).
     AltA,
+    /// Alt+Up (`CSI 1;3A`, or `ESC` then `CSI A` in one read):
+    /// `select_steering`.
+    AltUp,
+    /// Alt+Down (`CSI 1;3B`, or `ESC` then `CSI B` in one read):
+    /// `select_steering`.
+    AltDown,
+    /// Alt+X (`ESC x` in one read): `drop_steering`.
+    AltX,
 }
 
 /// One detection reply.
@@ -93,6 +101,20 @@ fn step(buf: &[u8]) -> Step {
             Some(b'[') => parse_csi(buf),
             Some(b'O') => parse_ss3(buf),
             Some(b'a') => Some((vec![Event::Key(Key::AltA)], 2)),
+            Some(b'x') => Some((vec![Event::Key(Key::AltX)], 2)),
+            // ESC before an arrow's CSI is the legacy Alt arrow.
+            Some(0x1b) if buf.get(2) == Some(&b'[') => {
+                let (events, used) = parse_csi(buf.get(1..)?)?;
+                let alt = events
+                    .into_iter()
+                    .filter_map(|event| match event {
+                        Event::Key(Key::Up) => Some(Event::Key(Key::AltUp)),
+                        Event::Key(Key::Down) => Some(Event::Key(Key::AltDown)),
+                        Event::Key(_) | Event::Reply(_) => None,
+                    })
+                    .collect();
+                Some((alt, used.saturating_add(1)))
+            }
             // Unknown escape sequence: drop ESC and the byte after it.
             Some(_) => Some((Vec::new(), 2)),
         },
@@ -145,6 +167,8 @@ fn parse_csi(buf: &[u8]) -> Step {
         0x46 if params.is_empty() => vec![Event::Key(Key::End)],
         0x41 if params.is_empty() => vec![Event::Key(Key::Up)],
         0x42 if params.is_empty() => vec![Event::Key(Key::Down)],
+        0x41 if params == b"1;3" => vec![Event::Key(Key::AltUp)],
+        0x42 if params == b"1;3" => vec![Event::Key(Key::AltDown)],
         _ => Vec::new(),
     };
     Some((events, end.saturating_add(1)))

@@ -203,6 +203,7 @@ impl App {
             }
             Key::Up | Key::Down => Effect::None,
             Key::AltA => self.open_first(),
+            Key::AltUp | Key::AltDown | Key::AltX => Effect::None,
         }
     }
 

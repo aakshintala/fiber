@@ -788,3 +788,15 @@ mod through_the_app {
         );
     }
 }
+
+#[test]
+fn the_steering_keys_do_nothing_while_the_panel_is_open() {
+    let mut queue = three();
+    let before = panel(&queue);
+    press(&mut queue, Key::AltUp, 1);
+    press(&mut queue, Key::AltDown, 1);
+    press(&mut queue, Key::AltX, 1);
+    assert_eq!(panel(&queue), before);
+    // With the panel closed they are not the panel's.
+    assert_eq!(Queue::default().on_key(&Key::AltX), None);
+}

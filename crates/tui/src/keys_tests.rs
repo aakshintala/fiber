@@ -110,8 +110,9 @@ fn esc_o_split_across_reads_is_held() {
 
 #[test]
 fn esc_with_any_other_byte_is_dropped_whole() {
-    // Alt+x: ESC and the byte after it go; the parser moves on.
-    assert_eq!(feed_all(&[b"\x1bxa"]), vec![Event::Key(Key::Char('a'))]);
+    // Alt+z, which nothing binds: ESC and the byte after it go; the parser
+    // moves on.
+    assert_eq!(feed_all(&[b"\x1bza"]), vec![Event::Key(Key::Char('a'))]);
     // An SS3 key this slice does not bind is dropped.
     assert_eq!(feed_all(&[b"\x1bOPa"]), vec![Event::Key(Key::Char('a'))]);
 }
@@ -191,4 +192,41 @@ fn esc_ending_a_read_then_a_is_esc_then_a() {
         feed_all(&[b"\x1b", b"a"]),
         vec![Event::Key(Key::Esc), Event::Key(Key::Char('a'))]
     );
+}
+
+#[test]
+fn esc_x_in_one_read_is_alt_x() {
+    assert_eq!(feed_all(&[b"\x1bx"]), vec![Event::Key(Key::AltX)]);
+    assert_eq!(
+        feed_all(&[b"\x1b", b"x"]),
+        vec![Event::Key(Key::Esc), Event::Key(Key::Char('x'))]
+    );
+}
+
+#[test]
+fn alt_arrows_in_their_csi_form() {
+    assert_eq!(feed_all(&[b"\x1b[1;3A"]), vec![Event::Key(Key::AltUp)]);
+    assert_eq!(feed_all(&[b"\x1b[1;3B"]), vec![Event::Key(Key::AltDown)]);
+    // Split across reads, the sequence is held and still parses.
+    assert_eq!(feed_all(&[b"\x1b[1;", b"3A"]), vec![Event::Key(Key::AltUp)]);
+    assert_eq!(
+        feed_all(&[b"\x1b[1;3", b"B"]),
+        vec![Event::Key(Key::AltDown)]
+    );
+}
+
+#[test]
+fn esc_then_an_arrow_in_one_read_is_the_alt_arrow() {
+    assert_eq!(feed_all(&[b"\x1b\x1b[A"]), vec![Event::Key(Key::AltUp)]);
+    assert_eq!(feed_all(&[b"\x1b\x1b[B"]), vec![Event::Key(Key::AltDown)]);
+    assert_eq!(
+        feed_all(&[b"\x1b\x1b[", b"A"]),
+        vec![Event::Key(Key::AltUp)]
+    );
+    assert_eq!(
+        feed_all(&[b"\x1b\x1b[Ax"]),
+        vec![Event::Key(Key::AltUp), Event::Key(Key::Char('x'))]
+    );
+    // ESC before another sequence is no Alt arrow.
+    assert!(feed_all(&[b"\x1b\x1b[5~"]).is_empty());
 }
