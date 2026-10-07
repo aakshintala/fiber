@@ -256,6 +256,10 @@ twice the median. The median behind each bound is a comment beside its
 `timeout-minutes` line. A job that gains work past its bound has the bound
 raised in its workflow.
 
+Every `apt-get` step sets a 5-minute `timeout-minutes` and passes the workflow's
+`APT_OPTS` (three retries, 20-second HTTP and HTTPS timeouts), so a silent mirror
+fails the step, not the job.
+
 ## Waiting on CI
 
 Every workflow's third-party actions are pinned to a commit hash. The hash is
