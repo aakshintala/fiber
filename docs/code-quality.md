@@ -78,6 +78,11 @@ Denied everywhere:
 - a lint name the toolchain does not know: rustc's `unknown_lints` and
   `renamed_and_removed_lints`, so a toolchain update that renames a lint
   fails instead of silently dropping it
+- reading or waiting on the real clock: `clippy.toml` disallows
+  `std::thread::sleep`, `Instant::now`, `SystemTime::now` and both
+  `elapsed` methods. Code reads and waits on an injected
+  `contract::clock::Clock` instead, so a test drives time
+  (`docs/testing.md`, "Values that change every run")
 
 Test code may unwrap, expect, panic and index. `clippy.toml` sets
 `allow-unwrap-in-tests`, `allow-expect-in-tests`, `allow-panic-in-tests` and

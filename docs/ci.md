@@ -256,4 +256,7 @@ Node.js version is moved to its newest major before it is pinned.
 No job polls the Actions API in a loop. The backstop's one lookup of the
 last passing `main` commit is the only Actions API call a workflow makes.
 Agents wait on the `CI` check with `gh-ci`, never with a `gh run watch`
-loop, because such loops have tripped GitHub's Actions rate limit.
+loop, because such loops have tripped GitHub's Actions rate limit. `gh-ci` is
+a small `gh` wrapper that waits with few API calls; it lives in the owner's
+agent tooling ([switchyard](https://github.com/aakshintala/switchyard)), not
+in this repository.
