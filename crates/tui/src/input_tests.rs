@@ -421,3 +421,86 @@ fn replace_and_set_type_the_text_with_the_cursor_after_it() {
     draft.set("/new");
     assert_eq!(shown(&draft), "/new|");
 }
+
+#[test]
+fn the_token_at_the_cursor_prefers_the_one_before_it() {
+    // Tokens are named by their number.
+    let mut draft = typed("a");
+    assert_eq!(draft.token_at_cursor(), None);
+    draft.paste(&lines(11));
+    draft.paste(&lines(12));
+    // Directly after #2, directly before nothing: #2.
+    assert_eq!(draft.token_at_cursor(), Some(2));
+    assert_eq!(draft.token_text(2), Some(lines(12).as_str()));
+    // Between #1 and #2: the one before wins.
+    draft.left();
+    assert_eq!(draft.token_at_cursor(), Some(1));
+    assert_eq!(draft.token_text(1), Some(lines(11).as_str()));
+    // Before #1, after a character: the one after.
+    draft.left();
+    assert_eq!(draft.token_at_cursor(), Some(1));
+    // At the start, before a character: none.
+    draft.left();
+    assert_eq!(draft.token_at_cursor(), None);
+    assert_eq!(draft.token_text(0), None);
+}
+
+#[test]
+fn new_token_text_keeps_its_number_and_counts_its_lines_again() {
+    let mut draft = typed("a");
+    draft.paste(&lines(11));
+    draft.insert('b');
+    draft.left();
+    draft.set_token(1, &lines(15));
+    assert_eq!(draft.rows(80), vec!["> a[Pasted text #1 · 15 lines]b"]);
+    assert_eq!(shown(&draft), format!("a{}|b", lines(15)));
+    // A token's text with \r line breaks reads as a paste does.
+    draft.set_token(1, &lines(12).replace('\n', "\r\n"));
+    assert_eq!(draft.expand(), format!("a{}b", lines(12)));
+}
+
+#[test]
+fn token_text_of_ten_lines_or_fewer_goes_inline() {
+    let mut draft = typed("a");
+    draft.paste(&lines(11));
+    draft.insert('b');
+    draft.left();
+    draft.set_token(1, "x\ny");
+    assert_eq!(draft.expand(), "ax\nyb");
+    assert_eq!(draft.token_at_cursor(), None);
+    // The cursor stays after the text that replaced the token.
+    assert_eq!(shown(&draft), "ax\ny|b");
+    // A later token keeps its own number.
+    draft.paste(&lines(11));
+    assert_eq!(
+        draft.rows(80).last().map(String::as_str),
+        Some("  y[Pasted text #2 · 11 lines]b")
+    );
+    // A cursor further on stays after the same text.
+    let mut draft = typed("ab");
+    draft.left();
+    draft.paste(&lines(11));
+    draft.right();
+    draft.set_token(1, "z");
+    assert_eq!(shown(&draft), "azb|");
+    // A position with no token changes nothing.
+    draft.set_token(0, "q");
+    assert_eq!(shown(&draft), "azb|");
+}
+
+#[test]
+fn ten_lines_go_inline_and_a_cursor_before_the_token_stays_put() {
+    let mut draft = typed("ab");
+    draft.left();
+    draft.paste(&lines(11));
+    draft.left();
+    // The cursor is directly before the token.
+    draft.set_token(1, &lines(10));
+    assert_eq!(shown(&draft), format!("a|{}b", lines(10)));
+    assert_eq!(draft.token_at_cursor(), None);
+    // Eleven lines stay a token.
+    let mut draft = typed("a");
+    draft.paste(&lines(12));
+    draft.set_token(1, &lines(11));
+    assert_eq!(draft.rows(80), vec!["> a[Pasted text #1 · 11 lines]"]);
+}

@@ -50,7 +50,11 @@ fn one_line(effect: Effect) -> String {
             assert_eq!(lines.len(), 1);
             lines.into_iter().next().unwrap_or_default()
         }
-        Effect::None | Effect::Quit | Effect::ListFiles | Effect::Search { .. } => {
+        Effect::None
+        | Effect::Quit
+        | Effect::ListFiles
+        | Effect::Search { .. }
+        | Effect::Editor { .. } => {
             panic!("expected one line")
         }
     }
@@ -213,7 +217,11 @@ fn esc_busy_sends_cancel() {
             let value = parse(&lines[0]);
             assert_eq!(value.get("command"), Some(&serde_json::json!("cancel")));
         }
-        Effect::None | Effect::Quit | Effect::ListFiles | Effect::Search { .. } => {
+        Effect::None
+        | Effect::Quit
+        | Effect::ListFiles
+        | Effect::Search { .. }
+        | Effect::Editor { .. } => {
             panic!("expected cancel")
         }
     }
@@ -439,7 +447,11 @@ fn rejected_cancel_shows_nothing() {
             .and_then(serde_json::Value::as_str)
             .unwrap_or_default()
             .to_owned(),
-        Effect::None | Effect::Quit | Effect::ListFiles | Effect::Search { .. } => {
+        Effect::None
+        | Effect::Quit
+        | Effect::ListFiles
+        | Effect::Search { .. }
+        | Effect::Editor { .. } => {
             panic!("expected cancel")
         }
     };

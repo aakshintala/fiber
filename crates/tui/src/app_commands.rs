@@ -9,6 +9,7 @@ use contract::events::OpeningMessage;
 use serde_json::json;
 
 use super::{App, Effect, Kind, Link, Phase, mint, read, session_command};
+use crate::editor::Target;
 use crate::keymap;
 use crate::keys::{Edit, Key};
 use crate::shell;
@@ -540,6 +541,32 @@ impl App {
         let line = session_command(&id, "cancel", &session, None).to_string();
         self.pending.insert(id, (Kind::Cancel, String::new()));
         Effect::Send(vec![line])
+    }
+
+    /// Ctrl+G: the paste token beside the cursor, or else the whole draft,
+    /// every token expanded.
+    pub(super) fn open_in_editor(&mut self) -> Effect {
+        let (target, text) = match self.draft.token_at_cursor() {
+            Some(number) => (
+                Target::Token(number),
+                self.draft.token_text(number).unwrap_or_default().to_owned(),
+            ),
+            None => (Target::Draft, self.draft.expand()),
+        };
+        Effect::Editor { target, text }
+    }
+
+    /// The editor returned: its text replaces `target`'s, the whole draft's
+    /// as typed with the cursor at its end; an error is the notice, and the
+    /// draft stays.
+    pub(crate) fn editor_returned(&mut self, target: Target, result: Result<String, String>) {
+        match (result, target) {
+            (Err(notice), _) => self.notice = Some(notice),
+            (Ok(text), Target::Token(number)) => self.draft.set_token(number, &text),
+            (Ok(text), Target::Draft) => self.draft.set(&text),
+        }
+        self.overlays.selected = 0;
+        self.edited();
     }
 
     /// `opening_message`: the session's skills join the `/` list.

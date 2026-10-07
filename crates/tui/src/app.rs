@@ -80,6 +80,13 @@ pub(crate) enum Effect {
         /// The query.
         query: String,
     },
+    /// Open `text` in the editor; its text goes back to `target`.
+    Editor {
+        /// Where the edited text goes.
+        target: crate::editor::Target,
+        /// What the editor opens.
+        text: String,
+    },
 }
 
 /// Which command the terminal sent and waits on.
@@ -237,7 +244,7 @@ impl App {
             }
             Key::AltA => self.open_first(),
             Key::CtrlR => self.open_search(),
-            Key::CtrlG => Effect::None,
+            Key::CtrlG => self.open_in_editor(),
         }
     }
 

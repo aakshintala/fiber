@@ -1031,3 +1031,14 @@ fn hand_over_that_cannot_take_the_terminal_back_quits_with_one() {
     assert_eq!(lp.hand_over(|| ran = true), Some(1));
     assert!(ran);
 }
+
+#[test]
+fn ctrl_c_or_ctrl_backslash_in_a_cooked_terminal_leaves_fiber_running() {
+    // Each test runs in its own process, so the signals reach only this
+    // test; uncaught, either would end it.
+    super::catch_interrupts();
+    signal_hook::low_level::raise(signal_hook::consts::SIGINT)
+        .unwrap_or_else(|err| panic!("raise: {err}"));
+    signal_hook::low_level::raise(signal_hook::consts::SIGQUIT)
+        .unwrap_or_else(|err| panic!("raise: {err}"));
+}

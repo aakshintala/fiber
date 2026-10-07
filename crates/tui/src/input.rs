@@ -22,6 +22,8 @@ enum Piece {
     Char(char),
     /// A pasted text shown as its label.
     Paste {
+        /// Its number, the `N` of its label.
+        number: usize,
         /// What the draft shows, `[Pasted text #N · L lines]`.
         label: String,
         /// What is sent.
@@ -106,24 +108,66 @@ impl Draft {
     /// [`PASTE_LINES`] lines, not counting a trailing line break, become
     /// one token.
     pub(crate) fn paste(&mut self, text: &str) {
-        let text: String = text
-            .replace("\r\n", "\n")
-            .replace('\r', "\n")
-            .chars()
-            .filter(|ch| matches!(ch, '\n' | '\t') || !ch.is_control())
-            .collect();
+        let text = clean(text);
         if text.is_empty() {
             return;
         }
-        let lines = text.strip_suffix('\n').unwrap_or(&text).split('\n').count();
-        if lines > PASTE_LINES {
-            let label = format!("[Pasted text #{} · {lines} lines]", self.next);
+        if line_count(&text) > PASTE_LINES {
+            let number = self.next;
             self.next = self.next.saturating_add(1);
-            self.put(Piece::Paste { label, text });
+            self.put(token(number, text));
         } else {
             for ch in text.chars() {
                 self.put(Piece::Char(ch));
             }
+        }
+    }
+
+    /// The number of the paste token directly before the cursor, else of
+    /// the one directly after it.
+    pub(crate) fn token_at_cursor(&self) -> Option<usize> {
+        [self.before(self.cursor), self.pieces.get(self.cursor)]
+            .into_iter()
+            .find_map(|piece| match piece {
+                Some(Piece::Paste { number, .. }) => Some(*number),
+                Some(Piece::Char(_)) | None => None,
+            })
+    }
+
+    /// The full text of paste token `number`.
+    pub(crate) fn token_text(&self, number: usize) -> Option<&str> {
+        self.pieces.iter().find_map(|piece| match piece {
+            Piece::Paste {
+                number: found,
+                text,
+                ..
+            } if *found == number => Some(text.as_str()),
+            Piece::Paste { .. } | Piece::Char(_) => None,
+        })
+    }
+
+    /// Replaces the text of paste token `number`, read as a paste is: the
+    /// token keeps its number and its label counts the new lines, or, at
+    /// [`PASTE_LINES`] lines or fewer, the text replaces the token inline.
+    /// The cursor stays beside the same pieces.
+    pub(crate) fn set_token(&mut self, number: usize, text: &str) {
+        let Some(at) = self.pieces.iter().position(
+            |piece| matches!(piece, Piece::Paste { number: found, .. } if *found == number),
+        ) else {
+            return;
+        };
+        let text = clean(text);
+        if line_count(&text) > PASTE_LINES {
+            if let Some(piece) = self.pieces.get_mut(at) {
+                *piece = token(number, text);
+            }
+            return;
+        }
+        let chars: Vec<Piece> = text.chars().map(Piece::Char).collect();
+        let len = chars.len();
+        self.pieces.splice(at..=at, chars);
+        if self.cursor > at {
+            self.cursor = self.cursor.saturating_add(len).saturating_sub(1);
         }
     }
 
@@ -233,10 +277,11 @@ impl Draft {
         *self = Self::default();
     }
 
-    /// Replaces the draft with `text`, typed, the cursor at its end.
+    /// Replaces the draft with `text`, typed, the cursor at its end: line
+    /// breaks read as a paste's do, and no token.
     pub(crate) fn set(&mut self, text: &str) {
         self.clear();
-        for ch in text.chars() {
+        for ch in clean(text).chars() {
             self.put(Piece::Char(ch));
         }
     }
@@ -450,6 +495,31 @@ impl Piece {
 /// A word is a run of alphanumeric characters or `_`.
 fn is_word_char(ch: char) -> bool {
     ch.is_alphanumeric() || ch == '_'
+}
+
+/// Pasted text as the draft holds it: `\r\n` and `\r` become line breaks,
+/// and control characters but line breaks and tabs go.
+fn clean(text: &str) -> String {
+    text.replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .chars()
+        .filter(|ch| matches!(ch, '\n' | '\t') || !ch.is_control())
+        .collect()
+}
+
+/// The lines of `text`, not counting a trailing line break.
+fn line_count(text: &str) -> usize {
+    text.strip_suffix('\n').unwrap_or(text).split('\n').count()
+}
+
+/// Paste token `number` holding `text`.
+fn token(number: usize, text: String) -> Piece {
+    let label = format!("[Pasted text #{number} · {} lines]", line_count(&text));
+    Piece::Paste {
+        number,
+        label,
+        text,
+    }
 }
 
 /// Appends `ch` to the last row.

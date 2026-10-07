@@ -529,7 +529,11 @@ mod through_the_app {
                 assert_eq!(lines.len(), 1);
                 lines.into_iter().next().unwrap_or_default()
             }
-            Effect::None | Effect::Quit | Effect::ListFiles | Effect::Search { .. } => {
+            Effect::None
+            | Effect::Quit
+            | Effect::ListFiles
+            | Effect::Search { .. }
+            | Effect::Editor { .. } => {
                 panic!("expected one line")
             }
         }

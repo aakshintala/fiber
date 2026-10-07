@@ -8,6 +8,7 @@
 mod app;
 mod approvals;
 mod bindings;
+mod editor;
 mod files;
 mod format;
 mod input;
@@ -24,6 +25,7 @@ use std::fs::File;
 use std::io::{self, PipeReader, PipeWriter};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread;
@@ -34,7 +36,7 @@ use ratatui::backend::{Backend, ClearType, CrosstermBackend, WindowSize};
 use ratatui::buffer::{Buffer, Cell};
 use ratatui::layout::{Position, Rect, Size};
 use ratatui::{Terminal, TerminalOptions, Viewport};
-use signal_hook::consts::SIGWINCH;
+use signal_hook::consts::{SIGINT, SIGQUIT, SIGWINCH};
 use signal_hook::iterator::Signals;
 
 use crate::app::{App, Effect};
@@ -89,6 +91,7 @@ pub fn run(
     // SIGWINCH is caught from before the size is read, so no resize is
     // missed; its thread starts after the first frame.
     let signals = Signals::new([SIGWINCH]).ok();
+    catch_interrupts();
     let _restore = term::Guard;
     let Ok((width, height)) = term::setup(&tty) else {
         return 1;
@@ -135,6 +138,20 @@ pub fn run(
     // blocked and end with the process.
     terminal.hang_up();
     code
+}
+
+/// Catches SIGINT and SIGQUIT for the rest of the process's life, so `Ctrl+C`
+/// or `Ctrl+\` typed while the editor has the terminal in cooked mode ends
+/// only the editor. In raw mode the tty sends neither. Never unregistered:
+/// unregistering does not restore the default disposition. The editor,
+/// after `exec`, has the default one.
+fn catch_interrupts() {
+    let caught = Arc::new(AtomicBool::new(false));
+    for signal in [SIGINT, SIGQUIT] {
+        match signal_hook::flag::register(signal, Arc::clone(&caught)) {
+            Ok(_) | Err(_) => {}
+        }
+    }
 }
 
 /// Restores the terminal [`run`] set up: leaves the alternate screen, shows
@@ -346,6 +363,11 @@ impl<B: Backend> Loop<B> {
                                 search.search(generation, query);
                             }
                         }
+                        Effect::Editor { target, text } => {
+                            if let Some(code) = self.open_editor(target, &text) {
+                                return Some(code);
+                            }
+                        }
                     }
                 }
             }
@@ -438,14 +460,27 @@ impl<B: Backend> Loop<B> {
         }
     }
 
+    /// Ctrl+G: opens `text` in the editor `$VISUAL` or `$EDITOR` names,
+    /// with the terminal handed over, and gives the app what it returned.
+    /// `Some(1)` when the terminal cannot be taken back.
+    fn open_editor(&mut self, target: editor::Target, text: &str) -> Option<i32> {
+        let Some(command) = editor::command(|name| std::env::var(name).ok()) else {
+            self.app
+                .editor_returned(target, Err(editor::NO_EDITOR.to_owned()));
+            return None;
+        };
+        let mut result = Err(String::new());
+        let code = self.hand_over(|| result = editor::run(&command, text));
+        if code.is_none() {
+            self.app.editor_returned(target, result);
+        }
+        code
+    }
+
     /// Hands the terminal to `program`, run in the foreground on this
     /// thread: the reader paused, the terminal restored, then both taken
     /// back and the whole screen repainted at the size read again. `Some(1)`
     /// when the terminal cannot be taken back.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "Ctrl+G calls it in the next commit")
-    )]
     fn hand_over(&mut self, program: impl FnOnce()) -> Option<i32> {
         if let Some(reader) = &mut self.reader {
             reader.pause();
