@@ -223,8 +223,10 @@ impl App {
 
     /// The text y copies and Ctrl+G opens: a conversation line's rows, a
     /// code block's code, a paste token's text, a notice's whole text, a
-    /// steering row's text; None for a control.
-    fn item_text(&self, id: TargetId) -> Option<String> {
+    /// steering row's text; None for a control. A turn spanning dropped
+    /// pages loads them first: the first press asks for them and says so,
+    /// and the next press copies the whole turn.
+    fn item_text(&mut self, id: TargetId) -> Option<String> {
         match id {
             TargetId::Line(target) => self.line_text(target),
             TargetId::Token(number) => self.draft.token_text(number).map(str::to_owned),
@@ -263,9 +265,17 @@ impl App {
 
     /// Turn `at`'s rows with no target of their own: the prompt bubble, a
     /// right-aligned row, trimmed at both ends, every other row trimmed
-    /// at the end, joined by `\n`; None when that leaves nothing.
-    fn turn_text(&self, at: usize) -> Option<String> {
-        self.pages.turn_text(at)
+    /// at the end, joined by `\n`; None when that leaves nothing, and None
+    /// with a notice while its dropped pages load.
+    fn turn_text(&mut self, at: usize) -> Option<String> {
+        let missing = crate::turn_text::request_turn(&mut self.pages, at);
+        if !missing.is_empty() {
+            self.notices.push("Loading history…".to_owned());
+            return None;
+        }
+        let text = self.pages.turn_text(at);
+        crate::turn_text::release_turn(&mut self.pages, at);
+        text
     }
 
     /// Scrolls so focus row `row` shows, keeping a wrapped target together

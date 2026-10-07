@@ -1205,3 +1205,194 @@ fn the_notice_overlay_hides_the_turn_stops() {
     key(&mut app, Key::BackTab);
     assert_eq!(app.focused(), None);
 }
+
+/// One sequenced line of a session whose first turn spans pages.
+fn seq_line(seq: u64, kind: &str, payload: serde_json::Value, action: Option<&str>) -> Line {
+    Line::Session(contract::Envelope {
+        kind: kind.to_owned(),
+        session_id: contract::SessionId(SESSION.to_owned()),
+        ts: seq.saturating_mul(1_000),
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: action.map(|id| contract::ActionId(id.to_owned())),
+        seq: Some(contract::Seq(seq)),
+        payload: payload.as_object().cloned().unwrap_or_default(),
+    })
+}
+
+/// A session whose first turn runs 40 steps, so it spans pages, then a
+/// short second turn so the first turn leaves the resident window.
+fn spanning_session() -> Vec<Line> {
+    let mut lines = Vec::new();
+    let mut seq = 0u64;
+    let mut push = |kind: &str, payload: serde_json::Value, action: Option<String>| {
+        let action = action.as_deref();
+        lines.push(seq_line(seq, kind, payload, action));
+        seq = seq.saturating_add(1);
+    };
+    push(
+        "turn_started",
+        serde_json::json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "go"}]}]}),
+        None,
+    );
+    for step in 0..40 {
+        let message = format!("m_{step}");
+        push("step_started", serde_json::json!({}), None);
+        push(
+            "assistant_message_started",
+            serde_json::json!({}),
+            Some(message.clone()),
+        );
+        push(
+            "text_completed",
+            serde_json::json!({"text": format!("reply {step}")}),
+            Some(message.clone()),
+        );
+        push(
+            "assistant_message_completed",
+            serde_json::json!({"outcome": "completed"}),
+            Some(message),
+        );
+    }
+    push(
+        "turn_completed",
+        serde_json::json!({"outcome": "completed"}),
+        None,
+    );
+    push(
+        "turn_started",
+        serde_json::json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "next"}]}]}),
+        None,
+    );
+    push("step_started", serde_json::json!({}), None);
+    push(
+        "assistant_message_started",
+        serde_json::json!({}),
+        Some("m_last".to_owned()),
+    );
+    push(
+        "text_completed",
+        serde_json::json!({"text": "last reply"}),
+        Some("m_last".to_owned()),
+    );
+    push(
+        "assistant_message_completed",
+        serde_json::json!({"outcome": "completed"}),
+        Some("m_last".to_owned()),
+    );
+    push(
+        "turn_completed",
+        serde_json::json!({"outcome": "completed"}),
+        None,
+    );
+    lines
+}
+
+/// The durable envelopes behind `lines`, as `history` answers them.
+fn envelopes_of(lines: &[Line]) -> Vec<contract::Envelope> {
+    lines
+        .iter()
+        .filter_map(|line| match line {
+            Line::Session(envelope) => Some(envelope.clone()),
+            Line::Hub(_) => None,
+        })
+        .collect()
+}
+
+/// Loads every page `app` needs from `envelopes`, as the frame loop does.
+fn load_needed(app: &mut App, envelopes: &[contract::Envelope]) {
+    while let Some(range) = app.needs().first().cloned() {
+        let chunk: Vec<contract::Envelope> = envelopes
+            .iter()
+            .filter(|line| line.seq.is_some_and(|seq| range.contains(&seq)))
+            .cloned()
+            .collect();
+        assert!(!chunk.is_empty(), "no lines for {range:?}");
+        app.load(chunk);
+        assert_ne!(app.needs().first(), Some(&range), "loading did not settle");
+    }
+}
+
+/// `lines` open in an app of `height`, with every needed page loaded.
+fn spanning_app(lines: &[Line], envelopes: &[contract::Envelope], height: u16) -> App {
+    let mut app = attached(60, height);
+    for line in lines {
+        app.on_line(line.clone());
+    }
+    load_needed(&mut app, envelopes);
+    frame(&mut app);
+    app
+}
+
+/// The whole text of turn 0, from an app tall enough to hold every page.
+fn whole_turn_zero(lines: &[Line], envelopes: &[contract::Envelope]) -> String {
+    let mut app = spanning_app(lines, envelopes, 200);
+    assert!(app.pages().part(0).is_some(), "the tall app drops nothing");
+    app.focus = Some(TargetId::Turn(0));
+    match app.on_key(Key::Char('y'), now()) {
+        Effect::Copy(text) => text,
+        Effect::None
+        | Effect::Send(_)
+        | Effect::Quit
+        | Effect::ListFiles
+        | Effect::Search { .. }
+        | Effect::Editor { .. } => panic!("the whole turn copies"),
+    }
+}
+
+#[test]
+fn y_on_a_turn_spanning_dropped_pages_loads_the_whole_turn() {
+    let lines = spanning_session();
+    let envelopes = envelopes_of(&lines);
+    let want = whole_turn_zero(&lines, &envelopes);
+    assert!(want.contains("reply 0"), "{want:?}");
+    assert!(want.contains("reply 39"), "{want:?}");
+    let mut app = spanning_app(&lines, &envelopes, 8);
+    assert!(app.pages().index().pages().len() > 2, "too few pages");
+    assert!(
+        app.pages().part(0).is_none(),
+        "the first page stays resident"
+    );
+    app.focus = Some(TargetId::Turn(0));
+    // The dropped fragments are not copied in part: the first press asks
+    // for them and says so.
+    assert_eq!(app.on_key(Key::Char('y'), now()), Effect::None);
+    assert_eq!(app.notice(), Some("Loading history…"));
+    assert!(
+        !app.needs().is_empty(),
+        "nothing asked for the dropped pages"
+    );
+    load_needed(&mut app, &envelopes);
+    assert!(
+        app.pages().part(0).is_some(),
+        "the dropped page did not load"
+    );
+    app.focus = Some(TargetId::Turn(0));
+    assert_eq!(app.on_key(Key::Char('y'), now()), Effect::Copy(want));
+}
+
+#[test]
+fn ctrl_g_on_a_turn_spanning_dropped_pages_opens_the_whole_turn() {
+    let lines = spanning_session();
+    let envelopes = envelopes_of(&lines);
+    let want = whole_turn_zero(&lines, &envelopes);
+    let mut app = spanning_app(&lines, &envelopes, 8);
+    assert!(
+        app.pages().part(0).is_none(),
+        "the first page stays resident"
+    );
+    app.focus = Some(TargetId::Turn(0));
+    assert_eq!(app.on_key(Key::CtrlG, now()), Effect::None);
+    assert_eq!(app.notice(), Some("Loading history…"));
+    load_needed(&mut app, &envelopes);
+    app.focus = Some(TargetId::Turn(0));
+    assert_eq!(
+        app.on_key(Key::CtrlG, now()),
+        Effect::Editor {
+            target: crate::editor::Target::Item,
+            text: want
+        },
+    );
+}

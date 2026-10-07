@@ -28,6 +28,7 @@ mod shell;
 mod slash;
 mod term;
 mod turn;
+mod turn_text;
 mod view;
 mod window;
 

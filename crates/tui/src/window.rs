@@ -211,6 +211,8 @@ pub(crate) struct Pages {
     stale: BTreeSet<usize>,
     /// Pages whose load failed since the width last changed.
     failed: BTreeSet<usize>,
+    /// Dropped pages a whole-turn copy asked for, kept until it runs.
+    wanted: BTreeSet<usize>,
     width: u16,
     /// The rows of the open page's lines too wide for one row, by text, so
     /// counting it again after each line wraps only what changed.
@@ -238,6 +240,7 @@ impl Pages {
             overrides: BTreeMap::new(),
             stale: BTreeSet::new(),
             failed: BTreeSet::new(),
+            wanted: BTreeSet::new(),
             width,
             wrapped: HashMap::new(),
             #[cfg(test)]
@@ -506,14 +509,16 @@ impl Pages {
     }
 
     /// The seq ranges to load, in order: the window's pages not resident,
-    /// then the pages whose row counts are stale. A page may be listed
-    /// twice; once loaded, it is no longer needed.
+    /// then the pages whose row counts are stale, then the pages a
+    /// whole-turn copy asked for. A page may be listed twice; once loaded,
+    /// it is no longer needed.
     pub(crate) fn needs(&self, top: usize, height: usize) -> Vec<RangeInclusive<Seq>> {
         let wanted = |at: &usize| {
             !self.failed.contains(at) && self.closed.get(*at).is_some_and(Option::is_none)
         };
         let mut pages: Vec<usize> = self.index.window(top, height).filter(wanted).collect();
         pages.extend(self.stale.iter().copied().filter(wanted));
+        pages.extend(self.wanted.iter().copied().filter(wanted));
         pages
             .into_iter()
             .filter_map(|at| self.index.pages().get(at))
@@ -521,14 +526,40 @@ impl Pages {
             .collect()
     }
 
-    /// Drops the cards of every closed page outside the window.
+    /// Drops the cards of every closed page outside the window, keeping
+    /// the pages a whole-turn copy asked for until it runs.
     pub(crate) fn trim(&mut self, top: usize, height: usize) {
         let window = self.index.window(top, height);
         for (at, part) in self.closed.iter_mut().enumerate() {
-            if !window.contains(&at) {
+            if !window.contains(&at) && !self.wanted.contains(&at) {
                 *part = None;
             }
         }
+    }
+
+    /// How many pages the conversation holds, the open one included.
+    pub(crate) fn page_count(&self) -> usize {
+        self.seeds.len()
+    }
+
+    /// The first turn page `at` holds, if it holds one.
+    pub(crate) fn page_first(&self, at: usize) -> Option<usize> {
+        self.seeds.get(at).map(|seed| seed.first)
+    }
+
+    /// Whether the next page begins inside the same turn.
+    pub(crate) fn page_cut(&self, at: usize) -> bool {
+        self.seeds.get(at).is_some_and(|seed| seed.cut)
+    }
+
+    /// Keeps page `at` resident for a whole-turn copy.
+    pub(crate) fn want(&mut self, at: usize) {
+        self.wanted.insert(at);
+    }
+
+    /// Lets page `at` drop with the window again.
+    pub(crate) fn unwant(&mut self, at: usize) {
+        self.wanted.remove(&at);
     }
 
     /// Re-counts every page at `width`: a resident page in place, a dropped
