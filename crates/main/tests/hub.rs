@@ -437,3 +437,15 @@ fn a_too_long_fiber_home_is_reported_on_stderr_and_in_the_hub_log() {
     );
     assert!(!home.join("run").join("hub").exists());
 }
+
+#[test]
+#[should_panic(expected = "for the hub to start and say hub_hello")]
+fn a_hub_that_never_says_hello_fails_the_connect_wait() {
+    let setup = Setup::new();
+    let run = setup.home().join("run");
+    fs::create_dir_all(&run).unwrap();
+    // Accepts connections in the kernel's backlog and never speaks.
+    let _silent = std::os::unix::net::UnixListener::bind(run.join("hub")).unwrap();
+    let hub = Arc::new(Mutex::new(None));
+    connect_hub_within(&setup, &hub, std::time::Duration::from_millis(500));
+}
