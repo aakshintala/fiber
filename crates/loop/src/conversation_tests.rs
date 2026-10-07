@@ -1589,3 +1589,67 @@ fn a_steered_image_renders_on_the_user_message_and_the_carry() {
     assert_eq!(conversation, vec![expected.clone()]);
     assert_eq!(carry.input, vec![expected]);
 }
+
+#[test]
+fn rebuild_stamps_each_side_of_a_switch_with_the_model_in_force() {
+    use contract::events::{ModelChanged, ModelSettings, ReasoningCompleted, SwitchSource};
+    let reasoning = |text: &str| {
+        Event::ReasoningCompleted(ReasoningCompleted {
+            text: text.into(),
+            provider_item: None,
+        })
+    };
+    let switched = |before: &str, after: &str| {
+        Event::ModelChanged(ModelChanged {
+            before: ModelSettings {
+                model: before.into(),
+                thinking: None,
+                cache_lifetime: contract::events::CacheLifetime::OneHour,
+                credential: Some("work".into()),
+            },
+            after: ModelSettings {
+                model: after.into(),
+                thinking: None,
+                cache_lifetime: contract::events::CacheLifetime::OneHour,
+                credential: Some("work".into()),
+            },
+            source: SwitchSource::Driver,
+        })
+    };
+    let lines = vec![
+        line("reasoning_completed", &reasoning("first"), Some("a_1")),
+        line("model_changed", &switched("fake/old", "fake/new"), None),
+        line("reasoning_completed", &reasoning("second"), Some("a_2")),
+    ];
+    // The rebuild starts from the first switch's `before`, not the passed model.
+    let rebuilt = super::rebuild(&lines, "fake/ignored").unwrap();
+    let models: Vec<&str> = rebuilt
+        .iter()
+        .filter_map(|input| match input {
+            Input::Reasoning { model, .. } => Some(model.as_str()),
+            Input::User { .. }
+            | Input::Assistant { .. }
+            | Input::ToolCall { .. }
+            | Input::ToolResult { .. } => None,
+        })
+        .collect();
+    assert_eq!(models, vec!["fake/old", "fake/new"]);
+}
+
+#[test]
+fn rebuild_without_a_switch_stamps_with_the_session_model() {
+    use contract::events::ReasoningCompleted;
+    let lines = vec![line(
+        "reasoning_completed",
+        &Event::ReasoningCompleted(ReasoningCompleted {
+            text: "only".into(),
+            provider_item: None,
+        }),
+        Some("a_1"),
+    )];
+    let rebuilt = super::rebuild(&lines, "fake/only").unwrap();
+    assert!(matches!(
+        &rebuilt[0],
+        Input::Reasoning { model, .. } if model == "fake/only"
+    ));
+}

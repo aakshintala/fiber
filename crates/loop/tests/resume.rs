@@ -4667,3 +4667,47 @@ fn calls_before_the_action_are_cancelled_and_calls_after_it_run_after_the_reply(
     let first_start = kinds.iter().position(|k| k == "tool_call_started").unwrap();
     assert!(last_decision < first_start, "{kinds:?}");
 }
+
+fn switched(after: &str, thinking: Option<&str>, credential: Option<&str>) -> Event {
+    Event::ModelChanged(contract::events::ModelChanged {
+        before: contract::events::ModelSettings {
+            model: support::MODEL.into(),
+            thinking: None,
+            cache_lifetime: contract::events::CacheLifetime::OneHour,
+            credential: Some("work".into()),
+        },
+        after: contract::events::ModelSettings {
+            model: after.into(),
+            thinking: thinking.map(str::to_owned),
+            cache_lifetime: contract::events::CacheLifetime::OneHour,
+            credential: credential.map(str::to_owned),
+        },
+        source: contract::events::SwitchSource::Driver,
+    })
+}
+
+#[test]
+fn resumed_folds_model_credential_and_thinking_from_the_last_switch() {
+    let history = History::new(vec![]);
+    history.write(preamble(Some("work")), None);
+    history.write(
+        switched("fake/second", Some("high"), Some("personal")),
+        None,
+    );
+    history.write(switched("fake/third", None, None), None);
+    let resumed = r#loop::resumed(&history.dir).unwrap();
+    assert_eq!(resumed.model.as_deref(), Some("fake/third"));
+    assert_eq!(resumed.credential, None);
+    assert_eq!(resumed.thinking.as_deref(), None);
+}
+
+#[test]
+fn resumed_keeps_the_switch_thinking_as_the_session_choice() {
+    let history = History::new(vec![]);
+    history.write(preamble(Some("work")), None);
+    history.write(switched("fake/second", Some("high"), Some("work")), None);
+    let resumed = r#loop::resumed(&history.dir).unwrap();
+    assert_eq!(resumed.thinking.as_deref(), Some("high"));
+    assert_eq!(resumed.model.as_deref(), Some("fake/second"));
+    assert_eq!(resumed.credential.as_deref(), Some("work"));
+}

@@ -75,6 +75,21 @@ pub(crate) fn rebuild_and_sent(
     seed: Carry,
 ) -> Result<Rebuilt, Error> {
     let completed = completed_actions(lines)?;
+    // Live and rebuilt `Input`s carry the model in force at their line:
+    // from the first `model_changed`'s `before`, each switch stamping
+    // what follows with its `after`.
+    let mut stamped = model.to_owned();
+    for line in lines.iter().filter(|l| l.is_durable()) {
+        if line.kind != "model_changed" {
+            continue;
+        }
+        if let Some(Event::ModelChanged(changed)) =
+            Event::from_envelope(line).map_err(Error::Unreadable)?
+        {
+            stamped = changed.before.model.clone();
+            break;
+        }
+    }
     let mut rendered = Rendered {
         carry: seed,
         ..Rendered::default()
@@ -82,7 +97,10 @@ pub(crate) fn rebuild_and_sent(
     let mut sent = None;
     for line in lines.iter().filter(|l| l.is_durable()) {
         if let Some(event) = Event::from_envelope(line).map_err(Error::Unreadable)? {
-            rendered.push(&event, line.action_id.as_ref(), model, &completed, open);
+            rendered.push(&event, line.action_id.as_ref(), &stamped, &completed, open);
+            if let Event::ModelChanged(changed) = &event {
+                stamped = changed.after.model.clone();
+            }
             if matches!(event, Event::AssistantMessageStarted(_)) {
                 sent = Some(rendered.conversation.len());
             }
@@ -352,9 +370,6 @@ impl Rendered {
 /// Adds what `event`, about `action`, puts in the conversation. `model` is
 /// the model reference in force, which produced any reasoning, text part or
 /// tool call.
-// debt: the model reference is the session's one model until `/model`
-// switches it; then it comes from the log's `model_changed`. A text part's
-// `provider_item` is stamped with that same reference.
 pub(crate) fn render(
     conversation: &mut Vec<Input>,
     event: &Event,
