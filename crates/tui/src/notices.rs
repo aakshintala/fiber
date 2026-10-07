@@ -180,7 +180,7 @@ fn pad(text: &str, width: usize) -> String {
 impl App {
     /// The notice boxes the view floats over the conversation.
     pub(crate) fn notices(&self) -> Vec<NoticeBox> {
-        self.notices.boxes(self.width)
+        self.notices.boxes(self.screen.width())
     }
 
     /// The notice overlay's text while it is open.

@@ -412,10 +412,9 @@ impl App {
             return;
         }
         self.phase = Phase::Starting;
-        self.pages.clear();
+        self.screen.clear();
         self.overlays.slash_rows = slash::rows(&[]);
         self.overlays.commands_id = None;
-        self.scroll.follow();
     }
 
     /// The attached session, when the command can go out: with none
@@ -478,7 +477,9 @@ impl App {
         let page = height.saturating_sub(1).max(1);
         let total: usize = keymap::lines()
             .iter()
-            .map(|line| crate::view::rows(ratatui::text::Line::raw(line.as_str()), self.width))
+            .map(|line| {
+                crate::view::rows(ratatui::text::Line::raw(line.as_str()), self.screen.width())
+            })
             .sum();
         let last = total.saturating_sub(height);
         self.overlays.keymap = match key {

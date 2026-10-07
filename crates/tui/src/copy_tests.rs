@@ -64,7 +64,7 @@ fn row_of(app: &App, width: u16, height: u16, needle: &str) -> Option<u16> {
 /// there, if any, is clicked.
 fn click(app: &mut App, col: u16, row: u16) -> Effect {
     app.clear_copied();
-    let area = ratatui::layout::Rect::new(0, 0, app.width, app.height);
+    let area = ratatui::layout::Rect::new(0, 0, app.screen.width(), app.screen.height());
     let mut buf = ratatui::buffer::Buffer::empty(area);
     let targets = crate::view::render(app, area, &mut buf, None);
     crate::mouse::hit(&targets, col, row).map_or(Effect::None, |target| app.on_click(target))
