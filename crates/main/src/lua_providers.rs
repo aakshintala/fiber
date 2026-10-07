@@ -19,6 +19,27 @@ use crate::failed;
 /// each request, `Some` when the provider registered `credential` or `sign`.
 pub(crate) type KeyAndSigner = (Option<Secret>, Option<Arc<dyn Signer>>);
 
+/// What a session reaches one provider with: the key or signer
+/// [`session_credential`] gave, and the Lua provider that signs its
+/// requests and looks up its costs, if one registered it.
+#[derive(Clone)]
+pub(crate) struct Access {
+    pub(crate) key: Option<Secret>,
+    pub(crate) signer: Option<Arc<dyn Signer>>,
+    pub(crate) lua: Option<Arc<LuaProvider>>,
+}
+
+impl Access {
+    /// The access a read `credential` and the provider's `lua` give.
+    pub(crate) fn new(lua: Option<&Arc<LuaProvider>>, (key, signer): KeyAndSigner) -> Self {
+        Self {
+            key,
+            signer,
+            lua: lua.cloned(),
+        }
+    }
+}
+
 /// Merges every Lua provider's models into `providers`
 /// (`docs/model-routing.md`, "Model discovery"): with no cached copy
 /// `models()` runs synchronously once at startup for a provider with a
@@ -79,18 +100,18 @@ pub(crate) fn add_lua(
     Ok(naming)
 }
 
-/// The session's key and signer for `provider`: no key when it registered
-/// `credential`, so no key file is needed, else the key `key` reads. The
+/// The session's key and signer for `provider`, whose Lua provider is
+/// `lua`: no key when it registered `credential`, so no key file is
+/// needed, else the key `key` reads. The
 /// token is read once, so a failing `credential()` fails here with its
 /// code: before any session line for a session, and into the loop for a
 /// reviewer (`docs/permissions.md`, "How it runs").
 pub(crate) fn session_credential(
-    providers: &Providers,
+    lua: Option<&Arc<LuaProvider>>,
     provider: &ProviderData,
     label: &str,
     key: impl FnOnce() -> Result<Secret, Failure>,
 ) -> Result<KeyAndSigner, Failure> {
-    let lua = providers.lua(&provider.name);
     let pair = CredentialPair::for_provider(provider, label);
     let key = match lua {
         Some(lua)

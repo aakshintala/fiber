@@ -17,7 +17,7 @@ use contract::shapes::Failure;
 use contract::{ErrorCode, ThinkingLevel};
 use extensions::{LuaProvider, Providers};
 
-use crate::lua_providers::KeyAndSigner;
+use crate::lua_providers::{Access, KeyAndSigner};
 
 /// One read credential, by provider name: its label, and its key and
 /// signer.
@@ -177,12 +177,13 @@ fn reviewer_for(
     {
         return Err(limit_failure(provider));
     }
-    let mut lookup = |provider: &ProviderData| -> Result<(String, KeyAndSigner), Failure> {
-        switching
+    let mut lookup = |provider: &ProviderData| -> Result<Access, Failure> {
+        let (_, read) = switching
             .credentials
             .get(&provider.name)
             .cloned()
-            .ok_or_else(|| limit_failure(&provider.name))
+            .ok_or_else(|| limit_failure(&provider.name))?;
+        Ok(Access::new(switching.registry.lua(&provider.name), read))
     };
     crate::choose_reviewer(&switching.registry, &switching.config, session, &mut lookup)
 }

@@ -512,13 +512,13 @@ fn parts_in(
     let context_window = settings::context_window(model.model, &model.reference())?;
     let label =
         recorded_credential.map_or_else(|| config.credential_label(model.provider), str::to_owned);
-    let (key, signer) =
-        lua_providers::session_credential(&providers, model.provider, &label, || {
-            crate::credential::session_credential(&config, model.provider, recorded_credential)
-                .map(|(_, key)| key)
-        })?;
+    let lua = providers.lua(&model.provider.name);
+    let (key, signer) = lua_providers::session_credential(lua, model.provider, &label, || {
+        crate::credential::session_credential(&config, model.provider, recorded_credential)
+            .map(|(_, key)| key)
+    })?;
     let session_credential = (key.clone(), signer.clone());
-    let provider = connect(model, key, signer, providers.lua(&model.provider.name))?;
+    let provider = connect(model, key, signer, lua)?;
     // The credentials read at startup, frozen into `Switching` once the
     // reviewer is chosen: the session's entry first, so a reviewer on the
     // session's provider reuses its key and signer.
@@ -528,21 +528,20 @@ fn parts_in(
         (label.clone(), session_credential),
     );
     let reviewer = {
-        let mut lookup = |provider: &config::ProviderData| -> Result<(String, lua_providers::KeyAndSigner), Failure> {
-            if let Some(entry) = credentials.get(&provider.name) {
-                return Ok(entry.clone());
-            }
-            let label = config.credential_label(provider);
-            let (key, signer) = lua_providers::session_credential(&providers, provider, &label, || {
-                crate::credential::session_credential(&config, provider, None)
-                    .map(|(_, key)| key)
-            })?;
-            credentials.insert(
-                provider.name.clone(),
-                (label.clone(), (key.clone(), signer.clone())),
-            );
-            Ok((label, (key, signer)))
-        };
+        let mut lookup =
+            |provider: &config::ProviderData| -> Result<lua_providers::Access, Failure> {
+                let lua = providers.lua(&provider.name);
+                if let Some((_, read)) = credentials.get(&provider.name) {
+                    return Ok(lua_providers::Access::new(lua, read.clone()));
+                }
+                let label = config.credential_label(provider);
+                let read = lua_providers::session_credential(lua, provider, &label, || {
+                    crate::credential::session_credential(&config, provider, None)
+                        .map(|(_, key)| key)
+                })?;
+                credentials.insert(provider.name.clone(), (label, read.clone()));
+                Ok(lua_providers::Access::new(lua, read))
+            };
         choose_reviewer(&providers, &config, &model, &mut lookup)
     };
     // Every refreshed provider the session does not use is unloaded once
@@ -675,17 +674,11 @@ fn reviewer_reference(config: &Config, session: &extensions::Model<'_>) -> Resul
 /// reuses the session's key and signer, and a `command` credential runs once
 /// per process; a switch passes a map-only lookup, which never reads a
 /// source (`docs/model-routing.md`, "Keys, tokens and OAuth").
-#[allow(
-    clippy::type_complexity,
-    reason = "the lookup's shape is the contract: provider in, label and key out"
-)]
 fn choose_reviewer(
     providers: &Providers,
     config: &Config,
     session: &extensions::Model<'_>,
-    credential: &mut dyn FnMut(
-        &config::ProviderData,
-    ) -> Result<(String, lua_providers::KeyAndSigner), Failure>,
+    credential: &mut dyn FnMut(&config::ProviderData) -> Result<lua_providers::Access, Failure>,
 ) -> Result<r#loop::Reviewer, Failure> {
     let typed = reviewer_reference(config, session)?;
     let model = providers.resolve(&typed).map_err(|e| failed(e.code(), e))?;
@@ -693,11 +686,11 @@ fn choose_reviewer(
     // Another provider's reviewer goes through the same path, so a Lua
     // reviewer model works: the token when it registered `credential`,
     // else the key.
-    let (_, (key, signer)) = credential(model.provider)?;
+    let access = credential(model.provider)?;
     // The token is read once, so a failing `credential()` fails here:
     // not a startup error, the loop gets it and every reviewed call
     // escalates it (`docs/permissions.md`, "How it runs").
-    let provider = connect(model, key, signer, providers.lua(&model.provider.name))?;
+    let provider = connect(model, access.key, access.signer, access.lua.as_ref())?;
     Ok(r#loop::Reviewer {
         provider,
         model: Model {
