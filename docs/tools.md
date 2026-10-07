@@ -108,10 +108,15 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
   tool that changes files sets it, an extension's included.
 - `artifact`: the path to the full output, present when the result was cut or
   when an `after_tool` hook returned text for the artifact.
-- `control`: instructions to the loop, absent on most results. The one field
-  defined is `handoff`, a handoff note: the loop restarts the model's context
-  from it at the step boundary (`docs/handoff.md`). Any tool may set it; the
-  loop acts on the field, never on which tool set it.
+- `control`: instructions to the loop, absent on most results. Three fields
+  are defined. `handoff`, a handoff note: the loop restarts the model's
+  context from it at the step boundary (`docs/handoff.md`). `questions`, a
+  `questions` array: once every call in the step has completed, the turn ends
+  `completed` with the questions of every call that set it, in call order, on
+  `turn_completed`, after any handoff in the step. `name`, a session name: the
+  loop writes `session_named` just before the call's `tool_call_completed`, or
+  fails the call `name_pinned` while the person's name pins it. Any tool may
+  set them; the loop acts on the fields, never on which tool set them.
 - Images are written to the session's `artifacts/` (see `docs/state.md`) as
   the processed file (`docs/model-routing.md`, "Image limits") and referenced
   by path, never inlined as base64 in the log.
@@ -685,8 +690,10 @@ a program, such as a delegate (a fork included) or a `fiber ask` session.
 - The description tells the model to put a recommended option first, with
   "(Recommended)" in its label, and to ask with this tool rather than list
   choices in its reply.
-- The definition is at most 300 tokens and counts toward the built-in budget
-  ("Size budget in CI").
+- The definition is at most 1,200 bytes serialised, about 300 tokens, which a
+  test checks, and counts toward the built-in budget ("Size budget in CI").
+- The limits are in the schema (`minItems`, `maxItems`, `maxLength`), so the
+  tool is sent with `strict: false`.
 - A call that breaks these rules fails with `invalid_arguments`, as any call
   does ("Before a call runs").
 - The tool declares no effect, so it never reaches a reviewer
@@ -713,6 +720,7 @@ included) or a `fiber ask` session, and a session that has been sent `close`.
 
 - The turn ends `completed`, with the questions on `turn_completed`. The
   call's result is one line saying the questions went to the driver.
+  `ask_user` returns `control.questions` ("What a result carries").
 - A `close` that arrives while a question is pending ends the turn the same
   way.
 - The driver answers by resuming the session. The answers arrive as the next
@@ -948,6 +956,9 @@ first prompt.
   sessions. Its definition counts toward the built-in budget ("Size budget in
   CI").
 - Each name is written as `session_named` (`docs/events.md`).
+- The limits are `minLength` and `maxLength` in the schema, so the tool is
+  sent with `strict: false`. The call returns `control.name`, and the loop
+  writes `session_named` and applies the pin.
 
 ## Messaging other sessions
 

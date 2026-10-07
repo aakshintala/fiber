@@ -181,7 +181,15 @@ stream, in the order they happened in the session. Each finishes, including
 any host call it waits on, before the next starts, so a hook never sees state
 that misses an earlier event. Timers are not ordered against the session.
 They run in the gaps: when the stream is empty, or while its current item
-waits on a host call.
+waits on a host call. A tool call runs in the gaps, as timers do, so a long
+tool never holds up the extension's hooks.
+
+**A host call that fails raises a Lua error** whose value is
+`{ code, message }`, which `pcall` catches. An uncaught one fails the
+callback, and the callback's own failure rule applies. `state_too_large` and
+`closing` reach Lua this way. `host.drive` raises the rejection's `code` and
+`message` on `command_rejected`, and returns the command's `result`, or
+`true`, on `command_accepted`.
 
 **A host call suspends the code that made it.** Fiber runs every callback as
 a coroutine. A host call such as `host.http` or `host.model` suspends it until
@@ -236,6 +244,17 @@ fiber.command(name, { description, timeout, run })
 
 What a harness declares is `docs/delegates.md`, "Harness extensions".
 
+A tool's `effects` is a table, `{ effects, paths?, reversible }` as
+`docs/permissions.md`, "Effects", declares, or a function of the call's
+arguments that returns one. The function is bounded by the tool's `timeout`,
+and an error fails the call `tool_error` before it runs. `run` returns a
+string, one text part, or `{ content, details?, error = { code, message }?,
+control? }`, where `control` takes the fields any tool may set
+(`docs/tools.md`, "What a result carries"). A raised error fails the call
+`tool_error` with its message. When two extensions register one tool name,
+neither gets it, a `notice` names both, and configuration can rename one, as
+for commands ("Commands and screens").
+
 A tool, harness, search backend, hook or watcher registers before the
 session's tool set is fixed (`docs/prompt-cache.md`, "Tools"), which is why
 every enabled Lua extension runs its `init.lua` at session start ("Loading,
@@ -273,12 +292,18 @@ json.decode(str) / json.encode(value)   -- JSON, host-provided (Lua has none bui
 - **`host.secret`** reads only a name the manifest's `secrets` lists. Any
   other name is an error in the calling code. A declared secret that is not
   stored returns `nil`, and `fiber doctor` names it.
-- **`host.model`** takes a model reference or a role, messages and a token
-  limit. It goes through the session's provider routing and credentials, and
-  writes `usage_recorded` naming the extension. It uses its own prompt-cache
-  key, the session's id plus the extension's name, so it never shares the
-  session's key (`docs/prompt-cache.md`). Any callback may call it, bounded by
-  that callback's timeout.
+- **`host.model`** takes a model reference, never a role, an optional system
+  text, messages and a token limit, and returns `{ text, usage }`:
+  `host.model({ model, system, messages, max_tokens })`. A message's
+  `content` is a string or content parts (`docs/events.md`), and `usage` has
+  the `tokens` and `cost` of its `usage_recorded`. It goes through the
+  session's provider routing and credentials, and writes `usage_recorded`
+  naming the extension. Its prompt-cache key is `"{id}:extension:{name}"`,
+  where `{id}` is the calling session's own id, a fork's included, so it never
+  shares the session's key or the reviewer's (`docs/prompt-cache.md`). The
+  retry policy applies within the callback's timeout. At `budget.usd` it
+  raises `budget_exceeded` and does not fail the turn. Any callback may call
+  it, bounded by that callback's timeout.
 - **`host.exec`** runs a program in its own process group, which is stopped on
   cancel and at shutdown as a tool's is (`docs/tools.md`, "Shell"). Inside a
   tool call, the tool's declared `executes` effect is what the permission
@@ -419,7 +444,8 @@ state.keys()
   `latest`. A delegate that is not a fork starts with no extension state.
 - **A hook's writes go with its change.** A write made inside a hook is
   logged just before the line the hook changed, and is dropped if the hook
-  fails. Any other write takes effect for the extension at once and is logged
+  fails. A hook that changes no line has its writes logged when it returns,
+  before whatever it ran for. Any other write takes effect for the extension at once and is logged
   at the loop's next drain of its inbox, so a crash before then loses it.
   Once `fiber_exited` is written there is no next drain: `state.set` and
   `state.unset` fail with code `closing` ("When a session ends").
@@ -520,7 +546,7 @@ calls exactly as for the model's ("Running a tool").
 | `before_model_call` | A step's model request is built and the budget allows it, before it is sent (`docs/loop.md`, "Spending budget") | the model reference, and the session's `usage` so far, its delegates included (`docs/events.md`) | a refusal with a reason |
 | `after_tool` | A call that ran has returned, before its output is cut, its artifact is written or it is logged; and each job delivery, before it joins the conversation or is logged | the tool's name, the arguments, `status`, the full output, `details`, `process`, and `delivery` for a job delivery | replacement `content`, replacement `details`, text for the artifact |
 | `turn_end` | The model has replied without calling a tool, so the turn would complete, before `turn_completed` is written | the model's final reply | a message to continue the turn with |
-| `before_handoff` | A handoff has started, before the note request | the trigger, the person's instructions, and the conversation as the model would be sent it | a handoff note |
+| `before_handoff` | A handoff has started, before the note request | the trigger, the person's instructions, and the conversation as Fiber's messages of content parts, without the note request | a handoff note (a string) |
 
 Returning nothing leaves things as they were.
 
@@ -587,8 +613,16 @@ job ends, it runs once more on the job's whole output file, with `delivery`
 `output_file`, and the artifact text it returns replaces the file. A Fiber
 delegate's `events.jsonl` is another session's log, so the `output_file` pass
 skips it. `delivery`
-is absent for an ordinary call. A redaction hook can ignore it and treat every
-input alike, so job output takes the same path as every other tool output.
+is absent for an ordinary call. A `completion` delivery hands the hook, as
+`output`, the notice as the model would be sent it, with the job's `status`.
+An output file of at most 1 MiB is handed as `output`; a larger one is handed
+as `path` and `size`, and the hook rewrites it through `host.fs` under the
+per-path lock or returns artifact text that replaces it. When an
+`output_file` hook fails `blocking`, the file is replaced with a one-line note
+that the output was withheld; a `non-blocking` failure keeps the file and
+gives a `notice`. Apart from that large-file case, a redaction hook can ignore
+`delivery` and treat every input alike, so job output takes the same path as
+every other tool output.
 One window remains: while a job runs, its output file is written directly by
 the program, so it holds raw output until the job ends. An extension that
 compacts build and test output returns a short summary as `content` and the
@@ -607,6 +641,11 @@ agent working until a condition is met is built on this point.
 **`before_handoff`** lets an extension write the handoff note instead of the
 session's own model. When a hook returns a note, Fiber makes no note request.
 When none does, Fiber makes its own (`docs/handoff.md`, "The handoff note").
+With several hooks, each sees the note the one before returned, and the last
+note wins; `handoff_completed.extension` names the extension whose note was
+used. The hook does not run for a handoff a tool started, which already has
+its note. The hook is handed the whole conversation, so a Lua extension that
+registers it raises `memory_mib` to fit the conversations it handles.
 
 ### When several hooks share a point
 
@@ -802,6 +841,18 @@ plain: `/databricks-models`, not
 `/databricks:models`. When two extensions register the same name, neither
 gets it, a `notice` names both, and configuration can rename one. An
 extension may replace a built-in command by name, as it may a tool.
+
+The `command` driver command is answered with `command_accepted` once it is
+admitted, before `run` runs, and `run`'s return value is ignored. A command
+reports through `host.status`, `host.widget`, `host.ask` or `host.emit`, and a
+`run` that errors gives a `notice` naming the extension. A command is allowed
+during a turn and joins the extension's ordered stream in session order; a
+`host.drive` inside it follows each driver command's own rules.
+`host.ask(kind, spec)` takes the keys of `interaction_requested` for that kind
+(`prompt`, `options`, `fields`) and returns the answer keys of
+`interaction_resolved` (`confirmed`, `labels`, `text`, `answers`, `note`), or
+`{ declined = true }`. When the callback's timeout passes while a `host.ask`
+is pending, the interaction is resolved `declined` with `by` `fiber`.
 
 A command may run tools with `host.tool`. The person or driver who invoked it
 is the admission, and each inner call names the command's invocation

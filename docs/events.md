@@ -224,7 +224,7 @@ optional `multiSelect` (`docs/tools.md`, "The call").
 
 | Key | Type | Required | Meaning |
 |---|---|---|---|
-| `source` | string | yes | `driver`, a client's command; `extension`, an extension's `host.drive`; `session`, another session's `session_message` (`docs/tools.md`, "Messaging other sessions"); or `fiber`, Fiber's own message, such as the ending notice (`docs/tools.md`, "Background jobs"); a closed set |
+| `source` | string | yes | `driver`, a client's command; `extension`, an extension's `host.drive`, or a message a `turn_end` hook returned; `session`, another session's `session_message` (`docs/tools.md`, "Messaging other sessions"); or `fiber`, Fiber's own message, such as the ending notice (`docs/tools.md`, "Background jobs"); a closed set |
 | `extension` | string | no | the extension's name, when `source` is `extension` |
 | `from_session_id` | string | no | the sending session's id, when `source` is `session` |
 | `command_id` | string | no | the id of the `prompt`, `steer` or `message` command that sent it; present unless `source` is `fiber` or a `turn_end` hook returned the message (`docs/extensions.md`, "The hook points") |
@@ -613,7 +613,7 @@ Durable. The call's outcome.
 | `details` | any JSON | no | data for clients, such as an edit's diff; never sent to the model |
 | `artifact` | string | no | the full output's path, when the result was cut or a hook returned text for it |
 | `changes` | array | no | on a call that changed files, one object per file: `path` (string) and `added` and `removed` (integers, lines) |
-| `control` | object | no | instructions to the loop; the one key is `handoff` (string), a handoff note (`docs/handoff.md`) |
+| `control` | object | no | instructions to the loop: `handoff` (string), a handoff note (`docs/handoff.md`); `questions` (`questions`); `name` (string), a session name (`docs/tools.md`, "What a result carries") |
 | `changed_by` | `changed_by` | no | when an `after_tool` hook rewrote the result |
 | `loaded` | array of strings | no | on `tool_search`, the names of the tools it loaded (`docs/tools.md`, "Tool search") |
 | `provider_item` | any JSON | no | on a call the provider ran, its result block exactly as it arrived, sent back unchanged only to the model that produced it (`docs/tools.md`, "Hosted by the provider"); absent on a call Fiber runs |
@@ -632,8 +632,9 @@ which tool ran (`docs/tools.md`, "What a result carries").
 
 A line whose content a hook changed carries `changed_by`. It appears on
 `tool_call_started` for rewritten arguments, on `tool_call_completed` for a
-rewritten result, and on a `turn_started` message and `steering_applied` for
-a rewritten message. The line holds what the hook returned; the original is
+rewritten result, on a `turn_started` message and `steering_applied` for
+a rewritten message, and on `job_line`, `delegate_finished` and
+`job_completed` for a rewritten job delivery. The line holds what the hook returned; the original is
 never logged (`docs/extensions.md`, "Hooks").
 
 A call stopped by Fiber or the user is `cancelled`, not a signal failure. An
@@ -1185,6 +1186,7 @@ Durable. What a monitor delivered to the model.
 | `job_id` | string | yes | the monitor's job |
 | `lines` | string | yes | the batch of lines delivered, cut as `docs/tools.md`, "Background jobs", says |
 | `suppressed` | integer | no | deliveries suppressed since the last one, when any were |
+| `changed_by` | `changed_by` | no | when an `after_tool` hook rewrote the lines |
 
 #### `delegate_finished`
 
@@ -1198,6 +1200,7 @@ Durable. Written just before `job_completed`.
 | `questions` | `questions` | no | when the delegate's turn ended on `ask_user` |
 | `usage` | `usage` | yes | the run's totals |
 | `worktree` | object | no | when isolated: `path` and `branch` (strings) and `dirty` (boolean) |
+| `changed_by` | `changed_by` | no | when an `after_tool` hook rewrote the final message |
 
 #### `job_completed`
 
@@ -1210,6 +1213,8 @@ Durable.
 | `error` | `error` | no | on `failed` |
 | `process` | `process` | no | for a job that ran a process |
 | `output_tail` | string | no | for a failed job, the tail of its output, capped |
+| `content` | content parts | no | when an `after_tool` hook replaced the completion notice: the notice the model was sent, which a resume re-sends |
+| `changed_by` | `changed_by` | no | with `content` |
 
 #### `jobs_pending_notified`
 

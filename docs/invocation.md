@@ -386,7 +386,10 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 Rejection codes: `malformed`, `invalid_arguments`, `unknown_command`,
 `not_subscribed`, `busy`, `stale_request`, `not_step_boundary`,
 `session_held`, `delegate_session`, `summary_failed`, `closing`,
-`duplicate_command`, `session_not_found`.
+`duplicate_command`, `session_not_found`, `message_refused` (a
+`before_message` hook refused the prompt or steer; the message gives its
+reason and extension) and `hook_failed` (a `blocking` `before_message` hook
+failed). A `fiber ask` whose first prompt is refused this way exits 1.
 
 **`reply` answers every interaction that asks something, not just approvals.**
 `docs/architecture.md` fixes the set: "Fiber ships one closed, versioned set

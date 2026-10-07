@@ -238,7 +238,7 @@ Every code Fiber emits. "Where" names the lines that carry it.
 | `mcp_server_unapproved` | exit | a repository's required MCP server is not approved; run `fiber approve` in the repository |
 | `mcp_server_unavailable` | tool call, MCP server | the server failed to start or died |
 | `mcp_tool_removed` | tool call | the server has removed the tool |
-| `message_refused` | tool call | the target session's `before_message` refused a session message |
+| `message_refused` | tool call, driver command | a `before_message` hook refused a message: a session message, or a person's or a driver's |
 | `model_ambiguous` | exit | a bare model id matches models of two or more installed providers; prefix the provider |
 | `model_invalid` | notice | a model's `extra_body` names a field Fiber builds, its `web_search` names a type its protocol does not read, it declares no `context_window`, or its `thinking_default` is not among its `thinking_levels`, so the model is left out of the model list (`docs/model-routing.md`, "Extra request body fields", "Hosted web search", "Thinking") |
 | `model_not_found` | model call, turn | the provider does not know the model |
@@ -289,7 +289,7 @@ Notices, for a failure outside any action:
 |---|---|
 | `command_conflict` | two extensions registered the same command name |
 | `config_key_ignored` | an unknown key, or a key a repository may not set |
-| `extension_failed` | an extension failed to start or missed its deadline, or its install record is missing or unreadable, so loading skipped it (`docs/extensions.md`, "Installing") |
+| `extension_failed` | an extension failed to start or missed its deadline, or its install record is missing or unreadable, so loading skipped it, or loading skipped one of its registrations; the message names which (`docs/extensions.md`, "Installing") |
 | `extension_incompatible` | an extension needs a newer `fiber` or a different extension API version, so loading skipped it |
 | `extension_shadowed` | a repository's approved copy of an extension loads in place of the personal install of the same name; the message names both versions |
 | `hook_failed` | a `non-blocking` hook or a watcher failed |
