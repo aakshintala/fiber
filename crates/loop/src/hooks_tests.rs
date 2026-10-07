@@ -322,23 +322,24 @@ fn run_with(
     });
     let turn = done_rx.recv_timeout(TURN_DEADLINE).expect("the turn ended");
     drop(inbox);
-    let mut streamed = Vec::new();
     // The loop is dropped once its turn returns, so the watcher ends. A
     // turn that fails writes no `turn_completed`: the end breaks the loop
     // too.
-    loop {
-        let got = watcher
-            .recv_timeout(TURN_DEADLINE)
-            .expect("a turn_completed line or the log's end in time");
-        let Ok(Some(line)) = got else {
-            break;
-        };
-        let last = line.kind == "turn_completed";
-        streamed.push(line);
-        if last {
-            break;
-        }
-    }
+    let streamed = fakes::within(
+        "a turn_completed line or the log's end",
+        TURN_DEADLINE,
+        move || {
+            let mut streamed = Vec::new();
+            while let Ok(Some(line)) = watcher.recv() {
+                let last = line.kind == "turn_completed";
+                streamed.push(line);
+                if last {
+                    break;
+                }
+            }
+            streamed
+        },
+    );
     let session = home.path().join("s_test");
     Ran {
         turn,
@@ -853,17 +854,21 @@ fn extensions_loaded_writes_the_set_then_each_notice() {
     )
     .unwrap();
     drop(log);
-    let mut streamed = Vec::new();
-    loop {
-        match watcher
-            .recv_timeout(TURN_DEADLINE)
-            .expect("the log's remaining lines in time")
-        {
-            Ok(Some(line)) => streamed.push(line),
-            Ok(None) => break,
-            Err(e) => panic!("the extensions watcher failed: {e}"),
-        }
-    }
+    let streamed = fakes::within(
+        "the log's remaining lines (extensions)",
+        TURN_DEADLINE,
+        move || {
+            let mut streamed = Vec::new();
+            loop {
+                match watcher.recv() {
+                    Ok(Some(line)) => streamed.push(line),
+                    Ok(None) => break,
+                    Err(e) => panic!("the extensions watcher failed: {e}"),
+                }
+            }
+            streamed
+        },
+    );
     let kinds: Vec<&str> = streamed.iter().map(|l| l.kind.as_str()).collect();
     assert_eq!(kinds, ["extensions_loaded", "notice"]);
     assert_eq!(
@@ -902,17 +907,21 @@ fn mcp_servers_started_writes_each_failure_then_each_notice() {
     )
     .unwrap();
     drop(log);
-    let mut streamed = Vec::new();
-    loop {
-        match watcher
-            .recv_timeout(TURN_DEADLINE)
-            .expect("the log's remaining lines in time")
-        {
-            Ok(Some(line)) => streamed.push(line),
-            Ok(None) => break,
-            Err(e) => panic!("the MCP watcher failed: {e}"),
-        }
-    }
+    let streamed = fakes::within(
+        "the log's remaining lines (MCP servers)",
+        TURN_DEADLINE,
+        move || {
+            let mut streamed = Vec::new();
+            loop {
+                match watcher.recv() {
+                    Ok(Some(line)) => streamed.push(line),
+                    Ok(None) => break,
+                    Err(e) => panic!("the MCP watcher failed: {e}"),
+                }
+            }
+            streamed
+        },
+    );
     let kinds: Vec<&str> = streamed.iter().map(|l| l.kind.as_str()).collect();
     assert_eq!(kinds, ["mcp_server_failed", "notice"]);
     assert_eq!(streamed[0].payload["server"], "fx");
