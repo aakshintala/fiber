@@ -1,4 +1,4 @@
-//! `fiber completion <shell>` (`docs/invocation.md`, "Fiber itself"): a
+//! `fiber completion <shell>` (`docs/invocation.md`, "Commands and flags"): a
 //! completion script generated from the parser's own definitions. It
 //! completes the visible commands and flags, and no values.
 
