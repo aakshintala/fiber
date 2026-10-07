@@ -1006,6 +1006,11 @@ Configuration:
   config get <key>                              Print the effective value and the layer it came from
   config set [--project | --repo] <key> <value>  Write one key in one layer's file
 
+The hub:
+  hub install [--port <port>]  Register the hub as a login service
+  hub uninstall                Remove the hub's login service; running sessions carry on
+  hub status [--json]          Print the hub's state: running, version, port, clients, devices, installed
+
 Flags:
   -h, --help     Print this menu
   -v, --version  Print the version
