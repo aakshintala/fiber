@@ -485,9 +485,8 @@ fn events(lines: &[Envelope]) -> String {
 
 #[test]
 fn the_paging_report_counts_every_loaded_line() {
-    let report =
-        super::measure_paging(&events(&session()), 60, 12, fakes::clock::FakeClock::new())
-            .unwrap_or_else(|error| panic!("{error}"));
+    let report = super::measure_paging(&events(&session()), 60, 12, fakes::clock::FakeClock::new())
+        .unwrap_or_else(|error| panic!("{error}"));
     // Every page loaded while paging up keeps its first line: dropping one
     // draws fewer rows.
     assert!(report.contains("rows: 313\n"), "{report}");
