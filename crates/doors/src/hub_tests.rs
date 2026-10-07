@@ -173,7 +173,7 @@ fn eof_before_hello_retries_the_whole_connect_once() {
     let temp = Temp::new();
     let listener = UnixListener::bind(temp.run().join("hub")).unwrap();
     let served = Arc::new(AtomicUsize::new(0));
-    thread::spawn({
+    let server = thread::spawn({
         let served = Arc::clone(&served);
         move || {
             // The first connection dies silent: the idle-exit race. The
@@ -187,6 +187,9 @@ fn eof_before_hello_retries_the_whole_connect_once() {
     });
     let hub = run_connect(temp.dir.clone(), || Ok(()), fakes::clock::FakeClock::new()).unwrap();
     assert_eq!(hub.1.kind, "hub_hello");
+    // `connect` returns once the hello is read, which can be before the
+    // server counts its second connection.
+    server.join().unwrap();
     assert_eq!(served.load(Ordering::SeqCst), 2);
 }
 
