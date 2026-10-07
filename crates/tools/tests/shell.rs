@@ -31,6 +31,12 @@ use tools::Shell;
 
 const DEADLINE: Duration = Duration::from_secs(5);
 
+/// The bound on a child's first ready line. How long a child takes to start
+/// follows the machine's load, not the test: at a load of 40 to 100 on 11
+/// cores 5 s was not enough. 20 s is the per-wait bound `crates/main/tests`
+/// use. Later lines come from the running command and keep `DEADLINE`.
+const CHILD_START: Duration = Duration::from_secs(20);
+
 /// One bound for a whole `print_steps` sequence.
 const STEPS: Duration = Duration::from_secs(15);
 
@@ -431,7 +437,7 @@ fn the_call_waits_until_the_group_is_empty() {
         hold = quote(&hold),
     );
     let running = start(dir.path().to_path_buf(), command, None, CancelToken::new());
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(CHILD_START)[0];
     let watchdog = Watchdog::group(pgid);
     let _child = ready.wait(DEADLINE);
     assert!(
@@ -462,7 +468,7 @@ fn a_timeout_is_not_stopped_until_the_deadline() {
         Some(1000),
         CancelToken::new(),
     );
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(CHILD_START)[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(DEADLINE);
     assert!(group_alive(pgid));
@@ -493,7 +499,7 @@ fn with_no_timeout_the_run_parks_at_ten_minutes() {
         None,
         cancel.clone(),
     );
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(CHILD_START)[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(DEADLINE);
     assert!(
@@ -533,7 +539,7 @@ fn a_cancel_after_the_timeout_fired_stays_a_timeout() {
         Some(1000),
         cancel.clone(),
     );
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(CHILD_START)[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(DEADLINE);
     assert!(
@@ -563,7 +569,7 @@ fn a_command_that_ignores_sigterm_is_killed_after_the_grace() {
         None,
         cancel.clone(),
     );
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(CHILD_START)[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(DEADLINE);
     cancel.cancel();
@@ -593,7 +599,7 @@ fn a_descendant_that_ignores_sigterm_is_killed_with_the_group() {
         None,
         cancel.clone(),
     );
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(CHILD_START)[0];
     let watchdog = Watchdog::group(pgid);
     let pids = ready.wait(DEADLINE);
     let holders = life.watch();
@@ -625,9 +631,9 @@ fn a_pipe_held_open_after_a_normal_end_keeps_the_exit() {
         None,
         CancelToken::new(),
     );
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(CHILD_START)[0];
     let watchdog = Watchdog::group(pgid);
-    let holder = ready.wait(DEADLINE)[0];
+    let holder = ready.wait(CHILD_START)[0];
     let holders = life.watch();
     let _guard = KillPid(holder);
     assert!(
@@ -662,9 +668,9 @@ fn an_escapee_that_holds_the_pipe_is_indeterminate() {
         None,
         cancel.clone(),
     );
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(CHILD_START)[0];
     let watchdog = Watchdog::group(pgid);
-    let escapee = ready.wait(DEADLINE)[0];
+    let escapee = ready.wait(CHILD_START)[0];
     let holders = life.watch();
     let _guard = KillPid(escapee);
     cancel.cancel();
@@ -966,7 +972,7 @@ fn run_in_background_returns_a_receipt_while_the_command_runs() {
         Arc::clone(&jobs),
         CancelToken::new(),
     );
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(CHILD_START)[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(DEADLINE);
     let output = running.output.recv_timeout(DEADLINE).expect("the receipt");
@@ -1016,7 +1022,7 @@ fn a_running_job_emits_what_it_prints_after_the_move_as_job_deltas() {
         Arc::clone(&jobs),
         CancelToken::new(),
     );
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(CHILD_START)[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(DEADLINE);
     let output = running.output.recv_timeout(DEADLINE).expect("the receipt");
@@ -1062,7 +1068,7 @@ fn a_command_moves_after_thirty_seconds_without_being_restarted() {
         Arc::clone(&jobs),
         CancelToken::new(),
     );
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(CHILD_START)[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(DEADLINE);
     let move_at = running.start + Duration::from_secs(30);
@@ -1121,7 +1127,7 @@ fn the_background_command_moves_a_running_call_before_thirty_seconds() {
         Arc::clone(&jobs),
         CancelToken::new(),
     );
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(CHILD_START)[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(DEADLINE);
     assert!(
@@ -1188,7 +1194,7 @@ fn a_call_that_moved_by_thirty_seconds_is_not_moved_again() {
         Arc::clone(&jobs),
         CancelToken::new(),
     );
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(CHILD_START)[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(DEADLINE);
     assert!(
@@ -1224,7 +1230,7 @@ fn a_run_in_background_call_is_not_registered_as_foreground() {
         Arc::clone(&jobs),
         CancelToken::new(),
     );
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(CHILD_START)[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(DEADLINE);
     running.output.recv_timeout(DEADLINE).expect("the receipt");
@@ -1247,7 +1253,7 @@ fn a_timeout_at_thirty_seconds_stops_in_the_foreground() {
         Arc::clone(&jobs),
         CancelToken::new(),
     );
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(CHILD_START)[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(DEADLINE);
     assert!(
@@ -1285,7 +1291,7 @@ fn a_shell_that_exits_with_members_moves_and_names_them() {
         Arc::clone(&jobs),
         CancelToken::new(),
     );
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(CHILD_START)[0];
     let watchdog = Watchdog::group(pgid);
     let output = running
         .output
@@ -1344,7 +1350,7 @@ fn a_moved_job_times_out_from_the_commands_start() {
         Arc::clone(&jobs),
         CancelToken::new(),
     );
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(CHILD_START)[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(DEADLINE);
     let _output = running.output.recv_timeout(DEADLINE).expect("the receipt");
@@ -1414,7 +1420,7 @@ fn stopping_a_job_cancels_it_and_a_turn_cancel_does_not() {
         Arc::clone(&jobs),
         watched.clone(),
     );
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(CHILD_START)[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(DEADLINE);
     let output = running.output.recv_timeout(DEADLINE).expect("the receipt");
@@ -1475,7 +1481,7 @@ fn a_background_command_whose_open_fails_leaves_no_registration() {
         Arc::clone(&jobs),
         CancelToken::new(),
     );
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(CHILD_START)[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(DEADLINE);
     assert!(
@@ -1515,7 +1521,7 @@ fn a_failed_open_leaves_the_command_running_in_the_foreground() {
         jobs,
         CancelToken::new(),
     );
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(CHILD_START)[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(DEADLINE);
     assert!(
@@ -1653,7 +1659,7 @@ fn a_tty_command_has_a_terminal_for_all_three_streams_and_as_its_controlling_ter
         None,
         Arc::clone(&jobs),
     );
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(CHILD_START)[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(DEADLINE);
     assert!(
@@ -1740,7 +1746,7 @@ fn the_receipt_waits_250_ms_for_output_on_the_clock() {
         None,
         Arc::clone(&jobs),
     );
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(CHILD_START)[0];
     let watchdog = Watchdog::group(pgid);
     let due = running.start + Duration::from_millis(250);
     assert!(
@@ -1776,7 +1782,7 @@ fn what_a_job_is_typed_reaches_the_program_and_its_answer_is_in_the_file() {
         None,
         Arc::clone(&jobs),
     );
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(CHILD_START)[0];
     let watchdog = Watchdog::group(pgid);
     let due = running.start + Duration::from_millis(250);
     assert!(running.clock.await_parked(due, DEADLINE));
@@ -1813,7 +1819,7 @@ fn a_tty_job_past_its_timeout_fails_and_stop_cancels_it() {
         Some(5_000),
         Arc::clone(&jobs),
     );
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(CHILD_START)[0];
     let watchdog = Watchdog::group(pgid);
     assert!(
         running
@@ -1824,7 +1830,7 @@ fn a_tty_job_past_its_timeout_fails_and_stop_cancels_it() {
     let _receipt = running.output.recv_timeout(DEADLINE).expect("the receipt");
     let timeout_at = running.start + Duration::from_secs(5);
     assert!(
-        running.clock.await_parked(timeout_at, DEADLINE),
+        running.clock.await_parked(timeout_at, CHILD_START),
         "the job did not park at its timeout"
     );
     assert!(group_alive(pgid), "stopped before the deadline");
@@ -1859,7 +1865,7 @@ fn a_cancel_stops_a_write_to_a_terminal_whose_program_never_reads() {
         None,
         Arc::clone(&jobs),
     );
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(CHILD_START)[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(DEADLINE);
     assert!(
@@ -2029,7 +2035,7 @@ fn a_monitor_moves_at_once_with_its_receipt() {
         None,
         Arc::clone(&jobs),
     );
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(CHILD_START)[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(DEADLINE);
     let output = running.output.recv_timeout(DEADLINE).expect("the receipt");
@@ -2072,7 +2078,7 @@ fn a_monitor_whose_errors_file_cannot_be_created_says_its_standard_error_is_disc
         block = quote(&block),
     );
     let running = start_monitor(dir.path().to_path_buf(), command, None, Arc::clone(&jobs));
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(CHILD_START)[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(DEADLINE);
     let output = running.output.recv_timeout(DEADLINE).expect("the receipt");
@@ -2147,7 +2153,7 @@ fn standard_output_lines_reach_the_model_and_standard_error_its_own_file() {
         block = quote(&block),
     );
     let running = start_monitor(dir.path().to_path_buf(), command, None, Arc::clone(&jobs));
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(CHILD_START)[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(DEADLINE);
     let output = running.output.recv_timeout(DEADLINE).expect("the receipt");
@@ -2194,7 +2200,7 @@ fn an_incomplete_last_line_is_flushed_before_the_end() {
         block = quote(&block),
     );
     let running = start_monitor(dir.path().to_path_buf(), command, None, Arc::clone(&jobs));
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(CHILD_START)[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(DEADLINE);
     let _receipt = running.output.recv_timeout(DEADLINE).expect("the receipt");
@@ -2246,7 +2252,7 @@ fn a_suppressed_count_still_pending_is_sent_before_the_end() {
         Some(LONG_DEADLINE_MS),
         Arc::clone(&jobs),
     );
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(CHILD_START)[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(DEADLINE);
     let _receipt = running.output.recv_timeout(DEADLINE).expect("the receipt");
@@ -2287,7 +2293,7 @@ fn sustained_output_for_thirty_seconds_floods_and_stops_the_monitor() {
         Some(LONG_DEADLINE_MS),
         Arc::clone(&jobs),
     );
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(CHILD_START)[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(DEADLINE);
     let _receipt = running.output.recv_timeout(DEADLINE).expect("the receipt");
@@ -2337,7 +2343,7 @@ fn output_that_pauses_for_two_seconds_ends_the_run_and_does_not_flood() {
         Some(LONG_DEADLINE_MS),
         Arc::clone(&jobs),
     );
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(CHILD_START)[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(DEADLINE);
     let _receipt = running.output.recv_timeout(DEADLINE).expect("the receipt");
@@ -2369,7 +2375,7 @@ fn a_monitor_ends_at_its_deadline_as_a_timeout() {
         Some(5_000),
         Arc::clone(&jobs),
     );
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(CHILD_START)[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(DEADLINE);
     let _receipt = running.output.recv_timeout(DEADLINE).expect("the receipt");
