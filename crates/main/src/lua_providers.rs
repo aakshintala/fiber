@@ -28,18 +28,36 @@ pub(crate) type KeyAndSigner = (Option<Secret>, Option<Arc<dyn Signer>>);
 /// refresh leaves the old copy. A refresh never touches `providers`, so a
 /// running session's tool definitions never change. Then fills per-account
 /// host placeholders, so a session chooses from filled URLs.
+///
+/// Returns every model of every provider as `(provider, id)` pairs, taken
+/// after `add_lua` and before placeholders are filled, so a model left out
+/// with `model_unconfigured` still counts toward ambiguity.
 // debt: notices from discovery are dropped, as `parts_with` drops
 // them; surfaced when #382 lands.
 pub(crate) fn add_lua(
     extensions: &SessionExtensions,
     providers: &mut Providers,
     config: &Config,
-) -> Result<(), Failure> {
+) -> Result<Vec<(String, String)>, Failure> {
     for (extension, provider) in extensions.lua_providers() {
         // debt: notices from discovery are dropped, as `parts_with` drops
         // them; surfaced when #382 lands.
         let _notices = providers.add_lua(extension, provider, config);
     }
+    let naming: Vec<(String, String)> = providers
+        .names()
+        .flat_map(|name| {
+            providers
+                .get(name)
+                .map(|data| {
+                    data.models
+                        .iter()
+                        .map(|model| (name.to_owned(), model.id.clone()))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        })
+        .collect();
     // debt: notices from placeholders are dropped, as above; surfaced
     // when #382 lands.
     let _notices = providers
@@ -58,7 +76,7 @@ pub(crate) fn add_lua(
         Some(config::refresh_after(config)),
     );
     let _detached = started;
-    Ok(())
+    Ok(naming)
 }
 
 /// The session's key and signer for `provider`: no key when it registered

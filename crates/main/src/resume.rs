@@ -133,11 +133,17 @@ fn resumed_session(
     // model that no longer resolves fails here, before any session line is
     // written. Configuration and the project key still come from the launch
     // directory; the workspace is the first `session_started`'s, wherever
-    // the resume runs.
+    // the resume runs. The recorded thinking level is read before `folded`
+    // moves into `Loop::resume`.
+    let recorded_thinking = folded
+        .thinking
+        .as_deref()
+        .and_then(|level| level.parse::<contract::ThinkingLevel>().ok());
     let parts = match crate::parts_with(
         model,
         folded.model.as_deref(),
         folded.credential.as_deref(),
+        recorded_thinking,
         Arc::clone(&clock),
     ) {
         Ok(mut parts) => {
@@ -166,6 +172,8 @@ fn resumed_session(
         extensions,
         locks,
         mcp,
+        switching,
+        switchable,
         web_search,
         ..
     } = parts;
@@ -263,7 +271,10 @@ fn resumed_session(
                 )
                 .map(|looped| {
                     let looped = crate::session_extensions::hooked(looped.jobs(jobs), &extensions);
-                    looped.handoff(handoff).on_handoff(forget)
+                    looped
+                        .handoff(handoff)
+                        .on_handoff(forget)
+                        .switcher(switching.closure(), switchable)
                 }),
                 budget,
                 idle,

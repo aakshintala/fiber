@@ -26,6 +26,7 @@ mod session_command;
 mod session_extensions;
 mod settings;
 mod shutdown;
+mod switch;
 
 #[cfg(test)]
 #[path = "live_tests.rs"]
@@ -37,6 +38,7 @@ mod lua_warm_tests;
 #[path = "reviewer_tests.rs"]
 mod reviewer_tests;
 
+use std::collections::BTreeMap;
 use std::fmt::Display;
 use std::io::{self, IsTerminal, Write};
 use std::os::fd::AsFd;
@@ -52,7 +54,7 @@ use connect::connect;
 use contract::inbox::Delivery;
 use contract::provider::Provider;
 use contract::shapes::Failure;
-use contract::{ErrorCode, SessionId};
+use contract::{ErrorCode, SessionId, ThinkingLevel};
 use doors::{Session, failure};
 use extensions::Providers;
 use log::Log;
@@ -96,6 +98,10 @@ struct Parts {
     /// The session's per-path lock, shared by the file tools and `host.fs`.
     locks: Arc<tools::PathLocks>,
     mcp: mcp_servers::Specs,
+    /// The second-model preparation, for `Loop::switcher`.
+    switching: switch::Switching,
+    /// The session's own thinking choice and hosted search type at start.
+    switchable: r#loop::Switchable,
     /// The session model's hosted search type, such as `web_search_20250305`.
     web_search: Option<String>,
 }
@@ -427,6 +433,7 @@ fn parts_with(
     model: Option<String>,
     recorded: Option<&str>,
     recorded_credential: Option<&str>,
+    recorded_thinking: Option<ThinkingLevel>,
     clock: Arc<dyn contract::clock::Clock>,
 ) -> Result<Parts, Failure> {
     let home = config::fiber_home_from_env().map_err(|e| failed(e.code(), e))?;
@@ -438,6 +445,7 @@ fn parts_with(
         model,
         recorded,
         recorded_credential,
+        recorded_thinking,
         clock,
         prompt_files::agents_home(std::env::var_os("HOME")),
     )
@@ -447,12 +455,17 @@ fn parts_with(
 /// `workspace` rather than the environment's. `agents_home` is the skills
 /// directory the prompt reads; the test passes `None` so the host's skills
 /// cannot overflow the fixture model's context.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one composition of the session's parts: homes, model choice and clock"
+)]
 fn parts_in(
     home: PathBuf,
     workspace: PathBuf,
     model: Option<String>,
     recorded: Option<&str>,
     recorded_credential: Option<&str>,
+    recorded_thinking: Option<ThinkingLevel>,
     clock: Arc<dyn contract::clock::Clock>,
     agents_home: Option<PathBuf>,
 ) -> Result<Parts, Failure> {
@@ -471,11 +484,14 @@ fn parts_in(
     // and docs/extensions.md, "The extension API version"; fixed by #382.
     // Notices from configuration and loading are dropped.
     let (mut providers, _notices) = Providers::load(&home).map_err(|e| failed(e.code(), e))?;
+    // The registry as `Switching::new` fills it for a switch: before any
+    // `add_lua`.
+    let snapshot = providers.clone();
     let locks = Arc::new(tools::PathLocks::new());
     let session_locks: Arc<dyn contract::files::PathLock> = locks.clone();
     let mut extensions =
         extensions::SessionExtensions::load(&home, &config, Arc::clone(&clock), session_locks);
-    lua_providers::add_lua(&extensions, &mut providers, &config)?;
+    let naming = lua_providers::add_lua(&extensions, &mut providers, &config)?;
     // Every `file` credential source configuration declares, after the Lua
     // providers are added so their sources are protected too: a relative
     // path joins the workspace the reader reads it from, an absolute one
@@ -499,7 +515,32 @@ fn parts_in(
         })?;
     let session_credential = (key.clone(), signer.clone());
     let provider = connect(model, key, signer)?;
-    let reviewer = choose_reviewer(&providers, &config, &model, &session_credential);
+    // The credentials read at startup, frozen into `Switching` once the
+    // reviewer is chosen: the session's entry first, so a reviewer on the
+    // session's provider reuses its key and signer.
+    let mut credentials: switch::Credentials = BTreeMap::new();
+    credentials.insert(
+        model.provider.name.clone(),
+        (label.clone(), session_credential),
+    );
+    let reviewer = {
+        let mut lookup = |provider: &config::ProviderData| -> Result<(String, lua_providers::KeyAndSigner), Failure> {
+            if let Some(entry) = credentials.get(&provider.name) {
+                return Ok(entry.clone());
+            }
+            let label = config.credential_label(provider);
+            let (key, signer) = lua_providers::session_credential(&providers, provider, &label, || {
+                crate::credential::session_credential(&config, provider, None)
+                    .map(|(_, key)| key)
+            })?;
+            credentials.insert(
+                provider.name.clone(),
+                (label.clone(), (key.clone(), signer.clone())),
+            );
+            Ok((label, (key, signer)))
+        };
+        choose_reviewer(&providers, &config, &model, &mut lookup)
+    };
     // Every refreshed provider the session does not use is unloaded once
     // its list is written: only the session's and the reviewer's stay
     // loaded (`docs/model-routing.md`, "Model discovery"). `providers` is
@@ -524,13 +565,23 @@ fn parts_in(
     let mut startup_notices = Vec::new();
     let thinking = settings::thinking(
         model.thinking,
-        None,
+        recorded_thinking,
         &config,
         model.model,
         &model.reference(),
         &mut startup_notices,
     )
     .map_err(|e| failed(e.code, e.message))?;
+    // The switch preparation over the load clone: every retained Lua
+    // provider with a model cache, the naming list, and the credentials
+    // read above.
+    let switching = switch::Switching::new(
+        snapshot,
+        extensions.lua_providers(),
+        naming,
+        config.clone(),
+        credentials,
+    )?;
     // The extensions loaded above, started before the model was chosen:
     // choosing a Lua provider's model waits on them.
     // The session log's path is set by the caller, which mints the session
@@ -581,8 +632,33 @@ fn parts_in(
         locks,
         extensions: Arc::new(extensions),
         mcp,
+        switching,
+        // The startup model's `:level` suffix, if any: a resumed session
+        // passes none with its recorded model, so the loop's seeded choice
+        // stands.
+        switchable: r#loop::Switchable {
+            chosen: model.thinking,
+            web_search: model.model.web_search.clone(),
+        },
         web_search: model.model.web_search.clone(),
     })
+}
+
+/// The reviewer model's reference: `reviewer.model` when set, else the
+/// session model's provider's reviewer model. A missing reviewer is not a
+/// startup error: the loop gets it, and every reviewed call escalates it
+/// (`docs/permissions.md`, "How it runs").
+fn reviewer_reference(config: &Config, session: &extensions::Model<'_>) -> Result<String, Failure> {
+    if let Some(typed) = config
+        .get("reviewer.model", None)
+        .and_then(|(value, _)| value.as_str().map(str::to_owned))
+    {
+        return Ok(typed);
+    }
+    match &session.provider.reviewer_model {
+        Some(id) => Ok(format!("{}/{}", session.provider.name, id)),
+        None => Err(failure(ErrorCode::NoModel, r#loop::NO_MODEL_MESSAGE)),
+    }
 }
 
 /// Who judges step 7's calls: `reviewer.model` when set, else the session
@@ -590,41 +666,29 @@ fn parts_in(
 /// resolve the model or to read its credential is not a startup error: the
 /// loop gets it, and every reviewed call escalates it
 /// (`docs/permissions.md`, "How it runs"). Fiber never reviews with the
-/// session's own model. A reviewer on the session's own provider reuses
-/// the session's key and signer, so a `command` credential runs once per
-/// process; a reviewer elsewhere reads its own configured label.
+/// session's own model. `credential` reads the startup map first, then the
+/// provider's configured label, so a reviewer on the session's own provider
+/// reuses the session's key and signer, and a `command` credential runs once
+/// per process; a switch passes a map-only lookup, which never reads a
+/// source (`docs/model-routing.md`, "Keys, tokens and OAuth").
+#[allow(
+    clippy::type_complexity,
+    reason = "the lookup's shape is the contract: provider in, label and key out"
+)]
 fn choose_reviewer(
     providers: &Providers,
     config: &Config,
     session: &extensions::Model<'_>,
-    session_credential: &lua_providers::KeyAndSigner,
+    credential: &mut dyn FnMut(
+        &config::ProviderData,
+    ) -> Result<(String, lua_providers::KeyAndSigner), Failure>,
 ) -> Result<r#loop::Reviewer, Failure> {
-    let configured = config
-        .get("reviewer.model", None)
-        .and_then(|(value, _)| value.as_str().map(str::to_owned));
-    let typed = match configured {
-        Some(typed) => typed,
-        None => match &session.provider.reviewer_model {
-            Some(id) => format!("{}/{}", session.provider.name, id),
-            None => {
-                return Err(failure(ErrorCode::NoModel, r#loop::NO_MODEL_MESSAGE));
-            }
-        },
-    };
+    let typed = reviewer_reference(config, session)?;
     let model = providers.resolve(&typed).map_err(|e| failed(e.code(), e))?;
     // Another provider's reviewer goes through the same path, so a Lua
     // reviewer model works: the token when it registered `credential`,
     // else the key.
-    let (key, signer) = if model.provider.name == session.provider.name {
-        session_credential.clone()
-    } else {
-        lua_providers::session_credential(
-            providers,
-            model.provider,
-            &config.credential_label(model.provider),
-            || credential::session_credential(config, model.provider, None).map(|(_, key)| key),
-        )?
-    };
+    let (_, (key, signer)) = credential(model.provider)?;
     // The token is read once, so a failing `credential()` fails here:
     // not a startup error, the loop gets it and every reviewed call
     // escalates it (`docs/permissions.md`, "How it runs").

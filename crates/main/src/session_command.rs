@@ -73,7 +73,7 @@ pub(crate) fn new_session(
     signals: &Arc<doors::Signals>,
     fiber: Result<PathBuf, String>,
 ) -> i32 {
-    let mut parts = match parts_with(model, None, None, Arc::clone(&clock)) {
+    let mut parts = match parts_with(model, None, None, None, Arc::clone(&clock)) {
         Ok(parts) => parts,
         Err(e) => return ask_failed(e),
     };
@@ -102,6 +102,8 @@ pub(crate) fn new_session(
         extensions,
         locks,
         mcp,
+        switching,
+        switchable,
         web_search,
     } = parts;
     let (job_emit, jobs) = late_emit::registry(&dir, &clock);
@@ -188,7 +190,10 @@ pub(crate) fn new_session(
                     session_extensions::written(&log, &extensions)?;
                     r#loop::mcp_servers_started(&log, session_servers.failed, mcp.notices)?;
                     let looped = session_extensions::hooked(looped.jobs(jobs), &extensions);
-                    Ok(looped.handoff(handoff).on_handoff(forget))
+                    Ok(looped
+                        .handoff(handoff)
+                        .on_handoff(forget)
+                        .switcher(switching.closure(), switchable))
                 }),
                 budget,
                 idle,

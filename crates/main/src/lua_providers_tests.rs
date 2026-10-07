@@ -71,7 +71,11 @@ fn an_unconfigured_model_is_left_out_and_a_setting_fills_it() {
         fakes::clock::FakeClock::new(),
         Arc::new(PathLocks::new()),
     );
-    add_lua(&extensions, &mut providers, &config).unwrap();
+    let naming = add_lua(&extensions, &mut providers, &config).unwrap();
+    assert!(
+        naming.contains(&("acme".to_owned(), "m".to_owned())),
+        "the naming list keeps the unconfigured model: {naming:?}"
+    );
     assert_eq!(
         providers.resolve("acme/m").unwrap_err().code(),
         ErrorCode::ModelUnconfigured
