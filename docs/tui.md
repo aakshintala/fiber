@@ -878,11 +878,11 @@ Measured in Fiber on macOS arm64 (Darwin 25.6.0) with the `hover` jig,
 `cargo run --release -p tui --example hover -- crates/tui/examples/hover.jsonl`,
 at 160 by 48, 20,000 motion reports per case, the median of 5 runs: every
 report draws the screen in memory and compares it with the last frame, 75
-to 110 µs, and writes nothing unless the target under the pointer changed; a
+to 80 µs, and writes nothing unless the target under the pointer changed; a
 report that moves along one target, or repeats one cell, costs the same and
-writes nothing; each change of target costs one frame, 140 to 180 µs and 72
+writes nothing; each change of target costs one frame, 140 to 145 µs and 79
 bytes for the badge; a fast sweep over a conversation whose lines are targets
-wrote 1,332 frames and 349,036 bytes in 20,000 reports.
+wrote 1,332 frames and 358,360 bytes in 20,000 reports.
 
 ## Look
 
