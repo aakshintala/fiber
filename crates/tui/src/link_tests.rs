@@ -20,7 +20,10 @@ fn written_lines_are_exact_json() {
     let (done, finished) = std::sync::mpsc::channel();
     std::thread::Builder::new()
         .name("link-read-exact".to_owned())
-        .spawn(move || done.send(recv.read_exact(&mut buf).map(|()| buf)).unwrap_or(()))
+        .spawn(move || {
+            done.send(recv.read_exact(&mut buf).map(|()| buf))
+                .unwrap_or(())
+        })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
     let buf = finished
         .recv_timeout(DEADLINE)

@@ -114,6 +114,8 @@ fn a_csi_c_or_u_without_the_question_mark_is_no_reply() {
     assert!(feed_all(&[b"\x1b[5u"]).is_empty());
     assert!(feed_all(&[b"\x1b[?u"]).is_empty());
     assert!(feed_all(&[b"\x1b[?5;1u"]).is_empty());
+    assert!(feed_all(&[b"\x1b[15u"]).is_empty());
+    assert!(feed_all(&[b"\x1b[?+5u"]).is_empty());
     assert!(feed_all(&[b"\x1b[1;2F"]).is_empty());
 }
 
@@ -145,4 +147,12 @@ fn invalid_utf8_drops_one_byte_and_keeps_the_rest() {
 #[test]
 fn a_csi_with_a_stray_byte_drops_esc_bracket_and_reads_on() {
     assert_eq!(feed_all(&[b"\x1b[\x01a"]), vec![Event::Key(Key::Char('a'))]);
+}
+
+#[test]
+fn control_characters_are_dropped_whole() {
+    // A tab, and C1's first control as two bytes: neither is a key, and
+    // the byte after each is read.
+    assert_eq!(feed_all(&[b"\ta"]), vec![Event::Key(Key::Char('a'))]);
+    assert_eq!(feed_all(&[b"\xc2\x80b"]), vec![Event::Key(Key::Char('b'))]);
 }

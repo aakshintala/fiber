@@ -54,137 +54,72 @@ impl Parser {
         let mut buf = std::mem::take(&mut self.pending);
         buf.extend_from_slice(bytes);
         let mut out = Vec::new();
-        let mut i = 0;
-        while i < buf.len() {
-            let Some(byte) = buf.get(i).copied() else {
-                break;
-            };
-            match byte {
-                0x03 => {
-                    out.push(Event::Key(Key::CtrlC));
-                    i += 1;
-                }
-                0x08 | 0x7f => {
-                    out.push(Event::Key(Key::Backspace));
-                    i += 1;
-                }
-                0x0d => {
-                    out.push(Event::Key(Key::Enter));
-                    i += 1;
-                }
-                0x1b => {
-                    // A lone ESC ending the read is Esc; ESC followed by
-                    // bytes in the same read starts a sequence.
-                    let Some(next) = buf.get(i.saturating_add(1)).copied() else {
-                        out.push(Event::Key(Key::Esc));
-                        i += 1;
-                        continue;
-                    };
-                    match next {
-                        0x5b => {
-                            let Some(rest) = buf.get(i..) else {
-                                break;
-                            };
-                            match parse_csi(rest) {
-                                Csi::Complete(events, len) => {
-                                    out.extend(events);
-                                    i += len;
-                                }
-                                Csi::Incomplete => break,
-                            }
-                        }
-                        0x4f => {
-                            let Some(rest) = buf.get(i..) else {
-                                break;
-                            };
-                            match parse_ss3(rest) {
-                                Ss3::Complete(events, len) => {
-                                    out.extend(events);
-                                    i += len;
-                                }
-                                Ss3::Incomplete => break,
-                            }
-                        }
-                        _ => {
-                            // Unknown escape sequence: drop ESC and the
-                            // byte after it.
-                            i += 2;
-                        }
-                    }
-                }
-                _ => {
-                    let Some(rest) = buf.get(i..) else {
-                        break;
-                    };
-                    match decode_char(rest) {
-                        Char::Done(ch, len) => {
-                            if !ch.is_control() {
-                                out.push(Event::Key(Key::Char(ch)));
-                            }
-                            i += len;
-                        }
-                        Char::Incomplete => break,
-                        Char::Invalid => {
-                            i += 1;
-                        }
-                    }
-                }
-            }
+        let mut rest = buf.as_slice();
+        while let Some((events, used)) = step(rest) {
+            out.extend(events);
+            // Every step takes at least one byte, so the loop ends.
+            rest = rest.get(used.max(1)..).unwrap_or_default();
         }
-        self.pending = buf.get(i..).map_or_else(Vec::new, <[u8]>::to_vec);
+        self.pending = rest.to_vec();
         out
     }
 }
 
-/// One CSI parse result.
-enum Csi {
-    /// Parsed events and bytes consumed.
-    Complete(Vec<Event>, usize),
-    /// No final byte yet; held for the next read.
-    Incomplete,
+/// The events of the bytes at the start of a buffer and how many bytes
+/// they take; `None` when the buffer is empty, or starts with an
+/// incomplete sequence held for the next read.
+type Step = Option<(Vec<Event>, usize)>;
+
+/// Parses the bytes at the start of `buf`.
+fn step(buf: &[u8]) -> Step {
+    let key = |key: Key| Some((vec![Event::Key(key)], 1));
+    match *buf.first()? {
+        0x03 => key(Key::CtrlC),
+        0x08 | 0x7f => key(Key::Backspace),
+        0x0d => key(Key::Enter),
+        // A lone ESC ending the read is Esc; ESC followed by bytes in the
+        // same read starts a sequence.
+        0x1b => match buf.get(1) {
+            None => key(Key::Esc),
+            Some(b'[') => parse_csi(buf),
+            Some(b'O') => parse_ss3(buf),
+            // Unknown escape sequence: drop ESC and the byte after it.
+            Some(_) => Some((Vec::new(), 2)),
+        },
+        _ => decode_char(buf),
+    }
 }
 
 /// Parses `ESC [` at the start of `buf`.
-fn parse_csi(buf: &[u8]) -> Csi {
+fn parse_csi(buf: &[u8]) -> Step {
     // Find the final byte: 0x40..=0x7e. Parameters are 0x30..=0x3f,
     // intermediates 0x20..=0x2f.
     let mut end = None;
-    for at in 2..buf.len().saturating_add(1) {
-        let Some(byte) = buf.get(at).copied() else {
-            break;
-        };
+    for (at, byte) in buf.iter().copied().enumerate().skip(2) {
         if (0x40..=0x7e).contains(&byte) {
             end = Some(at);
             break;
         }
         if !(0x20..=0x3f).contains(&byte) {
             // Not a CSI byte at all: drop `ESC [` and reparse after it.
-            return Csi::Complete(Vec::new(), 2);
+            return Some((Vec::new(), 2));
         }
     }
-    let Some(end) = end else {
-        return Csi::Incomplete;
-    };
-    let Some(final_byte) = buf.get(end).copied() else {
-        return Csi::Incomplete;
-    };
-    let Some(params) = buf.get(2..end) else {
-        return Csi::Incomplete;
-    };
+    let end = end?;
+    let final_byte = *buf.get(end)?;
+    let params = buf.get(2..end)?;
     let events = match final_byte {
         0x75 if params.first() == Some(&b'?') => {
-            // Kitty flags: `CSI ? <flags> u`.
-            let Some(digits) = params.get(1..) else {
-                return Csi::Complete(Vec::new(), end.saturating_add(1));
-            };
-            if digits.is_empty() || !digits.iter().all(|b| b.is_ascii_digit()) {
-                Vec::new()
+            // Kitty flags: `CSI ? <flags> u`. Digits only: `u8`'s parser
+            // would also take a leading `+`.
+            let digits = params.get(1..).unwrap_or_default();
+            if digits.iter().all(u8::is_ascii_digit) {
+                String::from_utf8_lossy(digits).parse::<u8>().map_or_else(
+                    |_| Vec::new(),
+                    |flags| vec![Event::Reply(Reply::KittyFlags(flags))],
+                )
             } else {
-                let text = String::from_utf8_lossy(digits);
-                match text.parse::<u8>() {
-                    Ok(flags) => vec![Event::Reply(Reply::KittyFlags(flags))],
-                    Err(_) => Vec::new(),
-                }
+                Vec::new()
             }
         }
         0x63 if params.first() == Some(&b'?') => {
@@ -197,88 +132,48 @@ fn parse_csi(buf: &[u8]) -> Csi {
             [b'4'] => vec![Event::Key(Key::End)],
             _ => Vec::new(),
         },
-        0x46 => {
-            if params.is_empty() {
-                vec![Event::Key(Key::End)]
-            } else {
-                Vec::new()
-            }
-        }
+        0x46 if params.is_empty() => vec![Event::Key(Key::End)],
         _ => Vec::new(),
     };
-    Csi::Complete(events, end.saturating_add(1))
-}
-
-/// One SS3 parse result.
-enum Ss3 {
-    /// Parsed events and bytes consumed.
-    Complete(Vec<Event>, usize),
-    /// `ESC O` with nothing after it yet.
-    Incomplete,
+    Some((events, end.saturating_add(1)))
 }
 
 /// Parses `ESC O` at the start of `buf`.
-fn parse_ss3(buf: &[u8]) -> Ss3 {
-    let Some(final_byte) = buf.get(2).copied() else {
-        return Ss3::Incomplete;
-    };
-    let events = match final_byte {
+fn parse_ss3(buf: &[u8]) -> Step {
+    let events = match *buf.get(2)? {
         b'F' => vec![Event::Key(Key::End)],
         _ => Vec::new(),
     };
-    Ss3::Complete(events, 3)
+    Some((events, 3))
 }
 
-/// One UTF-8 decode result at a position.
-enum Char {
-    /// A character and its byte length.
-    Done(char, usize),
-    /// A truncated sequence at the end of the read.
-    Incomplete,
-    /// An invalid byte; the caller drops one byte.
-    Invalid,
-}
-
-/// Decodes one character at the start of `buf`.
-fn decode_char(buf: &[u8]) -> Char {
-    let Some(first) = buf.first().copied() else {
-        return Char::Invalid;
+/// Decodes one character at the start of `buf`. A control character is
+/// dropped whole; a byte that starts no character is dropped alone.
+fn decode_char(buf: &[u8]) -> Step {
+    let len = match *buf.first()? {
+        0x00..=0x7f => 1,
+        0xc0..=0xdf => 2,
+        0xe0..=0xef => 3,
+        0xf0..=0xf7 => 4,
+        _ => return Some((Vec::new(), 1)),
     };
-    if first < 0x80 {
-        let ch = char::from(first);
-        return Char::Done(ch, 1);
-    }
-    let len = if first & 0xe0 == 0xc0 {
-        2
-    } else if first & 0xf0 == 0xe0 {
-        3
-    } else if first & 0xf8 == 0xf0 {
-        4
-    } else {
-        return Char::Invalid;
-    };
-    if buf.len() < len {
+    let Some(head) = buf.get(..len) else {
         // Truncated only when every byte so far continues correctly;
         // otherwise the lead byte is invalid.
-        let Some(tail) = buf.get(1..) else {
-            return Char::Incomplete;
+        let continues = buf.iter().skip(1).all(|b| b & 0xc0 == 0x80);
+        return if continues {
+            None
+        } else {
+            Some((Vec::new(), 1))
         };
-        let ok = tail.iter().all(|b| b & 0xc0 == 0x80);
-        if ok {
-            return Char::Incomplete;
-        }
-        return Char::Invalid;
-    }
-    let Some(head) = buf.get(..len) else {
-        return Char::Invalid;
     };
-    match std::str::from_utf8(head) {
-        Ok(text) => {
-            let mut chars = text.chars();
-            let ch = chars.next().unwrap_or('\u{FFFD}');
-            Char::Done(ch, len)
-        }
-        Err(_) => Char::Invalid,
+    match std::str::from_utf8(head)
+        .ok()
+        .and_then(|text| text.chars().next())
+    {
+        Some(ch) if ch.is_control() => Some((Vec::new(), len)),
+        Some(ch) => Some((vec![Event::Key(Key::Char(ch))], len)),
+        None => Some((Vec::new(), 1)),
     }
 }
 

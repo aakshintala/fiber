@@ -356,7 +356,10 @@ fn a_failed_write_hangs_up_and_returns_the_draft() {
     assert_eq!(lp.app.notice(), Some("Connection lost."));
     assert_eq!(lp.app.draft(), "hi");
     // Enter on a lost connection keeps the draft.
-    feed(&mut lp, vec![Input::Bytes(b"\r".to_vec()), Input::Disconnected]);
+    feed(
+        &mut lp,
+        vec![Input::Bytes(b"\r".to_vec()), Input::Disconnected],
+    );
     assert_eq!(lp.app.draft(), "hi");
 }
 

@@ -531,7 +531,10 @@ fn a_refused_schema_keeps_its_notice_when_the_hub_hangs_up() {
     assert!(app.on_line(Line::Hub(hello)).is_empty());
     assert!(!app.connected());
     app.disconnected();
-    assert!(app.notice().is_some_and(|notice| notice.contains("schema version")));
+    assert!(
+        app.notice()
+            .is_some_and(|notice| notice.contains("schema version"))
+    );
 }
 
 #[test]
