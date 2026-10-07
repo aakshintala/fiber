@@ -1018,6 +1018,19 @@ fn open_refuses_a_socket_a_live_session_holds() {
     close_within(opened.session, opened.log);
 }
 
+/// Connecting to a socket whose mode is 0o000 fails with permission denied.
+/// Root connects anyway, so a run as root fails here and says why instead of
+/// failing later on an unrelated assertion.
+fn assert_connect_denied(socket: &std::path::Path) {
+    match UnixStream::connect(socket) {
+        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {}
+        other => panic!(
+            "these tests need a user other than root: connecting to a mode-0 socket gave {:?}",
+            other.map(|_| ())
+        ),
+    }
+}
+
 #[test]
 fn open_leaves_a_live_socket_it_cannot_connect_to() {
     reset();
@@ -1026,6 +1039,7 @@ fn open_leaves_a_live_socket_it_cannot_connect_to() {
     // A live listener whose mode hides it: connect fails, but a session is
     // still behind the path, so `open` must fail and leave the path alone.
     fs::set_permissions(&socket, fs::Permissions::from_mode(0o000)).unwrap();
+    assert_connect_denied(&socket);
     // The same id in another project: its own new directory, the hidden
     // socket the live session owns.
     let id = contract::SessionId(socket.file_name().unwrap().to_string_lossy().into_owned());
@@ -1067,6 +1081,7 @@ fn open_leaves_a_symlink_to_a_live_socket_it_cannot_connect_to() {
     let opened = open();
     let live = opened.socket.clone();
     fs::set_permissions(&live, fs::Permissions::from_mode(0o000)).unwrap();
+    assert_connect_denied(&live);
     // Another session's path is a symlink to the hidden live socket: it is
     // no regular file, so nothing proves it stale.
     let home = opened._temp.path().join("h");

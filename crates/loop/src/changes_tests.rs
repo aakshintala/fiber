@@ -38,6 +38,19 @@ fn inputs(home: &Path, clock: &Arc<FakeClock>) -> PromptInputs {
     )
 }
 
+/// The read of a file whose mode denies it fails with permission denied. Root
+/// reads it anyway, so a run as root fails here and says why instead of
+/// passing without exercising the failure.
+fn assert_read_denied(file: &Path) {
+    match std::fs::read(file) {
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {}
+        other => panic!(
+            "these tests need a user other than root: the read of a mode-0 file gave {:?}",
+            other.map(|bytes| bytes.len())
+        ),
+    }
+}
+
 fn root() -> (PathBuf, fakes::TempDir) {
     let held = fakes::TempDir::new("fiber-changes");
     (held.path().to_path_buf(), held)
@@ -1342,10 +1355,7 @@ fn unreadable_candidate_readable_again_with_same_stat_is_created() {
     // check below exercises the failure and not the shortcut. Under a
     // user that can still read the file (root) there is no failure to
     // exercise, so the test fails instead of passing vacuously.
-    assert_eq!(
-        std::fs::read(&file).unwrap_err().kind(),
-        std::io::ErrorKind::PermissionDenied
-    );
+    assert_read_denied(&file);
     // Unreadable: named once...
     let out = state.check(&*fake);
     assert!(out.files.is_empty());
@@ -1381,10 +1391,7 @@ fn unreadable_tracked_file_readable_again_at_its_old_stat_is_compared() {
     deny(&file);
     // Precondition: the read really fails with permission denied; see the
     // candidate case above.
-    assert_eq!(
-        std::fs::read(&file).unwrap_err().kind(),
-        std::io::ErrorKind::PermissionDenied
-    );
+    assert_read_denied(&file);
     let out = state.check(&*fake);
     assert!(out.files.is_empty());
     assert_eq!(out.notices.len(), 1);
@@ -1419,10 +1426,7 @@ fn permission_denied_tracked_file_is_named_once_per_stat_change() {
     // check below exercises the failure and not the shortcut. Under a
     // user that can still read the file (root) there is no failure to
     // exercise, so the test fails instead of passing vacuously.
-    assert_eq!(
-        std::fs::read(&file).unwrap_err().kind(),
-        std::io::ErrorKind::PermissionDenied
-    );
+    assert_read_denied(&file);
     let out = state.check(&*fake);
     allow(&file);
     assert!(out.files.is_empty());
@@ -1441,10 +1445,7 @@ fn permission_denied_untracked_candidate_is_named() {
     deny(&file);
     // Precondition: the read really fails with permission denied; see the
     // tracked case above.
-    assert_eq!(
-        std::fs::read(&file).unwrap_err().kind(),
-        std::io::ErrorKind::PermissionDenied
-    );
+    assert_read_denied(&file);
     let fake = clock();
     let mut state = initial(&home, &workspace, &fake);
     let out = state.check(&*fake);
