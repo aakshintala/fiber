@@ -136,6 +136,40 @@ fiber.provider("acme", { credential = { timeout = 60000, run = function()
 end } })
 "#;
 
+/// A provider whose `credential()` builds its login from one interactive
+/// `host.oauth` helper, named by the secret `mode`.
+const LOGIN: &str = r#"
+fiber.provider("acme", { credential = { timeout = 60000, run = function()
+  local mode = host.secret("mode")
+  local url = host.secret("url")
+  if mode == "open" then host.oauth.open(url .. "/verify") end
+  if mode == "callback" then host.oauth.callback({ port = tonumber(host.secret("port")) }) end
+  if mode == "poll" then
+    local reply = host.oauth.poll({
+      url = url .. "/device/token",
+      body = "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code&device_code=d",
+      headers = { ["content-type"] = "application/x-www-form-urlencoded" },
+    })
+    return { token = reply.access_token, expires_at = 1700003600 }
+  end
+  if mode == "device" then
+    host.oauth.open(url .. "/verify")
+    local reply = host.oauth.poll({
+      url = url .. "/device/token",
+      body = "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code&device_code=d",
+      headers = { ["content-type"] = "application/x-www-form-urlencoded" },
+    })
+    return { token = reply.access_token, expires_at = 1700003600 }
+  end
+  return { token = "unreached", expires_at = 1700003600 }
+end } })
+"#;
+
+/// The `LOGIN` fixture with the default browser, which has nobody attached.
+fn login(env: &Env) -> Arc<LuaExtension> {
+    Arc::new(env.bare(LOGIN, "login"))
+}
+
 /// `require("go_spin")` signals that the code reached it, then reads an empty
 /// module, so the code runs on (a fifo opened for write returns once the
 /// loader has opened it for read).
@@ -964,4 +998,16 @@ fn a_symbolic_link_credentials_directory_is_refused() {
     assert!(matches!(error, Error::Credential(_)), "{error}");
     assert_eq!(server.request_count(), 0);
     assert!(fs::read_dir(&elsewhere).unwrap().next().is_none());
+}
+
+#[test]
+fn a_poll_with_nobody_attached_is_authentication_failed_and_sends_nothing() {
+    let env = Env::new();
+    let ext = login(&env);
+    let server = OauthServer::start(vec![OauthReply::token("at", "rt", 3600)]);
+    let provider = env.provider(&ext, &server, "poll");
+    let error = finish(&start_token(&provider)).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::AuthenticationFailed, "{error}");
+    assert!(error.to_string().contains("host.oauth.poll"), "{error}");
+    assert!(server.requests().is_empty());
 }
