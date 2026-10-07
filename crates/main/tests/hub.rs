@@ -508,6 +508,90 @@ fn a_turn_runs_through_the_hub_and_the_hub_outlives_no_session() {
     guard.wait_gone();
 }
 
+#[test]
+fn prompts_sent_through_the_hub_page_back_newest_first_and_ask_adds_none() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello(), hello(), hello()]).unwrap();
+    setup.provider(&server);
+    let hub = Arc::new(Mutex::new(None));
+    let (client, _) = connect_hub(&setup, &hub);
+    let workspace = setup.workspace().to_string_lossy().into_owned();
+    let guard = SessionGuard::arm(&workspace);
+    let session = start_session(&client, &workspace, "first-prompt");
+    subscribe(&client, &session);
+    until(&client, "the first turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    client.send(&format!(
+        "{{\"id\":\"c_p2\",\"session_id\":\"{session}\",\"command\":\"prompt\",\"args\":{{\"content\":[{{\"type\":\"text\",\"text\":\"second-prompt\"}}]}}}}"
+    ));
+    let lines = until(&client, "the second prompt's acknowledgement", |line| {
+        line["payload"]["command_id"] == "c_p2"
+    });
+    assert_eq!(
+        lines.last().unwrap()["kind"],
+        "command_accepted",
+        "{lines:?}"
+    );
+    until(&client, "the second turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    // `fiber ask` in the same workspace shares the project and appends nothing.
+    let mut ask = setup.fiber(&["ask", "asked-prompt"]);
+    ask.current_dir(setup.workspace());
+    let output = run_to_exit(ask);
+    assert!(output.status.success(), "{output:?}");
+    let projects: Vec<_> = fs::read_dir(setup.home().join("projects"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect();
+    assert_eq!(
+        projects.len(),
+        1,
+        "the ask shares the project: {projects:?}"
+    );
+    let sessions = fs::read_dir(
+        setup
+            .home()
+            .join("projects")
+            .join(&projects[0])
+            .join("sessions"),
+    )
+    .unwrap()
+    .count();
+    assert_eq!(sessions, 2, "the hub's session and the ask's");
+    client.send(&format!(
+        "{{\"id\":\"c_hist\",\"command\":\"prompt_history\",\"args\":{{\"project\":\"{}\"}}}}",
+        projects[0]
+    ));
+    let lines = until(&client, "the prompt_history answer", |line| {
+        line["payload"]["command_id"] == "c_hist"
+    });
+    let answer = lines.last().unwrap();
+    assert_eq!(answer["kind"], "command_accepted", "{answer}");
+    let result = &answer["payload"]["result"];
+    let texts: Vec<_> = result["prompts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|line| {
+            assert_eq!(line["session_id"], session.as_str(), "{line}");
+            assert!(line["ts"].is_u64(), "{line}");
+            line["content"][0]["text"].as_str().unwrap().to_owned()
+        })
+        .collect();
+    assert_eq!(texts, ["second-prompt", "first-prompt"]);
+    assert!(result.get("before").is_none(), "no older page: {result}");
+    drop(client);
+    let hub = hub.lock().unwrap().take().expect("the starter ran");
+    hub.kill("KILL");
+    hub.wait();
+    let direct = Socket::connect(&setup.session_socket(&session));
+    close_session(&direct);
+    drop(direct);
+    guard.wait_gone();
+}
+
 /// One side of a two-thread meeting with a deadline: each side waits
 /// [`DEADLINE`] for the other, and the other failing ends the wait at once.
 struct Meet {
@@ -739,9 +823,9 @@ fn a_session_stuck_in_setup_is_killed_by_its_guard() {
     hub.wait();
 }
 
-/// Runs `command`, a hub that fails to start, to its exit under
-/// [`DEADLINE`], and checks it left no process in its group.
-fn run_failing(mut command: Command) -> std::process::Output {
+/// Runs `command` to its exit under [`DEADLINE`], and checks it left no
+/// process in its group.
+fn run_to_exit(mut command: Command) -> std::process::Output {
     let child = command.spawn().unwrap();
     let group = child.id();
     let watchdog = Watchdog::group(group);
@@ -749,11 +833,11 @@ fn run_failing(mut command: Command) -> std::process::Output {
     thread::spawn(move || done.send(child.wait_with_output()).unwrap());
     let output = match finished.recv_timeout(DEADLINE) {
         Ok(output) => output.unwrap(),
-        Err(error) => panic!("waited {DEADLINE:?} for the failing hub to exit: {error}"),
+        Err(error) => panic!("waited {DEADLINE:?} for `fiber` to exit: {error}"),
     };
     assert!(
         !group_alive(group),
-        "the hub left a process in its group behind"
+        "`fiber` left a process in its group behind"
     );
     watchdog.stand_down(DEADLINE);
     output
@@ -772,7 +856,7 @@ fn hub_log_lines(home: &Path) -> Vec<Value> {
 fn a_hub_that_cannot_start_says_why_on_stderr() {
     let setup = Setup::new();
     fs::write(setup.home().join("config.json"), "{").unwrap();
-    let output = run_failing(setup.fiber(&["hub", "serve"]));
+    let output = run_to_exit(setup.fiber(&["hub", "serve"]));
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.starts_with("fiber: "), "{stderr}");
@@ -784,7 +868,7 @@ fn a_hub_that_cannot_start_says_why_on_stderr() {
 fn an_invalid_config_is_written_to_the_hub_log() {
     let setup = Setup::new();
     fs::write(setup.home().join("config.json"), "{").unwrap();
-    let output = run_failing(setup.fiber(&["hub", "serve"]));
+    let output = run_to_exit(setup.fiber(&["hub", "serve"]));
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8(output.stderr).unwrap();
     let lines = hub_log_lines(&setup.home());
@@ -805,7 +889,7 @@ fn a_too_long_fiber_home_is_reported_on_stderr_and_in_the_hub_log() {
     fs::create_dir_all(&home).unwrap();
     let mut command = setup.fiber(&["hub", "serve"]);
     command.env("FIBER_HOME", &home);
-    let output = run_failing(command);
+    let output = run_to_exit(command);
     assert_eq!(output.status.code(), Some(2), "{output:?}");
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.starts_with("fiber: "), "{stderr}");

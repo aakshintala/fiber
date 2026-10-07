@@ -287,7 +287,9 @@ truth ([ADR 0001](adr/0001-session-log-is-the-only-state-of-record.md)).
 **Prompt history.** Per project, `history.jsonl`: one JSON line per prompt,
 append-only. The session appends each prompt a person sends it, in a session
 the hub started, so every client shares one history; a `fiber ask` prompt is
-not appended. Up-arrow recalls prompts typed anywhere in that project.
+not appended. Each line holds `ts` (integer, wall-clock milliseconds),
+`session_id` and `content`, the prompt's content parts as the session
+accepted them. Up-arrow recalls prompts typed anywhere in that project.
 
 Fiber writes no derived database in v0.0.1. Listing sessions reads the logs
 (`docs/events.md` has the measurement). Any future one is derived from the
