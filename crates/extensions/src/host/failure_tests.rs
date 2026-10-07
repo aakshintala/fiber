@@ -1,6 +1,5 @@
-//! The `{ code, message }` constructor, the `pcall` converter and the
-//! prelude's yield-forwarding `pcall`/`xpcall`
-//! (`docs/extensions.md`, "How an extension runs").
+//! The `{ code, message }` constructor and the prelude's yield-forwarding
+//! `pcall`/`xpcall` (`docs/extensions.md`, "How an extension runs").
 
 #![allow(
     clippy::unwrap_used,
@@ -12,31 +11,15 @@
 use contract::ErrorCode;
 use mlua::{Lua, LuaSerdeExt, Value as LuaValue};
 
-use super::{Failure, as_failure, code_name, install};
+use super::{Boundary, FailureLib, code_name, install};
 use crate::lua::Deadline;
 
 fn lua() -> Lua {
     Lua::new()
 }
 
-fn lib(lua: &Lua) -> super::FailureLib {
+fn lib(lua: &Lua) -> FailureLib {
     install(lua).unwrap()
-}
-
-fn converted(lua: &Lua, err: LuaValue) -> LuaValue {
-    let lib = lib(lua);
-    lib.convert.call(err).unwrap()
-}
-
-fn external_failure(code: ErrorCode, message: &str) -> mlua::Error {
-    mlua::Error::external(Failure {
-        code,
-        message: message.to_owned(),
-    })
-}
-
-fn external(err: impl std::error::Error + Send + Sync + 'static) -> LuaValue {
-    LuaValue::Error(Box::new(mlua::Error::external(err)))
 }
 
 #[test]
@@ -49,84 +32,77 @@ fn failure_builds_code_and_message_with_a_tostring_of_the_message() {
         .unwrap();
     assert_eq!(failed.get::<String>("code").unwrap(), "connection_failed");
     assert_eq!(failed.get::<String>("message").unwrap(), "host.http: nope");
-    // __tostring returns the message, so an uncaught table fails the
-    // callback with the message as its text.
     lua.globals().set("failed", failed).unwrap();
     let shown: String = lua.load("return tostring(failed)").eval().unwrap();
     assert_eq!(shown, "host.http: nope");
 }
 
 #[test]
-fn the_converter_maps_each_rust_failure_to_its_table() {
+fn an_escaping_failure_is_matched_through_mlua_s_traceback() {
     let lua = lua();
-    // A host failure keeps its code and message.
-    let table = converted(
-        &lua,
-        external(super::Failure {
-            code: ErrorCode::ConnectionFailed,
-            message: "host.http: nope".into(),
-        }),
+    let lib = lib(&lua);
+    lua.globals().set("failure", lib.failure.clone()).unwrap();
+    let message = "host.oauth.poll needs a person to log in, and nobody is attached";
+    let raise =
+        format!("error(failure('authentication_failed', '{message}', 'unattended:poll'), 0)");
+    let thread = lua
+        .create_thread(lua.load(&raise).into_function().unwrap())
+        .unwrap();
+    let error = thread.resume::<()>(()).unwrap_err();
+    // mlua reports a resumed thread's error as its tostring and a traceback.
+    assert!(
+        matches!(&error, mlua::Error::RuntimeError(text) if text.starts_with(&format!("{message}\nstack traceback:"))),
+        "{error:?}"
     );
-    let (code, message) = as_failure(&table).unwrap();
-    assert_eq!(code, "connection_failed");
-    assert_eq!(message, "host.http: nope");
-    // An unattended login is `authentication_failed`.
-    let table = converted(
-        &lua,
-        external(crate::oauth::Unattended {
-            call: "open".into(),
-        }),
+    let pending = lib.state.take_matching(&error).unwrap();
+    assert_eq!(pending.message, message);
+    assert_eq!(
+        pending.boundary,
+        Boundary::Unattended {
+            call: "poll".into()
+        }
     );
-    let (code, message) = as_failure(&table).unwrap();
-    assert_eq!(code, "authentication_failed");
-    assert!(message.contains("host.oauth.open"), "{message}");
-    // A failure table passes through with its own code; a string the
-    // refresh function raised itself is the credential failing.
-    let table = converted(
-        &lua,
-        external(crate::oauth::RefreshFailed {
-            reached: false,
-            message: "host.http: nope".into(),
-            table_code: Some("connection_failed".into()),
-        }),
-    );
-    let (code, _) = as_failure(&table).unwrap();
-    assert_eq!(code, "connection_failed");
-    let table = converted(
-        &lua,
-        external(crate::oauth::RefreshFailed {
-            reached: true,
-            message: "boom".into(),
-            table_code: None,
-        }),
-    );
-    let (code, message) = as_failure(&table).unwrap();
-    assert_eq!(code, "credential_failed");
-    assert_eq!(message, "boom");
-}
+    // Taken once.
+    assert!(lib.state.take_matching(&error).is_none());
 
-#[test]
-fn the_converter_leaves_anything_else_alone() {
-    let lua = lua();
-    for err in [
-        LuaValue::String(lua.create_string("boom").unwrap()),
-        LuaValue::Nil,
-        LuaValue::Integer(3),
+    let error = lua.load(&raise).exec().unwrap_err();
+    assert!(lib.state.take_matching(&error).is_some(), "{error:?}");
+    // Raised through a Rust function, mlua wraps it in `CallbackError`.
+    let raise_fn = lua.load(&raise).into_function().unwrap();
+    let through_rust = lua
+        .create_function(move |_, ()| raise_fn.call::<()>(()))
+        .unwrap();
+    let wrapped = through_rust.call::<()>(()).unwrap_err();
+    assert!(
+        matches!(wrapped, mlua::Error::CallbackError { .. }),
+        "{wrapped:?}"
+    );
+    assert!(lib.state.take_matching(&wrapped).is_some(), "{wrapped:?}");
+
+    // Another error, or one that merely starts with the same text, is not it.
+    lua.load(&raise).exec().unwrap_err();
+    for other in [
+        "a different error".to_owned(),
+        format!("{message} and more"),
     ] {
-        assert!(matches!(converted(&lua, err), LuaValue::Nil));
+        assert!(
+            lib.state
+                .take_matching(&mlua::Error::RuntimeError(other))
+                .is_none()
+        );
     }
-    // A table, even one shaped like a failure, is not a Rust failure.
-    let plain = lua.create_table().unwrap();
-    plain.set("code", "connection_failed").unwrap();
-    assert!(matches!(
-        converted(&lua, LuaValue::Table(plain)),
-        LuaValue::Nil
-    ));
-    // Another Rust error is not a host failure either.
-    assert!(matches!(
-        converted(&lua, external(std::io::Error::other("disk gone"))),
-        LuaValue::Nil
-    ));
+    // A failure with no boundary records nothing.
+    lib.state.clear();
+    lua.load(format!(
+        "error(failure('authentication_failed', '{message}'), 0)"
+    ))
+    .exec()
+    .unwrap_err();
+    assert!(
+        lib.state
+            .take_matching(&mlua::Error::RuntimeError(message.to_owned()))
+            .is_none()
+    );
 }
 
 #[test]
@@ -137,29 +113,7 @@ fn code_names_are_the_registry_snake_case() {
     assert_eq!(code_name(&ErrorCode::Other("custom".into())), "custom");
 }
 
-#[test]
-fn as_failure_reads_only_string_code_and_message_tables() {
-    let lua = lua();
-    let table = lua.create_table().unwrap();
-    table.set("code", "connection_failed").unwrap();
-    table.set("message", "host.http: nope").unwrap();
-    assert_eq!(
-        as_failure(&LuaValue::Table(table)),
-        Some(("connection_failed".into(), "host.http: nope".into()))
-    );
-    for value in [
-        LuaValue::Nil,
-        LuaValue::String(lua.create_string("boom").unwrap()),
-    ] {
-        assert_eq!(as_failure(&value), None);
-    }
-    let table = lua.create_table().unwrap();
-    table.set("code", 3).unwrap();
-    table.set("message", "host.http: nope").unwrap();
-    assert_eq!(as_failure(&LuaValue::Table(table)), None);
-}
-
-/// Lua with the prelude installed: the new global `pcall`/`xpcall`.
+/// Lua with the prelude installed: the yield-forwarding `pcall`/`xpcall`.
 fn prelude() -> Lua {
     let lua = Lua::new();
     let clock = fakes::clock::FakeClock::new();
@@ -185,45 +139,19 @@ fn pcall_returns_every_value_and_passes_errors_through_unchanged() {
         ),
         serde_json::json!([true, 4, 2])
     );
-    // A string error comes back as the same string.
     assert_eq!(
         json(&lua, "return table.pack(pcall(error, 'boom', 0))"),
         serde_json::json!([false, "boom"])
     );
-    // A table error comes back as the same table.
     let same: bool = lua
         .load(
-            "local err = { code = 'custom', message = 'mine' }
-             local ok, got = pcall(error, err, 0)
-             return ok == false and got == err",
+            "local original = { code = 'custom', message = 'mine', extra = 7 }
+             local ok, caught = pcall(error, original, 0)
+             return not ok and rawequal(caught, original) and caught.extra == 7",
         )
         .eval()
         .unwrap();
     assert!(same);
-}
-
-#[test]
-fn pcall_converts_a_rust_host_failure_to_its_table() {
-    let lua = prelude();
-    lua.globals()
-        .set(
-            "boom",
-            lua.create_function(|_, ()| {
-                Err::<(), _>(external_failure(
-                    ErrorCode::ConnectionFailed,
-                    "host.http: nope",
-                ))
-            })
-            .unwrap(),
-        )
-        .unwrap();
-    assert_eq!(
-        json(
-            &lua,
-            "local ok, err = pcall(boom) return { ok, err.code, err.message }"
-        ),
-        serde_json::json!([false, "connection_failed", "host.http: nope"])
-    );
 }
 
 /// The failure a raw `coroutine.resume` of `code` catches: its code and
@@ -243,11 +171,35 @@ fn resumed(lua: &Lua, code: &str) -> (String, String) {
 }
 
 #[test]
+fn pcall_and_coroutine_resume_receive_failure_tables_at_their_source() {
+    let lua = prelude();
+    let lib = install(&lua).unwrap();
+    lua.globals().set("failure", lib.failure.clone()).unwrap();
+    lua.load(
+        "host_failure = function()
+           error(failure('connection_failed', 'host.http: nope'), 0)
+         end",
+    )
+    .exec()
+    .unwrap();
+    assert_eq!(
+        json(
+            &lua,
+            "local ok, err = pcall(host_failure)
+             return { ok, err.code, err.message }",
+        ),
+        serde_json::json!([false, "connection_failed", "host.http: nope"])
+    );
+    assert_eq!(
+        resumed(&lua, "host_failure()"),
+        ("connection_failed".into(), "host.http: nope".into())
+    );
+}
+
+#[test]
 fn wrap_raises_the_table_at_its_source() {
     let lua = lua();
     let lib = lib(&lua);
-    // A coded failure returns `(nil, code, message)`; the wrapper raises
-    // the table, which even a raw `coroutine.resume` catches as a table.
     let raw = lua
         .create_function(|lua, ()| {
             Ok(mlua::MultiValue::from_vec(vec![
@@ -263,7 +215,6 @@ fn wrap_raises_the_table_at_its_source() {
         resumed(&lua, "return wrapped()"),
         ("connection_failed".into(), "host.http: nope".into())
     );
-    // Success passes through: a value, and nil for a missing one.
     let raw = lua
         .create_function(|_, ()| Ok(mlua::MultiValue::from_vec(vec![LuaValue::Nil])))
         .unwrap();
@@ -292,23 +243,6 @@ fn xpcall_calls_its_handler_with_the_error_and_keeps_every_return() {
         .eval()
         .unwrap();
     assert_eq!(seen, "false|handled|boom");
-    // The handler receives the converted table for a host failure.
-    lua.globals()
-        .set(
-            "boom",
-            lua.create_function(|_, ()| {
-                Err::<(), _>(external_failure(ErrorCode::Timeout, "host.http: slow"))
-            })
-            .unwrap(),
-        )
-        .unwrap();
-    assert_eq!(
-        json(
-            &lua,
-            "local ok, code = xpcall(boom, function(e) return e.code end) return { ok, code }",
-        ),
-        serde_json::json!([false, "timeout"])
-    );
 }
 
 #[test]
@@ -332,5 +266,71 @@ fn xpcall_runs_a_failing_handler_protected() {
             "return table.pack(xpcall(function() error('boom', 0) end, function(e) error('handler:' .. e, 0) end))"
         ),
         serde_json::json!([false, "handler:boom"])
+    );
+}
+
+#[test]
+fn a_noted_failure_matches_its_text_and_reports_its_message() {
+    let lua = lua();
+    let lib = lib(&lua);
+    for (context, expected) in [
+        ("refresh:reached", Boundary::Refresh { reached: true }),
+        ("refresh:unreached", Boundary::Refresh { reached: false }),
+        (
+            "unattended:open",
+            Boundary::Unattended {
+                call: "open".into(),
+            },
+        ),
+        (
+            "unattended:callback",
+            Boundary::Unattended {
+                call: "callback".into(),
+            },
+        ),
+        (
+            "unattended:poll",
+            Boundary::Unattended {
+                call: "poll".into(),
+            },
+        ),
+    ] {
+        lib.note_failure
+            .call::<()>(("table: 0x1", "offline", context))
+            .unwrap();
+        let error =
+            mlua::Error::RuntimeError("table: 0x1\nstack traceback:\n\t[C]: in ?".to_owned());
+        let pending = lib.state.take_matching(&error).unwrap();
+        assert_eq!(pending.message, "offline");
+        assert_eq!(pending.boundary, expected);
+    }
+    assert!(
+        lib.note_failure
+            .call::<()>(("t", "m", "elsewhere"))
+            .is_err()
+    );
+}
+
+#[test]
+fn a_refresh_forwarding_an_unattended_failure_keeps_its_mapping() {
+    let lua = lua();
+    let lib = lib(&lua);
+    let message = "host.oauth.open needs a person to log in, and nobody is attached";
+    let _: mlua::Table = lib
+        .failure
+        .call(("authentication_failed", message, "unattended:open"))
+        .unwrap();
+    lib.note_failure
+        .call::<()>((message, message, "refresh:reached"))
+        .unwrap();
+    let pending = lib
+        .state
+        .take_matching(&mlua::Error::RuntimeError(message.to_owned()))
+        .unwrap();
+    assert_eq!(
+        pending.boundary,
+        Boundary::Unattended {
+            call: "open".into()
+        }
     );
 }

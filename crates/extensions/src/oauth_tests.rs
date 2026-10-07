@@ -376,3 +376,121 @@ fn a_credential_file_that_cannot_be_read_or_written_is_io_failed() {
     assert!(message.contains("default"), "{message}");
     std::fs::set_permissions(&cred_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
 }
+
+fn unattended_oauth_lua() -> Lua {
+    let lua = Lua::new();
+    let failures = crate::host::failure::install(&lua).unwrap();
+    let host = lua.create_table().unwrap();
+    let tag = lua.create_table().unwrap();
+    install(
+        &lua,
+        &host,
+        &tag,
+        Arc::new(SystemBrowser::default()),
+        Rc::new(Cell::new(false)),
+        failures.failure,
+        failures.note_failure,
+    )
+    .unwrap();
+    lua.globals().set("host", host).unwrap();
+    lua.globals().set("tag", tag).unwrap();
+    lua
+}
+
+#[test]
+fn unattended_oauth_calls_raise_tables_to_coroutine_resume() {
+    let lua = unattended_oauth_lua();
+    for (call, message) in [
+        (
+            "host.oauth.open('https://example.test')",
+            "host.oauth.open needs a person to log in, and nobody is attached",
+        ),
+        (
+            "host.oauth.callback({ port = 1 })",
+            "host.oauth.callback needs a person to log in, and nobody is attached",
+        ),
+        (
+            "host.oauth.poll({ url = 'https://example.test' })",
+            "host.oauth.poll needs a person to log in, and nobody is attached",
+        ),
+    ] {
+        let (ok, err): (bool, mlua::Value) = lua
+            .load(format!(
+                "return coroutine.resume(coroutine.create(function() {call} end))"
+            ))
+            .eval()
+            .unwrap();
+        assert!(!ok, "{call} unexpectedly succeeded");
+        let mlua::Value::Table(failed) = err else {
+            panic!("{call} raised no failure table");
+        };
+        assert_eq!(
+            failed.get::<String>("code").unwrap(),
+            "authentication_failed"
+        );
+        assert_eq!(failed.get::<String>("message").unwrap(), message);
+    }
+}
+
+#[test]
+fn refresh_passes_the_original_failure_table_through_unchanged() {
+    let lua = unattended_oauth_lua();
+    let dir = fakes::TempDir::new("fiber-oauth-table-identity");
+    let lock = CredentialFile::new(dir.path(), "acme", LABEL)
+        .unwrap()
+        .try_lock()
+        .unwrap()
+        .unwrap();
+    lua.globals()
+        .set("held", Held::new(lock, fakes::clock::FakeClock::new()))
+        .unwrap();
+    let same: bool = lua
+        .load(
+            "local original = { code = 'connection_failed', message = 'offline', extra = 'kept' }
+             local co = coroutine.create(function()
+               return pcall(function()
+                 return host.oauth.refresh(function() error(original, 0) end)
+               end)
+             end)
+             local started, yielded, kind = coroutine.resume(co)
+             if not started or yielded ~= tag or kind ~= 'lock' then return false end
+             local resumed, ok, caught = coroutine.resume(co, held)
+             return resumed and not ok and rawequal(caught, original)
+               and caught.code == 'connection_failed' and caught.message == 'offline'
+               and caught.extra == 'kept'",
+        )
+        .eval()
+        .unwrap();
+    assert!(same, "refresh replaced or changed the user's failure table");
+}
+
+#[test]
+fn a_refresh_function_raising_a_string_reaches_coroutine_resume_as_credential_failed() {
+    let lua = unattended_oauth_lua();
+    let dir = fakes::TempDir::new("fiber-oauth-string-refresh");
+    let lock = CredentialFile::new(dir.path(), "acme", LABEL)
+        .unwrap()
+        .try_lock()
+        .unwrap()
+        .unwrap();
+    lua.globals()
+        .set("held", Held::new(lock, fakes::clock::FakeClock::new()))
+        .unwrap();
+    let (code, message): (String, String) = lua
+        .load(
+            "local co = coroutine.create(function()
+               return host.oauth.refresh(function() error('boom', 0) end)
+             end)
+             local started, yielded, kind = coroutine.resume(co)
+             assert(started and yielded == tag and kind == 'lock')
+             local resumed, caught = coroutine.resume(co, held)
+             assert(not resumed and type(caught) == 'table')
+             return caught.code, caught.message",
+        )
+        .eval()
+        .unwrap();
+    assert_eq!(
+        (code.as_str(), message.as_str()),
+        ("credential_failed", "boom")
+    );
+}

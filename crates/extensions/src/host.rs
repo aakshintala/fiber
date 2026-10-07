@@ -129,6 +129,7 @@ pub(crate) fn install(
     entry: Rc<Cell<bool>>,
     hub: &Arc<crate::lua::Hub>,
     failure: mlua::Function,
+    note_failure: mlua::Function,
 ) -> mlua::Result<(LuaValue, Table)> {
     let HostContext {
         home,
@@ -183,7 +184,7 @@ pub(crate) fn install(
         in_entry,
         failure.clone(),
     ))?;
-    oauth::install(lua, &host, &tag, browser, entry, failure)?;
+    oauth::install(lua, &host, &tag, browser, entry, failure, note_failure)?;
     let timer_funcs = timers::install(lua, &host, hub)?;
     log::install(lua, &host, hub, &extension)?;
     ui::install(lua, &host, hub, &extension)?;

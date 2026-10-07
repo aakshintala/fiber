@@ -52,7 +52,7 @@ pub(super) const CHECK_EVERY: u32 = 1000;
 // extension runs"). A hook's phase and `on_failure` are docs/extensions.md,
 // "When several hooks share a point" and "When a hook fails".
 pub(super) const PRELUDE: &str = r#"
-local create, load_module, convert_error = ...
+local create, load_module, rethrow_panic = ...
 local commands, providers, hooks, problems = {}, {}, {}, {}
 local resume, status, yield, pack, unpack =
   coroutine.resume, coroutine.status, coroutine.yield, table.pack, table.unpack
@@ -69,17 +69,17 @@ end
 
 -- Like `pcall(f, ...)`, but `f` may suspend on a host call. The VM's `pcall`
 -- cannot be yielded across, so `f` runs in a coroutine of its own and each
--- yield it makes is passed up to the host, and the answer back down. A host
--- failure comes back as `{ code, message }`; any other error passes through
--- unchanged, tables staying tables, and every return survives.
+-- yield it makes is passed up to the host, and the answer back down. Every
+-- error passes through unchanged (a host failure is already its
+-- `{ code, message }` table), and every return survives. `rethrow_panic`
+-- reads the error so a Rust panic resumes in Rust instead of being caught.
 pcall = function(f, ...)
   local co = create(f)
   local args = pack(...)
   while true do
     local r = pack(resume(co, unpack(args, 1, args.n)))
     if not r[1] then
-      local converted = convert_error(r[2])
-      if converted ~= nil then return false, converted end
+      rethrow_panic(r[2])
       return false, r[2]
     end
     if status(co) == "dead" then return true, unpack(r, 2, r.n) end

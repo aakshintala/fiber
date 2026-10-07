@@ -1,62 +1,121 @@
-//! Every failed host call raises `{ code, message }`
-//! (`docs/extensions.md`, "How an extension runs"): one Lua constructor
-//! builds them all, and one Rust error carries them out of host functions.
-//!
-//! A Rust host function never raises a failure as a Rust error directly:
-//! mlua would wrap it as userdata, and `pcall` would see that, not a table.
-//! Instead each failing call has a Lua half, as `host.http` and `host.exec`
-//! already have, that receives `(nil, code, message)` from Rust or from
-//! `coroutine.yield` and raises `error(failure(code, message), 0)`. Calls
-//! implemented wholly in Rust (`host.secret`, `host.fs`, `host.config`,
-//! `host.oauth.pkce` and the held credential's methods) return `(nil,
-//! code, message)` from Rust for a coded failure, and the Lua half [`wrap`]
-//! raises the same table at the call site; uncaught, mlua stringifies the
-//! failure text is `message` either way. A wrong argument stays a string error, "an
-//! error in the calling code", as do the entry-script refusals.
+//! Host failures raised in Lua are tables (`docs/extensions.md`, "How an
+//! extension runs"). A failure whose uncaught code is not `extension_failed`
+//! (OAuth's unattended calls and refresh) is also recorded in a per-VM slot,
+//! which the callback boundary reads when the same error escapes.
+
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use contract::ErrorCode;
 use mlua::{Function, Lua, MultiValue, Table, Value as LuaValue};
 
-/// A host call's failure: its stable code and what a person reads. The
-/// prelude's `pcall` converts a caught one to the same table [`install`]
-/// builds; direct host calls instead return `(nil, code, message)` for
-/// [`wrap`] to raise, so the value is the table at its source.
-#[derive(Debug)]
-pub(crate) struct Failure {
-    /// The stable label a caller switches on, never parsing the message.
-    pub code: ErrorCode,
-    /// What a person reads; single-line, naming the call.
-    pub message: String,
+/// How a recorded failure maps if it escapes its callback.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Boundary {
+    /// No person was attached for an interactive OAuth call.
+    Unattended { call: String },
+    /// A refresh function failed, classified by whether its last request got
+    /// a response from the token endpoint.
+    Refresh { reached: bool },
 }
 
-impl std::fmt::Display for Failure {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.message)
+/// The last recorded failure raised in this VM.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PendingFailure {
+    /// The raised value's `tostring`: what mlua reports when it escapes.
+    pub(crate) text: String,
+    /// What the callback's error reports: the table's own `message`.
+    pub(crate) message: String,
+    pub(crate) boundary: Boundary,
+}
+
+/// Per-VM state shared by the Lua constructor and its callback boundary.
+#[derive(Clone, Default)]
+pub(crate) struct FailureState(Arc<Mutex<Option<PendingFailure>>>);
+
+impl FailureState {
+    /// Discard an error caught by Lua before the next callback starts.
+    pub(crate) fn clear(&self) {
+        *lock(&self.0) = None;
+    }
+
+    /// Take the pending failure when `error` is it escaping the callback.
+    ///
+    /// mlua hands an uncaught error value over as its `tostring`, which for a
+    /// failure table is its message, followed by Lua's traceback when it left
+    /// a resumed thread; an error that crossed a Rust function is wrapped in
+    /// `CallbackError`.
+    pub(crate) fn take_matching(&self, error: &mlua::Error) -> Option<PendingFailure> {
+        if let mlua::Error::CallbackError { cause, .. } = error {
+            return self.take_matching(cause);
+        }
+        let mlua::Error::RuntimeError(text) = error else {
+            return None;
+        };
+        let mut pending = lock(&self.0);
+        let escaped = pending.as_ref().is_some_and(|failure| {
+            text.strip_prefix(failure.text.as_str())
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with("\nstack traceback:"))
+        });
+        if escaped { pending.take() } else { None }
+    }
+
+    fn record(&self, text: String, message: String, boundary: &str) -> mlua::Result<()> {
+        let boundary = match boundary {
+            "unattended:open" => Boundary::Unattended {
+                call: "open".into(),
+            },
+            "unattended:callback" => Boundary::Unattended {
+                call: "callback".into(),
+            },
+            "unattended:poll" => Boundary::Unattended {
+                call: "poll".into(),
+            },
+            "refresh:reached" => Boundary::Refresh { reached: true },
+            "refresh:unreached" => Boundary::Refresh { reached: false },
+            other => {
+                return Err(mlua::Error::runtime(format!(
+                    "unknown failure boundary `{other}`"
+                )));
+            }
+        };
+        let mut pending = lock(&self.0);
+        // An unattended call that fails inside a refresh function keeps its
+        // own mapping when the refresh forwards the same table.
+        if matches!(boundary, Boundary::Refresh { .. })
+            && pending.as_ref().is_some_and(|failure| {
+                failure.text == text && matches!(failure.boundary, Boundary::Unattended { .. })
+            })
+        {
+            return Ok(());
+        }
+        *pending = Some(PendingFailure {
+            text,
+            message,
+            boundary,
+        });
+        Ok(())
     }
 }
 
-impl std::error::Error for Failure {}
-
-/// The code's name as Lua sees it: the registry's snake_case label.
-pub(crate) fn code_name(code: &ErrorCode) -> String {
-    serde_json::to_value(code)
-        .ok()
-        .and_then(|value| value.as_str().map(str::to_owned))
-        .unwrap_or_else(|| "extension_failed".to_owned())
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// What `install` builds: the `failure(code, message)` constructor the host
-/// halves raise, and the `pcall` converter that maps a caught Rust failure
-/// to the same table.
+/// The failure table constructor and per-VM callback-boundary state.
 pub(crate) struct FailureLib {
-    /// Builds `{ code, message }` with the shared `__tostring` metatable.
-    pub failure: Function,
-    /// Maps a caught external host failure to its table, else nil.
-    pub convert: Function,
+    /// `failure(code, message, boundary?)` builds `{ code, message }` with
+    /// the shared `__tostring` metatable, recording it when given a boundary.
+    pub(crate) failure: Function,
+    /// `note_failure(text, message, boundary)` records a value raised
+    /// elsewhere, which then passes through unchanged.
+    pub(crate) note_failure: Function,
+    /// Lets mlua re-raise a Rust panic instead of exposing it as a Lua error.
+    pub(crate) rethrow_panic: Function,
+    /// State read by `Vm::error` and cleared at callback start.
+    pub(crate) state: FailureState,
 }
 
-/// Builds [`FailureLib`]: one shared `__tostring` metatable behind both
-/// functions, so a table and its converted twin stringify alike.
+/// Builds the shared failure constructor and its pending-error recorder.
 pub(crate) fn install(lua: &Lua) -> mlua::Result<FailureLib> {
     let metatable = lua.create_table()?;
     metatable.set(
@@ -66,37 +125,59 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<FailureLib> {
             Ok(message)
         })?,
     )?;
+    let state = FailureState::default();
+    let failure_state = state.clone();
     let failure_mt = metatable.clone();
-    let failure = lua.create_function(move |lua, (code, message): (String, String)| {
-        raised(lua, &failure_mt, &code, &message)
-    })?;
-    let convert_mt = metatable.clone();
-    let convert = lua.create_function(move |lua, err: LuaValue| {
-        converted(lua, &convert_mt, &err).map(|table| table.map_or(LuaValue::Nil, LuaValue::Table))
-    })?;
-    Ok(FailureLib { failure, convert })
+    let failure = lua.create_function(
+        move |lua, (code, message, boundary): (String, String, Option<String>)| {
+            if let Some(boundary) = boundary {
+                failure_state.record(message.clone(), message.clone(), &boundary)?;
+            }
+            raised(lua, &failure_mt, &code, &message)
+        },
+    )?;
+    let note_state = state.clone();
+    let note_failure = lua.create_function(
+        move |_, (text, message, boundary): (String, String, String)| {
+            note_state.record(text, message, &boundary)
+        },
+    )?;
+    let rethrow_panic = lua.create_function(|_, _: LuaValue| Ok(()))?;
+    Ok(FailureLib {
+        failure,
+        note_failure,
+        rethrow_panic,
+        state,
+    })
 }
 
 /// Wraps a raw host function that returns its value on success and
-/// `(nil, code, message)` on a coded failure: the wrapper raises
-/// `error(failure(code, message), 0)` at the call site, so the value is
-/// the table at its source even for a caller catching it with
-/// `coroutine.resume`. A wrong argument stays a string error: the raw
-/// function raises it, and the wrapper never sees it.
+/// `(nil, code, message)` on a coded failure. The table is raised at the call
+/// site, so even `coroutine.resume` catches it as a table.
 pub(crate) fn wrap(lua: &Lua, raw: Function, failure: &Function) -> mlua::Result<Function> {
+    wrap_with_boundary(lua, raw, failure, None)
+}
+
+/// Wraps an OAuth call whose uncaught failure has a special callback mapping.
+pub(crate) fn wrap_with_boundary(
+    lua: &Lua,
+    raw: Function,
+    failure: &Function,
+    boundary: Option<&str>,
+) -> mlua::Result<Function> {
     lua.load(
         r#"
-local raw, failure = ...
+local raw, failure, boundary = ...
 local pack, unpack = table.pack, table.unpack
 return function(...)
   local r = pack(raw(...))
-  if r[2] ~= nil then error(failure(r[2], r[3]), 0) end
+  if r[2] ~= nil then error(failure(r[2], r[3], boundary), 0) end
   return unpack(r, 1, r.n)
 end
 "#,
     )
     .set_name("=host failure wrap")
-    .call((raw, failure.clone()))
+    .call((raw, failure.clone(), boundary))
 }
 
 /// The `(nil, code, message)` a raw host function returns for a coded
@@ -113,6 +194,14 @@ pub(crate) fn raw_failure(
     ]))
 }
 
+/// The code's name as Lua sees it: the registry's snake_case label.
+pub(crate) fn code_name(code: &ErrorCode) -> String {
+    serde_json::to_value(code)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_else(|| "extension_failed".to_owned())
+}
+
 /// The `{ code, message }` table with the shared metatable.
 fn raised(lua: &Lua, metatable: &Table, code: &str, message: &str) -> mlua::Result<Table> {
     let failed = lua.create_table()?;
@@ -120,54 +209,6 @@ fn raised(lua: &Lua, metatable: &Table, code: &str, message: &str) -> mlua::Resu
     failed.set("message", message)?;
     failed.set_metatable(Some(metatable.clone()))?;
     Ok(failed)
-}
-
-/// The table a caught `err` converts to: a Rust host failure's code and
-/// message, an unattended login's `authentication_failed`, or a failed
-/// refresh's pass-through. Anything else is not a host failure.
-fn converted(lua: &Lua, metatable: &Table, err: &LuaValue) -> mlua::Result<Option<Table>> {
-    let LuaValue::Error(e) = err else {
-        return Ok(None);
-    };
-    if let Some(failed) = e.downcast_ref::<Failure>() {
-        return raised(lua, metatable, &code_name(&failed.code), &failed.message).map(Some);
-    }
-    if let Some(unattended) = e.downcast_ref::<crate::oauth::Unattended>() {
-        return raised(
-            lua,
-            metatable,
-            &code_name(&ErrorCode::AuthenticationFailed),
-            &unattended.to_string(),
-        )
-        .map(Some);
-    }
-    if let Some(refresh) = e.downcast_ref::<crate::oauth::RefreshFailed>() {
-        // A failure table passes through with its own code; a string the
-        // refresh function raised itself is the credential failing.
-        let code = refresh.table_code.as_deref().unwrap_or("credential_failed");
-        return raised(lua, metatable, code, &refresh.message).map(Some);
-    }
-    Ok(None)
-}
-
-/// The `(code, message)` a Lua value carries when it is a failure table:
-/// two strings and nothing else is required, so a table `pcall` caught
-/// passes back through unchanged.
-pub(crate) fn as_failure(value: &LuaValue) -> Option<(String, String)> {
-    let LuaValue::Table(failed) = value else {
-        return None;
-    };
-    let (code, message): (LuaValue, LuaValue) =
-        (failed.get("code").ok()?, failed.get("message").ok()?);
-    match (code, message) {
-        (LuaValue::String(code), LuaValue::String(message)) => {
-            let (Ok(code), Ok(message)) = (code.to_str(), message.to_str()) else {
-                return None;
-            };
-            Some((code.to_owned(), message.to_owned()))
-        }
-        _ => None,
-    }
 }
 
 #[cfg(test)]

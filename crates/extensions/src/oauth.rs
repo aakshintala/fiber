@@ -127,17 +127,15 @@ impl Browser for SystemBrowser {
 /// table, the yield tag and a function that says whether the entry script is
 /// running, which can wait on nothing.
 const LUA: &str = r#"
-local host, tag, failure, in_entry, refresh_failed, need_person = ...
+local host, tag, failure, in_entry, note_failure, attended = ...
 local oauth = host.oauth
 local yield, resume, status = coroutine.yield, coroutine.resume, coroutine.status
 -- The armed `coroutine.create` the prelude installed.
 local create = coroutine.create
 local pack, unpack = table.pack, table.unpack
 
--- Like `pcall(f, ...)`, but kept local: `refresh` needs the raw error value,
--- an external Rust failure carrying whether the endpoint was reached, so an
--- uncaught one still fails with the rejection's code. The global `pcall`
--- converts only at the caller's own boundary.
+-- Like `pcall(f, ...)`, but kept local so refresh can observe its HTTP yields
+-- and forward the original failure value unchanged.
 local function run(f, ...)
   local co = create(f)
   local args = pack(...)
@@ -150,15 +148,28 @@ local function run(f, ...)
 end
 
 -- Runs the refresh function `f` the way `run` does, and sees each `host.http`
--- yield and its answer. A function that raises fails the refresh, and the host
--- is told whether the last request got no reply at all.
+-- yield and its answer. A function that raises fails the refresh: a table
+-- passes through unchanged, anything else becomes `credential_failed`.
+-- Either is recorded with whether the last request got a reply, which an
+-- uncaught one fails the callback by.
 local function attempt(f, ...)
   local co = create(f)
   local args = pack(...)
   local unreached = false
   while true do
     local r = pack(resume(co, unpack(args, 1, args.n)))
-    if not r[1] then refresh_failed(not unreached, tostring(r[2]), r[2]) end
+    if not r[1] then
+      local err = r[2]
+      local boundary = unreached and "refresh:unreached" or "refresh:reached"
+      if type(err) == "table" then
+        local text = tostring(err)
+        local message = err.message
+        note_failure(text, type(message) == "string" and message or text, boundary)
+      else
+        err = failure("credential_failed", tostring(err), boundary)
+      end
+      error(err, 0)
+    end
     if status(co) == "dead" then return r[2] end
     local http = r[2] == tag and r[3] == "http"
     args = pack(yield(unpack(r, 2, r.n)))
@@ -169,6 +180,13 @@ end
 local function in_callback(call)
   if in_entry() then
     error("host.oauth." .. call .. ": needs a running callback, not the entry script", 3)
+  end
+end
+
+local function need_person(call)
+  if not attended() then
+    local message = "host.oauth." .. call .. " needs a person to log in, and nobody is attached"
+    error(failure("authentication_failed", message, "unattended:" .. call), 0)
   end
 end
 
@@ -250,7 +268,7 @@ end
 "#;
 
 /// Sets `host.oauth`. `entry` is true while the entry script runs.
-/// `failure` is the `{ code, message }` constructor the waiting calls raise.
+/// `failure` raises a table; `note_failure` preserves refresh's outer mapping.
 pub(crate) fn install(
     lua: &Lua,
     host: &Table,
@@ -258,23 +276,24 @@ pub(crate) fn install(
     browser: Arc<dyn Browser>,
     entry: Rc<Cell<bool>>,
     failure: mlua::Function,
+    note_failure: mlua::Function,
 ) -> mlua::Result<()> {
     let oauth = lua.create_table()?;
-    let need_browser = Arc::clone(&browser);
-    // `open` with nobody attached raises `Unattended`, which the prelude's
-    // `pcall` converts to the `authentication_failed` table and uncaught
-    // maps to `Error::Unattended`; a wrong argument stays a string error.
+    let open_browser = Arc::clone(&browser);
+    let open_raw = lua.create_function(move |lua, url: String| {
+        if !open_browser.attended() {
+            return crate::host::failure::raw_failure(
+                lua,
+                &contract::ErrorCode::AuthenticationFailed,
+                "host.oauth.open needs a person to log in, and nobody is attached".to_owned(),
+            );
+        }
+        open_browser.open(&url);
+        Ok(mlua::MultiValue::new())
+    })?;
     oauth.set(
         "open",
-        lua.create_function(move |_, url: String| {
-            if !browser.attended() {
-                return Err::<(), _>(mlua::Error::external(Unattended {
-                    call: "open".to_owned(),
-                }));
-            }
-            browser.open(&url);
-            Ok(())
-        })?,
+        crate::host::failure::wrap_with_boundary(lua, open_raw, &failure, Some("unattended:open"))?,
     )?;
     let pkce_raw = lua.create_function(|lua, ()| {
         let verifier = match verifier() {
@@ -295,69 +314,15 @@ pub(crate) fn install(
     oauth.set("pkce", crate::host::failure::wrap(lua, pkce_raw, &failure)?)?;
     host.set("oauth", oauth)?;
     let in_entry = lua.create_function(move |_, ()| Ok(entry.get()))?;
-    let refresh_failed =
-        lua.create_function(|_, (reached, message, raised): (bool, String, LuaValue)| {
-            if let LuaValue::Error(e) = &raised
-                && let Some(unattended) = e.downcast_ref::<Unattended>()
-            {
-                return Err::<(), _>(mlua::Error::external(Unattended {
-                    call: unattended.call.clone(),
-                }));
-            }
-            // A failure table passes through unchanged: its own code and
-            // its own message, not the stringified table.
-            if let Some((code, table_message)) = crate::host::failure::as_failure(&raised) {
-                return Err::<(), _>(mlua::Error::external(RefreshFailed {
-                    reached,
-                    message: table_message,
-                    table_code: Some(code),
-                }));
-            }
-            Err::<(), _>(mlua::Error::external(RefreshFailed {
-                reached,
-                message,
-                table_code: None,
-            }))
-        })?;
-    let need_person = lua.create_function(move |_, call: String| {
-        if need_browser.attended() {
-            Ok(())
-        } else {
-            Err(mlua::Error::external(Unattended { call }))
-        }
-    })?;
+    let attended = lua.create_function(move |_, ()| Ok(browser.attended()))?;
     lua.load(LUA).set_name("=host.oauth").call::<()>((
         host.clone(),
         tag.clone(),
         failure,
         in_entry,
-        refresh_failed,
-        need_person,
+        note_failure,
+        attended,
     ))
-}
-
-/// What the refresh function's failure carries out of Lua: whether the token
-/// endpoint was reached, so the host can tell a rejection from a network
-/// failure. `reached` is false when the last `host.http` call the function
-/// made before it raised got no reply. `table_code` is the failure table's
-/// own code when the function raised one, so `pcall` passes it through
-/// unchanged; a string the function raised itself is the credential
-/// failing.
-#[derive(Debug, thiserror::Error)]
-#[error("{message}")]
-pub(crate) struct RefreshFailed {
-    pub(crate) reached: bool,
-    pub(crate) message: String,
-    pub(crate) table_code: Option<String>,
-}
-
-/// An interactive `host.oauth` helper called with nobody attached to answer
-/// (`docs/model-routing.md`, "Keys, tokens and OAuth"). `open`, `callback`
-/// and `poll` raise this before they open, listen or send anything.
-#[derive(Debug, thiserror::Error)]
-#[error("host.oauth.{call} needs a person to log in, and nobody is attached")]
-pub(crate) struct Unattended {
-    pub(crate) call: String,
 }
 
 /// 32 random bytes as base64url without padding, 43 characters (RFC 7636,

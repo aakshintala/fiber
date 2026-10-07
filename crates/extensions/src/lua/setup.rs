@@ -26,13 +26,13 @@ pub(super) enum Poll {
 /// Removes the base library's I/O, which belongs to the host, and runs the
 /// prelude. Returns the tables `fiber.command`, `fiber.provider` and
 /// `fiber.hook` fill, the one `fiber.hook` fills with its refusals, and the
-/// `failure(code, message)` constructor the host halves raise.
+/// failure constructor and pending-error state shared with the host.
 pub(crate) fn install(
     lua: &Lua,
     deadline: &Deadline,
     dir: PathBuf,
     memory_cap: usize,
-) -> mlua::Result<(Table, Table, Table, Table, mlua::Function)> {
+) -> mlua::Result<(Table, Table, Table, Table, crate::host::failure::FailureLib)> {
     let globals = lua.globals();
     for name in ["print", "warn", "dofile", "loadfile"] {
         globals.raw_remove(name)?;
@@ -54,8 +54,8 @@ pub(crate) fn install(
     let (commands, providers, hooks, problems): (Table, Table, Table, Table) = lua
         .load(PRELUDE)
         .set_name("=prelude")
-        .call((create, load_module, failures.convert))?;
-    Ok((commands, providers, hooks, problems, failures.failure))
+        .call((create, load_module, failures.rethrow_panic.clone()))?;
+    Ok((commands, providers, hooks, problems, failures))
 }
 
 /// Reads `file` under `dir` and compiles it, named by its path in `dir` so an

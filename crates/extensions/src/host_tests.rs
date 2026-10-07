@@ -21,6 +21,7 @@ fn lua_in(home: PathBuf) -> Lua {
         Rc::default(),
         &hub,
         failures.failure,
+        failures.note_failure,
     )
     .unwrap();
     lua
