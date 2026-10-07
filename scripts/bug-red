@@ -61,7 +61,12 @@ package_args=()
 while IFS=$'\t' read -r -a fields; do
   kind=${fields[0]:-}
   if [ "$kind" = package ]; then
-    package_args+=(-p "${fields[1]}")
+    # The `log` crate shares its name with crates.io `log`: name its version.
+    if [ "${fields[1]}" = log ]; then
+      package_args+=(-p log@0.0.0)
+    else
+      package_args+=(-p "${fields[1]}")
+    fi
   fi
 done <<<"$plan"
 
