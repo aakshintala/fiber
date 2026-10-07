@@ -376,7 +376,7 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 | `history` | Answers, in its `command_accepted`, with the session's durable lines from `from_seq` to `to_seq` inclusive, or to the latest when `to_seq` is absent, at most 256 lines; a client pages for more. This is how every client pages history, the local terminal included: no client reads a session's log from disk (`docs/tui.md`, "History and paging"). Rejected `invalid_arguments` when `from_seq` is past the latest line. |
 | `tools` | Answers with every declared tool: its source, whether it is full, deferred or loaded, and its approximate size (`docs/tools.md`, "Seeing the tools"). |
 | `commands` | Answers with every `/name` the session runs: each skill and prompt template that discovery keeps and `skills.disabled` does not switch off (`docs/system-prompt.md`, "Skills"), and each extension's command (`docs/extensions.md`, "Commands and screens"). Each entry is a name, a one-line description, the skill's `argument-hint` when it has one, and a tag: `skill`, `template`, or the extension's name. The list is fixed when the session starts, and again when it reloads. A client's `/` list reads it (`docs/tui.md`, "Slash commands"). |
-| `model` | Switches model or thinking level at the next turn boundary. Takes a model reference and an optional thinking level. The switch rebuilds the prompt cache, and the terminal says so with the rebuild's size first (`docs/prompt-cache.md`, "Switching model"). Rejected `invalid_arguments` for an unknown model. |
+| `model` | Switches model or thinking level at the next turn boundary. Takes a model reference and an optional thinking level. The switch rebuilds the prompt cache, and the terminal says so with the rebuild's size first (`docs/prompt-cache.md`, "Switching model"). Rejected `invalid_arguments` for an unknown model, and with the credential's own code, such as `credential_missing`, when the new model's credential cannot be read (`docs/model-routing.md`, "When a credential is missing or fails"). |
 | `credential` | Switches the session's credential label at the next turn boundary (`docs/model-routing.md`, "Which credential a session uses"). The switch rebuilds the prompt cache, as a model switch does. It changes this session only; the terminal's `/credential` also saves the label. Rejected `invalid_arguments` for a label the provider does not have. |
 | `name` | Sets the session's name, which pins it against the model's `name_session`. Takes the text; empty text clears the person's name and unpins it. Written as `session_named`. |
 | `handoff` | Starts a handoff: the model's context restarts from a note the model writes (`docs/handoff.md`). Takes optional instructions saying what the next stretch of work focuses on. During a turn it applies at the next step boundary, as a steering message does; between turns it is a turn of its own whose input is the command. |
@@ -724,6 +724,8 @@ and a repeat does nothing. A SIGTERM or SIGINT after it is a second signal.
   with code `mcp_cancel_requested`, as on a cancelled turn (`docs/mcp.md`,
   "Calls"); a pending elicitation goes with its call. Then each stdio
   server's stdin is closed and it gets SIGTERM, then SIGKILL 800 ms later.
+- A credential command a `model` switch is reading gets SIGKILL, and the
+  switch is rejected `closing`.
 - No model request is made, no ending notice is given, and no hook runs.
   Because no `after_tool` hook runs to redact it, a call cancelled by shutdown
   completes with no content and no artifact.
