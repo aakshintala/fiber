@@ -9,8 +9,8 @@ use std::thread;
 use std::time::Duration;
 
 use super::{
-    MATCHING_PATTERN_VAR, MATCHING_WATCHDOG_SCRIPT, WATCHDOG_SCRIPT, kill_group, kill_matching,
-    kill_pid, matching, pattern,
+    MATCHING_PATTERN_VAR, MATCHING_WATCHDOG_SCRIPT, WATCHDOG_SCRIPT, group_empties, kill_group,
+    kill_matching, kill_pid, matching, pattern,
 };
 
 const DEADLINE: Duration = Duration::from_secs(5);
@@ -252,5 +252,21 @@ fn the_matching_watchdog_script_refuses_an_empty_pattern() {
     assert!(
         survived(sentinel),
         "the empty pattern signalled the sentinel"
+    );
+}
+
+#[test]
+fn group_empties_reports_an_empty_group_and_a_live_one() {
+    let child = marked("group_empties");
+    let group = child.id();
+    assert!(
+        !group_empties(group, Duration::from_millis(200)),
+        "a live group must not read as empty"
+    );
+    kill_group(group, "KILL").unwrap();
+    reaped(child, "the killed group leader");
+    assert!(
+        group_empties(group, DEADLINE),
+        "waited {DEADLINE:?} for the killed group to empty"
     );
 }

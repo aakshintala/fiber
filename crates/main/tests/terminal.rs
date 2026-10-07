@@ -31,6 +31,9 @@ use serde_json::{Value, json};
 /// One named wall-clock deadline for every blocking wait.
 const DEADLINE: Duration = Duration::from_secs(30);
 
+/// How long a process group may take to empty after `fiber` exits.
+const GROUP_DEADLINE: Duration = Duration::from_secs(5);
+
 /// A temporary root holding Fiber home and the workspace, removed on drop.
 struct Setup {
     root: fakes::TempDir,
@@ -146,11 +149,6 @@ impl Drop for KillGroup {
             Ok(_) | Err(_) => {}
         }
     }
-}
-
-/// Whether any process remains in process group `group`.
-fn group_alive(group: u32) -> bool {
-    fakes::kill_group(group, "0").unwrap()
 }
 
 /// The terminal under test: its child, the pty master, and one reader
@@ -286,14 +284,14 @@ impl Run {
                 fakes::kill_group(group, "KILL").unwrap();
                 let reaped = finished.recv_timeout(DEADLINE).is_ok();
                 assert!(
-                    !group_alive(group),
+                    fakes::group_empties(group, GROUP_DEADLINE),
                     "`fiber` left a process in its group behind"
                 );
                 panic!("waited {DEADLINE:?} for `fiber` to exit (reaped after the kill: {reaped})");
             }
         };
         assert!(
-            !group_alive(group),
+            fakes::group_empties(group, GROUP_DEADLINE),
             "`fiber` left a process in its group behind"
         );
         std::mem::forget(guard);
@@ -509,7 +507,10 @@ fn assert_names_ask(stdin: Stdio, missing: &str) {
         .recv_timeout(DEADLINE)
         .unwrap_or_else(|_| panic!("waited {DEADLINE:?} for `fiber` to exit, no tty on {missing}"))
         .unwrap();
-    assert!(!group_alive(group));
+    assert!(
+        fakes::group_empties(group, GROUP_DEADLINE),
+        "waited {GROUP_DEADLINE:?} for the process group to empty"
+    );
     std::mem::forget(guard);
     watchdog.stand_down(DEADLINE);
     assert_eq!(output.status.code(), Some(2), "no tty on {missing}");
