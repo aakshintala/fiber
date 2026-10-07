@@ -1,9 +1,10 @@
 //! Drawing the terminal: the conversation as plain text, the notice, the
-//! quit hint, the approval badge, and the input line or the approval panel
-//! in its place (`docs/tui.md`, "Turns", "Approvals and questions").
+//! quit hint, the approval badge, and the input box or the approval panel
+//! in its place (`docs/tui.md`, "Turns", "The input box", "Approvals and
+//! questions").
 
 use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
+use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 
@@ -32,8 +33,8 @@ pub(crate) fn rows(line: &str, width: u16) -> usize {
     paragraph(line).line_count(width).max(1)
 }
 
-/// Draws `app` into `area` of `buf`, from the bottom up: the input line
-/// on the last row, or the approval panel in its place, then the badge, the
+/// Draws `app` into `area` of `buf`, from the bottom up: the input box
+/// on the last rows, or the approval panel in its place, then the badge, the
 /// quit hint and the notice when shown, and the conversation in the rows
 /// left. A screen too short for them all drops the notice first, then the
 /// hint, then the badge. A panel taller than the screen keeps its top.
@@ -62,11 +63,10 @@ pub(crate) fn render(app: &App, area: Rect, buf: &mut Buffer) {
         }
     };
     if app.panel().is_none() {
-        // The input line keeps the end of a draft wider than the screen.
-        let input = format!("> {}", app.draft());
-        let skip = input.chars().count().saturating_sub(width);
-        let shown: String = input.chars().skip(skip).collect();
-        put(&shown);
+        let (rows, _, _) = input_box(app, area.width);
+        for row in rows.iter().rev() {
+            put(row);
+        }
     }
     if let Some(badge) = app.badge() {
         put(&badge);
@@ -79,6 +79,36 @@ pub(crate) fn render(app: &App, area: Rect, buf: &mut Buffer) {
     }
     let rows = bottom.saturating_sub(area.y);
     conversation_rows(app, Rect::new(area.x, area.y, area.width, rows), buf);
+}
+
+/// The input box's shown rows, and the cursor's row in them and column:
+/// at most [`App::input_height`] rows, scrolled so the cursor's row shows.
+fn input_box(app: &App, width: u16) -> (Vec<String>, usize, u16) {
+    let draft = app.input();
+    let (row, col) = draft.cursor(width);
+    let height = app.input_height();
+    let top = row.saturating_add(1).saturating_sub(height);
+    let rows = draft
+        .rows(width)
+        .into_iter()
+        .skip(top)
+        .take(height)
+        .collect();
+    (rows, row.saturating_sub(top), col)
+}
+
+/// Where the terminal cursor shows: at the draft's cursor while the input
+/// box has focus, `None` while the approval panel is open or the cursor's
+/// row is off a screen too short for it.
+pub(crate) fn cursor(app: &App, area: Rect) -> Option<Position> {
+    if app.panel().is_some() {
+        return None;
+    }
+    let (rows, row, col) = input_box(app, area.width);
+    let below = to_u16(rows.len().saturating_sub(row));
+    let y = area.bottom().checked_sub(below).filter(|y| *y >= area.y)?;
+    let x = area.x.saturating_add(col.min(area.width.saturating_sub(1)));
+    Some(Position::new(x, y))
 }
 
 /// Draws the conversation's visible rows, bottom-aligned while it is

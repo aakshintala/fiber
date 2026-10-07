@@ -1,7 +1,7 @@
 //! Tests for terminal state.
 
 use super::{App, Effect, QUIT_WINDOW};
-use crate::keys::{Key, Parser};
+use crate::keys::{Edit, Key, Parser};
 use crate::link::Line;
 use contract::clock::Clock;
 use std::path::PathBuf;
@@ -734,4 +734,185 @@ fn command_ids_are_c_and_sixteen_fresh_hex_digits() {
         );
     }
     assert_ne!(first, second);
+}
+
+/// `n` numbered lines joined by line breaks.
+fn numbered(n: usize) -> String {
+    (1..=n)
+        .map(|at| format!("l{at}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The text part a prompt or steer line carries.
+fn content_text(line: &str) -> String {
+    parse(line)
+        .pointer("/args/content/0/text")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_owned()
+}
+
+#[test]
+fn enter_sends_the_draft_with_its_tokens_expanded() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
+    app.on_key(Key::Char('a'), now);
+    app.on_edit(Edit::Paste(numbered(11)));
+    assert_eq!(app.input().rows(80), vec!["> a[Pasted text #1 · 11 lines]"]);
+    let line = one_line(app.on_key(Key::Enter, now));
+    assert_eq!(content_text(&line), format!("a{}", numbered(11)));
+    assert!(app.input().is_empty());
+    // The next draft numbers its tokens from 1 again.
+    app.on_edit(Edit::Paste(numbered(11)));
+    assert_eq!(app.input().rows(80), vec!["> [Pasted text #1 · 11 lines]"]);
+}
+
+#[test]
+fn shift_enter_and_ctrl_j_insert_line_breaks() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
+    app.on_key(Key::Char('a'), now);
+    app.on_edit(Edit::ShiftEnter);
+    app.on_key(Key::Char('b'), now);
+    app.on_edit(Edit::CtrlJ);
+    app.on_key(Key::Char('c'), now);
+    assert_eq!(app.draft(), "a\nb\nc");
+    let line = one_line(app.on_key(Key::Enter, now));
+    assert_eq!(content_text(&line), "a\nb\nc");
+}
+
+#[test]
+fn editing_keys_move_and_delete_in_the_draft() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    for ch in "one two".chars() {
+        app.on_key(Key::Char(ch), now);
+    }
+    app.on_edit(Edit::WordLeft);
+    app.on_edit(Edit::Left);
+    app.on_key(Key::Char('!'), now);
+    assert_eq!(app.draft(), "one! two");
+    app.on_edit(Edit::WordRight);
+    app.on_edit(Edit::DeleteWord);
+    assert_eq!(app.draft(), "one! ");
+    app.on_edit(Edit::LineStart);
+    app.on_edit(Edit::Delete);
+    app.on_edit(Edit::Right);
+    app.on_key(Key::Backspace, now);
+    assert_eq!(app.draft(), "e! ");
+    app.on_edit(Edit::LineEnd);
+    app.on_key(Key::Char('x'), now);
+    assert_eq!(app.draft(), "e! x");
+}
+
+#[test]
+fn up_and_down_move_through_a_draft_of_several_lines() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    for ch in "ab".chars() {
+        app.on_key(Key::Char(ch), now);
+    }
+    app.on_edit(Edit::ShiftEnter);
+    app.on_key(Key::Char('c'), now);
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
+    app.on_key(Key::Char('!'), now);
+    assert_eq!(app.draft(), "a!b\nc");
+    app.on_key(Key::Down, now);
+    app.on_key(Key::Char('?'), now);
+    assert_eq!(app.draft(), "a!b\nc?");
+}
+
+#[test]
+fn ctrl_c_clears_a_draft_with_tokens() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    app.on_edit(Edit::Paste(numbered(11)));
+    app.on_edit(Edit::Paste(numbered(11)));
+    assert_eq!(app.on_key(Key::CtrlC, now), Effect::None);
+    assert!(app.input().is_empty());
+    assert!(!app.hint());
+    app.on_edit(Edit::Paste(numbered(11)));
+    assert_eq!(app.input().rows(80), vec!["> [Pasted text #1 · 11 lines]"]);
+}
+
+#[test]
+fn an_editing_key_disarms_ctrl_c() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    app.on_key(Key::CtrlC, now);
+    assert!(app.hint());
+    app.on_edit(Edit::Left);
+    assert!(!app.hint());
+    assert_eq!(app.on_key(Key::CtrlC, now), Effect::None);
+}
+
+#[test]
+fn the_input_box_grows_to_a_third_of_the_screen() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    app.set_size(60, 12);
+    assert_eq!(app.input_height(), 1);
+    assert_eq!(app.conversation_height(), 11);
+    for _ in 0..2 {
+        app.on_edit(Edit::ShiftEnter);
+    }
+    assert_eq!(app.input_height(), 3);
+    assert_eq!(app.conversation_height(), 9);
+    for _ in 0..5 {
+        app.on_edit(Edit::ShiftEnter);
+    }
+    // 12 / 3 rows at most.
+    assert_eq!(app.input_height(), 4);
+    assert_eq!(app.conversation_height(), 8);
+    app.set_size(60, 14);
+    assert_eq!(app.input_height(), 4);
+    app.set_size(60, 15);
+    assert_eq!(app.input_height(), 5);
+    // A screen under 3 rows still shows one.
+    app.set_size(60, 2);
+    assert_eq!(app.input_height(), 1);
+    // Wrapped rows count.
+    let mut app = self::app();
+    app.set_size(10, 12);
+    for _ in 0..9 {
+        app.on_key(Key::Char('x'), now);
+    }
+    assert_eq!(app.input_height(), 2);
+}
+
+#[test]
+fn the_panel_takes_editing_keys_first_and_a_paste_goes_to_its_feedback() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
+    app.on_key(Key::Char('d'), now);
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "permission_requested",
+        serde_json::json!({"request_id": "r_1", "effects": ["executes"],
+            "reversible": true, "step": "review"}),
+        Some("a_1"),
+    ));
+    assert!(app.panel().is_some());
+    for edit in [
+        Edit::Left,
+        Edit::WordLeft,
+        Edit::LineStart,
+        Edit::Delete,
+        Edit::DeleteWord,
+        Edit::ShiftEnter,
+        Edit::CtrlJ,
+    ] {
+        app.on_edit(edit);
+    }
+    app.on_edit(Edit::Paste("no\nway".to_owned()));
+    assert_eq!(app.draft(), "d");
+    let feedback = app
+        .panel()
+        .and_then(|panel| panel.lines.last().cloned())
+        .unwrap_or_default();
+    assert_eq!(feedback, "› deny · no way");
 }

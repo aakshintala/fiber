@@ -814,3 +814,29 @@ fn each_approval_choice_goes_to_the_hub_as_a_reply() {
     }
     assert!(lp.app.panel().is_none());
 }
+
+#[test]
+fn the_screen_shows_the_cursor_at_the_draft() {
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    feed(&mut lp, vec![Input::Bytes(b"ab\x1b[D".to_vec())]);
+    let backend = lp.screen.terminal.backend_mut();
+    assert!(backend.inner.cursor_visible());
+    backend.inner.assert_cursor_position((3, 11));
+}
+
+#[test]
+fn a_cursor_move_alone_writes_and_a_still_frame_writes_nothing() {
+    let sink = Sink::default();
+    let (mut lp, _) = new_loop(CrosstermBackend::new(sink.clone()), None);
+    feed(&mut lp, vec![Input::Bytes(b"ab".to_vec())]);
+    let typed = sink.len();
+    // ← changes no cell, only the cursor.
+    feed(&mut lp, vec![Input::Bytes(b"\x1b[D".to_vec())]);
+    let moved = sink.len();
+    assert!(moved > typed);
+    // ← at the start changes nothing: no byte.
+    feed(&mut lp, vec![Input::Bytes(b"\x1b[D\x1b[D".to_vec())]);
+    let start = sink.len();
+    feed(&mut lp, vec![Input::Bytes(b"\x1b[D".to_vec())]);
+    assert_eq!(sink.len(), start);
+}

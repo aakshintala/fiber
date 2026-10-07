@@ -1,12 +1,12 @@
 //! Screen snapshots: the whole in-memory screen against stored files.
 
-use super::{render, text};
+use super::{cursor, render, text};
 use crate::app::App;
-use crate::keys::Key;
+use crate::keys::{Edit, Key};
 use crate::link::Line;
 use contract::clock::Clock;
 use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
+use ratatui::layout::{Position, Rect};
 use std::path::PathBuf;
 
 const WIDTH: u16 = 60;
@@ -233,10 +233,12 @@ fn a_long_draft_shows_its_end() {
     for ch in std::iter::repeat_n('a', 70).chain("end".chars()) {
         app.on_key(Key::Char(ch), fakes::clock::FakeClock::new().now());
     }
+    // The draft wraps: its start on the row above, its end on the last.
     let shown = screen(&app);
-    let last = shown.lines().last().unwrap_or_default();
-    assert_eq!(last.chars().count(), usize::from(WIDTH));
-    assert!(last.ends_with("aend"));
+    let rows: Vec<&str> = shown.lines().collect();
+    assert_eq!(rows.get(10).map(|row| row.chars().count()), Some(60));
+    assert!(rows.get(10).is_some_and(|row| row.starts_with("> a")));
+    assert_eq!(rows.last().copied(), Some("  aaaaaaaaaaaaend"));
 }
 
 #[test]
@@ -491,4 +493,100 @@ fn a_panel_taller_than_the_screen_keeps_its_header() {
         sized(&mut app, 40, 2),
         format!("approval · {S_A} · 1 of 1\nasked by a global rule: echo hi\n")
     );
+}
+
+/// Types `text` into the draft, `\n` as Shift+Enter.
+fn type_draft(app: &mut App, text: &str) {
+    let now = fakes::clock::FakeClock::new().now();
+    for ch in text.chars() {
+        if ch == '\n' {
+            app.on_edit(Edit::ShiftEnter);
+        } else {
+            app.on_key(Key::Char(ch), now);
+        }
+    }
+}
+
+/// Where the cursor shows on the 60x12 screen.
+fn cursor_at(app: &App) -> Option<Position> {
+    cursor(app, Rect::new(0, 0, WIDTH, HEIGHT))
+}
+
+#[test]
+fn a_draft_of_three_lines() {
+    let mut app = empty();
+    attach(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "hi"));
+    type_draft(&mut app, "first\nsecond\nthird");
+    insta::assert_snapshot!("draft_of_three_lines", screen(&app));
+    assert_eq!(cursor_at(&app), Some(Position::new(7, 11)));
+}
+
+#[test]
+fn a_draft_taller_than_a_third_scrolls_with_the_cursor() {
+    let mut app = empty();
+    type_draft(&mut app, "l1\nl2\nl3\nl4\nl5\nl6");
+    // 12 rows: the box shows 4, the last four while the cursor is there.
+    insta::assert_snapshot!("draft_taller_than_the_cap", screen(&app));
+    assert_eq!(cursor_at(&app), Some(Position::new(4, 11)));
+    let now = fakes::clock::FakeClock::new().now();
+    for _ in 0..5 {
+        app.on_key(Key::Up, now);
+    }
+    // On the first line, the box shows the first four.
+    insta::assert_snapshot!("draft_scrolled_to_its_top", screen(&app));
+    assert_eq!(cursor_at(&app), Some(Position::new(4, 8)));
+}
+
+#[test]
+fn a_paste_token_in_the_draft() {
+    let mut app = empty();
+    type_draft(&mut app, "see ");
+    let pasted: Vec<String> = (1..=312).map(|n| format!("line {n}")).collect();
+    app.on_edit(Edit::Paste(pasted.join("\n")));
+    insta::assert_snapshot!("draft_with_a_paste_token", screen(&app));
+    assert_eq!(cursor_at(&app), Some(Position::new(34, 11)));
+}
+
+#[test]
+fn a_draft_wider_than_the_screen_wraps() {
+    let mut app = empty();
+    let long: String = std::iter::repeat_n('w', 70).collect();
+    type_draft(&mut app, &long);
+    let shown = screen(&app);
+    let rows: Vec<&str> = shown.lines().collect();
+    assert_eq!(
+        rows.get(10).copied(),
+        Some(format!("> {}", "w".repeat(58)).as_str())
+    );
+    assert_eq!(
+        rows.get(11).copied(),
+        Some(format!("  {}", "w".repeat(12)).as_str())
+    );
+    assert_eq!(cursor_at(&app), Some(Position::new(14, 11)));
+}
+
+#[test]
+fn the_cursor_hides_while_the_panel_is_open() {
+    let mut app = empty();
+    attach(&mut app, "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(cursor_at(&app), Some(Position::new(2, 11)));
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "permission_requested",
+        serde_json::json!({"request_id": "r_1", "effects": ["executes"],
+            "reversible": true, "step": "review"}),
+        Some("a_1"),
+    ));
+    assert!(app.panel().is_some());
+    assert_eq!(cursor_at(&app), None);
+}
+
+#[test]
+fn the_cursor_stays_on_a_screen_one_column_wide() {
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_size(1, 3);
+    type_draft(&mut app, "ab");
+    let area = Rect::new(0, 0, 1, 3);
+    assert_eq!(cursor(&app, area).map(|at| at.x), Some(0));
 }

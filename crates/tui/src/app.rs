@@ -16,7 +16,8 @@ use contract::{Envelope, HubLine, SessionId};
 use serde_json::{Map, Value, json};
 
 use crate::approvals::{self, Panel, PanelKey, Queue};
-use crate::keys::Key;
+use crate::input::Draft;
+use crate::keys::{Edit, Key};
 use crate::link::Line;
 
 /// How long the second Ctrl+C waits for the first.
@@ -97,7 +98,7 @@ enum Item {
 pub(crate) struct App {
     /// The launch directory `start` names.
     workspace: PathBuf,
-    draft: String,
+    draft: Draft,
     phase: Phase,
     link: Link,
     /// Lines held until the hub connects: the `start` of an early Enter.
@@ -126,7 +127,7 @@ impl App {
     pub(crate) fn new(workspace: PathBuf) -> Self {
         Self {
             workspace,
-            draft: String::new(),
+            draft: Draft::default(),
             phase: Phase::Starting,
             link: Link::Waiting,
             held: Vec::new(),
@@ -165,11 +166,11 @@ impl App {
         }
         match key {
             Key::Char(ch) => {
-                self.draft.push(ch);
+                self.draft.insert(ch);
                 Effect::None
             }
             Key::Backspace => {
-                self.draft.pop();
+                self.draft.backspace();
                 Effect::None
             }
             Key::Enter => self.on_enter(),
@@ -186,8 +187,46 @@ impl App {
                 self.follow();
                 Effect::None
             }
-            Key::Up | Key::Down => Effect::None,
+            Key::Up => {
+                // debt: ↑ on the first row does nothing; upgrade when prompt
+                // recall lands (part 2 of #684).
+                self.draft.up(self.width);
+                Effect::None
+            }
+            Key::Down => {
+                self.draft.down(self.width);
+                Effect::None
+            }
             Key::AltA => self.open_first(),
+        }
+    }
+
+    /// Handles one key that edits the draft. With the approval panel open,
+    /// a paste goes to its feedback, its line breaks as spaces, and every
+    /// other editing key does nothing.
+    pub(crate) fn on_edit(&mut self, edit: Edit) {
+        self.armed_at = None;
+        if self.panel().is_some() {
+            if let Edit::Paste(text) = edit {
+                for ch in text.chars() {
+                    let ch = if ch.is_control() { ' ' } else { ch };
+                    self.queue.on_key(&Key::Char(ch));
+                }
+            }
+            return;
+        }
+        let draft = &mut self.draft;
+        match edit {
+            Edit::Left => draft.left(),
+            Edit::Right => draft.right(),
+            Edit::ShiftEnter | Edit::CtrlJ => draft.line_break(),
+            Edit::WordLeft => draft.word_left(),
+            Edit::WordRight => draft.word_right(),
+            Edit::DeleteWord => draft.delete_word(),
+            Edit::LineStart => draft.line_start(),
+            Edit::LineEnd => draft.line_end(),
+            Edit::Delete => draft.delete(),
+            Edit::Paste(text) => draft.paste(&text),
         }
     }
 
@@ -269,9 +308,22 @@ impl App {
         self.kitty
     }
 
+    /// The draft's text, its tokens expanded.
+    #[cfg(test)]
+    pub(crate) fn draft(&self) -> String {
+        self.draft.expand()
+    }
+
     /// The draft in the input box.
-    pub(crate) fn draft(&self) -> &str {
+    pub(crate) fn input(&self) -> &Draft {
         &self.draft
+    }
+
+    /// The input box's rows: the draft's wrapped rows, at most a third of
+    /// the screen and at least one.
+    pub(crate) fn input_height(&self) -> usize {
+        let cap = usize::from(self.height / 3).max(1);
+        self.draft.rows(self.width).len().min(cap)
     }
 
     /// The notice line, if any.
@@ -294,11 +346,11 @@ impl App {
         self.top
     }
 
-    /// The conversation's rows: the screen less the input line or the
+    /// The conversation's rows: the screen less the input box or the
     /// panel in its place, the badge, the hint and the notice. None on a
     /// screen too short for them.
     pub(crate) fn conversation_height(&self) -> usize {
-        let input = self.panel().map_or(1, |panel| {
+        let input = self.panel().map_or(self.input_height(), |panel| {
             panel
                 .lines
                 .iter()
@@ -356,13 +408,14 @@ impl App {
     /// Enter sends the draft: `start` with no session, `prompt` when idle,
     /// `steer` during a turn.
     fn on_enter(&mut self) -> Effect {
-        if self.draft.trim() == APPROVALS {
+        let text = self.draft.expand();
+        if text.trim() == APPROVALS {
             self.draft.clear();
             return self.open_first();
         }
         // A command sent after the connection is lost goes nowhere, so the
         // draft stays.
-        if self.draft.trim().is_empty() || self.link == Link::Down {
+        if text.trim().is_empty() || self.link == Link::Down {
             return Effect::None;
         }
         let (kind, session) = match &self.phase {
@@ -374,7 +427,7 @@ impl App {
             }
         };
         let id = mint();
-        let text = std::mem::take(&mut self.draft);
+        self.draft.clear();
         let content = json!([{"type": "text", "text": text}]);
         let line = match session {
             None => {
@@ -498,7 +551,7 @@ impl App {
             return;
         };
         if self.draft.is_empty() {
-            self.draft = text;
+            self.draft.paste(&text);
         }
         if kind == Kind::Start {
             self.phase = Phase::Starting;

@@ -7,10 +7,6 @@
 
 mod app;
 mod approvals;
-#[cfg_attr(
-    not(test),
-    allow(dead_code, reason = "the app takes the draft in the next commit")
-)]
 mod input;
 mod keys;
 mod link;
@@ -149,11 +145,14 @@ pub fn draw(events: &str, width: u16, height: u16) -> Result<String, String> {
     Ok(view::text(&buf))
 }
 
+/// One frame: the cells, and where the cursor shows, if anywhere.
+type Frame = (Buffer, Option<Position>);
+
 /// The screen: ratatui on a fixed viewport, and the last frame drawn.
 struct Screen<B: Backend> {
     terminal: Terminal<TtySized<B>>,
     area: Rect,
-    last: Option<Buffer>,
+    last: Option<Frame>,
 }
 
 impl<B: Backend> Screen<B> {
@@ -175,16 +174,22 @@ impl<B: Backend> Screen<B> {
         })
     }
 
-    /// Draws `app`. A frame equal to the last one writes nothing; otherwise
-    /// only the cells that changed are written.
+    /// Draws `app`, the cursor shown at the draft's cursor or hidden. A
+    /// frame whose cells and cursor equal the last one's writes nothing;
+    /// otherwise only the cells that changed are written.
     fn draw(&mut self, app: &App) -> Result<(), B::Error> {
-        let mut next = Buffer::empty(self.area);
-        view::render(app, self.area, &mut next);
+        let mut cells = Buffer::empty(self.area);
+        view::render(app, self.area, &mut cells);
+        let next = (cells, view::cursor(app, self.area));
         if self.last.as_ref() == Some(&next) {
             return Ok(());
         }
-        self.terminal
-            .draw(|frame| frame.buffer_mut().clone_from(&next))?;
+        self.terminal.draw(|frame| {
+            frame.buffer_mut().clone_from(&next.0);
+            if let Some(cursor) = next.1 {
+                frame.set_cursor_position(cursor);
+            }
+        })?;
         self.last = Some(next);
         Ok(())
     }
@@ -299,7 +304,8 @@ impl<B: Backend> Loop<B> {
                             Effect::Quit => return Some(0),
                         },
                         Event::Reply(Reply::KittyFlags(_)) => self.kitty(),
-                        Event::Reply(Reply::DeviceAttributes) | Event::Edit(_) => {}
+                        Event::Edit(edit) => self.app.on_edit(edit),
+                        Event::Reply(Reply::DeviceAttributes) => {}
                     }
                 }
             }
