@@ -118,7 +118,7 @@ local function callback(what, spec)
   return { timeout = spec.timeout, run = spec.run }
 end
 
-local provider_functions = { models = true, quota = true, credential = true, sign = true }
+local provider_functions = { models = true, quota = true, credential = true, sign = true, cost = true }
 
 local hook_points = {
   session_start = true, before_message = true, turn_start = true, before_tool = true,
@@ -197,7 +197,7 @@ fiber = {
     local registered = {}
     for key, f in pairs(spec) do
       if not provider_functions[key] then
-        error("fiber.provider: `" .. tostring(key) .. "` is not models, quota, credential or sign", 2)
+        error("fiber.provider: `" .. tostring(key) .. "` is not models, quota, credential, sign or cost", 2)
       end
       registered[key] = callback("fiber.provider: `" .. key .. "`", f)
     end
@@ -498,7 +498,7 @@ impl LuaExtension {
         }
     }
 
-    /// Runs `function` (`models`, `quota`, `credential` or `sign`) of the
+    /// Runs `function` (`models`, `quota`, `credential`, `sign` or `cost`) of the
     /// provider `provider` registered, passing `arg`, and returns what it
     /// returned, as JSON. These calls carry no credential pair: only
     /// `credential()` refreshes a stored credential
@@ -631,7 +631,7 @@ enum Target {
     Provider {
         /// The provider.
         name: String,
-        /// `models`, `quota`, `credential` or `sign`.
+        /// `models`, `quota`, `credential`, `sign` or `cost`.
         function: &'static str,
         /// The stored credential and label the call is for: `Some` only
         /// for `credential`, whose `host.oauth.refresh` locks and reads

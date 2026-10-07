@@ -298,3 +298,8 @@ fn a_call_error_s_usage_is_what_each_variant_carries() {
     let cancelled_none = CallError::Cancelled { usage: None };
     assert_eq!(cancelled_none.usage(), None);
 }
+
+#[test]
+fn a_provider_without_an_override_has_no_cost_lookup() {
+    assert!(Fake.cost_lookup().is_none());
+}
