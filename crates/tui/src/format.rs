@@ -142,23 +142,15 @@ fn marked(line: &str) -> Option<&str> {
     Some(text.trim()).filter(|text| !text.is_empty())
 }
 
-/// A thinking block's first heading, failing that its first non-empty
-/// line.
-pub(crate) fn first_heading(text: &str) -> Option<String> {
-    text.lines()
-        .find_map(marked)
-        .or_else(|| first_line(text))
-        .map(str::to_owned)
-}
-
-/// The last heading in thinking still streaming, failing that its first
-/// non-empty line.
-pub(crate) fn latest_heading(text: &str) -> Option<String> {
-    text.lines()
-        .rev()
-        .find_map(marked)
-        .or_else(|| first_line(text))
-        .map(str::to_owned)
+/// A thinking block's first heading, or with `latest` its last one so
+/// far; failing that its first non-empty line.
+pub(crate) fn heading(text: &str, latest: bool) -> Option<String> {
+    let found = if latest {
+        text.lines().rev().find_map(marked)
+    } else {
+        text.lines().find_map(marked)
+    };
+    found.or_else(|| first_line(text)).map(str::to_owned)
 }
 
 fn first_line(text: &str) -> Option<&str> {
@@ -416,8 +408,8 @@ pub(crate) fn closing(done: &TurnCompleted, ms: u64, calls: u64, usage: &Usage) 
 /// out when unknown or under a second.
 pub(crate) fn thought(gutter: &str, text: &str, span: Option<u64>) -> Line<'static> {
     let mut line = format!("{gutter}+ Thought");
-    if let Some(heading) = first_heading(text) {
-        line.push_str(&format!(": {heading}"));
+    if let Some(found) = heading(text, false) {
+        line.push_str(&format!(": {found}"));
     }
     if let Some(span) = span.and_then(seconds) {
         line.push_str(&format!(" · {span}"));

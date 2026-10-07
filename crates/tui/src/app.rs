@@ -24,9 +24,11 @@ use crate::turn::{Fold, Row, Turn};
 /// line is skipped.
 macro_rules! read {
     ($envelope:expr, $kind:ty) => {
-        serde_json::from_value::<$kind>(Value::Object($envelope.payload.clone())).ok()
+        serde_json::from_value::<$kind>(serde_json::Value::Object($envelope.payload.clone()))
+            .ok()
     };
 }
+pub(crate) use read;
 
 /// How long the second Ctrl+C waits for the first.
 pub(crate) const QUIT_WINDOW: Duration = Duration::from_secs(1);
@@ -603,12 +605,13 @@ impl App {
         }
         let action = envelope.action_id.as_ref().map(|id| id.0.as_str());
         let ts = envelope.ts;
-        match envelope.kind.as_str() {
+        // Only a line that changed a card shows the overlay.
+        let changed = match envelope.kind.as_str() {
             "command_accepted" => {
                 if let Some(accepted) = read!(envelope, CommandAccepted) {
                     self.pending.remove(&accepted.command_id.0);
                 }
-                return;
+                false
             }
             "command_rejected" => {
                 if let Some(rejected) = read!(envelope, CommandRejected)
@@ -616,12 +619,9 @@ impl App {
                 {
                     self.rejected(&id.0, rejected.message);
                 }
-                return;
+                false
             }
-            "turn_started" => {
-                let Some(started) = read!(envelope, TurnStarted) else {
-                    return;
-                };
+            "turn_started" => read!(envelope, TurnStarted).is_some_and(|started| {
                 self.set_busy(true);
                 let prompts = started
                     .input
@@ -635,20 +635,16 @@ impl App {
                     })
                     .collect();
                 self.turns.push(Turn::new(prompts, ts));
-            }
-            "turn_completed" => {
-                let Some(done) = read!(envelope, TurnCompleted) else {
-                    return;
-                };
+                true
+            }),
+            "turn_completed" => read!(envelope, TurnCompleted).is_some_and(|done| {
                 self.set_busy(false);
-                if let Some(turn) = self.open_turn() {
+                self.open_turn().is_some_and(|turn| {
                     turn.complete(done, ts);
-                }
-            }
-            "usage_recorded" => {
-                let Some(line) = read!(envelope, UsageRecorded) else {
-                    return;
-                };
+                    true
+                })
+            }),
+            "usage_recorded" => read!(envelope, UsageRecorded).is_some_and(|line| {
                 // A line folds where its generation already is, so a late
                 // correction updates a closed card; else into the open turn.
                 let known = self
@@ -659,32 +655,30 @@ impl App {
                     Some(at) => self.turns.get_mut(at),
                     None => self.open_turn(),
                 };
-                if let Some(turn) = turn {
+                turn.is_some_and(|turn| {
                     turn.spend.record(&line);
+                    true
+                })
+            }),
+            "steering_applied" => read!(envelope, SteeringApplied).is_some_and(|applied| {
+                self.open_turn().is_some_and(|turn| {
+                    turn.steer(text_of(&applied.content));
+                    true
+                })
+            }),
+            "step_started" => {
+                if let Some(turn) = self.open_turn() {
+                    turn.step_started();
                 }
+                false
             }
-            _ => {
-                let Some(action) = action else {
-                    if envelope.kind == "steering_applied" {
-                        let applied = read!(envelope, SteeringApplied);
-                        if let (Some(applied), Some(turn)) = (applied, self.open_turn()) {
-                            turn.steer(text_of(&applied.content));
-                        }
-                    } else if envelope.kind == "step_started"
-                        && let Some(turn) = self.open_turn()
-                    {
-                        turn.step_started();
-                    }
-                    self.changed();
-                    return;
-                };
-                if crate::turn::fold_action(&mut self.turns, &mut self.fold, envelope, action) {
-                    self.changed();
-                }
-                return;
-            }
+            _ => action.is_some_and(|action| {
+                crate::turn::fold_action(&mut self.turns, &mut self.fold, envelope, action)
+            }),
+        };
+        if changed {
+            self.changed();
         }
-        self.changed();
     }
 
     /// The turn still running, if any.

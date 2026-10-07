@@ -985,3 +985,64 @@ fn ctrl_o_closes_when_every_ledger_is_open_whatever_thinking_groups_say() {
     assert!(!texts(&app).contains(&"  1 read a.rs".to_owned()));
     assert!(!texts(&app).contains(&"  1 read b.rs".to_owned()));
 }
+
+/// Folds one line while scrolled up; whether it raised the overlay.
+fn flags(app: &mut App, kind: &str, action: Option<&str>, payload: Value) -> bool {
+    let now = fakes::clock::FakeClock::new().now();
+    app.on_key(Key::PageUp, now);
+    feed(app, kind, action, 0, payload);
+    let new = app.has_new();
+    app.on_key(Key::End, now);
+    new
+}
+
+#[test]
+fn only_a_line_that_changes_a_card_raises_the_overlay() {
+    let mut app = app();
+    let usage = json!({"generation_id": "g_1", "model": "fake/m",
+        "tokens": {"input": 1, "cache_read": 0, "cache_write": {}, "output": 0},
+        "cost": null});
+    let steer = json!({"content": [{"type": "text", "text": "x"}], "source": "driver"});
+    // With no turn open, nothing has a card to change.
+    assert!(!flags(&mut app, "notice", None, json!({"message": "hi"})));
+    assert!(!flags(&mut app, "usage_recorded", Some("a_m"), usage.clone()));
+    assert!(!flags(&mut app, "steering_applied", None, steer.clone()));
+    assert!(!flags(&mut app, "turn_completed", None, json!({"outcome": "completed"})));
+    let prompt = json!({"input": [{"type": "message", "source": "driver",
+        "content": [{"type": "text", "text": "go"}]}]});
+    assert!(flags(&mut app, "turn_started", None, prompt));
+    assert!(!flags(&mut app, "step_started", None, json!({})));
+    assert!(flags(&mut app, "steering_applied", None, steer));
+    assert!(flags(&mut app, "usage_recorded", Some("a_m"), usage));
+    // Lines about an action the fold never saw, or that add nothing.
+    assert!(!flags(&mut app, "tool_call_started", Some("a_9"), json!({})));
+    let done = json!({"status": "completed", "content": []});
+    assert!(!flags(&mut app, "tool_call_completed", Some("a_9"), done.clone()));
+    assert!(!flags(&mut app, "permission_requested", Some("a_9"), json!({})));
+    let thought = json!({"text": "t"});
+    assert!(!flags(&mut app, "reasoning_completed", Some("r_9"), thought.clone()));
+    assert!(!flags(&mut app, "reasoning_delta", Some("r_9"), thought.clone()));
+    assert!(!flags(&mut app, "assistant_message_started", Some("a_m"), json!({})));
+    assert!(!flags(&mut app, "assistant_message_delta", Some("a_m"), json!({"text": ""})));
+    assert!(!flags(&mut app, "text_completed", Some("a_m"), json!({"text": ""})));
+    assert!(!flags(&mut app, "assistant_message_completed", Some("a_m"), json!({})));
+    assert!(!flags(&mut app, "tool_call_requested", Some("a_1"), json!({})));
+    assert!(!flags(&mut app, "model_call_failed", Some("a_m"), json!({})));
+    // Lines that change the card.
+    assert!(flags(&mut app, "assistant_message_delta", Some("a_m"), json!({"text": "h"})));
+    assert!(flags(&mut app, "text_completed", Some("a_m"), json!({"text": "hi"})));
+    assert!(flags(&mut app, "reasoning_started", Some("r_1"), json!({})));
+    assert!(!flags(&mut app, "reasoning_started", Some("r_1"), json!({})));
+    assert!(flags(&mut app, "reasoning_delta", Some("r_1"), thought.clone()));
+    assert!(flags(&mut app, "reasoning_completed", Some("r_1"), thought));
+    let raw = json!({"index": 0, "name": "read", "text": "{"});
+    assert!(flags(&mut app, "tool_call_arguments_delta", Some("a_n"), raw));
+    assert!(flags(&mut app, "assistant_message_completed", Some("a_n"), json!({})));
+    assert!(!flags(&mut app, "assistant_message_completed", Some("a_n"), json!({})));
+    let read = json!({"name": "read", "arguments": {"path": "a.rs"}});
+    assert!(flags(&mut app, "tool_call_requested", Some("a_1"), read));
+    assert!(flags(&mut app, "tool_call_started", Some("a_1"), json!({})));
+    assert!(flags(&mut app, "permission_requested", Some("a_1"), json!({})));
+    assert!(flags(&mut app, "tool_call_completed", Some("a_1"), done));
+    assert!(flags(&mut app, "turn_completed", None, json!({"outcome": "completed"})));
+}

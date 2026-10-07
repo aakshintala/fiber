@@ -18,15 +18,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
 use serde_json::Value;
 
-use crate::app::Target;
-
-/// A line's payload as `$kind`; `None` when it does not parse, and the
-/// line is skipped.
-macro_rules! read {
-    ($envelope:expr, $kind:ty) => {
-        serde_json::from_value::<$kind>(Value::Object($envelope.payload.clone())).ok()
-    };
-}
+use crate::app::{Target, read};
 use crate::format::{self, Kinds};
 
 /// One drawn line and what clicking it opens.
@@ -92,14 +84,6 @@ struct Thought {
     open: bool,
 }
 
-/// How far a call has got.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum State {
-    Requested,
-    Started,
-    Done(CallStatus),
-}
-
 /// One tool call.
 #[derive(Debug)]
 struct Call {
@@ -107,7 +91,8 @@ struct Call {
     action: String,
     name: String,
     arguments: Value,
-    state: State,
+    /// How it ended; `None` while it runs.
+    status: Option<CallStatus>,
     changes: Vec<FileChange>,
     /// What opening the call shows.
     detail: String,
@@ -189,18 +174,22 @@ impl Turn {
     }
 
     /// `assistant_message_completed`: whatever it was still emitting is no
-    /// longer in flight.
-    pub(crate) fn message_completed(&mut self, action: &str) {
+    /// longer in flight; false when nothing was.
+    pub(crate) fn message_completed(&mut self, action: &str) -> bool {
+        let mut dropped = false;
         for group in self.groups_mut() {
+            let before = group.streaming.len();
             group.streaming.retain(|call| call.message != action);
+            dropped |= group.streaming.len() != before;
         }
+        dropped
     }
 
     /// `assistant_message_delta`: appends to the message's reply, or starts
-    /// a new one once a group has opened after it.
-    pub(crate) fn text_delta(&mut self, action: &str, text: &str) {
+    /// a new one once a group has opened after it; false when empty.
+    pub(crate) fn text_delta(&mut self, action: &str, text: &str) -> bool {
         if text.is_empty() {
-            return;
+            return false;
         }
         let mut found = None;
         for entry in self.entries.iter_mut().rev() {
@@ -217,13 +206,15 @@ impl Turn {
             Some(reply) => reply.push_str(text),
             None => self.reply(action, text.to_owned()),
         }
+        true
     }
 
     /// `text_completed`: the message's next text part replaces the reply
-    /// streamed for it, or is a new reply. An empty part shows nothing.
-    pub(crate) fn text_completed(&mut self, action: &str, text: String) {
+    /// streamed for it, or is a new reply. An empty part shows nothing,
+    /// and is false.
+    pub(crate) fn text_completed(&mut self, action: &str, text: String) -> bool {
         if text.is_empty() {
-            return;
+            return false;
         }
         let part = self.parts.entry(action.to_owned()).or_default();
         let nth = *part;
@@ -240,6 +231,7 @@ impl Turn {
             Some(reply) => *reply = text,
             None => self.reply(action, text),
         }
+        true
     }
 
     /// A new reply, which ends the open group.
@@ -283,13 +275,14 @@ impl Turn {
         });
     }
 
-    /// `reasoning_started`: a thinking block joins the open group.
-    pub(crate) fn reasoning_started(&mut self, action: &str, ts: u64, fold: &mut Fold) {
+    /// `reasoning_started`: a thinking block joins the open group; false
+    /// when it already has.
+    pub(crate) fn reasoning_started(&mut self, action: &str, ts: u64, fold: &mut Fold) -> bool {
         if self
             .groups_mut()
             .any(|group| group.thought(action).is_some())
         {
-            return;
+            return false;
         }
         let step = self.step;
         let id = fold.id();
@@ -302,6 +295,7 @@ impl Turn {
             ended: None,
             open: false,
         });
+        true
     }
 
     /// `reasoning_delta`; false when the block was never started here.
@@ -372,7 +366,7 @@ impl Turn {
             action: action.to_owned(),
             name: requested.name,
             arguments,
-            state: State::Requested,
+            status: None,
             changes: Vec::new(),
             detail: String::new(),
             open: false,
@@ -382,12 +376,8 @@ impl Turn {
 
     /// `tool_call_started`; false when the call is not in this turn.
     pub(crate) fn call_started(&mut self, action: &str, ts: u64) -> bool {
-        self.groups_mut().any(|group| {
-            group.call(action).is_some_and(|call| {
-                call.state = State::Started;
-                true
-            }) && group.touched(ts)
-        })
+        self.groups_mut()
+            .any(|group| group.call(action).is_some() && group.touched(ts))
     }
 
     /// `tool_call_completed`; false when the call is not in this turn.
@@ -399,7 +389,7 @@ impl Turn {
     ) -> bool {
         self.groups_mut().any(|group| {
             group.call(action).is_some_and(|call| {
-                call.state = State::Done(done.status);
+                call.status = Some(done.status);
                 call.changes = done.changes.clone().unwrap_or_default();
                 call.detail = format::detail(done);
                 true
@@ -488,8 +478,8 @@ impl Turn {
     }
 }
 
-/// Folds a line about one action into `turns`; false when it was not one
-/// the fold reads.
+/// Folds a line about one action into `turns`; false when it changed no
+/// card.
 pub(crate) fn fold_action(
     turns: &mut [Turn],
     fold: &mut Fold,
@@ -500,73 +490,62 @@ pub(crate) fn fold_action(
     // Completions may follow their turn's end, so they search back
     // through every card; streaming goes only to the open one.
     match envelope.kind.as_str() {
-        "tool_call_started" => {
+        "tool_call_started" => turns
+            .iter_mut()
+            .rev()
+            .any(|turn| turn.call_started(action, ts)),
+        "tool_call_completed" => read!(envelope, ToolCallCompleted).is_some_and(|done| {
             turns
                 .iter_mut()
                 .rev()
-                .any(|turn| turn.call_started(action, ts));
-        }
-        "tool_call_completed" => {
-            if let Some(done) = read!(envelope, ToolCallCompleted) {
-                turns
-                    .iter_mut()
-                    .rev()
-                    .any(|turn| turn.call_completed(action, &done, ts));
-            }
-        }
+                .any(|turn| turn.call_completed(action, &done, ts))
+        }),
         "permission_requested" | "permission_resolved" => {
             let asking = envelope.kind == "permission_requested";
             turns
                 .iter_mut()
                 .rev()
-                .any(|turn| turn.permission(action, asking));
+                .any(|turn| turn.permission(action, asking))
         }
-        "reasoning_completed" => {
-            if let Some(done) = read!(envelope, ReasoningCompleted) {
-                let mut text = Some(done.text);
-                turns.iter_mut().rev().any(|turn| {
-                    turn.reasoning_completed(action, text.take().unwrap_or_default(), ts)
-                });
-            }
-        }
+        "reasoning_completed" => read!(envelope, ReasoningCompleted).is_some_and(|done| {
+            let mut text = Some(done.text);
+            turns
+                .iter_mut()
+                .rev()
+                .any(|turn| turn.reasoning_completed(action, text.take().unwrap_or_default(), ts))
+        }),
         kind => {
             let Some(turn) = turns.last_mut().filter(|turn| turn.is_open()) else {
                 return false;
             };
             match kind {
-                "assistant_message_started" => turn.message_started(action),
+                "assistant_message_started" => {
+                    turn.message_started(action);
+                    false
+                }
                 "assistant_message_completed" => turn.message_completed(action),
-                "assistant_message_delta" => {
-                    if let Some(delta) = read!(envelope, TextDelta) {
-                        turn.text_delta(action, &delta.text);
-                    }
-                }
-                "text_completed" => {
-                    if let Some(done) = read!(envelope, TextCompleted) {
-                        turn.text_completed(action, done.text);
-                    }
-                }
-                "tool_call_arguments_delta" => {
-                    if let Some(delta) = read!(envelope, ToolCallArgumentsDelta) {
+                "assistant_message_delta" => read!(envelope, TextDelta)
+                    .is_some_and(|delta| turn.text_delta(action, &delta.text)),
+                "text_completed" => read!(envelope, TextCompleted)
+                    .is_some_and(|done| turn.text_completed(action, done.text)),
+                "tool_call_arguments_delta" => read!(envelope, ToolCallArgumentsDelta)
+                    .is_some_and(|delta| {
                         turn.arguments_delta(action, delta, ts, fold);
-                    }
-                }
+                        true
+                    }),
                 "reasoning_started" => turn.reasoning_started(action, ts, fold),
-                "reasoning_delta" => {
-                    if let Some(delta) = read!(envelope, TextDelta) {
-                        turn.reasoning_delta(action, &delta.text, ts);
-                    }
-                }
-                "tool_call_requested" => {
-                    if let Some(requested) = read!(envelope, ToolCallRequested) {
+                "reasoning_delta" => read!(envelope, TextDelta)
+                    .is_some_and(|delta| turn.reasoning_delta(action, &delta.text, ts)),
+                "tool_call_requested" => read!(envelope, ToolCallRequested).is_some_and(
+                    |requested| {
                         turn.call_requested(action, requested, ts, fold);
-                    }
-                }
-                _ => return false,
+                        true
+                    },
+                ),
+                _ => false,
             }
         }
     }
-    true
 }
 
 impl Group {
@@ -695,7 +674,7 @@ impl Group {
         if running {
             let flight: Vec<String> = self
                 .calls()
-                .filter(|call| !matches!(call.state, State::Done(_)))
+                .filter(|call| call.status.is_none())
                 .map(|call| {
                     format::label(&call.name, &format::summary(&call.name, &call.arguments))
                 })
@@ -709,7 +688,7 @@ impl Group {
                 parts.push(flight.join(", "));
             }
             if let Some(thought) = self.thoughts().filter(|t| t.ended.is_none()).last() {
-                parts.push(match format::latest_heading(&thought.text) {
+                parts.push(match format::heading(&thought.text, true) {
                     Some(heading) => format!("Thinking: {heading}"),
                     None => "Thinking".to_owned(),
                 });
@@ -754,12 +733,12 @@ impl Group {
                 if !call.changes.is_empty() {
                     row.push_str(&format!(" +{added} −{removed}"));
                 }
-                match call.state {
-                    State::Requested | State::Started => row.push_str(" · running"),
-                    State::Done(CallStatus::Completed) => {}
-                    State::Done(CallStatus::Failed) => row.push_str(" · failed"),
-                    State::Done(CallStatus::Denied) => row.push_str(" · denied"),
-                    State::Done(CallStatus::Cancelled) => row.push_str(" · cancelled"),
+                match call.status {
+                    None => row.push_str(" · running"),
+                    Some(CallStatus::Completed) => {}
+                    Some(CallStatus::Failed) => row.push_str(" · failed"),
+                    Some(CallStatus::Denied) => row.push_str(" · denied"),
+                    Some(CallStatus::Cancelled) => row.push_str(" · cancelled"),
                 }
                 let line = if call.changes.is_empty() {
                     format::dim(row)

@@ -1,6 +1,6 @@
 //! Tests for a card's figures.
 
-use super::{Kinds, count, duration, first_heading, latest_heading, money, seconds, tokens, wrap};
+use super::{Kinds, count, duration, heading, money, seconds, tokens, wrap};
 
 #[test]
 fn durations_truncate_to_whole_seconds_at_each_threshold() {
@@ -154,36 +154,36 @@ fn kinds_with_no_calls_are_left_out() {
 #[test]
 fn a_heading_is_a_markdown_heading_or_a_bold_line() {
     assert_eq!(
-        first_heading("intro\n## Plan the fix\n**Check**").as_deref(),
+        heading("intro\n## Plan the fix\n**Check**", false).as_deref(),
         Some("Plan the fix")
     );
     assert_eq!(
-        first_heading("intro\n**Check the tests**\n# Later").as_deref(),
+        heading("intro\n**Check the tests**\n# Later", false).as_deref(),
         Some("Check the tests")
     );
     // Neither: the first non-empty line.
     assert_eq!(
-        first_heading("\n  look at a.rs  \nthen b").as_deref(),
+        heading("\n  look at a.rs  \nthen b", false).as_deref(),
         Some("look at a.rs")
     );
     // A bold run that is not the whole line, and bare markers, are no
     // heading.
     assert_eq!(
-        first_heading("**a** b\n####\n****").as_deref(),
+        heading("**a** b\n####\n****", false).as_deref(),
         Some("**a** b")
     );
-    assert_eq!(first_heading(""), None);
-    assert_eq!(first_heading("\n \n"), None);
+    assert_eq!(heading("", false), None);
+    assert_eq!(heading("\n \n", false), None);
 }
 
 #[test]
 fn the_latest_heading_is_the_last_one_so_far() {
     assert_eq!(
-        latest_heading("# One\ntext\n**Two**\nmore").as_deref(),
+        heading("# One\ntext\n**Two**\nmore", true).as_deref(),
         Some("Two")
     );
-    assert_eq!(latest_heading("just text").as_deref(), Some("just text"));
-    assert_eq!(latest_heading(""), None);
+    assert_eq!(heading("just text", true).as_deref(), Some("just text"));
+    assert_eq!(heading("", true), None);
 }
 
 #[test]
