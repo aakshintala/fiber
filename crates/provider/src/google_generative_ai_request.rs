@@ -157,9 +157,20 @@ fn contents(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
     let mut signature = None;
     for input in &request.conversation {
         match input {
-            Input::User { text, .. } => {
+            Input::User { text, images } => {
                 park(&mut out, &mut signature);
-                push(&mut out, "user", json!({"text": text}));
+                let prepared =
+                    crate::images::prepare(text, images, &request.session_dir, endpoint.text_only);
+                if !prepared.text.is_empty() || prepared.images.is_empty() {
+                    push(&mut out, "user", json!({"text": prepared.text}));
+                }
+                for image in &prepared.images {
+                    push(
+                        &mut out,
+                        "user",
+                        json!({"inlineData": {"mimeType": image.mime_type, "data": image.data}}),
+                    );
+                }
             }
             Input::Assistant {
                 model,

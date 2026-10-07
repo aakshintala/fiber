@@ -1790,3 +1790,81 @@ fn the_cache_key_goes_in_the_declared_header_and_nowhere_else_without_one() {
     assert_eq!(sent[0].header("x-opencode-session"), None);
     assert_eq!(sent[1].header("x-opencode-session"), Some("s_root"));
 }
+
+/// A conversation whose one user message carries `images`.
+fn user_conversation(text: &str, images: Vec<contract::provider::ImageRef>) -> Vec<Input> {
+    vec![Input::User {
+        text: text.into(),
+        images,
+    }]
+}
+
+fn user_message(server: &ProviderServer) -> Value {
+    sent_body(server, 0)["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|message| message["role"] == "user")
+        .unwrap()
+        .clone()
+}
+
+#[test]
+fn a_users_image_is_sent_as_image_url_parts_after_the_text() {
+    let session = image_session();
+    let request = ModelRequest {
+        conversation: user_conversation("look", vec![png_ref("artifacts/i_1.png")]),
+        session_dir: session.path().to_path_buf(),
+        ..request()
+    };
+    let server = ProviderServer::start([completed_reply(), completed_reply()]).unwrap();
+    let endpoint = endpoint(&server);
+    send(endpoint.clone(), &request);
+    send(endpoint, &request);
+    let bodies: Vec<Vec<u8>> = server.requests().into_iter().map(|r| r.body).collect();
+    assert_eq!(bodies[0], bodies[1], "a resume sends the same bytes");
+    assert_eq!(
+        user_message(&server),
+        json!({"role": "user", "content": [
+            {"type": "text", "text": "look"},
+            image_url("YWJjZA=="),
+        ]})
+    );
+}
+
+#[test]
+fn a_users_empty_text_sends_no_text_part() {
+    let session = image_session();
+    let request = ModelRequest {
+        conversation: user_conversation("", vec![png_ref("artifacts/i_1.png")]),
+        session_dir: session.path().to_path_buf(),
+        ..request()
+    };
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    send(endpoint(&server), &request);
+    assert_eq!(
+        user_message(&server),
+        json!({"role": "user", "content": [image_url("YWJjZA==")]})
+    );
+}
+
+#[test]
+fn a_users_image_is_left_out_for_a_text_only_model() {
+    let session = image_session();
+    let request = ModelRequest {
+        conversation: user_conversation("look", vec![png_ref("artifacts/i_1.png")]),
+        session_dir: session.path().to_path_buf(),
+        ..request()
+    };
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let endpoint = Endpoint {
+        text_only: true,
+        ..endpoint(&server)
+    };
+    send(endpoint, &request);
+    assert_eq!(
+        user_message(&server),
+        json!({"role": "user",
+            "content": "look\n[Image artifacts/i_1.png left out: this model does not take images.]"})
+    );
+}

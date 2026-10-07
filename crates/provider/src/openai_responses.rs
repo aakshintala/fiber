@@ -255,7 +255,11 @@ fn input(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
         .conversation
         .iter()
         .filter_map(|input| match input {
-            Input::User { text, .. } => Some(json!({ "role": "user", "content": text })),
+            Input::User { text, images } => {
+                let prepared =
+                    crate::images::prepare(text, images, &request.session_dir, endpoint.text_only);
+                Some(json!({ "role": "user", "content": output(prepared) }))
+            }
             Input::Assistant {
                 model,
                 text,

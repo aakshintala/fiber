@@ -1834,3 +1834,89 @@ fn thinking_levels_map_to_geminis_thinking_config() {
         json!({"includeThoughts": true, "thinkingLevel": "XHIGH"})
     );
 }
+
+/// A conversation whose one user message carries `images`.
+fn user_conversation(text: &str, images: Vec<contract::provider::ImageRef>) -> Vec<Input> {
+    vec![Input::User {
+        text: text.into(),
+        images,
+    }]
+}
+
+fn user_contents(server: &ProviderServer) -> Value {
+    sent_body(server, 0)["contents"].clone()
+}
+
+#[test]
+fn a_users_image_is_sent_as_inline_data_parts_after_the_text() {
+    let session = fakes::TempDir::new("fiber-gemini-user-image");
+    std::fs::create_dir(session.path().join("artifacts")).unwrap();
+    std::fs::write(session.path().join("artifacts/i_1.png"), b"abcd").unwrap();
+    let request = ModelRequest {
+        conversation: user_conversation("look", vec![png_ref("artifacts/i_1.png")]),
+        session_dir: session.path().to_path_buf(),
+        ..request()
+    };
+    let server = ProviderServer::start([completed_reply(), completed_reply()]).unwrap();
+    let gemini = Gemini::new(endpoint(&server));
+    for _ in 0..2 {
+        run(Box::new(gemini.request(&request))).0.unwrap();
+    }
+    let bodies: Vec<Vec<u8>> = server.requests().into_iter().map(|r| r.body).collect();
+    assert_eq!(bodies[0], bodies[1], "a resume sends the same bytes");
+    assert_eq!(
+        user_contents(&server),
+        json!([{"role": "user", "parts": [
+            {"text": "look"},
+            {"inlineData": {"mimeType": "image/png", "data": "YWJjZA=="}},
+        ]}])
+    );
+}
+
+#[test]
+fn a_users_empty_text_sends_no_text_part() {
+    let session = fakes::TempDir::new("fiber-gemini-user-image");
+    std::fs::create_dir(session.path().join("artifacts")).unwrap();
+    std::fs::write(session.path().join("artifacts/i_1.png"), b"abcd").unwrap();
+    let request = ModelRequest {
+        conversation: user_conversation("", vec![png_ref("artifacts/i_1.png")]),
+        session_dir: session.path().to_path_buf(),
+        ..request()
+    };
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    run(Box::new(Gemini::new(endpoint(&server)).request(&request)))
+        .0
+        .unwrap();
+    assert_eq!(
+        user_contents(&server),
+        json!([{"role": "user", "parts": [
+            {"inlineData": {"mimeType": "image/png", "data": "YWJjZA=="}},
+        ]}])
+    );
+}
+
+#[test]
+fn a_users_image_is_left_out_for_a_text_only_model() {
+    let session = fakes::TempDir::new("fiber-gemini-user-image");
+    std::fs::create_dir(session.path().join("artifacts")).unwrap();
+    std::fs::write(session.path().join("artifacts/i_1.png"), b"abcd").unwrap();
+    let request = ModelRequest {
+        conversation: user_conversation("look", vec![png_ref("artifacts/i_1.png")]),
+        session_dir: session.path().to_path_buf(),
+        ..request()
+    };
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let endpoint = Endpoint {
+        text_only: true,
+        ..endpoint(&server)
+    };
+    run(Box::new(Gemini::new(endpoint).request(&request)))
+        .0
+        .unwrap();
+    assert_eq!(
+        user_contents(&server),
+        json!([{"role": "user", "parts": [
+            {"text": "look\n[Image artifacts/i_1.png left out: this model does not take images.]"},
+        ]}])
+    );
+}

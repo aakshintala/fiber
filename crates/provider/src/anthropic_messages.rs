@@ -336,20 +336,21 @@ fn messages(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
     let mut out: Vec<(&'static str, Vec<Value>)> = Vec::new();
     let mut positions: Vec<Option<(usize, usize)>> = Vec::with_capacity(request.conversation.len());
     for input in &request.conversation {
-        let Some(block) = block_of(
+        let blocks = block_of(
             input,
             &reference,
             &call_ids,
             &request.session_dir,
             endpoint.text_only,
-        ) else {
+        );
+        if blocks.is_empty() {
             positions.push(None);
             continue;
-        };
+        }
         let role = role_of(input);
         match out.last_mut() {
-            Some((last, blocks)) if *last == role => blocks.push(block),
-            _ => out.push((role, vec![block])),
+            Some((last, merged)) if *last == role => merged.extend(blocks),
+            _ => out.push((role, blocks)),
         }
         let message = out.len() - 1;
         positions.push(out.last().map(|(_, blocks)| (message, blocks.len() - 1)));
@@ -389,43 +390,61 @@ fn role_of(input: &Input) -> &'static str {
     }
 }
 
-/// The content block an input renders as, or `None` for an input that adds
+/// The content blocks an input renders as, empty for an input that adds
 /// nothing to the request: an empty assistant text, or reasoning sent to a
 /// different model reference (`docs/loop.md`, "What the model is sent").
+/// A person's blocks stay contiguous in one message: its text block, when
+/// the prepared text is non-empty, then one `image` block per image.
 fn block_of(
     input: &Input,
     reference: &str,
     call_ids: &BTreeMap<&ActionId, &str>,
     session_dir: &Path,
     text_only: bool,
-) -> Option<Value> {
+) -> Vec<Value> {
     match input {
-        Input::User { text, .. } => Some(json!({"type": "text", "text": text})),
+        Input::User { text, images } => {
+            let prepared = crate::images::prepare(text, images, session_dir, text_only);
+            if prepared.images.is_empty() {
+                return vec![json!({"type": "text", "text": prepared.text})];
+            }
+            let mut blocks = Vec::new();
+            if !prepared.text.is_empty() {
+                blocks.push(json!({"type": "text", "text": prepared.text}));
+            }
+            for image in &prepared.images {
+                blocks.push(json!({
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": image.mime_type, "data": image.data},
+                }));
+            }
+            blocks
+        }
         // A part's own form (a hosted call or result, a text with citations)
         // goes back unchanged, only to the model that produced it.
         Input::Assistant {
             model,
             provider_item: Some(item),
             ..
-        } if model == reference => Some(item.clone()),
-        Input::Assistant { text, .. } if text.is_empty() => None,
-        Input::Assistant { text, .. } => Some(json!({"type": "text", "text": text})),
+        } if model == reference => vec![item.clone()],
+        Input::Assistant { text, .. } if text.is_empty() => Vec::new(),
+        Input::Assistant { text, .. } => vec![json!({"type": "text", "text": text})],
         // Reasoning goes back unchanged, only to the model that produced it,
         // and never as plain text.
         Input::Reasoning {
             model,
             provider_item,
             ..
-        } if model == reference => provider_item.clone(),
-        Input::Reasoning { .. } => None,
+        } if model == reference => provider_item.clone().into_iter().collect(),
+        Input::Reasoning { .. } => Vec::new(),
         Input::ToolCall {
             action_id, call, ..
-        } => Some(json!({
+        } => vec![json!({
             "type": "tool_use",
             "id": call_ids.get(action_id).copied().unwrap_or(action_id.0.as_str()),
             "name": call.name,
             "input": call.arguments,
-        })),
+        })],
         Input::ToolResult {
             action_id,
             text,
@@ -445,7 +464,7 @@ fn block_of(
             if *is_error && let Some(map) = result.as_object_mut() {
                 map.insert("is_error".into(), json!(true));
             }
-            Some(result)
+            vec![result]
         }
     }
 }

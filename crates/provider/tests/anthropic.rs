@@ -2088,3 +2088,127 @@ fn the_cache_key_goes_in_the_declared_header_and_nowhere_else_without_one() {
     assert_eq!(sent[0].header("x-opencode-session"), None);
     assert_eq!(sent[1].header("x-opencode-session"), Some("session_1"));
 }
+
+/// A conversation whose one user message carries `images`.
+fn user_conversation(text: &str, images: Vec<contract::provider::ImageRef>) -> Vec<Input> {
+    vec![Input::User {
+        text: text.into(),
+        images,
+    }]
+}
+
+#[test]
+fn a_users_image_is_sent_as_image_blocks_after_the_text() {
+    let session = fakes::TempDir::new("fiber-anthropic-user-image");
+    std::fs::create_dir(session.path().join("artifacts")).unwrap();
+    std::fs::write(session.path().join("artifacts/i_1.png"), b"abcd").unwrap();
+    let request = ModelRequest {
+        conversation: user_conversation("look", vec![png_ref("artifacts/i_1.png")]),
+        session_dir: session.path().to_path_buf(),
+        ..request()
+    };
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    run(Box::new(Messages::new(endpoint(&server)).request(&request)))
+        .0
+        .unwrap();
+    assert_eq!(
+        sent_body(&server, 0)["messages"],
+        json!([{"role": "user", "content": [
+            {"type": "text", "text": "look"},
+            {"type": "image", "source": {
+                "type": "base64", "media_type": "image/png", "data": "YWJjZA=="},
+             "cache_control": {"type": "ephemeral"}},
+        ]}])
+    );
+}
+
+#[test]
+fn a_users_empty_text_sends_no_text_block() {
+    let session = fakes::TempDir::new("fiber-anthropic-user-image");
+    std::fs::create_dir(session.path().join("artifacts")).unwrap();
+    std::fs::write(session.path().join("artifacts/i_1.png"), b"abcd").unwrap();
+    let request = ModelRequest {
+        conversation: user_conversation("", vec![png_ref("artifacts/i_1.png")]),
+        session_dir: session.path().to_path_buf(),
+        ..request()
+    };
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    run(Box::new(Messages::new(endpoint(&server)).request(&request)))
+        .0
+        .unwrap();
+    assert_eq!(
+        sent_body(&server, 0)["messages"],
+        json!([{"role": "user", "content": [
+            {"type": "image", "source": {
+                "type": "base64", "media_type": "image/png", "data": "YWJjZA=="},
+             "cache_control": {"type": "ephemeral"}},
+        ]}])
+    );
+}
+
+#[test]
+fn a_users_image_is_left_out_for_a_text_only_model() {
+    let session = fakes::TempDir::new("fiber-anthropic-user-image");
+    std::fs::create_dir(session.path().join("artifacts")).unwrap();
+    std::fs::write(session.path().join("artifacts/i_1.png"), b"abcd").unwrap();
+    let request = ModelRequest {
+        conversation: user_conversation("look", vec![png_ref("artifacts/i_1.png")]),
+        session_dir: session.path().to_path_buf(),
+        ..request()
+    };
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let endpoint = Endpoint {
+        text_only: true,
+        ..endpoint(&server)
+    };
+    run(Box::new(Messages::new(endpoint).request(&request)))
+        .0
+        .unwrap();
+    assert_eq!(
+        sent_body(&server, 0)["messages"],
+        json!([{"role": "user", "content": [
+            {"type": "text",
+             "text": "look\n[Image artifacts/i_1.png left out: this model does not take images.]",
+             "cache_control": {"type": "ephemeral"}},
+        ]}])
+    );
+}
+
+#[test]
+fn the_previous_end_marker_lands_on_a_multi_block_users_last_block() {
+    let session = fakes::TempDir::new("fiber-anthropic-user-image");
+    std::fs::create_dir(session.path().join("artifacts")).unwrap();
+    std::fs::write(session.path().join("artifacts/i_1.png"), b"abcd").unwrap();
+    let request = ModelRequest {
+        conversation: vec![
+            Input::User {
+                text: "look".into(),
+                images: vec![png_ref("artifacts/i_1.png")],
+            },
+            Input::User {
+                text: "again".into(),
+                images: Vec::new(),
+            },
+        ],
+        previous_end: Some(1),
+        session_dir: session.path().to_path_buf(),
+        ..request()
+    };
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    run(Box::new(Messages::new(endpoint(&server)).request(&request)))
+        .0
+        .unwrap();
+    // Both inputs share one user message; the marker for the boundary after
+    // the first input lands on its last block, the image, and the last
+    // block overall carries the other marker.
+    assert_eq!(
+        sent_body(&server, 0)["messages"],
+        json!([{"role": "user", "content": [
+            {"type": "text", "text": "look"},
+            {"type": "image", "source": {
+                "type": "base64", "media_type": "image/png", "data": "YWJjZA=="},
+             "cache_control": {"type": "ephemeral"}},
+            {"type": "text", "text": "again", "cache_control": {"type": "ephemeral"}},
+        ]}])
+    );
+}

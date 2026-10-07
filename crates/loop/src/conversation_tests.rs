@@ -1502,3 +1502,88 @@ mod window {
         assert_eq!(error.code(), ErrorCode::LogCorrupt);
     }
 }
+
+#[test]
+fn a_prompt_image_renders_on_the_user_message_and_the_carry() {
+    let content = vec![
+        contract::shapes::ContentPart::Text {
+            text: "look".into(),
+        },
+        contract::shapes::ContentPart::Image {
+            path: "artifacts/i_1.png".into(),
+            mime_type: "image/png".into(),
+            width: 1,
+            height: 1,
+        },
+    ];
+    let started = contract::events::Event::TurnStarted(contract::events::TurnStarted {
+        input: vec![contract::events::InputItem::Message {
+            content: content.clone(),
+            sender: contract::shapes::Sender {
+                origin: contract::shapes::Origin::Driver,
+                command_id: None,
+            },
+            changed_by: None,
+        }],
+    });
+    let mut conversation = Vec::new();
+    let mut carry = crate::handoff::Carry::default();
+    render(
+        &mut conversation,
+        &started,
+        None,
+        "fake/model-1",
+        &mut BTreeMap::new(),
+        &mut carry,
+    );
+    let expected = Input::User {
+        text: "look".into(),
+        images: vec![contract::provider::ImageRef {
+            path: "artifacts/i_1.png".into(),
+            mime_type: "image/png".into(),
+            width: 1,
+            height: 1,
+        }],
+    };
+    assert_eq!(conversation, vec![expected.clone()]);
+    assert_eq!(carry.input, vec![expected]);
+}
+
+#[test]
+fn a_steered_image_renders_on_the_user_message_and_the_carry() {
+    let content = vec![contract::shapes::ContentPart::Image {
+        path: "artifacts/i_2.png".into(),
+        mime_type: "image/png".into(),
+        width: 2,
+        height: 2,
+    }];
+    let steering = contract::events::Event::SteeringApplied(contract::events::SteeringApplied {
+        content: content.clone(),
+        sender: contract::shapes::Sender {
+            origin: contract::shapes::Origin::Driver,
+            command_id: None,
+        },
+        changed_by: None,
+    });
+    let mut conversation = Vec::new();
+    let mut carry = crate::handoff::Carry::default();
+    render(
+        &mut conversation,
+        &steering,
+        None,
+        "fake/model-1",
+        &mut BTreeMap::new(),
+        &mut carry,
+    );
+    let expected = Input::User {
+        text: String::new(),
+        images: vec![contract::provider::ImageRef {
+            path: "artifacts/i_2.png".into(),
+            mime_type: "image/png".into(),
+            width: 2,
+            height: 2,
+        }],
+    };
+    assert_eq!(conversation, vec![expected.clone()]);
+    assert_eq!(carry.input, vec![expected]);
+}

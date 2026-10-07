@@ -652,7 +652,7 @@ fn dir_of(path: &str) -> String {
 fn user(content: &[ContentPart]) -> Input {
     Input::User {
         text: text(content),
-        images: Vec::new(),
+        images: images(content),
     }
 }
 
