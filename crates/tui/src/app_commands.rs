@@ -3,10 +3,13 @@
 //! "Quit").
 
 use std::mem;
+use std::time::Instant;
 
+use contract::Envelope;
+use contract::events::OpeningMessage;
 use serde_json::json;
 
-use super::{App, Effect, Kind, Link, Phase, mint, session_command};
+use super::{App, Effect, Kind, Link, Phase, mint, read, session_command};
 use crate::keymap;
 use crate::keys::Key;
 use crate::slash::{self, SHOWN};
@@ -24,6 +27,37 @@ pub(super) struct FilePanel {
     result: Option<Result<Vec<String>, String>>,
 }
 
+/// The `/` and `@` panels' and the key map overlay's state.
+#[derive(Debug)]
+pub(super) struct Overlays {
+    /// The `/` list: built-in commands, then the attached session's skills.
+    slash_rows: Vec<slash::Row>,
+    /// Esc closed the `/` panel for this draft.
+    slash_closed: bool,
+    /// The selected row of the open completion panel.
+    selected: usize,
+    /// The `@` panel, while open.
+    files: Option<FilePanel>,
+    /// Bumped when the `@` panel opens and on every query change, never
+    /// reset; a search result tagged with another is stale.
+    generation: u64,
+    /// The key map overlay's top row, while it is open.
+    keymap: Option<usize>,
+}
+
+impl Default for Overlays {
+    fn default() -> Self {
+        Self {
+            slash_rows: slash::rows(&[]),
+            slash_closed: false,
+            selected: 0,
+            files: None,
+            generation: 0,
+            keymap: None,
+        }
+    }
+}
+
 /// The open completion panel's rows as drawn, and which is selected.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Completions {
@@ -34,6 +68,19 @@ pub(crate) struct Completions {
 }
 
 impl App {
+    /// Handles one key at `now`, read from the injected clock.
+    pub(crate) fn on_key(&mut self, key: Key, now: Instant) -> Effect {
+        let effect = self.route_key(key, now);
+        self.edited();
+        effect
+    }
+
+    /// The completion panel's height in rows; 0 while none is open.
+    pub(super) fn completion_rows(&self) -> usize {
+        self.completions()
+            .map_or(0, |completions| completions.lines.len())
+    }
+
     /// The completion panel above the input line, while one is open with
     /// rows and the approval panel is closed.
     pub(crate) fn completions(&self) -> Option<Completions> {
@@ -41,10 +88,15 @@ impl App {
             return None;
         }
         let (all, selectable): (Vec<String>, bool) = if self.slash_open() {
-            let rows = slash::filter(&self.slash_rows, self.slash_query());
+            let rows = slash::filter(&self.overlays.slash_rows, self.slash_query());
             (rows.into_iter().map(slash::Row::line).collect(), true)
         } else {
-            match self.files.as_ref().and_then(|panel| panel.result.as_ref()) {
+            match self
+                .overlays
+                .files
+                .as_ref()
+                .and_then(|panel| panel.result.as_ref())
+            {
                 Some(Ok(paths)) => (paths.clone(), true),
                 Some(Err(error)) => (vec![format!("No files: {error}")], false),
                 None => return None,
@@ -53,16 +105,16 @@ impl App {
         if all.is_empty() {
             return None;
         }
-        let start = slash::window_start(self.selected);
+        let start = slash::window_start(self.overlays.selected);
         let lines: Vec<String> = all.into_iter().skip(start).take(SHOWN).collect();
-        let selected = selectable.then(|| self.selected.saturating_sub(start));
+        let selected = selectable.then(|| self.overlays.selected.saturating_sub(start));
         Some(Completions { lines, selected })
     }
 
     /// Whether the `/` panel is open: the draft starts with `/`, holds no
     /// whitespace, and Esc has not closed the panel for it.
     fn slash_open(&self) -> bool {
-        !self.slash_closed
+        !self.overlays.slash_closed
             && self.draft.starts_with('/')
             && !self.draft.contains(char::is_whitespace)
     }
@@ -74,7 +126,7 @@ impl App {
 
     /// The names of the `/` panel's rows, in order.
     fn slash_names(&self) -> Vec<String> {
-        slash::filter(&self.slash_rows, self.slash_query())
+        slash::filter(&self.overlays.slash_rows, self.slash_query())
             .into_iter()
             .map(|row| row.name.clone())
             .collect()
@@ -82,7 +134,12 @@ impl App {
 
     /// The paths the `@` panel offers, in order.
     fn file_paths(&self) -> &[String] {
-        match self.files.as_ref().and_then(|panel| panel.result.as_ref()) {
+        match self
+            .overlays
+            .files
+            .as_ref()
+            .and_then(|panel| panel.result.as_ref())
+        {
             Some(Ok(paths)) => paths,
             Some(Err(_)) | None => &[],
         }
@@ -90,13 +147,13 @@ impl App {
 
     /// The `@` panel's query: the text after its `@`.
     fn file_query(&self) -> Option<&str> {
-        let anchor = self.files.as_ref()?.anchor;
+        let anchor = self.overlays.files.as_ref()?.anchor;
         self.draft.get(anchor.saturating_add(1)..)
     }
 
     /// Whether the `@` panel is open.
     pub(crate) fn files_open(&self) -> bool {
-        self.files.is_some()
+        self.overlays.files.is_some()
     }
 
     /// The launch directory, which the `@` panel lists.
@@ -106,19 +163,19 @@ impl App {
 
     /// The current search generation.
     pub(crate) fn generation(&self) -> u64 {
-        self.generation
+        self.overlays.generation
     }
 
     /// A search result tagged `generation`: shown when it is the current
     /// generation and the `@` panel is open; otherwise it is stale and
     /// changes nothing.
     pub(crate) fn on_files(&mut self, generation: u64, result: Result<Vec<String>, String>) {
-        if generation != self.generation {
+        if generation != self.overlays.generation {
             return;
         }
-        if let Some(panel) = &mut self.files {
+        if let Some(panel) = &mut self.overlays.files {
             let len = result.as_ref().map_or(0, Vec::len);
-            self.selected = self.selected.min(len.saturating_sub(1));
+            self.overlays.selected = self.overlays.selected.min(len.saturating_sub(1));
             panel.result = Some(result);
         }
     }
@@ -129,15 +186,15 @@ impl App {
     /// whitespace.
     pub(super) fn edited(&mut self) {
         if !self.draft.starts_with('/') {
-            self.slash_closed = false;
+            self.overlays.slash_closed = false;
         }
-        if let Some(panel) = &self.files {
+        if let Some(panel) = &self.overlays.files {
             let open = self
                 .draft
                 .get(panel.anchor..)
                 .is_some_and(|rest| rest.starts_with('@') && !rest.contains(char::is_whitespace));
             if !open {
-                self.files = None;
+                self.overlays.files = None;
             }
         }
     }
@@ -152,13 +209,13 @@ impl App {
                 .next_back()
                 .is_none_or(char::is_whitespace);
         self.draft.push(ch);
-        self.selected = 0;
+        self.overlays.selected = 0;
         if opens {
-            self.files = Some(FilePanel {
+            self.overlays.files = Some(FilePanel {
                 anchor: self.draft.len().saturating_sub(1),
                 result: None,
             });
-            self.generation = self.generation.saturating_add(1);
+            self.overlays.generation = self.overlays.generation.saturating_add(1);
             return Effect::ListFiles;
         }
         self.query_changed()
@@ -167,7 +224,7 @@ impl App {
     /// Deletes the draft's last character.
     pub(super) fn backspace(&mut self) -> Effect {
         self.draft.pop();
-        self.selected = 0;
+        self.overlays.selected = 0;
         self.query_changed()
     }
 
@@ -177,9 +234,9 @@ impl App {
         let Some(query) = self.file_query().map(str::to_owned) else {
             return Effect::None;
         };
-        self.generation = self.generation.saturating_add(1);
+        self.overlays.generation = self.overlays.generation.saturating_add(1);
         Effect::Search {
-            generation: self.generation,
+            generation: self.overlays.generation,
             query,
         }
     }
@@ -189,28 +246,29 @@ impl App {
     pub(super) fn completion_key(&mut self, key: &Key) -> Option<Effect> {
         let names = if self.slash_open() {
             self.slash_names()
-        } else if self.files.is_some() {
+        } else if self.overlays.files.is_some() {
             self.file_paths().to_vec()
         } else {
             return None;
         };
-        let chosen = names.get(self.selected).cloned();
+        let chosen = names.get(self.overlays.selected).cloned();
         match key {
-            Key::Up => self.selected = self.selected.saturating_sub(1),
+            Key::Up => self.overlays.selected = self.overlays.selected.saturating_sub(1),
             Key::Down => {
-                self.selected = self
+                self.overlays.selected = self
+                    .overlays
                     .selected
                     .saturating_add(1)
                     .min(names.len().saturating_sub(1));
             }
             Key::Esc => {
-                if self.files.take().is_none() {
-                    self.slash_closed = true;
+                if self.overlays.files.take().is_none() {
+                    self.overlays.slash_closed = true;
                 }
             }
             Key::Tab | Key::Enter => {
                 let chosen = chosen?;
-                if let Some(panel) = self.files.take() {
+                if let Some(panel) = self.overlays.files.take() {
                     self.draft.truncate(panel.anchor);
                     self.draft.push_str(&chosen);
                     self.draft.push(' ');
@@ -264,7 +322,7 @@ impl App {
             // `?` and `help`.
             _ => {
                 self.draft.clear();
-                self.keymap = Some(0);
+                self.overlays.keymap = Some(0);
                 Effect::None
             }
         };
@@ -281,7 +339,7 @@ impl App {
         }
         self.phase = Phase::Starting;
         self.turns.clear();
-        self.slash_rows = slash::rows(&[]);
+        self.overlays.slash_rows = slash::rows(&[]);
         self.follow();
     }
 
@@ -331,15 +389,19 @@ impl App {
 
     /// The key map overlay's top row, while it is open.
     pub(crate) fn keymap_top(&self) -> Option<usize> {
-        self.keymap
+        self.overlays.keymap
+    }
+
+    /// Opens the key map overlay at its top.
+    pub(super) fn open_keymap(&mut self) -> Effect {
+        self.overlays.keymap = Some(0);
+        Effect::None
     }
 
     /// A key while the key map is open: ↑ ↓ PageUp PageDown scroll it, Esc
-    /// closes it, other keys do nothing.
-    pub(super) fn keymap_key(&mut self, key: &Key) {
-        let Some(top) = self.keymap else {
-            return;
-        };
+    /// closes it, other keys do nothing. `None` while it is closed.
+    pub(super) fn keymap_key(&mut self, key: &Key) -> Option<Effect> {
+        let top = self.overlays.keymap?;
         let height = self.conversation_height();
         let page = height.saturating_sub(1).max(1);
         let total: usize = keymap::lines()
@@ -347,7 +409,7 @@ impl App {
             .map(|line| crate::view::rows(ratatui::text::Line::raw(line.as_str()), self.width))
             .sum();
         let last = total.saturating_sub(height);
-        self.keymap = match key {
+        self.overlays.keymap = match key {
             Key::Esc => None,
             Key::Up => Some(top.saturating_sub(1)),
             Key::Down => Some(top.saturating_add(1).min(last)),
@@ -364,6 +426,15 @@ impl App {
             | Key::F1
             | Key::CtrlO => Some(top),
         };
+        Some(Effect::None)
+    }
+
+    /// `opening_message`: the session's skills join the `/` list.
+    pub(super) fn opening(&mut self, envelope: &Envelope) -> bool {
+        if let Some(opening) = read!(envelope, OpeningMessage) {
+            self.overlays.slash_rows = slash::rows(&opening.skills);
+        }
+        false
     }
 }
 

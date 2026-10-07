@@ -8,8 +8,8 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use contract::events::{
-    CommandAccepted, CommandRejected, InputItem, OpeningMessage, SteeringApplied, TurnCompleted,
-    TurnStarted, UsageRecorded,
+    CommandAccepted, CommandRejected, InputItem, SteeringApplied, TurnCompleted, TurnStarted,
+    UsageRecorded,
 };
 use contract::shapes::ContentPart;
 use contract::{Envelope, HubLine, SessionId};
@@ -18,13 +18,10 @@ use serde_json::{Map, Value, json};
 use crate::approvals::{self, Panel, PanelKey, Queue};
 use crate::keys::Key;
 use crate::link::Line;
-use crate::slash;
 use crate::turn::{Fold, Row, Turn};
 
 #[path = "app_commands.rs"]
 mod commands;
-
-use commands::FilePanel;
 
 /// A line's payload as `$kind`; `None` when it does not parse, and the
 /// line is skipped.
@@ -144,19 +141,8 @@ pub(crate) struct App {
     kitty: bool,
     /// Approval requests from every session.
     queue: Queue,
-    /// The `/` list: built-in commands, then the attached session's skills.
-    slash_rows: Vec<slash::Row>,
-    /// Esc closed the `/` panel for this draft.
-    slash_closed: bool,
-    /// The selected row of the open completion panel.
-    selected: usize,
-    /// The `@` panel, while open.
-    files: Option<FilePanel>,
-    /// Bumped when the `@` panel opens and on every query change, never
-    /// reset; a search result tagged with another is stale.
-    generation: u64,
-    /// The key map overlay's top row, while it is open.
-    keymap: Option<usize>,
+    /// The `/` and `@` panels and the key map overlay.
+    overlays: commands::Overlays,
 }
 
 impl App {
@@ -179,12 +165,7 @@ impl App {
             armed_at: None,
             kitty: false,
             queue: Queue::default(),
-            slash_rows: slash::rows(&[]),
-            slash_closed: false,
-            selected: 0,
-            files: None,
-            generation: 0,
-            keymap: None,
+            overlays: commands::Overlays::default(),
         }
     }
 
@@ -197,13 +178,6 @@ impl App {
         };
     }
 
-    /// Handles one key at `now`, read from the injected clock.
-    pub(crate) fn on_key(&mut self, key: Key, now: Instant) -> Effect {
-        let effect = self.route_key(key, now);
-        self.edited();
-        effect
-    }
-
     /// Hands one key to what is on top: the key map, the approval panel, a
     /// completion panel, then the input box.
     fn route_key(&mut self, key: Key, now: Instant) -> Effect {
@@ -211,9 +185,8 @@ impl App {
             return self.on_ctrl_c(now);
         }
         self.armed_at = None;
-        if self.keymap.is_some() {
-            self.keymap_key(&key);
-            return Effect::None;
+        if let Some(effect) = self.keymap_key(&key) {
+            return effect;
         }
         match self.queue.on_key(&key) {
             Some(PanelKey::Handled) => return Effect::None,
@@ -244,10 +217,7 @@ impl App {
                 self.follow();
                 Effect::None
             }
-            Key::F1 => {
-                self.keymap = Some(0);
-                Effect::None
-            }
+            Key::F1 => self.open_keymap(),
             Key::Up | Key::Down | Key::Tab | Key::BackTab => Effect::None,
             Key::AltA => self.open_first(),
         }
@@ -361,24 +331,15 @@ impl App {
     /// panel in its place, the badge, the hint and the notice. None on a
     /// screen too short for them.
     pub(crate) fn conversation_height(&self) -> usize {
-        let input = self.panel().map_or_else(
-            || {
-                1usize.saturating_add(
-                    self.completions()
-                        .map_or(0, |completions| completions.lines.len()),
-                )
-            },
-            |panel| {
-                panel
-                    .lines
-                    .iter()
-                    .map(|line| {
-                        crate::view::rows(ratatui::text::Line::raw(line.as_str()), self.width)
-                    })
-                    .sum()
-            },
-        );
+        let input = self.panel().map_or(1, |panel| {
+            panel
+                .lines
+                .iter()
+                .map(|line| crate::view::rows(ratatui::text::Line::raw(line.as_str()), self.width))
+                .sum()
+        });
         let below = input
+            + self.completion_rows()
             + usize::from(self.badge().is_some())
             + usize::from(self.hint())
             + usize::from(self.notice.is_some());
@@ -676,12 +637,7 @@ impl App {
                 }
                 false
             }
-            "opening_message" => {
-                if let Some(opening) = read!(envelope, OpeningMessage) {
-                    self.slash_rows = slash::rows(&opening.skills);
-                }
-                false
-            }
+            "opening_message" => self.opening(envelope),
             "turn_started" => read!(envelope, TurnStarted).is_some_and(|started| {
                 self.set_busy(true);
                 let prompts = started
