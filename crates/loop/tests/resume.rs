@@ -2626,6 +2626,159 @@ fn a_cancel_reaches_a_call_running_after_a_resumed_credential_refusal() {
 }
 
 #[test]
+fn a_resumed_credential_refusal_hands_off_from_a_later_call() {
+    // The credential-refusal branch runs its batch uncancelled, so a later
+    // call whose result sets `control.handoff` restarts the context from
+    // its note through `handoff_from_tools`, as in any step: the `!cancelled`
+    // guard's effect, and the MISSED mutant that deletes the `!`.
+    let keys = fakes::TempDir::new("fiber-resume-keys");
+    let key = keys.path().join("openrouter");
+    std::fs::write(&key, "sk-file-secret").unwrap();
+    let first = reads("first");
+    let denied = Arc::new(support::TestTool::declaring(
+        "read",
+        "sk-file-secret",
+        vec![contract::shapes::Effect::Reads],
+        Some(vec![key.display().to_string()]),
+    ));
+    let mut wrapup = support::TestTool::reads("wrapup", "");
+    wrapup.output.content = Vec::new();
+    wrapup.output.control = Some(contract::events::Control {
+        handoff: "the note".into(),
+    });
+    let wrapup = Arc::new(wrapup);
+    let mut history = History::new(vec![Scripted::text("Hello.")]);
+    history.write(user_turn("one"), None);
+    history.write(message_started(), Some("a_0"));
+    history.write(requested("first"), Some("a_1"));
+    history.write(requested("read"), Some("a_2"));
+    history.write(requested("wrapup"), Some("a_3"));
+    history.write(standing_request("r_9"), Some("a_2"));
+    history.write(fiber_started(), None);
+    history.write(fiber_exited(Some("r_9")), None);
+    history.freeze();
+
+    let looped = history.resume_headless_with_files(
+        vec![
+            ("builtin".into(), first.clone() as Arc<dyn Tool>),
+            ("builtin".into(), denied.clone() as Arc<dyn Tool>),
+            ("builtin".into(), wrapup.clone() as Arc<dyn Tool>),
+        ],
+        vec![key.clone()],
+    );
+    let (_looped, finishing) = history.step(looped);
+    assert_eq!(finishing, Some(contract::events::TurnOutcome::Completed));
+
+    assert!(
+        first.ran().is_empty(),
+        "a call before the refusal never runs"
+    );
+    assert!(denied.ran().is_empty(), "a denied call never runs");
+    assert_eq!(wrapup.ran().len(), 1, "a call after the refusal runs");
+    let handed = new_of(&history, "handoff_completed");
+    assert_eq!(handed.len(), 1, "{:?}", history.new_kinds());
+    assert_eq!(handed[0].payload["outcome"], "completed");
+    assert_eq!(handed[0].payload["note"], json!(["a_3"]));
+}
+
+#[test]
+fn a_cancel_after_a_resumed_credential_refusal_skips_the_tool_handoff() {
+    // The batch ran with a note in hand but a cancel ended it, so the
+    // `!cancelled` guard skips `handoff_from_tools`: no `handoff_completed`
+    // is written, and the turn ends `interrupted`. Deleting the `!` hands
+    // off instead, which this test forbids.
+    let keys = fakes::TempDir::new("fiber-resume-keys");
+    let key = keys.path().join("openrouter");
+    std::fs::write(&key, "sk-file-secret").unwrap();
+    let denied = Arc::new(support::TestTool::declaring(
+        "read",
+        "sk-file-secret",
+        vec![contract::shapes::Effect::Reads],
+        Some(vec![key.display().to_string()]),
+    ));
+    let mut wrapup = support::TestTool::reads("wrapup", "");
+    wrapup.output.content = Vec::new();
+    wrapup.output.control = Some(contract::events::Control {
+        handoff: "the note".into(),
+    });
+    let wrapup = Arc::new(wrapup);
+    let mut slow = support::TestTool::reads("slow", "Paris.");
+    slow.script = vec![support::Script::WaitCancel];
+    let slow = Arc::new(slow);
+    let mut history = History::new(vec![Scripted::text("Hello.")]);
+    history.write(user_turn("one"), None);
+    history.write(message_started(), Some("a_0"));
+    history.write(requested("read"), Some("a_1"));
+    history.write(requested("wrapup"), Some("a_2"));
+    history.write(requested("slow"), Some("a_3"));
+    history.write(standing_request("r_9"), Some("a_1"));
+    history.write(fiber_started(), None);
+    history.write(fiber_exited(Some("r_9")), None);
+    history.freeze();
+
+    let cancel = Arc::new(r#loop::TurnCancel::default());
+    let looped = history
+        .resume_headless_with_files(
+            vec![
+                ("builtin".into(), denied.clone() as Arc<dyn Tool>),
+                ("builtin".into(), wrapup.clone() as Arc<dyn Tool>),
+                ("builtin".into(), slow.clone() as Arc<dyn Tool>),
+            ],
+            vec![key.clone()],
+        )
+        .cancelled_by(Arc::clone(&cancel));
+    let tap = support::Tap::new(&history.log);
+    let cancelling = Arc::clone(&cancel);
+    std::thread::scope(|scope| {
+        scope.spawn(move || {
+            // Both waits carry the test's deadline: the first is the
+            // refusal, the second the noted call. Cancelling only after the
+            // second keeps the note while the slow call still waits, so the
+            // cancel ends the batch with the note in hand.
+            tap.wait_for("tool_call_completed");
+            tap.wait_for("tool_call_completed");
+            assert!(cancelling.cancel(), "the cancel ended the batch");
+        });
+        let (_looped, finishing) = history.step(looped);
+        assert_eq!(finishing, Some(contract::events::TurnOutcome::Interrupted));
+    });
+    assert!(denied.ran().is_empty(), "a denied call never runs");
+    assert_eq!(wrapup.ran().len(), 1, "the noted call ran");
+    assert!(
+        slow.cancelled.lock().unwrap().contains(&true),
+        "the slow call saw the cancel"
+    );
+    // The note was in hand: the noted call completed with its handoff.
+    let done: Vec<(String, String)> = new_of(&history, "tool_call_completed")
+        .into_iter()
+        .map(|line| {
+            (
+                line.action_id.as_ref().unwrap().0.clone(),
+                line.payload["status"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        done,
+        [
+            ("a_1".to_owned(), "denied".to_owned()),
+            ("a_2".to_owned(), "completed".to_owned()),
+            ("a_3".to_owned(), "cancelled".to_owned()),
+        ]
+    );
+    let noted = new_of(&history, "tool_call_completed")
+        .into_iter()
+        .find(|line| line.action_id.as_ref().unwrap().0 == "a_2")
+        .unwrap();
+    assert_eq!(noted.payload["control"], json!({"handoff": "the note"}));
+    assert!(
+        new_of(&history, "handoff_completed").is_empty(),
+        "a cancel that ended the batch skips the tool handoff: {:?}",
+        history.new_kinds()
+    );
+}
+
+#[test]
 fn a_three_call_batch_completes_in_request_order() {
     let mut history = History::new(vec![Scripted::text("Hello."), Scripted::text("Second.")]);
     history.write(user_turn("one"), None);
