@@ -636,6 +636,21 @@ fn many_unterminated_openers_stay_linear() {
 }
 
 #[test]
+fn many_unmatched_hidden_closes_stay_linear() {
+    // Each close below matches nothing open, so none may rescan what is.
+    let n = 100_000;
+    for (svg, open, close) in [
+        ("<svg>", "<noscript>", "</template>"),
+        ("<svg>", "<template>", "</noscript>"),
+        ("", "<noscript>", "</svg>"),
+        ("", "<template>", "</svg>"),
+    ] {
+        let html = format!("{svg}{}{}x", open.repeat(n), close.repeat(n));
+        assert_eq!(to_markdown(&html), "", "{svg}{open}{close}");
+    }
+}
+
+#[test]
 fn excess_list_closes_pop_the_counter_first() {
     let over = 5;
     let total = super::MAX_LEVELS + over;

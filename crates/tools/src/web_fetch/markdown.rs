@@ -171,25 +171,6 @@ const OUT_OF_SVG: [&str; 44] = [
     "var",
 ];
 
-/// An open element whose content is dropped.
-#[derive(Clone, Copy, PartialEq)]
-enum Hidden {
-    Svg,
-    Noscript,
-    Template,
-}
-
-impl Hidden {
-    fn of(name: &str) -> Option<Self> {
-        match name {
-            "svg" => Some(Hidden::Svg),
-            "noscript" => Some(Hidden::Noscript),
-            "template" => Some(Hidden::Template),
-            _ => None,
-        }
-    }
-}
-
 /// What a list item is numbered by.
 struct List {
     ordered: bool,
@@ -213,14 +194,17 @@ struct Converter {
     /// The raw-text element whose text is arriving, if any.
     raw: Option<Raw>,
     /// Open `svg`, `noscript` and `template` elements, whose content is
-    /// dropped, innermost last: one byte each, so a page of opens grows it
-    /// by less than the page itself.
-    hidden: Vec<Hidden>,
-    /// Where in `hidden` the outermost open `svg` is. Everything after it
-    /// is foreign content, inside the `svg`: there nothing switches state,
-    /// so a `title` is neither collected nor switched, and a `noscript` or
-    /// `template` is an element of the `svg`, closed with it.
-    svg: Option<usize>,
+    /// dropped. Each has a depth, its place among them counted from the
+    /// outermost; the three stacks below hold the depths of each kind,
+    /// innermost last, so every open, close and lookup is amortised O(1).
+    hidden: usize,
+    /// Depths of the open `svg` elements. Everything inside the outermost
+    /// is foreign content: there nothing switches state, so a `title` is
+    /// neither collected nor switched, and a `noscript` or `template` is an
+    /// element of the `svg`, closed with it.
+    svgs: Vec<usize>,
+    noscripts: Vec<usize>,
+    templates: Vec<usize>,
     in_head: bool,
     /// Open `pre` elements; the text of one is verbatim.
     pre: usize,
@@ -246,8 +230,10 @@ impl Default for Converter {
             title_text: String::new(),
             title_done: false,
             raw: None,
-            hidden: Vec::new(),
-            svg: None,
+            hidden: 0,
+            svgs: Vec::new(),
+            noscripts: Vec::new(),
+            templates: Vec::new(),
             in_head: false,
             pre: 0,
             pre_start: 0,
@@ -279,7 +265,7 @@ impl Converter {
         // Raw-text switches apply everywhere but inside `svg`, whose
         // content is foreign content: tokenized as markup and dropped.
         // Inside `noscript` and `template` the switches apply.
-        if self.svg.is_none() {
+        if self.svgs.is_empty() {
             if name == "script" {
                 self.raw = Some(Raw::Script);
                 return TokenSinkResult::RawData(RawKind::ScriptData);
@@ -289,7 +275,7 @@ impl Converter {
                 return TokenSinkResult::RawData(RawKind::Rawtext);
             }
             if name == "title" {
-                if !self.title_done && self.hidden.is_empty() {
+                if !self.title_done && self.hidden == 0 {
                     self.raw = Some(Raw::Title);
                     self.title_text.clear();
                 } else {
@@ -306,16 +292,15 @@ impl Converter {
         if breaks_out_of_svg(name, tag) {
             self.close_svg();
         }
+        let depth = self.hidden;
         if name == "head" {
             self.in_head = true;
-        } else if let Some(hidden) = Hidden::of(name) {
+        } else if let Some(depths) = self.depths(name) {
             if !tag.self_closing {
-                if hidden == Hidden::Svg && self.svg.is_none() {
-                    self.svg = Some(self.hidden.len());
-                }
-                self.hidden.push(hidden);
+                depths.push(depth);
+                self.hidden += 1;
             }
-        } else if self.hidden.is_empty() && !self.in_head {
+        } else if self.hidden == 0 && !self.in_head {
             self.visible_tag(name, false, tag);
         }
         TokenSinkResult::Continue
@@ -334,9 +319,9 @@ impl Converter {
         if matches!(name, "p" | "br") {
             self.close_svg();
         }
-        if let Some(hidden) = Hidden::of(name) {
-            self.end_hidden(hidden);
-        } else if self.hidden.is_empty() && !self.in_head {
+        if matches!(name, "svg" | "noscript" | "template") {
+            self.end_hidden(name);
+        } else if self.hidden == 0 && !self.in_head {
             self.visible_tag(name, true, tag);
         }
     }
@@ -348,38 +333,49 @@ impl Converter {
     /// as a `template` or `noscript` around one stops it. Anything open
     /// inside the closed element closes with it; any other end tag is
     /// ignored, so an `svg` already closed stays closed.
-    fn end_hidden(&mut self, hidden: Hidden) {
-        let foreign = self.svg.unwrap_or(self.hidden.len());
-        let open = self.hidden.iter().copied().enumerate().rev();
-        let at = open
-            .clone()
-            .take_while(|&(at, _)| at >= foreign)
-            .find(|&(_, open)| open == hidden)
-            .or_else(|| match hidden {
-                Hidden::Template => open.clone().find(|&(_, open)| open == hidden),
-                Hidden::Svg | Hidden::Noscript => open
-                    .clone()
-                    .find(|&(at, _)| at < foreign)
-                    .filter(|&(_, open)| open == hidden),
-            })
-            .map(|(at, _)| at);
+    fn end_hidden(&mut self, name: &str) {
+        let foreign = self.svgs.first().copied().unwrap_or(self.hidden);
+        let innermost = self.depths(name).and_then(|depths| depths.last().copied());
+        let at = innermost.filter(|&at| at >= foreign).or_else(|| {
+            if name == "template" {
+                innermost
+            } else {
+                foreign
+                    .checked_sub(1)
+                    .filter(|&below| innermost == Some(below))
+            }
+        });
         if let Some(at) = at {
-            self.truncate_hidden(at);
+            self.close_hidden(at);
         }
     }
 
     /// Closes every open `svg`, and with them what they hide.
     fn close_svg(&mut self) {
-        if let Some(svg) = self.svg {
-            self.truncate_hidden(svg);
+        if let Some(&svg) = self.svgs.first() {
+            self.close_hidden(svg);
         }
     }
 
-    /// Closes the hidden element at `at` and everything open inside it.
-    fn truncate_hidden(&mut self, at: usize) {
-        self.hidden.truncate(at);
-        if self.svg.is_some_and(|svg| svg >= at) {
-            self.svg = None;
+    /// Closes the hidden element at depth `at` and everything open inside
+    /// it: each depth is popped once, so this is amortised O(1).
+    fn close_hidden(&mut self, at: usize) {
+        self.hidden = at;
+        for depths in [&mut self.svgs, &mut self.noscripts, &mut self.templates] {
+            while depths.last().is_some_and(|&depth| depth >= at) {
+                depths.pop();
+            }
+        }
+    }
+
+    /// The depths of the open hidden elements named `name`, if it names
+    /// a hidden element.
+    fn depths(&mut self, name: &str) -> Option<&mut Vec<usize>> {
+        match name {
+            "svg" => Some(&mut self.svgs),
+            "noscript" => Some(&mut self.noscripts),
+            "template" => Some(&mut self.templates),
+            _ => None,
         }
     }
 
@@ -619,7 +615,7 @@ impl Converter {
             Some(_) => return,
             None => {}
         }
-        if !self.hidden.is_empty() {
+        if self.hidden > 0 {
             return;
         }
         self.in_head &= text.chars().all(|c| c.is_ascii_whitespace());
