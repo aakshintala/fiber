@@ -144,7 +144,9 @@ by content.
   "Web fetch and web search").
 - A cut result keeps what its tool declares (the start by default, or both
   ends), a notice saying how many bytes were cut, and the artifact path. When
-  both ends are kept, the notice sits between them. Nothing is lost, only
+  both ends are kept, the notice sits between them. A configured cap on such
+  a tool is divided in the tool's own start-to-end proportion: the end gets
+  its share rounded down, and the start gets the rest. Nothing is lost, only
   moved out of the model's view. The full output is in the session's `artifacts/`. `read` is the
   exception: the file is the full output, so a cut read writes no artifact
   and its notice gives the offset to continue from.
