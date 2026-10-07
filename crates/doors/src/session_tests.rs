@@ -584,7 +584,7 @@ fn a_disconnect_stops_a_writer_whose_queue_is_full() {
     });
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
-        crate::client::write_loop(watcher, Box::new(stream), false);
+        crate::client::write_loop(watcher, Box::new(stream), false, mpsc::channel().1);
         if let Ok(()) = tx.send(()) {}
     });
     rx.recv_timeout(DEADLINE)
@@ -623,7 +623,7 @@ fn an_acknowledgement_survives_a_lagged_queue() {
     };
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
-        crate::client::write_loop(watcher, Box::new(write), false);
+        crate::client::write_loop(watcher, Box::new(write), false, mpsc::channel().1);
         if let Ok(()) = tx.send(()) {}
     });
     let text = held.wait_text(
@@ -888,7 +888,7 @@ fn a_full_subscribers_latest_status_survives_a_queue_saturated_after_registratio
     };
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
-        crate::client::write_loop(watcher, Box::new(write), false);
+        crate::client::write_loop(watcher, Box::new(write), false, mpsc::channel().1);
         if let Ok(()) = tx.send(()) {}
     });
     let text = held.wait_text(
