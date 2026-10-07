@@ -819,9 +819,10 @@ fn a_policy_refusal_fails_the_call_as_refused() {
 #[test]
 fn cancelling_from_another_thread_ends_a_blocked_read() {
     let payload = format!("data: {}\n\n", text_delta("Hel")).into_bytes();
-    let server = ProviderServer::start([Response::stall(200, payload.clone(), payload.len() + 1024)
-        .header("content-type", "text/event-stream")])
-    .unwrap();
+    let server =
+        ProviderServer::start([Response::stall(200, payload.clone(), payload.len() + 1024)
+            .header("content-type", "text/event-stream")])
+        .unwrap();
     let endpoint = Endpoint {
         base_url: server.url(),
         direct: true,

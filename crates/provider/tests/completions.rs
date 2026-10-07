@@ -865,9 +865,10 @@ fn a_call_cancelled_before_it_runs_returns_without_connecting() {
 #[test]
 fn cancelling_from_another_thread_ends_a_blocked_read() {
     let payload = format!("data: {}\n\n", chunk(json!({"content": "Hel"}), None)).into_bytes();
-    let server = ProviderServer::start([Response::stall(200, payload.clone(), payload.len() + 1024)
-        .header("content-type", "text/event-stream")])
-    .unwrap();
+    let server =
+        ProviderServer::start([Response::stall(200, payload.clone(), payload.len() + 1024)
+            .header("content-type", "text/event-stream")])
+        .unwrap();
     let endpoint = Endpoint {
         base_url: server.url(),
         direct: true,

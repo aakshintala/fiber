@@ -1069,9 +1069,10 @@ fn cancelling_from_another_thread_ends_a_blocked_read() {
     let open = format!("data: {}\n\n", text_block(0, "Hel")[0]);
     let event = format!("data: {}\n\n", text_block(0, "Hel")[1]);
     let payload = format!("{open}{event}").into_bytes();
-    let server = ProviderServer::start([Response::stall(200, payload.clone(), payload.len() + 1024)
-        .header("content-type", "text/event-stream")])
-    .unwrap();
+    let server =
+        ProviderServer::start([Response::stall(200, payload.clone(), payload.len() + 1024)
+            .header("content-type", "text/event-stream")])
+        .unwrap();
     let endpoint = Endpoint {
         base_url: server.url(),
         direct: true,
