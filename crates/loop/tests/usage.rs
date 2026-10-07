@@ -415,8 +415,10 @@ fn a_delegate_s_unnamed_call_copied_into_its_parent_is_counted_once() {
     }
     r#loop::fiber_exited(&parent.log, &parent.dir, Ok(()), false, None).unwrap();
     let all = log::read(&parent.dir).unwrap();
+    let mut expected = FAILED_UNNAMED_KINDS.to_vec();
+    expected.extend(["usage_recorded", "usage_recorded", "fiber_exited"]);
+    assert_eq!(kinds(&all), expected);
     let exited = all.last().unwrap();
-    assert_eq!(exited.kind, "fiber_exited");
     // The parent's call and the delegate's, each once.
     let usage = &exited.payload["usage"]["tokens"];
     assert_eq!(usage["input"], 20);
