@@ -83,6 +83,7 @@ fn record(
         headers,
         ..Endpoint::default()
     };
+    let secrets = endpoint.secrets();
     let opened = match protocol {
         "openai-responses" => Responses::new(endpoint)
             .request(&request)
@@ -99,7 +100,7 @@ fn record(
         }
     };
     let mut stream = opened.map_err(|e| {
-        let failure = e.failure("record");
+        let failure = e.failure("record", &secrets);
         serde_json::to_string(&failure).unwrap_or_else(|_| e.to_string())
     })?;
     let mut file = File::create(out).map_err(|e| format!("{out}: {e}"))?;

@@ -24,6 +24,7 @@ use ureq::unversioned::transport::{
 };
 
 use crate::Error;
+use crate::redact::Secrets;
 
 fn validate_signed_header(name: &str, value: &str) -> Result<(), contract::signing::Error> {
     if ureq::http::HeaderName::from_bytes(name.as_bytes()).is_err() {
@@ -95,6 +96,7 @@ pub(crate) fn post_signed(
     signer: Option<&dyn Signer>,
     direct: bool,
     cancel: &Arc<Cancel>,
+    secrets: &mut Secrets,
 ) -> Result<(impl Read + use<>, Option<bool>), Error> {
     post_with(
         url,
@@ -102,6 +104,7 @@ pub(crate) fn post_signed(
         body,
         signer,
         cancel,
+        secrets,
         if direct {
             None
         } else {
@@ -119,6 +122,7 @@ fn post_with(
     body: &[u8],
     signer: Option<&dyn Signer>,
     cancel: &Arc<Cancel>,
+    secrets: &mut Secrets,
     proxy: Option<ureq::Proxy>,
 ) -> Result<(impl Read + use<>, Option<bool>), Error> {
     // A call cancelled before it starts never resolves or connects.
@@ -126,20 +130,29 @@ fn post_with(
         return Err(Error::Connection("the call was cancelled".into()));
     }
     let signed = match signer {
-        Some(signer) => signer
-            .sign(&SignRequest {
-                method: "POST",
-                url,
-                headers,
-                body,
-            })
-            .map_err(Error::Sign)?,
+        Some(signer) => {
+            let signed = signer
+                .sign(&SignRequest {
+                    method: "POST",
+                    url,
+                    headers,
+                    body,
+                })
+                .map_err(Error::Sign)?;
+            for credential in signer.credentials() {
+                secrets.add(credential);
+            }
+            signed
+        }
         None => Vec::new(),
     };
     for (name, value) in &signed {
         if let Err(why) = validate_signed_header(name, value) {
             return Err(Error::Sign(why));
         }
+    }
+    for (name, value) in &signed {
+        secrets.add_header(name, value);
     }
     let tls = TlsConfig::builder()
         .root_certs(RootCerts::PlatformVerifier)

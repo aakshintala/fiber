@@ -22,6 +22,7 @@ use serde_json::{Map, Value, json};
 
 use crate::http::{self, Cancel};
 use crate::openai_completions_messages::messages;
+use crate::redact::Secrets;
 use crate::{Endpoint, Error, sse};
 
 /// One model reached over `openai-completions`.
@@ -68,6 +69,7 @@ impl Completions {
             lifetime: request.cache_lifetime,
             direct: endpoint.direct,
             cancel: Arc::default(),
+            secrets: endpoint.secrets(),
         }
     }
 }
@@ -94,10 +96,12 @@ pub struct Call {
     lifetime: CacheLifetime,
     direct: bool,
     cancel: Arc<Cancel>,
+    secrets: Secrets,
 }
 
 impl ModelCall for Call {
     fn run(&self, sink: &mut dyn FnMut(Delta)) -> Result<Reply, CallError> {
+        let mut secrets = self.secrets.clone();
         let (reply, should_retry) = match http::post_signed(
             &self.url,
             &self.headers,
@@ -105,6 +109,7 @@ impl ModelCall for Call {
             self.signer.as_deref(),
             self.direct,
             &self.cancel,
+            &mut secrets,
         ) {
             Ok((stream, should_retry)) => (
                 decode(BufReader::new(stream), &self.lifetime, sink),
@@ -120,7 +125,7 @@ impl ModelCall for Call {
             return Err(CallError::Cancelled);
         }
         reply.map_err(|e| CallError::Failed {
-            failure: e.failure(&self.provider),
+            failure: e.failure(&self.provider, &secrets),
             should_retry,
         })
     }

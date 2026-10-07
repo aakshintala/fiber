@@ -5,6 +5,8 @@ use contract::ErrorCode;
 use contract::shapes::{Failure, ProviderFailure};
 use serde_json::Value;
 
+use crate::redact::Secrets;
+
 /// A failed model call. Each message is a phrase that follows the
 /// provider's name, as [`Error::failure`] writes it.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
@@ -87,7 +89,10 @@ impl Error {
     }
 
     /// The failure as a failed model call records it, naming `provider`.
-    pub fn failure(&self, provider: &str) -> Failure {
+    /// The stored provider message holds no secret value: every value in
+    /// `secrets` is replaced with `[redacted]`; the code and retry advice
+    /// read the original body unchanged.
+    pub fn failure(&self, provider: &str, secrets: &Secrets) -> Failure {
         let code = self.code();
         let (retry_after, said) = match self {
             Self::Status {
@@ -95,8 +100,11 @@ impl Error {
                 body,
                 retry_after,
                 ..
-            } => (*retry_after, Some((*status, body_message(body)))),
-            Self::ReplyFailed { message, .. } => (None, Some((200, message.clone()))),
+            } => (
+                *retry_after,
+                Some((*status, secrets.redact(&body_message(body)))),
+            ),
+            Self::ReplyFailed { message, .. } => (None, Some((200, secrets.redact(message)))),
             Self::Connection(_)
             | Self::StreamIncomplete(_)
             | Self::UnknownStopReason(_)

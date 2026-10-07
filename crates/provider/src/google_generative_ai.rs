@@ -16,6 +16,7 @@ use serde_json::{Map, Value};
 
 pub use crate::google_generative_ai_decode::decode;
 use crate::http::{self, Cancel};
+use crate::redact::Secrets;
 
 use crate::google_generative_ai_request::{body, wire_tools};
 use crate::{Endpoint, Error};
@@ -79,6 +80,7 @@ impl Gemini {
             signer: endpoint.signer.clone(),
             direct: endpoint.direct,
             cancel: Arc::default(),
+            secrets: endpoint.secrets(),
         }
     }
 }
@@ -102,10 +104,12 @@ pub struct Call {
     signer: Option<Arc<dyn contract::signing::Signer>>,
     direct: bool,
     cancel: Arc<Cancel>,
+    secrets: Secrets,
 }
 
 impl ModelCall for Call {
     fn run(&self, sink: &mut dyn FnMut(Delta)) -> Result<Reply, CallError> {
+        let mut secrets = self.secrets.clone();
         let (reply, should_retry) = match http::post_signed(
             &self.url,
             &self.headers,
@@ -113,6 +117,7 @@ impl ModelCall for Call {
             self.signer.as_deref(),
             self.direct,
             &self.cancel,
+            &mut secrets,
         ) {
             Ok((stream, should_retry)) => (decode(BufReader::new(stream), sink), should_retry),
             Err(e) => {
@@ -125,7 +130,7 @@ impl ModelCall for Call {
             return Err(CallError::Cancelled);
         }
         reply.map_err(|e| CallError::Failed {
-            failure: e.failure(&self.provider),
+            failure: e.failure(&self.provider, &secrets),
             should_retry,
         })
     }
