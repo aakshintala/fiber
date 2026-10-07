@@ -23,19 +23,6 @@ pub(crate) fn session_credential(
     Ok((label, key))
 }
 
-/// The reviewer's key under its own configured label. When the reviewer is
-/// the session's own provider the caller reuses the session's key instead,
-/// so a `command` credential runs once per process.
-pub(crate) fn reviewer_credential(
-    config: &Config,
-    reviewer: &ProviderData,
-) -> Result<Secret, Failure> {
-    let label = config.credential_label(reviewer);
-    config
-        .credential(reviewer, &label)
-        .map_err(|e| failed(e.code(), e))
-}
-
 #[cfg(test)]
 #[path = "credential_tests.rs"]
 mod tests;

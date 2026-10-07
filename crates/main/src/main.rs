@@ -699,7 +699,7 @@ fn choose_reviewer(
         session_credential.clone()
     } else {
         lua_providers::session_credential(providers, model.provider, || {
-            credential::reviewer_credential(config, model.provider)
+            credential::session_credential(config, model.provider, None).map(|(_, key)| key)
         })?
     };
     // The token is read once, so a failing `credential()` fails here:

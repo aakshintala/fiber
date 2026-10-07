@@ -5,7 +5,7 @@
 
 use config::{Config, ProjectKey, ProviderData, Secret, Sources, store_credential};
 
-use super::{reviewer_credential, session_credential};
+use super::session_credential;
 
 fn provider(name: &str) -> ProviderData {
     ProviderData {
@@ -71,6 +71,6 @@ fn a_recorded_label_that_names_nothing_is_credential_missing() {
 fn the_reviewer_of_another_provider_uses_its_own_label() {
     let root = fakes::TempDir::new("fiber-credential");
     let config = config(&root, &STORED, SETTINGS);
-    let key = reviewer_credential(&config, &provider("other"));
-    assert_eq!(key.unwrap().expose(), "other-own");
+    let (label, key) = session_credential(&config, &provider("other"), None).unwrap();
+    assert_eq!((label.as_str(), key.expose()), ("own", "other-own"));
 }
