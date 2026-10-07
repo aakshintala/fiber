@@ -256,3 +256,52 @@ fn fiber_exited_error_rejects_anything_but_a_verdict() {
         assert!(fiber_exited_error(&line).is_none(), "{line}");
     }
 }
+
+fn args_of(command: &Command) -> Vec<String> {
+    command
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect()
+}
+
+#[test]
+fn the_session_command_starts_with_a_model_and_never_a_prompt() {
+    let id = SessionId("s_0123456789abcdef".to_owned());
+    let command = session_command(
+        Path::new("/bin/fiber"),
+        &id,
+        Path::new("/w"),
+        Some("fake/m"),
+        false,
+    );
+    assert_eq!(command.get_program(), "/bin/fiber");
+    assert_eq!(
+        args_of(&command),
+        [
+            "session",
+            "--id",
+            "s_0123456789abcdef",
+            "--workspace",
+            "/w",
+            "--model",
+            "fake/m"
+        ]
+    );
+}
+
+#[test]
+fn the_session_command_resumes_with_the_recorded_workspace_and_no_model() {
+    let id = SessionId("s_0123456789abcdef".to_owned());
+    let command = session_command(Path::new("/bin/fiber"), &id, Path::new("/w"), None, true);
+    assert_eq!(
+        args_of(&command),
+        [
+            "session",
+            "--id",
+            "s_0123456789abcdef",
+            "--workspace",
+            "/w",
+            "--resume"
+        ]
+    );
+}

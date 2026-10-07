@@ -1,9 +1,9 @@
 //! One client connection: `hub_hello` first, hub-command dispatch for
-//! `start` and `status`, and the relay map to session sockets.
+//! `start` and `status`, and the relay to session sockets.
 //!
-//! A command with a `session_id` is for that session: the hub passes the
-//! line to the session's socket without the key and passes back what the
-//! session sends. A command without one is for the hub. Every connection
+//! A command with a `session_id` is for that session: the relay passes it
+//! to the session's socket (`crate::relay`). A command without one is for
+//! the hub. Every connection
 //! opens with `hub_hello`, before any acknowledgement.
 
 use std::io::{BufRead, BufReader, Write};
@@ -13,7 +13,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
-use std::thread;
 use std::time::{Duration, Instant};
 
 use contract::clock::{Clock, Wake};
@@ -22,6 +21,7 @@ use serde_json::{Map, Value};
 
 use crate::Starter;
 use crate::diag::Diag;
+use crate::relay::Relays;
 use crate::start::{self, Outcome};
 
 /// What the hub shares across its connections: home, the version it
@@ -44,6 +44,9 @@ pub(crate) struct Hub {
     /// `tick` as the clock's subscriber: kept alive so advances wake the
     /// idle wait.
     wake: Arc<dyn Wake>,
+    /// Held across a resume: one at a time per hub, so two commands for
+    /// one exited session start one process.
+    pub(crate) resume_gate: Mutex<()>,
 }
 
 /// The open connections and the idle timer. `zero_since` is `Some` exactly
@@ -93,6 +96,7 @@ impl Hub {
             }),
             tick,
             wake,
+            resume_gate: Mutex::new(()),
         }
     }
 
@@ -277,39 +281,6 @@ impl Wake for Tick {
     }
 }
 
-/// One relay: the session connection, and the writer the next command for
-/// it uses. The relay thread owns the reader; both halves close together.
-struct Relay {
-    session: String,
-    epoch: u64,
-    writer: UnixStream,
-}
-
-/// A connection's relays, and the last epoch minted on it. Epochs are
-/// never reused for the connection's lifetime, so a stale relay thread
-/// never drops the entry of a reconnect to the same session.
-#[derive(Default)]
-struct Relays {
-    entries: Vec<Relay>,
-    minted: u64,
-}
-
-impl Relays {
-    /// The next relay epoch: one past every epoch minted on this connection.
-    fn mint(&mut self) -> u64 {
-        self.minted += 1;
-        self.minted
-    }
-
-    /// Drops a finished relay thread's entry: its own session and epoch
-    /// only, so a stale thread never drops a reconnect's entry.
-    fn finish(&mut self, session: &str, epoch: u64) {
-        if let Some(at) = relay_slot(&self.entries, session, epoch) {
-            self.entries.remove(at);
-        }
-    }
-}
-
 /// Serves one client connection: `hub_hello`, then one acknowledgement per
 /// hub command, and a relay thread per session commanded on it. Returning
 /// shuts down every relay stream of the connection, so each session sees
@@ -355,13 +326,7 @@ pub(crate) fn serve_counted(stream: UnixStream, hub: Arc<Hub>, n: u64) {
             }
         }
     }
-    let mut relays = lock(&relays);
-    for entry in relays.entries.drain(..) {
-        match entry.writer.shutdown(Shutdown::Both) {
-            Ok(()) | Err(_) => {}
-        }
-    }
-    drop(relays);
+    lock(&relays).close_all();
     disconnect(&hub, n);
 }
 
@@ -393,7 +358,7 @@ fn on_command(
         }
     };
     if let Some(session) = line.session_id {
-        relay_command(&line.id, &session, &line.value, hub, writer, relays);
+        crate::relay::relay_command(&line.id, &session, &line.value, hub, writer, relays);
         return;
     }
     match line.command.as_str() {
@@ -541,143 +506,6 @@ fn start_args(args: &Map<String, Value>) -> Option<(&str, Option<&str>, Option<&
     Some((workspace, model, args.get("content")))
 }
 
-/// Whether `session` names a session the hub can reach: `s_` plus 16
-/// lowercase hex digits, the shape the hub mints and `parse_session_id`
-/// accepts. Anything else names no session, so it is rejected without
-/// touching the filesystem: an absolute path or `..` never escapes `run/`,
-/// and `"hub"` never routes back to the hub.
-fn valid_session_id(session: &str) -> bool {
-    let hex = session.strip_prefix("s_").unwrap_or("");
-    hex.len() == 16
-        && hex
-            .bytes()
-            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
-}
-
-/// Passes the line to the session's socket without the `session_id` key. A
-/// session the hub cannot reach is rejected `session_not_found`.
-fn relay_command(
-    id: &CommandId,
-    session: &str,
-    value: &Value,
-    hub: &Arc<Hub>,
-    writer: &Arc<Mutex<UnixStream>>,
-    relays: &Arc<Mutex<Relays>>,
-) {
-    if !valid_session_id(session) {
-        not_found(writer, hub, id, session);
-        return;
-    }
-    let Some(object) = value.as_object() else {
-        return;
-    };
-    let mut stripped = object.clone();
-    stripped.remove("session_id");
-    let mut bytes = match serde_json::to_vec(&stripped) {
-        Ok(bytes) => bytes,
-        Err(_) => return,
-    };
-    bytes.push(b'\n');
-    {
-        let mut held = lock(relays);
-        if let Some(at) = held
-            .entries
-            .iter()
-            .position(|entry| entry.session == session)
-        {
-            if held
-                .entries
-                .get(at)
-                .is_some_and(|entry| write_all(&entry.writer, &bytes).is_ok())
-            {
-                return;
-            }
-            held.entries.remove(at);
-        }
-    }
-    let socket = hub.home.join("run").join(session);
-    match UnixStream::connect(&socket) {
-        Ok(stream) => {
-            if write_all(&stream, &bytes).is_err() {
-                not_found(writer, hub, id, session);
-                return;
-            }
-            let reader = match stream.try_clone() {
-                Ok(reader) => reader,
-                Err(_) => {
-                    not_found(writer, hub, id, session);
-                    return;
-                }
-            };
-            let mut held = lock(relays);
-            let epoch = held.mint();
-            // The thread may run before its entry is pushed: on session
-            // EOF it only removes an entry it finds.
-            let relayed = thread::Builder::new().name("hub-relay".to_owned()).spawn({
-                let writer = Arc::clone(writer);
-                let relays = Arc::clone(relays);
-                let session = session.to_owned();
-                move || relay(epoch, &session, reader, &writer, &relays)
-            });
-            // A thread that never started leaves no entry: the next
-            // command for the session reconnects.
-            if relayed.is_ok() {
-                held.entries.push(Relay {
-                    session: session.to_owned(),
-                    epoch,
-                    writer: stream,
-                });
-            }
-        }
-        Err(_) => not_found(writer, hub, id, session),
-    }
-}
-
-fn not_found(writer: &Arc<Mutex<UnixStream>>, hub: &Hub, id: &CommandId, session: &str) {
-    reject(
-        writer,
-        hub,
-        Some(id),
-        &ErrorCode::SessionNotFound,
-        &format!("No running session `{session}`."),
-    );
-}
-
-/// Copies every session line back verbatim onto the client's shared writer.
-/// The session closing its socket drops the map entry; the next command
-/// for it reconnects.
-fn relay(
-    epoch: u64,
-    session: &str,
-    reader: UnixStream,
-    writer: &Arc<Mutex<UnixStream>>,
-    relays: &Arc<Mutex<Relays>>,
-) {
-    let mut read = BufReader::new(reader);
-    let mut buf = Vec::new();
-    loop {
-        buf.clear();
-        match read.read_until(b'\n', &mut buf) {
-            Ok(0) | Err(_) => break,
-            Ok(_) => {
-                let mut out = lock(writer);
-                if out.write_all(&buf).and_then(|()| out.flush()).is_err() {
-                    break;
-                }
-            }
-        }
-    }
-    lock(relays).finish(session, epoch);
-}
-
-/// The entry a finished relay thread drops: its own session and epoch, so
-/// a stale thread never drops a reconnect's entry.
-fn relay_slot(entries: &[Relay], session: &str, epoch: u64) -> Option<usize> {
-    entries
-        .iter()
-        .position(|entry| entry.session == session && entry.epoch == epoch)
-}
-
 fn accept_result(writer: &Arc<Mutex<UnixStream>>, hub: &Hub, id: &CommandId, result: Value) {
     let mut payload = Map::new();
     payload.insert("command_id".to_owned(), Value::String(id.0.clone()));
@@ -685,7 +513,7 @@ fn accept_result(writer: &Arc<Mutex<UnixStream>>, hub: &Hub, id: &CommandId, res
     send(writer, hub, "command_accepted", payload);
 }
 
-fn reject(
+pub(crate) fn reject(
     writer: &Arc<Mutex<UnixStream>>,
     hub: &Hub,
     id: Option<&CommandId>,
@@ -720,12 +548,6 @@ fn send(writer: &Arc<Mutex<UnixStream>>, hub: &Hub, kind: &str, payload: Map<Str
         .unwrap_or(());
 }
 
-fn write_all(stream: &UnixStream, bytes: &[u8]) -> std::io::Result<()> {
-    let mut stream = stream;
-    stream.write_all(bytes)?;
-    stream.flush()
-}
-
 /// Whether `value` holds an explicit `null`: an optional key is absent,
 /// never `null`.
 fn contains_null(value: &Value) -> bool {
@@ -737,7 +559,7 @@ fn contains_null(value: &Value) -> bool {
     }
 }
 
-fn lock<'a, T>(mutex: &'a Mutex<T>) -> MutexGuard<'a, T> {
+pub(crate) fn lock<'a, T>(mutex: &'a Mutex<T>) -> MutexGuard<'a, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 

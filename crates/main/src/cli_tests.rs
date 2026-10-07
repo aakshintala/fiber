@@ -778,6 +778,38 @@ fn session_parses_its_id_workspace_model_and_prompt() {
     };
     assert_eq!(args.model, None);
     assert_eq!(args.prompt, None);
+    assert!(!args.resume);
+}
+
+#[test]
+fn session_resume_parses_and_conflicts_with_prompt() {
+    let Invocation::Run(Some(Commands::Session(args))) = parse_from([
+        "fiber",
+        "session",
+        "--id",
+        "s_0123456789abcdef",
+        "--workspace",
+        "/home/u/proj",
+        "--resume",
+    ]) else {
+        panic!("session with --resume");
+    };
+    assert!(args.resume);
+    assert_eq!(args.prompt, None);
+
+    let said = sentence(&[
+        "fiber",
+        "session",
+        "--id",
+        "s_0123456789abcdef",
+        "--workspace",
+        "/w",
+        "--resume",
+        "--prompt",
+        "hi",
+    ]);
+    assert!(said.contains("--resume"), "{said}");
+    assert!(said.contains("--prompt"), "{said}");
 }
 
 #[test]
