@@ -621,7 +621,7 @@ const CHILD: &str = "FIBER_CLI_EXTENSION_CHILD";
 const CHILD_SOURCE: &str = "FIBER_CLI_EXTENSION_SOURCE";
 
 /// How long a child may run before the test kills it and fails.
-const CHILD_DEADLINE: Duration = Duration::from_secs(60);
+const CHILD_DEADLINE: Duration = Duration::from_secs(50);
 
 /// How long a killed child or its watchdog may take to be reaped.
 const REAP_DEADLINE: Duration = Duration::from_secs(10);
@@ -643,11 +643,23 @@ fn strip_prelude<'a>(out: &'a str, name: &str) -> &'a str {
     }
 }
 
-#[test]
-fn each_command_gives_its_exit_code() {
-    if let Ok(case) = std::env::var(CHILD) {
+fn child_test_name(case: &str) -> &'static str {
+    match case {
+        "list" => "list_command_gives_its_exit_code",
+        "install" => "install_command_gives_its_exit_code",
+        "update-one" => "update_one_command_gives_its_exit_code",
+        "update-all" => "update_all_commands_give_their_exit_code",
+        "remove" => "remove_command_gives_its_exit_code",
+        "install-by-name" => "install_by_name_command_gives_its_exit_code",
+        unknown => panic!("unknown extension child case: {unknown}"),
+    }
+}
+
+fn run_case(case: &str) {
+    if let Ok(child_case) = std::env::var(CHILD) {
+        assert_eq!(child_case, case);
         let clock = fakes::clock::FakeClock::new();
-        let code = match case.as_str() {
+        let code = match child_case.as_str() {
             "list" => super::extension_list(&*clock),
             "install" => super::extension_install(
                 &std::env::var(CHILD_SOURCE).unwrap(),
@@ -670,101 +682,118 @@ fn each_command_gives_its_exit_code() {
         &manifest(NAME_A),
         &[provider("p", &["http://127.0.0.1:1/v1"])],
     );
-    let name = module_path!().split_once("::").unwrap().1;
+    let test_name = child_test_name(case);
     // Each case's home, prepared by the parent through the private
     // functions; no variable is set in the test process itself.
-    let prepare = |case: &str| {
-        let home = setup.root.path().join(format!("home-{case}"));
-        fs::create_dir_all(&home).unwrap();
-        if case != "install" && case != "install-by-name" {
-            install_fixture(&home, &source);
-        }
-        home
-    };
-    for case in [
-        "list",
-        "install",
-        "update-one",
-        "update-all",
-        "remove",
-        "install-by-name",
-    ] {
-        let home = prepare(case);
-        let mut command = Command::new(std::env::current_exe().unwrap());
-        command
-            .args([
-                "--exact",
-                &format!("{name}::each_command_gives_its_exit_code"),
-                "--nocapture",
-                "--test-threads=1",
-            ])
-            .env("FIBER_HOME", &home)
-            .env(CHILD, case)
-            .env(CHILD_SOURCE, &source)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .process_group(0);
-        if case == "install-by-name" {
-            // No `git` on the path: the install fails before any fetch.
-            command.env("PATH", "");
-        }
-        let child = command.spawn().unwrap();
-        let group = child.id();
-        let watchdog = fakes::Watchdog::group(group);
-        let (tx, rx) = mpsc::channel();
-        // The outputs are a few lines, so the pipes cannot fill while
-        // the child runs.
-        thread::spawn(move || tx.send(child.wait_with_output()));
-        let Ok(output) = rx.recv_timeout(CHILD_DEADLINE) else {
-            assert!(fakes::kill_group(group, "KILL").unwrap());
-            rx.recv_timeout(REAP_DEADLINE)
-                .expect("the killed extension child must be reaped")
-                .unwrap();
-            panic!("waited {CHILD_DEADLINE:?} for `fiber extension {case}` to exit");
-        };
-        let output = output.unwrap();
-        assert!(!fakes::kill_group(group, "0").unwrap(), "a child remains");
-        watchdog.stand_down(REAP_DEADLINE);
-        let stdout_text = String::from_utf8(output.stdout).unwrap();
-        let stdout = strip_prelude(
-            &stdout_text,
-            &format!("{name}::each_command_gives_its_exit_code"),
-        );
-        let stderr = String::from_utf8(output.stderr).unwrap();
-        match case {
-            "list" => {
-                assert_eq!(output.status.code(), Some(0), "{case}: {stderr}");
-                assert_eq!(stdout, format!("{NAME_A} v1.0.0 local\n"));
-                assert_eq!(stderr, "");
-            }
-            "install" => {
-                assert_eq!(output.status.code(), Some(0), "{case}: {stderr}");
-                assert_eq!(stdout, "");
-                assert_eq!(stderr, format!("fiber: installed {NAME_A}\n"));
-                assert!(
-                    home.join("extensions")
-                        .join(SLUG_A)
-                        .join(".fiber.json")
-                        .exists()
-                );
-            }
-            "update-one" | "update-all" => {
-                assert_eq!(output.status.code(), Some(0), "{case}: {stderr}");
-                assert_eq!(stdout, "");
-                assert_eq!(stderr, format!("fiber: installed {NAME_A}\n"));
-            }
-            "remove" => {
-                assert_eq!(output.status.code(), Some(0), "{case}: {stderr}");
-                assert_eq!(stdout, "");
-                assert_eq!(stderr, format!("fiber: removed {NAME_A}\n"));
-                assert!(!home.join("extensions").join(SLUG_A).exists());
-            }
-            "install-by-name" => {
-                assert_eq!(output.status.code(), Some(2), "{case}: {stderr}");
-                assert!(stderr.contains("Install git"), "{stderr}");
-            }
-            _ => unreachable!("every case is prepared above"),
-        }
+    let home = setup.root.path().join(format!("home-{case}"));
+    fs::create_dir_all(&home).unwrap();
+    if case != "install" && case != "install-by-name" {
+        install_fixture(&home, &source);
     }
+    let full_test_name = format!(
+        "{}::{test_name}",
+        module_path!().split_once("::").unwrap().1
+    );
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command
+        .args([
+            "--exact",
+            &full_test_name,
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env("FIBER_HOME", &home)
+        .env(CHILD, case)
+        .env(CHILD_SOURCE, &source)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0);
+    if case == "install-by-name" {
+        // No `git` on the path: the install fails before any fetch.
+        command.env("PATH", "");
+    }
+    let child = command.spawn().unwrap();
+    let group = child.id();
+    let watchdog = fakes::Watchdog::group(group);
+    let (tx, rx) = mpsc::channel();
+    // The outputs are a few lines, so the pipes cannot fill while the child runs.
+    thread::spawn(move || tx.send(child.wait_with_output()));
+    let Ok(output) = rx.recv_timeout(CHILD_DEADLINE) else {
+        assert!(fakes::kill_group(group, "KILL").unwrap());
+        rx.recv_timeout(REAP_DEADLINE)
+            .expect("the killed extension child must be reaped")
+            .unwrap();
+        panic!("waited {CHILD_DEADLINE:?} for `fiber extension {case}` to exit");
+    };
+    let output = output.unwrap();
+    assert!(!fakes::kill_group(group, "0").unwrap(), "a child remains");
+    watchdog.stand_down(REAP_DEADLINE);
+    let stdout_text = String::from_utf8(output.stdout).unwrap();
+    let stdout = strip_prelude(&stdout_text, &full_test_name);
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    match case {
+        "list" => {
+            assert_eq!(output.status.code(), Some(0), "{case}: {stderr}");
+            assert_eq!(stdout, format!("{NAME_A} v1.0.0 local\n"));
+            assert_eq!(stderr, "");
+        }
+        "install" => {
+            assert_eq!(output.status.code(), Some(0), "{case}: {stderr}");
+            assert_eq!(stdout, "");
+            assert_eq!(stderr, format!("fiber: installed {NAME_A}\n"));
+            assert!(
+                home.join("extensions")
+                    .join(SLUG_A)
+                    .join(".fiber.json")
+                    .exists()
+            );
+        }
+        "update-one" | "update-all" => {
+            assert_eq!(output.status.code(), Some(0), "{case}: {stderr}");
+            assert_eq!(stdout, "");
+            assert_eq!(stderr, format!("fiber: installed {NAME_A}\n"));
+        }
+        "remove" => {
+            assert_eq!(output.status.code(), Some(0), "{case}: {stderr}");
+            assert_eq!(stdout, "");
+            assert_eq!(stderr, format!("fiber: removed {NAME_A}\n"));
+            assert!(!home.join("extensions").join(SLUG_A).exists());
+        }
+        "install-by-name" => {
+            assert_eq!(output.status.code(), Some(2), "{case}: {stderr}");
+            assert!(stderr.contains("Install git"), "{stderr}");
+        }
+        _ => unreachable!("every case has its own test"),
+    }
+}
+
+#[test]
+fn list_command_gives_its_exit_code() {
+    run_case("list");
+}
+
+#[test]
+fn install_command_gives_its_exit_code() {
+    run_case("install");
+}
+
+#[test]
+fn update_one_command_gives_its_exit_code() {
+    run_case("update-one");
+}
+
+#[test]
+fn update_all_commands_give_their_exit_code() {
+    run_case("update-all");
+}
+
+#[test]
+fn remove_command_gives_its_exit_code() {
+    run_case("remove");
+}
+
+#[test]
+fn install_by_name_command_gives_its_exit_code() {
+    run_case("install-by-name");
 }
