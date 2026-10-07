@@ -755,9 +755,22 @@ impl SessionGuard {
 }
 
 impl Drop for SessionGuard {
-    /// Sends the kill without waiting on it: a drop never blocks or panics.
+    /// Kills on a thread and waits for it up to `cleanup()`, so the session
+    /// is dead when the drop returns; a drop never blocks past that or panics.
     fn drop(&mut self) {
-        kill_matching_detached(&self.workspace);
+        let text = self.workspace.clone();
+        let (done, finished) = mpsc::channel();
+        let spawned = thread::Builder::new().spawn(move || {
+            let killed = fakes::kill_matching(&text);
+            match done.send(killed) {
+                Ok(()) | Err(_) => {}
+            }
+        });
+        if spawned.is_ok() {
+            match finished.recv_timeout(self.deadline.cleanup()) {
+                Ok(_) | Err(_) => {}
+            }
+        }
     }
 }
 
