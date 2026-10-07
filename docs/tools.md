@@ -1358,8 +1358,9 @@ that disables tools. The session runs anyway.
 - The budget starts at the largest total at the commit that adds the check,
   with no headroom. Raising it is an explicit change in the same pull request
   that grows a definition.
-- Every CI run prints the size of each built-in definition in each protocol,
-  so the tool that grew can be seen without reproducing the build.
+- Every CI run that tests the `main` crate prints the size of each built-in
+  definition in each protocol, so the tool that grew can be seen without
+  reproducing the build.
 
 ## Not settled here
 
