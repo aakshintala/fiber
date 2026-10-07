@@ -22,6 +22,15 @@ const SEARCH: &str = "search prompts: ";
 /// What the search panel shows when nothing matches.
 const NO_MATCH: &str = "no matching prompts";
 
+/// What covers the input box: the approval panel, the key map, and a
+/// completion or search panel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Cover {
+    approval: bool,
+    keymap: bool,
+    completions: bool,
+}
+
 /// The Ctrl+R panel's state.
 #[derive(Debug, Default)]
 struct Search {
@@ -54,6 +63,9 @@ pub(super) struct History {
     browse: Option<(usize, String)>,
     /// An ↑ reached the end of what is loaded and waits for the next page.
     waiting: bool,
+    /// What covered the input box once that ↑ was handled; `None` until
+    /// [`App::settle`] first looks.
+    cover: Option<Cover>,
     /// The Ctrl+R panel, while open.
     search: Option<Search>,
 }
@@ -142,10 +154,10 @@ impl History {
     pub(super) fn sync(&mut self, text: &str) {
         if self.browse.is_some() && !self.browsing(text) {
             self.browse = None;
-            self.waiting = false;
+            self.cancel();
         }
         if self.browse.is_none() && !text.is_empty() {
-            self.waiting = false;
+            self.cancel();
         }
     }
 
@@ -153,6 +165,7 @@ impl History {
     /// comes, and shows nothing.
     pub(super) fn cancel(&mut self) {
         self.waiting = false;
+        self.cover = None;
     }
 
     /// The `prompt_history` answer for `id`: its lines join the list.
@@ -288,10 +301,8 @@ impl App {
         true
     }
 
-    /// Ctrl+R: opens the search panel, and asks for the first page. A
-    /// recall waiting for a page waits no more.
+    /// Ctrl+R: opens the search panel, and asks for the first page.
     pub(super) fn open_search(&mut self) -> Effect {
-        self.history.cancel();
         self.history.search = Some(Search::default());
         self.more()
     }
@@ -356,6 +367,7 @@ impl App {
         } else {
             lines.extend(self.history.fetch(up));
             self.history.waiting = self.history.pending.is_some();
+            self.history.cover = None;
         }
         send(lines)
     }
@@ -379,9 +391,9 @@ impl App {
     }
 
     /// A `command_accepted` for `id`: when it answers `prompt_history`, its
-    /// lines join the list, a waiting recall shows the next entry while no
-    /// panel covers the input box, and an open search panel asks for the
-    /// next page. `None` for another command.
+    /// lines join the list, a waiting recall shows the next entry while
+    /// what covers the input box is as it was after the ↑, and an open
+    /// search panel asks for the next page. `None` for another command.
     pub(super) fn history_answered(
         &mut self,
         id: &str,
@@ -391,9 +403,9 @@ impl App {
             return None;
         }
         let mut lines = Vec::new();
-        let covered = self.panel().is_some() || self.keymap_top().is_some();
+        let unchanged = self.history.cover.is_none_or(|cover| cover == self.cover());
         if std::mem::take(&mut self.history.waiting)
-            && !covered
+            && unchanged
             && let Effect::Send(more) = self.older()
         {
             lines.extend(more);
@@ -402,6 +414,32 @@ impl App {
             lines.extend(more);
         }
         Some(lines)
+    }
+
+    /// What covers the input box now.
+    fn cover(&self) -> Cover {
+        Cover {
+            approval: self.panel().is_some(),
+            keymap: self.keymap_top().is_some(),
+            completions: self.completions().is_some(),
+        }
+    }
+
+    /// Runs after every input the app handles: a key, an edit, a click, a
+    /// line from the hub, a failed write or connection, the editor's or a
+    /// file search's return. The first time after an ↑ starts waiting for
+    /// a page it notes what covers the input box; once that differs,
+    /// whatever opened or closed a panel, the recall waits no more.
+    pub(super) fn settle(&mut self) {
+        if !self.history.waiting {
+            return;
+        }
+        let now = self.cover();
+        match self.history.cover {
+            None => self.history.cover = Some(now),
+            Some(cover) if cover != now => self.history.cancel(),
+            Some(_) => {}
+        }
     }
 
     /// A `command_rejected` for `id`: when it rejects `prompt_history`, its
@@ -413,7 +451,7 @@ impl App {
         }
         self.history.pending = None;
         self.history.ended = true;
-        self.history.waiting = false;
+        self.history.cancel();
         self.notice = Some(message.to_owned());
         true
     }

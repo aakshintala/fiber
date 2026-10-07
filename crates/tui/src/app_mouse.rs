@@ -13,7 +13,7 @@ impl App {
     /// page waits no more.
     pub(crate) fn on_click(&mut self, target: TargetId) -> Effect {
         self.history.cancel();
-        match target {
+        let effect = match target {
             TargetId::Badge => self.open_first(),
             TargetId::Line(line) => {
                 self.open(line);
@@ -24,12 +24,15 @@ impl App {
                 Effect::None
             }
             TargetId::Token(number) => self.open_token(number),
-        }
+        };
+        self.settle();
+        effect
     }
 
     /// Puts the request the panel shows aside, as Esc does, so it waits on
     /// the badge. The `hover` jig's way to a badge from an events file.
     pub(crate) fn put_aside(&mut self) {
         self.queue.on_key(&Key::Esc);
+        self.settle();
     }
 }

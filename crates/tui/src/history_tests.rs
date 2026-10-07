@@ -662,13 +662,10 @@ fn a_page_after_any_edit_ctrl_g_send_or_clear_leaves_the_draft() {
     assert_eq!(app.draft(), "late", "page up");
 }
 
-#[test]
-fn a_page_while_the_approval_panel_is_open_leaves_the_draft() {
-    let (mut app, request) = waiting();
-    let payload = json!({"request_id": "r_1", "effects": ["executes"], "reversible": true,
-        "step": "standing_ask", "standing_rule": {"scope": "global", "prefix": "echo hi"}});
-    app.on_line(Line::Session(contract::Envelope {
-        kind: "permission_requested".to_owned(),
+/// A line of `kind` from `S_A` with `payload`.
+fn from_a(kind: &str, payload: Value) -> Line {
+    Line::Session(contract::Envelope {
+        kind: kind.to_owned(),
         session_id: contract::SessionId(S_A.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -676,8 +673,87 @@ fn a_page_while_the_approval_panel_is_open_leaves_the_draft() {
         action_id: Some(contract::ActionId("a_1".to_owned())),
         seq: None,
         payload: payload.as_object().cloned().unwrap_or_default(),
-    }));
+    })
+}
+
+/// A standing ask `r_1` from `S_A`, which opens the approval panel.
+fn asked() -> Line {
+    from_a(
+        "permission_requested",
+        json!({"request_id": "r_1", "effects": ["executes"], "reversible": true,
+            "step": "standing_ask", "standing_rule": {"scope": "global", "prefix": "echo hi"}}),
+    )
+}
+
+#[test]
+fn a_page_while_the_approval_panel_is_open_leaves_the_draft() {
+    let (mut app, request) = waiting();
+    app.on_line(asked());
     assert!(app.panel().is_some());
     answer(&mut app, &request, &[line(S_B, "late")], None);
     assert_eq!(app.draft(), "x");
+}
+
+#[test]
+fn a_page_after_an_approval_panel_opened_and_closed_leaves_the_draft() {
+    let (mut app, request) = waiting();
+    app.on_line(asked());
+    app.on_line(from_a(
+        "permission_resolved",
+        json!({"request_id": "r_1", "decision": "deny", "decided_by": "cancel"}),
+    ));
+    assert!(app.panel().is_none());
+    answer(&mut app, &request, &[line(S_B, "late")], None);
+    assert_eq!(app.draft(), "x");
+    press(&mut app, Key::Up);
+    assert_eq!(app.draft(), "late");
+}
+
+/// An app attached to `S_A` with `x` recalled and an ↑ waiting for the
+/// first page, after a reply to `r_1` went out and closed the panel; the
+/// page's request and the reply's line.
+fn waiting_after_a_reply() -> (App, Value, String) {
+    let mut app = connected();
+    with_own(&mut app, &["x"]);
+    app.on_line(asked());
+    let Effect::Send(lines) = press(&mut app, Key::Enter) else {
+        panic!("no reply sent");
+    };
+    let reply = lines.into_iter().next().unwrap_or_default();
+    assert!(app.panel().is_none());
+    let request = asks(&mut app, Key::Up);
+    assert!(sent(press(&mut app, Key::Up)).is_empty());
+    assert_eq!(app.draft(), "x");
+    (app, request, reply)
+}
+
+#[test]
+fn a_page_after_a_restored_approval_leaves_the_draft() {
+    // The reply is rejected: the panel reopens.
+    let (mut app, request, reply) = waiting_after_a_reply();
+    let id: Value = serde_json::from_str(&reply).unwrap_or_default();
+    app.on_line(from_a(
+        "command_rejected",
+        json!({"command_id": id["id"], "code": "stale_request", "message": "gone"}),
+    ));
+    assert!(app.panel().is_some());
+    answer(&mut app, &request, &[line(S_B, "late")], None);
+    assert_eq!(app.draft(), "x");
+    // Its write fails: the panel reopens too.
+    let (mut app, request, reply) = waiting_after_a_reply();
+    app.write_failed(&[reply]);
+    assert!(app.panel().is_some());
+    answer(&mut app, &request, &[line(S_B, "late")], None);
+    assert_eq!(app.draft(), "x");
+}
+
+#[test]
+fn a_recalled_slash_entry_keeps_its_panel_and_its_wait() {
+    let mut app = connected();
+    with_own(&mut app, &["/ne"]);
+    let request = asks(&mut app, Key::Up);
+    assert!(app.completions().is_some());
+    assert!(sent(press(&mut app, Key::Up)).is_empty());
+    answer(&mut app, &request, &[line(S_B, "late")], None);
+    assert_eq!(app.draft(), "late");
 }

@@ -252,13 +252,15 @@ impl App {
 
     /// Folds one line from the hub, returning command lines to send.
     pub(crate) fn on_line(&mut self, line: Line) -> Vec<String> {
-        match line {
+        let lines = match line {
             Line::Hub(hub) => self.on_hub(&hub),
             Line::Session(envelope) => {
                 self.on_session(&envelope);
                 Vec::new()
             }
-        }
+        };
+        self.settle();
+        lines
     }
 
     /// The hub could not be reached, or runs a schema this terminal cannot
@@ -271,6 +273,7 @@ impl App {
             let id = command_id.clone();
             self.fail(&id);
         }
+        self.settle();
     }
 
     /// The hub connection ended. Reconnecting is a later ticket. A
@@ -281,6 +284,7 @@ impl App {
             self.link = Link::Down;
             self.notice = Some("Connection lost.".to_owned());
         }
+        self.settle();
     }
 
     /// Writing `unsent`, command lines this app made, to the hub failed:
@@ -296,6 +300,7 @@ impl App {
                 self.fail(&id);
             }
         }
+        self.settle();
     }
 
     /// Whether the hub spoke a `hub_hello` this terminal reads, and the

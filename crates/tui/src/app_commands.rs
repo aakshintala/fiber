@@ -81,6 +81,7 @@ impl App {
         }
         let effect = self.route_key(key, now);
         self.edited();
+        self.settle();
         effect
     }
 
@@ -95,7 +96,9 @@ impl App {
         }
         crate::input::route(edit, &mut self.draft, &mut self.queue);
         self.overlays.selected = 0;
-        self.query_changed()
+        let effect = self.query_changed();
+        self.settle();
+        effect
     }
 
     /// A key the draft takes: a character or Backspace, which may open or
@@ -227,6 +230,7 @@ impl App {
             self.overlays.selected = self.overlays.selected.min(len.saturating_sub(1));
             panel.result = Some(result);
         }
+        self.settle();
     }
 
     /// Keeps the panels in step with the draft after every key: the `/`
@@ -590,6 +594,7 @@ impl App {
         }
         self.overlays.selected = 0;
         self.edited();
+        self.settle();
     }
 
     /// `opening_message`: the session's skills join the `/` list.
