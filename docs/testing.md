@@ -213,10 +213,10 @@ The shipped tooling has three parts:
   says, not when the wall clock does. These exist only under the runner, as
   its documented feature; a session started any other way has neither.
 
-Fiber's CI runs `fiber extension test` for every first-party extension that has
-code. An
-extension change that breaks one of its cases fails the pull request that
-caused it.
+Fiber's CI runs `fiber extension test` for every first-party package that has
+cases whenever the binary-level tests run (`docs/ci.md`, "Selection"). A change
+to a package, or to Fiber under it, that breaks one of its cases fails the pull
+request that caused it.
 
 ## Jigs
 
@@ -394,7 +394,9 @@ a `PATH` lookup or the shebang line, keeps the executable file and passes a
 
 ### Flaky tests
 
-A failed binary-level test retries once. A pass on retry does not block the
+A failed binary-level test retries once. The binary-level tests are the test
+binaries in `crates/main/tests/`; no other test retries, including the unit
+tests in `crates/main/src/`. A pass on retry does not block the
 merge. CI opens a flake issue naming the test and its first failure, or
 comments on the open one. A flake issue closes when the test is rewritten to be
 deterministic, never by rerunning.

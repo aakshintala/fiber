@@ -64,17 +64,21 @@ A pull request runs only what its diff can affect.
   tests check it parses. The selector lists these files. The gate fails when
   the list and the source disagree, or when an include's argument is not a
   string literal.
-- A diff under `providers/` or `extensions/` runs the binary-level tests,
-  every crate whose tests read a first-party package, and
-  `fiber extension test` for each changed package that has cases ("Testing
-  an extension"). The selector lists the crates that read packages. The
-  gate fails when the list and the source disagree.
+- A diff under `providers/` or `extensions/` runs the binary-level tests
+  and every crate whose tests read a first-party package. The selector lists
+  the crates that read packages. The gate fails when the list and the source
+  disagree.
 - Any other diff runs the crates it touches and every crate that depends on
   them, read from the workspace's dependency graph
   ([ADR 0002](adr/0002-module-boundaries-are-crate-boundaries.md)).
   Binary-level tests depend on every crate that ships, so any change to one
   runs them. `xtask` ships in no binary, so a change to it alone runs its
   own tests.
+- Every diff that runs the binary-level tests also runs the release-profile
+  job ("On every pull request that changes code"), and `fiber extension test`
+  for every first-party package that has cases, not only the changed ones
+  ("Testing an extension"). A change to Fiber's own code can break a package
+  that did not change.
 
 The selector has its own tests.
 
