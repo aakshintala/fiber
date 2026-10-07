@@ -18,7 +18,7 @@ use contract::clock::Clock as _;
 use fakes::clock::FakeClock;
 use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
 
-use super::{Action, BOUND, Phase, Signals, decide, signal_code};
+use super::{Action, BOUND, Phase, Signals, decide, decide_close, signal_code};
 
 /// How long a test waits on another thread before it fails.
 const DEADLINE: Duration = Duration::from_secs(10);
@@ -218,6 +218,97 @@ fn a_first_signal_once_started_does_not_run_on_record() {
         record_calls.try_recv().is_err(),
         "a started shutdown runs no on_record"
     );
+}
+
+/// A `close` with `now` shuts down only once started with no signal seen.
+#[test]
+fn decide_close_shuts_down_only_once_started() {
+    assert_eq!(decide_close(Phase::Started, 0), Action::Shutdown(0));
+    assert_eq!(decide_close(Phase::Started, 1), Action::Nothing);
+    assert_eq!(decide_close(Phase::Armed, 0), Action::Nothing);
+    assert_eq!(decide_close(Phase::Booting, 0), Action::Nothing);
+}
+
+#[test]
+fn close_now_while_booting_or_armed_does_nothing() {
+    let clock = FakeClock::new();
+    let (signals, did) = recorded(&clock);
+    let (tx, calls) = mpsc::channel();
+    signals.close_now();
+    assert!(calls.try_recv().is_err(), "no shutdown ran while booting");
+    assert!(did.try_recv().is_err(), "nothing exited while booting");
+    arm(&signals, &tx);
+    signals.close_now();
+    assert!(calls.try_recv().is_err(), "no shutdown ran while armed");
+    assert!(did.try_recv().is_err(), "nothing exited while armed");
+    assert_eq!(start(&signals, &tx), None);
+}
+
+#[test]
+fn close_now_once_started_shuts_down_with_code_0_and_the_bound_exits_0() {
+    let clock = FakeClock::new();
+    let (signals, did) = recorded(&clock);
+    let (tx, calls) = mpsc::channel();
+    arm(&signals, &tx);
+    assert_eq!(start(&signals, &tx), None);
+    let until = clock.now() + BOUND;
+    signals.close_now();
+    assert_eq!(calls.try_recv().unwrap(), Did::Signal(0));
+    assert!(
+        clock.await_parked(until, DEADLINE),
+        "the bound waits on the clock"
+    );
+    clock.advance(BOUND);
+    assert_eq!(calls.recv_timeout(DEADLINE).unwrap(), Did::Bound);
+    assert_eq!(did.recv_timeout(DEADLINE).unwrap(), Did::Exit(0));
+}
+
+#[test]
+fn a_second_close_now_does_nothing_and_a_later_term_kills_the_groups() {
+    let clock = FakeClock::new();
+    let (signals, did) = recorded(&clock);
+    let (tx, calls) = mpsc::channel();
+    arm(&signals, &tx);
+    assert_eq!(start(&signals, &tx), None);
+    let until = clock.now() + BOUND;
+    signals.close_now();
+    assert_eq!(calls.try_recv().unwrap(), Did::Signal(0));
+    signals.close_now();
+    assert!(calls.try_recv().is_err(), "a second close_now does nothing");
+    signals.handle(SIGHUP);
+    assert!(calls.try_recv().is_err(), "a later SIGHUP does nothing");
+    signals.handle(SIGTERM);
+    assert_eq!(calls.try_recv().unwrap(), Did::Second);
+    assert!(
+        clock.await_parked(until, DEADLINE),
+        "the bound waits on the clock"
+    );
+    clock.advance(BOUND);
+    assert_eq!(calls.recv_timeout(DEADLINE).unwrap(), Did::Bound);
+    assert_eq!(did.recv_timeout(DEADLINE).unwrap(), Did::Exit(0));
+    assert!(did.try_recv().is_err(), "no second bound ran");
+    assert!(calls.try_recv().is_err(), "no second bound ran");
+}
+
+#[test]
+fn close_now_after_a_signal_keeps_the_signal_and_its_code() {
+    let clock = FakeClock::new();
+    let (signals, did) = recorded(&clock);
+    let (tx, calls) = mpsc::channel();
+    arm(&signals, &tx);
+    assert_eq!(start(&signals, &tx), None);
+    signals.handle(SIGTERM);
+    assert_eq!(calls.try_recv().unwrap(), Did::Signal(143));
+    signals.close_now();
+    assert!(calls.try_recv().is_err(), "close_now keeps the signal");
+    let until = clock.now() + BOUND;
+    assert!(
+        clock.await_parked(until, DEADLINE),
+        "the bound waits on the clock"
+    );
+    clock.advance(BOUND);
+    assert_eq!(calls.recv_timeout(DEADLINE).unwrap(), Did::Bound);
+    assert_eq!(did.recv_timeout(DEADLINE).unwrap(), Did::Exit(143));
 }
 
 /// The child's marker: set, the test installs the signals and sends itself
