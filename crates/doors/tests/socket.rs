@@ -22,16 +22,16 @@ use std::time::Duration;
 use contract::clock::{Clock, Wake};
 use contract::emit::Emit;
 use contract::events::{
-    CommandInfo, Empty, Event, ExtensionsLoaded, FiberExited, InputItem, LoadedExtension, Notice,
-    QueuedMessage, SessionState, SessionStatus, SteeringQueue, ToolInfo, ToolSource, ToolState,
-    TurnStarted,
+    CacheLifetime, CommandInfo, Empty, Event, ExtensionsLoaded, FiberExited, InputItem,
+    LoadedExtension, Notice, PreambleBuilt, PreambleReason, QueuedMessage, SentTool, SessionState,
+    SessionStatus, SteeringQueue, ToolInfo, ToolSource, ToolState, TurnStarted, UsageRecorded,
 };
 use contract::inbox::{Delivery, Message};
 use contract::jobs::{Foreground, Jobs, Opening, Stop};
 use contract::provider::ToolDefinition;
 use contract::shapes::{ContentPart, Failure, Origin, Process, Sender, Tokens, Usage};
 use contract::tool::{Bound, Cancel, Effects, EffectsError, Output, Tool};
-use contract::{CommandId, ErrorCode, SessionId};
+use contract::{ActionId, CommandId, ErrorCode, GenerationId, SessionId};
 use doors::{Session, mint};
 use fakes::Client;
 use fakes::clock::FakeClock;
@@ -740,6 +740,198 @@ fn tools_and_history_answer_while_the_inbox_is_unread() {
                 matches!(inbox.try_recv(), Ok(Delivery::Prompt(_, _))),
                 "the prompt was waiting unread while tools and history answered"
             );
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn tools_give_tokens_from_the_first_request_after_each_preamble() {
+    fn definition() -> Map<String, Value> {
+        serde_json::from_value(serde_json::json!({"type": "object"})).unwrap()
+    }
+
+    fn preamble(reason: PreambleReason, system_prompt: &str) -> Event {
+        Event::PreambleBuilt(PreambleBuilt {
+            reason,
+            model: "fake/m".into(),
+            context_window: 200_000,
+            trigger_at: None,
+            thinking: None,
+            tool_choice: "auto".into(),
+            cache_lifetime: CacheLifetime::FiveMinutes,
+            credential: None,
+            system_prompt: system_prompt.into(),
+            tools: vec![SentTool {
+                name: "read".into(),
+                registered_by: "builtin".into(),
+                deferred: false,
+                definition: definition(),
+            }],
+            replaced: Vec::new(),
+        })
+    }
+
+    fn usage(
+        generation: &str,
+        cache_write: Vec<(&str, u64)>,
+        extension: Option<&str>,
+        origin: Option<SessionId>,
+    ) -> Event {
+        Event::UsageRecorded(UsageRecorded {
+            generation_id: GenerationId(generation.into()),
+            model: "fake/m".into(),
+            tokens: Tokens {
+                input: 10,
+                cache_read: 0,
+                cache_write: cache_write
+                    .into_iter()
+                    .map(|(lifetime, written)| (lifetime.to_owned(), written))
+                    .collect(),
+                output: 3,
+            },
+            web_searches: None,
+            cost: None,
+            subscription: None,
+            extension: extension.map(str::to_owned),
+            origin_session_id: origin,
+        })
+    }
+
+    fn started() -> Event {
+        Event::AssistantMessageStarted(Empty {})
+    }
+
+    fn tools_of(answer: &Value) -> &Vec<Value> {
+        answer["payload"]["result"]["tools"].as_array().unwrap()
+    }
+
+    let opened = Opened::open(vec![tool()]);
+    let socket = opened.socket.clone();
+    let log = Arc::clone(&opened.log);
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+
+            send(&client, r#"{"id":"c_t0","command":"tools"}"#);
+            let t0 = response(&client, "c_t0");
+            assert_eq!(kind(&t0), "command_accepted", "{t0}");
+            assert_eq!(tools_of(&t0).len(), 1);
+            assert_eq!(tools_of(&t0)[0]["bytes"], 12);
+            assert!(tools_of(&t0)[0].get("tokens").is_none(), "{t0}");
+
+            log.append(&preamble(PreambleReason::Start, "system-a"), None, None)
+                .unwrap();
+            send(&client, r#"{"id":"c_t1","command":"tools"}"#);
+            let t1 = response(&client, "c_t1");
+            assert_eq!(tools_of(&t1)[0]["bytes"], 12);
+            assert!(tools_of(&t1)[0].get("tokens").is_none(), "{t1}");
+
+            let a1 = Some(ActionId("a_1".into()));
+            log.append(&started(), None, a1.clone()).unwrap();
+            log.append(&usage("g_x", vec![("5m", 1000)], None, None), None, None)
+                .unwrap();
+            log.append(
+                &usage("g_x", vec![("5m", 1000)], Some("x"), None),
+                None,
+                a1.clone(),
+            )
+            .unwrap();
+            log.append(
+                &usage(
+                    "g_x",
+                    vec![("5m", 1000)],
+                    None,
+                    Some(SessionId("s_other".into())),
+                ),
+                None,
+                a1.clone(),
+            )
+            .unwrap();
+            log.append(
+                &usage("g_x", vec![("5m", 1000)], None, None),
+                None,
+                Some(ActionId("a_9".into())),
+            )
+            .unwrap();
+            send(&client, r#"{"id":"c_t2","command":"tools"}"#);
+            let t2 = response(&client, "c_t2");
+            assert_eq!(tools_of(&t2)[0]["bytes"], 12);
+            assert!(tools_of(&t2)[0].get("tokens").is_none(), "{t2}");
+
+            log.append(
+                &usage("g_1", vec![("5m", 100)], None, None),
+                None,
+                a1.clone(),
+            )
+            .unwrap();
+            send(&client, r#"{"id":"c_t3","command":"tools"}"#);
+            let t3 = response(&client, "c_t3");
+            let fields = serde_json::json!({
+                "cache_lifetime": "5m",
+                "model": "fake/m",
+                "system_prompt": "system-a",
+                "tool_choice": "auto",
+                "tools": [{"type": "object"}],
+            });
+            let preamble_bytes = serde_json::to_vec(&fields).unwrap().len() as u64;
+            let expected = 12 * 100 / preamble_bytes;
+            assert!(expected >= 2 && (12 * 100) % preamble_bytes != 0);
+            assert_eq!(tools_of(&t3)[0]["bytes"], 12);
+            assert_eq!(
+                tools_of(&t3)[0]["tokens"].as_u64().unwrap(),
+                expected,
+                "{t3}"
+            );
+
+            log.append(
+                &usage("g_1", vec![("5m", 555)], None, None),
+                None,
+                a1.clone(),
+            )
+            .unwrap();
+            send(&client, r#"{"id":"c_t4","command":"tools"}"#);
+            let t4 = response(&client, "c_t4");
+            assert_eq!(tools_of(&t4)[0]["bytes"], 12);
+            assert_eq!(
+                tools_of(&t4)[0]["tokens"].as_u64().unwrap(),
+                expected,
+                "{t4}"
+            );
+
+            log.append(&preamble(PreambleReason::Reload, "system-b"), None, None)
+                .unwrap();
+            send(&client, r#"{"id":"c_t5","command":"tools"}"#);
+            let t5 = response(&client, "c_t5");
+            assert_eq!(tools_of(&t5)[0]["bytes"], 12);
+            assert!(tools_of(&t5)[0].get("tokens").is_none(), "{t5}");
+
+            log.append(
+                &usage("g_1", vec![("5m", 1000)], None, None),
+                None,
+                a1.clone(),
+            )
+            .unwrap();
+            send(&client, r#"{"id":"c_t6","command":"tools"}"#);
+            let t6 = response(&client, "c_t6");
+            assert_eq!(tools_of(&t6)[0]["bytes"], 12);
+            assert!(tools_of(&t6)[0].get("tokens").is_none(), "{t6}");
+
+            log.append(&started(), None, Some(ActionId("a_2".into())))
+                .unwrap();
+            log.append(
+                &usage("g_2", Vec::new(), None, None),
+                None,
+                Some(ActionId("a_2".into())),
+            )
+            .unwrap();
+            send(&client, r#"{"id":"c_t7","command":"tools"}"#);
+            let t7 = response(&client, "c_t7");
+            assert_eq!(tools_of(&t7)[0]["bytes"], 12);
+            assert_eq!(tools_of(&t7)[0]["tokens"], 0, "{t7}");
             Ok(())
         })
         .unwrap();

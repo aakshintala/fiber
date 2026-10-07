@@ -17,6 +17,7 @@ use contract::tool::Bound;
 use contract::{ActionId, Envelope, SCHEMA_VERSION, Seq, SessionId, TurnId};
 
 use crate::offsets::Offsets;
+use crate::rate::{Rate, RateFold};
 use crate::read::{CAPACITY, Queue, Watcher};
 use crate::{ARTIFACTS, EVENTS, Error, LOCK, io_at, session_path};
 
@@ -50,6 +51,8 @@ struct Inner {
     /// The newest line of each latest-wins kind. A subscriber reads it after
     /// registering, so a lagging connection cannot hide it.
     latest: BTreeMap<String, Envelope>,
+    /// The bytes-to-tokens rate folded from every line so far.
+    rate: RateFold,
     /// Why the log stopped, once a write or fsync failed.
     failed: Option<String>,
 }
@@ -110,6 +113,7 @@ impl Log {
         let mut lines = crate::read::lines(&dir)?;
         let mut starts = Vec::new();
         let mut latest = BTreeMap::new();
+        let mut rate = RateFold::default();
         let mut next = 0;
         loop {
             let start = lines.offset();
@@ -120,6 +124,7 @@ impl Log {
             starts.push(start);
             next = line.seq.map_or(0, |s| s.0 + 1);
             keep_latest(&mut latest, &line);
+            rate.fold(&line);
         }
         let end = lines.offset();
         // A no-op unless the tail is torn.
@@ -127,6 +132,7 @@ impl Log {
         let offsets = Offsets::new(path, starts, end);
         let mut inner = Inner::new(id, dir, events, lock, next, offsets);
         inner.latest = latest;
+        inner.rate = rate;
         Ok(Self::from_parts(inner, clock))
     }
 
@@ -171,6 +177,7 @@ impl Log {
             Class::Ephemeral => {}
         }
         keep_latest(&mut inner.latest, &line);
+        inner.rate.fold(&line);
         inner.watchers.retain(|w| match w.upgrade() {
             Some(queue) => {
                 queue.push(&line);
@@ -189,6 +196,11 @@ impl Log {
     /// written in between is queued and may also be here; the latest wins.
     pub fn latest(&self, kind: &str) -> Option<Envelope> {
         self.lock().latest.get(kind).cloned()
+    }
+
+    /// The bytes-to-tokens rate folded from every line so far.
+    pub fn rate(&self) -> Rate {
+        self.lock().rate.rate()
     }
 
     /// How many durable lines the log holds: the `seq` the next one gets.
@@ -423,6 +435,7 @@ impl Inner {
             fsyncs: 0,
             watchers: Vec::new(),
             latest: BTreeMap::new(),
+            rate: RateFold::default(),
             failed: None,
         }
     }

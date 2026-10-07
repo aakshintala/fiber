@@ -10,6 +10,7 @@
 mod dependents;
 mod export;
 mod offsets;
+mod rate;
 mod read;
 mod resolve;
 mod weak_emit;
@@ -22,6 +23,7 @@ use contract::{ErrorCode, SessionId};
 
 pub use dependents::dependents;
 pub use export::export;
+pub use rate::Rate;
 pub use read::{Injector, Lines, Watcher, lines, read};
 pub use resolve::resolve;
 pub use weak_emit::WeakEmit;
