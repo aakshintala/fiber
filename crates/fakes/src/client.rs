@@ -11,6 +11,15 @@ use std::time::Duration;
 
 use serde_json::Value;
 
+/// How long `Drop` waits for the reader thread to stop, in real time.
+///
+/// The `shutdown(Both)` just before wakes the reader's `read` at once, so
+/// the bound only reports a fake that missed the wake. 2 s matches the
+/// client's own test deadline (`client_tests.rs` `DEADLINE`). A passing run
+/// never waits on it; it only bounds a hang, adding 2 s per dropped client
+/// on the failure path only.
+const READER_STOP: Duration = Duration::from_secs(2);
+
 /// A client connected to a session socket. It sends command lines and reads
 /// the JSON lines that come back. [`Client::slow`] stops it reading, so the
 /// session's writer blocks instead of the test.
@@ -145,7 +154,12 @@ impl Drop for Client {
             }
         }
         if let Some(handle) = lock(&self.reader).take() {
-            match handle.join() {
+            // The shutdown above wakes the reader's `read` at once
+            // (`docs/testing.md`, "Waits and timeouts"); the bound only
+            // reports a reader that missed the wake.
+            match crate::within("the fake client's reader to stop", READER_STOP, move || {
+                handle.join()
+            }) {
                 Ok(()) | Err(_) => {}
             }
         }
