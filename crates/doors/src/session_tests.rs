@@ -707,28 +707,34 @@ fn a_published_reader_is_shut_down_before_it_is_joined() {
     let opened = open();
     let gate = Arc::clone(&opened.session.gate);
     let (peer, mut stream) = UnixStream::pair().unwrap();
-    let shutdown = stream.try_clone().unwrap();
-    let (started_tx, started_rx) = mpsc::channel();
+    let peer = Arc::new(Mutex::new(Some(peer)));
+    let shut = Arc::new(AtomicBool::new(false));
     let reader = thread::spawn(move || {
-        if let Ok(()) = started_tx.send(()) {}
         let mut buf = [0u8; 1];
         match stream.read(&mut buf) {
             Ok(_) | Err(_) => {}
         }
     });
-    started_rx
-        .recv_timeout(DEADLINE)
-        .expect("the reader is running");
-    let id = gate.push_reader(reader, crate::client::shutdown_both(shutdown));
+    // The shutdown ends the reader by EOF, so it works whether the reader
+    // has reached `read` yet or not.
+    let (flag, held) = (Arc::clone(&shut), Arc::clone(&peer));
+    let id = gate.push_reader(
+        reader,
+        Box::new(move || {
+            flag.store(true, Ordering::SeqCst);
+            drop(lock(&held).take());
+        }),
+    );
     let (done_tx, done_rx) = mpsc::channel();
+    let finishing = Arc::clone(&gate);
     thread::spawn(move || {
-        gate.finish(id);
+        finishing.finish(id);
         if let Ok(()) = done_tx.send(()) {}
     });
     done_rx
         .recv_timeout(DEADLINE)
         .expect("reap shuts the reader down before joining it");
-    drop(peer);
+    assert!(shut.load(Ordering::SeqCst), "reap ran the shutdown");
     close_within(opened.session, opened.log);
 }
 
