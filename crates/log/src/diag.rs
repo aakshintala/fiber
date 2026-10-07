@@ -93,6 +93,12 @@ pub struct Diag {
     clock: Arc<dyn Clock>,
     rotate_at: Option<u64>,
     peak: fn() -> Option<u64>,
+    /// A hook run between [`Diag::peak_memory_then_info`]'s two appends.
+    /// Test-only: it forces the race the pair closes, so a split-lock
+    /// implementation lets a rival through during the hook
+    /// (`docs/testing.md`, "Races are forced, not waited for"). Always
+    /// `None` outside tests, where the branch below never fires.
+    between: Option<Arc<dyn Fn() + Send + Sync>>,
     state: Mutex<State>,
 }
 
@@ -115,6 +121,7 @@ impl Diag {
             clock,
             rotate_at: None,
             peak: peak_kib,
+            between: None,
             state: Mutex::new(State {
                 file,
                 session: None,
@@ -141,6 +148,15 @@ impl Diag {
     #[must_use]
     pub fn with_peak(mut self, read: fn() -> Option<u64>) -> Self {
         self.peak = read;
+        self
+    }
+
+    /// Runs `between` between [`Diag::peak_memory_then_info`]'s two
+    /// appends, before the writer is shared. Test-only: see [`Diag`].
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_between(mut self, between: Arc<dyn Fn() + Send + Sync>) -> Self {
+        self.between = Some(between);
         self
     }
 
@@ -201,6 +217,9 @@ impl Diag {
                 "The process's peak memory so far.",
                 Some(&data),
             );
+        }
+        if let Some(between) = &self.between {
+            between();
         }
         self.append(&state, "info", None, code, message, None);
     }

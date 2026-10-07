@@ -64,12 +64,21 @@ impl Diag {
     }
 
     /// Reads the peak memory with `read` instead of the process's own,
-    /// before the hub shares the log. Tests use it to prove the stop
-    /// lines hold the log's lock while they read.
+    /// before the hub shares the log. Tests use it for a deterministic
+    /// `peak_memory` value.
     #[cfg(test)]
     pub(crate) fn with_peak(self, read: fn() -> Option<u64>) -> Self {
         Self {
             log: self.log.with_peak(read),
+        }
+    }
+
+    /// Runs `between` between the stop lines' two appends, before the hub
+    /// shares the log. Test-only: it forces the race the pair closes.
+    #[cfg(test)]
+    pub(crate) fn with_between(self, between: Arc<dyn Fn() + Send + Sync>) -> Self {
+        Self {
+            log: self.log.with_between(between),
         }
     }
 

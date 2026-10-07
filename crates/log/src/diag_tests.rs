@@ -11,7 +11,7 @@
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 
@@ -23,6 +23,11 @@ type Reader = fn() -> Option<u64>;
 
 /// The wall-clock limit on every channel receive below.
 const LIMIT: Duration = Duration::from_secs(30);
+
+/// How long the pair's seam waits for the rival to finish its write:
+/// under the single lock the rival stays blocked and the wait times
+/// out; with split locks the rival completes inside the wait.
+const SEAM_WAIT: Duration = Duration::from_millis(300);
 
 struct Home {
     held: fakes::TempDir,
@@ -328,52 +333,34 @@ fn a_line_racing_attach_lands_whole_in_the_file_its_order_implies() {
     assert_eq!(after["session_id"], "s_0123456789abcdef");
 }
 
-/// The gate the forced-pair test and its peak reader coordinate
-/// through. The reader runs while `peak_memory_then_info` holds the
-/// state lock, so its `inside` signal proves the pair holds the lock;
-/// it then waits for the release, which the test sends only after a
-/// competing write has started. One shot: the reader takes it.
-struct PairGate {
-    inside_tx: mpsc::Sender<()>,
-    release_rx: mpsc::Receiver<()>,
-}
-
-static PAIR_GATE: std::sync::Mutex<Option<PairGate>> = std::sync::Mutex::new(None);
-
-/// The peak reader for the forced-pair test: proves the pair holds the
-/// lock, then waits for the release with a wall-clock deadline.
-fn gated_peak() -> Option<u64> {
-    let gate = PAIR_GATE
-        .lock()
-        .unwrap()
-        .take()
-        .expect("the pair test installs its gate");
-    gate.inside_tx.send(()).unwrap();
-    gate.release_rx.recv_timeout(LIMIT).unwrap();
-    Some(7)
-}
-
-/// `peak_memory_then_info` holds one lock for both lines (`docs/testing.md`,
-/// "Races are forced, not waited for"): the gated reader proves the pair
-/// holds the lock, the test then starts a competing write whose signal
-/// goes out just before its `line` call, and only then releases the pair.
-/// The rival's line must land after `hub_stopped`; every wait has a
-/// wall-clock deadline and nothing sleeps.
+/// `peak_memory_then_info` holds one lock for both lines: the seam runs
+/// between the pair's two appends, so it signals `inside`, then waits
+/// for the rival to finish its write. Under the single lock the rival
+/// stays blocked, the wait times out, and the file reads `peak_memory`,
+/// `hub_stopped`, `other`; with split locks the rival lands between
+/// them. Every wait is bounded and nothing sleeps.
 #[test]
 fn peak_memory_then_info_writes_its_pair_with_nothing_between() {
     let home = Home::new("ld-pair-forced");
-    let diag = std::sync::Arc::new(home.diag(Process::Hub, Level::Debug).with_peak(gated_peak));
     let (inside_tx, inside_rx) = mpsc::channel::<()>();
-    let (attempt_tx, attempt_rx) = mpsc::channel::<()>();
-    let (release_tx, release_rx) = mpsc::channel::<()>();
-    *PAIR_GATE.lock().unwrap() = Some(PairGate {
-        inside_tx,
-        release_rx,
+    let (rival_done_tx, rival_done_rx) = mpsc::channel::<()>();
+    let rival_done_rx = Arc::new(Mutex::new(rival_done_rx));
+    let between: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+        inside_tx.send(()).unwrap();
+        // Times out under the single lock, the pass path; with split
+        // locks the rival completes inside the wait and the file order
+        // below fails the test.
+        let _rival_finished = rival_done_rx.lock().unwrap().recv_timeout(SEAM_WAIT);
     });
+    let diag = Arc::new(
+        home.diag(Process::Hub, Level::Debug)
+            .with_peak(|| Some(7))
+            .with_between(between),
+    );
     let pair = thread::Builder::new()
         .name("log-test-pair".to_owned())
         .spawn({
-            let diag = std::sync::Arc::clone(&diag);
+            let diag = Arc::clone(&diag);
             move || diag.peak_memory_then_info("hub_stopped", "The hub stopped: signal.")
         })
         .unwrap();
@@ -381,15 +368,13 @@ fn peak_memory_then_info_writes_its_pair_with_nothing_between() {
     let rival = thread::Builder::new()
         .name("log-test-rival".to_owned())
         .spawn({
-            let diag = std::sync::Arc::clone(&diag);
+            let diag = Arc::clone(&diag);
             move || {
-                attempt_tx.send(()).unwrap();
                 diag.line(Severity::Info, None, "other", "Other.");
+                rival_done_tx.send(()).unwrap();
             }
         })
         .unwrap();
-    attempt_rx.recv_timeout(LIMIT).unwrap();
-    release_tx.send(()).unwrap();
     pair.join().unwrap();
     rival.join().unwrap();
     let lines: Vec<serde_json::Value> = fs::read_to_string(home.file("hub.log"))

@@ -31,6 +31,12 @@ use crate::listen::Held;
 /// One named deadline per wait: the hub answers before it.
 const DEADLINE: Duration = Duration::from_secs(5);
 
+/// How long the stop lines' seam waits for the rival disconnect to
+/// finish its write: under the single lock the rival stays blocked and
+/// the wait times out; with split locks the rival completes inside the
+/// wait.
+const SEAM_WAIT: Duration = Duration::from_millis(300);
+
 /// How long `await_parked` waits for the hub to park, in wall time.
 const WITHIN: Duration = Duration::from_secs(5);
 
@@ -120,17 +126,20 @@ fn serve_with_hub_at(
     clock: Arc<fakes::clock::FakeClock>,
     level: Level,
 ) -> (Arc<Hub>, Arc<AtomicI32>, mpsc::Receiver<i32>) {
-    serve_with_hub_at_peak(temp, idle, clock, level, log::diag::peak_kib)
+    let idle_seam: Arc<dyn Fn() + Send + Sync> = Arc::new(|| {});
+    serve_with_hub_at_peak_between(temp, idle, clock, level, log::diag::peak_kib, idle_seam)
 }
 
-/// [`serve_with_hub_at`] reading the peak memory with `peak`. Tests use
-/// it to prove the stop lines hold the log's lock while they read.
-fn serve_with_hub_at_peak(
+/// [`serve_with_hub_at`] reading the peak memory with `peak` and running
+/// `between` between the stop lines' two appends. Tests use them to
+/// force the stop-pair race with a deterministic `peak_memory` value.
+fn serve_with_hub_at_peak_between(
     temp: &Temp,
     idle: Duration,
     clock: Arc<fakes::clock::FakeClock>,
     level: Level,
     peak: fn() -> Option<u64>,
+    between: Arc<dyn Fn() + Send + Sync>,
 ) -> (Arc<Hub>, Arc<AtomicI32>, mpsc::Receiver<i32>) {
     let timed: Arc<dyn contract::clock::Clock> = clock;
     let hub = Arc::new(Hub::new(
@@ -140,7 +149,8 @@ fn serve_with_hub_at_peak(
         Arc::clone(&timed),
         Diag::open(&temp.dir, timed)
             .with_level(level)
-            .with_peak(peak),
+            .with_peak(peak)
+            .with_between(between),
     ));
     hub.diag.info("hub_started", "The hub started.");
     let lock = crate::listen::lock(&temp.dir).unwrap().unwrap();
@@ -529,29 +539,13 @@ fn join_after_wake_returns_when_the_socket_path_is_gone() {
     assert!(!ended.load(Ordering::SeqCst), "nothing woke the acceptor");
 }
 
-/// The gate the forced-stop test and its peak reader coordinate
-/// through: the reader runs while the shutdown's stop lines hold the
-/// log's lock, so its `inside` signal proves the pair holds the lock;
-/// it then waits for the release, which the test sends only after a
-/// departing client's write has started. One shot: the reader takes it.
+/// The gate the forced-stop test and its seam coordinate through:
+/// the seam runs between the stop lines' two appends, so its `inside`
+/// signal proves the pair is mid-write; it then waits for the rival
+/// disconnect to finish its write.
 struct StopGate {
     inside_tx: mpsc::Sender<()>,
-    release_rx: mpsc::Receiver<()>,
-}
-
-static STOP_GATE: std::sync::Mutex<Option<StopGate>> = std::sync::Mutex::new(None);
-
-/// The peak reader for the forced-stop test: proves the stop lines hold
-/// the log's lock, then waits for the release with a wall-clock deadline.
-fn gated_peak() -> Option<u64> {
-    let gate = STOP_GATE
-        .lock()
-        .unwrap()
-        .take()
-        .expect("the stop test installs its gate");
-    gate.inside_tx.send(()).unwrap();
-    gate.release_rx.recv_timeout(DEADLINE).unwrap();
-    Some(9)
+    rival_done_rx: Arc<std::sync::Mutex<mpsc::Receiver<()>>>,
 }
 
 #[test]
@@ -559,24 +553,36 @@ fn a_signal_stop_keeps_peak_memory_next_to_hub_stopped_during_disconnects() {
     let temp = Temp::new();
     let clock = fakes::clock::FakeClock::new();
     let (inside_tx, inside_rx) = mpsc::channel::<()>();
-    let (attempt_tx, attempt_rx) = mpsc::channel::<()>();
-    let (release_tx, release_rx) = mpsc::channel::<()>();
-    *STOP_GATE.lock().unwrap() = Some(StopGate {
+    let (rival_done_tx, rival_done_rx) = mpsc::channel::<()>();
+    let gate = StopGate {
         inside_tx,
-        release_rx,
+        rival_done_rx: Arc::new(std::sync::Mutex::new(rival_done_rx)),
+    };
+    let between: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+        gate.inside_tx.send(()).unwrap();
+        // Times out under the single lock, the pass path; with split
+        // locks the rival completes inside the wait and the order below
+        // fails the test.
+        let _rival_finished = gate.rival_done_rx.lock().unwrap().recv_timeout(SEAM_WAIT);
     });
-    let (hub, got, done) =
-        serve_with_hub_at_peak(&temp, IDLE, Arc::clone(&clock), Level::Debug, gated_peak);
+    let (hub, got, done) = serve_with_hub_at_peak_between(
+        &temp,
+        IDLE,
+        Arc::clone(&clock),
+        Level::Debug,
+        || Some(9),
+        between,
+    );
     await_idle_park(&clock, clock.origin(), "at start");
     let client = connect(&temp);
     await_open_park(&clock, "after the arrival");
-    // The signal shutdown's stop lines take the log's lock, and the
-    // gated reader proves it, then waits (`docs/testing.md`, "Races are
-    // forced, not waited for"). The test then starts a departing
-    // client's write, whose signal goes out just before its `line`
-    // call, and only then releases the pair: the rival's line must land
-    // after `hub_stopped`. Every wait has a wall-clock deadline and
-    // nothing sleeps.
+    // The signal shutdown's stop lines run the seam between their two
+    // appends, which signals `inside`, then waits for the rival to
+    // finish its write (`docs/testing.md`, "Races are forced, not
+    // waited for"). Under the single lock the rival stays blocked,
+    // the wait times out, and the disconnect lands after the stop;
+    // with split locks it lands between the pair. Every wait is
+    // bounded and nothing sleeps.
     got.store(signal_hook::consts::SIGTERM, Ordering::SeqCst);
     hub.waker().wake();
     inside_rx
@@ -587,16 +593,12 @@ fn a_signal_stop_keeps_peak_memory_next_to_hub_stopped_during_disconnects() {
         .spawn({
             let hub = Arc::clone(&hub);
             move || {
-                attempt_tx.send(()).unwrap();
                 hub.diag
                     .info("client_disconnected", "Client 7 disconnected.");
+                rival_done_tx.send(()).unwrap();
             }
         })
         .unwrap();
-    attempt_rx
-        .recv_timeout(DEADLINE)
-        .expect("the disconnect starts its write");
-    release_tx.send(()).unwrap();
     assert_eq!(done.recv_timeout(DEADLINE).expect("the hub stops"), 143);
     rival.join().unwrap();
     drop(client);
