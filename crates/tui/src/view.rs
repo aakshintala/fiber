@@ -1,8 +1,8 @@
-//! Drawing the terminal: the conversation's styled lines, the notice, the
-//! quit hint, the approval badge, and the input box or the approval panel
-//! in its place (`docs/tui.md`, "Turns", "The input box", "Approvals and
-//! questions"), with the click target under the pointer tinted ("Mouse
-//! and hover").
+//! Drawing the terminal: the conversation's styled lines, the notices over
+//! it, the quit hint, the approval badge, the steering queue, and the input
+//! box or the approval panel in its place (`docs/tui.md`, "Turns", "The
+//! input box", "Steering", "Notices", "Approvals and questions"), with the
+//! click target under the pointer tinted ("Mouse and hover").
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
@@ -26,6 +26,11 @@ pub(crate) const APPROVAL_TINT: Style = Style::new().bg(Color::Indexed(17));
 /// (see #685).
 pub(crate) const ALERT_TINT: Style = Style::new().bg(Color::Indexed(52));
 
+/// A notice's tint.
+/// debt: a fixed colour, not a theme role; upgrade when colour roles land
+/// (see #685).
+const NOTICE_TINT: Style = Style::new().bg(Color::Indexed(236));
+
 /// The background of the click target under the pointer.
 /// debt: a fixed colour, not a theme role; upgrade when colour roles land
 /// (see #685).
@@ -43,11 +48,11 @@ pub(crate) fn rows(line: Line<'_>, width: u16) -> usize {
 
 /// Draws `app` into `area` of `buf`, from the bottom up: the input box
 /// on the last rows with a completion panel above it, or the approval panel
-/// in their place, then the badge, the quit hint and the notice when
-/// shown, and the conversation in the rows left, or the key map over them
-/// while it is open. A screen too short for them all drops the notice
-/// first, then the hint, then the badge. A panel taller than the screen
-/// keeps its top.
+/// in their place, then the steering queue, the badge and the quit hint
+/// when shown, and the conversation in the rows left with the notices
+/// floating over its top-right corner, or the key map over them while it
+/// is open. A screen too short for them all drops the hint first, then the
+/// badge. A panel taller than the screen keeps its top.
 ///
 /// Returns the click targets drawn, in draw order. Last, the target under
 /// `pointer`, if any, gets [`HOVER_TINT`] as its background.
@@ -94,6 +99,26 @@ pub(crate) fn render(
             }
         }
     }
+    // The steering queue sits above the input box, its newest row lowest;
+    // a row a `steer` sent ends in a ✕ that drops it.
+    let drops = app.steering_drops();
+    for (at, row) in app.steering().iter().enumerate().rev() {
+        let Some(rect) = put(buf, area, &mut bottom, row, Style::default()) else {
+            continue;
+        };
+        targets.push(Target {
+            id: TargetId::Steering(at),
+            rect,
+        });
+        if drops.get(at) == Some(&true) && area.width > 0 {
+            let close = Rect::new(area.right().saturating_sub(1), rect.y, 1, 1);
+            buf.set_string(close.x, close.y, "✕", Style::default());
+            targets.push(Target {
+                id: TargetId::DropSteering(at),
+                rect: close,
+            });
+        }
+    }
     if let Some(rect) = app
         .badge()
         .and_then(|badge| put(buf, area, &mut bottom, &badge, Style::default()))
@@ -106,9 +131,6 @@ pub(crate) fn render(
     if app.hint() {
         put(buf, area, &mut bottom, QUIT_HINT, Style::default());
     }
-    if let Some(notice) = app.notice() {
-        put(buf, area, &mut bottom, notice, Style::default());
-    }
     let rows = bottom.saturating_sub(area.y);
     let conversation = Rect::new(area.x, area.y, area.width, rows);
     match app.keymap_top() {
@@ -116,7 +138,10 @@ pub(crate) fn render(
             .wrap(Wrap { trim: false })
             .scroll((to_u16(top), 0))
             .render(conversation, buf),
-        None => conversation_rows(app, conversation, buf, &mut targets),
+        None => {
+            conversation_rows(app, conversation, buf, &mut targets);
+            notices(app, conversation, buf, &mut targets);
+        }
     }
     if let Some(target) = pointer.and_then(|(col, row)| mouse::under(&targets, col, row)) {
         buf.set_style(target.rect, HOVER_TINT);
@@ -132,6 +157,67 @@ fn put(buf: &mut Buffer, area: Rect, bottom: &mut u16, text: &str, style: Style)
     let (end, _) = buf.set_stringn(area.x, row, text, usize::from(area.width), style);
     *bottom = row;
     Some(Rect::new(area.x, row, end.saturating_sub(area.x), 1))
+}
+
+/// Floats the notices over the conversation's top-right corner, newest on
+/// top, each a click target with its ✕ a target over it, or the notice
+/// overlay over the whole conversation while it is open, which hides the
+/// conversation's targets.
+fn notices(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
+    let mut y = area.y;
+    if let Some(texts) = app.notice_overlay() {
+        targets.retain(|target| !matches!(target.id, TargetId::Line(_) | TargetId::NewBelow));
+        let rows: Vec<String> = texts
+            .iter()
+            .flat_map(|text| crate::format::wrap(text, usize::from(area.width)))
+            .collect();
+        for row in rows {
+            if y >= area.bottom() {
+                return;
+            }
+            let width = usize::from(area.width);
+            let blank = " ".repeat(width);
+            buf.set_stringn(area.x, y, blank, width, NOTICE_TINT);
+            buf.set_stringn(area.x, y, &row, width, NOTICE_TINT);
+            y = y.saturating_add(1);
+        }
+        return;
+    }
+    for notice in app.notices() {
+        let top = y;
+        let mut wide = 0;
+        for row in &notice.rows {
+            if y >= area.bottom() {
+                break;
+            }
+            wide = to_u16(crate::format::width(row)).min(area.width);
+            let x = area.right().saturating_sub(wide);
+            buf.set_stringn(x, y, row, usize::from(wide), NOTICE_TINT);
+            y = y.saturating_add(1);
+        }
+        if y == top {
+            return;
+        }
+        let x = area.right().saturating_sub(wide);
+        let rect = Rect::new(x, top, wide, y.saturating_sub(top));
+        let Some(id) = notice.id else {
+            targets.push(Target {
+                id: TargetId::MoreNotices,
+                rect,
+            });
+            continue;
+        };
+        targets.push(Target {
+            id: TargetId::Notice(id),
+            rect,
+        });
+        // The ✕ ends the first row.
+        let close = Rect::new(area.right().saturating_sub(1), top, 1, 1);
+        targets.push(Target {
+            id: TargetId::DismissNotice(id),
+            rect: close,
+        });
+    }
 }
 
 /// The input box's shown rows, and the cursor's row in them and column:
@@ -222,6 +308,50 @@ fn conversation_rows(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<
             id: TargetId::NewBelow,
             rect: Rect::new(x, row, end.saturating_sub(x), 1),
         });
+    }
+}
+
+/// Where the conversation is scrolled to.
+#[derive(Debug, Default)]
+pub(crate) struct Scroll {
+    /// The top wrapped row while scrolled up; `None` follows new output.
+    pub(crate) top: Option<usize>,
+    /// New output arrived while scrolled up.
+    pub(crate) has_new: bool,
+}
+
+impl Scroll {
+    /// New output while scrolled up shows the overlay; the view stays put.
+    pub(crate) fn changed(&mut self) {
+        if self.top.is_some() {
+            self.has_new = true;
+        }
+    }
+
+    /// PageUp: up by `step` from the top row, or from `bottom` when
+    /// following.
+    pub(crate) fn up(&mut self, step: usize, bottom: usize) {
+        let top = self.top.unwrap_or(bottom);
+        self.top = Some(top.saturating_sub(step));
+    }
+
+    /// PageDown: down by `step`, following again on reaching `bottom`.
+    pub(crate) fn down(&mut self, step: usize, bottom: usize) {
+        let Some(top) = self.top else {
+            return;
+        };
+        let next = top.saturating_add(step);
+        if next >= bottom {
+            self.follow();
+        } else {
+            self.top = Some(next);
+        }
+    }
+
+    /// End jumps to the bottom and resumes following.
+    pub(crate) fn follow(&mut self) {
+        self.top = None;
+        self.has_new = false;
     }
 }
 

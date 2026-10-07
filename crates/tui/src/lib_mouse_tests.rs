@@ -307,3 +307,237 @@ fn hover_over_a_group_line_tints_only_its_row() {
         }
     }
 }
+
+/// An attached loop at 60x12 fed `inputs`.
+fn attached(inputs: Vec<Input>) -> super::Loop<TestBackend> {
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    lp.app
+        .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    feed(&mut lp, inputs);
+    lp
+}
+
+/// The click target under 0-based `col`, `row` of `lp`'s last frame.
+fn hit_at(lp: &super::Loop<TestBackend>, col: u16, row: u16) -> Option<crate::mouse::TargetId> {
+    crate::mouse::hit(&lp.screen.targets, col, row)
+}
+
+#[test]
+fn a_click_on_a_steering_row_selects_it_into_the_draft() {
+    use serde_json::json;
+    let mut lp = attached(vec![
+        Input::Bytes(b"mine".to_vec()),
+        session(
+            "steering_queue",
+            json!({"messages": [
+                {"content": [{"type": "text", "text": "use the parser"}], "source": "driver", "command_id": "c_1"},
+                {"content": [{"type": "text", "text": "and test it"}], "source": "driver", "command_id": "c_2"},
+            ]}),
+            None,
+        ),
+    ]);
+    // The queue's rows sit on rows 9 and 10, above the input line.
+    assert_eq!(row_of(&lp, "↳ use the parser"), 9);
+    assert_eq!(row_of(&lp, "↳ and test it"), 10);
+    // Beside a row's text is no target.
+    feed(&mut lp, vec![click(40, 9)]);
+    assert_eq!(lp.app.input().expand(), "mine");
+    feed(&mut lp, vec![click(3, 9)]);
+    assert_eq!(lp.app.input().expand(), "use the parser");
+    assert_eq!(row_of(&lp, "▸ use the parser"), 9);
+    // Esc puts the stashed draft back.
+    feed(&mut lp, vec![esc()]);
+    assert_eq!(lp.app.input().expand(), "mine");
+}
+
+/// `n` notices from the attached session, "Notice 1." oldest.
+fn notices(n: usize) -> Vec<Input> {
+    (1..=n)
+        .map(|at| {
+            session(
+                "notice",
+                serde_json::json!({"code": "extension_failed", "message": format!("Notice {at}.")}),
+                None,
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn a_click_on_a_notice_shows_it_whole_and_its_cross_dismisses_it() {
+    let mut lp = attached(notices(2));
+    // Each box is 24 columns at the right, newest on top: its ✕ at 59.
+    assert!(
+        shown(&lp)
+            .lines()
+            .next()
+            .is_some_and(|row| row.contains("Notice 2."))
+    );
+    // Left of the box is the conversation, no target.
+    assert_eq!(hit_at(&lp, 35, 0), None);
+    feed(&mut lp, vec![click(36, 0)]);
+    assert_eq!(lp.app.notice_overlay(), Some(vec!["Notice 2.".to_owned()]));
+    feed(&mut lp, vec![esc()]);
+    assert_eq!(lp.app.notice_overlay(), None);
+    feed(&mut lp, vec![click(59, 0)]);
+    assert!(!shown(&lp).contains("Notice 2."), "{}", shown(&lp));
+    assert!(
+        shown(&lp)
+            .lines()
+            .next()
+            .is_some_and(|row| row.contains("Notice 1."))
+    );
+    assert_eq!(lp.app.notice_overlay(), None);
+}
+
+#[test]
+fn a_click_on_more_lists_every_notice() {
+    let mut lp = attached(notices(4));
+    let more = row_of(&lp, "+1 more");
+    assert_eq!(more, 3);
+    feed(&mut lp, vec![click(40, more)]);
+    let listed: Vec<String> = (1..=4).rev().map(|at| format!("Notice {at}.")).collect();
+    assert_eq!(lp.app.notice_overlay(), Some(listed));
+}
+
+#[test]
+fn the_open_notice_overlay_hides_the_conversation_targets() {
+    let mut lp = grouped(TestBackend::new(60, 12));
+    let group = row_of(&lp, "• Read");
+    feed(&mut lp, notices(1));
+    feed(&mut lp, vec![click(36, 0)]);
+    assert!(lp.app.notice_overlay().is_some());
+    assert_eq!(hit_at(&lp, 0, group), None);
+}
+
+#[test]
+fn a_click_on_a_failed_logins_line_hits_log_in() {
+    use crate::app::Target;
+    use crate::mouse::TargetId;
+    use serde_json::json;
+    let started = json!({"input": [{"type": "message", "source": "driver",
+        "content": [{"type": "text", "text": "go"}]}]});
+    let failed = json!({"outcome": "failed", "error": {"code": "authentication_failed",
+        "message": "The key was refused."}});
+    let mut lp = attached(vec![
+        session("turn_started", started, None),
+        session("turn_completed", failed, None),
+    ]);
+    let line = row_of(&lp, "✗ The key was refused.");
+    assert_eq!(hit_at(&lp, 0, line), Some(TargetId::Line(Target::Login)));
+    // The login view is #678's; the click changes nothing yet.
+    let before = shown(&lp);
+    feed(&mut lp, vec![click(0, line)]);
+    assert_eq!(shown(&lp), before);
+}
+
+#[test]
+fn a_click_on_a_handoffs_note_line_opens_the_note() {
+    use serde_json::json;
+    let preamble = json!({"reason": "start", "model": "fake/m", "context_window": 1_000_000,
+        "tool_choice": "auto", "cache_lifetime": "5m", "system_prompt": "", "tools": [],
+        "trigger_at": 400_000});
+    let started = json!({"input": [{"type": "message", "source": "driver",
+        "content": [{"type": "text", "text": "go"}]}]});
+    let mut lp = attached(vec![
+        session("preamble_built", preamble, None),
+        session("turn_started", started, None),
+        session("handoff_started", json!({"trigger": "auto"}), None),
+        session(
+            "text_completed",
+            json!({"text": "## Note\nkeep going"}),
+            Some("a_n"),
+        ),
+        session(
+            "handoff_completed",
+            json!({"outcome": "completed", "note": ["a_n"], "tokens_before": 402_000}),
+            None,
+        ),
+        session(
+            "assistant_message_delta",
+            json!({"text": "Continuing."}),
+            Some("a_2"),
+        ),
+        session("turn_completed", json!({"outcome": "completed"}), None),
+    ]);
+    assert!(!shown(&lp).contains("keep going"), "{}", shown(&lp));
+    let note = row_of(&lp, "▸ note");
+    feed(&mut lp, vec![click(4, note)]);
+    assert!(shown(&lp).contains("keep going"), "{}", shown(&lp));
+    // The opened note pushes the bottom-aligned rows up.
+    let note = row_of(&lp, "▸ note");
+    feed(&mut lp, vec![click(4, note)]);
+    assert!(!shown(&lp).contains("keep going"), "{}", shown(&lp));
+}
+
+#[test]
+fn a_click_on_the_orphaned_jobs_line_shows_each_jobs_message() {
+    use serde_json::json;
+    let started = json!({"input": [{"type": "message", "source": "driver",
+        "content": [{"type": "text", "text": "go"}]}]});
+    let mut lp = attached(vec![
+        session(
+            "job_started",
+            json!({"job_id": "j_1", "description": "build the docs", "output_path": "/tmp/o"}),
+            None,
+        ),
+        session("turn_started", started, None),
+        session(
+            "fiber_started",
+            json!({"version": "0.0.1", "resumed": true}),
+            None,
+        ),
+        session(
+            "job_completed",
+            json!({"job_id": "j_1", "status": "failed",
+                "error": {"code": "orphaned", "message": "j_1 orphaned."}}),
+            None,
+        ),
+    ]);
+    assert!(!shown(&lp).contains("j_1 orphaned."), "{}", shown(&lp));
+    let line = row_of(&lp, "Orphaned jobs: build the docs");
+    feed(&mut lp, vec![click(0, line)]);
+    assert!(
+        shown(&lp).contains("build the docs: j_1 orphaned."),
+        "{}",
+        shown(&lp)
+    );
+}
+
+#[test]
+fn a_click_on_a_steering_rows_cross_drops_it_and_its_text_still_selects() {
+    use serde_json::json;
+    use std::io::BufReader;
+    use std::os::unix::net::UnixStream;
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    let (ours, theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    feed(&mut lp, vec![Input::Connected(ours, super::tests::hello())]);
+    lp.app
+        .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    feed(
+        &mut lp,
+        vec![session(
+            "steering_queue",
+            json!({"messages": [
+                {"content": [{"type": "text", "text": "use the parser"}], "source": "driver", "command_id": "c_1"},
+                {"content": [{"type": "text", "text": "and test it"}], "source": "driver", "command_id": "c_2"},
+                {"content": [{"type": "text", "text": "from fiber"}], "source": "fiber"},
+            ]}),
+            None,
+        )],
+    );
+    // Rows 8 to 10 above the input line; Fiber's own row has no ✕.
+    let rows: Vec<String> = shown(&lp).lines().map(str::to_owned).collect();
+    assert!(rows[8].ends_with('✕') && rows[9].ends_with('✕'), "{rows:?}");
+    assert!(!rows[10].contains('✕'), "{rows:?}");
+    assert_eq!(hit_at(&lp, 59, 10), None);
+    feed(&mut lp, vec![click(59, 8)]);
+    let (_, dropped) = super::tests::command(BufReader::new(theirs), "the steer_drop");
+    assert_eq!(dropped["command"], "steer_drop");
+    assert_eq!(dropped["session_id"], "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(dropped["args"], json!({"command_id": "c_1"}));
+    // The ✕ selects nothing; the row's text still selects it.
+    assert_eq!(lp.app.input().expand(), "");
+    feed(&mut lp, vec![click(3, 9)]);
+    assert_eq!(lp.app.input().expand(), "and test it");
+}

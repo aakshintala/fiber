@@ -27,6 +27,7 @@ fn built_ins_come_in_table_order_then_skills() {
             "home",
             "new",
             "handoff",
+            "name",
             "reload",
             "close",
             "quit",
@@ -37,8 +38,8 @@ fn built_ins_come_in_table_order_then_skills() {
             "review"
         ]
     );
-    assert!(all.iter().take(9).all(|row| row.tag == "command"));
-    assert!(all.iter().skip(9).all(|row| row.tag == "skill"));
+    assert!(all.iter().take(10).all(|row| row.tag == "command"));
+    assert!(all.iter().skip(10).all(|row| row.tag == "skill"));
     assert_eq!(
         all.iter()
             .find(|row| row.name == "tdd")

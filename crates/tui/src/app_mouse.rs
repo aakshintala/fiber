@@ -8,7 +8,9 @@ use crate::mouse::TargetId;
 impl App {
     /// Handles a click on `target` (`docs/tui.md`, "Bindings"): the badge
     /// reopens the approval queue, "↓ New messages below" jumps to the end,
-    /// a conversation line opens or closes what it names.
+    /// a conversation line opens or closes what it names, a steering row is
+    /// selected, its ✕ drops it, a notice opens whole, its ✕ dismisses it, and "+N more"
+    /// lists the notices.
     pub(crate) fn on_click(&mut self, target: TargetId) -> Effect {
         match target {
             TargetId::Badge => self.open_first(),
@@ -17,7 +19,24 @@ impl App {
                 Effect::None
             }
             TargetId::NewBelow => {
-                self.follow();
+                self.scroll.follow();
+                Effect::None
+            }
+            TargetId::Steering(at) => {
+                self.select_steering(at);
+                Effect::None
+            }
+            TargetId::DropSteering(at) => self.drop_steering(at),
+            TargetId::Notice(id) => {
+                self.open_notice(id);
+                Effect::None
+            }
+            TargetId::DismissNotice(id) => {
+                self.dismiss_notice(id);
+                Effect::None
+            }
+            TargetId::MoreNotices => {
+                self.open_more_notices();
                 Effect::None
             }
         }

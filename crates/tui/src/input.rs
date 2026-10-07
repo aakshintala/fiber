@@ -90,6 +90,9 @@ impl Draft {
             | Key::PageDown
             | Key::End
             | Key::AltA
+            | Key::AltUp
+            | Key::AltDown
+            | Key::AltX
             | Key::Tab
             | Key::BackTab
             | Key::F1 => return false,

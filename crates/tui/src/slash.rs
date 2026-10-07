@@ -12,6 +12,7 @@ const BUILT_INS: &[(&str, &str, Option<&str>)] = &[
     ("home", "Goes home.", None),
     ("new", "Goes home with the cursor in the input box.", None),
     ("handoff", "Starts a handoff.", Some("[instructions]")),
+    ("name", "Names the session.", Some("<text>")),
     (
         "reload",
         "Reloads configuration, MCP servers and extensions.",

@@ -280,6 +280,8 @@ impl Queue {
             Key::PageUp | Key::PageDown | Key::End | Key::CtrlC | Key::F1 | Key::CtrlO => {
                 return None;
             }
+            // The steering queue's keys do nothing while the panel is open.
+            Key::AltUp | Key::AltDown | Key::AltX => {}
         }
         Some(PanelKey::Handled)
     }

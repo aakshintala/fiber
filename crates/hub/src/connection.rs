@@ -1,6 +1,6 @@
 //! One client connection: `hub_hello` first, hub-command dispatch for
-//! `start`, `status`, `prompt_history`, `feed`, `dismiss` and `recent`, and
-//! the relay to session sockets.
+//! `start`, `status`, `prompt_history`, `feed`, `dismiss`, `recent` and
+//! `delete`, and the relay to session sockets.
 //!
 //! A command with a `session_id` is for that session: the relay passes it
 //! to the session's socket (`crate::relay`). A command without one is for
@@ -382,6 +382,12 @@ fn on_command(
         "feed" => on_feed(&line.id, &line.args, hub, writer, fed),
         "dismiss" => answer(writer, hub, &line.id, hub.feed.dismiss(&line.args)),
         "recent" => answer(writer, hub, &line.id, hub.feed.recent(&line.args)),
+        "delete" => answer(
+            writer,
+            hub,
+            &line.id,
+            crate::delete::delete(hub, &line.args),
+        ),
         command => {
             let message = format!("`{command}` is not a hub command.");
             reject(
