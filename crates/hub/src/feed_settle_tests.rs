@@ -154,7 +154,10 @@ fn stopping_the_feed_releases_a_listing_before_any_scan() {
     let temp = Temp::new();
     let (feed, clock) = new_feed(&temp);
     let rx = listing(&feed);
-    assert!(clock.await_parked(next_scan(&clock), DEADLINE));
+    assert!(
+        clock.await_parked_unbounded(DEADLINE),
+        "the listing waits for the first scan"
+    );
     assert!(rx.try_recv().is_err(), "no scan yet, so not answered");
     stop_within(&feed);
     assert_eq!(rx.recv_timeout(DEADLINE).unwrap(), Vec::<String>::new());
@@ -165,8 +168,31 @@ fn a_listing_made_before_the_first_scan_is_answered_by_it() {
     let temp = Temp::new();
     let (feed, clock) = new_feed(&temp);
     let rx = listing(&feed);
-    assert!(clock.await_parked(next_scan(&clock), DEADLINE));
+    assert!(
+        clock.await_parked_unbounded(DEADLINE),
+        "the listing waits for the first scan"
+    );
     assert!(rx.try_recv().is_err(), "no scan yet, so not answered");
+    feed.start();
+    assert_eq!(rx.recv_timeout(DEADLINE).unwrap(), Vec::<String>::new());
+    stop_within(&feed);
+}
+
+#[test]
+fn a_deadline_passing_before_the_first_scan_does_not_release_the_listing() {
+    let temp = Temp::new();
+    let (feed, clock) = new_feed(&temp);
+    let rx = listing(&feed);
+    assert!(
+        clock.await_parked_unbounded(DEADLINE),
+        "the listing waits for the first scan"
+    );
+    let mark = clock.advance_marked(RUN_SCAN + Duration::from_millis(1));
+    assert!(
+        clock.await_parked_since(&mark, None, DEADLINE),
+        "still waiting for the first scan past the bound"
+    );
+    assert!(rx.try_recv().is_err(), "a deadline is not a scan");
     feed.start();
     assert_eq!(rx.recv_timeout(DEADLINE).unwrap(), Vec::<String>::new());
     stop_within(&feed);

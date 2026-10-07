@@ -133,12 +133,21 @@ fn listing(
     json: bool,
     answers: &[Value],
 ) -> (Result<(), contract::shapes::Failure>, String, Value) {
-    let mut hub = FakeHub::new(answers);
-    let mut out = Vec::new();
-    let ran = run(workspace, identity, all, json, &mut out, &mut || {
-        hub.connect()
+    let workspace = workspace.to_owned();
+    let identity = identity.to_owned();
+    let answers = answers.to_owned();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut hub = FakeHub::new(&answers);
+        let mut out = Vec::new();
+        let ran = run(&workspace, &identity, all, json, &mut out, &mut || {
+            hub.connect()
+        });
+        let text = String::from_utf8(out).unwrap();
+        let sent = hub.sent();
+        tx.send((ran, text, sent)).unwrap_or(());
     });
-    (ran, String::from_utf8(out).unwrap(), hub.sent())
+    rx.recv_timeout(HUB_DEADLINE).unwrap()
 }
 
 /// The JSON Lines `fiber sessions --json` prints for `result`.
@@ -398,6 +407,25 @@ fn text_is_a_padded_table_with_a_header_and_two_decimal_spend() {
          s_0123456789abcdef  waiting  $0.42  approval: shell cargo publish --dry-run  fix the flaky test\n\
          s_fedcba9876543210  crashed  $0.00  -                                        -\n"
     );
+}
+
+#[test]
+fn a_multiline_name_is_one_row_in_text_and_whole_in_json() {
+    let name = "say hi\nthen bye\r\nor\rafter";
+    let result = json!({"live": [live("s_1", idle(name))], "exited": []});
+    let rows = json_rows(result.clone());
+    assert_eq!(rows[0]["name"], json!(name));
+    let (ran, out, _) = listing(
+        Path::new("/w"),
+        Path::new("/w"),
+        false,
+        false,
+        &[accepted(result)],
+    );
+    ran.unwrap();
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines.len(), 2, "{out}");
+    assert!(lines[1].contains("say hi then bye or after"), "{out}");
 }
 
 #[test]

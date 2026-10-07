@@ -136,6 +136,11 @@ fn rows(answer: Answer) -> Vec<Row> {
     live.chain(exited).collect()
 }
 
+/// One text cell: each embedded line break is one space.
+fn one_line(cell: &str) -> String {
+    cell.replace("\r\n", " ").replace(['\r', '\n'], " ")
+}
+
 /// The `state` word a live session's status names.
 fn state_word(state: &SessionState) -> &'static str {
     match state {
@@ -185,7 +190,8 @@ fn json_lines(rows: &[Row]) -> Result<Vec<String>, Failure> {
 }
 
 /// The text table: a header row, then one row per session, a missing cell
-/// `-`.
+/// `-`. A cell never spans lines: embedded line breaks become single
+/// spaces, so a row stays one line; JSON keeps the original.
 fn text_lines(rows: &[Row]) -> Vec<String> {
     let or_missing = |cell: &str| {
         if cell.is_empty() {
@@ -204,8 +210,8 @@ fn text_lines(rows: &[Row]) -> Vec<String> {
             row.id.clone(),
             row.state.clone(),
             format!("${:.2}", row.spend),
-            or_missing(row.waiting.as_deref().unwrap_or_default()),
-            or_missing(&row.name),
+            or_missing(&one_line(row.waiting.as_deref().unwrap_or_default())),
+            or_missing(&one_line(&row.name)),
         ]);
     }
     pad(&table)
