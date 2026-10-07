@@ -4,18 +4,21 @@
 use std::sync::Arc;
 
 use contract::events::{
-    AskStep, CacheLifetime, DecidedBy, Decision, Escalation, Event, InputItem, Notice,
-    PermissionResolved, ReviewerRef, RuleOffer, ToolCallCompleted, ToolCallRequested,
-    UsageRecorded,
+    AskStep, CacheLifetime, DecidedBy, Decision, Escalation, Event, Notice, PermissionResolved,
+    ReviewerRef, RuleOffer, ToolCallCompleted, ToolCallRequested, UsageRecorded,
 };
 use contract::provider::{CallError, Cost, Input, ModelRequest, Provider, Reply};
-use contract::shapes::{ContentPart, Failure, Origin};
+use contract::shapes::Failure;
 use contract::tool::{Effects, Tool};
 use contract::{ActionId, ErrorCode, RequestId, TurnId};
 use serde_json::{Map, Value};
 
 use crate::calls::{Approved, Asked};
 use crate::{Error, Loop, Model};
+
+mod shown;
+
+pub(crate) use shown::{Reviewed, render_reviewed};
 
 /// What step 7 says about one call: it runs, or how its denial reads.
 type Decided = Result<Approved, Box<ToolCallCompleted>>;
@@ -56,16 +59,6 @@ impl Default for BlockLimits {
     }
 }
 
-/// One item of what the reviewer is shown (`docs/permissions.md`, "What it
-/// is shown"). A message carries no call.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct Reviewed {
-    /// The call this item renders; `None` for a person's message.
-    pub action: Option<ActionId>,
-    /// The item as the reviewer reads it.
-    pub input: Input,
-}
-
 /// The reviewer's instructions (`docs/system-prompt.md`, "The texts").
 pub(crate) struct Sections {
     /// What every reviewer request carries as its system prompt.
@@ -83,100 +76,6 @@ pub(crate) fn sections() -> Sections {
         shared: crate::prompt::section(md, "shared"),
         first: crate::prompt::section(md, "first-pass"),
         second: crate::prompt::section(md, "second-pass"),
-    }
-}
-
-/// Adds what `event` puts in what the reviewer is shown: each person's
-/// message and each tool call, nothing else.
-pub(crate) fn render_reviewed(
-    reviewed: &mut Vec<Reviewed>,
-    event: &Event,
-    action: Option<&ActionId>,
-) {
-    match event {
-        Event::TurnStarted(started) => {
-            for item in &started.input {
-                if let InputItem::Message {
-                    content, sender, ..
-                } = item
-                    && sender.origin == Origin::Driver
-                {
-                    reviewed.push(person(content));
-                }
-            }
-        }
-        Event::SteeringApplied(steering) => {
-            if steering.sender.origin == Origin::Driver {
-                reviewed.push(person(&steering.content));
-            }
-        }
-        Event::ToolCallRequested(call) => {
-            if let Some(action) = action {
-                let arguments = match &call.repair {
-                    Some(repair) => Value::Object(repair.repaired.clone()),
-                    None => call.arguments.clone(),
-                };
-                let rendered = format!(
-                    "{{\"tool\":{},\"arguments\":{}}}",
-                    serde_json::to_string(&call.name).unwrap_or_default(),
-                    serde_json::to_string(&arguments).unwrap_or_default(),
-                );
-                reviewed.push(Reviewed {
-                    action: Some(action.clone()),
-                    input: Input::User {
-                        text: format!("Tool call: {rendered}"),
-                        images: Vec::new(),
-                    },
-                });
-            }
-        }
-        // Every other kind adds nothing the reviewer reads. Each is
-        // listed, so a new kind does not compile until it is placed.
-        Event::FiberStarted(_) | Event::FiberExited(_) | Event::SessionStarted(_) => {}
-        Event::Rewound(_) | Event::StepStarted(_) | Event::TurnCompleted(_) => {}
-        Event::SteeringQueue(_) | Event::ShellCommand(_) | Event::SessionNamed(_) => {}
-        Event::Clients(_) | Event::SessionStatus(_) | Event::ContextAdded(_) => {}
-        Event::AssistantMessageStarted(_)
-        | Event::AssistantMessageDelta(_)
-        | Event::AssistantMessageCompleted(_) => {}
-        Event::TextCompleted(_) | Event::ToolCallArgumentsDelta(_) | Event::ReasoningStarted(_) => {
-        }
-        Event::ReasoningDelta(_) | Event::ReasoningCompleted(_) | Event::ToolCallStarted(_) => {}
-        Event::ToolCallDelta(_) | Event::ToolCallCompleted(_) | Event::PermissionRequested(_) => {}
-        Event::PermissionResolved(_)
-        | Event::InteractionRequested(_)
-        | Event::InteractionResolved(_) => {}
-        Event::RepositoryCodeOffered(_) | Event::RepositoryCodeResolved(_) => {}
-        Event::UsageRecorded(_) | Event::QuotaNoticed(_) | Event::RetryScheduled(_) => {}
-        Event::Notice(_) | Event::PreambleBuilt(_) | Event::ModelChanged(_) => {}
-        Event::OpeningMessage(_) | Event::InstructionFile(_) | Event::DateChanged(_) => {}
-        Event::SkillsChanged(_) | Event::SkillsResent(_) => {}
-        Event::HandoffStarted(_)
-        | Event::HandoffCompleted(_)
-        | Event::ContextNudged(_)
-        | Event::ReviewerKept(_) => {}
-        Event::McpServerFailed(_) | Event::McpServerReady(_) | Event::Reloaded(_) => {}
-        Event::ExtensionsLoaded(_)
-        | Event::ExtensionStateSet(_)
-        | Event::ExtensionStateUnset(_) => {}
-        Event::ExtensionUi(_)
-        | Event::ExtensionMessage(_)
-        | Event::ExtensionLog(_)
-        | Event::ExtensionExec(_) => {}
-        Event::JobStarted(_) | Event::DelegateStarted(_) | Event::JobDelta(_) => {}
-        Event::JobLine(_) | Event::DelegateFinished(_) | Event::JobCompleted(_) => {}
-        Event::JobsPendingNotified(_) | Event::CommandAccepted(_) | Event::CommandRejected(_) => {}
-    }
-}
-
-/// A person's message as the reviewer reads it.
-fn person(content: &[ContentPart]) -> Reviewed {
-    Reviewed {
-        action: None,
-        input: Input::User {
-            text: format!("The person: {}", crate::conversation::text(content)),
-            images: Vec::new(),
-        },
     }
 }
 
@@ -538,7 +437,7 @@ impl Loop {
         let cut = self
             .reviewed
             .iter()
-            .position(|item| item.action.as_ref() == Some(id))
+            .position(|item| matches!(&item.shown, shown::Shown::Call(call) if call == id))
             .map_or(self.reviewed.len(), |at| at + 1);
         let previous = self.reviewer_sent;
         self.reviewer_sent = Some(cut);

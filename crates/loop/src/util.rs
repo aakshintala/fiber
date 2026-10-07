@@ -72,10 +72,10 @@ pub(crate) fn write(
     had: &mut BTreeMap<String, String>,
     carry: &mut crate::handoff::Carry,
 ) -> Result<(), Error> {
-    log.append(event, turn.cloned(), action.cloned())?;
+    let line = log.append(event, turn.cloned(), action.cloned())?;
     if event.class() == Class::Durable {
         crate::conversation::render(conversation, event, action, model, had, carry);
-        crate::reviewer::render_reviewed(reviewed, event, action);
+        crate::reviewer::render_reviewed(reviewed, event, action, line.seq);
     }
     Ok(())
 }
