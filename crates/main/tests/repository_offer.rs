@@ -18,8 +18,10 @@ use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::thread;
+use std::time::Duration;
 
 use fakes::Client;
 use fakes::{ProviderServer, Watchdog};
@@ -97,17 +99,43 @@ fn spawn_session(setup: &Setup, id: &str, extra: &[&str]) -> (HubProc, mpsc::Rec
     )
 }
 
+/// How long the reader thread polls for the next line while a wait's single
+/// `DEADLINE` runs on the test thread.
+const SLICE: Duration = Duration::from_secs(1);
+
 /// Waits for the session's `extensions_loaded` on stdout: every startup
-/// line is written and the socket is listening.
-fn started(lines: &mpsc::Receiver<Value>) {
-    loop {
-        let line = lines
-            .recv_timeout(DEADLINE)
-            .expect("the session's extensions_loaded within the deadline");
-        if line["kind"] == "extensions_loaded" {
-            return;
-        }
-    }
+/// line is written and the socket is listening. One `DEADLINE` bounds the
+/// whole wait: a scoped thread reads the lines and the test takes the
+/// arrival with one `recv_timeout`.
+fn started(lines: mpsc::Receiver<Value>) {
+    let stop = AtomicBool::new(false);
+    thread::scope(|scope| {
+        let (tx, found) = mpsc::channel();
+        let stop = &stop;
+        scope.spawn(move || {
+            while !stop.load(Ordering::SeqCst) {
+                match lines.recv_timeout(SLICE) {
+                    Ok(line) => {
+                        if line["kind"] == "extensions_loaded" {
+                            if let Ok(()) = tx.send(true) {}
+                            return;
+                        }
+                    }
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(mpsc::RecvTimeoutError::Disconnected) => {
+                        if let Ok(()) = tx.send(false) {}
+                        return;
+                    }
+                }
+            }
+        });
+        let got = found.recv_timeout(DEADLINE);
+        stop.store(true, Ordering::SeqCst);
+        assert!(
+            got.expect("the session's extensions_loaded within the deadline"),
+            "the session's stdout closed before extensions_loaded"
+        );
+    });
 }
 
 /// A `full` client on the session `id`, once the session counts it.
@@ -173,7 +201,7 @@ fn a_full_client_answers_the_offer_and_the_turn_runs() {
     declare_db(&setup, &json!({}));
     let id = doors::mint("s_");
     let (session, stdout) = spawn_session(&setup, &id, &[]);
-    started(&stdout);
+    started(stdout);
     let client = attach(&setup, &id, "c_sub");
     prompt(&client, "c_prompt");
 
@@ -219,6 +247,31 @@ fn a_full_client_answers_the_offer_and_the_turn_runs() {
     drop(client);
     assert!(session.wait().success());
     assert_eq!(server.requests().len(), 1);
+    // The complete, ordered durable kinds: the offer is raised and resolved
+    // before the preamble, then the turn runs.
+    assert_eq!(
+        durable_kinds(&setup, &id)
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "repository_code_offered",
+            "repository_code_resolved",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
 }
 
 #[test]
@@ -236,6 +289,32 @@ fn fiber_ask_skips_an_unapproved_server_with_a_notice() {
     let message = notices[0]["payload"]["message"].as_str().unwrap();
     assert!(message.contains("`db`"), "{message}");
     assert!(message.contains("fiber approve"), "{message}");
+    // The complete, ordered stdout kinds: one skip notice, then the turn.
+    assert_eq!(
+        stdout_kinds(&lines),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "notice",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "session_status",
+            "session_status",
+            "session_status",
+            "session_status",
+            "fiber_exited",
+        ]
+    );
 }
 
 #[test]
@@ -251,6 +330,17 @@ fn fiber_ask_fails_on_a_required_server_nobody_approved() {
     assert_eq!(exited["payload"]["error"]["code"], "mcp_server_unapproved");
     assert!(stderr.contains("`db`"), "{stderr}");
     assert!(server.requests().is_empty());
+    // The complete, ordered stdout kinds: no turn, the run fails.
+    assert_eq!(
+        stdout_kinds(&lines),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "session_status",
+            "fiber_exited",
+        ]
+    );
 }
 
 #[test]
@@ -281,6 +371,17 @@ fn fiber_ask_fails_on_a_required_repository_extension_nobody_approved() {
         "extension_unapproved"
     );
     assert!(server.requests().is_empty());
+    // The complete, ordered stdout kinds: no turn, the run fails.
+    assert_eq!(
+        stdout_kinds(&lines),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "session_status",
+            "fiber_exited",
+        ]
+    );
 }
 
 #[test]
@@ -295,6 +396,31 @@ fn fiber_ask_after_fiber_approve_loads_without_a_notice() {
     assert_eq!(code, Some(0), "stderr: {stderr}");
     assert!(of(&lines, "notice").is_empty());
     assert_eq!(server.requests().len(), 1);
+    // The complete, ordered stdout kinds: approved, so no notice.
+    assert_eq!(
+        stdout_kinds(&lines),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "session_status",
+            "session_status",
+            "session_status",
+            "session_status",
+            "fiber_exited",
+        ]
+    );
 }
 
 /// The `seq` of a line, 0 when it has none.
@@ -306,6 +432,27 @@ fn session_dir(setup: &Setup, id: &str) -> PathBuf {
     log::sessions_dir(&setup.home(), &doors::project(&setup.workspace())).join(id)
 }
 
+/// The kinds of every durable line in the session `id`'s log, in order.
+fn durable_kinds(setup: &Setup, id: &str) -> Vec<String> {
+    let text = fs::read_to_string(session_dir(setup, id).join("events.jsonl")).unwrap();
+    text.lines()
+        .map(|line| {
+            serde_json::from_str::<Value>(line).unwrap()["kind"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect()
+}
+
+/// The kinds of `fiber ask`'s stdout `lines`, in order.
+fn stdout_kinds(lines: &[Value]) -> Vec<&str> {
+    lines
+        .iter()
+        .map(|line| line["kind"].as_str().unwrap())
+        .collect()
+}
+
 #[test]
 fn a_session_that_exits_on_its_first_offer_raises_it_again_on_resume() {
     let setup = Setup::new();
@@ -314,7 +461,7 @@ fn a_session_that_exits_on_its_first_offer_raises_it_again_on_resume() {
     declare_db(&setup, &json!({}));
     let id = doors::mint("s_");
     let (session, stdout) = spawn_session(&setup, &id, &[]);
-    started(&stdout);
+    started(stdout);
     let client = attach(&setup, &id, "c_sub");
     prompt(&client, "c_prompt");
     let offered = recv_kind(&client, "repository_code_offered");
@@ -334,25 +481,47 @@ fn a_session_that_exits_on_its_first_offer_raises_it_again_on_resume() {
     );
 
     let (resumed, stdout) = spawn_session(&setup, &id, &["--resume"]);
-    started(&stdout);
+    started(stdout);
     let client = Client::connect(&setup.session_socket(&id)).unwrap();
     client
         .send(r#"{"id":"c_sub2","command":"subscribe","args":{"level":"full"}}"#)
         .unwrap();
     // The replay holds the old offer; this process's `fiber_started` is the
-    // latest one before the client is counted.
+    // latest one before the client is counted. One `DEADLINE` bounds the
+    // whole wait: a scoped thread reads the lines and the test takes the
+    // count with one `recv_timeout`.
+    let stop = AtomicBool::new(false);
     let mut since = 0;
-    loop {
-        let line = client
-            .recv(DEADLINE)
-            .expect("the replay and the clients line within the deadline");
-        if line["kind"] == "fiber_started" {
-            since = seq(&line);
-        }
-        if line["kind"] == "clients" && line["payload"]["count"] == 1 {
-            break;
-        }
-    }
+    thread::scope(|scope| {
+        let (tx, counted) = mpsc::channel();
+        let stop = &stop;
+        let client = &client;
+        scope.spawn(move || {
+            let mut seen = 0;
+            while !stop.load(Ordering::SeqCst) {
+                match client.recv(SLICE) {
+                    Some(line) => {
+                        if line["kind"] == "fiber_started" {
+                            seen = seq(&line);
+                        }
+                        if line["kind"] == "clients" && line["payload"]["count"] == 1 {
+                            if let Ok(()) = tx.send(Some(seen)) {}
+                            return;
+                        }
+                    }
+                    None => {
+                        if let Ok(()) = tx.send(None) {}
+                        return;
+                    }
+                }
+            }
+        });
+        let got = counted.recv_timeout(DEADLINE);
+        stop.store(true, Ordering::SeqCst);
+        since = got
+            .expect("the replay and the clients line within the deadline")
+            .expect("the socket stayed open for the replay and the clients line");
+    });
     prompt(&client, "c_prompt2");
     let again = client
         .recv_until(DEADLINE, |line| {
@@ -368,4 +537,33 @@ fn a_session_that_exits_on_its_first_offer_raises_it_again_on_resume() {
     drop(client);
     assert!(resumed.wait().success());
     assert_eq!(server.requests().len(), 1);
+    // The complete, ordered durable kinds: the first process exits on its
+    // offer, the resume raises it again, resolves it, then runs the turn.
+    assert_eq!(
+        durable_kinds(&setup, &id)
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "repository_code_offered",
+            "fiber_exited",
+            "fiber_started",
+            "extensions_loaded",
+            "repository_code_offered",
+            "repository_code_resolved",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
 }

@@ -343,6 +343,12 @@ fn a_prompt_raises_one_offer_before_the_preamble_and_waits_for_the_reply() {
     assert_eq!(session.provider.requests().len(), 1);
     close(&session);
     ended(&finished).unwrap();
+    // The complete, ordered durable kinds: the offer waits, resolves, then
+    // the turn runs.
+    assert_eq!(
+        durable_kinds(&session).join(" "),
+        "session_started repository_code_offered repository_code_resolved preamble_built opening_message turn_started step_started assistant_message_started text_completed usage_recorded assistant_message_completed turn_completed"
+    );
 }
 
 #[test]
@@ -389,6 +395,11 @@ fn a_reply_that_does_not_fit_is_rejected_and_the_offer_stays_pending() {
     close(&session);
     ended(&finished).unwrap();
     assert_eq!(durable(&session, "repository_code_resolved").len(), 1);
+    // The complete, ordered durable kinds.
+    assert_eq!(
+        durable_kinds(&session).join(" "),
+        "session_started repository_code_offered repository_code_resolved preamble_built opening_message turn_started step_started assistant_message_started text_completed usage_recorded assistant_message_completed turn_completed"
+    );
 }
 
 #[test]
@@ -423,6 +434,11 @@ fn a_decision_the_seam_fails_rejects_the_reply_and_a_second_reply_resolves() {
     assert_eq!(durable(&session, "repository_code_resolved").len(), 1);
     close(&session);
     ended(&finished).unwrap();
+    // The complete, ordered durable kinds.
+    assert_eq!(
+        durable_kinds(&session).join(" "),
+        "session_started repository_code_offered repository_code_resolved preamble_built opening_message turn_started step_started assistant_message_started text_completed usage_recorded assistant_message_completed turn_completed"
+    );
 }
 
 #[test]
@@ -452,6 +468,12 @@ fn content_that_changed_under_an_answer_is_offered_again_alone() {
     let (_, _) = until_kind(watcher, "turn_completed");
     close(&session);
     ended(&finished).unwrap();
+    // The complete, ordered durable kinds: the first offer resolves, the
+    // changed item is offered again alone, then the turn runs.
+    assert_eq!(
+        durable_kinds(&session).join(" "),
+        "session_started repository_code_offered repository_code_resolved repository_code_offered repository_code_resolved preamble_built opening_message turn_started step_started assistant_message_started text_completed usage_recorded assistant_message_completed turn_completed"
+    );
 }
 
 #[test]
@@ -500,6 +522,11 @@ fn deliveries_while_an_offer_waits_go_where_they_belong() {
     assert_eq!(input_texts(&started[0]), ["go", "s", "two"]);
     close(&session);
     ended(&finished).unwrap();
+    // The complete, ordered durable kinds.
+    assert_eq!(
+        durable_kinds(&session).join(" "),
+        "session_started repository_code_offered extension_exec repository_code_resolved preamble_built opening_message turn_started step_started assistant_message_started text_completed usage_recorded assistant_message_completed turn_completed"
+    );
 }
 
 #[test]
@@ -517,6 +544,11 @@ fn never_marked_items_and_items_answered_in_this_process_are_not_offered() {
     ended(&finished).unwrap();
     assert!(durable(&session, "repository_code_offered").is_empty());
     assert!(notices(&drain(&mut all)).is_empty());
+    // The complete, ordered durable kinds: nothing offered, the turn runs.
+    assert_eq!(
+        durable_kinds(&session).join(" "),
+        "session_started preamble_built opening_message turn_started step_started assistant_message_started text_completed usage_recorded assistant_message_completed turn_completed"
+    );
 }
 
 #[test]
@@ -537,6 +569,11 @@ fn a_required_item_a_person_skips_fails_nothing() {
     close(&session);
     ended(&finished).unwrap();
     assert!(code.decides().is_empty());
+    // The complete, ordered durable kinds.
+    assert_eq!(
+        durable_kinds(&session).join(" "),
+        "session_started repository_code_offered repository_code_resolved preamble_built opening_message turn_started step_started assistant_message_started text_completed usage_recorded assistant_message_completed turn_completed"
+    );
 }
 
 /// What one unattended run wrote and returned.
@@ -587,6 +624,12 @@ fn with_nobody_to_answer_each_item_is_skipped_with_a_notice() {
         assert!(notice < preamble, "{kinds:?}");
         assert_eq!(durable(&session, "turn_completed").len(), 1);
         assert!(code.decides().is_empty());
+        // The complete, ordered durable kinds.
+        assert_eq!(
+            durable_kinds(&session).join(" "),
+            "session_started preamble_built opening_message turn_started step_started assistant_message_started text_completed usage_recorded assistant_message_completed turn_completed",
+            "{clients:?} {answerable}"
+        );
     }
 }
 
@@ -614,6 +657,8 @@ fn with_nobody_to_answer_a_required_item_fails_the_run_with_its_kinds_code() {
             assert_eq!(notices(&lines), [skipped("plain", "MCP server")]);
             assert!(durable(&session, "turn_started").is_empty());
             assert!(session.provider.requests().is_empty());
+            // The complete, ordered durable kinds.
+            assert_eq!(durable_kinds(&session).join(" "), "session_started");
         }
     }
 }
@@ -644,6 +689,11 @@ fn a_second_turn_gathers_nothing_more() {
     close(&session);
     ended(&finished).unwrap();
     assert_eq!(durable(&session, "repository_code_offered").len(), 1);
+    // The complete, ordered durable kinds: one offer, then two turns.
+    assert_eq!(
+        durable_kinds(&session).join(" "),
+        "session_started repository_code_offered repository_code_resolved preamble_built opening_message turn_started step_started assistant_message_started text_completed usage_recorded assistant_message_completed turn_completed turn_started step_started assistant_message_started text_completed usage_recorded assistant_message_completed turn_completed"
+    );
 }
 
 #[test]
@@ -660,6 +710,11 @@ fn without_a_seam_nothing_is_offered() {
     close(&session);
     ended(&finished).unwrap();
     assert!(durable(&session, "repository_code_offered").is_empty());
+    // The complete, ordered durable kinds: without a seam the turn runs.
+    assert_eq!(
+        durable_kinds(&session).join(" "),
+        "session_started preamble_built opening_message turn_started step_started assistant_message_started text_completed usage_recorded assistant_message_completed turn_completed"
+    );
 }
 
 #[test]
@@ -713,6 +768,12 @@ fn waiting_on_an_offer_is_idle() {
     r#loop::fiber_exited(&session.log, &session.dir, Ok(()), false, None).unwrap();
     let exited = durable(&session, "fiber_exited");
     assert_eq!(exited[0].payload["suspended_on"], request.0.as_str());
+    // The complete, ordered durable kinds: the offer waits, then the idle
+    // exit suspends on it.
+    assert_eq!(
+        durable_kinds(&session).join(" "),
+        "session_started repository_code_offered fiber_exited"
+    );
 }
 
 #[test]
@@ -737,25 +798,51 @@ fn close_while_an_offer_waits_skips_its_items_and_runs_the_turn() {
         [skipped("a", "MCP server"), skipped("fmt", "hook")]
     );
     assert_eq!(durable(&session, "turn_completed").len(), 1);
+    // The complete, ordered durable kinds: the close skips the offer, then
+    // the turn runs.
+    assert_eq!(
+        durable_kinds(&session).join(" "),
+        "session_started repository_code_offered preamble_built opening_message turn_started step_started assistant_message_started text_completed usage_recorded assistant_message_completed turn_completed"
+    );
 }
 
 #[test]
 fn the_failure_names_each_required_item_and_how_to_approve() {
     let code = Fake::new(vec![item(OfferedKind::McpServer, "db", true)]);
-    let (_, _, ran) = unattended(&code, Some(0), true);
+    let (session, lines, ran) = unattended(&code, Some(0), true);
     assert_eq!(
         ran.expect_err("a required item fails the run").to_string(),
         "The repository requires the MCP server `db`, which nobody approved, and nobody could be asked. Run `fiber approve` in the repository to approve it."
     );
+    // The complete, ordered live kinds of the failed run.
+    assert_eq!(
+        lines
+            .iter()
+            .map(|line| line.kind.as_str())
+            .collect::<Vec<_>>()
+            .join(" "),
+        "session_status"
+    );
+    assert_eq!(durable_kinds(&session).join(" "), "session_started");
     let code = Fake::new(vec![
         item(OfferedKind::McpServer, "db", true),
         item(OfferedKind::Hook, "fmt", true),
     ]);
-    let (_, _, ran) = unattended(&code, Some(0), true);
+    // The complete, ordered live kinds of the failed run.
+    let (session, lines, ran) = unattended(&code, Some(0), true);
     assert_eq!(
         ran.expect_err("a required item fails the run").to_string(),
         "The repository requires the MCP server `db` and the hook `fmt`, which nobody approved, and nobody could be asked. Run `fiber approve` in the repository to approve them."
     );
+    assert_eq!(
+        lines
+            .iter()
+            .map(|line| line.kind.as_str())
+            .collect::<Vec<_>>()
+            .join(" "),
+        "session_status"
+    );
+    assert_eq!(durable_kinds(&session).join(" "), "session_started");
 }
 
 // Resume: a pending offer is raised again, the session's skips hold, and an
@@ -1071,6 +1158,17 @@ fn a_pending_offer_is_raised_again_before_any_prompt_when_a_client_is_attached()
     inbox.send(Delivery::Close(ignore())).unwrap();
     finished_ok(&finished);
     assert_eq!(history.of("repository_code_offered").len(), 2);
+    // The complete, ordered durable kinds: raised again and resolved, then
+    // a later resume runs its turn with nothing left to offer.
+    assert_eq!(
+        history
+            .lines()
+            .iter()
+            .map(|line| line.kind.as_str())
+            .collect::<Vec<_>>()
+            .join(" "),
+        "session_started fiber_started repository_code_offered fiber_exited fiber_started repository_code_offered repository_code_resolved fiber_exited fiber_started preamble_built opening_message turn_started step_started assistant_message_started text_completed usage_recorded assistant_message_completed turn_completed"
+    );
 }
 
 #[test]
@@ -1090,6 +1188,16 @@ fn a_pending_offer_is_not_raised_again_with_nobody_to_answer() {
     assert!(history.of("repository_code_resolved").is_empty());
     assert_eq!(notices(&drain(&mut all)), [skipped("a", "MCP server")]);
     assert_eq!(history.of("turn_completed").len(), 1);
+    // The complete, ordered durable kinds.
+    assert_eq!(
+        history
+            .lines()
+            .iter()
+            .map(|line| line.kind.as_str())
+            .collect::<Vec<_>>()
+            .join(" "),
+        "session_started fiber_started repository_code_offered fiber_exited fiber_started preamble_built opening_message turn_started step_started assistant_message_started text_completed usage_recorded assistant_message_completed turn_completed"
+    );
 }
 
 #[test]
@@ -1127,6 +1235,23 @@ fn a_skip_from_an_earlier_process_holds_for_the_same_content_only() {
             expected,
             "{hash}"
         );
+        // The complete, ordered durable kinds: the same content is never
+        // offered again; changed content is offered again alone.
+        let expected = if hash == "h_a" {
+            "session_started fiber_started repository_code_offered repository_code_resolved fiber_exited fiber_started preamble_built opening_message turn_started step_started assistant_message_started text_completed usage_recorded assistant_message_completed turn_completed"
+        } else {
+            "session_started fiber_started repository_code_offered repository_code_resolved fiber_exited fiber_started repository_code_offered repository_code_resolved preamble_built opening_message turn_started step_started assistant_message_started text_completed usage_recorded assistant_message_completed turn_completed"
+        };
+        assert_eq!(
+            history
+                .lines()
+                .iter()
+                .map(|line| line.kind.as_str())
+                .collect::<Vec<_>>()
+                .join(" "),
+            expected,
+            "{hash}"
+        );
     }
 }
 
@@ -1160,6 +1285,16 @@ fn content_changed_under_a_pending_offer_is_offered_fresh_after_it_resolves() {
     let (_, _) = until_kind(watcher, "repository_code_resolved");
     inbox.send(Delivery::Close(ignore())).unwrap();
     finished_ok(&finished);
+    // The complete, ordered durable kinds.
+    assert_eq!(
+        history
+            .lines()
+            .iter()
+            .map(|line| line.kind.as_str())
+            .collect::<Vec<_>>()
+            .join(" "),
+        "session_started fiber_started repository_code_offered fiber_exited fiber_started repository_code_offered repository_code_resolved repository_code_offered repository_code_resolved"
+    );
 }
 
 #[test]
@@ -1179,6 +1314,16 @@ fn an_offer_already_resolved_is_not_raised_again() {
     inbox.send(Delivery::Close(ignore())).unwrap();
     finished_ok(&finished);
     assert_eq!(history.of("repository_code_offered").len(), 1);
+    // The complete, ordered durable kinds: resolved long ago, never again.
+    assert_eq!(
+        history
+            .lines()
+            .iter()
+            .map(|line| line.kind.as_str())
+            .collect::<Vec<_>>()
+            .join(" "),
+        "session_started fiber_started repository_code_offered repository_code_resolved fiber_exited fiber_started preamble_built opening_message turn_started step_started assistant_message_started text_completed usage_recorded assistant_message_completed turn_completed"
+    );
 }
 
 #[test]
@@ -1205,6 +1350,17 @@ fn an_offer_comes_before_a_suspended_approval_and_both_are_answered_in_order() {
     let resolved = history.of("permission_resolved");
     assert_eq!(resolved.len(), 1);
     assert_eq!(resolved[0].payload["decided_by"], "person");
+    // The complete, ordered durable kinds: the offer resolves first, then
+    // the suspended approval.
+    assert_eq!(
+        history
+            .lines()
+            .iter()
+            .map(|line| line.kind.as_str())
+            .collect::<Vec<_>>()
+            .join(" "),
+        "session_started fiber_started turn_started assistant_message_started tool_call_requested permission_requested fiber_exited fiber_started repository_code_offered repository_code_resolved preamble_built opening_message permission_requested permission_resolved tool_call_completed step_started assistant_message_started text_completed usage_recorded assistant_message_completed turn_completed"
+    );
 }
 
 #[test]
@@ -1232,6 +1388,16 @@ fn an_approvals_reply_sent_while_the_offer_waits_answers_it_after() {
     assert_eq!(resolved.len(), 1);
     assert_eq!(resolved[0].payload["request_id"], "r_9");
     assert_eq!(resolved[0].payload["decided_by"], "person");
+    // The complete, ordered durable kinds.
+    assert_eq!(
+        history
+            .lines()
+            .iter()
+            .map(|line| line.kind.as_str())
+            .collect::<Vec<_>>()
+            .join(" "),
+        "session_started fiber_started turn_started assistant_message_started tool_call_requested permission_requested fiber_exited fiber_started repository_code_offered repository_code_resolved preamble_built opening_message permission_requested permission_resolved tool_call_completed step_started assistant_message_started text_completed usage_recorded assistant_message_completed turn_completed"
+    );
 }
 
 #[test]
@@ -1277,6 +1443,16 @@ fn an_idle_exit_on_the_offer_keeps_the_suspended_approval_for_the_next_resume() 
     assert_eq!(lines.last().unwrap().turn_id, Some(TurnId("t_1".into())));
     inbox.send(Delivery::Close(ignore())).unwrap();
     finished_ok(&finished);
+    // The complete, ordered durable kinds.
+    assert_eq!(
+        history
+            .lines()
+            .iter()
+            .map(|line| line.kind.as_str())
+            .collect::<Vec<_>>()
+            .join(" "),
+        "session_started fiber_started turn_started assistant_message_started tool_call_requested permission_requested fiber_exited fiber_started repository_code_offered permission_requested fiber_exited fiber_started repository_code_offered repository_code_resolved preamble_built opening_message permission_requested permission_resolved tool_call_completed step_started assistant_message_started text_completed usage_recorded assistant_message_completed turn_completed"
+    );
 }
 
 #[test]
@@ -1328,6 +1504,18 @@ fn a_failed_offer_step_keeps_the_suspended_approval_and_a_repaired_resume_finish
         assert_eq!(lines.last().unwrap().turn_id, Some(TurnId("t_1".into())));
         inbox.send(Delivery::Close(ignore())).unwrap();
         finished_ok(&finished);
+        // The complete, ordered durable kinds: the failed step keeps the
+        // suspended approval, and the repaired resume finishes its turn.
+        assert_eq!(
+            history
+                .lines()
+                .iter()
+                .map(|line| line.kind.as_str())
+                .collect::<Vec<_>>()
+                .join(" "),
+            "session_started fiber_started turn_started assistant_message_started tool_call_requested permission_requested fiber_exited fiber_started permission_requested fiber_exited fiber_started preamble_built opening_message permission_requested permission_resolved tool_call_completed step_started assistant_message_started text_completed usage_recorded assistant_message_completed turn_completed",
+            "answerable: {answerable}"
+        );
     }
 }
 
@@ -1375,6 +1563,17 @@ fn a_pending_offer_waits_for_a_client_at_the_prompt() {
     let (_, _) = until_kind(watcher, "turn_completed");
     inbox.send(Delivery::Close(ignore())).unwrap();
     finished_ok(&finished);
+    // The complete, ordered durable kinds: the no-answer run skips, then
+    // the attached run raises the same offer again.
+    assert_eq!(
+        history
+            .lines()
+            .iter()
+            .map(|line| line.kind.as_str())
+            .collect::<Vec<_>>()
+            .join(" "),
+        "session_started fiber_started repository_code_offered fiber_exited fiber_started preamble_built opening_message turn_started step_started assistant_message_started text_completed usage_recorded assistant_message_completed turn_completed fiber_exited fiber_started repository_code_offered repository_code_resolved preamble_built turn_started step_started assistant_message_started text_completed usage_recorded assistant_message_completed turn_completed"
+    );
 }
 
 #[test]
@@ -1385,7 +1584,7 @@ fn an_idle_exit_on_a_raised_again_offer_leaves_it_for_the_next_resume() {
     history.exited_on_offer("r_old", &items);
     history.clients(1);
     let delay = Duration::from_secs(60);
-    for _ in 0..2 {
+    for round in 0..2 {
         let watcher = history.log.watch();
         let (looped, inbox) = history.resume(&code, true);
         let finished = run_on(looped.idle_exit(Some(delay)));
@@ -1402,6 +1601,23 @@ fn an_idle_exit_on_a_raised_again_offer_leaves_it_for_the_next_resume() {
         assert!(history.of("repository_code_resolved").is_empty());
         let exited = history.exit_process(Ok(()));
         assert_eq!(exited["suspended_on"], "r_old");
+        // The complete, ordered durable kinds: each idle exit leaves the
+        // offer for the next resume.
+        let expected = if round == 0 {
+            "session_started fiber_started repository_code_offered fiber_exited fiber_started repository_code_offered fiber_exited"
+        } else {
+            "session_started fiber_started repository_code_offered fiber_exited fiber_started repository_code_offered fiber_exited fiber_started repository_code_offered fiber_exited"
+        };
+        assert_eq!(
+            history
+                .lines()
+                .iter()
+                .map(|line| line.kind.as_str())
+                .collect::<Vec<_>>()
+                .join(" "),
+            expected,
+            "round: {round}"
+        );
     }
 }
 
@@ -1431,6 +1647,16 @@ fn an_answer_to_the_offer_sent_before_it_is_raised_again_is_taken_first() {
     let (_, _) = until_kind(watcher, "turn_completed");
     inbox.send(Delivery::Close(ignore())).unwrap();
     finished_ok(&finished);
+    // The complete, ordered durable kinds.
+    assert_eq!(
+        history
+            .lines()
+            .iter()
+            .map(|line| line.kind.as_str())
+            .collect::<Vec<_>>()
+            .join(" "),
+        "session_started fiber_started repository_code_offered turn_started assistant_message_started tool_call_requested permission_requested fiber_exited fiber_started repository_code_offered repository_code_resolved preamble_built opening_message permission_requested permission_resolved tool_call_completed step_started assistant_message_started text_completed usage_recorded assistant_message_completed turn_completed"
+    );
 }
 
 #[test]
@@ -1452,4 +1678,14 @@ fn a_close_sent_before_the_offer_is_raised_again_leaves_nobody_to_answer() {
     assert_eq!(resolved.len(), 1);
     assert_eq!(resolved[0].payload["decided_by"], "standing_rule");
     assert_eq!(history.of("turn_completed").len(), 1);
+    // The complete, ordered durable kinds.
+    assert_eq!(
+        history
+            .lines()
+            .iter()
+            .map(|line| line.kind.as_str())
+            .collect::<Vec<_>>()
+            .join(" "),
+        "session_started fiber_started repository_code_offered turn_started assistant_message_started tool_call_requested permission_requested fiber_exited fiber_started repository_code_offered preamble_built opening_message permission_requested permission_resolved tool_call_completed step_started assistant_message_started text_completed usage_recorded assistant_message_completed turn_completed"
+    );
 }
