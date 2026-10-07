@@ -18,6 +18,7 @@ fn home() -> App {
         git: false,
         hover: true,
         version: "0.0.1".to_owned(),
+        logo_glyph: "⌇".to_owned(),
     });
     app.set_size(80, 24);
     app
@@ -1607,20 +1608,20 @@ fn down_on_the_last_drawn_row_focuses_the_next_and_scrolls() {
     assert_eq!(keys(&app).len(), 15);
     drawn(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    // Twelve rows fit under the box: eleven steps reach the last drawn
-    // one, and the next step moves below the fold.
-    for _ in 0..12 {
+    // Nine rows fit under the four-row logo's box: nine steps reach
+    // the last drawn one, and the next step moves below the fold.
+    for _ in 0..9 {
         assert_eq!(app.on_key(Key::Down, now), Effect::None);
     }
     let shown = keys(&app);
     assert_eq!(
         app.focused(),
-        Some(crate::mouse::TargetId::Home(Spot::Entry(shown[11])))
+        Some(crate::mouse::TargetId::Home(Spot::Entry(shown[8])))
     );
     assert_eq!(app.on_key(Key::Down, now), Effect::None);
     assert_eq!(
         app.focused(),
-        Some(crate::mouse::TargetId::Home(Spot::Entry(shown[12])))
+        Some(crate::mouse::TargetId::Home(Spot::Entry(shown[9])))
     );
     let area = ratatui::layout::Rect::new(0, 0, 80, 24);
     let mut buf = ratatui::buffer::Buffer::empty(area);
@@ -1635,7 +1636,7 @@ fn down_on_the_last_drawn_row_focuses_the_next_and_scrolls() {
             }
         })
         .collect();
-    assert_eq!(drawn.last(), Some(&shown[12]));
+    assert_eq!(drawn.last(), Some(&shown[9]));
     assert!(!drawn.contains(&shown[0]));
 }
 

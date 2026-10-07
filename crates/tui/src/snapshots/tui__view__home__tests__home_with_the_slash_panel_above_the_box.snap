@@ -2,10 +2,13 @@
 source: crates/tui/src/home_view_tests.rs
 expression: "screen(&app, 80, 24)"
 ---
-/handoff [instructions]  Starts a handoff.  command
-/name <text>  Names the session.  command
+/home  Goes home.  command
+/new  Goes home with the cursor in the input box.  command
+/resume  Opens home at the session list.  command
+/handoff [instructions]  Starts a handoff.  command▀▄
+/name <text>  Names the session.  command ████  █▄▄▄▀
 /reload  Reloads configuration, MCP servers and extensions.  command
-/close  Stops the session on screen.  command1
+/close  Stops the session on screen.  command▄▄ █   █ 0.0.1
 /quit  Quits.  command
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 > /
@@ -13,9 +16,6 @@ expression: "screen(&app, 80, 24)"
 
 [w]  enter starts a session
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-
-
-
 
 
 

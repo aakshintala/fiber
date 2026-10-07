@@ -31,6 +31,11 @@ pub(crate) fn launch(workspace: PathBuf, identity: &Path, config: &Config) -> tu
         git,
         hover,
         version: env!("CARGO_PKG_VERSION").to_owned(),
+        // `tui.logo_glyph`, defaulting to ⌇ (`docs/configuration.md`).
+        logo_glyph: config
+            .get("tui.logo_glyph", None)
+            .and_then(|(value, _)| value.as_str().map(str::to_owned))
+            .unwrap_or_else(|| "⌇".to_owned()),
     }
 }
 

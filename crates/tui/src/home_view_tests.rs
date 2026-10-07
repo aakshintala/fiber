@@ -12,6 +12,11 @@ use std::path::PathBuf;
 
 /// An app on home at `width` by `height`.
 fn home(width: u16, height: u16) -> App {
+    home_with_glyph(width, height, "⌇")
+}
+
+/// An app on home at `width` by `height` with the one-row logo's `glyph`.
+fn home_with_glyph(width: u16, height: u16, glyph: &str) -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
         workspace: PathBuf::from("/w"),
@@ -19,6 +24,7 @@ fn home(width: u16, height: u16) -> App {
         git: false,
         hover: true,
         version: "0.0.1".to_owned(),
+        logo_glyph: glyph.to_owned(),
     });
     app.set_size(width, height);
     app
@@ -98,9 +104,9 @@ fn home_cursor_sits_at_the_draft_cursor_in_the_box() {
     let area = Rect::new(0, 0, 80, 24);
     let mut buf = Buffer::empty(area);
     render(&app, area, &mut buf, None);
-    // The pad is three rows, then the logo and one blank row, the ▄ edge
-    // and the draft's first row; the cursor sits after "> hi".
-    assert_eq!(cursor(&app, area), Some(Position::new(4, 6)));
+    // The pad is three rows, then the four-row logo and one blank row,
+    // the ▄ edge and the draft's first row; the cursor sits after "> hi".
+    assert_eq!(cursor(&app, area), Some(Position::new(4, 9)));
 }
 
 #[test]
@@ -224,6 +230,48 @@ fn idle() -> serde_json::Value {
 }
 
 #[test]
+fn home_four_row_logo_80x24() {
+    insta::assert_snapshot!("home_four_row_logo_80x24", screen(&home(80, 24), 80, 24));
+}
+
+#[test]
+fn home_one_row_logo_at_the_height_limit() {
+    insta::assert_snapshot!(
+        "home_one_row_logo_at_the_height_limit",
+        screen(&home(80, 16), 80, 16)
+    );
+}
+
+#[test]
+fn the_four_row_logo_needs_its_height_exactly() {
+    // At 80 columns the threshold is 17 rows: a pad of 2, the four-row
+    // logo, one blank row, the six-row box, three list rows, the foot.
+    let tall = screen(&home(80, 17), 80, 17);
+    assert!(tall.contains('█'), "four pixel rows at the threshold");
+    let short = screen(&home(80, 16), 80, 16);
+    assert!(!short.contains('█'), "one row below the threshold");
+    assert!(short.contains("⌇ fiber 0.0.1"), "the one-row logo");
+}
+
+#[test]
+fn a_screen_narrower_than_the_logo_gets_one_row() {
+    let narrow = screen(&home(20, 24), 20, 24);
+    assert!(!narrow.contains('█'), "no pixel rows without the width");
+    assert!(narrow.contains("⌇ fiber 0.0.1"), "the one-row logo");
+}
+
+#[test]
+fn the_logo_glyph_setting_changes_the_one_row_logo() {
+    // The four-row logo's wave is drawn pixels, and never changes.
+    let tall = screen(&home_with_glyph(80, 24, "≈"), 80, 24);
+    assert!(tall.contains('█'), "four pixel rows");
+    assert!(!tall.contains('≈'), "no glyph in the pixel logo");
+    let short = screen(&home_with_glyph(80, 16, "≈"), 80, 16);
+    assert!(short.contains("≈ fiber 0.0.1"), "the setting's glyph");
+    assert!(!short.contains('⌇'), "no wave where the glyph goes");
+}
+
+#[test]
 fn home_cursor_hides_while_navigating() {
     let mut app = home(80, 24);
     // Pasted text past the token line count becomes one paste token, a
@@ -267,10 +315,10 @@ fn a_focused_row_below_the_fold_is_drawn_last() {
     let mut buf = Buffer::empty(area);
     let targets = render(&app, area, &mut buf, None);
     app.drawn(&targets);
-    // Twelve rows fit under the box: twelve steps focus the last drawn
-    // row, and the thirteenth moves below the fold.
+    // Nine rows fit under the four-row logo's box: nine steps focus the
+    // last drawn row, and the tenth moves below the fold.
     let now = fakes::clock::FakeClock::new().now();
-    for _ in 0..13 {
+    for _ in 0..10 {
         app.on_key(Key::Down, now);
     }
     let keys: Vec<u64> = app
@@ -290,8 +338,8 @@ fn a_focused_row_below_the_fold_is_drawn_last() {
             }
         })
         .collect();
-    assert_eq!(drawn.len(), 12);
-    assert_eq!(drawn.last(), Some(&keys[12]));
+    assert_eq!(drawn.len(), 9);
+    assert_eq!(drawn.last(), Some(&keys[9]));
     assert!(!drawn.contains(&keys[0]));
 }
 

@@ -104,7 +104,7 @@ impl App {
             version: home.launch.version.clone(),
             // A remote client has no launch directory; the picker it would
             // always show is a later ticket's.
-            glyph: "⌇".to_owned(),
+            glyph: home.launch.logo_glyph.clone(),
             chips: vec![format!("[{segment}]"), "enter starts a session".to_owned()],
             rows: home
                 .sessions

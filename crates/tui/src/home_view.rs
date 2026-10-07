@@ -13,6 +13,9 @@ use crate::home::{HomeScreen, Spot};
 use crate::markdown::{Role, style};
 use crate::mouse::{self, Target, TargetId};
 
+#[path = "logo.rs"]
+mod logo;
+
 /// The home input box's tint.
 /// debt: a fixed colour, not a theme role; upgrade when colour roles land
 /// (see #685).
@@ -39,6 +42,9 @@ struct Placed {
     /// The box's first column and width.
     x: u16,
     width: u16,
+    /// The logo's first row and its rows: four pixel rows, or one.
+    logo: u16,
+    logo_rows: usize,
     /// The ▄ edge row.
     box_top: u16,
     /// The first draft row.
@@ -54,14 +60,26 @@ struct Placed {
 }
 
 /// Lays home out in `area`: the pad, the logo, one blank row, the box,
-/// the list, and the foot hint on the last row.
-fn layout(app: &App, area: Rect) -> Placed {
+/// the list, and the foot hint on the last row. The logo is four pixel
+/// rows when they fit with three list rows kept, else the one-row form.
+fn layout(app: &App, screen: &HomeScreen, area: Rect) -> Placed {
     let width = area.width.min(BOX_WIDTH);
     let x = area.x.saturating_add(area.width.saturating_sub(width) / 2);
     let pad = area.height / 8;
-    let box_top = area.y.saturating_add(pad).saturating_add(2);
     let draft = app.input().rows(width);
     let height = draft.len().clamp(MIN_BOX, MAX_BOX);
+    // The box is its ▄ edge, the draft rows, the chip row and its ▀ edge.
+    let boxed = super::to_u16(height).saturating_add(3);
+    // Four rows need the pad, the four-row logo, one blank row, the
+    // box, three list rows and the foot, and the logo's width.
+    let need = pad + 4 + boxed + 3 + 1;
+    let four =
+        area.height > need && area.width >= super::to_u16(logo::width_cells(&screen.version));
+    let logo_rows = if four { 4 } else { 1 };
+    let logo = area.y.saturating_add(pad);
+    let box_top = logo
+        .saturating_add(super::to_u16(logo_rows))
+        .saturating_add(1);
     let (row, _) = app.input().cursor(width);
     let top = row.saturating_add(1).saturating_sub(height);
     let shown = draft.into_iter().skip(top).take(height).collect();
@@ -72,6 +90,8 @@ fn layout(app: &App, area: Rect) -> Placed {
     Placed {
         x,
         width,
+        logo,
+        logo_rows,
         box_top,
         draft_top,
         shown,
@@ -113,31 +133,40 @@ pub(super) fn render(
         return Vec::new();
     }
     let mut targets = Vec::new();
-    let placed = layout(app, area);
-    // The logo is `⌇ fiber <version>`: the ⌇ and the name in the accent
-    // colour, the version dim.
-    let name = format!("{} fiber ", screen.glyph);
-    let at = placed.x.saturating_add(
-        placed.width.saturating_sub(super::to_u16(
-            width(&name).saturating_add(width(&screen.version)),
-        )) / 2,
-    );
-    let logo = area.y.saturating_add(area.height / 8);
-    if logo < area.bottom() {
-        let (end, _) = buf.set_stringn(
-            at,
-            logo,
-            &name,
-            usize::from(area.width),
-            style(Role::Accent),
+    let placed = layout(app, screen, area);
+    if placed.logo_rows == 4 {
+        // The four-row logo is pixel letters drawn with half blocks,
+        // centred, with the version dim on its fourth row.
+        let cells = super::to_u16(logo::width_cells(&screen.version));
+        let at = placed
+            .x
+            .saturating_add(placed.width.saturating_sub(cells) / 2);
+        logo::draw(buf, at, placed.logo, &screen.version);
+    } else {
+        // The logo is `⌇ fiber <version>`: the ⌇ and the name in the accent
+        // colour, the version dim.
+        let name = format!("{} fiber ", screen.glyph);
+        let at = placed.x.saturating_add(
+            placed.width.saturating_sub(super::to_u16(
+                width(&name).saturating_add(width(&screen.version)),
+            )) / 2,
         );
-        buf.set_stringn(
-            end,
-            logo,
-            &screen.version,
-            usize::from(area.width),
-            Style::new().add_modifier(Modifier::DIM),
-        );
+        if placed.logo < area.bottom() {
+            let (end, _) = buf.set_stringn(
+                at,
+                placed.logo,
+                &name,
+                usize::from(area.width),
+                style(Role::Accent),
+            );
+            buf.set_stringn(
+                end,
+                placed.logo,
+                &screen.version,
+                usize::from(area.width),
+                Style::new().add_modifier(Modifier::DIM),
+            );
+        }
     }
     put(
         buf,
@@ -307,11 +336,11 @@ fn token_targets(app: &App, area: Rect, placed: &Placed, targets: &mut Vec<Targe
 
 /// Where the terminal cursor shows on home: at the draft's cursor in the
 /// box, `None` while navigating.
-pub(super) fn cursor(app: &App, _screen: &HomeScreen, area: Rect) -> Option<Position> {
+pub(super) fn cursor(app: &App, screen: &HomeScreen, area: Rect) -> Option<Position> {
     if app.focused().is_some() || area.is_empty() {
         return None;
     }
-    let placed = layout(app, area);
+    let placed = layout(app, screen, area);
     let (row, col) = app.input().cursor(placed.width);
     let y = placed
         .draft_top

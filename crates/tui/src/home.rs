@@ -33,6 +33,9 @@ pub struct Launch {
     pub hover: bool,
     /// Fiber's version, for the logo.
     pub version: String,
+    /// `tui.logo_glyph`: the one-row logo's mark, "⌇" or "≈". The
+    /// four-row logo's wave is drawn pixels, and never changes.
+    pub logo_glyph: String,
 }
 
 /// What home draws, built by [`crate::app::App::home_screen`].
