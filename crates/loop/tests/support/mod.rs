@@ -244,7 +244,7 @@ impl TestTool {
         tool.output.error = Some(Failure {
             code,
             message: "It broke.".into(),
-            retry_after: None,
+            retry_after_ms: None,
             provider: None,
         });
         tool
@@ -1260,6 +1260,98 @@ fn unpriced() -> Model {
 /// The kinds of `lines`, in order.
 pub(crate) fn kinds(lines: &[Envelope]) -> Vec<&str> {
     lines.iter().map(|l| l.kind.as_str()).collect()
+}
+
+/// One attempt number per `assistant_message_started`, in order. A start
+/// that follows a failed `assistant_message_completed` in the same step
+/// with no handoff line between is the next attempt at the same request;
+/// any other start is attempt 1 of its request.
+pub(crate) fn attempt_numbers(lines: &[Envelope]) -> Vec<u32> {
+    let mut numbers = Vec::new();
+    let mut pending: Option<u32> = None;
+    let mut last_started: Option<u32> = None;
+    for line in lines {
+        match line.kind.as_str() {
+            "assistant_message_started" => {
+                let n = pending.map(|p| p + 1).unwrap_or(1);
+                numbers.push(n);
+                last_started = Some(n);
+                pending = None;
+            }
+            "assistant_message_completed" => {
+                let failed = line.payload.get("outcome").and_then(|o| o.as_str()) == Some("failed");
+                if failed {
+                    pending = last_started;
+                } else {
+                    pending = None;
+                }
+            }
+            "handoff_started" | "handoff_completed" | "step_started" | "turn_started" => {
+                pending = None;
+            }
+            _ => {}
+        }
+    }
+    numbers
+}
+
+/// Asserts no `assistant_message_completed` stores an `attempt` key.
+pub(crate) fn assert_no_stored_attempt(lines: &[Envelope]) {
+    for line in lines
+        .iter()
+        .filter(|l| l.kind == "assistant_message_completed")
+    {
+        assert!(
+            line.payload.get("attempt").is_none(),
+            "a failed call stores no attempt: {}",
+            serde_json::to_string(&line.payload).unwrap()
+        );
+    }
+}
+
+/// Cross-checks every `retry_scheduled` against the derived attempt
+/// numbers: its `attempt` is the failed start it names (its `action_id`)
+/// plus one, and the next start that follows it carries that number too,
+/// unless the wait was cancelled and no retry ran.
+pub(crate) fn assert_scheduled_attempts(lines: &[Envelope]) {
+    let numbers = attempt_numbers(lines);
+    let starts: Vec<(&Envelope, u32)> = lines
+        .iter()
+        .filter(|l| l.kind == "assistant_message_started")
+        .zip(numbers)
+        .collect();
+    let by_action: std::collections::HashMap<String, u32> = starts
+        .iter()
+        .filter_map(|(l, n)| l.action_id.clone().map(|a| (a.0.clone(), *n)))
+        .collect();
+    for (i, line) in lines.iter().enumerate() {
+        if line.kind != "retry_scheduled" {
+            continue;
+        }
+        let scheduled = u32::try_from(line.payload["attempt"].as_u64().unwrap()).unwrap();
+        if let Some(id) = line.action_id.clone().map(|a| a.0.clone())
+            && let Some(failed) = by_action.get(&id)
+        {
+            assert_eq!(scheduled, failed + 1, "schedule after {id}");
+        }
+        // The retry that ran is the next start; a schedule cancelled
+        // during its wait has no next start and is checked by the first
+        // half only. A new request after a handoff starts at 1, so only
+        // a next start past 1 is checked against the schedule.
+        let next_number = lines[i + 1..]
+            .iter()
+            .find(|l| l.kind == "assistant_message_started")
+            .and_then(|next| {
+                next.action_id
+                    .clone()
+                    .and_then(|a| by_action.get(&a.0).copied())
+            });
+        if let Some(n) = next_number
+            && n != 1
+        {
+            assert_eq!(n, scheduled, "the retry after the schedule");
+        }
+    }
 }
 
 /// A live tap on a session's log: its own watcher, readable mid-turn with

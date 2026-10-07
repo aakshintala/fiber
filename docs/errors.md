@@ -24,7 +24,7 @@ Every failure is `error { code, message }`: on `tool_call_completed`,
 
 A failed model call adds two optional fields:
 
-- `retry_after`, in seconds, when the provider asked Fiber to wait.
+- `retry_after_ms`, in milliseconds, rounded up from the seconds the provider sent.
 - `provider { name, status, message }`: the provider's name, the HTTP status and
   the provider's own message. Provider messages can mislead (OpenRouter answers
   a bad key with "Missing Authentication header"), which is why they sit here
@@ -119,7 +119,7 @@ retried.
 ## A failed model call
 
 A failed model call is an assistant message that completed with a failed
-outcome, a code and an attempt number (`docs/events.md`, "Actions"). The retry
+outcome and a code (`docs/events.md`, "Actions"). The retry
 policy is `docs/model-routing.md`, "When a model call fails".
 
 | Code | What it covers | Retried |
@@ -153,7 +153,7 @@ model call fails"). It never overrides `quota_exceeded` or
 `unknown_stop_reason`, which are never retried.
 
 A wait longer than 60 seconds fails at once as `rate_limited` with
-`retry_after` set, so a person or a caller can decide.
+`retry_after_ms` set, so a person or a caller can decide.
 
 ### Recognising a context overflow
 

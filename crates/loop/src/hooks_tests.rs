@@ -578,7 +578,7 @@ fn a_withheld_output_is_one_line_with_no_artifact_and_its_status_kept() {
     let failure = Failure {
         code: ErrorCode::NonzeroExit,
         message: "Exit code 1.".into(),
-        retry_after: None,
+        retry_after_ms: None,
         provider: None,
     };
     let ran = run(
@@ -702,7 +702,7 @@ fn a_failed_call_is_shown_to_the_hook_as_failed() {
             error: Some(Failure {
                 code: ErrorCode::ToolError,
                 message: "no".into(),
-                retry_after: None,
+                retry_after_ms: None,
                 provider: None,
             }),
             ..text("partial")
@@ -890,7 +890,7 @@ fn mcp_servers_started_writes_each_failure_then_each_notice() {
             error: Failure {
                 code: ErrorCode::McpServerUnavailable,
                 message: "The MCP server `fx` did not answer before its startup deadline of 5000 ms. Raise `startup_timeout_ms` under `mcp.servers.fx` if it needs longer.".into(),
-                retry_after: None,
+                retry_after_ms: None,
                 provider: None,
             },
         }],
@@ -974,7 +974,7 @@ fn a_failed_call_shaped_under_a_shutdown_keeps_no_output() {
         error: Some(Failure {
             code: ErrorCode::ToolError,
             message: "failed with a secret".into(),
-            retry_after: None,
+            retry_after_ms: None,
             provider: None,
         }),
         ..text("failed with a secret, long enough to be cut")

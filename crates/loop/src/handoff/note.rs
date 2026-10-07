@@ -48,7 +48,7 @@ pub(super) fn failure(code: ErrorCode, message: &str) -> Failure {
     Failure {
         code,
         message: message.to_owned(),
-        retry_after: None,
+        retry_after_ms: None,
         provider: None,
     }
 }

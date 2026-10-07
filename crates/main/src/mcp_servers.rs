@@ -116,7 +116,7 @@ pub(crate) fn session_tools(
         return Err(Failure {
             code: ErrorCode::McpRequiredServerFailed,
             message: failure.error.message.clone(),
-            retry_after: None,
+            retry_after_ms: None,
             provider: None,
         });
     }

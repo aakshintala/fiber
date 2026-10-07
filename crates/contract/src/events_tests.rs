@@ -170,7 +170,7 @@ fn durable_and_ephemeral_events_say_so() {
 /// One payload per kind, or more where the doc makes keys exclusive, with
 /// every key the doc lists for it.
 fn samples() -> Vec<(&'static str, Value)> {
-    let error = json!({"code": "timeout", "message": "m", "retry_after": 1.5,
+    let error = json!({"code": "timeout", "message": "m", "retry_after_ms": 1500,
         "provider": {"name": "p", "status": 429, "message": "slow down"}});
     let process = json!({"exit_code": 1, "signal": "SIGKILL", "timed_out": false});
     let content = json!([{"type": "text", "text": "t"},
@@ -297,7 +297,7 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("assistant_message_delta", json!({"text": "Hel"})),
         (
             "assistant_message_completed",
-            json!({"outcome": "failed", "error": error, "attempt": 2}),
+            json!({"outcome": "failed", "error": error}),
         ),
         (
             "text_completed",
@@ -608,6 +608,14 @@ fn samples() -> Vec<(&'static str, Value)> {
         (
             "jobs_pending_notified",
             json!({"job_ids": ["j"], "reason": "ending"}),
+        ),
+        (
+            "command_accepted",
+            json!({"command_id": "c", "result": {"session_id": "s2"}}),
+        ),
+        (
+            "command_accepted",
+            json!({"command_id": "c", "result": {"clients": 2, "fiber_version": "0.0.0", "running": true}}),
         ),
         (
             "command_accepted",
@@ -975,5 +983,29 @@ fn every_other_result_still_reads_as_its_own_variant() {
     assert!(matches!(
         result_of(json!({"command_id": "c", "result": {"output": "o", "process": process}})),
         CommandResult::Shell { .. }
+    ));
+}
+
+#[test]
+fn a_session_id_result_reads_as_start_and_a_status_object_as_status() {
+    assert_eq!(
+        result_of(json!({"command_id": "c", "result": {"session_id": "s2"}})),
+        CommandResult::Start {
+            session_id: SessionId("s2".into())
+        }
+    );
+    assert_eq!(
+        result_of(
+            json!({"command_id": "c", "result": {"clients": 2, "fiber_version": "0.0.0", "running": true}})
+        ),
+        CommandResult::Status {
+            running: true,
+            fiber_version: "0.0.0".into(),
+            clients: 2,
+        }
+    );
+    assert!(matches!(
+        result_of(json!({"command_id": "c", "result": {"new_session_id": "s2"}})),
+        CommandResult::Rewind { .. }
     ));
 }

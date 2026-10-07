@@ -367,6 +367,33 @@ fn succeeds_after_one_retry(
     assert_eq!(run.last()["payload"]["text"], "Hello.");
     assert_eq!(run.retried(), [code]);
     assert_eq!(server.requests().len(), 2);
+    let failed = run
+        .lines
+        .iter()
+        .find(|l| l["kind"] == "assistant_message_completed" && l["payload"]["outcome"] == "failed")
+        .unwrap();
+    assert!(failed["payload"].get("attempt").is_none());
+}
+
+#[test]
+fn a_429_asking_for_2_seconds_over_the_cap_records_retry_after_ms_2000() {
+    let setup = Setup::new();
+    let server =
+        ProviderServer::start([Response::status(429, "{}").header("retry-after", "2")]).unwrap();
+    setup.provider(&server, "openai-responses", 3);
+    let run = setup.ask();
+    assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), FAILED_AT_ONCE_KINDS);
+    let completed = run
+        .lines
+        .iter()
+        .find(|l| l["kind"] == "assistant_message_completed")
+        .unwrap();
+    assert_eq!(completed["payload"]["error"]["code"], "rate_limited");
+    assert_eq!(completed["payload"]["error"]["retry_after_ms"], 2000);
+    assert!(completed["payload"]["error"].get("retry_after").is_none());
+    assert!(completed["payload"].get("attempt").is_none());
+    assert_eq!(server.requests().len(), 1);
 }
 
 #[test]

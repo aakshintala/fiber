@@ -300,7 +300,7 @@ impl Loop {
             reviewer: Err(Failure {
                 code: ErrorCode::NoModel,
                 message: NO_MODEL_MESSAGE.to_owned(),
-                retry_after: None,
+                retry_after_ms: None,
                 provider: None,
             }),
             limits: BlockLimits::default(),
@@ -572,7 +572,7 @@ impl Loop {
                 message: format!(
                     "The session reached its spending budget of ${limit:.2} (budget.usd)."
                 ),
-                retry_after: None,
+                retry_after_ms: None,
                 provider: None,
             }),
         ))
@@ -714,7 +714,6 @@ impl Loop {
             &Event::AssistantMessageCompleted(AssistantMessageCompleted {
                 outcome: MessageOutcome::Completed,
                 error: None,
-                attempt: None,
             }),
             turn,
             Some(message),
@@ -752,7 +751,7 @@ impl Loop {
                     Some(Failure {
                         code: ErrorCode::OutputTruncated,
                         message: "Two replies in a row reached the output limit.".to_owned(),
-                        retry_after: None,
+                        retry_after_ms: None,
                         provider: None,
                     }),
                 )));

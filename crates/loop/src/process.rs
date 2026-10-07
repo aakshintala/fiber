@@ -99,7 +99,7 @@ pub fn fiber_exited(
     let unread = unread.map(|e| Failure {
         code: e.code(),
         message: e.to_string(),
-        retry_after: None,
+        retry_after_ms: None,
         provider: None,
     });
     let turn_error = if one_turn { fold.error } else { None };

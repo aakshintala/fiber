@@ -158,7 +158,7 @@ below names a shape from this section by its name.
 |---|---|---|---|
 | `code` | string | yes | a stable label from `docs/errors.md`, "Registry"; an open set, and an unknown code is a generic failure |
 | `message` | string | yes | Fiber's own sentence, saying what to do when there is a fix |
-| `retry_after` | number | no | on a failed model call, the seconds the provider asked Fiber to wait |
+| `retry_after_ms` | integer | no | on a failed model call, the wait the provider asked for, in milliseconds |
 | `provider` | object | no | on a failed model call, or a Lua provider's `credential()` that failed at startup: `name` (string), `status` (integer, the HTTP status; absent when an extension provider's `credential()` or `sign()` failed) and `message` (string, the provider's own message) |
 
 ### `process`
@@ -508,8 +508,7 @@ Durable.
 | Key | Type | Required | Meaning |
 |---|---|---|---|
 | `outcome` | string | yes | `completed` or `failed`; a closed set |
-| `error` | `error` | no | on `failed`, with `retry_after` and `provider` where they apply (`docs/errors.md`, "A failed model call") |
-| `attempt` | integer | no | on `failed`: 1 for the first attempt at this request, 2 for its first retry, and so on |
+| `error` | `error` | no | on `failed`, with `retry_after_ms` and `provider` where they apply (`docs/errors.md`, "A failed model call") |
 
 #### `text_completed`
 
@@ -621,7 +620,7 @@ Durable. The call's outcome.
 | `provider_item` | any JSON | no | on a call the provider ran, its result block exactly as it arrived, sent back unchanged only to the model that produced it (`docs/tools.md`, "Hosted by the provider"); absent on a call Fiber runs |
 
 A failed model call is an assistant message that completed with a failed
-outcome, an `error` and an attempt number; the retry is a new action. Its codes
+outcome and an `error`; the retry is a new action. Its codes
 are `docs/errors.md`, "A failed model call". There is no
 separate error channel, so no failure is ever reported twice.
 
@@ -1329,7 +1328,9 @@ Partial assistant text from an interrupted response is gone, because deltas are
 ephemeral. The log does not pay to store text a completion would supersede.
 
 An attempt count is derived by counting `assistant_message_started` lines, never
-from a stored counter, so it cannot drift from the record.
+from a stored counter, so it cannot drift from the record. A client that shows which attempt a model call is, such as the terminal's
+"attempt 2 of 4", counts the `assistant_message_started` lines of the request's
+retries in that step.
 
 ## Rewind
 

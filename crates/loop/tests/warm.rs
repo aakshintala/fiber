@@ -377,7 +377,7 @@ fn a_failed_refresh_is_not_retried_and_stops_warming_with_a_notice() {
             Scripted::failed(Failure {
                 code: ErrorCode::ProviderUnavailable,
                 message: "Overloaded.".into(),
-                retry_after: None,
+                retry_after_ms: None,
                 provider: None,
             }),
             refresh_reply(),

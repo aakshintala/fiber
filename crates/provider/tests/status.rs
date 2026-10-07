@@ -154,7 +154,7 @@ fn timeout_conflict_and_server_errors_are_provider_unavailable() {
             let (failure, should_retry) = failed((protocol.call)(&endpoint));
             assert_eq!(failure.code, ErrorCode::ProviderUnavailable, "{status}");
             assert_eq!(should_retry, None, "{status}");
-            assert_eq!(failure.retry_after, None, "{status}");
+            assert_eq!(failure.retry_after_ms, None, "{status}");
             assert_eq!(
                 failure.provider.as_ref().unwrap().status.unwrap(),
                 status,
@@ -176,11 +176,31 @@ fn a_503_carries_retry_after_and_a_500_carries_x_should_retry() {
         let (failure, should_retry) = failed((protocol.call)(&endpoint));
         assert_eq!(failure.code, ErrorCode::ProviderUnavailable);
         assert_eq!(should_retry, None);
-        assert_eq!(failure.retry_after, Some(7.0));
+        assert_eq!(failure.retry_after_ms, Some(7000));
         let (failure, should_retry) = failed((protocol.call)(&endpoint));
         assert_eq!(failure.code, ErrorCode::ProviderUnavailable);
         assert_eq!(should_retry, Some(true));
-        assert_eq!(failure.retry_after, None);
+        assert_eq!(failure.retry_after_ms, None);
+    }
+}
+
+#[test]
+fn a_429_with_retry_after_2_records_retry_after_ms_2000() {
+    for protocol in protocols() {
+        let server =
+            ProviderServer::start([Response::status(429, "{}").header("retry-after", "2")])
+                .unwrap();
+        let endpoint = endpoint(protocol.name, &server);
+        let (failure, _) = failed((protocol.call)(&endpoint));
+        assert_eq!(failure.code, ErrorCode::RateLimited, "{}", protocol.name);
+        let value = serde_json::to_value(&failure).unwrap();
+        assert_eq!(
+            value.get("retry_after_ms"),
+            Some(&serde_json::json!(2000)),
+            "{}",
+            protocol.name
+        );
+        assert!(value.get("retry_after").is_none(), "{}", protocol.name);
     }
 }
 

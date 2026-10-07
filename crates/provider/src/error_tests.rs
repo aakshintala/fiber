@@ -455,3 +455,52 @@ fn an_error_info_reason_needs_its_type() {
         ErrorCode::InvalidRequest,
     );
 }
+
+#[test]
+fn a_failed_status_records_the_asked_wait_in_milliseconds_rounded_up() {
+    use std::time::Duration;
+    let failed = |retry_after: Option<f64>| {
+        let value = Error::Status {
+            status: 429,
+            body: "{}".to_owned(),
+            retry_after,
+            should_retry: None,
+            url: String::new(),
+        }
+        .failure("p", &Secrets::default());
+        serde_json::to_value(&value).unwrap()
+    };
+    for (seconds, ms) in [
+        (Some(2.0), Some(2000)),
+        (Some(1.5), Some(1500)),
+        (Some(0.0), Some(0)),
+        (Some(0.0001), Some(1)),
+        (Some(1e300), Some(u64::MAX)),
+        (Some(0.043), Some(43)),
+        (Some(0.043000000000000003), Some(43)),
+        (Some(0.0431), Some(44)),
+        (
+            Some(Duration::from_millis(u64::MAX).as_secs_f64()),
+            Some(u64::MAX),
+        ),
+    ] {
+        let value = failed(seconds);
+        assert_eq!(
+            value.get("retry_after_ms").and_then(|v| v.as_u64()),
+            ms,
+            "asked {seconds:?}"
+        );
+        assert!(
+            value.get("retry_after").is_none(),
+            "no seconds key for {seconds:?}: {value}"
+        );
+    }
+    for seconds in [Some(f64::NAN), Some(f64::INFINITY), Some(-1.0), None] {
+        let value = failed(seconds);
+        assert!(
+            value.get("retry_after_ms").is_none(),
+            "absent for {seconds:?}: {value}"
+        );
+        assert!(value.get("retry_after").is_none(), "{value}");
+    }
+}

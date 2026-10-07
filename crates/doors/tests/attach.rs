@@ -372,7 +372,7 @@ fn a_failed_turn_prints_its_lines_and_returns_1() {
                 error: Some(Failure {
                     code: ErrorCode::ToolError,
                     message: "the tool failed".into(),
-                    retry_after: None,
+                    retry_after_ms: None,
                     provider: None,
                 }),
                 questions: None,

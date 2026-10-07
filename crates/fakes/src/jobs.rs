@@ -40,7 +40,7 @@ impl Drop for Unreported {
                 error: Some(contract::shapes::Failure {
                     code: contract::ErrorCode::Indeterminate,
                     message: "The job ended without a result.".to_owned(),
-                    retry_after: None,
+                    retry_after_ms: None,
                     provider: None,
                 }),
                 process: None,

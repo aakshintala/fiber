@@ -232,7 +232,7 @@ fn fiber_exited_error_parses_code_and_message() {
         .expect("the verdict");
     assert_eq!(failure.code, ErrorCode::NoModel);
     assert_eq!(failure.message, "No model is configured.");
-    assert_eq!(failure.retry_after, None);
+    assert_eq!(failure.retry_after_ms, None);
     assert_eq!(failure.provider, None);
 }
 

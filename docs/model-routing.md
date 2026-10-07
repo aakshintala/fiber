@@ -47,7 +47,7 @@ With `gpt-6-luna` the endpoint accepted
 `usage_limit_reached` or `usage_not_included` to `quota_exceeded`, on any
 endpoint and whatever the HTTP status, and never retries it. No other vendor
 sends these codes, so the match needs no flag. When the body has `resets_at`
-(Unix seconds), the seconds until then become the error's `retry_after`, and
+(Unix seconds), the milliseconds until then become the error's `retry_after_ms`, and
 the message names the reset time. `rate_limit_exceeded` stays `rate_limited`.
 No usage-limit reply has been probed: the match rests on the reference
 implementations ([research/codex-responses-probe](../research/codex-responses-probe/README.md),
@@ -755,7 +755,7 @@ A headless run whose credential has expired and cannot be refreshed fails with
 ## When a model call fails
 
 A failed model call is recorded as `docs/events.md` describes: an assistant
-message that completed with a failed outcome, an `error` and an attempt number.
+message that completed with a failed outcome and an `error`.
 A retry is a new action. Which failure gets which code, and which codes are
 retried, is `docs/errors.md`, "A failed model call".
 
@@ -782,7 +782,7 @@ reached a 429 (`research/retry-signals/`). No vendor sent `retry-after-ms`.
 The saved responses had statuses 200, 400, 401, 403, 404, 405 and 429; no 409,
 425 or 501 appeared, which does not show a vendor never sends them.
 
-The wait a provider asks for, in seconds, becomes the error's `retry_after`.
+The wait a provider asks for, in seconds, becomes the error's `retry_after_ms`, in milliseconds rounded up.
 Fiber reads it from `retry-after`. On `google-generative-ai`, Fiber reads
 `Retry-After` or the error body's `RetryInfo.retryDelay`, whichever is present.
 That is the shape Google documents, and it is unprobed: no Gemini 429 was

@@ -53,7 +53,7 @@ fn failure(code: contract::ErrorCode) -> contract::shapes::Failure {
     contract::shapes::Failure {
         code,
         message: "no session".to_owned(),
-        retry_after: None,
+        retry_after_ms: None,
         provider: None,
     }
 }

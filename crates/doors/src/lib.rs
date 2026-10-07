@@ -36,7 +36,7 @@ pub fn failure(code: ErrorCode, message: impl Into<String>) -> Failure {
     Failure {
         code,
         message: message.into(),
-        retry_after: None,
+        retry_after_ms: None,
         provider: None,
     }
 }

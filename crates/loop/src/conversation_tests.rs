@@ -417,7 +417,7 @@ fn orphaned(id: &str) -> Event {
         error: Some(contract::shapes::Failure {
             code: contract::ErrorCode::Orphaned,
             message: "The process that ran this job died; it may still be running.".into(),
-            retry_after: None,
+            retry_after_ms: None,
             provider: None,
         }),
         process: None,

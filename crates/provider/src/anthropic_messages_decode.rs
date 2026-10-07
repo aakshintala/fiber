@@ -375,7 +375,7 @@ fn hosted_completion(block: &Value) -> ToolCallCompleted {
         let error = Failure {
             code: ErrorCode::ToolError,
             message: message.clone(),
-            retry_after: None,
+            retry_after_ms: None,
             provider: None,
         };
         (CallStatus::Failed, message, Some(error))

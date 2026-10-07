@@ -43,7 +43,9 @@ pub(crate) fn answered(text: &str, result: Option<CommandResult>) -> Option<Stri
         CommandResult::Rewind { .. }
         | CommandResult::Tools { .. }
         | CommandResult::Commands { .. }
-        | CommandResult::History { .. } => None,
+        | CommandResult::History { .. }
+        | CommandResult::Start { .. }
+        | CommandResult::Status { .. } => None,
     }
 }
 

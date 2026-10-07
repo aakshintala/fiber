@@ -461,7 +461,7 @@ fn gemini_classification_reads_the_original_body() {
     .unwrap();
     let endpoint = endpoint_key(protocol.name, &server, "37s");
     let (failure, _) = failed((protocol.call)(&endpoint));
-    assert_eq!(failure.retry_after, Some(37.0));
+    assert_eq!(failure.retry_after_ms, Some(37000));
     assert_eq!(
         failure.provider.as_ref().unwrap().message.as_str(),
         "slow down [redacted]"

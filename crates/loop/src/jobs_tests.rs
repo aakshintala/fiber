@@ -52,7 +52,7 @@ fn failed(id: &str) -> JobCompleted {
         error: Some(Failure {
             code: ErrorCode::NonzeroExit,
             message: "Exit code 1.".into(),
-            retry_after: None,
+            retry_after_ms: None,
             provider: None,
         }),
         process: Some(Process {
@@ -665,7 +665,7 @@ fn a_notice_reads_its_status_exit_signal_error_and_output() {
     killed.error = Some(Failure {
         code: ErrorCode::Signal,
         message: "Killed by SIGKILL.".into(),
-        retry_after: None,
+        retry_after_ms: None,
         provider: None,
     });
     killed.output_tail = None;
@@ -678,7 +678,7 @@ fn a_notice_reads_its_status_exit_signal_error_and_output() {
     errored.error = Some(Failure {
         code: ErrorCode::ToolError,
         message: "The job ended without a result.\n".into(),
-        retry_after: None,
+        retry_after_ms: None,
         provider: None,
     });
     assert_eq!(

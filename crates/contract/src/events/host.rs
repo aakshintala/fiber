@@ -324,8 +324,8 @@ pub enum PendingReason {
 pub struct CommandAccepted {
     /// The command's id.
     pub command_id: CommandId,
-    /// On `rewind`, `tools`, `commands`, `history` and a `shell` sent with
-    /// `send` false.
+    /// The command's answer, on the commands in the `command_accepted`
+    /// table in `docs/events.md`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result: Option<CommandResult>,
 }
@@ -363,6 +363,20 @@ pub enum CommandResult {
         artifact: Option<String>,
         /// How it ended.
         process: Process,
+    },
+    /// For `start`, over the hub: the session the hub started.
+    Start {
+        /// The session that continues this one.
+        session_id: SessionId,
+    },
+    /// For `status`, over the hub.
+    Status {
+        /// Whether the hub is running.
+        running: bool,
+        /// The hub's version.
+        fiber_version: String,
+        /// The open client connections, this connection's asker included.
+        clients: usize,
     },
 }
 
