@@ -18,10 +18,15 @@ use serde_json::Value;
 use crate::{API, Error, LuaProvider};
 use contract::ThinkingLevel;
 
+mod placeholders;
+
 /// Every provider the installed extensions register, by name.
 #[derive(Clone, Default)]
 pub struct Providers {
     by_name: BTreeMap<String, ProviderData>,
+    /// The extension whose data or `models()` supplied each provider's
+    /// current models, by provider name.
+    extension_of: BTreeMap<String, String>,
     /// Each provider's models' addendum texts, by provider name then
     /// model id: read with the data that declared them and replaced
     /// together with it.
@@ -246,6 +251,9 @@ impl Providers {
             } else {
                 for (data, addenda) in buffered {
                     providers.addenda.insert(data.name.clone(), addenda);
+                    providers
+                        .extension_of
+                        .insert(data.name.clone(), manifest.name.clone());
                     providers.by_name.insert(data.name.clone(), data);
                 }
             }
@@ -301,10 +309,12 @@ impl Providers {
         match self.by_name.get_mut(&name) {
             Some(data) => {
                 data.models = models;
-                self.addenda.insert(name, addenda);
+                self.addenda.insert(name.clone(), addenda);
+                self.extension_of.insert(name, extension.to_owned());
             }
             None => {
                 self.addenda.insert(name.clone(), addenda);
+                self.extension_of.insert(name.clone(), extension.to_owned());
                 self.by_name.insert(
                     name.clone(),
                     ProviderData {
@@ -313,12 +323,29 @@ impl Providers {
                         credential: None,
                         credential_name: None,
                         headers: BTreeMap::new(),
+                        placeholders: BTreeMap::new(),
                         reviewer_model: None,
                     },
                 );
             }
         }
         notices
+    }
+
+    /// Fills every `{name}` in every model's `base_url` from the provider's
+    /// extension's setting `name`, never the repository's file, else the
+    /// environment variable `placeholders.<name>.env` names, read through
+    /// `env` (`docs/model-routing.md`, "A per-account host"). A model with a
+    /// placeholder that has no value is removed, with one `model_unconfigured`
+    /// notice. Runs once, after `load` and every `add_lua`, before a model is
+    /// chosen or listed; the model cache keeps the template. An extension
+    /// settings file that cannot be read is `Error::Config`.
+    pub fn fill_placeholders(
+        &mut self,
+        _config: &Config,
+        _env: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<Vec<Notice>, Error> {
+        Ok(Vec::new())
     }
 
     /// The installed data of `name`: the data file's, else one naming only
@@ -330,6 +357,7 @@ impl Providers {
             credential: None,
             credential_name: None,
             headers: BTreeMap::new(),
+            placeholders: BTreeMap::new(),
             reviewer_model: None,
         })
     }

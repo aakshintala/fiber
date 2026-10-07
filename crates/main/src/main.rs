@@ -452,7 +452,7 @@ fn parts_in(
     let session_locks: Arc<dyn contract::files::PathLock> = locks.clone();
     let mut extensions =
         extensions::SessionExtensions::load(&home, &config, Arc::clone(&clock), session_locks);
-    lua_providers::add_lua(&extensions, &mut providers, &config);
+    lua_providers::add_lua(&extensions, &mut providers, &config)?;
     // Every `file` credential source configuration declares, after the Lua
     // providers are added so their sources are protected too: a relative
     // path joins the workspace the reader reads it from, an absolute one

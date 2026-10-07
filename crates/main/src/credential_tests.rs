@@ -13,6 +13,7 @@ fn provider(name: &str) -> ProviderData {
         credential: None,
         credential_name: None,
         headers: Default::default(),
+        placeholders: Default::default(),
         models: Vec::new(),
         reviewer_model: None,
     }
