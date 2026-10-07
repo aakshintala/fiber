@@ -245,9 +245,9 @@ fn a_closed_pipe_flush_with_no_match_stays_quiet_despite_skipped_directories() {
         Outcome::Done(code) => code,
         Outcome::Fallback => panic!("fell back"),
     };
-    // A broken pipe ends the process quietly with the exit it had so far.
-    // The flush breaks the pipe with nothing
-    // printed, so the skipped-directory notice never prints.
+    // A broken pipe ends the process quietly with the exit it had so far. The
+    // flush breaks the pipe with nothing printed, so the skipped-directory
+    // notice never prints.
     assert_eq!(code, 0);
     assert!(
         stderr.is_empty(),

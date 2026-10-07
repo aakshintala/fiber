@@ -44,11 +44,11 @@ const POLL: Duration = Duration::from_millis(20);
 const MAX_HEAD: usize = 8 * 1024;
 
 /// How many polls in a row a connection may send nothing before the listener
-/// drops it and serves the next. The listener
-/// serves one connection at a time and browsers open idle speculative
-/// connections, so silence on one cannot last to the callback's timeout. The
-/// count restarts whenever bytes arrive, so pauses between bytes do not add
-/// up; the callback's own timeout still ends the whole call.
+/// drops it and serves the next. The listener serves one connection at a time
+/// and browsers open idle speculative connections, so silence on one cannot
+/// last to the callback's timeout. The count restarts whenever bytes arrive,
+/// so pauses between bytes do not add up; the callback's own timeout still
+/// ends the whole call.
 const SILENT_POLLS: u32 = 100;
 
 /// What the browser shows after the redirect.

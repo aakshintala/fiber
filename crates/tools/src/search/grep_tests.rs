@@ -1196,8 +1196,8 @@ fn an_implicit_recursive_root_prints_without_the_dot_slash_prefix() {
         ("a.txt", "needle\n"),
         ("sub/c.txt", "needle\n"),
     ]));
-    // `-r` with no path searches `.` but prints
-    // paths without the walk's `./` prefix.
+    // `-r` with no path searches `.` but prints paths without the walk's `./`
+    // prefix.
     let (code, stdout, stderr) = text(&dir, &["-r", "needle"], "");
     assert_eq!(code, 0);
     assert_eq!(stdout, "a.txt:needle\nsub/c.txt:needle\n");
@@ -1280,10 +1280,9 @@ fn a_closed_pipe_with_a_zero_count_stays_quiet_despite_skipped_directories() {
         Outcome::Done(code) => code,
         Outcome::Fallback => panic!("fell back"),
     };
-    // A broken pipe ends the process quietly with the exit it had so far.
-    // The zero counts break the pipe with no
-    // match, so the exit stays 1 and the skipped-directory notice never
-    // prints.
+    // A broken pipe ends the process quietly with the exit it had so far. The
+    // zero counts break the pipe with no match, so the exit stays 1 and the
+    // skipped-directory notice never prints.
     assert_eq!(code, 1);
     assert!(
         stderr.is_empty(),

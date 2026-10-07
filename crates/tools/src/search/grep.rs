@@ -58,8 +58,8 @@ pub(crate) fn run(
     if options.files_with_matches && options.count {
         return Outcome::Fallback;
     }
-    // `-o` with `-v` or context runs the system grep,
-    // whose output for these combinations is not reproduced here.
+    // `-o` with `-v` or context runs the system grep, whose output for these
+    // combinations is not reproduced here.
     if options.only_matching && options.invert {
         return Outcome::Fallback;
     }

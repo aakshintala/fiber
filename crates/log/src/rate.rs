@@ -14,7 +14,8 @@ use serde_json::{Map, Value};
 /// "Seeing the tools").
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Rate {
-    /// The last `preamble_built`'s request fields' compact-JSON size in bytes; 0 before one.
+    /// The last `preamble_built`'s request fields' compact-JSON size in bytes;
+    /// 0 before one.
     preamble: u64,
     /// Cache-write tokens from the first own request after the build;
     /// None until that request's `usage_recorded`.
