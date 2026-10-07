@@ -3,9 +3,9 @@
 //! It holds no session.
 //!
 //! [`serve`] listens on `run/hub`, answers `start`, `status`,
-//! `prompt_history`, `feed`, `dismiss`, `recent` and `delete`, and relays
-//! session commands to `run/<session_id>` (`docs/invocation.md`, "What the
-//! hub speaks"). It sends `attention` to every connection
+//! `prompt_history`, `feed`, `dismiss`, `recent`, `sessions` and `delete`,
+//! and relays session commands to `run/<session_id>` (`docs/invocation.md`,
+//! "What the hub speaks"). It sends `attention` to every connection
 //! (`docs/invocation.md`, "Attention"). It exits once no client has been connected for
 //! `hub.idle_exit_ms` (`docs/configuration.md`).
 
@@ -23,6 +23,7 @@ mod prompt_history;
 mod recent;
 mod relay;
 mod resume;
+mod sessions;
 mod start;
 
 use std::io;
