@@ -274,7 +274,7 @@ fn a_resumed_session_cuts_a_shell_result_to_its_configured_cap() {
     let action = completed["action_id"].as_str().unwrap();
     let artifact = format!("artifacts/{action}.txt");
     assert_eq!(completed["payload"]["artifact"], artifact.as_str());
-    let dir = run_session_dir(&setup, &id);
+    let dir = second.session_dir(&setup);
     let path = dir.join(&artifact);
     assert_eq!(fs::read_to_string(&path).unwrap(), full);
     assert_eq!(
@@ -298,18 +298,6 @@ fn a_resumed_session_cuts_a_shell_result_to_its_configured_cap() {
         })
         .collect();
     assert_eq!(seqs, (0..seqs.len() as u64).collect::<Vec<_>>());
-}
-
-/// The session's directory for `id`.
-fn run_session_dir(setup: &Setup, id: &str) -> PathBuf {
-    let workspace = fs::canonicalize(setup.root.path()).unwrap();
-    let key = workspace.to_string_lossy().replace('/', "-");
-    setup
-        .home()
-        .join("projects")
-        .join(key)
-        .join("sessions")
-        .join(id)
 }
 
 #[test]

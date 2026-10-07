@@ -21,7 +21,7 @@ use fakes::Scripted;
 use r#loop::{ResultCaps, capped};
 use serde_json::{Value, json};
 
-use support::{Session, TestTool, calls_reply, delivery};
+use support::{Session, TestTool, calls_reply, delivery, kinds};
 
 /// A session whose first reply makes `calls` and whose second says "Done.",
 /// with `tools` passed through `capped` with `caps` before they are
@@ -47,6 +47,40 @@ fn turn(
     session.inbox.send(delivery("go")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     let lines = session.lines();
+    // The complete turn, in order: a `tool_call_delta` line is ephemeral,
+    // so it is dropped before comparing (`docs/testing.md`, "Event
+    // streams"). The `cat` tool only reads, so no `permission_` line is
+    // written (`docs/permissions.md`, "Fast paths").
+    assert_eq!(
+        kinds(&lines)
+            .into_iter()
+            .filter(|kind| *kind != "tool_call_delta")
+            .collect::<Vec<_>>(),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            // "Done." streams as two deltas.
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     (session, lines)
 }
 
