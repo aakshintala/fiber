@@ -3,7 +3,7 @@
 //! request stay byte-identical across sessions with the same inputs
 //! (`docs/prompt-cache.md`).
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use contract::ErrorCode;
@@ -29,31 +29,13 @@ type SessionTools = (
 /// hosted search type of the session's model. `read`, `write` and `edit`
 /// share one session's file state, which a handoff forgets, take `locks`,
 /// the session's per-path lock, which an extension's `host.fs` shares, and
-/// `read` runs
-/// the image child (`fiber image`) into `artifacts`, the session's
+/// `read` runs the image child (`fiber image`) into `artifacts`, the session's
 /// `artifacts/` directory, where `web_fetch` saves the PDFs and images it
-/// downloads; the model's
-/// `shell` moves commands into `jobs`, which the `jobs` tool lists, waits on
-/// and stops. The driver shell runs in the foreground only. A failure to find
-/// the running binary is `io_failed`, before any session line.
+/// downloads; the model's `shell` moves commands into `jobs`, which the
+/// `jobs` tool lists, waits on and stops. The driver shell runs in the
+/// foreground only. `fiber` is the executable recorded at process startup.
 pub(crate) fn builtin(
-    workspace: &Path,
-    artifacts: &Path,
-    clock: &Arc<dyn Clock>,
-    jobs: &Arc<jobs::Registry>,
-    locks: &Arc<tools::PathLocks>,
-    web_search: Option<&str>,
-) -> Result<SessionTools, Failure> {
-    let fiber = std::env::current_exe()
-        .map_err(|error| failed(ErrorCode::IoFailed, format!("the running binary: {error}")))?;
-    with_binary(fiber, workspace, artifacts, clock, jobs, locks, web_search)
-}
-
-/// [`builtin`] with the binary the shell's search and the image child run.
-/// Tests pass a stub, because the test harness would treat `image` as a
-/// test filter and run its suite.
-pub(crate) fn with_binary(
-    fiber: std::path::PathBuf,
+    fiber: PathBuf,
     workspace: &Path,
     artifacts: &Path,
     clock: &Arc<dyn Clock>,
