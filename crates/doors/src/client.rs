@@ -225,7 +225,12 @@ pub(crate) fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
             }
         }
         Command::Tools => {
-            let tools = conn.gate.tools.clone();
+            let tools = conn
+                .gate
+                .tools
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone();
             // The log is dropped once read, so this connection does not
             // hold the session lock. Without a log the session is closing
             // and the answer keeps its byte sizes.

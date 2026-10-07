@@ -5,7 +5,7 @@
 
 use config::{Config, ProjectKey, ProviderData, Secret, Sources, store_credential};
 
-use super::session_credential;
+use super::{session_credential, switch_credential};
 
 fn provider(name: &str) -> ProviderData {
     ProviderData {
@@ -74,4 +74,24 @@ fn the_reviewer_of_another_provider_uses_its_own_label() {
     let config = config(&root, &STORED, SETTINGS);
     let (label, key) = session_credential(&config, &provider("other"), None).unwrap();
     assert_eq!((label.as_str(), key.expose()), ("own", "other-own"));
+}
+
+#[test]
+fn a_switch_read_maps_a_config_error_to_its_code() {
+    let root = fakes::TempDir::new("fiber-switch-credential");
+    let config = config(&root, &[("acme", "cfg")], SETTINGS);
+    let read = switch_credential(&config, &provider("acme"), "cfg", &|command| {
+        command.output()
+    })
+    .unwrap();
+    assert_eq!(read.secret.expose(), "acme-cfg");
+    assert_eq!(read.file, None);
+    let mut command = provider("acme");
+    command.credential =
+        Some(serde_json::from_value(serde_json::json!({"command": ["false"]})).unwrap());
+    let failure = switch_credential(&config, &command, "default", &|command| command.output())
+        .err()
+        .unwrap();
+    assert_eq!(failure.code, contract::ErrorCode::CredentialMissing);
+    assert!(failure.message.contains("`false`"), "{}", failure.message);
 }

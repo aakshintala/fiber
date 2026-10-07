@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, ExitStatus};
 use std::sync::mpsc;
 use std::thread;
+use std::time::Duration;
 
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
@@ -27,6 +28,39 @@ use support::*;
 /// the fake server, and makes `fake/m` the configured model. `n` takes
 /// `low` and `high`, defaulting to `low`.
 fn install_switch_provider(setup: &Setup, server: &ProviderServer) {
+    install_models(
+        setup,
+        &json!([
+            {"id": "m", "protocol": "openai-responses",
+             "base_url": format!("{}/v1", server.url()), "context_window": 100000},
+            {"id": "n", "protocol": "openai-responses",
+             "base_url": format!("{}/v1", server.url()), "context_window": 100000,
+             "thinking_levels": ["low", "high"], "thinking_default": "low"},
+        ]),
+        "fake/m",
+    );
+}
+
+/// Installs a provider `fake` with `m` on `openai-responses` and `w` on
+/// `anthropic-messages` with the hosted search `web_search_20250305`, both
+/// at the fake server, and makes `configured` the configured model.
+fn install_hosted_provider(setup: &Setup, server: &ProviderServer, configured: &str) {
+    install_models(
+        setup,
+        &json!([
+            {"id": "m", "protocol": "openai-responses",
+             "base_url": format!("{}/v1", server.url()), "context_window": 100000},
+            {"id": "w", "protocol": "anthropic-messages",
+             "base_url": format!("{}/v1", server.url()), "context_window": 100000,
+             "web_search": "web_search_20250305"},
+        ]),
+        configured,
+    );
+}
+
+/// Installs a provider `fake` whose models are `models`, reading its key
+/// from `FIBER_TEST_FAKE_KEY`, and makes `configured` the configured model.
+fn install_models(setup: &Setup, models: &Value, configured: &str) {
     let source = setup.root.path().join("src");
     write_json(
         &source.join("extension.json"),
@@ -37,13 +71,7 @@ fn install_switch_provider(setup: &Setup, server: &ProviderServer) {
         &json!({
             "name": "fake",
             "credential": {"env": "FIBER_TEST_FAKE_KEY"},
-            "models": [
-                {"id": "m", "protocol": "openai-responses",
-                 "base_url": format!("{}/v1", server.url()), "context_window": 100000},
-                {"id": "n", "protocol": "openai-responses",
-                 "base_url": format!("{}/v1", server.url()), "context_window": 100000,
-                 "thinking_levels": ["low", "high"], "thinking_default": "low"},
-            ]
+            "models": models,
         }),
     );
     extensions::plan(
@@ -58,7 +86,7 @@ fn install_switch_provider(setup: &Setup, server: &ProviderServer) {
     .unwrap();
     write_json(
         &setup.home().join("config.json"),
-        &json!({"model": "fake/m"}),
+        &json!({"model": configured}),
     );
 }
 
@@ -1026,4 +1054,681 @@ fn a_resume_restores_the_switched_model_and_level() {
     assert_eq!(seen.len(), 3, "{seen:?}");
     assert_eq!(seen[2]["model"], "n");
     assert_eq!(seen[2]["reasoning"]["effort"], "high");
+}
+
+/// An `anthropic-messages` reply of `Hello.`.
+fn anthropic_hello() -> Response {
+    let events = [
+        json!({"type": "message_start", "message": {"id": "msg_1"}}),
+        json!({"type": "content_block_start", "index": 0,
+            "content_block": {"type": "text", "text": ""}}),
+        json!({"type": "content_block_delta", "index": 0,
+            "delta": {"type": "text_delta", "text": "Hello."}}),
+        json!({"type": "content_block_stop", "index": 0}),
+        json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"},
+            "usage": {"input_tokens": 10, "output_tokens": 3}}),
+        json!({"type": "message_stop"}),
+    ];
+    Response::stream(
+        events
+            .iter()
+            .map(|event| format!("data: {event}\n\n"))
+            .collect::<String>(),
+    )
+}
+
+/// Each request body the fake server saw, by path, in arrival order.
+fn all_bodies(server: &ProviderServer) -> Vec<(String, Value)> {
+    server
+        .requests()
+        .into_iter()
+        .map(|request| (request.path, serde_json::from_slice(&request.body).unwrap()))
+        .collect()
+}
+
+/// The `web_search` entries of a request body's `tools`.
+fn searches(body: &Value) -> Vec<Value> {
+    body["tools"]
+        .as_array()
+        .map(|tools| {
+            tools
+                .iter()
+                .filter(|tool| tool["name"] == "web_search")
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Asks for the `tools` answer as `id` and returns its lines and its
+/// `web_search` entries.
+fn tools_answer(client: &Socket, id: &str) -> (Vec<Value>, Vec<Value>) {
+    client.send(&format!(r#"{{"id":"{id}","command":"tools"}}"#));
+    let lines = until(client, "the tools answer", |line| {
+        line["payload"]["command_id"] == id
+    });
+    let answer = lines.last().unwrap();
+    assert_eq!(answer["kind"], "command_accepted", "{answer}");
+    let tools = answer["payload"]["result"]["tools"].as_array().unwrap();
+    let mut names: Vec<&str> = tools
+        .iter()
+        .map(|tool| tool["name"].as_str().unwrap())
+        .collect();
+    let listed = names.clone();
+    names.sort_unstable();
+    assert!(
+        names.windows(2).all(|pair| pair[0] != pair[1]),
+        "{listed:?}"
+    );
+    let found = tools
+        .iter()
+        .filter(|tool| tool["name"] == "web_search")
+        .cloned()
+        .collect();
+    (lines, found)
+}
+
+/// A switched session's stream, its two `web_search` answers and its
+/// request bodies by path.
+type Switched = (Vec<Value>, [Vec<Value>; 2], Vec<(String, Value)>);
+
+/// Runs one session started on `from`: a turn, the `tools` answer, a
+/// switch to `to`, a turn, the `tools` answer, then `close`. Returns the
+/// stream, the two `web_search` answers and the request bodies.
+fn switch_and_list(from: &str, to: &str, replies: [Response; 2]) -> Switched {
+    let setup = Setup::new();
+    let server = ProviderServer::start(replies).unwrap();
+    install_hosted_provider(&setup, &server, from);
+    let id = doors::mint("s_");
+    let running = start_session(&setup, &id, &[]);
+    let client = running.connect(&setup.session_socket(&id));
+    running.wait_for("extensions_loaded");
+    let mut stream = vec![subscribe(&client)];
+    prompt(&client, "c_prompt", "hi");
+    stream.extend(until(&client, "turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    }));
+    let (lines, before) = tools_answer(&client, "c_t0");
+    stream.extend(lines);
+    model(&client, "c_model", to, None);
+    stream.extend(until(&client, "model_changed", |line| {
+        line["kind"] == "model_changed"
+    }));
+    // The switch applied before the next turn starts, so the answer after
+    // that turn shows it.
+    prompt(&client, "c_again", "again");
+    stream.extend(until(&client, "turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    }));
+    let (lines, after) = tools_answer(&client, "c_t1");
+    stream.extend(lines);
+    close(&client);
+    stream.extend(until_close(&client));
+    drop(client);
+    let (status, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+    let reply: &[&str] = &[
+        "step_started",
+        "assistant_message_started",
+        "assistant_message_delta",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+    ];
+    let openai_reply: &[&str] = &[
+        "step_started",
+        "assistant_message_started",
+        "assistant_message_delta",
+        "assistant_message_delta",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+    ];
+    let (first, second) = if from.ends_with("/w") {
+        (reply, openai_reply)
+    } else {
+        (openai_reply, reply)
+    };
+    let expected = [
+        &[
+            "command_accepted",
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "clients",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "command_accepted",
+        ] as &[&str],
+        first,
+        &[
+            "turn_completed",
+            "command_accepted",
+            "command_accepted",
+            "model_changed",
+            "preamble_built",
+            "turn_started",
+            "command_accepted",
+        ],
+        second,
+        &[
+            "turn_completed",
+            "command_accepted",
+            "command_accepted",
+            "fiber_exited",
+        ],
+    ]
+    .concat();
+    assert_eq!(kinds(&stream), expected);
+    let built = stream
+        .iter()
+        .rev()
+        .find(|line| line["kind"] == "preamble_built")
+        .unwrap();
+    assert_eq!(built["payload"]["reason"], "switch");
+    (stream, [before, after], all_bodies(&server))
+}
+
+#[test]
+fn a_switch_to_a_model_without_hosted_search_withdraws_it() {
+    let (stream, [before, after], seen) =
+        switch_and_list("fake/w", "fake/m", [anthropic_hello(), hello()]);
+    assert_eq!(before.len(), 1, "{before:?}");
+    assert_eq!(before[0]["source"], "builtin");
+    assert!(after.is_empty(), "{after:?}");
+    let built = stream
+        .iter()
+        .rev()
+        .find(|line| line["kind"] == "preamble_built")
+        .unwrap();
+    assert!(
+        built["payload"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|tool| tool["name"] != "web_search"),
+        "{built}"
+    );
+    assert_eq!(seen.len(), 2, "{seen:?}");
+    assert_eq!(seen[0].0, "/v1/messages");
+    assert_eq!(
+        searches(&seen[0].1),
+        vec![json!({"type": "web_search_20250305", "name": "web_search"})]
+    );
+    assert_eq!(seen[1].0, "/v1/responses");
+    assert!(searches(&seen[1].1).is_empty(), "{:?}", seen[1].1);
+}
+
+#[test]
+fn a_switch_to_a_model_with_hosted_search_declares_it() {
+    let (stream, [before, after], seen) =
+        switch_and_list("fake/m", "fake/w", [hello(), anthropic_hello()]);
+    assert!(before.is_empty(), "{before:?}");
+    assert_eq!(after.len(), 1, "{after:?}");
+    assert_eq!(after[0]["source"], "builtin");
+    assert_eq!(after[0]["state"], "full");
+    let built = stream
+        .iter()
+        .rev()
+        .find(|line| line["kind"] == "preamble_built")
+        .unwrap();
+    let declared: Vec<&Value> = built["payload"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|tool| tool["name"] == "web_search")
+        .collect();
+    assert_eq!(declared.len(), 1, "{built}");
+    assert_eq!(declared[0]["registered_by"], "builtin");
+    assert_eq!(seen.len(), 2, "{seen:?}");
+    assert_eq!(seen[0].0, "/v1/responses");
+    assert!(searches(&seen[0].1).is_empty(), "{:?}", seen[0].1);
+    assert_eq!(seen[1].0, "/v1/messages");
+    assert_eq!(
+        searches(&seen[1].1),
+        vec![json!({"type": "web_search_20250305", "name": "web_search"})]
+    );
+}
+
+/// Installs extension `short` from source: the provider data `data`, and
+/// `init.lua` when given.
+fn install_extension(setup: &Setup, short: &str, data: &Value, init: Option<&str>) {
+    let source = setup.root.path().join(format!("src-{short}"));
+    write_json(
+        &source.join("extension.json"),
+        &json!({"name": short, "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
+    );
+    let provider = data["name"].as_str().unwrap();
+    write_json(&source.join(format!("providers/{provider}.json")), data);
+    if let Some(init) = init {
+        fs::write(source.join("init.lua"), init).unwrap();
+    }
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(source),
+        "0.0.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+}
+
+/// Provider `other` with `om` on `openai-responses` at the fake server,
+/// whose key `credential` gives.
+fn install_other(setup: &Setup, server: &ProviderServer, credential: &Value) {
+    install_extension(
+        setup,
+        "other",
+        &json!({
+            "name": "other",
+            "credential": credential,
+            "models": [{"id": "om", "protocol": "openai-responses",
+                        "base_url": format!("{}/v1", server.url()), "context_window": 100000}],
+        }),
+        None,
+    );
+}
+
+/// Waits under the test's deadline for `file` to hold a whole line, and
+/// returns it trimmed.
+fn ready_line(setup: &Setup, file: &Path) -> String {
+    let file = file.to_path_buf();
+    fakes::within("the ready file", setup.deadline.left(), move || {
+        loop {
+            if let Ok(text) = fs::read_to_string(&file)
+                && text.ends_with('\n')
+            {
+                return text.trim().to_owned();
+            }
+            thread::yield_now();
+        }
+    })
+}
+
+/// The bodies of the requests the fake server saw, with their
+/// `authorization` header.
+fn authorized(server: &ProviderServer) -> Vec<Option<String>> {
+    server
+        .requests()
+        .into_iter()
+        .filter(|request| request.path == "/v1/responses")
+        .map(|request| request.header("authorization").map(str::to_owned))
+        .collect()
+}
+
+#[test]
+fn a_switch_to_an_unloaded_lua_provider_sends_its_token() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    install_switch_provider(&setup, &server);
+    install_extension(
+        &setup,
+        "luax",
+        &json!({
+            "name": "lp",
+            "models": [{"id": "lm", "protocol": "openai-responses",
+                        "base_url": format!("{}/v1", server.url()), "context_window": 100000}],
+        }),
+        Some(
+            "fiber.provider(\"lp\", { credential = { timeout = 5000,\n\
+               run = function() return { token = \"tok-lp\", expires_at = 4102444800 } end } })\n",
+        ),
+    );
+    let id = doors::mint("s_");
+    let running = start_session(&setup, &id, &[]);
+    let client = running.connect(&setup.session_socket(&id));
+    running.wait_for("extensions_loaded");
+    let mut stream = vec![subscribe(&client)];
+    model(&client, "c_model", "lp/lm", None);
+    stream.extend(until(&client, "model_changed", |line| {
+        line["kind"] == "model_changed"
+    }));
+    prompt(&client, "c_prompt", "hi");
+    stream.extend(until(&client, "turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    }));
+    close(&client);
+    stream.extend(until_close(&client));
+    drop(client);
+    let (status, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+    assert_eq!(
+        kinds(&stream),
+        [
+            "command_accepted",
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "clients",
+            "command_accepted",
+            "model_changed",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "command_accepted",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "command_accepted",
+            "fiber_exited",
+        ]
+    );
+    let changed = stream
+        .iter()
+        .find(|line| line["kind"] == "model_changed")
+        .unwrap();
+    assert_eq!(changed["payload"]["after"]["model"], "lp/lm");
+    assert_eq!(
+        authorized(&server),
+        vec![Some(fakes::fingerprint("Bearer tok-lp"))]
+    );
+}
+
+#[test]
+fn a_command_source_runs_once_across_switches() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    install_switch_provider(&setup, &server);
+    let marker = setup.root.path().join("ran");
+    install_other(
+        &setup,
+        &server,
+        &json!({"command": ["sh", "-c", format!("echo x >> '{}'; echo other-key", marker.display())]}),
+    );
+    let id = doors::mint("s_");
+    let running = start_session(&setup, &id, &[]);
+    let client = running.connect(&setup.session_socket(&id));
+    running.wait_for("extensions_loaded");
+    let mut stream = vec![subscribe(&client)];
+    for (command, reference) in [("c_1", "other/om"), ("c_2", "fake/m"), ("c_3", "other/om")] {
+        model(&client, command, reference, None);
+        stream.extend(until(&client, "model_changed", |line| {
+            line["kind"] == "model_changed"
+        }));
+    }
+    prompt(&client, "c_prompt", "hi");
+    stream.extend(until(&client, "turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    }));
+    close(&client);
+    stream.extend(until_close(&client));
+    drop(client);
+    let (status, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+    assert_eq!(
+        kinds(&stream),
+        [
+            "command_accepted",
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "clients",
+            "command_accepted",
+            "model_changed",
+            "command_accepted",
+            "model_changed",
+            "command_accepted",
+            "model_changed",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "command_accepted",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "command_accepted",
+            "fiber_exited",
+        ]
+    );
+    assert_eq!(fs::read_to_string(&marker).unwrap(), "x\n", "one run");
+    assert_eq!(
+        authorized(&server),
+        vec![Some(fakes::fingerprint("Bearer other-key"))]
+    );
+}
+
+#[test]
+fn a_failed_read_is_rejected_with_its_code_and_read_again_later() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([]).unwrap();
+    install_switch_provider(&setup, &server);
+    let fixed = setup.root.path().join("fixed");
+    let script = format!(
+        "if [ -e '{}' ]; then echo other-key; else exit 1; fi",
+        fixed.display()
+    );
+    install_other(&setup, &server, &json!({"command": ["sh", "-c", script]}));
+    let id = doors::mint("s_");
+    let running = start_session(&setup, &id, &[]);
+    let client = running.connect(&setup.session_socket(&id));
+    running.wait_for("extensions_loaded");
+    let mut stream = vec![subscribe(&client)];
+    model(&client, "c_1", "other/om", None);
+    stream.extend(until(&client, "command_rejected", |line| {
+        line["kind"] == "command_rejected"
+    }));
+    let rejected = stream.last().unwrap().clone();
+    assert_eq!(rejected["payload"]["command_id"], "c_1");
+    assert_eq!(rejected["payload"]["code"], "credential_missing");
+    let message = rejected["payload"]["message"].as_str().unwrap();
+    assert!(message.contains("`sh`"), "{message}");
+    assert!(!message.contains("exit 1"), "{message}");
+    let before = log_kinds(&setup, &id);
+    // The complete ordered kinds so far: startup only, since a rejected
+    // switch writes no durable line.
+    assert_eq!(
+        before,
+        ["session_started", "fiber_started", "extensions_loaded"].map(str::to_owned),
+        "{before:?}"
+    );
+    fs::write(&fixed, "").unwrap();
+    model(&client, "c_2", "other/om", None);
+    stream.extend(until(&client, "model_changed", |line| {
+        line["kind"] == "model_changed"
+    }));
+    close(&client);
+    stream.extend(until_close(&client));
+    drop(client);
+    let (status, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+    assert_eq!(
+        kinds(&stream),
+        [
+            "command_accepted",
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "clients",
+            "command_rejected",
+            "command_accepted",
+            "model_changed",
+            "command_accepted",
+            "fiber_exited",
+        ]
+    );
+    // No turn ever started, so closing the session leaves no log behind.
+    assert!(
+        !session_dir(&setup, &id).exists(),
+        "a session never prompted keeps no log"
+    );
+}
+
+#[test]
+fn sigterm_during_a_switchs_read_exits_143_and_kills_the_command() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    install_switch_provider(&setup, &server);
+    let ready = setup.root.path().join("ready");
+    let script = format!("echo $$ > '{}'; exec sleep 30", ready.display());
+    install_other(&setup, &server, &json!({"command": ["sh", "-c", script]}));
+    let id = doors::mint("s_");
+    let running = start_session(&setup, &id, &[]);
+    let client = running.connect(&setup.session_socket(&id));
+    running.wait_for("extensions_loaded");
+    let _subscribed = subscribe(&client);
+    // A turn first: a session never prompted leaves no log behind.
+    prompt(&client, "c_prompt", "hi");
+    until(&client, "turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    model(&client, "c_model", "other/om", None);
+    let command: u32 = ready_line(&setup, &ready).parse().unwrap();
+    let watchdog = Watchdog::group(command);
+    let session = running.group;
+    assert!(kill_pid(setup.deadline, session, "TERM").unwrap());
+    let rejected = until(&client, "command_rejected", |line| {
+        line["kind"] == "command_rejected"
+    });
+    assert_eq!(rejected.last().unwrap()["payload"]["code"], "closing");
+    drop(client);
+    // Under the 5 second shutdown bound, which would end the process with
+    // no `fiber_exited`.
+    let (status, stderr) = fakes::within("the session's exit", Duration::from_secs(4), move || {
+        running.wait()
+    });
+    assert_eq!(status.code(), Some(143), "stderr: {stderr}");
+    assert!(
+        !group_alive(setup.deadline, command),
+        "the command was killed"
+    );
+    watchdog.stand_down(setup.deadline.cleanup());
+    // The complete ordered kinds of the session log: the turn, then the
+    // exit, with no `model_changed`, since the switch died in its read.
+    assert_eq!(
+        log_kinds(&setup, &id),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+        .map(str::to_owned)
+        .to_vec(),
+    );
+}
+
+/// An `openai-responses` stream calling `read` on `path`.
+fn read_call(path: &Path) -> Response {
+    stream(&[json!({"type": "response.output_item.done", "item": {
+        "type": "function_call",
+        "id": "fc_call_1",
+        "call_id": "call_1",
+        "name": "read",
+        "arguments": json!({"path": path}).to_string()
+    }})])
+}
+
+#[test]
+fn the_file_a_switch_read_is_denied_after_its_link_moves() {
+    let setup = Setup::new();
+    let server =
+        ProviderServer::start([read_call(&setup.root.path().join("keys/a")), hello()]).unwrap();
+    install_switch_provider(&setup, &server);
+    let keys = setup.root.path().join("keys");
+    fs::create_dir_all(&keys).unwrap();
+    for (name, text) in [("a", "sk-file-a"), ("b", "sk-file-b"), ("c", "sk-file-c")] {
+        fs::write(keys.join(name), text).unwrap();
+    }
+    let link = keys.join("link");
+    std::os::unix::fs::symlink(keys.join("c"), &link).unwrap();
+    install_other(&setup, &server, &json!({"file": link}));
+    let id = doors::mint("s_");
+    let running = start_session(&setup, &id, &[]);
+    let client = running.connect(&setup.session_socket(&id));
+    running.wait_for("extensions_loaded");
+    let mut stream = vec![subscribe(&client)];
+    // Started against `c`; the switch reads `a`; the link then moves on.
+    let repoint = |target: &str| {
+        fs::remove_file(&link).unwrap();
+        std::os::unix::fs::symlink(keys.join(target), &link).unwrap();
+    };
+    repoint("a");
+    model(&client, "c_model", "other/om", None);
+    stream.extend(until(&client, "model_changed", |line| {
+        line["kind"] == "model_changed"
+    }));
+    repoint("b");
+    prompt(&client, "c_prompt", "read it");
+    stream.extend(until(&client, "turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    }));
+    close(&client);
+    stream.extend(until_close(&client));
+    drop(client);
+    let (status, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+    assert_eq!(
+        kinds(&stream),
+        [
+            "command_accepted",
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "clients",
+            "command_accepted",
+            "model_changed",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "command_accepted",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "permission_resolved",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "command_accepted",
+            "fiber_exited",
+        ]
+    );
+    let resolved = stream
+        .iter()
+        .find(|line| line["kind"] == "permission_resolved")
+        .unwrap();
+    assert_eq!(resolved["payload"]["decided_by"], "credential_deny");
+    let completed = stream
+        .iter()
+        .find(|line| line["kind"] == "tool_call_completed")
+        .unwrap();
+    assert_eq!(completed["payload"]["status"], "denied");
+    let log = fs::read_to_string(session_dir(&setup, &id).join("events.jsonl")).unwrap();
+    assert!(
+        !log.contains("sk-file-a"),
+        "no byte of the key reached the log"
+    );
+    assert_eq!(
+        authorized(&server)[0],
+        Some(fakes::fingerprint("Bearer sk-file-a"))
+    );
 }

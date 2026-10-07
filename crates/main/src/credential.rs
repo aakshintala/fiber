@@ -23,6 +23,22 @@ pub(crate) fn session_credential(
     Ok((label, key))
 }
 
+/// A switch's read of `provider`'s key under `label`, running a `command`
+/// source through `run`: the key and the canonical path of a `file` source
+/// it read. A source that cannot be read fails with its own code, such as
+/// `credential_missing` (`docs/model-routing.md`, "When a credential is
+/// missing or fails").
+pub(crate) fn switch_credential(
+    config: &Config,
+    provider: &ProviderData,
+    label: &str,
+    run: config::Runner<'_>,
+) -> Result<config::Read, Failure> {
+    config
+        .credential_with(provider, label, run)
+        .map_err(|e| failed(e.code(), e))
+}
+
 #[cfg(test)]
 #[path = "credential_tests.rs"]
 mod tests;

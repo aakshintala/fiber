@@ -102,7 +102,7 @@ struct Parts {
     mcp: mcp_servers::Specs,
     /// The second-model preparation, for `Loop::switcher`.
     switching: switch::Switching,
-    /// The session's own thinking choice and hosted search type at start.
+    /// The session's own thinking choice at start.
     switchable: r#loop::Switchable,
     /// The session model's hosted search type, such as `web_search_20250305`.
     web_search: Option<String>,
@@ -488,14 +488,14 @@ fn parts_in(
     // and docs/extensions.md, "The extension API version"; fixed by #382.
     // Notices from configuration and loading are dropped.
     let (mut providers, _notices) = Providers::load(&home).map_err(|e| failed(e.code(), e))?;
-    // The registry as `Switching::new` fills it for a switch: before any
-    // `add_lua`.
-    let snapshot = providers.clone();
     let locks = Arc::new(tools::PathLocks::new());
     let session_locks: Arc<dyn contract::files::PathLock> = locks.clone();
     let mut extensions =
         extensions::SessionExtensions::load(&home, &config, Arc::clone(&clock), session_locks);
     let naming = lua_providers::add_lua(&extensions, &mut providers, &config)?;
+    let owners = (extensions.lua_providers().iter())
+        .map(|(extension, lua)| (lua.name().to_owned(), extension.clone()))
+        .collect();
     // Every `file` credential source configuration declares, after the Lua
     // providers are added so their sources are protected too: a relative
     // path joins the workspace the reader reads it from, an absolute one
@@ -513,45 +513,42 @@ fn parts_in(
     let context_window = settings::context_window(model.model, &model.reference())?;
     let label =
         recorded_credential.map_or_else(|| config.credential_label(model.provider), str::to_owned);
-    let (key, signer) =
-        lua_providers::session_credential(&providers, model.provider, &label, || {
-            crate::credential::session_credential(&config, model.provider, recorded_credential)
-                .map(|(_, key)| key)
-        })?;
+    let lua = providers.lua(&model.provider.name);
+    let (key, signer) = lua_providers::session_credential(lua, model.provider, &label, || {
+        crate::credential::session_credential(&config, model.provider, recorded_credential)
+            .map(|(_, key)| key)
+    })?;
     let session_credential = (key.clone(), signer.clone());
-    let provider = connect(model, key, signer, providers.lua(&model.provider.name))?;
-    // The credentials read at startup, frozen into `Switching` once the
-    // reviewer is chosen: the session's entry first, so a reviewer on the
-    // session's provider reuses its key and signer.
+    let provider = connect(model, key, signer, lua)?;
+    // The credentials read at startup, seeding `Switching`'s keys: the
+    // session's entry first, so a reviewer on its provider reuses them.
     let mut credentials: switch::Credentials = BTreeMap::new();
     credentials.insert(
         model.provider.name.clone(),
         (label.clone(), session_credential),
     );
     let reviewer = {
-        let mut lookup = |provider: &config::ProviderData| -> Result<(String, lua_providers::KeyAndSigner), Failure> {
-            if let Some(entry) = credentials.get(&provider.name) {
-                return Ok(entry.clone());
-            }
-            let label = config.credential_label(provider);
-            let (key, signer) = lua_providers::session_credential(&providers, provider, &label, || {
-                crate::credential::session_credential(&config, provider, None)
-                    .map(|(_, key)| key)
-            })?;
-            credentials.insert(
-                provider.name.clone(),
-                (label.clone(), (key.clone(), signer.clone())),
-            );
-            Ok((label, (key, signer)))
-        };
+        let mut lookup =
+            |provider: &config::ProviderData| -> Result<lua_providers::Access, Failure> {
+                let lua = providers.lua(&provider.name);
+                if let Some((_, read)) = credentials.get(&provider.name) {
+                    return Ok(lua_providers::Access::new(lua, read.clone()));
+                }
+                let label = config.credential_label(provider);
+                let read = lua_providers::session_credential(lua, provider, &label, || {
+                    crate::credential::session_credential(&config, provider, None)
+                        .map(|(_, key)| key)
+                })?;
+                credentials.insert(provider.name.clone(), (label, read.clone()));
+                Ok(lua_providers::Access::new(lua, read))
+            };
         choose_reviewer(&providers, &config, &model, &mut lookup)
     };
     // Every refreshed provider the session does not use is unloaded once
     // its list is written: only the session's and the reviewer's stay
-    // loaded (`docs/model-routing.md`, "Model discovery"). `providers` is
-    // a local, so dropping it unloads the rest; the session's and the
-    // reviewer's signers hold their own Arcs.
-    {
+    // loaded, held by `Switching` (`docs/model-routing.md`, "Model
+    // discovery"). The switch registry is `providers` holding no Lua handle.
+    let loaded: Vec<_> = {
         let mut keep = vec![model.provider.name.as_str()];
         if let Some(name) = reviewer
             .as_ref()
@@ -561,7 +558,12 @@ fn parts_in(
             keep.push(name);
         }
         extensions.retain_lua_providers(&keep);
-    }
+        (extensions.lua_providers().iter())
+            .map(|(_, lua)| (lua.name().to_owned(), Arc::clone(lua)))
+            .collect()
+    };
+    extensions.retain_lua_providers(&[]);
+    let extensions = Arc::new(extensions);
     let limits = settings::block_limits(&config);
     let retry = settings::retry_policy(&config);
     let handoff = handoff::handoff_settings(&config, &model.reference());
@@ -577,16 +579,20 @@ fn parts_in(
         &mut startup_notices,
     )
     .map_err(|e| failed(e.code, e.message))?;
-    // The switch preparation over the load clone: every retained Lua
-    // provider with a model cache, the naming list, and the credentials
-    // read above.
+    let loader = switch::Loader {
+        extensions: Arc::clone(&extensions),
+        clock: Arc::clone(&clock),
+        locks: locks.clone(),
+        owners,
+    };
     let switching = switch::Switching::new(
-        snapshot,
-        extensions.lua_providers(),
+        providers.clone(),
         naming,
         config.clone(),
         credentials,
-    )?;
+        loaded,
+        loader,
+    );
     // The extensions loaded above, started before the model was chosen:
     // choosing a Lua provider's model waits on them.
     // The session log's path is set by the caller, which mints the session
@@ -635,7 +641,7 @@ fn parts_in(
         caps: settings::result_caps(&config),
         credential_files,
         locks,
-        extensions: Arc::new(extensions),
+        extensions,
         mcp,
         switching,
         // The startup model's `:level` suffix, if any: a resumed session
@@ -643,7 +649,6 @@ fn parts_in(
         // stands.
         switchable: r#loop::Switchable {
             chosen: model.thinking,
-            web_search: model.model.web_search.clone(),
         },
         web_search: model.model.web_search.clone(),
     })
@@ -674,19 +679,13 @@ fn reviewer_reference(config: &Config, session: &extensions::Model<'_>) -> Resul
 /// session's own model. `credential` reads the startup map first, then the
 /// provider's configured label, so a reviewer on the session's own provider
 /// reuses the session's key and signer, and a `command` credential runs once
-/// per process; a switch passes a map-only lookup, which never reads a
-/// source (`docs/model-routing.md`, "Keys, tokens and OAuth").
-#[allow(
-    clippy::type_complexity,
-    reason = "the lookup's shape is the contract: provider in, label and key out"
-)]
+/// per process; a switch passes the access its read returned
+/// (`docs/model-routing.md`, "Keys, tokens and OAuth").
 fn choose_reviewer(
     providers: &Providers,
     config: &Config,
     session: &extensions::Model<'_>,
-    credential: &mut dyn FnMut(
-        &config::ProviderData,
-    ) -> Result<(String, lua_providers::KeyAndSigner), Failure>,
+    credential: &mut dyn FnMut(&config::ProviderData) -> Result<lua_providers::Access, Failure>,
 ) -> Result<r#loop::Reviewer, Failure> {
     let typed = reviewer_reference(config, session)?;
     let model = providers.resolve(&typed).map_err(|e| failed(e.code(), e))?;
@@ -694,11 +693,11 @@ fn choose_reviewer(
     // Another provider's reviewer goes through the same path, so a Lua
     // reviewer model works: the token when it registered `credential`,
     // else the key.
-    let (_, (key, signer)) = credential(model.provider)?;
+    let access = credential(model.provider)?;
     // The token is read once, so a failing `credential()` fails here:
     // not a startup error, the loop gets it and every reviewed call
     // escalates it (`docs/permissions.md`, "How it runs").
-    let provider = connect(model, key, signer, providers.lua(&model.provider.name))?;
+    let provider = connect(model, access.key, access.signer, access.lua.as_ref())?;
     Ok(r#loop::Reviewer {
         provider,
         model: Model {

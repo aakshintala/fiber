@@ -526,6 +526,13 @@ impl Providers {
         self.lua.get(name)
     }
 
+    /// Drops every Lua provider handle and keeps the models, placeholders
+    /// and addenda they supplied: a registry that names every installed
+    /// model and holds no extension's VM.
+    pub fn forget_lua(&mut self) {
+        self.lua.clear();
+    }
+
     /// The text of the chosen model's addendum file; `None` when the model
     /// names none.
     pub fn addendum(&self, model: &Model<'_>) -> Option<&str> {

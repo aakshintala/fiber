@@ -17,6 +17,28 @@ use provider::openai_responses::Responses;
 use provider::{Compat, Endpoint};
 use serde_json::Value;
 
+/// Whether this Fiber speaks `protocol`, checked before anything is read
+/// for the model `reference`: `bedrock-converse` fails as [`connect`] does.
+pub(crate) fn speaks(protocol: Protocol, reference: &str) -> Result<(), Failure> {
+    match protocol {
+        Protocol::BedrockConverse => Err(unspoken(reference)),
+        Protocol::OpenaiResponses
+        | Protocol::OpenaiCompletions
+        | Protocol::AnthropicMessages
+        | Protocol::GoogleGenerativeAi => Ok(()),
+    }
+}
+
+/// The model `reference` speaks a protocol this Fiber does not speak.
+fn unspoken(reference: &str) -> Failure {
+    failure(
+        ErrorCode::ProtocolUnsupported,
+        format!(
+            "The model `{reference}` speaks a protocol this Fiber does not speak yet; pick another model."
+        ),
+    )
+}
+
 /// The provider a model reaches: the endpoint and protocol construction the
 /// session's model and the reviewer's share. A reviewer failure never falls
 /// back to the session's model (`docs/permissions.md`, "How it runs").
@@ -86,15 +108,7 @@ pub(crate) fn connect(
                 None => gemini,
             })
         }
-        Protocol::BedrockConverse => {
-            return Err(failure(
-                ErrorCode::ProtocolUnsupported,
-                format!(
-                    "The model `{}` speaks a protocol this Fiber does not speak yet; pick another model.",
-                    model.reference()
-                ),
-            ));
-        }
+        Protocol::BedrockConverse => return Err(unspoken(&model.reference())),
     };
     Ok(match lua {
         Some(lua) => lua

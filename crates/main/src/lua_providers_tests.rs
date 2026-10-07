@@ -169,9 +169,12 @@ fn the_session_label_and_shared_credential_name_reach_credential() {
     // deadline instead of hanging the test.
     let (done, looked_up) = mpsc::channel();
     std::thread::spawn(move || {
-        drop(done.send(session_credential(&providers, &data, "work", || {
-            panic!("no key is read when credential() is registered")
-        })))
+        drop(done.send(session_credential(
+            providers.lua("acme"),
+            &data,
+            "work",
+            || panic!("no key is read when credential() is registered"),
+        )))
     });
     let (key, signer) = looked_up
         .recv_timeout(WAIT)

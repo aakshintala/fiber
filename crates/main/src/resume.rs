@@ -203,6 +203,7 @@ fn resumed_session(
         Err(e) => return ask_failed(e),
     };
     let forget = Arc::clone(&session_servers.forget);
+    let hosted_stands = crate::switch::hosted_stands(&tools);
     let workspace = std::path::PathBuf::from(&folded.workspace);
     let offer = Arc::new(extensions::SessionOffer::new(&home, &project, &workspace));
     let permissions = crate::ask_permissions(
@@ -237,9 +238,14 @@ fn resumed_session(
     let mut all_commands = r#loop::commands(&prompt_inputs, Path::new(&folded.workspace));
     all_commands.extend(extensions.commands());
     session.commands(all_commands);
+    let door = crate::switch::Door {
+        declare: session.declarer(),
+        hosted_stands,
+    };
     let cancel = Arc::new(r#loop::TurnCancel::default());
     // A signal while armed: the log stays as it was.
-    if let Some(code) = crate::shutdown::start(signals, &cancel, &session, jobs.clone()) {
+    let reads = switching.reads();
+    if let Some(code) = crate::shutdown::start(signals, &cancel, &session, jobs.clone(), reads) {
         session_servers.servers.stop();
         close(session, log, &home, dir, &workspace, &*clock);
         return code;
@@ -276,7 +282,7 @@ fn resumed_session(
                     looped
                         .handoff(handoff)
                         .on_handoff(forget)
-                        .switcher(switching.closure(), switchable)
+                        .switcher(switching.closure(door), switchable)
                         .repository_code(offer)
                 }),
                 budget,
