@@ -31,7 +31,9 @@ impl App {
     /// what it opens.
     #[cfg(test)]
     pub(crate) fn targets(&self) -> Vec<(usize, Target)> {
-        self.rows()
+        self.screen
+            .pages()
+            .rows()
             .into_iter()
             .enumerate()
             .filter_map(|(at, (_, target))| target.map(|target| (at, target)))
@@ -41,15 +43,16 @@ impl App {
     /// The columns of the `copy` cells `target` covers on its line, when
     /// it is a code block's copy target.
     pub(crate) fn copy_cells(&self, target: Target) -> Option<Range<u16>> {
-        self.pages
-            .copy_target(target, self.width)
+        self.screen
+            .pages()
+            .copy_target(target, self.screen.width())
             .map(|copy| copy.cols)
     }
 
     /// A click on a code block's `copy`: copies its code and shows
     /// "Copied".
     pub(super) fn copy(&mut self, target: Target) -> Effect {
-        let code = self.pages.copy_target(target, self.width);
+        let code = self.screen.pages().copy_target(target, self.screen.width());
         self.copied = code.is_some();
         code.map_or(Effect::None, |copy| Effect::Copy(copy.code))
     }

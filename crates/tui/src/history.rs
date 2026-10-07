@@ -210,14 +210,14 @@ impl App {
         let browsing = self.history.browsing(&self.draft.expand());
         let effect = match key {
             Key::Up => {
-                if self.draft.is_empty() || (!self.draft.up(self.width) && browsing) {
+                if self.draft.is_empty() || (!self.draft.up(self.screen.width()) && browsing) {
                     self.older()
                 } else {
                     Effect::None
                 }
             }
             Key::Down => {
-                if !self.draft.down(self.width) && browsing {
+                if !self.draft.down(self.screen.width()) && browsing {
                     self.newer()
                 } else {
                     Effect::None
@@ -441,7 +441,8 @@ impl App {
     /// a page it notes what covers the input box; once that differs,
     /// whatever opened or closed a panel, the recall waits no more.
     pub(super) fn settle(&mut self) {
-        self.settle_pages();
+        let height = self.conversation_height();
+        self.screen.settle(height);
         self.settle_pending_turn();
         if !self.history.waiting {
             return;

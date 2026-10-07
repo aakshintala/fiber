@@ -767,7 +767,11 @@ impl App {
         let max = self
             .home_screen()
             .map(|screen| {
-                max_question_scroll(self, &screen, Rect::new(0, 0, self.width, self.height))
+                max_question_scroll(
+                    self,
+                    &screen,
+                    Rect::new(0, 0, self.screen.width(), self.screen.height()),
+                )
             })
             .unwrap_or(0);
         if let Some(home) = self.home.as_mut()

@@ -127,7 +127,7 @@ fn hub_hello() -> contract::HubLine {
 
 /// Renders `app` at its size, takes the frame's targets, and returns them.
 fn frame(app: &mut App) -> Vec<Hit> {
-    let area = Rect::new(0, 0, app.width, app.height);
+    let area = Rect::new(0, 0, app.screen.width(), app.screen.height());
     let mut buf = Buffer::empty(area);
     let targets = crate::view::render(app, area, &mut buf, None);
     app.drawn(&targets);
@@ -143,7 +143,7 @@ fn key(app: &mut App, key: Key) -> Effect {
 
 /// The screen as text at the app's size.
 fn screen(app: &App) -> String {
-    let area = Rect::new(0, 0, app.width, app.height);
+    let area = Rect::new(0, 0, app.screen.width(), app.screen.height());
     let mut buf = Buffer::empty(area);
     crate::view::render(app, area, &mut buf, None);
     crate::view::text(&buf)
@@ -760,7 +760,8 @@ fn a_wrapped_item_is_revealed_whole() {
             let stops = frame(&mut app);
             let focused = app.focused().expect("focus");
             let rows = app
-                .pages
+                .screen
+                .pages()
                 .focus_items()
                 .into_iter()
                 .find(|(_, _, item)| *item == focused)
@@ -822,7 +823,7 @@ fn reveal_past_the_last_line_changes_nothing() {
     }
     // Five one-row replies and the prompt at height 6: three conversation
     // rows, scrolled to the top.
-    app.scroll.top = Some(0);
+    app.screen.jump(0);
     let len = app.lines().len();
     app.reveal(len);
     assert_eq!(app.top(), Some(0));

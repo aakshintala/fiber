@@ -22,9 +22,6 @@ use crate::input::Draft;
 use crate::keys::Key;
 use crate::link::Line;
 use crate::shell;
-#[cfg(test)]
-use crate::turn::Row;
-use crate::view::Scroll;
 use crate::window::Pages;
 use notices::Notices;
 use steering::Steering;
@@ -46,6 +43,9 @@ mod history;
 mod home;
 #[path = "app_mouse.rs"]
 mod mouse;
+mod screen;
+
+use screen::Screen;
 
 /// A line's payload as `$kind`; `None` when it does not parse, and the
 /// line is skipped.
@@ -174,11 +174,9 @@ pub(crate) struct App {
     pending: HashMap<String, (Kind, String)>,
     /// The notices floating over the conversation.
     notices: Notices,
-    /// The conversation, paged (`docs/tui.md`, "History and paging").
-    pages: Pages,
-    scroll: Scroll,
-    width: u16,
-    height: u16,
+    /// The conversation's size, scroll and pages (`docs/tui.md`, "History
+    /// and paging").
+    screen: Screen,
     /// The first Ctrl+C, waiting for the second. Its hint shows while set.
     armed_at: Option<Instant>,
     /// Whether detection saw kitty's keyboard flags.
@@ -219,10 +217,7 @@ impl App {
             held: Vec::new(),
             pending: HashMap::new(),
             notices: Notices::default(),
-            pages: Pages::new(80),
-            scroll: Scroll::default(),
-            width: 80,
-            height: 24,
+            screen: Screen::new(),
             armed_at: None,
             kitty: false,
             queue: Queue::default(),
@@ -297,7 +292,7 @@ impl App {
                 Effect::None
             }
             Key::End | Key::CtrlC => {
-                self.scroll.follow();
+                self.screen.follow();
                 Effect::None
             }
             Key::F1 => self.open_keymap(),
@@ -384,9 +379,7 @@ impl App {
     /// Sets the screen size for wrapping and paging; a new width re-counts
     /// every page.
     pub(crate) fn set_size(&mut self, width: u16, height: u16) {
-        self.width = width.max(1);
-        self.height = height.max(1);
-        self.pages.set_width(self.width);
+        self.screen.set_size(width, height);
         self.settle();
     }
 
@@ -414,8 +407,8 @@ impl App {
     /// The input box's rows: the draft's wrapped rows, at most a third of
     /// the screen and at least one.
     pub(crate) fn input_height(&self) -> usize {
-        let cap = usize::from(self.height / 3).max(1);
-        self.draft.rows(self.width).len().min(cap)
+        let cap = usize::from(self.screen.height() / 3).max(1);
+        self.draft.rows(self.screen.width()).len().min(cap)
     }
 
     /// Whether the quit hint shows: armed by a first Ctrl+C, or asking
@@ -426,12 +419,12 @@ impl App {
 
     /// Whether new output arrived while scrolled up.
     pub(crate) fn has_new(&self) -> bool {
-        self.scroll.has_new
+        self.screen.has_new()
     }
 
     /// The top wrapped row while scrolled up; `None` follows.
     pub(crate) fn top(&self) -> Option<usize> {
-        self.scroll.top
+        self.screen.top()
     }
 
     /// The conversation's rows: the screen less the input box or the
@@ -442,7 +435,9 @@ impl App {
             panel
                 .lines
                 .iter()
-                .map(|line| crate::view::rows(ratatui::text::Line::raw(line.as_str()), self.width))
+                .map(|line| {
+                    crate::view::rows(ratatui::text::Line::raw(line.as_str()), self.screen.width())
+                })
                 .sum()
         });
         let below = input
@@ -450,7 +445,7 @@ impl App {
             + self.steering().len()
             + usize::from(self.badge().is_some())
             + usize::from(self.hint());
-        usize::from(self.height).saturating_sub(below)
+        usize::from(self.screen.height()).saturating_sub(below)
     }
 
     /// The approval panel, while it is open.
@@ -466,49 +461,46 @@ impl App {
     /// The resident conversation's lines, before wrapping.
     #[cfg(test)]
     pub(crate) fn lines(&self) -> Vec<ratatui::text::Line<'static>> {
-        self.rows().into_iter().map(|(line, _)| line).collect()
+        self.screen
+            .pages()
+            .rows()
+            .into_iter()
+            .map(|(line, _)| line)
+            .collect()
     }
 
     /// Opens or closes what `target` names.
     pub(crate) fn open(&mut self, target: Target) {
-        if self.pages.open(&target) {
-            self.scroll.changed();
+        if self.screen.open(target) {
             self.settle();
         }
     }
 
-    /// The resident pages' lines.
-    #[cfg(test)]
-    fn rows(&self) -> Vec<Row> {
-        self.pages.rows()
-    }
-
     /// The top row shown and every row: what a scroll bar draws.
     pub(crate) fn scroll(&self) -> (usize, usize) {
-        (self.view_top(), self.pages.index().total())
+        self.screen.scroll_bar(self.conversation_height())
     }
 
     /// The lines drawing rows `[top, top + height)`.
     pub(crate) fn shown(&self, top: usize, height: usize) -> crate::window::Shown {
-        self.pages.shown(top, height)
+        self.screen.pages().shown(top, height)
     }
 
     /// The seq ranges of pages the next frame needs and does not hold.
     pub(crate) fn needs(&self) -> Vec<RangeInclusive<Seq>> {
-        self.pages
-            .needs(self.view_top(), self.conversation_height())
+        self.screen.needs(self.conversation_height())
     }
 
     /// Folds a fetched range's durable lines into their pages.
     pub(crate) fn load(&mut self, lines: Vec<Envelope>) {
-        self.pages.load(&lines);
+        self.screen.pages_mut().load(&lines);
         self.settle();
     }
 
     /// Loading `range` failed: its rows stay blank and the notice says why.
     /// A failed page ends a whole-turn copy waiting on dropped pages.
     pub(crate) fn load_failed(&mut self, range: &RangeInclusive<Seq>, message: &str) {
-        self.pages.fail(*range.start());
+        self.screen.pages_mut().fail(*range.start());
         self.cancel_pending_turn();
         self.notices
             .push(format!("Could not load history: {message}"));
@@ -516,19 +508,19 @@ impl App {
 
     /// Scrolls so `row` is the top row, as dragging the scroll bar does.
     pub(crate) fn jump(&mut self, row: usize) {
-        self.scroll.top = Some(row);
+        self.screen.jump(row);
         self.settle();
     }
 
     /// The pages.
     pub(crate) fn pages(&self) -> &Pages {
-        &self.pages
+        self.screen.pages()
     }
 
     /// `toggle_ledgers`: closes every ledger when all are open, else opens
     /// them all. Groups made later start the same way.
     fn toggle_ledgers(&mut self) {
-        self.pages.toggle_ledgers();
+        self.screen.pages_mut().toggle_ledgers();
         self.settle();
     }
 
@@ -688,7 +680,7 @@ impl App {
         {
             self.history.saw(&envelope.session_id, &started.input);
         }
-        let applied = self.pages.apply(envelope);
+        let applied = self.screen.pages_mut().apply(envelope);
         let mut changed = applied.changed;
         match envelope.kind.as_str() {
             "command_accepted" => {
@@ -697,12 +689,12 @@ impl App {
                     self.commands_answered(&accepted);
                     let shell = sent.filter(|(kind, _)| *kind == Kind::Shell);
                     let item = shell.and_then(|(_, text)| shell::answered(&text, accepted.result));
-                    changed |= self.pages.add_shell(item);
+                    changed |= self.screen.pages_mut().add_shell(item);
                 }
             }
             "shell_command" => {
                 if let Some(ran) = read!(envelope, ShellCommand) {
-                    changed |= self.pages.add_shell(Some(shell::ran(&ran)));
+                    changed |= self.screen.pages_mut().add_shell(Some(shell::ran(&ran)));
                 }
             }
             "command_rejected" => {
@@ -738,7 +730,7 @@ impl App {
             self.set_busy(busy);
         }
         if changed {
-            self.scroll.changed();
+            self.screen.changed();
         }
         send
     }
@@ -749,35 +741,10 @@ impl App {
         }
     }
 
-    /// The top row when following: the last screenful.
-    fn bottom_top(&self) -> usize {
-        let total = self.pages.index().total();
-        total.saturating_sub(self.conversation_height())
-    }
-
-    /// The top row shown: the bottom while following, and never past it.
-    fn view_top(&self) -> usize {
-        let bottom = self.bottom_top();
-        self.scroll.top.map_or(bottom, |top| top.min(bottom))
-    }
-
-    /// Clamps the top to the bottom and drops the pages outside the window.
-    fn settle_pages(&mut self) {
-        if self.scroll.top.is_some() {
-            self.scroll.top = Some(self.view_top());
-        }
-        self.pages.trim(self.view_top(), self.conversation_height());
-    }
-
     /// PageUp and PageDown move by the conversation height less one.
     fn page(&mut self, up: bool) {
-        let step = self.conversation_height().saturating_sub(1).max(1);
-        let bottom = self.bottom_top();
-        if up {
-            self.scroll.up(step, bottom);
-        } else {
-            self.scroll.down(step, bottom);
-        }
+        let height = self.conversation_height();
+        self.screen.page(up, height);
         self.settle();
     }
 }

@@ -133,7 +133,7 @@ impl App {
     /// same line.
     fn items(&self) -> Vec<(usize, TargetId)> {
         let mut out = Vec::new();
-        for (row, _, id) in self.pages.focus_items() {
+        for (row, _, id) in self.screen.pages().focus_items() {
             if !out.iter().any(|(_, seen)| *seen == id) {
                 out.push((row, id));
             }
@@ -253,12 +253,14 @@ impl App {
     fn line_text(&self, target: super::Target) -> Option<String> {
         if matches!(target, super::Target::Copy { .. }) {
             return self
-                .pages
-                .copy_target(target, self.width)
+                .screen
+                .pages()
+                .copy_target(target, self.screen.width())
                 .map(|copy| copy.code);
         }
         let rows: Vec<String> = self
-            .pages
+            .screen
+            .pages()
             .rows()
             .into_iter()
             .filter(|(_, own)| *own == Some(target))
@@ -282,7 +284,7 @@ impl App {
         {
             self.cancel_pending_turn();
         }
-        let missing = crate::turn_text::request_turn(&mut self.pages, at);
+        let missing = crate::turn_text::request_turn(self.screen.pages_mut(), at);
         if !missing.is_empty() {
             self.pending_turn = Some(crate::turn_text::PendingTurn {
                 turn: at,
@@ -291,8 +293,8 @@ impl App {
             self.notices.push("Loading history…".to_owned());
             return None;
         }
-        let text = self.pages.turn_text(at);
-        crate::turn_text::release_turn(&mut self.pages, at);
+        let text = self.screen.pages().turn_text(at);
+        crate::turn_text::release_turn(self.screen.pages_mut(), at);
         text
     }
 
@@ -301,7 +303,7 @@ impl App {
     pub(super) fn cancel_pending_turn(&mut self) {
         if let Some(pending) = self.pending_turn.take() {
             for at in pending.pages {
-                self.pages.unwant(at);
+                self.screen.pages_mut().unwant(at);
             }
         }
     }
@@ -323,27 +325,8 @@ impl App {
     /// With no conversation rows there is nothing to show, and the
     /// scroll stays as it was.
     fn reveal(&mut self, row: usize) {
-        if self.conversation_height() == 0 {
-            return;
-        }
-        let Some((_, rows, _)) = self
-            .pages
-            .focus_items()
-            .into_iter()
-            .find(|(at, _, _)| *at == row)
-        else {
-            return;
-        };
-        let height = self.conversation_height().max(1);
-        let bottom = self.bottom_top();
-        let top = self.scroll.top.map_or(bottom, |top| top.min(bottom));
-        let end = row.saturating_add(rows.min(height));
-        let next = top.clamp(end.saturating_sub(height), row);
-        if next >= bottom {
-            self.scroll.follow();
-        } else {
-            self.scroll.top = Some(next);
-        }
+        let height = self.conversation_height();
+        self.screen.reveal(row, height);
     }
 }
 
