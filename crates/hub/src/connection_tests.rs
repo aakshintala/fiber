@@ -806,6 +806,18 @@ fn recent_over_the_wire_answers_a_page() {
     hub.feed.stop();
 }
 
+/// Stops the feed on a thread and receives its return under [`DEADLINE`]:
+/// joining its threads blocks.
+fn stop_within(hub: &Arc<Hub>) {
+    let (done_tx, done_rx) = mpsc::channel();
+    let hub = Arc::clone(hub);
+    thread::spawn(move || {
+        hub.feed.stop();
+        done_tx.send(()).unwrap_or(());
+    });
+    done_rx.recv_timeout(DEADLINE).expect("the feed stops");
+}
+
 /// Waits under [`DEADLINE`] until attention holds `n` listeners.
 fn until_listeners(hub: &Arc<Hub>, n: usize, what: &str) {
     let (done_tx, done_rx) = mpsc::channel();
@@ -914,7 +926,7 @@ fn attention_reaches_every_connection_after_hub_hello_with_or_without_a_feed() {
     drop(b);
     drop(c);
     until_listeners(&hub, 0, "after every client left");
-    hub.feed.stop();
+    stop_within(&hub);
 }
 
 #[test]
@@ -935,5 +947,5 @@ fn a_client_that_half_closes_without_reading_still_leaves() {
     d.write.shutdown(Shutdown::Write).unwrap();
     until_listeners(&hub, 0, "after D half-closed");
     until_clients(&hub, 0, "after D half-closed");
-    hub.feed.stop();
+    stop_within(&hub);
 }

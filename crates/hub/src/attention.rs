@@ -111,6 +111,22 @@ pub(crate) fn turn_ended_at(log: &Path, since: u64) -> bool {
         return false;
     };
     let from = len.saturating_sub(crate::feed::TAIL);
+    // Whether the window starts mid-line: only then is its first line
+    // partial. A window starting exactly after a newline starts at a
+    // complete line, which counts.
+    let mid_line = if from > 0 {
+        let mut probe = [0; 1];
+        if file
+            .seek(SeekFrom::Start(from - 1))
+            .and_then(|_| file.read_exact(&mut probe))
+            .is_err()
+        {
+            return false;
+        }
+        probe[0] != b'\n'
+    } else {
+        false
+    };
     if file.seek(SeekFrom::Start(from)).is_err() {
         return false;
     }
@@ -119,14 +135,13 @@ pub(crate) fn turn_ended_at(log: &Path, since: u64) -> bool {
         return false;
     }
     // The tail's complete lines: a last line with no trailing newline is
-    // torn and dropped, and a read that started mid-file starts mid-line,
-    // so the partial first line is dropped too.
-    let mut lines: Vec<&[u8]> = tail.split(|byte| *byte == b'\n').collect();
-    lines.pop();
-    if from > 0 && !lines.is_empty() {
-        lines.remove(0);
+    // torn and dropped, as is a partial first line.
+    let mut parts = tail.split(|byte| *byte == b'\n');
+    parts.next_back();
+    if mid_line {
+        parts.next();
     }
-    lines.iter().filter(|line| !line.is_empty()).any(|line| {
+    parts.filter(|line| !line.is_empty()).any(|line| {
         let Ok(value) = serde_json::from_slice::<Value>(line) else {
             return false;
         };

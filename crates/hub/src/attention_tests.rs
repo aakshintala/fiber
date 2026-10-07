@@ -506,6 +506,39 @@ fn turn_ended_at_matches_only_a_complete_turn_completed_with_that_ts() {
 }
 
 #[test]
+fn turn_ended_at_at_a_window_edge_counts_a_whole_line_but_not_a_partial_one() {
+    let held = fakes::TempDir::new("hc");
+    let log = held.path().join("events.jsonl");
+    let target = format!("{{\"kind\":\"turn_completed\",\"ts\":{S}}}\n");
+    let filler = "{\"kind\":\"x\",\"ts\":1}\n";
+    let tail = usize::try_from(crate::feed::TAIL).unwrap();
+    // Whole lines plus empty lines to an exact byte length.
+    let pad = |n: usize| {
+        format!(
+            "{}{}",
+            filler.repeat(n / filler.len()),
+            "\n".repeat(n % filler.len())
+        )
+    };
+    // The window holds exactly the target and what follows it, so it
+    // starts at the target's first byte, right after a newline.
+    let suffix = pad(tail - target.len());
+    assert_eq!(target.len() + suffix.len(), tail);
+    std::fs::write(&log, format!("{filler}{target}{suffix}")).unwrap();
+    assert!(
+        turn_ended_at(&log, S),
+        "a complete line at the window boundary counts"
+    );
+    // The window starts inside a trash line at the target's brace: the
+    // remainder parses, but it is partial, so it must not count.
+    std::fs::write(&log, format!("{filler}TRASH{target}{suffix}")).unwrap();
+    assert!(
+        !turn_ended_at(&log, S),
+        "a partial first line never counts, even when it parses"
+    );
+}
+
+#[test]
 fn ended_unseen_needs_a_since_at_or_after_the_hub_start() {
     let held = fakes::TempDir::new("hb");
     let log = held.path().join("events.jsonl");
@@ -531,6 +564,18 @@ fn read_line(read: &mut BufReader<UnixStream>, what: &str) -> Value {
         .unwrap_or_else(|_| panic!("never received {what}"));
     assert!(!text.is_empty(), "attention closed before {what}");
     serde_json::from_str(&text).unwrap()
+}
+
+/// Drops listener `id` on a thread and receives its return under
+/// [`DEADLINE`]: joining the writer blocks.
+fn unlisten_within(attention: &Arc<Attention>, id: u64, what: &str) {
+    let (done_tx, done_rx) = mpsc::channel();
+    let ending = Arc::clone(attention);
+    thread::spawn(move || {
+        ending.unlisten(id);
+        done_tx.send(()).unwrap_or(());
+    });
+    assert!(done_rx.recv_timeout(DEADLINE).is_ok(), "{what}");
 }
 
 #[test]
@@ -643,33 +688,21 @@ fn a_dead_or_slow_listener_does_not_stop_a_live_one() {
             "line {n} in order"
         );
     }
-    let ending = Arc::clone(&attention);
-    let (done_tx, done_rx) = mpsc::channel();
-    thread::spawn(move || {
-        ending.unlisten(live);
-        done_tx.send(()).unwrap_or(());
-    });
-    assert!(done_rx.recv_timeout(DEADLINE).is_ok(), "unlisten returns");
+    unlisten_within(&attention, live, "the live unlisten returns");
     drop(slow_far);
-    let ending = Arc::clone(&attention);
-    let (done_tx, done_rx) = mpsc::channel();
-    thread::spawn(move || {
-        ending.unlisten(slow);
-        done_tx.send(()).unwrap_or(());
-    });
-    assert!(done_rx.recv_timeout(DEADLINE).is_ok(), "unlisten returns");
+    unlisten_within(&attention, slow, "the slow unlisten returns");
 }
 
 #[test]
 fn unlisten_ends_only_that_listener() {
     let clock = FakeClock::new();
-    let attention = Attention::new(Arc::clone(&clock) as Arc<dyn Clock>);
+    let attention = Arc::new(Attention::new(Arc::clone(&clock) as Arc<dyn Clock>));
     let (first, first_far) = UnixStream::pair().unwrap();
     first_far.set_read_timeout(Some(DEADLINE)).unwrap();
     let held = Arc::new(Mutex::new(first));
     let first = attention.listen(Arc::clone(&held)).unwrap();
     let mut second = listened(&attention);
-    attention.unlisten(first);
+    unlisten_within(&attention, first, "unlisten returns");
     drop(held);
     attention.notify("a", None, &status_of("waiting", Some("r1"), S, None), false);
     assert_eq!(

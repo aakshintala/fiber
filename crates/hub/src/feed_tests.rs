@@ -170,6 +170,18 @@ fn await_true(what: &str, done: impl Fn() -> bool + Send + 'static) {
     assert!(rx.recv_timeout(DEADLINE).is_ok(), "waited for {what}");
 }
 
+/// Drops attention listener `id` on a thread and receives its return
+/// under [`DEADLINE`]: joining its writer blocks.
+fn unlisten_within(feed: &Arc<Feed>, id: u64) {
+    let (done_tx, done_rx) = mpsc::channel();
+    let ending = Arc::clone(feed);
+    thread::spawn(move || {
+        ending.attention.unlisten(id);
+        done_tx.send(()).unwrap_or(());
+    });
+    assert!(done_rx.recv_timeout(DEADLINE).is_ok(), "unlisten returns");
+}
+
 fn entry_of(feed: &Feed, id: &str) -> Option<&'static str> {
     lock(&feed.state).entries.get(id).map(|entry| match entry {
         Entry::Running(_) => "running",
@@ -945,7 +957,7 @@ fn waiting_then_a_finished_turn_each_send_one_attention() {
     let again = heard.next("the second waiting attention");
     assert_eq!(again["payload"]["reason"], "waiting");
     assert_eq!(again["payload"]["summary"], "run r2");
-    feed.attention.unlisten(heard.id);
+    unlisten_within(&feed, heard.id);
     stop_within(&feed);
 }
 
@@ -968,7 +980,7 @@ fn idle_without_a_turn_sends_nothing() {
     // The waiting r1 arrives first, so no idle or jobs line sent one.
     let waiting = heard.next("the waiting attention");
     assert_eq!(waiting["payload"]["reason"], "waiting");
-    feed.attention.unlisten(heard.id);
+    unlisten_within(&feed, heard.id);
     stop_within(&feed);
 }
 
@@ -1000,7 +1012,7 @@ fn a_late_reader_still_sends_one_finished_per_turn() {
     // The waiting r1 arrives third, so each turn sent exactly one.
     let waiting = heard.next("the waiting attention");
     assert_eq!(waiting["payload"]["reason"], "waiting");
-    feed.attention.unlisten(heard.id);
+    unlisten_within(&feed, heard.id);
     stop_within(&feed);
 }
 
@@ -1018,7 +1030,7 @@ fn a_turn_that_ended_before_the_hub_followed_is_announced() {
     let finished = heard.next("the finished attention");
     assert_eq!(finished["payload"]["reason"], "finished");
     assert_eq!(finished["payload"]["session_id"], id(1).as_str());
-    feed.attention.unlisten(heard.id);
+    unlisten_within(&feed, heard.id);
     stop_within(&feed);
 }
 
@@ -1037,7 +1049,7 @@ fn a_turn_that_ended_before_the_hub_started_is_not() {
     // The waiting r1 arrives first, so the stale idle sent nothing.
     let waiting = heard.next("the waiting attention");
     assert_eq!(waiting["payload"]["reason"], "waiting");
-    feed.attention.unlisten(heard.id);
+    unlisten_within(&feed, heard.id);
     stop_within(&feed);
 }
 
@@ -1065,7 +1077,7 @@ fn a_delegate_never_sends_attention() {
     let waiting = heard.next("the waiting attention");
     assert_eq!(waiting["payload"]["session_id"], id(1).as_str());
     assert_eq!(waiting["payload"]["reason"], "waiting");
-    feed.attention.unlisten(heard.id);
+    unlisten_within(&feed, heard.id);
     stop_within(&feed);
 }
 
@@ -1093,7 +1105,7 @@ fn a_resumed_session_raising_its_request_again_is_not_announced_but_its_turn_end
     // The finished arrives next, so the repeated waiting r1 sent nothing.
     let finished = heard.next("the finished attention");
     assert_eq!(finished["payload"]["reason"], "finished");
-    feed.attention.unlisten(heard.id);
+    unlisten_within(&feed, heard.id);
     stop_within(&feed);
 }
 
@@ -1113,7 +1125,7 @@ fn a_resumed_run_that_starts_idle_is_not_announced() {
     // The waiting r1 arrives first, so the idle without a turn sent nothing.
     let waiting = heard.next("the waiting attention");
     assert_eq!(waiting["payload"]["reason"], "waiting");
-    feed.attention.unlisten(heard.id);
+    unlisten_within(&feed, heard.id);
     stop_within(&feed);
 }
 
@@ -1142,8 +1154,8 @@ fn a_listener_added_later_gets_no_replay() {
         first.next("the finished attention")["payload"]["reason"],
         "finished"
     );
-    feed.attention.unlisten(first.id);
-    feed.attention.unlisten(second.id);
+    unlisten_within(&feed, first.id);
+    unlisten_within(&feed, second.id);
     stop_within(&feed);
 }
 
@@ -1176,7 +1188,7 @@ fn older_lines_after_a_snapshot_are_not_announced_twice() {
     // The waiting r2 arrives third, so neither line was announced twice.
     let again = heard.next("the second waiting attention");
     assert_eq!(again["payload"]["summary"], "run r2");
-    feed.attention.unlisten(heard.id);
+    unlisten_within(&feed, heard.id);
     stop_within(&feed);
 }
 
@@ -1206,7 +1218,7 @@ fn a_resume_that_starts_idle_does_not_announce_a_turn_again() {
     // The waiting r1 arrives next, so the repeated idle sent nothing.
     let waiting = heard.next("the waiting attention");
     assert_eq!(waiting["payload"]["reason"], "waiting");
-    feed.attention.unlisten(heard.id);
+    unlisten_within(&feed, heard.id);
     stop_within(&feed);
 }
 
