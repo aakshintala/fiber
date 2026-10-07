@@ -551,16 +551,35 @@ fn two_tools() -> Vec<std::sync::Arc<dyn contract::tool::Tool>> {
     ]
 }
 
-fn tool_notices(window: u64) -> Vec<Value> {
+const TURN_KINDS: [&str; 12] = [
+    "session_started",
+    "preamble_built",
+    "opening_message",
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "assistant_message_delta",
+    "assistant_message_delta",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+];
+
+/// The turn's event kinds and its notices' payloads, for a window of
+/// `window` tokens.
+fn tool_turn(window: u64) -> (Vec<String>, Vec<Value>) {
     let mut session = Session::windowed(vec![Scripted::text("Done.")], two_tools(), window);
     session.inbox.send(delivery("hi")).unwrap();
     session.turn();
-    session
-        .lines()
+    let lines = session.lines();
+    let kinds = kinds(&lines).into_iter().map(str::to_owned).collect();
+    let notices = lines
         .into_iter()
         .filter(|line| line.kind == "notice")
         .map(|line| Value::Object(line.payload))
-        .collect()
+        .collect();
+    (kinds, notices)
 }
 
 #[test]
@@ -568,7 +587,10 @@ fn definitions_over_ten_percent_of_the_window_write_tool_definitions_large() {
     let bytes = definition_bytes(two_tools());
     // Four bytes a token: a window one token under 2.5 x bytes puts the
     // definitions just over 10%.
-    let notices = tool_notices((bytes * 10).div_ceil(4) - 1);
+    let (kinds, notices) = tool_turn((bytes * 10).div_ceil(4) - 1);
+    let mut expected = TURN_KINDS.to_vec();
+    expected.insert(3, "notice");
+    assert_eq!(kinds, expected);
     assert_eq!(notices.len(), 1);
     let notice = notices.first().unwrap();
     assert_eq!(notice["code"], "tool_definitions_large");
@@ -580,5 +602,7 @@ fn definitions_over_ten_percent_of_the_window_write_tool_definitions_large() {
 #[test]
 fn definitions_at_exactly_ten_percent_of_the_window_write_no_notice() {
     let bytes = definition_bytes(two_tools());
-    assert!(tool_notices((bytes * 10).div_ceil(4)).is_empty());
+    let (kinds, notices) = tool_turn((bytes * 10).div_ceil(4));
+    assert_eq!(kinds, TURN_KINDS);
+    assert!(notices.is_empty());
 }
