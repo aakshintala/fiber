@@ -556,7 +556,10 @@ fn a_prompt_mid_turn_is_busy_and_starts_nothing() {
 
 /// The text of each message in the first `turn_started`'s input, in order.
 fn input_texts(lines: &[Envelope]) -> Vec<String> {
-    let started = lines.iter().find(|line| line.kind == "turn_started").unwrap();
+    let started = lines
+        .iter()
+        .find(|line| line.kind == "turn_started")
+        .unwrap();
     started.payload["input"]
         .as_array()
         .unwrap()
