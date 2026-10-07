@@ -116,7 +116,7 @@ only that crate, in KiB; the empty program is 323 KiB.
 | crossterm | terminal input, raw mode and output | ~0 | 256 | ~0 | 28 | 443 |
 | mlua | the extension runtime, Lua 5.4 vendored | 912 | 704 | ~0 | 23 | 785 |
 | clap | the command line | 452 | 448 | ~0 | 17 | 782 |
-| clap_complete | the shell completion scripts `fiber completion` prints (`docs/invocation.md`, "Commands and flags") | TBD | TBD | 1,136 | 18 | TBD |
+| clap_complete | the shell completion scripts `fiber completion` prints (`docs/invocation.md`, "Commands and flags") | 796 | 1,020 | 1,136 | 18 | 967 |
 | thiserror | error types in library crates | ~0 | ~0 | ~0 | 6 | 325 |
 | signal-hook | SIGTERM, SIGINT and SIGHUP | ~0 | ~0 | ~0 | 4 | 352 |
 | ring | SHA-256, for PKCE, extension binary checksums, the content hash a repository's approvals pin, and an MCP tool's cut-short name; HMAC-SHA256, for `host.hmac_sha256`; credential fingerprints in the fake provider server | ~0 | ~0 | ~0 | 8 | 341 |
@@ -127,7 +127,7 @@ only that crate, in KiB; the empty program is 323 KiB.
 | html5ever | `web_fetch`'s tokenizer, without its tree builder | 808 | 960 | 480 | 19 | 1,058 |
 | encoding_rs | `web_fetch`'s decoding by the declared character set | 224 | 332 | 272 | 5 | 490 |
 | pulldown-cmark | the terminal's markdown in replies (`docs/tui.md`, "Look") | 428 | 384 | ~0 | 4 | 724 |
-| all of the above together | | TBD | TBD | 5,376 | 153 | TBD |
+| all of the above together | | 8,292 | 7,532 | 5,376 | 153 | 7,729 |
 | image, fast_image_resize | the image child; png, jpeg, gif and webp only (`docs/model-routing.md`, "Image limits") | 68,076 | 67,604 | 72,352 | 32 | 5,234 |
 
 Notes:
@@ -334,6 +334,7 @@ dependency.
 | cargo-mutants | tool | the mutation check on every pull request |
 | cargo-deny | tool | licences, advisories and crate sources |
 | cargo-about | tool | the release's third-party notices file |
+| zsh, fish | tool | the completion tests load `fiber completion`'s scripts in each shell (`docs/testing.md`, "Running tests"); bash is on every runner already. CI installs them on Linux and macOS |
 | xtask | tool | the workspace's own CI helper, `cargo xtask`: selection, the `CI` verdict and the gate's checks (`docs/ci.md`). It uses serde_json, proc-macro2 and pulldown-cmark, `fakes` in its tests, and no Fiber crate depends on it |
 | proc-macro2 | xtask dependency | tokenising Rust source for the `unsafe` table check (`docs/code-quality.md`, "`unsafe`") |
 | pulldown-cmark | xtask dependency | reading Markdown for the docs check (`docs/ci.md`, "The docs check"); the terminal's use is in the runtime table |
