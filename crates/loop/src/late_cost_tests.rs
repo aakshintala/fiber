@@ -272,6 +272,38 @@ fn two_lookups_run_in_due_order() {
     );
 }
 
+#[test]
+fn two_lookups_due_together_both_run_in_scheduling_order() {
+    let (clock, dyn_clock) = clocks();
+    let due = clock.now() + LOOKUP_AFTER;
+    let (first_lookup, seen) = lookup(Some(1.0));
+    let (second_lookup, _unused) = lookup(Some(2.0));
+    let second_lookup = Arc::new(AlsoRecords {
+        inner: second_lookup,
+        calls: Arc::clone(&seen.calls),
+    });
+    let mut late = LateCost::default();
+    late.schedule(first_lookup, first("gen-a"), turn(), action(), &dyn_clock)
+        .unwrap();
+    assert!(clock.await_parked(due, WAIT), "the worker parks at the due");
+    let mark = clock
+        .mark_parked(due, WAIT)
+        .expect("the worker parks at the due");
+    late.schedule(second_lookup, first("gen-b"), None, None, &dyn_clock)
+        .unwrap();
+    assert!(
+        clock.await_parked_since(&mark, Some(due), WAIT),
+        "woken by the schedule, the worker parks at the same due"
+    );
+    let mark = clock.advance_marked(LOOKUP_AFTER);
+    assert!(
+        clock.await_parked_since(&mark, None, WAIT),
+        "the worker parks with an empty queue after both calls"
+    );
+    assert_eq!(seen.calls(), ["gen-a", "gen-b"]);
+    assert_eq!(late.take_settled().len(), 2);
+}
+
 /// A lookup that also records its calls in another lookup's record.
 struct AlsoRecords {
     inner: Arc<dyn CostLookup>,
