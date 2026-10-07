@@ -67,6 +67,9 @@ pub(crate) struct Gate {
     /// What the `cancel` command asks: whether a turn is running. Stored
     /// by [`Session::run`], so a missing closure is no turn.
     cancel: Mutex<Option<Arc<dyn Fn() -> bool + Send + Sync>>>,
+    /// What a `close` with `now` starts (`docs/invocation.md`, "Shutdown"),
+    /// wired by the session process. Unset, `now` is an ordinary close.
+    close_now: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     /// The tool a driver `shell` runs. None leaves `shell` unknown.
     driver_shell: Mutex<Option<Arc<dyn Tool>>>,
     /// The session's jobs, which `job_stop` and `background` reach. None
@@ -243,6 +246,11 @@ impl Session {
         *lock(&self.gate.images) = Some(images);
     }
 
+    /// What `close` with `now` starts; unset, `now` is an ordinary close.
+    pub fn close_now(&self, start: Arc<dyn Fn() + Send + Sync>) {
+        *lock(&self.gate.close_now) = Some(start);
+    }
+
     /// What a shutdown calls to stop the door side's work
     /// (`docs/invocation.md`, "Shutdown"): every driver shell is cancelled,
     /// a later one is cancelled as it starts, and the loop is woken. Once
@@ -378,6 +386,12 @@ impl Gate {
         lock(&self.driver_shell).clone()
     }
 
+    /// What a `close` with `now` starts, cloned out of the lock so the
+    /// shutdown runs with no gate lock held.
+    pub(crate) fn close_now(&self) -> Option<Arc<dyn Fn() + Send + Sync>> {
+        lock(&self.close_now).clone()
+    }
+
     /// The image child's driver, cloned out of the lock so no child run
     /// holds it.
     pub(crate) fn images(&self) -> Option<Arc<dyn contract::images::Images>> {
@@ -435,6 +449,7 @@ fn open_in(
         accepted: Mutex::new(HashSet::new()),
         inbox: Mutex::new(None),
         cancel: Mutex::new(None),
+        close_now: Mutex::new(None),
         driver_shell: Mutex::new(None),
         jobs: Mutex::new(None),
         hooks: Mutex::new(None),

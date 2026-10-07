@@ -357,7 +357,7 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 | `rewind` | `from_session_id` (string, optional), `seq` (integer, optional), `summarise` (boolean, default false), `adopt` (array of strings, default empty) |
 | `shell` | `command` (string); `send` (boolean, default false) |
 | `command` | `name` (string); `text` (string, optional), what the person typed after the name |
-| `close` | none |
+| `close` | `now` (boolean, default false) |
 
 ### What each command does
 
@@ -383,7 +383,7 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 | `rewind` | Starts a new session process that continues a session from an earlier point (`docs/events.md`, "Rewind"), and answers with the new session's id. Takes an optional `from_session_id`, default this session; an optional `seq`, default the start of the latest turn; whether to summarise; and `adopt`, the `job_id`s of the jobs started after the point that the new session keeps, default none, so every other such job stops. Rejected `busy` if a turn is running, `stale_request` if `adopt` names a job that is not running, `not_step_boundary` if `seq` is not a step boundary, `session_held` if another process holds the session, `delegate_session` if it is a delegate, and `summary_failed` if it asked for a summary that could not be made. |
 | `shell` | Runs a shell command the person typed, as `!` does in the terminal. Takes the command and `send`, default false. Answered when the command ends. Accepted during a turn. |
 | `command` | Runs an extension's command by name, with the text after it as arguments, as a person typing `/name args` does (`docs/extensions.md`, "Commands and screens"). Rejected `unknown_command` for a name no extension registered. |
-| `close` | Accept no more prompts; finish the turn in flight, then any running jobs (`docs/tools.md`, "Background jobs"), and exit. |
+| `close` | Accept no more prompts; finish the turn in flight, then any running jobs (`docs/tools.md`, "Background jobs"), and exit. With `now`, it starts a shutdown instead ("Shutdown"): the turn in flight ends, every job and delegate stops, and the session exits 0. A `close` with `now` is accepted also after `close`. |
 
 Rejection codes: `malformed`, `invalid_arguments`, `unknown_command`,
 `not_subscribed`, `busy`, `stale_request`, `not_step_boundary`,
@@ -537,14 +537,15 @@ resumes the session and delivers the command. If that resume fails
 `session_held`, the hub waits for the old process to release the lock, up to
 the 5-second shutdown bound, and the client gets `session_held` only once the
 bound has passed. A command after `close` and before `fiber_exited` still gets
-`closing`.
+`closing`, except a `close` with `now`, which is accepted and upgrades the close.
 
 **A session that never got a prompt leaves nothing behind.** A session that
 exits with no `turn_started` in its log deletes its own directory.
 
 **`close` ends the session whoever else is attached.** It accepts no more
 prompts, finishes the turn in flight, then any running jobs (`docs/tools.md`,
-"Background jobs"), and exits.
+"Background jobs"), and exits. With `now`, it starts a shutdown instead
+("Shutdown"), and is accepted also after `close`.
 
 One rule covers every case that matters. A GUI that dies mid-turn closes its
 connection, and the session finishes the turn. A phone that loses its
@@ -674,17 +675,24 @@ that ticket's resolution holds the rationale and the rejected alternatives.
 What reference agents do, and what a crash leaves behind, are
 `research/shutdown/`.
 
-A shutdown is Fiber stopping because a signal told it to. It is bounded, it
+A shutdown is Fiber stopping because a signal, or a `close` with `now`,
+told it to. It is bounded, it
 stops everything the session started, and it asks nobody anything. Exiting
-because the work ran out ("Lifecycle") and `close` are not shutdowns: both
+because the work ran out ("Lifecycle") and `close` without `now` are not shutdowns: both
 wait for jobs without a cap. A supervisor that wants the work finished sends
-`close`, and SIGTERM when its patience runs out.
+`close` without `now`; when its patience runs out, it sends `close` with `now`,
+or SIGTERM.
 
 **Three signals, one path.** SIGTERM, SIGINT and SIGHUP each start a
 shutdown. They differ only in the exit code: 143, 130 and 129. A second
 SIGTERM or SIGINT during a shutdown skips the grace period below: every
 process group still alive gets SIGKILL at once, and Fiber writes what it
 knows and exits.
+
+A `close` with `now` takes the same path with exit code 0: the door answers
+it, then starts the shutdown a first signal would. A shutdown that already
+started keeps its code: a `close` with `now` after a signal changes nothing,
+and a repeat does nothing. A SIGTERM or SIGINT after it is a second signal.
 
 **What happens, all at once:**
 

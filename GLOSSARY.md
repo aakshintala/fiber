@@ -484,9 +484,9 @@ _Avoid_: intercom, peer message, cross-session message
 
 ### Shutdown
 
-Fiber stopping because a signal told it to: within a bound, stopping everything
+Fiber stopping because a signal, or a `close` with `now`, told it to: within a bound, stopping everything
 the session started, asking nobody anything. Distinct from exiting because the
-work ran out, which waits for jobs.
+work ran out, or an ordinary `close`, which waits for jobs.
 _Avoid_: teardown, graceful exit, termination
 
 ### Front door

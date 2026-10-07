@@ -9,6 +9,7 @@
 
 mod attach;
 mod client;
+mod close;
 pub mod hub;
 mod pasted;
 mod prompt_history;

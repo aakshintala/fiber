@@ -280,7 +280,7 @@ fn ask_new(
     model: Option<String>,
     prompt: String,
     clock: Arc<dyn contract::clock::Clock>,
-    signals: &doors::Signals,
+    signals: &Arc<doors::Signals>,
     fiber: Result<PathBuf, String>,
 ) -> i32 {
     session_command::new_session(

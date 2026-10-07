@@ -100,7 +100,8 @@ fn samples() -> Vec<Value> {
             "summarise": true, "adopt": ["j"]}}),
         json!({"id": "c", "command": "shell", "args": {"command": "git status", "send": true}}),
         json!({"id": "c", "command": "command", "args": {"name": "review", "text": "all"}}),
-        json!({"id": "c", "command": "close"}),
+        json!({"id": "c", "command": "close", "args": {"now": true}}),
+        json!({"id": "c", "command": "close", "args": {"now": false}}),
     ]
 }
 
@@ -226,7 +227,36 @@ fn commands_writes_without_args() {
 
 #[test]
 fn close_reads_an_empty_args_as_a_missing_one() {
-    empty_args_read_as_missing("close", Command::Close);
+    empty_args_read_as_missing("close", Command::Close(CloseArgs { now: false }));
+}
+
+#[test]
+fn close_now_reads_a_boolean_and_refuses_anything_else() {
+    for (args, expected) in [
+        (r#"{"now":true}"#, Ok(true)),
+        (r#"{"now":false}"#, Ok(false)),
+        (r#"{}"#, Ok(false)),
+        (r#"{"now":null}"#, Err(())),
+        (r#"{"now":"yes"}"#, Err(())),
+        (r#"{"now":1}"#, Err(())),
+        (r#"{"now":true,"future":1}"#, Err(())),
+    ] {
+        let line = format!(r#"{{"id":"c","command":"close","args":{args}}}"#);
+        match expected {
+            Ok(now) => assert_eq!(
+                parse(&line)
+                    .unwrap_or_else(|e| panic!("{line}: {e}"))
+                    .command,
+                Command::Close(CloseArgs { now }),
+                "{line}"
+            ),
+            Err(()) => assert!(parse(&line).is_err(), "{line}"),
+        }
+    }
+    assert_eq!(
+        parse(r#"{"id":"c","command":"close"}"#).unwrap().command,
+        Command::Close(CloseArgs { now: false })
+    );
 }
 
 #[test]
