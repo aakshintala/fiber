@@ -17,7 +17,7 @@ mod probes;
 mod wire_tools;
 
 use std::collections::BTreeMap;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, mpsc};
@@ -862,47 +862,14 @@ fn a_call_cancelled_before_it_runs_returns_without_connecting() {
     );
 }
 
-/// A server that answers one request with response headers and one text
-/// chunk, then holds the socket open until `hold` is dropped.
-fn stalling_server() -> (String, mpsc::Sender<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let url = format!("http://{}", listener.local_addr().unwrap());
-    let (hold, held) = mpsc::channel::<()>();
-    thread::spawn(move || {
-        let (mut socket, _) = listener.accept().unwrap();
-        let mut reader = BufReader::new(socket.try_clone().unwrap());
-        let mut length = 0;
-        loop {
-            let mut line = String::new();
-            reader.read_line(&mut line).unwrap();
-            if line == "\r\n" {
-                break;
-            }
-            if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
-                length = v.trim().parse().unwrap();
-            }
-        }
-        reader.read_exact(&mut vec![0; length]).unwrap();
-        let payload = format!("data: {}\n\n", chunk(json!({"content": "Hel"}), None));
-        write!(
-            socket,
-            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\
-             transfer-encoding: chunked\r\n\r\n{:x}\r\n{payload}\r\n",
-            payload.len()
-        )
-        .unwrap();
-        socket.flush().unwrap();
-        // Hold the socket open, sending nothing more.
-        held.recv().unwrap_err();
-    });
-    (url, hold)
-}
-
 #[test]
 fn cancelling_from_another_thread_ends_a_blocked_read() {
-    let (url, _hold) = stalling_server();
+    let payload = format!("data: {}\n\n", chunk(json!({"content": "Hel"}), None)).into_bytes();
+    let server = ProviderServer::start([Response::stall(200, payload.clone(), payload.len() + 1024)
+        .header("content-type", "text/event-stream")])
+    .unwrap();
     let endpoint = Endpoint {
-        base_url: url,
+        base_url: server.url(),
         direct: true,
         ..Endpoint::default()
     };
@@ -923,6 +890,10 @@ fn cancelling_from_another_thread_ends_a_blocked_read() {
         .recv_timeout(DEADLINE)
         .expect("waited for run to return after the cancel");
     assert_eq!(result, Err(CallError::Cancelled));
+    assert!(
+        server.await_closed(1, DEADLINE),
+        "waited for the server to see the client close"
+    );
 }
 
 #[test]
