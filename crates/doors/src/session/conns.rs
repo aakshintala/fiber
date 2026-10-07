@@ -112,6 +112,21 @@ impl Gate {
         self.writers.notify_all();
     }
 
+    /// Runs the live connection's stored shutdown closure, if any,
+    /// without removing its entry: the reader gets EOF and runs its normal
+    /// cleanup, and the client sees EOF. Runs under the connection lock
+    /// and never joins (`docs/code-quality.md`, "Threads"): a writer
+    /// whose watcher failed calls it from the writer thread, while the
+    /// reader reaps that thread.
+    pub(crate) fn shut(&self, id: u64) {
+        let conns = lock(&self.conns);
+        if let Some((_, live)) = conns.live.iter().find(|(slot, _)| *slot == id)
+            && let Some(shutdown) = live.shutdown.as_ref()
+        {
+            shutdown();
+        }
+    }
+
     pub(super) fn mark_stopped(&self) {
         let _conns = lock(&self.conns);
         self.stop.store(true, Ordering::Relaxed);

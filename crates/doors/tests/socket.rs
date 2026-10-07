@@ -44,7 +44,7 @@ const DEADLINE: Duration = Duration::from_secs(10);
 
 const MALFORMED: &str = "A command is one JSON object per line, with a string `id` and `command`.";
 const NOT_SUBSCRIBED: &str = "Send `subscribe` first.";
-const ALREADY: &str = "This connection is already subscribed.";
+const ALREADY: &str = "This connection is already subscribed at this level.";
 const UNFIT: &str = "The arguments do not fit this command.";
 const PAST: &str = "`from_seq` is past the latest line.";
 const REVERSED: &str = "`to_seq` is before `from_seq`.";
@@ -430,7 +430,7 @@ fn subscribe_is_first_and_unknown_or_unfit_commands_are_rejected() {
             subscribe(&client, "c_sub", "full");
             send(
                 &client,
-                r#"{"id":"c_again","command":"subscribe","args":{"level":"summary"}}"#,
+                r#"{"id":"c_again","command":"subscribe","args":{"level":"full"}}"#,
             );
             let again = response(&client, "c_again");
             assert_eq!(rejection(&again), ("invalid_arguments", ALREADY));
