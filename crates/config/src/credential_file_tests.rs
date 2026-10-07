@@ -63,7 +63,7 @@ fn a_writer_never_exposes_a_file_wider_than_0600() {
     let lock = file.try_lock().unwrap().unwrap();
     lock.write(&json!({ "token": "first" })).unwrap();
     let dir = home.path().join("credentials/acme");
-    const DEADLINE: Duration = Duration::from_secs(10);
+    const DEADLINE: Duration = Duration::from_secs(5);
     let (paused_tx, paused) = mpsc::channel();
     let (release_tx, release) = mpsc::channel();
 

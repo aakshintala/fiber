@@ -21,11 +21,12 @@ use config::{Secret, store_secret};
 use serde_json::{Value, json};
 
 /// How long the resolve jig may take. `.config/nextest.toml` kills a slow
-/// test after a 30s period times 4 (120s total), so this is half of that:
+/// test after a 30s period times 4 (120s total); with the 5s watchdog stand-down
+/// the deadlines sum to 55s, so 120s is at least twice them:
 /// `docs/testing.md`, "Waits and timeouts", needs nextest's timeout to be
 /// at least twice the test's own deadlines, so a hang reports which wait
 /// expired. A cold compile of the example can be slow.
-const JIG_DEADLINE: Duration = Duration::from_secs(60);
+const JIG_DEADLINE: Duration = Duration::from_secs(50);
 
 fn resolve(setup: &Setup, args: &[&str]) -> Output {
     let child = Command::new(env!("CARGO"))
