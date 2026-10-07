@@ -42,6 +42,12 @@ use serde_json::{Map, Value};
 /// A hang bound for one line, the same order as the log crate's watcher tests.
 const DEADLINE: Duration = Duration::from_secs(10);
 
+/// One deadline for a whole `until` wait. The busiest test waits on it seven
+/// times and closes its session once under [`DEADLINE`]: 7 x 6 + 10 = 52 s,
+/// at most half of nextest's 120 s kill (`docs/testing.md`, "Waits and
+/// timeouts").
+const UNTIL: Duration = Duration::from_secs(6);
+
 const MALFORMED: &str = "A command is one JSON object per line, with a string `id` and `command`.";
 const NOT_SUBSCRIBED: &str = "Send `subscribe` first.";
 const ALREADY: &str = "This connection is already subscribed at this level.";
@@ -152,16 +158,32 @@ fn next(client: &Client) -> Value {
     client.recv(DEADLINE).expect("a line arrived")
 }
 
-fn until(client: &Client, mut done: impl FnMut(&Value) -> bool) -> Vec<Value> {
-    let mut lines = Vec::new();
-    loop {
-        let line = next(client);
-        let stop = done(&line);
-        lines.push(line);
-        if stop {
-            return lines;
-        }
-    }
+/// Lines up to and including the first one `done` accepts, read under one
+/// [`UNTIL`] deadline for the whole wait, not one per line. Fails naming the
+/// wait when it passes.
+fn until(client: &Client, mut done: impl FnMut(&Value) -> bool + Send) -> Vec<Value> {
+    let stop = AtomicBool::new(false);
+    thread::scope(|scope| {
+        let (tx, rx) = mpsc::channel();
+        let stop = &stop;
+        scope.spawn(move || {
+            let mut lines = Vec::new();
+            while !stop.load(Ordering::SeqCst) {
+                let Some(line) = client.recv(UNTIL) else {
+                    break;
+                };
+                let finished = done(&line);
+                lines.push(line);
+                if finished {
+                    if let Ok(()) = tx.send(lines) {}
+                    return;
+                }
+            }
+        });
+        let got = rx.recv_timeout(UNTIL);
+        stop.store(true, Ordering::SeqCst);
+        got.expect("the awaited line arrived within one deadline for the whole wait")
+    })
 }
 
 fn kind(line: &Value) -> &str {
