@@ -216,7 +216,13 @@ fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
         .max_output_tokens
         .and_then(|request_limit| endpoint.output_limit(Some(request_limit)))
     {
-        // The Responses API rejects values below 16.
+        // The smaller of the two, as on the other protocols: a model's
+        // `extra_body` limit may be the lower (`docs/errors.md`, "Output
+        // tokens"). The Responses API rejects values below 16.
+        let limit = body
+            .get("max_output_tokens")
+            .and_then(Value::as_u64)
+            .map_or(limit, |n| n.min(limit));
         body.insert("max_output_tokens".into(), json!(limit.max(16)));
     }
     Value::Object(body).to_string().into_bytes()
