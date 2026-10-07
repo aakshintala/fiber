@@ -54,11 +54,18 @@ A step is one round-trip to the model. Each step does this, in order:
 
 A reply with no tool call ends the step without a next one ("Ending a turn").
 
-While the loop waits for a person's `reply` to an approval, it reads its inbox
-for that reply. Inbox commands (`steer`, `steer_drop`, `handoff`, `close`, a
-second `reply`) and job notices that arrive meanwhile wait for the next step
-boundary. Commands answered during a turn, such as `job_stop`, `shell`,
-`tools` and `history`, are answered at once (`docs/invocation.md`). A `cancel` ends the turn ("Interrupt").
+During a turn the loop reads its inbox at two points only: at a step
+boundary (step 1 above, and the check before a turn ends), and while it waits
+for a person's `reply` to an approval. While it sends a request and streams the
+reply, nothing reads the inbox. While it waits on an approval, everything that
+arrives is answered at once: a `steer` is queued and `steering_queue` written,
+a `steer_drop` takes effect, a `handoff` is accepted, a second `reply` is
+rejected `stale_request`, and a `close` ends the wait with the request
+unanswerable (`docs/permissions.md`, "Headless"). What these queue (steering
+messages, a handoff, job notices) joins the conversation at the next step
+boundary. Commands answered during a turn, such as `job_stop`, `shell`, `tools`
+and `history`, are answered at once by the door, without the inbox
+(`docs/invocation.md`). A `cancel` ends the turn ("Interrupt").
 
 ## Tool calls that do not run
 
