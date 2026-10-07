@@ -1,0 +1,28 @@
+---
+source: crates/tui/src/view/offer_tests.rs
+expression: "draw(&app, 80, 24).0"
+---
+Repository code · 1 item                                                       ✕
+A package's TUI files are never installed from a repository.
+
+› MCP server db
+     approve   skip  [never]
+    MCP server: db
+    declared in: .fiber/config.json
+    runs: /bin/echo
+
+  Send · 0 approve, 0 skip, 1 never
+
+
+
+
+
+
+
+
+
+
+
+
+
+>

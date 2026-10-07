@@ -1,0 +1,28 @@
+---
+source: crates/tui/src/view/offer_tests.rs
+expression: screen
+---
+Repository code · 1 item                                                       ✕
+A package's TUI files are never installed from a repository.
+
+› extension lint · 1.0.0
+     approve  [skip]  never
+    extension lint
+    files: a.ts
+    -old
+    +new
+
+  Send · 0 approve, 1 skip, 0 never
+
+
+
+
+
+
+
+
+
+
+
+
+>

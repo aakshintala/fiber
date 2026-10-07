@@ -1,0 +1,28 @@
+---
+source: crates/tui/src/view/offer_tests.rs
+expression: "draw(&app, 80, 24).0"
+---
+Repository code · 1 item                                                       ✕
+A package's TUI files are never installed from a repository.
+
+› extension lint · 1.2.0 · required
+     approve  [skip]  never
+    extension lint 1.2.0
+    files: index.ts
+    --- a/index.ts
+    +++ b/index.ts
+    @@ -1 +1 @@
+    -old()
+    +new()
+
+  Send · 0 approve, 1 skip, 0 never
+
+
+
+
+
+
+
+
+
+>
