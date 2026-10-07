@@ -208,8 +208,15 @@ logic belongs in deeper modules split at real boundaries. `cargo xtask
 line-cap` lists every such file and never fails. The pull request whose
 change takes a file over 800 lines files a ticket labelled `split` for it.
 The split separates what the file owns into modules with their own
-interfaces; a `#[path]` child module or a trim to get under the line is not a
-split. 800 is picked rather than measured.
+interfaces. Lines moved into another file that still reach the parent's
+private state, or a trim to get under the line, are not a split. 800 is
+picked rather than measured.
+
+A module lives at its standard path: `src/<parent>/<name>.rs` beside
+`src/<parent>.rs`. `#[path]` names only a unit-test file, as below, or a
+shared test support file that a test or an example includes. Some older
+modules still use `#[path]`; a change that splits one moves it to its
+standard path.
 
 Unit tests live in their own file, a `tests.rs` or `<name>_tests.rs`
 included with `#[cfg(test)] mod tests;`, so a file's length is its code. A
