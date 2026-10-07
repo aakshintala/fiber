@@ -46,6 +46,13 @@ pub(crate) enum Key {
     AltDown,
     /// Alt+X (`ESC x` in one read, `CSI 120;3u`): `drop_steering`.
     AltX,
+    /// Alt+P (`ESC p` in one read, `CSI 112;3u`): `toggle_panel`.
+    AltP,
+    /// Alt+R (`ESC r` in one read, `CSI 114;3u`): `toggle_rail`.
+    AltR,
+    /// Alt+1 to Alt+9 (`ESC 1` to `ESC 9` in one read, `CSI 49;3u` to
+    /// `CSI 57;3u`): `rail_row_n`, the digit.
+    AltDigit(u8),
 }
 
 /// One key that edits the draft (`docs/tui.md`, "The input box",
@@ -275,6 +282,9 @@ fn step(buf: &[u8]) -> Step {
             Some(b'O') => parse_ss3(buf),
             Some(b'a') => Some((vec![Event::Key(Key::AltA)], 2)),
             Some(b'x') => Some((vec![Event::Key(Key::AltX)], 2)),
+            Some(b'p') => Some((vec![Event::Key(Key::AltP)], 2)),
+            Some(b'r') => Some((vec![Event::Key(Key::AltR)], 2)),
+            Some(digit @ b'1'..=b'9') => Some((vec![Event::Key(Key::AltDigit(digit - b'0'))], 2)),
             // ESC before an arrow's CSI is the legacy Alt arrow.
             Some(0x1b) if buf.get(2) == Some(&b'[') => {
                 let (events, used) = parse_csi(buf.get(1..)?)?;
@@ -460,6 +470,9 @@ fn kitty_key(params: &[u8]) -> Option<Event> {
         (9, SHIFT) => Event::Key(Key::BackTab),
         (97, ALT) => Event::Key(Key::AltA),
         (120, ALT) => Event::Key(Key::AltX),
+        (112, ALT) => Event::Key(Key::AltP),
+        (114, ALT) => Event::Key(Key::AltR),
+        (digit @ 49..=57, ALT) => Event::Key(Key::AltDigit(u8::try_from(digit - 48).ok()?)),
         (98, ALT) => Event::Edit(Edit::WordLeft),
         (102, ALT) => Event::Edit(Edit::WordRight),
         _ => return None,

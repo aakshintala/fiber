@@ -27,11 +27,11 @@ mod exit;
 /// this run, which hides the input box's placeholder.
 pub(super) struct Home {
     /// What the terminal knows about where it was launched.
-    launch: Launch,
+    pub(super) launch: Launch,
     /// A `start` went out in this run.
     prompted: bool,
     /// The session list: live rows from the feed, exited rows from `recent`.
-    sessions: Sessions,
+    pub(super) sessions: Sessions,
     /// `feed` and the first `recent` page went out.
     fed: bool,
     /// The `feed` command waiting for its answer.
@@ -548,7 +548,10 @@ impl App {
                 | Key::CtrlC
                 | Key::AltUp
                 | Key::AltDown
-                | Key::AltX => return Some(Effect::None),
+                | Key::AltX
+                | Key::AltP
+                | Key::AltR
+                | Key::AltDigit(_) => return Some(Effect::None),
             }
         }
         if !self.on_home() {
@@ -588,7 +591,10 @@ impl App {
                 | Key::CtrlR
                 | Key::AltUp
                 | Key::AltDown
-                | Key::AltX => return Some(Effect::None),
+                | Key::AltX
+                | Key::AltP
+                | Key::AltR
+                | Key::AltDigit(_) => return Some(Effect::None),
             }
         }
         // The picker takes every key first: moving, choosing and closing
@@ -615,7 +621,10 @@ impl App {
                 | Key::CtrlR
                 | Key::AltUp
                 | Key::AltDown
-                | Key::AltX => {}
+                | Key::AltX
+                | Key::AltP
+                | Key::AltR
+                | Key::AltDigit(_) => {}
             }
             return Some(Effect::None);
         }

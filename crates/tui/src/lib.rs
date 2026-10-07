@@ -21,10 +21,12 @@ mod input;
 mod jigs;
 mod keymap;
 mod keys;
+mod layout;
 mod link;
 mod markdown;
 mod mouse;
 mod offer;
+mod osc;
 mod pages;
 mod shell;
 mod slash;
@@ -145,12 +147,14 @@ pub fn run(
         var: Box::new(|name| std::env::var(name).ok()),
         copy_command: clipboard::command(|name| std::env::var_os(name), clipboard::on_path)
             .map(|argv| argv.into_iter().map(str::to_owned).collect()),
+        title: osc::Title::default(),
     };
     // The first frame waits on nothing: the queries are out, and nothing
     // reads the tty or the hub until it is drawn.
     if terminal.screen.draw(&mut terminal.app, None).is_err() {
         return 1;
     }
+    terminal.write_title();
     let (tx, rx) = mpsc::channel();
     terminal.files_out = Some(tx.clone());
     terminal.reader = terminal
@@ -373,6 +377,8 @@ struct Loop<B: Backend> {
     var: Var,
     /// The system clipboard command a copy is piped to, beside OSC 52.
     copy_command: Option<Vec<String>>,
+    /// The window title last written.
+    title: osc::Title,
 }
 
 /// The most lines one `history` answer holds (`docs/invocation.md`,
@@ -504,7 +510,17 @@ impl<B: Backend> Loop<B> {
         if self.screen.draw(&mut self.app, self.pointer.at).is_err() {
             return Some(1);
         }
+        self.write_title();
         None
+    }
+
+    /// Writes the app's window title when it changed since the last write.
+    fn write_title(&mut self) {
+        if let Some(bytes) = self.title.next(self.app.title())
+            && let Some(mut tty) = self.tty.as_ref()
+        {
+            tty.write_all(&bytes).unwrap_or(());
+        }
     }
 
     /// Kitty's flags reply: the first pushes the flags the bindings need
@@ -687,6 +703,8 @@ impl<B: Backend> Loop<B> {
         if term::resume(self.parser.kitty(), self.hover).is_err() {
             return Some(1);
         }
+        // The restore popped the title: the next frame writes it again.
+        self.title.forget();
         if let Some(reader) = &self.reader {
             reader.resume();
         }

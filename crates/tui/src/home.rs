@@ -1,7 +1,4 @@
-//! Home's data: what the terminal knows about where it was launched,
-//! the session list's rows, and what home draws (`docs/tui.md`, "Home",
-//! "The session list"). Later parts add the subscriptions and the picker
-//! state.
+//! Home's data: the session rows, the subscriptions and what home draws (`docs/tui.md`, "Home").
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -52,6 +49,15 @@ pub struct Launch {
     /// `tui.logo_glyph`: the one-row logo's mark, "⌇" or "≈". The
     /// four-row logo's wave is drawn pixels, and never changes.
     pub logo_glyph: String,
+    /// `tui.rail.width`: the rail's share of the screen's width, in
+    /// percent (`docs/tui.md`, "Layout").
+    pub rail_share: f64,
+    /// `tui.panel.width`: the panel's share of the screen's width, in
+    /// percent.
+    pub panel_share: f64,
+    /// `tui.panel.cards`: the panel's cards, in order (`docs/tui.md`,
+    /// "The panel").
+    pub panel_cards: Vec<String>,
 }
 
 /// What home draws, built by [`crate::app::App::home_screen`].
@@ -652,20 +658,26 @@ pub(crate) fn dependents(message: &str) -> Vec<SessionId> {
     out
 }
 
-/// A row's line: the glyph, the name or the id, the detail, and the
-/// workspace's last path segment outside the launch project, joined by
-/// two spaces with empty parts left out.
-pub(crate) fn line(row: &Row, launch_project: &str) -> String {
+/// A row's state glyph, the one set home's list, the rail and the
+/// terminal title share (`docs/tui.md`, "State glyphs").
+pub(crate) fn glyph(row: &Row) -> &'static str {
     // The working states share one still glyph: a still glyph, not the
     // spinner; upgrade when the working line's timer lands (see #686).
-    let glyph = match (&row.left, &row.state) {
+    match (&row.left, &row.state) {
         (Some(Left::Exited), _) => "○",
         (Some(Left::Crashed), _) => "✗",
         (None, State::Working | State::Retrying | State::Jobs) => "●",
         (None, State::Waiting) => "!",
         (None, State::Idle) => "✓",
         (None, State::Unreadable) => "?",
-    };
+    }
+}
+
+/// A row's line: the glyph, the name or the id, the detail, and the
+/// workspace's last path segment outside the launch project, joined by
+/// two spaces with empty parts left out.
+pub(crate) fn line(row: &Row, launch_project: &str) -> String {
+    let glyph = glyph(row);
     let name = title(row);
     let mut detail = row.note.clone().unwrap_or_default();
     if detail.is_empty() {

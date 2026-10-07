@@ -22,6 +22,9 @@ fn home() -> App {
         model: None,
         thinking: None,
         logo_glyph: "⌇".to_owned(),
+        rail_share: 15.0,
+        panel_share: 21.0,
+        panel_cards: Vec::new(),
     });
     app.set_size(80, 24);
     app
