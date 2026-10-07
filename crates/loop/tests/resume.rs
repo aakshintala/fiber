@@ -1073,8 +1073,7 @@ fn reviewer_denies_from_before_the_resume_count_toward_the_session_limit() {
     assert_eq!(completed.payload["error"]["code"], "blocked");
 }
 
-#[test]
-fn no_reviewer_denies_from_before_the_resume_count_toward_the_session_limit() {
+fn resume_after_prior_denials(decided_by: DecidedBy) -> (History, contract::events::TurnOutcome) {
     let mut history = History::new(vec![
         support::tool_call_reply("Go.", &["exec"]),
         Scripted::text("After."),
@@ -1087,14 +1086,12 @@ fn no_reviewer_denies_from_before_the_resume_count_toward_the_session_limit() {
     );
     tool.subject = Some("run tests".into());
     let tool = Arc::new(tool);
-    // Twenty denials with no reviewer set up: a reviewer failure, not a
-    // model's block.
     for _ in 0..20 {
         history.write(
             Event::PermissionResolved(PermissionResolved {
                 request_id: None,
                 decision: Decision::Deny,
-                decided_by: DecidedBy::NoReviewer,
+                decided_by,
                 reason: Some("no".into()),
                 feedback: None,
                 grant: None,
@@ -1146,6 +1143,12 @@ fn no_reviewer_denies_from_before_the_resume_count_toward_the_session_limit() {
     );
     history.inbox_tx = tx;
     let outcome = history.run(looped, "two");
+    (history, outcome)
+}
+
+#[test]
+fn no_reviewer_denies_from_before_the_resume_count_toward_the_session_limit() {
+    let (history, outcome) = resume_after_prior_denials(DecidedBy::NoReviewer);
 
     // The 21st session block escalates with no person to answer: the turn
     // fails `blocked`.
@@ -1179,76 +1182,7 @@ fn no_reviewer_denies_from_before_the_resume_count_toward_the_session_limit() {
 
 #[test]
 fn non_reviewer_denies_from_before_the_resume_do_not_count() {
-    let mut history = History::new(vec![
-        support::tool_call_reply("Go.", &["exec"]),
-        Scripted::text("After."),
-    ]);
-    let mut tool = support::TestTool::declaring(
-        "exec",
-        "done",
-        vec![contract::shapes::Effect::Executes],
-        None,
-    );
-    tool.subject = Some("run tests".into());
-    let tool = Arc::new(tool);
-    // Twenty spending-budget denials: not a model's block.
-    for _ in 0..20 {
-        history.write(
-            Event::PermissionResolved(PermissionResolved {
-                request_id: None,
-                decision: Decision::Deny,
-                decided_by: DecidedBy::Budget,
-                reason: Some("no".into()),
-                feedback: None,
-                grant: None,
-                rule: None,
-                reviewer: None,
-            }),
-            Some("a_old"),
-        );
-    }
-    history.freeze();
-    let mut expected = vec!["session_started".to_owned()];
-    expected.extend(vec!["permission_resolved".to_owned(); 20]);
-    assert_eq!(history.history_kinds(), expected);
-
-    let reviewer = Arc::new(ScriptedProvider::new(vec![
-        Scripted::text("check"),
-        Scripted::text("block: it writes"),
-    ]));
-    let (tx, rx) = mpsc::channel();
-    let looped = Loop::resume(
-        Arc::clone(&history.log),
-        r#loop::resumed(&history.dir).unwrap(),
-        Arc::clone(&history.provider) as Arc<dyn Provider>,
-        History::model(),
-        history.prompt(),
-        rx,
-        vec![("builtin".into(), tool.clone() as Arc<dyn Tool>)],
-        r#loop::Permissions {
-            workspace: history.workspace.clone(),
-            credentials: history.credentials.clone(),
-            credential_files: Vec::new(),
-            rules: history.rules.clone(),
-        },
-    )
-    .unwrap()
-    .answerable(false)
-    .reviewer(
-        Ok(r#loop::Reviewer {
-            provider: reviewer,
-            model: Model {
-                reference: "fake/reviewer-1".into(),
-                cost: None,
-                subscription: false,
-            },
-            cache_lifetime: contract::events::CacheLifetime::OneHour,
-            context_window: None,
-        }),
-        r#loop::BlockLimits::default(),
-    );
-    history.inbox_tx = tx;
-    let outcome = history.run(looped, "two");
+    let (history, outcome) = resume_after_prior_denials(DecidedBy::Budget);
 
     // The first counted block denies the call; the turn completes.
     assert_eq!(outcome, contract::events::TurnOutcome::Completed);
