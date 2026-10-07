@@ -63,6 +63,16 @@ impl Diag {
         }
     }
 
+    /// Reads the peak memory with `read` instead of the process's own,
+    /// before the hub shares the log. Tests use it to prove the stop
+    /// lines hold the log's lock while they read.
+    #[cfg(test)]
+    pub(crate) fn with_peak(self, read: fn() -> Option<u64>) -> Self {
+        Self {
+            log: self.log.with_peak(read),
+        }
+    }
+
     /// Writes an `info` line for one of the hub's operations.
     pub(crate) fn info(&self, code: &str, message: &str) {
         self.log.line(Severity::Info, None, code, message);

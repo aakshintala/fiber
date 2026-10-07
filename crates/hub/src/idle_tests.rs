@@ -120,13 +120,27 @@ fn serve_with_hub_at(
     clock: Arc<fakes::clock::FakeClock>,
     level: Level,
 ) -> (Arc<Hub>, Arc<AtomicI32>, mpsc::Receiver<i32>) {
+    serve_with_hub_at_peak(temp, idle, clock, level, log::diag::peak_kib)
+}
+
+/// [`serve_with_hub_at`] reading the peak memory with `peak`. Tests use
+/// it to prove the stop lines hold the log's lock while they read.
+fn serve_with_hub_at_peak(
+    temp: &Temp,
+    idle: Duration,
+    clock: Arc<fakes::clock::FakeClock>,
+    level: Level,
+    peak: fn() -> Option<u64>,
+) -> (Arc<Hub>, Arc<AtomicI32>, mpsc::Receiver<i32>) {
     let timed: Arc<dyn contract::clock::Clock> = clock;
     let hub = Arc::new(Hub::new(
         &temp.dir,
         "0.0.0",
         Arc::new(FakeStarter::hang(&temp.dir)),
         Arc::clone(&timed),
-        Diag::open(&temp.dir, timed).with_level(level),
+        Diag::open(&temp.dir, timed)
+            .with_level(level)
+            .with_peak(peak),
     ));
     hub.diag.info("hub_started", "The hub started.");
     let lock = crate::listen::lock(&temp.dir).unwrap().unwrap();
@@ -515,62 +529,95 @@ fn join_after_wake_returns_when_the_socket_path_is_gone() {
     assert!(!ended.load(Ordering::SeqCst), "nothing woke the acceptor");
 }
 
+/// The gate the forced-stop test and its peak reader coordinate
+/// through: the reader runs while the shutdown's stop lines hold the
+/// log's lock, so its `inside` signal proves the pair holds the lock;
+/// it then waits for the release, which the test sends only after a
+/// departing client's write has started. One shot: the reader takes it.
+struct StopGate {
+    inside_tx: mpsc::Sender<()>,
+    release_rx: mpsc::Receiver<()>,
+}
+
+static STOP_GATE: std::sync::Mutex<Option<StopGate>> = std::sync::Mutex::new(None);
+
+/// The peak reader for the forced-stop test: proves the stop lines hold
+/// the log's lock, then waits for the release with a wall-clock deadline.
+fn gated_peak() -> Option<u64> {
+    let gate = STOP_GATE
+        .lock()
+        .unwrap()
+        .take()
+        .expect("the stop test installs its gate");
+    gate.inside_tx.send(()).unwrap();
+    gate.release_rx.recv_timeout(DEADLINE).unwrap();
+    Some(9)
+}
+
 #[test]
 fn a_signal_stop_keeps_peak_memory_next_to_hub_stopped_during_disconnects() {
     let temp = Temp::new();
     let clock = fakes::clock::FakeClock::new();
-    let (hub, got, done) = serve_with_hub_at(&temp, IDLE, Arc::clone(&clock), Level::Debug);
+    let (inside_tx, inside_rx) = mpsc::channel::<()>();
+    let (attempt_tx, attempt_rx) = mpsc::channel::<()>();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    *STOP_GATE.lock().unwrap() = Some(StopGate {
+        inside_tx,
+        release_rx,
+    });
+    let (hub, got, done) =
+        serve_with_hub_at_peak(&temp, IDLE, Arc::clone(&clock), Level::Debug, gated_peak);
     await_idle_park(&clock, clock.origin(), "at start");
     let client = connect(&temp);
     await_open_park(&clock, "after the arrival");
-    // A departing client writes `client_disconnected` while the hub shuts
-    // down. The writer logs its first line before the signal, then keeps
-    // writing until the hub has stopped, so its lines overlap the
-    // shutdown's writes; the handshake is channels with wall-clock
-    // deadlines, never sleeps.
-    let (stop_tx, stop_rx) = mpsc::channel();
-    let (started_tx, started_rx) = mpsc::channel();
-    let writer = thread::Builder::new()
+    // The signal shutdown's stop lines take the log's lock, and the
+    // gated reader proves it, then waits (`docs/testing.md`, "Races are
+    // forced, not waited for"). The test then starts a departing
+    // client's write, whose signal goes out just before its `line`
+    // call, and only then releases the pair: the rival's line must land
+    // after `hub_stopped`. Every wait has a wall-clock deadline and
+    // nothing sleeps.
+    got.store(signal_hook::consts::SIGTERM, Ordering::SeqCst);
+    hub.waker().wake();
+    inside_rx
+        .recv_timeout(DEADLINE)
+        .expect("the shutdown reaches its stop lines");
+    let rival = thread::Builder::new()
         .name("hub-test-disconnect".to_owned())
         .spawn({
             let hub = Arc::clone(&hub);
             move || {
+                attempt_tx.send(()).unwrap();
                 hub.diag
                     .info("client_disconnected", "Client 7 disconnected.");
-                started_tx.send(()).unwrap();
-                while stop_rx.try_recv().is_err() {
-                    hub.diag
-                        .info("client_disconnected", "Client 7 disconnected.");
-                    thread::yield_now();
-                }
             }
         })
         .unwrap();
-    started_rx
+    attempt_rx
         .recv_timeout(DEADLINE)
-        .expect("the disconnect writer starts");
-    got.store(signal_hook::consts::SIGTERM, Ordering::SeqCst);
-    hub.waker().wake();
+        .expect("the disconnect starts its write");
+    release_tx.send(()).unwrap();
     assert_eq!(done.recv_timeout(DEADLINE).expect("the hub stops"), 143);
-    stop_tx.send(()).unwrap();
-    writer.join().unwrap();
+    rival.join().unwrap();
     drop(client);
     let lines: Vec<serde_json::Value> = temp
         .log()
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
-    assert!(
-        lines
-            .iter()
-            .any(|line| line["code"] == "client_disconnected"),
-        "a disconnect line overlaps the shutdown"
-    );
     let at = lines
         .iter()
         .position(|line| line["code"] == "hub_stopped")
         .expect("the hub logs its stop");
     assert!(at > 0, "a line comes before the stop");
     assert_eq!(lines[at - 1]["code"], "peak_memory");
-    assert!(lines[at - 1]["data"]["peak_kib"].as_u64().unwrap() > 0);
+    assert_eq!(lines[at - 1]["data"]["peak_kib"], 9);
+    let rival_at = lines
+        .iter()
+        .position(|line| line["message"] == "Client 7 disconnected.")
+        .expect("the rival disconnect is logged");
+    assert!(
+        rival_at > at,
+        "the competing disconnect lands after the stop"
+    );
 }

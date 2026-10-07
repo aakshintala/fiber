@@ -328,44 +328,81 @@ fn a_line_racing_attach_lands_whole_in_the_file_its_order_implies() {
     assert_eq!(after["session_id"], "s_0123456789abcdef");
 }
 
-/// `peak_memory` and its `info` line stay adjacent while another thread
-/// writes: the handshake starts the other writes before the pair and
-/// stops them after, with wall-clock deadlines and no sleeps.
+/// The gate the forced-pair test and its peak reader coordinate
+/// through. The reader runs while `peak_memory_then_info` holds the
+/// state lock, so its `inside` signal proves the pair holds the lock;
+/// it then waits for the release, which the test sends only after a
+/// competing write has started. One shot: the reader takes it.
+struct PairGate {
+    inside_tx: mpsc::Sender<()>,
+    release_rx: mpsc::Receiver<()>,
+}
+
+static PAIR_GATE: std::sync::Mutex<Option<PairGate>> = std::sync::Mutex::new(None);
+
+/// The peak reader for the forced-pair test: proves the pair holds the
+/// lock, then waits for the release with a wall-clock deadline.
+fn gated_peak() -> Option<u64> {
+    let gate = PAIR_GATE
+        .lock()
+        .unwrap()
+        .take()
+        .expect("the pair test installs its gate");
+    gate.inside_tx.send(()).unwrap();
+    gate.release_rx.recv_timeout(LIMIT).unwrap();
+    Some(7)
+}
+
+/// `peak_memory_then_info` holds one lock for both lines (`docs/testing.md`,
+/// "Races are forced, not waited for"): the gated reader proves the pair
+/// holds the lock, the test then starts a competing write whose signal
+/// goes out just before its `line` call, and only then releases the pair.
+/// The rival's line must land after `hub_stopped`; every wait has a
+/// wall-clock deadline and nothing sleeps.
 #[test]
 fn peak_memory_then_info_writes_its_pair_with_nothing_between() {
-    let home = Home::new("ld-pair");
-    let diag = std::sync::Arc::new(home.diag(Process::Hub, Level::Debug).with_peak(|| Some(3)));
-    let (started_tx, started_rx) = mpsc::channel::<()>();
-    let (stop_tx, stop_rx) = mpsc::channel::<()>();
-    let writer = thread::Builder::new()
+    let home = Home::new("ld-pair-forced");
+    let diag = std::sync::Arc::new(home.diag(Process::Hub, Level::Debug).with_peak(gated_peak));
+    let (inside_tx, inside_rx) = mpsc::channel::<()>();
+    let (attempt_tx, attempt_rx) = mpsc::channel::<()>();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    *PAIR_GATE.lock().unwrap() = Some(PairGate {
+        inside_tx,
+        release_rx,
+    });
+    let pair = thread::Builder::new()
         .name("log-test-pair".to_owned())
         .spawn({
             let diag = std::sync::Arc::clone(&diag);
+            move || diag.peak_memory_then_info("hub_stopped", "The hub stopped: signal.")
+        })
+        .unwrap();
+    inside_rx.recv_timeout(LIMIT).unwrap();
+    let rival = thread::Builder::new()
+        .name("log-test-rival".to_owned())
+        .spawn({
+            let diag = std::sync::Arc::clone(&diag);
             move || {
+                attempt_tx.send(()).unwrap();
                 diag.line(Severity::Info, None, "other", "Other.");
-                started_tx.send(()).unwrap();
-                while stop_rx.try_recv().is_err() {
-                    diag.line(Severity::Info, None, "other", "Other.");
-                    thread::yield_now();
-                }
             }
         })
         .unwrap();
-    started_rx.recv_timeout(LIMIT).unwrap();
-    diag.peak_memory_then_info("hub_stopped", "The hub stopped: signal.");
-    stop_tx.send(()).unwrap();
-    writer.join().unwrap();
+    attempt_rx.recv_timeout(LIMIT).unwrap();
+    release_tx.send(()).unwrap();
+    pair.join().unwrap();
+    rival.join().unwrap();
     let lines: Vec<serde_json::Value> = fs::read_to_string(home.file("hub.log"))
         .unwrap()
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
-    assert!(lines.iter().any(|line| line["code"] == "other"));
-    let at = lines
-        .iter()
-        .position(|line| line["code"] == "hub_stopped")
-        .unwrap();
-    assert!(at > 0);
-    assert_eq!(lines[at - 1]["code"], "peak_memory");
-    assert_eq!(lines[at - 1]["data"]["peak_kib"], 3);
+    assert_eq!(
+        lines
+            .iter()
+            .map(|line| line["code"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["peak_memory", "hub_stopped", "other"],
+    );
+    assert_eq!(lines[0]["data"]["peak_kib"], 7);
 }
