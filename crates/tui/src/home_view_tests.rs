@@ -161,6 +161,29 @@ fn home_with_live_and_exited_rows() {
 }
 
 #[test]
+fn a_name_with_control_characters_draws_as_spaces_on_the_frame() {
+    // No snapshot: the drawn frame holds the name with spaces, and no
+    // raw control character. The printables around each control stay,
+    // so flipping the `is_control` predicate fails.
+    let mut app = home(80, 24);
+    app.on_line(hello());
+    app.on_line(status(
+        "s_aaaaaaaaaaaaaaaa",
+        "a\nb\tc\u{1b}d\u{07}e",
+        idle(),
+    ));
+    let drawn = screen(&app, 80, 24);
+    // The name's `\n` draws as a space too: the whole name sits on one
+    // drawn row, which a raw newline would split.
+    assert!(drawn.contains("a b c d e"), "{drawn}");
+    for row in drawn.lines() {
+        for ch in ['\t', '\u{1b}', '\u{07}'] {
+            assert!(!row.contains(ch), "no raw {ch:?}: {drawn}");
+        }
+    }
+}
+
+#[test]
 fn home_with_more_rows_than_fit() {
     let mut app = home(80, 24);
     app.on_line(hello());

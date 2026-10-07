@@ -604,12 +604,18 @@ pub(crate) fn cascade_line(row: &Row, others: &[SessionId]) -> String {
     )
 }
 
-/// The row's name, or its id when it never had one.
-fn title(row: &Row) -> &str {
+/// The row's name as home draws it, or its id when it never had one:
+/// each control character draws as a space, so a name never breaks the
+/// row's line or the delete question (`docs/tui.md`, "Naming the
+/// session"). The stored name keeps its characters.
+fn title(row: &Row) -> String {
     if row.name.is_empty() {
-        row.id.0.as_str()
+        row.id.0.clone()
     } else {
-        row.name.as_str()
+        row.name
+            .chars()
+            .map(|ch| if ch.is_control() { ' ' } else { ch })
+            .collect()
     }
 }
 
@@ -659,11 +665,7 @@ pub(crate) fn line(row: &Row, launch_project: &str) -> String {
         (None, State::Idle) => "✓",
         (None, State::Unreadable) => "?",
     };
-    let name = if row.name.is_empty() {
-        row.id.0.as_str()
-    } else {
-        row.name.as_str()
-    };
+    let name = title(row);
     let mut detail = row.note.clone().unwrap_or_default();
     if detail.is_empty() {
         if row.state == State::Unreadable {
@@ -688,7 +690,7 @@ pub(crate) fn line(row: &Row, launch_project: &str) -> String {
             .unwrap_or_default()
             .to_owned();
     }
-    [glyph.to_owned(), name.to_owned(), detail, segment]
+    [glyph.to_owned(), name, detail, segment]
         .into_iter()
         .filter(|part| !part.is_empty())
         .collect::<Vec<_>>()

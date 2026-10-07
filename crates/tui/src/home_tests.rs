@@ -2,8 +2,8 @@
 //! `recent` pages, keys, glyphs and lines.
 
 use super::{
-    Left, Level, Row, Sessions, State, Subs, dependents, from_status, line, opening, quit_line,
-    recent_rows,
+    Left, Level, Row, Sessions, State, Subs, delete_line, dependents, from_status, line,
+    opening, quit_line, recent_rows,
 };
 use contract::{Envelope, SessionId};
 use serde_json::{Value, json};
@@ -556,6 +556,62 @@ fn a_note_replaces_the_detail() {
     assert_eq!(
         line(&row, PROJECT),
         "!  fix the parser  held by another process"
+    );
+}
+
+/// A row named `name`, live and idle with no detail.
+fn named(name: &str) -> Row {
+    Row {
+        key: 0,
+        id: SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
+        name: name.to_owned(),
+        workspace: "/Users/a/work/fiber".to_owned(),
+        project: PROJECT.to_owned(),
+        state: State::Idle,
+        left: None,
+        waiting: None,
+        spend: 0.0,
+        jobs: 0,
+        delegates: 0,
+        clients: 0,
+        note: None,
+    }
+}
+
+#[test]
+fn control_characters_in_a_name_draw_as_spaces_in_the_row_line() {
+    // Every control character draws as a space: the printable chars
+    // around them stay, so flipping the `is_control` predicate fails.
+    let row = named("a\nb\tc\u{1b}d\u{07}e");
+    assert_eq!(line(&row, PROJECT), "✓  a b c d e");
+    assert_eq!(
+        row.name, "a\nb\tc\u{1b}d\u{07}e",
+        "the stored name keeps its characters",
+    );
+}
+
+#[test]
+fn control_characters_in_a_name_draw_as_spaces_in_the_delete_question() {
+    let row = named("a\nb\tc\u{1b}d\u{07}e");
+    assert_eq!(
+        delete_line(&row),
+        "Delete a b c d e (s_aaaaaaaaaaaaaaaa)? \
+         It cannot be undone · enter delete · esc keep"
+    );
+    assert_eq!(
+        row.name, "a\nb\tc\u{1b}d\u{07}e",
+        "the stored name keeps its characters",
+    );
+}
+
+#[test]
+fn a_name_without_control_characters_draws_unchanged() {
+    let row = named("fix the parser");
+    assert_eq!(line(&row, PROJECT), "✓  fix the parser");
+    assert_eq!(
+        delete_line(&row),
+        "Delete fix the parser (s_aaaaaaaaaaaaaaaa)? \
+         It cannot be undone · enter delete · esc keep"
     );
 }
 
