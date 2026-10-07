@@ -731,7 +731,13 @@ keyboard's reach.
   cursor on it, opens it in the editor.
 - Ctrl+V with an image shows "[Image #1]" and sends the image as an image
   part in the prompt, which the session processes as it enters
-  (`docs/invocation.md`).
+  (`docs/invocation.md`). The terminal reads the image with the system
+  clipboard command on the machine it runs on: `osascript` reading
+  `«class PNGf»` on macOS, and on Linux `wl-paste --type image/png` under
+  Wayland, else `xclip -selection clipboard -t image/png -o`. No terminal
+  protocol carries the read. Where that machine has no readable clipboard,
+  such as an SSH login, Ctrl+V shows a notice saying so and leaves the draft
+  as it is.
 - `!cmd` runs a shell command and sends its output with the next prompt.
   `!!cmd` runs it and shows the output only to the person (`shell` with
   `send` false, `docs/invocation.md`).
