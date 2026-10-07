@@ -11,7 +11,7 @@ use contract::ErrorCode;
 use contract::emit::Emit;
 use contract::provider::ToolDefinition;
 use contract::shapes::{ContentPart, Failure};
-use contract::tool::{Cancel, Effects, Output, Tool};
+use contract::tool::{Cancel, Effects, Output, ServerRecord, Tool};
 use serde_json::{Map, Value};
 
 use crate::effects::Hints;
@@ -103,7 +103,7 @@ impl Tool for McpTool {
             ),
             Run::Failed(failed) => Output {
                 error: Some(failed.error),
-                server_failed: failed.record,
+                servers: failed.record.into_iter().map(ServerRecord::Failed).collect(),
                 ..Output::default()
             },
             Run::Call(server) => match server.call(

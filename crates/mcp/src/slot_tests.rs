@@ -8,8 +8,8 @@ use std::time::Duration;
 
 use contract::ErrorCode;
 use contract::clock::Clock;
-use contract::events::ServerFailure;
-use contract::tool::Tool;
+use contract::events::{McpServerFailed, ServerFailure};
+use contract::tool::{ServerRecord, Tool};
 use fakes::TempDir;
 use fakes::clock::FakeClock;
 use serde_json::{Value, json};
@@ -165,6 +165,14 @@ impl Setup {
     }
 }
 
+/// The call's one `mcp_server_failed` record, if it carries exactly that.
+fn only_failed(servers: &[ServerRecord]) -> Option<McpServerFailed> {
+    match servers {
+        [ServerRecord::Failed(failed)] => Some(failed.clone()),
+        _ => None,
+    }
+}
+
 fn initializes(dir: &std::path::Path) -> usize {
     let log = std::fs::read_to_string(dir.join("requests.log")).expect("requests.log");
     log.matches(r#""method":"initialize""#).count()
@@ -260,7 +268,7 @@ fn a_cached_server_whose_command_fails_dies_on_the_first_call() {
         "message: {}",
         error.message,
     );
-    let record = first.server_failed.expect("the failed start is recorded");
+    let record = only_failed(&first.servers).expect("the failed start is recorded");
     assert_eq!(record.server, "bad");
     assert_eq!(record.reason, ServerFailure::StartFailed);
     assert!(!record.will_restart);
@@ -270,7 +278,7 @@ fn a_cached_server_whose_command_fails_dies_on_the_first_call() {
     let second = setup.run(&tool);
     let again = second.error.expect("failed");
     assert_eq!(again.code, ErrorCode::McpServerUnavailable);
-    assert!(second.server_failed.is_none());
+    assert!(second.servers.is_empty());
     setup.stop(started.servers);
 }
 
@@ -313,7 +321,7 @@ fn a_lazy_start_that_misses_its_deadline_fails_with_deadline() {
         "The MCP server `slow` did not answer before its startup deadline of 5000 ms. \
          Raise `startup_timeout_ms` under `mcp.servers.slow` if it needs longer.",
     );
-    let record = output.server_failed.expect("the failed start is recorded");
+    let record = only_failed(&output.servers).expect("the failed start is recorded");
     assert_eq!(record.reason, ServerFailure::Deadline);
     assert!(!record.will_restart);
     setup.stop(started.servers);
@@ -335,7 +343,7 @@ fn a_call_to_a_removed_tool_fails_without_calling_and_updates_the_cache() {
         error.message,
         "The MCP server `fx` no longer has the tool `gone`; it stays declared until the next session.",
     );
-    assert!(output.server_failed.is_none());
+    assert!(output.servers.is_empty());
     let log = std::fs::read_to_string(setup.dir.path().join("requests.log")).expect("requests");
     assert!(
         !log.contains(r#""method":"tools/call""#),
@@ -399,7 +407,7 @@ fn stop_stops_a_lazily_started_server_and_ignores_a_never_started_one() {
         refused.error.as_ref().map(|error| &error.code),
         Some(&ErrorCode::McpServerUnavailable)
     );
-    assert!(refused.server_failed.is_none());
+    assert!(refused.servers.is_empty());
     assert!(
         !setup.dir.path().join("pid.txt").exists(),
         "nothing spawns after the stop",

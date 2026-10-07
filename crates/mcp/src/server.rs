@@ -371,6 +371,14 @@ impl Server {
         )
     }
 
+    /// Whether the server is gone: its output ended, so it exited or its
+    /// reader stopped, or it has no connection at all.
+    pub(crate) fn is_gone(&self) -> bool {
+        self.inner
+            .as_ref()
+            .is_none_or(|inner| lock(&inner.shared.inner).gone)
+    }
+
     /// Stops the server: closes stdin, sends SIGTERM to its process, waits
     /// on the clock until its output ends or the grace passes, then kills
     /// and reaps the child (`docs/invocation.md`, "Shutdown"). Idempotent:
