@@ -131,6 +131,7 @@ pub(crate) fn new_session(
     session.shell(driver);
     session.jobs(jobs.clone());
     session.hooks(Arc::clone(&extensions) as Arc<dyn contract::hook::Hooks>);
+    session.commands(r#loop::commands(&prompt_inputs, &workspace));
     let cancel = Arc::new(r#loop::TurnCancel::default());
     // A signal while armed: nothing was written, so nothing more is.
     if let Some(code) = shutdown::start(signals, &cancel, &session, jobs.clone()) {

@@ -231,6 +231,7 @@ fn built(command: &str) -> bool {
             | "reply"
             | "cancel"
             | "tools"
+            | "commands"
             | "history"
             | "close"
             | "shell"
@@ -247,6 +248,10 @@ fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
         Command::Tools => {
             let tools = conn.gate.tools.clone();
             accept(conn, id, Some(CommandResult::Tools { tools }));
+        }
+        Command::Commands => {
+            let commands = conn.gate.commands();
+            accept(conn, id, Some(CommandResult::Commands { commands }));
         }
         Command::History(args) => {
             // The log is dropped once read, so this connection does not

@@ -15,7 +15,7 @@ use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use contract::clock::{Clock, Wake};
 use contract::emit::Emit;
-use contract::events::{Clients, Event, ToolInfo};
+use contract::events::{Clients, CommandInfo, Event, ToolInfo};
 use contract::inbox::{Ack, Delivery, Message};
 use contract::shapes::{ContentPart, Failure, Origin, Sender as CommandSender};
 use contract::tool::Tool;
@@ -50,6 +50,9 @@ pub(crate) struct Gate {
     pub(crate) clock: Arc<dyn Clock>,
     pub(crate) session_id: SessionId,
     pub(crate) tools: Vec<ToolInfo>,
+    /// What the `commands` command answers with, set by
+    /// [`Session::commands`]; empty until then.
+    commands: Mutex<Vec<CommandInfo>>,
     inbox: Mutex<Option<Sender<Delivery>>>,
     /// What the `cancel` command asks: whether a turn is running. Stored
     /// by [`Session::run`], so a missing closure is no turn.
@@ -201,6 +204,14 @@ impl Session {
     /// With none set, `shell` stays an unknown command.
     pub fn shell(&self, tool: Arc<dyn Tool>) {
         *lock(&self.gate.driver_shell) = Some(tool);
+    }
+
+    /// Every `/name` the session runs, which the `commands` driver command
+    /// answers with verbatim (`docs/invocation.md`, "What each command
+    /// does"). Set before [`Session::run`]; with none set, the answer is an
+    /// empty list.
+    pub fn commands(&self, commands: Vec<CommandInfo>) {
+        *lock(&self.gate.commands) = commands;
     }
 
     /// The session's jobs, which the `job_stop` and `background` driver
@@ -395,6 +406,10 @@ impl Gate {
         cancel_each(&running);
     }
 
+    pub(crate) fn commands(&self) -> Vec<CommandInfo> {
+        lock(&self.commands).clone()
+    }
+
     pub(crate) fn jobs(&self) -> Option<Arc<dyn contract::jobs::Jobs>> {
         lock(&self.jobs).clone()
     }
@@ -571,6 +586,7 @@ fn open_in(
         clock: Arc::clone(&clock),
         session_id,
         tools,
+        commands: Mutex::new(Vec::new()),
         inbox: Mutex::new(None),
         cancel: Mutex::new(None),
         driver_shell: Mutex::new(None),

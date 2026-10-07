@@ -1463,3 +1463,80 @@ fn a_resumed_session_raises_its_request_again_and_a_reply_runs_the_call() {
         "{seqs:?}"
     );
 }
+
+/// Writes a skill under the workspace's `.agents/skills/<name>/`.
+fn workspace_skill(setup: &Setup, name: &str, header: &str) {
+    let dir = setup.workspace().join(".agents/skills").join(name);
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("SKILL.md"),
+        format!("---\nname: {name}\n{header}---\nBody.\n"),
+    )
+    .unwrap();
+}
+
+/// Subscribes `client`, sends `commands`, and returns its answer's `result`.
+fn commands_answer(client: &Socket) -> Value {
+    send(
+        client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    send(client, r#"{"id":"c_cmds","command":"commands"}"#);
+    let lines = until(client, "the commands answer", |line| {
+        line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_cmds"
+    });
+    lines.last().unwrap()["payload"]["result"].clone()
+}
+
+#[test]
+fn commands_answers_with_the_workspaces_skills_and_templates() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([]).unwrap();
+    setup.provider(&server);
+    workspace_skill(&setup, "review-pr", "description: Reviews a pull request.\n");
+    workspace_skill(
+        &setup,
+        "ship",
+        "description: Ships it.\nargument-hint: <tag>\ndisable-model-invocation: true\n",
+    );
+    let id = doors::mint("s_");
+    let mut running = setup.start_session(&id, &[]);
+    let client = running.connect(&setup.socket(&id));
+    running.wait_for("extensions_loaded");
+    assert_eq!(
+        commands_answer(&client),
+        json!({"commands": [
+            {"name": "review-pr", "description": "Reviews a pull request.", "tag": "skill"},
+            {"name": "ship", "description": "Ships it.", "argument_hint": "<tag>",
+             "tag": "template"}]})
+    );
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let _tail = until_close(&client);
+    drop(client);
+    let (status, _out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+}
+
+#[test]
+fn a_resumed_session_answers_commands_from_its_recorded_workspace() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([stream(&[function_call(
+        "call_1",
+        "shell",
+        &json!({"command": "echo hi"}),
+    )])])
+    .unwrap();
+    setup.provider(&server);
+    let id = doors::mint("s_");
+    suspend_on_an_approval(&setup, &id);
+    workspace_skill(&setup, "later", "description: Added before the resume.\n");
+
+    let mut running = setup.start_session(&id, &["--resume"]);
+    let client = running.connect(&setup.socket(&id));
+    assert_eq!(
+        commands_answer(&client),
+        json!({"commands": [
+            {"name": "later", "description": "Added before the resume.", "tag": "skill"}]})
+    );
+    // Dropping `running` kills the session, still waiting on the approval.
+}
