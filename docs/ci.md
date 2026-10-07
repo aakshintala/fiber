@@ -77,7 +77,7 @@ A pull request runs only what its diff can affect.
   runs them. `xtask` ships in no binary, so a change to it alone runs its
   own tests.
 - Every diff that runs the binary-level tests also runs the release-profile
-  job ("On every pull request that changes code"), and `fiber extension test`
+  job, `release` ("On every pull request that changes code"), and `fiber extension test`
   for every first-party package that has cases, not only the changed ones
   ("Testing an extension"). A change to Fiber's own code can break a package
   that did not change.
@@ -143,7 +143,9 @@ On Linux x86_64 alone:
 
 One more Linux x86_64 job builds the release profile for the target that
 ships, `x86_64-unknown-linux-musl` (`docs/releasing.md`), at the pull
-request's head and at its base commit. It checks that the stripped head binary is
+request's head and at its base commit (`scripts/release-size`). The base
+binary comes from the build cache when the backstop stored one for that
+commit, and is built otherwise. It checks that the stripped head binary is
 under 20 MiB and runs the benchmarks that gate each pull request
 (`docs/performance.md`). A timing gate compares against the base binary
 measured in the same job on the same runner.
@@ -185,16 +187,18 @@ opened.
 
 ## The backstop on `main`
 
-Every push to `main` runs the backstop. It runs the lint, test and mutant
-jobs the selection chooses from the diff
+Every push to `main` runs the backstop. It runs the lint, test, mutant and
+release jobs the selection chooses from the diff
 since the last `main` commit whose backstop passed. The tests run on all
 three platforms, and it compiles
 the whole workspace. That is the parent
 commit unless a run was cancelled or failed. A conflict between two merged
 pull requests shows in a crate that depends on what the later one changed,
-and the selection includes that crate.
+and the selection includes that crate. The release job runs on every push
+and stores that commit's stripped binary in the build cache, for a later
+pull request's base.
 
-When lint, the tests or the mutants fail, the backstop opens an issue, or
+When lint, the tests, the mutants or the release job fail, the backstop opens an issue, or
 comments on the open one. It
 never blocks a merge.
 
