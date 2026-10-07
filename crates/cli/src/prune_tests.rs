@@ -38,6 +38,7 @@ fn args(older_than: Option<&str>, cascade: bool, dry_run: bool, yes: bool) -> Pr
         cascade,
         dry_run,
         yes,
+        force: false,
     }
 }
 
@@ -361,6 +362,39 @@ fn dry_run_names_blockers_and_cycles_in_singular_and_plural() {
         assert_eq!(out, expected);
         assert_eq!(hub.connects, 0);
     }
+}
+
+#[test]
+fn finish_reports_the_exact_number_of_deletions_on_failure() {
+    let rows = vec![super::sessions::SessionRow::Deletable {
+        id: "s_00000000000000a1".to_owned(),
+        age_days: 31,
+        bytes: 4,
+        dir: PathBuf::from("session"),
+        delete: 0,
+    }];
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let failure = super::finish(
+        &mut out,
+        &mut err,
+        &rows,
+        17,
+        vec![(
+            "old.log".to_owned(),
+            ErrorCode::IoFailed,
+            "could not delete".to_owned(),
+        )],
+        2,
+        2,
+    )
+    .unwrap_err();
+    assert_eq!(failure.message, "1 of 5 could not be deleted");
+    assert_eq!(String::from_utf8(out).unwrap(), "freed 17 B\n");
+    assert_eq!(
+        String::from_utf8(err).unwrap(),
+        "fiber: old.log could not be deleted: could not delete\n"
+    );
 }
 
 #[test]

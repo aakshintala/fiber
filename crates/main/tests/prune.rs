@@ -15,6 +15,7 @@ mod support;
 
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -275,4 +276,195 @@ fn without_yes_and_without_a_terminal_it_is_usage_and_removes_nothing() {
         !setup.home().join("logs").join("hub.log").exists(),
         "no hub was started"
     );
+}
+
+/// Runs `git` with `args` in `dir`, as the worktree tests do.
+fn git(dir: &Path, args: &[&str]) {
+    let status = Command::new("git")
+        .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+        .args(["-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"])
+        .args(["-c", "init.defaultBranch=main"])
+        .args(args)
+        .current_dir(dir)
+        .stdin(Stdio::null())
+        .status()
+        .unwrap();
+    assert!(status.success(), "git {args:?} in {}", dir.display());
+}
+
+/// Makes the workspace a git repository with one commit: `file.txt` and a
+/// `.gitignore` matching `local.secret`.
+fn repo(setup: &Setup) {
+    let workspace = setup.workspace();
+    git(&workspace, &["init", "--quiet"]);
+    fs::write(workspace.join("file.txt"), "x").unwrap();
+    fs::write(workspace.join(".gitignore"), "local.secret\n").unwrap();
+    git(&workspace, &["add", "."]);
+    git(&workspace, &["commit", "--quiet", "-m", "first"]);
+}
+
+/// A kept worktree `id` on branch `fiber/<id>` under the project's
+/// `worktrees/`, returned canonicalized.
+fn kept(setup: &Setup, id: &str) -> PathBuf {
+    let path = project(setup).join("worktrees").join(id);
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let branch = format!("fiber/{id}");
+    let target = path.to_string_lossy().into_owned();
+    git(
+        setup.workspace().as_path(),
+        &["worktree", "add", "-b", &branch, &target],
+    );
+    fs::canonicalize(&path).unwrap()
+}
+
+/// Whether `refs/heads/fiber/<id>` still exists in the workspace.
+fn branch_exists(setup: &Setup, id: &str) -> bool {
+    Command::new("git")
+        .arg("-C")
+        .arg(setup.workspace())
+        .args([
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/fiber/{id}"),
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+/// A session `id` whose workspace is `workspace`: its log and an unheld
+/// lock file, like `session` but working anywhere.
+fn wt_session(setup: &Setup, id: &str, workspace: &Path) -> PathBuf {
+    let dir = project(setup).join("sessions").join(id);
+    fs::create_dir_all(dir.join("artifacts")).unwrap();
+    let first = json!({"kind": "session_started", "seq": 0, "payload": {"workspace": workspace}});
+    let last = json!({"kind": "x", "ts": 0});
+    fs::write(dir.join("events.jsonl"), format!("{first}\n{last}\n")).unwrap();
+    fs::write(dir.join("session.lock"), b"").unwrap();
+    dir
+}
+
+#[test]
+fn a_clean_worktree_is_removed_with_its_branch() {
+    let setup = setup();
+    repo(&setup);
+    let wt = kept(&setup, "s_00000000000000e1");
+    let output = prune(&setup, &["--yes"]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+    let out = text(&output.stdout);
+    assert!(
+        out.contains("worktree  s_00000000000000e1  fiber/s_00000000000000e1  clean"),
+        "{out}"
+    );
+    assert!(!wt.exists(), "the worktree is gone");
+    assert!(
+        !branch_exists(&setup, "s_00000000000000e1"),
+        "the branch is gone"
+    );
+}
+
+#[test]
+fn a_dirty_worktree_is_skipped_naming_uncommitted_files() {
+    let setup = setup();
+    repo(&setup);
+    let wt = kept(&setup, "s_00000000000000e2");
+    fs::write(wt.join("notes.txt"), "scratch").unwrap();
+    let output = prune(&setup, &["--yes"]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+    let out = text(&output.stdout);
+    assert!(
+        out.contains("skipped: removing it would lose uncommitted or ignored files"),
+        "{out}"
+    );
+    assert!(wt.is_dir(), "the worktree stays");
+    assert!(
+        branch_exists(&setup, "s_00000000000000e2"),
+        "the branch stays"
+    );
+}
+
+#[test]
+fn an_ignored_only_worktree_is_skipped() {
+    let setup = setup();
+    repo(&setup);
+    let wt = kept(&setup, "s_00000000000000e3");
+    fs::write(wt.join("local.secret"), "secret").unwrap();
+    let output = prune(&setup, &["--yes"]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+    let out = text(&output.stdout);
+    assert!(
+        out.contains("skipped: removing it would lose uncommitted or ignored files"),
+        "{out}"
+    );
+    assert!(wt.is_dir(), "the worktree stays");
+}
+
+#[test]
+fn a_unique_commit_worktree_is_skipped_naming_it() {
+    let setup = setup();
+    repo(&setup);
+    let wt = kept(&setup, "s_00000000000000e4");
+    fs::write(wt.join("more.txt"), "y").unwrap();
+    git(&wt, &["add", "."]);
+    git(&wt, &["commit", "--quiet", "-m", "second"]);
+    let output = prune(&setup, &["--yes"]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+    let out = text(&output.stdout);
+    assert!(
+        out.contains("skipped: removing it would lose commits found nowhere else"),
+        "{out}"
+    );
+    assert!(wt.is_dir(), "the worktree stays");
+    assert!(
+        branch_exists(&setup, "s_00000000000000e4"),
+        "the branch stays"
+    );
+}
+
+#[test]
+fn force_removes_the_dirty_worktree() {
+    let setup = setup();
+    repo(&setup);
+    let wt = kept(&setup, "s_00000000000000e2");
+    fs::write(wt.join("notes.txt"), "scratch").unwrap();
+    let output = prune(&setup, &["--yes", "--force"]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+    let out = text(&output.stdout);
+    assert!(
+        out.contains("forced: loses uncommitted or ignored files"),
+        "{out}"
+    );
+    assert!(!wt.exists(), "the worktree is gone");
+    assert!(
+        !branch_exists(&setup, "s_00000000000000e2"),
+        "the branch is gone"
+    );
+}
+
+#[test]
+fn a_running_session_keeps_its_worktree_under_force() {
+    let setup = setup();
+    repo(&setup);
+    let wt = kept(&setup, "s_00000000000000e1");
+    let user = wt_session(&setup, "s_00000000000000a1", &wt);
+    let held = match log::try_hold(&user) {
+        Ok(log::Hold::Held(held)) => held,
+        Ok(log::Hold::Busy) | Err(_) => panic!("the user's lock is held"),
+    };
+    let output = prune(&setup, &["--yes", "--force"]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+    let out = text(&output.stdout);
+    assert!(
+        out.contains("worktree  s_00000000000000e1  skipped: a running session works in it"),
+        "{out}"
+    );
+    assert!(wt.is_dir(), "the worktree stays");
+    assert!(
+        branch_exists(&setup, "s_00000000000000e1"),
+        "the branch stays"
+    );
+    drop(held);
 }
