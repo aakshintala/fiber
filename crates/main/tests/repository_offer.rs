@@ -27,7 +27,7 @@ use std::time::Duration;
 use fakes::Client;
 use fakes::{ProviderServer, Watchdog};
 use serde_json::{Value, json};
-use support::{DEADLINE, HubProc, Setup, hello, run_to_exit, write_json};
+use support::{Deadline, HubProc, Setup, hello, run_to_exit, write_json};
 
 /// Declares the MCP server `db` in the workspace's repository file.
 fn declare_db(setup: &Setup, extra: &Value) {
@@ -50,7 +50,11 @@ fn in_workspace(setup: &Setup, args: &[&str]) -> Command {
 
 /// `fiber ask hi` in the workspace: its exit code, stdout lines and stderr.
 fn ask(setup: &Setup) -> (Option<i32>, Vec<Value>, String) {
-    let output = run_to_exit("fiber ask", in_workspace(setup, &["ask", "hi"]));
+    let output = run_to_exit(
+        setup.deadline,
+        "fiber ask",
+        in_workspace(setup, &["ask", "hi"]),
+    );
     let lines = String::from_utf8(output.stdout)
         .unwrap()
         .lines()
@@ -95,20 +99,21 @@ fn spawn_session(setup: &Setup, id: &str, extra: &[&str]) -> (HubProc, mpsc::Rec
             child,
             watchdog,
             group,
+            deadline: setup.deadline,
         },
         lines,
     )
 }
 
 /// How long the reader thread polls for the next line while a wait's single
-/// `DEADLINE` runs on the test thread.
+/// deadline runs on the test thread.
 const SLICE: Duration = Duration::from_secs(1);
 
 /// Waits for the session's `extensions_loaded` on stdout: every startup
-/// line is written and the socket is listening. One `DEADLINE` bounds the
+/// line is written and the socket is listening. One deadline bounds the
 /// whole wait: a scoped thread reads the lines and the test takes the
 /// arrival with one `recv_timeout`.
-fn started(lines: mpsc::Receiver<Value>) {
+fn started(deadline: Deadline, lines: mpsc::Receiver<Value>) {
     let stop = AtomicBool::new(false);
     thread::scope(|scope| {
         let (tx, found) = mpsc::channel();
@@ -130,7 +135,7 @@ fn started(lines: mpsc::Receiver<Value>) {
                 }
             }
         });
-        let got = found.recv_timeout(DEADLINE);
+        let got = found.recv_timeout(deadline.left());
         stop.store(true, Ordering::SeqCst);
         assert!(
             got.expect("the session's extensions_loaded within the deadline"),
@@ -148,27 +153,27 @@ fn attach(setup: &Setup, id: &str, sub: &str) -> Client {
         ))
         .unwrap();
     client
-        .recv_until(DEADLINE, |line| {
+        .recv_until(setup.deadline.left(), |line| {
             line["kind"] == "clients" && line["payload"]["count"] == 1
         })
         .expect("the session counts the client within the deadline");
     client
 }
 
-fn recv_kind(client: &Client, kind: &str) -> Value {
+fn recv_kind(deadline: Deadline, client: &Client, kind: &str) -> Value {
     client
-        .recv_until(DEADLINE, |line| line["kind"] == kind)
-        .unwrap_or_else(|| panic!("no {kind} within {DEADLINE:?}"))
+        .recv_until(deadline.left(), |line| line["kind"] == kind)
+        .unwrap_or_else(|| panic!("no {kind} within the deadline"))
 }
 
 /// The answer to the command `id`.
-fn answer(client: &Client, id: &str) -> Value {
+fn answer(deadline: Deadline, client: &Client, id: &str) -> Value {
     client
-        .recv_until(DEADLINE, |line| {
+        .recv_until(deadline.left(), |line| {
             (line["kind"] == "command_accepted" || line["kind"] == "command_rejected")
                 && line["payload"]["command_id"] == id
         })
-        .unwrap_or_else(|| panic!("no answer to {id} within {DEADLINE:?}"))
+        .unwrap_or_else(|| panic!("no answer to {id} within the deadline"))
 }
 
 fn prompt(client: &Client, id: &str) {
@@ -202,11 +207,11 @@ fn a_full_client_answers_the_offer_and_the_turn_runs() {
     declare_db(&setup, &json!({}));
     let id = doors::mint("s_");
     let (session, stdout) = spawn_session(&setup, &id, &[]);
-    started(stdout);
+    started(setup.deadline, stdout);
     let client = attach(&setup, &id, "c_sub");
     prompt(&client, "c_prompt");
 
-    let offered = recv_kind(&client, "repository_code_offered");
+    let offered = recv_kind(setup.deadline, &client, "repository_code_offered");
     let request = offered["payload"]["request_id"]
         .as_str()
         .unwrap()
@@ -217,7 +222,7 @@ fn a_full_client_answers_the_offer_and_the_turn_runs() {
     assert_eq!(items[0]["name"], "db");
     let hash = items[0]["hash"].as_str().unwrap().to_owned();
     let status = client
-        .recv_until(DEADLINE, |line| {
+        .recv_until(setup.deadline.left(), |line| {
             line["kind"] == "session_status" && line["payload"]["state"] == "waiting"
         })
         .expect("a waiting session_status within the deadline");
@@ -225,26 +230,29 @@ fn a_full_client_answers_the_offer_and_the_turn_runs() {
     assert_eq!(status["payload"]["waiting"]["request_id"], request.as_str());
 
     reply(&client, "c_r0", &request, &["approve", "approve"]);
-    let rejected = answer(&client, "c_r0");
+    let rejected = answer(setup.deadline, &client, "c_r0");
     assert_eq!(rejected["kind"], "command_rejected");
     assert_eq!(rejected["payload"]["code"], "invalid_arguments");
 
     reply(&client, "c_r1", &request, &["approve"]);
-    let resolved = recv_kind(&client, "repository_code_resolved");
+    let resolved = recv_kind(setup.deadline, &client, "repository_code_resolved");
     assert_eq!(resolved["payload"]["decisions"], json!(["approve"]));
     // The reply is accepted after its resolved line.
-    assert_eq!(answer(&client, "c_r1")["kind"], "command_accepted");
-    recv_kind(&client, "turn_completed");
+    assert_eq!(
+        answer(setup.deadline, &client, "c_r1")["kind"],
+        "command_accepted"
+    );
+    recv_kind(setup.deadline, &client, "turn_completed");
     let approval = fs::read_to_string(setup.home().join("approvals").join(&hash)).unwrap();
     assert!(approval.contains(r#""decision":"approve""#), "{approval}");
 
     reply(&client, "c_r2", &request, &["approve"]);
-    let stale = answer(&client, "c_r2");
+    let stale = answer(setup.deadline, &client, "c_r2");
     assert_eq!(stale["kind"], "command_rejected");
     assert_eq!(stale["payload"]["code"], "stale_request");
 
     close(&client, "c_close");
-    recv_kind(&client, "fiber_exited");
+    recv_kind(setup.deadline, &client, "fiber_exited");
     drop(client);
     assert!(session.wait().success());
     assert_eq!(server.requests().len(), 1);
@@ -397,7 +405,11 @@ fn fiber_ask_after_fiber_approve_loads_without_a_notice() {
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     declare_db(&setup, &json!({"required": true}));
-    let approved = run_to_exit("fiber approve", in_workspace(&setup, &["approve", "--yes"]));
+    let approved = run_to_exit(
+        setup.deadline,
+        "fiber approve",
+        in_workspace(&setup, &["approve", "--yes"]),
+    );
     assert!(approved.status.success());
     let (code, lines, stderr) = ask(&setup);
     assert_eq!(code, Some(0), "stderr: {stderr}");
@@ -471,17 +483,17 @@ fn a_session_that_exits_on_its_first_offer_raises_it_again_on_resume() {
     declare_db(&setup, &json!({}));
     let id = doors::mint("s_");
     let (session, stdout) = spawn_session(&setup, &id, &[]);
-    started(stdout);
+    started(setup.deadline, stdout);
     let client = attach(&setup, &id, "c_sub");
     prompt(&client, "c_prompt");
-    let offered = recv_kind(&client, "repository_code_offered");
+    let offered = recv_kind(setup.deadline, &client, "repository_code_offered");
     let request = offered["payload"]["request_id"]
         .as_str()
         .unwrap()
         .to_owned();
 
     session.kill("TERM");
-    let exited = recv_kind(&client, "fiber_exited");
+    let exited = recv_kind(setup.deadline, &client, "fiber_exited");
     assert_eq!(exited["payload"]["suspended_on"], request.as_str());
     drop(client);
     session.wait();
@@ -491,7 +503,7 @@ fn a_session_that_exits_on_its_first_offer_raises_it_again_on_resume() {
     );
 
     let (resumed, stdout) = spawn_session(&setup, &id, &["--resume"]);
-    started(stdout);
+    started(setup.deadline, stdout);
     let client = Client::connect(&setup.session_socket(&id)).unwrap();
     client
         .send(r#"{"id":"c_sub2","command":"subscribe","args":{"level":"full"}}"#)
@@ -500,7 +512,7 @@ fn a_session_that_exits_on_its_first_offer_raises_it_again_on_resume() {
     // latest one before the client is counted.
     let since = Cell::new(0);
     client
-        .recv_until(DEADLINE, |line| {
+        .recv_until(setup.deadline.left(), |line| {
             if line["kind"] == "fiber_started" {
                 since.set(seq(line));
             }
@@ -510,16 +522,16 @@ fn a_session_that_exits_on_its_first_offer_raises_it_again_on_resume() {
     let since = since.get();
     prompt(&client, "c_prompt2");
     let again = client
-        .recv_until(DEADLINE, |line| {
+        .recv_until(setup.deadline.left(), |line| {
             line["kind"] == "repository_code_offered" && seq(line) > since
         })
         .expect("the offer raised again within the deadline");
     assert_eq!(again["payload"]["request_id"], request.as_str());
     reply(&client, "c_r1", &request, &["approve"]);
-    recv_kind(&client, "repository_code_resolved");
-    recv_kind(&client, "turn_completed");
+    recv_kind(setup.deadline, &client, "repository_code_resolved");
+    recv_kind(setup.deadline, &client, "turn_completed");
     close(&client, "c_close2");
-    recv_kind(&client, "fiber_exited");
+    recv_kind(setup.deadline, &client, "fiber_exited");
     drop(client);
     assert!(resumed.wait().success());
     assert_eq!(server.requests().len(), 1);
