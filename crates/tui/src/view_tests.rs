@@ -597,7 +597,9 @@ fn tool_group_ledger_open_with_a_call_open() {
         .into_iter()
         .filter_map(|(_, target)| match target {
             crate::app::Target::Call(_) => Some(target),
-            crate::app::Target::Group(_) | crate::app::Target::Thought(_) => None,
+            crate::app::Target::Group(_)
+            | crate::app::Target::Thought(_)
+            | crate::app::Target::Login => None,
         })
         .nth(1);
     if let Some(edit) = edit {

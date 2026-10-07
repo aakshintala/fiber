@@ -6,9 +6,10 @@
 
 use std::collections::BTreeMap;
 
+use contract::ErrorCode;
 use contract::GenerationId;
-use contract::events::{CallStatus, ToolCallCompleted, TurnCompleted, TurnOutcome, UsageRecorded};
-use contract::shapes::{ContentPart, Tokens, Usage};
+use contract::events::{CallStatus, RetryScheduled, ToolCallCompleted, UsageRecorded};
+use contract::shapes::{ContentPart, Failure, Tokens, Usage};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use serde_json::Value;
@@ -380,19 +381,9 @@ impl Spend {
 }
 
 /// "▣ completed · 38s · 12 calls · 18.2k tokens · $0.41 · $1.10 on
-/// subscription", each zero figure left out.
-pub(crate) fn closing(done: &TurnCompleted, ms: u64, calls: u64, usage: &Usage) -> String {
-    let mut parts = vec![
-        match done.outcome {
-            TurnOutcome::Completed => "▣ completed",
-            TurnOutcome::Interrupted => "▣ interrupted",
-            TurnOutcome::Failed => "▣ failed",
-        }
-        .to_owned(),
-    ];
-    if let (TurnOutcome::Failed, Some(error)) = (done.outcome, &done.error) {
-        parts.push(error.message.clone());
-    }
+/// subscription" after `head`, each zero figure left out.
+pub(crate) fn closing(head: &str, ms: u64, calls: u64, usage: &Usage) -> String {
+    let mut parts = vec![head.to_owned()];
     parts.extend(seconds(ms));
     if calls > 0 {
         parts.push(count(calls, "call", "calls"));
@@ -417,6 +408,42 @@ pub(crate) fn closing(done: &TurnCompleted, ms: u64, calls: u64, usage: &Usage) 
         ));
     }
     parts.join(" · ")
+}
+
+/// An error code as the log spells it.
+pub(crate) fn code(code: &ErrorCode) -> String {
+    serde_json::to_value(code)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_default()
+}
+
+/// A failed turn's lines before its ▣ line: "✗ <message> · <code>", then,
+/// when the provider said something, its words dim under it. A failed
+/// login offers "log in" on the ✗ line.
+pub(crate) fn failure(error: &Failure, out: &mut Vec<Row>) {
+    // #678 builds the login view `Target::Login` opens.
+    let login = (error.code == ErrorCode::AuthenticationFailed).then_some(Target::Login);
+    let line = format!("✗ {} · {}", error.message, code(&error.code));
+    out.push((Line::raw(line), login));
+    if let Some(provider) = &error.provider {
+        let said = format!(
+            "{} said HTTP {}: “{}”",
+            provider.name, provider.status, provider.message
+        );
+        out.push((dim(said), None));
+    }
+}
+
+/// "↻ Retrying in 4s · rate_limited · attempt 2": the wait rounded up to
+/// whole seconds.
+pub(crate) fn retry(retry: &RetryScheduled) -> Line<'static> {
+    let secs = retry.delay_ms.div_ceil(1000);
+    Line::raw(format!(
+        "↻ Retrying in {secs}s · {} · attempt {}",
+        code(&retry.code),
+        retry.attempt
+    ))
 }
 
 /// "+ Thought: Plan the fix · 22s" after `gutter`, dim; the span left
@@ -475,7 +502,7 @@ impl Group {
     /// Its lines. A finished group with no call is its thinking, one line
     /// a block; otherwise a summary line, and the ledger when open.
     pub(crate) fn rows(&self, running: bool, out: &mut Vec<Row>) {
-        if !running && !self.has_calls() {
+        if !running && !self.has_ledger() {
             for thought in self.thoughts() {
                 thought_rows(thought, "", out);
             }
@@ -485,6 +512,10 @@ impl Group {
         let kinds = self.kinds().summary();
         if !kinds.is_empty() {
             parts.push(kinds);
+        }
+        let failed = self.failed() as u64;
+        if failed > 0 {
+            parts.push(count(failed, "failed model call", "failed model calls"));
         }
         if running {
             let flight: Vec<String> = self
@@ -523,10 +554,15 @@ impl Group {
     }
 
     /// One row per call, split by step: the step's number in the gutter on
-    /// its first row, its thinking first.
+    /// its first row, the model calls that failed first, then its thinking.
     fn ledger(&self, out: &mut Vec<Row>) {
         for section in &self.sections {
             let mut gutter = format!("{:>3} ", section.step);
+            for (code, attempt) in &section.failed {
+                let gutter = std::mem::replace(&mut gutter, GAP.to_owned());
+                let row = format!("{gutter}model call failed · {code} · attempt {attempt}");
+                out.push((dim(row), None));
+            }
             for thought in &section.thoughts {
                 thought_rows(
                     thought,

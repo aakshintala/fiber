@@ -564,10 +564,7 @@ fn a_subscription_only_turn_shows_no_billed_figure() {
     start(&mut app, "go", 0);
     usage(&mut app, "g1", 5, json!(0.2), json!({"subscription": true}));
     end(&mut app, "failed", 0);
-    assert_eq!(
-        last(&app),
-        "▣ failed · boom · 5 tokens · $0.20 on subscription"
-    );
+    assert_eq!(last(&app), "▣ failed · 5 tokens · $0.20 on subscription");
 }
 
 #[test]
@@ -761,6 +758,7 @@ fn targets_name_the_lines_they_open() {
         .iter()
         .map(|(_, target)| match target {
             Target::Group(id) | Target::Call(id) | Target::Thought(id) => *id,
+            Target::Login => usize::MAX,
         })
         .collect();
     ids.sort_unstable();
@@ -1205,4 +1203,208 @@ fn an_interrupt_shows_only_on_the_closing_line_and_its_call_reads_cancelled() {
     assert_eq!(mentions, ["▣ interrupted · 3s · 1 call"]);
     assert_eq!(last(&app), "▣ interrupted · 3s · 1 call");
     assert!(lines.contains(&"  1 shell sleep 9 · cancelled".to_owned()));
+}
+
+/// A `retry_scheduled` for message `a_m`.
+fn retry(app: &mut App, attempt: u32, delay_ms: u64) {
+    feed(
+        app,
+        "retry_scheduled",
+        Some("a_m"),
+        0,
+        json!({"code": "rate_limited", "attempt": attempt, "delay_ms": delay_ms}),
+    );
+}
+
+#[test]
+fn a_failed_turn_says_why_then_closes() {
+    let mut app = app();
+    start(&mut app, "go", 0);
+    feed(
+        &mut app,
+        "turn_completed",
+        None,
+        0,
+        json!({"outcome": "failed", "error": {"code": "rate_limited",
+            "message": "The provider is rate limiting this key.",
+            "provider": {"name": "anthropic", "status": 529, "message": "Overloaded"}}}),
+    );
+    let lines = texts(&app);
+    assert_eq!(
+        lines[1..],
+        [
+            "✗ The provider is rate limiting this key. · rate_limited",
+            "anthropic said HTTP 529: “Overloaded”",
+            "▣ failed",
+        ]
+    );
+    assert!(!dim(&styled(
+        &app,
+        "✗ The provider is rate limiting this key. · rate_limited"
+    )));
+    assert!(dim(&styled(&app, "anthropic said HTTP 529: “Overloaded”")));
+    // Only a failed login offers "log in".
+    assert!(!app.targets().iter().any(|(_, t)| *t == Target::Login));
+}
+
+#[test]
+fn a_failed_login_offers_log_in_on_its_error_line() {
+    let mut app = app();
+    start(&mut app, "go", 0);
+    feed(
+        &mut app,
+        "turn_completed",
+        None,
+        0,
+        json!({"outcome": "failed", "error": {"code": "authentication_failed",
+            "message": "The key was refused."}}),
+    );
+    assert_eq!(
+        texts(&app)[1..],
+        ["✗ The key was refused. · authentication_failed", "▣ failed"]
+    );
+    assert_eq!(
+        target(&app, "✗ The key was refused. · authentication_failed"),
+        Target::Login
+    );
+}
+
+#[test]
+fn a_pending_retry_is_a_row_after_the_open_turn() {
+    let mut app = app();
+    start(&mut app, "go", 0);
+    step(&mut app, 0);
+    retry(&mut app, 2, 3_001);
+    assert_eq!(last(&app), "↻ Retrying in 4s · rate_limited · attempt 2");
+    retry(&mut app, 3, 4_000);
+    assert_eq!(last(&app), "↻ Retrying in 4s · rate_limited · attempt 3");
+    retry(&mut app, 4, 0);
+    assert_eq!(last(&app), "↻ Retrying in 0s · rate_limited · attempt 4");
+}
+
+#[test]
+fn the_retry_row_clears_once_the_call_gets_through() {
+    let kinds: [(&str, Option<&str>, Value); 9] = [
+        (
+            "assistant_message_delta",
+            Some("a_m"),
+            json!({"text": "Hi"}),
+        ),
+        ("text_completed", Some("a_m"), json!({"text": "Hi"})),
+        ("reasoning_started", Some("a_r"), json!({})),
+        (
+            "tool_call_arguments_delta",
+            Some("a_m"),
+            json!({"index": 0, "text": "{", "name": "read"}),
+        ),
+        (
+            "tool_call_requested",
+            Some("a_1"),
+            json!({"name": "read", "arguments": {"path": "a"}}),
+        ),
+        ("tool_call_started", Some("a_9"), json!({})),
+        ("tool_call_delta", Some("a_9"), json!({"text": "x"})),
+        (
+            "tool_call_completed",
+            Some("a_9"),
+            json!({"status": "completed", "content": []}),
+        ),
+        ("turn_completed", None, json!({"outcome": "completed"})),
+    ];
+    for (kind, action, payload) in kinds {
+        let mut app = app();
+        start(&mut app, "go", 0);
+        step(&mut app, 0);
+        retry(&mut app, 2, 1_000);
+        feed(&mut app, kind, action, 0, payload);
+        assert!(
+            !texts(&app).iter().any(|line| line.starts_with('↻')),
+            "{kind}"
+        );
+    }
+    // Other lines leave it.
+    let mut app = app();
+    start(&mut app, "go", 0);
+    retry(&mut app, 2, 1_000);
+    step(&mut app, 0);
+    assert!(last(&app).starts_with('↻'));
+}
+
+#[test]
+fn a_failed_model_call_is_counted_on_the_summary_and_in_the_ledger() {
+    let mut app = app();
+    start(&mut app, "go", 0);
+    step(&mut app, 0);
+    retry(&mut app, 2, 1_000);
+    call(&mut app, "a_1", "read", json!({"path": "a.rs"}), 0);
+    retry(&mut app, 3, 1_000);
+    text(&mut app, "a_m", "Done.", 0);
+    assert_eq!(texts(&app)[1], "• Read 1 file · 2 failed model calls");
+    app.open(group(&app));
+    assert_eq!(
+        texts(&app)[2..5],
+        [
+            "  1 model call failed · rate_limited · attempt 1",
+            "    model call failed · rate_limited · attempt 2",
+            "    read a.rs",
+        ]
+    );
+}
+
+#[test]
+fn a_group_with_only_a_failed_call_still_draws_its_summary() {
+    let mut app = app();
+    start(&mut app, "go", 0);
+    step(&mut app, 0);
+    retry(&mut app, 2, 1_000);
+    text(&mut app, "a_m", "Done.", 0);
+    assert_eq!(texts(&app), [" go ", "• 1 failed model call", "Done."]);
+    // Ctrl+O counts it as a ledger.
+    ctrl_o(&mut app);
+    assert_eq!(
+        texts(&app)[2],
+        "  1 model call failed · rate_limited · attempt 1"
+    );
+}
+
+/// An `mcp_server_failed` line for `server`.
+fn mcp_failed(app: &mut App, server: &str) {
+    feed(
+        app,
+        "mcp_server_failed",
+        None,
+        0,
+        json!({"server": server, "reason": "died", "will_restart": true,
+            "error": {"code": "mcp_server_unavailable",
+                "message": format!("The MCP server {server} stopped.")}}),
+    );
+}
+
+#[test]
+fn a_failed_mcp_server_is_a_warning_line_in_or_out_of_a_turn() {
+    let mut app = app();
+    mcp_failed(&mut app, "one");
+    start(&mut app, "go", 0);
+    mcp_failed(&mut app, "two");
+    text(&mut app, "a_m", "Hi", 0);
+    end(&mut app, "completed", 0);
+    mcp_failed(&mut app, "three");
+    feed(
+        &mut app,
+        "mcp_server_ready",
+        None,
+        0,
+        json!({"server": "three"}),
+    );
+    assert_eq!(
+        texts(&app),
+        [
+            "⚠ The MCP server one stopped.",
+            " go ",
+            "⚠ The MCP server two stopped.",
+            "Hi",
+            "▣ completed",
+            "⚠ The MCP server three stopped.",
+        ]
+    );
 }

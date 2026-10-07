@@ -102,6 +102,8 @@ pub(crate) enum Target {
     Call(usize),
     /// A thinking block's text.
     Thought(usize),
+    /// The login a failed turn offers.
+    Login,
 }
 
 /// The terminal's state.
@@ -376,15 +378,26 @@ impl App {
         expect(dead_code, reason = "#682 clicks and #683 focus call it")
     )]
     pub(crate) fn open(&mut self, target: Target) {
-        if self.turns.iter_mut().any(|turn| turn.toggle(target)) {
+        let asides = self.fold.asides.iter_mut().map(|(_, aside)| aside);
+        if self.turns.iter_mut().any(|turn| turn.toggle(target))
+            || asides.into_iter().any(|aside| aside.toggle(target))
+        {
             self.changed();
         }
     }
 
+    /// The turns' cards, each aside after the turns there were when it
+    /// came.
     fn rows(&self) -> Vec<Row> {
         let mut out = Vec::new();
-        for turn in &self.turns {
-            turn.rows(self.width, &mut out);
+        let mut asides = self.fold.asides.iter().peekable();
+        for at in 0..=self.turns.len() {
+            while let Some((_, aside)) = asides.next_if(|(after, _)| *after <= at) {
+                aside.rows(&mut out);
+            }
+            if let Some(turn) = self.turns.get(at) {
+                turn.rows(self.width, &mut out);
+            }
         }
         out
     }
@@ -396,7 +409,7 @@ impl App {
             .turns
             .iter_mut()
             .flat_map(Turn::groups_mut)
-            .filter(|group| group.has_calls())
+            .filter(|group| group.has_ledger())
             .collect();
         let open = if ledgers.is_empty() {
             !self.fold.ledgers

@@ -11,15 +11,18 @@ use std::collections::HashMap;
 
 use contract::Envelope;
 use contract::events::{
-    CallStatus, FileChange, InputItem, ReasoningCompleted, SteeringApplied, TextCompleted,
-    TextDelta, ToolCallArgumentsDelta, ToolCallCompleted, ToolCallRequested, TurnCompleted,
-    TurnStarted, UsageRecorded,
+    CallStatus, FileChange, InputItem, ReasoningCompleted, RetryScheduled, SteeringApplied,
+    TextCompleted, TextDelta, ToolCallArgumentsDelta, ToolCallCompleted, ToolCallRequested,
+    TurnCompleted, TurnOutcome, TurnStarted, UsageRecorded,
 };
 use ratatui::text::Line;
 use serde_json::Value;
 
 use crate::app::{Target, read, text_of};
 use crate::format;
+
+#[path = "crash.rs"]
+pub(crate) mod crash;
 
 /// One drawn line and what clicking it opens.
 pub(crate) type Row = (Line<'static>, Option<Target>);
@@ -31,6 +34,9 @@ pub(crate) struct Fold {
     next: usize,
     /// Whether a new group starts with its ledger open: the last Ctrl+O.
     pub(crate) ledgers: bool,
+    /// Lines outside any turn, each after the turns there were when it
+    /// came.
+    pub(crate) asides: Vec<(usize, crash::Aside)>,
 }
 
 impl Fold {
@@ -50,6 +56,8 @@ enum Entry {
     Steer(String),
     /// A tool group, by its index in the turn's groups.
     Group(usize),
+    /// A line that came while the turn ran.
+    Aside(crash::Aside),
 }
 
 /// Everything between two pieces of assistant text.
@@ -71,6 +79,8 @@ pub(crate) struct Section {
     pub(crate) step: u64,
     pub(crate) thoughts: Vec<Thought>,
     pub(crate) calls: Vec<Call>,
+    /// Model calls that failed and were retried: code and attempt.
+    pub(crate) failed: Vec<(String, u32)>,
 }
 
 /// One thinking block.
@@ -128,6 +138,8 @@ pub(crate) struct Turn {
     parts: HashMap<String, usize>,
     /// The turn's usage, delegates' copies included.
     pub(crate) spend: format::Spend,
+    /// A failed model call waiting to retry.
+    retry: Option<RetryScheduled>,
 }
 
 impl Turn {
@@ -145,6 +157,7 @@ impl Turn {
             message: None,
             parts: HashMap::new(),
             spend: format::Spend::default(),
+            retry: None,
         }
     }
 
@@ -194,7 +207,7 @@ impl Turn {
                     break;
                 }
                 Entry::Group(_) => break,
-                Entry::Reply { .. } | Entry::Steer(_) => {}
+                Entry::Reply { .. } | Entry::Steer(_) | Entry::Aside(_) => {}
             }
         }
         match found {
@@ -219,7 +232,7 @@ impl Turn {
             .iter_mut()
             .filter_map(|entry| match entry {
                 Entry::Reply { action: has, text } if has == action => Some(text),
-                Entry::Reply { .. } | Entry::Steer(_) | Entry::Group(_) => None,
+                Entry::Reply { .. } | Entry::Steer(_) | Entry::Group(_) | Entry::Aside(_) => None,
             })
             .nth(nth);
         match found {
@@ -439,6 +452,23 @@ impl Turn {
     /// Toggles what `target` opens; false when it is not in this turn.
     pub(crate) fn toggle(&mut self, target: Target) -> bool {
         self.groups_mut().any(|group| group.toggle(target))
+            || self.entries.iter_mut().any(|entry| match entry {
+                Entry::Aside(aside) => aside.toggle(target),
+                Entry::Reply { .. } | Entry::Steer(_) | Entry::Group(_) => false,
+            })
+    }
+
+    /// `retry_scheduled`: the retry pends, and the open group counts the
+    /// call that failed.
+    fn retry(&mut self, retry: RetryScheduled, ts: u64, fold: &mut Fold) {
+        let step = self.step;
+        let code = format::code(&retry.code);
+        let attempt = retry.attempt.saturating_sub(1);
+        self.group(ts, fold)
+            .section(step)
+            .failed
+            .push((code, attempt));
+        self.retry = Some(retry);
     }
 
     /// The card's lines at `width`.
@@ -459,16 +489,23 @@ impl Turn {
                         group.rows(self.is_open() && self.open_group == Some(*at), out);
                     }
                 }
+                Entry::Aside(aside) => aside.rows(out),
             }
         }
         if let Some((done, ts)) = &self.ended {
-            let closing = format::closing(
-                done,
-                ts.saturating_sub(self.started),
-                self.calls,
-                &self.spend.usage(),
-            );
+            let head = match done.outcome {
+                TurnOutcome::Completed => "▣ completed",
+                TurnOutcome::Interrupted => "▣ interrupted",
+                TurnOutcome::Failed => "▣ failed",
+            };
+            if let (TurnOutcome::Failed, Some(error)) = (done.outcome, &done.error) {
+                format::failure(error, out);
+            }
+            let ms = ts.saturating_sub(self.started);
+            let closing = format::closing(head, ms, self.calls, &self.spend.usage());
             out.push((format::dim(closing), None));
+        } else if let Some(retry) = &self.retry {
+            out.push((format::retry(retry), None));
         }
     }
 }
@@ -478,7 +515,17 @@ impl Turn {
 pub(crate) fn fold_line(turns: &mut Vec<Turn>, fold: &mut Fold, envelope: &Envelope) -> bool {
     let action = envelope.action_id.as_ref().map(|id| id.0.as_str());
     let ts = envelope.ts;
-    match envelope.kind.as_str() {
+    let kind = envelope.kind.as_str();
+    // A model call that got through ends the wait to retry.
+    if (matches!(
+        kind,
+        "assistant_message_delta" | "text_completed" | "reasoning_started" | "turn_completed"
+    ) || kind.starts_with("tool_call_"))
+        && let Some(turn) = open(turns)
+    {
+        turn.retry = None;
+    }
+    match kind {
         "turn_started" => read!(envelope, TurnStarted).is_some_and(|started| {
             let prompts = started
                 .input
@@ -527,6 +574,13 @@ pub(crate) fn fold_line(turns: &mut Vec<Turn>, fold: &mut Fold, envelope: &Envel
             }
             false
         }
+        "retry_scheduled" => read!(envelope, RetryScheduled).is_some_and(|retry| {
+            open(turns).is_some_and(|turn| {
+                turn.retry(retry, ts, fold);
+                true
+            })
+        }),
+        "mcp_server_failed" => crash::fold(turns, fold, envelope),
         _ => action.is_some_and(|action| fold_action(turns, fold, envelope, action)),
     }
 }
@@ -618,6 +672,7 @@ impl Group {
                 step,
                 thoughts: Vec::new(),
                 calls: Vec::new(),
+                failed: Vec::new(),
             });
         }
         let at = self.sections.len().saturating_sub(1);
@@ -666,13 +721,23 @@ impl Group {
                 .flat_map(|section| section.calls.iter_mut())
                 .find(|call| call.id == id)
                 .map(|call| &mut call.open),
+            Target::Login => None,
         };
         flag.map(|open| *open = !*open).is_some()
     }
 
-    /// Whether the group holds calls, and so a ledger.
-    pub(crate) fn has_calls(&self) -> bool {
-        self.calls().next().is_some()
+    /// Whether the group holds calls or failed model calls, and so a
+    /// ledger.
+    pub(crate) fn has_ledger(&self) -> bool {
+        self.calls().next().is_some() || self.failed() > 0
+    }
+
+    /// How many model calls failed in the group.
+    pub(crate) fn failed(&self) -> usize {
+        self.sections
+            .iter()
+            .map(|section| section.failed.len())
+            .sum()
     }
 }
 

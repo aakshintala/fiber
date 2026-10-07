@@ -626,13 +626,13 @@ fn turn_started_sets_busy_and_completed_clears_it() {
 }
 
 #[test]
-fn failed_turn_closes_with_its_message() {
+fn failed_turn_says_why_before_it_closes() {
     let clock = fakes::clock::FakeClock::new();
     let mut app = app();
     attach(&mut app, clock.now(), "s_aaaaaaaaaaaaaaaa");
     app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "hi"));
     app.on_line(turn_completed("s_aaaaaaaaaaaaaaaa", "failed"));
-    assert_eq!(texts(&app).last(), Some(&"▣ failed · boom".to_owned()));
+    assert_eq!(texts(&app)[1..], ["✗ boom · io_failed", "▣ failed"]);
 }
 
 #[test]
