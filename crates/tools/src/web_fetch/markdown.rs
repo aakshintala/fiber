@@ -115,6 +115,62 @@ impl Raw {
     }
 }
 
+/// The start tags that can be in the head, beside `script`, `style` and
+/// `title`, which switch to raw text first. Any other ends it.
+const IN_HEAD: [&str; 10] = [
+    "base", "basefont", "bgsound", "head", "html", "link", "meta", "noframes", "noscript",
+    "template",
+];
+
+/// The start tags that close every open `svg`, beside a `font` with a
+/// `color`, `face` or `size` attribute.
+const OUT_OF_SVG: [&str; 44] = [
+    "b",
+    "big",
+    "blockquote",
+    "body",
+    "br",
+    "center",
+    "code",
+    "dd",
+    "div",
+    "dl",
+    "dt",
+    "em",
+    "embed",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "head",
+    "hr",
+    "i",
+    "img",
+    "li",
+    "listing",
+    "menu",
+    "meta",
+    "nobr",
+    "ol",
+    "p",
+    "pre",
+    "ruby",
+    "s",
+    "small",
+    "span",
+    "strong",
+    "strike",
+    "sub",
+    "sup",
+    "table",
+    "tt",
+    "u",
+    "ul",
+    "var",
+];
+
 /// What a list item is numbered by.
 struct List {
     ordered: bool,
@@ -220,10 +276,16 @@ impl Converter {
                 return TokenSinkResult::RawData(RawKind::Rcdata);
             }
         }
+        // The HTML standard ends the head at the first start tag that cannot
+        // be in it, and every open `svg` at the first that cannot be in one.
+        if !IN_HEAD.contains(&name) {
+            self.in_head = false;
+        }
+        if breaks_out_of_svg(name, tag) {
+            self.close_svg();
+        }
         if name == "head" {
             self.in_head = true;
-        } else if name == "body" {
-            self.in_head = false;
         } else if matches!(name, "svg" | "noscript" | "template") {
             if !tag.self_closing {
                 self.hidden += 1;
@@ -242,9 +304,15 @@ impl Converter {
             self.end_raw();
             return;
         }
-        if name == "head" {
+        // The HTML standard also ends the head at these end tags, and every
+        // open `svg` at `</p>` and `</br>`; `</br>` is then a `br`.
+        if matches!(name, "head" | "body" | "html" | "br") {
             self.in_head = false;
-        } else if matches!(name, "svg" | "noscript" | "template") {
+        }
+        if matches!(name, "p" | "br") {
+            self.close_svg();
+        }
+        if matches!(name, "svg" | "noscript" | "template") {
             self.hidden = self.hidden.saturating_sub(1);
             if name == "svg" {
                 self.svg = self.svg.saturating_sub(1);
@@ -252,6 +320,12 @@ impl Converter {
         } else if self.hidden == 0 && !self.in_head {
             self.visible_tag(name, true, tag);
         }
+    }
+
+    /// Closes every open `svg`, and with them what they hide.
+    fn close_svg(&mut self) {
+        self.hidden = self.hidden.saturating_sub(self.svg);
+        self.svg = 0;
     }
 
     /// The end tag of the raw-text element: a collected title becomes the
@@ -479,6 +553,8 @@ impl Converter {
     /// Character tokens: already entity-decoded per the HTML standard by
     /// the tokenizer. Raw `script` and `style` text is dropped, a counted
     /// title's is collected, and anything hidden or in the head is dropped.
+    /// Text that is not all whitespace ends the head, as the HTML standard
+    /// ends it.
     fn chars(&mut self, text: &str) {
         match self.raw {
             Some(Raw::Title) => {
@@ -488,7 +564,11 @@ impl Converter {
             Some(_) => return,
             None => {}
         }
-        if self.hidden > 0 || self.in_head {
+        if self.hidden > 0 {
+            return;
+        }
+        self.in_head &= text.chars().all(|c| c.is_ascii_whitespace());
+        if self.in_head {
             return;
         }
         self.plain(text);
@@ -622,6 +702,16 @@ impl Converter {
         }
         self.out
     }
+}
+
+/// Whether a start tag closes every open `svg`, per the HTML standard's
+/// rules for foreign content: an HTML element that cannot be inside one.
+fn breaks_out_of_svg(name: &str, tag: &Tag) -> bool {
+    OUT_OF_SVG.contains(&name)
+        || name == "font"
+            && ["color", "face", "size"]
+                .iter()
+                .any(|wanted| attribute(tag, wanted).is_some())
 }
 
 /// The value of attribute `wanted` on a tokenized tag, or `None` when it is
