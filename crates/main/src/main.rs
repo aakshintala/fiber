@@ -580,6 +580,22 @@ fn terminal() -> i32 {
             ));
         }
     };
+    // `tui.hover`, defaulting to on (`docs/configuration.md`, "Keys").
+    let hover = match ::cli::project_of(&home, &workspace).and_then(|(_, project)| {
+        Config::load(Sources {
+            home: home.clone(),
+            workspace: workspace.clone(),
+            project,
+            overrides: Vec::new(),
+        })
+        .map_err(|e| failed(e.code(), e))
+    }) {
+        Ok(config) => config
+            .get("tui.hover", None)
+            .and_then(|(value, _)| value.as_bool())
+            .unwrap_or(true),
+        Err(e) => return fail(e),
+    };
     let tty = match io::stdin().as_fd().try_clone_to_owned() {
         Ok(tty) => std::fs::File::from(tty),
         Err(e) => return fail(failed(ErrorCode::IoFailed, format!("the terminal: {e}"))),
@@ -601,7 +617,15 @@ fn terminal() -> i32 {
         doors::hub::connect(&home, &mut start, hub_clock.as_ref())
     });
     let project = log::project_key(&doors::project(&workspace));
-    tui::run(tty, workspace, project, connect, Box::new(crash::attach), clock)
+    tui::run(
+        tty,
+        workspace,
+        project,
+        connect,
+        Box::new(crash::attach),
+        clock,
+        hover,
+    )
 }
 
 fn usage(message: impl Into<String>) -> Failure {

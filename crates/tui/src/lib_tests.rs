@@ -124,10 +124,10 @@ fn read_until(main: &File, marker: &[u8], what: &str) -> Vec<u8> {
 
 /// Every byte the backend wrote, shared with the test.
 #[derive(Clone, Default)]
-struct Sink(Arc<Mutex<Vec<u8>>>);
+pub(super) struct Sink(Arc<Mutex<Vec<u8>>>);
 
 impl Sink {
-    fn len(&self) -> usize {
+    pub(super) fn len(&self) -> usize {
         self.0.lock().map_or(0, |bytes| bytes.len())
     }
 }
@@ -146,7 +146,10 @@ impl Write for Sink {
 }
 
 /// A loop at 60x12 on `backend`, with no tty, that records attaches.
-fn new_loop<B: Backend>(backend: B, tty: Option<File>) -> (Loop<B>, Arc<Mutex<Vec<String>>>) {
+pub(super) fn new_loop<B: Backend>(
+    backend: B,
+    tty: Option<File>,
+) -> (Loop<B>, Arc<Mutex<Vec<String>>>) {
     let attached = Arc::new(Mutex::new(Vec::new()));
     let seen = Arc::clone(&attached);
     let mut app = App::new(PathBuf::from("/w"));
@@ -168,12 +171,14 @@ fn new_loop<B: Backend>(backend: B, tty: Option<File>) -> (Loop<B>, Arc<Mutex<Ve
         files_out: None,
         search: None,
         reader: None,
+        pointer: crate::mouse::Pointer::default(),
+        hover: true,
     };
     (lp, attached)
 }
 
 /// Runs `lp` over `inputs`, then with every sender gone.
-fn feed<B: Backend>(lp: &mut Loop<B>, inputs: Vec<Input>) -> i32 {
+pub(super) fn feed<B: Backend>(lp: &mut Loop<B>, inputs: Vec<Input>) -> i32 {
     let (tx, rx) = mpsc::channel();
     for input in inputs {
         tx.send(input).unwrap_or_else(|err| panic!("send: {err}"));
@@ -225,7 +230,7 @@ fn inputs_wake_the_loop_once_each_and_no_ops_write_nothing() {
     let sink = Sink::default();
     let (mut lp, _) = new_loop(CrosstermBackend::new(sink.clone()), None);
     lp.screen
-        .draw(&lp.app)
+        .draw(&lp.app, None)
         .unwrap_or_else(|err| panic!("draw: {err}"));
     let first = sink.len();
     assert!(first > 0);
@@ -421,14 +426,14 @@ fn a_schema_mismatch_says_so_and_hangs_up() {
 #[test]
 fn restore_puts_back_what_setup_changed() {
     let pair = open();
-    crate::term::setup(&pair.slave).unwrap_or_else(|err| panic!("setup: {err}"));
-    let start = "\x1b[?1049h\x1b[?2004h\x1b[?u\x1b[c";
+    crate::term::setup(&pair.slave, true).unwrap_or_else(|err| panic!("setup: {err}"));
+    let start = "\x1b[?1049h\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b[?u\x1b[c";
     assert_eq!(
         read_exact(&pair.main, start.len(), "the start bytes"),
         start.as_bytes()
     );
     super::restore();
-    let end = "\x1b[<u\x1b[?2004l\x1b[?1049l\x1b[?25h";
+    let end = "\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?1049l\x1b[?25h";
     assert_eq!(
         read_exact(&pair.main, end.len(), "the restore bytes"),
         end.as_bytes()
@@ -614,20 +619,21 @@ fn run_quits_on_double_ctrl_c_with_the_reader_blocked() {
                 Box::new(move || Ok((hub, hello))),
                 Box::new(|_| {}),
                 clock,
+                true,
             );
             match done.send(code) {
                 Ok(()) | Err(_) => {}
             }
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
-    // The terminal bytes at start: alternate screen, the two queries, then
-    // the first frame before anything is written to the master.
-    let start = read_exact(
-        &pair.main,
-        "\x1b[?1049h\x1b[?2004h".len() + "\x1b[?u\x1b[c".len(),
-        "the start bytes",
-    );
-    assert_eq!(start, b"\x1b[?1049h\x1b[?2004h\x1b[?u\x1b[c");
+    // The terminal bytes at start: alternate screen, bracketed paste, the mouse
+    // modes, the
+    // two queries, then the first frame before anything is written to the
+    // master.
+    let expected =
+        b"\x1b[?1049h\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b[?u\x1b[c";
+    let start = read_exact(&pair.main, expected.len(), "the start bytes");
+    assert_eq!(start, expected);
     let frame = read_exact(&pair.main, 10, "the first frame");
     assert!(frame.contains(&b'>'));
     // The slave is in raw mode while running.
@@ -649,7 +655,8 @@ fn run_quits_on_double_ctrl_c_with_the_reader_blocked() {
     let after = rustix::termios::tcgetattr(&pair.slave).unwrap_or_else(|err| panic!("attr: {err}"));
     assert!(is_cooked(&after));
     // After the last frame the output holds the restore bytes.
-    let marker = b"\x1b[<u\x1b[?2004l\x1b[?1049l\x1b[?25h";
+    let marker =
+        b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?1049l\x1b[?25h";
     let tail = read_until(&pair.main, marker, "the restore bytes");
     assert_eq!(
         tail.get(tail.len().saturating_sub(marker.len())..),
@@ -675,6 +682,7 @@ fn run_shows_a_failed_connect_and_still_quits_restored() {
                 Box::new(|| Err(io::Error::other("refused"))),
                 Box::new(|_| {}),
                 fakes::clock::FakeClock::new(),
+                true,
             );
             done.send(code).unwrap_or(());
         })
@@ -690,7 +698,7 @@ fn run_shows_a_failed_connect_and_still_quits_restored() {
     assert_eq!(code, 0);
     read_until(
         &pair.main,
-        b"\x1b[<u\x1b[?2004l\x1b[?1049l\x1b[?25h",
+        b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?1049l\x1b[?25h",
         "the restore bytes",
     );
     assert!(is_cooked(
@@ -722,6 +730,7 @@ fn run_redraws_on_sigwinch_at_the_new_size() {
                 Box::new(|| Err(io::Error::other("refused"))),
                 Box::new(|_| {}),
                 fakes::clock::FakeClock::new(),
+                true,
             );
             done.send(code).unwrap_or(());
         })
@@ -754,7 +763,7 @@ fn run_redraws_on_sigwinch_at_the_new_size() {
 }
 
 /// A review request offering the rule `npm test`, as the hub relays it.
-fn offering(request: &str) -> Input {
+pub(super) fn offering(request: &str) -> Input {
     let payload = serde_json::json!({
         "request_id": request, "effects": ["executes"], "reversible": true, "step": "review",
         "rule": {"subject": "npm test --watch", "prefix": "npm test"},
@@ -964,8 +973,8 @@ fn a_reader_whose_channel_closed_ends() {
 #[test]
 fn hand_over_gives_the_terminal_and_its_input_to_the_program() {
     let mut pair = open();
-    crate::term::setup(&pair.slave).unwrap_or_else(|err| panic!("setup: {err}"));
-    let start = "\x1b[?1049h\x1b[?2004h\x1b[?u\x1b[c";
+    crate::term::setup(&pair.slave, true).unwrap_or_else(|err| panic!("setup: {err}"));
+    let start = "\x1b[?1049h\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b[?u\x1b[c";
     read_exact(&pair.main, start.len(), "the start bytes");
     let tty = pair
         .slave
@@ -1006,12 +1015,15 @@ fn hand_over_gives_the_terminal_and_its_input_to_the_program() {
     assert!(!is_cooked(
         &rustix::termios::tcgetattr(&pair.slave).unwrap_or_else(|err| panic!("attr: {err}"))
     ));
-    // The terminal was restored, then set up again with kitty's flags.
-    let restore = "\x1b[<u\x1b[?2004l\x1b[?1049l\x1b[?25h";
+    // The terminal was restored, then set up again with hover and kitty's
+    // flags.
+    let restore =
+        "\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?1049l\x1b[?25h";
     let echoed = read_until(&pair.main, restore.as_bytes(), "the restore bytes");
     assert!(echoed.ends_with(restore.as_bytes()));
     // In between, the cooked terminal echoed the program's line.
-    let resumed = "typed\r\n\x1b[?1049h\x1b[?2004h\x1b[>1u";
+    let resumed =
+        "typed\r\n\x1b[?1049h\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b[>1u";
     assert_eq!(
         read_until(&pair.main, resumed.as_bytes(), "the resume bytes"),
         resumed.as_bytes()
