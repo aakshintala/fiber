@@ -4034,6 +4034,31 @@ fn an_answerable_resume_runs_the_call_a_person_allows() {
 }
 
 #[test]
+fn an_allowed_call_that_sets_control_handoff_hands_off_after_the_batch() {
+    // The finishing turn's batch ran uncancelled: a call whose result set
+    // `control.handoff` restarts the context from its note, as in any step.
+    let mut history = suspended_batch(vec![Scripted::text("Done.")], &["wrapup"], 1);
+    let mut wrapup = support::TestTool::reads("wrapup", "");
+    wrapup.output.content = Vec::new();
+    wrapup.output.control = Some(contract::events::Control {
+        handoff: "the note".into(),
+    });
+    let wrapup = Arc::new(wrapup);
+    let looped = history.resume(tools_of(&[&wrapup]));
+    let (delivery, seen) = reply_delivery("r_9", Decision::Allow);
+    history.inbox_tx.send(delivery).unwrap();
+    let (_looped, outcome) = history.step(looped);
+
+    assert_eq!(outcome, Some(contract::events::TurnOutcome::Completed));
+    assert!(is_accepted(&seen), "the reply was accepted");
+    assert_eq!(wrapup.ran().len(), 1);
+    let handed = new_of(&history, "handoff_completed");
+    assert_eq!(handed.len(), 1, "{:?}", history.new_kinds());
+    assert_eq!(handed[0].payload["outcome"], "completed");
+    assert_eq!(handed[0].payload["note"], json!(["a_1"]));
+}
+
+#[test]
 fn a_reply_queued_before_the_resume_answers_the_re_raised_request() {
     let mut history = suspended_batch(vec![Scripted::text("Done.")], &["act"], 1);
     let act = reads("act");
