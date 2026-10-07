@@ -3,7 +3,7 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::{Output, Stdio};
+use std::process::{Command, Output, Stdio};
 
 use contract::ErrorCode;
 
@@ -139,6 +139,10 @@ fn inspect_with(program: &str, path: &Path) -> Result<Inspection, Error> {
     // ignored files included, counts as uncommitted. `--untracked-files=all`
     // pins `status.showUntrackedFiles`: `no` in the config would otherwise
     // suppress ignored files too, hiding an ignored-only worktree.
+    // `--ignore-submodules=none` pins `submodule.*.ignore`: `all` would
+    // otherwise hide a modified submodule. The Git command builder turns
+    // `core.fsmonitor` off: a hook that reports nothing changed would
+    // otherwise hide a modified tracked file.
     let out = run(
         program,
         path,
@@ -148,6 +152,7 @@ fn inspect_with(program: &str, path: &Path) -> Result<Inspection, Error> {
             "--porcelain",
             "--ignored",
             "--untracked-files=all",
+            "--ignore-submodules=none",
         ],
     )?;
     if !out.status.success() {
@@ -201,7 +206,7 @@ pub enum Removed {
 /// Removes the worktree at `path` and its branch, through `git` run from
 /// the common directory.
 pub fn remove(path: &Path, inspected: &Inspected, force: bool) -> Result<Removed, Error> {
-    let mut remove = std::process::Command::new("git");
+    let mut remove = git_command("git");
     remove
         .arg("-C")
         .arg(&inspected.common_dir)
@@ -217,7 +222,7 @@ pub fn remove(path: &Path, inspected: &Inspected, force: bool) -> Result<Removed
     if !out.status.success() {
         return Err(git_failed(path, "worktree remove", &out));
     }
-    let out = std::process::Command::new("git")
+    let out = git_command("git")
         .arg("-C")
         .arg(&inspected.common_dir)
         .args(["branch", "-D", &inspected.branch])
@@ -234,14 +239,28 @@ pub fn remove(path: &Path, inspected: &Inspected, force: bool) -> Result<Removed
 /// Runs a `git` read for `path` in `dir`: stdin is null, and no lock is
 /// taken. A spawn failure of kind `NotFound` means `git` is missing.
 fn run(program: &str, dir: &Path, path: &Path, args: &[&str]) -> Result<Output, Error> {
-    std::process::Command::new(program)
+    git_command(program)
         .arg("-C")
         .arg(dir)
         .args(args)
         .stdin(Stdio::null())
-        .env("GIT_OPTIONAL_LOCKS", "0")
         .output()
         .map_err(|source| spawn_failed(path, source))
+}
+
+/// Runs Git with `core.fsmonitor` off and without the environment that
+/// can redirect reads or removals elsewhere.
+fn git_command(program: &str) -> Command {
+    let mut command = Command::new(program);
+    command
+        .args(["-c", "core.fsmonitor=false"])
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_COMMON_DIR")
+        .env_remove("GIT_INDEX_FILE");
+    command
 }
 
 /// A `git` command that failed: its stderr, or how it exited when stderr

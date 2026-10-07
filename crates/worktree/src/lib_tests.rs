@@ -84,6 +84,47 @@ fn common_dir(repo: &Path) -> PathBuf {
 }
 
 #[test]
+fn git_environment_cannot_redirect_inspection() {
+    // The child re-runs this test with a hostile environment: the
+    // builder must clear each variable, or inspection reads the other
+    // repository instead.
+    if let Ok(path) = std::env::var("FIBER_WORKTREE_ENV_CHILD") {
+        let path = PathBuf::from(path);
+        match inspect(&path) {
+            Ok(Inspection::Worktree(inspected)) if inspected.uncommitted => {
+                std::process::exit(0);
+            }
+            _ => {
+                std::process::exit(1);
+            }
+        }
+    }
+    let home = repo("worktree-env");
+    let path = add(home.path(), "fiber/x", "wt");
+    let other = repo("worktree-env-other");
+    let wrong_index = home.path().join("wrong-index");
+    fs::write(&wrong_index, "not an index").unwrap();
+    fs::write(path.join("file.txt"), "precious change").unwrap();
+    let name = module_path!().split_once("::").unwrap().1;
+    let status = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            &format!("{name}::git_environment_cannot_redirect_inspection"),
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env("GIT_DIR", other.path().join(".git"))
+        .env("GIT_WORK_TREE", other.path())
+        .env("GIT_COMMON_DIR", other.path().join(".git"))
+        .env("GIT_INDEX_FILE", &wrong_index)
+        .env("FIBER_WORKTREE_ENV_CHILD", &path)
+        .stdin(std::process::Stdio::null())
+        .status()
+        .unwrap();
+    assert!(status.success(), "inspection must see past the redirect");
+}
+
+#[test]
 fn a_clean_merged_worktree_reports_nothing_to_lose() {
     let home = repo("worktree-clean");
     let path = add(home.path(), "fiber/x", "wt");
@@ -155,6 +196,66 @@ fn an_ignored_only_worktree_is_uncommitted_when_untracked_files_are_hidden() {
         inspected.uncommitted,
         "an ignored-only worktree counts as uncommitted"
     );
+}
+
+#[test]
+fn fsmonitor_cannot_hide_a_modified_tracked_file() {
+    let home = repo("worktree-fsmonitor");
+    let path = add(home.path(), "fiber/x", "wt");
+    let hooks = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/test-hooks");
+    let fsmonitor = hooks.join("fsmonitor-empty");
+    git(
+        &path,
+        &["config", "core.fsmonitor", fsmonitor.to_str().unwrap()],
+    );
+    let _ = git(&path, &["status", "--porcelain"]);
+    fs::write(path.join("file.txt"), "precious change").unwrap();
+    assert!(
+        git(&path, &["status", "--porcelain"]).is_empty(),
+        "the configured fsmonitor reproduces the hidden modification"
+    );
+    let inspected = worktree_of(inspect(&path).unwrap());
+    assert!(inspected.uncommitted);
+}
+
+#[test]
+fn ignored_submodule_changes_cannot_be_hidden() {
+    let home = repo("worktree-submodule-parent");
+    let submodule = repo("worktree-submodule-source");
+    git(
+        home.path(),
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            "--quiet",
+            submodule.path().to_str().unwrap(),
+            "dep",
+        ],
+    );
+    git(home.path(), &["add", "dep"]);
+    git(home.path(), &["commit", "--quiet", "-m", "submodule"]);
+    let path = add(home.path(), "fiber/x", "wt");
+    git(
+        &path,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "update",
+            "--init",
+            "--quiet",
+        ],
+    );
+    git(&path, &["config", "submodule.dep.ignore", "all"]);
+    fs::write(path.join("dep/file.txt"), "precious change").unwrap();
+    assert!(
+        git(&path, &["status", "--porcelain"]).is_empty(),
+        "submodule.ignore=all hides the modified submodule"
+    );
+    let inspected = worktree_of(inspect(&path).unwrap());
+    assert!(inspected.uncommitted);
 }
 
 #[test]
