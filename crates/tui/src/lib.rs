@@ -294,7 +294,7 @@ impl<B: Backend> Loop<B> {
                             Effect::Quit => return Some(0),
                         },
                         Event::Reply(Reply::KittyFlags(_)) => self.app.set_kitty(),
-                        Event::Reply(Reply::DeviceAttributes) => {}
+                        Event::Reply(Reply::DeviceAttributes) | Event::Edit(_) => {}
                     }
                 }
             }

@@ -1,6 +1,6 @@
 //! Tests for the byte parser.
 
-use super::{Event, Key, Parser, Reply};
+use super::{Edit, Event, Key, Parser, Reply};
 
 /// Feeds `chunks` in order, concatenating every read's events.
 fn feed_all(chunks: &[&[u8]]) -> Vec<Event> {
@@ -183,4 +183,204 @@ fn esc_ending_a_read_then_a_is_esc_then_a() {
         feed_all(&[b"\x1b", b"a"]),
         vec![Event::Key(Key::Esc), Event::Key(Key::Char('a'))]
     );
+}
+
+/// One edit event.
+fn edit(edit: Edit) -> Vec<Event> {
+    vec![Event::Edit(edit)]
+}
+
+#[test]
+fn legacy_arrows_left_and_right() {
+    assert_eq!(feed_all(&[b"\x1b[D"]), edit(Edit::Left));
+    assert_eq!(feed_all(&[b"\x1b[C"]), edit(Edit::Right));
+    assert_eq!(feed_all(&[b"\x1bOD"]), edit(Edit::Left));
+    assert_eq!(feed_all(&[b"\x1bOC"]), edit(Edit::Right));
+    // An explicit "no modifiers" is the plain arrow.
+    assert_eq!(feed_all(&[b"\x1b[1;1D"]), edit(Edit::Left));
+}
+
+#[test]
+fn modified_arrows_move_by_word_or_line() {
+    // Alt is 1 + 2, Ctrl 1 + 4, Super 1 + 8.
+    assert_eq!(feed_all(&[b"\x1b[1;3D"]), edit(Edit::WordLeft));
+    assert_eq!(feed_all(&[b"\x1b[1;3C"]), edit(Edit::WordRight));
+    assert_eq!(feed_all(&[b"\x1b[1;5D"]), edit(Edit::WordLeft));
+    assert_eq!(feed_all(&[b"\x1b[1;5C"]), edit(Edit::WordRight));
+    assert_eq!(feed_all(&[b"\x1b[1;9D"]), edit(Edit::LineStart));
+    assert_eq!(feed_all(&[b"\x1b[1;9C"]), edit(Edit::LineEnd));
+    // Caps Lock (64) and Num Lock (128) do not change the key.
+    assert_eq!(feed_all(&[b"\x1b[1;67D"]), edit(Edit::WordLeft));
+    assert_eq!(feed_all(&[b"\x1b[1;133C"]), edit(Edit::WordRight));
+    // Shift, and modifiers together, bind nothing here.
+    assert!(feed_all(&[b"\x1b[1;2D"]).is_empty());
+    assert!(feed_all(&[b"\x1b[1;7D"]).is_empty());
+    assert!(feed_all(&[b"\x1b[1;11C"]).is_empty());
+    assert!(feed_all(&[b"\x1b[1;13C"]).is_empty());
+    assert!(feed_all(&[b"\x1b[1;17C"]).is_empty());
+    assert!(feed_all(&[b"\x1b[2;3C"]).is_empty());
+    assert!(feed_all(&[b"\x1b[1;+3C"]).is_empty());
+}
+
+#[test]
+fn delete_and_legacy_word_keys() {
+    assert_eq!(feed_all(&[b"\x1b[3~"]), edit(Edit::Delete));
+    assert!(feed_all(&[b"\x1b[3;5~"]).is_empty());
+    assert_eq!(feed_all(&[b"\x1bb"]), edit(Edit::WordLeft));
+    assert_eq!(feed_all(&[b"\x1bf"]), edit(Edit::WordRight));
+    assert_eq!(feed_all(&[b"\x1b\x7f"]), edit(Edit::DeleteWord));
+}
+
+#[test]
+fn line_feed_is_ctrl_j() {
+    assert_eq!(feed_all(&[b"\n"]), edit(Edit::CtrlJ));
+    assert_eq!(
+        feed_all(&[b"a\nb"]),
+        vec![
+            Event::Key(Key::Char('a')),
+            Event::Edit(Edit::CtrlJ),
+            Event::Key(Key::Char('b')),
+        ]
+    );
+}
+
+#[test]
+fn kitty_keys_read_as_their_legacy_meaning() {
+    assert_eq!(feed_all(&[b"\x1b[13u"]), vec![Event::Key(Key::Enter)]);
+    assert_eq!(feed_all(&[b"\x1b[13;1u"]), vec![Event::Key(Key::Enter)]);
+    assert_eq!(feed_all(&[b"\x1b[13;2u"]), edit(Edit::ShiftEnter));
+    assert_eq!(feed_all(&[b"\x1b[27u"]), vec![Event::Key(Key::Esc)]);
+    assert_eq!(feed_all(&[b"\x1b[99;5u"]), vec![Event::Key(Key::CtrlC)]);
+    assert_eq!(feed_all(&[b"\x1b[106;5u"]), edit(Edit::CtrlJ));
+    assert_eq!(feed_all(&[b"\x1b[127u"]), vec![Event::Key(Key::Backspace)]);
+    assert_eq!(feed_all(&[b"\x1b[127;3u"]), edit(Edit::DeleteWord));
+    assert_eq!(feed_all(&[b"\x1b[97;3u"]), vec![Event::Key(Key::AltA)]);
+    assert_eq!(feed_all(&[b"\x1b[98;3u"]), edit(Edit::WordLeft));
+    assert_eq!(feed_all(&[b"\x1b[102;3u"]), edit(Edit::WordRight));
+    // A lock modifier, and an event type or alternate key after a colon,
+    // do not change the key.
+    assert_eq!(feed_all(&[b"\x1b[99;69u"]), vec![Event::Key(Key::CtrlC)]);
+    assert_eq!(
+        feed_all(&[b"\x1b[99:67;5:1u"]),
+        vec![Event::Key(Key::CtrlC)]
+    );
+}
+
+#[test]
+fn kitty_keys_with_other_modifiers_or_codes_drop_silently() {
+    for bytes in [
+        b"\x1b[13;3u".as_slice(),
+        b"\x1b[13;5u",
+        b"\x1b[13;9u",
+        b"\x1b[27;2u",
+        b"\x1b[99u",
+        b"\x1b[99;3u",
+        b"\x1b[99;7u",
+        b"\x1b[99;13u",
+        b"\x1b[106;3u",
+        b"\x1b[127;5u",
+        b"\x1b[127;2u",
+        b"\x1b[97;5u",
+        b"\x1b[97;7u",
+        b"\x1b[98;5u",
+        b"\x1b[57441u",
+        b"\x1b[:;5u",
+        b"\x1b[;5u",
+        b"\x1b[99;u",
+    ] {
+        assert!(feed_all(&[bytes]).is_empty(), "{bytes:?}");
+    }
+    assert_eq!(
+        feed_all(&[b"\x1b[57441;2ua"]),
+        vec![Event::Key(Key::Char('a'))]
+    );
+}
+
+#[test]
+fn a_bracketed_paste_is_one_event_with_its_line_breaks() {
+    assert_eq!(
+        feed_all(&[b"\x1b[200~one\r\ntwo\rthree\nfour\x1b[201~"]),
+        edit(Edit::Paste("one\ntwo\nthree\nfour".to_owned()))
+    );
+}
+
+#[test]
+fn a_paste_split_across_three_reads_is_held() {
+    let mut parser = Parser::default();
+    assert_eq!(
+        parser.feed(b"a\x1b[200~fir"),
+        vec![Event::Key(Key::Char('a'))]
+    );
+    assert!(parser.feed(b"st\nsec").is_empty());
+    assert_eq!(
+        parser.feed(b"ond\x1b[201~b"),
+        vec![
+            Event::Edit(Edit::Paste("first\nsecond".to_owned())),
+            Event::Key(Key::Char('b')),
+        ]
+    );
+}
+
+#[test]
+fn the_end_marker_split_anywhere_is_found() {
+    let whole = b"\x1b[200~text\x1b[201~z";
+    let start = b"\x1b[200~text".len();
+    for cut in start..start + b"\x1b[201~".len() {
+        let mut parser = Parser::default();
+        let (head, tail) = whole.split_at(cut);
+        assert!(parser.feed(head).is_empty(), "cut at {cut}");
+        assert_eq!(
+            parser.feed(tail),
+            vec![
+                Event::Edit(Edit::Paste("text".to_owned())),
+                Event::Key(Key::Char('z')),
+            ],
+            "cut at {cut}"
+        );
+    }
+}
+
+#[test]
+fn the_start_marker_split_across_reads_is_held() {
+    let mut parser = Parser::default();
+    assert!(parser.feed(b"\x1b[20").is_empty());
+    assert!(parser.feed(b"0~x").is_empty());
+    assert_eq!(parser.feed(b"\x1b[201~"), edit(Edit::Paste("x".to_owned())));
+}
+
+#[test]
+fn a_paste_without_its_end_is_held_not_lost() {
+    let mut parser = Parser::default();
+    assert!(parser.feed(b"\x1b[200~kept").is_empty());
+    assert!(parser.feed(b"\x03\x1b[A").is_empty());
+    assert!(parser.feed(b" on").is_empty());
+    assert_eq!(
+        parser.feed(b"\x1b[201~"),
+        edit(Edit::Paste("kept[A on".to_owned()))
+    );
+}
+
+#[test]
+fn a_paste_yields_no_keys_and_drops_control_characters() {
+    assert_eq!(
+        feed_all(&[b"\x1b[200~a\x1b\x03\x7f\tb\x00\n\x1b[201~"]),
+        edit(Edit::Paste("a\tb\n".to_owned()))
+    );
+    // UTF-8, split across reads inside the paste, survives.
+    let text = "é€😀".as_bytes();
+    let mut parser = Parser::default();
+    assert!(parser.feed(b"\x1b[200~").is_empty());
+    for byte in text {
+        assert!(parser.feed(&[*byte]).is_empty());
+    }
+    assert_eq!(
+        parser.feed(b"\x1b[201~"),
+        edit(Edit::Paste("é€😀".to_owned()))
+    );
+}
+
+#[test]
+fn an_empty_paste_is_nothing() {
+    assert!(feed_all(&[b"\x1b[200~\x1b[201~"]).is_empty());
+    assert!(feed_all(&[b"\x1b[200~\x01\x1b[201~"]).is_empty());
 }
