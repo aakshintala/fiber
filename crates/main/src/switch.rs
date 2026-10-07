@@ -274,6 +274,22 @@ fn resolve_literal<'a>(
     typed: &str,
 ) -> Option<Result<extensions::Model<'a>, Rejection>> {
     let mut matches = named(naming, typed);
+    // Check the exact provider/model first: bare resolution can discard an
+    // unconfigured literal for suffix matches. Qualified resolution can
+    // strip a suffix too, so require the error to name this exact reference.
+    if let [reference] = matches.as_slice()
+        && let Err(extensions::Error::Unconfigured { message }) = registry.resolve(reference)
+        && message.starts_with(&format!("The model `{reference}` "))
+    {
+        let provider = reference
+            .split_once('/')
+            .map_or(reference.as_str(), |(name, _)| name);
+        return Some(if in_map(provider) {
+            Err(invalid(message))
+        } else {
+            Err(limited(provider))
+        });
+    }
     match registry.resolve(typed) {
         // The registry's own exact-first order tries the full id before
         // the suffix strips, so a model whose id is the full text is a

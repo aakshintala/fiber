@@ -467,8 +467,7 @@ fn an_unconfigured_literal_id_beats_stripped_id_ambiguity() {
     std::fs::create_dir_all(lit.join("providers")).unwrap();
     std::fs::write(
         lit.join("extension.json"),
-        json!({"name": "lit", "version": "v0.0.0", "fiber": "0.0.0", "api": 1})
-            .to_string(),
+        json!({"name": "lit", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}).to_string(),
     )
     .unwrap();
     std::fs::write(
