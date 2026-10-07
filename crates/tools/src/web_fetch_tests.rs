@@ -17,7 +17,7 @@ use fakes::clock::FakeClock;
 use fakes::{CancelToken, ConnectProxy, ProviderServer, Recorder, Response, TempDir};
 use serde_json::{Map, Value, json};
 
-use super::{Kind, WebFetch, kind_of, read_reply};
+use super::{Kind, WebFetch, kind_of, read_reply, read_up_to};
 use crate::web_fetch::http::Head;
 
 /// How long a test waits for a fetch to finish.
@@ -482,6 +482,7 @@ fn the_classification_of_a_status_at_the_edges_of_2xx() {
             status,
             content_type: None,
             location: None,
+            content_length: None,
         };
         match read_reply(head, &mut &b"body"[..]).unwrap() {
             super::Reply::Page(..) => "page",
@@ -497,12 +498,33 @@ fn the_classification_of_a_status_at_the_edges_of_2xx() {
 }
 
 #[test]
+fn a_body_is_read_into_room_reserved_for_its_stated_length_never_past_the_limit() {
+    let body = b"0123456789";
+    let read = |limit: u64, hint: Option<u64>| read_up_to(&mut &body[..], limit, hint).unwrap();
+    let exact = read(20, Some(10));
+    assert_eq!(exact, body);
+    assert_eq!(exact.capacity(), 10, "the stated length is reserved");
+    let over = read(5, Some(100));
+    assert_eq!(over, b"01234");
+    assert_eq!(over.capacity(), 5, "never more than the limit is reserved");
+    let none = read(20, None);
+    assert_eq!(none, body);
+    assert!(none.capacity() >= 10);
+    let short = read(5, Some(3));
+    assert_eq!(
+        short, b"01234",
+        "a body longer than stated is still cut at the limit"
+    );
+}
+
+#[test]
 fn only_a_redirect_status_with_a_location_redirects() {
     let reply = |status: u16, location: Option<&str>| {
         let head = Head {
             status,
             content_type: None,
             location: location.map(str::to_owned),
+            content_length: None,
         };
         matches!(
             read_reply(head, &mut &b""[..]).unwrap(),

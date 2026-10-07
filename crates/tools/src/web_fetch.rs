@@ -188,7 +188,7 @@ impl WebFetch {
                         }
                     }
                 }
-                Ok(Reply::Page(head, bytes)) => return self.page(&uri, &head, &bytes),
+                Ok(Reply::Page(head, bytes)) => return self.page(&uri, &head, bytes),
                 Ok(Reply::Refused(head, bytes)) => return refused(&uri, &head, &bytes),
                 Err(Ended::Stopped(stop)) => return stopped_output(&uri, stop),
                 Err(Ended::Failed(output)) => return *output,
@@ -255,8 +255,9 @@ impl WebFetch {
         })
     }
 
-    /// A 2xx response, as the result.
-    fn page(&self, uri: &Uri, head: &Head, bytes: &[u8]) -> Output {
+    /// A 2xx response, as the result. A text page's body becomes the result
+    /// itself, so the page is held once when it is valid UTF-8.
+    fn page(&self, uri: &Uri, head: &Head, bytes: Vec<u8>) -> Output {
         if u64::try_from(bytes.len()).is_ok_and(|length| length > MAX_BODY) {
             return failed(
                 ErrorCode::TooLarge,
@@ -273,16 +274,22 @@ impl WebFetch {
             head.content_type.as_deref().unwrap_or_default()
         );
         match kind {
-            Kind::Markdown => match self.save(bytes, "html") {
+            Kind::Markdown => match self.save(&bytes, "html") {
                 Ok(path) => {
-                    let page = charset::decode(head.content_type.as_deref(), bytes);
+                    let page = charset::decode(head.content_type.as_deref(), &bytes);
                     let markdown = markdown::to_markdown(&page);
                     text_output(format!("{first}; raw page at {path}\n\n{markdown}"))
                 }
                 Err(message) => failed(ErrorCode::ToolError, message),
             },
-            Kind::Text => text_output(format!("{first}\n\n{}", String::from_utf8_lossy(bytes))),
-            Kind::Saved(extension) => match self.save(bytes, extension) {
+            Kind::Text => {
+                let mut text = String::from_utf8(bytes).unwrap_or_else(|invalid| {
+                    String::from_utf8_lossy(invalid.as_bytes()).into_owned()
+                });
+                text.insert_str(0, &format!("{first}\n\n"));
+                text_output(text)
+            }
+            Kind::Saved(extension) => match self.save(&bytes, extension) {
                 Ok(path) => text_output(format!(
                     "{first}\n\nSaved to {path} ({} bytes). Read it with `read`.\n",
                     bytes.len()
@@ -369,18 +376,22 @@ fn read_reply(head: Head, body: &mut dyn Read) -> io::Result<Reply> {
     match (&head.location, redirect, head.status) {
         (Some(location), true, _) => Ok(Reply::Redirect(location.clone())),
         (_, _, 200..300) => {
-            let bytes = read_up_to(body, MAX_BODY.saturating_add(1))?;
+            let bytes = read_up_to(body, MAX_BODY.saturating_add(1), head.content_length)?;
             Ok(Reply::Page(head, bytes))
         }
         _ => {
-            let bytes = read_up_to(body, ERROR_BODY)?;
+            let bytes = read_up_to(body, ERROR_BODY, head.content_length)?;
             Ok(Reply::Refused(head, bytes))
         }
     }
 }
 
-fn read_up_to(body: &mut dyn Read, limit: u64) -> io::Result<Vec<u8>> {
-    let mut bytes = Vec::new();
+/// Reads at most `limit` bytes of `body`, reserving room for `hint` of
+/// them first, never more than `limit`: the stated length is server input,
+/// so it sizes the buffer and never decides how much is read.
+fn read_up_to(body: &mut dyn Read, limit: u64, hint: Option<u64>) -> io::Result<Vec<u8>> {
+    let reserve = hint.map_or(0, |hint| hint.min(limit));
+    let mut bytes = Vec::with_capacity(usize::try_from(reserve).unwrap_or(0));
     body.take(limit).read_to_end(&mut bytes)?;
     Ok(bytes)
 }
