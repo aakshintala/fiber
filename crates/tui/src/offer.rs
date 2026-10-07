@@ -199,7 +199,10 @@ impl Offer {
             | Key::CtrlR
             | Key::AltUp
             | Key::AltDown
-            | Key::AltX => return Some(OfferKey::Handled),
+            | Key::AltX
+            | Key::AltP
+            | Key::AltR
+            | Key::AltDigit(_) => return Some(OfferKey::Handled),
         }
         self.keep_in_view(width, height);
         Some(OfferKey::Handled)
