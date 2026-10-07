@@ -19,7 +19,7 @@ use ratatui::text::Line;
 use serde_json::Value;
 
 use crate::app::{Target, read, text_of};
-use crate::format::{self, Kinds};
+use crate::format;
 use crate::markdown::{self, CopyTarget};
 
 #[path = "crash.rs"]
