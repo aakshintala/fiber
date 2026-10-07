@@ -32,6 +32,10 @@ pub struct Reviewer {
     pub provider: Arc<dyn Provider>,
     /// The reviewer's model, and how its calls are priced.
     pub model: Model,
+    /// The prompt-cache lifetime its requests ask for: `cache.lifetime`
+    /// resolved for the reviewer's model (`docs/prompt-cache.md`, "Cache
+    /// lifetime").
+    pub cache_lifetime: CacheLifetime,
 }
 
 /// When a reviewer block hands the call to a person

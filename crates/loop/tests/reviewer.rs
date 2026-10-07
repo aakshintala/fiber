@@ -222,6 +222,30 @@ fn a_stage_1_allow_runs_the_call_with_one_token() {
     assert_eq!(usages(&lines).len(), 3);
 }
 
+/// A reviewer request asks for the reviewer's cache lifetime, the one
+/// `cache.lifetime` resolves to for its model (`docs/prompt-cache.md`,
+/// "Cache lifetime"), whatever the session's is.
+#[test]
+fn a_reviewer_request_carries_the_reviewers_cache_lifetime() {
+    for lifetime in [CacheLifetime::FiveMinutes, CacheLifetime::OneHour] {
+        let tool = shell(None, None);
+        let mut session = Session::with_tools(
+            vec![
+                calls_reply("", &[("shell", paris())]),
+                Scripted::text("Done."),
+            ],
+            None,
+            vec![tool.clone() as Arc<dyn Tool>],
+        );
+        let reviewer = session.reviewer_cached(vec![Scripted::text("allow")], lifetime);
+        session.inbox.send(delivery("run the tests")).unwrap();
+        assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+        let requests: Vec<ModelRequest> = reviewer.requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].cache_lifetime, lifetime, "{lifetime:?}");
+    }
+}
+
 #[test]
 fn the_request_body_holds_only_what_the_reviewer_is_shown() {
     let tool = shell(None, None);

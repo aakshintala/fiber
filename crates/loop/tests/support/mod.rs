@@ -1049,6 +1049,25 @@ impl Session {
         limits: BlockLimits,
         cost: Option<contract::provider::Cost>,
     ) -> Arc<ScriptedProvider> {
+        self.reviewer_with(script, limits, cost, CacheLifetime::OneHour)
+    }
+
+    /// As [`Session::reviewer`], with the reviewer's cache lifetime.
+    pub(crate) fn reviewer_cached(
+        &mut self,
+        script: Vec<Scripted>,
+        cache_lifetime: CacheLifetime,
+    ) -> Arc<ScriptedProvider> {
+        self.reviewer_with(script, BlockLimits::default(), None, cache_lifetime)
+    }
+
+    fn reviewer_with(
+        &mut self,
+        script: Vec<Scripted>,
+        limits: BlockLimits,
+        cost: Option<contract::provider::Cost>,
+        cache_lifetime: CacheLifetime,
+    ) -> Arc<ScriptedProvider> {
         let provider = Arc::new(ScriptedProvider::new(script));
         let looped = self.looped.take().unwrap().reviewer(
             Ok(Reviewer {
@@ -1058,6 +1077,7 @@ impl Session {
                     cost,
                     subscription: false,
                 },
+                cache_lifetime,
             }),
             limits,
         );
