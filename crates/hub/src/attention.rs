@@ -225,7 +225,8 @@ impl Attention {
         }
     }
 
-    /// Ruling 5: `now.since >= started_ms && turn_ended_at(log, now.since)`. Takes no lock.
+    /// The unseen-turn test is
+    /// `now.since >= started_ms && turn_ended_at(log, now.since)`. Takes no lock.
     pub(crate) fn ended_unseen(&self, log: &Path, now: &SessionStatus) -> bool {
         now.since >= self.started_ms && turn_ended_at(log, now.since)
     }

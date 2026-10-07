@@ -41,7 +41,7 @@ pub(crate) struct Options {
     pub word: bool,
     /// Whether `-o` was given: each non-empty match prints on its own
     /// line. With `-v`, context or an alternation the call instead runs
-    /// the system grep (ruling 17 on #298).
+    /// the system grep.
     pub only_matching: bool,
     /// The `-B` context lines.
     pub before: usize,

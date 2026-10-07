@@ -1,4 +1,5 @@
-//! Unit tests of `Retry::decide`: the decision table of the plan's Rulings.
+//! Unit tests of `Retry::decide`: retryable failures, backoff and attempt limit
+//! (`docs/model-routing.md`, "When a model call fails").
 
 use std::time::Duration;
 

@@ -211,9 +211,9 @@ fn an_error_names_the_extensions_file_and_line() {
 
 #[test]
 fn a_registration_without_a_timeout_leaves_a_problem_and_registers_nothing() {
-    // Ruling 5 on #561: a bad `fiber.command` spec leaves a problem (an
-    // `extension_failed` notice) and the entry script goes on, instead of
-    // raising. The command is never registered, so calling it is unknown.
+    // Without its required timeout, a `fiber.command` spec leaves a problem
+    // (an `extension_failed` notice), and the entry script continues instead
+    // of raising. The command is never registered, so calling it is unknown.
     let setup = Setup::new();
     let dir = setup.home().join("ext");
     write(
