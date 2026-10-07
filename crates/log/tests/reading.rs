@@ -311,30 +311,41 @@ fn a_watcher_that_falls_behind_catches_up_through_recv_timeout() {
             log.append(&empty("step_started"), None, None).unwrap()
         })
         .collect();
-    let mut got = Vec::new();
-    let mut ephemeral = 0;
-    while got.len() < durable.len() {
-        let line = watcher
-            .recv_timeout(DEADLINE)
-            .expect("a catch-up line before the deadline")
-            .unwrap()
-            .expect("a catch-up line before the end");
-        if line.is_durable() {
-            got.push(line);
-        } else {
-            ephemeral += 1;
+    // `durable` moves into the thread below; the copy stays for the
+    // assertion after it.
+    let queued = durable.clone();
+    // Calling code that blocks is a wait too (`docs/testing.md`, "Waits
+    // and timeouts"): the catch-up loop runs on a thread and hands back
+    // what it read, under one deadline for the whole catch-up.
+    let (mut watcher, got, ephemeral) = fakes::within("the catch-up lines", DEADLINE, move || {
+        let mut got = Vec::new();
+        let mut ephemeral = 0;
+        while got.len() < queued.len() {
+            let line = watcher
+                .recv_timeout(DEADLINE)
+                .expect("a catch-up line before the deadline")
+                .unwrap()
+                .expect("a catch-up line before the end");
+            if line.is_durable() {
+                got.push(line);
+            } else {
+                ephemeral += 1;
+            }
         }
-    }
+        (watcher, got, ephemeral)
+    });
     assert_eq!(got, durable);
     // The queue is bounded: the ephemeral lines it had no room for are gone.
     assert!(ephemeral < durable.len(), "{ephemeral} ephemeral lines");
     // Once caught up, lines arrive as they are written.
     let live = log.append(&delta("live"), None, None).unwrap();
-    let got = watcher
-        .recv_timeout(DEADLINE)
-        .expect("a live line before the deadline")
-        .unwrap()
-        .expect("a live line after the catch-up");
+    let got = fakes::within("the live line", DEADLINE, move || {
+        watcher
+            .recv_timeout(DEADLINE)
+            .expect("a live line before the deadline")
+            .unwrap()
+            .expect("a live line after the catch-up")
+    });
     assert_eq!(got, live);
 }
 
@@ -388,23 +399,56 @@ fn a_writer_in_another_process_holds_the_session() {
         .stdout(Stdio::piped())
         .spawn()
         .unwrap();
-    let mut out = BufReader::new(child.stdout.take().unwrap());
-    let mut line = String::new();
-    while line.trim() != "holding" {
-        line.clear();
-        assert_ne!(out.read_line(&mut line).unwrap(), 0, "the child exited");
-    }
+    let pid = child.id();
+    let stdout = child.stdout.take().unwrap();
+    // Calling code that blocks is a wait too (`docs/testing.md`, "Waits
+    // and timeouts"): the read-until-`holding` loop runs on a thread and
+    // sends its reader back, received with a deadline naming the wait.
+    let (done, holding) = mpsc::channel();
+    thread::spawn(move || {
+        let mut out = BufReader::new(stdout);
+        let mut line = String::new();
+        while line.trim() != "holding" {
+            line.clear();
+            let read = out
+                .read_line(&mut line)
+                .expect("the child to print its holding line");
+            assert_ne!(read, 0, "the child exited before its holding line");
+        }
+        done.send(out).unwrap_or(());
+    });
+    let _out = match holding.recv_timeout(DEADLINE) {
+        Ok(out) => out,
+        Err(_) => {
+            match fakes::kill_pid(pid, "KILL") {
+                Ok(_) | Err(_) => {}
+            }
+            let reaped = holding.recv_timeout(DEADLINE).is_ok();
+            panic!("waited {DEADLINE:?} for the child's holding line (reaped: {reaped})");
+        }
+    };
 
     let Err(err) = Log::open(tmp.path(), id("s_1"), fakes::clock::FakeClock::new()) else {
         panic!("opened a session another process holds");
     };
-    assert!(
-        err.to_string().contains(&format!("process {}", child.id())),
-        "{err}"
-    );
+    assert!(err.to_string().contains(&format!("process {pid}")), "{err}");
 
     drop(child.stdin.take());
-    assert!(child.wait().unwrap().success());
+    let (done, exited) = mpsc::channel();
+    thread::spawn(move || {
+        done.send(child.wait()).unwrap_or(());
+    });
+    let status = match exited.recv_timeout(DEADLINE) {
+        Ok(status) => status,
+        Err(_) => {
+            match fakes::kill_pid(pid, "KILL") {
+                Ok(_) | Err(_) => {}
+            }
+            let reaped = exited.recv_timeout(DEADLINE).is_ok();
+            panic!("waited {DEADLINE:?} for the child to exit (reaped: {reaped})");
+        }
+    };
+    assert!(status.unwrap().success());
     assert!(Log::open(tmp.path(), id("s_1"), fakes::clock::FakeClock::new()).is_ok());
 }
 
