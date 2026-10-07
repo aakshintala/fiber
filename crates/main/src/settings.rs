@@ -162,3 +162,16 @@ mod thinking_tests;
 #[cfg(test)]
 #[path = "warm_tests.rs"]
 mod warm_tests;
+
+/// Each configured `tools."<name>".max_result_bytes`, by the tool's
+/// registered name (`docs/configuration.md`, "Keys"; `docs/tools.md`,
+/// "Bounded results"). The key is not a per-model key, so the caps are
+/// read with no model. An entry whose `max_result_bytes` is absent or not
+/// a whole number gives no entry.
+pub(crate) fn result_caps(_config: &Config) -> r#loop::ResultCaps {
+    r#loop::ResultCaps::new()
+}
+
+#[cfg(test)]
+#[path = "result_caps_tests.rs"]
+mod result_caps_tests;
