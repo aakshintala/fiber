@@ -434,9 +434,9 @@ fn command() -> clap::Command {
 
 /// The menu, or one command's help. An unknown name is the same sentence
 /// as invoking that name directly.
-pub(crate) fn render_help(name: Option<&str>) -> Result<String, String> {
+pub(crate) fn render_help<S: AsRef<str>>(words: &[S]) -> Result<String, String> {
     let mut cmd = command();
-    let Some(name) = name else {
+    let Some(name) = words.first().map(AsRef::as_ref) else {
         return Ok(cmd.render_help().to_string());
     };
     // The usage line names the parent (`fiber ask`) only after the parent
