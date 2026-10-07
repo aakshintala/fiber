@@ -58,6 +58,12 @@ impl RecentRow {
         self.how == Left::Exited && self.status.as_ref().is_some_and(is_waiting)
     }
 
+    /// Whether the session was a delegate: its status names a parent.
+    /// Delegates are never in the feed, so `recent` skips them too.
+    pub(crate) fn delegate(&self) -> bool {
+        self.status.as_ref().is_some_and(is_delegate)
+    }
+
     /// Whether the session's directory is still there.
     pub(crate) fn dir_exists(&self, home: &Path) -> bool {
         session_dir(home, &self.project, &self.session_id.0).is_dir()
@@ -67,6 +73,11 @@ impl RecentRow {
 /// Whether `status` is waiting on a person.
 pub(crate) fn is_waiting(status: &SessionStatus) -> bool {
     matches!(status.state, contract::events::SessionState::Waiting { .. })
+}
+
+/// Whether `status` names a parent: the session is a delegate.
+pub(crate) fn is_delegate(status: &SessionStatus) -> bool {
+    status.parent.is_some()
 }
 
 /// Appends `row` to `home`'s `recent.jsonl` as one write of one line on a
@@ -111,9 +122,9 @@ pub(crate) enum PageError {
 }
 
 /// One page of exited sessions, newest first, newest row per session
-/// only: rows whose directory is gone and sessions in `running` are
-/// skipped; with `project`, only that key. The page starts after
-/// `before`'s row.
+/// only: delegates' rows, rows whose directory is gone and sessions in
+/// `running` are skipped; with `project`, only that key. The page starts
+/// after `before`'s row.
 pub(crate) fn page(
     home: &Path,
     before: Option<&str>,
@@ -123,6 +134,7 @@ pub(crate) fn page(
     let listed: Vec<RecentRow> = newest_first(read_all(home))
         .into_iter()
         .filter(|row| project.is_none_or(|key| row.project == key))
+        .filter(|row| !row.delegate())
         .filter(|row| row.dir_exists(home))
         .collect();
     let start = match before {
@@ -145,7 +157,7 @@ pub(crate) fn page(
 
 /// The rows the hub seeds its feed from at start: of the newest
 /// [`RECENT_KEEP`] rows, each session's newest, when it is crashed or
-/// exited waiting and its directory is still there.
+/// exited waiting, not a delegate, and its directory is still there.
 pub(crate) fn seeds(home: &Path) -> Vec<RecentRow> {
     let rows = read_all(home);
     let kept = rows
@@ -158,6 +170,7 @@ pub(crate) fn seeds(home: &Path) -> Vec<RecentRow> {
         .collect();
     newest_first(kept)
         .into_iter()
+        .filter(|row| !row.delegate())
         .filter(|row| row.how == Left::Crashed || row.waiting())
         .filter(|row| row.dir_exists(home))
         .collect()

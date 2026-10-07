@@ -413,6 +413,21 @@ fn main() {
         let md = "# Heading\n\nSome *emphasis* and `code`.\n\n- item\n- item\n\n```rust\nfn main() {}\n```\n\n".repeat(20);
         black_box(pulldown_cmark::Parser::new(&md).count());
     }
+    #[cfg(feature = "arborium")]
+    {
+        // The terminal highlights a reply's code blocks: one block in each
+        // of three languages, each grammar loaded on its first block.
+        let blocks = [
+            ("rust", "fn main() {\n    let x = 1; // one\n    println!(\"{x}\");\n}\n"),
+            ("python", "def main():\n    x = 1  # one\n    print(f\"{x}\")\n"),
+            ("javascript", "function main() {\n  const x = 1; // one\n  console.log(`${x}`);\n}\n"),
+        ];
+        let mut hl = arborium::Highlighter::new();
+        for (lang, code) in blocks {
+            let code = code.repeat(20);
+            black_box(hl.highlight_spans(lang, &code).unwrap().len());
+        }
+    }
     #[cfg(feature = "syntect")]
     {
         use syntect::{easy::HighlightLines, highlighting::ThemeSet, parsing::SyntaxSet};

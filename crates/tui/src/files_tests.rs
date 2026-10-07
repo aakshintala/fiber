@@ -232,6 +232,11 @@ fn the_loop_lists_searches_and_drops_the_worker_on_close() {
         files_out: Some(out),
         search: None,
         stash: std::collections::VecDeque::new(),
+        reader: None,
+        pointer: crate::mouse::Pointer::default(),
+        hover: true,
+        var: Box::new(|_| None),
+        copy_command: None,
     };
     // No hub: a frame fetches no history, so nothing arrives here.
     let (_hub, idle) = mpsc::channel();

@@ -42,10 +42,11 @@ const fn value(spelling: &'static str) -> Flag {
 
 const HEAD_TAIL: &[Flag] = &[flag("-q"), value("-n"), value("-c")];
 
+/// No `-R`: it follows every link below its operands, past the credential
+/// deny (`docs/tools.md`, "Other command-line tools").
 const GREP: &[Flag] = &[
     flag("-n"),
     flag("-r"),
-    flag("-R"),
     flag("-i"),
     flag("-v"),
     flag("-E"),

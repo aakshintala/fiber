@@ -15,7 +15,7 @@ use super::{Pages, Part, fold};
 use crate::app::{App, Effect, Target};
 use crate::keys::Key;
 use crate::link::Line;
-use crate::turn::{Fold, Row};
+use crate::turn::Row;
 
 const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 
@@ -233,18 +233,13 @@ fn history(lines: &[Envelope], range: &RangeInclusive<Seq>) -> Vec<Envelope> {
 
 /// What one fold of every line draws, with the totals `pages` kept.
 fn whole(pages: &Pages, lines: &[Envelope]) -> Vec<Row> {
-    let mut part = Part {
-        first: 0,
-        turns: Vec::new(),
-    };
-    let ledgers = Fold {
-        ledgers: pages.fold.ledgers,
-    };
+    let seed = pages.seeds.first().cloned().expect("the initial page seed");
+    let mut part = Part::seeded(seed);
     for line in lines {
-        fold(&mut part, &ledgers, line);
+        fold(&mut part, line);
     }
     let mut out = Vec::new();
-    pages.draw(&part, &mut out);
+    pages.draw(0, &part, &mut out);
     out
 }
 
@@ -266,7 +261,7 @@ fn joined(pages: &mut Pages, lines: &[Envelope]) -> Vec<Row> {
         assert!(pages.part(at).is_some(), "page {at} did not load");
         let mut rows = Vec::new();
         if let Some(part) = pages.part(at) {
-            pages.draw(part, &mut rows);
+            pages.draw(at, part, &mut rows);
         }
         let drawn: usize = rows
             .iter()
@@ -563,7 +558,12 @@ fn refolding_leaves_session_state_alone() {
     }
     let sent = match app.on_key(Key::Enter, now()) {
         Effect::Send(sent) => sent,
-        Effect::None | Effect::Quit | Effect::ListFiles | Effect::Search { .. } => Vec::new(),
+        Effect::None
+        | Effect::Quit
+        | Effect::ListFiles
+        | Effect::Search { .. }
+        | Effect::Editor { .. }
+        | Effect::Copy(_) => Vec::new(),
     };
     assert!(
         sent.iter().any(|line| line.contains("\"steer\"")),
@@ -596,7 +596,7 @@ fn a_failed_load_keeps_every_count_and_says_why() {
     let (first, shown) = app.shown(0, 1);
     assert_eq!(first, 0);
     assert_eq!(
-        shown.first().map(|(line, _)| line.to_string()),
+        shown.first().map(|(line, _, _)| line.to_string()),
         Some(String::new())
     );
 }
@@ -612,7 +612,7 @@ fn first_group(app: &App) -> Option<Target> {
 fn page_texts(app: &App, at: usize) -> Vec<String> {
     let mut rows = Vec::new();
     if let Some(part) = app.pages().part(at) {
-        app.pages().draw(part, &mut rows);
+        app.pages().draw(at, part, &mut rows);
     }
     rows.iter().map(|(line, _)| line.to_string()).collect()
 }
@@ -630,7 +630,7 @@ fn a_target_opened_stays_open_when_its_page_comes_back() {
         return;
     };
     let closed = page_texts(&app, 0).len();
-    app.open(group.clone());
+    app.open(group);
     let opened = page_texts(&app, 0);
     assert!(opened.len() > closed);
     let after = layout(&app);

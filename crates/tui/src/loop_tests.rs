@@ -143,6 +143,11 @@ fn opened() -> (
         stash: std::collections::VecDeque::new(),
         files_out: None,
         search: None,
+        reader: None,
+        pointer: crate::mouse::Pointer::default(),
+        hover: true,
+        var: Box::new(|_| None),
+        copy_command: None,
     };
     let (tx, rx) = mpsc::channel();
     (lp, theirs, tx, rx)

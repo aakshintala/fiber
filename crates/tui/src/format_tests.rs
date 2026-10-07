@@ -1,6 +1,6 @@
 //! Tests for a card's figures.
 
-use super::{Kinds, count, duration, heading, money, seconds, tokens, wrap};
+use super::{Kinds, count, cut, duration, heading, money, seconds, tokens, wrap};
 
 #[test]
 fn durations_truncate_to_whole_seconds_at_each_threshold() {
@@ -204,4 +204,14 @@ fn wrapping_breaks_at_spaces_and_inside_long_words() {
 fn a_span_under_a_second_is_left_out() {
     assert_eq!(seconds(999), None);
     assert_eq!(seconds(1000).as_deref(), Some("1s"));
+}
+
+#[test]
+fn cutting_keeps_what_fits_in_columns() {
+    assert_eq!(cut("abcdef", 4), "abcd");
+    assert_eq!(cut("abc", 3), "abc");
+    assert_eq!(cut("abc", 0), "");
+    // A wide character that would cross the edge is left out.
+    assert_eq!(cut("a界b", 2), "a");
+    assert_eq!(cut("a界b", 3), "a界");
 }

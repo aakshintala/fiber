@@ -1,5 +1,6 @@
 //! The commands that run no session: `fiber config`, `fiber login`,
-//! `fiber logout`, `fiber approve`, `fiber sessions export` and `fiber models`
+//! `fiber logout`, `fiber approve`, `fiber sessions export`,
+//! `fiber sessions delete` and `fiber models`
 //! (`docs/architecture.md`, "The modules"). `main` parses argv and
 //! dispatches here; this crate takes plain values.
 
@@ -21,7 +22,7 @@ pub use approve::approve;
 pub use config::{config_get, config_set};
 pub use login::{LogoutTarget, run_login, run_logout};
 pub use models::{models, refresh_model_lists};
-pub use sessions::export;
+pub use sessions::{delete, export};
 
 /// What `fiber logout` says when it is given no provider.
 pub const LOGOUT_SHAPE: &str =

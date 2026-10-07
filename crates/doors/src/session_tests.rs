@@ -1874,7 +1874,7 @@ fn a_served_session_appends_each_accepted_prompt_in_order() {
     let socket = opened.socket.clone();
     let file = history_file(&opened);
     let session_id = opened.session.gate.session_id.0.clone();
-    let ts = super::now_ms(opened.clock.as_ref());
+    let ts = contract::clock::wall_ms(opened.clock.wall());
     let watched = file.clone();
     opened
         .session

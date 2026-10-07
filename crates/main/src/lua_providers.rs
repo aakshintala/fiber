@@ -16,7 +16,7 @@ use crate::failed;
 /// The key a model's requests carry, or nothing when a Lua `credential()`
 /// supplies the token, which rides the signing seam instead; and what signs
 /// each request, `Some` when the provider registered `credential` or `sign`.
-pub(crate) type KeyAndSigner = (Option<String>, Option<Arc<dyn Signer>>);
+pub(crate) type KeyAndSigner = (Option<Secret>, Option<Arc<dyn Signer>>);
 
 /// Merges every Lua provider's models into `providers`
 /// (`docs/model-routing.md`, "Model discovery"): with no cached copy
@@ -67,7 +67,7 @@ pub(crate) fn session_credential(
             lua.token().map(|_| ()).map_err(|e| failed(e.code(), e))?;
             None
         }
-        _ => Some(key()?.expose().to_owned()),
+        _ => Some(key()?),
     };
     Ok((key, signer(lua)?))
 }

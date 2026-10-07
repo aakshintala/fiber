@@ -217,6 +217,27 @@ fn before_pages_across_the_page_boundary_exclusively() {
 }
 
 #[test]
+fn a_delegate_row_is_skipped_and_pages_stay_full() {
+    let temp = Temp::new();
+    let total = RECENT_PAGE as u64 + 3;
+    // A delegate's row, its status naming a parent, between every two
+    // root rows.
+    for n in 0..total {
+        temp.append(&temp.row(n, "p", Left::Exited, Some("idle")));
+        let mut delegate = temp.row(1000 + n, "p", Left::Exited, None);
+        delegate.status =
+            Some(serde_json::from_value(status("n", "/w", "idle", Some(&id(n)))).unwrap());
+        temp.append(&delegate);
+    }
+    let first = page_of(&temp.dir, None, None);
+    assert_eq!(first.len(), RECENT_PAGE);
+    assert_eq!(first.first(), Some(&id(total - 1)));
+    assert_eq!(first.last(), Some(&id(3)));
+    let second = page_of(&temp.dir, Some(&id(3)), None);
+    assert_eq!(second, [id(2), id(1), id(0)]);
+}
+
+#[test]
 fn an_unknown_before_is_an_error() {
     let temp = Temp::new();
     temp.append(&temp.row(1, "p", Left::Exited, None));
@@ -242,6 +263,22 @@ fn seeds_are_crashed_and_waiting_rows_whose_directory_is_there() {
     // Crashed while waiting is still crashed.
     temp.append(&temp.row(6, "p", Left::Crashed, Some("waiting")));
     assert_eq!(ids(&seeds(&temp.dir)), [id(6), id(2), id(1)]);
+}
+
+#[test]
+fn seeds_skip_delegate_rows() {
+    let temp = Temp::new();
+    temp.append(&temp.row(1, "p", Left::Crashed, Some("idle")));
+    // A crashed delegate and a waiting delegate: neither seeds the feed.
+    let mut crashed_delegate = temp.row(2, "p", Left::Crashed, None);
+    crashed_delegate.status =
+        Some(serde_json::from_value(status("n", "/w", "idle", Some(&id(1)))).unwrap());
+    temp.append(&crashed_delegate);
+    let mut waiting_delegate = temp.row(3, "p", Left::Exited, None);
+    waiting_delegate.status =
+        Some(serde_json::from_value(status("n", "/w", "waiting", Some(&id(1)))).unwrap());
+    temp.append(&waiting_delegate);
+    assert_eq!(ids(&seeds(&temp.dir)), [id(1)]);
 }
 
 #[test]

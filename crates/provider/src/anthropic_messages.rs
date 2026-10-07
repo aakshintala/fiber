@@ -50,7 +50,7 @@ impl Messages {
             ),
         ];
         if let Some(key) = &endpoint.key {
-            headers.push(("x-api-key".to_owned(), key.clone()));
+            headers.push(("x-api-key".to_owned(), key.expose().to_owned()));
         }
         headers.extend(endpoint.headers.iter().cloned());
         Call {

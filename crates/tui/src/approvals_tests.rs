@@ -529,7 +529,12 @@ mod through_the_app {
                 assert_eq!(lines.len(), 1);
                 lines.into_iter().next().unwrap_or_default()
             }
-            Effect::None | Effect::Quit | Effect::ListFiles | Effect::Search { .. } => {
+            Effect::None
+            | Effect::Quit
+            | Effect::ListFiles
+            | Effect::Search { .. }
+            | Effect::Editor { .. }
+            | Effect::Copy(_) => {
                 panic!("expected one line")
             }
         }
@@ -789,4 +794,25 @@ mod through_the_app {
                 "args": {"request_id": "r_1", "decision": "deny", "feedback": "no"}})
         );
     }
+}
+
+#[test]
+fn ctrl_g_and_ctrl_r_do_nothing_in_the_panel() {
+    let mut queue = folded(&[offering(S_A, "r_1")]);
+    let before = panel(&queue);
+    press(&mut queue, Key::CtrlG, 1);
+    press(&mut queue, Key::CtrlR, 1);
+    assert_eq!(panel(&queue), before);
+}
+
+#[test]
+fn the_steering_keys_do_nothing_while_the_panel_is_open() {
+    let mut queue = three();
+    let before = panel(&queue);
+    press(&mut queue, Key::AltUp, 1);
+    press(&mut queue, Key::AltDown, 1);
+    press(&mut queue, Key::AltX, 1);
+    assert_eq!(panel(&queue), before);
+    // With the panel closed they are not the panel's.
+    assert_eq!(Queue::default().on_key(&Key::AltX), None);
 }

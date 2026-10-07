@@ -7,8 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ops::RangeInclusive;
 
-use contract::events::{InputItem, SteeringApplied, TurnCompleted, TurnStarted, UsageRecorded};
-use contract::shapes::ContentPart;
+use contract::events::{TurnCompleted, TurnOutcome, UsageRecorded};
 use contract::{Envelope, Seq};
 use ratatui::text::Line;
 
@@ -18,7 +17,7 @@ use crate::pages::{Cut, Index};
 use crate::turn::{Fold, Row, Turn};
 
 /// Where folding a page begins.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct Seed {
     /// The summary of the page's first card.
     first: usize,
@@ -28,6 +27,8 @@ struct Seed {
     /// The next page begins inside the same turn, with the text that ends
     /// this page's last group.
     cut: bool,
+    /// The turn fold's state at the start of this page.
+    fold: Fold,
 }
 
 /// One page's cards: the turns from summary `first` on.
@@ -35,6 +36,8 @@ struct Seed {
 pub(crate) struct Part {
     first: usize,
     turns: Vec<Turn>,
+    fold: Fold,
+    aside_start: usize,
 }
 
 impl Part {
@@ -43,6 +46,8 @@ impl Part {
         Self {
             first: seed.first,
             turns: seed.step.map(Turn::part).into_iter().collect(),
+            fold: seed.fold.clone(),
+            aside_start: seed.fold.asides.len(),
         }
     }
 }
@@ -64,8 +69,13 @@ impl Summary {
     /// The ▣ line, once the turn has ended.
     fn closing(&self) -> Option<Line<'static>> {
         self.ended.as_ref().map(|(done, ts)| {
+            let head = match done.outcome {
+                TurnOutcome::Completed => "▣ completed",
+                TurnOutcome::Interrupted => "▣ interrupted",
+                TurnOutcome::Failed => "▣ failed",
+            };
             let ms = ts.saturating_sub(self.started);
-            format::dim(format::closing(done, ms, self.calls, &self.spend.usage()))
+            Line::raw(format::closing(head, ms, self.calls, &self.spend.usage()))
         })
     }
 }
@@ -116,9 +126,9 @@ pub(crate) struct Applied {
 }
 
 /// The lines shown from a row on: the first shown page's first row, and
-/// each line with its rows. A page not loaded is one blank line of its
-/// rows.
-pub(crate) type Shown = (usize, Vec<(Line<'static>, usize)>);
+/// each line with its rows and click target. A page not loaded is one blank
+/// line of its rows.
+pub(crate) type Shown = (usize, Vec<(Line<'static>, usize, Option<Target>)>);
 
 /// The conversation: the page index, the cards of the resident pages, each
 /// turn's totals and what the person opened.
@@ -135,6 +145,8 @@ pub(crate) struct Pages {
     summaries: Vec<Summary>,
     /// The ledger default, the last Ctrl+O.
     fold: Fold,
+    /// Shell output, placed after the number of turns in the page where it ran.
+    shells: Vec<(usize, usize, String)>,
     /// What the person opened or closed since, by target.
     overrides: BTreeMap<Target, bool>,
     /// Dropped pages whose row counts wait for a reload.
@@ -150,19 +162,22 @@ pub(crate) struct Pages {
 impl Pages {
     /// An empty conversation at `width`.
     pub(crate) fn new(width: u16) -> Self {
+        let fold = Fold::default();
         let seed = Seed {
             first: 0,
             step: None,
             cut: false,
+            fold: fold.clone(),
         };
         Self {
             index: Index::default(),
-            seeds: vec![seed],
+            seeds: vec![seed.clone()],
             closed: Vec::new(),
             open: Part::seeded(seed),
             pending: None,
             summaries: Vec::new(),
-            fold: Fold::default(),
+            fold,
+            shells: Vec::new(),
             overrides: BTreeMap::new(),
             stale: BTreeSet::new(),
             failed: BTreeSet::new(),
@@ -176,6 +191,7 @@ impl Pages {
         let ledgers = self.fold.ledgers;
         *self = Self::new(self.width);
         self.fold.ledgers = ledgers;
+        self.open.fold.ledgers = ledgers;
     }
 
     /// Folds one live line into the open page and the turn's totals,
@@ -195,14 +211,17 @@ impl Pages {
                 Cut::None | Cut::AtCandidate => {}
             }
         }
-        let folded = if kind == "usage_recorded" {
-            self.usage(envelope)
-        } else {
-            if let Some(pending) = &mut self.pending {
-                fold(&mut pending.next, &self.fold, envelope);
-            }
-            fold(&mut self.open, &self.fold, envelope)
-        };
+        let mut pending_folded = None;
+        if let Some(pending) = &mut self.pending {
+            pending_folded = Some(fold(&mut pending.next, envelope));
+        }
+        let folded = fold(&mut self.open, envelope);
+        if kind == "usage_recorded" {
+            self.usage(envelope);
+        }
+        let folded = pending_folded
+            .filter(|_| matches!(folded, Folded::Nothing))
+            .unwrap_or(folded);
         let changed = folded.changed();
         if !early && let Some(seq) = envelope.seq {
             cut = self.index.push(seq, kind, action, changed);
@@ -212,12 +231,8 @@ impl Pages {
         } else if !self.index.pending() {
             self.pending = None;
         }
-        let busy = match folded {
-            Folded::Started => Some(true),
-            Folded::Ended(..) => Some(false),
-            Folded::Nothing | Folded::Changed | Folded::Stepped | Folded::Called => None,
-        };
         self.summarise(folded, envelope.ts);
+        let busy = Some(self.running().is_some());
         // A usage line counts the page holding its turn's ▣ line itself.
         if (changed && kind != "usage_recorded") || cut != Cut::None {
             self.count(self.closed.len());
@@ -300,10 +315,11 @@ impl Pages {
             first: self.summaries.len(),
             step: None,
             cut: false,
+            fold: self.open.fold.clone(),
         };
         self.pending = None;
         let at = self.closed.len();
-        let part = std::mem::replace(&mut self.open, Part::seeded(seed));
+        let part = std::mem::replace(&mut self.open, Part::seeded(seed.clone()));
         self.closed.push(Some(part));
         self.seeds.push(seed);
         self.count(at);
@@ -316,16 +332,18 @@ impl Pages {
                 first: at,
                 step: self.summaries.get(at).map(|summary| summary.step),
                 cut: false,
+                fold: self.open.fold.clone(),
             },
             None => Seed {
                 first: self.summaries.len(),
                 step: None,
                 cut: false,
+                fold: self.open.fold.clone(),
             },
         };
         Pending {
             before: self.open.clone(),
-            next: Part::seeded(seed),
+            next: Part::seeded(seed.clone()),
             seed,
         }
     }
@@ -351,6 +369,7 @@ impl Pages {
         self.closed.push(Some(before));
         self.seeds.push(seed);
         self.open = next;
+        self.fold.ledgers = self.open.fold.ledgers;
         self.count(at);
     }
 
@@ -371,11 +390,11 @@ impl Pages {
                 if let Some((page, part)) = folding.take() {
                     self.keep(page, part);
                 }
-                let seed = self.seeds.get(at).copied();
+                let seed = self.seeds.get(at).cloned();
                 folding = seed.map(|seed| (at, Part::seeded(seed)));
             }
             if let Some((_, part)) = &mut folding {
-                fold(part, &self.fold, line);
+                fold(part, line);
             }
         }
         if let Some((page, part)) = folding {
@@ -471,16 +490,26 @@ impl Pages {
             .chain(std::iter::once((at, &mut self.open)));
         let mut found = None;
         for (at, part) in resident {
-            if let Some(flag) = part.turns.iter_mut().find_map(|card| card.flag(target)) {
-                *flag = !*flag;
-                found = Some((at, *flag));
+            let state = part
+                .turns
+                .iter_mut()
+                .find_map(|card| card.toggle(*target))
+                .or_else(|| {
+                    part.fold
+                        .asides
+                        .iter_mut()
+                        .map(|(_, aside)| aside)
+                        .find_map(|aside| aside.toggle(*target))
+                });
+            if let Some(open) = state {
+                found = Some((at, open));
                 break;
             }
         }
         let Some((at, open)) = found else {
             return false;
         };
-        self.overrides.insert(target.clone(), open);
+        self.overrides.insert(*target, open);
         if let Some(pending) = &mut self.pending {
             set(&mut pending.before, target, open);
             set(&mut pending.next, target, open);
@@ -501,7 +530,7 @@ impl Pages {
                 .chain(std::iter::once(&self.open))
                 .flat_map(|part| part.turns.iter())
                 .flat_map(Turn::groups)
-                .filter(|group| group.has_calls())
+                .filter(|group| group.has_ledger())
                 .peekable();
             if ledgers.peek().is_none() {
                 !self.fold.ledgers
@@ -510,6 +539,13 @@ impl Pages {
             }
         };
         self.fold.ledgers = open;
+        self.open.fold.ledgers = open;
+        for seed in &mut self.seeds {
+            seed.fold.ledgers = open;
+        }
+        if let Some(pending) = &mut self.pending {
+            pending.seed.fold.ledgers = open;
+        }
         self.overrides
             .retain(|target, _| !matches!(target, Target::Group(_)));
         let pending = self
@@ -523,8 +559,9 @@ impl Pages {
             .chain(std::iter::once(&mut self.open))
             .chain(pending)
         {
+            part.fold.ledgers = open;
             for group in part.turns.iter_mut().flat_map(Turn::groups_mut) {
-                if group.has_calls() {
+                if group.has_ledger() {
                     group.open = open;
                 }
             }
@@ -549,13 +586,13 @@ impl Pages {
                 match self.part(at) {
                     Some(part) => {
                         let mut rows = Vec::new();
-                        self.draw(part, &mut rows);
-                        lines.extend(rows.into_iter().map(|(line, _)| {
+                        self.draw(at, part, &mut rows);
+                        lines.extend(rows.into_iter().map(|(line, target)| {
                             let count = crate::view::rows(line.clone(), self.width);
-                            (line, count)
+                            (line, count, target)
                         }));
                     }
-                    None => lines.push((Line::default(), page.rows)),
+                    None => lines.push((Line::default(), page.rows, None)),
                 }
             }
             start = next;
@@ -564,15 +601,17 @@ impl Pages {
     }
 
     /// The resident pages' lines, in order.
+    #[cfg(test)]
     pub(crate) fn rows(&self) -> Vec<Row> {
         let mut out = Vec::new();
-        for part in self
+        for (at, part) in self
             .closed
             .iter()
-            .flatten()
-            .chain(std::iter::once(&self.open))
+            .enumerate()
+            .filter_map(|(at, part)| part.as_ref().map(|part| (at, part)))
+            .chain(std::iter::once((self.closed.len(), &self.open)))
         {
-            self.draw(part, &mut out);
+            self.draw(at, part, &mut out);
         }
         out
     }
@@ -580,6 +619,30 @@ impl Pages {
     /// The page index.
     pub(crate) fn index(&self) -> &Index {
         &self.index
+    }
+
+    /// The code block target in a resident page, when it is still held.
+    pub(crate) fn copy_target(
+        &self,
+        target: Target,
+        width: u16,
+    ) -> Option<crate::markdown::CopyTarget> {
+        self.closed
+            .iter()
+            .flatten()
+            .chain(std::iter::once(&self.open))
+            .find_map(|part| crate::app::copy::copy_target(&part.turns, target, width))
+    }
+
+    /// Adds shell output to the page where it ran.
+    pub(crate) fn add_shell(&mut self, item: Option<String>) -> bool {
+        let Some(item) = item else {
+            return false;
+        };
+        self.shells
+            .push((self.closed.len(), self.summaries.len(), item));
+        self.count(self.closed.len());
+        true
     }
 
     /// How many pages hold cards, the open one included.
@@ -597,15 +660,41 @@ impl Pages {
 
     /// A page's lines: each card's, and the ▣ line of each card that ends
     /// on it, drawn from its turn's totals.
-    fn draw(&self, part: &Part, out: &mut Vec<Row>) {
-        for (at, card) in part.turns.iter().enumerate() {
-            card.rows(self.width, out);
-            let summary = self.summaries.get(part.first.saturating_add(at));
-            if !card.is_open()
-                && let Some(line) = summary.and_then(Summary::closing)
-            {
-                out.push((line, None));
+    fn draw(&self, page: usize, part: &Part, out: &mut Vec<Row>) {
+        let mut asides = part
+            .fold
+            .asides
+            .iter()
+            .enumerate()
+            .skip(part.aside_start)
+            .peekable();
+        for at in 0..=part.turns.len() {
+            let after = part.first.saturating_add(at);
+            while let Some((_, (_, aside))) = asides.next_if(|(_, (turns, _))| *turns <= after) {
+                aside.rows(out);
             }
+            for (on_page, shell_after, text) in &self.shells {
+                if *on_page == page && *shell_after == after {
+                    out.extend(
+                        text.split('\n')
+                            .map(|line| (Line::raw(line.to_owned()), None)),
+                    );
+                }
+            }
+            let Some(card) = part.turns.get(at) else {
+                continue;
+            };
+            let summary = self.summaries.get(after);
+            let mut card = card.clone();
+            if let Some(summary) = summary.filter(|summary| summary.closed_on == page) {
+                card.summary(
+                    summary.started,
+                    summary.calls,
+                    &summary.spend,
+                    summary.ended.as_ref(),
+                );
+            }
+            card.rows(self.width, out);
         }
     }
 
@@ -615,7 +704,7 @@ impl Pages {
             return;
         };
         let mut lines = Vec::new();
-        self.draw(part, &mut lines);
+        self.draw(at, part, &mut lines);
         let width = self.width;
         let open = at == self.closed.len();
         let mut wrapped = HashMap::new();
@@ -644,74 +733,35 @@ impl Pages {
 
 /// Sets what `target` names in `part` to `open`, when it holds it.
 fn set(part: &mut Part, target: &Target, open: bool) {
-    if let Some(flag) = part.turns.iter_mut().find_map(|card| card.flag(target)) {
-        *flag = open;
+    if !part
+        .turns
+        .iter_mut()
+        .any(|card| card.set_open(target, open))
+    {
+        part.fold
+            .asides
+            .iter_mut()
+            .map(|(_, aside)| aside)
+            .any(|aside| aside.set_open(target, open));
     }
 }
 
-/// The running card, if any.
-fn running(turns: &mut [Turn]) -> Option<&mut Turn> {
-    turns.last_mut().filter(|turn| turn.is_open())
-}
-
-/// Folds one line into a page's cards. Only the cards: a turn's totals and
-/// session state are kept by their owners, so folding a fetched page again
-/// touches neither.
-///
-/// debt: a completion arriving more than one turn after its call lands on
-/// a later page and finds no card, so the call keeps its running glyph;
-/// upgrade on a log showing completions two turns late.
-pub(crate) fn fold(part: &mut Part, fold: &Fold, envelope: &Envelope) -> Folded {
-    match envelope.kind.as_str() {
-        "turn_started" => read!(envelope, TurnStarted).map_or(Folded::Nothing, |started| {
-            let prompts = started
-                .input
-                .iter()
-                .filter_map(|input| {
-                    if let InputItem::Message { content, .. } = input {
-                        Some(text_of(content))
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            part.turns.push(Turn::new(prompts));
-            Folded::Started
-        }),
-        "turn_completed" => read!(envelope, TurnCompleted).map_or(Folded::Nothing, |done| {
-            let closed = running(&mut part.turns).map(Turn::complete).is_some();
-            Folded::Ended(done, closed)
-        }),
-        "steering_applied" => read!(envelope, SteeringApplied)
-            .and_then(|applied| {
-                running(&mut part.turns).map(|turn| turn.steer(text_of(&applied.content)))
-            })
-            .map_or(Folded::Nothing, |()| Folded::Changed),
-        "step_started" => running(&mut part.turns)
-            .map(Turn::step_started)
-            .map_or(Folded::Nothing, |()| Folded::Stepped),
-        kind => {
-            let changed = envelope.action_id.as_ref().is_some_and(|action| {
-                crate::turn::fold_action(&mut part.turns, fold, envelope, &action.0)
-            });
-            match (changed, kind) {
-                (false, _) => Folded::Nothing,
-                (true, "tool_call_requested") => Folded::Called,
-                (true, _) => Folded::Changed,
-            }
+/// Folds one line into a page's cards and fold state using the turn's
+/// current rendering path.
+pub(crate) fn fold(part: &mut Part, envelope: &Envelope) -> Folded {
+    let kind = envelope.kind.as_str();
+    let was_open = part.turns.last().is_some_and(Turn::is_open);
+    let changed = crate::turn::fold_line(&mut part.turns, &mut part.fold, envelope);
+    match kind {
+        "turn_started" if changed => Folded::Started,
+        "turn_completed" if changed && was_open => {
+            read!(envelope, TurnCompleted).map_or(Folded::Nothing, |done| Folded::Ended(done, true))
         }
+        "step_started" if was_open => Folded::Stepped,
+        "tool_call_requested" if changed => Folded::Called,
+        _ if changed => Folded::Changed,
+        _ => Folded::Nothing,
     }
-}
-
-/// The text parts of a message, joined.
-fn text_of(parts: &[ContentPart]) -> String {
-    parts
-        .iter()
-        .filter_map(|part| match part {
-            ContentPart::Text { text } => Some(text.as_str()),
-            ContentPart::Image { .. } | ContentPart::Unknown => None,
-        })
-        .collect()
 }
 
 #[cfg(test)]

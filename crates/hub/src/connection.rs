@@ -1,6 +1,6 @@
 //! One client connection: `hub_hello` first, hub-command dispatch for
-//! `start`, `status`, `prompt_history`, `feed`, `dismiss` and `recent`, and
-//! the relay to session sockets.
+//! `start`, `status`, `prompt_history`, `feed`, `dismiss`, `recent` and
+//! `delete`, and the relay to session sockets.
 //!
 //! A command with a `session_id` is for that session: the relay passes it
 //! to the session's socket (`crate::relay`). A command without one is for
@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
-use contract::clock::{Clock, Wake};
+use contract::clock::{Clock, Wake, wall_ms};
 use contract::{CommandId, ErrorCode, HubLine, SCHEMA_VERSION};
 use serde_json::{Map, Value};
 
@@ -382,6 +382,12 @@ fn on_command(
         "feed" => on_feed(&line.id, &line.args, hub, writer, fed),
         "dismiss" => answer(writer, hub, &line.id, hub.feed.dismiss(&line.args)),
         "recent" => answer(writer, hub, &line.id, hub.feed.recent(&line.args)),
+        "delete" => answer(
+            writer,
+            hub,
+            &line.id,
+            crate::delete::delete(hub, &line.args),
+        ),
         command => {
             let message = format!("`{command}` is not a hub command.");
             reject(
@@ -559,7 +565,7 @@ pub(crate) fn send(
 ) {
     let line = HubLine {
         kind: kind.to_owned(),
-        ts: crate::diag::wall_ms(hub.clock.wall()),
+        ts: wall_ms(hub.clock.wall()),
         schema_version: SCHEMA_VERSION,
         payload,
     };

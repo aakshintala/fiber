@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::sync::mpsc;
 use std::thread;
 
+use contract::clock::wall_ms;
 use contract::commands::{Command, CommandLine, SentPart};
 use contract::events::{CommandAccepted, CommandRejected, CommandResult, Event};
 use contract::inbox::{Ack, Answer, Delivery, Message, Rejection};
@@ -591,7 +592,7 @@ fn recorded(ack: Ack, path: PathBuf, gate: &Arc<Gate>, content: Vec<ContentPart>
     Ack(Box::new(move |result| {
         if result.is_ok() {
             // debt: a failed append is dropped unreported, when a session gets a diag log, record a failed history append.
-            let ts = session::now_ms(gate.clock.as_ref());
+            let ts = wall_ms(gate.clock.wall());
             match crate::prompt_history::append(&path, ts, &gate.session_id, &content) {
                 Ok(()) | Err(_) => {}
             }

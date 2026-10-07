@@ -26,7 +26,7 @@ use crate::slot::Slot;
 use crate::tool::McpTool;
 
 /// One configured stdio server: what [`start`] spawns.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ServerSpec {
     /// The configured name: the middle of every qualified tool name.
     pub name: String,
@@ -48,6 +48,32 @@ pub struct ServerSpec {
     pub hints: BTreeMap<String, Hints>,
     /// Whether failing to start ends the session.
     pub required: bool,
+}
+
+// An `env` value can hold a token, so only names print
+// (`docs/code-quality.md`, "Errors").
+impl std::fmt::Debug for ServerSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ServerSpec")
+            .field("name", &self.name)
+            .field("command", &self.command)
+            .field("args", &self.args)
+            .field(
+                "env",
+                &self
+                    .env
+                    .keys()
+                    .map(|name| (name, "redacted"))
+                    .collect::<BTreeMap<_, _>>(),
+            )
+            .field("startup_timeout", &self.startup_timeout)
+            .field("call_timeout", &self.call_timeout)
+            .field("enabled", &self.enabled)
+            .field("disabled", &self.disabled)
+            .field("hints", &self.hints)
+            .field("required", &self.required)
+            .finish()
+    }
 }
 
 /// What [`start`] started: the tools for the loop, their infos, the
