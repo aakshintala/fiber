@@ -121,7 +121,7 @@ impl Loop {
             // A person item is always a user item (`shown.rs` only builds
             // `Shown::Person` with one), so anything else is skipped.
             if let Shown::Person(message) = &item.shown
-                && let Input::User { text } = &item.input
+                && let Input::User { text, .. } = &item.input
             {
                 persons.push((
                     *message,
@@ -167,9 +167,13 @@ impl Loop {
             let mut conversation = base.clone();
             conversation.push(Input::User {
                 text: listing.clone(),
+                images: Vec::new(),
             });
             if let Some(note) = &note {
-                conversation.push(Input::User { text: note.clone() });
+                conversation.push(Input::User {
+                    text: note.clone(),
+                    images: Vec::new(),
+                });
             }
             match self.send_review(
                 turn,

@@ -120,7 +120,7 @@ fn texts(request: &ModelRequest) -> Vec<&str> {
         .conversation
         .iter()
         .map(|input| match input {
-            Input::User { text } => text.as_str(),
+            Input::User { text, .. } => text.as_str(),
             Input::Assistant { .. }
             | Input::Reasoning { .. }
             | Input::ToolCall { .. }
@@ -135,7 +135,7 @@ fn failed(message: &str) -> Scripted {
     Scripted::failed(Failure {
         code: ErrorCode::RateLimited,
         message: message.into(),
-        retry_after: None,
+        retry_after_ms: None,
         provider: None,
     })
 }
@@ -431,7 +431,7 @@ fn a_resume_rebuilds_the_reviewers_input_from_the_selection() {
         conversation
             .iter()
             .map(|input| match input {
-                Input::User { text } => text.replace(workspace, "<workspace>"),
+                Input::User { text, .. } => text.replace(workspace, "<workspace>"),
                 Input::Assistant { .. }
                 | Input::Reasoning { .. }
                 | Input::ToolCall { .. }

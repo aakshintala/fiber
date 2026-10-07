@@ -92,6 +92,7 @@ fn a_person_message_carries_its_line_and_its_index() {
             shown: Shown::Person(kept(12, 1)),
             input: Input::User {
                 text: "The person: run the tests".into(),
+                images: Vec::new(),
             },
         }],
     );
@@ -116,6 +117,7 @@ fn a_steered_message_is_the_lines_only_item() {
             shown: Shown::Person(kept(31, 0)),
             input: Input::User {
                 text: "The person: and the linter".into(),
+                images: Vec::new(),
             },
         }],
     );
@@ -161,6 +163,7 @@ fn a_call_is_shown_by_its_action() {
             shown: Shown::Call(action),
             input: Input::User {
                 text: r#"Tool call: {"tool":"shell","arguments":{"city":"Paris"}}"#.into(),
+                images: Vec::new(),
             },
         }],
     );
@@ -233,6 +236,7 @@ fn reviewer_kept_leaves_the_named_message_word_for_word() {
             shown: Shown::Person(kept(12, 0)),
             input: Input::User {
                 text: "The person: never push to main".into(),
+                images: Vec::new(),
             },
         }],
     );
@@ -316,9 +320,11 @@ fn lines_after_reviewer_kept_append_after_the_kept_items() {
         vec![
             Input::User {
                 text: "The person: say hi".into(),
+                images: Vec::new(),
             },
             Input::User {
                 text: "The person: now run it".into(),
+                images: Vec::new(),
             },
         ],
     );
