@@ -14,6 +14,7 @@
 
 mod support;
 
+use std::cell::Cell;
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
@@ -289,6 +290,10 @@ fn fiber_ask_skips_an_unapproved_server_with_a_notice() {
     let message = notices[0]["payload"]["message"].as_str().unwrap();
     assert!(message.contains("`db`"), "{message}");
     assert!(message.contains("fiber approve"), "{message}");
+    assert!(
+        !of(&lines, "session_status").is_empty(),
+        "a session_status on stdout"
+    );
     // The complete, ordered stdout kinds: one skip notice, then the turn.
     assert_eq!(
         stdout_kinds(&lines),
@@ -308,10 +313,6 @@ fn fiber_ask_skips_an_unapproved_server_with_a_notice() {
             "usage_recorded",
             "assistant_message_completed",
             "turn_completed",
-            "session_status",
-            "session_status",
-            "session_status",
-            "session_status",
             "fiber_exited",
         ]
     );
@@ -330,6 +331,10 @@ fn fiber_ask_fails_on_a_required_server_nobody_approved() {
     assert_eq!(exited["payload"]["error"]["code"], "mcp_server_unapproved");
     assert!(stderr.contains("`db`"), "{stderr}");
     assert!(server.requests().is_empty());
+    assert!(
+        !of(&lines, "session_status").is_empty(),
+        "a session_status on stdout"
+    );
     // The complete, ordered stdout kinds: no turn, the run fails.
     assert_eq!(
         stdout_kinds(&lines),
@@ -337,7 +342,6 @@ fn fiber_ask_fails_on_a_required_server_nobody_approved() {
             "session_started",
             "fiber_started",
             "extensions_loaded",
-            "session_status",
             "fiber_exited",
         ]
     );
@@ -371,6 +375,10 @@ fn fiber_ask_fails_on_a_required_repository_extension_nobody_approved() {
         "extension_unapproved"
     );
     assert!(server.requests().is_empty());
+    assert!(
+        !of(&lines, "session_status").is_empty(),
+        "a session_status on stdout"
+    );
     // The complete, ordered stdout kinds: no turn, the run fails.
     assert_eq!(
         stdout_kinds(&lines),
@@ -378,7 +386,6 @@ fn fiber_ask_fails_on_a_required_repository_extension_nobody_approved() {
             "session_started",
             "fiber_started",
             "extensions_loaded",
-            "session_status",
             "fiber_exited",
         ]
     );
@@ -396,6 +403,10 @@ fn fiber_ask_after_fiber_approve_loads_without_a_notice() {
     assert_eq!(code, Some(0), "stderr: {stderr}");
     assert!(of(&lines, "notice").is_empty());
     assert_eq!(server.requests().len(), 1);
+    assert!(
+        !of(&lines, "session_status").is_empty(),
+        "a session_status on stdout"
+    );
     // The complete, ordered stdout kinds: approved, so no notice.
     assert_eq!(
         stdout_kinds(&lines),
@@ -414,10 +425,6 @@ fn fiber_ask_after_fiber_approve_loads_without_a_notice() {
             "usage_recorded",
             "assistant_message_completed",
             "turn_completed",
-            "session_status",
-            "session_status",
-            "session_status",
-            "session_status",
             "fiber_exited",
         ]
     );
@@ -445,10 +452,13 @@ fn durable_kinds(setup: &Setup, id: &str) -> Vec<String> {
         .collect()
 }
 
-/// The kinds of `fiber ask`'s stdout `lines`, in order.
+/// The kinds of `fiber ask`'s stdout `lines`, in order, without
+/// `session_status`: an observer thread writes it, so where it falls among
+/// the loop's own lines is not what these tests pin.
 fn stdout_kinds(lines: &[Value]) -> Vec<&str> {
     lines
         .iter()
+        .filter(|line| line["kind"] != "session_status")
         .map(|line| line["kind"].as_str().unwrap())
         .collect()
 }
@@ -487,41 +497,17 @@ fn a_session_that_exits_on_its_first_offer_raises_it_again_on_resume() {
         .send(r#"{"id":"c_sub2","command":"subscribe","args":{"level":"full"}}"#)
         .unwrap();
     // The replay holds the old offer; this process's `fiber_started` is the
-    // latest one before the client is counted. One `DEADLINE` bounds the
-    // whole wait: a scoped thread reads the lines and the test takes the
-    // count with one `recv_timeout`.
-    let stop = AtomicBool::new(false);
-    let mut since = 0;
-    thread::scope(|scope| {
-        let (tx, counted) = mpsc::channel();
-        let stop = &stop;
-        let client = &client;
-        scope.spawn(move || {
-            let mut seen = 0;
-            while !stop.load(Ordering::SeqCst) {
-                match client.recv(SLICE) {
-                    Some(line) => {
-                        if line["kind"] == "fiber_started" {
-                            seen = seq(&line);
-                        }
-                        if line["kind"] == "clients" && line["payload"]["count"] == 1 {
-                            if let Ok(()) = tx.send(Some(seen)) {}
-                            return;
-                        }
-                    }
-                    None => {
-                        if let Ok(()) = tx.send(None) {}
-                        return;
-                    }
-                }
+    // latest one before the client is counted.
+    let since = Cell::new(0);
+    client
+        .recv_until(DEADLINE, |line| {
+            if line["kind"] == "fiber_started" {
+                since.set(seq(line));
             }
-        });
-        let got = counted.recv_timeout(DEADLINE);
-        stop.store(true, Ordering::SeqCst);
-        since = got
-            .expect("the replay and the clients line within the deadline")
-            .expect("the socket stayed open for the replay and the clients line");
-    });
+            line["kind"] == "clients" && line["payload"]["count"] == 1
+        })
+        .expect("the replay and the clients line within the deadline");
+    let since = since.get();
     prompt(&client, "c_prompt2");
     let again = client
         .recv_until(DEADLINE, |line| {
