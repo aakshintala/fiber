@@ -862,7 +862,9 @@ during a turn and joins the extension's ordered stream in session order; a
 (`prompt`, `options`, `fields`) and returns the answer keys of
 `interaction_resolved` (`confirmed`, `labels`, `text`, `answers`, `note`), or
 `{ declined = true }`. When the callback's timeout passes while a `host.ask`
-is pending, the interaction is resolved `declined` with `by` `fiber`.
+is pending, the interaction is resolved `declined` with `by` `fiber`. So is a
+pending `host.ask` when the session exits: the VM that waited for the answer
+does not survive the exit.
 
 A command may run tools with `host.tool`. The person or driver who invoked it
 is the admission, and each inner call names the command's invocation
