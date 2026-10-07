@@ -709,3 +709,77 @@ fn run_redraws_on_sigwinch_at_the_new_size() {
         .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for run to return: {err}"));
     assert_eq!(code, 0);
 }
+
+/// A review request offering the rule `npm test`, as the hub relays it.
+fn offering(request: &str) -> Input {
+    let payload = serde_json::json!({
+        "request_id": request, "effects": ["executes"], "reversible": true, "step": "review",
+        "rule": {"subject": "npm test --watch", "prefix": "npm test"},
+    });
+    Input::Hub(Line::Session(contract::Envelope {
+        kind: "permission_requested".to_owned(),
+        session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: Some(contract::ActionId(format!("a_{request}"))),
+        seq: None,
+        payload: payload.as_object().cloned().unwrap_or_default(),
+    }))
+}
+
+#[test]
+fn each_approval_choice_goes_to_the_hub_as_a_reply() {
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    let (ours, theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    let reader = BufReader::new(theirs);
+    feed(
+        &mut lp,
+        vec![
+            Input::Connected(ours, hello()),
+            Input::Bytes(b"hi\r".to_vec()),
+        ],
+    );
+    let (reader, start) = command(reader, "the start command");
+    let accepted = contract::HubLine {
+        kind: "command_accepted".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::json!({"command_id": start["id"], "result": {"session_id": "s_aaaaaaaaaaaaaaaa"}})
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+    };
+    feed(&mut lp, vec![Input::Hub(Line::Hub(accepted))]);
+    let (mut reader, _) = command(reader, "the subscribe command");
+    feed(
+        &mut lp,
+        ["r_1", "r_2", "r_3", "r_4"]
+            .map(offering)
+            .into_iter()
+            .collect(),
+    );
+    // Allow once; for this session; in this project; deny with feedback.
+    let keys: [&[u8]; 4] = [b"\r", b"\x1b[B\r", b"\x1b[B\x1b[B\r", b"no\r"];
+    feed(
+        &mut lp,
+        keys.iter()
+            .map(|bytes| Input::Bytes(bytes.to_vec()))
+            .collect(),
+    );
+    let remember = |scope: &str| serde_json::json!({"scope": scope, "prefix": "npm test"});
+    let expected = [
+        serde_json::json!({"request_id": "r_1", "decision": "allow"}),
+        serde_json::json!({"request_id": "r_2", "decision": "allow", "remember": remember("session")}),
+        serde_json::json!({"request_id": "r_3", "decision": "allow", "remember": remember("project")}),
+        serde_json::json!({"request_id": "r_4", "decision": "deny", "feedback": "no"}),
+    ];
+    for args in expected {
+        let (next, reply) = command(reader, "a reply");
+        reader = next;
+        assert_eq!(reply["command"], "reply");
+        assert_eq!(reply["session_id"], "s_aaaaaaaaaaaaaaaa");
+        assert_eq!(reply["args"], args);
+    }
+    assert!(lp.app.panel().is_none());
+}

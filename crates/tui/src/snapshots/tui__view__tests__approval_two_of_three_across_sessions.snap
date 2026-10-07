@@ -1,0 +1,16 @@
+---
+source: crates/tui/src/view_tests.rs
+expression: wide(&mut app).0
+---
+
+
+
+
+
+
+› run it
+approval · s_bbbbbbbbbbbbbbbb · 2 of 3
+asked by a global rule: echo hi
+shell {"command":"echo hi"}
+› allow once
+  deny · type to add feedback

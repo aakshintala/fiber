@@ -20,6 +20,12 @@ pub(crate) enum Key {
     PageDown,
     /// End (`CSI F`, `CSI 4~`, `SS3 F`).
     End,
+    /// Up (`CSI A`, `SS3 A`).
+    Up,
+    /// Down (`CSI B`, `SS3 B`).
+    Down,
+    /// Alt+A (`ESC a` in one read).
+    AltA,
 }
 
 /// One detection reply.
@@ -83,6 +89,7 @@ fn step(buf: &[u8]) -> Step {
             None => key(Key::Esc),
             Some(b'[') => parse_csi(buf),
             Some(b'O') => parse_ss3(buf),
+            Some(b'a') => Some((vec![Event::Key(Key::AltA)], 2)),
             // Unknown escape sequence: drop ESC and the byte after it.
             Some(_) => Some((Vec::new(), 2)),
         },
@@ -133,6 +140,8 @@ fn parse_csi(buf: &[u8]) -> Step {
             _ => Vec::new(),
         },
         0x46 if params.is_empty() => vec![Event::Key(Key::End)],
+        0x41 if params.is_empty() => vec![Event::Key(Key::Up)],
+        0x42 if params.is_empty() => vec![Event::Key(Key::Down)],
         _ => Vec::new(),
     };
     Some((events, end.saturating_add(1)))
@@ -142,6 +151,8 @@ fn parse_csi(buf: &[u8]) -> Step {
 fn parse_ss3(buf: &[u8]) -> Step {
     let events = match *buf.get(2)? {
         b'F' => vec![Event::Key(Key::End)],
+        b'A' => vec![Event::Key(Key::Up)],
+        b'B' => vec![Event::Key(Key::Down)],
         _ => Vec::new(),
     };
     Some((events, 3))

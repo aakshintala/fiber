@@ -302,3 +302,193 @@ fn the_overlay_never_covers_the_input_line() {
     assert_eq!(sized(&mut app, 30, 1), ">\n");
     assert_eq!(sized(&mut app, 30, 2), "     ↓ New messages below\n>\n");
 }
+
+const S_A: &str = "s_aaaaaaaaaaaaaaaa";
+const S_B: &str = "s_bbbbbbbbbbbbbbbb";
+
+/// Renders `app` on an 80x12 screen, returning the text and the buffer.
+fn wide(app: &mut App) -> (String, Buffer) {
+    app.set_size(80, HEIGHT);
+    let area = Rect::new(0, 0, 80, HEIGHT);
+    let mut buf = Buffer::empty(area);
+    render(app, area, &mut buf);
+    (text(&buf), buf)
+}
+
+/// A connected app attached to `S_A`, with a conversation line.
+fn asked() -> App {
+    let mut app = empty();
+    app.on_line(Line::Hub(contract::HubLine {
+        kind: "hub_hello".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::Map::new(),
+    }));
+    attach(&mut app, S_A);
+    app.on_line(turn_started(S_A, "run it"));
+    app
+}
+
+/// A `permission_requested` with `keys` beside its request id.
+fn request(session: &str, action: &str, request: &str, keys: serde_json::Value) -> Line {
+    let mut payload = serde_json::json!({"request_id": request, "effects": ["executes"]});
+    if let (Some(into), Some(from)) = (payload.as_object_mut(), keys.as_object()) {
+        into.extend(from.clone());
+    }
+    session_line(session, "permission_requested", payload, Some(action))
+}
+
+/// A standing ask on `echo hi`.
+fn standing(session: &str, action: &str, id: &str) -> Line {
+    request(
+        session,
+        action,
+        id,
+        serde_json::json!({"reversible": true, "step": "standing_ask",
+            "standing_rule": {"scope": "global", "prefix": "echo hi"}}),
+    )
+}
+
+/// A shell call.
+fn shell(session: &str, action: &str, command: &str) -> Line {
+    session_line(
+        session,
+        "tool_call_requested",
+        serde_json::json!({"name": "shell", "arguments": {"command": command}}),
+        Some(action),
+    )
+}
+
+/// The background of the cell at column 0 of `row`.
+fn bg(buf: &Buffer, row: u16) -> Option<ratatui::style::Color> {
+    buf.cell((0, row)).map(|cell| cell.bg)
+}
+
+#[test]
+fn approval_standing_ask() {
+    let mut app = asked();
+    app.on_line(shell(S_A, "a_1", "echo hi"));
+    app.on_line(standing(S_A, "a_1", "r_1"));
+    let (shown, buf) = wide(&mut app);
+    insta::assert_snapshot!("approval_standing_ask", shown);
+    // Header to deny, five rows, take the approval tint; the row above
+    // does not.
+    for row in 7..12 {
+        assert_eq!(bg(&buf, row), super::APPROVAL_TINT.bg, "row {row}");
+    }
+    assert_eq!(bg(&buf, 6), Some(ratatui::style::Color::Reset));
+}
+
+#[test]
+fn approval_review_escalation_with_rule() {
+    let mut app = asked();
+    app.on_line(shell(S_A, "a_1", "npm test --watch"));
+    app.on_line(request(
+        S_A,
+        "a_1",
+        "r_1",
+        serde_json::json!({"reversible": true, "step": "review",
+            "escalation": {"cause": "consecutive_blocks", "reason": "it blocked three in a row"},
+            "rule": {"subject": "npm test --watch", "prefix": "npm test"}}),
+    ));
+    let (shown, buf) = wide(&mut app);
+    insta::assert_snapshot!("approval_review_escalation_with_rule", shown);
+    assert_eq!(bg(&buf, 11), super::ALERT_TINT.bg);
+    assert_ne!(super::ALERT_TINT.bg, super::APPROVAL_TINT.bg);
+}
+
+#[test]
+fn approval_reviewer_failed() {
+    let mut app = asked();
+    app.on_line(request(
+        S_A,
+        "a_1",
+        "r_1",
+        serde_json::json!({"reversible": true, "step": "review",
+            "escalation": {"cause": "reviewer_failed",
+                "error": {"code": "io_failed", "message": "the reviewer model did not answer"}}}),
+    ));
+    insta::assert_snapshot!("approval_reviewer_failed", wide(&mut app).0);
+}
+
+#[test]
+fn approval_irreversible_header() {
+    let mut app = asked();
+    app.on_line(request(
+        S_A,
+        "a_1",
+        "r_1",
+        serde_json::json!({"reversible": false, "step": "standing_ask",
+            "standing_rule": {"scope": "project", "prefix": "git push"}}),
+    ));
+    insta::assert_snapshot!("approval_irreversible_header", wide(&mut app).0);
+}
+
+#[test]
+fn approval_two_of_three_across_sessions() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = asked();
+    app.on_line(standing(S_A, "a_1", "r_1"));
+    app.on_line(shell(S_B, "a_1", "echo hi"));
+    app.on_line(standing(S_B, "a_1", "r_1"));
+    app.on_line(standing(S_A, "a_2", "r_2"));
+    app.on_key(Key::AltA, now);
+    insta::assert_snapshot!("approval_two_of_three_across_sessions", wide(&mut app).0);
+}
+
+#[test]
+fn approval_badge_with_the_panel_closed() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = asked();
+    app.on_line(standing(S_A, "a_1", "r_1"));
+    app.on_line(standing(S_A, "a_2", "r_2"));
+    app.on_key(Key::Esc, now);
+    app.on_key(Key::Esc, now);
+    for ch in "draft".chars() {
+        app.on_key(Key::Char(ch), now);
+    }
+    insta::assert_snapshot!("approval_badge_with_the_panel_closed", wide(&mut app).0);
+}
+
+#[test]
+fn approval_feedback_typed_on_deny() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = asked();
+    app.on_line(shell(S_A, "a_1", "echo hi"));
+    app.on_line(standing(S_A, "a_1", "r_1"));
+    for ch in "use printf".chars() {
+        app.on_key(Key::Char(ch), now);
+    }
+    insta::assert_snapshot!("approval_feedback_typed_on_deny", wide(&mut app).0);
+}
+
+#[test]
+fn a_short_screen_drops_the_badge_after_the_hint_and_notice() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = asked();
+    app.on_line(standing(S_A, "a_1", "r_1"));
+    app.on_key(Key::Esc, now);
+    app.connect_failed("lost".to_owned());
+    app.on_key(Key::CtrlC, now);
+    let badge = "! 1 waiting · /approvals or ⌥A";
+    assert_eq!(sized(&mut app, 40, 1), ">\n");
+    assert_eq!(sized(&mut app, 40, 2), format!("{badge}\n>\n"));
+    assert_eq!(
+        sized(&mut app, 40, 3),
+        format!("Press Ctrl+C again to quit\n{badge}\n>\n")
+    );
+    assert_eq!(
+        sized(&mut app, 40, 4),
+        format!("lost\nPress Ctrl+C again to quit\n{badge}\n>\n")
+    );
+}
+
+#[test]
+fn a_panel_taller_than_the_screen_keeps_its_header() {
+    let mut app = asked();
+    app.on_line(standing(S_A, "a_1", "r_1"));
+    assert_eq!(
+        sized(&mut app, 40, 2),
+        format!("approval · {S_A} · 1 of 1\nasked by a global rule: echo hi\n")
+    );
+}

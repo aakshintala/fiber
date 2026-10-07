@@ -1,0 +1,16 @@
+---
+source: crates/tui/src/view_tests.rs
+expression: wide(&mut app).0
+---
+
+
+
+
+
+
+
+
+
+› run it
+! 2 waiting · /approvals or ⌥A
+> draft

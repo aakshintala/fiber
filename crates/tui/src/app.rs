@@ -1,5 +1,6 @@
-//! Terminal state: the draft, the attach phase and the folded stream
-//! (`docs/tui.md`, "Turns", "Steering", "Quit").
+//! Terminal state: the draft, the attach phase, the folded stream and the
+//! approval queue (`docs/tui.md`, "Turns", "Steering", "Quit", "Approvals
+//! and questions").
 
 use std::collections::HashMap;
 use std::hash::{BuildHasher, RandomState};
@@ -14,6 +15,7 @@ use contract::shapes::ContentPart;
 use contract::{Envelope, HubLine, SessionId};
 use serde_json::{Map, Value, json};
 
+use crate::approvals::{self, Panel, PanelKey, Queue};
 use crate::keys::Key;
 use crate::link::Line;
 
@@ -22,6 +24,9 @@ pub(crate) const QUIT_WINDOW: Duration = Duration::from_secs(1);
 
 /// What the quit hint says.
 pub(crate) const QUIT_HINT: &str = "Press Ctrl+C again to quit";
+
+/// The draft that reopens the waiting queue.
+const APPROVALS: &str = "/approvals";
 
 /// What the terminal is attached to.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,6 +65,7 @@ enum Kind {
     Prompt,
     Steer,
     Cancel,
+    Reply,
 }
 
 /// The hub connection, as the terminal sees it.
@@ -111,6 +117,8 @@ pub(crate) struct App {
     armed_at: Option<Instant>,
     /// Whether detection saw kitty's keyboard flags.
     kitty: bool,
+    /// Approval requests from every session.
+    queue: Queue,
 }
 
 impl App {
@@ -131,6 +139,7 @@ impl App {
             height: 24,
             armed_at: None,
             kitty: false,
+            queue: Queue::default(),
         }
     }
 
@@ -149,6 +158,11 @@ impl App {
             return self.on_ctrl_c(now);
         }
         self.armed_at = None;
+        match self.queue.on_key(&key) {
+            Some(PanelKey::Handled) => return Effect::None,
+            Some(PanelKey::Answer) => return self.answer(),
+            None => {}
+        }
         match key {
             Key::Char(ch) => {
                 self.draft.push(ch);
@@ -172,6 +186,8 @@ impl App {
                 self.follow();
                 Effect::None
             }
+            Key::Up | Key::Down => Effect::None,
+            Key::AltA => self.open_first(),
         }
     }
 
@@ -279,11 +295,32 @@ impl App {
         self.top
     }
 
-    /// The conversation's rows: the screen less the input line, the hint
-    /// and the notice. None on a screen too short for them.
+    /// The conversation's rows: the screen less the input line or the
+    /// panel in its place, the badge, the hint and the notice. None on a
+    /// screen too short for them.
     pub(crate) fn conversation_height(&self) -> usize {
-        let below = 1 + usize::from(self.hint()) + usize::from(self.notice.is_some());
+        let input = self.panel().map_or(1, |panel| {
+            panel
+                .lines
+                .iter()
+                .map(|line| crate::view::rows(line, self.width))
+                .sum()
+        });
+        let below = input
+            + usize::from(self.badge().is_some())
+            + usize::from(self.hint())
+            + usize::from(self.notice.is_some());
         usize::from(self.height).saturating_sub(below)
+    }
+
+    /// The approval panel, while it is open.
+    pub(crate) fn panel(&self) -> Option<Panel> {
+        self.queue.panel()
+    }
+
+    /// The badge line while the panel is closed and requests wait.
+    pub(crate) fn badge(&self) -> Option<String> {
+        self.queue.badge()
     }
 
     /// The conversation as plain lines, before wrapping.
@@ -320,6 +357,10 @@ impl App {
     /// Enter sends the draft: `start` with no session, `prompt` when idle,
     /// `steer` during a turn.
     fn on_enter(&mut self) -> Effect {
+        if self.draft.trim() == APPROVALS {
+            self.draft.clear();
+            return self.open_first();
+        }
         // A command sent after the connection is lost goes nowhere, so the
         // draft stays.
         if self.draft.trim().is_empty() || self.link == Link::Down {
@@ -445,7 +486,7 @@ impl App {
             Some((Kind::Cancel, _)) => {
                 self.pending.remove(id);
             }
-            Some((Kind::Start | Kind::Prompt | Kind::Steer, _)) => {
+            Some((Kind::Start | Kind::Prompt | Kind::Steer | Kind::Reply, _)) => {
                 self.notice = Some(message);
                 self.fail(id);
             }
@@ -463,9 +504,41 @@ impl App {
         if kind == Kind::Start {
             self.phase = Phase::Starting;
         }
+        if kind == Kind::Reply {
+            self.queue.restore(id);
+        }
+    }
+
+    /// Sends the shown request's answer. With the link down nothing goes
+    /// out and the request stays.
+    fn answer(&mut self) -> Effect {
+        if self.link != Link::Up {
+            return Effect::None;
+        }
+        let id = mint();
+        let Some(line) = self.queue.answer(&id) else {
+            return Effect::None;
+        };
+        self.pending.insert(id, (Kind::Reply, String::new()));
+        Effect::Send(vec![line])
+    }
+
+    /// `/approvals` and Alt+A with the panel closed: the panel opens at the
+    /// first request waiting, or a notice says none waits.
+    fn open_first(&mut self) -> Effect {
+        if !self.queue.open_first() {
+            self.notice = Some("No requests waiting.".to_owned());
+        }
+        Effect::None
     }
 
     fn on_session(&mut self, envelope: &Envelope) {
+        // The queue takes every session's requests; everything else is the
+        // attached session's alone.
+        if approvals::KINDS.contains(&envelope.kind.as_str()) {
+            self.queue.fold(envelope);
+            return;
+        }
         if self.session() != Some(&envelope.session_id) {
             return;
         }
@@ -618,7 +691,12 @@ fn mint() -> String {
 }
 
 /// A command for a session: `session_id` beside `id`, `command` and `args`.
-fn session_command(id: &str, command: &str, session: &SessionId, args: Option<Value>) -> Value {
+pub(crate) fn session_command(
+    id: &str,
+    command: &str,
+    session: &SessionId,
+    args: Option<Value>,
+) -> Value {
     let mut line = json!({"id": id, "command": command, "session_id": session.0});
     if let (Some(args), Some(object)) = (args, line.as_object_mut()) {
         object.insert("args".to_owned(), args);
