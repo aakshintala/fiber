@@ -2397,3 +2397,34 @@ fn the_declarer_does_nothing_once_the_session_closes() {
     // With the gate gone, a call still neither panics nor changes anything.
     declare("web_search", None);
 }
+
+#[test]
+fn the_inbox_wake_wakes_the_loop_and_never_keeps_the_inbox_open() {
+    let opened = open();
+    let wake = opened.session.inbox_wake();
+    let mut kept = None;
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), |inbox| {
+            wake.wake();
+            let delivery = inbox
+                .recv_timeout(DEADLINE)
+                .expect("the wake reaches the inbox");
+            assert!(matches!(delivery, Delivery::Cancelled));
+            kept = Some(inbox);
+            Ok(())
+        })
+        .unwrap();
+    let inbox = kept.unwrap();
+    close_within(opened.session, opened.log);
+    // The session is closed: waking does nothing, and the wake alone does
+    // not hold the inbox open.
+    wake.wake();
+    assert!(
+        matches!(
+            inbox.recv_timeout(DEADLINE),
+            Err(mpsc::RecvTimeoutError::Disconnected)
+        ),
+        "the inbox closes with the session"
+    );
+}

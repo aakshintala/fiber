@@ -173,6 +173,7 @@ pub(crate) fn new_session(
         close(session, log, &home, &dir, &workspace, &*clock);
         return code;
     }
+    let inbox_wake = session.inbox_wake();
     let code = run_turn(
         &session,
         &log,
@@ -202,7 +203,8 @@ pub(crate) fn new_session(
                         .handoff(handoff)
                         .on_handoff(forget)
                         .switcher(switching.closure(door), switchable)
-                        .repository_code(offer))
+                        .repository_code(offer)
+                        .inbox_wake(inbox_wake))
                 }),
                 budget,
                 idle,

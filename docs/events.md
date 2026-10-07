@@ -704,7 +704,10 @@ Durable. The envelope carries no `action_id`; the payload names the calls.
 #### `interaction_resolved`
 
 Durable. It carries exactly one answer: `declined: true`, or the answer keys
-for its kind, and no others.
+for its kind, and no others. When a tool call raises an interaction that no
+one can answer, Fiber writes no `interaction_requested`, and the
+`interaction_resolved` with `by` `fiber` and `declined: true` names a
+request that was never raised.
 
 | Kind | Answer keys |
 |---|---|
