@@ -385,16 +385,19 @@ fn the_socket_is_open_while_bytes_arrive_and_shut_at_end_of_stream() {
     assert!(!socket.is_open());
 }
 
-/// The head of one GET of `uri`, pinned to `address`.
+/// The head of one GET of `uri`, pinned to `address`. The GET blocks on
+/// the network, so it runs under its own deadline and names that wait.
 fn head_of(address: SocketAddr, uri: &str) -> super::Head {
     let uri: Uri = uri.parse().unwrap();
-    let request = super::Get {
-        uri: &uri,
-        pinned: Some(&[address]),
-        proxy: None,
-    };
-    let hop = Arc::new(Hop::default());
-    hop.get(&request, |head, _| Ok(head)).unwrap()
+    fakes::within("the head of one GET", SIGNAL, move || {
+        let request = super::Get {
+            uri: &uri,
+            pinned: Some(&[address]),
+            proxy: None,
+        };
+        let hop = Arc::new(Hop::default());
+        hop.get(&request, |head, _| Ok(head)).unwrap()
+    })
 }
 
 #[test]
@@ -416,9 +419,15 @@ fn the_head_of_a_body_with_no_stated_length_carries_none() {
     let port = listener.local_addr().unwrap().port();
     let (served, done) = mpsc::channel();
     thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        let mut request = [0u8; 4096];
-        let _read = stream.read(&mut request).unwrap();
+        let (mut stream, _) = fakes::within("the server accepts the request", SIGNAL, move || {
+            listener.accept().unwrap()
+        });
+        stream.set_read_timeout(Some(SIGNAL)).unwrap();
+        let mut stream = fakes::within("the server reads the request", SIGNAL, move || {
+            let mut request = [0u8; 4096];
+            let _read = stream.read(&mut request).unwrap();
+            stream
+        });
         stream
             .write_all(b"HTTP/1.1 200 OK\r\nconnection: close\r\n\r\nabc")
             .unwrap();

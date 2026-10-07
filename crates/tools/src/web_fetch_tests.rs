@@ -1614,17 +1614,22 @@ fn an_html_body_cut_short_is_connection_failed_and_leaves_no_file() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     let server = thread::spawn(move || {
-        let (mut socket, _) = listener.accept().unwrap();
+        let (mut socket, _) = fakes::within("the server accepts the request", SIGNAL, move || {
+            listener.accept().unwrap()
+        });
         socket
             .set_read_timeout(Some(SIGNAL))
             .expect("a read deadline is set");
-        let mut request = Vec::new();
-        let mut byte = [0u8; 1];
-        while !request.ends_with(b"\r\n\r\n") {
-            let read = std::io::Read::read(&mut socket, &mut byte).unwrap();
-            assert_eq!(read, 1, "the request ended before its head did");
-            request.push(byte[0]);
-        }
+        let mut socket = fakes::within("the server reads the request", SIGNAL, move || {
+            let mut request = Vec::new();
+            let mut byte = [0u8; 1];
+            while !request.ends_with(b"\r\n\r\n") {
+                let read = std::io::Read::read(&mut socket, &mut byte).unwrap();
+                assert_eq!(read, 1, "the request ended before its head did");
+                request.push(byte[0]);
+            }
+            socket
+        });
         std::io::Write::write_all(
             &mut socket,
             b"HTTP/1.1 200 OK\r\ncontent-type: text/html\r\ncontent-length: 100\r\n\r\n<p>abc",
@@ -1634,7 +1639,7 @@ fn an_html_body_cut_short_is_connection_failed_and_leaves_no_file() {
     let url = format!("http://127.0.0.1:{port}/page");
     let rig = Rig::new();
     let output = rig.fetch(&url);
-    server.join().unwrap();
+    fakes::within("the server answers", SIGNAL, || server.join().unwrap());
     assert_eq!(code(&output), Some(ErrorCode::ConnectionFailed));
     assert_eq!(
         text(&output),
