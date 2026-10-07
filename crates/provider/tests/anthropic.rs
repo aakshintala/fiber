@@ -91,6 +91,7 @@ fn request() -> ModelRequest {
         max_output_tokens: None,
         conversation: vec![Input::User {
             text: "What is the weather in Paris? Use the tool.".into(),
+            images: Vec::new(),
         }],
         session_dir: std::path::PathBuf::new(),
     }
@@ -724,6 +725,7 @@ fn four_turn_conversation() -> Vec<Input> {
     vec![
         Input::User {
             text: "What is the weather in Paris?".into(),
+            images: Vec::new(),
         },
         Input::ToolCall {
             action_id: ActionId("a_1".into()),
@@ -745,6 +747,7 @@ fn four_turn_conversation() -> Vec<Input> {
         },
         Input::User {
             text: "And Rome?".into(),
+            images: Vec::new(),
         },
     ]
 }
@@ -1862,6 +1865,7 @@ fn hosted_conversation(model: &str) -> Vec<Input> {
         },
         Input::User {
             text: "Thanks.".into(),
+            images: Vec::new(),
         },
     ]);
     conversation
@@ -2023,6 +2027,7 @@ fn the_recorded_hosted_search_runs_through_the_seam_and_replays_its_blocks() {
         },
         Input::User {
             text: "Thanks.".into(),
+            images: Vec::new(),
         },
     ]);
     let (second, _) = run(provider.call(&next));

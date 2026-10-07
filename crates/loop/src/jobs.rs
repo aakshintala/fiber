@@ -295,6 +295,7 @@ impl Loop {
                 self.handoff.carry.fold_jobs(&event);
                 self.held.push(Input::User {
                     text: notice_text(&completed),
+                    images: Vec::new(),
                 });
                 continue;
             }

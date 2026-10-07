@@ -427,7 +427,7 @@ fn users(request: &ModelRequest) -> Vec<String> {
         .conversation
         .iter()
         .filter_map(|input| match input {
-            Input::User { text } => Some(text.clone()),
+            Input::User { text, .. } => Some(text.clone()),
             Input::Assistant { .. }
             | Input::Reasoning { .. }
             | Input::ToolCall { .. }
@@ -485,7 +485,8 @@ fn a_notice_while_idle_starts_a_turn_named_by_its_job() {
     assert_eq!(
         requests[0].conversation.last(),
         Some(&Input::User {
-            text: rendered(JOB)
+            text: rendered(JOB),
+            images: Vec::new()
         })
     );
 }
@@ -771,7 +772,8 @@ fn a_notice_while_a_call_runs_is_written_at_the_next_step_boundary() {
     assert_eq!(
         conversation.last(),
         Some(&Input::User {
-            text: rendered(JOB)
+            text: rendered(JOB),
+            images: Vec::new()
         })
     );
 }
@@ -879,7 +881,8 @@ fn a_notice_during_the_final_reply_continues_the_turn() {
     assert_eq!(
         requests[1].conversation.last(),
         Some(&Input::User {
-            text: rendered(JOB)
+            text: rendered(JOB),
+            images: Vec::new()
         })
     );
 }
@@ -1184,6 +1187,7 @@ fn close_with_a_job_running_gives_the_ending_notice_then_waits_for_the_job() {
     // renders nothing.
     let notice = Input::User {
         text: ending_text(&[&id]),
+        images: Vec::new(),
     };
     assert_eq!(requests[1].conversation.last(), Some(&notice));
     assert_eq!(
@@ -2029,7 +2033,8 @@ fn a_batch_while_idle_starts_a_turn_named_by_its_monitor() {
     assert_eq!(
         requests[0].conversation.last(),
         Some(&Input::User {
-            text: format!("Fiber: monitor {JOB} printed:\nbuild ok\ntests ok\n{SUPPRESSED}")
+            text: format!("Fiber: monitor {JOB} printed:\nbuild ok\ntests ok\n{SUPPRESSED}"),
+            images: Vec::new()
         })
     );
     // A resume renders the batch from the log as the loop sent it.

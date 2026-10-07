@@ -157,7 +157,7 @@ fn contents(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
     let mut signature = None;
     for input in &request.conversation {
         match input {
-            Input::User { text } => {
+            Input::User { text, .. } => {
                 park(&mut out, &mut signature);
                 push(&mut out, "user", json!({"text": text}));
             }

@@ -50,7 +50,7 @@ fn file(
 }
 
 fn user_text(input: &Input) -> &str {
-    let Input::User { text } = input else {
+    let Input::User { text, .. } = input else {
         panic!("a User message, got {input:?}");
     };
     text

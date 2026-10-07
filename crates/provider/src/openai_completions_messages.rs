@@ -71,7 +71,7 @@ pub(crate) fn messages(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value
     let mut last_tool = None;
     for (index, input) in request.conversation.iter().enumerate() {
         match input {
-            Input::User { text } => {
+            Input::User { text, .. } => {
                 flush_images(&mut out, &mut ends, &mut pending, last_tool);
                 out.push(message(json!({"role": "user", "content": text})));
             }

@@ -105,6 +105,7 @@ fn request() -> ModelRequest {
         cache_key: "s_root".into(),
         conversation: vec![Input::User {
             text: "What is the weather in Paris? Use the tool.".into(),
+            images: Vec::new(),
         }],
         previous_end: None,
         max_output_tokens: None,
@@ -550,6 +551,7 @@ fn four_turn_conversation() -> Vec<Input> {
     vec![
         Input::User {
             text: "What is the weather in Paris?".into(),
+            images: Vec::new(),
         },
         Input::ToolCall {
             action_id: ActionId("a_1".into()),
@@ -571,6 +573,7 @@ fn four_turn_conversation() -> Vec<Input> {
         },
         Input::User {
             text: "And Rome?".into(),
+            images: Vec::new(),
         },
     ]
 }
@@ -1392,6 +1395,7 @@ fn a_tool_results_image_goes_in_a_user_message_after_the_tool_message() {
     let session = image_session();
     let mut conversation = vec![Input::User {
         text: "What is the weather in Paris?".into(),
+        images: Vec::new(),
     }];
     conversation.extend(image_turn(
         "a_1",
@@ -1475,6 +1479,7 @@ fn a_user_turn_after_a_tool_result_comes_after_the_image_message() {
     let session = image_session();
     let mut conversation = vec![Input::User {
         text: "What is the weather in Paris?".into(),
+        images: Vec::new(),
     }];
     conversation.extend(image_turn(
         "a_1",
@@ -1484,6 +1489,7 @@ fn a_user_turn_after_a_tool_result_comes_after_the_image_message() {
     ));
     conversation.push(Input::User {
         text: "And Rome?".into(),
+        images: Vec::new(),
     });
     let request = ModelRequest {
         conversation,
@@ -1513,6 +1519,7 @@ fn a_text_only_model_sends_no_image_message_and_the_result_says_so() {
     let session = image_session();
     let mut conversation = vec![Input::User {
         text: "What is the weather in Paris?".into(),
+        images: Vec::new(),
     }];
     conversation.extend(image_turn(
         "a_1",
@@ -1549,6 +1556,7 @@ fn the_image_message_carries_the_cache_marker_as_the_new_and_previous_end() {
     let session = image_session();
     let mut conversation = vec![Input::User {
         text: "What is the weather in Paris?".into(),
+        images: Vec::new(),
     }];
     conversation.extend(image_turn(
         "a_1",

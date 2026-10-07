@@ -102,6 +102,7 @@ fn request() -> ModelRequest {
         max_output_tokens: None,
         conversation: vec![Input::User {
             text: "What is the weather in Paris? Use the tool.".into(),
+            images: Vec::new(),
         }],
         session_dir: std::path::PathBuf::new(),
     }
@@ -1210,6 +1211,7 @@ fn a_signed_reply_does_not_eat_the_same_words_in_a_later_reply() {
     let mut conversation = after(&earlier.unwrap(), REFERENCE);
     conversation.push(Input::User {
         text: "Say it again.".into(),
+        images: Vec::new(),
     });
     let later = later.unwrap();
     conversation.push(Input::Assistant {
@@ -1388,6 +1390,7 @@ fn a_bare_call_signature_parks_before_user_content_and_not_on_a_later_call() {
         },
         Input::User {
             text: "And tomorrow?".into(),
+            images: Vec::new(),
         },
         Input::ToolCall {
             action_id: ActionId("a_later".into()),
@@ -1617,6 +1620,7 @@ fn a_foreign_call_and_result_go_as_text_while_the_models_own_stay_native() {
     let conversation = vec![
         Input::User {
             text: "What is in a.txt?".into(),
+            images: Vec::new(),
         },
         Input::Reasoning {
             model: "other/model".into(),

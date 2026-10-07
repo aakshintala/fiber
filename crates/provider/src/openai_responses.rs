@@ -255,7 +255,7 @@ fn input(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
         .conversation
         .iter()
         .filter_map(|input| match input {
-            Input::User { text } => Some(json!({ "role": "user", "content": text })),
+            Input::User { text, .. } => Some(json!({ "role": "user", "content": text })),
             Input::Assistant {
                 model,
                 text,

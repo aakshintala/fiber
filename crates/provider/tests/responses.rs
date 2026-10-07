@@ -102,6 +102,7 @@ fn request() -> ModelRequest {
         cache_key: "s_root".into(),
         conversation: vec![Input::User {
             text: "What is the weather in Paris? Use the tool.".into(),
+            images: Vec::new(),
         }],
         previous_end: None,
         max_output_tokens: None,

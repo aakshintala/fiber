@@ -400,7 +400,7 @@ fn block_of(
     text_only: bool,
 ) -> Option<Value> {
     match input {
-        Input::User { text } => Some(json!({"type": "text", "text": text})),
+        Input::User { text, .. } => Some(json!({"type": "text", "text": text})),
         // A part's own form (a hosted call or result, a text with citations)
         // goes back unchanged, only to the model that produced it.
         Input::Assistant {
