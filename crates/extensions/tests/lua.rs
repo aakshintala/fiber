@@ -743,9 +743,9 @@ fn a_command_named_like_a_provider_function_keeps_its_own_timeout() {
     );
     // The provider function's 50 ms would already have failed a parked call.
     // Advancing wakes the caller; it parks again at the same grace.
-    clock.advance(Duration::from_millis(50));
+    let mark = clock.advance_marked(Duration::from_millis(50));
     assert!(
-        clock.await_parked(grace, WAIT),
+        clock.await_parked_since(&mark, Some(grace), WAIT),
         "p.sign left its own deadline"
     );
     assert!(
