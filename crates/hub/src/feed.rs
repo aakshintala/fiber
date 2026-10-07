@@ -361,6 +361,13 @@ impl Feed {
     /// Subscribes `summary` to session `id` and follows it on a thread. A
     /// connect that fails is not a crash: the next scan tries again.
     fn follow(self: &Arc<Self>, id: String) {
+        // Where the log ended before connecting: any earlier run's exit
+        // line is already before that point, and the followed run's
+        // `fiber_exited` or `rewound`, if it writes one, comes after.
+        let found = recent::find(&self.home, &id).map(|(project, dir)| {
+            let from = fs::metadata(dir.join("events.jsonl")).map_or(0, |meta| meta.len());
+            (project, dir, from)
+        });
         let Ok(stream) = UnixStream::connect(self.socket(&id)) else {
             return;
         };
@@ -370,12 +377,6 @@ impl Feed {
         if (&stream).write_all(SUBSCRIBE).is_err() {
             return;
         }
-        // Where the log ended once connected: the followed run's
-        // `fiber_exited` or `rewound`, if it writes one, comes after.
-        let found = recent::find(&self.home, &id).map(|(project, dir)| {
-            let from = fs::metadata(dir.join("events.jsonl")).map_or(0, |meta| meta.len());
-            (project, dir, from)
-        });
         let mut state = lock(&self.state);
         // Only the scanner adds to `tracked`, so the scan's check still
         // holds here.
