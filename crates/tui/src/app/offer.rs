@@ -22,7 +22,7 @@ impl App {
             return Some(Effect::None);
         }
         let height = self.conversation_height();
-        match self.offer.on_key(key, self.width, height)? {
+        match self.offer.on_key(key, self.screen.width(), height)? {
             OfferKey::Handled => Some(Effect::None),
             OfferKey::Send => Some(self.send_offer()),
         }
