@@ -36,7 +36,7 @@ fn function_call(call_id: &str, name: &str, arguments: &Value) -> Value {
     }})
 }
 
-fn subscribe(client: &Client) {
+fn subscribe(deadline: Deadline, client: &Client) {
     client
         .send_by(
             r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
@@ -45,7 +45,7 @@ fn subscribe(client: &Client) {
         .unwrap();
 }
 
-fn commanded(client: &Client, id: &str, name: &str) {
+fn commanded(deadline: Deadline, client: &Client, id: &str, name: &str) {
     client
         .send_by(
             &format!(r#"{{"id":"{id}","command":"command","args":{{"name":"{name}"}}}}"#),
@@ -59,7 +59,7 @@ fn commanded(client: &Client, id: &str, name: &str) {
         .expect("the command was admitted");
 }
 
-fn requested(client: &Client) -> Value {
+fn requested(deadline: Deadline, client: &Client) -> Value {
     client
         .recv_until(deadline.left(), |line| {
             line["kind"] == "interaction_requested"
@@ -82,9 +82,9 @@ fn a_command_raising_a_form_resolves_through_reply() {
     let mut running = setup.start_session(&id, &[]);
     let client = running.connect_client(&setup.socket(&id));
     running.wait_for("extensions_loaded");
-    subscribe(&client);
-    commanded(&client, "c_1", "askform");
-    let asked = requested(&client);
+    subscribe(setup.deadline, &client);
+    commanded(setup.deadline, &client, "c_1", "askform");
+    let asked = requested(setup.deadline, &client);
     assert_eq!(asked["payload"]["extension"], "fiber.test/worker");
     assert_eq!(asked["payload"]["fields"].as_array().unwrap().len(), 2);
     let request_id = asked["payload"]["request_id"].as_str().unwrap().to_owned();
@@ -142,9 +142,9 @@ fn an_unfit_reply_is_rejected_then_a_fitting_one_resolves_and_a_second_is_stale(
     let mut running = setup.start_session(&id, &[]);
     let client = running.connect_client(&setup.socket(&id));
     running.wait_for("extensions_loaded");
-    subscribe(&client);
-    commanded(&client, "c_1", "askform");
-    let asked = requested(&client);
+    subscribe(setup.deadline, &client);
+    commanded(setup.deadline, &client, "c_1", "askform");
+    let asked = requested(setup.deadline, &client);
     let request_id = asked["payload"]["request_id"].as_str().unwrap().to_owned();
     // Another kind's answer keys do not fit a `form`.
     client
@@ -161,9 +161,10 @@ fn an_unfit_reply_is_rejected_then_a_fitting_one_resolves_and_a_second_is_stale(
     // The request stays pending: nothing resolves it yet.
     assert!(
         client
-            .recv_until(std::time::Duration::from_secs(2), |line| {
-                line["kind"] == "interaction_resolved"
-            })
+            .recv_until(
+                std::time::Duration::from_secs(2).min(setup.deadline.left()),
+                |line| { line["kind"] == "interaction_resolved" }
+            )
             .is_none(),
         "the request stays pending after an unfit reply"
     );
@@ -207,8 +208,9 @@ fn an_unfit_reply_is_rejected_then_a_fitting_one_resolves_and_a_second_is_stale(
 
 /// Runs `fiber ask` with `args` to completion and returns its exit status,
 /// stdout lines and stderr. `fiber` runs in its own process group under a
-/// watchdog, and the group is reaped and checked empty under [`DEADLINE`],
-/// including after a timeout (`docs/testing.md`, "Running tests").
+/// watchdog, and the group is reaped and checked empty under the test's
+/// [`Deadline`], including after a timeout (`docs/testing.md`, "Running
+/// tests").
 fn run_ask(setup: &Setup, args: &[&str]) -> (ExitStatus, Vec<Value>, String) {
     let mut command = setup.fiber(args);
     command.current_dir(setup.workspace());
@@ -219,19 +221,7 @@ fn run_ask(setup: &Setup, args: &[&str]) -> (ExitStatus, Vec<Value>, String) {
     std::thread::spawn(move || done.send(child.wait_with_output()).unwrap());
     let output = match finished.recv_timeout(setup.deadline.left()) {
         Ok(output) => output.unwrap(),
-        Err(_) => {
-            support::kill_group(setup.deadline, group, "KILL").unwrap();
-            // Reaps the killed child, so the check below sees the group
-            // as the kill left it.
-            let reaped = finished.recv_timeout(setup.deadline.cleanup()).is_ok();
-            assert!(
-                !group_alive(setup.deadline, group),
-                "`fiber` left a process in its group behind"
-            );
-            panic!(
-                "waited until the deadline for fiber ask to exit (reaped after the kill: {reaped})"
-            );
-        }
+        Err(_) => support::expired(setup.deadline, group, &finished, "fiber ask to exit"),
     };
     assert!(
         !group_alive(setup.deadline, group),
@@ -271,13 +261,9 @@ struct KillGroup(u32);
 
 impl Drop for KillGroup {
     fn drop(&mut self) {
-        match support::kill_group_detached(self.0, "KILL") {
-            Ok(_) | Err(_) => {}
-        }
+        support::kill_group_detached(self.0, "KILL");
     }
 }
-
-/// Whether any process remains in process group `group`.
 
 #[test]
 fn fiber_ask_declines_a_hook_ask_and_writes_no_question() {
@@ -335,9 +321,9 @@ fn close_while_an_ask_is_pending_declines_it_by_fiber() {
     let mut running = setup.start_session(&id, &[]);
     let client = running.connect_client(&setup.socket(&id));
     running.wait_for("extensions_loaded");
-    subscribe(&client);
-    commanded(&client, "c_1", "slowask");
-    let asked = requested(&client);
+    subscribe(setup.deadline, &client);
+    commanded(setup.deadline, &client, "c_1", "slowask");
+    let asked = requested(setup.deadline, &client);
     let request_id = asked["payload"]["request_id"].as_str().unwrap().to_owned();
     client
         .send_by(r#"{"id":"c_close","command":"close"}"#, &|| {
@@ -395,9 +381,9 @@ fn a_resumed_interactive_session_answers_a_host_ask() {
     let mut running = setup.start_session(&id, &["--resume"]);
     let client = running.connect_client(&setup.socket(&id));
     running.wait_for("extensions_loaded");
-    subscribe(&client);
-    commanded(&client, "c_1", "slowask");
-    let asked = requested(&client);
+    subscribe(setup.deadline, &client);
+    commanded(setup.deadline, &client, "c_1", "slowask");
+    let asked = requested(setup.deadline, &client);
     let request_id = asked["payload"]["request_id"].as_str().unwrap().to_owned();
     client
         .send_by(&format!(

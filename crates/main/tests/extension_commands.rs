@@ -20,7 +20,6 @@ use std::fs;
 use extension_harness::*;
 use fakes::ProviderServer;
 use serde_json::{Value, json};
-use support::Deadline;
 
 const SYNC: &str = "fiber.command(\"sync-now\", { timeout = 8000, description = \"Sync now.\", run = function(text) host.status(\"synced \" .. text) end })\n";
 
@@ -243,7 +242,7 @@ fn a_command_parked_past_close_writes_no_line_after_fiber_exited() {
     let setup = Setup::new();
     let server = ProviderServer::start([]).unwrap();
     setup.provider(&server);
-    let (url, _accepted) = hold_server();
+    let (url, accepted, _release) = hold_server(setup.deadline);
     setup.lua(
         "worker",
         &format!(
@@ -265,6 +264,17 @@ fn a_command_parked_past_close_writes_no_line_after_fiber_exited() {
     until(&client, "command_accepted", |line| {
         line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_1"
     });
+    // The close goes only once `host.http` is held, so the command is
+    // parked when the session closes.
+    match accepted.recv_timeout(setup.deadline.left()) {
+        Ok(()) => {}
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            panic!("waited until the deadline for host.http to reach the held server")
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            panic!("the held server ended before host.http reached it")
+        }
+    }
     send(&client, r#"{"id":"c_close","command":"close"}"#);
     let tail = until_close(&client);
     drop(client);
