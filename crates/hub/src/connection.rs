@@ -374,7 +374,10 @@ pub(crate) fn serve_counted(stream: UnixStream, hub: Arc<Hub>, n: u64) {
             }
         }
     }
-    read.get_ref().shutdown(Shutdown::Both).unwrap_or(());
+    // Fails a blocked writer: the write half only, since a client that
+    // half-closed already disconnected the socket, and shutting down a
+    // disconnected read half fails without unblocking anything.
+    read.get_ref().shutdown(Shutdown::Write).unwrap_or(());
     if let Some(fed) = fed {
         hub.feed.unsubscribe(fed);
     }

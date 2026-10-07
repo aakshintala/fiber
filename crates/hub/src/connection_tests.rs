@@ -10,6 +10,7 @@
 
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
+use std::net::Shutdown;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, mpsc};
@@ -20,6 +21,10 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::fake::FakeStarter;
+use contract::events::SessionStatus;
+
+/// `wall()` on a fake clock nobody advances, in milliseconds.
+const WALL: u64 = 1_700_000_000_000;
 
 /// One named deadline per receive: the client never waits past it.
 const DEADLINE: Duration = Duration::from_secs(10);
@@ -798,5 +803,137 @@ fn recent_over_the_wire_answers_a_page() {
     let (code, echoed, _) = rejected(&client.next("the unknown before"));
     assert_eq!(code, "invalid_arguments");
     assert_eq!(echoed.as_deref(), Some("c_2"));
+    hub.feed.stop();
+}
+
+/// Waits under [`DEADLINE`] until attention holds `n` listeners.
+fn until_listeners(hub: &Arc<Hub>, n: usize, what: &str) {
+    let (done_tx, done_rx) = mpsc::channel();
+    let hub = Arc::clone(hub);
+    thread::spawn(move || {
+        while hub.feed.attention.listeners() != n {
+            std::thread::yield_now();
+        }
+        done_tx.send(()).unwrap_or(());
+    });
+    done_rx
+        .recv_timeout(DEADLINE)
+        .unwrap_or_else(|_| panic!("attention holds {n} listeners {what}"));
+}
+
+/// A `session_status` payload with a `waiting` state: `request_id` and
+/// `summary "run <request_id>"`, named `n` in `/w`.
+fn waiting_payload(request: &str) -> Value {
+    let mut payload = crate::fake::status("n", "/w", "idle", None);
+    let map = payload.as_object_mut().unwrap();
+    map.insert("state".to_owned(), json!("waiting"));
+    map.insert(
+        "waiting".to_owned(),
+        json!({
+            "request_id": request,
+            "kind": "approval",
+            "summary": format!("run {request}"),
+        }),
+    );
+    payload
+}
+
+fn waiting_status(request: &str) -> SessionStatus {
+    serde_json::from_value(waiting_payload(request)).unwrap()
+}
+
+#[test]
+fn attention_reaches_every_connection_after_hub_hello_with_or_without_a_feed() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    let id = "s_00000000000000a1";
+    let session = crate::fake::FakeSession::bind(&temp.dir, id);
+    session.say(&crate::fake::status_line(
+        id,
+        &crate::fake::status("n", "/w", "streaming", None),
+    ));
+    hub.feed.start();
+    assert!(session.await_subscribed(1, DEADLINE));
+    let mut a = Client::connect(&hub);
+    a.hello();
+    a.send(&command("c_1", "feed", json!({})));
+    let (echoed, _) = accepted(&a.next("the feed acknowledgement"));
+    assert_eq!(echoed, "c_1");
+    assert_eq!(a.next("the snapshot status")["kind"], "session_status");
+    let mut b = Client::connect(&hub);
+    b.hello();
+    until_listeners(&hub, 2, "after A and B connected");
+    // C's connection thread waits on the pause point before its hello.
+    let (reached_tx, reached_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    *guard(&hub.before_hello) = Some(Box::new(move || {
+        reached_tx.send(()).unwrap_or(());
+        release_rx.recv_timeout(DEADLINE).unwrap_or(());
+    }));
+    let mut c = Client::connect(&hub);
+    reached_rx
+        .recv_timeout(DEADLINE)
+        .expect("C reaches its hello");
+    hub.feed
+        .attention
+        .notify("s_00000000000000ff", None, &waiting_status("rh"), false);
+    let held = b.next("the held attention");
+    assert_eq!(held["payload"]["reason"], "waiting");
+    assert_eq!(held["payload"]["summary"], "run rh");
+    release_tx.send(()).unwrap_or(());
+    assert_eq!(c.hello()["kind"], "hub_hello");
+    until_listeners(&hub, 3, "after C registered");
+    // Every connection hears the turn's waiting, but C never hears `rh`.
+    session.say(&crate::fake::status_line(id, &waiting_payload("r1")));
+    let r1 = json!({
+        "kind": "attention", "ts": WALL, "schema_version": 1,
+        "payload": {
+            "name": "n", "reason": "waiting", "session_id": id,
+            "summary": "run r1", "workspace": "/w",
+        },
+    });
+    assert_eq!(b.next("B's attention"), r1);
+    assert_eq!(c.next("C's attention"), r1);
+    let mut got = [
+        a.next("A's first line"),
+        a.next("A's second line"),
+        a.next("A's third line"),
+    ]
+    .map(|line| serde_json::to_string(&line).unwrap());
+    got.sort();
+    let mut want = [
+        serde_json::from_str::<Value>(&crate::fake::status_line(id, &waiting_payload("r1")))
+            .unwrap(),
+        r1,
+        held,
+    ]
+    .map(|line| serde_json::to_string(&line).unwrap());
+    want.sort();
+    assert_eq!(got, want);
+    drop(a);
+    drop(b);
+    drop(c);
+    until_listeners(&hub, 0, "after every client left");
+    hub.feed.stop();
+}
+
+#[test]
+fn a_client_that_half_closes_without_reading_still_leaves() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    let mut d = Client::connect(&hub);
+    d.hello();
+    until_listeners(&hub, 1, "after D connected");
+    // About 4 MB past any socket buffer, so the writer blocks.
+    for n in 0..2_000 {
+        let mut status = waiting_status(&format!("r{n}"));
+        status.name = format!("{n}:{}", "x".repeat(2_000));
+        hub.feed
+            .attention
+            .notify("s_00000000000000ff", None, &status, false);
+    }
+    d.write.shutdown(Shutdown::Write).unwrap();
+    until_listeners(&hub, 0, "after D half-closed");
+    until_clients(&hub, 0, "after D half-closed");
     hub.feed.stop();
 }
