@@ -26,8 +26,8 @@ use contract::events::{
     CacheLifetime, ReasoningCompleted, TextCompleted, TextDelta, ToolCallRequested,
 };
 use contract::provider::{
-    CallError, Delta, Finish, Input, ModelCall, ModelRequest, Provider, Reply, ReplyAction,
-    ToolDefinition,
+    CallError, Delta, Finish, Input, InputSize, ModelCall, ModelRequest, Provider, Reply,
+    ReplyAction, ToolDefinition,
 };
 use contract::shapes::Tokens;
 use contract::{ActionId, ErrorCode, ProviderCallId};
@@ -364,7 +364,12 @@ fn a_recording_served_by_the_fake_server_runs_through_the_seam() {
     let provider: Box<dyn Provider> = Box::new(Gemini::new(endpoint(&server)));
     let (reply, deltas) = run(provider.call(&request()));
     let (want, want_deltas) = decoded(&bytes);
-    assert_eq!(reply.unwrap(), want.unwrap());
+    let mut want = want.unwrap();
+    want.input_size = InputSize {
+        bytes: u64::try_from(server.requests()[0].body.len()).unwrap(),
+        media: false,
+    };
+    assert_eq!(reply.unwrap(), want);
     assert_eq!(deltas, want_deltas);
 
     let sent = &server.requests()[0];
@@ -1900,4 +1905,45 @@ fn a_users_image_is_left_out_for_a_text_only_model() {
 fn a_user_without_images_keeps_its_text_part_even_when_empty() {
     let (contents, _) = sent_contents(user_conversation("", Vec::new()));
     assert_eq!(contents, json!([{"role": "user", "parts": [{"text": ""}]}]));
+}
+
+#[test]
+fn a_reply_carries_the_size_of_the_body_it_sent() {
+    let session = fakes::TempDir::new("fiber-gemini-request-size");
+    std::fs::create_dir(session.path().join("artifacts")).unwrap();
+    std::fs::write(session.path().join("artifacts/i_1.png"), b"abcd").unwrap();
+    let request = ModelRequest {
+        conversation: image_conversation(
+            false,
+            "Image: 2x1 image/png.\n",
+            vec![png_ref("artifacts/i_1.png")],
+        ),
+        session_dir: session.path().to_path_buf(),
+        ..request()
+    };
+    let server = ProviderServer::start([completed_reply(), completed_reply()]).unwrap();
+    let reply = run(Box::new(Gemini::new(endpoint(&server)).request(&request)))
+        .0
+        .unwrap();
+    assert_eq!(
+        reply.input_size,
+        InputSize {
+            bytes: u64::try_from(server.requests()[0].body.len()).unwrap(),
+            media: true,
+        }
+    );
+    let endpoint = Endpoint {
+        text_only: true,
+        ..endpoint(&server)
+    };
+    let reply = run(Box::new(Gemini::new(endpoint).request(&request)))
+        .0
+        .unwrap();
+    assert_eq!(
+        reply.input_size,
+        InputSize {
+            bytes: u64::try_from(server.requests()[1].body.len()).unwrap(),
+            media: false,
+        }
+    );
 }

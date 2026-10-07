@@ -735,6 +735,8 @@ impl History {
             subscription: None,
             extension: None,
             origin_session_id: None,
+            input_bytes: 1,
+            input_media: None,
         })
     }
 }

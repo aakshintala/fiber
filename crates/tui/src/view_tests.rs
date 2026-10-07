@@ -672,7 +672,7 @@ fn tool_turn(app: &mut App) {
     for (id, cost, subscription) in [("g1", 0.41, false), ("g2", 1.1, true)] {
         let mut usage = json!({"generation_id": id, "model": "fake/m",
             "tokens": {"input": 9_100, "cache_read": 0, "cache_write": {}, "output": 0},
-            "cost": cost});
+            "input_bytes": 0, "cost": cost});
         if subscription && let Some(usage) = usage.as_object_mut() {
             usage.insert("subscription".to_owned(), json!(true));
         }
@@ -773,7 +773,7 @@ fn thought_turn(app: &mut App) {
         23_000,
         json!({"generation_id": "g1", "model": "fake/m",
             "tokens": {"input": 300, "cache_read": 0, "cache_write": {}, "output": 40},
-            "cost": null}),
+            "input_bytes": 0, "cost": null}),
     ));
     app.on_line(at(
         "turn_completed",

@@ -459,6 +459,7 @@ fn samples() -> Vec<(&'static str, Value)> {
         (
             "usage_recorded",
             json!({"generation_id": "g", "model": "p/m", "tokens": tokens,
+            "input_bytes": 48213, "input_media": true,
             "web_searches": 1, "cost": 0.25, "subscription": true, "extension": "e",
             "origin_session_id": "s0"}),
         ),
@@ -830,7 +831,7 @@ fn a_required_key_that_may_be_null_must_be_present() {
         ("session_named", json!({"by": "person"}), "name"),
         (
             "usage_recorded",
-            json!({"generation_id": "g", "model": "p/m", "tokens": tokens}),
+            json!({"generation_id": "g", "model": "p/m", "tokens": tokens, "input_bytes": 1}),
             "cost",
         ),
     ];
@@ -863,6 +864,16 @@ fn a_required_key_that_may_be_null_must_be_present() {
             .unwrap()
             .is_some()
     );
+}
+
+#[test]
+fn a_usage_without_input_bytes_does_not_read() {
+    let tokens = json!({"input": 1, "cache_read": 0, "cache_write": {}, "output": 1});
+    let without = json!({"generation_id": "g", "model": "p/m", "tokens": tokens, "cost": null});
+    assert!(read("usage_recorded", without.clone()).is_err());
+    let mut with = without;
+    with["input_bytes"] = json!(1);
+    assert!(read("usage_recorded", with).unwrap().is_some());
 }
 
 #[test]

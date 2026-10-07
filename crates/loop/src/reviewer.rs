@@ -595,6 +595,8 @@ impl Loop {
                 generation_id: reply.generation_id.clone(),
                 model: endpoint.reference.clone(),
                 tokens: reply.tokens.clone(),
+                input_bytes: reply.input_size.bytes,
+                input_media: reply.input_size.media.then_some(true),
                 web_searches: reply.web_searches,
                 cost,
                 subscription: endpoint.subscription.then_some(true),

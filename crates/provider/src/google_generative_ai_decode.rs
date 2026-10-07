@@ -6,7 +6,7 @@ use std::io::BufRead;
 use contract::events::{
     ReasoningCompleted, TextCompleted, TextDelta, ToolCallArgumentsDelta, ToolCallRequested,
 };
-use contract::provider::{Delta, Finish, Reply, ReplyAction};
+use contract::provider::{Delta, Finish, InputSize, Reply, ReplyAction};
 use contract::shapes::Tokens;
 use contract::{GenerationId, ProviderCallId};
 use serde_json::{Value, json};
@@ -283,6 +283,7 @@ impl Decoder {
             tokens: tokens(&self.usage)?,
             web_searches: None,
             cost: None,
+            input_size: InputSize::default(),
         })
     }
 }

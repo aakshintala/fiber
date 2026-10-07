@@ -94,6 +94,8 @@ impl Loop {
                     generation_id: reply.generation_id,
                     model: self.model.reference.clone(),
                     tokens: reply.tokens,
+                    input_bytes: reply.input_size.bytes,
+                    input_media: reply.input_size.media.then_some(true),
                     web_searches: reply.web_searches,
                     subscription: self.model.subscription.then_some(true),
                     extension: None,

@@ -206,6 +206,16 @@ pub enum Delta {
     ToolCallArguments(ToolCallArgumentsDelta),
 }
 
+/// The input a protocol sent for one call: its request body's size and
+/// whether it carried an image (`docs/events.md`, `usage_recorded`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct InputSize {
+    /// The request body's length in bytes, exactly as posted.
+    pub bytes: u64,
+    /// True when the body carried an image or PDF part.
+    pub media: bool,
+}
+
 /// A reply that reached its protocol's terminal event.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Reply {
@@ -223,6 +233,8 @@ pub struct Reply {
     /// The vendor's own figure for the call, in US dollars, where the
     /// response reports one.
     pub cost: Option<f64>,
+    /// The input the protocol sent for the call.
+    pub input_size: InputSize,
 }
 
 impl Reply {

@@ -1336,12 +1336,14 @@ that disables tools. The session runs anyway.
   - its state: full, deferred or loaded
   - its approximate size in tokens
 - A tool's size in tokens is estimated from its size in bytes. The
-  bytes-to-tokens rate comes from the last preamble build's first request:
-  every input token it reported in `usage_recorded`, whether uncached, read
-  from the cache or written to it, divided by the request's input size in
-  bytes. A request that carries an image or PDF part is skipped for the next
-  one without, because those parts' bytes bear no relation to their tokens.
-  Until a request gives a rate, sizes are shown in bytes.
+  bytes-to-tokens rate comes from the session's own first request after the
+  last preamble build: every input token it reported in `usage_recorded`,
+  whether uncached, read from the cache or written to it, divided by the
+  request's input size in bytes (`input_bytes` on `usage_recorded`,
+  `docs/events.md`). A request that carries an image or PDF part
+  (`input_media`) is skipped for the next one without, because those parts'
+  bytes bear no relation to their tokens. Until a request gives a rate,
+  sizes are shown in bytes.
 - `preamble_built` records, for each tool definition, whether it was deferred
   (`docs/events.md`).
 
