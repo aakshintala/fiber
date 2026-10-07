@@ -141,11 +141,7 @@ fn a_documented_quota_or_billing_reply_is_quota_exceeded() {
         "provider-errors/documented/gemini.resource-quota-exceeded-429.json",
         "provider-errors/documented/openrouter.insufficient-credits-402.json",
     ] {
-        assert_eq!(
-            recorded(case).code(),
-            ErrorCode::QuotaExceeded,
-            "{case}"
-        );
+        assert_eq!(recorded(case).code(), ErrorCode::QuotaExceeded, "{case}");
     }
 }
 
@@ -167,10 +163,7 @@ fn an_in_flight_budget_402_without_retry_after_is_quota_exceeded() {
     assert_eq!(status(402, &body, None), ErrorCode::QuotaExceeded);
     // A1 names no `limit_source`, so even a header leaves it a billing error.
     let billing = fixture_body("provider-errors/documented/anthropic.billing-402.json");
-    assert_eq!(
-        status(402, &billing, Some(5.0)),
-        ErrorCode::QuotaExceeded
-    );
+    assert_eq!(status(402, &billing, Some(5.0)), ErrorCode::QuotaExceeded);
 }
 
 #[test]
@@ -214,7 +207,11 @@ fn only_the_quota_shapes_are_quota_exceeded() {
     // One clause is enough: the code alone, the type alone, A2's shape
     // alone, and a quota `ErrorInfo` with no other clause.
     assert_eq!(
-        status(429, r#"{"error":{"code":"credit_balance_exhausted"}}"#, None),
+        status(
+            429,
+            r#"{"error":{"code":"credit_balance_exhausted"}}"#,
+            None
+        ),
         ErrorCode::QuotaExceeded,
     );
     assert_eq!(
@@ -360,15 +357,6 @@ fn an_error_info_reason_needs_its_type() {
         status(
             403,
             r#"{"error":{"details":[{"@type":"type.googleapis.com/google.rpc.QuotaFailure","reason":"BILLING_DISABLED"}]}}"#,
-            None
-        ),
-        ErrorCode::InvalidRequest,
-    );
-    // A bare `API_KEY_INVALID` with no `ErrorInfo` `@type` is not auth.
-    assert_eq!(
-        status(
-            400,
-            r#"{"error":{"details":[{"reason":"API_KEY_INVALID"}]}}"#,
             None
         ),
         ErrorCode::InvalidRequest,

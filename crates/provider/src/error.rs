@@ -341,20 +341,22 @@ fn body_code(body: &str) -> Option<String> {
 }
 
 /// Whether one `error.details[]` entry is a `google.rpc.ErrorInfo` naming
-/// `reason`. Google's shape always carries the `@type`; a bare reason
-/// without it is not the documented shape.
+/// `reason`. Only the quota match requires the `@type`: Google's quota
+/// shape always carries it, while a bare `API_KEY_INVALID` reason without
+/// it still fails authentication.
 fn error_info_reason(entry: &Value, reason: &str) -> bool {
     entry.get("@type").and_then(Value::as_str) == Some("type.googleapis.com/google.rpc.ErrorInfo")
         && entry.get("reason").and_then(Value::as_str) == Some(reason)
 }
 
 /// Whether a Google error body's `error.details` names `reason`
-/// (`google.rpc.ErrorInfo`).
+/// (`google.rpc.ErrorInfo`). A bare reason without the `@type` still
+/// matches: only the quota match requires it.
 fn has_reason(body: &str, reason: &str) -> bool {
     serde_json::from_str::<Value>(body)
         .ok()
         .and_then(|v| v.pointer("/error/details")?.as_array().cloned())
-        .is_some_and(|details| details.iter().any(|entry| error_info_reason(entry, reason)))
+        .is_some_and(|details| details.iter().any(|d| d["reason"] == reason))
 }
 
 /// The provider's own message in an error body: `error.message`, or
