@@ -69,15 +69,16 @@ pub(crate) fn floor_line(width: u16, height: u16) -> Option<String> {
 }
 
 /// A region's width: `share` percent of `width`, rounded, kept from `floor`
-/// to `ceiling`.
+/// to `ceiling`. `round` takes a half away from zero, which for a
+/// width is half up.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "the value is clamped to floor..=ceiling, both u16, before the cast"
+)]
 fn share_of(width: u16, share: f64, floor: u16, ceiling: u16) -> u16 {
     let target = f64::from(width) * share / 100.0;
-    // The first whole number whose half above passes the target is the
-    // target rounded half up; past the ceiling none is, and the ceiling
-    // holds.
-    (floor..=ceiling)
-        .find(|columns| f64::from(*columns) + 0.5 > target)
-        .unwrap_or(ceiling)
+    target.round().clamp(f64::from(floor), f64::from(ceiling)) as u16
 }
 
 /// Splits a `width` by `height` screen. The rail sheds before the panel:
