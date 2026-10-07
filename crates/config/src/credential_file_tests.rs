@@ -1,7 +1,6 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -57,14 +56,6 @@ fn an_existing_directory_keeps_its_mode() {
     assert_eq!(mode(&dir), 0o750);
 }
 
-struct StopOnDrop<'a>(&'a AtomicBool);
-
-impl Drop for StopOnDrop<'_> {
-    fn drop(&mut self) {
-        self.0.store(true, Ordering::Relaxed);
-    }
-}
-
 #[test]
 fn a_writer_never_exposes_a_file_wider_than_0600() {
     let home = TempDir::new("cred-file");
@@ -72,52 +63,50 @@ fn a_writer_never_exposes_a_file_wider_than_0600() {
     let lock = file.try_lock().unwrap().unwrap();
     lock.write(&json!({ "token": "first" })).unwrap();
     let dir = home.path().join("credentials/acme");
-    let stop = AtomicBool::new(false);
-    let (started, running) = mpsc::channel();
+    const DEADLINE: Duration = Duration::from_secs(10);
+    let (paused_tx, paused) = mpsc::channel();
+    let (release_tx, release) = mpsc::channel();
 
     thread::scope(|scope| {
         scope.spawn(|| {
-            let mut n = 0;
-            while !stop.load(Ordering::Relaxed) {
-                lock.write(&json!({ "token": format!("t{n}") })).unwrap();
-                n += 1;
-                // Once, after the first write: the observer starts scanning.
-                if n == 1 {
-                    started.send(()).unwrap();
-                }
-            }
+            crate::write::before_rename(move || {
+                paused_tx.send(()).unwrap();
+                release
+                    .recv_timeout(DEADLINE)
+                    .expect("the test released the writer");
+            });
+            lock.write(&json!({ "token": "t" })).unwrap();
         });
-        // Stops the writer however the observer exits, a failed assertion included.
-        let _stop = StopOnDrop(&stop);
-        running.recv_timeout(Duration::from_secs(5)).unwrap();
-        // The observer scans until it has seen a temporary file, or has made
-        // `MAX_SCANS` scans: the deadline, in scans rather than time.
-        const MAX_SCANS: usize = 200_000;
+        paused
+            .recv_timeout(DEADLINE)
+            .expect("the writer paused between creating the temporary file and renaming it");
         let mut temporaries = 0;
-        for _ in 0..MAX_SCANS {
-            if temporaries > 0 {
-                break;
+        for entry in fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_some_and(|e| e == "tmp") {
+                temporaries += 1;
             }
-            for entry in fs::read_dir(&dir).unwrap() {
-                let path = entry.unwrap().path();
-                // A temporary file is renamed away between the listing and
-                // the stat.
-                let Ok(meta) = fs::metadata(&path) else {
-                    continue;
-                };
-                if path.extension().is_some_and(|e| e == "tmp") {
-                    temporaries += 1;
-                }
-                assert_eq!(
-                    meta.permissions().mode() & 0o777,
-                    0o600,
-                    "{}",
-                    path.display()
-                );
-            }
+            assert_eq!(mode(&path), 0o600, "{}", path.display());
         }
-        assert!(temporaries > 0, "no temporary file was observed");
+        assert_eq!(
+            temporaries,
+            1,
+            "expected exactly one temporary file in {}",
+            dir.display()
+        );
+        release_tx.send(()).unwrap();
     });
+
+    let names: Vec<_> = fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert!(
+        names.iter().all(|n| !n.to_string_lossy().ends_with(".tmp")),
+        "a temporary file remains in {}",
+        dir.display()
+    );
+    assert_eq!(lock.read().unwrap(), Some(json!({ "token": "t" })));
 }
 
 #[test]
