@@ -1,13 +1,18 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+use contract::clock::Clock;
 
 use serde_json::Value;
 
 use super::*;
 use crate::TempDir;
+use crate::clock::FakeClock;
 use crate::within;
 
 const DEADLINE: Duration = Duration::from_secs(2);
@@ -203,4 +208,173 @@ fn recv_until_returns_none_at_once_when_the_socket_closes() {
         client.recv_until(Duration::from_secs(60), |_| false)
     });
     assert!(got.is_none(), "a close with no match returns none");
+}
+
+/// What remains until `end` on `clock`, zero once it has passed: the `left`
+/// a caller hands `send_by`.
+fn left_until(clock: &FakeClock, end: Instant) -> Duration {
+    end.saturating_duration_since(clock.now())
+}
+
+/// Reads `server` until end-of-file, 4 KiB at a time, calling `after_read`
+/// after each read. Sends the bytes read, so the test's wait is a bounded
+/// receive.
+fn drain(
+    mut server: UnixStream,
+    after_read: impl Fn() + Send + 'static,
+) -> mpsc::Receiver<Vec<u8>> {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut got = Vec::new();
+        let mut buf = [0u8; 4096];
+        loop {
+            match server.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    got.extend_from_slice(&buf[..n]);
+                    after_read();
+                }
+            }
+        }
+        if let Ok(()) = tx.send(got) {}
+    });
+    rx
+}
+
+/// A connected client and its server end.
+fn pair() -> (TempDir, Client, UnixStream) {
+    let dir = TempDir::new("fc");
+    let path = dir.path().join("s");
+    let listener = UnixListener::bind(&path).unwrap();
+    let client = Client::connect(&path).unwrap();
+    let server = accept_within(&listener);
+    (dir, client, server)
+}
+
+#[test]
+fn send_by_delivers_the_line_with_a_newline() {
+    let (_dir, client, server) = pair();
+    let clock = FakeClock::new();
+    let end = clock.origin() + Duration::from_secs(60);
+    let read = drain(server, || {});
+    let left_clock = Arc::clone(&clock);
+    let client = within("send_by", DEADLINE, move || {
+        client
+            .send_by(r#"{"id":1}"#, &|| left_until(&left_clock, end))
+            .unwrap();
+        client
+    });
+    drop(client);
+    let got = read
+        .recv_timeout(DEADLINE)
+        .expect("the peer reads to end-of-file");
+    assert_eq!(got, b"{\"id\":1}\n");
+}
+
+#[test]
+fn send_by_keeps_a_newline_the_line_already_has() {
+    let (_dir, client, server) = pair();
+    let read = drain(server, || {});
+    let client = within("send_by", DEADLINE, move || {
+        client.send_by("{}\n", &|| DEADLINE).unwrap();
+        client
+    });
+    drop(client);
+    let got = read
+        .recv_timeout(DEADLINE)
+        .expect("the peer reads to end-of-file");
+    assert_eq!(got, b"{}\n");
+}
+
+#[test]
+fn send_by_does_not_renew_its_deadline_across_partial_writes() {
+    let (_dir, client, server) = pair();
+    let clock = FakeClock::new();
+    // Fake seconds, so a real write timeout of what is left never ends a
+    // write: only the clock the peer advances can.
+    let end = clock.origin() + Duration::from_secs(300);
+    let reader_clock = Arc::clone(&clock);
+    // Each read is the signal that the sender has made progress.
+    let read = drain(server, move || {
+        reader_clock.advance(Duration::from_secs(100))
+    });
+    let line = "x".repeat(1 << 20);
+    let left_clock = Arc::clone(&clock);
+    let (sent, client) = within("send_by", Duration::from_secs(10), move || {
+        let sent = client.send_by(&line, &|| left_until(&left_clock, end));
+        (sent, client)
+    });
+    drop(client);
+    let got = read
+        .recv_timeout(DEADLINE)
+        .expect("the peer reads to end-of-file");
+    assert_eq!(
+        sent.expect_err("the deadline passes before the line is written")
+            .kind(),
+        std::io::ErrorKind::TimedOut,
+    );
+    assert!(
+        got.len() < 1 << 20,
+        "a deadline that does not renew stops the line, the peer read {} bytes",
+        got.len()
+    );
+}
+
+#[test]
+fn send_by_at_zero_writes_nothing() {
+    let (_dir, client, server) = pair();
+    let read = drain(server, || {});
+    let (sent, client) = within("send_by", DEADLINE, move || {
+        (client.send_by("{}", &|| Duration::ZERO), client)
+    });
+    drop(client);
+    let got = read
+        .recv_timeout(DEADLINE)
+        .expect("the peer reads to end-of-file");
+    assert_eq!(
+        sent.expect_err("no time is left").kind(),
+        std::io::ErrorKind::TimedOut
+    );
+    assert!(got.is_empty(), "nothing is written at zero, got {got:?}");
+}
+
+#[test]
+fn send_by_reads_what_is_left_once_per_4_kib_chunk() {
+    for (len, reads) in [(4095, 1), (4096, 2)] {
+        let (_dir, client, server) = pair();
+        let read = drain(server, || {});
+        let line = "x".repeat(len);
+        let (calls, client) = within("send_by", DEADLINE, move || {
+            let calls = AtomicUsize::new(0);
+            client
+                .send_by(&line, &|| {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    DEADLINE
+                })
+                .unwrap();
+            (calls.into_inner(), client)
+        });
+        drop(client);
+        let got = read
+            .recv_timeout(DEADLINE)
+            .expect("the peer reads to end-of-file");
+        assert_eq!(got.len(), len + 1, "the whole line and its newline arrive");
+        assert_eq!(
+            calls,
+            reads,
+            "a {} byte line with its newline is read in {reads} chunks",
+            len + 1
+        );
+    }
+}
+
+#[test]
+fn send_by_leaves_the_socket_without_a_write_timeout() {
+    let (_dir, client, _server) = pair();
+    client.send_by("{}", &|| DEADLINE).unwrap();
+    assert_eq!(
+        super::lock(&client.write).write_timeout().unwrap(),
+        None,
+        "a later send is not bounded by send_by's last timeout"
+    );
 }

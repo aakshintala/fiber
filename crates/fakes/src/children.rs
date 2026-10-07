@@ -46,14 +46,30 @@ impl Ready {
             Ok(status) => panic!("mkfifo {} exited {status}", path.display()),
             Err(err) => panic!("mkfifo {}: {err}", path.display()),
         }
-        let fifo = path.clone();
+        Self::at(&path, &|| OPEN_DEADLINE)
+    }
+
+    /// Starts reading the existing FIFO `fifo`, as [`Ready::new`] does after
+    /// making it. The wait for the reader to open it is bounded by `left()`.
+    /// With no time left it panics naming the FIFO, before opening it.
+    #[allow(
+        clippy::panic,
+        reason = "a ready fifo that does not open means the test cannot proceed"
+    )]
+    pub fn at(fifo: &Path, left: &dyn Fn() -> Duration) -> Self {
+        let path = fifo.to_path_buf();
+        let within = left();
+        if within.is_zero() {
+            panic!("no time left to open ready fifo {}", path.display());
+        }
+        let reading = path.clone();
         let (tx, rx) = mpsc::channel();
         let (opened_tx, opened_rx) = mpsc::channel();
-        thread::spawn(move || read_fifo(&fifo, &tx, &opened_tx));
-        match opened_rx.recv_timeout(OPEN_DEADLINE) {
+        thread::spawn(move || read_fifo(&reading, &tx, &opened_tx));
+        match opened_rx.recv_timeout(within) {
             Ok(()) => {}
             Err(mpsc::RecvTimeoutError::Timeout) => panic!(
-                "waited {OPEN_DEADLINE:?} for ready fifo {} to open",
+                "waited {within:?} for ready fifo {} to open",
                 path.display()
             ),
             Err(mpsc::RecvTimeoutError::Disconnected) => panic!(
