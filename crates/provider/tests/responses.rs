@@ -167,7 +167,7 @@ fn a_function_call_with_empty_argument_text_records_an_empty_object() {
         let done = json!({"type": "response.output_item.done", "item": {
             "type": "function_call", "id": "fc_1", "call_id": "call_1",
             "name": "f", "arguments": arguments}});
-        let reply = decoded(&stream(&[done])).0;
+        let reply = decoded(&stream(&[done, completed("completed", json!({}))])).0;
         let reply = reply.unwrap();
         let [ReplyAction::ToolCall(call)] = reply.actions.as_slice() else {
             panic!("{:?}", reply.actions);
