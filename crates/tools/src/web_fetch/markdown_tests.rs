@@ -286,10 +286,86 @@ fn a_title_tag_is_case_insensitive() {
 fn head_contents_other_than_the_title_are_dropped() {
     assert_eq!(
         to_markdown(
-            "<head><meta charset=\"utf-8\"><link href=\"x\">stray<base href=\"/\"></head><p>x</p>"
+            "<head><meta charset=\"utf-8\"><link href=\"x\">\n <base href=\"/\"></head><p>x</p>"
         ),
         "x\n"
     );
+}
+
+#[test]
+fn a_head_never_closed_ends_at_its_first_text() {
+    // The HTML standard ends the head at the first text that is not
+    // whitespace, as a browser shows it.
+    assert_eq!(
+        to_markdown("<head><title>T</title> Hello<meta charset=\"utf-8\">"),
+        "# T\n\nHello\n"
+    );
+}
+
+#[test]
+fn a_head_never_closed_ends_at_a_tag_that_cannot_be_in_it() {
+    assert_eq!(
+        to_markdown("<head><title>T</title><p>Hello</p>"),
+        "# T\n\nHello\n"
+    );
+    assert_eq!(to_markdown("<head><svg></svg>x"), "x\n");
+    assert_eq!(to_markdown("<head></html>x"), "x\n");
+    assert_eq!(to_markdown("<head></br>x"), "x\n");
+    // A visible tag alone ends it, with no text after it.
+    assert_eq!(to_markdown("<head><hr>"), "---\n");
+}
+
+#[test]
+fn a_tag_that_cannot_be_in_svg_ends_it() {
+    // The HTML standard closes every open `svg` at these tags, so the text
+    // after them is shown, closed `svg` or not.
+    assert_eq!(to_markdown("a<svg><svg>s<p>b</p>"), "a\n\nb\n");
+    assert_eq!(to_markdown("a<svg><g><p>b</p></g></svg>c"), "a\n\nb\n\nc\n");
+    assert_eq!(to_markdown("a<svg></p>b"), "a\n\nb\n");
+    assert_eq!(to_markdown("a<svg></br>b"), "a\nb\n");
+    assert_eq!(to_markdown("a<svg><font>s<font color=\"red\">b"), "ab\n");
+}
+
+#[test]
+fn leaving_svg_closes_what_is_open_inside_it() {
+    // Inside an `svg` a `noscript` or `template` is an element of the
+    // `svg`, so the tag that ends the `svg` ends it too.
+    assert_eq!(to_markdown("<svg><noscript><p>Hello</p>"), "Hello\n");
+    assert_eq!(
+        to_markdown("<svg><template><p>a</p></template>b"),
+        "a\n\nb\n"
+    );
+    assert_eq!(
+        to_markdown("<svg><noscript><p>a</p></noscript>b"),
+        "a\n\nb\n"
+    );
+    assert_eq!(to_markdown("<svg><noscript><svg></noscript></svg>b"), "b\n");
+}
+
+#[test]
+fn leaving_svg_keeps_what_hides_it_open() {
+    // A `template` or `noscript` around the `svg` stays open, and an
+    // `</svg>` after the `svg` has ended closes nothing.
+    assert_eq!(
+        to_markdown("<template><svg><p>x</p></svg>secret</template>shown"),
+        "shown\n"
+    );
+    assert_eq!(
+        to_markdown("<noscript><svg><p>x</p></svg>secret</noscript>shown"),
+        "shown\n"
+    );
+}
+
+#[test]
+fn a_hidden_end_tag_closes_what_the_html_standard_closes() {
+    // `</template>` closes its `template` through anything open inside it;
+    // `</noscript>` stops at a `template` inside its `noscript`.
+    assert_eq!(to_markdown("<template><noscript></template>x"), "x\n");
+    assert_eq!(
+        to_markdown("<noscript><template></noscript>x</template>y</noscript>z"),
+        "z\n"
+    );
+    assert_eq!(to_markdown("<noscript><svg></noscript>x"), "x\n");
 }
 
 #[test]
@@ -562,6 +638,21 @@ fn many_unterminated_openers_stay_linear() {
 }
 
 #[test]
+fn many_unmatched_hidden_closes_stay_linear() {
+    // Each close below matches nothing open, so none may rescan what is.
+    let n = 100_000;
+    for (svg, open, close) in [
+        ("<svg>", "<noscript>", "</template>"),
+        ("<svg>", "<template>", "</noscript>"),
+        ("", "<noscript>", "</svg>"),
+        ("", "<template>", "</svg>"),
+    ] {
+        let html = format!("{svg}{}{}x", open.repeat(n), close.repeat(n));
+        assert_eq!(to_markdown(&html), "", "{svg}{open}{close}");
+    }
+}
+
+#[test]
 fn excess_list_closes_pop_the_counter_first() {
     let over = 5;
     let total = super::MAX_LEVELS + over;
@@ -633,8 +724,8 @@ fn a_title_close_is_not_an_opener() {
 }
 
 #[test]
-fn a_body_close_does_not_end_the_head() {
-    assert_eq!(to_markdown("<head></body><p>x</p>"), "");
+fn a_body_close_ends_the_head() {
+    assert_eq!(to_markdown("<head></body><p>x</p>"), "x\n");
 }
 
 #[test]
