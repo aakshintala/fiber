@@ -582,14 +582,27 @@ fn models_spawns_its_refresh_child_from_the_recorded_path() {
         clock.wall(),
     );
     let dir = fakes::TempDir::new("fiber-models-recorded");
-    let record = dir.path().join("args");
+    let fifo = dir.path().join("fifo");
     let stub = dir.path().join("stub.sh");
     std::fs::write(
         &stub,
-        format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > {}\n", record.display()),
+        format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > {}\n", fifo.display()),
     )
     .unwrap();
     std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(
+        Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success(),
+        "mkfifo {}",
+        fifo.display()
+    );
+    // The stub's write blocks until a reader opens the FIFO, and the
+    // reader gets EOF when the stub exits: completion is the signal.
+    let (fifo_tx, fifo_rx) = mpsc::channel();
+    thread::spawn(move || fifo_tx.send(std::fs::read_to_string(&fifo).unwrap()));
     let name = module_path!().split_once("::").unwrap().1;
     let child = Command::new(std::env::current_exe().unwrap())
         .args([
@@ -617,25 +630,15 @@ fn models_spawns_its_refresh_child_from_the_recorded_path() {
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("acme/old"), "{stdout:?}");
-    // The stub writes its arguments and exits, detached in its own
-    // process group: poll its file under the crate's usual child
-    // deadline, in slices that yield rather than sleep the test.
-    let (_tick, tock) = mpsc::channel::<()>();
-    let slices = SPAWN_DEADLINE.as_millis() / 100;
-    let mut args = String::new();
-    for _ in 0..slices {
-        if let Ok(text) = std::fs::read_to_string(&record)
-            && text.contains("refresh-model-lists")
-            && text.contains("acme")
-        {
-            args = text;
-            break;
-        }
-        let _waited = tock.recv_timeout(Duration::from_millis(100));
-    }
+    // The stub writes its arguments to the FIFO and exits, detached in
+    // its own process group: the read completes when the stub runs, and
+    // the deadline fails the test when a mutant skips the spawn.
+    let Ok(args) = fifo_rx.recv_timeout(SPAWN_DEADLINE) else {
+        panic!("the recorded stub never ran the refresh child");
+    };
     assert!(
         args.contains("refresh-model-lists") && args.contains("acme"),
-        "the recorded stub never ran the refresh child: {args:?}"
+        "{args:?}"
     );
 }
 
