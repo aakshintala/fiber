@@ -219,7 +219,7 @@ fn two_concurrent_calls_resolve_by_id_out_of_order() {
     let setup = Setup::tools(&tools);
     setup.result("slow", r#"{"content":[{"type":"text","text":"slow"}]}"#);
     setup.result("fast", r#"{"content":[{"type":"text","text":"fast"}]}"#);
-    write(&setup.dir, "delay-slow", "1");
+    write(&setup.dir, "hold-slow", "");
     let opened = setup.start(Duration::from_secs(5));
     let server = std::sync::Arc::new(opened.server);
     let (done, results) = mpsc::channel();
@@ -237,26 +237,30 @@ fn two_concurrent_calls_resolve_by_id_out_of_order() {
         });
     }
     drop(done);
-    let mut seen = Vec::new();
-    for _ in 0..2 {
+    let next = || -> (String, Value) {
         let (tool, answer): (String, Result<Value, CallError>) = results
             .recv_timeout(WITHIN)
-            .unwrap_or_else(|_| panic!("both calls answer within {WITHIN:?}"));
-        seen.push((tool, answer.expect("no call fails")));
-    }
-    seen.sort_by(|left, right| left.0.cmp(&right.0));
+            .unwrap_or_else(|_| panic!("the awaited call answers within {WITHIN:?}"));
+        (tool, answer.expect("no call fails"))
+    };
+    let first = next();
     assert_eq!(
-        seen,
-        [
-            (
-                "fast".to_owned(),
-                json!({"content": [{"type": "text", "text": "fast"}]}),
-            ),
-            (
-                "slow".to_owned(),
-                json!({"content": [{"type": "text", "text": "slow"}]}),
-            ),
-        ],
+        first,
+        (
+            "fast".to_owned(),
+            json!({"content": [{"type": "text", "text": "fast"}]}),
+        ),
+        "the fast call answers while the slow one is held",
+    );
+    write(&setup.dir, "release-slow", "");
+    let second = next();
+    assert_eq!(
+        second,
+        (
+            "slow".to_owned(),
+            json!({"content": [{"type": "text", "text": "slow"}]}),
+        ),
+        "the slow call answers once released",
     );
 }
 

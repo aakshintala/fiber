@@ -9,8 +9,9 @@
 # `call-<tool>.json` file per tool holding that call's `result` object. A
 # tool whose result file holds exactly `hang` is never answered, and one
 # whose result file holds exactly `exit` makes the server exit without
-# answering. A `delay-<tool>` file holding seconds delays that tool's
-# answer, so two concurrent calls resolve out of order. A `notify-<tool>`
+# answering. A `hold-<tool>` file holds that tool's answer until a
+# `release-<tool>` file exists, so a test releases a call after another
+# one answered and two concurrent calls resolve out of order. A `notify-<tool>`
 # file makes the server send `notifications/tools/list_changed` before it
 # answers that tool's call. A `fail-start` file makes the server exit 1
 # before reading anything.
@@ -81,14 +82,10 @@ while IFS= read -r line; do
                     answer '{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}'
                 fi
                 if [ "$(cat "$result")" != "hang" ]; then
-                    delay="0"
-                    if [ -f "$dir/delay-$tool" ]; then
-                        delay="$(cat "$dir/delay-$tool")"
-                    fi
                     body="$(cat "$result")"
-                    # Each call is answered in the background, so a delayed
+                    # Each call is answered in the background, so a held
                     # call does not hold back a fast one behind it.
-                    ( sleep "$delay"; answer "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":$body}" ) &
+                    ( while [ -f "$dir/hold-$tool" ] && [ ! -f "$dir/release-$tool" ]; do sleep 0.05; done; answer "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":$body}" ) &
                 fi
             elif [ -n "$id" ]; then
                 answer "{\"jsonrpc\":\"2.0\",\"id\":$id,\"error\":{\"code\":-32602,\"message\":\"Unknown tool: $tool\"}}"
