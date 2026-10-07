@@ -399,7 +399,7 @@ impl Loop {
         Some(ModelRequest {
             system_prompt: built.system_prompt.clone(),
             tools: built.tools.clone(),
-            effort: None,
+            thinking: built.thinking,
             tool_choice: built.tool_choice.clone(),
             cache_lifetime: built.cache_lifetime,
             cache_key: self.cache_key.clone(),

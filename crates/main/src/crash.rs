@@ -39,15 +39,16 @@ pub(crate) fn attach(id: &contract::SessionId) {
 /// One panic's report: the file's text and the report on stderr are this,
 /// and stderr adds exactly one line after it. The hook runs on the thread
 /// that panicked and takes no lock of Fiber's: the session id is one atomic
-/// load, and nothing else here is shared with the log. The terminal restore
-/// goes at the top when the TUI builds one (`docs/code-quality.md`, "What a
-/// panic leaves").
+/// load, and nothing else here is shared with the log. The terminal is
+/// restored first, when this process set one up (`docs/code-quality.md`,
+/// "What a panic leaves").
 fn hook(
     info: &PanicHookInfo<'_>,
     fiber_home: &Option<OsString>,
     home: &Option<OsString>,
     clock: &Arc<dyn contract::clock::Clock>,
 ) {
+    tui::restore();
     let thread = std::thread::current();
     let name = thread.name().unwrap_or("<unnamed>");
     let location = info.location().map_or_else(

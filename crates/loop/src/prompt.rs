@@ -45,6 +45,9 @@ pub struct PromptInputs {
     /// The prompt-cache lifetime (`docs/prompt-cache.md`, "Cache
     /// lifetime").
     pub cache_lifetime: contract::events::CacheLifetime,
+    /// The session's one reasoning setting (`docs/model-routing.md`,
+    /// "Thinking"); `None` sends nothing.
+    pub thinking: Option<contract::ThinkingLevel>,
 }
 
 impl PromptInputs {
@@ -73,6 +76,7 @@ impl PromptInputs {
             clock,
             credential: None,
             cache_lifetime: contract::events::CacheLifetime::OneHour,
+            thinking: None,
         }
     }
 }
@@ -256,8 +260,8 @@ pub(crate) fn system_prompt(
 /// One preamble build: the system prompt text, the tool definitions in
 /// name order for requests, and the `preamble_built` payload
 /// (`docs/prompt-cache.md`, "The preamble" and `docs/events.md`,
-/// "`preamble_built`"). `effort` and `thinking` are
-/// absent: no thinking levels exist; `credential` is the inputs' label. `trigger_at` is
+/// "`preamble_built`"). `thinking` is the inputs' level, absent when none;
+/// `credential` is the inputs' label. `trigger_at` is
 /// the automatic handoff's trigger, absent when it is off.
 #[allow(
     clippy::too_many_arguments,
@@ -306,8 +310,7 @@ pub(crate) fn build(
         model: model.to_owned(),
         context_window: inputs.context_window.unwrap_or(0),
         trigger_at,
-        effort: None,
-        thinking: None,
+        thinking: inputs.thinking.map(|level| level.as_str().to_owned()),
         tool_choice,
         cache_lifetime,
         credential: inputs.credential.clone(),

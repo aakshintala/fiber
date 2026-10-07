@@ -135,6 +135,7 @@ use Kind::{
 const YES: bool = true;
 const NO: bool = false;
 const LIFETIMES: &[&str] = &["5m", "1h"];
+const LEVELS: &[&str] = &["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 pub(crate) const KEYS: &[Key] = &[
     key(
@@ -155,11 +156,13 @@ pub(crate) const KEYS: &[Key] = &[
     key("handoff.window_fraction", Number, YES, Some("0.7")),
     key("handoff.nudge", Bool, YES, Some("true")),
     key("cache.lifetime", OneOf(LIFETIMES), YES, Some("\"1h\"")),
+    key("thinking", OneOf(LEVELS), YES, None),
     key("models.*.handoff.enabled", Bool, YES, None),
     key("models.*.handoff.tokens", Count, YES, None),
     key("models.*.handoff.window_fraction", Number, YES, None),
     key("models.*.handoff.nudge", Bool, YES, None),
     key("models.*.cache.lifetime", OneOf(LIFETIMES), YES, None),
+    key("models.*.thinking", OneOf(LEVELS), YES, None),
     key("retry.attempts", Count, YES, Some("3")),
     key("retry.initial_delay_ms", Count, YES, Some("2000")),
     key("retry.max_delay_ms", Count, YES, Some("60000")),
@@ -331,3 +334,7 @@ pub fn parse_duration(text: &str) -> Option<Duration> {
     };
     Some(Duration::from_secs(seconds))
 }
+
+#[cfg(test)]
+#[path = "keys_tests.rs"]
+mod tests;

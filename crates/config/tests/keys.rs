@@ -142,6 +142,20 @@ fn rows() -> Vec<(&'static [&'static str], Value, Value, &'static str, bool)> {
             "one of \"5m\", \"1h\"",
             true,
         ),
+        (
+            &["thinking"],
+            json!("high"),
+            json!("turbo"),
+            "one of \"off\", \"minimal\", \"low\", \"medium\", \"high\", \"xhigh\", \"max\"",
+            true,
+        ),
+        (
+            &["models", "a/b", "thinking"],
+            json!("off"),
+            json!("turbo"),
+            "one of \"off\", \"minimal\", \"low\", \"medium\", \"high\", \"xhigh\", \"max\"",
+            true,
+        ),
         (&["retry", "attempts"], json!(5), json!(-3), COUNT, true),
         (
             &["retry", "initial_delay_ms"],

@@ -83,7 +83,7 @@ fn request() -> ModelRequest {
     ModelRequest {
         system_prompt: "You are terse.".into(),
         tools: vec![weather_tool()],
-        effort: None,
+        thinking: None,
         tool_choice: "auto".into(),
         cache_lifetime: CacheLifetime::FiveMinutes,
         cache_key: "session_1".into(),
@@ -589,7 +589,7 @@ fn two_requests_built_from_the_same_inputs_are_the_same_bytes() {
 fn adaptive_thinking_is_sent_as_an_effort_not_a_token_budget() {
     let server = ProviderServer::start([completed_reply()]).unwrap();
     let mut request = request();
-    request.effort = Some("medium".into());
+    request.thinking = Some(contract::ThinkingLevel::Medium);
     run(Box::new(Messages::new(endpoint(&server)).request(&request)))
         .0
         .unwrap();
@@ -2030,4 +2030,35 @@ fn the_recorded_hosted_search_runs_through_the_seam_and_replays_its_blocks() {
     let sent = sent_body(&server, 1);
     let blocks = sent["messages"][1]["content"].as_array().unwrap();
     assert_eq!(blocks, &vec![call_item.clone(), result_item.clone()]);
+}
+
+#[test]
+fn thinking_levels_map_to_adaptive_thinking_and_effort() {
+    use contract::ThinkingLevel::{Low, Off, Xhigh};
+    let server = ProviderServer::start([
+        completed_reply(),
+        completed_reply(),
+        completed_reply(),
+        completed_reply(),
+    ])
+    .unwrap();
+    for level in [None, Some(Off), Some(Low), Some(Xhigh)] {
+        let mut req = request();
+        req.thinking = level;
+        run(Box::new(Messages::new(endpoint(&server)).request(&req)))
+            .0
+            .unwrap();
+    }
+    let none = sent_body(&server, 0);
+    assert_eq!(none.get("thinking"), None);
+    assert_eq!(none.get("output_config"), None);
+    let off = sent_body(&server, 1);
+    assert_eq!(off.get("thinking"), None);
+    assert_eq!(off.get("output_config"), None);
+    let low = sent_body(&server, 2);
+    assert_eq!(low["thinking"], json!({"type": "adaptive"}));
+    assert_eq!(low["output_config"], json!({"effort": "low"}));
+    let xhigh = sent_body(&server, 3);
+    assert_eq!(xhigh["thinking"], json!({"type": "adaptive"}));
+    assert_eq!(xhigh["output_config"], json!({"effort": "xhigh"}));
 }

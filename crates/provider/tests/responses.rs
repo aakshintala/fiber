@@ -96,7 +96,7 @@ fn request() -> ModelRequest {
     ModelRequest {
         system_prompt: "You are terse.".into(),
         tools: vec![weather_tool(), loose_tool()],
-        effort: Some("low".into()),
+        thinking: Some(contract::ThinkingLevel::Low),
         tool_choice: "auto".into(),
         cache_lifetime: CacheLifetime::OneHour,
         cache_key: "s_root".into(),
@@ -1258,5 +1258,30 @@ fn a_text_only_model_gets_a_string_output_saying_the_image_was_left_out() {
         json!(
             "Image: 2x1 image/png.\n[Image artifacts/i_1.png left out: this model does not take images.]"
         )
+    );
+}
+
+#[test]
+fn thinking_levels_map_to_the_reasoning_effort() {
+    use contract::ThinkingLevel::{Low, Off, Xhigh};
+    let reply = || Response::stream(stream(&[completed("completed", json!({}))]));
+    let server = ProviderServer::start([reply(), reply(), reply(), reply()]).unwrap();
+    for level in [None, Some(Off), Some(Low), Some(Xhigh)] {
+        let mut req = request();
+        req.thinking = level;
+        run(Box::new(Responses::new(endpoint(&server)).request(&req)))
+            .0
+            .unwrap();
+    }
+    let none = sent_body(&server, 0);
+    assert_eq!(none.get("reasoning"), None);
+    assert_eq!(
+        sent_body(&server, 1)["reasoning"],
+        json!({"effort": "none"})
+    );
+    assert_eq!(sent_body(&server, 2)["reasoning"], json!({"effort": "low"}));
+    assert_eq!(
+        sent_body(&server, 3)["reasoning"],
+        json!({"effort": "xhigh"})
     );
 }

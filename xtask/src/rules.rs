@@ -34,28 +34,50 @@ pub(crate) fn over_cap(files: &[RustFile]) -> Vec<String> {
         .collect()
 }
 
-/// The crates only the image child links (`docs/dependencies.md`, "Crates
-/// used only by the image child"), and the crates that may link them.
-pub(crate) const IMAGE_CRATES: [&str; 2] = ["image", "fast_image_resize"];
-pub(crate) const IMAGE_MEMBERS: [&str; 2] = ["picture", "main"];
+/// Crates only some workspace members may link.
+pub(crate) struct Isolation {
+    /// The crates kept out of every other member's normal dependency tree.
+    pub(crate) crates: &'static [&'static str],
+    /// The members that may link them.
+    pub(crate) members: &'static [&'static str],
+    /// What a failure says after the crate it found.
+    pub(crate) why: &'static str,
+}
 
-/// Each failure where a workspace member's normal dependency tree names an
-/// image crate. `trees` pairs a member with the output of `cargo tree -p
-/// MEMBER -e normal --prefix none`: one line per crate, the crate's name
-/// first. `picture` and `main` are exempt.
-pub(crate) fn image_leaks(trees: &[(String, String)]) -> Vec<String> {
+/// The crates only the image child links (`docs/dependencies.md`, "Crates
+/// used only by the image child").
+pub(crate) const IMAGE: Isolation = Isolation {
+    crates: &["image", "fast_image_resize"],
+    members: &["picture", "main"],
+    why: "only the image child links image code",
+};
+
+/// The crates admitted only for `tui` (`docs/dependencies.md`, "Admitting
+/// a crate"): no other Fiber crate depends on them.
+pub(crate) const TUI: Isolation = Isolation {
+    crates: &["ratatui", "crossterm"],
+    members: &["tui", "main"],
+    why: "only the terminal links terminal UI code",
+};
+
+/// Each failure where a workspace member's normal dependency tree names
+/// one of `rule`'s crates. `trees` pairs a member with the output of `cargo
+/// tree -p MEMBER -e normal --prefix none`: one line per crate, the crate's
+/// name first. `rule`'s members are exempt.
+pub(crate) fn leaks(trees: &[(String, String)], rule: &Isolation) -> Vec<String> {
     let mut failures = BTreeSet::new();
     for (member, tree) in trees {
-        if IMAGE_MEMBERS.contains(&member.as_str()) {
+        if rule.members.contains(&member.as_str()) {
             continue;
         }
         for name in tree
             .lines()
             .filter_map(|line| line.split_whitespace().next())
         {
-            if IMAGE_CRATES.contains(&name) {
+            if rule.crates.contains(&name) {
                 failures.insert(format!(
-                    "{member}: its normal dependency tree holds {name}; only the image child links image code"
+                    "{member}: its normal dependency tree holds {name}; {}",
+                    rule.why
                 ));
             }
         }

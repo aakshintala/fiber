@@ -129,9 +129,6 @@ pub struct PreambleBuilt {
     /// automatic handoff is off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trigger_at: Option<u64>,
-    /// The reasoning effort, where the model takes one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub effort: Option<String>,
     /// The thinking level, where the model takes one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking: Option<String>,
@@ -168,9 +165,6 @@ pub struct ToolReplaced {
 pub struct ModelSettings {
     /// The model reference.
     pub model: String,
-    /// The reasoning effort, where the model takes one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub effort: Option<String>,
     /// The thinking level, where the model takes one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking: Option<String>,

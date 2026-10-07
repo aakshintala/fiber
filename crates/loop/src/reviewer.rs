@@ -570,7 +570,7 @@ impl Loop {
         let request = ModelRequest {
             system_prompt: shared.to_owned(),
             tools: Vec::new(),
-            effort: None,
+            thinking: None,
             tool_choice: "auto".to_owned(),
             cache_lifetime: endpoint.cache_lifetime,
             cache_key: self.reviewer_key.clone(),

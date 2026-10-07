@@ -86,10 +86,7 @@ impl contract::rules::Rules for NoRules {
 #[test]
 fn an_extension_exec_idle_is_written_once_and_starts_no_turn() {
     let (mut looped, _log, mut watched, _home) = started();
-    let mut input = TurnInput {
-        pieces: Vec::new(),
-        prompt: None,
-    };
+    let mut input = TurnInput::of(Vec::new());
     looped
         .admit_idle(Delivery::ExtensionExec(exec("git")), &mut input)
         .unwrap();

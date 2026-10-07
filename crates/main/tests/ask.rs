@@ -88,6 +88,40 @@ impl Setup {
         );
     }
 
+    /// As [`Setup::provider`], with the model declaring the `low` and
+    /// `high` thinking levels and defaulting to `low`.
+    fn provider_with_thinking(&self, server: &ProviderServer) {
+        let source = self.root.path().join("src");
+        write(
+            &source.join("extension.json"),
+            &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
+        );
+        write(
+            &source.join("providers/fake.json"),
+            &json!({
+                "name": "fake",
+                "credential": {"env": "FIBER_TEST_FAKE_KEY"},
+                "models": [{"id": "m", "protocol": "openai-responses",
+                    "base_url": format!("{}/v1", server.url()),
+                    "thinking_levels": ["low", "high"], "thinking_default": "low"}]
+            }),
+        );
+        extensions::plan(
+            &self.home(),
+            &extensions::Request::Path(source),
+            "0.0.0",
+            &extensions::Origin::github(),
+            &*fakes::clock::FakeClock::new(),
+        )
+        .unwrap()
+        .commit()
+        .unwrap();
+        write(
+            &self.home().join("config.json"),
+            &json!({"model": "fake/m"}),
+        );
+    }
+
     /// Disables retries for the next run: `retry.attempts` 0, so a
     /// retryable failure fails at once, with no backoff to sleep through.
     fn no_retry(&self) {
@@ -1115,7 +1149,7 @@ fn bare_fiber_names_ask_and_prints_nothing() {
     assert!(run.lines.is_empty());
     assert_eq!(
         run.stderr,
-        "fiber: The terminal door is not built; run `fiber ask \"<prompt>\"`. Run `fiber --help` for usage.\n"
+        "fiber: The terminal needs a tty; run `fiber ask \"<prompt>\"`. Run `fiber --help` for usage.\n"
     );
 }
 
@@ -2985,5 +3019,28 @@ fn a_lua_provider_without_credential_uses_the_stored_key() {
     assert!(
         !requests.iter().any(|request| request.path == "/token"),
         "{requests:?}"
+    );
+}
+
+#[test]
+fn a_thinking_suffix_is_recorded_and_an_unsupported_level_fails_first() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider_with_thinking(&server);
+
+    let run = setup.fiber(&["ask", "--model", "fake/m:high", "hi"], None);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
+    let built = run
+        .lines
+        .iter()
+        .find(|l| l["kind"] == "preamble_built")
+        .unwrap();
+    assert_eq!(built["payload"]["thinking"], "high");
+
+    assert_pre_session(
+        &setup.fiber(&["ask", "--model", "fake/m:max", "hi"], None),
+        1,
+        "invalid_arguments",
     );
 }

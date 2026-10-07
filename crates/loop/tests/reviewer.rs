@@ -279,7 +279,7 @@ fn the_request_body_holds_only_what_the_reviewer_is_shown() {
     assert!(request.system_prompt.starts_with("## shared\n"));
     assert!(request.tools.is_empty());
     assert_eq!(request.tool_choice, "auto");
-    assert_eq!(request.effort, None);
+    assert_eq!(request.thinking, None);
     assert_eq!(request.cache_lifetime, CacheLifetime::OneHour);
     assert_eq!(request.cache_key, "s_test:reviewer");
     assert_eq!(request.conversation.len(), 4);

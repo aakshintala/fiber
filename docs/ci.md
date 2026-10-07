@@ -110,6 +110,9 @@ On Linux x86_64 alone:
 - no crate but `picture` and `main` has `image` or `fast_image_resize` in its
   normal dependency tree (`cargo xtask image-isolation`), so the session
   process links no image code
+- no crate but `tui` and `main` has `ratatui` or `crossterm` in its normal
+  dependency tree (`cargo xtask tui-isolation`), so no other crate depends on
+  a crate admitted only for the terminal
 - cargo-deny's licence, source and ban checks
 - the built-in tool definitions within their byte budget, with each
   definition's size printed
