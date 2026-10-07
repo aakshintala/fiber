@@ -138,10 +138,6 @@ impl crate::Loop {
         // send, so a refresh counted from here comes early, never late.
         if self.warm.is_some() {
             self.last_request = Some((request.clone(), self.log.clock().now()));
-            // A new request warms again: a switch's stop marker from
-            // before this turn is obsolete (`docs/invocation.md`,
-            // "Lifecycle").
-            self.warm_stopped = None;
         }
         Ok(match self.call_with_retries(request, turn)? {
             Attempted::Replied {
