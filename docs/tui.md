@@ -884,6 +884,14 @@ writes nothing; each change of target costs one frame, 140 to 145 µs and 79
 bytes for the badge; a fast sweep over a conversation whose lines are targets
 wrote 1,332 frames and 358,360 bytes in 20,000 reports.
 
+Measured in Fiber on Linux x86_64 (6.18.44, a 4-core Intel Xeon at 2.30
+GHz) with the same jig, command, size and runs: a still pointer, and a
+pointer moving along one target, wrote 1 frame and 86 bytes in 20,000
+reports, 115 to 120 µs a report; a change of target on every report wrote
+20,000 frames and 1,580,000 bytes, 79 bytes a frame, 271 µs a report; the
+fast sweep wrote 1,332 frames and 358,360 bytes, 129 µs a report. The frames
+and bytes match the macOS run; the times are 1.5 to 1.9 times as long.
+
 ## Look
 
 - **Surfaces, not lines.** The person's messages, each tool group, the input
