@@ -1562,30 +1562,20 @@ fn run_close_all_sends_summary_and_close_now_and_prints_no_line_for_it() {
     pair.main
         .flush()
         .unwrap_or_else(|err| panic!("flush: {err}"));
-    // Every read runs under DEADLINE: the far end reads the close lines
-    // the quit question sent.
-    let mut hub = BufReader::new(held);
-    let mut line = String::new();
-    for want in [
-        ("feed", None),
-        ("recent", None),
-        ("subscribe", Some("summary")),
-        ("close", None),
-    ] {
-        line.clear();
-        hub.read_line(&mut line)
-            .unwrap_or_else(|err| panic!("read: {err}"));
-        let got: serde_json::Value =
-            serde_json::from_str(&line).unwrap_or_else(|err| panic!("{line:?}: {err}"));
-        assert_eq!(got["command"], want.0);
-        if let Some(level) = want.1 {
-            assert_eq!(got["args"]["level"], level);
-        }
-        if want.0 == "close" {
-            assert_eq!(got["session_id"], "s_aaaaaaaaaaaaaaaa");
-            assert_eq!(got["args"], serde_json::json!({"now": true}));
-        }
-    }
+    // Every read runs under DEADLINE through `command`: the far end
+    // reads the close lines the quit question sent.
+    let hub = BufReader::new(held);
+    let (hub, feed) = command(hub, "the feed command");
+    assert_eq!(feed["command"], "feed");
+    let (hub, recent) = command(hub, "the recent command");
+    assert_eq!(recent["command"], "recent");
+    let (hub, subscribe) = command(hub, "the subscribe command");
+    assert_eq!(subscribe["command"], "subscribe");
+    assert_eq!(subscribe["args"]["level"], "summary");
+    let (_, close) = command(hub, "the close command");
+    assert_eq!(close["command"], "close");
+    assert_eq!(close["session_id"], "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(close["args"], serde_json::json!({"now": true}));
     assert_eq!(
         finished
             .recv_timeout(DEADLINE)
