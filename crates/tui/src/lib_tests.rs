@@ -13,6 +13,20 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
+/// The launch description `run` tests start from: `/w`, outside git.
+fn launch() -> super::Launch {
+    super::Launch {
+        workspace: PathBuf::from("/w"),
+        project: "-w".to_owned(),
+        git: false,
+        hover: true,
+        version: "0.0.1".to_owned(),
+        model: None,
+        thinking: None,
+        logo_glyph: "⌇".to_owned(),
+    }
+}
+
 /// One named wall-clock deadline for every blocking wait.
 const DEADLINE: Duration = Duration::from_secs(10);
 
@@ -617,12 +631,10 @@ fn run_quits_on_double_ctrl_c_with_the_reader_blocked() {
         .spawn(move || {
             let code = super::run(
                 slave,
-                PathBuf::from("/w"),
-                "-w".to_owned(),
+                launch(),
                 Box::new(move || Ok((hub, hello))),
                 Box::new(|_| {}),
                 clock,
-                true,
             );
             match done.send(code) {
                 Ok(()) | Err(_) => {}
@@ -637,8 +649,9 @@ fn run_quits_on_double_ctrl_c_with_the_reader_blocked() {
         b"\x1b[?1049h\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b[?u\x1b[c";
     let start = read_exact(&pair.main, expected.len(), "the start bytes");
     assert_eq!(start, expected);
-    let frame = read_exact(&pair.main, 10, "the first frame");
-    assert!(frame.contains(&b'>'));
+    // On home the input line is not on the last row: the first frame is
+    // read through the placeholder, whose letters are written together.
+    read_until(&pair.main, b"shortcuts", "the first frame");
     // The slave is in raw mode while running.
     let raw = rustix::termios::tcgetattr(&pair.slave).unwrap_or_else(|err| panic!("attr: {err}"));
     assert!(is_cooked(&before));
@@ -680,12 +693,10 @@ fn run_shows_a_failed_connect_and_still_quits_restored() {
         .spawn(move || {
             let code = super::run(
                 slave,
-                PathBuf::from("/w"),
-                "-w".to_owned(),
+                launch(),
                 Box::new(|| Err(io::Error::other("refused"))),
                 Box::new(|_| {}),
                 fakes::clock::FakeClock::new(),
-                true,
             );
             done.send(code).unwrap_or(());
         })
@@ -728,12 +739,10 @@ fn run_redraws_on_sigwinch_at_the_new_size() {
         .spawn(move || {
             let code = super::run(
                 slave,
-                PathBuf::from("/w"),
-                "-w".to_owned(),
+                launch(),
                 Box::new(|| Err(io::Error::other("refused"))),
                 Box::new(|_| {}),
                 fakes::clock::FakeClock::new(),
-                true,
             );
             done.send(code).unwrap_or(());
         })
@@ -754,11 +763,14 @@ fn run_redraws_on_sigwinch_at_the_new_size() {
     // test's `run`.
     signal_hook::low_level::raise(signal_hook::consts::SIGWINCH)
         .unwrap_or_else(|err| panic!("raise: {err}"));
-    // The input line moves to the new last row: the cursor goes there, and
-    // the next character printed, after any colour change, is its `>`.
+    // The foot hint sits on the new last row, wider than the screen and
+    // cut: the cursor goes to column 1, and the next character printed,
+    // after any colour change, is its `↓`.
     read_until(&pair.main, b"\x1b[10;1H", "the move to row 10");
-    let next = read_until(&pair.main, b">", "the input line on row 10");
-    let between = next.split_last().map_or(&[][..], |(_, rest)| rest);
+    let next = read_until(&pair.main, "↓".as_bytes(), "the foot hint on row 10");
+    let between = next
+        .get(..next.len().saturating_sub("↓".len()))
+        .unwrap_or_default();
     assert!(
         between
             .iter()
@@ -1313,4 +1325,307 @@ fn a_non_left_press_keeps_copied_and_a_left_press_clears_it() {
     // A left press on blank cells clears "Copied".
     feed(&mut lp, vec![at(0, 2, 0, 'M'), at(0, 2, 0, 'm')]);
     assert!(!lp.app.copied());
+}
+
+#[test]
+fn opening_a_row_by_key_calls_on_attach() {
+    let (mut lp, attached) = new_loop(TestBackend::new(60, 12), None);
+    lp.app.set_home(launch());
+    let (ours, theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    let reader = BufReader::new(theirs);
+    feed(&mut lp, vec![Input::Connected(ours, hello())]);
+    let (reader, feed_cmd) = command(reader, "the feed command");
+    assert_eq!(feed_cmd["command"], "feed");
+    let (reader, _) = command(reader, "the recent command");
+    let status = contract::Envelope {
+        kind: "session_status".to_owned(),
+        session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: serde_json::json!({
+            "name": "fix the parser",
+            "workspace": "/w",
+            "project": "-w",
+            "state": "streaming",
+            "since": 0,
+            "spend": {"tokens": {"input": 1, "cache_read": 0,
+                "cache_write": {}, "output": 2},
+                "cost": 0.0, "subscription_cost": 0.0},
+            "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0,
+        })
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    };
+    feed(&mut lp, vec![Input::Hub(Line::Session(status))]);
+    // The first row draws at the second column of the tenth row: a press
+    // then a release on it opens the session.
+    feed(
+        &mut lp,
+        vec![
+            Input::Bytes(b"\x1b[<0;1;10M".to_vec()),
+            Input::Bytes(b"\x1b[<0;1;10m".to_vec()),
+        ],
+    );
+    let (reader, subscribe) = command(reader, "the subscribe command");
+    assert_eq!(subscribe["command"], "subscribe");
+    assert_eq!(subscribe["session_id"], "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(subscribe["args"]["level"], "full");
+    let (_, commands) = command(reader, "the commands command");
+    assert_eq!(commands["command"], "commands");
+    assert_eq!(commands["session_id"], "s_aaaaaaaaaaaaaaaa");
+    let seen = || attached.lock().map(|held| held.clone()).unwrap_or_default();
+    assert_eq!(seen(), vec!["s_aaaaaaaaaaaaaaaa".to_owned()]);
+}
+
+/// A live `session_status` for `session` in `state`.
+fn live_status(session: &str, state: &str) -> Line {
+    Line::Session(contract::Envelope {
+        kind: "session_status".to_owned(),
+        session_id: contract::SessionId(session.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: serde_json::json!({
+            "name": "fix the parser",
+            "workspace": "/w",
+            "project": "-w",
+            "state": state,
+            "since": 0,
+            "spend": {"tokens": {"input": 1, "cache_read": 0,
+                "cache_write": {}, "output": 2},
+                "cost": 0.0, "subscription_cost": 0.0},
+            "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0,
+        })
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    })
+}
+
+#[test]
+fn an_exit_sends_its_lines_then_quits() {
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    lp.app.set_home(launch());
+    let (ours, theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    let reader = BufReader::new(theirs);
+    let (_tx, rx) = mpsc::channel();
+    assert_eq!(lp.step(Input::Connected(ours, hello()), &rx), None);
+    assert_eq!(
+        lp.step(
+            Input::Hub(live_status("s_aaaaaaaaaaaaaaaa", "streaming")),
+            &rx
+        ),
+        None
+    );
+    // Ctrl+C twice asks while the session works, and `c` closes all.
+    assert_eq!(lp.step(Input::Bytes(vec![0x03]), &rx), None);
+    assert_eq!(lp.step(Input::Bytes(vec![0x03]), &rx), None);
+    let (reader, feed) = command(reader, "the feed");
+    assert_eq!(feed["command"], "feed");
+    let (reader, recent) = command(reader, "the recent");
+    assert_eq!(recent["command"], "recent");
+    // The close lines reach the far end, and the step quits with 0.
+    assert_eq!(lp.step(Input::Bytes(b"c".to_vec()), &rx), Some(0));
+    let (reader, subscribe) = command(reader, "the subscribe");
+    assert_eq!(subscribe["command"], "subscribe");
+    assert_eq!(subscribe["session_id"], "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(subscribe["args"]["level"], "summary");
+    let (_, close) = command(reader, "the close");
+    assert_eq!(close["command"], "close");
+    assert_eq!(close["session_id"], "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(close["args"], serde_json::json!({"now": true}));
+}
+
+/// A hub `session_status` line for `session` in `state`.
+fn hub_status(session: &str, state: &str) -> String {
+    serde_json::to_string(&contract::Envelope {
+        kind: "session_status".to_owned(),
+        session_id: contract::SessionId(session.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: serde_json::json!({
+            "name": "fix the parser",
+            "workspace": "/w",
+            "project": "-w",
+            "state": state,
+            "since": 0,
+            "spend": {"tokens": {"input": 1, "cache_read": 0,
+                "cache_write": {}, "output": 2},
+                "cost": 0.0, "subscription_cost": 0.0},
+            "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0,
+        })
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    })
+    .unwrap_or_else(|err| panic!("status: {err}"))
+}
+
+/// The terminal's restore bytes, after its last frame.
+const RESTORE: &[u8] =
+    b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?1049l\x1b[?25h";
+
+/// Runs the terminal on a pty with `hub` as its hub stream: the pty pair,
+/// and the exit code once it quits.
+fn spawn_run(hub: UnixStream) -> (Pair, mpsc::Receiver<i32>) {
+    let pair = open();
+    let slave = pair
+        .slave
+        .try_clone()
+        .unwrap_or_else(|err| panic!("dup: {err}"));
+    let hello = hello();
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("lib-run".to_owned())
+        .spawn(move || {
+            let code = super::run(
+                slave,
+                launch(),
+                Box::new(move || Ok((hub, hello))),
+                Box::new(|_| {}),
+                fakes::clock::FakeClock::new(),
+            );
+            match done.send(code) {
+                Ok(()) | Err(_) => {}
+            }
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    (pair, finished)
+}
+
+/// Reads the start bytes and the first frame.
+fn first_frame(pair: &Pair) {
+    let expected =
+        b"\x1b[?1049h\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b[?u\x1b[c";
+    assert_eq!(
+        read_exact(&pair.main, expected.len(), "the start bytes"),
+        expected
+    );
+    read_until(&pair.main, b"shortcuts", "the first frame");
+}
+
+#[test]
+fn run_prints_a_resume_line_per_live_session_after_restoring() {
+    let (hub, held) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    let (mut pair, finished) = spawn_run(hub);
+    first_frame(&pair);
+    crate::link::write_line(&held, &hub_status("s_aaaaaaaaaaaaaaaa", "idle"))
+        .unwrap_or_else(|err| panic!("write: {err}"));
+    // The test waits for the session's name on screen before quitting.
+    read_until(&pair.main, b"parser", "the session row");
+    // An idle session works nothing: Ctrl+C twice quits at once.
+    pair.main
+        .write_all(&[0x03, 0x03])
+        .unwrap_or_else(|err| panic!("write: {err}"));
+    pair.main
+        .flush()
+        .unwrap_or_else(|err| panic!("flush: {err}"));
+    assert_eq!(
+        finished
+            .recv_timeout(DEADLINE)
+            .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for run to return: {err}")),
+        0
+    );
+    read_until(&pair.main, RESTORE, "the restore bytes");
+    let line = b"s_aaaaaaaaaaaaaaaa  fiber resume s_aaaaaaaaaaaaaaaa";
+    let tail = read_until(&pair.main, line, "the resume line");
+    assert_eq!(
+        tail.get(tail.len().saturating_sub(line.len())..),
+        Some(line.as_slice())
+    );
+    drop(held);
+}
+
+#[test]
+fn run_close_all_sends_summary_and_close_now_and_prints_no_line_for_it() {
+    let (hub, held) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    let write = held.try_clone().unwrap_or_else(|err| panic!("dup: {err}"));
+    let (mut pair, finished) = spawn_run(hub);
+    first_frame(&pair);
+    crate::link::write_line(&write, &hub_status("s_aaaaaaaaaaaaaaaa", "streaming"))
+        .unwrap_or_else(|err| panic!("write: {err}"));
+    read_until(&pair.main, b"parser", "the session row");
+    // Ctrl+C twice asks while the session works, and `c` closes all:
+    // one write, so the loop asks before it closes.
+    pair.main
+        .write_all(&[0x03, 0x03, b'c'])
+        .unwrap_or_else(|err| panic!("write: {err}"));
+    pair.main
+        .flush()
+        .unwrap_or_else(|err| panic!("flush: {err}"));
+    // Every read runs under DEADLINE through `command`: the far end
+    // reads the close lines the quit question sent.
+    let hub = BufReader::new(held);
+    let (hub, feed) = command(hub, "the feed command");
+    assert_eq!(feed["command"], "feed");
+    let (hub, recent) = command(hub, "the recent command");
+    assert_eq!(recent["command"], "recent");
+    let (hub, subscribe) = command(hub, "the subscribe command");
+    assert_eq!(subscribe["command"], "subscribe");
+    assert_eq!(subscribe["args"]["level"], "summary");
+    let (_, close) = command(hub, "the close command");
+    assert_eq!(close["command"], "close");
+    assert_eq!(close["session_id"], "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(close["args"], serde_json::json!({"now": true}));
+    assert_eq!(
+        finished
+            .recv_timeout(DEADLINE)
+            .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for run to return: {err}")),
+        0
+    );
+    read_until(&pair.main, RESTORE, "the restore bytes");
+    // A closed session prints no resume line: the mark bounds the bytes
+    // after the restore, and none names the session.
+    (&pair.slave)
+        .write_all(b"ENDMARK")
+        .unwrap_or_else(|err| panic!("write: {err}"));
+    let tail = read_until(&pair.main, b"ENDMARK", "the mark");
+    assert!(!tail.windows(12).any(|window| window == b"fiber resume"));
+}
+
+#[test]
+fn run_close_all_with_a_lost_hub_still_prints_the_resume_line() {
+    let (hub, held) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    let write = held.try_clone().unwrap_or_else(|err| panic!("dup: {err}"));
+    let (mut pair, finished) = spawn_run(hub);
+    first_frame(&pair);
+    crate::link::write_line(&write, &hub_status("s_aaaaaaaaaaaaaaaa", "streaming"))
+        .unwrap_or_else(|err| panic!("write: {err}"));
+    read_until(&pair.main, b"parser", "the session row");
+    // The hub is lost fast: its far end drops after the status draws, and
+    // the test waits for `lost` on screen.
+    drop(write);
+    drop(held);
+    read_until(&pair.main, b"lost", "the lost notice");
+    // Ctrl+C twice asks, and `c` with the link down quits and closes
+    // nothing: one write, so the loop asks before it closes. The session
+    // keeps its resume line.
+    pair.main
+        .write_all(&[0x03, 0x03, b'c'])
+        .unwrap_or_else(|err| panic!("write: {err}"));
+    pair.main
+        .flush()
+        .unwrap_or_else(|err| panic!("flush: {err}"));
+    assert_eq!(
+        finished
+            .recv_timeout(DEADLINE)
+            .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for run to return: {err}")),
+        0
+    );
+    read_until(&pair.main, RESTORE, "the restore bytes");
+    let line = b"s_aaaaaaaaaaaaaaaa  fiber resume s_aaaaaaaaaaaaaaaa";
+    let tail = read_until(&pair.main, line, "the resume line");
+    assert_eq!(
+        tail.get(tail.len().saturating_sub(line.len())..),
+        Some(line.as_slice())
+    );
 }

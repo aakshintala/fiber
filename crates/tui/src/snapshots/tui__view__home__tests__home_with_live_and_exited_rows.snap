@@ -1,0 +1,28 @@
+---
+source: crates/tui/src/home_view_tests.rs
+expression: "screen(&app, 80, 24)"
+---
+
+
+
+                     ▀▄ █▀▀▀▀ ▀▀█▀▀ █▀▀█  █▀▀▀▀ █▀▀▀▄
+                     ▀▄ █▄▄▄    █   █▀▀█  ████  █▄▄▄▀
+                     ▀▄ █       █   ████  █▀▀▀▀ █ ▀▄
+                     ▀▄ █     ▄▄█▄▄ █▀▀█  █▄▄▄▄ █   █ 0.0.1
+
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+> /? for shortcuts
+
+
+[w]  [no model]  [thinking: default]  enter starts a session
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+●  fix the parser                                                              ✕
+✓  tidy docs                                                                   ✕
+○  old work                                                                    ✕
+✗  dead work                                                                   ✕
+
+
+
+
+
+           ↓ the session list · F1 the key map · Ctrl+C twice to quit

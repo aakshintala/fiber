@@ -16,6 +16,7 @@ mod files;
 mod focus;
 mod format;
 mod highlight;
+mod home;
 mod input;
 mod jigs;
 mod keymap;
@@ -34,10 +35,9 @@ mod window;
 
 use std::collections::VecDeque;
 use std::fs::File;
-use std::io::{self, PipeReader, PipeWriter};
+use std::io::{self, PipeReader, PipeWriter, Write};
 use std::ops::RangeInclusive;
 use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
@@ -56,6 +56,8 @@ use crate::app::{App, Effect, mint, session_command};
 use crate::keys::{Button, Event, MouseKind, Parser, Reply};
 use crate::link::Line;
 use crate::mouse::{Pointer, Target};
+
+pub use home::Launch;
 
 pub use jigs::{draw, hover_frames, measure_paging};
 
@@ -92,25 +94,26 @@ pub(crate) enum Input {
     },
 }
 
-/// Runs the terminal on `tty`, starting sessions in `workspace`, whose
-/// project key (`docs/state.md`, "Projects") is `project`. `hover` is
-/// `tui.hover`: with it off, mouse mode 1003 is never sent and nothing is
-/// tinted under the pointer. Returns 0 on quit and 1 when the terminal
-/// cannot be set up or drawn. The terminal is restored on every return.
+/// Runs the terminal on `tty` for `launch`, starting sessions in its
+/// workspace. `hover` is `launch.hover`: with it off, mouse mode 1003 is
+/// never sent and nothing is tinted under the pointer. Returns 0 on quit
+/// and 1 when the terminal cannot be set up or drawn. The terminal is
+/// restored on every return.
 pub fn run(
     tty: File,
-    workspace: PathBuf,
-    project: String,
+    launch: Launch,
     connect: Connect,
     on_attach: OnAttach,
     clock: Arc<dyn Clock>,
-    hover: bool,
 ) -> i32 {
     // SIGWINCH is caught from before the size is read, so no resize is
     // missed; its thread starts after the first frame.
     let signals = Signals::new([SIGWINCH]).ok();
     catch_interrupts();
-    let _restore = term::Guard;
+    let restore = term::Guard;
+    // Home is always set, so the first frame draws at once: it runs no
+    // child process and reads nothing.
+    let hover = launch.hover;
     let Ok((width, height)) = term::setup(&tty, hover) else {
         return 1;
     };
@@ -120,8 +123,8 @@ pub fn run(
     let Ok(screen) = Screen::new(CrosstermBackend::new(out), width, height) else {
         return 1;
     };
-    let mut app = App::new(workspace);
-    app.set_project(project);
+    let mut app = App::new(launch.workspace.clone());
+    app.set_home(launch);
     app.set_size(width, height);
     let mut terminal = Loop {
         app,
@@ -158,9 +161,19 @@ pub fn run(
         spawn_resize(signals, tx);
     }
     let code = terminal.run(&rx);
+    // One resume line per live session: collected first, then the hub
+    // hangs up, the terminal is restored, and the lines print in cooked
+    // mode, each ending in a newline.
+    let lines = terminal.app.exit_lines();
     // Ends the hub reader thread; the input and resize threads stay
     // blocked and end with the process.
     terminal.hang_up();
+    drop(restore);
+    if let Some(mut tty) = terminal.tty.take() {
+        for line in &lines {
+            writeln!(tty, "{line}").unwrap_or(());
+        }
+    }
     code
 }
 
@@ -391,6 +404,7 @@ impl<B: Backend> Loop<B> {
     /// Handles one input, loads the pages the frame needs, and draws what
     /// changed. Returns the exit code when the terminal quits.
     fn step(&mut self, input: Input, rx: &Receiver<Input>) -> Option<i32> {
+        let before = self.app.session().cloned();
         match input {
             Input::Bytes(bytes) => {
                 for event in self.parser.feed(&bytes) {
@@ -421,6 +435,13 @@ impl<B: Backend> Loop<B> {
                         }
                         Effect::Send(lines) => self.send(&lines),
                         Effect::Quit => return Some(0),
+                        Effect::Exit(lines) => {
+                            // The quit question's closes go out, then the
+                            // terminal quits: a close never written keeps
+                            // its resume line.
+                            self.send(&lines);
+                            return Some(0);
+                        }
                         Effect::ListFiles => self.list_files(),
                         Effect::Search { generation, query } => {
                             if let Some(search) = &self.search {
@@ -436,11 +457,7 @@ impl<B: Backend> Loop<B> {
                 }
             }
             Input::Hub(line) => {
-                let attached = self.app.session().is_some();
                 let lines = self.app.on_line(line);
-                if !attached && let Some(session) = self.app.session() {
-                    (self.on_attach)(session);
-                }
                 self.send(&lines);
             }
             Input::Connected(stream, hello) => {
@@ -470,6 +487,13 @@ impl<B: Backend> Loop<B> {
                     }
                 }
             }
+        }
+        // An attach the input brought is reported once: the session
+        // changed to one, from none.
+        if before.is_none()
+            && let Some(session) = self.app.session()
+        {
+            (self.on_attach)(session);
         }
         // A closed `@` panel drops its worker and the listing it holds.
         if !self.app.files_open() {
@@ -503,7 +527,7 @@ impl<B: Backend> Loop<B> {
         let Some(out) = &self.files_out else {
             return;
         };
-        let workspace = self.app.workspace().to_path_buf();
+        let workspace = self.app.workspace();
         let search = files::Search::spawn(move || files::list(&workspace), out.clone());
         search.search(self.app.generation(), String::new());
         self.search = Some(search);

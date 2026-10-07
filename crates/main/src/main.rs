@@ -19,6 +19,7 @@ mod credential;
 mod handoff;
 mod hub_command;
 mod late_emit;
+mod launch;
 mod lua_providers;
 mod mcp_servers;
 mod prompt_files;
@@ -735,7 +736,7 @@ fn terminal(fiber: Result<PathBuf, String>) -> i32 {
         }
     };
     // `tui.hover`, defaulting to on (`docs/configuration.md`, "Keys").
-    let hover = match ::cli::project_of(&home, &workspace).and_then(|(_, project)| {
+    let config = match ::cli::project_of(&home, &workspace).and_then(|(_, project)| {
         Config::load(Sources {
             home: home.clone(),
             workspace: workspace.clone(),
@@ -744,10 +745,7 @@ fn terminal(fiber: Result<PathBuf, String>) -> i32 {
         })
         .map_err(|e| failed(e.code(), e))
     }) {
-        Ok(config) => config
-            .get("tui.hover", None)
-            .and_then(|(value, _)| value.as_bool())
-            .unwrap_or(true),
+        Ok(config) => config,
         Err(e) => return fail(e),
     };
     let tty = match io::stdin().as_fd().try_clone_to_owned() {
@@ -759,16 +757,9 @@ fn terminal(fiber: Result<PathBuf, String>) -> i32 {
         let mut start = || start_hub(fiber.clone());
         doors::hub::connect(&home, &mut start, hub_clock.as_ref())
     });
-    let project = log::project_key(&doors::project(&workspace));
-    tui::run(
-        tty,
-        workspace,
-        project,
-        connect,
-        Box::new(crash::attach),
-        clock,
-        hover,
-    )
+    let identity = doors::project(&workspace);
+    let launch = launch::launch(workspace, &identity, &config);
+    tui::run(tty, launch, connect, Box::new(crash::attach), clock)
 }
 
 /// Starts `fiber hub serve` detached, as every client of the hub does when

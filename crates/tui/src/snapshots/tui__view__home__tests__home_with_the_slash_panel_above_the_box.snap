@@ -1,0 +1,28 @@
+---
+source: crates/tui/src/home_view_tests.rs
+expression: "screen(&app, 80, 24)"
+---
+/home  Goes home.  command
+/new  Goes home with the cursor in the input box.  command
+/resume  Opens home at the session list.  command
+/handoff [instructions]  Starts a handoff.  command▀▄
+/name <text>  Names the session.  command ████  █▄▄▄▀
+/reload  Reloads configuration, MCP servers and extensions.  command
+/close  Stops the session on screen.  command▄▄ █   █ 0.0.1
+/quit  Quits.  command
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+> /
+
+
+[w]  [no model]  [thinking: default]  enter starts a session
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+
+
+
+
+
+
+
+
+
+           ↓ the session list · F1 the key map · Ctrl+C twice to quit

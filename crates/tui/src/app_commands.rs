@@ -2,6 +2,7 @@
 //! the built-in commands and the key map overlay (`docs/tui.md`, "Keys",
 //! "Bindings", "Slash commands", "Quit").
 
+use std::path::PathBuf;
 use std::time::Instant;
 
 use contract::SessionId;
@@ -96,6 +97,11 @@ impl App {
     pub(crate) fn on_edit(&mut self, edit: Edit) -> Effect {
         self.armed_at = None;
         self.history.cancel();
+        // Delete on a focused home row asks to delete it when it
+        // exited, ahead of the focus early return below.
+        if let Some(effect) = self.home_edit(&edit) {
+            return effect;
+        }
         if self.overlays.keymap.is_some()
             || self.search_edit(&edit)
             || (self.focus.is_some() && self.panel().is_none())
@@ -219,9 +225,14 @@ impl App {
         self.overlays.files.is_some()
     }
 
-    /// The launch directory, which the `@` panel lists.
-    pub(crate) fn workspace(&self) -> &std::path::Path {
-        &self.workspace
+    /// The workspace in use: the attached session's row workspace on
+    /// home, else the launch directory.
+    pub(crate) fn workspace(&self) -> PathBuf {
+        if self.home.is_some() {
+            self.home_workspace()
+        } else {
+            self.workspace.clone()
+        }
     }
 
     /// The current search generation.
@@ -368,10 +379,8 @@ impl App {
         }
         let rest = rest.trim().to_owned();
         let effect = match name {
-            "home" | "new" => {
-                self.go_home();
-                Effect::None
-            }
+            "home" | "new" => self.leave(),
+            "resume" => self.resume_list(),
             "handoff" => {
                 let args = (!rest.is_empty()).then(|| json!({ "instructions": rest }));
                 self.send_command("handoff", args)
@@ -379,7 +388,7 @@ impl App {
             "name" => self.send_command("name", Some(json!({ "text": rest }))),
             "reload" => self.send_command("reload", None),
             "close" => self.close(),
-            "quit" => Effect::Quit,
+            "quit" => self.quit(),
             "approvals" => {
                 self.draft.clear();
                 self.open_first()
@@ -397,7 +406,7 @@ impl App {
     /// Returns to the screen before a session: the conversation and the
     /// draft cleared, the old session left running. While a `start` waits
     /// for its answer only the draft is cleared.
-    fn go_home(&mut self) {
+    pub(super) fn go_home(&mut self) {
         self.draft.clear();
         if matches!(self.phase, Phase::Pending { .. }) {
             return;
@@ -543,8 +552,7 @@ impl App {
             }
             (Phase::Pending { .. }, None) => return Effect::None,
             (Phase::Starting, None) => {
-                let workspace = self.workspace.display().to_string();
-                let args = json!({"workspace": workspace, "content": content});
+                let args = self.start_args(content);
                 let line = json!({"id": id, "command": "start", "args": args});
                 (Kind::Start, line)
             }

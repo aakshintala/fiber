@@ -26,6 +26,7 @@ fn built_ins_come_in_table_order_then_the_answer_rows() {
         [
             "home",
             "new",
+            "resume",
             "handoff",
             "name",
             "reload",
@@ -38,8 +39,8 @@ fn built_ins_come_in_table_order_then_the_answer_rows() {
             "review"
         ]
     );
-    assert!(all.iter().take(10).all(|row| row.tag == "command"));
-    assert!(all.iter().skip(10).all(|row| row.tag == "skill"));
+    assert!(all.iter().take(11).all(|row| row.tag == "command"));
+    assert!(all.iter().skip(11).all(|row| row.tag == "skill"));
     assert_eq!(
         all.iter()
             .find(|row| row.name == "tdd")
@@ -67,11 +68,11 @@ fn an_empty_query_shows_every_row() {
 #[test]
 fn prefix_matches_come_before_contains_matches() {
     let all = rows(&[skill("prereview"), skill("Review")]);
-    // `re`: reload starts with it, then the skill `Review` (case
-    // ignored); `prereview` contains it later on.
+    // `re`: resume starts with it, then reload, then the skill `Review`
+    // (case ignored); `prereview` contains it later on.
     assert_eq!(
         names(&filter(&all, "re")),
-        ["reload", "Review", "prereview"]
+        ["resume", "reload", "Review", "prereview"]
     );
     assert_eq!(names(&filter(&all, "RE")), names(&filter(&all, "re")));
     // Contains only: no row starts with `ose`.

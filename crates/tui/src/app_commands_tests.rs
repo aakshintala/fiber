@@ -60,6 +60,7 @@ fn sent(effect: Effect) -> Vec<Value> {
         | Effect::ListFiles
         | Effect::Search { .. }
         | Effect::Editor { .. }
+        | Effect::Exit(_)
         | Effect::Copy(_) => Vec::new(),
     }
 }
@@ -154,6 +155,7 @@ fn typing_filters_prefix_matches_first() {
     assert_eq!(
         shown(&app),
         [
+            "/resume  Opens home at the session list.  command",
             "/reload  Reloads configuration, MCP servers and extensions.  command",
             "/areview  Runs areview.  skill",
         ]
@@ -200,10 +202,7 @@ fn up_and_down_move_the_selection_clamped_and_scroll_the_window() {
         app.on_key(Key::Down, now());
     }
     // The eighth row, still in the first window.
-    assert_eq!(
-        selected(&app).as_deref(),
-        Some("/approvals  Reopens the waiting approvals and questions.  command")
-    );
+    assert_eq!(selected(&app).as_deref(), Some("/quit  Quits.  command"));
     assert_eq!(app.completions().and_then(|c| c.selected), Some(7));
     app.on_key(Key::Down, now());
     // The ninth row: the window moves down by one.
@@ -214,6 +213,11 @@ fn up_and_down_move_the_selection_clamped_and_scroll_the_window() {
             .and_then(|c| c.lines.first().cloned())
             .as_deref(),
         Some("/new  Goes home with the cursor in the input box.  command")
+    );
+    app.on_key(Key::Down, now());
+    assert_eq!(
+        selected(&app).as_deref(),
+        Some("/?  Opens the key map.  command")
     );
     app.on_key(Key::Down, now());
     assert_eq!(

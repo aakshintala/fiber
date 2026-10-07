@@ -17,6 +17,7 @@ use contract::{Envelope, HubLine, Seq, SessionId};
 use serde_json::{Map, Value, json};
 
 use crate::approvals::{self, Panel, PanelKey, Queue};
+use crate::home::Level;
 use crate::input::Draft;
 use crate::keys::Key;
 use crate::link::Line;
@@ -41,6 +42,8 @@ pub(crate) mod copy;
 mod focus;
 #[path = "history.rs"]
 mod history;
+#[path = "app_home.rs"]
+mod home;
 #[path = "app_mouse.rs"]
 mod mouse;
 
@@ -87,6 +90,8 @@ pub(crate) enum Effect {
     Send(Vec<String>),
     /// Quit the terminal.
     Quit,
+    /// Send these command lines, then quit.
+    Exit(Vec<String>),
     /// Start the `@` panel's search worker on a listing of the workspace's
     /// files, searching for an empty query at the current generation.
     ListFiles,
@@ -158,6 +163,8 @@ pub(crate) enum Target {
 pub(crate) struct App {
     /// The launch directory `start` names.
     workspace: PathBuf,
+    /// Home's state, once `run` sets it; `None` keeps today's screen.
+    home: Option<home::Home>,
     draft: Draft,
     phase: Phase,
     link: Link,
@@ -205,6 +212,7 @@ impl App {
     pub(crate) fn new(workspace: PathBuf) -> Self {
         Self {
             workspace,
+            home: None,
             draft: Draft::default(),
             phase: Phase::Starting,
             link: Link::Waiting,
@@ -243,6 +251,9 @@ impl App {
     /// completion panel, then the input box.
     fn route_key(&mut self, key: Key, now: Instant) -> Effect {
         self.copied = false;
+        if let Some(effect) = self.home_key(&key) {
+            return effect;
+        }
         if key == Key::CtrlC {
             return self.on_ctrl_c(now);
         }
@@ -302,10 +313,14 @@ impl App {
 
     /// Folds one line from the hub, returning command lines to send.
     pub(crate) fn on_line(&mut self, line: Line) -> Vec<String> {
-        let lines = match line {
-            Line::Hub(hub) => self.on_hub(&hub),
-            Line::Session(envelope) => self.on_session(&envelope),
+        let mut lines = match self.home_line(&line) {
+            Some(consumed) => consumed,
+            None => match line {
+                Line::Hub(hub) => self.on_hub(&hub),
+                Line::Session(envelope) => self.on_session(&envelope),
+            },
         };
+        lines.extend(self.home_outgoing());
         self.settle();
         lines
     }
@@ -336,8 +351,10 @@ impl App {
 
     /// Writing `unsent`, command lines this app made, to the hub failed:
     /// the connection is lost, and their commands fail as if rejected, so
-    /// a draft they carried returns to an empty draft.
+    /// a draft they carried returns to an empty draft. A close from the
+    /// quit question that was never written keeps its resume line.
     pub(crate) fn write_failed(&mut self, unsent: &[String]) {
+        self.home_unsent(unsent);
         self.disconnected();
         for line in unsent {
             if let Some(id) = serde_json::from_str::<Value>(line)
@@ -389,7 +406,7 @@ impl App {
     }
 
     /// The session's name, if it has one.
-    #[cfg_attr(not(test), expect(dead_code, reason = "#668 and #669 draw it"))]
+    #[cfg_attr(not(test), expect(dead_code, reason = "#669 draws it"))]
     pub(crate) fn name(&self) -> Option<&str> {
         self.name.as_deref()
     }
@@ -401,9 +418,10 @@ impl App {
         self.draft.rows(self.width).len().min(cap)
     }
 
-    /// Whether the quit hint shows: armed by a first Ctrl+C.
+    /// Whether the quit hint shows: armed by a first Ctrl+C, or asking
+    /// while sessions work.
     pub(crate) fn hint(&self) -> bool {
-        self.armed_at.is_some()
+        self.armed_at.is_some() || self.quit_open()
     }
 
     /// Whether new output arrived while scrolled up.
@@ -515,7 +533,8 @@ impl App {
     }
 
     /// Ctrl+C clears, then quits: a second press before [`QUIT_WINDOW`]
-    /// has passed since the first quits; a later one re-arms.
+    /// has passed since the first asks while sessions work, and quits
+    /// otherwise; a later one re-arms.
     fn on_ctrl_c(&mut self, now: Instant) -> Effect {
         if !self.draft.is_empty() {
             self.draft.clear();
@@ -527,7 +546,7 @@ impl App {
             .and_then(|armed| armed.checked_add(QUIT_WINDOW))
             .is_some_and(|end| now < end);
         if quits {
-            return Effect::Quit;
+            return self.quit();
         }
         self.armed_at = Some(now);
         Effect::None
@@ -580,12 +599,11 @@ impl App {
     }
 
     /// `start` was accepted: attach with a `full` connection, and ask for
-    /// the session's `/` commands.
+    /// the session's `/` commands. A started session is the attached one.
     fn started(&mut self, session: SessionId) -> Vec<String> {
         self.attach(session.clone());
-        let args = json!({"level": "full"});
         vec![
-            session_command(&mint(), "subscribe", &session, Some(args)).to_string(),
+            self.subscribe(&session, Level::Full),
             self.ask_commands(&session),
         ]
     }

@@ -33,6 +33,8 @@ pub(crate) enum TargetId {
     Turn(usize),
     /// The open overlay's ✕: closes it.
     CloseOverlay,
+    /// A home row, chip or toggle: what a click there does.
+    Home(crate::home::Spot),
 }
 
 /// One click target as drawn: what it does and the cells it covers.
