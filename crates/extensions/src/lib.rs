@@ -246,7 +246,9 @@ pub enum Error {
         id: String,
     },
     /// An installed provider that does not list the model.
-    #[error("The provider `{provider}` has no model `{model}`.")]
+    #[error(
+        "The provider `{provider}` has no model `{model}`. Run `fiber models` and name one it lists."
+    )]
     UnknownModel {
         /// The provider.
         provider: String,
