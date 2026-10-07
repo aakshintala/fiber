@@ -108,6 +108,14 @@ impl Notices {
         )
     }
 
+    /// Notice `id`'s whole text, while it is in the stack.
+    pub(crate) fn text(&self, id: usize) -> Option<&str> {
+        self.stack
+            .iter()
+            .find(|notice| notice.id == id)
+            .map(|notice| notice.text.as_str())
+    }
+
     /// The boxes for a conversation `columns` wide, newest first: at most
     /// [`SHOWN`], then "+N more" for the rest. Each is 40% of the width, at
     /// most [`WIDEST`] columns, and wraps to [`LINES`] lines, the last cut

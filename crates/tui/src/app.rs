@@ -37,6 +37,8 @@ mod steering;
 mod commands;
 #[path = "copy.rs"]
 pub(crate) mod copy;
+#[path = "app_focus.rs"]
+mod focus;
 #[path = "history.rs"]
 mod history;
 #[path = "app_mouse.rs"]
@@ -186,6 +188,16 @@ pub(crate) struct App {
     history: history::History,
     /// "Copied" shows, from a click on `copy` to the next key or click.
     copied: bool,
+    /// A whole-turn copy waiting on dropped pages (`docs/tui.md`,
+    /// "History and paging").
+    pending_turn: Option<crate::turn_text::PendingTurn>,
+    /// The focused click target in navigate mode; None while the input
+    /// box has focus.
+    focus: Option<crate::mouse::TargetId>,
+    /// The last frame's click targets: what focus steps through.
+    stops: Vec<crate::mouse::Target>,
+    /// Where the panel and the rail are drawn.
+    regions: crate::focus::Regions,
 }
 
 impl App {
@@ -211,6 +223,10 @@ impl App {
             overlays: commands::Overlays::default(),
             history: history::History::default(),
             copied: false,
+            pending_turn: None,
+            focus: None,
+            stops: Vec::new(),
+            regions: crate::focus::Regions::default(),
         }
     }
 
@@ -242,6 +258,9 @@ impl App {
         if let Some(effect) = self.history_key(&key) {
             return effect;
         }
+        if let Some(effect) = self.focus_key(&key) {
+            return effect;
+        }
         if let Some(effect) = self.completion_key(&key) {
             return effect;
         }
@@ -271,9 +290,9 @@ impl App {
                 Effect::None
             }
             Key::F1 => self.open_keymap(),
-            Key::Char(_) | Key::Backspace | Key::Up | Key::Down | Key::Tab | Key::BackTab => {
-                Effect::None
-            }
+            Key::Char(_) | Key::Backspace | Key::Up | Key::Down | Key::Tab => Effect::None,
+            Key::BackTab if self.completions().is_none() => self.navigate(),
+            Key::BackTab => Effect::None,
             Key::AltA => self.open_first(),
             Key::CtrlR => self.open_search(),
             Key::CtrlG => self.open_in_editor(),
@@ -469,8 +488,10 @@ impl App {
     }
 
     /// Loading `range` failed: its rows stay blank and the notice says why.
+    /// A failed page ends a whole-turn copy waiting on dropped pages.
     pub(crate) fn load_failed(&mut self, range: &RangeInclusive<Seq>, message: &str) {
         self.pages.fail(*range.start());
+        self.cancel_pending_turn();
         self.notices
             .push(format!("Could not load history: {message}"));
     }

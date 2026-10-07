@@ -44,7 +44,12 @@ impl App {
                 self.open_more_notices();
                 Effect::None
             }
+            TargetId::CloseOverlay => {
+                self.close_overlay();
+                Effect::None
+            }
             TargetId::Token(number) => self.open_token(number),
+            TargetId::Turn(_) => Effect::None,
         };
         self.settle();
         effect

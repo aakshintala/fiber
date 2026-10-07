@@ -40,6 +40,11 @@ const NOTICE_TINT: Style = Style::new().bg(Color::Indexed(236));
 /// (see #685).
 pub(crate) const HOVER_TINT: Style = Style::new().bg(Color::Indexed(238));
 
+/// The focused click target's style in navigate mode.
+/// debt: a fixed colour, not a theme role; upgrade when colour roles land
+/// (see #685).
+pub(crate) const FOCUS_STYLE: Style = Style::new().add_modifier(Modifier::REVERSED);
+
 /// One line, wrapped the way it draws.
 fn paragraph(line: Line<'_>) -> Paragraph<'_> {
     Paragraph::new(line).wrap(Wrap { trim: false })
@@ -144,10 +149,13 @@ pub(crate) fn render(
     let rows = bottom.saturating_sub(area.y);
     let conversation = Rect::new(area.x, area.y, area.width, rows);
     match app.keymap_top() {
-        Some(top) => Paragraph::new(crate::keymap::lines().join("\n"))
-            .wrap(Wrap { trim: false })
-            .scroll((to_u16(top), 0))
-            .render(conversation, buf),
+        Some(top) => {
+            Paragraph::new(crate::keymap::lines().join("\n"))
+                .wrap(Wrap { trim: false })
+                .scroll((to_u16(top), 0))
+                .render(conversation, buf);
+            overlay_cross(buf, conversation, &mut targets);
+        }
         None => {
             conversation_rows(app, conversation, buf, &mut targets);
             notices(app, conversation, buf, &mut targets);
@@ -156,6 +164,11 @@ pub(crate) fn render(
     if let Some(id) = pointer.and_then(|(col, row)| mouse::hit(&targets, col, row)) {
         for target in targets.iter().filter(|target| target.id == id) {
             buf.set_style(target.rect, HOVER_TINT);
+        }
+    }
+    if let Some(id) = app.focused() {
+        for target in targets.iter().filter(|target| target.id == id) {
+            buf.set_style(target.rect, FOCUS_STYLE);
         }
     }
     targets
@@ -203,14 +216,31 @@ fn put(buf: &mut Buffer, area: Rect, bottom: &mut u16, text: &str, style: Style)
     Some(Rect::new(area.x, row, end.saturating_sub(area.x), 1))
 }
 
-/// Floats the notices over the conversation's top-right corner, newest on
+/// The open overlay's ✕ on the conversation's top-right cell, a click
+/// target closing it; nothing when the conversation shows no rows.
+fn overlay_cross(buf: &mut Buffer, area: Rect, targets: &mut Vec<Target>) {
+    if area.is_empty() {
+        return;
+    }
+    let cross = Rect::new(area.right().saturating_sub(1), area.y, 1, 1);
+    buf.set_string(cross.x, cross.y, "✕", Style::default());
+    targets.push(Target {
+        id: TargetId::CloseOverlay,
+        rect: cross,
+    });
+}
 /// top, each a click target with its ✕ a target over it, or the notice
 /// overlay over the whole conversation while it is open, which hides the
 /// conversation's targets.
 fn notices(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
     let mut y = area.y;
     if let Some(texts) = app.notice_overlay() {
-        targets.retain(|target| !matches!(target.id, TargetId::Line(_) | TargetId::NewBelow));
+        targets.retain(|target| {
+            !matches!(
+                target.id,
+                TargetId::Line(_) | TargetId::NewBelow | TargetId::Turn(_)
+            )
+        });
         let rows: Vec<String> = texts
             .iter()
             .flat_map(|text| crate::format::wrap(text, usize::from(area.width)))
@@ -225,6 +255,7 @@ fn notices(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
             buf.set_stringn(area.x, y, &row, width, NOTICE_TINT);
             y = y.saturating_add(1);
         }
+        overlay_cross(buf, area, targets);
         return;
     }
     for notice in app.notices() {
@@ -282,10 +313,10 @@ fn input_box(app: &App, width: u16) -> (Vec<String>, usize, usize, u16) {
 }
 
 /// Where the terminal cursor shows: at the draft's cursor while the input
-/// box has focus, `None` while the approval panel is open or the cursor's
-/// row is off a screen too short for it.
+/// box has focus, `None` while navigating or the approval panel is open,
+/// or the cursor's row is off a screen too short for it.
 pub(crate) fn cursor(app: &App, area: Rect) -> Option<Position> {
-    if app.panel().is_some() {
+    if app.panel().is_some() || app.focused().is_some() {
         return None;
     }
     let (rows, _, row, col) = input_box(app, area.width);
@@ -307,9 +338,51 @@ fn conversation_rows(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<
     let end = top.saturating_add(height);
     let shown = total.min(end).saturating_sub(top);
     let mut y = area.y.saturating_add(to_u16(height.saturating_sub(shown)));
-    let (mut start, lines) = app.shown(top, height);
+    let crate::window::Shown {
+        first,
+        lines,
+        turns,
+    } = app.shown(top, height);
+    let mut start = first;
     let overlay = app.has_new() && area.height > 0;
     let last = area.bottom().saturating_sub(u16::from(overlay));
+    // Each line's cells on screen: its y and how many of its rows show.
+    let mut layout: Vec<(u16, u16)> = Vec::with_capacity(lines.len());
+    {
+        let (mut row_start, mut line_y) = (start, y);
+        for (_, rows, _) in &lines {
+            let next = row_start.saturating_add(*rows);
+            let count = next.min(end).saturating_sub(row_start.max(top));
+            layout.push((line_y, to_u16(count)));
+            line_y = line_y.saturating_add(to_u16(count));
+            row_start = next;
+        }
+    }
+    // Turns are focus stops over the rows their page cards draw; they are
+    // not click targets, so the line targets drawn after them win clicks.
+    for (at, range) in turns {
+        let mut rect: Option<Rect> = None;
+        for (line, (line_y, count)) in layout.iter().enumerate() {
+            if range.contains(&line) {
+                rect = Some(match rect {
+                    Some(before) => Rect {
+                        height: before.height.saturating_add(*count),
+                        ..before
+                    },
+                    None => Rect::new(area.x, *line_y, area.width, *count),
+                });
+            }
+        }
+        if let Some(rect) = rect {
+            let height = rect.height.min(last.saturating_sub(rect.y));
+            if height > 0 {
+                targets.push(Target {
+                    id: TargetId::Turn(at),
+                    rect: Rect { height, ..rect },
+                });
+            }
+        }
+    }
     // A line wholly above `top` or below `end` shows no rows.
     for (line, rows, open) in lines {
         let next = start.saturating_add(rows);

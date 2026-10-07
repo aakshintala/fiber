@@ -15,7 +15,7 @@ use super::{Folded, Pages, Part, fold};
 use crate::app::{App, Effect, Target};
 use crate::keys::Key;
 use crate::link::Line;
-use crate::turn::Row;
+use crate::turn::{Row, Turn};
 
 const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 
@@ -593,10 +593,10 @@ fn a_failed_load_keeps_every_count_and_says_why() {
     assert!(app.pages().part(0).is_none());
     assert_eq!(layout(&app), before);
     // Its rows draw blank.
-    let (first, shown) = app.shown(0, 1);
-    assert_eq!(first, 0);
+    let shown = app.shown(0, 1);
+    assert_eq!(shown.first, 0);
     assert_eq!(
-        shown.first().map(|(line, _, _)| line.to_string()),
+        shown.lines.first().map(|(line, _, _)| line.to_string()),
         Some(String::new())
     );
 }
@@ -1339,9 +1339,9 @@ fn shown_starts_at_the_first_page_drawing_a_row() {
         .expect("a second page drawing rows");
     let top = starts.get(at).copied().expect("a second page start");
     // The page before ends exactly at the top: it draws no row from there.
-    let (first, shown) = app.shown(top, 5);
-    assert_eq!(first, top);
-    assert!(!shown.is_empty());
+    let shown = app.shown(top, 5);
+    assert_eq!(shown.first, top);
+    assert!(!shown.lines.is_empty());
 }
 
 #[test]
@@ -1699,6 +1699,19 @@ fn set_opens_an_aside_only_past_the_turns() {
             aside,
             crate::turn::crash::Aside::Orphans { open: true, .. }
         ))
+    );
+}
+
+#[test]
+fn draw_data_skips_a_turn_drawing_no_rows() {
+    let pages = Pages::new(80);
+    let mut empty = part();
+    empty.turns.push(Turn::part(0));
+    let (rows, _, turns) = pages.draw_data(0, &empty);
+    assert!(rows.is_empty());
+    assert!(
+        turns.is_empty(),
+        "a turn with no rows leaves a range: {turns:?}"
     );
 }
 

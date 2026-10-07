@@ -90,12 +90,16 @@ impl App {
     }
 
     /// Handles one key that edits the draft, the approval panel first.
-    /// Nothing while the key map is open. A recall waiting for a page
-    /// waits no more.
+    /// Nothing while the key map is open, while navigating with the panel
+    /// closed, or in the Ctrl+R panel. A recall waiting for a page waits
+    /// no more.
     pub(crate) fn on_edit(&mut self, edit: Edit) -> Effect {
         self.armed_at = None;
         self.history.cancel();
-        if self.overlays.keymap.is_some() || self.search_edit(&edit) {
+        if self.overlays.keymap.is_some()
+            || self.search_edit(&edit)
+            || (self.focus.is_some() && self.panel().is_none())
+        {
             return Effect::None;
         }
         crate::input::route(edit, &mut self.draft, &mut self.queue);
@@ -626,6 +630,7 @@ impl App {
             (Err(notice), _) => self.notices.push(notice),
             (Ok(text), Target::Token(number)) => self.draft.set_token(number, &text),
             (Ok(text), Target::Draft) => self.draft.set(&text),
+            (Ok(_), Target::Item) => {}
         }
         self.overlays.selected = 0;
         self.edited();

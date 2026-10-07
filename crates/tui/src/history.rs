@@ -442,6 +442,7 @@ impl App {
     /// whatever opened or closed a panel, the recall waits no more.
     pub(super) fn settle(&mut self) {
         self.settle_pages();
+        self.settle_pending_turn();
         if !self.history.waiting {
             return;
         }

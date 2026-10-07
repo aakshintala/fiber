@@ -5,7 +5,7 @@
 //! totals, which its ▣ line draws, are kept for the whole session.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::ops::RangeInclusive;
+use std::ops::{Range, RangeInclusive};
 
 use contract::events::{TurnCompleted, TurnOutcome, UsageRecorded};
 use contract::{Envelope, Seq};
@@ -13,6 +13,7 @@ use ratatui::text::Line;
 
 use crate::app::{Target, read};
 use crate::format::{self, Spend};
+use crate::mouse::TargetId;
 use crate::pages::{Cut, Index};
 use crate::turn::{Fold, Row, Turn};
 
@@ -169,10 +170,21 @@ pub(crate) struct Applied {
     pub(crate) busy: Option<bool>,
 }
 
-/// The lines shown from a row on: the first shown page's first row, and
-/// each line with its rows and click target. A page not loaded is one blank
-/// line of its rows.
-pub(crate) type Shown = (usize, Vec<(Line<'static>, usize, Option<Target>)>);
+type TurnRanges = Vec<(usize, Range<usize>)>;
+type DrawData = (Vec<Row>, FocusItems, TurnRanges);
+
+/// The lines shown from a row on: the first shown page's first row, each
+/// line with its rows and click target, and the turn ranges in those lines.
+/// A page not loaded is one blank line of its rows.
+#[derive(Debug)]
+pub(crate) struct Shown {
+    pub(crate) first: usize,
+    pub(crate) lines: Vec<(Line<'static>, usize, Option<Target>)>,
+    pub(crate) turns: TurnRanges,
+}
+
+/// A focus stop's row, height and stable id across paging.
+pub(crate) type FocusItems = Vec<(usize, usize, TargetId)>;
 
 /// The conversation: the page index, the cards of the resident pages, each
 /// turn's totals and what the person opened.
@@ -191,12 +203,16 @@ pub(crate) struct Pages {
     fold: Fold,
     /// Shell output, placed after the number of turns in the page where it ran.
     shells: Vec<(usize, usize, String)>,
+    /// Focus stops by page, with row offsets within each page.
+    focus: Vec<FocusItems>,
     /// What the person opened or closed since, by target.
     overrides: BTreeMap<Target, bool>,
     /// Dropped pages whose row counts wait for a reload.
     stale: BTreeSet<usize>,
     /// Pages whose load failed since the width last changed.
     failed: BTreeSet<usize>,
+    /// Dropped pages a whole-turn copy asked for, kept until it runs.
+    wanted: BTreeSet<usize>,
     width: u16,
     /// The rows of the open page's lines too wide for one row, by text, so
     /// counting it again after each line wraps only what changed.
@@ -220,9 +236,11 @@ impl Pages {
             summaries: Vec::new(),
             fold: Fold::default(),
             shells: Vec::new(),
+            focus: vec![Vec::new()],
             overrides: BTreeMap::new(),
             stale: BTreeSet::new(),
             failed: BTreeSet::new(),
+            wanted: BTreeSet::new(),
             width,
             wrapped: HashMap::new(),
             #[cfg(test)]
@@ -376,6 +394,7 @@ impl Pages {
         }
         self.closed.push(Some(part));
         self.seeds.push(seed);
+        self.focus.push(Vec::new());
         self.count(at);
     }
 
@@ -424,6 +443,7 @@ impl Pages {
         Fold::default().carry_from(&mut before.fold);
         self.closed.push(Some(before));
         self.seeds.push(seed);
+        self.focus.push(Vec::new());
         self.open = next;
         self.fold.ledgers = self.open.fold.ledgers;
         self.count(at);
@@ -489,14 +509,16 @@ impl Pages {
     }
 
     /// The seq ranges to load, in order: the window's pages not resident,
-    /// then the pages whose row counts are stale. A page may be listed
-    /// twice; once loaded, it is no longer needed.
+    /// then the pages whose row counts are stale, then the pages a
+    /// whole-turn copy asked for. A page may be listed twice; once loaded,
+    /// it is no longer needed.
     pub(crate) fn needs(&self, top: usize, height: usize) -> Vec<RangeInclusive<Seq>> {
         let wanted = |at: &usize| {
             !self.failed.contains(at) && self.closed.get(*at).is_some_and(Option::is_none)
         };
         let mut pages: Vec<usize> = self.index.window(top, height).filter(wanted).collect();
         pages.extend(self.stale.iter().copied().filter(wanted));
+        pages.extend(self.wanted.iter().copied().filter(wanted));
         pages
             .into_iter()
             .filter_map(|at| self.index.pages().get(at))
@@ -504,14 +526,47 @@ impl Pages {
             .collect()
     }
 
-    /// Drops the cards of every closed page outside the window.
+    /// Drops the cards of every closed page outside the window, keeping
+    /// the pages a whole-turn copy asked for until it runs.
     pub(crate) fn trim(&mut self, top: usize, height: usize) {
         let window = self.index.window(top, height);
         for (at, part) in self.closed.iter_mut().enumerate() {
-            if !window.contains(&at) {
+            if !window.contains(&at) && !self.wanted.contains(&at) {
                 *part = None;
             }
         }
+    }
+
+    /// How many pages the conversation holds, the open one included.
+    pub(crate) fn page_count(&self) -> usize {
+        self.seeds.len()
+    }
+
+    /// The first turn page `at` holds, if it holds one.
+    pub(crate) fn page_first(&self, at: usize) -> Option<usize> {
+        self.seeds.get(at).map(|seed| seed.first)
+    }
+
+    /// Whether the next page begins inside the same turn.
+    pub(crate) fn page_cut(&self, at: usize) -> bool {
+        self.seeds.get(at).is_some_and(|seed| seed.cut)
+    }
+
+    /// Keeps page `at` resident for a whole-turn copy.
+    pub(crate) fn want(&mut self, at: usize) {
+        self.wanted.insert(at);
+    }
+
+    /// Lets page `at` drop with the window again.
+    pub(crate) fn unwant(&mut self, at: usize) {
+        self.wanted.remove(&at);
+    }
+
+    /// How many dropped pages a whole-turn copy keeps resident (tests only:
+    /// what an abandoned copy must return to).
+    #[cfg(test)]
+    pub(crate) fn pinned(&self) -> usize {
+        self.wanted.len()
     }
 
     /// Re-counts every page at `width`: a resident page in place, a dropped
@@ -634,6 +689,7 @@ impl Pages {
         let end = top.saturating_add(height);
         let mut first = None;
         let mut lines = Vec::new();
+        let mut turns = Vec::new();
         let mut start = 0usize;
         for (at, page) in self.index.pages().iter().enumerate() {
             if start >= end {
@@ -644,23 +700,76 @@ impl Pages {
                 first.get_or_insert(start);
                 match self.part(at) {
                     Some(part) => {
-                        let mut rows = Vec::new();
-                        self.draw(at, part, &mut rows);
+                        let (rows, _, page_turns) = self.draw_data(at, part);
+                        let base = lines.len();
                         lines.extend(rows.into_iter().map(|(line, target)| {
                             let count = crate::view::rows(line.clone(), self.width);
                             (line, count, target)
                         }));
+                        turns.extend(
+                            page_turns
+                                .into_iter()
+                                .map(|(turn, range)| (turn, base + range.start..base + range.end)),
+                        );
                     }
                     None => lines.push((Line::default(), page.rows, None)),
                 }
             }
             start = next;
         }
-        (first.unwrap_or(start), lines)
+        Shown {
+            first: first.unwrap_or(start),
+            lines,
+            turns,
+        }
+    }
+
+    /// Focus stops across the indexed conversation, even on dropped pages.
+    pub(crate) fn focus_items(&self) -> FocusItems {
+        let mut out = Vec::new();
+        let mut start = 0usize;
+        for (at, page) in self.index.pages().iter().enumerate() {
+            if let Some(items) = self.focus.get(at) {
+                out.extend(
+                    items
+                        .iter()
+                        .map(|(row, height, id)| (start.saturating_add(*row), *height, *id)),
+                );
+            }
+            start = start.saturating_add(page.rows);
+        }
+        out
+    }
+
+    /// The text of a turn's un-targeted rows on resident pages.
+    pub(crate) fn turn_text(&self, turn: usize) -> Option<String> {
+        let mut text = Vec::new();
+        for (at, part) in self
+            .closed
+            .iter()
+            .enumerate()
+            .filter_map(|(at, part)| part.as_ref().map(|part| (at, part)))
+            .chain(std::iter::once((self.closed.len(), &self.open)))
+        {
+            let (rows, _, turns) = self.draw_data(at, part);
+            for (_, range) in turns.into_iter().filter(|(id, _)| *id == turn) {
+                if let Some(turn_rows) = rows.get(range) {
+                    text.extend(turn_rows.iter().filter(|(_, target)| target.is_none()).map(
+                        |(line, _)| {
+                            if line.alignment == Some(ratatui::layout::Alignment::Right) {
+                                line.to_string().trim().to_owned()
+                            } else {
+                                line.to_string().trim_end().to_owned()
+                            }
+                        },
+                    ));
+                }
+            }
+        }
+        (!text.is_empty()).then(|| text.join("\n"))
     }
 
     /// The resident pages' lines, in order.
-    #[cfg(test)]
     pub(crate) fn rows(&self) -> Vec<Row> {
         let mut out = Vec::new();
         for (at, part) in self
@@ -720,6 +829,13 @@ impl Pages {
     /// A page's lines: each card's, and the ▣ line of each card that ends
     /// on it, drawn from its turn's totals.
     fn draw(&self, page: usize, part: &Part, out: &mut Vec<Row>) {
+        out.extend(self.draw_data(page, part).0);
+    }
+
+    /// A page's lines, their turn ranges, and stable focus stops.
+    fn draw_data(&self, page: usize, part: &Part) -> DrawData {
+        let mut out = Vec::new();
+        let mut turns = Vec::new();
         let mut asides = part
             .fold
             .asides
@@ -730,7 +846,7 @@ impl Pages {
         for at in 0..=part.turns.len() {
             let after = part.first.saturating_add(at);
             while let Some((_, (_, aside))) = asides.next_if(|(_, (turns, _))| *turns <= after) {
-                aside.rows(out);
+                aside.rows(&mut out);
             }
             for (on_page, shell_after, text) in &self.shells {
                 if *on_page == page && *shell_after == after {
@@ -753,31 +869,60 @@ impl Pages {
                     summary.ended.as_ref(),
                 );
             }
-            card.rows(self.width, out);
+            let first = out.len();
+            card.rows(self.width, &mut out);
+            if first < out.len() {
+                turns.push((after, first..out.len()));
+            }
         }
+        let mut starts = Vec::with_capacity(out.len());
+        let mut row = 0usize;
+        for (line, _) in &out {
+            starts.push(row);
+            row = row.saturating_add(crate::view::rows(line.clone(), self.width));
+        }
+        let mut focus: FocusItems = turns
+            .iter()
+            .filter_map(|(turn, range)| {
+                let line = range.start;
+                Some((
+                    *starts.get(line)?,
+                    crate::view::rows(out.get(line)?.0.clone(), self.width),
+                    TargetId::Turn(*turn),
+                ))
+            })
+            .collect();
+        focus.extend(out.iter().enumerate().filter_map(|(line, (_, target))| {
+            let target = (*target)?;
+            Some((
+                *starts.get(line)?,
+                crate::view::rows(out.get(line)?.0.clone(), self.width),
+                TargetId::Line(target),
+            ))
+        }));
+        (out, focus, turns)
     }
 
-    /// Counts page `at`'s rows from its cards, while it holds them.
+    /// Counts page `at`'s rows and focus stops from its cards, while it holds them.
     fn count(&mut self, at: usize) {
         let Some(part) = self.part(at) else {
             return;
         };
-        let mut lines = Vec::new();
-        self.draw(at, part, &mut lines);
+        let (lines, focus, _) = self.draw_data(at, part);
         let width = self.width;
         let open = at == self.closed.len();
         let mut wrapped = HashMap::new();
         let mut rows = 0usize;
-        for (line, _) in lines {
+        for (line, _) in &lines {
             let count = if !open || line.width() <= usize::from(width) {
-                crate::view::rows(line, width)
+                crate::view::rows(line.clone(), width)
             } else {
                 let text = line.to_string();
                 let count = self
                     .wrapped
                     .get(&text)
                     .copied()
-                    .unwrap_or_else(|| crate::view::rows(line, width));
+                    .unwrap_or_else(|| crate::view::rows(line.clone(), width));
                 wrapped.insert(text, count);
                 count
             };
@@ -791,6 +936,12 @@ impl Pages {
             self.recounts = self.recounts.saturating_add(1);
         }
         self.index.set_rows(at, rows);
+        if at >= self.focus.len() {
+            self.focus.resize_with(at, Vec::new);
+            self.focus.push(focus);
+        } else if let Some(items) = self.focus.get_mut(at) {
+            *items = focus;
+        }
     }
 }
 

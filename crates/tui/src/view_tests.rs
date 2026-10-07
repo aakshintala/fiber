@@ -1105,7 +1105,12 @@ fn the_badge_is_a_target_over_the_cells_it_drew() {
         id: TargetId::Badge,
         rect: Rect::new(0, 10, 30, 1),
     };
-    assert_eq!(targets, vec![badge]);
+    // The open turn's prompt is a stop on the row above the badge.
+    let turn = Target {
+        id: TargetId::Turn(0),
+        rect: Rect::new(0, 9, 40, 1),
+    };
+    assert_eq!(targets, vec![badge, turn]);
     // Narrower than its text, it takes the whole row.
     let (_, targets) = pointed(&mut app, 20, 12, None);
     assert_eq!(targets.first().map(|target| target.rect.width), Some(20));
@@ -1178,6 +1183,8 @@ fn lines(targets: &[crate::mouse::Target]) -> Vec<(crate::app::Target, Rect)> {
             | crate::mouse::TargetId::DropSteering(_)
             | crate::mouse::TargetId::Notice(_)
             | crate::mouse::TargetId::DismissNotice(_)
+            | crate::mouse::TargetId::CloseOverlay
+            | crate::mouse::TargetId::Turn(_)
             | crate::mouse::TargetId::MoreNotices => None,
         })
         .collect()
@@ -1532,4 +1539,144 @@ fn copied_needs_a_conversation_row_to_show_on() {
     assert!(app.copied());
     app.set_size(30, 1);
     assert_eq!(text(&buffer(&app, 30, 1)), ">\n");
+}
+
+#[test]
+fn the_focused_target_is_drawn_reversed() {
+    let mut app = empty();
+    tool_turn(&mut app);
+    tool_turn(&mut app);
+    app.on_key(Key::BackTab, fakes::clock::FakeClock::new().now());
+    let (buf, targets) = pointed(&mut app, WIDTH, HEIGHT, None);
+    app.drawn(&targets);
+    let focused = app.focused().expect("focus");
+    let rect = targets
+        .iter()
+        .find(|target| target.id == focused)
+        .map(|target| target.rect)
+        .expect("the focused stop is drawn");
+    for y in rect.top()..rect.bottom() {
+        for x in rect.left()..rect.right() {
+            assert!(
+                buf.cell((x, y))
+                    .is_some_and(|cell| cell.modifier.contains(Modifier::REVERSED)),
+                "cell {x},{y} of the focused row is reversed"
+            );
+        }
+    }
+    let other = targets
+        .iter()
+        .find(|target| matches!(target.id, crate::mouse::TargetId::Line(_)) && target.id != focused)
+        .map(|target| target.rect)
+        .expect("another line stop");
+    for y in other.top()..other.bottom() {
+        for x in other.left()..other.right() {
+            assert!(
+                !buf.cell((x, y))
+                    .is_some_and(|cell| cell.modifier.contains(Modifier::REVERSED)),
+                "cell {x},{y} of the other row is not reversed"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_cursor_hides_while_navigating() {
+    let mut app = empty();
+    tool_turn(&mut app);
+    let area = Rect::new(0, 0, WIDTH, HEIGHT);
+    assert!(cursor(&app, area).is_some());
+    app.on_key(Key::BackTab, fakes::clock::FakeClock::new().now());
+    let (_, targets) = pointed(&mut app, WIDTH, HEIGHT, None);
+    app.drawn(&targets);
+    assert_eq!(cursor(&app, area), None);
+    app.on_key(Key::Esc, fakes::clock::FakeClock::new().now());
+    let (_, targets) = pointed(&mut app, WIDTH, HEIGHT, None);
+    app.drawn(&targets);
+    assert!(cursor(&app, area).is_some());
+}
+
+#[test]
+fn an_open_overlay_draws_its_cross_as_a_target() {
+    use crate::mouse::TargetId;
+    let cross = Rect::new(WIDTH - 1, 0, 1, 1);
+    let mut app = empty();
+    attach(&mut app, S_A);
+    app.on_key(Key::F1, fakes::clock::FakeClock::new().now());
+    let (buf, targets) = pointed(&mut app, WIDTH, HEIGHT, None);
+    assert!(
+        targets
+            .iter()
+            .any(|target| target.id == TargetId::CloseOverlay && target.rect == cross),
+        "the key map draws its cross"
+    );
+    assert_eq!(
+        buf.cell((WIDTH - 1, 0)).map(|cell| cell.symbol()),
+        Some("✕")
+    );
+    let mut app = empty();
+    attach(&mut app, S_A);
+    app.on_line(session_line(
+        S_A,
+        "notice",
+        serde_json::json!({"code": "x", "message": "Saved."}),
+        None,
+    ));
+    app.open_notice(0);
+    let (buf, targets) = pointed(&mut app, WIDTH, HEIGHT, None);
+    assert!(
+        targets
+            .iter()
+            .any(|target| target.id == TargetId::CloseOverlay && target.rect == cross),
+        "the notice overlay draws its cross"
+    );
+    assert_eq!(
+        buf.cell((WIDTH - 1, 0)).map(|cell| cell.symbol()),
+        Some("✕")
+    );
+}
+
+#[test]
+fn no_cross_without_conversation_rows() {
+    let mut app = empty();
+    attach(&mut app, S_A);
+    app.on_key(Key::F1, fakes::clock::FakeClock::new().now());
+    let (_, targets) = pointed(&mut app, WIDTH, 1, None);
+    assert!(
+        targets
+            .iter()
+            .all(|target| target.id != crate::mouse::TargetId::CloseOverlay),
+        "no cross on a screen with no conversation rows"
+    );
+}
+
+#[test]
+fn a_turn_spanning_drawn_lines_sums_their_heights() {
+    use crate::mouse::TargetId;
+    let mut app = empty();
+    tool_turn(&mut app);
+    let (_, targets) = pointed(&mut app, WIDTH, HEIGHT, None);
+    let turn = targets
+        .iter()
+        .find(|target| target.id == TargetId::Turn(0))
+        .expect("turn 0 is drawn");
+    assert_eq!(turn.rect, Rect::new(0, 5, WIDTH, 6));
+}
+
+#[test]
+fn a_turn_past_the_last_row_is_clipped_to_it() {
+    use crate::mouse::TargetId;
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = empty();
+    tool_turn(&mut app);
+    app.set_size(WIDTH, 4);
+    app.on_key(Key::PageUp, now);
+    app.on_line(turn_started(S_A, "next"));
+    assert!(app.has_new());
+    let (_, targets) = pointed(&mut app, WIDTH, 3, None);
+    let turn = targets
+        .iter()
+        .find(|target| target.id == TargetId::Turn(0))
+        .expect("turn 0 is drawn");
+    assert_eq!(turn.rect, Rect::new(0, 0, WIDTH, 1));
 }

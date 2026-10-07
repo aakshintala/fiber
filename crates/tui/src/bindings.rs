@@ -37,7 +37,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
         id: "close_or_interrupt",
         description: "Close what is on top; interrupt the turn when nothing is open",
         keys: "Esc",
-        other_paths: "",
+        other_paths: "click the overlay's ✕ or outside it; click \"esc to interrupt\"",
     },
     Binding {
         area: "Sessions",
@@ -72,7 +72,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
         id: "delete_session",
         description: "Delete the selected exited session in the session list",
         keys: "Delete, or Backspace, on the row",
-        other_paths: "",
+        other_paths: "click the row's ✕",
     },
     Binding {
         area: "The input box",
@@ -170,7 +170,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
         id: "toggle_panel",
         description: "Show or hide the panel",
         keys: "⌥P",
-        other_paths: "",
+        other_paths: "/panel",
     },
     Binding {
         area: "The conversation",
@@ -212,7 +212,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
         id: "amend_steering",
         description: "Amend it",
         keys: "Enter",
-        other_paths: "",
+        other_paths: "its mouse target",
     },
     Binding {
         area: "Steering",
