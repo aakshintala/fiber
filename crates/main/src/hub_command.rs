@@ -116,15 +116,11 @@ impl hub::Starter for SpawnStarter {
         workspace: &Path,
         model: Option<&str>,
     ) -> std::io::Result<Box<dyn hub::Started>> {
-        let _recorded = &self.exe;
-        let exe = std::env::current_exe()?;
-        spawn(id, session_command(&exe, id, workspace, model, false))
+        spawn(id, session_command(&self.exe, id, workspace, model, false))
     }
 
     fn resume(&self, id: &SessionId, workspace: &Path) -> std::io::Result<Box<dyn hub::Started>> {
-        let _recorded = &self.exe;
-        let exe = std::env::current_exe()?;
-        spawn(id, session_command(&exe, id, workspace, None, true))
+        spawn(id, session_command(&self.exe, id, workspace, None, true))
     }
 }
 
