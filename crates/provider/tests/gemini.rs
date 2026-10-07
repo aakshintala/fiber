@@ -797,6 +797,43 @@ fn thought_parts_stream_as_reasoning_and_go_back_as_one_part() {
 }
 
 #[test]
+fn each_signed_thought_part_is_its_own_item_with_its_own_signature() {
+    let (reply, _) = decoded(&stream(&[
+        chunk(
+            json!([{"text": "One.", "thought": true, "thoughtSignature": "c2lnMQ=="}]),
+            None,
+        ),
+        chunk(
+            json!([{"text": "Two.", "thought": true, "thoughtSignature": "c2lnMg=="}]),
+            None,
+        ),
+        chunk(json!([{"text": "Done."}]), Some("STOP")),
+    ]));
+    let reasoning: Vec<_> = reply
+        .unwrap()
+        .actions
+        .into_iter()
+        .filter_map(|action| match action {
+            ReplyAction::Reasoning(item) => Some((item.text, item.provider_item)),
+            ReplyAction::Text(_) | ReplyAction::ToolCall(_) | ReplyAction::Hosted(_) => None,
+        })
+        .collect();
+    assert_eq!(
+        reasoning,
+        [
+            (
+                "One.".to_owned(),
+                Some(json!({"text": "One.", "thought": true, "thoughtSignature": "c2lnMQ=="}))
+            ),
+            (
+                "Two.".to_owned(),
+                Some(json!({"text": "Two.", "thought": true, "thoughtSignature": "c2lnMg=="}))
+            ),
+        ]
+    );
+}
+
+#[test]
 fn each_finish_reason_maps_as_the_docs_say_and_an_unknown_one_fails() {
     let end = |reason: &str| decoded(&stream(&[chunk(json!([]), Some(reason))])).0;
     assert_eq!(end("STOP").unwrap().finish, Finish::Completed);

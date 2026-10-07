@@ -107,13 +107,18 @@ impl Decoder {
                 signature: None,
             });
             thought.text.push_str(piece);
-            if signature.is_some() {
+            let signed = signature.is_some();
+            if signed {
                 thought.signature = signature;
             }
             if !piece.is_empty() {
                 sink(Delta::Reasoning(TextDelta {
                     text: piece.to_owned(),
                 }));
+            }
+            // A signature ends its thought: the next thought part is its own.
+            if signed {
+                self.close_thought();
             }
             return;
         }
