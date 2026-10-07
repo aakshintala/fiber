@@ -954,6 +954,57 @@ fn resumed_state_restores_a_declared_directory() {
 }
 
 #[test]
+fn resumed_state_restores_a_declared_directory_removed_before_the_resume() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(workspace.join("sub")).unwrap();
+    let workspace = canon(&workspace);
+    let fake = clock();
+    let message = opening::collect(&inputs(&home, &fake), &workspace).message;
+    let lines = vec![
+        envelope("opening_message", &Event::OpeningMessage(message)),
+        started("a_1", Some(&["sub"])),
+        finished("a_1"),
+    ];
+    // The call declared `sub/` while it existed; it is gone at the resume
+    // and made again after it, as the live session still checks it.
+    std::fs::remove_dir(workspace.join("sub")).unwrap();
+    let mut state = State::resumed(&lines, &workspace, &inputs(&home, &fake)).unwrap();
+    assert!(state.take_queued().is_empty());
+    assert!(state.check(&*fake).files.is_empty());
+    write(&workspace.join("sub/AGENTS.md"), "Late rules.\n");
+    let out = state.check(&*fake);
+    assert_eq!(out.files.len(), 1);
+    assert_eq!(
+        out.files[0].path,
+        workspace.join("sub/AGENTS.md").display().to_string()
+    );
+    assert_eq!(out.files[0].reason, InstructionReason::Created);
+}
+
+#[test]
+fn resumed_state_checks_a_declared_file_without_a_notice() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    write(&workspace.join("sub/x.txt"), "data\n");
+    let workspace = canon(&workspace);
+    let fake = clock();
+    let message = opening::collect(&inputs(&home, &fake), &workspace).message;
+    let lines = vec![
+        envelope("opening_message", &Event::OpeningMessage(message)),
+        started("a_1", Some(&["sub/x.txt"])),
+        finished("a_1"),
+    ];
+    // The restored `sub/x.txt` is a file: checking it finds no candidate
+    // under it, sends nothing and names no failure.
+    let mut state = State::resumed(&lines, &workspace, &inputs(&home, &fake)).unwrap();
+    assert!(state.maybe_dirs.contains(&workspace.join("sub/x.txt")));
+    let out = state.check(&*fake);
+    assert!(out.files.is_empty());
+    assert!(out.notices.is_empty());
+}
+
+#[test]
 fn resumed_state_skips_calls_that_touched_nothing_it_counts() {
     let (home, _held) = root();
     let workspace = home.join("workspace");
