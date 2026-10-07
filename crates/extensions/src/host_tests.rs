@@ -273,20 +273,52 @@ fn a_refused_connection_is_connection_failed() {
     assert!(message.starts_with("host.http: "), "{message}");
 }
 
+/// How long the silent fake waits for the request before failing the test.
+const ACCEPT_WITHIN: Duration = Duration::from_secs(10);
+/// How long the test waits for the blocking `get` before failing it.
+const GET_WITHIN: Duration = Duration::from_secs(10);
+/// How often the silent fake polls for the request while waiting.
+const ACCEPT_POLL: Duration = Duration::from_millis(20);
+
 #[test]
 fn a_silent_server_past_the_backstop_is_timeout() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
     let port = listener.local_addr().unwrap().port();
     std::thread::spawn(move || {
         // Accept and never reply: the read, not the connect, passes the backstop.
-        let _held = listener.accept();
-        std::thread::park();
+        // Both waits are bounded: the polls end at `ACCEPT_WITHIN`, and the
+        // held connection is released at `GET_WITHIN`.
+        let (_held_tx, held) = std::sync::mpsc::channel::<()>();
+        let polls = ACCEPT_WITHIN.as_millis() / ACCEPT_POLL.as_millis();
+        for _ in 0..polls {
+            match listener.accept() {
+                Ok((_held, _)) => {
+                    match held.recv_timeout(GET_WITHIN) {
+                        Ok(()) | Err(_) => {}
+                    }
+                    return;
+                }
+                Err(source) if source.kind() == std::io::ErrorKind::WouldBlock => {
+                    match held.recv_timeout(ACCEPT_POLL) {
+                        Ok(()) | Err(_) => {}
+                    }
+                }
+                Err(source) => panic!("the silent server failed to accept: {source}"),
+            }
+        }
+        panic!("waited {ACCEPT_WITHIN:?} for the silent server to accept");
     });
-    let (code, message) = get(
-        &format!("http://127.0.0.1:{port}/"),
-        Some(Duration::from_millis(300)),
-    )
-    .unwrap_err();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let url = format!("http://127.0.0.1:{port}/");
+    std::thread::spawn(move || {
+        tx.send(get(&url, Some(Duration::from_millis(300))))
+            .unwrap_or(());
+    });
+    let (code, message) = rx
+        .recv_timeout(GET_WITHIN)
+        .expect("waited {GET_WITHIN:?} for the silent-server get")
+        .unwrap_err();
     assert_eq!(code, contract::ErrorCode::Timeout, "{message}");
     assert!(message.starts_with("host.http: "), "{message}");
 }
@@ -304,23 +336,41 @@ fn pcall_of(lua: &Lua, code: &str) -> (String, String) {
     (failed.get("code").unwrap(), failed.get("message").unwrap())
 }
 
+/// The string a prelude `pcall` of `code` catches: a wrong argument stays
+/// a string error (ruling 17).
+fn pcall_string_of(lua: &Lua, code: &str) -> String {
+    let (ok, err): (bool, LuaValue) = lua
+        .load(format!("return pcall(function() {code} end)"))
+        .eval()
+        .unwrap();
+    assert!(!ok, "{code} unexpectedly succeeded");
+    let LuaValue::String(err) = err else {
+        panic!("{code} raised no string error: {err:?}");
+    };
+    err.to_str().unwrap().to_owned()
+}
+
 #[test]
-fn a_secret_failure_is_the_table_at_its_source() {
+fn a_secret_with_a_bad_name_is_a_string_at_its_source() {
     // Even a raw `coroutine.resume`, which the prelude's `pcall` never
-    // sees, catches the table: the Lua half raises it at the call.
+    // sees, catches the string: the Lua half raises it at the call.
     let lua = lua();
     let (ok, err): (bool, LuaValue) = lua
         .load("return coroutine.resume(coroutine.create(function() return host.secret('a/b') end))")
         .eval()
         .unwrap();
     assert!(!ok);
-    let LuaValue::Table(failed) = err else {
-        panic!("host.secret raised no failure table");
+    let LuaValue::String(message) = err else {
+        panic!("host.secret raised no string error: {err:?}");
     };
-    let (code, message): (String, String) =
-        (failed.get("code").unwrap(), failed.get("message").unwrap());
-    assert_eq!(code, "invalid_arguments");
+    let message = message.to_str().unwrap().to_owned();
     assert!(message.contains("not a secret's name"), "{message}");
+    let lua = lua_prelude(PathBuf::from("/nonexistent-fiber-home"));
+    let kind: String = lua
+        .load("local ok, err = pcall(function() return host.secret('a/b') end); return type(err)")
+        .eval()
+        .unwrap();
+    assert_eq!(kind, "string");
 }
 
 #[test]
@@ -341,10 +391,9 @@ fn pkce_resolves_through_its_wrapper() {
 }
 
 #[test]
-fn a_secret_with_a_bad_name_is_invalid_arguments() {
+fn a_secret_with_a_bad_name_is_a_string_for_pcall() {
     let lua = lua_prelude(PathBuf::from("/nonexistent-fiber-home"));
-    let (code, message) = pcall_of(&lua, "return host.secret('a/b')");
-    assert_eq!(code, "invalid_arguments");
+    let message = pcall_string_of(&lua, "return host.secret('a/b')");
     assert!(message.contains("not a secret's name"), "{message}");
 }
 

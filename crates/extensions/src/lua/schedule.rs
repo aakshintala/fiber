@@ -372,12 +372,11 @@ fn settle(
         Request::Lock => {
             // A command, hook or timer holds no provider credential: calling
             // `refresh` there is an error in the calling code, raised as
-            // `{ code, message }` like any host failure.
+            // a string.
             let no_credential = |what: &str| {
-                (
-                    contract::ErrorCode::InvalidArguments,
-                    format!("host.oauth.refresh: a {what} has no provider credential to refresh"),
-                )
+                crate::host::LockError::Arg(format!(
+                    "host.oauth.refresh: a {what} has no provider credential to refresh"
+                ))
             };
             let cancel = match &target {
                 Target::Provider {

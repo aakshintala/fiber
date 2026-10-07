@@ -312,6 +312,158 @@ fn a_noted_failure_matches_its_text_and_reports_its_message() {
 }
 
 #[test]
+fn two_caught_failures_both_keep_their_classification() {
+    let lua = lua();
+    let lib = lib(&lua);
+    let open = "host.oauth.open needs a person to log in, and nobody is attached";
+    let poll = "host.oauth.poll needs a person to log in, and nobody is attached";
+    let _: mlua::Table = lib
+        .failure
+        .call(("authentication_failed", open, "unattended:open"))
+        .unwrap();
+    let _: mlua::Table = lib
+        .failure
+        .call(("authentication_failed", poll, "unattended:poll"))
+        .unwrap();
+    // Rethrowing the first table still finds its own record, not the
+    // second catch's: a single slot would have lost it.
+    let first = lib
+        .state
+        .take_matching(&mlua::Error::RuntimeError(open.to_owned()))
+        .unwrap();
+    assert_eq!(
+        first.boundary,
+        Boundary::Unattended {
+            call: "open".into()
+        }
+    );
+    let second = lib
+        .state
+        .take_matching(&mlua::Error::RuntimeError(poll.to_owned()))
+        .unwrap();
+    assert_eq!(
+        second.boundary,
+        Boundary::Unattended {
+            call: "poll".into()
+        }
+    );
+    assert!(
+        lib.state
+            .take_matching(&mlua::Error::RuntimeError(open.to_owned()))
+            .is_none()
+    );
+}
+
+#[test]
+fn a_match_takes_the_most_recent_record() {
+    let lua = lua();
+    let lib = lib(&lua);
+    lib.note_failure
+        .call::<()>(("same", "first", "refresh:reached"))
+        .unwrap();
+    lib.note_failure
+        .call::<()>(("same", "second", "refresh:unreached"))
+        .unwrap();
+    let error = mlua::Error::RuntimeError("same".to_owned());
+    assert_eq!(lib.state.take_matching(&error).unwrap().message, "second");
+    assert_eq!(lib.state.take_matching(&error).unwrap().message, "first");
+    assert!(lib.state.take_matching(&error).is_none());
+}
+
+#[test]
+fn the_list_keeps_the_cap_and_drops_the_oldest() {
+    let lua = lua();
+    let lib = lib(&lua);
+    // The cap itself fits: every record is still there.
+    for i in 0..super::MAX_PENDING {
+        lib.note_failure
+            .call::<()>((format!("text-{i}"), "m", "refresh:reached"))
+            .unwrap();
+    }
+    assert!(
+        lib.state
+            .take_matching(&mlua::Error::RuntimeError("text-0".to_owned()))
+            .is_some()
+    );
+    lib.state.clear();
+    for i in 0..super::MAX_PENDING {
+        lib.note_failure
+            .call::<()>((format!("text-{i}"), "m", "refresh:reached"))
+            .unwrap();
+    }
+    // One past the cap evicts the oldest.
+    lib.note_failure
+        .call::<()>((
+            format!("text-{}", super::MAX_PENDING),
+            "m",
+            "refresh:reached",
+        ))
+        .unwrap();
+    assert!(
+        lib.state
+            .take_matching(&mlua::Error::RuntimeError("text-0".to_owned()))
+            .is_none(),
+        "the oldest record past the cap is dropped"
+    );
+    assert!(
+        lib.state
+            .take_matching(&mlua::Error::RuntimeError("text-1".to_owned()))
+            .is_some()
+    );
+    assert!(
+        lib.state
+            .take_matching(&mlua::Error::RuntimeError(format!(
+                "text-{}",
+                super::MAX_PENDING
+            )))
+            .is_some()
+    );
+}
+
+#[test]
+fn a_refresh_without_a_matching_unattended_failure_records() {
+    // Only the first conjunct holds (a refresh boundary, but no
+    // unattended record with the same text): it must record. With `||`
+    // the refresh alone would skip recording.
+    let lua = lua();
+    let lib = lib(&lua);
+    lib.note_failure
+        .call::<()>(("fresh", "m", "refresh:reached"))
+        .unwrap();
+    let pending = lib
+        .state
+        .take_matching(&mlua::Error::RuntimeError("fresh".to_owned()))
+        .unwrap();
+    assert_eq!(pending.boundary, Boundary::Refresh { reached: true });
+    // Only the second conjunct holds (the text matches an unattended
+    // record, but the new boundary is not a refresh): it must record
+    // too. With `||` the matching text alone would skip recording.
+    let message = "host.oauth.open needs a person to log in, and nobody is attached";
+    let _: mlua::Table = lib
+        .failure
+        .call(("authentication_failed", message, "unattended:open"))
+        .unwrap();
+    lib.note_failure
+        .call::<()>((message, message, "unattended:poll"))
+        .unwrap();
+    let error = mlua::Error::RuntimeError(message.to_owned());
+    let recent = lib.state.take_matching(&error).unwrap();
+    assert_eq!(
+        recent.boundary,
+        Boundary::Unattended {
+            call: "poll".into()
+        }
+    );
+    let earlier = lib.state.take_matching(&error).unwrap();
+    assert_eq!(
+        earlier.boundary,
+        Boundary::Unattended {
+            call: "open".into()
+        }
+    );
+}
+
+#[test]
 fn a_refresh_forwarding_an_unattended_failure_keeps_its_mapping() {
     let lua = lua();
     let lib = lib(&lua);

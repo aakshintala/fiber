@@ -140,9 +140,15 @@ pub(crate) fn install(
     } = ctx;
     let host = lua.create_table()?;
     let secret_home = home.clone();
-    let secret_raw = lua.create_function(move |lua, name: String| {
+    let secret_raw = lua.create_function(move |lua, name: LuaValue| {
         // A coded failure returns `(nil, code, message)` for the Lua half
         // to raise as the table; a wrong name stays a string error.
+        let LuaValue::String(name) = &name else {
+            return failure::raw_string(lua, "host.secret: name must be a string".to_owned());
+        };
+        let Ok(name) = name.to_str() else {
+            return failure::raw_string(lua, "host.secret: name must be a string".to_owned());
+        };
         match config::read_secret(&secret_home, &name) {
             Ok(secret) => Ok(match secret.map(|s| s.expose().trim().to_owned()) {
                 Some(secret) => {
@@ -150,6 +156,9 @@ pub(crate) fn install(
                 }
                 None => MultiValue::from_vec(vec![LuaValue::Nil]),
             }),
+            Err(source) if matches!(source, config::ConfigError::SecretName { .. }) => {
+                failure::raw_string(lua, source.to_string())
+            }
             Err(source) => {
                 let (code, message) = (source.code(), source.to_string());
                 failure::raw_failure(lua, &code, message)
@@ -263,6 +272,14 @@ pub(crate) enum Request {
     Sleep(Duration),
 }
 
+/// A `host.oauth.refresh` lock failure: a coded failure the refresh half
+/// raises as the table, or an error in the calling code it raises as the
+/// string (a command, hook or timer holds no provider credential).
+pub(crate) enum LockError {
+    Coded((contract::ErrorCode, String)),
+    Arg(String),
+}
+
 /// The answer to a [`Request`]. A failure is its code and the message Lua raises.
 pub(crate) enum Reply {
     Http(Result<(u16, Vec<u8>), (contract::ErrorCode, String)>),
@@ -271,7 +288,7 @@ pub(crate) enum Reply {
     /// The query parameters of the one request the callback served, or the
     /// code and message `host.oauth.callback` raises.
     Query(Result<Vec<(String, String)>, (contract::ErrorCode, String)>),
-    Lock(Result<CredentialLock, (contract::ErrorCode, String)>),
+    Lock(Result<CredentialLock, LockError>),
     Slept,
 }
 
@@ -410,8 +427,9 @@ pub(crate) fn perform(
 }
 
 /// The values `coroutine.yield` returns to the host call that yielded: its
-/// result, or nil, the failure's code and its message. `clock` is what a
-/// held credential's expiry is judged by.
+/// result, or nil, the failure's code and its message, or nil and the
+/// message of an error in the calling code. `clock` is what a held
+/// credential's expiry is judged by.
 pub(crate) fn resume_values(
     lua: &Lua,
     clock: &Arc<dyn Clock>,
@@ -431,8 +449,12 @@ pub(crate) fn resume_values(
         ])),
         Reply::Http(Err(failed_with))
         | Reply::Exec(Err(failed_with))
-        | Reply::Query(Err(failed_with))
-        | Reply::Lock(Err(failed_with)) => failed(failed_with),
+        | Reply::Query(Err(failed_with)) => failed(failed_with),
+        Reply::Lock(Err(LockError::Coded(failed_with))) => failed(failed_with),
+        Reply::Lock(Err(LockError::Arg(message))) => Ok(MultiValue::from_vec(vec![
+            LuaValue::Nil,
+            LuaValue::String(lua.create_string(message)?),
+        ])),
         Reply::Query(Ok(pairs)) => {
             let table = lua.create_table()?;
             for (key, value) in pairs {

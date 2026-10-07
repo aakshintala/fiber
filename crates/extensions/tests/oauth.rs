@@ -97,7 +97,7 @@ end })
 fiber.command("refresh_command", { timeout = 60000, run = function()
   local ok, err = pcall(host.oauth.refresh, function() return { token = "t", expires_at = 1 } end)
   if ok then return "ok" end
-  return err.code .. "\n" .. err.message
+  return type(err) .. "\n" .. tostring(err)
 end })
 
 -- The refresh function does what the secret `mode` says.
@@ -1320,12 +1320,12 @@ fn a_poll_slowed_down_past_3600_seconds_is_rate_limited() {
 }
 
 #[test]
-fn a_refresh_from_a_command_is_invalid_arguments() {
+fn a_refresh_from_a_command_is_a_string() {
     let env = Env::new();
     let ext = env.extension();
     let caught = run(&ext, "refresh_command", "").unwrap();
-    let (code, message) = caught.split_once('\n').unwrap();
-    assert_eq!(code, "invalid_arguments");
+    let (kind, message) = caught.split_once('\n').unwrap();
+    assert_eq!(kind, "string", "{caught}");
     assert!(
         message.contains("a command has no provider credential"),
         "{message}"

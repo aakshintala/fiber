@@ -261,7 +261,11 @@ fn delivered(work: impl FnOnce(&Deliver)) -> Reply {
 
 fn failed(reply: Reply) -> (contract::ErrorCode, String) {
     match reply {
-        Reply::Query(Err(failed)) | Reply::Lock(Err(failed)) => failed,
+        Reply::Query(Err(failed)) => failed,
+        Reply::Lock(Err(crate::host::LockError::Coded(failed))) => failed,
+        Reply::Lock(Err(crate::host::LockError::Arg(message))) => {
+            panic!("a string failure was delivered: {message}")
+        }
         Reply::Http(_) | Reply::Exec(_) | Reply::Query(_) | Reply::Lock(_) | Reply::Slept => {
             panic!("no failure was delivered")
         }
@@ -531,4 +535,43 @@ fn a_refresh_function_raising_a_string_reaches_coroutine_resume_as_credential_fa
         (code.as_str(), message.as_str()),
         ("credential_failed", "boom")
     );
+}
+
+#[test]
+fn a_held_write_with_no_usable_credential_is_a_string() {
+    let dir = fakes::TempDir::new("fiber-oauth-held-string");
+    let file = CredentialFile::new(dir.path(), "acme", LABEL).unwrap();
+    let lock = file.try_lock().unwrap().unwrap();
+    let held = Held::new(lock, fakes::clock::FakeClock::new());
+    let lua = Lua::new();
+    lua.globals().set("held", held).unwrap();
+    // The raw method returns `(nil, message)`, which the refresh half raises
+    // as the string: an error in the calling code (ruling 17).
+    let values: mlua::MultiValue = lua.load("return held:write({})").eval().unwrap();
+    let values = values.into_vec();
+    assert_eq!(values.len(), 2, "a string failure returns one message");
+    assert_eq!(values[0], mlua::Value::Nil);
+    let mlua::Value::String(message) = &values[1] else {
+        panic!("held:write raised no string failure");
+    };
+    assert!(
+        message.to_str().unwrap().contains("`token` string"),
+        "{message:?}"
+    );
+}
+
+#[test]
+fn a_held_read_after_release_is_a_string() {
+    let dir = fakes::TempDir::new("fiber-oauth-held-released");
+    let file = CredentialFile::new(dir.path(), "acme", LABEL).unwrap();
+    let lock = file.try_lock().unwrap().unwrap();
+    let held = Held::new(lock, fakes::clock::FakeClock::new());
+    let lua = Lua::new();
+    lua.globals().set("held", held).unwrap();
+    lua.load("held:release()").exec().unwrap();
+    let values: mlua::MultiValue = lua.load("return held:read()").eval().unwrap();
+    let values = values.into_vec();
+    assert_eq!(values.len(), 2, "a string failure returns one message");
+    assert_eq!(values[0], mlua::Value::Nil);
+    assert!(matches!(values[1], mlua::Value::String(_)));
 }

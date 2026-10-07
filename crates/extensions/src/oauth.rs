@@ -134,18 +134,10 @@ local yield, resume, status = coroutine.yield, coroutine.resume, coroutine.statu
 local create = coroutine.create
 local pack, unpack = table.pack, table.unpack
 
--- Like `pcall(f, ...)`, but kept local so refresh can observe its HTTP yields
--- and forward the original failure value unchanged.
-local function run(f, ...)
-  local co = create(f)
-  local args = pack(...)
-  while true do
-    local r = pack(resume(co, unpack(args, 1, args.n)))
-    if not r[1] then return false, r[2] end
-    if status(co) == "dead" then return true, r[2] end
-    args = pack(yield(unpack(r, 2, r.n)))
-  end
-end
+-- The prelude's yield-forwarding `pcall`: `refresh` needs no HTTP tracking
+-- around `held` reads and writes, so it shares the global. `attempt` keeps
+-- its own loop to observe each `host.http` yield and its answer.
+local run = pcall
 
 -- Runs the refresh function `f` the way `run` does, and sees each `host.http`
 -- yield and its answer. A function that raises fails the refresh: a table
@@ -251,14 +243,20 @@ function oauth.refresh(fn)
     error("host.oauth.refresh: takes a function", 2)
   end
   local held, code, message = yield(tag, "lock")
-  if held == nil then error(failure(code, message), 0) end
+  if held == nil then
+    if message == nil then error(code, 0) else error(failure(code, message), 0) end
+  end
   local ok, result = run(function()
     local stored, code, message = held:read()
-    if code ~= nil then error(failure(code, message), 0) end
+    if code ~= nil then
+      if message == nil then error(code, 0) else error(failure(code, message), 0) end
+    end
     if stored ~= nil and not held:due(stored) then return stored end
     local fresh = attempt(fn, stored)
     local _, wcode, wmessage = held:write(fresh)
-    if wcode ~= nil then error(failure(wcode, wmessage), 0) end
+    if wcode ~= nil then
+      if wmessage == nil then error(wcode, 0) else error(failure(wcode, wmessage), 0) end
+    end
     return fresh
   end)
   held:release()
@@ -280,7 +278,19 @@ pub(crate) fn install(
 ) -> mlua::Result<()> {
     let oauth = lua.create_table()?;
     let open_browser = Arc::clone(&browser);
-    let open_raw = lua.create_function(move |lua, url: String| {
+    let open_raw = lua.create_function(move |lua, url: LuaValue| {
+        let LuaValue::String(url) = &url else {
+            return crate::host::failure::raw_string(
+                lua,
+                "host.oauth.open: url must be a string".to_owned(),
+            );
+        };
+        let Ok(url) = url.to_str() else {
+            return crate::host::failure::raw_string(
+                lua,
+                "host.oauth.open: url must be a string".to_owned(),
+            );
+        };
         if !open_browser.attended() {
             return crate::host::failure::raw_failure(
                 lua,
@@ -382,12 +392,14 @@ impl UserData for Held {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         methods.add_method("read", |lua, this, ()| {
             // A coded failure returns `(nil, code, message)` for the refresh
-            // half to raise as the table; no longer held stays a string.
+            // half to raise as the table; no longer held returns
+            // `(nil, message)` for it to raise as the string.
             let held = this.lock.borrow();
             let Some(lock) = held.as_ref() else {
-                return Err(mlua::Error::runtime(
-                    "host.oauth.refresh: the credential is no longer held",
-                ));
+                return crate::host::failure::raw_string(
+                    lua,
+                    "host.oauth.refresh: the credential is no longer held".to_owned(),
+                );
             };
             match lock.read() {
                 Ok(None) => Ok(mlua::MultiValue::from_vec(vec![LuaValue::Nil])),
@@ -403,17 +415,30 @@ impl UserData for Held {
             Ok(host::to_json(&stored).map_or(true, |value| this.due(&value)))
         });
         methods.add_method("write", |lua, this, fresh: LuaValue| {
-            let value = host::to_json(&fresh)?;
+            let value = match host::to_json(&fresh) {
+                Ok(value) => value,
+                Err(err) => {
+                    return crate::host::failure::raw_string(
+                        lua,
+                        format!(
+                            "host.oauth.refresh: {}",
+                            err.to_string().lines().next().unwrap_or_default()
+                        ),
+                    );
+                }
+            };
             if usable(&value).is_none() {
-                return Err(mlua::Error::runtime(
-                    "host.oauth.refresh: the function must return a table with a `token` string and an `expires_at` whole number of seconds",
-                ));
+                return crate::host::failure::raw_string(
+                    lua,
+                    "host.oauth.refresh: the function must return a table with a `token` string and an `expires_at` whole number of seconds".to_owned(),
+                );
             }
             let held = this.lock.borrow();
             let Some(lock) = held.as_ref() else {
-                return Err(mlua::Error::runtime(
-                    "host.oauth.refresh: the credential is no longer held",
-                ));
+                return crate::host::failure::raw_string(
+                    lua,
+                    "host.oauth.refresh: the credential is no longer held".to_owned(),
+                );
             };
             match lock.write(&value) {
                 Ok(()) => Ok(mlua::MultiValue::from_vec(vec![])),
@@ -659,10 +684,10 @@ fn decode(text: &str) -> Result<String, &'static str> {
 /// the error is already delivered.
 pub(crate) fn lock(home: &Path, pair: &CredentialPair, deliver: &Deliver) -> Option<Sender<()>> {
     let fail = |why: &dyn std::fmt::Display| {
-        deliver(Reply::Lock(Err((
+        deliver(Reply::Lock(Err(crate::host::LockError::Coded((
             contract::ErrorCode::IoFailed,
             format!("host.oauth.refresh: {why}"),
-        ))));
+        )))));
     };
     let file = match CredentialFile::new(home, &pair.credential, &pair.label) {
         Ok(file) => file,
@@ -681,10 +706,10 @@ pub(crate) fn lock(home: &Path, pair: &CredentialPair, deliver: &Deliver) -> Opt
                     Ok(Some(lock)) => return send(Reply::Lock(Ok(lock))),
                     Ok(None) => {}
                     Err(e) => {
-                        return send(Reply::Lock(Err((
+                        return send(Reply::Lock(Err(crate::host::LockError::Coded((
                             contract::ErrorCode::IoFailed,
                             format!("host.oauth.refresh: {e}"),
-                        ))));
+                        )))));
                     }
                 }
                 match stop.recv_timeout(POLL) {

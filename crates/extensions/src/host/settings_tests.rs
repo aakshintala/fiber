@@ -387,3 +387,45 @@ fn a_set_where_no_file_can_be_written_is_io_failed() {
     assert_eq!(code, "io_failed");
     assert!(message.starts_with("host.config.set: "), "{message}");
 }
+
+#[test]
+fn wrong_arguments_are_strings_and_coded_failures_are_tables() {
+    let setup = Setup::new();
+    let config = setup.load(&[]);
+    let lua = setup.lua(Some(setup.session(config, &[])));
+    let clock = fakes::clock::FakeClock::new();
+    let deadline = crate::lua::Deadline::new(clock);
+    let dir = fakes::TempDir::new("fiber-settings-types");
+    crate::lua::install_prelude(&lua, &deadline, dir.path().to_path_buf(), crate::MEMORY_CAP)
+        .unwrap();
+    let kind_of = |code: &str| -> String {
+        lua.load(format!(
+            "local ok, err = pcall(function() {code} end); return type(err)"
+        ))
+        .eval()
+        .unwrap()
+    };
+    // Errors in the calling code stay strings (ruling 17).
+    for code in [
+        "return host.config.get(123)",
+        "host.config.set(\"a\", nil, \"machine\")",
+        "host.config.set(\"a\", 1, \"bogus\")",
+        "host.config.set(\"a\", 1, 123)",
+    ] {
+        assert_eq!(kind_of(code), "string", "{code}");
+    }
+    // No session stays a string too.
+    let lua = setup.lua(None);
+    let clock = fakes::clock::FakeClock::new();
+    let deadline = crate::lua::Deadline::new(clock);
+    let dir = fakes::TempDir::new("fiber-settings-types-nosession");
+    crate::lua::install_prelude(&lua, &deadline, dir.path().to_path_buf(), crate::MEMORY_CAP)
+        .unwrap();
+    let kind: String = lua
+        .load(
+            "local ok, err = pcall(function() return host.config.get(\"a\") end); return type(err)",
+        )
+        .eval()
+        .unwrap();
+    assert_eq!(kind, "string");
+}

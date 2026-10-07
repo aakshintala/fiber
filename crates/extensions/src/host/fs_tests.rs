@@ -807,3 +807,37 @@ fn a_resumed_failure_is_the_table_at_its_source() {
         assert!(message.starts_with(starts), "{code}: {message}");
     }
 }
+
+#[test]
+fn wrong_arguments_are_strings_and_coded_failures_are_tables() {
+    let setup = Setup::new();
+    let lua = setup.lua();
+    let clock = fakes::clock::FakeClock::new();
+    let deadline = crate::lua::Deadline::new(clock);
+    let dir = fakes::TempDir::new("fiber-fs-types");
+    crate::lua::install_prelude(&lua, &deadline, dir.path().to_path_buf(), crate::MEMORY_CAP)
+        .unwrap();
+    let kind_of = |code: &str| -> String {
+        lua.load(format!(
+            "local ok, err = pcall(function() {code} end); return type(err)"
+        ))
+        .eval()
+        .unwrap()
+    };
+    // Errors in the calling code stay strings (ruling 17).
+    for code in [
+        "return host.fs.read({})",
+        "host.fs.write(\"f.md\", \"x\", \"yes\")",
+        "return host.data_dir(\"elsewhere\")",
+        "return host.data_dir(123)",
+    ] {
+        assert_eq!(kind_of(code), "string", "{code}");
+    }
+    // Coded failures stay tables.
+    for code in [
+        "return host.fs.read(\"missing.md\")",
+        "return host.fs.list(\"missing.md\")",
+    ] {
+        assert_eq!(kind_of(code), "table", "{code}");
+    }
+}

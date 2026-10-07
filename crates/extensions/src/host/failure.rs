@@ -28,14 +28,19 @@ pub(crate) struct PendingFailure {
     pub(crate) boundary: Boundary,
 }
 
+/// How many caught failures the per-VM list keeps. Two unattended calls
+/// caught before a rethrow must both keep their classification; past the
+/// cap the oldest is dropped.
+const MAX_PENDING: usize = 32;
+
 /// Per-VM state shared by the Lua constructor and its callback boundary.
 #[derive(Clone, Default)]
-pub(crate) struct FailureState(Arc<Mutex<Option<PendingFailure>>>);
+pub(crate) struct FailureState(Arc<Mutex<Vec<PendingFailure>>>);
 
 impl FailureState {
-    /// Discard an error caught by Lua before the next callback starts.
+    /// Discard errors caught by Lua before the next callback starts.
     pub(crate) fn clear(&self) {
-        *lock(&self.0) = None;
+        lock(&self.0).clear();
     }
 
     /// Take the pending failure when `error` is it escaping the callback.
@@ -52,11 +57,11 @@ impl FailureState {
             return None;
         };
         let mut pending = lock(&self.0);
-        let escaped = pending.as_ref().is_some_and(|failure| {
+        let at = pending.iter().rposition(|failure| {
             text.strip_prefix(failure.text.as_str())
                 .is_some_and(|rest| rest.is_empty() || rest.starts_with("\nstack traceback:"))
         });
-        if escaped { pending.take() } else { None }
+        at.map(|at| pending.remove(at))
     }
 
     fn record(&self, text: String, message: String, boundary: &str) -> mlua::Result<()> {
@@ -82,13 +87,16 @@ impl FailureState {
         // An unattended call that fails inside a refresh function keeps its
         // own mapping when the refresh forwards the same table.
         if matches!(boundary, Boundary::Refresh { .. })
-            && pending.as_ref().is_some_and(|failure| {
+            && pending.iter().any(|failure| {
                 failure.text == text && matches!(failure.boundary, Boundary::Unattended { .. })
             })
         {
             return Ok(());
         }
-        *pending = Some(PendingFailure {
+        if pending.len() >= MAX_PENDING {
+            pending.remove(0);
+        }
+        pending.push(PendingFailure {
             text,
             message,
             boundary,
@@ -151,9 +159,10 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<FailureLib> {
     })
 }
 
-/// Wraps a raw host function that returns its value on success and
-/// `(nil, code, message)` on a coded failure. The table is raised at the call
-/// site, so even `coroutine.resume` catches it as a table.
+/// Wraps a raw host function that returns its value on success,
+/// `(nil, code, message)` on a coded failure, and `(nil, message)` with no
+/// third value on an error in the calling code. The table, or the string,
+/// is raised at the call site, so even `coroutine.resume` catches it there.
 pub(crate) fn wrap(lua: &Lua, raw: Function, failure: &Function) -> mlua::Result<Function> {
     wrap_with_boundary(lua, raw, failure, None)
 }
@@ -171,6 +180,7 @@ local raw, failure, boundary = ...
 local pack, unpack = table.pack, table.unpack
 return function(...)
   local r = pack(raw(...))
+  if r[2] ~= nil and r[3] == nil then error(r[2], 0) end
   if r[2] ~= nil then error(failure(r[2], r[3], boundary), 0) end
   return unpack(r, 1, r.n)
 end
@@ -178,6 +188,17 @@ end
     )
     .set_name("=host failure wrap")
     .call((raw, failure.clone(), boundary))
+}
+
+/// The `(nil, message)` a raw host function returns for an error in the
+/// calling code, so [`wrap`] raises it as the string. A Rust host function
+/// never raises as a Rust error: mlua wraps that as userdata, and `pcall`
+/// would see that, not a string or a table.
+pub(crate) fn raw_string(lua: &Lua, message: String) -> mlua::Result<MultiValue> {
+    Ok(MultiValue::from_vec(vec![
+        LuaValue::Nil,
+        LuaValue::String(lua.create_string(message)?),
+    ]))
 }
 
 /// The `(nil, code, message)` a raw host function returns for a coded

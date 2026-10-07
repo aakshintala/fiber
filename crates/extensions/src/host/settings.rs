@@ -6,7 +6,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use config::{Config, ConfigError, Scope};
-use mlua::{Lua, LuaString, Table, Value as LuaValue};
+use mlua::{Lua, Table, Value as LuaValue};
 
 use super::{failure, to_json, to_lua};
 
@@ -37,14 +37,18 @@ pub(crate) fn install(
     });
     let table = lua.create_table()?;
     // A coded I/O failure returns `(nil, code, message)` for the Lua half
-    // to raise as the table; a wrong key, scope or value stays a string.
+    // to raise as the table; a wrong key, scope or value returns
+    // `(nil, message)` for it to raise as the string.
     {
         let session = session.clone();
-        let raw = lua.create_function(move |lua, key: LuaString| {
+        let raw = lua.create_function(move |lua, key: LuaValue| {
             let Some(session) = session.as_ref() else {
-                return Err(no_session("get"));
+                return failure::raw_string(lua, no_session("get"));
             };
-            let key = key_text("get", &key)?;
+            let key = match key_text("get", &key) {
+                Ok(key) => key,
+                Err(message) => return failure::raw_string(lua, message),
+            };
             let repo: Vec<&str> = session.repo_settings.iter().map(String::as_str).collect();
             match session
                 .config
@@ -54,7 +58,7 @@ pub(crate) fn install(
                 Ok(Some(value)) => Ok(mlua::MultiValue::from_vec(vec![to_lua(lua, &value)?])),
                 Ok(None) => Ok(mlua::MultiValue::from_vec(vec![LuaValue::Nil])),
                 Err(err) => match coded("get", &key, err) {
-                    Ok(message) => Err(runtime(message)),
+                    Ok(message) => failure::raw_string(lua, message),
                     Err((code, message)) => failure::raw_failure(lua, &code, message),
                 },
             }
@@ -64,36 +68,50 @@ pub(crate) fn install(
     {
         let session = session.clone();
         let raw = lua.create_function(
-            move |lua, (key, value, scope): (LuaString, LuaValue, LuaValue)| {
+            move |lua, (key, value, scope): (LuaValue, LuaValue, LuaValue)| {
                 let Some(session) = session.as_ref() else {
-                    return Err(no_session("set"));
+                    return failure::raw_string(lua, no_session("set"));
                 };
                 if matches!(value, LuaValue::Nil) {
-                    return Err(runtime("host.config.set: value must not be nil".into()));
+                    return failure::raw_string(
+                        lua,
+                        "host.config.set: value must not be nil".to_owned(),
+                    );
                 }
                 let scope = if let LuaValue::String(s) = &scope {
                     s.as_bytes()
                 } else {
-                    return Err(runtime(
-                        "host.config.set: scope must be \"machine\" or \"project\"".into(),
-                    ));
+                    return failure::raw_string(
+                        lua,
+                        "host.config.set: scope must be \"machine\" or \"project\"".to_owned(),
+                    );
                 };
                 let scope = match scope.as_ref() {
                     b"machine" => Scope::Machine,
                     b"project" => Scope::Project,
                     _ => {
-                        return Err(runtime(
-                            "host.config.set: scope must be \"machine\" or \"project\"".into(),
-                        ));
+                        return failure::raw_string(
+                            lua,
+                            "host.config.set: scope must be \"machine\" or \"project\"".to_owned(),
+                        );
                     }
                 };
-                let key = key_text("set", &key)?;
-                let json = to_json(&value).map_err(|err| {
-                    runtime(format!(
-                        "host.config.set: {}",
-                        err.to_string().lines().next().unwrap_or_default()
-                    ))
-                })?;
+                let key = match key_text("set", &key) {
+                    Ok(key) => key,
+                    Err(message) => return failure::raw_string(lua, message),
+                };
+                let json = match to_json(&value) {
+                    Ok(json) => json,
+                    Err(err) => {
+                        return failure::raw_string(
+                            lua,
+                            format!(
+                                "host.config.set: {}",
+                                err.to_string().lines().next().unwrap_or_default()
+                            ),
+                        );
+                    }
+                };
                 match session.config.borrow_mut().set_extension_setting(
                     &session.extension,
                     scope,
@@ -102,7 +120,7 @@ pub(crate) fn install(
                 ) {
                     Ok(()) => Ok(mlua::MultiValue::from_vec(vec![])),
                     Err(err) => match coded("set", &key, err) {
-                        Ok(message) => Err(runtime(message)),
+                        Ok(message) => failure::raw_string(lua, message),
                         Err((code, message)) => failure::raw_failure(lua, &code, message),
                     },
                 }
@@ -114,23 +132,23 @@ pub(crate) fn install(
     Ok(())
 }
 
-fn runtime(message: String) -> mlua::Error {
-    mlua::Error::RuntimeError(message)
+fn no_session(op: &str) -> String {
+    format!("host.config.{op}: this extension has no session")
 }
 
-fn no_session(op: &str) -> mlua::Error {
-    runtime(format!("host.config.{op}: this extension has no session"))
-}
-
-/// A dotted key as text. Anything else is the key error.
-fn key_text(op: &str, key: &LuaString) -> Result<String, mlua::Error> {
+/// A dotted key as text. Anything else is the key error, as the message to
+/// raise as a string.
+fn key_text(op: &str, key: &LuaValue) -> Result<String, String> {
+    let LuaValue::String(key) = key else {
+        return Err(format!("host.config.{op}: key must be a string"));
+    };
     std::str::from_utf8(&key.as_bytes())
         .map(str::to_owned)
         .map_err(|_| {
-            runtime(format!(
+            format!(
                 "host.config.{op}: `{}` is not a dotted key",
                 String::from_utf8_lossy(&key.as_bytes())
-            ))
+            )
         })
 }
 
