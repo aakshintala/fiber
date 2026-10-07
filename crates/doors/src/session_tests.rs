@@ -1971,3 +1971,83 @@ fn an_ask_session_appends_no_prompt_even_one_a_client_sends() {
     assert_eq!(history_lines(&file), Vec::<Value>::new());
     close_within(opened.session, opened.log);
 }
+
+fn send_bare(client: &Client, id: &str, command: &str) {
+    client
+        .send(&format!(r#"{{"id":"{id}","command":"{command}"}}"#))
+        .unwrap();
+}
+
+#[test]
+fn a_repeated_prompt_id_is_rejected_on_another_connection_before_dispatch() {
+    reset();
+    let opened = open();
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .serve(None, Arc::new(|| false), move |inbox| {
+            let first = Client::connect(&socket).unwrap();
+            subscribe(&first, "c_sub", "summary");
+            let _ack = answer_of(&first, "c_sub");
+            send_text(&first, "c_1", "prompt", "one");
+            (next_prompt(&inbox).0)(Ok(None));
+            assert_eq!(answer_of(&first, "c_1")["kind"], "command_accepted");
+            drop(first);
+            let second = Client::connect(&socket).unwrap();
+            subscribe(&second, "c_sub2", "summary");
+            let _ack = answer_of(&second, "c_sub2");
+            send_text(&second, "c_1", "prompt", "again");
+            let repeat = answer_of(&second, "c_1");
+            assert_eq!(repeat["kind"], "command_rejected");
+            assert_eq!(repeat["payload"]["code"], "duplicate_command");
+            assert!(inbox.try_recv().is_err(), "the repeat was not dispatched");
+            Ok(())
+        })
+        .unwrap();
+    close_within(opened.session, opened.log);
+}
+
+#[test]
+fn a_repeated_answered_command_id_is_rejected() {
+    reset();
+    let opened = open();
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .serve(None, Arc::new(|| false), move |_inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "summary");
+            let _ack = answer_of(&client, "c_sub");
+            send_bare(&client, "c_t", "tools");
+            assert_eq!(answer_of(&client, "c_t")["kind"], "command_accepted");
+            send_bare(&client, "c_t", "tools");
+            let repeat = answer_of(&client, "c_t");
+            assert_eq!(repeat["payload"]["code"], "duplicate_command");
+            Ok(())
+        })
+        .unwrap();
+    close_within(opened.session, opened.log);
+}
+
+#[test]
+fn a_rejected_command_id_may_be_sent_again() {
+    reset();
+    let opened = open();
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .serve(None, Arc::new(|| false), move |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "summary");
+            let _ack = answer_of(&client, "c_sub");
+            send_text(&client, "c_r", "prompt", "one");
+            (next_prompt(&inbox).0)(Err(busy()));
+            assert_eq!(answer_of(&client, "c_r")["payload"]["code"], "busy");
+            send_text(&client, "c_r", "prompt", "one");
+            (next_prompt(&inbox).0)(Ok(None));
+            assert_eq!(answer_of(&client, "c_r")["kind"], "command_accepted");
+            Ok(())
+        })
+        .unwrap();
+    close_within(opened.session, opened.log);
+}
