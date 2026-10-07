@@ -215,6 +215,51 @@ fn ask_configured(setup: &Setup, prompt: &str) -> Vec<Value> {
         .collect()
 }
 
+/// The event kinds of every durable line `fiber ask` writes, in order.
+/// `session_status` lines are ephemeral, written by an observer thread, so
+/// where they fall among the loop's own lines is not pinned here, as in
+/// other `crates/main/tests` files.
+fn kinds(lines: &[Value]) -> Vec<&str> {
+    lines
+        .iter()
+        .filter(|line| line["kind"] != "session_status")
+        .map(|line| line["kind"].as_str().unwrap())
+        .collect()
+}
+
+/// The event kinds of a turn whose first reply calls the reads-only
+/// `session_search` and whose second is [`hello`]: no `permission_` line is
+/// written, as for a reads-only workspace call (`docs/permissions.md`,
+/// "Fast paths").
+fn search_kinds() -> Vec<&'static str> {
+    let mut kinds = vec![
+        "session_started",
+        "fiber_started",
+        "extensions_loaded",
+        "preamble_built",
+        "opening_message",
+        "turn_started",
+        "step_started",
+        "assistant_message_started",
+        "tool_call_requested",
+        "usage_recorded",
+        "assistant_message_completed",
+        "tool_call_started",
+        "tool_call_completed",
+        "step_started",
+        "assistant_message_started",
+    ];
+    kinds.extend(["assistant_message_delta"; 2]);
+    kinds.extend([
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+        "fiber_exited",
+    ]);
+    kinds
+}
+
 /// The one line of `kind`.
 fn line<'a>(lines: &'a [Value], kind: &str) -> &'a Value {
     let mut found = lines.iter().filter(|line| line["kind"] == kind);
@@ -261,6 +306,7 @@ fn a_search_finds_this_projects_past_session_and_never_its_own_call() {
     let before = snapshot(&setup.home().join("projects"));
 
     let lines = ask_with(&setup, "find the retry budget", &json!({"text": QUERY}));
+    assert_eq!(kinds(&lines), search_kinds());
 
     // The running session's prompt is a hit, the newest; its own call
     // holds the query too and gives none.
@@ -316,6 +362,7 @@ fn every_project_is_searched_with_all_projects() {
     let fixtures = Fixtures::write(&setup);
 
     let lines = ask(&setup, &json!({"text": QUERY, "all_projects": true}));
+    assert_eq!(kinds(&lines), search_kinds());
 
     let shown = result(&lines);
     let past = past_hits(&fixtures.past, 1);
@@ -394,6 +441,7 @@ fn a_link_below_projects_is_listed_and_never_followed() {
     symlink(outside.join("art"), linked_artifacts.join("artifacts")).unwrap();
 
     let lines = ask(&setup, &json!({"text": QUERY, "all_projects": true}));
+    assert_eq!(kinds(&lines), search_kinds());
 
     let shown = result(&lines);
     assert!(
@@ -436,6 +484,7 @@ fn the_limit_caps_the_hits_and_the_result_is_cut_like_any_other() {
     setup.provider(&server);
 
     let lines = ask_configured(&setup, "look");
+    assert_eq!(kinds(&lines), search_kinds());
 
     let shown = result(&lines);
     let log = fixtures.past.join("events.jsonl");
@@ -458,6 +507,7 @@ fn the_limit_caps_the_hits_and_the_result_is_cut_like_any_other() {
     )
     .unwrap();
     let lines = ask_configured(&setup, "look");
+    assert_eq!(kinds(&lines), search_kinds());
 
     let completed = line(&lines, "tool_call_completed");
     let artifact = completed["payload"]["artifact"].as_str().unwrap();
