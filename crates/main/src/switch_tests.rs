@@ -307,6 +307,56 @@ fn the_naming_list_counts_an_unloaded_lua_provider() {
         prepared(&switching, &args("fake/m"), None).model.reference,
         "fake/m"
     );
+    // The union is exact: no duplicate when the registry and the naming
+    // list name the same reference. The fixture registry already holds
+    // `other/m`, so all three list.
+    assert_eq!(
+        rejected(&switching, &args("m"), None).message,
+        "The model `m` is offered by more than one provider: fake/m, lua/m, other/m. \
+         Name one as `provider/model`."
+    );
+}
+
+#[test]
+fn a_bare_id_only_an_unloaded_provider_has_is_the_credential_sentence() {
+    let fixture = fixture("fiber-switch-bare-unloaded");
+    let config = config(&fixture, &[]);
+    let (providers, _) = Providers::load(&fixture.home).unwrap();
+    let credentials: Credentials = [("fake", keyed("default"))]
+        .into_iter()
+        .map(|(name, entry)| (name.to_owned(), entry))
+        .collect();
+    // Only the unloaded `lua` names `rm`.
+    let naming = vec![("lua".to_owned(), "rm".to_owned())];
+    let switching = Switching::new(providers, &[], naming, config, credentials).unwrap();
+    let rejection = rejected(&switching, &args("rm"), None);
+    assert_eq!(rejection.code, ErrorCode::InvalidArguments);
+    assert_eq!(rejection.message, sentence("lua"));
+}
+
+#[test]
+fn a_naming_match_joins_a_resolved_match_in_ambiguity() {
+    // The registry resolves bare `n` to `fake/n`; the naming list adds the
+    // unloaded `lua/n`.
+    let fixture = fixture("fiber-switch-resolved-naming");
+    let config = config(&fixture, &[]);
+    let (providers, _) = Providers::load(&fixture.home).unwrap();
+    let credentials: Credentials = [("fake", keyed("default"))]
+        .into_iter()
+        .map(|(name, entry)| (name.to_owned(), entry))
+        .collect();
+    let naming = vec![
+        ("fake".to_owned(), "n".to_owned()),
+        ("lua".to_owned(), "n".to_owned()),
+    ];
+    let switching = Switching::new(providers, &[], naming, config, credentials).unwrap();
+    let rejection = rejected(&switching, &args("n"), None);
+    assert_eq!(rejection.code, ErrorCode::InvalidArguments);
+    assert_eq!(
+        rejection.message,
+        "The model `n` is offered by more than one provider: fake/n, lua/n. \
+         Name one as `provider/model`."
+    );
 }
 
 #[test]
