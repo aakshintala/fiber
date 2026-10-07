@@ -15,7 +15,7 @@ use serde_json::{Map, Value, json};
 
 use super::McpTool;
 use crate::effects::Hints;
-use crate::server::{ListedTool, Server};
+use crate::server::Server;
 use crate::slot::Slot;
 use crate::start::ServerSpec;
 
@@ -134,10 +134,7 @@ impl Live {
             .unwrap_or_else(|_| panic!("the server starts within {WITHIN:?}"))
             .expect("the fixture server starts")
             .server;
-        let listed: Vec<ListedTool> = tools
-            .as_array()
-            .map(|entries| entries.iter().map(ListedTool::read).collect())
-            .unwrap_or_default();
+        let listed: Vec<Value> = tools.as_array().cloned().unwrap_or_default();
         let clock: Arc<dyn Clock> = fake.clone();
         let workspace = dir.path().to_path_buf();
         let slot = Slot::running(

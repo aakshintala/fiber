@@ -1,9 +1,12 @@
-//! One server's slot (`docs/mcp.md`, "Starting servers"): not started and
-//! declared from the cache, running, or dead for the session. The first
+//! One server's slot (`docs/mcp.md`, "Starting servers" and "When a server
+//! dies"): not started and declared from the cache, running, down after
+//! one death with its restart unused, or dead for the session. The first
 //! call to a server that is not started starts it under the slot's lock, so
 //! concurrent first calls share one start and then see the same running
-//! server or the same dead slot. A failed start leaves the slot dead, and
-//! only the call that triggered it carries the `mcp_server_failed` record.
+//! server or the same failure. A failed first start, or a death, is the
+//! server's one death: the next call restarts it, once. A second death
+//! leaves it dead, its tools still declared. Each death and each restart is
+//! recorded once, by the call that observed it.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -11,16 +14,17 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use contract::ErrorCode;
 use contract::clock::Clock;
-use contract::events::McpServerFailed;
+use contract::events::{McpServerFailed, McpServerReady, ServerFailure};
 use contract::shapes::Failure;
+use contract::tool::ServerRecord;
 use serde_json::Value;
 
 use crate::cache;
 use crate::server::{ListedTool, Server};
 use crate::start::{ServerSpec, failed};
 
-/// One server's place in the session: what [`Slot::run`] starts, calls or
-/// refuses, and what [`Slot::stop`] stops.
+/// One server's place in the session: what [`Slot::run`] starts, calls,
+/// restarts or refuses, and what [`Slot::stop`] stops.
 pub(crate) struct Slot {
     spec: ServerSpec,
     workspace: PathBuf,
@@ -30,43 +34,45 @@ pub(crate) struct Slot {
     state: Mutex<State>,
 }
 
-/// What the slot holds: the cached list until the first call starts the
-/// server, the running server with the names it listed, or the failure
-/// every later call repeats without spawning.
+/// What the slot holds. `listed` is always the last raw list this slot
+/// saw, for the cache rewrite check on the next start.
 enum State {
     /// Declared from the cache; no process runs.
     NotStarted {
-        /// The cached raw entries, for the rewrite check on start.
+        /// The cached raw entries.
         cached: Vec<Value>,
     },
     /// The server runs; `live` is every name it listed.
     Running {
         server: Arc<Server>,
         live: HashSet<String>,
+        listed: Vec<Value>,
+        /// Whether this is the restart, so the next death is final.
+        restarted: bool,
     },
-    /// A failed start, or a stop before any start: no spawn again.
+    /// One death seen and its restart unused: the next call restarts.
+    Down { listed: Vec<Value> },
+    /// A second death, or a stop: every call fails `error`, no spawn again.
     Dead { error: Failure },
 }
 
-/// What [`Slot::run`] found.
+/// What [`Slot::run`] found, with the server lines the call carries.
 pub(crate) enum Run {
     /// The server runs and still has the tool: call it.
-    Call(Arc<Server>),
+    Call(Arc<Server>, Vec<ServerRecord>),
     /// The running server no longer lists the tool: fail `mcp_tool_removed`.
-    Removed,
-    /// The server is dead or its start failed: fail `error`, carrying the
-    /// `mcp_server_failed` record only for the call that triggered the
-    /// failed start.
+    Removed(Vec<ServerRecord>),
+    /// The server is dead or its start failed: fail `error`.
     Failed(Box<RunFailed>),
 }
 
-/// A failed [`Run`]: the call's error and, only for the call that
-/// triggered the failed start, its `mcp_server_failed` record.
+/// A failed [`Run`]: the call's error and the server lines it carries.
 pub(crate) struct RunFailed {
     /// The call's error.
     pub error: Failure,
-    /// The record, set only for the triggering call.
-    pub record: Option<McpServerFailed>,
+    /// The lines this call observed; empty for a call that only found the
+    /// server dead.
+    pub records: Vec<ServerRecord>,
 }
 
 impl Slot {
@@ -109,8 +115,8 @@ impl Slot {
         )
     }
 
-    /// A slot for a server [`Server::start`] already runs, holding its full
-    /// listed tools for the removed-tool check.
+    /// A slot for a server [`Server::start`] already runs, holding its raw
+    /// `listed` entries for the removed-tool and cache checks.
     pub(crate) fn running(
         spec: ServerSpec,
         workspace: &Path,
@@ -118,9 +124,8 @@ impl Slot {
         clock: &Arc<dyn Clock>,
         version: &str,
         server: Server,
-        tools: Vec<ListedTool>,
+        listed: Vec<Value>,
     ) -> Arc<Self> {
-        let live = tools.iter().map(|tool| tool.name.clone()).collect();
         Self::new(
             spec,
             workspace,
@@ -129,32 +134,57 @@ impl Slot {
             version,
             State::Running {
                 server: Arc::new(server),
-                live,
+                live: names(&listed),
+                listed,
+                restarted: false,
             },
         )
     }
 
     /// The server to call `tool` on, starting it first when the slot is not
-    /// started. The lock is held across [`Server::start`], so the second of
-    /// two concurrent first calls waits for the first's start (bounded by
-    /// the startup deadline) and then sees the same outcome.
+    /// started, and restarting it when it died with its restart unused. The
+    /// lock is held across [`Server::start`], so a concurrent call waits for
+    /// that start (bounded by the startup deadline) and then sees the same
+    /// outcome, and only the call that ran it carries its lines.
     pub(crate) fn run(&self, tool: &str) -> Run {
         let mut state = lock(&self.state);
-        let cached = match &*state {
-            State::Running { server, live } => {
-                return if live.contains(tool) {
-                    Run::Call(Arc::clone(server))
-                } else {
-                    Run::Removed
-                };
+        let mut records = Vec::new();
+        let (listed, restart) = match &*state {
+            State::Running {
+                server,
+                live,
+                listed,
+                restarted,
+            } => {
+                if !server.is_gone() {
+                    return if live.contains(tool) {
+                        Run::Call(Arc::clone(server), records)
+                    } else {
+                        Run::Removed(records)
+                    };
+                }
+                // It died while idle: this call is the first to see it.
+                let record = died(&self.spec.name, !*restarted);
+                records.push(ServerRecord::Failed(record.clone()));
+                if *restarted {
+                    *state = State::Dead {
+                        error: record.error.clone(),
+                    };
+                    return Run::Failed(Box::new(RunFailed {
+                        error: record.error,
+                        records,
+                    }));
+                }
+                (listed.clone(), true)
             }
+            State::Down { listed } => (listed.clone(), true),
             State::Dead { error } => {
                 return Run::Failed(Box::new(RunFailed {
                     error: error.clone(),
-                    record: None,
+                    records,
                 }));
             }
-            State::NotStarted { cached } => cached.clone(),
+            State::NotStarted { cached } => (cached.clone(), false),
         };
         let timeout = self.spec.startup_timeout;
         let name = self.spec.name.clone();
@@ -171,7 +201,7 @@ impl Slot {
                 // The session keeps the tools it declared, because a tool
                 // set that changes mid-session misses the whole prompt
                 // cache; the cache is updated for the next session.
-                if open.tools != cached {
+                if open.tools != listed {
                     cache::write(
                         &self.cache,
                         &name,
@@ -179,60 +209,126 @@ impl Slot {
                         &open.tools,
                     );
                 }
-                let live: HashSet<String> = open
-                    .tools
-                    .iter()
-                    .map(|entry| ListedTool::read(entry).name)
-                    .collect();
+                let live = names(&open.tools);
                 let present = live.contains(tool);
                 let server = Arc::new(open.server);
                 *state = State::Running {
                     server: Arc::clone(&server),
                     live,
+                    listed: open.tools,
+                    restarted: restart,
                 };
+                if restart {
+                    records.push(ServerRecord::Ready(McpServerReady { server: name }));
+                }
                 if present {
-                    Run::Call(server)
+                    Run::Call(server, records)
                 } else {
-                    Run::Removed
+                    Run::Removed(records)
                 }
             }
             Err(error) => {
-                let record = failed(&name, &error, timeout, false);
+                // A failed first start is the server's one death; a failed
+                // restart is its second.
+                let mut record = failed(&name, &error, timeout, false);
+                record.will_restart = !restart;
                 let failure = record.error.clone();
-                *state = State::Dead {
-                    error: failure.clone(),
+                records.push(ServerRecord::Failed(record));
+                *state = if restart {
+                    State::Dead {
+                        error: failure.clone(),
+                    }
+                } else {
+                    State::Down { listed }
                 };
                 Run::Failed(Box::new(RunFailed {
                     error: failure,
-                    record: Some(record),
+                    records,
                 }))
             }
         }
     }
 
-    /// Stops the running server, if any. A server that never started is
-    /// marked dead instead, so nothing spawns after the stop; a slot an
+    /// Records that `gone`, which a call found gone mid-call, died: the
+    /// record only when the slot still runs that same server, so a death
+    /// many calls see is recorded once, and a server the slot already
+    /// replaced or stopped records nothing.
+    pub(crate) fn died(&self, gone: &Arc<Server>) -> Option<McpServerFailed> {
+        let mut state = lock(&self.state);
+        let State::Running {
+            server,
+            listed,
+            restarted,
+            ..
+        } = &*state
+        else {
+            return None;
+        };
+        if !Arc::ptr_eq(server, gone) {
+            return None;
+        }
+        let record = died(&self.spec.name, !*restarted);
+        *state = if *restarted {
+            State::Dead {
+                error: record.error.clone(),
+            }
+        } else {
+            State::Down {
+                listed: listed.clone(),
+            }
+        };
+        Some(record)
+    }
+
+    /// Stops the running server, if any, and leaves the slot dead from any
+    /// state, so nothing spawns or restarts after the stop. A slot an
     /// in-flight start holds is stopped after that start returns, bounded
     /// by the startup deadline.
     pub(crate) fn stop(&self) {
         let mut state = lock(&self.state);
-        if let State::Running { server, .. } = &*state {
-            let server = Arc::clone(server);
-            drop(state);
-            server.stop();
-            return;
-        }
-        if matches!(&*state, State::Dead { .. }) {
-            return;
-        }
-        *state = State::Dead {
-            error: Failure {
+        let error = match &*state {
+            State::Dead { error } => error.clone(),
+            State::NotStarted { .. } | State::Running { .. } | State::Down { .. } => Failure {
                 code: ErrorCode::McpServerUnavailable,
                 message: unavailable(&self.spec.name),
                 retry_after: None,
                 provider: None,
             },
         };
+        let previous = std::mem::replace(&mut *state, State::Dead { error });
+        drop(state);
+        if let State::Running { server, .. } = previous {
+            server.stop();
+        }
+    }
+}
+
+/// Every name in raw `tools/list` entries.
+fn names(listed: &[Value]) -> HashSet<String> {
+    listed
+        .iter()
+        .map(|entry| ListedTool::read(entry).name)
+        .collect()
+}
+
+/// The record of a server that exited: Fiber restarts it on the next call
+/// when `will_restart`, and otherwise its tools fail for the session.
+fn died(server: &str, will_restart: bool) -> McpServerFailed {
+    let message = if will_restart {
+        format!("The MCP server `{server}` exited; Fiber restarts it on the next call.")
+    } else {
+        format!("The MCP server `{server}` exited again; its tools fail until the next session.")
+    };
+    McpServerFailed {
+        server: server.to_owned(),
+        reason: ServerFailure::Died,
+        will_restart,
+        error: Failure {
+            code: ErrorCode::McpServerUnavailable,
+            message,
+            retry_after: None,
+            provider: None,
+        },
     }
 }
 
