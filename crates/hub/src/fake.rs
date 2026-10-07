@@ -7,7 +7,8 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::DirBuilderExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::net::Shutdown;
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::Duration;
 
@@ -37,6 +38,19 @@ pub(crate) struct FakeStarter {
     exited: Option<Failure>,
     handshake: Arc<Mutex<Option<Handshake>>>,
     received: Arc<Mutex<Vec<String>>>,
+    /// Each `resume` call's session and workspace, in order.
+    resumed: Arc<Mutex<Vec<(SessionId, PathBuf)>>>,
+    /// The connections the fake sessions accepted and still serve.
+    serving: Arc<Serving>,
+}
+
+/// The connections the fake sessions serve: a clone of each, to shut it
+/// down, and how many are still served.
+#[derive(Debug, Default)]
+struct Serving {
+    streams: Mutex<Vec<UnixStream>>,
+    live: Mutex<usize>,
+    ended: Condvar,
 }
 
 impl FakeStarter {
@@ -60,6 +74,12 @@ impl FakeStarter {
         Self::new(home, false, None, None)
     }
 
+    /// Binds `run/<id>` and reports the process exited with `failure`, as
+    /// a process that lost the session to another that bound it does.
+    pub(crate) fn bind_and_exit(home: &Path, failure: Failure) -> Self {
+        Self::new(home, true, Some(failure), None)
+    }
+
     fn new(home: &Path, bind: bool, exited: Option<Failure>, handshake: Option<Handshake>) -> Self {
         Self {
             home: home.to_path_buf(),
@@ -67,6 +87,8 @@ impl FakeStarter {
             exited,
             handshake: Arc::new(Mutex::new(handshake)),
             received: Arc::new(Mutex::new(Vec::new())),
+            resumed: Arc::new(Mutex::new(Vec::new())),
+            serving: Arc::new(Serving::default()),
         }
     }
 
@@ -74,15 +96,32 @@ impl FakeStarter {
     pub(crate) fn received(&self) -> Vec<String> {
         lock(&self.received).clone()
     }
-}
 
-impl Starter for FakeStarter {
-    fn start(
-        &self,
-        id: &SessionId,
-        _workspace: &Path,
-        _model: Option<&str>,
-    ) -> std::io::Result<Box<dyn Started>> {
+    /// Each `resume` call's session and workspace, in order.
+    pub(crate) fn resumed(&self) -> Vec<(SessionId, PathBuf)> {
+        lock(&self.resumed).clone()
+    }
+
+    /// Ends session `id` as an exiting process does: its socket is gone,
+    /// and every connection it served is closed, waiting at most `within`
+    /// for each to end. True once all have ended.
+    pub(crate) fn stop(&self, id: &SessionId, within: Duration) -> bool {
+        std::fs::remove_file(self.home.join("run").join(&id.0)).unwrap_or(());
+        for stream in lock(&self.serving.streams).drain(..) {
+            stream.shutdown(Shutdown::Both).unwrap_or(());
+        }
+        let live = lock(&self.serving.live);
+        let (live, _) = self
+            .serving
+            .ended
+            .wait_timeout_while(live, within, |live| *live > 0)
+            .unwrap_or_else(PoisonError::into_inner);
+        *live == 0
+    }
+
+    /// Binds `run/<id>` when the fake binds, serving each connection on a
+    /// thread of its own.
+    fn launch(&self, id: &SessionId) -> std::io::Result<Box<dyn Started>> {
         if self.bind {
             let run = self.home.join("run");
             DirBuilder::new()
@@ -94,10 +133,11 @@ impl Starter for FakeStarter {
             let listener = UnixListener::bind(&socket).map_err(|error| refused(&socket, &error))?;
             let received = Arc::clone(&self.received);
             let handshake = Arc::clone(&self.handshake);
+            let serving = Arc::clone(&self.serving);
             // The listener lives in the accept loop's thread.
             thread::Builder::new()
                 .name("fake-session".to_owned())
-                .spawn(move || accept_loop(listener, &received, &handshake))
+                .spawn(move || accept_loop(listener, &received, &handshake, &serving))
                 .map_err(|error| {
                     std::io::Error::new(error.kind(), format!("fake session: {error}"))
                 })?;
@@ -105,6 +145,22 @@ impl Starter for FakeStarter {
         Ok(Box::new(FakeStarted {
             exited: self.exited.clone(),
         }))
+    }
+}
+
+impl Starter for FakeStarter {
+    fn start(
+        &self,
+        id: &SessionId,
+        _workspace: &Path,
+        _model: Option<&str>,
+    ) -> std::io::Result<Box<dyn Started>> {
+        self.launch(id)
+    }
+
+    fn resume(&self, id: &SessionId, workspace: &Path) -> std::io::Result<Box<dyn Started>> {
+        lock(&self.resumed).push((id.clone(), workspace.to_path_buf()));
+        self.launch(id)
     }
 }
 
@@ -133,16 +189,27 @@ fn accept_loop(
     listener: UnixListener,
     received: &Arc<Mutex<Vec<String>>>,
     handshake: &Arc<Mutex<Option<Handshake>>>,
+    serving: &Arc<Serving>,
 ) {
     loop {
         let Ok((stream, _)) = listener.accept() else {
             return;
         };
+        let Ok(clone) = stream.try_clone() else {
+            return;
+        };
+        lock(&serving.streams).push(clone);
+        *lock(&serving.live) += 1;
         let received = Arc::clone(received);
         let handshake = Arc::clone(handshake);
+        let serving = Arc::clone(serving);
         let spawned = thread::Builder::new()
             .name("fake-session-conn".to_owned())
-            .spawn(move || serve_one(stream, &received, &handshake));
+            .spawn(move || {
+                serve_one(stream, &received, &handshake);
+                *lock(&serving.live) -= 1;
+                serving.ended.notify_all();
+            });
         if spawned.is_err() {
             return;
         }
@@ -183,8 +250,11 @@ fn serve_one(
                             return;
                         }
                     }
-                    // Any other connection is held until EOF.
-                    _ => hold(&mut read),
+                    // Any other command is accepted, as a session that
+                    // takes it does.
+                    Some(_) => write_accepted(&mut writer, &text),
+                    // Anything else is held until EOF.
+                    None => hold(&mut read),
                 }
             }
             // Nothing sent yet: hold until EOF.

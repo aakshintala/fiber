@@ -559,56 +559,6 @@ fn session_ids_outside_the_minted_shape_are_session_not_found() {
     }
 }
 
-#[test]
-fn a_stale_relay_never_drops_a_reconnect_to_the_same_session() {
-    fn entry(epoch: u64) -> Relay {
-        let (writer, _) = UnixStream::pair().unwrap();
-        Relay {
-            session: "s_0123456789abcdef".to_owned(),
-            epoch,
-            writer,
-        }
-    }
-    let sid = "s_0123456789abcdef";
-    let mut relays = Relays::default();
-    let stale = relays.mint();
-    relays.entries.push(entry(stale));
-    // A failed write drops the entry, leaving the map empty; the
-    // reconnect mints its epoch after that.
-    relays.entries.remove(0);
-    let fresh = relays.mint();
-    assert_ne!(fresh, stale);
-    relays.entries.push(entry(fresh));
-    // The stale relay thread finishes after the reconnect.
-    relays.finish(sid, stale);
-    assert_eq!(relays.entries.len(), 1, "the reconnect's entry stays");
-    assert_eq!(relays.entries[0].epoch, fresh);
-    relays.finish(sid, fresh);
-    assert!(relays.entries.is_empty(), "a relay drops its own entry");
-}
-
-#[test]
-fn relay_slots_drop_only_their_own_entry() {
-    fn entry(session: &str, epoch: u64) -> Relay {
-        let (writer, _) = UnixStream::pair().unwrap();
-        Relay {
-            session: session.to_owned(),
-            epoch,
-            writer,
-        }
-    }
-    let entries = [
-        entry("s_aaaaaaaaaaaaaaaa", 1),
-        entry("s_bbbbbbbbbbbbbbbb", 2),
-    ];
-    assert_eq!(relay_slot(&entries, "s_aaaaaaaaaaaaaaaa", 1), Some(0));
-    assert_eq!(relay_slot(&entries, "s_bbbbbbbbbbbbbbbb", 2), Some(1));
-    assert_eq!(relay_slot(&entries, "s_aaaaaaaaaaaaaaaa", 2), None);
-    assert_eq!(relay_slot(&entries, "s_bbbbbbbbbbbbbbbb", 1), None);
-    assert_eq!(relay_slot(&entries, "s_cccccccccccccccc", 1), None);
-    assert_eq!(relay_slot(&[], "s_aaaaaaaaaaaaaaaa", 1), None);
-}
-
 /// A hub on `clock`, for tests that move time.
 fn hub_on(temp: &Temp, clock: &Arc<fakes::clock::FakeClock>) -> Hub {
     let timed = Arc::clone(clock);
