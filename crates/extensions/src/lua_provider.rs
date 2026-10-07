@@ -235,7 +235,7 @@ impl LuaProvider {
         self.token().map_err(|e| signing::Error::Credential {
             code: e.code(),
             message: detail(&e),
-            unattended: false,
+            unattended: matches!(e, Error::Unattended { .. }),
         })
     }
 

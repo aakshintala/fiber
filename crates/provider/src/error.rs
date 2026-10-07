@@ -169,6 +169,14 @@ fn sign_sentence(provider: &str, error: &contract::signing::Error, secrets: &Sec
     use contract::signing::Error as Sign;
     match error {
         Sign::Failed(_) => format!("{provider}'s sign() failed."),
+        Sign::Credential {
+            code,
+            unattended: true,
+            ..
+        } if *code == ErrorCode::AuthenticationFailed => format!(
+            "{provider}'s credential() failed: logging in needs a person, and nobody is attached. \
+             Run `fiber login {provider}`."
+        ),
         Sign::Credential { code, .. } if *code == ErrorCode::AuthenticationFailed => format!(
             "{provider}'s credential() failed: the token endpoint rejected the refresh. Run \
              `fiber login {provider}`."

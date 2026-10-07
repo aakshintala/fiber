@@ -904,10 +904,16 @@ fn a_rejected_refresh_at_send_time_keeps_authentication_failed() {
     let setup = Setup::new();
     let server = fakes::OauthServer::start(vec![fakes::OauthReply::raw(400, "{}")]);
     let provider = refresh_provider(&setup, &server.url());
-    let contract::signing::Error::Credential { code, message, .. } = &sign_error(&provider) else {
+    let contract::signing::Error::Credential {
+        code,
+        message,
+        unattended,
+    } = &sign_error(&provider)
+    else {
         panic!("expected a credential error")
     };
     assert_eq!(*code, ErrorCode::AuthenticationFailed);
+    assert!(!unattended, "a rejected refresh is not an unattended login");
     assert!(message.contains("refresh failed: 400"), "{message}");
     assert!(!message.contains("second line"), "{message}");
     assert!(!message.starts_with('`'), "{message}");
@@ -922,11 +928,47 @@ fn an_unreachable_refresh_at_send_time_keeps_connection_failed() {
         .unwrap()
         .port();
     let provider = refresh_provider(&setup, &format!("http://127.0.0.1:{port}"));
-    let contract::signing::Error::Credential { code, message, .. } = &sign_error(&provider) else {
+    let contract::signing::Error::Credential {
+        code,
+        message,
+        unattended,
+    } = &sign_error(&provider)
+    else {
         panic!("expected a credential error")
     };
     assert_eq!(*code, ErrorCode::ConnectionFailed);
+    assert!(
+        !unattended,
+        "an unreachable refresh is not an unattended login"
+    );
     assert!(!message.starts_with('`'), "{message}");
+}
+
+#[test]
+fn an_unattended_login_at_send_time_marks_the_credential() {
+    let setup = Setup::new();
+    // Nobody is attached: the default browser never is, so `host.oauth.open`
+    // raises Unattended out of `credential()`.
+    let provider = script_provider(
+        &setup,
+        Some(
+            "(function() host.oauth.open(\"https://auth.example/\") return { token = \"t\", \
+             expires_at = 1700003600 } end)()",
+        ),
+        None,
+    );
+    let contract::signing::Error::Credential {
+        code,
+        message,
+        unattended,
+    } = &sign_error(&provider)
+    else {
+        panic!("expected a credential error")
+    };
+    assert_eq!(*code, ErrorCode::AuthenticationFailed);
+    assert!(*unattended, "a login needing a person marks the credential");
+    assert!(message.contains("host.oauth.open"), "{message}");
+    assert!(!message.contains('\n'), "{message}");
 }
 
 #[test]
