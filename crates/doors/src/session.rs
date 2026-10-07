@@ -49,7 +49,6 @@ pub(crate) struct Gate {
     pub(crate) log: Weak<Log>,
     pub(crate) clock: Arc<dyn Clock>,
     pub(crate) session_id: SessionId,
-    pub(crate) dir: PathBuf,
     pub(crate) tools: Vec<ToolInfo>,
     inbox: Mutex<Option<Sender<Delivery>>>,
     /// What the `cancel` command asks: whether a turn is running. Stored
@@ -531,7 +530,6 @@ fn open_in(
         log: Arc::downgrade(log),
         clock: Arc::clone(&clock),
         session_id,
-        dir: dir.to_owned(),
         tools,
         inbox: Mutex::new(None),
         cancel: Mutex::new(None),
@@ -667,13 +665,17 @@ pub(crate) fn park_reader_for_test() {
     tests::park_reader();
 }
 
-/// Whether the session's log has a `turn_started`. A log that cannot be read
-/// is kept, so nothing is deleted on a guess.
+/// Whether the session's log has a `turn_started`, read one line at a time
+/// up to the first. A log that cannot be read, or a line that does not
+/// parse before the first, keeps the session, so nothing is deleted on a
+/// guess.
 fn prompted(dir: &Path) -> bool {
-    log::read(dir).map_or(true, |lines| {
-        lines
-            .iter()
-            .any(|line| matches!(Event::from_envelope(line), Ok(Some(Event::TurnStarted(_)))))
+    log::lines(dir).map_or(true, |mut lines| {
+        lines.any(|line| {
+            line.map_or(true, |line| {
+                matches!(Event::from_envelope(&line), Ok(Some(Event::TurnStarted(_))))
+            })
+        })
     })
 }
 

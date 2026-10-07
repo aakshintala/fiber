@@ -356,7 +356,10 @@ fn reopening_refuses_an_unparseable_line_and_names_it() {
     };
     assert_eq!(err.code(), ErrorCode::LogCorrupt);
     assert!(err.to_string().contains("line 2"), "{err}");
-    assert_eq!(fs::read(&path).unwrap(), [whole, b"{\"torn".to_vec()].concat());
+    assert_eq!(
+        fs::read(&path).unwrap(),
+        [whole, b"{\"torn".to_vec()].concat()
+    );
 }
 
 /// `try_recv` waits for nothing: with no line it is `None`, with queued

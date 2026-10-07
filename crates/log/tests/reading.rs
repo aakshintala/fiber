@@ -144,7 +144,11 @@ fn lines_end_after_an_unparseable_line_that_they_name() {
     append_raw(&dir, b"not json\n");
     // A good line after the bad one is never reached.
     let whole = fs::read(dir.join("events.jsonl")).unwrap();
-    let first_line = whole.split_inclusive(|b| *b == b'\n').next().unwrap().to_vec();
+    let first_line = whole
+        .split_inclusive(|b| *b == b'\n')
+        .next()
+        .unwrap()
+        .to_vec();
     append_raw(&dir, &first_line);
     let mut it = lines(&dir).unwrap();
     assert_eq!(it.next().unwrap().unwrap(), first);

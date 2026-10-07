@@ -739,6 +739,100 @@ fn tools_and_history_answer_while_the_inbox_is_unread() {
     opened.close();
 }
 
+/// Overwrites line `index` (from 0) of the session's log in place with bytes
+/// that do not parse, keeping its length.
+fn corrupt(dir: &Path, index: usize) {
+    use std::os::unix::fs::FileExt;
+    let path = dir.join("events.jsonl");
+    let whole = fs::read(&path).unwrap();
+    let start: usize = whole
+        .split_inclusive(|b| *b == b'\n')
+        .take(index)
+        .map(<[u8]>::len)
+        .sum();
+    let len = whole[start..].iter().position(|b| *b == b'\n').unwrap();
+    let file = fs::OpenOptions::new().write(true).open(&path).unwrap();
+    file.write_all_at(&vec![b'x'; len], u64::try_from(start).unwrap())
+        .unwrap();
+}
+
+#[test]
+fn history_reads_only_its_window_of_the_log() {
+    let opened = Opened::open(vec![]);
+    let socket = opened.socket.clone();
+    let log = Arc::clone(&opened.log);
+    let dir = opened.dir.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            for _ in 0..8 {
+                log.append(&step(), None, None).unwrap();
+            }
+            // Bad lines before and after the window.
+            corrupt(&dir, 1);
+            corrupt(&dir, 6);
+            let client = Client::connect(&socket).unwrap();
+            // A full subscribe would read the bad line in its first page.
+            subscribe(&client, "c_sub", "summary");
+            send(
+                &client,
+                r#"{"id":"c_after","command":"history","args":{"from_seq":2,"to_seq":5}}"#,
+            );
+            let after = response(&client, "c_after");
+            assert_eq!(kind(&after), "command_accepted", "{after}");
+            let got: Vec<u64> = after["payload"]["result"]["lines"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|line| line["seq"].as_u64().unwrap())
+                .collect();
+            assert_eq!(got, vec![2, 3, 4, 5]);
+            send(
+                &client,
+                r#"{"id":"c_over","command":"history","args":{"from_seq":0,"to_seq":4}}"#,
+            );
+            assert_eq!(
+                rejection(&response(&client, "c_over")),
+                ("invalid_arguments", UNFIT)
+            );
+            // The checks before the read need no parse.
+            send(
+                &client,
+                r#"{"id":"c_past","command":"history","args":{"from_seq":8}}"#,
+            );
+            assert_eq!(
+                rejection(&response(&client, "c_past")),
+                ("invalid_arguments", PAST)
+            );
+            send(
+                &client,
+                r#"{"id":"c_rev","command":"history","args":{"from_seq":3,"to_seq":1}}"#,
+            );
+            assert_eq!(
+                rejection(&response(&client, "c_rev")),
+                ("invalid_arguments", REVERSED)
+            );
+            // A window cut short by `to_seq` reads no further.
+            send(
+                &client,
+                r#"{"id":"c_first","command":"history","args":{"from_seq":0,"to_seq":0}}"#,
+            );
+            let first = response(&client, "c_first");
+            assert_eq!(kind(&first), "command_accepted", "{first}");
+            assert_eq!(first["payload"]["result"]["lines"][0]["seq"], 0);
+            assert_eq!(
+                first["payload"]["result"]["lines"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                1
+            );
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
 #[test]
 fn inbox_commands_are_answered_only_on_the_connection_that_sent_them() {
     let opened = Opened::open(vec![]);
