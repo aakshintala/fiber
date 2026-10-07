@@ -7,11 +7,20 @@ use mlua::Table;
 
 use super::Target;
 
+/// One command the entry script registered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct DeclaredCommand {
+    /// Its timeout.
+    pub(super) timeout: Duration,
+    /// Its one-line description, `""` when undeclared.
+    pub(super) description: String,
+}
+
 /// What the entry script registered: commands, provider functions and hooks,
 /// in separate maps so a shared name cannot collide.
 #[derive(Default)]
 pub(super) struct CallbackTimeouts {
-    pub(super) commands: BTreeMap<String, Duration>,
+    pub(super) commands: BTreeMap<String, DeclaredCommand>,
     pub(super) providers: BTreeMap<String, BTreeMap<String, Duration>>,
     pub(super) hooks: DeclaredHooks,
 }
@@ -20,7 +29,7 @@ impl CallbackTimeouts {
     /// The timeout `target` declared, if the entry script registered it.
     pub(super) fn timeout(&self, target: &Target) -> Option<Duration> {
         match target {
-            Target::Command(name) => self.commands.get(name).copied(),
+            Target::Command(name) => self.commands.get(name).map(|c| c.timeout),
             Target::Provider { name, function } => self
                 .providers
                 .get(name)

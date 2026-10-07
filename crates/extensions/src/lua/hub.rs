@@ -197,6 +197,62 @@ impl Hub {
         }
     }
 
+    /// Sets the ephemeral emitter `host.status`, `host.widget` and `host.emit`
+    /// write through, flushing what was buffered before it in call order.
+    /// A later emitter replaces the last, as `set_inbox` does.
+    pub(crate) fn set_emit(&self, emit: std::sync::Arc<dyn contract::emit::Emit>) {
+        let mut shared = self.lock();
+        if shared.disposed || shared.sealed {
+            return;
+        }
+        shared.emitter = Some(emit.clone());
+        let buffered = std::mem::take(&mut shared.emit_buffer);
+        drop(shared);
+        for event in buffered {
+            emit.emit(&event);
+        }
+    }
+
+    /// Emits an ephemeral `event` through the late-bound emitter, or buffers
+    /// it in call order when none arrived yet. After the drop or `seal`,
+    /// it is dropped. Holds the hub lock while choosing, so `seal` under
+    /// the same lock drops every later emission; emitting itself runs
+    /// outside the lock.
+    pub(crate) fn emit(&self, event: contract::events::Event) {
+        let emitter = {
+            let mut shared = self.lock();
+            if shared.disposed || shared.sealed {
+                return;
+            }
+            match shared.emitter.clone() {
+                Some(emitter) => emitter,
+                None => {
+                    shared.emit_buffer.push(event);
+                    return;
+                }
+            }
+        };
+        emitter.emit(&event);
+    }
+
+    /// Drops every later emission and delivery from this extension; called by
+    /// `Session::quiesce` before `fiber_exited`. A running callback is not
+    /// stopped; only its output is dropped.
+    pub(crate) fn seal(&self) {
+        self.lock().sealed = true;
+    }
+
+    /// Releases a held queued call, so the stream may start it.
+    pub(crate) fn release(&self, id: u64) {
+        {
+            let mut shared = self.lock();
+            if let Some(job) = shared.queue.iter_mut().find(|job| job.id == id) {
+                job.held = false;
+            }
+        }
+        self.notify();
+    }
+
     /// Records the extension's drop under the same lock that routes
     /// deliveries: anything routed after this is dropped.
     pub(crate) fn dispose(&self, name: &str) {
@@ -275,10 +331,10 @@ impl Hub {
 
     /// Routes an extension delivery to the loop's inbox, or buffers it in
     /// call order when no sender arrived yet. One routed after the drop
-    /// is dropped instead; routing holds one lock, so nothing is stranded.
+    /// or after `seal` is dropped instead; routing holds one lock, so nothing is stranded.
     pub(crate) fn send(&self, delivery: Delivery) {
         let mut shared = self.lock();
-        if shared.disposed {
+        if shared.disposed || shared.sealed {
             return;
         }
         let inbox = shared.inbox.clone();
@@ -316,6 +372,15 @@ pub(crate) struct Shared {
     /// The extension was dropped: anything routed after this is dropped,
     /// under the same lock that routes deliveries.
     pub(super) disposed: bool,
+    /// `seal` was called: every later emission and delivery is dropped,
+    /// under the same lock that routes them.
+    pub(super) sealed: bool,
+    /// The ephemeral emitter `host.status`, `host.widget` and `host.emit`
+    /// write through, set late by `emit_to`.
+    pub(super) emitter: Option<std::sync::Arc<dyn contract::emit::Emit>>,
+    /// Ephemeral events emitted before any emitter, in call order, flushed
+    /// on the first one.
+    pub(super) emit_buffer: Vec<contract::events::Event>,
     /// The timers `host.after` and `host.every` set, by id.
     pub(crate) timers: HashMap<u64, Timer>,
     /// Timer ids whose Lua functions the extension's thread still frees.
@@ -375,6 +440,8 @@ pub(super) struct Job {
     /// When Fiber asked. Waiting counts against the callback's timeout from
     /// here.
     pub(super) asked: Instant,
+    /// A held job never starts until `release`; every stream job behind it waits too.
+    pub(super) held: bool,
 }
 
 /// What registration lets a waiter do.
@@ -394,6 +461,15 @@ pub(super) enum Next {
 impl Shared {
     /// Queues a call and returns its id.
     pub(super) fn push(&mut self, target: Target, arg: Value, asked: Instant) -> u64 {
+        self.push_at(target, arg, asked, false)
+    }
+
+    /// Queues a held call, which never starts until `release`.
+    pub(super) fn push_held(&mut self, target: Target, arg: Value, asked: Instant) -> u64 {
+        self.push_at(target, arg, asked, true)
+    }
+
+    fn push_at(&mut self, target: Target, arg: Value, asked: Instant, held: bool) -> u64 {
         let id = self.next_id;
         self.next_id = self.next_id.wrapping_add(1);
         self.queue.push_back(Job {
@@ -401,6 +477,7 @@ impl Shared {
             target,
             arg,
             asked,
+            held,
         });
         self.calls.insert(id, Progress::Queued);
         id
@@ -431,6 +508,7 @@ impl Shared {
                 target: Target::Timer { id: timer_id },
                 arg: Value::Null,
                 asked: now,
+                held: false,
             },
             timeout,
             deadline,

@@ -256,3 +256,16 @@ fn take_timer_cleanup_takes_the_list() {
     assert_eq!(hub.take_timer_cleanup(), vec![3, 5]);
     assert!(hub.take_timer_cleanup().is_empty());
 }
+
+/// After `seal`, a delivery reaches neither the inbox nor the buffer: one
+/// in flight finishes first and every later emission or delivery is dropped.
+#[test]
+fn a_delivery_after_seal_is_dropped() {
+    let hub = Hub::new(FakeClock::new());
+    let (tx, rx) = mpsc::channel();
+    hub.set_inbox(tx);
+    hub.seal();
+    hub.send(Delivery::ExtensionExec(exec("late")));
+    assert!(received(&rx).is_none(), "nothing arrives after the seal");
+    assert!(hub.lock().buffer.is_empty());
+}
