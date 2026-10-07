@@ -809,6 +809,38 @@ fn a_resumed_failure_is_the_table_at_its_source() {
 }
 
 #[test]
+fn a_path_that_is_not_a_string_names_the_call() {
+    let setup = Setup::new();
+    let lua = setup.lua();
+    let clock = fakes::clock::FakeClock::new();
+    let deadline = crate::lua::Deadline::new(clock);
+    let dir = fakes::TempDir::new("fiber-fs-badpath");
+    crate::lua::install_prelude(&lua, &deadline, dir.path().to_path_buf(), crate::MEMORY_CAP)
+        .unwrap();
+    for (call, code) in [
+        ("read", "host.fs.read({})"),
+        ("write", "host.fs.write(1, \"x\")"),
+        ("list", "host.fs.list(1)"),
+        ("stat", "host.fs.stat(1)"),
+        ("mkdir", "host.fs.mkdir(1)"),
+        ("remove", "host.fs.remove(1)"),
+        ("rename", "host.fs.rename(1, \"g.md\")"),
+        ("rename", "host.fs.rename(\"f.md\", 1)"),
+    ] {
+        let message: String = lua
+            .load(format!(
+                "local ok, err = pcall(function() {code} end); return err"
+            ))
+            .eval()
+            .unwrap();
+        assert!(
+            message.ends_with(&format!("host.fs.{call}: path must be a string")),
+            "{code}: {message}"
+        );
+    }
+}
+
+#[test]
 fn wrong_arguments_are_strings_and_coded_failures_are_tables() {
     let setup = Setup::new();
     let lua = setup.lua();
