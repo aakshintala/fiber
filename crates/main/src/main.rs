@@ -32,6 +32,9 @@ mod shutdown;
 #[path = "live_tests.rs"]
 mod live_tests;
 #[cfg(test)]
+#[path = "lua_warm_tests.rs"]
+mod lua_warm_tests;
+#[cfg(test)]
 #[path = "reviewer_tests.rs"]
 mod reviewer_tests;
 
@@ -389,6 +392,19 @@ fn parts_with(
     let home = config::fiber_home_from_env().map_err(|e| failed(e.code(), e))?;
     let workspace = std::env::current_dir()
         .map_err(|e| failed(ErrorCode::IoFailed, format!("the current directory: {e}")))?;
+    parts_in(home, workspace, model, recorded, recorded_credential, clock)
+}
+
+/// As [`parts_with`], for the Fiber home `home` and the workspace
+/// `workspace` rather than the environment's.
+fn parts_in(
+    home: PathBuf,
+    workspace: PathBuf,
+    model: Option<String>,
+    recorded: Option<&str>,
+    recorded_credential: Option<&str>,
+    clock: Arc<dyn contract::clock::Clock>,
+) -> Result<Parts, Failure> {
     let (sessions, project) = ::cli::project_of(&home, &workspace)?;
     let config = Config::load(Sources {
         home: home.clone(),
