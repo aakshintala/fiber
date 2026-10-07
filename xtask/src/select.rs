@@ -379,9 +379,9 @@ pub(crate) struct Plan {
 pub(crate) fn plan(mode: &str, packages: &[String], event: &str, bug: bool) -> Plan {
     let pr = event == "pull_request";
     let code = mode != "docs";
-    let shards = if pr && code { MUTANT_SHARDS } else { 0 };
+    let shards = if code { MUTANT_SHARDS } else { 0 };
     let jobs = BTreeMap::from([
-        ("lint", pr && code),
+        ("lint", !pr || code),
         // The backstop on `main` compiles the whole workspace on every push.
         ("test", !pr || !packages.is_empty()),
         ("mutants", shards > 0),

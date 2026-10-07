@@ -44,7 +44,7 @@ pub(crate) struct Hub {
     /// The open connections and the idle timer, under one lock.
     conns: Mutex<Conns>,
     /// Woken on every clock move, every change to `conns` and every signal.
-    tick: Arc<Tick>,
+    pub(crate) tick: Arc<Tick>,
     /// `tick` as the clock's subscriber: kept alive so advances wake the
     /// idle wait.
     wake: Arc<dyn Wake>,
@@ -284,6 +284,36 @@ impl Wake for Tick {
         // yet parked cannot miss it.
         let _held = lock(&self.held);
         self.moved.notify_all();
+    }
+}
+
+impl Tick {
+    /// Returns once `clock` reads `until` or later.
+    pub(crate) fn until(&self, clock: &dyn Clock, until: Instant) {
+        loop {
+            let guard = lock(&self.held);
+            if clock.now() >= until {
+                return;
+            }
+            let mut slot = Some(guard);
+            clock.wait_until(Some(until), &mut |bound| {
+                let Some(guard) = slot.take() else {
+                    return;
+                };
+                slot = Some(match bound {
+                    Some(limit) => {
+                        self.moved
+                            .wait_timeout(guard, limit)
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .0
+                    }
+                    None => self
+                        .moved
+                        .wait(guard)
+                        .unwrap_or_else(PoisonError::into_inner),
+                });
+            });
+        }
     }
 }
 

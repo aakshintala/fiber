@@ -10,7 +10,7 @@
 
 use std::os::unix::net::UnixStream;
 
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::*;
 
@@ -22,6 +22,7 @@ fn a_stale_relay_never_drops_a_reconnect_to_the_same_session() {
             session: "s_0123456789abcdef".to_owned(),
             epoch,
             writer,
+            kept: Kept::default(),
         }
     }
     let sid = "s_0123456789abcdef";
@@ -50,6 +51,7 @@ fn relay_slots_drop_only_their_own_entry() {
             session: session.to_owned(),
             epoch,
             writer,
+            kept: Kept::default(),
         }
     }
     let entries = [
@@ -108,4 +110,46 @@ fn only_an_acknowledgement_of_the_replayed_id_is_dropped() {
         &serde_json::to_vec(&json!({"kind": "command_accepted", "payload": {}})).unwrap(),
         "c_hub"
     ));
+}
+
+#[test]
+fn an_acknowledgement_names_its_command_and_whether_it_is_closing() {
+    let line = |kind: &str, payload: Value| {
+        serde_json::to_vec(&json!({"kind": kind, "ts": 1, "payload": payload})).unwrap()
+    };
+    let closing = json!({"command_id": "c_1", "code": "closing", "message": "m"});
+    assert_eq!(
+        acknowledgement(&line("command_rejected", closing.clone())),
+        Some(("c_1".to_owned(), true))
+    );
+    // Accepted, or rejected with another code: an acknowledgement, not
+    // closing.
+    assert_eq!(
+        acknowledgement(&line("command_accepted", closing.clone())),
+        Some(("c_1".to_owned(), false))
+    );
+    let other = json!({"command_id": "c_1", "code": "busy", "message": "m"});
+    assert_eq!(
+        acknowledgement(&line("command_rejected", other)),
+        Some(("c_1".to_owned(), false))
+    );
+    assert_eq!(
+        acknowledgement(&line("command_rejected", json!({"command_id": "c_1"}))),
+        Some(("c_1".to_owned(), false))
+    );
+    // No acknowledgement at all.
+    assert_eq!(acknowledgement(&line("session_status", closing)), None);
+    assert_eq!(
+        acknowledgement(&line("command_rejected", json!({"code": "closing"}))),
+        None
+    );
+    assert_eq!(
+        acknowledgement(&line("command_rejected", Value::Null)),
+        None
+    );
+    assert_eq!(acknowledgement(b"not json\n"), None);
+    assert_eq!(
+        acknowledgement(&serde_json::to_vec(&json!({"payload": {"command_id": "c_1"}})).unwrap()),
+        None
+    );
 }

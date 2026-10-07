@@ -8,6 +8,9 @@
 //! socket: the connection's first `subscribe` for a session is kept, and a
 //! reconnect to that session sends it again under a hub-minted id before
 //! the client's command, dropping the session's acknowledgement of it.
+//!
+//! A `closing` answer from a session whose log ends in `fiber_exited` is
+//! not passed on: the command is routed again to the resumed session.
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::Shutdown;
@@ -20,12 +23,20 @@ use serde_json::{Map, Value};
 
 use crate::connection::{Hub, lock, reject};
 
-/// One relay: the session connection, and the writer the next command for
-/// it uses. The relay thread owns the reader; both halves close together.
+/// The commands relayed on one session connection that the session has
+/// not acknowledged yet: each command id and its line without the
+/// `session_id`, so a `closing` answer can route it again. Shared by the
+/// relay entry and its thread.
+pub(crate) type Kept = Arc<Mutex<Vec<(String, Map<String, Value>)>>>;
+
+/// One relay: the session connection, the writer the next command for it
+/// uses, and the commands it has not acknowledged. The relay thread owns
+/// the reader; both halves close together.
 pub(crate) struct Relay {
     pub(crate) session: String,
     pub(crate) epoch: u64,
     pub(crate) writer: UnixStream,
+    pub(crate) kept: Kept,
 }
 
 /// A connection's relays, the last epoch minted on it, and the first
@@ -117,6 +128,23 @@ pub(crate) fn relay_command(
     };
     let mut stripped = object.clone();
     stripped.remove("session_id");
+    route(id, session, stripped, hub, writer, relays, false);
+}
+
+/// Passes `stripped` to the session's open relay, or to a new connection:
+/// the socket that accepts, or a resumed session. With `exited`, the
+/// session's log ends in `fiber_exited` and a socket that accepts may be
+/// its exiting process, so the connection comes from
+/// [`crate::resume::resume_exited`].
+fn route(
+    id: &CommandId,
+    session: &str,
+    stripped: Map<String, Value>,
+    hub: &Arc<Hub>,
+    writer: &Arc<Mutex<UnixStream>>,
+    relays: &Arc<Mutex<Relays>>,
+    exited: bool,
+) {
     let Some(bytes) = line_bytes(&stripped) else {
         return;
     };
@@ -127,11 +155,13 @@ pub(crate) fn relay_command(
             .iter()
             .position(|entry| entry.session == session)
         {
-            if held
-                .entries
-                .get(at)
-                .is_some_and(|entry| write_all(&entry.writer, &bytes).is_ok())
-            {
+            // Kept before the write, so the relay thread finds it when the
+            // session answers.
+            let sent = held.entries.get(at).is_some_and(|entry| {
+                lock(&entry.kept).push((id.0.clone(), stripped.clone()));
+                write_all(&entry.writer, &bytes).is_ok()
+            });
+            if sent {
                 held.keep(session, &stripped);
                 return;
             }
@@ -139,16 +169,19 @@ pub(crate) fn relay_command(
         }
         held.subscription(session)
     };
-    let socket = hub.home.join("run").join(session);
-    let stream = match UnixStream::connect(&socket) {
+    let sid = SessionId(session.to_owned());
+    let opened = if exited {
+        crate::resume::resume_exited(hub, &sid)
+    } else {
+        UnixStream::connect(hub.home.join("run").join(session))
+            .or_else(|_| crate::resume::resume(hub, &sid))
+    };
+    let stream = match opened {
         Ok(stream) => stream,
-        Err(_) => match crate::resume::resume(hub, &SessionId(session.to_owned())) {
-            Ok(stream) => stream,
-            Err(refused) => {
-                reject(writer, hub, Some(id), &refused.code, &refused.message);
-                return;
-            }
-        },
+        Err(refused) => {
+            reject(writer, hub, Some(id), &refused.code, &refused.message);
+            return;
+        }
     };
     // The connection's subscription first, under an id of the hub's own,
     // so the client's command reaches a subscribed connection.
@@ -165,6 +198,7 @@ pub(crate) fn relay_command(
         }
         None => None,
     };
+    let kept: Kept = Arc::new(Mutex::new(vec![(id.0.clone(), stripped.clone())]));
     if write_all(&stream, &bytes).is_err() {
         not_found(writer, hub, id, session);
         return;
@@ -182,10 +216,17 @@ pub(crate) fn relay_command(
     // The thread may run before its entry is pushed: on session EOF it
     // only removes an entry it finds.
     let relayed = thread::Builder::new().name("hub-relay".to_owned()).spawn({
+        let hub = Arc::clone(hub);
         let writer = Arc::clone(writer);
         let relays = Arc::clone(relays);
         let session = session.to_owned();
-        move || relay(epoch, &session, reader, &writer, &relays, replayed)
+        let kept = Arc::clone(&kept);
+        let owned = RelayThread {
+            epoch,
+            replayed,
+            kept,
+        };
+        move || relay(owned, &session, reader, &hub, &writer, &relays)
     });
     // A thread that never started leaves no entry: the next command for
     // the session reconnects.
@@ -194,8 +235,18 @@ pub(crate) fn relay_command(
             session: session.to_owned(),
             epoch,
             writer: stream,
+            kept,
         });
     }
+}
+
+/// What one relay thread owns besides its streams: its epoch, the
+/// subscription it sent again, and its entry's unacknowledged commands,
+/// which outlive the entry.
+struct RelayThread {
+    epoch: u64,
+    replayed: Option<String>,
+    kept: Kept,
 }
 
 fn not_found(writer: &Arc<Mutex<UnixStream>>, hub: &Hub, id: &CommandId, session: &str) {
@@ -204,20 +255,28 @@ fn not_found(writer: &Arc<Mutex<UnixStream>>, hub: &Hub, id: &CommandId, session
 }
 
 /// Copies every session line back verbatim onto the client's shared
-/// writer, except the acknowledgement of `replayed`, the subscription the
-/// hub sent again, which the client never sent. The session closing its
-/// socket drops the map entry; the next command for it reconnects.
+/// writer, except the acknowledgement of the subscription the hub sent
+/// again, which the client never sent, and a `closing` answer from a
+/// session whose log ends in `fiber_exited`: that drops this thread's map
+/// entry, without shutting the stream, and routes the command again. The
+/// session closing its socket drops the map entry; the next command for it
+/// reconnects.
 fn relay(
-    epoch: u64,
+    owned: RelayThread,
     session: &str,
     reader: UnixStream,
+    hub: &Arc<Hub>,
     writer: &Arc<Mutex<UnixStream>>,
     relays: &Arc<Mutex<Relays>>,
-    replayed: Option<String>,
 ) {
-    let mut replayed = replayed;
+    let RelayThread {
+        epoch,
+        mut replayed,
+        kept,
+    } = owned;
     let mut read = BufReader::new(reader);
     let mut buf = Vec::new();
+    let mut exiting = false;
     loop {
         buf.clear();
         match read.read_until(b'\n', &mut buf) {
@@ -230,6 +289,12 @@ fn relay(
                     replayed = None;
                     continue;
                 }
+                if let Some((id, line)) = settle(&buf, &kept, hub, session, exiting) {
+                    exiting = true;
+                    lock(relays).finish(session, epoch);
+                    route(&CommandId(id), session, line, hub, writer, relays, true);
+                    continue;
+                }
                 let mut out = lock(writer);
                 if out.write_all(&buf).and_then(|()| out.flush()).is_err() {
                     break;
@@ -240,22 +305,49 @@ fn relay(
     lock(relays).finish(session, epoch);
 }
 
+/// Settles a kept command `line` acknowledges: it is no longer kept. A
+/// `closing` rejection of it returns it, to be routed again, once this
+/// thread has seen the exited window, whether in this answer
+/// (`crate::resume::exited`) or an earlier one (`exiting`).
+fn settle(
+    line: &[u8],
+    kept: &Kept,
+    hub: &Hub,
+    session: &str,
+    exiting: bool,
+) -> Option<(String, Map<String, Value>)> {
+    let (id, closing) = {
+        let mut kept = lock(kept);
+        if kept.is_empty() {
+            return None;
+        }
+        let (id, closing) = acknowledgement(line)?;
+        let at = kept.iter().position(|(kept, _)| *kept == id)?;
+        (kept.remove(at), closing)
+    };
+    (closing && (exiting || crate::resume::exited(&hub.home, &SessionId(session.to_owned()))))
+        .then_some(id)
+}
+
+/// The `command_id` of a session's `command_accepted` or
+/// `command_rejected`, and whether it is a `closing` rejection.
+fn acknowledgement(line: &[u8]) -> Option<(String, bool)> {
+    let line = serde_json::from_slice::<Value>(line).ok()?;
+    let kind = line.get("kind").and_then(Value::as_str)?;
+    if !matches!(kind, "command_accepted" | "command_rejected") {
+        return None;
+    }
+    let payload = line.get("payload")?;
+    let id = payload.get("command_id").and_then(Value::as_str)?;
+    let closing = kind == "command_rejected"
+        && payload.get("code").and_then(Value::as_str) == Some("closing");
+    Some((id.to_owned(), closing))
+}
+
 /// Whether `line` is a session's `command_accepted` or `command_rejected`
 /// for `command_id`.
 pub(crate) fn acknowledges(line: &[u8], command_id: &str) -> bool {
-    let Ok(line) = serde_json::from_slice::<Value>(line) else {
-        return false;
-    };
-    let acknowledgement = matches!(
-        line.get("kind").and_then(Value::as_str),
-        Some("command_accepted" | "command_rejected")
-    );
-    acknowledgement
-        && line
-            .get("payload")
-            .and_then(|payload| payload.get("command_id"))
-            .and_then(Value::as_str)
-            == Some(command_id)
+    acknowledgement(line).is_some_and(|(id, _)| id == command_id)
 }
 
 /// The entry a finished relay thread drops: its own session and epoch, so
