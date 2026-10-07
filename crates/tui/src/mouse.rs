@@ -15,6 +15,16 @@ pub(crate) enum TargetId {
     NewBelow,
     /// A conversation line: opens or closes what it names.
     Line(crate::app::Target),
+    /// A queued steering row, by its index: selects it.
+    Steering(usize),
+    /// A queued steering row's ✕, by its index: drops it.
+    DropSteering(usize),
+    /// A notice's box, by its id: shows its whole text.
+    Notice(usize),
+    /// A notice's ✕, by its id: dismisses it.
+    DismissNotice(usize),
+    /// "+N more" under the notices: lists them all.
+    MoreNotices,
 }
 
 /// One click target as drawn: what it does and the cells it covers.

@@ -2,6 +2,8 @@
 source: crates/tui/src/view_tests.rs
 expression: screen(&app)
 ---
+                                    Could not reach the    ✕
+                                    hub: refused
 
 
 
@@ -11,6 +13,4 @@ expression: screen(&app)
 
 
 
-
-Could not reach the hub: refused
 >

@@ -34,6 +34,14 @@ pub(crate) enum Key {
     BackTab,
     /// F1 (`SS3 P`, `CSI 11~`, `CSI P`).
     F1,
+    /// Alt+Up (`CSI 1;3A`, or `ESC` then `CSI A` in one read):
+    /// `select_steering`.
+    AltUp,
+    /// Alt+Down (`CSI 1;3B`, or `ESC` then `CSI B` in one read):
+    /// `select_steering`.
+    AltDown,
+    /// Alt+X (`ESC x` in one read): `drop_steering`.
+    AltX,
 }
 
 /// One key that edits the draft (`docs/tui.md`, "The input box",
@@ -255,6 +263,20 @@ fn step(buf: &[u8]) -> Step {
             Some(b'[') => parse_csi(buf),
             Some(b'O') => parse_ss3(buf),
             Some(b'a') => Some((vec![Event::Key(Key::AltA)], 2)),
+            Some(b'x') => Some((vec![Event::Key(Key::AltX)], 2)),
+            // ESC before an arrow's CSI is the legacy Alt arrow.
+            Some(0x1b) if buf.get(2) == Some(&b'[') => {
+                let (events, used) = parse_csi(buf.get(1..)?)?;
+                let alt = events
+                    .into_iter()
+                    .filter_map(|event| match event {
+                        Event::Key(Key::Up) => Some(Event::Key(Key::AltUp)),
+                        Event::Key(Key::Down) => Some(Event::Key(Key::AltDown)),
+                        Event::Key(_) | Event::Edit(_) | Event::Mouse(_) | Event::Reply(_) => None,
+                    })
+                    .collect();
+                Some((alt, used.saturating_add(1)))
+            }
             Some(b'b') => Some((vec![Event::Edit(Edit::WordLeft)], 2)),
             Some(b'f') => Some((vec![Event::Edit(Edit::WordRight)], 2)),
             Some(0x7f) => Some((vec![Event::Edit(Edit::DeleteWord)], 2)),
@@ -321,6 +343,8 @@ fn parse_csi(buf: &[u8]) -> Step {
         0x43 | 0x44 => arrow(final_byte == 0x43, params).into_iter().collect(),
         0x5a if params.is_empty() => vec![Event::Key(Key::BackTab)],
         0x50 if params.is_empty() => vec![Event::Key(Key::F1)],
+        0x41 if params == b"1;3" => vec![Event::Key(Key::AltUp)],
+        0x42 if params == b"1;3" => vec![Event::Key(Key::AltDown)],
         _ => Vec::new(),
     };
     Some((events, end.saturating_add(1)))

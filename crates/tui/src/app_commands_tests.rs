@@ -185,11 +185,11 @@ fn up_and_down_move_the_selection_clamped_and_scroll_the_window() {
     // The eighth row, still in the first window.
     assert_eq!(
         selected(&app).as_deref(),
-        Some("/?  Opens the key map.  command")
+        Some("/approvals  Reopens the waiting approvals and questions.  command")
     );
     assert_eq!(app.completions().and_then(|c| c.selected), Some(7));
     app.on_key(Key::Down, now());
-    // The ninth and last row: the window moves down by one.
+    // The ninth row: the window moves down by one.
     let completions = app.completions();
     assert_eq!(completions.as_ref().and_then(|c| c.selected), Some(7));
     assert_eq!(
@@ -260,6 +260,13 @@ fn handoff_sends_its_instructions() {
 }
 
 #[test]
+fn the_slash_list_shows_the_name_row() {
+    let mut app = connected();
+    type_text(&mut app, "/nam");
+    assert_eq!(shown(&app), ["/name <text>  Names the session.  command"]);
+}
+
+#[test]
 fn reload_sends_reload_without_args() {
     let mut app = attached();
     let lines = sent(enter(&mut app, "/reload"));
@@ -285,7 +292,7 @@ fn a_rejected_handoff_returns_its_draft_with_the_notice() {
 
 #[test]
 fn a_command_with_no_session_says_so() {
-    for command in ["/handoff x", "/reload", "/close"] {
+    for command in ["/handoff x", "/name x", "/reload", "/close"] {
         let mut app = connected();
         assert_eq!(enter(&mut app, command), Effect::None, "{command}");
         assert_eq!(app.notice(), Some("No session on screen."), "{command}");
@@ -295,7 +302,7 @@ fn a_command_with_no_session_says_so() {
 
 #[test]
 fn a_command_with_the_link_down_keeps_its_draft() {
-    for command in ["/handoff x", "/reload", "/close"] {
+    for command in ["/handoff x", "/name x", "/reload", "/close"] {
         let mut app = attached();
         app.disconnected();
         assert_eq!(enter(&mut app, command), Effect::None, "{command}");
