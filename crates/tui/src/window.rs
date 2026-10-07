@@ -754,7 +754,9 @@ pub(crate) fn fold(part: &mut Part, envelope: &Envelope) -> Folded {
     let changed = crate::turn::fold_line(&mut part.turns, &mut part.fold, envelope);
     match kind {
         "turn_started" if changed => Folded::Started,
-        "turn_completed" if changed && was_open => {
+        // `changed` is redundant here: a completed line that folded
+        // nothing re-reads as nothing below, so openness alone decides.
+        "turn_completed" if was_open => {
             read!(envelope, TurnCompleted).map_or(Folded::Nothing, |done| Folded::Ended(done, true))
         }
         "step_started" if was_open => Folded::Stepped,

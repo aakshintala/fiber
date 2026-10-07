@@ -11,7 +11,7 @@ use contract::clock::Clock;
 use contract::{ActionId, Envelope, Seq, SessionId};
 use serde_json::{Value, json};
 
-use super::{Pages, Part, fold};
+use super::{Folded, Pages, Part, fold};
 use crate::app::{App, Effect, Target};
 use crate::keys::Key;
 use crate::link::Line;
@@ -777,4 +777,91 @@ fn resident_counts_every_held_page() {
     let total = pages.index().pages().len();
     assert!(total > 2, "{total}");
     assert_eq!(pages.resident(), total);
+}
+
+/// One envelope of `kind` with `payload`, outside any page cut.
+fn envelope(kind: &str, action: Option<&str>, payload: Value) -> Envelope {
+    Envelope {
+        kind: kind.to_owned(),
+        session_id: SessionId(SESSION.to_owned()),
+        ts: 1_000,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: action.map(|id| ActionId(id.to_owned())),
+        seq: None,
+        payload: payload.as_object().cloned().unwrap_or_default(),
+    }
+}
+
+/// An empty page.
+fn part() -> Part {
+    Part {
+        first: 0,
+        turns: Vec::new(),
+        fold: crate::turn::Fold::default(),
+        aside_start: 0,
+    }
+}
+
+/// A page with one running turn.
+fn running_part() -> Part {
+    let mut page = part();
+    let started = fold(
+        &mut page,
+        &envelope(
+            "turn_started",
+            None,
+            json!({"input": [{"type": "message", "source": "driver",
+                "content": [{"type": "text", "text": "hi"}]}]}),
+        ),
+    );
+    assert!(matches!(started, Folded::Started), "{started:?}");
+    page
+}
+
+#[test]
+fn a_turn_started_with_no_input_folds_to_nothing() {
+    // A line that folds nothing is not a new card: `if true` would start one.
+    let mut page = part();
+    let folded = fold(&mut page, &envelope("turn_started", None, json!({})));
+    assert!(matches!(folded, Folded::Nothing), "{folded:?}");
+    assert!(page.turns.is_empty());
+}
+
+#[test]
+fn turn_completed_folds_to_ended_only_in_a_running_turn() {
+    let done = json!({"outcome": "completed"});
+    // In the running turn the line closes its card...
+    let mut page = running_part();
+    let folded = fold(&mut page, &envelope("turn_completed", None, done.clone()));
+    assert!(matches!(folded, Folded::Ended(_, true)), "{folded:?}");
+    // ...with no running turn it closes nothing...
+    let mut page = part();
+    let folded = fold(&mut page, &envelope("turn_completed", None, done));
+    assert!(matches!(folded, Folded::Nothing), "{folded:?}");
+    // ...and a line that folds nothing ends nothing either.
+    let mut page = running_part();
+    let folded = fold(&mut page, &envelope("turn_completed", None, json!({})));
+    assert!(matches!(folded, Folded::Nothing), "{folded:?}");
+}
+
+#[test]
+fn step_started_folds_to_stepped_only_in_a_running_turn() {
+    let mut page = running_part();
+    let folded = fold(&mut page, &envelope("step_started", None, json!({})));
+    assert!(matches!(folded, Folded::Stepped), "{folded:?}");
+    let mut page = part();
+    let folded = fold(&mut page, &envelope("step_started", None, json!({})));
+    assert!(matches!(folded, Folded::Nothing), "{folded:?}");
+}
+
+#[test]
+fn a_call_request_that_folds_nothing_folds_to_nothing() {
+    // An unreadable request joins no running turn: `if true` would call one.
+    let mut page = running_part();
+    let folded = fold(
+        &mut page,
+        &envelope("tool_call_requested", Some("a_c"), json!({})),
+    );
+    assert!(matches!(folded, Folded::Nothing), "{folded:?}");
 }
