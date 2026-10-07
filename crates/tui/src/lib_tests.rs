@@ -2,6 +2,7 @@
 
 use super::{Input, Loop, Screen};
 use crate::app::App;
+use crate::keys::{Event, Key};
 use crate::link::Line;
 use ratatui::backend::{Backend, CrosstermBackend, TestBackend};
 use std::fs::File;
@@ -249,6 +250,38 @@ fn a_kitty_reply_is_recorded() {
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
     feed(&mut lp, vec![Input::Bytes(b"\x1b[?5u".to_vec())]);
     assert!(lp.app.kitty());
+    // No tty took the push, so a lone ESC ending a read is still Esc.
+    assert_eq!(lp.parser.feed(b"\x1b"), vec![Event::Key(Key::Esc)]);
+}
+
+#[test]
+fn the_first_kitty_reply_pushes_the_flags_once() {
+    let pair = open();
+    let tty = pair
+        .slave
+        .try_clone()
+        .unwrap_or_else(|err| panic!("dup: {err}"));
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), Some(tty));
+    // A second reply pushes nothing more: the next bytes on the tty are
+    // the marker written after it.
+    feed(
+        &mut lp,
+        vec![
+            Input::Bytes(b"\x1b[?0u".to_vec()),
+            Input::Bytes(b"\x1b[?1u".to_vec()),
+        ],
+    );
+    (&pair.slave)
+        .write_all(b"END")
+        .unwrap_or_else(|err| panic!("write: {err}"));
+    assert_eq!(
+        read_until(&pair.main, b"END", "the kitty push"),
+        b"\x1b[>1uEND"
+    );
+    assert_eq!(crate::term::KITTY_PUSH, b"\x1b[>1u");
+    // Once pushed, Esc is `CSI 27u`: a lone ESC ending a read is held.
+    assert!(lp.parser.feed(b"\x1b").is_empty());
+    assert_eq!(lp.parser.feed(b"[27u"), vec![Event::Key(Key::Esc)]);
 }
 
 #[test]
@@ -388,13 +421,13 @@ fn a_schema_mismatch_says_so_and_hangs_up() {
 fn restore_puts_back_what_setup_changed() {
     let pair = open();
     crate::term::setup(&pair.slave).unwrap_or_else(|err| panic!("setup: {err}"));
-    let start = "\x1b[?1049h\x1b[?u\x1b[c";
+    let start = "\x1b[?1049h\x1b[?2004h\x1b[?u\x1b[c";
     assert_eq!(
         read_exact(&pair.main, start.len(), "the start bytes"),
         start.as_bytes()
     );
     super::restore();
-    let end = "\x1b[?1049l\x1b[?25h";
+    let end = "\x1b[<u\x1b[?2004l\x1b[?1049l\x1b[?25h";
     assert_eq!(
         read_exact(&pair.main, end.len(), "the restore bytes"),
         end.as_bytes()
@@ -589,10 +622,10 @@ fn run_quits_on_double_ctrl_c_with_the_reader_blocked() {
     // the first frame before anything is written to the master.
     let start = read_exact(
         &pair.main,
-        "\x1b[?1049h".len() + "\x1b[?u\x1b[c".len(),
+        "\x1b[?1049h\x1b[?2004h".len() + "\x1b[?u\x1b[c".len(),
         "the start bytes",
     );
-    assert_eq!(start, b"\x1b[?1049h\x1b[?u\x1b[c");
+    assert_eq!(start, b"\x1b[?1049h\x1b[?2004h\x1b[?u\x1b[c");
     let frame = read_exact(&pair.main, 10, "the first frame");
     assert!(frame.contains(&b'>'));
     // The slave is in raw mode while running.
@@ -614,7 +647,7 @@ fn run_quits_on_double_ctrl_c_with_the_reader_blocked() {
     let after = rustix::termios::tcgetattr(&pair.slave).unwrap_or_else(|err| panic!("attr: {err}"));
     assert!(is_cooked(&after));
     // After the last frame the output holds the restore bytes.
-    let marker = b"\x1b[?1049l\x1b[?25h";
+    let marker = b"\x1b[<u\x1b[?2004l\x1b[?1049l\x1b[?25h";
     let tail = read_until(&pair.main, marker, "the restore bytes");
     assert_eq!(
         tail.get(tail.len().saturating_sub(marker.len())..),
@@ -652,7 +685,11 @@ fn run_shows_a_failed_connect_and_still_quits_restored() {
         .recv_timeout(DEADLINE)
         .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for run to return: {err}"));
     assert_eq!(code, 0);
-    read_until(&pair.main, b"\x1b[?1049l\x1b[?25h", "the restore bytes");
+    read_until(
+        &pair.main,
+        b"\x1b[<u\x1b[?2004l\x1b[?1049l\x1b[?25h",
+        "the restore bytes",
+    );
     assert!(is_cooked(
         &rustix::termios::tcgetattr(&pair.slave).unwrap_or_else(|err| panic!("attr: {err}"))
     ));
@@ -784,4 +821,30 @@ fn each_approval_choice_goes_to_the_hub_as_a_reply() {
         assert_eq!(reply["args"], args);
     }
     assert!(lp.app.panel().is_none());
+}
+
+#[test]
+fn the_screen_shows_the_cursor_at_the_draft() {
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    feed(&mut lp, vec![Input::Bytes(b"ab\x1b[D".to_vec())]);
+    let backend = lp.screen.terminal.backend_mut();
+    assert!(backend.inner.cursor_visible());
+    backend.inner.assert_cursor_position((3, 11));
+}
+
+#[test]
+fn a_cursor_move_alone_writes_and_a_still_frame_writes_nothing() {
+    let sink = Sink::default();
+    let (mut lp, _) = new_loop(CrosstermBackend::new(sink.clone()), None);
+    feed(&mut lp, vec![Input::Bytes(b"ab".to_vec())]);
+    let typed = sink.len();
+    // ← changes no cell, only the cursor.
+    feed(&mut lp, vec![Input::Bytes(b"\x1b[D".to_vec())]);
+    let moved = sink.len();
+    assert!(moved > typed);
+    // ← at the start changes nothing: no byte.
+    feed(&mut lp, vec![Input::Bytes(b"\x1b[D\x1b[D".to_vec())]);
+    let start = sink.len();
+    feed(&mut lp, vec![Input::Bytes(b"\x1b[D".to_vec())]);
+    assert_eq!(sink.len(), start);
 }
