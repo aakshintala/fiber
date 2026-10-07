@@ -68,8 +68,9 @@ impl Model<'_> {
     }
 }
 
-/// Removes every model whose `web_search` its protocol does not read or
-/// whose `extra_body` names a field Fiber builds, returning one
+/// Removes every model that declares no `context_window`, whose `web_search`
+/// its protocol does not read or whose `extra_body` names a field Fiber
+/// builds, returning one
 /// `model_invalid` notice per reason, in model order. A model it keeps is
 /// unchanged.
 pub fn leave_out_invalid(
@@ -133,6 +134,17 @@ pub fn leave_out_invalid(
                 message: format!(
                     "The model `{provider}/{}` names `{default}` as its `thinking_default`, \
                      which is not among its `thinking_levels`.",
+                    model.id
+                ),
+                extension: Some(extension.to_owned()),
+            });
+            invalid = true;
+        }
+        if model.context_window.is_none_or(|window| window == 0) {
+            notices.push(Notice {
+                code: ErrorCode::ModelInvalid,
+                message: format!(
+                    "The model `{provider}/{}` declares no `context_window`.",
                     model.id
                 ),
                 extension: Some(extension.to_owned()),
