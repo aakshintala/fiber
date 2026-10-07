@@ -260,6 +260,11 @@ impl Feed {
         }
     }
 
+    /// Drops any entry for `session`: its directory was deleted.
+    pub(crate) fn forget(&self, session: &str) {
+        lock(&self.state).entries.remove(session);
+    }
+
     /// `recent`: a page of exited sessions, newest first.
     pub(crate) fn recent(&self, args: &Map<String, Value>) -> Result<Option<Value>, Refusal> {
         let text = |key: &str| match args.get(key) {

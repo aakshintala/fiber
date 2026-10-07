@@ -16,6 +16,7 @@ Usage: fiber <command> [arguments]
 
 Sessions:
   ask [--model <model>] [--resume <id>] [<prompt>] [-]  Run one session of one turn; its events go to stdout
+  sessions delete [--cascade] [--yes] <id>              Delete a session, and with --cascade the sessions that continue it
   sessions export <id> [<path>]                         Write the session's log and its artifacts to <path>
   models [<search>] [--json]                            List the models the installed providers serve
 
@@ -86,7 +87,7 @@ struct Cli {
 pub(crate) enum Commands {
     /// Run one session of one turn; its events go to stdout
     Ask(AskArgs),
-    /// Write a session's log and its artifacts to a directory
+    /// Delete a session, or write its log and artifacts to a directory
     #[command(subcommand, arg_required_else_help = false)]
     Sessions(SessionsCommands),
     /// List the models the installed providers serve
@@ -171,6 +172,19 @@ pub(crate) enum HubCommands {
 #[derive(Debug, Subcommand)]
 #[command(disable_help_subcommand = true)]
 pub(crate) enum SessionsCommands {
+    /// Delete a session, and with --cascade the sessions that continue it
+    Delete {
+        /// Also delete every session that continues it: its forks and
+        /// rewinds, and theirs.
+        #[arg(long)]
+        cascade: bool,
+        /// Delete without asking.
+        #[arg(long)]
+        yes: bool,
+        /// The session: a full id or a unique prefix of one.
+        #[arg(value_name = "id")]
+        id: String,
+    },
     /// Write the session's log and its artifacts to <path>
     Export {
         /// The session: a full id or a unique prefix of one.
