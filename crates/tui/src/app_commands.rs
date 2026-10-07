@@ -102,10 +102,13 @@ impl App {
         if let Some(effect) = self.home_edit(&edit) {
             return effect;
         }
-        if self.overlays.keymap.is_some()
-            || self.search_edit(&edit)
-            || (self.focus.is_some() && self.panel().is_none())
-        {
+        if self.overlays.keymap.is_some() {
+            return Effect::None;
+        }
+        if let Some(effect) = self.offer_edit(&edit) {
+            return effect;
+        }
+        if self.search_edit(&edit) || (self.focus.is_some() && self.panel().is_none()) {
             return Effect::None;
         }
         crate::input::route(edit, &mut self.draft, &mut self.queue);
@@ -413,6 +416,7 @@ impl App {
         }
         self.phase = Phase::Starting;
         self.screen.clear();
+        self.offer = crate::offer::Offer::default();
         self.overlays.slash_rows = slash::rows(&[]);
         self.overlays.commands_id = None;
     }
@@ -553,7 +557,7 @@ impl App {
             }
             (Phase::Pending { .. }, None) => return Effect::None,
             (Phase::Starting, None) => {
-                let args = self.start_args(content);
+                let args = self.start_args();
                 let line = json!({"id": id, "command": "start", "args": args});
                 (Kind::Start, line)
             }
@@ -586,6 +590,17 @@ impl App {
             self.held.push(line);
             Effect::None
         }
+    }
+
+    /// The first prompt of a session `start` made, carrying `text`, sent
+    /// after its `subscribe` so the session counts this terminal before
+    /// the prompt. A rejection returns the text to an empty draft.
+    pub(super) fn first_prompt(&mut self, session: &SessionId, text: String) -> String {
+        let id = mint();
+        let args = json!({ "content": [{"type": "text", "text": text}] });
+        let line = session_command(&id, "prompt", session, Some(args)).to_string();
+        self.pending.insert(id, (Kind::Prompt, text));
+        line
     }
 
     /// Esc with nothing open interrupts the turn: `cancel`, only when busy.

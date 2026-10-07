@@ -410,7 +410,7 @@ fn start_names_the_launch_workspace() {
         serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("start: {err}"));
     assert_eq!(line["command"], "start");
     assert_eq!(line["args"]["workspace"], "/w");
-    assert_eq!(line["args"]["content"][0]["text"], "hi");
+    assert!(line["args"].get("content").is_none());
     // The placeholder goes with the first prompt.
     assert!(app.home_screen().is_some_and(|screen| !screen.placeholder));
 }
@@ -600,8 +600,9 @@ fn start_session(app: &mut App, session: &str) {
         .iter()
         .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{err}")))
         .collect();
-    assert_eq!(out.len(), 2);
+    assert_eq!(out.len(), 3);
     assert_eq!(out[0]["command"], "subscribe");
+    assert_eq!(out[2]["command"], "prompt");
 }
 
 #[test]

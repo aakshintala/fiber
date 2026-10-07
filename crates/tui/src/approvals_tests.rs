@@ -198,7 +198,7 @@ fn each_choice_sends_its_answer() {
             "{downs} down"
         );
         assert!(queue.panel().is_none());
-        assert!(queue.badge().is_none());
+        assert!(queue.badge(0).is_none());
     }
 }
 
@@ -351,11 +351,11 @@ fn esc_steps_through_the_queue_then_closes() {
     assert_eq!(header(&queue), format!("approval · {S_A} · 2 of 3"));
     press(&mut queue, Key::Esc, 1);
     assert_eq!(header(&queue), format!("approval · {S_A} · 3 of 3"));
-    assert!(queue.badge().is_none());
+    assert!(queue.badge(0).is_none());
     press(&mut queue, Key::Esc, 1);
     assert!(queue.panel().is_none());
     assert_eq!(
-        queue.badge().as_deref(),
+        queue.badge(0).as_deref(),
         Some("! 3 waiting · /approvals or ⌥A")
     );
     // A closed panel takes no key.
@@ -378,13 +378,13 @@ fn a_request_after_one_put_aside_waits_behind_the_badge() {
     queue.fold(&standing_ask(S_A, "a_2", "r_2", "two"));
     assert!(queue.panel().is_none());
     assert_eq!(
-        queue.badge().as_deref(),
+        queue.badge(0).as_deref(),
         Some("! 2 waiting · /approvals or ⌥A")
     );
     // Once the one put aside resolves, a new request opens at itself.
     queue.fold(&resolved(S_A, "r_1"));
     queue.fold(&resolved(S_A, "r_2"));
-    assert!(queue.badge().is_none());
+    assert!(queue.badge(0).is_none());
     queue.fold(&standing_ask(S_A, "a_3", "r_3", "three"));
     assert_eq!(row(&queue, 1), "asked by a global rule: three");
 }
@@ -480,7 +480,7 @@ fn a_resolved_request_leaves_the_queue() {
     assert_eq!(header(&queue), format!("approval · {S_A} · 1 of 1"));
     queue.fold(&resolved(S_A, "r_3"));
     assert!(queue.panel().is_none());
-    assert!(queue.badge().is_none());
+    assert!(queue.badge(0).is_none());
 }
 
 /// The queue through the app: keys, `/approvals`, and replies on the link.

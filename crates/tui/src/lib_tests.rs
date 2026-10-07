@@ -338,7 +338,7 @@ fn the_hub_connection_starts_attaches_and_subscribes() {
     let (reader, start) = command(reader, "the start command");
     assert_eq!(start["command"], "start");
     assert_eq!(start["args"]["workspace"], "/w");
-    assert_eq!(start["args"]["content"][0]["text"], "hi");
+    assert!(start["args"].get("content").is_none());
     let accepted = contract::HubLine {
         kind: "command_accepted".to_owned(),
         ts: 0,
@@ -354,10 +354,16 @@ fn the_hub_connection_starts_attaches_and_subscribes() {
     assert_eq!(seen(), vec!["s_aaaaaaaaaaaaaaaa".to_owned()]);
     feed(&mut lp, vec![Input::Hub(Line::Hub(accepted))]);
     assert_eq!(seen(), vec!["s_aaaaaaaaaaaaaaaa".to_owned()]);
-    let (_, subscribe) = command(reader, "the subscribe command");
+    let (reader, subscribe) = command(reader, "the subscribe command");
     assert_eq!(subscribe["command"], "subscribe");
     assert_eq!(subscribe["session_id"], "s_aaaaaaaaaaaaaaaa");
     assert_eq!(subscribe["args"]["level"], "full");
+    let (reader, asked) = command(reader, "the commands command");
+    assert_eq!(asked["command"], "commands");
+    let (_, prompt) = command(reader, "the first prompt");
+    assert_eq!(prompt["command"], "prompt");
+    assert_eq!(prompt["session_id"], "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(prompt["args"]["content"][0]["text"], "hi");
 }
 
 #[test]
@@ -829,8 +835,9 @@ fn each_approval_choice_goes_to_the_hub_as_a_reply() {
     };
     feed(&mut lp, vec![Input::Hub(Line::Hub(accepted))]);
     let (reader, _) = command(reader, "the subscribe command");
-    let (mut reader, asked) = command(reader, "the commands command");
+    let (reader, asked) = command(reader, "the commands command");
     assert_eq!(asked["command"], "commands");
+    let (mut reader, _) = command(reader, "the first prompt");
     feed(
         &mut lp,
         ["r_1", "r_2", "r_3", "r_4"]
