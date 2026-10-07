@@ -213,3 +213,218 @@ fn secrets_debug_shows_no_added_value() {
     assert!(!shown.contains("sk-q9"), "{shown:?}");
     assert!(!shown.contains("tok-q9"), "{shown:?}");
 }
+
+use std::sync::Arc;
+
+use contract::signing::{SignRequest, Signer};
+use serde_json::json;
+
+fn endpoint_key(provider: &str, server: &ProviderServer, key: &str) -> Endpoint {
+    Endpoint {
+        provider: provider.into(),
+        model: "m".into(),
+        base_url: format!("{}/v1", server.url()),
+        key: Some(contract::Secret::new(key.to_owned())),
+        direct: true,
+        ..Endpoint::default()
+    }
+}
+
+/// Signs with an `authorization` scheme and a second header.
+struct TwoHeaders;
+
+impl Signer for TwoHeaders {
+    fn sign(&self, _: &SignRequest<'_>) -> Result<Vec<(String, String)>, contract::signing::Error> {
+        Ok(vec![
+            ("authorization".to_owned(), "Bearer tok-1".to_owned()),
+            ("x-sig".to_owned(), "s-1".to_owned()),
+        ])
+    }
+}
+
+/// A 200 stream's error event echoing the key, and the redacted message it
+/// must log, per protocol.
+fn stream_error(name: &str) -> (Vec<u8>, &'static str) {
+    match name {
+        "anthropic" => (
+            format!(
+                "data: {}\n\n",
+                json!({"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded: sk-secret"}})
+            )
+            .into_bytes(),
+            "Overloaded: [redacted]",
+        ),
+        "opencode" => (
+            format!(
+                "event: error\ndata: {}\n\n",
+                json!({"type": "error", "code": "server_error", "message": "boom sk-secret"})
+            )
+            .into_bytes(),
+            "boom [redacted]",
+        ),
+        "openrouter" => (
+            format!("data: {}\n\n", json!({"error": {"message": "bad sk-secret"}}))
+                .into_bytes(),
+            "bad [redacted]",
+        ),
+        "gemini" => (
+            format!(
+                "data: {}\r\n\r\n",
+                json!({"error": {"code": 503, "message": "Overloaded sk-secret", "status": "UNAVAILABLE"}})
+            )
+            .into_bytes(),
+            "Overloaded [redacted]",
+        ),
+        _ => unreachable!("unknown protocol {name}"),
+    }
+}
+
+#[test]
+fn a_non_json_body_echoing_the_key_is_stored_redacted() {
+    for protocol in protocols() {
+        let server = ProviderServer::start([Response::status(400, "bad key sk-secret")]).unwrap();
+        let endpoint = endpoint(protocol.name, &server);
+        let (failure, _) = failed((protocol.call)(&endpoint));
+        let said = failure.provider.as_ref().unwrap();
+        assert_eq!(said.status, 400, "{}", protocol.name);
+        assert_eq!(
+            said.message.as_str(),
+            "bad key [redacted]",
+            "{}",
+            protocol.name
+        );
+    }
+}
+
+#[test]
+fn a_body_echoing_the_wrapped_key_redacts_the_key_only() {
+    for protocol in protocols() {
+        let server = ProviderServer::start([Response::status(
+            401,
+            r#"{"error":{"message":"Bearer sk-secret"}}"#,
+        )])
+        .unwrap();
+        let endpoint = endpoint(protocol.name, &server);
+        let (failure, _) = failed((protocol.call)(&endpoint));
+        assert_eq!(
+            failure.provider.as_ref().unwrap().message.as_str(),
+            "Bearer [redacted]",
+            "{}",
+            protocol.name
+        );
+    }
+}
+
+#[test]
+fn a_body_echoing_signed_header_values_is_stored_redacted() {
+    for protocol in protocols() {
+        let server = ProviderServer::start([Response::status(
+            401,
+            r#"{"error":{"message":"Bearer tok-1 then tok-1 then s-1"}}"#,
+        )])
+        .unwrap();
+        let endpoint = Endpoint {
+            provider: protocol.name.into(),
+            model: "m".into(),
+            base_url: format!("{}/v1", server.url()),
+            signer: Some(Arc::new(TwoHeaders) as Arc<dyn Signer>),
+            direct: true,
+            ..Endpoint::default()
+        };
+        let (failure, _) = failed((protocol.call)(&endpoint));
+        assert_eq!(
+            failure.provider.as_ref().unwrap().message.as_str(),
+            "[redacted] then [redacted] then [redacted]",
+            "{}",
+            protocol.name
+        );
+    }
+}
+
+#[test]
+fn an_error_inside_a_200_stream_is_stored_redacted() {
+    for protocol in protocols() {
+        let (body, expected) = stream_error(protocol.name);
+        let server = ProviderServer::start([Response::stream(body)]).unwrap();
+        let endpoint = endpoint(protocol.name, &server);
+        let (failure, _) = failed((protocol.call)(&endpoint));
+        let said = failure.provider.as_ref().unwrap();
+        assert_eq!(said.status, 200, "{}", protocol.name);
+        assert_eq!(said.message.as_str(), expected, "{}", protocol.name);
+    }
+}
+
+#[test]
+fn declared_and_fiber_built_header_values_stay() {
+    for protocol in protocols() {
+        let server = ProviderServer::start([Response::status(
+            400,
+            r#"{"error":{"message":"fiber sent application/json"}}"#,
+        )])
+        .unwrap();
+        let mut endpoint = endpoint(protocol.name, &server);
+        endpoint.headers = vec![("originator".to_owned(), "fiber".to_owned())];
+        let (failure, _) = failed((protocol.call)(&endpoint));
+        assert_eq!(
+            failure.provider.as_ref().unwrap().message.as_str(),
+            "fiber sent application/json",
+            "{}",
+            protocol.name
+        );
+    }
+}
+
+#[test]
+fn a_json_escaped_key_is_decoded_then_redacted() {
+    for protocol in protocols() {
+        let server = ProviderServer::start([Response::status(
+            400,
+            r#"{"error":{"message":"bad sk-a\/b"}}"#,
+        )])
+        .unwrap();
+        let endpoint = endpoint_key(protocol.name, &server, "sk-a/b");
+        let (failure, _) = failed((protocol.call)(&endpoint));
+        assert_eq!(
+            failure.provider.as_ref().unwrap().message.as_str(),
+            "bad [redacted]",
+            "{}",
+            protocol.name
+        );
+    }
+}
+
+#[test]
+fn gemini_classification_reads_the_original_body() {
+    let gemini = || {
+        protocols()
+            .into_iter()
+            .find(|p| p.name == "gemini")
+            .unwrap()
+    };
+    let protocol = gemini();
+    let server = ProviderServer::start([Response::status(
+        400,
+        r#"{"error":{"message":"API key not valid: API_KEY_INVALID","details":[{"reason":"API_KEY_INVALID"}]}}"#,
+    )])
+    .unwrap();
+    let endpoint = endpoint_key(protocol.name, &server, "API_KEY_INVALID");
+    let (failure, _) = failed((protocol.call)(&endpoint));
+    assert_eq!(failure.code, ErrorCode::AuthenticationFailed);
+    assert_eq!(
+        failure.provider.as_ref().unwrap().message.as_str(),
+        "API key not valid: [redacted]"
+    );
+
+    let server = ProviderServer::start([Response::status(
+        429,
+        r#"{"error":{"message":"slow down 37s","details":[{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"37s"}]}}"#,
+    )])
+    .unwrap();
+    let endpoint = endpoint_key(protocol.name, &server, "37s");
+    let (failure, _) = failed((protocol.call)(&endpoint));
+    assert_eq!(failure.retry_after, Some(37.0));
+    assert_eq!(
+        failure.provider.as_ref().unwrap().message.as_str(),
+        "slow down [redacted]"
+    );
+}
