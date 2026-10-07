@@ -228,16 +228,23 @@ pub fn matching(text: &str) -> io::Result<Vec<u32>> {
         .collect())
 }
 
+/// How long [`bounded`]'s worker waits between `try_wait` polls, on a
+/// channel that never sends, so the wait holds no lock. The lock is free
+/// between polls, so a timeout can always kill the child; the bound only
+/// delays reaping a child that already exited.
+const REAP_POLL: Duration = Duration::from_millis(10);
+
 /// What a bounded child left: its exit status and everything it wrote to
 /// stdout.
 type Finished = (ExitStatus, Vec<u8>);
 
 /// Waits up to `deadline` on the wall clock for `child`, whose stdout is
 /// piped, to close its stdout and exit. A thread reads stdout to its end,
-/// then reaps the child while holding its lock. On a miss the lock is free
-/// unless the reap has begun, so the child killed here is still unreaped
-/// and its pid cannot have gone to another process; the thread then reaps
-/// it. A miss is a `TimedOut` error naming `what`.
+/// then polls `try_wait` under a short lock, releasing it between polls, so
+/// a child that closed its stdout but hangs never holds the lock. On a miss
+/// the lock is free, so the child killed here is still unreaped and its pid
+/// cannot have gone to another process; the thread then reaps it. A miss is
+/// a `TimedOut` error naming `what`.
 fn bounded(mut child: Child, what: &str, deadline: Duration) -> io::Result<Finished> {
     let mut stdout = child
         .stdout
@@ -248,10 +255,26 @@ fn bounded(mut child: Child, what: &str, deadline: Duration) -> io::Result<Finis
     let (done, finished) = mpsc::channel::<io::Result<Finished>>();
     thread::spawn(move || {
         let mut out = Vec::new();
+        // `tick` never sends: holding it turns the receive below into a
+        // bounded wait that holds no lock.
+        let (tick, tock) = mpsc::channel::<()>();
         let result = stdout.read_to_end(&mut out).and_then(|_| {
-            let mut child = reaping.lock().unwrap_or_else(PoisonError::into_inner);
-            child.wait().map(|status| (status, out))
+            loop {
+                let status = {
+                    let mut child = reaping.lock().unwrap_or_else(PoisonError::into_inner);
+                    child.try_wait()
+                };
+                match status {
+                    Ok(Some(status)) => break Ok((status, out)),
+                    Ok(None) => {}
+                    Err(err) => break Err(err),
+                }
+                match tock.recv_timeout(REAP_POLL) {
+                    Ok(()) | Err(_) => {}
+                }
+            }
         });
+        drop(tick);
         match done.send(result) {
             Ok(()) | Err(_) => {}
         }
@@ -259,13 +282,12 @@ fn bounded(mut child: Child, what: &str, deadline: Duration) -> io::Result<Finis
     match finished.recv_timeout(deadline) {
         Ok(result) => result,
         Err(_) => {
-            // A held lock means the thread is reaping: the child closed its
-            // stdout and is exiting, so nothing is left to kill. The thread
-            // never panics while holding it, so it is never poisoned.
-            if let Ok(mut child) = child.try_lock() {
-                match child.kill() {
-                    Ok(()) | Err(_) => {}
-                }
+            // The worker holds the lock only across the non-blocking
+            // `try_wait`, so this acquires at once; the child killed here
+            // is still unreaped. The thread never panics while holding it,
+            // so it is never poisoned.
+            match child.lock().unwrap_or_else(PoisonError::into_inner).kill() {
+                Ok(()) | Err(_) => {}
             }
             Err(io::Error::new(
                 io::ErrorKind::TimedOut,

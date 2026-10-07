@@ -295,6 +295,48 @@ fn bounded_returns_a_timeout_on_a_miss_and_kills_the_child() {
     drop(stdin);
 }
 
+/// A shell in its own process group that closes its piped stdout, signals
+/// readiness past the close, then blocks in `sleep`: at `bounded`'s
+/// deadline stdout is already at end-of-file while the child lives, so a
+/// worker that held its lock across `wait` could never be killed.
+#[test]
+fn bounded_kills_a_child_that_closed_stdout_then_hangs() {
+    let dir = crate::TempDir::new("bc");
+    let ready = crate::children::Ready::new(dir.path());
+    let fifo = ready.path().to_owned();
+    let child = Command::new("sh")
+        .args(["-c", "exec 1>&-; echo $$ > \"$1\"; exec sleep 600", "sh"])
+        .arg(&fifo)
+        .process_group(0)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let group = child.id();
+    let watchdog = crate::Watchdog::group(group);
+    // The line is written past the close, so stdout is at end-of-file
+    // while the `sleep` lives.
+    assert_eq!(
+        ready.wait(DEADLINE),
+        vec![group],
+        "the ready line is the closed-stdout shell's pid"
+    );
+    let pid = child.id();
+    let missed = crate::within(
+        "bounded to give up on the closed-stdout shell",
+        DEADLINE,
+        move || bounded(child, "the closed-stdout shell", Duration::from_millis(100)),
+    );
+    let err = missed.unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+    assert!(err.to_string().contains("the closed-stdout shell"), "{err}");
+    assert!(
+        pids_exit(&[pid], DEADLINE),
+        "waited {DEADLINE:?} for the closed-stdout shell to be killed and reaped"
+    );
+    watchdog.stand_down(DEADLINE);
+}
+
 #[test]
 fn bounded_returns_the_status_and_stdout_of_a_child_that_exits() {
     let child = Command::new("sh")
