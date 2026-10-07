@@ -111,7 +111,7 @@ fn run() -> i32 {
             0
         }
         cli::Invocation::Run(Some(cli::Commands::Help { command })) => {
-            print_help(command.as_deref())
+            print_help(command.as_slice())
         }
         // The terminal door needs a tty and the hub; neither is built.
         cli::Invocation::Run(None) => {
@@ -395,8 +395,8 @@ fn list(clock: &dyn contract::clock::Clock) -> i32 {
     }
 }
 
-fn print_help(name: Option<&str>) -> i32 {
-    match cli::render_help(name) {
+fn print_help(words: &[String]) -> i32 {
+    match cli::render_help(words) {
         Ok(text) => {
             // A closed stdout leaves nobody to tell, as `fiber extension list` does.
             let mut out = io::stdout().lock();

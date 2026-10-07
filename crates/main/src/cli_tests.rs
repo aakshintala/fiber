@@ -68,11 +68,11 @@ fn the_menu_is_hand_grouped_and_names_every_visible_subcommand() {
     assert!(
         matches!(
             parsed,
-            Invocation::Run(Some(Commands::Help { command: None }))
+            Invocation::Run(Some(Commands::Help { ref command })) if command.as_slice().is_empty()
         ),
         "{parsed:?}"
     );
-    assert_eq!(super::render_help(None).unwrap(), menu());
+    assert_eq!(super::render_help::<&str>(&[]).unwrap(), menu());
 }
 
 #[test]
@@ -163,7 +163,7 @@ fn approve_parses_an_optional_yes_and_nothing_else() {
 
 #[test]
 fn the_menu_and_approve_help_say_what_approve_does() {
-    let help = super::render_help(Some("approve")).unwrap();
+    let help = super::render_help(&["approve"]).unwrap();
     assert!(help.contains("--yes"), "{help}");
     assert!(help.contains("without asking"), "{help}");
     assert!(
@@ -322,7 +322,7 @@ fn the_menu_lists_models_under_sessions() {
             l == "  models [<search>] [--json]                            List the models the installed providers serve"),
         "{sessions}"
     );
-    let help = super::render_help(Some("models")).unwrap();
+    let help = super::render_help(&["models"]).unwrap();
     assert!(
         help.contains("List the models the installed providers serve"),
         "{help}"
@@ -360,7 +360,7 @@ fn extension_alone_is_a_one_line_usage_sentence() {
 
 #[test]
 fn extension_help_matches_help_extension() {
-    let rendered = super::render_help(Some("extension")).unwrap();
+    let rendered = super::render_help(&["extension"]).unwrap();
     let Invocation::Print(error) = parse_from(["fiber", "extension", "--help"]) else {
         panic!("extension --help did not print");
     };
@@ -370,6 +370,41 @@ fn extension_help_matches_help_extension() {
             .lines()
             .any(|line| line.starts_with("Usage: fiber extension")),
         "{rendered}"
+    );
+}
+
+#[test]
+fn help_noun_verb_matches_the_verbs_help_flag() {
+    let cmd = command();
+    let pairs: Vec<(String, String)> = cmd
+        .get_subcommands()
+        .filter(|noun| !noun.is_hide_set())
+        .flat_map(|noun| {
+            noun.get_subcommands()
+                .map(|verb| (noun.get_name().to_owned(), verb.get_name().to_owned()))
+        })
+        .collect();
+    assert!(pairs.len() >= 3, "{pairs:?}");
+    for (noun, verb) in &pairs {
+        let parsed = parse_from(["fiber", "help", noun, verb]);
+        let Invocation::Run(Some(Commands::Help { command })) = parsed else {
+            panic!("help {noun} {verb} did not parse: {parsed:?}");
+        };
+        let rendered = super::render_help(command.as_slice()).unwrap();
+        let Invocation::Print(error) = parse_from(["fiber", noun, verb, "--help"]) else {
+            panic!("{noun} {verb} --help did not print");
+        };
+        assert_eq!(rendered, error.to_string(), "{noun} {verb}");
+        assert!(
+            rendered
+                .lines()
+                .any(|line| line.starts_with(&format!("Usage: fiber {noun} {verb}"))),
+            "{noun} {verb}\n{rendered}"
+        );
+    }
+    assert_eq!(
+        super::render_help(&["extension", "instal"]).unwrap_err(),
+        sentence(&["fiber", "extension", "instal"])
     );
 }
 
@@ -489,7 +524,7 @@ fn a_commands_help_matches_its_flag_and_names_fiber() {
     let names = visible();
     assert!(!names.is_empty());
     for name in &names {
-        let rendered = super::render_help(Some(name)).unwrap();
+        let rendered = super::render_help(&[name]).unwrap();
         let Invocation::Print(error) = parse_from(["fiber", name, "--help"]) else {
             panic!("{name} did not print help");
         };
@@ -502,7 +537,7 @@ fn a_commands_help_matches_its_flag_and_names_fiber() {
         );
     }
     assert_eq!(
-        super::render_help(Some("nope")).unwrap_err(),
+        super::render_help(&["nope"]).unwrap_err(),
         sentence(&["fiber", "nope"])
     );
 }
@@ -581,7 +616,7 @@ fn the_menu_and_ask_help_show_resume() {
         "the menu shows --resume:\n{}",
         menu()
     );
-    let rendered = super::render_help(Some("ask")).unwrap();
+    let rendered = super::render_help(&["ask"]).unwrap();
     assert!(
         rendered.contains("--resume <id>"),
         "ask's help shows --resume:\n{rendered}"
@@ -789,7 +824,7 @@ fn the_menu_and_top_level_help_name_no_session_command() {
         menu()
     );
     assert!(
-        !command_line(&super::render_help(None).unwrap()),
+        !command_line(&super::render_help::<&str>(&[]).unwrap()),
         "top-level help names no session command"
     );
     assert!(
@@ -937,7 +972,7 @@ fn hub_serve_parses_and_stays_hidden() {
         menu()
     );
     assert!(
-        !command_line(&super::render_help(None).unwrap()),
+        !command_line(&super::render_help::<&str>(&[]).unwrap()),
         "top-level help names no hub command"
     );
     assert!(

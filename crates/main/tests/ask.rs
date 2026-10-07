@@ -975,17 +975,29 @@ fn help_for_every_command_matches_the_flag() {
             via_flag.stdout
         );
     }
-    for verb in ["install", "update", "remove", "list"] {
-        let args = ["extension", verb, "--help"];
-        let run = setup.fiber(&args, None);
-        assert_eq!(run.code, Some(0), "{args:?}: {}", run.stderr);
-        assert_eq!(run.stderr, "");
+    for (noun, verb) in [
+        ("sessions", "export"),
+        ("extension", "install"),
+        ("extension", "update"),
+        ("extension", "remove"),
+        ("extension", "list"),
+        ("config", "get"),
+        ("config", "set"),
+    ] {
+        let via_help = setup.fiber(&["help", noun, verb], None);
+        let via_flag = setup.fiber(&[noun, verb, "--help"], None);
+        assert_eq!(via_help.code, Some(0), "{noun} {verb}: {}", via_help.stderr);
+        assert_eq!(via_flag.code, Some(0), "{noun} {verb}: {}", via_flag.stderr);
+        assert_eq!(via_help.stderr, "");
+        assert_eq!(via_flag.stderr, "");
+        assert_eq!(via_help.stdout, via_flag.stdout, "{noun} {verb}");
         assert!(
-            run.stdout
+            via_flag
+                .stdout
                 .lines()
-                .any(|line| line.starts_with(&format!("Usage: fiber extension {verb}"))),
-            "{verb}: {}",
-            run.stdout
+                .any(|line| line.starts_with(&format!("Usage: fiber {noun} {verb}"))),
+            "{noun} {verb}: {}",
+            via_flag.stdout
         );
     }
 }
