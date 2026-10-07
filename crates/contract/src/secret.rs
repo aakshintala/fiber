@@ -26,3 +26,7 @@ impl fmt::Debug for Secret {
         f.write_str("Secret(redacted)")
     }
 }
+
+#[cfg(test)]
+#[path = "secret_tests.rs"]
+mod tests;
