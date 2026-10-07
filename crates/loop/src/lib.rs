@@ -43,6 +43,8 @@ mod hooks;
 mod hosted;
 mod inbox;
 mod jobs;
+#[allow(dead_code, reason = "the loop wires it in next")]
+mod late_cost;
 mod opening;
 mod permission;
 mod process;
