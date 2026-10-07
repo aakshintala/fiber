@@ -896,6 +896,44 @@ fn steering_rows_above_the_input() {
 }
 
 #[test]
+fn zero_width_draws_no_steering_drop_target() {
+    use crate::mouse::TargetId;
+    let mut app = empty();
+    attach(&mut app, S_A);
+    app.on_line(turn_started(S_A, "hi"));
+    app.on_line(session_line(
+        S_A,
+        "steering_queue",
+        serde_json::json!({"messages": [
+            {"content": [{"type": "text", "text": "use the parser"}], "source": "driver", "command_id": "c_1"},
+        ]}),
+        None,
+    ));
+    assert!(
+        app.steering_drops().iter().any(|drop| *drop),
+        "the fixture needs a selectable steering row"
+    );
+    let area = Rect::new(0, 0, 0, HEIGHT);
+    let mut buf = Buffer::empty(area);
+    let targets = render(&app, area, &mut buf, None);
+    assert!(
+        targets
+            .iter()
+            .all(|target| !matches!(target.id, TargetId::DropSteering(_))),
+        "{targets:?}"
+    );
+    for target in &targets {
+        assert!(
+            target.rect.x >= area.x
+                && target.rect.right() <= area.right()
+                && target.rect.y >= area.y
+                && target.rect.bottom() <= area.bottom(),
+            "{target:?} outside {area:?}"
+        );
+    }
+}
+
+#[test]
 fn notices_float_and_nothing_below_the_conversation_moves() {
     let mut app = empty();
     attach(&mut app, S_A);
