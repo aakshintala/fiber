@@ -979,6 +979,43 @@ fn completed_line(run: &Run) -> &Value {
 }
 
 #[test]
+fn a_tool_call_with_no_arguments_is_logged_and_sent_back_as_an_empty_object() {
+    // Anthropic streams a call with no arguments as `input: {}` and no
+    // deltas; the log and the next request carried `""`, an HTTP 400 (#1295).
+    let setup = Setup::new();
+    let server = ProviderServer::start([
+        anthropic(&[
+            json!({"type": "content_block_start", "index": 0, "content_block": {
+                "type": "tool_use", "id": "toolu_1", "name": "read", "input": {}}}),
+            json!({"type": "content_block_stop", "index": 0}),
+        ]),
+        anthropic_hello(),
+        anthropic_hello(),
+    ])
+    .unwrap();
+    setup.provider_on(&server, "anthropic-messages");
+
+    let run = setup.run(&["ask", "call it"]);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let requested = run
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "tool_call_requested")
+        .unwrap();
+    assert_eq!(requested["payload"]["arguments"], json!({}));
+    let body: Value = serde_json::from_slice(&server.requests()[1].body).unwrap();
+    let sent = body["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|message| message["content"].as_array().cloned().unwrap_or_default())
+        .find(|block| block["type"] == "tool_use")
+        .unwrap();
+    assert_eq!(sent["input"], json!({}));
+}
+
+#[test]
 fn an_image_is_stored_logged_by_path_and_sent_inside_the_tool_result_on_every_request() {
     let setup = Setup::new();
     fs::write(setup.workspace().join("pic.png"), PIXEL).unwrap();

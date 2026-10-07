@@ -420,6 +420,52 @@ fn a_tool_use_with_no_input_text_records_an_empty_object() {
 }
 
 #[test]
+fn a_call_with_no_input_text_is_sent_back_as_an_empty_object() {
+    // The request after the tool result carries the call back; `input: ""`
+    // there is an HTTP 400 (#1295).
+    let events = [
+        started(),
+        json!({"type": "content_block_start", "index": 0, "content_block": {
+            "type": "tool_use", "id": "toolu_1", "name": "ping", "input": {}}}),
+        stopped(0),
+        finished("tool_use")[0].clone(),
+        finished("tool_use")[1].clone(),
+    ];
+    let reply = decoded(&stream(&events)).0.unwrap();
+    let [ReplyAction::ToolCall(call)] = reply.actions.as_slice() else {
+        panic!("{:?}", reply.actions);
+    };
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let request = ModelRequest {
+        conversation: vec![
+            Input::ToolCall {
+                action_id: ActionId("a_1".into()),
+                call: call.clone(),
+                model: "anthropic/claude-sonnet-5-5".into(),
+            },
+            Input::ToolResult {
+                action_id: ActionId("a_1".into()),
+                text: "pong".into(),
+                is_error: false,
+                images: Vec::new(),
+            },
+        ],
+        ..request()
+    };
+    run(Box::new(Messages::new(endpoint(&server)).request(&request)))
+        .0
+        .unwrap();
+    let sent = sent_body(&server, 0)["messages"][0]["content"].clone();
+    let tool_use = sent
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|b| b["type"] == "tool_use")
+        .unwrap_or_else(|| panic!("{sent}"));
+    assert_eq!(tool_use["input"], json!({}));
+}
+
+#[test]
 fn a_tool_use_whose_input_text_does_not_parse_records_the_raw_text() {
     let arguments = single_call(&[
         started(),
