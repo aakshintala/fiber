@@ -531,19 +531,40 @@ fn respond(stream: &mut TcpStream, status: &str) {
 
 /// A query string's parameters, in order, percent-decoded (`+` is a space).
 /// A bare `?` or an empty pair gives nothing; a key without `=` has an empty
-/// value. An invalid `%` escape is an error.
+/// value. An invalid `%` escape is an error. An error names the malformed
+/// parameter's recognised OAuth name, never any query bytes: any other key
+/// gives a generic phrase.
 fn parse_query(query: &str) -> Result<Vec<(String, String)>, String> {
     query
         .split('&')
         .filter(|pair| !pair.is_empty())
         .map(|pair| {
             let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
-            Ok((decode(key)?, decode(value)?))
+            let key = decode(key).map_err(|phrase| format!("a parameter name {phrase}"))?;
+            let value = decode(value).map_err(|phrase| {
+                if NAMED.contains(&key.as_str()) {
+                    format!("the `{key}` parameter's value {phrase}")
+                } else {
+                    format!("a parameter's value {phrase}")
+                }
+            })?;
+            Ok((key, value))
         })
         .collect()
 }
 
-fn decode(text: &str) -> Result<String, String> {
+/// The recognised OAuth 2.0 callback parameters (RFC 6749, section 4.1.2)
+/// and `iss` (RFC 9207): the only names an error ever repeats.
+const NAMED: &[&str] = &[
+    "code",
+    "state",
+    "error",
+    "error_description",
+    "error_uri",
+    "iss",
+];
+
+fn decode(text: &str) -> Result<String, &'static str> {
     let mut out = Vec::with_capacity(text.len());
     let mut bytes = text.bytes();
     while let Some(byte) = bytes.next() {
@@ -555,13 +576,13 @@ fn decode(text: &str) -> Result<String, String> {
                 let value = high
                     .zip(low)
                     .and_then(|(high, low)| u8::try_from(high * 16 + low).ok())
-                    .ok_or_else(|| format!("`{text}` has an invalid % escape"))?;
+                    .ok_or("has an invalid % escape")?;
                 out.push(value);
             }
             other => out.push(other),
         }
     }
-    String::from_utf8(out).map_err(|_| format!("`{text}` is not UTF-8 once decoded"))
+    String::from_utf8(out).map_err(|_| "is not UTF-8 once decoded")
 }
 
 /// Waits for the lock on `provider`'s stored credential, polling

@@ -780,7 +780,7 @@ fn an_error_chunk_mid_stream_fails_the_call_and_drops_what_it_streamed() {
         panic!("{result:?}");
     };
     assert_eq!(failure.code, ErrorCode::ContextOverflow);
-    assert_eq!(failure.provider.unwrap().status, 200);
+    assert_eq!(failure.provider.unwrap().status.unwrap(), 200);
     assert_eq!(
         deltas,
         [Delta::Text(TextDelta {

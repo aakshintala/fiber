@@ -75,3 +75,52 @@ fn credentials_is_empty_for_a_signer_without_credentials_even_with_a_cached_toke
         "a cached token must not be reported by a signer without credential()"
     );
 }
+
+#[test]
+fn detail_is_the_first_line_of_the_extension_s_own_text() {
+    use crate::Error;
+    use crate::lua_provider::detail;
+
+    fn lua(message: &str) -> Error {
+        Error::Lua {
+            extension: "ext".to_owned(),
+            message: message.to_owned(),
+        }
+    }
+    let cases: Vec<(Error, &str)> = vec![
+        (lua(""), ""),
+        (
+            Error::RefreshRejected {
+                extension: "ext".to_owned(),
+                message: "\n".to_owned(),
+            },
+            "",
+        ),
+        (
+            Error::RefreshUnreachable {
+                extension: "ext".to_owned(),
+                message: "a\r\nb".to_owned(),
+            },
+            "a",
+        ),
+        (Error::Credential(Box::new(lua("x\ny"))), "x"),
+        (
+            Error::Credential(Box::new(Error::Credential(Box::new(
+                Error::RefreshRejected {
+                    extension: "ext".to_owned(),
+                    message: "r".to_owned(),
+                },
+            )))),
+            "r",
+        ),
+    ];
+    for (error, expected) in &cases {
+        assert_eq!(detail(error), *expected, "{error:?}");
+    }
+    let bad = Error::BadReturn {
+        extension: "ext".to_owned(),
+        callback: "p.credential".to_owned(),
+        why: "no `token`".to_owned(),
+    };
+    assert_eq!(detail(&bad), bad.to_string());
+}

@@ -153,7 +153,7 @@ fn timeout_conflict_and_server_errors_are_provider_unavailable() {
             assert_eq!(should_retry, None, "{status}");
             assert_eq!(failure.retry_after, None, "{status}");
             assert_eq!(
-                failure.provider.as_ref().unwrap().status,
+                failure.provider.as_ref().unwrap().status.unwrap(),
                 status,
                 "{status}"
             );

@@ -131,18 +131,18 @@ fn post_with(
     }
     let signed = match signer {
         Some(signer) => {
-            let signed = signer
-                .sign(&SignRequest {
-                    method: "POST",
-                    url,
-                    headers,
-                    body,
-                })
-                .map_err(Error::Sign)?;
+            let signed = signer.sign(&SignRequest {
+                method: "POST",
+                url,
+                headers,
+                body,
+            });
+            // Added whether `sign()` succeeds or fails: a `sign()` error
+            // that echoes the credential it was handed is stored redacted.
             for credential in signer.credentials() {
                 secrets.add(credential);
             }
-            signed
+            signed.map_err(Error::Sign)?
         }
         None => Vec::new(),
     };

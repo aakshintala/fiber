@@ -10,6 +10,7 @@ use config::{Config, ProviderData, Secret};
 use contract::shapes::Failure;
 use contract::signing::Signer;
 use extensions::{LuaProvider, Providers, SessionExtensions};
+use provider::redact::Secrets;
 
 use crate::failed;
 
@@ -64,7 +65,9 @@ pub(crate) fn session_credential(
                 .registers("credential")
                 .map_err(|e| failed(e.code(), e))? =>
         {
-            lua.token().map(|_| ()).map_err(|e| failed(e.code(), e))?;
+            lua.credential_token().map(|_| ()).map_err(|e| {
+                provider::Error::Sign(e).failure(&provider.name, &Secrets::default())
+            })?;
             None
         }
         _ => Some(key()?),
