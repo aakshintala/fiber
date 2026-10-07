@@ -388,7 +388,8 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 Rejection codes: `malformed`, `invalid_arguments`, `unknown_command`,
 `not_subscribed`, `busy`, `stale_request`, `not_step_boundary`,
 `session_held`, `delegate_session`, `summary_failed`, `closing`,
-`duplicate_command`, `session_not_found`, `message_refused`, `hook_failed`.
+`duplicate_command`, `session_not_found`, `message_refused`, `hook_failed`,
+`io_failed`.
 
 A prompt or steer that a hook refuses is rejected `message_refused`, with the
 hook's reason and extension in the message. One whose blocking hook failed is
@@ -671,8 +672,8 @@ rationale and the rejected layouts are
   session keeps the binary it started with through `fiber update`. A client
   reads the session's `schema_version` from `fiber_started`; an additive
   difference is fine (`docs/events.md`, "Versioning"), and on a breaking one
-  the client says which version the session runs and declines, so the person
-  can close it or let it exit.
+  the client says which version the session runs and declines with
+  `session_held`, so the person can close it or let it exit.
 
 The socket is the only path into a running session. The terminal, a parent
 session, a GUI and a phone through the hub are the same kind of client, as map
