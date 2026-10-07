@@ -10,6 +10,7 @@
 )]
 
 use std::fs;
+use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
 
 use contract::events::Event;
@@ -114,3 +115,22 @@ pub(crate) fn kinds_and_seqs(dir: &Path) -> Vec<(String, Option<u64>)> {
         .map(|l| (l["kind"].as_str().unwrap().to_owned(), l["seq"].as_u64()))
         .collect()
 }
+
+/// Overwrites line `index` (from 0) of the session's log in place with bytes
+/// that do not parse, keeping its length, so every offset stays true.
+pub(crate) fn corrupt(dir: &Path, index: usize) {
+    let path = dir.join("events.jsonl");
+    let whole = fs::read(&path).unwrap();
+    let mut start = 0;
+    for line in whole.split_inclusive(|b| *b == b'\n').take(index) {
+        start += line.len();
+    }
+    let len = whole[start..].iter().position(|b| *b == b'\n').unwrap();
+    let file = fs::OpenOptions::new().write(true).open(&path).unwrap();
+    file.write_all_at(&vec![b'x'; len], u64::try_from(start).unwrap())
+        .unwrap();
+}
+
+/// How many lines a watcher's queue holds, and a catch-up page's size: the
+/// log crate's `CAPACITY`.
+pub(crate) const CAPACITY: usize = 1024;

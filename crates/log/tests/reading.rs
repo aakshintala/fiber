@@ -20,7 +20,7 @@ use std::time::Duration;
 
 use common::*;
 use contract::Envelope;
-use log::{Log, Watcher, read};
+use log::{Log, Watcher, lines, read};
 
 fn kinds(lines: &[Envelope]) -> Vec<&str> {
     lines.iter().map(|l| l.kind.as_str()).collect()
@@ -86,6 +86,84 @@ fn a_reader_refuses_a_complete_line_that_does_not_parse_and_names_it() {
 fn reading_a_missing_session_is_not_found() {
     let tmp = TestDir::new("read-missing");
     let err = read(&tmp.session(&id("s_x"))).unwrap_err();
+    assert_eq!(err.code(), contract::ErrorCode::SessionNotFound);
+}
+
+/// Appends `line` to the session's log as raw bytes, behind the writer's back.
+fn append_raw(dir: &std::path::Path, line: &[u8]) {
+    let mut file = fs::OpenOptions::new()
+        .append(true)
+        .open(dir.join("events.jsonl"))
+        .unwrap();
+    file.write_all(line).unwrap();
+}
+
+#[test]
+fn lines_yield_every_complete_line_in_order_and_skip_a_torn_tail() {
+    let tmp = TestDir::new("lines");
+    let log = Log::create(tmp.path(), id("s_1"), fakes::clock::FakeClock::new()).unwrap();
+    let written = [
+        log.append(&session_started(), None, None).unwrap(),
+        log.append(&empty("step_started"), None, None).unwrap(),
+        log.append(&empty("step_started"), None, None).unwrap(),
+    ];
+    let dir = tmp.session(&id("s_1"));
+    append_raw(&dir, br#"{"kind":"step_started","session_id":"s_1","#);
+    let got: Vec<Envelope> = lines(&dir).unwrap().map(Result::unwrap).collect();
+    assert_eq!(got, written);
+}
+
+#[test]
+fn lines_read_a_line_longer_than_64_kib_whole() {
+    let tmp = TestDir::new("lines-long");
+    let log = Log::create(tmp.path(), id("s_1"), fakes::clock::FakeClock::new()).unwrap();
+    let long = log
+        .append(
+            &event(
+                "session_named",
+                serde_json::json!({"name": "n".repeat(100 * 1024), "by": "person"}),
+            ),
+            None,
+            None,
+        )
+        .unwrap();
+    let after = log.append(&empty("step_started"), None, None).unwrap();
+    let got: Vec<Envelope> = lines(&tmp.session(&id("s_1")))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(got, [long, after]);
+}
+
+#[test]
+fn lines_end_after_an_unparseable_line_that_they_name() {
+    let tmp = TestDir::new("lines-bad");
+    let log = Log::create(tmp.path(), id("s_1"), fakes::clock::FakeClock::new()).unwrap();
+    let first = log.append(&session_started(), None, None).unwrap();
+    let dir = tmp.session(&id("s_1"));
+    append_raw(&dir, b"not json\n");
+    // A good line after the bad one is never reached.
+    let whole = fs::read(dir.join("events.jsonl")).unwrap();
+    let first_line = whole
+        .split_inclusive(|b| *b == b'\n')
+        .next()
+        .unwrap()
+        .to_vec();
+    append_raw(&dir, &first_line);
+    let mut it = lines(&dir).unwrap();
+    assert_eq!(it.next().unwrap().unwrap(), first);
+    let err = it.next().unwrap().unwrap_err();
+    assert!(err.to_string().contains("line 2"), "{err}");
+    assert_eq!(err.code(), contract::ErrorCode::LogCorrupt);
+    assert!(it.next().is_none(), "the lines end after the first error");
+}
+
+#[test]
+fn lines_of_a_missing_session_are_not_found() {
+    let tmp = TestDir::new("lines-missing");
+    let Err(err) = lines(&tmp.session(&id("s_x"))) else {
+        panic!("read lines of a session that does not exist");
+    };
     assert_eq!(err.code(), contract::ErrorCode::SessionNotFound);
 }
 
@@ -328,4 +406,159 @@ fn a_writer_in_another_process_holds_the_session() {
     drop(child.stdin.take());
     assert!(child.wait().unwrap().success());
     assert!(Log::open(tmp.path(), id("s_1"), fakes::clock::FakeClock::new()).is_ok());
+}
+
+/// A log of `count` durable lines and what each append returned.
+fn steps(name: &str, count: usize) -> (TestDir, Log, Vec<Envelope>) {
+    let tmp = TestDir::new(name);
+    let log = Log::create(tmp.path(), id("s_1"), fakes::clock::FakeClock::new()).unwrap();
+    let written = (0..count)
+        .map(|_| log.append(&empty("step_started"), None, None).unwrap())
+        .collect();
+    (tmp, log, written)
+}
+
+#[test]
+fn a_range_returns_the_lines_at_its_positions() {
+    let (_tmp, log, written) = steps("range", 10);
+    assert_eq!(log.count(), 10);
+    assert_eq!(log.range(3, 4).unwrap(), written[3..7]);
+    assert_eq!(log.range(0, 10).unwrap(), written);
+    // The log ends first.
+    assert_eq!(log.range(7, 10).unwrap(), written[7..]);
+    assert_eq!(log.range(9, 1).unwrap(), written[9..]);
+    assert_eq!(log.range(9, 2).unwrap(), written[9..]);
+    assert!(log.range(10, 1).unwrap().is_empty());
+    assert!(log.range(11, 1).unwrap().is_empty());
+    assert!(log.range(3, 0).unwrap().is_empty());
+}
+
+#[test]
+fn a_range_of_an_empty_log_is_empty() {
+    let (_tmp, log, _) = steps("range-empty", 0);
+    assert_eq!(log.count(), 0);
+    assert!(log.range(0, 5).unwrap().is_empty());
+    // An ephemeral line takes no position.
+    log.append(&delta("x"), None, None).unwrap();
+    assert_eq!(log.count(), 0);
+    assert!(log.range(0, 5).unwrap().is_empty());
+}
+
+#[test]
+fn a_range_reads_lines_longer_than_64_kib_before_and_inside_it() {
+    let tmp = TestDir::new("range-long");
+    let log = Log::create(tmp.path(), id("s_1"), fakes::clock::FakeClock::new()).unwrap();
+    let long = || {
+        event(
+            "session_named",
+            serde_json::json!({"name": "n".repeat(100 * 1024), "by": "person"}),
+        )
+    };
+    let written = [
+        log.append(&long(), None, None).unwrap(),
+        log.append(&empty("step_started"), None, None).unwrap(),
+        log.append(&long(), None, None).unwrap(),
+        log.append(&empty("step_started"), None, None).unwrap(),
+    ];
+    assert_eq!(log.range(1, 3).unwrap(), written[1..]);
+    assert_eq!(log.range(2, 1).unwrap(), written[2..3]);
+}
+
+#[test]
+fn a_range_holds_lines_appended_after_open() {
+    let (tmp, log, mut written) = steps("range-reopen", 3);
+    drop(log);
+    let log = Log::open(tmp.path(), id("s_1"), fakes::clock::FakeClock::new()).unwrap();
+    assert_eq!(log.count(), 3);
+    assert_eq!(log.range(0, 10).unwrap(), written);
+    for _ in 0..2 {
+        written.push(log.append(&empty("step_started"), None, None).unwrap());
+    }
+    assert_eq!(log.count(), 5);
+    assert_eq!(log.range(3, 2).unwrap(), written[3..]);
+    assert_eq!(log.range(0, 10).unwrap(), written);
+}
+
+#[test]
+fn a_range_after_a_torn_tail_ends_before_it_and_appends_carry_on() {
+    let (tmp, log, mut written) = steps("range-torn", 2);
+    drop(log);
+    let dir = tmp.session(&id("s_1"));
+    append_raw(&dir, br#"{"kind":"step_started","session_id":"s_1","#);
+    let log = Log::open(tmp.path(), id("s_1"), fakes::clock::FakeClock::new()).unwrap();
+    assert_eq!(log.range(0, 10).unwrap(), written);
+    written.push(log.append(&empty("step_started"), None, None).unwrap());
+    assert_eq!(log.range(2, 1).unwrap(), written[2..]);
+    assert_eq!(log.range(0, 10).unwrap(), written);
+}
+
+#[test]
+fn a_range_parses_only_its_own_lines() {
+    let (tmp, log, written) = steps("range-bad", 6);
+    corrupt(&tmp.session(&id("s_1")), 1);
+    // A bad line before the window is never parsed.
+    assert_eq!(log.range(2, 4).unwrap(), written[2..]);
+    // One inside it is an error naming it.
+    let err = log.range(0, 3).unwrap_err();
+    assert!(err.to_string().contains("line 2"), "{err}");
+    assert_eq!(err.code(), contract::ErrorCode::LogCorrupt);
+    let err = log.range(1, 1).unwrap_err();
+    assert!(err.to_string().contains("line 2"), "{err}");
+}
+
+/// Receives from `rx` until `count` durable lines have arrived, and returns
+/// them.
+fn durable(rx: &Receiver<Option<Envelope>>, count: usize) -> Vec<Envelope> {
+    let mut got = Vec::new();
+    while got.len() < count {
+        let line = next(rx).unwrap();
+        if line.is_durable() {
+            got.push(line);
+        }
+    }
+    got
+}
+
+#[test]
+fn a_watcher_that_falls_behind_by_more_than_two_pages_gets_every_line_once() {
+    let (_tmp, log, _) = steps("watch-pages", 3);
+    let watcher = log.watch();
+    let written: Vec<Envelope> = (0..2 * CAPACITY + 50)
+        .map(|_| {
+            log.append(&delta("x"), None, None).unwrap();
+            log.append(&empty("step_started"), None, None).unwrap()
+        })
+        .collect();
+    let rx = relay(watcher);
+    assert_eq!(durable(&rx, written.len()), written);
+    // Once caught up, lines arrive as they are written, and none came twice.
+    let live = log.append(&empty("step_started"), None, None).unwrap();
+    assert_eq!(durable(&rx, 1), [live]);
+}
+
+#[test]
+fn a_catch_up_page_ending_at_the_end_of_the_log_carries_on_live() {
+    let (_tmp, log, _) = steps("watch-page-end", 0);
+    let watcher = log.watch();
+    // The queue holds the first `CAPACITY` lines; the catch-up reads the
+    // rest as exactly one full page, and finds nothing after it.
+    let written: Vec<Envelope> = (0..2 * CAPACITY)
+        .map(|_| log.append(&empty("step_started"), None, None).unwrap())
+        .collect();
+    let rx = relay(watcher);
+    assert_eq!(durable(&rx, written.len()), written);
+    let live = log.append(&empty("step_started"), None, None).unwrap();
+    assert_eq!(next(&rx), Some(live));
+}
+
+#[test]
+fn a_catch_up_never_parses_a_line_before_the_watcher_subscribed() {
+    let (tmp, log, _) = steps("watch-bad-before", 3);
+    let watcher = log.watch();
+    corrupt(&tmp.session(&id("s_1")), 1);
+    let written: Vec<Envelope> = (0..CAPACITY + 100)
+        .map(|_| log.append(&empty("step_started"), None, None).unwrap())
+        .collect();
+    let rx = relay(watcher);
+    assert_eq!(durable(&rx, written.len()), written);
 }

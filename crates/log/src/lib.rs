@@ -8,6 +8,7 @@
 //! (`docs/architecture.md`, "The call rules").
 
 mod export;
+mod offsets;
 mod read;
 mod resolve;
 mod write;
@@ -18,7 +19,7 @@ use std::path::{Path, PathBuf};
 use contract::{ErrorCode, SessionId};
 
 pub use export::export;
-pub use read::{Injector, Watcher, read};
+pub use read::{Injector, Lines, Watcher, lines, read};
 pub use resolve::resolve;
 pub use write::Log;
 

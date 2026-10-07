@@ -247,10 +247,20 @@ fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
             let tools = conn.gate.tools.clone();
             accept(conn, id, Some(CommandResult::Tools { tools }));
         }
-        Command::History(args) => match history(&conn.gate.dir, &args) {
-            Ok(lines) => accept(conn, id, Some(CommandResult::History { lines })),
-            Err(message) => reject(conn, Some(id), ErrorCode::InvalidArguments, message),
-        },
+        Command::History(args) => {
+            // The log is dropped once read, so this connection does not
+            // hold the session lock.
+            let Some(log) = conn.gate.log.upgrade() else {
+                reject(conn, Some(id), ErrorCode::Closing, ENDED);
+                return;
+            };
+            let read = history(&log, &args);
+            drop(log);
+            match read {
+                Ok(lines) => accept(conn, id, Some(CommandResult::History { lines })),
+                Err(message) => reject(conn, Some(id), ErrorCode::InvalidArguments, message),
+            }
+        }
         Command::Prompt(args) => match content(args.content) {
             Ok(content) => deliver_message(conn, id, content, true),
             Err(message) => reject(conn, Some(id), ErrorCode::InvalidArguments, &message),
@@ -450,32 +460,29 @@ fn content(parts: Vec<SentPart>) -> Result<Vec<ContentPart>, String> {
     Ok(out)
 }
 
+/// The durable lines `args` asks for, at most [`HISTORY`] of them, read and
+/// parsed from the log's offset table by `seq`: a line outside the window
+/// is never read.
 fn history(
-    dir: &std::path::Path,
+    log: &log::Log,
     args: &contract::commands::HistoryArgs,
 ) -> Result<Vec<Envelope>, &'static str> {
-    let lines = match log::read(dir) {
-        Ok(lines) => lines,
-        Err(_) => return Err(UNFIT),
-    };
-    let latest = lines.iter().rev().find_map(|line| line.seq);
-    let Some(latest) = latest else {
-        return Err(PAST);
-    };
-    if args.from_seq > latest {
+    let from = args.from_seq.0;
+    if from >= log.count() {
         return Err(PAST);
     }
-    if args.to_seq.is_some_and(|to| to < args.from_seq) {
-        return Err(REVERSED);
-    }
-    let to = args.to_seq.unwrap_or(latest);
+    let max = match args.to_seq {
+        Some(to) if to < args.from_seq => return Err(REVERSED),
+        Some(to) => {
+            usize::try_from(to.0 - from).map_or(HISTORY, |span| span.saturating_add(1).min(HISTORY))
+        }
+        None => HISTORY,
+    };
+    let lines = log.range(from, max).map_err(|_| UNFIT)?;
+    let to = args.to_seq.map_or(u64::MAX, |to| to.0);
     Ok(lines
         .into_iter()
-        .filter(|line| {
-            line.seq
-                .is_some_and(|seq| seq >= args.from_seq && seq <= to)
-        })
-        .take(HISTORY)
+        .filter(|line| line.seq.is_some_and(|seq| seq.0 <= to))
         .collect())
 }
 

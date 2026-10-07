@@ -3,41 +3,98 @@
 //! and a reader stops at the last complete line (`docs/events.md`, "Writing").
 
 use std::collections::VecDeque;
-use std::fs;
-use std::io;
+use std::fs::File;
+use std::io::{self, BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
 
 use contract::Envelope;
 
+use crate::offsets::Offsets;
 use crate::{EVENTS, Error, io_at};
 
 /// Every durable line in the session directory `dir`, in order, up to the
 /// last complete line. A torn tail, a line cut short by a crash, is skipped;
 /// a complete line that is not an event line is an error naming it.
 pub fn read(dir: &Path) -> Result<Vec<Envelope>, Error> {
+    lines(dir)?.collect()
+}
+
+/// The durable lines in the session directory `dir`, read one at a time as
+/// [`read`] reads them, holding one line and never the whole file. A missing
+/// log is [`Error::NotFound`] here; after the first error the lines end.
+pub fn lines(dir: &Path) -> Result<Lines, Error> {
     let path = dir.join(EVENTS);
-    let bytes = fs::read(&path).map_err(|e| {
+    let file = File::open(&path).map_err(|e| {
         if e.kind() == io::ErrorKind::NotFound {
             Error::NotFound(dir.to_owned())
         } else {
             io_at(&path)(e)
         }
     })?;
-    bytes
-        .get(..complete_len(&bytes))
-        .unwrap_or_default()
-        .split_inclusive(|b| *b == b'\n')
-        .enumerate()
-        .map(|(i, line)| {
-            serde_json::from_slice(line).map_err(|source| Error::Unreadable {
-                path: path.clone(),
-                line: i + 1,
-                source,
-            })
-        })
-        .collect()
+    Ok(Lines {
+        reader: BufReader::new(file),
+        path,
+        buf: Vec::new(),
+        number: 0,
+        offset: 0,
+        done: false,
+    })
+}
+
+/// A session's durable lines, read one at a time: see [`lines`].
+pub struct Lines {
+    reader: BufReader<File>,
+    path: PathBuf,
+    /// The line being read.
+    buf: Vec<u8>,
+    /// How many complete lines have been read.
+    number: usize,
+    /// The byte offset just past the last complete line read.
+    offset: u64,
+    /// An error was returned or the complete lines ran out.
+    done: bool,
+}
+
+impl Lines {
+    /// The byte offset just past the last complete line returned: where the
+    /// next line starts, and, once the lines end, where a torn tail starts.
+    pub(crate) fn offset(&self) -> u64 {
+        self.offset
+    }
+}
+
+impl Iterator for Lines {
+    type Item = Result<Envelope, Error>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.done {
+            return None;
+        }
+        self.buf.clear();
+        let read = match self.reader.read_until(b'\n', &mut self.buf) {
+            Ok(read) => read,
+            Err(e) => {
+                self.done = true;
+                return Some(Err(io_at(&self.path)(e)));
+            }
+        };
+        // The end of the file, or a torn tail: a line with no newline.
+        if self.buf.last() != Some(&b'\n') {
+            self.done = true;
+            return None;
+        }
+        self.number += 1;
+        self.offset += u64::try_from(read).unwrap_or(u64::MAX);
+        let parsed = serde_json::from_slice(&self.buf).map_err(|source| Error::Unreadable {
+            path: self.path.clone(),
+            line: self.number,
+            source,
+        });
+        self.done = parsed.is_err();
+        Some(parsed)
+    }
 }
 
 /// The length of `bytes` up to and including its last newline: everything
@@ -49,7 +106,8 @@ pub(crate) fn complete_len(bytes: &[u8]) -> usize {
 // debt: 1,024 is picked, not measured. The queue grows only as lines
 // wait in it. The busy-session memory budget (`docs/performance.md`) and a
 // slow watcher's measured lag would set it.
-/// How many events a watcher's queue holds before it falls behind.
+/// How many events a watcher's queue holds before it falls behind, and how
+/// many durable lines one catch-up page reads.
 pub(crate) const CAPACITY: usize = 1024;
 
 /// One watcher's bounded queue, shared by the log that fills it and the
@@ -170,11 +228,16 @@ impl Injector {
 /// log by `seq`, and loses the ephemeral ones.
 pub struct Watcher {
     queue: Arc<Queue>,
-    dir: PathBuf,
+    /// The log's offset table, which a catch-up reads by `seq` from.
+    offsets: Arc<Offsets>,
     /// The `seq` of the next durable line this watcher has not yet returned.
     next: u64,
     /// Lines re-read from the log, not yet returned.
     backlog: VecDeque<Envelope>,
+    /// The log may hold durable lines from `next` on that the watcher has
+    /// not read: the last page read was full, or a catch-up is due. Read
+    /// before anything is taken from the queue.
+    more: bool,
 }
 
 /// What the watcher takes from its queue.
@@ -197,24 +260,27 @@ enum Wait {
 }
 
 impl Watcher {
-    pub(crate) fn new(queue: Arc<Queue>, dir: PathBuf, next: u64) -> Self {
+    pub(crate) fn new(queue: Arc<Queue>, offsets: Arc<Offsets>, next: u64) -> Self {
         Self {
             queue,
-            dir,
+            offsets,
             next,
             backlog: VecDeque::new(),
+            more: false,
         }
     }
 
-    /// A watcher whose first lines are `lines`, then whatever arrives after
-    /// it was registered. `next` starts at 0 so a line already queued is
-    /// skipped once `lines` has returned it.
-    pub(crate) fn starting(queue: Arc<Queue>, dir: PathBuf, lines: Vec<Envelope>) -> Self {
+    /// A watcher from `seq` 0 whose first lines are `first`, the log's first
+    /// page, then the pages after it, then whatever arrives after it was
+    /// registered. `next` starts at 0 so a line already queued is skipped
+    /// once a page has returned it.
+    pub(crate) fn starting(queue: Arc<Queue>, offsets: Arc<Offsets>, first: Vec<Envelope>) -> Self {
         Self {
             queue,
-            dir,
+            offsets,
             next: 0,
-            backlog: VecDeque::from(lines),
+            more: first.len() == CAPACITY,
+            backlog: VecDeque::from(first),
         }
     }
 
@@ -254,6 +320,10 @@ impl Watcher {
         loop {
             let line = match self.backlog.pop_front() {
                 Some(line) => line,
+                None if self.more => match self.page() {
+                    Ok(()) => continue,
+                    Err(e) => return Some(Err(e)),
+                },
                 None => {
                     let taken = match wait {
                         Wait::Forever => Some(self.take()),
@@ -265,16 +335,8 @@ impl Watcher {
                         None => return None,
                         Some(Taken::Line(line)) => line,
                         Some(Taken::CatchUp) => {
-                            // debt: re-reads the whole log to find the lines it
-                            // missed; a read from an offset by `seq` when logs grow
-                            // large enough for a lagging watcher to notice.
-                            match read(&self.dir) {
-                                Ok(lines) => {
-                                    self.backlog = lines.into();
-                                    continue;
-                                }
-                                Err(e) => return Some(Err(e)),
-                            }
+                            self.more = true;
+                            continue;
                         }
                         Some(Taken::End(End::Failed { session, cause })) => {
                             return Some(Err(Error::Poisoned { session, cause }));
@@ -293,6 +355,16 @@ impl Watcher {
                 None => return Some(Ok(Some(line))),
             }
         }
+    }
+
+    /// Reads the next page of durable lines the watcher has not returned,
+    /// from `next`. A full page means there may be more. An error leaves
+    /// `more` set, so the next call reads the same page again.
+    fn page(&mut self) -> Result<(), Error> {
+        let page = self.offsets.range(self.next, CAPACITY)?;
+        self.more = page.len() == CAPACITY;
+        self.backlog = page.into();
+        Ok(())
     }
 
     /// Waits for a queued line, for the need to catch up, or for the end,

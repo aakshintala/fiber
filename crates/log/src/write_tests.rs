@@ -295,6 +295,73 @@ fn latest_is_the_newest_line_of_each_kind_with_no_watcher() {
     assert!(reopened.latest("session_status").is_none());
 }
 
+/// Reopening folds the whole log in one pass: across more lines than a
+/// queue holds, `latest` is the newest durable line of its kind, not the
+/// first, and `seq` carries on after the last line.
+#[test]
+fn reopening_a_long_log_keeps_the_newest_line_of_each_kind() {
+    let sessions = fakes::TempDir::new("log-unit-reopen-latest");
+    let log = Log::create(
+        sessions.path(),
+        SessionId("s_1".into()),
+        fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    let mut last = None;
+    for n in 0..crate::read::CAPACITY + 10 {
+        log.append(&step(), None, None).unwrap();
+        if n % 100 == 0 {
+            last = Some(log.append(&extensions(&n.to_string()), None, None).unwrap());
+        }
+    }
+    let tail = log.append(&step(), None, None).unwrap();
+    drop(log);
+    let reopened = Log::open(
+        sessions.path(),
+        SessionId("s_1".into()),
+        fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    assert_eq!(reopened.latest("extensions_loaded"), last);
+    let next = reopened.append(&step(), None, None).unwrap();
+    assert_eq!(next.seq.map(|s| s.0), tail.seq.map(|s| s.0 + 1));
+    assert_eq!(reopened.count(), next.seq.map_or(0, |s| s.0 + 1));
+}
+
+/// Reopening refuses a log with a complete line that does not parse, naming
+/// it, and leaves the file as it was.
+#[test]
+fn reopening_refuses_an_unparseable_line_and_names_it() {
+    let sessions = fakes::TempDir::new("log-unit-reopen-bad");
+    let log = Log::create(
+        sessions.path(),
+        SessionId("s_1".into()),
+        fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    log.append(&step(), None, None).unwrap();
+    let path = log.dir().join(crate::EVENTS);
+    drop(log);
+    let mut bytes = fs::read(&path).unwrap();
+    bytes.extend_from_slice(b"not json\n");
+    let whole = bytes.clone();
+    bytes.extend_from_slice(b"{\"torn");
+    fs::write(&path, &bytes).unwrap();
+    let Err(err) = Log::open(
+        sessions.path(),
+        SessionId("s_1".into()),
+        fakes::clock::FakeClock::new(),
+    ) else {
+        panic!("opened a log with an unparseable line");
+    };
+    assert_eq!(err.code(), ErrorCode::LogCorrupt);
+    assert!(err.to_string().contains("line 2"), "{err}");
+    assert_eq!(
+        fs::read(&path).unwrap(),
+        [whole, b"{\"torn".to_vec()].concat()
+    );
+}
+
 /// `try_recv` waits for nothing: with no line it is `None`, with queued
 /// lines it returns them in order, and a watcher that overflowed its queue
 /// gets every durable line it missed, re-read from the log, then `None`.
