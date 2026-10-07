@@ -138,10 +138,9 @@ fn trailing_spaces_match_on_the_second_pass_and_only_those_lines_fold() {
 }
 
 #[test]
-fn a_trailing_tab_is_ignored_the_same_way() {
-    let applied = must("alpha\t\nbeta\n", &[("alpha\nbeta", "ALPHA\nBETA")]);
-    assert_eq!(applied.bytes, b"ALPHA\nBETA\n");
-    assert!(applied.reports[0].normalised);
+fn a_trailing_tab_is_not_ignored() {
+    let err = edited("alpha\t\nbeta\n", &[("alpha\nbeta", "ALPHA\nBETA")]).unwrap_err();
+    assert_eq!(err, MatchError::NoMatch { index: 0 });
 }
 
 #[test]
