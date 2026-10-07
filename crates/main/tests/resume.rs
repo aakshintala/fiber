@@ -63,7 +63,7 @@ impl Setup {
         let ids: Vec<Value> = models
             .iter()
             .map(|m| {
-                json!({"id": m, "protocol": "openai-responses", "base_url": format!("{}/v1", server.url())})
+                json!({"id": m, "protocol": "openai-responses", "base_url": format!("{}/v1", server.url()), "context_window": 100000})
             })
             .collect();
         write(

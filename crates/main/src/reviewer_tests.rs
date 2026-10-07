@@ -59,8 +59,8 @@ fn reviewer_lifetime(overrides: &[&str]) -> contract::events::CacheLifetime {
     std::fs::write(
         extension.join("providers/fake.json"),
         r#"{"name": "fake", "models": [
-            {"id": "session", "protocol": "openai-responses", "base_url": "http://127.0.0.1:9/v1"},
-            {"id": "reviewer", "protocol": "openai-responses", "base_url": "http://127.0.0.1:9/v1"}
+            {"id": "session", "protocol": "openai-responses", "base_url": "http://127.0.0.1:9/v1", "context_window": 1000},
+            {"id": "reviewer", "protocol": "openai-responses", "base_url": "http://127.0.0.1:9/v1", "context_window": 1000}
         ]}"#,
     )
     .unwrap();

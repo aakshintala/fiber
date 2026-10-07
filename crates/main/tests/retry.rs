@@ -57,7 +57,7 @@ impl Setup {
                 "name": "fake",
                 "credential": {"env": "FIBER_TEST_FAKE_KEY"},
                 "models": [{"id": "m", "protocol": protocol,
-                    "base_url": format!("{}/v1", server.url())}]
+                    "base_url": format!("{}/v1", server.url()), "context_window": 100000}]
             }),
         );
         extensions::plan(

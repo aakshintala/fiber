@@ -11,7 +11,7 @@ fn model() -> ModelData {
     serde_json::from_value(json!({
         "id": "gpt-5.6",
         "protocol": "openai-responses",
-        "base_url": "https://x/v1",
+        "base_url": "https://x/v1", "context_window": 1000,
         "thinking_levels": ["low", "high"],
         "thinking_default": "low",
     }))
@@ -22,7 +22,7 @@ fn model_without_levels() -> ModelData {
     serde_json::from_value(json!({
         "id": "mini",
         "protocol": "openai-responses",
-        "base_url": "https://x/v1",
+        "base_url": "https://x/v1", "context_window": 1000,
     }))
     .unwrap()
 }

@@ -69,7 +69,7 @@ impl Setup {
             &json!({
                 "name": "fake",
                 "credential": {"env": "FIBER_TEST_FAKE_KEY"},
-                "models": [{"id": "m", "protocol": "openai-responses", "base_url": format!("{}/v1", server.url())}]
+                "models": [{"id": "m", "protocol": "openai-responses", "base_url": format!("{}/v1", server.url()), "context_window": 100000}]
             }),
         );
         extensions::plan(
@@ -102,7 +102,7 @@ impl Setup {
                 "name": "fake",
                 "credential": {"env": "FIBER_TEST_FAKE_KEY"},
                 "models": [{"id": "m", "protocol": "openai-responses",
-                    "base_url": format!("{}/v1", server.url()),
+                    "base_url": format!("{}/v1", server.url()), "context_window": 100000,
                     "thinking_levels": ["low", "high"], "thinking_default": "low"}]
             }),
         );
@@ -885,7 +885,7 @@ fn a_bedrock_converse_model_fails_before_the_session() {
         &json!({
             "name": "fake",
             "credential": {"env": "FIBER_TEST_FAKE_KEY"},
-            "models": [{"id": "m", "protocol": "bedrock-converse", "base_url": format!("{}/v1", server.url())}]
+            "models": [{"id": "m", "protocol": "bedrock-converse", "base_url": format!("{}/v1", server.url()), "context_window": 100000}]
         }),
     );
     extensions::plan(
@@ -2932,7 +2932,7 @@ fn a_cached_list_serves_the_model_while_the_refresh_runs_in_the_background() {
         &json!([{
             "id": "m1",
             "protocol": "openai-responses",
-            "base_url": format!("{}/v1", server.url()),
+            "base_url": format!("{}/v1", server.url()), "context_window": 100000,
         }]),
     );
     // The copy is stale: backdated past `model_lists.refresh_after`, so
@@ -2997,7 +2997,7 @@ fn a_lua_provider_without_credential_uses_the_stored_key() {
     fs::write(
         source.join("init.lua"),
         format!(
-            "fiber.provider(\"plain\", {{\n models = {{\n   timeout = 5000,\n   run = function()\n     return {{ {{ id = \"m1\", protocol = \"openai-responses\", base_url = \"{}/v1\" }} }}\n   end,\n }},\n}})\n",
+            "fiber.provider(\"plain\", {{\n models = {{\n   timeout = 5000,\n   run = function()\n     return {{ {{ id = \"m1\", protocol = \"openai-responses\", base_url = \"{}/v1\", context_window = 100000 }} }}\n   end,\n }},\n}})\n",
             server.url()
         ),
     )

@@ -378,7 +378,7 @@ fn models_prints_a_stale_list_at_once_and_it_is_fresh_on_the_next_run() {
     std::fs::write(
         &file,
         json!([{ "id": "old", "protocol": "openai-responses",
-                 "base_url": "http://127.0.0.1:9/v1" }])
+                 "base_url": "http://127.0.0.1:9/v1", "context_window": 1000 }])
         .to_string(),
     )
     .unwrap();
