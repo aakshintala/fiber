@@ -122,7 +122,7 @@ impl Piped {
                             return;
                         }
                     }
-                    Err(_) => break,
+                    Err(_) => return,
                 }
             }
             match tx.send(None) {

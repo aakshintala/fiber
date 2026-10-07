@@ -119,7 +119,7 @@ impl Lifeline {
                 match file.read(&mut buf) {
                     Ok(0) => break,
                     Ok(_) => {}
-                    Err(_) => break,
+                    Err(_) => return,
                 }
             }
             match tx.send(()) {
