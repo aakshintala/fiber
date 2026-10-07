@@ -533,7 +533,10 @@ fn definition_bytes(tools: Vec<std::sync::Arc<dyn contract::tool::Tool>>) -> u64
         .into_iter()
         .find(|line| line.kind == "preamble_built")
         .unwrap();
-    built.payload["tools"]
+    built
+        .payload
+        .get("tools")
+        .unwrap()
         .as_array()
         .unwrap()
         .iter()
@@ -567,8 +570,9 @@ fn definitions_over_ten_percent_of_the_window_write_tool_definitions_large() {
     // definitions just over 10%.
     let notices = tool_notices((bytes * 10).div_ceil(4) - 1);
     assert_eq!(notices.len(), 1);
-    assert_eq!(notices[0]["code"], "tool_definitions_large");
-    let text = notices[0]["message"].as_str().unwrap();
+    let notice = notices.first().unwrap();
+    assert_eq!(notice["code"], "tool_definitions_large");
+    let text = notice["message"].as_str().unwrap();
     assert!(text.contains("builtin"), "{text}");
     assert!(text.contains("tools.disabled"), "{text}");
 }
