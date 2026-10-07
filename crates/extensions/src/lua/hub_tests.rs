@@ -1,5 +1,5 @@
-//! `send_exec` against `set_exec_inbox`: buffered runs flush in order,
-//! and a `deliver_to` racing a run's end strands nothing
+//! `send` against `set_inbox`: buffered deliveries flush in order,
+//! and a `deliver_to` racing a delivery's end strands nothing
 //! (`docs/extensions.md`, "Host calls"). `cancel_timer` twice.
 
 #![allow(
@@ -11,6 +11,7 @@
 use std::sync::TryLockError;
 use std::sync::mpsc;
 
+use contract::events::ExtensionExec;
 use fakes::clock::FakeClock;
 
 use super::*;
@@ -32,6 +33,7 @@ fn exec(tag: &str) -> ExtensionExec {
 fn received(rx: &std::sync::mpsc::Receiver<Delivery>) -> Option<String> {
     match rx.try_recv().ok()? {
         Delivery::ExtensionExec(exec) => Some(exec.program),
+        Delivery::ExtensionLog(log) => Some(log.message),
         Delivery::Prompt(..)
         | Delivery::Steer(..)
         | Delivery::SteerDrop(..)
@@ -50,13 +52,13 @@ fn received(rx: &std::sync::mpsc::Receiver<Delivery>) -> Option<String> {
 fn a_run_before_any_sender_flushes_on_the_first_one() {
     let clock = FakeClock::new();
     let hub = Hub::new(clock);
-    hub.send_exec(exec("first"));
-    hub.send_exec(exec("second"));
+    hub.send(Delivery::ExtensionExec(exec("first")));
+    hub.send(Delivery::ExtensionExec(exec("second")));
     let (tx, rx) = std::sync::mpsc::channel();
-    hub.set_exec_inbox(tx);
+    hub.set_inbox(tx);
     assert_eq!(received(&rx).as_deref(), Some("first"));
     assert_eq!(received(&rx).as_deref(), Some("second"));
-    assert!(hub.lock().exec_buffer.is_empty());
+    assert!(hub.lock().buffer.is_empty());
 }
 
 /// How long a test waits on a worker before it fails.
@@ -71,7 +73,7 @@ const WAIT: Duration = Duration::from_secs(10);
 fn a_run_ending_after_dispose_is_dropped() {
     let hub = Hub::new(FakeClock::new());
     let (tx, rx) = mpsc::channel();
-    hub.set_exec_inbox(tx);
+    hub.set_inbox(tx);
     let (proceed_tx, proceed_rx) = mpsc::channel::<()>();
     let (done_tx, done_rx) = mpsc::channel();
     let other = Arc::clone(&hub);
@@ -79,7 +81,7 @@ fn a_run_ending_after_dispose_is_dropped() {
         proceed_rx
             .recv_timeout(WAIT)
             .expect("waited for the drop's signal before routing the late run");
-        other.send_exec(exec("late"));
+        other.send(Delivery::ExtensionExec(exec("late")));
         let _done = done_tx.send(());
     });
     hub.dispose("ext");
@@ -89,7 +91,7 @@ fn a_run_ending_after_dispose_is_dropped() {
         .expect("waited for the late run to be routed");
     assert!(received(&rx).is_none(), "nothing arrives after the drop");
     assert!(
-        hub.lock().exec_buffer.is_empty(),
+        hub.lock().buffer.is_empty(),
         "nothing is buffered after the drop"
     );
 }
@@ -102,8 +104,8 @@ fn a_run_ending_after_dispose_is_dropped() {
 #[test]
 fn a_sender_after_dispose_flushes_nothing() {
     let hub = Hub::new(FakeClock::new());
-    hub.send_exec(exec("early"));
-    assert_eq!(hub.lock().exec_buffer.len(), 1, "the run is buffered");
+    hub.send(Delivery::ExtensionExec(exec("early")));
+    assert_eq!(hub.lock().buffer.len(), 1, "the run is buffered");
     let (tx, rx) = mpsc::channel();
     let (proceed_tx, proceed_rx) = mpsc::channel::<()>();
     let (done_tx, done_rx) = mpsc::channel();
@@ -112,7 +114,7 @@ fn a_sender_after_dispose_flushes_nothing() {
         proceed_rx
             .recv_timeout(WAIT)
             .expect("waited for the drop's signal before setting the late sender");
-        other.set_exec_inbox(tx);
+        other.set_inbox(tx);
         let _done = done_tx.send(());
     });
     hub.dispose("ext");
@@ -122,7 +124,7 @@ fn a_sender_after_dispose_flushes_nothing() {
         .expect("waited for the late sender to be routed");
     assert!(received(&rx).is_none(), "nothing flushes after the drop");
     assert_eq!(
-        hub.lock().exec_buffer.len(),
+        hub.lock().buffer.len(),
         1,
         "the buffered run is never flushed nor delivered"
     );
@@ -134,7 +136,7 @@ fn locked(hub: &Hub) -> bool {
     matches!(hub.shared.try_lock(), Err(TryLockError::WouldBlock))
 }
 
-/// A run ending against `deliver_to`, paused where `send_exec` has chosen
+/// A run ending against `deliver_to`, paused where `send` has chosen
 /// the buffer: the hub lock is still held, so the `deliver_to` started
 /// there runs only after the run is buffered, and flushes it.
 #[test]
@@ -155,11 +157,11 @@ fn deliver_to_at_a_runs_buffer_choice_flushes_the_run() {
         };
         let (other, done_tx) = (Arc::clone(&other), done_tx.clone());
         std::thread::spawn(move || {
-            other.set_exec_inbox(tx);
+            other.set_inbox(tx);
             let _done = done_tx.send(());
         });
     }));
-    hub.send_exec(exec("run"));
+    hub.send(Delivery::ExtensionExec(exec("run")));
     assert!(
         held_rx
             .recv_timeout(WAIT)
@@ -170,16 +172,16 @@ fn deliver_to_at_a_runs_buffer_choice_flushes_the_run() {
         .recv_timeout(WAIT)
         .expect("waited for the racing deliver_to to return");
     assert_eq!(received(&rx).as_deref(), Some("run"), "the run was flushed");
-    assert!(hub.lock().exec_buffer.is_empty(), "nothing is stranded");
+    assert!(hub.lock().buffer.is_empty(), "nothing is stranded");
 }
 
-/// A run ending against `deliver_to`, paused where `set_exec_inbox` has
+/// A run ending against `deliver_to`, paused where `set_inbox` has
 /// taken the buffer but not flushed it: the hub lock is still held, so the
 /// run started there is sent only after the buffered one, in end order.
 #[test]
 fn a_run_ending_at_a_flush_follows_the_buffered_runs() {
     let hub = Hub::new(FakeClock::new());
-    hub.send_exec(exec("first"));
+    hub.send(Delivery::ExtensionExec(exec("first")));
     let (tx, rx) = mpsc::channel();
     let (held_tx, held_rx) = mpsc::channel();
     let (done_tx, done_rx) = mpsc::channel();
@@ -192,11 +194,11 @@ fn a_run_ending_at_a_flush_follows_the_buffered_runs() {
         let _held = held_tx.send(locked(hub));
         let (other, done_tx) = (Arc::clone(&other), done_tx.clone());
         std::thread::spawn(move || {
-            other.send_exec(exec("second"));
+            other.send(Delivery::ExtensionExec(exec("second")));
             let _done = done_tx.send(());
         });
     }));
-    hub.set_exec_inbox(tx);
+    hub.set_inbox(tx);
     assert!(
         held_rx
             .recv_timeout(WAIT)

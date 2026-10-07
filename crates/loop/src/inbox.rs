@@ -365,6 +365,7 @@ impl Loop {
             | Delivery::Job(_)
             | Delivery::JobLine(_)
             | Delivery::ExtensionExec(_)
+            | Delivery::ExtensionLog(_)
             | Delivery::Cancelled) => {
                 self.admit_running(other, turn)?;
                 Ok(Waited::Again)
@@ -439,6 +440,11 @@ impl Loop {
             Delivery::ExtensionExec(exec) => {
                 self.log.append(&Event::ExtensionExec(exec), None, None)?;
             }
+            Delivery::ExtensionLog(entry) => {
+                self.log
+                    .append(&Event::ExtensionLog(entry.clone()), None, None)?;
+                self.diag.extension_log(&entry.extension, &entry.message);
+            }
         }
         Ok(())
     }
@@ -491,6 +497,11 @@ impl Loop {
             // and never joins the model's input.
             Delivery::ExtensionExec(exec) => {
                 self.log.append(&Event::ExtensionExec(exec), None, None)?;
+            }
+            Delivery::ExtensionLog(entry) => {
+                self.log
+                    .append(&Event::ExtensionLog(entry.clone()), None, None)?;
+                self.diag.extension_log(&entry.extension, &entry.message);
             }
         }
         Ok(())

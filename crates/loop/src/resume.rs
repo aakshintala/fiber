@@ -275,8 +275,14 @@ impl Loop {
         };
         // debt: copies `Loop::start`'s literal apart from five fields; a
         // shared constructor once a third constructor needs the same fields.
+        let diag = crate::diag::SessionDiag::new(
+            &prompt.home,
+            contract::SessionId(folded.session.clone()),
+            Arc::clone(log.clock()),
+        );
         let mut resumed = Self {
             log,
+            diag,
             provider,
             model,
             prompt,

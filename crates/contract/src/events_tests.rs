@@ -567,6 +567,7 @@ fn samples() -> Vec<(&'static str, Value)> {
             json!({"extension": "e", "widget": "w", "lines": ["l"]}),
         ),
         ("extension_message", json!({"extension": "e", "data": "d"})),
+        ("extension_log", json!({"extension": "e", "message": "m"})),
         (
             "extension_exec",
             json!({"extension": "e", "program": "git", "args": ["status"],

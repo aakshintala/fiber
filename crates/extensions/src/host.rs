@@ -22,6 +22,7 @@ use crate::oauth::{self, Browser};
 
 pub(crate) mod exec;
 mod fs;
+mod log;
 mod settings;
 pub(crate) mod timers;
 
@@ -163,6 +164,7 @@ pub(crate) fn install(
         .call::<()>((host.clone(), tag.clone(), in_entry))?;
     oauth::install(lua, &host, &tag, browser, entry)?;
     let timer_funcs = timers::install(lua, &host, hub)?;
+    log::install(lua, &host, hub, &extension)?;
     host.set(
         "sha256",
         lua.create_function(|_, bytes: LuaString| Ok(sha256_hex(&bytes.as_bytes())))?,

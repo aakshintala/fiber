@@ -11,7 +11,7 @@ use common::{Setup, install, manifest, write};
 use config::{Config, ProjectKey, Sources};
 use contract::ErrorCode;
 use contract::clock::Clock;
-use contract::events::{CallStatus, ExtensionExec};
+use contract::events::{CallStatus, ExtensionExec, ExtensionLog};
 use contract::hook::{AfterToolAnswer, AfterToolCall, AfterToolOutcome, Hooks};
 use contract::inbox::Delivery;
 use extensions::{LuaExtension, SessionExtensions};
@@ -294,6 +294,19 @@ fn next_exec(inbox: &mpsc::Receiver<Delivery>) -> ExtensionExec {
     }
 }
 
+/// The next `extension_log` delivery on `inbox` under `WAIT`.
+#[allow(
+    clippy::panic,
+    reason = "a test helper; a missing line is the test's failure"
+)]
+fn next_log(inbox: &mpsc::Receiver<Delivery>) -> ExtensionLog {
+    match inbox.recv_timeout(WAIT) {
+        Ok(Delivery::ExtensionLog(log)) => log,
+        Ok(other) => panic!("expected extension_log, got {other:?}"),
+        Err(_) => panic!("waited {WAIT:?} for extension_log"),
+    }
+}
+
 const PWD_INIT: &str = r#"
 fiber.command("pwd", { timeout = 5000, run = function()
   return json.encode(host.exec("sh", {"-c", "pwd"}))
@@ -344,6 +357,44 @@ fn a_run_before_deliver_to_is_delivered_after_it() {
     let exec = next_exec(&rx);
     assert_eq!(exec.program, "sh");
     assert_eq!(exec.process.exit_code, Some(0));
+}
+
+const LOG_INIT: &str = r#"
+fiber.command("note", { timeout = 5000, run = function()
+  host.log("seen")
+  return json.encode({ ok = true })
+end })
+"#;
+
+#[test]
+fn log_from_a_command_callback_reaches_the_inbox_as_extension_log() {
+    let setup = Setup::new();
+    let clock = FakeClock::new();
+    let ext = exec_extension(&setup, "log", LOG_INIT, clock);
+    let (tx, rx) = mpsc::channel();
+    ext.deliver_to(tx);
+    exec_call(&ext, "note").expect("the note command runs");
+    let log = next_log(&rx);
+    assert_eq!(log.extension, "fiber.test/log");
+    assert_eq!(log.message, "seen");
+}
+
+#[test]
+fn log_in_init_is_buffered_and_delivered_in_order_with_a_later_exec() {
+    let setup = Setup::new();
+    let clock = FakeClock::new();
+    let init = "host.log(\"early\")\n\
+        fiber.command(\"pwd\", { timeout = 5000, run = function()\n\
+          host.log(\"late\")\n\
+          return json.encode(host.exec(\"sh\", {\"-c\", \"pwd\"}))\n\
+        end })\n";
+    let ext = exec_extension(&setup, "log", init, clock);
+    let (tx, rx) = mpsc::channel();
+    exec_call(&ext, "pwd").expect("the pwd command runs");
+    ext.deliver_to(tx);
+    assert_eq!(next_log(&rx).message, "early");
+    assert_eq!(next_log(&rx).message, "late");
+    assert_eq!(next_exec(&rx).program, "sh");
 }
 
 #[test]

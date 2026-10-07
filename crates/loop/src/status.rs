@@ -281,6 +281,7 @@ impl Fold {
             | Event::ExtensionStateUnset(_)
             | Event::ExtensionUi(_)
             | Event::ExtensionMessage(_)
+            | Event::ExtensionLog(_)
             | Event::ExtensionExec(_)
             | Event::JobDelta(_)
             | Event::JobLine(_)

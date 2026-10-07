@@ -155,7 +155,10 @@ pub(crate) fn render_reviewed(
         Event::ExtensionsLoaded(_)
         | Event::ExtensionStateSet(_)
         | Event::ExtensionStateUnset(_) => {}
-        Event::ExtensionUi(_) | Event::ExtensionMessage(_) | Event::ExtensionExec(_) => {}
+        Event::ExtensionUi(_)
+        | Event::ExtensionMessage(_)
+        | Event::ExtensionLog(_)
+        | Event::ExtensionExec(_) => {}
         Event::JobStarted(_) | Event::DelegateStarted(_) | Event::JobDelta(_) => {}
         Event::JobLine(_) | Event::DelegateFinished(_) | Event::JobCompleted(_) => {}
         Event::JobsPendingNotified(_) | Event::CommandAccepted(_) | Event::CommandRejected(_) => {}
