@@ -459,10 +459,7 @@ fn parts_in(
     let retry = settings::retry_policy(&config);
     let handoff = handoff::handoff_settings(&config, &model.reference());
     let idle = settings::idle_exit(&config);
-    // A Lua provider builds its own request body, so Fiber cannot show that
-    // capping the output changes nothing else in it: it never warms
-    // (`docs/prompt-cache.md`, "Warming while idle").
-    let warm = settings::warm(&config).filter(|_| providers.lua(&model.provider.name).is_none());
+    let warm = settings::warm(&config);
     let thinking = settings::thinking(
         model.thinking,
         None,
