@@ -123,6 +123,7 @@ pub fn run(
         reader: None,
         pointer: Pointer::default(),
         hover,
+        var: Box::new(|name| std::env::var(name).ok()),
     };
     // The first frame waits on nothing: the queries are out, and nothing
     // reads the tty or the hub until it is drawn.
@@ -368,6 +369,9 @@ impl<B: Backend> Backend for TtySized<B> {
     }
 }
 
+/// Reads an environment variable by name.
+type Var = Box<dyn Fn(&str) -> Option<String> + Send>;
+
 /// The loop's state.
 struct Loop<B: Backend> {
     app: App,
@@ -391,6 +395,8 @@ struct Loop<B: Backend> {
     pointer: Pointer,
     /// `tui.hover`: whether the pointer's cell is recorded and tinted.
     hover: bool,
+    /// Reads an environment variable: `$VISUAL` and `$EDITOR` for Ctrl+G.
+    var: Var,
 }
 
 impl<B: Backend> Loop<B> {
@@ -538,7 +544,7 @@ impl<B: Backend> Loop<B> {
     /// with the terminal handed over, and gives the app what it returned.
     /// `Some(1)` when the terminal cannot be taken back.
     fn open_editor(&mut self, target: editor::Target, text: &str) -> Option<i32> {
-        let Some(command) = editor::command(|name| std::env::var(name).ok()) else {
+        let Some(command) = editor::command(&self.var) else {
             self.app
                 .editor_returned(target, Err(editor::NO_EDITOR.to_owned()));
             return None;

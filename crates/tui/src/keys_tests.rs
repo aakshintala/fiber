@@ -406,7 +406,9 @@ fn with_kitty_pushed_a_lone_esc_ending_a_read_is_held() {
     // Esc is `CSI 27u` then, so the ESC starts a sequence: here a paste
     // start marker split right after it.
     let mut parser = Parser::default();
+    assert!(!parser.kitty());
     parser.set_kitty();
+    assert!(parser.kitty());
     assert_eq!(parser.feed(b"a\x1b"), vec![Event::Key(Key::Char('a'))]);
     assert_eq!(
         parser.feed(b"[200~x\x1b[201~"),

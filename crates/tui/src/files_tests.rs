@@ -234,6 +234,7 @@ fn the_loop_lists_searches_and_drops_the_worker_on_close() {
         reader: None,
         pointer: crate::mouse::Pointer::default(),
         hover: true,
+        var: Box::new(|_| None),
     };
     assert_eq!(lp.step(Input::Bytes(b"@".to_vec())), None);
     assert!(lp.search.is_some());

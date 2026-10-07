@@ -504,3 +504,23 @@ fn ten_lines_go_inline_and_a_cursor_before_the_token_stays_put() {
     draft.set_token(1, &lines(11));
     assert_eq!(draft.rows(80), vec!["> a[Pasted text #1 · 11 lines]"]);
 }
+
+#[test]
+fn two_tokens_on_one_row_are_two_spans() {
+    let lines = |n: usize| {
+        (1..=n)
+            .map(|at| format!("l{at}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let mut draft = Draft::default();
+    draft.paste(&lines(11));
+    draft.paste(&lines(12));
+    let spans: Vec<(usize, usize, u16, u16)> = draft
+        .token_spans(80)
+        .iter()
+        .map(|span| (span.number, span.row, span.start, span.end))
+        .collect();
+    // "> [Pasted text #1 · 11 lines][Pasted text #2 · 12 lines]"
+    assert_eq!(spans, vec![(1, 0, 2, 29), (2, 0, 29, 56)]);
+}

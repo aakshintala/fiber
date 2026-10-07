@@ -1,7 +1,7 @@
 //! Tests for Ctrl+G: choosing what opens, running the editor on a
 //! temporary file, and applying what it returns.
 
-use super::{NO_EDITOR, Target, command, run_in};
+use super::{NEXT, NO_EDITOR, Target, TempFile, command, run_in};
 use crate::app::{App, Effect};
 use crate::keys::{Edit, Key};
 use contract::clock::Clock;
@@ -323,4 +323,47 @@ fn ctrl_g_does_nothing_while_the_search_panel_is_open() {
     press(&mut app, Key::CtrlR);
     assert_eq!(press(&mut app, Key::CtrlG), Effect::None);
     assert!(app.completions().is_some());
+}
+
+/// The name [`TempFile::create`] gives number `n` in `dir`.
+fn draft_name(dir: &Path, n: u64) -> PathBuf {
+    dir.join(format!("fiber-draft-{}-{n}.md", std::process::id()))
+}
+
+#[test]
+fn a_taken_name_moves_on_to_the_next() {
+    let temp = fakes::TempDir::new("drafts");
+    let n = NEXT.load(std::sync::atomic::Ordering::Relaxed);
+    for taken in [n, n + 1] {
+        std::fs::write(draft_name(temp.path(), taken), "taken")
+            .unwrap_or_else(|err| panic!("write: {err}"));
+    }
+    let (file, _) = TempFile::create(temp.path()).unwrap_or_else(|err| panic!("create: {err}"));
+    assert_eq!(file.0, draft_name(temp.path(), n + 2));
+    // The files already there are left as they were.
+    for taken in [n, n + 1] {
+        let text = std::fs::read_to_string(draft_name(temp.path(), taken)).unwrap_or_default();
+        assert_eq!(text, "taken");
+    }
+    drop(file);
+    assert!(!draft_name(temp.path(), n + 2).exists());
+}
+
+#[test]
+fn every_name_taken_or_another_error_gives_up() {
+    let temp = fakes::TempDir::new("drafts");
+    let n = NEXT.load(std::sync::atomic::Ordering::Relaxed);
+    for taken in n..n + 16 {
+        std::fs::write(draft_name(temp.path(), taken), "taken")
+            .unwrap_or_else(|err| panic!("write: {err}"));
+    }
+    let kind = TempFile::create(temp.path()).err().map(|err| err.kind());
+    assert_eq!(kind, Some(std::io::ErrorKind::AlreadyExists));
+    // Any other error stops at the first name, trying no more.
+    let n = NEXT.load(std::sync::atomic::Ordering::Relaxed);
+    let kind = TempFile::create(&temp.path().join("missing"))
+        .err()
+        .map(|err| err.kind());
+    assert_eq!(kind, Some(std::io::ErrorKind::NotFound));
+    assert_eq!(NEXT.load(std::sync::atomic::Ordering::Relaxed), n + 1);
 }

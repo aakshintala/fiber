@@ -173,6 +173,7 @@ pub(super) fn new_loop<B: Backend>(
         reader: None,
         pointer: crate::mouse::Pointer::default(),
         hover: true,
+        var: Box::new(|_| None),
     };
     (lp, attached)
 }
@@ -1063,4 +1064,83 @@ fn ctrl_c_or_ctrl_backslash_in_a_cooked_terminal_leaves_fiber_running() {
         .unwrap_or_else(|err| panic!("raise: {err}"));
     signal_hook::low_level::raise(signal_hook::consts::SIGQUIT)
         .unwrap_or_else(|err| panic!("raise: {err}"));
+}
+
+#[test]
+fn pause_on_a_reader_already_parked_returns_at_once() {
+    let (_woken, wake) = io::pipe().unwrap_or_else(|err| panic!("pipe: {err}"));
+    let gate = Arc::new(super::Gate::default());
+    gate.lock().parked = true;
+    let reader = paused(super::Reader { gate, wake });
+    assert!(reader.gate.lock().paused);
+}
+
+/// A fake editor whose script is `body`, run as `/bin/sh <script>`; the
+/// directory holding it, and an environment reader naming it as `$EDITOR`.
+fn fake_editor(body: &str) -> (fakes::TempDir, super::Var) {
+    let dir = fakes::TempDir::new("editor");
+    let script = dir.path().join("editor.sh");
+    std::fs::write(&script, body).unwrap_or_else(|err| panic!("script: {err}"));
+    let command = format!("/bin/sh {}", script.display());
+    (
+        dir,
+        Box::new(move |name| (name == "EDITOR").then(|| command.clone())),
+    )
+}
+
+/// Runs `lp` over `inputs` on a thread with one deadline: the exit code
+/// and the draft.
+fn feed_within(mut lp: Loop<TestBackend>, inputs: Vec<Input>) -> (i32, String) {
+    within("the loop", move || {
+        let code = feed(&mut lp, inputs);
+        (code, lp.app.draft())
+    })
+}
+
+#[test]
+fn ctrl_g_puts_the_editors_text_in_the_draft_and_the_loop_reads_on() {
+    let pair = open();
+    crate::term::setup(&pair.slave, true).unwrap_or_else(|err| panic!("setup: {err}"));
+    // Drain what the terminal is sent, so no write blocks.
+    let mut main = pair
+        .main
+        .try_clone()
+        .unwrap_or_else(|err| panic!("dup: {err}"));
+    std::thread::Builder::new()
+        .name("lib-drain".to_owned())
+        .spawn(move || io::copy(&mut main, &mut io::sink()))
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    let tty = pair
+        .slave
+        .try_clone()
+        .unwrap_or_else(|err| panic!("dup: {err}"));
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), Some(tty));
+    let (_dir, var) = fake_editor("printf 'edited' > \"$1\"\n");
+    lp.var = var;
+    let inputs = ["a", "\x07", "!"].map(|bytes| Input::Bytes(bytes.as_bytes().to_vec()));
+    assert_eq!(feed_within(lp, inputs.into()), (0, "edited!".to_owned()));
+    crate::term::restore();
+}
+
+#[test]
+fn ctrl_g_that_cannot_take_the_terminal_back_quits_with_one() {
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    let (_dir, var) = fake_editor("printf 'edited' > \"$1\"\n");
+    lp.var = var;
+    let inputs = ["a", "\x07", "!"].map(|bytes| Input::Bytes(bytes.as_bytes().to_vec()));
+    assert_eq!(feed_within(lp, inputs.into()), (1, "a".to_owned()));
+}
+
+#[test]
+fn ctrl_g_with_no_editor_says_so_and_the_loop_reads_on() {
+    let (lp, _) = new_loop(TestBackend::new(60, 12), None);
+    let inputs = ["a", "\x07", "!"].map(|bytes| Input::Bytes(bytes.as_bytes().to_vec()));
+    let (lp, code) = within("the loop", move || {
+        let mut lp = lp;
+        let code = feed(&mut lp, inputs.into());
+        (lp, code)
+    });
+    assert_eq!(code, 0);
+    assert_eq!(lp.app.draft(), "a!");
+    assert_eq!(lp.app.notice(), Some(crate::editor::NO_EDITOR));
 }

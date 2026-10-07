@@ -1343,3 +1343,22 @@ fn hovering_a_token_tints_every_cell_of_its_label_only() {
         }
     }
 }
+
+#[test]
+fn a_paste_token_below_the_box_or_with_no_room_is_no_target() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = empty();
+    type_draft(&mut app, "1\n2\n3\n4\n");
+    let pasted: Vec<String> = (1..=312).map(|n| format!("line {n}")).collect();
+    app.on_edit(Edit::Paste(pasted.join("\n")));
+    for _ in 0..4 {
+        app.on_key(Key::Up, now);
+    }
+    // The box shows rows 0 to 3; the token is on row 4, just below it.
+    let (_, targets) = pointed(&mut app, WIDTH, HEIGHT, None);
+    assert!(token_rects(&targets).is_empty(), "{targets:?}");
+    // Two columns wide, the label starts past the last column: no cells.
+    let mut app = with_token();
+    let (_, targets) = pointed(&mut app, 2, HEIGHT, None);
+    assert!(token_rects(&targets).is_empty(), "{targets:?}");
+}
