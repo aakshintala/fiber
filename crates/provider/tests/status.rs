@@ -10,13 +10,11 @@
     reason = "test code, helpers included"
 )]
 
-use std::sync::mpsc;
-use std::thread;
 use std::time::Duration;
 
 use contract::ErrorCode;
 use contract::events::CacheLifetime;
-use contract::provider::{CallError, Delta, Input, ModelCall, ModelRequest, Reply};
+use contract::provider::{CallError, Delta, Input, ModelCall, ModelRequest};
 use fakes::{ProviderServer, Response};
 use provider::Endpoint;
 use provider::anthropic_messages::Messages;
@@ -55,33 +53,26 @@ fn endpoint(provider: &str, server: &ProviderServer) -> Endpoint {
     }
 }
 
-/// Runs `call` on its own thread, so a call that never returns fails the
-/// test at the deadline instead of hanging it.
-#[allow(
-    clippy::result_large_err,
-    reason = "the error is the model call's, returned unchanged"
-)]
-fn run(call: Box<dyn ModelCall>) -> Result<Reply, CallError> {
-    let (done, finished) = mpsc::channel();
-    thread::spawn(move || {
-        let mut deltas = Vec::new();
-        let reply = call.run(&mut |d: Delta| deltas.push(d));
-        done.send(reply).unwrap();
-    });
-    finished
-        .recv_timeout(DEADLINE)
-        .expect("waited for the call to return")
-}
-
-fn failed(call: Box<dyn ModelCall>) -> (contract::shapes::Failure, Option<bool>) {
-    let Err(CallError::Failed {
-        failure,
-        should_retry,
-    }) = run(call)
-    else {
-        panic!("expected a failure");
-    };
-    (failure, should_retry)
+/// Every call in order under one [`DEADLINE`], each of which must fail:
+/// one deadline however many calls the protocol needs.
+fn failures(calls: Vec<Box<dyn ModelCall>>) -> Vec<(contract::shapes::Failure, Option<bool>)> {
+    fakes::within("the calls to fail", DEADLINE, move || {
+        calls
+            .into_iter()
+            .map(|call| {
+                let mut deltas = Vec::new();
+                let reply = call.run(&mut |d: Delta| deltas.push(d));
+                let Err(CallError::Failed {
+                    failure,
+                    should_retry,
+                }) = reply
+                else {
+                    panic!("expected a failure");
+                };
+                (failure, should_retry)
+            })
+            .collect()
+    })
 }
 
 /// A port nothing listens on: connecting is refused.
@@ -150,10 +141,15 @@ fn timeout_conflict_and_server_errors_are_provider_unavailable() {
         )
         .unwrap();
         let endpoint = endpoint(protocol.name, &server);
-        for status in [408, 409, 500, 503] {
-            let (failure, should_retry) = failed((protocol.call)(&endpoint));
+        let calls: Vec<Box<dyn ModelCall>> = [408, 409, 500, 503]
+            .iter()
+            .map(|_| (protocol.call)(&endpoint))
+            .collect();
+        let got = failures(calls);
+        for (index, status) in [408, 409, 500, 503].into_iter().enumerate() {
+            let (failure, should_retry) = &got[index];
             assert_eq!(failure.code, ErrorCode::ProviderUnavailable, "{status}");
-            assert_eq!(should_retry, None, "{status}");
+            assert_eq!(should_retry, &None, "{status}");
             assert_eq!(failure.retry_after_ms, None, "{status}");
             assert_eq!(
                 failure.provider.as_ref().unwrap().status.unwrap(),
@@ -173,13 +169,16 @@ fn a_503_carries_retry_after_and_a_500_carries_x_should_retry() {
         ])
         .unwrap();
         let endpoint = endpoint(protocol.name, &server);
-        let (failure, should_retry) = failed((protocol.call)(&endpoint));
+        let calls: Vec<Box<dyn ModelCall>> =
+            [0, 1].iter().map(|_| (protocol.call)(&endpoint)).collect();
+        let got = failures(calls);
+        let (failure, should_retry) = &got[0];
         assert_eq!(failure.code, ErrorCode::ProviderUnavailable);
-        assert_eq!(should_retry, None);
+        assert_eq!(should_retry, &None);
         assert_eq!(failure.retry_after_ms, Some(7000));
-        let (failure, should_retry) = failed((protocol.call)(&endpoint));
+        let (failure, should_retry) = &got[1];
         assert_eq!(failure.code, ErrorCode::ProviderUnavailable);
-        assert_eq!(should_retry, Some(true));
+        assert_eq!(should_retry, &Some(true));
         assert_eq!(failure.retry_after_ms, None);
     }
 }
@@ -191,9 +190,10 @@ fn a_429_with_retry_after_2_records_retry_after_ms_2000() {
             ProviderServer::start([Response::status(429, "{}").header("retry-after", "2")])
                 .unwrap();
         let endpoint = endpoint(protocol.name, &server);
-        let (failure, _) = failed((protocol.call)(&endpoint));
+        let got = failures(vec![(protocol.call)(&endpoint)]);
+        let (failure, _) = &got[0];
         assert_eq!(failure.code, ErrorCode::RateLimited, "{}", protocol.name);
-        let value = serde_json::to_value(&failure).unwrap();
+        let value = serde_json::to_value(failure).unwrap();
         assert_eq!(
             value.get("retry_after_ms"),
             Some(&serde_json::json!(2000)),
@@ -208,8 +208,9 @@ fn a_429_with_retry_after_2_records_retry_after_ms_2000() {
 fn a_refused_connection_is_connection_failed() {
     for protocol in protocols() {
         let endpoint = refused_endpoint(protocol.name);
-        let (failure, should_retry) = failed((protocol.call)(&endpoint));
+        let got = failures(vec![(protocol.call)(&endpoint)]);
+        let (failure, should_retry) = &got[0];
         assert_eq!(failure.code, ErrorCode::ConnectionFailed);
-        assert_eq!(should_retry, None);
+        assert_eq!(should_retry, &None);
     }
 }
