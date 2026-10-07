@@ -296,7 +296,7 @@ Notices, for a failure outside any action:
 |---|---|
 | `command_conflict` | two extensions registered the same command name |
 | `config_key_ignored` | an unknown key, a key a repository may not set, or a configured `thinking` level the session's model does not declare (`docs/model-routing.md`, "Thinking") |
-| `extension_failed` | an extension failed to start or missed its deadline, or its install record is missing or unreadable, so loading skipped it, or loading skipped one of its registrations; the message names which (`docs/extensions.md`, "Installing") |
+| `extension_failed` | an extension failed to start or missed its deadline, or its install record is missing or unreadable, so loading skipped it, or loading skipped one of its registrations, or one of its commands failed; the message names which (`docs/extensions.md`, "Installing") |
 | `extension_incompatible` | an extension needs a newer `fiber` or a different extension API version, so loading skipped it |
 | `extension_shadowed` | a repository's approved copy of an extension loads in place of the personal install of the same name; the message names both versions |
 | `hook_failed` | a `non-blocking` hook or a watcher failed |

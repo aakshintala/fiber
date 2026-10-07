@@ -135,7 +135,11 @@ pub(crate) fn new_session(
     session.shell(driver);
     session.jobs(jobs.clone());
     session.hooks(Arc::clone(&extensions) as Arc<dyn contract::hook::Hooks>);
-    session.commands(r#loop::commands(&prompt_inputs, &workspace));
+    session.extensions(Arc::clone(&extensions) as Arc<dyn contract::extension::ExtensionDoor>);
+    extensions.emit_to(Arc::new(log::WeakEmit::new(&log)));
+    let mut all_commands = r#loop::commands(&prompt_inputs, &workspace);
+    all_commands.extend(extensions.commands());
+    session.commands(all_commands);
     let cancel = Arc::new(r#loop::TurnCancel::default());
     // A signal while armed: nothing was written, so nothing more is.
     if let Some(code) = shutdown::start(signals, &cancel, &session, jobs.clone()) {
