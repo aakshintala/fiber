@@ -114,6 +114,97 @@ fn an_age_exactly_equal_to_older_than_is_kept() {
 }
 
 #[test]
+fn selection_reports_floored_whole_days_at_the_boundary() {
+    let setup = Setup::new();
+    let now = wall_ms(wall());
+    setup.session("s_00000000000000a1", "/w", None, now - 30 * DAY_MS - 1);
+    setup.session(
+        "s_00000000000000b2",
+        "/w",
+        None,
+        now - 31 * DAY_MS - 12 * 60 * 60 * 1000,
+    );
+    let selected = setup.select(false);
+    assert_eq!(
+        setup.deletes(false),
+        ["s_00000000000000a1", "s_00000000000000b2"]
+    );
+    let mut ages = Vec::new();
+    for row in &selected.rows {
+        if let SessionRow::Deletable { age_days, .. } = row {
+            ages.push(*age_days);
+        } else {
+            panic!("a boundary session is deletable: {}", super::row_id(row));
+        }
+    }
+    assert_eq!(ages, [30, 31]);
+}
+
+#[test]
+fn a_cascade_dependent_with_an_unreadable_last_line_is_still_deleted() {
+    let setup = Setup::new();
+    setup.session("s_00000000000000a1", "/w", None, old_ts());
+    let child = setup.sessions().join("s_00000000000000b2");
+    fs::create_dir_all(child.join("artifacts")).unwrap();
+    let first = json!({
+        "kind": "session_started",
+        "seq": 0,
+        "payload": {
+            "workspace": "/w",
+            "forked_from": {"session_id": "s_00000000000000a1", "seq": 1},
+        },
+    });
+    fs::write(child.join("events.jsonl"), format!("{first}\nnot json\n")).unwrap();
+    fs::write(child.join("artifacts/a.txt"), b"bytes").unwrap();
+    let selected = setup.select(true);
+    // One cascade delete covers both: the root's delete removes the
+    // unreadable dependent too.
+    assert_eq!(selected.deletes.len(), 1);
+    assert_eq!(selected.deletes[0].id.0, "s_00000000000000a1");
+    assert!(selected.deletes[0].cascade);
+    assert_eq!(
+        row_ids(&selected.rows),
+        ["s_00000000000000a1", "s_00000000000000b2"]
+    );
+    let dependent = &selected.rows[1];
+    assert!(matches!(dependent, SessionRow::Continues { .. }));
+    if let SessionRow::Continues {
+        age_days,
+        bytes,
+        dir,
+        parent,
+        delete,
+        ..
+    } = dependent
+    {
+        assert_eq!(*age_days, None);
+        assert_eq!(*parent, "s_00000000000000a1");
+        assert_eq!(*delete, 0);
+        assert_eq!(*dir, child);
+        assert!(*bytes > 0);
+    }
+}
+
+#[test]
+fn a_cascade_dependent_reports_its_floored_age() {
+    let setup = Setup::new();
+    setup.session("s_00000000000000a1", "/w", None, old_ts());
+    let half_day_ms = 12 * 60 * 60 * 1000;
+    setup.session(
+        "s_00000000000000b2",
+        "/w",
+        Some("s_00000000000000a1"),
+        wall_ms(wall()) - 10 * DAY_MS - half_day_ms,
+    );
+    let selected = setup.select(true);
+    assert_eq!(selected.deletes.len(), 1);
+    assert!(matches!(&selected.rows[1], SessionRow::Continues { .. }));
+    if let SessionRow::Continues { age_days, .. } = &selected.rows[1] {
+        assert_eq!(*age_days, Some(10));
+    }
+}
+
+#[test]
 fn a_held_lock_excludes_a_session() {
     let setup = Setup::new();
     setup.session("s_00000000000000a1", "/w", None, old_ts());

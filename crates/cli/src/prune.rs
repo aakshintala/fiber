@@ -7,9 +7,9 @@ use std::path::Path;
 use std::process::Stdio;
 use std::time::SystemTime;
 
+use contract::ErrorCode;
 use contract::clock::Clock;
 use contract::shapes::Failure;
-use contract::{ErrorCode, SessionId};
 
 mod diagnostics;
 mod sessions;
@@ -126,19 +126,32 @@ fn prune_run(
         say(ask.err, "nothing deleted\n");
         return Ok(());
     }
-    let mut freed = 0_u64;
-    freed += remove_diagnostics(&logs)?;
-    freed += remove_diagnostics(&crashes)?;
+    let removed_logs = remove_diagnostics(&logs);
+    let removed_crashes = remove_diagnostics(&crashes);
+    let freed = removed_logs.freed + removed_crashes.freed;
+    let failures: Vec<(String, ErrorCode, String)> = removed_logs
+        .failures
+        .into_iter()
+        .chain(removed_crashes.failures)
+        .map(|(path, message)| (path, ErrorCode::IoFailed, message))
+        .collect();
+    let diag_total = logs.len() + crashes.len();
     if !has_sessions {
-        writeln!(out, "freed {}", format_size(freed))
-            .map_err(|e| failed(ErrorCode::IoFailed, format!("standard output: {e}")))?;
-        return Ok(());
+        return finish(out, ask.err, &selected.rows, freed, failures, diag_total);
     }
     let stream = match connect() {
         Ok((stream, _)) => stream,
         Err(e) => {
-            let message = format!("the hub: {e}");
-            return reconcile_no_connection(out, &selected, freed, ask.err, &message);
+            // No `delete` was accepted: every remaining directory fails
+            // with the connection error, as `reconcile` reports.
+            let results: Vec<Result<(), Failure>> = selected
+                .deletes
+                .iter()
+                .map(|_| Err(failed(ErrorCode::IoFailed, format!("the hub: {e}"))))
+                .collect();
+            return reconcile(
+                out, &selected, &results, freed, failures, diag_total, ask.err,
+            );
         }
     };
     let mut read = BufReader::new(stream);
@@ -152,7 +165,9 @@ fn prune_run(
             delete.cascade,
         ));
     }
-    reconcile(out, &selected, &results, freed, ask.err)
+    reconcile(
+        out, &selected, &results, freed, failures, diag_total, ask.err,
+    )
 }
 
 /// Whether `cwd` is inside a git repository: `git -C cwd rev-parse
@@ -252,9 +267,12 @@ fn session_line(row: &sessions::SessionRow) -> String {
             parent,
             ..
         } => {
+            let age = match age_days {
+                Some(days) => format_age(*days),
+                None => "unknown".to_owned(),
+            };
             format!(
-                "session  {id}  {}  {}  continues {parent}",
-                format_age(*age_days),
+                "session  {id}  {age}  {}  continues {parent}",
                 format_size(*bytes)
             )
         }
@@ -332,71 +350,47 @@ fn diag_bytes(files: &[OldFile]) -> u64 {
     files.iter().map(|file| file.bytes).sum()
 }
 
-/// Removes every diagnostics file: a `NotFound` is neither a failure nor
-/// counted. Gives the bytes removed.
-fn remove_diagnostics(files: &[OldFile]) -> Result<u64, Failure> {
+/// What removing diagnostics files freed and what it could not: a
+/// `NotFound` is neither a failure nor counted, and every other error is
+/// kept so the rest still runs.
+struct DiagRemoved {
+    freed: u64,
+    /// Each file that stayed: its path and why.
+    failures: Vec<(String, String)>,
+}
+
+/// Removes every diagnostics file, keeping every failure.
+fn remove_diagnostics(files: &[OldFile]) -> DiagRemoved {
     let mut freed = 0_u64;
+    let mut failures = Vec::new();
     for file in files {
         match std::fs::remove_file(&file.path) {
             Ok(()) => freed += file.bytes,
             Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-            Err(e) => {
-                return Err(failed(
-                    ErrorCode::IoFailed,
-                    format!("{}: {e}", file.path.display()),
-                ));
-            }
+            Err(e) => failures.push((file.path.display().to_string(), e.to_string())),
         }
     }
-    Ok(freed)
-}
-
-/// Reconciles after a failed hub connection, when no `delete` was
-/// accepted: every session row whose directory remains is a failure.
-fn reconcile_no_connection(
-    out: &mut dyn Write,
-    selected: &sessions::Selected,
-    diag_freed: u64,
-    err: &mut dyn Write,
-    message: &str,
-) -> Result<(), Failure> {
-    let mut freed = diag_freed;
-    let mut failures: Vec<(String, ErrorCode, String)> = Vec::new();
-    for row in &selected.rows {
-        let (id, dir, bytes) = match row {
-            sessions::SessionRow::Deletable { id, bytes, dir, .. }
-            | sessions::SessionRow::Continues { id, bytes, dir, .. } => (id, dir, *bytes),
-            sessions::SessionRow::Blocked { .. }
-            | sessions::SessionRow::Cycle { .. }
-            | sessions::SessionRow::Unreadable { .. } => continue,
-        };
-        match log::remaining(dir) {
-            Ok(None) => freed += bytes,
-            Ok(Some(left)) => {
-                freed += bytes.saturating_sub(left);
-                failures.push((id.clone(), ErrorCode::IoFailed, message.to_owned()));
-            }
-            Err(_) => {
-                failures.push((id.clone(), ErrorCode::IoFailed, message.to_owned()));
-            }
-        }
-    }
-    finish(out, err, &selected.rows, freed, failures)
+    DiagRemoved { freed, failures }
 }
 
 /// Reconciles each session row with `log::remaining` after every `delete`
 /// has been answered: freed is listed minus remaining, and a row whose
 /// `delete` was not accepted and whose directory remains is a failure
-/// keeping the hub's code and message.
+/// keeping the hub's code and message. `failures` already holds the
+/// diagnostics files that stayed, in path order. A failed hub connection
+/// passes one error per delete, which reports every remaining directory
+/// with the connection error.
 fn reconcile(
     out: &mut dyn Write,
     selected: &sessions::Selected,
     results: &[Result<(), Failure>],
     diag_freed: u64,
+    failures: Vec<(String, ErrorCode, String)>,
+    diag_total: usize,
     err: &mut dyn Write,
 ) -> Result<(), Failure> {
     let mut freed = diag_freed;
-    let mut failures: Vec<(String, ErrorCode, String)> = Vec::new();
+    let mut failures = failures;
     for row in &selected.rows {
         let (id, dir, bytes, delete) = match row {
             sessions::SessionRow::Deletable {
@@ -429,15 +423,23 @@ fn reconcile(
             Ok(Some(left)) => {
                 freed += bytes.saturating_sub(left);
                 if !accepted && let Some(failure) = hub_failure {
-                    failures.push((id.clone(), failure.code.clone(), failure.message.clone()));
+                    failures.push((
+                        format!("session {id}"),
+                        failure.code.clone(),
+                        failure.message.clone(),
+                    ));
                 }
             }
             Err(_) => {
                 if let Some(failure) = hub_failure {
-                    failures.push((id.clone(), failure.code.clone(), failure.message.clone()));
+                    failures.push((
+                        format!("session {id}"),
+                        failure.code.clone(),
+                        failure.message.clone(),
+                    ));
                 } else {
                     failures.push((
-                        id.clone(),
+                        format!("session {id}"),
                         ErrorCode::IoFailed,
                         format!("{id} could not be read after pruning"),
                     ));
@@ -445,27 +447,29 @@ fn reconcile(
             }
         }
     }
-    finish(out, err, &selected.rows, freed, failures)
+    finish(out, err, &selected.rows, freed, failures, diag_total)
 }
 
 /// Prints `freed`, and when any deletion failed the per-row stderr lines
-/// and the `<n>` of `<m>` failure with the first failure's code.
+/// and the `<n>` of `<m>` failure with the first failure's code: session
+/// rows first, then the diagnostics files that stayed.
 fn finish(
     out: &mut dyn Write,
     err: &mut dyn Write,
     rows: &[sessions::SessionRow],
     freed: u64,
     failures: Vec<(String, ErrorCode, String)>,
+    diag_total: usize,
 ) -> Result<(), Failure> {
     writeln!(out, "freed {}", format_size(freed))
         .map_err(|e| failed(ErrorCode::IoFailed, format!("standard output: {e}")))?;
     if failures.is_empty() {
         return Ok(());
     }
-    for (id, _, message) in &failures {
+    for (what, _, message) in &failures {
         say(
             err,
-            &format!("fiber: session {id} could not be deleted: {message}\n"),
+            &format!("fiber: {what} could not be deleted: {message}\n"),
         );
     }
     let total = rows
@@ -476,7 +480,8 @@ fn finish(
                 sessions::SessionRow::Deletable { .. } | sessions::SessionRow::Continues { .. }
             )
         })
-        .count();
+        .count()
+        + diag_total;
     let (_, code, _) =
         failures
             .first()
@@ -486,12 +491,6 @@ fn finish(
         code,
         format!("{} of {} could not be deleted", failures.len(), total),
     ))
-}
-
-/// The `SessionId` of a delete, for tests.
-#[allow(dead_code, reason = "only tests read the delete's session")]
-fn delete_id(id: &SessionId) -> &str {
-    &id.0
 }
 
 #[cfg(test)]

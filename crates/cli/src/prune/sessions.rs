@@ -58,8 +58,9 @@ pub(crate) enum SessionRow {
     Continues {
         /// The session.
         id: String,
-        /// Whole days old, floored.
-        age_days: u64,
+        /// Whole days old, floored; `None` when its last line does not
+        /// read, which never blocks the root's cascade delete.
+        age_days: Option<u64>,
         /// Logical bytes.
         bytes: u64,
         /// The session's directory.
@@ -104,12 +105,11 @@ pub(crate) fn select(
         };
     };
     let all = log::started_sessions(home);
-    let mut by_id: HashMap<String, (PathBuf, Option<String>, Option<String>)> = HashMap::new();
+    let mut by_id: HashMap<String, (PathBuf, Option<String>)> = HashMap::new();
     let mut children: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for started in &all {
         by_id.entry(started.id.0.clone()).or_insert((
             started.dir.clone(),
-            started.workspace.clone(),
             started.forked_from.as_ref().map(|id| id.0.clone()),
         ));
         if let Some(from) = started.forked_from.as_ref() {
@@ -154,10 +154,9 @@ pub(crate) fn select(
         if !in_scope(&started.id.0, &started.dir, &started.workspace) {
             continue;
         }
-        let Some(work) = &started.workspace else {
+        if started.workspace.is_none() {
             continue;
-        };
-        let _ = work;
+        }
         let Ok(hold) = log::try_hold(&started.dir) else {
             continue;
         };
@@ -214,11 +213,9 @@ pub(crate) fn select(
     if cascade {
         select_cascade(
             &candidates,
-            &in_c,
             &depend_sets,
             &by_id,
             &unreadable,
-            &cyclic,
             closure_has_cycle,
             cycle_members,
             now_ms,
@@ -344,11 +341,9 @@ fn select_plain(
 )]
 fn select_cascade(
     candidates: &[Candidate],
-    in_c: &BTreeSet<String>,
     depend_sets: &HashMap<String, BTreeSet<String>>,
-    by_id: &HashMap<String, (PathBuf, Option<String>, Option<String>)>,
+    by_id: &HashMap<String, (PathBuf, Option<String>)>,
     unreadable: &[String],
-    cyclic: &BTreeSet<String>,
     closure_has_cycle: impl Fn(&str) -> bool,
     cycle_members: impl Fn(&str) -> Vec<String>,
     now_ms: u64,
@@ -357,7 +352,6 @@ fn select_cascade(
         .iter()
         .filter(|c| !closure_has_cycle(&c.id))
         .collect();
-    let clean_ids: BTreeSet<String> = clean.iter().map(|c| c.id.clone()).collect();
     let mut roots: Vec<&Candidate> = clean
         .iter()
         .filter(|c| {
@@ -371,7 +365,6 @@ fn select_cascade(
         .cloned()
         .collect();
     roots.sort_by(|a, b| a.id.cmp(&b.id));
-    let _ = (in_c, cyclic);
     let mut rows = Vec::new();
     let mut deletes = Vec::new();
     let mut listed: BTreeSet<String> = BTreeSet::new();
@@ -397,14 +390,11 @@ fn select_cascade(
             if !listed.insert(member.clone()) {
                 continue;
             }
-            let Some((dir, _, forked)) = by_id.get(&member) else {
+            let Some((dir, forked)) = by_id.get(&member) else {
                 continue;
             };
-            let Some(ts) = log::last_ts(dir) else {
-                rows.push(SessionRow::Unreadable { id: member.clone() });
-                continue;
-            };
-            let age_days = now_ms.saturating_sub(ts) / (24 * 60 * 60 * 1000);
+            let age_days =
+                log::last_ts(dir).map(|ts| now_ms.saturating_sub(ts) / (24 * 60 * 60 * 1000));
             let parent = forked.clone().unwrap_or_else(|| root.id.clone());
             rows.push(SessionRow::Continues {
                 id: member.clone(),
@@ -430,7 +420,6 @@ fn select_cascade(
             rows.push(SessionRow::Unreadable { id: id.clone() });
         }
     }
-    let _ = clean_ids;
     rows.sort_by(row_id_cmp);
     Selected { rows, deletes }
 }

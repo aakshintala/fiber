@@ -22,7 +22,7 @@ use contract::{ErrorCode, HubLine};
 use serde_json::{Map, Value, json};
 use std::os::unix::process::CommandExt;
 
-use super::{PruneArgs, format_age, format_size, prune, prune_run};
+use super::{OldFile, PruneArgs, format_age, format_size, prune, prune_run, remove_diagnostics};
 use crate::sessions::Ask;
 
 /// One named deadline for the fake hub's read and the test's receive.
@@ -210,6 +210,328 @@ fn run_prune(
         String::from_utf8(err).unwrap(),
         got,
     )
+}
+
+/// Runs `prune_run` with a hub connection that always fails.
+fn run_prune_no_connect(
+    setup: &Setup,
+    args: &PruneArgs,
+    yes: bool,
+    terminal: bool,
+    input: &mut dyn BufRead,
+) -> (String, String, Result<(), contract::shapes::Failure>) {
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let ask = Ask {
+        yes,
+        terminal,
+        input,
+        err: &mut err,
+    };
+    let got = prune_run(
+        &setup.home(),
+        &setup.workspace(),
+        args,
+        wall(),
+        ask,
+        &mut out,
+        &mut || -> io::Result<doors::hub::Hub> { Err(io::Error::other("down")) },
+    );
+    (
+        String::from_utf8(out).unwrap(),
+        String::from_utf8(err).unwrap(),
+        got,
+    )
+}
+
+/// Whole days old of a session whose last line has `ts`, floored.
+fn age_days(ts: u64) -> u64 {
+    (contract::clock::wall_ms(wall()) - ts) / (24 * 60 * 60 * 1000)
+}
+
+#[test]
+fn dry_run_prints_every_row_and_the_exact_total() {
+    let setup = Setup::new();
+    let dir = setup.session("s_00000000000000a1", None, 0);
+    setup.diag(
+        "logs",
+        "old.log",
+        b"0123456789",
+        Duration::from_secs(31 * 24 * 60 * 60),
+    );
+    setup.diag(
+        "crashes",
+        "old.crash",
+        b"12345",
+        Duration::from_secs(31 * 24 * 60 * 60),
+    );
+    let mut hub = FakeHub::accept_all();
+    let (out, err, got) = run_prune(
+        &setup,
+        &mut hub,
+        &args(Some("30d"), false, true, false),
+        false,
+        false,
+        &mut Unread,
+    );
+    got.unwrap();
+    assert_eq!(err, "");
+    let session_bytes = log::session_bytes(&dir);
+    assert!(session_bytes > 0);
+    let total = session_bytes + 10 + 5;
+    assert_eq!(
+        out,
+        format!(
+            "session  s_00000000000000a1  {}d  {}\nlog  old.log  31d  10 B\ncrash  old.crash  31d  5 B\nwould free {}\n",
+            age_days(0),
+            format_size(session_bytes),
+            format_size(total),
+        )
+    );
+    assert_eq!(hub.connects, 0);
+}
+
+#[test]
+fn dry_run_names_blockers_and_cycles_in_singular_and_plural() {
+    // One young fork blocks with `continues it`.
+    let single = Setup::new();
+    single.session("s_00000000000000a1", None, 0);
+    single.session(
+        "s_00000000000000b2",
+        Some("s_00000000000000a1"),
+        contract::clock::wall_ms(wall()),
+    );
+    // Two young forks block with `continue it`.
+    let plural = Setup::new();
+    plural.session("s_00000000000000a1", None, 0);
+    plural.session(
+        "s_00000000000000b2",
+        Some("s_00000000000000a1"),
+        contract::clock::wall_ms(wall()),
+    );
+    plural.session(
+        "s_00000000000000c3",
+        Some("s_00000000000000a1"),
+        contract::clock::wall_ms(wall()),
+    );
+    // A session continuing itself cycles with `continues itself`.
+    let alone = Setup::new();
+    alone.session("s_00000000000000a1", Some("s_00000000000000a1"), 0);
+    // Two sessions continuing each other cycle with `continue each other`.
+    let pair = Setup::new();
+    pair.session("s_00000000000000a1", Some("s_00000000000000b2"), 0);
+    pair.session("s_00000000000000b2", Some("s_00000000000000a1"), 0);
+    let age = age_days(0);
+    for (setup, expected) in [
+        (
+            &single,
+            format!(
+                "session  s_00000000000000a1  {age}d  skipped: s_00000000000000b2 continues it\nfreed 0 B\n"
+            ),
+        ),
+        (
+            &plural,
+            format!(
+                "session  s_00000000000000a1  {age}d  skipped: s_00000000000000b2, s_00000000000000c3 continue it\nfreed 0 B\n"
+            ),
+        ),
+        (
+            &alone,
+            format!(
+                "session  s_00000000000000a1  {age}d  skipped: s_00000000000000a1 continues itself\nfreed 0 B\n"
+            ),
+        ),
+        (
+            &pair,
+            format!(
+                "session  s_00000000000000a1  {age}d  skipped: s_00000000000000a1, s_00000000000000b2 continue each other\nsession  s_00000000000000b2  {age}d  skipped: s_00000000000000a1, s_00000000000000b2 continue each other\nfreed 0 B\n"
+            ),
+        ),
+    ] {
+        let mut hub = FakeHub::accept_all();
+        let (out, _, got) = run_prune(
+            setup,
+            &mut hub,
+            &args(Some("30d"), false, true, false),
+            false,
+            false,
+            &mut Unread,
+        );
+        got.unwrap();
+        assert_eq!(out, expected);
+        assert_eq!(hub.connects, 0);
+    }
+}
+
+#[test]
+fn remove_diagnostics_counts_every_file_and_keeps_every_failure() {
+    let setup = Setup::new();
+    let good = setup.home().join("good.log");
+    fs::create_dir_all(setup.home()).unwrap();
+    fs::write(&good, b"0123456789").unwrap();
+    let more = setup.home().join("more.log");
+    fs::write(&more, b"12345").unwrap();
+    let missing = setup.home().join("gone.log");
+    let blocked = setup.home().join("blocked");
+    fs::create_dir_all(&blocked).unwrap();
+    let removed = remove_diagnostics(&[
+        OldFile {
+            path: good.clone(),
+            bytes: 10,
+        },
+        OldFile {
+            path: missing.clone(),
+            bytes: 0,
+        },
+        OldFile {
+            path: blocked.clone(),
+            bytes: 7,
+        },
+        OldFile {
+            path: more.clone(),
+            bytes: 5,
+        },
+    ]);
+    assert_eq!(removed.freed, 15);
+    assert_eq!(removed.failures.len(), 1);
+    assert!(
+        removed.failures[0].0.contains("blocked"),
+        "{:?}",
+        removed.failures
+    );
+    assert!(!good.exists());
+    assert!(!more.exists());
+    assert!(blocked.exists());
+}
+
+#[test]
+fn a_diagnostics_failure_still_deletes_everything_else() {
+    use std::os::unix::fs::PermissionsExt;
+    let setup = Setup::new();
+    let dir = setup.session("s_00000000000000a1", None, 0);
+    let session_bytes = log::session_bytes(&dir);
+    setup.diag(
+        "logs",
+        "old.log",
+        b"0123456789",
+        Duration::from_secs(31 * 24 * 60 * 60),
+    );
+    setup.diag(
+        "crashes",
+        "old.crash",
+        b"12345",
+        Duration::from_secs(31 * 24 * 60 * 60),
+    );
+    // Taking write permission off `logs/` makes its removal fail, while
+    // `crashes/` and the session still delete.
+    let logs = setup.home().join("logs");
+    fs::set_permissions(&logs, fs::Permissions::from_mode(0o555)).unwrap();
+    let sessions = setup.sessions();
+    let mut hub = FakeHub::new(move |line| {
+        let id = line["id"].as_str().unwrap().to_owned();
+        let session = line["args"]["session"].as_str().unwrap().to_owned();
+        fs::remove_dir_all(sessions.join(&session)).unwrap_or(());
+        accept_line(&id)
+    });
+    let (out, err, got) = run_prune(
+        &setup,
+        &mut hub,
+        &args(Some("30d"), false, false, true),
+        true,
+        false,
+        &mut Unread,
+    );
+    fs::set_permissions(&logs, fs::Permissions::from_mode(0o755)).unwrap();
+    let failure = got.unwrap_err();
+    assert_eq!(failure.code, ErrorCode::IoFailed);
+    assert!(failure.message.contains("1 of 3"), "{}", failure.message);
+    let freed = session_bytes + 5;
+    assert_eq!(
+        out,
+        format!(
+            "session  s_00000000000000a1  {}d  {}\nlog  old.log  31d  10 B\ncrash  old.crash  31d  5 B\nfreed {}\n",
+            age_days(0),
+            format_size(session_bytes),
+            format_size(freed),
+        )
+    );
+    assert!(err.contains("old.log"), "{err}");
+    assert!(err.contains("could not be deleted"), "{err}");
+    assert!(setup.home().join("logs/old.log").exists());
+    assert!(!setup.home().join("crashes/old.crash").exists());
+    assert!(!dir.exists());
+}
+
+#[test]
+fn a_failed_hub_connection_fails_every_remaining_session() {
+    let setup = Setup::new();
+    let dir = setup.session("s_00000000000000a1", None, 0);
+    let session_bytes = log::session_bytes(&dir);
+    let (out, err, got) = run_prune_no_connect(
+        &setup,
+        &args(Some("30d"), false, false, true),
+        true,
+        false,
+        &mut Unread,
+    );
+    let failure = got.unwrap_err();
+    assert_eq!(failure.code, ErrorCode::IoFailed);
+    assert!(failure.message.contains("1 of 1"), "{}", failure.message);
+    assert_eq!(
+        out,
+        format!(
+            "session  s_00000000000000a1  {}d  {}\nfreed 0 B\n",
+            age_days(0),
+            format_size(session_bytes),
+        )
+    );
+    assert!(
+        err.contains("session s_00000000000000a1 could not be deleted: the hub: down"),
+        "{err}"
+    );
+    assert!(dir.exists());
+}
+
+#[test]
+fn cascade_lists_an_unreadable_dependent_as_deleted_with_unknown_age() {
+    let setup = Setup::new();
+    let root = setup.session("s_00000000000000a1", None, 0);
+    let child = setup.sessions().join("s_00000000000000b2");
+    fs::create_dir_all(child.join("artifacts")).unwrap();
+    let first = json!({
+        "kind": "session_started",
+        "seq": 0,
+        "payload": {
+            "workspace": "/w",
+            "forked_from": {"session_id": "s_00000000000000a1", "seq": 1},
+        },
+    });
+    fs::write(child.join("events.jsonl"), format!("{first}\nnot json\n")).unwrap();
+    fs::write(child.join("artifacts/a.txt"), b"0123456789").unwrap();
+    let mut hub = FakeHub::accept_all();
+    let (out, _, got) = run_prune(
+        &setup,
+        &mut hub,
+        &args(Some("30d"), true, true, false),
+        false,
+        false,
+        &mut Unread,
+    );
+    got.unwrap();
+    let root_bytes = log::session_bytes(&root);
+    let child_bytes = log::session_bytes(&child);
+    let total = root_bytes + child_bytes;
+    assert_eq!(
+        out,
+        format!(
+            "session  s_00000000000000a1  {}d  {}\nsession  s_00000000000000b2  unknown  {}  continues s_00000000000000a1\nwould free {}\n",
+            age_days(0),
+            format_size(root_bytes),
+            format_size(child_bytes),
+            format_size(total),
+        )
+    );
+    assert_eq!(hub.connects, 0);
 }
 
 #[test]

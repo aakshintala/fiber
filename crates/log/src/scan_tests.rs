@@ -183,6 +183,24 @@ fn last_ts_uses_the_last_complete_line_past_a_torn_tail() {
 }
 
 #[test]
+fn the_backward_step_is_64_kib() {
+    assert_eq!(super::STEP, 64 * 1024);
+}
+
+#[test]
+fn last_ts_skips_a_torn_tail_longer_than_one_step() {
+    // 70 000 torn bytes after the last newline: the first 64 KiB step
+    // back holds no newline, so only the loop finds the last line.
+    let home = fakes::TempDir::new("log-scan-torn-tail");
+    let dir = home.path().join("s");
+    write_log(
+        &dir,
+        format!("{}\n{}\n{}", event(1), event(9), "p".repeat(70 * 1024)).as_bytes(),
+    );
+    assert_eq!(last_ts(&dir), Some(9));
+}
+
+#[test]
 fn last_ts_reads_a_last_line_longer_than_64_kib() {
     let home = fakes::TempDir::new("log-scan-long");
     let dir = home.path().join("s");
