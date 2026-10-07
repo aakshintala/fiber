@@ -42,6 +42,9 @@ pub(crate) struct FakeStarter {
     resumed: Arc<Mutex<Vec<(SessionId, PathBuf)>>>,
     /// The connections the fake sessions accepted and still serve.
     serving: Arc<Serving>,
+    /// How many more `resume` calls exit `session_held` without binding,
+    /// as a resume does while the exiting process still holds the lock.
+    held: Arc<Mutex<usize>>,
 }
 
 /// The connections the fake sessions serve: a clone of each, to shut it
@@ -80,6 +83,14 @@ impl FakeStarter {
         Self::new(home, true, Some(failure), None)
     }
 
+    /// Binds `run/<id>` on `resume`, after its first `held` calls each
+    /// exit `session_held` without binding.
+    pub(crate) fn held_then_bind(home: &Path, held: usize) -> Self {
+        let starter = Self::bind_and_hold(home);
+        *lock(&starter.held) = held;
+        starter
+    }
+
     fn new(home: &Path, bind: bool, exited: Option<Failure>, handshake: Option<Handshake>) -> Self {
         Self {
             home: home.to_path_buf(),
@@ -89,6 +100,7 @@ impl FakeStarter {
             received: Arc::new(Mutex::new(Vec::new())),
             resumed: Arc::new(Mutex::new(Vec::new())),
             serving: Arc::new(Serving::default()),
+            held: Arc::new(Mutex::new(0)),
         }
     }
 
@@ -160,6 +172,18 @@ impl Starter for FakeStarter {
 
     fn resume(&self, id: &SessionId, workspace: &Path) -> std::io::Result<Box<dyn Started>> {
         lock(&self.resumed).push((id.clone(), workspace.to_path_buf()));
+        {
+            let mut held = lock(&self.held);
+            if *held > 0 {
+                *held -= 1;
+                return Ok(Box::new(FakeStarted {
+                    exited: Some(failure(
+                        ErrorCode::SessionHeld,
+                        "Another process holds this session.",
+                    )),
+                }));
+            }
+        }
         self.launch(id)
     }
 }

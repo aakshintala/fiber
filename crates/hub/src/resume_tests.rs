@@ -101,6 +101,21 @@ impl Temp {
         workspace
     }
 
+    /// Appends `kind` as the last line of `SID`'s log.
+    fn append(&self, kind: &str) {
+        let log = self
+            .dir
+            .join("projects")
+            .join("-p")
+            .join("sessions")
+            .join(SID)
+            .join("events.jsonl");
+        let mut text = fs::read_to_string(&log).unwrap();
+        text.push_str(&json!({"kind": kind, "session_id": SID, "payload": {}}).to_string());
+        text.push('\n');
+        fs::write(log, text).unwrap();
+    }
+
     fn hub_log(&self) -> String {
         fs::read_to_string(self.dir.join("logs").join("hub.log")).unwrap_or_default()
     }
@@ -119,6 +134,20 @@ fn resumed(hub: &Arc<Hub>) -> Result<UnixStream, Refused> {
     finished
         .recv_timeout(DEADLINE)
         .expect("the resume answers before its deadline")
+}
+
+/// Runs `resume` on a thread and hands back where its result arrives: the
+/// test drives the fake clock while it waits.
+fn resuming(hub: &Arc<Hub>) -> mpsc::Receiver<Result<UnixStream, Refused>> {
+    let (done, finished) = mpsc::channel();
+    let hub = Arc::clone(hub);
+    thread::spawn(move || done.send(resume(&hub, &sid())).unwrap_or(()));
+    finished
+}
+
+/// How many held polls fit in the shutdown bound.
+fn polls() -> u32 {
+    u32::try_from(SHUTDOWN_BOUND.as_millis() / HELD_POLL.as_millis()).unwrap()
 }
 
 fn refused(result: Result<UnixStream, Refused>) -> Refused {
@@ -236,6 +265,75 @@ fn a_resumed_process_that_never_binds_fails_at_the_start_deadline() {
     let log = temp.hub_log();
     assert!(log.contains("could not resume."), "{log}");
     assert!(!log.contains(SECRET), "no workspace path in the log");
+}
+
+#[test]
+fn a_held_resume_of_an_exited_session_retries_until_the_lock_is_released() {
+    let temp = Temp::new();
+    temp.recorded();
+    temp.append("fiber_exited");
+    let starter = FakeStarter::held_then_bind(&temp.dir, 2);
+    let hub = temp.hub(starter.clone());
+    let finished = resuming(&hub);
+    for k in 1..=2 {
+        let until = temp.clock.origin() + HELD_POLL * k;
+        assert!(
+            temp.clock.await_parked(until, DEADLINE),
+            "the hub waits a poll after held failure {k}"
+        );
+        assert_eq!(starter.resumed().len(), usize::try_from(k).unwrap());
+        assert!(finished.try_recv().is_err(), "no answer while it waits");
+        temp.clock.advance(HELD_POLL);
+    }
+    let result = finished
+        .recv_timeout(DEADLINE)
+        .expect("the resume answers once the lock is released");
+    assert!(result.is_ok());
+    assert_eq!(starter.resumed().len(), 3);
+}
+
+#[test]
+fn a_resume_held_past_the_shutdown_bound_is_session_held() {
+    let temp = Temp::new();
+    temp.recorded();
+    temp.append("fiber_exited");
+    let starter = FakeStarter::held_then_bind(&temp.dir, usize::MAX);
+    let hub = temp.hub(starter.clone());
+    let finished = resuming(&hub);
+    for k in 1..=polls() {
+        let until = temp.clock.origin() + HELD_POLL * k;
+        assert!(
+            temp.clock.await_parked(until, DEADLINE),
+            "the hub waits poll {k} inside the bound"
+        );
+        assert!(finished.try_recv().is_err(), "no answer before the bound");
+        temp.clock.advance(HELD_POLL);
+    }
+    let refused = refused(
+        finished
+            .recv_timeout(DEADLINE)
+            .expect("the resume answers at the bound"),
+    );
+    assert_eq!(refused.code, ErrorCode::SessionHeld);
+    assert_eq!(refused.message, "Another process holds this session.");
+    assert_eq!(temp.clock.now(), temp.clock.origin() + SHUTDOWN_BOUND);
+    assert_eq!(
+        starter.resumed().len(),
+        usize::try_from(polls()).unwrap() + 1
+    );
+}
+
+#[test]
+fn a_held_resume_of_a_session_that_has_not_exited_is_session_held_at_once() {
+    let temp = Temp::new();
+    temp.recorded();
+    temp.append("turn_started");
+    let starter = FakeStarter::held_then_bind(&temp.dir, usize::MAX);
+    let hub = temp.hub(starter.clone());
+    let refused = refused(resumed(&hub));
+    assert_eq!(refused.code, ErrorCode::SessionHeld);
+    assert_eq!(starter.resumed().len(), 1);
+    assert_eq!(temp.clock.now(), temp.clock.origin());
 }
 
 #[test]
