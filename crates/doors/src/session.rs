@@ -7,11 +7,10 @@ use std::fs;
 use std::io::{self, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
 
 use crate::client;
 use crate::socket::{bind, remove_socket};
@@ -25,16 +24,15 @@ use contract::tool::Tool;
 use contract::{CommandId, ErrorCode, SessionId};
 use log::{Log, Watcher};
 
+mod conns;
 mod event;
 mod shells;
+use conns::Conns;
+#[cfg(test)]
+use conns::{GRACE, grace_remains};
 pub(crate) use event::envelope;
 use shells::RunningShells;
 pub(crate) use shells::Stopped;
-
-// debt: 2 s grace is picked, not measured; a slow client's measured drain time would set it.
-/// How long [`Session::close`] waits for a connection's writer to finish
-/// before it shuts the socket.
-const GRACE: Duration = Duration::from_secs(2);
 
 /// A running session process's door side: its socket, the clients on it, and
 /// the thread copying its events to stdout.
@@ -87,20 +85,6 @@ pub(crate) struct Gate {
     /// Paired with [`Gate::conns`].
     writers: Condvar,
     conns: Mutex<Conns>,
-}
-
-struct Live {
-    reader: Option<JoinHandle<()>>,
-    writer: Option<JoinHandle<()>>,
-    shutdown: Option<Box<dyn Fn() + Send + Sync>>,
-}
-
-struct Conns {
-    live: Vec<(u64, Live)>,
-    writers_open: u32,
-    /// The next connection id. Starts at 1, so a missed store cannot look
-    /// like the first connection.
-    next: u64,
 }
 
 impl Session {
@@ -254,7 +238,7 @@ impl Session {
     }
 
     /// Ends the door side: stops accepting, unlinks the socket, drops `log`
-    /// (the last handle, which releases the lock), waits up to [`GRACE`] for
+    /// (the last handle, which releases the lock), waits up to [`conns::GRACE`] for
     /// each writer, then shuts down whatever is still open. Every driver
     /// shell is cancelled first, since shutting its socket does not stop the
     /// tool, and waited for: its thread is not joined, and its answer is
@@ -310,43 +294,6 @@ impl Gate {
         }
     }
 
-    fn wait_writers(&self) {
-        let until = self.clock.now() + GRACE;
-        let mut conns = lock(&self.conns);
-        while conns.writers_open > 0 && grace_remains(self.clock.now(), until) {
-            let writers = &self.writers;
-            let mut slot = Some(conns);
-            self.clock.wait_until(Some(until), &mut |bound| {
-                let Some(guard) = slot.take() else {
-                    return;
-                };
-                slot = Some(match bound {
-                    Some(limit) => {
-                        writers
-                            .wait_timeout(guard, limit)
-                            .unwrap_or_else(PoisonError::into_inner)
-                            .0
-                    }
-                    None => writers.wait(guard).unwrap_or_else(PoisonError::into_inner),
-                });
-            });
-            conns = match slot {
-                Some(guard) => guard,
-                None => lock(&self.conns),
-            };
-        }
-    }
-
-    fn join_clients(&self) {
-        let live = {
-            let mut conns = lock(&self.conns);
-            std::mem::take(&mut conns.live)
-        };
-        for (_, live) in live {
-            reap(live);
-        }
-    }
-
     /// One more `full` connection, and the `clients` line for it.
     pub(crate) fn attach(&self) {
         let mut clients = lock(&self.clients);
@@ -393,89 +340,6 @@ impl Gate {
         if let Err(mpsc::SendError(delivery)) = inbox.send(delivery) {
             drop(delivery);
         }
-    }
-
-    /// Records `handle` and `shutdown` together, and returns the id `serve`
-    /// finishes the connection with. `close` joins the reader; the shutdown
-    /// is what unblocks it. A published connection never lacks one.
-    pub(crate) fn push_reader(
-        &self,
-        handle: JoinHandle<()>,
-        shutdown: Box<dyn Fn() + Send + Sync>,
-    ) -> u64 {
-        let mut conns = lock(&self.conns);
-        let id = conns.next;
-        conns.next = conns.next.wrapping_add(1);
-        conns.live.push((
-            id,
-            Live {
-                reader: Some(handle),
-                writer: None,
-                shutdown: Some(shutdown),
-            },
-        ));
-        id
-    }
-
-    pub(crate) fn push_writer(&self, id: u64, handle: JoinHandle<()>) {
-        let mut conns = lock(&self.conns);
-        if let Some((_, live)) = conns.live.iter_mut().find(|(slot, _)| *slot == id) {
-            live.writer = Some(handle);
-        }
-        drop(conns);
-        self.writers.notify_all();
-    }
-
-    /// Drops this connection's socket and joins its writer. The reader calls
-    /// it as it exits.
-    pub(crate) fn finish(&self, id: u64) {
-        let taken = {
-            let mut conns = lock(&self.conns);
-            let pos = conns.live.iter().position(|(slot, _)| *slot == id);
-            pos.map(|pos| conns.live.swap_remove(pos).1)
-        };
-        if let Some(live) = taken {
-            reap(live);
-        }
-        // The socket closed outside the lock. Taking it before the notify
-        // means a waiter that judged the descriptors still open has parked.
-        let _held = lock(&self.conns);
-        self.writers.notify_all();
-    }
-
-    fn mark_stopped(&self) {
-        let _conns = lock(&self.conns);
-        self.stop.store(true, Ordering::Relaxed);
-        self.writers.notify_all();
-    }
-
-    fn wait_for_room(&self) {
-        let conns = lock(&self.conns);
-        if self.stopped() {
-            return;
-        }
-        #[cfg(test)]
-        tests::note_accept_wait();
-        drop(
-            self.writers
-                .wait(conns)
-                .unwrap_or_else(PoisonError::into_inner),
-        );
-    }
-
-    pub(crate) fn begin_writer(&self) {
-        lock(&self.conns).writers_open += 1;
-    }
-
-    pub(crate) fn end_writer(&self) {
-        let mut conns = lock(&self.conns);
-        conns.writers_open = conns.writers_open.saturating_sub(1);
-        drop(conns);
-        self.writers.notify_all();
-    }
-
-    pub(crate) fn stopped(&self) -> bool {
-        self.stop.load(Ordering::Relaxed)
     }
 }
 
@@ -621,31 +485,6 @@ fn accept_loop(listener: UnixListener, gate: Arc<Gate>) {
 /// so the loop does not spin.
 fn accept_error_waits(kind: io::ErrorKind) -> bool {
     kind != io::ErrorKind::Interrupted
-}
-
-/// True while the grace has not been reached. An equal instant is the
-/// deadline itself. Waiting on through it would spin: the clock does not
-/// park for a time that has already arrived.
-fn grace_remains(now: Instant, until: Instant) -> bool {
-    now < until
-}
-
-/// Shuts the connection's socket and joins the threads still running on it.
-/// A reader reaping itself detaches its own handle; joining it would deadlock.
-fn reap(live: Live) {
-    if let Some(shutdown) = live.shutdown {
-        shutdown();
-    }
-    if let Some(writer) = live.writer {
-        join(writer);
-    }
-    if let Some(reader) = live.reader {
-        if reader.thread().id() == thread::current().id() {
-            drop(reader);
-        } else {
-            join(reader);
-        }
-    }
 }
 
 #[cfg(test)]
