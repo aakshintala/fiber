@@ -68,7 +68,14 @@ fn started_line(log: &Path) -> Option<(Option<String>, Option<SessionId>)> {
     BufReader::new(File::open(log).ok()?)
         .read_line(&mut first)
         .ok()?;
-    let line: Value = serde_json::from_str(&first).ok()?;
+    started_from(first.as_bytes())
+}
+
+/// The workspace and fork of the `session_started` in `first`, a log's
+/// first line with or without its newline: `None` when it does not read as
+/// one.
+pub(crate) fn started_from(first: &[u8]) -> Option<(Option<String>, Option<SessionId>)> {
+    let line: Value = serde_json::from_slice(first).ok()?;
     if line.get("kind")?.as_str()? != "session_started" {
         return None;
     }

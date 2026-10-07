@@ -499,13 +499,15 @@ fn a_newline_query_skips_an_artifact_with_a_late_nul() {
 fn an_artifact_search_stopped_before_the_end_admits_nothing() {
     let dir = TempDir::new("log-search-first");
     let path = dir.path().join("late.txt");
-    let mut late = b"needle first\n".to_vec();
+    // Two matches, then a NUL past the searcher's first buffer.
+    let mut late = b"needle first\nneedle second\n".to_vec();
     late.extend(std::iter::repeat_n(b'a', 1 << 21));
     late.extend(b"\n\0\n");
     fs::write(&path, &late).unwrap();
     let text = Text::new("needle").unwrap();
-    // A cancel at each check in turn: one of them is the match's own check,
-    // which stops the search before the NUL is read, and none admits a hit.
+    // A cancel at each check in turn: one of them is the second match's
+    // check, which stops the search after the first match was kept and
+    // before the NUL is read, and none admits a hit.
     let mut stopped = 0;
     for after in 0..16 {
         match first_match(&text, File::open(&path).unwrap(), &After::new(after)) {
@@ -543,6 +545,22 @@ fn the_name_is_the_latest_named_else_the_first_prompt() {
     let found = run("needle", &fx.dir("s_2"));
     assert_eq!(found.hits[0].name, "");
 
+    // The first message of the first turn, its text parts joined; a part
+    // of another type holds no text even with a `text` key.
+    fx.log("s_4");
+    raw(
+        &fx.dir("s_4"),
+        concat!(
+            r#"{"kind":"turn_started","session_id":"s_4","ts":1,"schema_version":1,"seq":1,"payload":{"input":["#,
+            r#"{"type":"shell_command","seq":0},"#,
+            r#"{"type":"message","source":"driver","content":[{"type":"text","text":"one "},{"type":"unknown","text":"x"},{"type":"text","text":"needle"}]}"#,
+            "]}}\n",
+        )
+        .as_bytes(),
+    );
+    let found = run("needle", &fx.dir("s_4"));
+    assert_eq!(found.hits[0].name, "one needle");
+
     // A first turn with no message gives an empty name, never a later
     // turn's.
     let third = fx.log("s_3");
@@ -554,4 +572,78 @@ fn the_name_is_the_latest_named_else_the_first_prompt() {
     fx.add(&third, "turn_started", prompt("later needle"));
     let found = run("needle", &fx.dir("s_3"));
     assert_eq!(found.hits[0].name, "");
+}
+
+#[test]
+fn the_first_matching_string_of_a_label_gives_its_snippet() {
+    let fx = Fixture::new();
+    let log = fx.log("s_1");
+    let input = json!({"input": [{"type": "message", "content": [text("plain"), text("first needle"), text("second needle")], "source": "driver"}]});
+    let seq = fx.add(&log, "turn_started", input);
+    let found = run("needle", &fx.dir("s_1"));
+    assert_eq!(
+        hits(&found),
+        [(Label::Message, seq, "first needle".into(), None)]
+    );
+}
+
+#[test]
+fn a_missing_or_odd_artifacts_directory_lists_no_problem() {
+    let fx = Fixture::new();
+    let log = fx.log("s_1");
+    let seq = fx.add(&log, "text_completed", json!({"text": "needle"}));
+    let dir = fx.dir("s_1");
+    fs::remove_dir(dir.join("artifacts")).unwrap();
+    let want = [(Label::Message, seq, "needle".to_owned(), None)];
+    let found = run("needle", &dir);
+    assert_eq!((hits(&found), found.problems), (want.to_vec(), vec![]));
+    // `artifacts` that is a file.
+    fs::write(dir.join("artifacts"), "needle").unwrap();
+    let found = run("needle", &dir);
+    assert_eq!((hits(&found), found.problems), (want.to_vec(), vec![]));
+    // A directory inside `artifacts/`, named by a line.
+    fs::remove_file(dir.join("artifacts")).unwrap();
+    fs::create_dir_all(dir.join("artifacts").join("sub")).unwrap();
+    fx.add(
+        &log,
+        "tool_call_completed",
+        completed("cut", Some("artifacts/sub")),
+    );
+    let found = run("needle", &dir);
+    assert_eq!((hits(&found), found.problems), (want.to_vec(), vec![]));
+}
+
+#[test]
+fn a_cancel_is_seen_at_a_match_across_lines() {
+    let dir = TempDir::new("log-search-multi");
+    let path = dir.path().join("a.txt");
+    fs::write(&path, "one\ntwo\n").unwrap();
+    let text = Text::new("one\ntwo").unwrap();
+    let counted = After::new(usize::MAX);
+    let got = first_match(&text, File::open(&path).unwrap(), &counted).unwrap();
+    assert_eq!(got.as_deref(), Some("one\ntwo"));
+    // The last check is the match's own: the read is done, and the
+    // cancelled search keeps nothing.
+    let checks = counted.checks.load(Ordering::SeqCst);
+    let got = first_match(&text, File::open(&path).unwrap(), &After::new(checks - 1));
+    assert_eq!(got.unwrap(), None);
+}
+
+#[test]
+fn a_cancel_is_seen_at_each_selected_line() {
+    let fx = Fixture::new();
+    let log = fx.log("s_1");
+    let first = fx.add(&log, "text_completed", json!({"text": "needle 1"}));
+    fx.add(&log, "text_completed", json!({"text": "needle 2"}));
+    let dir = fx.dir("s_1");
+    let counted = After::new(usize::MAX);
+    assert_eq!(run_with("needle", &dir, &counted).total, 2);
+    // The checks end with the last line's and the read of the end: a cancel
+    // at the last line's check keeps the line before it.
+    let checks = counted.checks.load(Ordering::SeqCst);
+    let found = run_with("needle", &dir, &After::new(checks - 2));
+    assert_eq!(
+        hits(&found),
+        [(Label::Message, first, "needle 1".into(), None)]
+    );
 }

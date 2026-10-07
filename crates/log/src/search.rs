@@ -1,5 +1,6 @@
 //! Searching past sessions (`docs/tools.md`, "Searching past sessions"):
 //! one raw pass per log with the ripgrep crates, no index, nothing written.
+//! [`SessionScan::scan`] is the one entry every search goes through.
 
 mod fields;
 mod read;
@@ -7,10 +8,256 @@ mod session;
 mod text;
 
 use std::cmp::{Ordering, Reverse};
-use std::collections::BinaryHeap;
+use std::collections::{BinaryHeap, HashMap};
+use std::fs::File;
+use std::io::{self, BufRead, BufReader};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, OnceLock};
 
 use contract::SessionId;
-use contract::session_search::{Found, Hit, Label};
+use contract::session_search::{Found, Hit, Label, Query, Scan};
+use contract::tool::Cancel;
+
+use crate::scan::started_from;
+use crate::{EVENTS, project_key};
+use read::Cancelling;
+use session::Session;
+use text::Text;
+
+/// A project's identity path for a workspace, as resume looks a session up
+/// (`docs/state.md`, "Projects").
+pub type Identity = Arc<dyn Fn(&Path) -> PathBuf + Send + Sync>;
+
+/// The scan behind `session_search` and `fiber sessions search`, for one
+/// session's workspace.
+pub struct SessionScan {
+    /// Fiber home.
+    home: PathBuf,
+    /// The calling session's workspace.
+    workspace: PathBuf,
+    /// The project identity of a workspace.
+    identity: Identity,
+    /// The calling session's own project identity, found at first use and
+    /// kept for the scanner's life.
+    own: OnceLock<PathBuf>,
+}
+
+impl SessionScan {
+    /// A scanner over `home` for a session in `workspace`. Nothing runs
+    /// until the first call: `identity` may run git.
+    pub fn new(home: &Path, workspace: &Path, identity: Identity) -> Self {
+        Self {
+            home: home.to_owned(),
+            workspace: workspace.to_owned(),
+            identity,
+            own: OnceLock::new(),
+        }
+    }
+
+    /// The calling session's own project identity.
+    fn own(&self) -> &Path {
+        self.own.get_or_init(|| (self.identity)(&self.workspace))
+    }
+
+    /// `projects/` in Fiber home.
+    fn projects(&self) -> PathBuf {
+        self.home.join("projects")
+    }
+}
+
+impl Scan for SessionScan {
+    fn scope(&self, all_projects: bool) -> PathBuf {
+        let dir = if all_projects {
+            self.projects()
+        } else {
+            self.projects().join(project_key(self.own()))
+        };
+        let mut dir = dir.into_os_string();
+        dir.push("/");
+        PathBuf::from(dir)
+    }
+
+    fn scan(&self, query: &Query, cancel: &dyn Cancel) -> Found {
+        if query.text.is_empty() || cancel.is_cancelled() {
+            return Found::default();
+        }
+        let mut out = Collect::new(query.limit);
+        match Text::new(&query.text) {
+            Ok(text) => Walk {
+                scan: self,
+                text: &text,
+                all_projects: query.all_projects,
+                cancel,
+                out: &mut out,
+                ours: HashMap::new(),
+            }
+            .run(),
+            Err(problem) => out.problem(problem),
+        }
+        out.found()
+    }
+}
+
+/// One search's walk over the sessions it reads. Every step below
+/// `projects/` refuses a link, so nothing outside the declared directory is
+/// read.
+struct Walk<'a> {
+    /// The scanner.
+    scan: &'a SessionScan,
+    /// The query.
+    text: &'a Text,
+    /// Whether every project is searched.
+    all_projects: bool,
+    /// The call's signal.
+    cancel: &'a dyn Cancel,
+    /// Where hits and problems go.
+    out: &'a mut Collect,
+    /// Whether each recorded workspace seen in this call is in the
+    /// calling session's project.
+    ours: HashMap<String, bool>,
+}
+
+impl Walk<'_> {
+    /// Searches every project in scope, one at a time.
+    fn run(&mut self) {
+        let projects = self.scan.projects();
+        if !self.all_projects {
+            let own = projects.join(project_key(self.scan.own()));
+            return self.project(&own);
+        }
+        let Some(dirs) = self.list(&projects) else {
+            return;
+        };
+        for dir in dirs {
+            if self.cancel.is_cancelled() {
+                return;
+            }
+            self.project(&dir);
+        }
+    }
+
+    /// Searches the sessions of one project directory.
+    fn project(&mut self, dir: &Path) {
+        if !self.directory(dir) {
+            return;
+        }
+        let sessions = dir.join("sessions");
+        if !self.directory(&sessions) {
+            return;
+        }
+        let Some(dirs) = self.list(&sessions) else {
+            return;
+        };
+        for dir in dirs {
+            if self.cancel.is_cancelled() {
+                return;
+            }
+            self.session(&dir);
+        }
+    }
+
+    /// Searches one session directory: one whose first line is a
+    /// `session_started` in scope.
+    fn session(&mut self, dir: &Path) {
+        if !self.directory(dir) {
+            return;
+        }
+        let Some(name) = dir.file_name() else {
+            return;
+        };
+        let id = SessionId(name.to_string_lossy().into_owned());
+        let path = dir.join(EVENTS);
+        match std::fs::symlink_metadata(&path) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return,
+            Err(error) => return self.unreadable(&path, &error),
+            Ok(meta) if meta.is_symlink() => return self.link(&path),
+            Ok(meta) if !meta.is_file() => return,
+            Ok(_) => {}
+        }
+        let log = match File::open(&path) {
+            Ok(log) => log,
+            Err(error) => return self.unreadable(&path, &error),
+        };
+        let mut first = Vec::new();
+        let read = BufReader::new(Cancelling::new(&log, self.cancel)).read_until(b'\n', &mut first);
+        if let Err(error) = read {
+            if !self.cancel.is_cancelled() {
+                self.unreadable(&path, &error);
+            }
+            return;
+        }
+        // A first line that is not a `session_started` is not a session.
+        let Some((workspace, _)) = started_from(&first) else {
+            return;
+        };
+        if !self.all_projects && !workspace.is_some_and(|w| self.ours(&w)) {
+            return;
+        }
+        let session = Session {
+            id: &id,
+            dir,
+            log: &log,
+        };
+        session::search(self.text, &session, self.cancel, self.out);
+    }
+
+    /// Whether a session recorded in `workspace` is in the calling
+    /// session's project, as resume checks it (`docs/state.md`, "A slug
+    /// can collide"). Each workspace's identity is found once per call.
+    fn ours(&mut self, workspace: &str) -> bool {
+        if let Some(ours) = self.ours.get(workspace) {
+            return *ours;
+        }
+        let ours = (self.scan.identity)(Path::new(workspace)) == self.scan.own();
+        self.ours.insert(workspace.to_owned(), ours);
+        ours
+    }
+
+    /// Whether `path` is a directory to walk. A link is a problem; a path
+    /// that is missing or not a directory is passed over.
+    fn directory(&mut self, path: &Path) -> bool {
+        match std::fs::symlink_metadata(path) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+            Err(error) => {
+                self.unreadable(path, &error);
+                false
+            }
+            Ok(meta) if meta.is_symlink() => {
+                self.link(path);
+                false
+            }
+            Ok(meta) => meta.is_dir(),
+        }
+    }
+
+    /// The entries of directory `path`, sorted; `None` when it cannot be
+    /// listed, which is a problem unless it is missing.
+    fn list(&mut self, path: &Path) -> Option<Vec<PathBuf>> {
+        match std::fs::read_dir(path) {
+            Ok(entries) => {
+                let mut paths: Vec<PathBuf> = entries.flatten().map(|entry| entry.path()).collect();
+                paths.sort();
+                Some(paths)
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+            Err(error) => {
+                self.unreadable(path, &error);
+                None
+            }
+        }
+    }
+
+    /// Lists `path` as unreadable.
+    fn unreadable(&mut self, path: &Path, error: &io::Error) {
+        self.out
+            .problem(format!("Could not read: {}: {error}", path.display()));
+    }
+
+    /// Lists `path` as a link, which the search does not follow.
+    fn link(&mut self, path: &Path) {
+        self.out.problem(format!("{} is a link", path.display()));
+    }
+}
 
 /// The most problems a search lists; the rest are counted.
 const PROBLEMS: usize = 20;
@@ -127,3 +374,7 @@ impl Ord for Ranked {
         self.key().cmp(&other.key())
     }
 }
+
+#[cfg(test)]
+#[path = "search_tests.rs"]
+mod tests;

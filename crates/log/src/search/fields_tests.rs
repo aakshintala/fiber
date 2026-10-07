@@ -13,6 +13,9 @@ use serde_json::{Value, json};
 
 use super::*;
 
+/// A kind, its payload and the strings it gives.
+type Row = (&'static str, Value, Vec<(Label, &'static str)>);
+
 fn got(kind: &str, payload: &Value) -> Vec<(Label, String)> {
     labelled(kind, payload.as_object().unwrap())
         .into_iter()
@@ -36,7 +39,7 @@ fn image() -> Value {
 
 #[test]
 fn each_searched_kind_gives_its_strings_under_its_label() {
-    let table: Vec<(&str, Value, Vec<(Label, &str)>)> = vec![
+    let table: Vec<Row> = vec![
         (
             "turn_started",
             json!({"input": [
@@ -48,7 +51,7 @@ fn each_searched_kind_gives_its_strings_under_its_label() {
         ),
         (
             "steering_applied",
-            json!({"content": [image(), text("steer")]}),
+            json!({"content": [image(), {"type": "unknown", "text": "no"}, text("steer")]}),
             vec![(Message, "steer")],
         ),
         (

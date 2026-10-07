@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use contract::session_search::{Hit, Label};
 use contract::tool::Cancel;
 use contract::{Envelope, SessionId};
-use grep_searcher::{BinaryDetection, Searcher, SearcherBuilder, Sink, SinkFinish, SinkMatch};
+use grep_searcher::{BinaryDetection, Searcher, SearcherBuilder, Sink, SinkMatch};
 use serde_json::Value;
 
 use super::Collect;
@@ -174,16 +174,16 @@ fn not_text(name: &str) -> bool {
 }
 
 /// The snippet around `file`'s first match: `None` when nothing matches or
-/// the file holds a NUL byte. A hit counts only once the whole file was
-/// read, so a NUL anywhere in it is seen; a search cancelled or stopped
-/// before the end admits nothing.
+/// the file holds a NUL byte. A hit counts only once the search read to the
+/// file's end: the line searcher quits at a NUL before reading on, so a
+/// search that reached the end found none, and a search cancelled, stopped
+/// or quit before the end admits nothing.
 fn first_match(text: &Text, file: File, cancel: &dyn Cancel) -> io::Result<Option<String>> {
     let mut reader = Cancelling::new(file, cancel);
     let mut first = First {
         text,
         cancel,
         snippet: None,
-        binary: false,
     };
     if text.multi_line() {
         // A search across lines holds the file in memory; the NUL check
@@ -200,8 +200,7 @@ fn first_match(text: &Text, file: File, cancel: &dyn Cancel) -> io::Result<Optio
     } else {
         searcher_without_binary().search_reader(text.artifact(), &mut reader, &mut first)?;
     }
-    let whole = reader.eof() && !first.binary;
-    Ok(first.snippet.filter(|_| whole))
+    Ok(first.snippet.filter(|_| reader.eof()))
 }
 
 /// A line searcher that quits at the first NUL byte, as the shell's
@@ -220,8 +219,6 @@ struct First<'a> {
     cancel: &'a dyn Cancel,
     /// The first match's snippet.
     snippet: Option<String>,
-    /// Whether the searcher found a NUL byte.
-    binary: bool,
 }
 
 impl Sink for First<'_> {
@@ -238,11 +235,6 @@ impl Sink for First<'_> {
             self.snippet = Some(snippet(found, start));
         }
         Ok(true)
-    }
-
-    fn finish(&mut self, _: &Searcher, finish: &SinkFinish) -> Result<(), io::Error> {
-        self.binary = finish.binary_byte_offset().is_some();
-        Ok(())
     }
 }
 
