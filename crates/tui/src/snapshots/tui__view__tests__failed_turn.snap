@@ -10,7 +10,7 @@ expression: screen(&app)
 
 
 
-
                                                          hi
-▣ failed · boom
+✗ boom · io_failed
+▣ failed
 >

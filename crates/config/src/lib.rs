@@ -29,6 +29,7 @@ use contract::events::Notice;
 use serde_json::{Map, Value};
 
 pub use cache::{model_cache_age, model_cache_lock_file, read_model_cache, write_model_cache};
+pub use contract::Secret;
 pub use credential_file::{CredentialFile, CredentialLock};
 pub use error::ConfigError;
 pub use extension::{
@@ -39,7 +40,7 @@ pub use home::{ProjectKey, fiber_home, fiber_home_from_env};
 pub use names::{SHORT_NAMES, dir_name, full_name, short_name};
 pub use rules::RulesFiles;
 pub use secret::{
-    CredentialSource, Secret, credential_labels, delete_credential, delete_credential_held,
+    CredentialSource, credential_labels, delete_credential, delete_credential_held,
     read_credential, read_secret, store_credential, store_secret,
 };
 pub use write::{Layer, Scope, remove_extension_settings, set, set_global, set_global_if_unset};

@@ -266,8 +266,8 @@ the lines that carry it.
 | `rate_limited` | model call, turn | the provider rate-limited the request |
 | `refused` | model call, turn | the provider declined on policy grounds |
 | `repository_code_skipped` | notice | an extension, hook or MCP server the repository declares was skipped, because nobody approved it and nobody could be asked (`docs/extensions.md`, "Code a repository ships") |
-| `session_has_dependents` | exit | a delete names a session that forks or rewinds point at; the message lists them, and `--cascade` deletes them too (`docs/invocation.md`, "Deleting and pruning") |
-| `session_held` | exit | another process holds the session |
+| `session_has_dependents` | exit, hub command | a delete names a session that forks or rewinds point at; the message lists them, and `--cascade` deletes them too (`docs/invocation.md`, "Deleting and pruning") |
+| `session_held` | exit, hub command | another process holds the session |
 | `session_not_found` | exit, hub command | a resume names no session, or a command whose `session_id` names no session, running or exited (`docs/invocation.md`, "The hub") |
 | `signal` | tool call, job | a process killed by a signal Fiber did not send |
 | `skill_invalid` | notice | a skill's `SKILL.md` header does not parse or lacks `name` or `description`, so it is left out; the message names its path (`docs/system-prompt.md`, "Skills") |

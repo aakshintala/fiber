@@ -1,8 +1,7 @@
-//! The input box's completion panels, the built-in commands and the key
-//! map overlay (`docs/tui.md`, "Keys", "Bindings", "Slash commands",
-//! "Quit").
+//! The input box's completion panels, the commands Enter and Esc send,
+//! the built-in commands and the key map overlay (`docs/tui.md`, "Keys",
+//! "Bindings", "Slash commands", "Quit").
 
-use std::mem;
 use std::time::Instant;
 
 use contract::Envelope;
@@ -10,8 +9,10 @@ use contract::events::OpeningMessage;
 use serde_json::json;
 
 use super::{App, Effect, Kind, Link, Phase, mint, read, session_command};
+use crate::editor::Target;
 use crate::keymap;
-use crate::keys::Key;
+use crate::keys::{Edit, Key};
+use crate::shell;
 use crate::slash::{self, SHOWN};
 
 /// What the notice says when a command needs a session and none is
@@ -21,7 +22,7 @@ const NO_SESSION: &str = "No session on screen.";
 /// The `@` panel's state.
 #[derive(Debug)]
 pub(super) struct FilePanel {
-    /// The byte offset of the `@` in the draft.
+    /// The draft position of the `@`.
     anchor: usize,
     /// The latest search result: matching paths, or why there are none.
     result: Option<Result<Vec<String>, String>>,
@@ -68,11 +69,63 @@ pub(crate) struct Completions {
 }
 
 impl App {
-    /// Handles one key at `now`, read from the injected clock.
+    /// Handles one key at `now`, read from the injected clock. A recall
+    /// waiting for a page waits on only through ↑ and the keys that move
+    /// the view.
     pub(crate) fn on_key(&mut self, key: Key, now: Instant) -> Effect {
+        if !matches!(
+            key,
+            Key::Up | Key::PageUp | Key::PageDown | Key::End | Key::CtrlO
+        ) {
+            self.history.cancel();
+        }
         let effect = self.route_key(key, now);
         self.edited();
+        self.settle();
         effect
+    }
+
+    /// Handles one key that edits the draft, the approval panel first.
+    /// Nothing while the key map is open. A recall waiting for a page
+    /// waits no more.
+    pub(crate) fn on_edit(&mut self, edit: Edit) -> Effect {
+        self.armed_at = None;
+        self.history.cancel();
+        if self.overlays.keymap.is_some() || self.search_edit(&edit) {
+            return Effect::None;
+        }
+        crate::input::route(edit, &mut self.draft, &mut self.queue);
+        self.overlays.selected = 0;
+        let effect = self.query_changed();
+        self.settle();
+        effect
+    }
+
+    /// A key the draft takes: a character or Backspace, which may open or
+    /// search the `@` panel, or ↑ ↓ by wrapped row and then through earlier
+    /// prompts. `None` for any other key.
+    pub(super) fn draft_key(&mut self, key: &Key) -> Option<Effect> {
+        match key {
+            Key::Char(ch) => Some(self.type_char(*ch)),
+            Key::Backspace => Some(self.backspace()),
+            Key::Up | Key::Down => self.recall_key(key),
+            Key::Enter
+            | Key::Esc
+            | Key::CtrlC
+            | Key::CtrlO
+            | Key::PageUp
+            | Key::PageDown
+            | Key::End
+            | Key::AltA
+            | Key::AltUp
+            | Key::AltDown
+            | Key::AltX
+            | Key::Tab
+            | Key::BackTab
+            | Key::F1
+            | Key::CtrlG
+            | Key::CtrlR => None,
+        }
     }
 
     /// The completion panel's height in rows; 0 while none is open.
@@ -87,8 +140,11 @@ impl App {
         if self.panel().is_some() {
             return None;
         }
+        if let Some(search) = self.search_panel() {
+            return Some(search);
+        }
         let (all, selectable): (Vec<String>, bool) = if self.slash_open() {
-            let rows = slash::filter(&self.overlays.slash_rows, self.slash_query());
+            let rows = slash::filter(&self.overlays.slash_rows, &self.slash_query());
             (rows.into_iter().map(slash::Row::line).collect(), true)
         } else {
             match self
@@ -114,19 +170,18 @@ impl App {
     /// Whether the `/` panel is open: the draft starts with `/`, holds no
     /// whitespace, and Esc has not closed the panel for it.
     fn slash_open(&self) -> bool {
-        !self.overlays.slash_closed
-            && self.draft.starts_with('/')
-            && !self.draft.contains(char::is_whitespace)
+        let text = self.draft.expand();
+        !self.overlays.slash_closed && text.starts_with('/') && !text.contains(char::is_whitespace)
     }
 
     /// The text after the `/`.
-    fn slash_query(&self) -> &str {
-        self.draft.get(1..).unwrap_or_default()
+    fn slash_query(&self) -> String {
+        self.draft.expand().get(1..).unwrap_or_default().to_owned()
     }
 
     /// The names of the `/` panel's rows, in order.
     fn slash_names(&self) -> Vec<String> {
-        slash::filter(&self.overlays.slash_rows, self.slash_query())
+        slash::filter(&self.overlays.slash_rows, &self.slash_query())
             .into_iter()
             .map(|row| row.name.clone())
             .collect()
@@ -145,10 +200,10 @@ impl App {
         }
     }
 
-    /// The `@` panel's query: the text after its `@`.
-    fn file_query(&self) -> Option<&str> {
+    /// The `@` panel's query: the text after its `@` up to whitespace.
+    fn file_query(&self) -> Option<String> {
         let anchor = self.overlays.files.as_ref()?.anchor;
-        self.draft.get(anchor.saturating_add(1)..)
+        self.draft.mention(anchor).map(|(query, _)| query)
     }
 
     /// Whether the `@` panel is open.
@@ -178,41 +233,34 @@ impl App {
             self.overlays.selected = self.overlays.selected.min(len.saturating_sub(1));
             panel.result = Some(result);
         }
+        self.settle();
     }
 
     /// Keeps the panels in step with the draft after every key: the `/`
     /// panel may open again once the draft no longer starts with `/`, and
-    /// the `@` panel closes once its `@` is gone or the query holds
-    /// whitespace.
+    /// the `@` panel closes once its `@` is gone or the cursor leaves the
+    /// query, the text from the `@` to whitespace.
     pub(super) fn edited(&mut self) {
-        if !self.draft.starts_with('/') {
+        self.history.sync(&self.draft.expand());
+        if !self.draft.expand().starts_with('/') {
             self.overlays.slash_closed = false;
         }
-        if let Some(panel) = &self.overlays.files {
-            let open = self
-                .draft
-                .get(panel.anchor..)
-                .is_some_and(|rest| rest.starts_with('@') && !rest.contains(char::is_whitespace));
-            if !open {
-                self.overlays.files = None;
-            }
+        if let Some(panel) = &self.overlays.files
+            && self.draft.mention(panel.anchor).is_none()
+        {
+            self.overlays.files = None;
         }
     }
 
-    /// Types one character into the draft. An `@` at the draft's start or
+    /// Types one character at the cursor. An `@` at the draft's start or
     /// after whitespace opens the `@` panel.
     pub(super) fn type_char(&mut self, ch: char) -> Effect {
-        let opens = ch == '@'
-            && self
-                .draft
-                .chars()
-                .next_back()
-                .is_none_or(char::is_whitespace);
-        self.draft.push(ch);
+        let opens = ch == '@' && self.draft.after_space();
+        self.draft.insert(ch);
         self.overlays.selected = 0;
         if opens {
             self.overlays.files = Some(FilePanel {
-                anchor: self.draft.len().saturating_sub(1),
+                anchor: self.draft.position().saturating_sub(1),
                 result: None,
             });
             self.overlays.generation = self.overlays.generation.saturating_add(1);
@@ -221,9 +269,9 @@ impl App {
         self.query_changed()
     }
 
-    /// Deletes the draft's last character.
+    /// Deletes the piece before the cursor.
     pub(super) fn backspace(&mut self) -> Effect {
-        self.draft.pop();
+        self.draft.backspace();
         self.overlays.selected = 0;
         self.query_changed()
     }
@@ -231,7 +279,7 @@ impl App {
     /// After an edit: a new search while the `@` panel stays open.
     fn query_changed(&mut self) -> Effect {
         self.edited();
-        let Some(query) = self.file_query().map(str::to_owned) else {
+        let Some(query) = self.file_query() else {
             return Effect::None;
         };
         self.overlays.generation = self.overlays.generation.saturating_add(1);
@@ -269,13 +317,15 @@ impl App {
             Key::Tab | Key::Enter => {
                 let chosen = chosen?;
                 if let Some(panel) = self.overlays.files.take() {
-                    self.draft.truncate(panel.anchor);
-                    self.draft.push_str(&chosen);
-                    self.draft.push(' ');
+                    let end = self
+                        .draft
+                        .mention(panel.anchor)
+                        .map_or(panel.anchor, |(_, end)| end);
+                    self.draft.replace(panel.anchor..end, &format!("{chosen} "));
                 } else if *key == Key::Tab {
-                    self.draft = format!("/{chosen} ");
+                    self.draft.set(&format!("/{chosen} "));
                 } else {
-                    self.draft = format!("/{chosen}");
+                    self.draft.set(&format!("/{chosen}"));
                     return Some(self.on_enter());
                 }
             }
@@ -286,9 +336,14 @@ impl App {
             | Key::PageDown
             | Key::End
             | Key::AltA
+            | Key::AltUp
+            | Key::AltDown
+            | Key::AltX
             | Key::BackTab
             | Key::F1
-            | Key::CtrlO => return None,
+            | Key::CtrlO
+            | Key::CtrlG
+            | Key::CtrlR => return None,
         }
         Some(Effect::None)
     }
@@ -296,7 +351,8 @@ impl App {
     /// Runs the draft when its first word is a built-in command; `None`
     /// when it is not one, and the draft goes out as typed.
     pub(super) fn built_in(&mut self) -> Option<Effect> {
-        let draft = self.draft.trim();
+        let draft = self.draft.expand();
+        let draft = draft.trim();
         let (head, rest) = draft.split_once(char::is_whitespace).unwrap_or((draft, ""));
         let name = head.strip_prefix('/')?;
         if !slash::is_built_in(name) {
@@ -312,6 +368,7 @@ impl App {
                 let args = (!rest.is_empty()).then(|| json!({ "instructions": rest }));
                 self.send_command("handoff", args)
             }
+            "name" => self.send_command("name", Some(json!({ "text": rest }))),
             "reload" => self.send_command("reload", None),
             "close" => self.close(),
             "quit" => Effect::Quit,
@@ -340,7 +397,7 @@ impl App {
         self.phase = Phase::Starting;
         self.turns.clear();
         self.overlays.slash_rows = slash::rows(&[]);
-        self.follow();
+        self.scroll.follow();
     }
 
     /// The attached session, when the command can go out: with none
@@ -348,7 +405,7 @@ impl App {
     /// draft stays.
     fn command_session(&mut self) -> Option<(contract::SessionId, bool)> {
         let Phase::Attached { session, busy } = &self.phase else {
-            self.notice = Some(NO_SESSION.to_owned());
+            self.notices.push(NO_SESSION.to_owned());
             self.draft.clear();
             return None;
         };
@@ -363,8 +420,9 @@ impl App {
         };
         let id = mint();
         let line = session_command(&id, command, &session, args).to_string();
-        self.pending
-            .insert(id, (Kind::Command, mem::take(&mut self.draft)));
+        let text = self.draft.expand();
+        self.draft.clear();
+        self.pending.insert(id, (Kind::Command, text));
         Effect::Send(vec![line])
     }
 
@@ -421,12 +479,135 @@ impl App {
             | Key::CtrlC
             | Key::End
             | Key::AltA
+            | Key::AltUp
+            | Key::AltDown
+            | Key::AltX
             | Key::Tab
             | Key::BackTab
             | Key::F1
-            | Key::CtrlO => Some(top),
+            | Key::CtrlO
+            | Key::CtrlG
+            | Key::CtrlR => Some(top),
         };
         Some(Effect::None)
+    }
+
+    /// Enter sends the draft, its tokens expanded: `start` with no session,
+    /// `prompt` when idle, `steer` during a turn, and `shell` for a `!`
+    /// command whenever attached.
+    pub(super) fn on_enter(&mut self) -> Effect {
+        if let Some(effect) = self.built_in() {
+            return effect;
+        }
+        let text = self.draft.expand();
+        // A command sent after the connection is lost goes nowhere, so the
+        // draft stays.
+        if text.trim().is_empty() || self.link == Link::Down {
+            return Effect::None;
+        }
+        if self.steering.is_selected() {
+            return self.amend();
+        }
+        let id = mint();
+        let content = json!([{"type": "text", "text": text}]);
+        let (kind, line) = match (&self.phase, shell::parse(&text)) {
+            (Phase::Starting | Phase::Pending { .. }, Some(_)) => {
+                self.notices.push("Start a session first.".to_owned());
+                return Effect::None;
+            }
+            (Phase::Pending { .. }, None) => return Effect::None,
+            (Phase::Starting, None) => {
+                let workspace = self.workspace.display().to_string();
+                let args = json!({"workspace": workspace, "content": content});
+                let line = json!({"id": id, "command": "start", "args": args});
+                (Kind::Start, line)
+            }
+            (Phase::Attached { session, .. }, Some((command, send))) => {
+                (Kind::Shell, shell::command(&id, session, command, send))
+            }
+            (Phase::Attached { session, busy }, None) => {
+                let (kind, command) = if *busy {
+                    (Kind::Steer, "steer")
+                } else {
+                    (Kind::Prompt, "prompt")
+                };
+                let args = json!({ "content": content });
+                (kind, session_command(&id, command, session, Some(args)))
+            }
+        };
+        if kind == Kind::Start {
+            self.phase = Phase::Pending {
+                command_id: id.clone(),
+            };
+        }
+        self.draft.clear();
+        self.pending.insert(id, (kind, text));
+        let line = line.to_string();
+        if self.link == Link::Up {
+            Effect::Send(vec![line])
+        } else {
+            // An Enter before the hub connects is held, not lost: `start`
+            // goes out once the hub speaks `hub_hello`.
+            self.held.push(line);
+            Effect::None
+        }
+    }
+
+    /// Esc with nothing open interrupts the turn: `cancel`, only when busy.
+    pub(super) fn on_esc(&mut self) -> Effect {
+        let session = match &self.phase {
+            Phase::Attached {
+                session,
+                busy: true,
+            } if self.connected() => session.clone(),
+            Phase::Starting | Phase::Pending { .. } | Phase::Attached { .. } => {
+                return Effect::None;
+            }
+        };
+        let id = mint();
+        let line = session_command(&id, "cancel", &session, None).to_string();
+        self.pending.insert(id, (Kind::Cancel, String::new()));
+        Effect::Send(vec![line])
+    }
+
+    /// Ctrl+G: the paste token beside the cursor, or else the whole draft,
+    /// every token expanded. A recall waiting for a page waits no more.
+    pub(super) fn open_in_editor(&mut self) -> Effect {
+        if let Some(number) = self.draft.token_at_cursor() {
+            return self.open_token(number);
+        }
+        self.history.cancel();
+        Effect::Editor {
+            target: Target::Draft,
+            text: self.draft.expand(),
+        }
+    }
+
+    /// Paste token `number`'s text in the editor; nothing when the draft
+    /// holds no such token. A recall waiting for a page waits no more.
+    pub(super) fn open_token(&mut self, number: usize) -> Effect {
+        self.history.cancel();
+        match self.draft.token_text(number) {
+            Some(text) => Effect::Editor {
+                target: Target::Token(number),
+                text: text.to_owned(),
+            },
+            None => Effect::None,
+        }
+    }
+
+    /// The editor returned: its text replaces `target`'s, the whole draft's
+    /// as typed with the cursor at its end; an error is the notice, and the
+    /// draft stays.
+    pub(crate) fn editor_returned(&mut self, target: Target, result: Result<String, String>) {
+        match (result, target) {
+            (Err(notice), _) => self.notices.push(notice),
+            (Ok(text), Target::Token(number)) => self.draft.set_token(number, &text),
+            (Ok(text), Target::Draft) => self.draft.set(&text),
+        }
+        self.overlays.selected = 0;
+        self.edited();
+        self.settle();
     }
 
     /// `opening_message`: the session's skills join the `/` list.

@@ -33,8 +33,21 @@ pub trait Clock: Send + Sync {
     fn subscribe(&self, waker: Weak<dyn Wake>);
 }
 
+/// `wall` as milliseconds since the Unix epoch: 0 before it, `u64::MAX` past it.
+pub fn wall_ms(wall: SystemTime) -> u64 {
+    wall.duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0)
+        .try_into()
+        .unwrap_or(u64::MAX)
+}
+
 /// Wakes whoever is blocked in [`Clock::wait_until`] when the clock moves.
 pub trait Wake: Send + Sync {
     /// Wakes every waiter this value stands for.
     fn wake(&self);
 }
+
+#[cfg(test)]
+#[path = "clock_tests.rs"]
+mod tests;

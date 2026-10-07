@@ -1,0 +1,14 @@
+---
+source: crates/tui/src/view_tests.rs
+expression: text(&buf)
+---
+                        Copied
+
+
+
+
+
+                      plan it
+rust                      copy
+1 │ let x = 1;
+>

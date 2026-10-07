@@ -104,7 +104,7 @@ pub(crate) fn not_found(session: &SessionId) -> Refused {
 /// The first `projects/*/sessions/<session>/events.jsonl` under `home`, in
 /// project-key order. `session` has the minted shape, so the path never
 /// leaves the project's `sessions/`.
-fn find_log(home: &Path, session: &SessionId) -> Option<PathBuf> {
+pub(crate) fn find_log(home: &Path, session: &SessionId) -> Option<PathBuf> {
     let mut projects: Vec<PathBuf> = std::fs::read_dir(home.join("projects"))
         .ok()?
         .filter_map(|entry| entry.ok().map(|entry| entry.path()))

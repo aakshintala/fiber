@@ -19,6 +19,9 @@ cargo run --release -- fixtures/session.jsonl
 | `--static` | loads the whole file at once |
 | `--reduced-motion` | keeps the working line's word still; `FIBER_REDUCED_MOTION=1` does the same |
 | `--hover` | also turns on mode 1003, every mouse motion, and tints the click target under the pointer; see "Hover's cost" |
+| `--rail A\|B\|C` | the session rail design at start: list, cards, or tabs; the default is B; F2 cycles; see "The rail (#692)" |
+| `--rail-share P` | the rail's width at start, as a percent of the window; the default is 15, clamped to [22, 48] columns |
+| `--panel-share P` | the panel's width at start, as a percent of the window; the default is 21 (34 columns at 160), clamped to [30, 60] columns |
 | `--stats FILE` | writes the measurement below to FILE on exit |
 | `--exit-after S` | exits after S seconds |
 | `--warmup S` | starts the measurement window after S seconds; default 2 |
@@ -64,6 +67,27 @@ Stage 2 covers selection and copy, search, keyboard protocol detection, the appr
 - the start page, the session list, handoff bands, the nudge, rewind, retries, a failed turn, crash recovery and interrupts, because the fixture has none of them;
 - paging history from the log: by default the prototype folds the whole file into memory; `--paged` is a probe of paging, in `PAGING.md`;
 - the 256-colour theme: colours are the mock's "atelier" truecolour values, written into the code.
+
+## The rail (#692)
+
+Eight fake sessions stand in for the hub's feed, so the owner can judge the rail's look in Ghostty. Session 1 is the replayed fixture (WORKING, NEEDS INPUT once it waits on its approval or question); its model, branch, spend and context % are the fixture's real numbers. The other seven are hard-coded: "docs: rail spec" WORKING, "review #688" NEEDS INPUT on an approval, "bump ratatui" NEEDS INPUT on a question, "lsp probe" CRASHED, "migrate every provider adapter to the new streaming contract" WORKING and "backfill embeddings" RETRYING in the `pi-rig` project, and "rewrite onboarding tour" READY in a third project, `beacon`. Sessions stay in start order, so ⌥N numbers never move; a waiting session draws attention by glyph, stripe, tint and pulse only. Clicking a card or pressing ⌥N moves the on-screen marker only; the conversation stays the replayed session, as the dim "click moves marker" line says.
+
+| Flag / key | What it does |
+|---|---|
+| `--rail A\|B\|C` | the design at start; the default is B |
+| `--density full\|medium\|three\|compact` | the B card density at start; the default is three |
+| chips | function keys do not reach every shell, so the rail switches by clicking the `A B C` chips (and, in B, the `full medium compact` chips) in the rail's bottom label; the tabs row carries its own `A B C` chips |
+| ⌥1..⌥9 | jumps to the Nth session in start order and scrolls its card into view; needs Ghostty's `macos-option-as-alt`, as with the other ⌥ keys; the mouse is the fallback |
+| ⌥A | jumps to the oldest waiting session; on macOS where Option is not Alt it arrives as "å", which the prototype also accepts |
+| ⌥R | toggles the rail shown/hidden; on macOS where Option is not Alt it arrives as "®", which the prototype also accepts |
+
+- A "list": 22 columns, one row per session (`1 ● name…`), waiting sessions with their wait reason on a second dim row, the on-screen session on a tint with a ▌ stripe, other projects under a divider behind "+1 other · show all".
+- B "cards" (the default): rich cards grouped by project, mocked at 40 columns with tinted surfaces and no box borders. The bottom label's chips switch four densities, the current one highlighted; three is the card: medium's rows with cost and context moved into row 1 (number, glyph, state word; coarse elapsed, spend and coloured percentage right-aligned, no bar), both edges, 3 content rows. When row 1 does not fit the elapsed goes first, then the spend; the state word is never cut. Full keeps the 5-row edged card, medium the 4-row edged card and compact the 3-row flat card for comparison. The three default keeps every project on screen at once. Narrow rule as medium. Every row ends 2 cells short of the card's edge (a right inner margin matching the stripe + space on the left). The bar is blue under 60%, orange at 60–85%, red above. The stripe and tint follow the state: working blue, retrying orange, needs-input the pulsing attention colour, ready dim, crashed dimmed red. The on-screen card uses the brighter SEL surface; the rest use their dimmer state tint. A project header names the project in the accent colour, bold, with the group's live spend summed over its cards and a fake "N done" right-aligned; the launch project's group comes first, the rest after in start order, and every project shows. A "+" chip after the project name starts a session there (a "→ would start" row); clicking "N done" opens that project's session list (a "→ would open" row). Context % values span 12%–91% so all three bar colours show.
+- C "tabs": no column; one row across the top of the conversation (`1 ⠋ fix flaky… │ 2 ● docs: rail…`), the on-screen tab tinted, waiting tabs in the attention colour, overflow as "+2 ›", and `A B C` chips at the row's end.
+- Session states, on the rail in every variant: a braille spinner WORKING in blue (`●` under reduced motion, animating on the working line's tick, so the rail redraws with it), the spinner in orange for RETRYING, `!` bold orange NEEDS INPUT (pulsing, still under reduced motion), `✓` dim READY, `✗` bold red CRASHED. A crashed card shows ✕ at row 1's right end instead of the elapsed: clicking it dismisses the card, leaving its number's gap (numbers are stable per session); clicking elsewhere on the card shows a "→ would send resume" row and turns it WORKING. (Not built: the session list, so no `○` exited; the terminal title.)
+- Width is a share of the window for the rail and the panel alike: the rail defaults to 15% clamped to [22, 48], the panel to 21% (34 columns at 160) clamped to [30, 60]. Dragging the rail's right edge or the panel's left edge (the one-column gaps beside them) resizes it; a dim ⋮ grip on 3 centred rows marks each handle, brightening with a tinted column on hover or while dragging (which also sets the col-resize pointer through OSC 22); the new share applies live and survives terminal resizes as a share, with the share shown while dragging ("rail 18% · 31 cols" in a dim pill). `--rail-share P` and `--panel-share P` set the start. Dragged below its 22-column floor, or when the window is too narrow for rail floor + conversation minimum + panel, the rail hides completely and "N waiting" joins the narrow-layout status rows or the panel's Session card (clicking it brings the rail back). While hidden a 1-column handle with the dim ⋮ grip stays at the screen's left edge, with the hover tint and col-resize pointer as the other handles; dragging it out restores the rail at the dragged width. An auto-hidden rail returns by itself when the window grows; a dragged-shut rail stays shut until dragged out, toggled with ⌥R, or restored from the Session card. A drag stops where the conversation would go under its 84-column minimum.
+- The rail scrolls with the mouse wheel when its cards overflow the screen; ⌥N, ⌥A and a click scroll the card into view.
+- With `--hover`, hovering a B card brightens the whole card; in compact it also shows a one-line dim footer at the rail's bottom with the full name, workspace, model · thinking level and spend, since compact hides them. In A hovering a row floats one tooltip line with the full name, workspace and spend. Elapsed times on card row 1 are coarse and one unit (`16s`, `2m`, `1h`, `3d`), so names get the space.
 
 ## The glimmer's cost
 
@@ -175,6 +199,10 @@ tmux answers the DA1 query itself and does not answer kitty's query, so under tm
 | Quit, printing the resume line | Ctrl+C | Ctrl+C | no |
 | Scroll the conversation | wheel, ↑ ↓, Page Up, Page Down | same | no |
 | Scroll the panel | wheel over the panel | same | no |
+| Scroll the rail | wheel over the rail, when its cards overflow | same | no |
+| Jump to a rail session | ⌥N, scrolls its card into view | click its card | no, where Option is Alt |
+| Jump to the oldest waiting session | ⌥A | click its card | no; "å" where Option is not Alt |
+| Toggle the rail shown/hidden | ⌥R | click the Session card's waiting line | no; "®" where Option is not Alt |
 | Jump to the end | End | End, or click the "↓ N lines below" overlay | no |
 | Open or close every ledger | Ctrl+O | Ctrl+O | no |
 | Open or close one ledger | click the group's summary line | same | no |

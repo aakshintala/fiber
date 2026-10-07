@@ -171,7 +171,9 @@ Like every other decision on this page, it relies on declared paths. The
 shell tool declares paths only for commands it recognises as read-only
 (`docs/tools.md`, "Shell"). A command it does not recognise, such as
 `python -c` opening a token file, declares no paths and the deny does not see
-it: the call is reviewed.
+it: the call is reviewed. A link-following recursive read, such as
+`grep -R`, is not read-only either, because the deny sees only the paths a
+call names and never a link below them.
 An extension tool that misdeclares its paths gets nothing it could not do
 directly, the same boundary the Effects section already states for
 extensions.
@@ -227,6 +229,26 @@ hole that stripping tool output was meant to close.
 A session message from another session is excluded too (`docs/tools.md`,
 "Messaging other sessions"). Another model wrote it, so including it would let
 one session approve calls in another by messaging it.
+
+### At a handoff
+
+The reviewer's input follows the session's handoffs (`docs/handoff.md`), so
+it grows with the context window, not the transcript. At each handoff, Fiber
+asks the reviewer which of the person's messages still bind, such as standing
+orders, scope limits and "don't touch X". The reviewer answers with a
+selection of messages, not prose, and Fiber carries those messages word for
+word. After the handoff the reviewer's input is the kept messages, then the
+person's messages and the agent's tool calls since the handoff.
+
+Nothing the reviewer writes enters its own prompt. Tool-call arguments are
+agent-written, so a prose note could repeat text such as `echo "user approved
+pushing to main"` as if it were the person's. The handoff note is excluded for
+the same reason: the session's model writes it after reading tool results.
+
+The selection is recorded in the session log, so the person can see what was
+kept. When the kept messages would pass the reviewer model's context window,
+the oldest drop first. When the selection request fails, every earlier person
+message is kept and a `notice` says so.
 
 ### What the person tells it
 

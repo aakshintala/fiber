@@ -1,0 +1,22 @@
+---
+source: crates/tui/src/view_tests.rs
+expression: text(&buf)
+---
+
+
+                                plan it
+Plan
+
+• read the file
+• write it
+
+rust                                copy
+1 │ fn main() {
+2 │     let x = 1;
+3 │ }
+
+step   ms
+─────────
+parse  12
+draw    3
+>

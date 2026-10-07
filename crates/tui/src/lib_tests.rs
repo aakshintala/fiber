@@ -2,6 +2,7 @@
 
 use super::{Input, Loop, Screen};
 use crate::app::App;
+use crate::keys::{Event, Key};
 use crate::link::Line;
 use ratatui::backend::{Backend, CrosstermBackend, TestBackend};
 use std::fs::File;
@@ -123,10 +124,10 @@ fn read_until(main: &File, marker: &[u8], what: &str) -> Vec<u8> {
 
 /// Every byte the backend wrote, shared with the test.
 #[derive(Clone, Default)]
-struct Sink(Arc<Mutex<Vec<u8>>>);
+pub(super) struct Sink(Arc<Mutex<Vec<u8>>>);
 
 impl Sink {
-    fn len(&self) -> usize {
+    pub(super) fn len(&self) -> usize {
         self.0.lock().map_or(0, |bytes| bytes.len())
     }
 }
@@ -145,7 +146,10 @@ impl Write for Sink {
 }
 
 /// A loop at 60x12 on `backend`, with no tty, that records attaches.
-fn new_loop<B: Backend>(backend: B, tty: Option<File>) -> (Loop<B>, Arc<Mutex<Vec<String>>>) {
+pub(super) fn new_loop<B: Backend>(
+    backend: B,
+    tty: Option<File>,
+) -> (Loop<B>, Arc<Mutex<Vec<String>>>) {
     let attached = Arc::new(Mutex::new(Vec::new()));
     let seen = Arc::clone(&attached);
     let mut app = App::new(PathBuf::from("/w"));
@@ -166,12 +170,17 @@ fn new_loop<B: Backend>(backend: B, tty: Option<File>) -> (Loop<B>, Arc<Mutex<Ve
         wakeups: 0,
         files_out: None,
         search: None,
+        reader: None,
+        pointer: crate::mouse::Pointer::default(),
+        hover: true,
+        var: Box::new(|_| None),
+        copy_command: None,
     };
     (lp, attached)
 }
 
 /// Runs `lp` over `inputs`, then with every sender gone.
-fn feed<B: Backend>(lp: &mut Loop<B>, inputs: Vec<Input>) -> i32 {
+pub(super) fn feed<B: Backend>(lp: &mut Loop<B>, inputs: Vec<Input>) -> i32 {
     let (tx, rx) = mpsc::channel();
     for input in inputs {
         tx.send(input).unwrap_or_else(|err| panic!("send: {err}"));
@@ -180,7 +189,7 @@ fn feed<B: Backend>(lp: &mut Loop<B>, inputs: Vec<Input>) -> i32 {
     lp.run(&rx)
 }
 
-fn hello() -> contract::HubLine {
+pub(super) fn hello() -> contract::HubLine {
     contract::HubLine {
         kind: "hub_hello".to_owned(),
         ts: 0,
@@ -204,7 +213,7 @@ fn within<T: Send + 'static>(what: &str, work: impl FnOnce() -> T + Send + 'stat
 
 /// Reads one command line the loop wrote to the hub, with one deadline,
 /// and hands the reader back.
-fn command(
+pub(super) fn command(
     mut reader: BufReader<UnixStream>,
     what: &str,
 ) -> (BufReader<UnixStream>, serde_json::Value) {
@@ -223,7 +232,7 @@ fn inputs_wake_the_loop_once_each_and_no_ops_write_nothing() {
     let sink = Sink::default();
     let (mut lp, _) = new_loop(CrosstermBackend::new(sink.clone()), None);
     lp.screen
-        .draw(&lp.app)
+        .draw(&lp.app, None)
         .unwrap_or_else(|err| panic!("draw: {err}"));
     let first = sink.len();
     assert!(first > 0);
@@ -249,6 +258,38 @@ fn a_kitty_reply_is_recorded() {
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
     feed(&mut lp, vec![Input::Bytes(b"\x1b[?5u".to_vec())]);
     assert!(lp.app.kitty());
+    // No tty took the push, so a lone ESC ending a read is still Esc.
+    assert_eq!(lp.parser.feed(b"\x1b"), vec![Event::Key(Key::Esc)]);
+}
+
+#[test]
+fn the_first_kitty_reply_pushes_the_flags_once() {
+    let pair = open();
+    let tty = pair
+        .slave
+        .try_clone()
+        .unwrap_or_else(|err| panic!("dup: {err}"));
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), Some(tty));
+    // A second reply pushes nothing more: the next bytes on the tty are
+    // the marker written after it.
+    feed(
+        &mut lp,
+        vec![
+            Input::Bytes(b"\x1b[?0u".to_vec()),
+            Input::Bytes(b"\x1b[?1u".to_vec()),
+        ],
+    );
+    (&pair.slave)
+        .write_all(b"END")
+        .unwrap_or_else(|err| panic!("write: {err}"));
+    assert_eq!(
+        read_until(&pair.main, b"END", "the kitty push"),
+        b"\x1b[>1uEND"
+    );
+    assert_eq!(crate::term::KITTY_PUSH, b"\x1b[>1u");
+    // Once pushed, Esc is `CSI 27u`: a lone ESC ending a read is held.
+    assert!(lp.parser.feed(b"\x1b").is_empty());
+    assert_eq!(lp.parser.feed(b"[27u"), vec![Event::Key(Key::Esc)]);
 }
 
 #[test]
@@ -387,14 +428,14 @@ fn a_schema_mismatch_says_so_and_hangs_up() {
 #[test]
 fn restore_puts_back_what_setup_changed() {
     let pair = open();
-    crate::term::setup(&pair.slave).unwrap_or_else(|err| panic!("setup: {err}"));
-    let start = "\x1b[?1049h\x1b[?u\x1b[c";
+    crate::term::setup(&pair.slave, true).unwrap_or_else(|err| panic!("setup: {err}"));
+    let start = "\x1b[?1049h\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b[?u\x1b[c";
     assert_eq!(
         read_exact(&pair.main, start.len(), "the start bytes"),
         start.as_bytes()
     );
     super::restore();
-    let end = "\x1b[?1049l\x1b[?25h";
+    let end = "\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?1049l\x1b[?25h";
     assert_eq!(
         read_exact(&pair.main, end.len(), "the restore bytes"),
         end.as_bytes()
@@ -576,23 +617,25 @@ fn run_quits_on_double_ctrl_c_with_the_reader_blocked() {
             let code = super::run(
                 slave,
                 PathBuf::from("/w"),
+                "-w".to_owned(),
                 Box::new(move || Ok((hub, hello))),
                 Box::new(|_| {}),
                 clock,
+                true,
             );
             match done.send(code) {
                 Ok(()) | Err(_) => {}
             }
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
-    // The terminal bytes at start: alternate screen, the two queries, then
-    // the first frame before anything is written to the master.
-    let start = read_exact(
-        &pair.main,
-        "\x1b[?1049h".len() + "\x1b[?u\x1b[c".len(),
-        "the start bytes",
-    );
-    assert_eq!(start, b"\x1b[?1049h\x1b[?u\x1b[c");
+    // The terminal bytes at start: alternate screen, bracketed paste, the mouse
+    // modes, the
+    // two queries, then the first frame before anything is written to the
+    // master.
+    let expected =
+        b"\x1b[?1049h\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b[?u\x1b[c";
+    let start = read_exact(&pair.main, expected.len(), "the start bytes");
+    assert_eq!(start, expected);
     let frame = read_exact(&pair.main, 10, "the first frame");
     assert!(frame.contains(&b'>'));
     // The slave is in raw mode while running.
@@ -614,7 +657,8 @@ fn run_quits_on_double_ctrl_c_with_the_reader_blocked() {
     let after = rustix::termios::tcgetattr(&pair.slave).unwrap_or_else(|err| panic!("attr: {err}"));
     assert!(is_cooked(&after));
     // After the last frame the output holds the restore bytes.
-    let marker = b"\x1b[?1049l\x1b[?25h";
+    let marker =
+        b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?1049l\x1b[?25h";
     let tail = read_until(&pair.main, marker, "the restore bytes");
     assert_eq!(
         tail.get(tail.len().saturating_sub(marker.len())..),
@@ -636,9 +680,11 @@ fn run_shows_a_failed_connect_and_still_quits_restored() {
             let code = super::run(
                 slave,
                 PathBuf::from("/w"),
+                "-w".to_owned(),
                 Box::new(|| Err(io::Error::other("refused"))),
                 Box::new(|_| {}),
                 fakes::clock::FakeClock::new(),
+                true,
             );
             done.send(code).unwrap_or(());
         })
@@ -652,7 +698,11 @@ fn run_shows_a_failed_connect_and_still_quits_restored() {
         .recv_timeout(DEADLINE)
         .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for run to return: {err}"));
     assert_eq!(code, 0);
-    read_until(&pair.main, b"\x1b[?1049l\x1b[?25h", "the restore bytes");
+    read_until(
+        &pair.main,
+        b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?1049l\x1b[?25h",
+        "the restore bytes",
+    );
     assert!(is_cooked(
         &rustix::termios::tcgetattr(&pair.slave).unwrap_or_else(|err| panic!("attr: {err}"))
     ));
@@ -678,9 +728,11 @@ fn run_redraws_on_sigwinch_at_the_new_size() {
             let code = super::run(
                 slave,
                 PathBuf::from("/w"),
+                "-w".to_owned(),
                 Box::new(|| Err(io::Error::other("refused"))),
                 Box::new(|_| {}),
                 fakes::clock::FakeClock::new(),
+                true,
             );
             done.send(code).unwrap_or(());
         })
@@ -701,8 +753,18 @@ fn run_redraws_on_sigwinch_at_the_new_size() {
     // test's `run`.
     signal_hook::low_level::raise(signal_hook::consts::SIGWINCH)
         .unwrap_or_else(|err| panic!("raise: {err}"));
-    // The input line moves to the new last row.
-    read_until(&pair.main, b"\x1b[10;1H>", "the input line on row 10");
+    // The input line moves to the new last row: the cursor goes there, and
+    // the next character printed, after any colour change, is its `>`.
+    read_until(&pair.main, b"\x1b[10;1H", "the move to row 10");
+    let next = read_until(&pair.main, b">", "the input line on row 10");
+    let between = next.split_last().map_or(&[][..], |(_, rest)| rest);
+    assert!(
+        between
+            .iter()
+            .all(|byte| *byte == 0x1b || b"[;m0123456789".contains(byte)),
+        "{:?}",
+        String::from_utf8_lossy(&next)
+    );
     pair.main
         .write_all(&[0x03, 0x03])
         .unwrap_or_else(|err| panic!("write: {err}"));
@@ -713,7 +775,7 @@ fn run_redraws_on_sigwinch_at_the_new_size() {
 }
 
 /// A review request offering the rule `npm test`, as the hub relays it.
-fn offering(request: &str) -> Input {
+pub(super) fn offering(request: &str) -> Input {
     let payload = serde_json::json!({
         "request_id": request, "effects": ["executes"], "reversible": true, "step": "review",
         "rule": {"subject": "npm test --watch", "prefix": "npm test"},
@@ -784,4 +846,468 @@ fn each_approval_choice_goes_to_the_hub_as_a_reply() {
         assert_eq!(reply["args"], args);
     }
     assert!(lp.app.panel().is_none());
+}
+
+#[test]
+fn the_screen_shows_the_cursor_at_the_draft() {
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    feed(&mut lp, vec![Input::Bytes(b"ab\x1b[D".to_vec())]);
+    let backend = lp.screen.terminal.backend_mut();
+    assert!(backend.inner.cursor_visible());
+    backend.inner.assert_cursor_position((3, 11));
+}
+
+#[test]
+fn a_cursor_move_alone_writes_and_a_still_frame_writes_nothing() {
+    let sink = Sink::default();
+    let (mut lp, _) = new_loop(CrosstermBackend::new(sink.clone()), None);
+    feed(&mut lp, vec![Input::Bytes(b"ab".to_vec())]);
+    let typed = sink.len();
+    // ← changes no cell, only the cursor.
+    feed(&mut lp, vec![Input::Bytes(b"\x1b[D".to_vec())]);
+    let moved = sink.len();
+    assert!(moved > typed);
+    // ← at the start changes nothing: no byte.
+    feed(&mut lp, vec![Input::Bytes(b"\x1b[D\x1b[D".to_vec())]);
+    let start = sink.len();
+    feed(&mut lp, vec![Input::Bytes(b"\x1b[D".to_vec())]);
+    assert_eq!(sink.len(), start);
+}
+
+/// A reader on a pipe standing in for the tty: the reader, the pipe's
+/// write end and the loop's channel.
+fn piped_reader() -> (super::Reader, io::PipeWriter, mpsc::Receiver<Input>) {
+    let (read, write) = io::pipe().unwrap_or_else(|err| panic!("pipe: {err}"));
+    let tty = File::from(std::os::fd::OwnedFd::from(read));
+    let (tx, rx) = mpsc::channel();
+    let reader = super::Reader::spawn(&tty, tx).unwrap_or_else(|| panic!("the reader started"));
+    (reader, write, rx)
+}
+
+/// The next bytes the reader sends, with one deadline.
+fn next_bytes(rx: &mpsc::Receiver<Input>, what: &str) -> Vec<u8> {
+    match rx.recv_timeout(DEADLINE) {
+        Ok(Input::Bytes(bytes)) => bytes,
+        Ok(_) => panic!("{what}: not bytes"),
+        Err(err) => panic!("waited {DEADLINE:?} for {what}: {err}"),
+    }
+}
+
+/// Pauses `reader` on a thread with one deadline, handing it back.
+fn paused(reader: super::Reader) -> super::Reader {
+    within("the pause to return", move || {
+        let mut reader = reader;
+        reader.pause();
+        reader
+    })
+}
+
+#[test]
+fn a_paused_reader_holds_the_ttys_bytes_until_resumed() {
+    let (reader, mut tty, rx) = piped_reader();
+    tty.write_all(b"a")
+        .unwrap_or_else(|err| panic!("write: {err}"));
+    assert_eq!(next_bytes(&rx, "the first byte"), b"a");
+    let reader = paused(reader);
+    // Pause returned only once the reader parked.
+    assert!(reader.gate.lock().parked);
+    tty.write_all(b"b")
+        .unwrap_or_else(|err| panic!("write: {err}"));
+    // Parked on the condition variable, it reads nothing.
+    assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    assert!(reader.gate.lock().parked);
+    reader.resume();
+    assert_eq!(next_bytes(&rx, "the byte after resume"), b"b");
+    assert!(!reader.gate.lock().parked);
+    // A second pause and resume works the same.
+    let reader = paused(reader);
+    tty.write_all(b"c")
+        .unwrap_or_else(|err| panic!("write: {err}"));
+    assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    reader.resume();
+    assert_eq!(next_bytes(&rx, "the byte after the second resume"), b"c");
+}
+
+#[test]
+fn bytes_read_before_the_pause_are_sent_not_lost() {
+    let (reader, mut tty, rx) = piped_reader();
+    tty.write_all(b"xy")
+        .unwrap_or_else(|err| panic!("write: {err}"));
+    let reader = paused(reader);
+    reader.resume();
+    let mut got = Vec::new();
+    while got.len() < 2 {
+        got.extend(next_bytes(&rx, "the bytes written before the pause"));
+    }
+    assert_eq!(got, b"xy");
+}
+
+#[test]
+fn pause_on_an_ended_reader_returns_at_once() {
+    let (reader, tty, rx) = piped_reader();
+    // The tty's end ends the reader: its sender drops.
+    drop(tty);
+    match rx.recv_timeout(DEADLINE) {
+        Err(mpsc::RecvTimeoutError::Disconnected) => {}
+        Ok(_) => panic!("bytes instead of the reader's end"),
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            panic!("waited {DEADLINE:?} for the reader to end")
+        }
+    }
+    let reader = paused(reader);
+    assert!(reader.gate.lock().ended);
+    assert!(!reader.gate.lock().parked);
+}
+
+#[test]
+fn a_reader_whose_channel_closed_ends() {
+    let (reader, mut tty, rx) = piped_reader();
+    drop(rx);
+    tty.write_all(b"a")
+        .unwrap_or_else(|err| panic!("write: {err}"));
+    // Its send fails, and it records its end.
+    let state = reader.gate.lock();
+    let (state, waited) = reader
+        .gate
+        .changed
+        .wait_timeout_while(state, DEADLINE, |state| !state.ended)
+        .unwrap_or_else(|err| panic!("lock: {err}"));
+    assert!(
+        !waited.timed_out(),
+        "waited {DEADLINE:?} for the reader to end"
+    );
+    drop(state);
+    // Pause on it returns at once.
+    let reader = paused(reader);
+    assert!(!reader.gate.lock().parked);
+}
+
+#[test]
+fn hand_over_gives_the_terminal_and_its_input_to_the_program() {
+    let mut pair = open();
+    crate::term::setup(&pair.slave, true).unwrap_or_else(|err| panic!("setup: {err}"));
+    let start = "\x1b[?1049h\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b[?u\x1b[c";
+    read_exact(&pair.main, start.len(), "the start bytes");
+    let tty = pair
+        .slave
+        .try_clone()
+        .unwrap_or_else(|err| panic!("dup: {err}"));
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), Some(tty));
+    let (tx, rx) = mpsc::channel();
+    lp.reader = super::Reader::spawn(&pair.slave, tx);
+    lp.parser.set_kitty();
+    let slave = pair
+        .slave
+        .try_clone()
+        .unwrap_or_else(|err| panic!("dup: {err}"));
+    let mut main = pair
+        .main
+        .try_clone()
+        .unwrap_or_else(|err| panic!("dup: {err}"));
+    // The pause inside blocks: the loop runs on a thread, with a deadline.
+    let (lp, code, seen) = within("the hand-over", move || {
+        let mut seen = None;
+        let code = lp.hand_over(|| {
+            let cooked =
+                rustix::termios::tcgetattr(&slave).unwrap_or_else(|err| panic!("attr: {err}"));
+            // A line typed now goes to the program, not to the paused reader.
+            main.write_all(b"typed\n")
+                .unwrap_or_else(|err| panic!("write: {err}"));
+            let line = within("the program's read", move || {
+                let mut line = String::new();
+                BufReader::new(slave).read_line(&mut line).map(|_| line)
+            });
+            seen = Some((is_cooked(&cooked), line.unwrap_or_default()));
+        });
+        (lp, code, seen)
+    });
+    drop(lp);
+    assert_eq!(code, None);
+    assert_eq!(seen, Some((true, "typed\n".to_owned())));
+    assert!(!is_cooked(
+        &rustix::termios::tcgetattr(&pair.slave).unwrap_or_else(|err| panic!("attr: {err}"))
+    ));
+    // The terminal was restored, then set up again with hover and kitty's
+    // flags.
+    let restore =
+        "\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?1049l\x1b[?25h";
+    let echoed = read_until(&pair.main, restore.as_bytes(), "the restore bytes");
+    assert!(echoed.ends_with(restore.as_bytes()));
+    // In between, the cooked terminal echoed the program's line.
+    let resumed =
+        "typed\r\n\x1b[?1049h\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b[>1u";
+    assert_eq!(
+        read_until(&pair.main, resumed.as_bytes(), "the resume bytes"),
+        resumed.as_bytes()
+    );
+    // The reader runs again.
+    pair.main
+        .write_all(b"k")
+        .unwrap_or_else(|err| panic!("write: {err}"));
+    assert_eq!(next_bytes(&rx, "a key after the program"), b"k");
+    crate::term::restore();
+}
+
+#[test]
+fn hand_over_that_cannot_take_the_terminal_back_quits_with_one() {
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    let mut ran = false;
+    assert_eq!(lp.hand_over(|| ran = true), Some(1));
+    assert!(ran);
+}
+
+#[test]
+fn ctrl_c_or_ctrl_backslash_in_a_cooked_terminal_leaves_fiber_running() {
+    // Each test runs in its own process, so the signals reach only this
+    // test; uncaught, either would end it.
+    super::catch_interrupts();
+    signal_hook::low_level::raise(signal_hook::consts::SIGINT)
+        .unwrap_or_else(|err| panic!("raise: {err}"));
+    signal_hook::low_level::raise(signal_hook::consts::SIGQUIT)
+        .unwrap_or_else(|err| panic!("raise: {err}"));
+}
+
+#[test]
+fn pause_on_a_reader_already_parked_returns_at_once() {
+    let (_woken, wake) = io::pipe().unwrap_or_else(|err| panic!("pipe: {err}"));
+    let gate = Arc::new(super::Gate::default());
+    gate.lock().parked = true;
+    let reader = paused(super::Reader { gate, wake });
+    assert!(reader.gate.lock().paused);
+}
+
+/// A fake editor and what keeps it in check.
+struct FakeEditor {
+    /// Holds the script.
+    _dir: fakes::TempDir,
+    /// The script's path: every editor process's command line names it.
+    script: String,
+    /// Kills any editor process left when the test ends or dies.
+    _watchdog: fakes::Watchdog,
+}
+
+impl FakeEditor {
+    /// Asserts no editor process is left.
+    fn assert_gone(&self) {
+        let left = fakes::matching(&self.script).unwrap_or_else(|err| panic!("ps: {err}"));
+        assert!(left.is_empty(), "editor processes left: {left:?}");
+    }
+}
+
+/// A fake editor whose script is `body`, run as `/bin/sh <script>`, under a
+/// watchdog matching its path; and an environment reader naming it as
+/// `$EDITOR`.
+fn fake_editor(body: &str) -> (FakeEditor, super::Var) {
+    let dir = fakes::TempDir::new("editor");
+    let script = dir.path().join("editor.sh");
+    std::fs::write(&script, body).unwrap_or_else(|err| panic!("script: {err}"));
+    let command = format!("/bin/sh {}", script.display());
+    let script = script.display().to_string();
+    let watchdog = fakes::Watchdog::matching(&script);
+    (
+        FakeEditor {
+            _dir: dir,
+            script,
+            _watchdog: watchdog,
+        },
+        Box::new(move |name| (name == "EDITOR").then(|| command.clone())),
+    )
+}
+
+/// Runs `lp` over `inputs` on a thread with one deadline: the exit code
+/// and the draft.
+fn feed_within(mut lp: Loop<TestBackend>, inputs: Vec<Input>) -> (i32, String) {
+    within("the loop", move || {
+        let code = feed(&mut lp, inputs);
+        (code, lp.app.draft())
+    })
+}
+
+#[test]
+fn ctrl_g_puts_the_editors_text_in_the_draft_and_the_loop_reads_on() {
+    let pair = open();
+    crate::term::setup(&pair.slave, true).unwrap_or_else(|err| panic!("setup: {err}"));
+    // Drain what the terminal is sent, so no write blocks.
+    let mut main = pair
+        .main
+        .try_clone()
+        .unwrap_or_else(|err| panic!("dup: {err}"));
+    std::thread::Builder::new()
+        .name("lib-drain".to_owned())
+        .spawn(move || io::copy(&mut main, &mut io::sink()))
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    let tty = pair
+        .slave
+        .try_clone()
+        .unwrap_or_else(|err| panic!("dup: {err}"));
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), Some(tty));
+    let (editor, var) = fake_editor("printf 'edited' > \"$1\"\n");
+    lp.var = var;
+    let inputs = ["a", "\x07", "!"].map(|bytes| Input::Bytes(bytes.as_bytes().to_vec()));
+    assert_eq!(feed_within(lp, inputs.into()), (0, "edited!".to_owned()));
+    editor.assert_gone();
+    crate::term::restore();
+}
+
+#[test]
+fn ctrl_g_that_cannot_take_the_terminal_back_quits_with_one() {
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    let (editor, var) = fake_editor("printf 'edited' > \"$1\"\n");
+    lp.var = var;
+    let inputs = ["a", "\x07", "!"].map(|bytes| Input::Bytes(bytes.as_bytes().to_vec()));
+    assert_eq!(feed_within(lp, inputs.into()), (1, "a".to_owned()));
+    editor.assert_gone();
+}
+
+#[test]
+fn ctrl_g_with_no_editor_says_so_and_the_loop_reads_on() {
+    let (lp, _) = new_loop(TestBackend::new(60, 12), None);
+    let inputs = ["a", "\x07", "!"].map(|bytes| Input::Bytes(bytes.as_bytes().to_vec()));
+    let (lp, code) = within("the loop", move || {
+        let mut lp = lp;
+        let code = feed(&mut lp, inputs.into());
+        (lp, code)
+    });
+    assert_eq!(code, 0);
+    assert_eq!(lp.app.draft(), "a!");
+    assert_eq!(lp.app.notice(), Some(crate::editor::NO_EDITOR));
+}
+
+#[test]
+fn a_copy_writes_osc_52_and_pipes_the_code_to_the_command() {
+    let pair = open();
+    let dir = fakes::TempDir::new("tui-copy");
+    let out = dir.path().join("copied").display().to_string();
+    let ready = fakes::children::Ready::new(dir.path());
+    let watchdog = fakes::Watchdog::matching(&out);
+    let tty = pair
+        .slave
+        .try_clone()
+        .unwrap_or_else(|err| panic!("dup: {err}"));
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), Some(tty));
+    let ready_path = ready.path().display().to_string();
+    lp.copy_command = Some(
+        [
+            "/bin/sh",
+            "-c",
+            "cat > \"$0\"; echo $$ > \"$1\"",
+            &out,
+            &ready_path,
+        ]
+        .map(str::to_owned)
+        .to_vec(),
+    );
+    let session = contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned());
+    lp.app.attach(session.clone());
+    let line = |kind: &str, payload: serde_json::Value, action: Option<&str>| {
+        Input::Hub(Line::Session(contract::Envelope {
+            kind: kind.to_owned(),
+            session_id: session.clone(),
+            ts: 0,
+            schema_version: contract::SCHEMA_VERSION,
+            turn_id: None,
+            action_id: action.map(|id| contract::ActionId(id.to_owned())),
+            seq: None,
+            payload: payload.as_object().cloned().unwrap_or_default(),
+        }))
+    };
+    let started = serde_json::json!({"input": [{"type": "message", "source": "driver",
+        "content": [{"type": "text", "text": "hi"}]}]});
+    let reply = serde_json::json!({"text": "```rust\nlet a = 1;\n```"});
+    feed(
+        &mut lp,
+        vec![
+            line("turn_started", started, None),
+            line("assistant_message_delta", reply, Some("a_1")),
+        ],
+    );
+    let shown = crate::view::text(lp.screen.terminal.backend().inner.buffer());
+    let row = shown
+        .lines()
+        .position(|line| line.ends_with("copy"))
+        .and_then(|row| u16::try_from(row).ok())
+        .unwrap_or_else(|| panic!("no copy target on\n{shown}"));
+    // SGR reports are 1-based. A wheel, a right click, hover, a left click
+    // off `copy` and a press on `copy` released elsewhere copy nothing.
+    let at = |button: u8, col: u16, row: u16, end: char| {
+        Input::Bytes(format!("\x1b[<{button};{};{}{end}", col + 1, row + 1).into_bytes())
+    };
+    feed(
+        &mut lp,
+        vec![
+            at(64, 57, row, 'M'),
+            at(2, 57, row, 'M'),
+            at(2, 57, row, 'm'),
+            at(35, 57, row, 'M'),
+            at(0, 10, row, 'M'),
+            at(0, 10, row, 'm'),
+            at(0, 57, row, 'M'),
+            at(0, 57, row + 1, 'm'),
+        ],
+    );
+    assert!(
+        !lp.app.copied(),
+        "a report other than a click on copy copied"
+    );
+    feed(&mut lp, vec![at(0, 57, row, 'M'), at(0, 57, row, 'm')]);
+    assert!(lp.app.copied());
+    // A left click off any target, here on blank cells, clears "Copied".
+    feed(&mut lp, vec![at(0, 2, 0, 'M'), at(0, 2, 0, 'm')]);
+    assert!(!lp.app.copied());
+    let osc = b"\x1b]52;c;bGV0IGEgPSAxOw==\x07";
+    assert_eq!(read_exact(&pair.main, osc.len(), "the OSC 52 bytes"), osc);
+    ready.wait(DEADLINE);
+    assert_eq!(
+        std::fs::read_to_string(&out).ok().as_deref(),
+        Some("let a = 1;")
+    );
+    watchdog.stand_down(DEADLINE);
+}
+
+#[test]
+fn a_non_left_press_keeps_copied_and_a_left_press_clears_it() {
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    let session = contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned());
+    lp.app.attach(session.clone());
+    let line = |kind: &str, payload: serde_json::Value, action: Option<&str>| {
+        Input::Hub(Line::Session(contract::Envelope {
+            kind: kind.to_owned(),
+            session_id: session.clone(),
+            ts: 0,
+            schema_version: contract::SCHEMA_VERSION,
+            turn_id: None,
+            action_id: action.map(|id| contract::ActionId(id.to_owned())),
+            seq: None,
+            payload: payload.as_object().cloned().unwrap_or_default(),
+        }))
+    };
+    let started = serde_json::json!({"input": [{"type": "message", "source": "driver",
+        "content": [{"type": "text", "text": "hi"}]}]});
+    let reply = serde_json::json!({"text": "```rust\nlet a = 1;\n```"});
+    feed(
+        &mut lp,
+        vec![
+            line("turn_started", started, None),
+            line("assistant_message_delta", reply, Some("a_1")),
+        ],
+    );
+    let shown = crate::view::text(lp.screen.terminal.backend().inner.buffer());
+    let row = shown
+        .lines()
+        .position(|line| line.ends_with("copy"))
+        .and_then(|row| u16::try_from(row).ok())
+        .unwrap_or_else(|| panic!("no copy target on\n{shown}"));
+    // SGR reports are 1-based.
+    let at = |button: u8, col: u16, row: u16, end: char| {
+        Input::Bytes(format!("\x1b[<{button};{};{}{end}", col + 1, row + 1).into_bytes())
+    };
+    // A left click on `copy` shows "Copied".
+    feed(&mut lp, vec![at(0, 57, row, 'M'), at(0, 57, row, 'm')]);
+    assert!(lp.app.copied());
+    // A right press on blank cells is not a click: "Copied" stays.
+    feed(&mut lp, vec![at(2, 2, 0, 'M'), at(2, 2, 0, 'm')]);
+    assert!(lp.app.copied());
+    // A left press on blank cells clears "Copied".
+    feed(&mut lp, vec![at(0, 2, 0, 'M'), at(0, 2, 0, 'm')]);
+    assert!(!lp.app.copied());
 }

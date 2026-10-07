@@ -789,12 +789,17 @@ fn how_left_names_both_exit_lines() {
 fn a_session_resumed_before_its_end_is_read_is_not_crashed() {
     let temp = Temp::new();
     let (feed, clock) = new_feed(&temp);
-    // The resumed run has written past `fiber_exited` already.
     let id = temp.session(1, "p", "fiber_started");
     let (session, line) = running(&temp, &id, "idle");
     let mut sub = Sub::new(&feed);
     start(&feed, &clock);
     assert_eq!(sub.raw("the status"), line);
+    // The followed run exits, and the resumed run has written past its
+    // `fiber_exited` already.
+    let log = recent::session_dir(&temp.dir, "p", &id).join("events.jsonl");
+    let mut file = fs::OpenOptions::new().append(true).open(log).unwrap();
+    file.write_all(b"{\"kind\":\"fiber_exited\"}\n{\"kind\":\"fiber_started\"}\n")
+        .unwrap();
     let back = session.resumed(&temp.dir, &id);
     let again = status_line(&id, &status("again", "/w", "idle", None));
     back.say(&again);
@@ -802,5 +807,32 @@ fn a_session_resumed_before_its_end_is_read_is_not_crashed() {
     assert!(temp.rows().is_empty());
     clock.advance(RUN_SCAN);
     assert_eq!(sub.raw("the resumed status"), again);
+    stop_within(&feed);
+}
+
+#[test]
+fn an_exit_line_from_before_the_follow_is_not_the_followed_runs() {
+    let temp = Temp::new();
+    let (feed, clock) = new_feed(&temp);
+    let id = temp.session(1, "p", "fiber_started");
+    // The earlier run's exit line is already in the log when the hub
+    // follows: only an exit line written after that point ends this run.
+    let log = recent::session_dir(&temp.dir, "p", &id).join("events.jsonl");
+    fs::write(
+        &log,
+        "{\"kind\":\"session_started\"}\n{\"kind\":\"fiber_exited\"}\n{\"kind\":\"fiber_started\"}\n",
+    )
+    .unwrap();
+    let (session, line) = running(&temp, &id, "idle");
+    let mut sub = Sub::new(&feed);
+    start(&feed, &clock);
+    assert_eq!(sub.raw("the status"), line);
+    // The followed run writes no exit line.
+    session.close();
+    sub.left(&id, "crashed");
+    assert_eq!(entry_of(&feed, &id), Some("crashed"));
+    let rows = temp.rows();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["how"], "crashed");
     stop_within(&feed);
 }

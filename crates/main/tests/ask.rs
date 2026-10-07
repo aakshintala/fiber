@@ -855,6 +855,23 @@ fn a_missing_credential_fails_before_the_session() {
 }
 
 #[test]
+fn a_failing_credential_command_is_named_by_its_program_alone() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([]).unwrap();
+    setup.provider(&server);
+    write(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "providers": {"fake": {"credentials": {"default": {"command": ["false", "sk-in-argument"]}}}}}),
+    );
+
+    let run = setup.fiber(&["ask", "hi"], None);
+    assert_pre_session(&run, 1, "credential_missing");
+    assert!(run.stderr.contains("`false` failed"), "{}", run.stderr);
+    assert!(!run.stdout.contains("sk-in-argument"), "{}", run.stdout);
+    assert!(!run.stderr.contains("sk-in-argument"), "{}", run.stderr);
+}
+
+#[test]
 fn a_bedrock_converse_model_fails_before_the_session() {
     let setup = Setup::new();
     let server = ProviderServer::start([]).unwrap();
@@ -920,6 +937,7 @@ Usage: fiber <command> [arguments]
 
 Sessions:
   ask [--model <model>] [--resume <id>] [<prompt>] [-]  Run one session of one turn; its events go to stdout
+  sessions delete [--cascade] [--yes] <id>              Delete a session, and with --cascade the sessions that continue it
   sessions export <id> [<path>]                         Write the session's log and its artifacts to <path>
   models [<search>] [--json]                            List the models the installed providers serve
 

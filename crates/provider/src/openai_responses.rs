@@ -60,7 +60,10 @@ impl Responses {
             ),
         ];
         if let Some(key) = &endpoint.key {
-            headers.push(("authorization".to_owned(), format!("Bearer {key}")));
+            headers.push((
+                "authorization".to_owned(),
+                format!("Bearer {}", key.expose()),
+            ));
         }
         headers.extend(endpoint.headers.iter().cloned());
         if let Some(name) = &self.cache_key_header {

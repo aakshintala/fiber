@@ -7,6 +7,7 @@
 //! [`Watcher`] are the reading side, which `tui` and `doors` may use
 //! (`docs/architecture.md`, "The call rules").
 
+mod dependents;
 mod export;
 mod offsets;
 mod read;
@@ -18,6 +19,7 @@ use std::path::{Path, PathBuf};
 
 use contract::{ErrorCode, SessionId};
 
+pub use dependents::dependents;
 pub use export::export;
 pub use read::{Injector, Lines, Watcher, lines, read};
 pub use resolve::resolve;
@@ -30,13 +32,20 @@ const LOCK: &str = "session.lock";
 /// The directory for bytes too large to inline.
 const ARTIFACTS: &str = "artifacts";
 
+/// A project's key (`docs/state.md`, "Projects"): its identity path with
+/// every `/` made `-`. `project` is that identity path, symlinks already
+/// resolved.
+pub fn project_key(project: &Path) -> String {
+    project.to_string_lossy().replace('/', "-")
+}
+
 /// Where a project's session directories live in Fiber home
-/// (`docs/state.md`, "Projects"): `projects/<key>/sessions`, where the key is
-/// the project's identity path with every `/` made `-`. `project` is that
-/// identity path, symlinks already resolved.
+/// (`docs/state.md`, "Projects"): `projects/<key>/sessions`, the key from
+/// [`project_key`].
 pub fn sessions_dir(home: &Path, project: &Path) -> PathBuf {
-    let key = project.to_string_lossy().replace('/', "-");
-    home.join("projects").join(key).join("sessions")
+    home.join("projects")
+        .join(project_key(project))
+        .join("sessions")
 }
 
 /// What can go wrong opening, writing or reading a session.

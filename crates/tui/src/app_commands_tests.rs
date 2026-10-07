@@ -1,7 +1,7 @@
 //! Tests for the completion panels, the built-in commands and the key map.
 
 use crate::app::{App, Effect};
-use crate::keys::Key;
+use crate::keys::{Edit, Key};
 use crate::link::Line;
 use contract::clock::Clock;
 use serde_json::{Value, json};
@@ -55,7 +55,12 @@ fn sent(effect: Effect) -> Vec<Value> {
             .iter()
             .map(|line| serde_json::from_str(line).unwrap_or_default())
             .collect(),
-        Effect::None | Effect::Quit | Effect::ListFiles | Effect::Search { .. } => Vec::new(),
+        Effect::None
+        | Effect::Quit
+        | Effect::ListFiles
+        | Effect::Search { .. }
+        | Effect::Editor { .. }
+        | Effect::Copy(_) => Vec::new(),
     }
 }
 
@@ -185,11 +190,11 @@ fn up_and_down_move_the_selection_clamped_and_scroll_the_window() {
     // The eighth row, still in the first window.
     assert_eq!(
         selected(&app).as_deref(),
-        Some("/?  Opens the key map.  command")
+        Some("/approvals  Reopens the waiting approvals and questions.  command")
     );
     assert_eq!(app.completions().and_then(|c| c.selected), Some(7));
     app.on_key(Key::Down, now());
-    // The ninth and last row: the window moves down by one.
+    // The ninth row: the window moves down by one.
     let completions = app.completions();
     assert_eq!(completions.as_ref().and_then(|c| c.selected), Some(7));
     assert_eq!(
@@ -260,6 +265,13 @@ fn handoff_sends_its_instructions() {
 }
 
 #[test]
+fn the_slash_list_shows_the_name_row() {
+    let mut app = connected();
+    type_text(&mut app, "/nam");
+    assert_eq!(shown(&app), ["/name <text>  Names the session.  command"]);
+}
+
+#[test]
 fn reload_sends_reload_without_args() {
     let mut app = attached();
     let lines = sent(enter(&mut app, "/reload"));
@@ -285,7 +297,7 @@ fn a_rejected_handoff_returns_its_draft_with_the_notice() {
 
 #[test]
 fn a_command_with_no_session_says_so() {
-    for command in ["/handoff x", "/reload", "/close"] {
+    for command in ["/handoff x", "/name x", "/reload", "/close"] {
         let mut app = connected();
         assert_eq!(enter(&mut app, command), Effect::None, "{command}");
         assert_eq!(app.notice(), Some("No session on screen."), "{command}");
@@ -295,7 +307,7 @@ fn a_command_with_no_session_says_so() {
 
 #[test]
 fn a_command_with_the_link_down_keeps_its_draft() {
-    for command in ["/handoff x", "/reload", "/close"] {
+    for command in ["/handoff x", "/name x", "/reload", "/close"] {
         let mut app = attached();
         app.disconnected();
         assert_eq!(enter(&mut app, command), Effect::None, "{command}");
@@ -693,4 +705,86 @@ fn a_shorter_result_clamps_the_selection() {
     assert_eq!(selected(&app).as_deref(), Some("c"));
     app.on_files(app.generation(), paths(&["a", "b"]));
     assert_eq!(selected(&app).as_deref(), Some("b"));
+}
+
+#[test]
+fn the_file_panel_follows_the_cursor_in_a_multi_line_draft() {
+    // Whitespace after the query closes the panel, and moving back into
+    // the query does not reopen it.
+    let mut app = connected();
+    type_any(&mut app, "first");
+    assert_eq!(app.on_edit(Edit::ShiftEnter), Effect::None);
+    type_any(&mut app, "@ma tail");
+    assert!(!app.files_open());
+    for _ in 0.." tail".len() {
+        assert_eq!(app.on_edit(Edit::Left), Effect::None);
+    }
+    assert!(!app.files_open());
+    let mut app = connected();
+    type_any(&mut app, "first");
+    app.on_edit(Edit::CtrlJ);
+    key(&mut app, '@');
+    key(&mut app, 'a');
+    // A paste at the cursor searches anew.
+    let generation = app.generation();
+    assert_eq!(
+        app.on_edit(Edit::Paste("in".to_owned())),
+        Effect::Search {
+            generation: generation + 1,
+            query: "ain".to_owned()
+        }
+    );
+    // Moving inside the query keeps the panel; choosing replaces the whole
+    // query, not only the part before the cursor.
+    app.on_edit(Edit::Left);
+    assert!(app.files_open());
+    app.on_files(app.generation(), paths(&["src/main.rs"]));
+    assert_eq!(app.on_key(Key::Tab, now()), Effect::None);
+    assert_eq!(app.draft(), "first\nsrc/main.rs ");
+    // Left past the `@` closes the panel.
+    let mut app = connected();
+    type_any(&mut app, "x @ab");
+    app.on_edit(Edit::LineStart);
+    assert!(!app.files_open());
+}
+
+#[test]
+fn a_file_chosen_mid_line_keeps_the_text_after_it() {
+    let mut app = connected();
+    type_any(&mut app, "see  now");
+    for _ in 0.." now".len() {
+        app.on_edit(Edit::Left);
+    }
+    assert_eq!(key(&mut app, '@'), Effect::ListFiles);
+    key(&mut app, 'a');
+    app.on_files(app.generation(), paths(&["a.rs"]));
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(app.draft(), "see a.rs  now");
+    // The cursor is after the inserted path and its space.
+    key(&mut app, '!');
+    assert_eq!(app.draft(), "see a.rs ! now");
+}
+
+#[test]
+fn a_line_break_closes_the_slash_panel() {
+    let mut app = connected();
+    type_any(&mut app, "/re");
+    assert!(app.completions().is_some());
+    app.on_edit(Edit::ShiftEnter);
+    assert_eq!(app.completions(), None);
+    app.on_key(Key::Backspace, now());
+    assert!(app.completions().is_some());
+}
+
+#[test]
+fn editing_keys_do_nothing_while_the_key_map_is_open() {
+    let mut app = connected();
+    type_any(&mut app, "ab");
+    assert_eq!(app.on_key(Key::F1, now()), Effect::None);
+    assert!(app.keymap_top().is_some());
+    assert_eq!(app.on_edit(Edit::Paste("x".to_owned())), Effect::None);
+    assert_eq!(app.on_edit(Edit::Left), Effect::None);
+    app.on_key(Key::Esc, now());
+    key(&mut app, '!');
+    assert_eq!(app.draft(), "ab!");
 }

@@ -8,9 +8,9 @@ use std::io::{self, Write};
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
-use std::time::{Duration, UNIX_EPOCH};
+use std::time::Duration;
 
-use contract::clock::Clock;
+use contract::clock::{Clock, wall_ms};
 use contract::emit::Emit;
 use contract::events::{Class, Event};
 use contract::tool::Bound;
@@ -151,7 +151,7 @@ impl Log {
         let mut line = Envelope {
             kind: event.kind().to_owned(),
             session_id: inner.session_id.clone(),
-            ts: now_ms(self.clock.as_ref()),
+            ts: wall_ms(self.clock.wall()),
             schema_version: SCHEMA_VERSION,
             turn_id,
             action_id,
@@ -584,14 +584,6 @@ fn holder(path: &Path, clock: &dyn Clock) -> String {
         clock.sleep(Duration::from_millis(1));
     }
     "a process whose pid is not yet recorded".to_owned()
-}
-
-/// Milliseconds since the epoch, for `ts`.
-fn now_ms(clock: &dyn Clock) -> u64 {
-    clock
-        .wall()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
 }
 
 #[cfg(test)]

@@ -675,7 +675,7 @@ mod tests {
         for l in std::fs::read_to_string(path).unwrap().lines() {
             f.apply(&serde_json::from_str(l).unwrap());
         }
-        let panel = |f: &Fold| crate::panel_rows(f, 0, "").iter().map(plain).collect::<Vec<_>>();
+        let panel = |f: &Fold| crate::panel_rows(f, 0, "", 34, 0).iter().map(plain).collect::<Vec<_>>();
         assert_eq!(panel(&sum), panel(&f));
         assert_eq!(sum.pending.len(), f.pending.len());
         assert_eq!(sum.queue, f.queue);
