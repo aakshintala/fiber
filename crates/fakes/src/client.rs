@@ -109,7 +109,6 @@ impl Client {
             match stream.write(chunk) {
                 Ok(0) => break Err(std::io::ErrorKind::WriteZero.into()),
                 Ok(n) => rest = rest.get(n..).unwrap_or_default(),
-                Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {}
                 Err(err) => break Err(err),
             }
         };
