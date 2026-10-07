@@ -860,8 +860,12 @@ fn tools_give_tokens_from_the_first_request_after_each_preamble() {
             assert_eq!(tools_of(&t2)[0]["bytes"], 12);
             assert!(tools_of(&t2)[0].get("tokens").is_none(), "{t2}");
 
-            log.append(&usage("g_1", vec![("5m", 100)], None, None), None, a1.clone())
-                .unwrap();
+            log.append(
+                &usage("g_1", vec![("5m", 100)], None, None),
+                None,
+                a1.clone(),
+            )
+            .unwrap();
             send(&client, r#"{"id":"c_t3","command":"tools"}"#);
             let t3 = response(&client, "c_t3");
             let fields = serde_json::json!({
@@ -875,14 +879,26 @@ fn tools_give_tokens_from_the_first_request_after_each_preamble() {
             let expected = 12 * 100 / preamble_bytes;
             assert!(expected >= 2 && (12 * 100) % preamble_bytes != 0);
             assert_eq!(tools_of(&t3)[0]["bytes"], 12);
-            assert_eq!(tools_of(&t3)[0]["tokens"].as_u64().unwrap(), expected, "{t3}");
+            assert_eq!(
+                tools_of(&t3)[0]["tokens"].as_u64().unwrap(),
+                expected,
+                "{t3}"
+            );
 
-            log.append(&usage("g_1", vec![("5m", 555)], None, None), None, a1.clone())
-                .unwrap();
+            log.append(
+                &usage("g_1", vec![("5m", 555)], None, None),
+                None,
+                a1.clone(),
+            )
+            .unwrap();
             send(&client, r#"{"id":"c_t4","command":"tools"}"#);
             let t4 = response(&client, "c_t4");
             assert_eq!(tools_of(&t4)[0]["bytes"], 12);
-            assert_eq!(tools_of(&t4)[0]["tokens"].as_u64().unwrap(), expected, "{t4}");
+            assert_eq!(
+                tools_of(&t4)[0]["tokens"].as_u64().unwrap(),
+                expected,
+                "{t4}"
+            );
 
             log.append(&preamble(PreambleReason::Reload, "system-b"), None, None)
                 .unwrap();
@@ -891,8 +907,12 @@ fn tools_give_tokens_from_the_first_request_after_each_preamble() {
             assert_eq!(tools_of(&t5)[0]["bytes"], 12);
             assert!(tools_of(&t5)[0].get("tokens").is_none(), "{t5}");
 
-            log.append(&usage("g_1", vec![("5m", 1000)], None, None), None, a1.clone())
-                .unwrap();
+            log.append(
+                &usage("g_1", vec![("5m", 1000)], None, None),
+                None,
+                a1.clone(),
+            )
+            .unwrap();
             send(&client, r#"{"id":"c_t6","command":"tools"}"#);
             let t6 = response(&client, "c_t6");
             assert_eq!(tools_of(&t6)[0]["bytes"], 12);

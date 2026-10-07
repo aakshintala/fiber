@@ -150,9 +150,7 @@ fn the_tools_command_gives_tokens_after_the_first_request() {
     });
     let missing = answered(&before, "c_t0");
     assert_eq!(missing["kind"], "command_accepted", "{missing}");
-    let tools0 = missing["payload"]["result"]["tools"]
-        .as_array()
-        .unwrap();
+    let tools0 = missing["payload"]["result"]["tools"].as_array().unwrap();
     assert!(!tools0.is_empty());
     for tool in tools0 {
         assert!(tool.get("tokens").is_none(), "{tool}");
@@ -170,9 +168,7 @@ fn the_tools_command_gives_tokens_after_the_first_request() {
     });
     let present = answered(&after, "c_t1");
     assert_eq!(present["kind"], "command_accepted", "{present}");
-    let tools1 = present["payload"]["result"]["tools"]
-        .as_array()
-        .unwrap();
+    let tools1 = present["payload"]["result"]["tools"].as_array().unwrap();
     assert_eq!(tools1.len(), tools0.len());
     for (before_tool, tool) in tools0.iter().zip(tools1.iter()) {
         assert_eq!(tool["name"], before_tool["name"]);

@@ -254,6 +254,21 @@ fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
         Command::Subscribe(args) => subscribe(conn, id, args.level),
         Command::Tools => {
             let tools = conn.gate.tools.clone();
+            // The log is dropped once read, so this connection does not
+            // hold the session lock. Without a log the session is closing
+            // and the answer keeps its byte sizes.
+            let rate = conn.gate.log.upgrade().map(|log| {
+                let rate = log.rate();
+                drop(log);
+                rate
+            });
+            let tools = tools
+                .into_iter()
+                .map(|mut info| {
+                    info.tokens = rate.as_ref().and_then(|rate| rate.tokens(info.bytes));
+                    info
+                })
+                .collect();
             accept(conn, id, Some(CommandResult::Tools { tools }));
         }
         Command::Commands => {
