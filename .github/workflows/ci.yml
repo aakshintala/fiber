@@ -260,7 +260,7 @@ jobs:
     # No history yet: a generous bound for the release build, the debug
     # benchmark harness build and the benchmarks, the 429-call turn under
     # strace included (docs/ci.md, "Job time limits").
-    timeout-minutes: 60
+    timeout-minutes: 45
     env:
       BASE: ${{ needs.select.outputs.base }}
       # C code (lua-src, ring) compiles against musl's headers; the Rust linker stays the default.
