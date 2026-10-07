@@ -20,7 +20,7 @@ use crate::StartError;
 
 /// The longest socket path the platform binds: `sun_path` less its
 /// terminating byte (`docs/state.md`, "Sockets").
-const SOCKET_PATH_MAX: usize = if cfg!(target_os = "macos") { 103 } else { 107 };
+pub(crate) const SOCKET_PATH_MAX: usize = if cfg!(target_os = "macos") { 103 } else { 107 };
 
 /// The single-hub lock on `run/`. Only its holder writes `logs/hub.log`,
 /// binds `run/hub` or removes it.

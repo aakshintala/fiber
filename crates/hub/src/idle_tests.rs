@@ -76,11 +76,12 @@ fn serve_in(
         .spawn(move || {
             let code = crate::serve(
                 &home,
-                idle,
+                move || Ok(idle),
                 "0.0.0",
                 Arc::new(FakeStarter::hang(&home)),
                 timed,
-            );
+            )
+            .expect("the hub starts");
             done_tx.send(code).unwrap_or(());
         })
         .unwrap();
