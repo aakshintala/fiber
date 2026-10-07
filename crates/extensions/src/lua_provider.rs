@@ -230,6 +230,14 @@ impl LuaProvider {
         Ok(token)
     }
 
+    /// The token `token()` returns; a failure as the signing seam carries it.
+    pub fn credential_token(self: &Arc<Self>) -> Result<Secret, signing::Error> {
+        self.token().map_err(|e| signing::Error::Credential {
+            code: e.code(),
+            message: detail(&e),
+        })
+    }
+
     /// The token `credential()` last returned, without fetching or
     /// refreshing when there is none. What `LuaSigner::credentials`
     /// redacts after `sign()` replaced the `authorization` header.
@@ -314,7 +322,7 @@ impl Signer for LuaProvider {
         });
         let returned = self
             .call("sign", arg)
-            .map_err(|e| signing::Error::Failed(e.to_string()))?;
+            .map_err(|e| signing::Error::Failed(detail(&e)))?;
         let not_headers = || {
             signing::Error::NotHeaders(
                 self.bad_return("sign", "something other than a table of headers".into())
@@ -353,13 +361,7 @@ impl Signer for LuaSigner {
     fn sign(&self, request: &SignRequest<'_>) -> Result<Vec<(String, String)>, signing::Error> {
         let mut headers = Vec::new();
         if self.credential {
-            let token = self
-                .provider
-                .token()
-                .map_err(|e| signing::Error::Credential {
-                    code: e.code(),
-                    message: e.to_string(),
-                })?;
+            let token = self.provider.credential_token()?;
             headers.push((
                 "authorization".to_owned(),
                 format!("Bearer {}", token.expose()),
@@ -395,6 +397,24 @@ impl Signer for LuaSigner {
         }
         self.provider.cached_token().into_iter().collect()
     }
+}
+
+/// The first line of the extension's own text in `e`: Lua's own text,
+/// what the refresh function raised, or Fiber's own `Display` for a
+/// failure Fiber itself raised. Always one line.
+fn detail(e: &Error) -> String {
+    if let Error::Credential(inner) = e {
+        return detail(inner);
+    }
+    let text = if let Error::Lua { message, .. }
+    | Error::RefreshRejected { message, .. }
+    | Error::RefreshUnreachable { message, .. } = e
+    {
+        message.clone()
+    } else {
+        e.to_string()
+    };
+    text.lines().next().unwrap_or("").to_owned()
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {

@@ -8,7 +8,7 @@ use crate::{ErrorCode, Secret};
 /// Why a request could not be signed.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
-    /// The provider's `sign()` failed before it returned headers.
+    /// The first line of the provider's `sign()` own error text.
     #[error("`sign()` failed: {0}")]
     Failed(String),
     /// `sign()` returned something other than a table of header names to
@@ -20,7 +20,7 @@ pub enum Error {
     Credential {
         /// The stable code the failure reports.
         code: ErrorCode,
-        /// Why the credential failed.
+        /// The first line of the credential failure's own text.
         message: String,
     },
 }

@@ -3,6 +3,7 @@
 //! stream copied to stdout, the clients on that socket, and what is left
 //! when it exits.
 
+use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -59,6 +60,9 @@ pub(crate) struct Gate {
     /// What the `commands` command answers with, set by
     /// [`Session::commands`]; empty until then.
     commands: Mutex<Vec<CommandInfo>>,
+    /// The id of every command this process accepted or is running, across
+    /// connections, so a repeat is rejected `duplicate_command` (`docs/invocation.md`).
+    accepted: Mutex<HashSet<String>>,
     inbox: Mutex<Option<Sender<Delivery>>>,
     /// What the `cancel` command asks: whether a turn is running. Stored
     /// by [`Session::run`], so a missing closure is no turn.
@@ -74,9 +78,6 @@ pub(crate) struct Gate {
     /// The session's extensions as the door reaches them, for the `command`
     /// driver command.
     door: Mutex<Option<Arc<dyn contract::extension::ExtensionDoor>>>,
-    /// Ids of accepted `command` commands, remembered for as long as the
-    /// process runs, so a retransmission is rejected `duplicate_command`.
-    accepted_commands: Mutex<std::collections::BTreeSet<String>>,
     /// The project's `history.jsonl`, set by [`Session::serve`] alone, so
     /// `fiber ask` and a bare [`Session::run`] append no prompt.
     pub(crate) history: OnceLock<Option<PathBuf>>,
@@ -304,6 +305,17 @@ impl Session {
 }
 
 impl Gate {
+    /// Claims `id` before its command is dispatched. False when an earlier
+    /// command holds it, running or accepted.
+    pub(crate) fn reserve(&self, id: &CommandId) -> bool {
+        lock(&self.accepted).insert(id.0.clone())
+    }
+
+    /// Frees `id` once its command is rejected, so a client may retry it.
+    pub(crate) fn release(&self, id: &CommandId) {
+        lock(&self.accepted).remove(&id.0);
+    }
+
     #[cfg(test)]
     pub(crate) fn note(&self, point: tests::Probe) {
         let probe = lock(&self.probe).clone();
@@ -343,19 +355,6 @@ impl Gate {
 
     pub(crate) fn door(&self) -> Option<Arc<dyn contract::extension::ExtensionDoor>> {
         lock(&self.door).clone()
-    }
-
-    /// Remembers `id` as an accepted `command` id. Returns false when the id
-    /// was already accepted, across connections, for as long as the process
-    /// runs. A rejected `command` records nothing.
-    pub(crate) fn admit_command_id(&self, id: &contract::CommandId) -> bool {
-        lock(&self.accepted_commands).insert(id.0.clone())
-    }
-
-    /// Forgets `id`, so a rejected `command` records nothing and a corrected
-    /// resend with the same id is admitted.
-    pub(crate) fn forget_command_id(&self, id: &contract::CommandId) {
-        lock(&self.accepted_commands).remove(&id.0);
     }
 
     pub(crate) fn jobs(&self) -> Option<Arc<dyn contract::jobs::Jobs>> {
@@ -414,13 +413,13 @@ fn open_in(
         session_id,
         tools,
         commands: Mutex::new(Vec::new()),
+        accepted: Mutex::new(HashSet::new()),
         inbox: Mutex::new(None),
         cancel: Mutex::new(None),
         driver_shell: Mutex::new(None),
         jobs: Mutex::new(None),
         hooks: Mutex::new(None),
         door: Mutex::new(None),
-        accepted_commands: Mutex::new(std::collections::BTreeSet::new()),
         history: OnceLock::new(),
         shells: Mutex::new(RunningShells {
             stopped: false,

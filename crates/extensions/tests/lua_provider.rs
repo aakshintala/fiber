@@ -864,7 +864,7 @@ fn refresh_provider(setup: &Setup, url: &str) -> Arc<LuaProvider> {
              credential = {{ timeout = 60000, run = function()\n\
              return host.oauth.refresh(function()\n\
              local reply = host.http({{ url = \"{url}/token\", method = \"POST\" }})\n\
-             if reply.status ~= 200 then error(\"refresh failed: \" .. reply.status) end\n\
+             if reply.status ~= 200 then error(\"refresh failed: \" .. reply.status .. \"\\nsecond line\") end\n\
              return {{ token = \"t\", expires_at = 1700003600 }}\n\
              end) end }},\n\
              sign = {{ timeout = 1000, run = function() return {{}} end }},\n\
@@ -909,6 +909,8 @@ fn a_rejected_refresh_at_send_time_keeps_authentication_failed() {
     };
     assert_eq!(*code, ErrorCode::AuthenticationFailed);
     assert!(message.contains("refresh failed: 400"), "{message}");
+    assert!(!message.contains("second line"), "{message}");
+    assert!(!message.starts_with('`'), "{message}");
 }
 
 #[test]
@@ -920,10 +922,11 @@ fn an_unreachable_refresh_at_send_time_keeps_connection_failed() {
         .unwrap()
         .port();
     let provider = refresh_provider(&setup, &format!("http://127.0.0.1:{port}"));
-    let contract::signing::Error::Credential { code, .. } = &sign_error(&provider) else {
+    let contract::signing::Error::Credential { code, message } = &sign_error(&provider) else {
         panic!("expected a credential error")
     };
     assert_eq!(*code, ErrorCode::ConnectionFailed);
+    assert!(!message.starts_with('`'), "{message}");
 }
 
 #[test]
@@ -943,4 +946,61 @@ fn provider_names_lists_every_registered_provider_sorted() {
     ));
     let names = within(move || extension.provider_names()).unwrap();
     assert_eq!(names, ["a", "b"]);
+}
+
+#[test]
+fn a_sign_error_is_its_own_first_line() {
+    let setup = Setup::new();
+    let provider = script_provider(&setup, Some(TOKEN), Some("error(\"signing broke\")"));
+    let url = "http://127.0.0.1:1/v1/responses".to_owned();
+    let err = within({
+        let provider = Arc::clone(&provider);
+        move || {
+            provider.sign(&SignRequest {
+                method: "POST",
+                url: &url,
+                headers: &[],
+                body: b"{}",
+            })
+        }
+    })
+    .unwrap_err();
+    let contract::signing::Error::Failed(text) = &err else {
+        panic!("{err:?}")
+    };
+    assert!(text.ends_with("signing broke"), "{text}");
+    assert!(!text.starts_with('`'), "{text}");
+    assert!(!text.contains('\n'), "{text}");
+}
+
+#[test]
+fn a_credential_error_is_its_own_first_line_with_its_code() {
+    let setup = Setup::new();
+    let provider = script_provider(
+        &setup,
+        Some("error(\"refresh failed: body-xyz\")"),
+        Some("{}"),
+    );
+    let signer = within({
+        let provider = Arc::clone(&provider);
+        move || provider.signer()
+    })
+    .unwrap()
+    .unwrap();
+    let url = "http://127.0.0.1:1/v1/responses".to_owned();
+    let err = within(move || {
+        signer.sign(&SignRequest {
+            method: "POST",
+            url: &url,
+            headers: &[],
+            body: b"{}",
+        })
+    })
+    .unwrap_err();
+    let contract::signing::Error::Credential { code, message } = &err else {
+        panic!("{err:?}")
+    };
+    assert_eq!(*code, ErrorCode::CredentialFailed);
+    assert!(message.ends_with("refresh failed: body-xyz"), "{message}");
+    assert!(!message.starts_with('`'), "{message}");
 }

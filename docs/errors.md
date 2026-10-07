@@ -32,7 +32,7 @@ A failed model call adds two optional fields:
   `sign()` failed, `message` is the first line of the extension's error and
   `status` is absent. Before it is stored, every credential value and every
   header value the credential, `credential()` or `sign()` supplied is replaced
-  with `[redacted]`.
+  with `[redacted]`. Fiber's `message` then names the provider and the function, such as "acme's credential() failed. Run `fiber login acme`.", and a `credential()` that fails at startup adds the same `provider` to `fiber_exited.error`.
 
 ## Where a code comes from
 

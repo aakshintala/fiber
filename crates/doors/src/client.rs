@@ -27,6 +27,7 @@ pub(crate) const STOP: &str = "doors.stop";
 const MALFORMED: &str = "A command is one JSON object per line, with a string `id` and `command`.";
 const NOT_SUBSCRIBED: &str = "Send `subscribe` first.";
 const ALREADY: &str = "This connection is already subscribed.";
+const DUPLICATE: &str = "A command with this id was already accepted.";
 const UNFIT: &str = "The arguments do not fit this command.";
 const PAST: &str = "`from_seq` is past the latest line.";
 const REVERSED: &str = "`to_seq` is before `from_seq`.";
@@ -161,6 +162,10 @@ fn on_line(bytes: &[u8], conn: &mut Conn) {
             return;
         }
     };
+    if !conn.gate.reserve(&line.id) {
+        reject(conn, Some(line.id), ErrorCode::DuplicateCommand, DUPLICATE);
+        return;
+    }
     if !conn.subscribed && line.command != "subscribe" {
         reject(
             conn,
@@ -522,7 +527,15 @@ pub(crate) fn accept(conn: &mut Conn, id: CommandId, result: Option<CommandResul
     );
 }
 
+/// A rejection frees the id for a retry, except one that never reserved it:
+/// `malformed` (the line's id may belong to an accepted command) and
+/// `duplicate_command` (the id is the earlier command's).
 pub(crate) fn reject(conn: &mut Conn, id: Option<CommandId>, code: ErrorCode, message: &str) {
+    if let Some(id) = &id
+        && !matches!(code, ErrorCode::Malformed | ErrorCode::DuplicateCommand)
+    {
+        conn.gate.release(id);
+    }
     send(
         conn,
         Event::CommandRejected(CommandRejected {
@@ -567,11 +580,14 @@ fn inbox_ack(conn: &Conn, id: CommandId) -> Ack {
                 command_id: id,
                 result,
             }),
-            Err(rejection) => Event::CommandRejected(CommandRejected {
-                command_id: Some(id),
-                code: rejection.code,
-                message: rejection.message,
-            }),
+            Err(rejection) => {
+                gate.release(&id);
+                Event::CommandRejected(CommandRejected {
+                    command_id: Some(id),
+                    code: rejection.code,
+                    message: rejection.message,
+                })
+            }
         };
         injector.push_kept(session::envelope(
             &gate.session_id,

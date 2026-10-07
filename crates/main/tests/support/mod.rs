@@ -476,7 +476,7 @@ pub(crate) fn subscribe(client: &Socket, session: &str) {
 
 /// Closes the session on the direct socket, and waits for it to leave.
 pub(crate) fn close_session(socket: &Socket) {
-    socket.send(r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#);
+    socket.send(r#"{"id":"c_close_sub","command":"subscribe","args":{"level":"full"}}"#);
     let ack = recv(socket, "the subscribe acknowledgement");
     assert_eq!(ack["kind"], "command_accepted", "{ack}");
     socket.send(r#"{"id":"c_close","command":"close"}"#);

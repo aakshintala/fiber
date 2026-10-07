@@ -284,7 +284,7 @@ fn a_documented_stream_quota_failure_is_quota_exceeded() {
         let failure = err.failure("p", &Secrets::default());
         assert_eq!(failure.code, ErrorCode::QuotaExceeded);
         let provider = failure.provider.unwrap();
-        assert_eq!(provider.status, 200);
+        assert_eq!(provider.status, Some(200));
     }
 }
 

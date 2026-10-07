@@ -465,6 +465,7 @@ fn models_exits_zero_and_prints_the_row() {
             false,
             fakes::clock::FakeClock::new(),
             std::sync::Arc::new(NoLock),
+            Ok(std::env::current_exe().unwrap()),
         ));
     }
     let setup = Setup::new();
@@ -516,6 +517,7 @@ fn models_with_a_relative_fiber_home_is_a_usage_failure() {
             false,
             fakes::clock::FakeClock::new(),
             std::sync::Arc::new(NoLock),
+            Ok(std::env::current_exe().unwrap()),
         ));
     }
     let setup = Setup::new();
@@ -544,6 +546,156 @@ fn models_with_a_relative_fiber_home_is_a_usage_failure() {
     };
     // `FIBER_HOME must be an absolute path` is a usage error.
     assert_eq!(status.code(), Some(2), "{status:?}");
+}
+
+/// The recorded executable the child passes as `models`' own path.
+const RECORDED: &str = "FIBER_CLI_TEST_RECORDED";
+
+#[test]
+#[cfg(unix)]
+fn models_spawns_its_refresh_child_from_the_recorded_path() {
+    // Runs in a child with a Fiber home holding a stale Lua provider, so
+    // `models` spawns its refresh child and exits 0 without waiting. The
+    // recorded path is a stub script writing its arguments to a file, so
+    // the parent knows which binary `models` re-ran: a `models` that asks
+    // the OS for its own path re-runs the test binary instead, and the
+    // stub's file stays empty.
+    use std::os::unix::fs::PermissionsExt;
+    if std::env::var_os(CHILD).is_some() {
+        let recorded = PathBuf::from(std::env::var_os(RECORDED).unwrap());
+        std::process::exit(super::models(
+            None,
+            false,
+            fakes::clock::FakeClock::new(),
+            std::sync::Arc::new(NoLock),
+            Ok(recorded),
+        ));
+    }
+    let setup = Setup::new();
+    setup.install_lua("acme-lua", "acme", &lua_list("new"));
+    let clock = fakes::clock::FakeClock::new();
+    write_stale_cache(
+        &setup.home(),
+        "acme",
+        &json!([{"id": "old", "protocol": "openai-responses",
+                 "base_url": "http://127.0.0.1:1/v1"}]),
+        clock.wall(),
+    );
+    let dir = fakes::TempDir::new("fiber-models-recorded");
+    let fifo = dir.path().join("fifo");
+    let stub = dir.path().join("stub.sh");
+    std::fs::write(
+        &stub,
+        format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > {}\n", fifo.display()),
+    )
+    .unwrap();
+    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut mkfifo = Command::new("mkfifo").arg(&fifo).spawn().unwrap();
+    let mkfifo_pid = mkfifo.id();
+    let (mkfifo_tx, mkfifo_rx) = mpsc::channel();
+    thread::spawn(move || mkfifo_tx.send(mkfifo.wait()));
+    let Ok(mkfifo_status) = mkfifo_rx.recv_timeout(CHILD_DEADLINE) else {
+        fakes::kill_pid(mkfifo_pid, "KILL").unwrap();
+        panic!("waited {CHILD_DEADLINE:?} for mkfifo to exit");
+    };
+    assert!(
+        mkfifo_status.unwrap().success(),
+        "mkfifo {}",
+        fifo.display()
+    );
+    // The stub's write blocks until a reader opens the FIFO, and the
+    // reader gets EOF when the stub exits: completion is the signal.
+    let (fifo_tx, fifo_rx) = mpsc::channel();
+    thread::spawn(move || fifo_tx.send(std::fs::read_to_string(&fifo).unwrap()));
+    let name = module_path!().split_once("::").unwrap().1;
+    let child = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            &format!("{name}::models_spawns_its_refresh_child_from_the_recorded_path"),
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env("FIBER_HOME", setup.home())
+        .env(CHILD, "1")
+        .env(RECORDED, &stub)
+        .current_dir(setup.workspace())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let pid = child.id();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || tx.send(child.wait_with_output().unwrap()));
+    let Ok(output) = rx.recv_timeout(CHILD_DEADLINE) else {
+        fakes::kill_pid(pid, "KILL").unwrap();
+        panic!("waited {CHILD_DEADLINE:?} for `fiber models` to exit");
+    };
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("acme/old"), "{stdout:?}");
+    // The stub writes its arguments to the FIFO and exits, detached in
+    // its own process group: the read completes when the stub runs, and
+    // the deadline fails the test when a mutant skips the spawn.
+    let Ok(args) = fifo_rx.recv_timeout(SPAWN_DEADLINE) else {
+        panic!("the recorded stub never ran the refresh child");
+    };
+    assert!(
+        args.contains("refresh-model-lists") && args.contains("acme"),
+        "{args:?}"
+    );
+}
+
+#[test]
+fn models_with_an_unusable_recorded_path_still_prints_from_the_cache() {
+    // A spawn that fails is ignored: `fiber models` still prints from
+    // the cache and exits 0. It runs in a child so the process's own
+    // `FIBER_HOME` cannot change the outcome.
+    if std::env::var_os(CHILD).is_some() {
+        std::process::exit(super::models(
+            None,
+            false,
+            fakes::clock::FakeClock::new(),
+            std::sync::Arc::new(NoLock),
+            Err("the running binary: gone".to_owned()),
+        ));
+    }
+    let setup = Setup::new();
+    setup.install_lua("acme-lua", "acme", &lua_list("new"));
+    let clock = fakes::clock::FakeClock::new();
+    write_stale_cache(
+        &setup.home(),
+        "acme",
+        &json!([{"id": "old", "protocol": "openai-responses",
+                 "base_url": "http://127.0.0.1:1/v1"}]),
+        clock.wall(),
+    );
+    let name = module_path!().split_once("::").unwrap().1;
+    let child = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            &format!("{name}::models_with_an_unusable_recorded_path_still_prints_from_the_cache"),
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env("FIBER_HOME", setup.home())
+        .env(CHILD, "1")
+        .current_dir(setup.workspace())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let pid = child.id();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || tx.send(child.wait_with_output().unwrap()));
+    let Ok(output) = rx.recv_timeout(CHILD_DEADLINE) else {
+        fakes::kill_pid(pid, "KILL").unwrap();
+        panic!("waited {CHILD_DEADLINE:?} for `fiber models` to exit");
+    };
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("acme/old"), "{stdout:?}");
 }
 
 #[test]

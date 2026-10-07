@@ -200,3 +200,45 @@ fn a_client_that_keeps_sending_is_dropped_once_the_callback_is_cancelled() {
     // Cancelled: dropped on the first pass, long before the bound.
     assert!(matches!(read_head(&mut Dripping, &stop), Head::Gone));
 }
+
+#[test]
+fn a_malformed_parameter_is_named_only_when_recognised_and_its_value_never_shown() {
+    let cases: &[(&str, &str, &str)] = &[
+        (
+            "code=SECRET%zz",
+            "the `code` parameter's value",
+            "invalid % escape",
+        ),
+        (
+            "code=SECRET%4",
+            "the `code` parameter's value",
+            "invalid % escape",
+        ),
+        (
+            "code=SECRET%",
+            "the `code` parameter's value",
+            "invalid % escape",
+        ),
+        (
+            "code=SECRET%ff",
+            "the `code` parameter's value",
+            "not UTF-8 once decoded",
+        ),
+        (
+            "state=%zz",
+            "the `state` parameter's value",
+            "invalid % escape",
+        ),
+        ("SECRETCODE=%zz", "a parameter's value", "invalid % escape"),
+        ("%0ASECRET=%zz", "a parameter's value", "invalid % escape"),
+        ("SECRET%zz=x", "a parameter name", "invalid % escape"),
+        ("SECRET%ff=x", "a parameter name", "not UTF-8 once decoded"),
+    ];
+    for (query, phrase, kind) in cases {
+        let err = parse_query(query).unwrap_err();
+        assert!(err.contains(phrase), "{query}: {err}");
+        assert!(err.contains(kind), "{query}: {err}");
+        assert!(!err.contains("SECRET"), "{query}: {err}");
+        assert!(!err.contains('\n'), "{query}: {err}");
+    }
+}

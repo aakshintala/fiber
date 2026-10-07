@@ -23,19 +23,7 @@ pub(crate) fn run(conn: &mut crate::client::Conn, id: CommandId, args: &RunComma
         );
         return;
     }
-    // The id is admitted at most once per session process, across
-    // connections: a repeat is rejected `duplicate_command` and nothing runs.
-    if !conn.gate.admit_command_id(&id) {
-        reject(
-            conn,
-            Some(id.clone()),
-            ErrorCode::DuplicateCommand,
-            &format!("`{}` was already accepted.", id.0),
-        );
-        return;
-    }
     let Some(door) = conn.gate.door() else {
-        conn.gate.forget_command_id(&id);
         reject(
             conn,
             Some(id.clone()),
@@ -47,9 +35,6 @@ pub(crate) fn run(conn: &mut crate::client::Conn, id: CommandId, args: &RunComma
     let release = match door.command(&args.name, &text) {
         Ok(release) => release,
         Err(rejection) => {
-            // A rejected `command` records nothing, so a corrected resend
-            // with the same id is admitted.
-            conn.gate.forget_command_id(&id);
             reject(conn, Some(id), rejection.code, &rejection.message);
             return;
         }
