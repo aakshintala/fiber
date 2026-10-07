@@ -423,7 +423,11 @@ fn a_writer_in_another_process_holds_the_session() {
             match fakes::kill_pid(pid, "KILL") {
                 Ok(_) | Err(_) => {}
             }
-            let reaped = holding.recv_timeout(DEADLINE).is_ok();
+            let (done, exited) = mpsc::channel();
+            thread::spawn(move || {
+                done.send(child.wait()).unwrap_or(());
+            });
+            let reaped = exited.recv_timeout(DEADLINE).is_ok();
             panic!("waited {DEADLINE:?} for the child's holding line (reaped: {reaped})");
         }
     };
