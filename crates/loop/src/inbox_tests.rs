@@ -7,7 +7,7 @@ use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
 use contract::SessionId;
-use contract::events::ExtensionExec;
+use contract::events::{ExtensionExec, ExtensionLog};
 use contract::inbox::Delivery;
 use contract::shapes::Process;
 use log::Log;
@@ -16,6 +16,25 @@ use super::TurnInput;
 use crate::{Loop, Model};
 
 const DEADLINE: Duration = Duration::from_secs(10);
+
+fn logged(message: &str) -> ExtensionLog {
+    ExtensionLog {
+        extension: "fiber.test/notes".into(),
+        message: message.into(),
+    }
+}
+
+fn diag_text(home: &fakes::TempDir) -> String {
+    std::fs::read_to_string(home.path().join("logs").join("session-s_test.log")).unwrap_or_default()
+}
+
+fn saved_kinds(home: &fakes::TempDir) -> Vec<String> {
+    log::read(&home.path().join("s_test"))
+        .unwrap_or_default()
+        .into_iter()
+        .map(|line| line.kind)
+        .collect()
+}
 
 fn exec(program: &str) -> ExtensionExec {
     ExtensionExec {
@@ -121,4 +140,64 @@ fn an_extension_exec_mid_turn_is_written_once_and_queues_nothing() {
         .expect("the log ended before extension_exec");
     assert_eq!(line.kind, "extension_exec");
     assert!(line.turn_id.is_none(), "extension_exec carries no turn");
+}
+
+#[test]
+fn an_extension_log_idle_is_live_ephemeral_and_diagnostic_and_starts_no_turn() {
+    let (mut looped, _log, mut watched, home) = started();
+    let mut input = TurnInput {
+        pieces: Vec::new(),
+        prompt: None,
+    };
+    looped
+        .admit_idle(Delivery::ExtensionLog(logged("hello")), &mut input)
+        .unwrap();
+    assert!(input.pieces.is_empty(), "extension_log starts no turn idle");
+    let line = watched
+        .recv_timeout(DEADLINE)
+        .expect("extension_log arrives in time")
+        .expect("the log outlives the turn")
+        .expect("the log ended before extension_log");
+    assert_eq!(line.kind, "extension_log");
+    assert!(line.turn_id.is_none(), "extension_log carries no turn");
+    assert!(line.seq.is_none(), "extension_log is ephemeral");
+    assert_eq!(line.payload["extension"], "fiber.test/notes");
+    assert_eq!(line.payload["message"], "hello");
+    assert!(
+        !saved_kinds(&home).contains(&"extension_log".to_owned()),
+        "extension_log is never saved"
+    );
+    assert!(
+        diag_text(&home).ends_with("\"message\":\"fiber.test/notes: hello\"}\n"),
+        "one line in logs/session-s_test.log"
+    );
+}
+
+#[test]
+fn an_extension_log_mid_turn_is_live_ephemeral_and_diagnostic_and_queues_nothing() {
+    let (mut looped, _log, mut watched, home) = started();
+    let turn = contract::TurnId("t_test".into());
+    looped
+        .admit_running(Delivery::ExtensionLog(logged("hello")), &turn)
+        .unwrap();
+    assert!(
+        looped.queued.is_empty(),
+        "extension_log queues nothing mid-turn"
+    );
+    let line = watched
+        .recv_timeout(DEADLINE)
+        .expect("extension_log arrives in time")
+        .expect("the log outlives the turn")
+        .expect("the log ended before extension_log");
+    assert_eq!(line.kind, "extension_log");
+    assert!(line.turn_id.is_none(), "extension_log carries no turn");
+    assert!(line.seq.is_none(), "extension_log is ephemeral");
+    assert!(
+        !saved_kinds(&home).contains(&"extension_log".to_owned()),
+        "extension_log is never saved"
+    );
+    assert!(
+        diag_text(&home).ends_with("\"message\":\"fiber.test/notes: hello\"}\n"),
+        "one line in logs/session-s_test.log"
+    );
 }

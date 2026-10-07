@@ -34,6 +34,7 @@ mod cancel;
 mod changes;
 mod completion;
 mod conversation;
+mod diag;
 mod handoff;
 mod hooks;
 mod hosted;
@@ -116,6 +117,7 @@ pub struct Permissions {
 /// One session's loop.
 pub struct Loop {
     log: Arc<Log>,
+    diag: diag::SessionDiag,
     provider: Arc<dyn Provider>,
     /// The model `provider` reaches, and how its calls are priced.
     model: Model,
@@ -278,8 +280,14 @@ impl Loop {
         // and rebuilds the state from it.
         let changes = changes::State::empty(&prompt.home);
         // `session_started` renders nothing into the conversation.
+        let diag = diag::SessionDiag::new(
+            &prompt.home,
+            started.session_id.clone(),
+            Arc::clone(log.clock()),
+        );
         Ok(Self {
             log,
+            diag,
             provider,
             model,
             prompt,

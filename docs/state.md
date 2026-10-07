@@ -221,6 +221,9 @@ What is recorded:
   that passes its bound (`docs/invocation.md`, "Shutdown"), and a background
   refresh, such as a quota or model list, that fails while no session is
   running.
+- **An extension's `host.log` lines:** each is a line in the session's file
+  with `process` `session`, `code` `extension_log`, the extension's name and
+  the message as the extension wrote it.
 - **The hub's operations:** `hub_started` and `hub_stopped`;
   `client_connected`, `client_disconnected` and `client_unauthenticated`;
   `device_paired` and `device_revoked`, naming the device and the client that
@@ -231,9 +234,10 @@ An event inside a running session is recorded in that session's log and
 nowhere else; a hook that fails in a session, for example, is a `notice` or
 `hook_failed` there (`docs/extensions.md`, "When a hook fails"). Nothing in
 `logs/` holds a credential or token, prompt or model text, a tool's arguments
-or a configuration value. A failed hook is named with its code, never its
-content. There is one level of detail; a level that records requests, their
-paths, statuses and timings, is not built.
+or a configuration value, with one exception: an `extension_log` line is the
+extension's own text, and Fiber records it as given. A failed hook is named
+with its code, never its content. There is one level of detail; a level that
+records requests, their paths, statuses and timings, is not built.
 
 **Bounds.** `logs/hub.log` is renamed to `logs/hub.log.1` when it passes
 10 MiB, replacing any older one; its single writer makes the rename safe.
