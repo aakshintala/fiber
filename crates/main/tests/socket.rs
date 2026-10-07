@@ -577,14 +577,15 @@ fn cancel_on_the_same_socket_stops_a_driver_shell() {
         "waited {DEADLINE:?} for the shell to start"
     );
     send(&client, r#"{"id":"c_cancel","command":"cancel"}"#);
-    let cancel = until(&client, "the answer to c_cancel", |line| {
-        line["payload"]["command_id"] == "c_cancel"
+    // The cancel wakes the shell before its own answer is queued, so either
+    // answer can come first.
+    let mut pending = vec!["c_cancel", "c_shell"];
+    let lines = until(&client, "the answers to c_cancel and c_shell", |line| {
+        pending.retain(|id| line["payload"]["command_id"] != *id);
+        pending.is_empty()
     });
-    assert_eq!(answered(&cancel, "c_cancel")["kind"], "command_accepted");
-    let shell = until(&client, "the answer to c_shell", |line| {
-        line["payload"]["command_id"] == "c_shell"
-    });
-    let shell = answered(&shell, "c_shell");
+    assert_eq!(answered(&lines, "c_cancel")["kind"], "command_accepted");
+    let shell = answered(&lines, "c_shell");
     assert_eq!(shell["kind"], "command_accepted", "{shell}");
     assert_eq!(
         shell["payload"]["result"]["output"],

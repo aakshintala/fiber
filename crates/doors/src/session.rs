@@ -68,6 +68,9 @@ pub(crate) struct Gate {
     shells: Mutex<RunningShells>,
     /// Signalled whenever a driver shell leaves [`Gate::shells`].
     shell_ended: Condvar,
+    /// What a test observes, or holds, at a [`tests::Probe`] point.
+    #[cfg(test)]
+    pub(crate) probe: Mutex<Option<tests::Prober>>,
     stop: AtomicBool,
     /// The `full` connections, and whether `clients` lines are sealed.
     clients: Mutex<(u32, bool)>,
@@ -234,10 +237,14 @@ impl Session {
     /// each writer, then shuts down whatever is still open. Every driver
     /// shell is cancelled first, since shutting its socket does not stop the
     /// tool, and waited for: its thread is not joined, and its answer is
-    /// queued before it ends.
+    /// queued before it ends. A reader can still admit one until it is
+    /// joined; that shell starts cancelled and is waited for once no reader
+    /// is left, though its answer may reach no writer.
     pub fn close(self, log: Arc<Log>) {
         self.gate.cancel_shells();
         self.gate.wait_shells();
+        #[cfg(test)]
+        self.gate.note(tests::Probe::FirstShellWaitDone);
         self.gate.mark_stopped();
         // Wakes `accept` if it is blocked in `accept`. A connection during
         // teardown is dropped, not served.
@@ -255,6 +262,7 @@ impl Session {
         drop(log);
         self.gate.wait_writers();
         self.gate.join_clients();
+        self.gate.wait_shells();
         join(self.printer);
     }
 
@@ -277,10 +285,20 @@ impl Gate {
     fn wait_shells(&self) {
         let mut shells = lock(&self.shells);
         while !shells.running.is_empty() {
+            #[cfg(test)]
+            self.note(tests::Probe::ShellsWaiting);
             shells = self
                 .shell_ended
                 .wait(shells)
                 .unwrap_or_else(PoisonError::into_inner);
+        }
+    }
+
+    #[cfg(test)]
+    fn note(&self, point: tests::Probe) {
+        let probe = lock(&self.probe).clone();
+        if let Some(probe) = probe {
+            probe(point);
         }
     }
 
@@ -557,6 +575,8 @@ fn open_in(
             running: Vec::new(),
         }),
         shell_ended: Condvar::new(),
+        #[cfg(test)]
+        probe: Mutex::new(None),
         stop: AtomicBool::new(false),
         clients: Mutex::new((0, false)),
         writers: Condvar::new(),

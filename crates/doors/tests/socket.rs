@@ -1512,12 +1512,27 @@ fn cancel_from_another_connection_stops_a_driver_shell() {
 /// The answer to `id`, or none when a line is not read within [`DEADLINE`].
 /// Lets a test close its session before it asserts.
 fn answer_within(client: &Client, id: &str) -> Option<Value> {
-    loop {
-        let line = client.recv(DEADLINE)?;
-        if command_id(&line) == Some(id) {
-            return Some(line);
+    answers_within(client, &[id]).pop().flatten()
+}
+
+/// The answers to `ids` in the order named, whatever order they arrive in.
+/// Reading stops once each is answered, or when a line is not read within
+/// [`DEADLINE`], which leaves the rest none.
+fn answers_within(client: &Client, ids: &[&str]) -> Vec<Option<Value>> {
+    let mut answers: Vec<Option<Value>> = vec![None; ids.len()];
+    while answers.iter().any(Option::is_none) {
+        let Some(line) = client.recv(DEADLINE) else {
+            break;
+        };
+        if let Some(slot) = ids
+            .iter()
+            .position(|id| command_id(&line) == Some(*id))
+            .and_then(|at| answers.get_mut(at))
+        {
+            *slot = Some(line);
         }
     }
+    answers
 }
 
 #[test]
@@ -1542,13 +1557,12 @@ fn cancel_on_the_same_connection_stops_a_driver_shell() {
                 .recv_timeout(DEADLINE)
                 .expect("the shell is running");
             send(&client, r#"{"id":"c_cancel","command":"cancel"}"#);
-            let cancel = answer_within(&client, "c_cancel");
+            // The cancel wakes the shell before its own answer is queued,
+            // so either answer can come first. On a reader blocked in the
+            // shell, neither would come before close.
+            let mut answers = answers_within(&client, &["c_cancel", "c_shell"]).into_iter();
+            let (cancel, shell) = (answers.next().flatten(), answers.next().flatten());
             let woken = !matches!(inbox.try_recv(), Err(mpsc::TryRecvError::Empty));
-            // On a reader blocked in the shell, the shell's answer would
-            // only follow close.
-            let shell = cancel
-                .as_ref()
-                .and_then(|_| answer_within(&client, "c_shell"));
             no_durable(&dir);
             seen = Some((cancel, woken, shell, client));
             Ok(())
