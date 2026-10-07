@@ -29,7 +29,8 @@ const DEADLINE: Duration = Duration::from_secs(20);
 const SERVER_EXIT: Duration = Duration::from_secs(5);
 
 /// The built-in tool order, when no MCP server declares anything.
-const TOOL_NAMES: [&str; 7] = [
+const TOOL_NAMES: [&str; 8] = [
+    "ask_user",
     "edit",
     "handoff",
     "jobs",
@@ -420,6 +421,7 @@ fn a_configured_server_declares_and_runs_its_tools() {
     assert_eq!(
         tool_names(&requests[0].body),
         [
+            "ask_user",
             "edit",
             "handoff",
             "jobs",
@@ -637,6 +639,7 @@ fn disabled_hides_a_tool() {
     assert_eq!(
         tool_names(&requests[0].body),
         [
+            "ask_user",
             "edit",
             "handoff",
             "jobs",

@@ -2724,6 +2724,7 @@ fn two_runs_send_byte_identical_preambles() {
     assert_eq!(
         names,
         [
+            "ask_user",
             "edit",
             "handoff",
             "jobs",

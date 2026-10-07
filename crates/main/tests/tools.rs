@@ -33,7 +33,8 @@ const MKFIFO: Duration = Duration::from_secs(5);
 
 /// The request's tool order: the loop keys tools by name, so this is name
 /// order, whatever order `main` pushes them in.
-const TOOL_NAMES: [&str; 7] = [
+const TOOL_NAMES: [&str; 8] = [
+    "ask_user",
     "edit",
     "handoff",
     "jobs",
@@ -2398,4 +2399,147 @@ fn a_shell_read_of_proc_environ_is_reviewed_and_blocked() {
             "request {index} holds the environment"
         );
     }
+}
+
+/// The result of an `ask_user` call whose questions went to the driver.
+const SENT: &str = "The questions went to the driver. The answers arrive as the next prompt.";
+
+/// The request's tool named `name`.
+fn tool_in<'a>(body: &'a Value, name: &str) -> &'a Value {
+    body["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == name)
+        .unwrap()
+}
+
+#[test]
+fn ask_user_ends_the_run_with_its_questions_and_a_resume_answers_them() {
+    let setup = Setup::new();
+    let questions = json!([
+        {"header": "Base", "question": "Which branch?", "options": [
+            {"label": "main (Recommended)"},
+            {"label": "dev", "description": "The development branch"}
+        ]},
+        {"header": "Name", "question": "What name?"}
+    ]);
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "call_ask",
+            "ask_user",
+            &json!({"questions": questions}),
+        )]),
+        text_reply("Done."),
+    ])
+    .unwrap();
+    setup.provider(&server);
+
+    let first = setup.run(&["ask", "start"]);
+
+    assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
+    let mut expected = read_kinds();
+    let cut = expected
+        .iter()
+        .position(|kind| *kind == "tool_call_completed")
+        .unwrap();
+    expected.truncate(cut + 1);
+    expected.extend(["turn_completed", "fiber_exited"]);
+    assert_eq!(first.kinds(), expected);
+    let completed = first
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "tool_call_completed")
+        .unwrap();
+    assert_eq!(completed["payload"]["status"], "completed");
+    assert_eq!(completed["payload"]["content"][0]["text"], SENT);
+    let ended = &first.lines[first.lines.len() - 2];
+    assert_eq!(ended["kind"], "turn_completed");
+    assert_eq!(
+        ended["payload"],
+        json!({"outcome": "completed", "questions": questions})
+    );
+    let exited = first.lines.last().unwrap();
+    assert_eq!(exited["payload"]["exit_code"], 0);
+    assert_eq!(exited["payload"]["questions"], questions);
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
+    assert_eq!(tool_in(&body, "ask_user")["strict"], false);
+    assert_eq!(tool_in(&body, "handoff")["strict"], true);
+
+    let id = first.session_id().to_owned();
+    let second = setup.run(&["ask", "--resume", &id, "main; call it fiber"]);
+
+    assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2);
+    let body: Value = serde_json::from_slice(&requests[1].body).unwrap();
+    let input = body["input"].as_array().unwrap();
+    let output = input
+        .iter()
+        .find(|item| item["type"] == "function_call_output")
+        .unwrap();
+    assert_eq!(output["call_id"], "call_ask");
+    assert_eq!(output["output"], SENT);
+    let last = input.last().unwrap();
+    assert_eq!(last["role"], "user");
+    assert!(last.to_string().contains("main; call it fiber"), "{last}");
+    let exited = second.lines.last().unwrap();
+    assert_eq!(exited["kind"], "fiber_exited");
+    assert!(exited["payload"].get("questions").is_none(), "{exited}");
+}
+
+#[test]
+fn an_ask_user_call_outside_its_limits_fails_before_it_starts() {
+    let setup = Setup::new();
+    let question = |header: &str, options: Value| json!({"header": header, "question": "Which?", "options": options});
+    let two = json!([{"label": "a"}, {"label": "b"}]);
+    let free = json!({"header": "h", "question": "q"});
+    let calls = [
+        json!({"questions": []}),
+        json!({"questions": [free, free, free, free, free]}),
+        json!({"questions": [question("thirteen char", two.clone())]}),
+        json!({"questions": [question("h", json!([{"label": "a"}]))]}),
+        json!({"questions": [question("h", json!([
+            {"label": "a"}, {"label": "b"}, {"label": "c"}, {"label": "d"}, {"label": "e"}
+        ]))]}),
+        json!({"questions": [{"header": "h", "question": "q", "preview": "p"}]}),
+    ];
+    let events: Vec<Value> = calls
+        .iter()
+        .enumerate()
+        .map(|(n, arguments)| function_call(&format!("call_{n}"), "ask_user", arguments))
+        .collect();
+    let server = ProviderServer::start([stream(&events), hello()]).unwrap();
+    setup.provider(&server);
+
+    let run = setup.run(&["ask", "ask me"]);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert!(
+        !run.kinds().contains(&"tool_call_started"),
+        "{:?}",
+        run.kinds()
+    );
+    let completed: Vec<&Value> = run
+        .lines
+        .iter()
+        .filter(|line| line["kind"] == "tool_call_completed")
+        .collect();
+    assert_eq!(completed.len(), calls.len());
+    for line in completed {
+        assert_eq!(line["payload"]["status"], "failed", "{line}");
+        assert_eq!(
+            line["payload"]["error"]["code"], "invalid_arguments",
+            "{line}"
+        );
+    }
+    let ended = run
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "turn_completed")
+        .unwrap();
+    assert_eq!(ended["payload"], json!({"outcome": "completed"}));
+    assert_eq!(server.requests().len(), 2);
 }
