@@ -38,6 +38,10 @@ unsafe extern "C" {
 /// Makes `command`'s child drop its crash exception port between fork and
 /// exec. A failed call leaves the inherited port, so the child still aborts,
 /// only with a report.
+// Mutants run on Linux, where this macOS-only module is not compiled, so no
+// test there can see a mutant of this function; `a_rerun_child_has_no_crash_
+// exception_port` fails on macOS when it does nothing.
+#[cfg_attr(false, mutants::skip)]
 pub(crate) fn silence(command: &mut Command) {
     #[allow(
         unsafe_code,
