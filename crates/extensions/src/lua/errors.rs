@@ -38,7 +38,7 @@ pub(super) fn not_registered(name: &str, target: &Target) -> Error {
 
 /// A copy of the error that stopped the extension, for the next caller.
 /// These are the errors a stopped extension can hold.
-pub(super) pub(super) fn again(name: &str, e: &Error) -> Error {
+pub(super) fn again(name: &str, e: &Error) -> Error {
     match e {
         Error::Io { path, source } => Error::Io {
             path: path.clone(),
