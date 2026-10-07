@@ -290,6 +290,23 @@ fn install_in_a_terminal_shows_the_summary_and_installs_on_yes() {
 }
 
 #[test]
+fn install_in_a_terminal_shows_what_the_extension_replaces() {
+    let setup = Setup::new();
+    let mut manifest = manifest(NAME_A);
+    manifest["replaces"] = serde_json::json!(["shell", "read"]);
+    let source = setup.source("aaa", &manifest, &[]);
+    let mut input = io::Cursor::new(b"n\n".to_vec());
+    let (err, _) = run_install(
+        &setup.home(),
+        Request::Path(source),
+        &Origin::github(),
+        true,
+        &mut input,
+    );
+    assert!(err.contains("Replaces `shell`\nReplaces `read`\n"), "{err}");
+}
+
+#[test]
 fn install_declined_installs_nothing_and_exits_one() {
     let setup = Setup::new();
     let source = setup.source(

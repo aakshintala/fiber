@@ -109,6 +109,8 @@ pub struct InstallSummary {
     pub version: String,
     /// For an update, what changed since the installed commit.
     pub changes: Option<String>,
+    /// The built-in tools and commands it replaces.
+    pub replaces: Vec<String>,
     /// Each provider it registers, with its models' base URLs.
     pub providers: Vec<(String, Vec<String>)>,
     /// The program a process extension runs, with its arguments.

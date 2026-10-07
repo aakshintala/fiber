@@ -260,6 +260,7 @@ fn commit_plan(
             source: item.source(),
             version: item.version.clone(),
             changes: item.changes.clone(),
+            replaces: Vec::new(),
             providers: item
                 .providers
                 .iter()
