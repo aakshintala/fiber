@@ -278,25 +278,7 @@ fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
             conn.gate.deliver(Delivery::Reply(reply, ack));
         }
         Command::Cancel => cancel(conn, id),
-        Command::Shell(args) => match crate::shell::run(&conn.gate, &args) {
-            crate::shell::Answer::Unknown => unknown(conn, id, name),
-            crate::shell::Answer::Rejected { code, message } => {
-                reject(conn, Some(id), code, &message);
-            }
-            crate::shell::Answer::Accepted {
-                output,
-                artifact,
-                process,
-            } => accept(
-                conn,
-                id,
-                Some(CommandResult::Shell {
-                    output,
-                    artifact,
-                    process,
-                }),
-            ),
-        },
+        Command::Shell(args) => shell(conn, id, &args, name),
         Command::Close => {
             let ack = inbox_ack(conn, id);
             conn.gate.deliver(Delivery::Close(ack));
@@ -347,6 +329,46 @@ fn cancel(conn: &mut Conn, id: CommandId) {
         }
     } else {
         reject(conn, Some(id), ErrorCode::StaleRequest, NO_TURN);
+    }
+}
+
+/// Starts a driver `shell` on a thread of its own, so this reader reads on
+/// and a `cancel` on this connection reaches it. Its cancel is registered
+/// before this returns. The thread gets the shell and its answer only once
+/// it has started; if it cannot start, the reader answers `io_failed`.
+fn shell(conn: &mut Conn, id: CommandId, args: &contract::commands::Shell, name: &str) {
+    let running = match crate::shell::start(&conn.gate, args) {
+        Ok(running) => running,
+        Err(crate::shell::Refused::Unknown) => return unknown(conn, id, name),
+        Err(crate::shell::Refused::Rejected { code, message }) => {
+            return reject(conn, Some(id), code, &message);
+        }
+    };
+    let gate = Arc::clone(&conn.gate);
+    let (tx, rx) = mpsc::channel::<(crate::shell::Running, Ack)>();
+    let spawned = thread::Builder::new()
+        .name("shell".to_owned())
+        .spawn(move || {
+            if let Ok((running, ack)) = rx.recv() {
+                running.finish(&gate, ack);
+            }
+        });
+    if spawned.is_err() {
+        reject(
+            conn,
+            Some(id),
+            ErrorCode::IoFailed,
+            crate::shell::COULD_NOT_START,
+        );
+        running.abandon(&conn.gate);
+        return;
+    }
+    let ack = inbox_ack(conn, id);
+    // The thread waits in `recv`, so the send fails only if it died first:
+    // the dropped acknowledgement answers `closing`.
+    if let Err(mpsc::SendError((running, ack))) = tx.send((running, ack)) {
+        drop(ack);
+        running.abandon(&conn.gate);
     }
 }
 

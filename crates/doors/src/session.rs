@@ -62,9 +62,9 @@ pub(crate) struct Gate {
     /// The session's hooks, which receive the loop's inbox so an extension's
     /// program run can be logged as `extension_exec`.
     hooks: Mutex<Option<Arc<dyn contract::hook::Hooks>>>,
-    /// Driver shells running now, and whether `close` has stopped new ones.
-    /// Both sit under this lock, so a shell that registers after `close`
-    /// cannot miss the snapshot.
+    /// Driver shells running now, and whether shutdown has begun, which
+    /// cancels a new one as it registers. Both sit under this lock, so a
+    /// shell that registers after `close` cannot miss the snapshot.
     shells: Mutex<RunningShells>,
     /// Signalled whenever a driver shell leaves [`Gate::shells`].
     shell_ended: Condvar,
@@ -226,22 +226,18 @@ impl Session {
         // An emission holds this lock, so one in flight finishes first.
         lock(&self.gate.clients).1 = true;
         self.gate.cancel_shells();
-        let mut shells = lock(&self.gate.shells);
-        while !shells.running.is_empty() {
-            shells = self
-                .gate
-                .shell_ended
-                .wait(shells)
-                .unwrap_or_else(PoisonError::into_inner);
-        }
+        self.gate.wait_shells();
     }
 
     /// Ends the door side: stops accepting, unlinks the socket, drops `log`
     /// (the last handle, which releases the lock), waits up to [`GRACE`] for
-    /// each writer, then shuts down whatever is still open. A driver shell
-    /// is cancelled first: shutting its socket does not stop the tool.
+    /// each writer, then shuts down whatever is still open. Every driver
+    /// shell is cancelled first, since shutting its socket does not stop the
+    /// tool, and waited for: its thread is not joined, and its answer is
+    /// queued before it ends.
     pub fn close(self, log: Arc<Log>) {
         self.gate.cancel_shells();
+        self.gate.wait_shells();
         self.gate.mark_stopped();
         // Wakes `accept` if it is blocked in `accept`. A connection during
         // teardown is dropped, not served.
@@ -277,6 +273,17 @@ impl Session {
 }
 
 impl Gate {
+    /// Waits until no driver shell is registered: each has answered.
+    fn wait_shells(&self) {
+        let mut shells = lock(&self.shells);
+        while !shells.running.is_empty() {
+            shells = self
+                .shell_ended
+                .wait(shells)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+    }
+
     fn wait_writers(&self) {
         let until = self.clock.now() + GRACE;
         let mut conns = lock(&self.conns);
@@ -372,15 +379,13 @@ impl Gate {
         lock(&self.driver_shell).clone()
     }
 
+    /// Registers a driver shell's cancel. After `close` or the stopper it
+    /// is registered too, so they wait for its thread, and cancelled at once.
     pub(crate) fn track_shell(&self, cancel: Arc<crate::shell::ShellCancel>) {
         let stopped = {
             let mut shells = lock(&self.shells);
-            if shells.stopped {
-                true
-            } else {
-                shells.running.push(Arc::clone(&cancel));
-                false
-            }
+            shells.running.push(Arc::clone(&cancel));
+            shells.stopped
         };
         // After the lock: `cancel` wakes the tool, which must not need this lock.
         if stopped {
