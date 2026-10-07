@@ -287,6 +287,12 @@ nothing into its own function and mark that, since an exemption on a statement
 or block is not reliably honoured. How many runners share the mutants is CI's
 to set.
 
+Mutants run on Linux, so code compiled only on macOS, or on any platform other
+than Linux, is never built there, and every mutant of it would pass unnoticed.
+A function gated that way is exempted the same way, with the reason that
+mutants run on Linux, where it is not compiled. The macOS test job still runs
+it, so its tests must reach it.
+
 Code is written so a mutant fails fast. A loop that steps an index by hand can
 spin forever when a mutant breaks the arithmetic, and a hung mutant fails CI as
 a timeout; walk with an iterator instead. A test reaches the code under test
