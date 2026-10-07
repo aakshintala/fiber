@@ -866,6 +866,74 @@ fn a_call_request_that_folds_nothing_folds_to_nothing() {
     assert!(matches!(folded, Folded::Nothing), "{folded:?}");
 }
 
+/// A resumed `fiber_started`.
+fn resumed(resumed: bool) -> Envelope {
+    envelope(
+        "fiber_started",
+        None,
+        json!({"version": "0.0.1", "resumed": resumed}),
+    )
+}
+
+#[test]
+fn a_resumed_fiber_started_cuts_the_running_card_short() {
+    let mut page = running_part();
+    let folded = fold(&mut page, &resumed(true));
+    assert!(matches!(folded, Folded::CutShort), "{folded:?}");
+    assert!(
+        !page.turns.last().is_some_and(|turn| turn.is_open()),
+        "the card still runs"
+    );
+}
+
+#[test]
+fn a_fresh_or_suspended_fiber_started_closes_no_card() {
+    // A fresh process finds no open turn: `if true` would cut one short.
+    let mut page = part();
+    let folded = fold(&mut page, &resumed(true));
+    assert!(matches!(folded, Folded::Nothing), "{folded:?}");
+    // A process that did not resume leaves the running card alone, and a
+    // resume later still cuts it: forcing the guard true would idle here.
+    let mut page = running_part();
+    let folded = fold(&mut page, &resumed(false));
+    assert!(matches!(folded, Folded::Nothing), "{folded:?}");
+    assert!(
+        page.turns.last().is_some_and(|turn| turn.is_open()),
+        "the card closed"
+    );
+}
+
+#[test]
+fn a_resumed_crash_leaves_the_session_idle() {
+    let input = json!({"input": [{"type": "message", "source": "driver",
+        "content": [{"type": "text", "text": "hi"}]}]});
+    let mut app = app(80, 20);
+    app.on_line(Line::Session(envelope("turn_started", None, input)));
+    app.on_line(Line::Session(resumed(true)));
+    let lines: Vec<String> = app.lines().iter().map(ToString::to_string).collect();
+    assert!(
+        lines.iter().any(|line| line.starts_with("▣ cut short")),
+        "{lines:?}"
+    );
+    // Not busy: Enter sends `prompt`, where `steer` would go to a turn
+    // still running.
+    for ch in "again".chars() {
+        app.on_key(Key::Char(ch), now());
+    }
+    let sent = match app.on_key(Key::Enter, now()) {
+        Effect::Send(sent) => sent,
+        Effect::None
+        | Effect::Quit
+        | Effect::ListFiles
+        | Effect::Search { .. }
+        | Effect::Editor { .. }
+        | Effect::Copy(_) => panic!("expected a sent line"),
+    };
+    assert_eq!(sent.len(), 1);
+    let command: Value = serde_json::from_str(&sent[0]).unwrap_or_default();
+    assert_eq!(command.get("command"), Some(&json!("prompt")), "{command}");
+}
+
 #[test]
 fn only_a_changed_or_cut_line_counts_its_page_again() {
     // A line that changes a card counts its page...

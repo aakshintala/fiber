@@ -61,6 +61,8 @@ struct Summary {
     /// Its usage, late lines and delegates' copies included.
     spend: Spend,
     ended: Option<(TurnCompleted, u64)>,
+    /// A resume cut the turn short, at the resume's time.
+    cut: Option<u64>,
     /// The page holding its `turn_completed`.
     closed_on: usize,
 }
@@ -104,13 +106,15 @@ pub(crate) enum Folded {
     Called,
     /// `turn_completed`, and whether it closed the running card.
     Ended(TurnCompleted, bool),
+    /// `fiber_started` resumed closed the running card as cut short.
+    CutShort,
 }
 
 impl Folded {
     /// Whether a card changed.
     fn changed(&self) -> bool {
         match self {
-            Self::Changed | Self::Started | Self::Called => true,
+            Self::Changed | Self::Started | Self::Called | Self::CutShort => true,
             Self::Ended(_, closed) => *closed,
             Self::Nothing | Self::Stepped => false,
         }
@@ -238,7 +242,10 @@ impl Pages {
             self.pending = None;
         }
         self.summarise(folded, envelope.ts);
-        let busy = Some(self.running().is_some());
+        // Whether a turn runs is what the open card says: a resume closes
+        // the card as cut short without a `turn_completed`, which the
+        // totals below only learn through `CutShort`.
+        let busy = Some(self.open.turns.last().is_some_and(Turn::is_open));
         // A usage line counts the page holding its turn's ▣ line itself.
         if (changed && kind != "usage_recorded") || cut != Cut::None {
             self.count(self.closed.len());
@@ -246,12 +253,13 @@ impl Pages {
         Applied { changed, busy }
     }
 
-    /// The running turn's summary, if a turn runs.
+    /// The running turn's summary, if a turn runs: the last one while it
+    /// has neither completed nor been cut short by a crash.
     fn running(&self) -> Option<usize> {
         let last = self.summaries.len().checked_sub(1)?;
         self.summaries
             .get(last)
-            .filter(|summary| summary.ended.is_none())
+            .filter(|summary| summary.ended.is_none() && summary.cut.is_none())
             .map(|_| last)
     }
 
@@ -270,12 +278,17 @@ impl Pages {
                 summary.ended = Some((done, ts));
                 summary.closed_on = at;
             }
+            (Folded::CutShort, Some(summary)) => {
+                summary.cut = Some(ts);
+                summary.closed_on = at;
+            }
             (
                 Folded::Nothing
                 | Folded::Changed
                 | Folded::Stepped
                 | Folded::Called
-                | Folded::Ended(..),
+                | Folded::Ended(..)
+                | Folded::CutShort,
                 _,
             ) => {}
         }
@@ -764,6 +777,12 @@ pub(crate) fn fold(part: &mut Part, envelope: &Envelope) -> Folded {
     let changed = crate::turn::fold_line(&mut part.turns, &mut part.fold, envelope);
     match kind {
         "turn_started" if changed => Folded::Started,
+        // A resume that folded something closed the card it found open:
+        // `changed` alone says the rule below fired, closing nothing when
+        // the process is fresh or suspended the turn instead.
+        "fiber_started" if changed && was_open && !part.turns.last().is_some_and(Turn::is_open) => {
+            Folded::CutShort
+        }
         // `changed` is redundant here: a completed line that folded
         // nothing re-reads as nothing below, so openness alone decides.
         "turn_completed" if was_open => {
