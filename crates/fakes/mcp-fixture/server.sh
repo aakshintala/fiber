@@ -9,9 +9,12 @@
 # `call-<tool>.json` file per tool holding that call's `result` object. A
 # tool whose result file holds exactly `hang` is never answered, and one
 # whose result file holds exactly `exit` makes the server exit without
-# answering. A `hold-<tool>` file holds that tool's answer until a
-# `release-<tool>` file exists, so a test releases a call after another
-# one answered and two concurrent calls resolve out of order. A `notify-<tool>`
+# answering. If `release-<tool>` is a FIFO, the server holds that tool's
+# answer: in the background subshell, if `held-<tool>` is also a FIFO it
+# first writes one line to it (`printf 'held\n' > "$dir/held-<tool>"`),
+# then blocks on `read -r _ < "$dir/release-<tool>"`, then answers. No
+# sleep, no polling. A tool without a release FIFO answers at once. A
+# `notify-<tool>`
 # file makes the server send `notifications/tools/list_changed` before it
 # answers that tool's call. A `fail-start` file makes the server exit 1
 # before reading anything.
@@ -85,7 +88,7 @@ while IFS= read -r line; do
                     body="$(cat "$result")"
                     # Each call is answered in the background, so a held
                     # call does not hold back a fast one behind it.
-                    ( while [ -f "$dir/hold-$tool" ] && [ ! -f "$dir/release-$tool" ]; do sleep 0.05; done; answer "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":$body}" ) &
+                    ( if [ -p "$dir/release-$tool" ]; then if [ -p "$dir/held-$tool" ]; then printf 'held\n' > "$dir/held-$tool"; fi; read -r _ < "$dir/release-$tool"; fi; answer "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":$body}" ) &
                 fi
             elif [ -n "$id" ]; then
                 answer "{\"jsonrpc\":\"2.0\",\"id\":$id,\"error\":{\"code\":-32602,\"message\":\"Unknown tool: $tool\"}}"
