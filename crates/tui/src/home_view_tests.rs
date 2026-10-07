@@ -254,3 +254,57 @@ fn the_placeholder_goes_after_a_start_is_sent() {
     app.on_key(Key::Enter, now);
     assert!(app.home_screen().is_some_and(|screen| !screen.placeholder));
 }
+
+#[test]
+fn a_focused_row_below_the_fold_is_drawn_last() {
+    let mut app = home(80, 24);
+    app.on_line(hello());
+    for n in 0..15u8 {
+        let session = format!("s_{n:016x}");
+        app.on_line(status(&session, "fix the parser", idle()));
+    }
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let targets = render(&app, area, &mut buf, None);
+    app.drawn(&targets);
+    // Twelve rows fit under the box: twelve steps focus the last drawn
+    // row, and the thirteenth moves below the fold.
+    let now = fakes::clock::FakeClock::new().now();
+    for _ in 0..13 {
+        app.on_key(Key::Down, now);
+    }
+    let keys: Vec<u64> = app
+        .home_screen()
+        .map(|screen| screen.rows.into_iter().map(|(key, _, _)| key).collect())
+        .unwrap_or_default();
+    assert_eq!(keys.len(), 15);
+    let mut buf = Buffer::empty(area);
+    let targets = render(&app, area, &mut buf, None);
+    let drawn: Vec<u64> = targets
+        .iter()
+        .filter_map(|target| {
+            if let crate::mouse::TargetId::Home(crate::home::Spot::Entry(key)) = target.id {
+                Some(key)
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(drawn.len(), 12);
+    assert_eq!(drawn.last(), Some(&keys[12]));
+    assert!(!drawn.contains(&keys[0]));
+}
+
+#[test]
+fn home_with_a_focused_row() {
+    let mut app = home(80, 24);
+    app.on_line(hello());
+    app.on_line(status("s_aaaaaaaaaaaaaaaa", "fix the parser", live()));
+    app.on_line(status("s_bbbbbbbbbbbbbbbb", "tidy docs", idle()));
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let targets = render(&app, area, &mut buf, None);
+    app.drawn(&targets);
+    app.on_key(Key::Down, fakes::clock::FakeClock::new().now());
+    insta::assert_snapshot!("home_with_a_focused_row", screen(&app, 80, 24));
+}

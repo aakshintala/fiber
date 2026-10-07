@@ -186,9 +186,20 @@ pub(super) fn render(
     );
     // The session list draws under the box, down to the row above the
     // foot, scrolling past the screen. Each row is a target opening its
-    // session.
-    let mut row_y = placed.edge.saturating_add(1);
-    for (key, text, _has_x) in &screen.rows {
+    // session. The focused row is the last drawn one once it is past
+    // the first screenful, and the list draws from the top otherwise.
+    let list_top = placed.edge.saturating_add(1);
+    let capacity = usize::from(placed.foot.saturating_sub(list_top));
+    let start = match app.focused() {
+        Some(TargetId::Home(Spot::Entry(key))) => screen
+            .rows
+            .iter()
+            .position(|(row, _, _)| *row == key)
+            .map_or(0, |at| (at + 1).saturating_sub(capacity)),
+        _ => 0,
+    };
+    let mut row_y = list_top;
+    for (key, text, _has_x) in screen.rows.iter().skip(start) {
         if row_y >= placed.foot {
             break;
         }

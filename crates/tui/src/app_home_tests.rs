@@ -1476,3 +1476,253 @@ fn without_home_the_workspace_is_the_launch_directory() {
     let app = App::new(PathBuf::from("/w"));
     assert_eq!(app.workspace(), PathBuf::from("/w"));
 }
+
+/// Renders home at 80x24 and takes its targets, so keys move among drawn
+/// stops.
+fn drawn(app: &mut App) {
+    let area = ratatui::layout::Rect::new(0, 0, 80, 24);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let targets = crate::view::render(app, area, &mut buf, None);
+    app.drawn(&targets);
+}
+
+/// Two live rows, the first streaming and the second idle.
+fn two_rows(app: &mut App) {
+    linked(app);
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "fix the parser",
+        "/w",
+        "-w",
+        json!({"state": "streaming"}),
+    ));
+    app.on_line(live(
+        "s_bbbbbbbbbbbbbbbb",
+        "tidy docs",
+        "/w",
+        "-w",
+        json!({"state": "idle"}),
+    ));
+}
+
+#[test]
+fn down_in_an_empty_box_focuses_the_first_row() {
+    let mut app = home();
+    two_rows(&mut app);
+    drawn(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(keys(&app)[0])))
+    );
+    // Esc returns focus to the input box, and j focuses the first row
+    // again.
+    assert_eq!(app.on_key(Key::Esc, now), Effect::None);
+    assert_eq!(app.focused(), None);
+    assert_eq!(app.on_key(Key::Char('j'), now), Effect::None);
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(keys(&app)[0])))
+    );
+}
+
+#[test]
+fn down_with_a_draft_moves_in_the_draft() {
+    let mut app = home();
+    two_rows(&mut app);
+    type_text(&mut app, "x");
+    drawn(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(app.focused(), None);
+    assert_eq!(app.input().expand(), "x");
+}
+
+#[test]
+fn down_with_the_search_panel_open_moves_its_selection() {
+    let mut app = home();
+    two_rows(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    let _ = app.on_key(Key::CtrlR, now);
+    assert!(app.completions().is_some());
+    drawn(&mut app);
+    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(app.focused(), None);
+    assert!(app.completions().is_some());
+}
+
+#[test]
+fn down_with_no_rows_does_nothing() {
+    let mut app = home();
+    linked(&mut app);
+    drawn(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(app.focused(), None);
+}
+
+#[test]
+fn down_on_the_conversation_screen_is_unchanged() {
+    let mut app = home();
+    linked(&mut app);
+    app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(app.focused(), None);
+}
+
+#[test]
+fn down_twice_moves_to_the_second_row() {
+    let mut app = home();
+    two_rows(&mut app);
+    drawn(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(keys(&app)[0])))
+    );
+    assert_eq!(app.on_key(Key::Char('j'), now), Effect::None);
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(keys(&app)[1])))
+    );
+}
+
+#[test]
+fn down_on_the_last_drawn_row_focuses_the_next_and_scrolls() {
+    let mut app = home();
+    linked(&mut app);
+    for n in 0..15u8 {
+        let session = format!("s_{n:016x}");
+        app.on_line(live(
+            &session,
+            "fix the parser",
+            "/w",
+            "-w",
+            json!({"state": "idle"}),
+        ));
+    }
+    assert_eq!(keys(&app).len(), 15);
+    drawn(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    // Twelve rows fit under the box: eleven steps reach the last drawn
+    // one, and the next step moves below the fold.
+    for _ in 0..12 {
+        assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    }
+    let shown = keys(&app);
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(shown[11])))
+    );
+    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(shown[12])))
+    );
+    let area = ratatui::layout::Rect::new(0, 0, 80, 24);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let targets = crate::view::render(&app, area, &mut buf, None);
+    let drawn: Vec<u64> = targets
+        .iter()
+        .filter_map(|target| {
+            if let crate::mouse::TargetId::Home(Spot::Entry(key)) = target.id {
+                Some(key)
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(drawn.last(), Some(&shown[12]));
+    assert!(!drawn.contains(&shown[0]));
+}
+
+#[test]
+fn down_on_the_last_row_of_the_list_does_nothing() {
+    let mut app = home();
+    two_rows(&mut app);
+    drawn(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(keys(&app)[1])))
+    );
+    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(keys(&app)[1])))
+    );
+}
+
+#[test]
+fn slash_resume_from_a_session_focuses_the_list_after_the_home_frame() {
+    let mut app = home();
+    linked(&mut app);
+    start_session(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "fix the parser",
+        "/w",
+        "-w",
+        json!({"state": "streaming"}),
+    ));
+    // The conversation frame first, as the loop draws it.
+    drawn(&mut app);
+    assert!(matches!(enter_text(&mut app, "/resume"), Effect::Send(_)));
+    assert!(app.on_home());
+    let area = ratatui::layout::Rect::new(0, 0, 80, 24);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let targets = crate::view::render(&app, area, &mut buf, None);
+    app.drawn(&targets);
+    let row = keys(&app)[0];
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(row)))
+    );
+    let now = fakes::clock::FakeClock::new().now();
+    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+        panic!("Enter opens the focused row");
+    };
+    let lines: Vec<Value> = lines
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
+        .collect();
+    assert_eq!(lines[0]["command"], "subscribe");
+    assert_eq!(lines[0]["session_id"], "s_aaaaaaaaaaaaaaaa");
+}
+
+#[test]
+fn slash_resume_with_no_rows_leaves_the_box_focused() {
+    let mut app = home();
+    linked(&mut app);
+    start_session(&mut app, "s_aaaaaaaaaaaaaaaa");
+    drawn(&mut app);
+    assert_eq!(enter_text(&mut app, "/resume"), Effect::None);
+    assert!(app.on_home());
+    drawn(&mut app);
+    assert_eq!(app.focused(), None);
+}
+
+#[test]
+fn y_on_a_focused_row_copies_its_line() {
+    let mut app = home();
+    linked(&mut app);
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "fix the parser",
+        "/w",
+        "-w",
+        json!({"state": "idle"}),
+    ));
+    drawn(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(
+        app.on_key(Key::Char('y'), now),
+        Effect::Copy("✓  fix the parser".to_owned())
+    );
+}

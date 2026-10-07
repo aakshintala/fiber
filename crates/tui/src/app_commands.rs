@@ -375,6 +375,7 @@ impl App {
         let rest = rest.trim().to_owned();
         let effect = match name {
             "home" | "new" => self.leave(),
+            "resume" => self.resume_list(),
             "handoff" => {
                 let args = (!rest.is_empty()).then(|| json!({ "instructions": rest }));
                 self.send_command("handoff", args)

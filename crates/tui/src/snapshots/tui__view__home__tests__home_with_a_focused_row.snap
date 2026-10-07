@@ -2,19 +2,19 @@
 source: crates/tui/src/home_view_tests.rs
 expression: "screen(&app, 80, 24)"
 ---
-/handoff [instructions]  Starts a handoff.  command
-/name <text>  Names the session.  command
-/reload  Reloads configuration, MCP servers and extensions.  command
-/close  Stops the session on screen.  command1
-/quit  Quits.  command
+
+
+
+                                 ⌇ fiber 0.0.1
+
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-> /
+> /? for shortcuts
 
 
 [w]  enter starts a session
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-
-
+●  fix the parser
+✓  tidy docs
 
 
 

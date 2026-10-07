@@ -249,6 +249,9 @@ impl App {
     /// completion panel, then the input box.
     fn route_key(&mut self, key: Key, now: Instant) -> Effect {
         self.copied = false;
+        if let Some(effect) = self.home_key(&key) {
+            return effect;
+        }
         if key == Key::CtrlC {
             return self.on_ctrl_c(now);
         }

@@ -7,10 +7,13 @@ use std::path::PathBuf;
 use serde_json::{Value, json};
 
 use super::{App, Effect, Link, Phase, mint, session_command};
+use crate::focus::{Area, order};
 use crate::home::{
     HomeScreen, Launch, Left, Level, Sessions, Spot, Subs, from_status, line, opening, recent_rows,
 };
+use crate::keys::Key;
 use crate::link::Line;
+use crate::mouse::{Target, TargetId};
 use contract::SessionId;
 
 /// Home's state: the launch description, and whether a `start` went out in
@@ -38,6 +41,8 @@ pub(super) struct Home {
     opening: Option<Opening>,
     /// Lowering lines reconciliation queued, sent from `on_line`'s tail.
     outbox: Vec<String>,
+    /// `/resume` asks the next frame to focus the list.
+    focus_list: bool,
 }
 
 /// A session opening from home: its subscribes, the last one whose
@@ -72,6 +77,7 @@ impl App {
             subs: Subs::default(),
             opening: None,
             outbox: Vec::new(),
+            focus_list: false,
         });
     }
 
@@ -318,6 +324,77 @@ impl App {
         } else {
             Effect::None
         }
+    }
+
+    /// Opens home at the session list: home, with the next frame
+    /// focusing the list, or the input box when the list is empty.
+    pub(super) fn resume_list(&mut self) -> Effect {
+        let effect = self.leave();
+        if let Some(home) = self.home.as_mut() {
+            home.focus_list = true;
+        }
+        effect
+    }
+
+    /// Focuses the list after `/resume`: the first list stop among the
+    /// new targets, leaving focus in the box when the list is empty.
+    /// True when it ran, so the frame draws again with the focus shown.
+    pub(super) fn home_drawn(&mut self, targets: &[Target]) -> bool {
+        let Some(home) = self.home.as_mut() else {
+            return false;
+        };
+        if !home.focus_list {
+            return false;
+        }
+        home.focus_list = false;
+        self.focus = order(targets, &self.regions, Area::Conversation)
+            .into_iter()
+            .find(|id| matches!(id, TargetId::Home(Spot::Entry(_))));
+        true
+    }
+
+    /// A key for home, ahead of the key map and focus: down in an empty
+    /// box focuses the first row, and down on the last drawn row focuses
+    /// the next one below the fold. `None` for anything else, so the
+    /// focused stops keep moving as they do on the conversation.
+    pub(super) fn home_key(&mut self, key: &Key) -> Option<Effect> {
+        if !self.on_home() || !matches!(key, Key::Down | Key::Char('j')) {
+            return None;
+        }
+        if self.focus.is_none() {
+            if !self.draft.is_empty() || self.completions().is_some() {
+                return None;
+            }
+            let first = order(&self.stops, &self.regions, Area::Conversation)
+                .into_iter()
+                .find(|id| matches!(id, TargetId::Home(Spot::Entry(_))));
+            if let Some(id) = first {
+                self.focus = Some(id);
+                return Some(Effect::None);
+            }
+            return None;
+        }
+        let Some(TargetId::Home(Spot::Entry(focused))) = self.focus else {
+            return None;
+        };
+        let ordered = order(&self.stops, &self.regions, Area::Conversation);
+        let last = ordered
+            .iter()
+            .rev()
+            .find(|id| matches!(id, TargetId::Home(Spot::Entry(_))));
+        if last != Some(&TargetId::Home(Spot::Entry(focused))) {
+            return None;
+        }
+        let next = self.home.as_ref().and_then(|home| {
+            let shown = home.sessions.shown(&home.launch.project, false);
+            let at = shown.iter().position(|row| row.key == focused)?;
+            shown.get(at + 1).map(|row| row.key)
+        });
+        if let Some(key) = next {
+            self.focus = Some(TargetId::Home(Spot::Entry(key)));
+            return Some(Effect::None);
+        }
+        None
     }
 
     /// Clicks `spot` on home: a row opens its session.

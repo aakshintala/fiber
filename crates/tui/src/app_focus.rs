@@ -16,11 +16,13 @@ impl App {
         self.focus
     }
 
-    /// Takes a frame's click targets. When the focused target is not among
-    /// them, focus returns to the input box and this returns true: the
-    /// frame showed a stale focus and is drawn again.
+    /// Takes a frame's click targets. `/resume` focuses the list first;
+    /// then, when the focused target is not among them, focus returns to
+    /// the input box and this returns true: the frame showed a stale
+    /// focus and is drawn again.
     pub(crate) fn drawn(&mut self, targets: &[Target]) -> bool {
         self.stops = targets.to_vec();
+        let resumed = self.home_drawn(targets);
         if self
             .focus
             .is_some_and(|id| !targets.iter().any(|target| target.id == id))
@@ -29,7 +31,7 @@ impl App {
             self.cancel_pending_turn();
             return true;
         }
-        false
+        resumed
     }
 
     /// Sets where the panel and the rail are drawn.
