@@ -160,9 +160,9 @@ fn bounded_returns_or_expires() {
     assert_eq!(bounded(deadline, "a quick answer", || 5), 5);
     clock.advance(Duration::from_secs(40));
     let (_never, blocked) = mpsc::channel::<()>();
-    let expired = std::panic::catch_unwind(move || {
+    let expired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
         bounded(deadline, "a reply nobody sends", move || blocked.recv())
-    })
+    }))
     .unwrap_err();
     let message = expired
         .downcast_ref::<String>()
@@ -206,5 +206,5 @@ fn a_probe_on_a_live_group_is_bounded() {
 fn the_budget_is_half_of_nextests_kill() {
     assert!(WAITS < CLEANUP && CLEANUP < BUDGET);
     assert!(BUDGET * 2 <= Duration::from_secs(120));
-    assert!(BUDGET - CLEANUP >= Duration::from_secs(10));
+    assert!(BUDGET.saturating_sub(CLEANUP) >= Duration::from_secs(10));
 }
