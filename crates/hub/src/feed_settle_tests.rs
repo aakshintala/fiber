@@ -112,6 +112,17 @@ fn await_pause(arrived: &mpsc::Receiver<()>) {
     );
 }
 
+fn await_true(what: &str, done: impl Fn() -> bool + Send + 'static) {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        while !done() {
+            thread::yield_now();
+        }
+        tx.send(()).unwrap_or(());
+    });
+    assert!(rx.recv_timeout(DEADLINE).is_ok(), "waited for {what}");
+}
+
 fn say_idle(session: &FakeSession, id: &str) {
     session.say(&status_line(id, &status("n", "/w", "idle", None)));
 }
@@ -187,19 +198,29 @@ fn a_stop_between_the_first_scan_check_and_wait_releases_a_listing() {
     let (arrived, release) = pause_settle_wait(&feed);
     let rx = listing(&feed);
     await_pause(&arrived);
-    stop_within(&feed);
+    let (done_tx, done_rx) = mpsc::channel();
+    let stopping = Arc::clone(&feed);
+    thread::spawn(move || {
+        stopping.stop();
+        done_tx.send(()).unwrap_or(());
+    });
+    let flag = Arc::clone(&feed);
+    await_true("stop marks the feed", move || lock(&flag.state).stopped);
     release.send(()).unwrap();
     assert_eq!(rx.recv_timeout(DEADLINE).unwrap(), Vec::<String>::new());
+    assert!(done_rx.recv_timeout(DEADLINE).is_ok(), "stop returns");
 }
 
 #[test]
 fn a_scan_finish_between_the_first_scan_check_and_wait_releases_a_listing() {
     let temp = Temp::new();
-    let (feed, clock) = new_feed(&temp);
+    let (feed, _clock) = new_feed(&temp);
     let (arrived, release) = pause_settle_wait(&feed);
     let rx = listing(&feed);
     await_pause(&arrived);
-    start(&feed, &clock);
+    feed.start();
+    let flag = Arc::clone(&feed);
+    await_true("the scan finishes", move || lock(&flag.state).scanned);
     release.send(()).unwrap();
     assert_eq!(rx.recv_timeout(DEADLINE).unwrap(), Vec::<String>::new());
     stop_within(&feed);
@@ -213,7 +234,17 @@ fn a_status_between_the_post_scan_check_and_wait_releases_a_listing() {
     let rx = listing(&feed);
     await_pause(&arrived);
     let line = status_line(&id(1), &status("n", "/w", "idle", None));
-    assert!(feed.on_line(&id(1), line.as_bytes(), None));
+    let feeding = Arc::clone(&feed);
+    thread::spawn(move || {
+        assert!(feeding.on_line(&id(1), line.as_bytes(), None));
+    });
+    let flag = Arc::clone(&feed);
+    await_true("the status lands", move || {
+        matches!(
+            lock(&flag.state).entries.get(&id(1)),
+            Some(Entry::Running(_))
+        )
+    });
     release.send(()).unwrap();
     assert_eq!(rx.recv_timeout(DEADLINE).unwrap(), [id(1)]);
     stop_within(&feed);

@@ -5,6 +5,8 @@
 //! [`RUN_SCAN`] past the scan.
 
 #[cfg(test)]
+use std::sync::MutexGuard;
+#[cfg(test)]
 use std::time::Duration;
 use std::time::Instant;
 
@@ -43,8 +45,6 @@ impl Feed {
     /// statuses.
     pub(crate) fn settled(&self) {
         loop {
-            #[cfg(test)]
-            self.pause_before_wait();
             if self.wait_for(None, |state| state.stopped || state.scanned) {
                 break;
             }
@@ -53,8 +53,6 @@ impl Feed {
             return;
         };
         loop {
-            #[cfg(test)]
-            self.pause_before_wait();
             if self.wait_for(Some(until), |state| {
                 state.stopped || state.awaited.is_empty() || self.clock.now() >= until
             }) {
@@ -69,6 +67,8 @@ impl Feed {
         if done(&lock(&self.state)) {
             return true;
         }
+        #[cfg(test)]
+        self.pause_after_check(&guard);
         let mut slot = Some(guard);
         self.clock.wait_until(until, &mut |bound| {
             let Some(held) = slot.take() else {
@@ -93,7 +93,7 @@ impl Feed {
     }
 
     #[cfg(test)]
-    fn pause_before_wait(&self) {
+    fn pause_after_check(&self, _guard: &MutexGuard<'_, ()>) {
         let Some(pause) = lock(&self.settle_pause).take() else {
             return;
         };
