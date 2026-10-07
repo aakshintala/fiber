@@ -752,6 +752,7 @@ fn poll_raises_a_terminal_error_or_an_unusable_reply() {
         (OauthReply::denied(), "access_denied"),
         (OauthReply::expired(), "expired_token"),
         (OauthReply::raw(200, "not json"), "not a JSON object"),
+        (OauthReply::raw(200, "[1]"), "not a JSON object"),
         (OauthReply::raw(500, "{}"), "status 500"),
     ] {
         let server = device_server(vec![reply]);
@@ -1296,6 +1297,11 @@ fn a_poll_failure_carries_its_code_for_pcall() {
             "unreadable_reply",
             "not a JSON object",
         ),
+        (
+            OauthReply::raw(200, "[1]"),
+            "unreadable_reply",
+            "not a JSON object",
+        ),
         (OauthReply::raw(500, "{}"), "http_error", "status 500"),
     ] {
         let server = device_server(vec![reply]);
@@ -1427,4 +1433,67 @@ fn a_caught_unattended_failure_rethrown_after_another_keeps_authentication_faile
     assert!(error.to_string().contains("host.oauth.open"), "{error}");
     assert!(!error.to_string().contains("host.oauth.poll"), "{error}");
     assert!(server.requests().is_empty());
+}
+
+#[test]
+fn a_caught_unattended_failure_survives_another_callback_while_parked() {
+    // A credential catches an unattended `host.oauth.open` failure, parks
+    // on `host.http`, and rethrows the first table uncaught once a second
+    // callback has started and finished meanwhile: the code stays
+    // `authentication_failed` (see #1124), not `credential_failed`.
+    const INIT: &str = r#"
+fiber.command("ping", { timeout = 60000, run = function() return "pong" end })
+fiber.provider("acme", { credential = { timeout = 60000, run = function()
+  local ok, first = pcall(host.oauth.open, host.secret("url") .. "/verify")
+  assert(not ok)
+  host.http({ url = host.secret("http") })
+  error(first, 0)
+end } })
+"#;
+    let env = Env::new();
+    let dir = env.setup.root().join("extensions").join("interleave");
+    write(&dir.join("init.lua"), INIT);
+    let ext = Arc::new(
+        LuaExtension::new("interleave", dir, env.home(), env.clock.clone())
+            .with_browser(Arc::new(Recording::never())),
+    );
+    // A test HTTP server that holds its response until released.
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let http = format!("http://{}/", listener.local_addr().unwrap());
+    env.secret("url", "https://auth.example");
+    env.secret("http", &http);
+    let (accepted_tx, accepted_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    std::thread::spawn(move || {
+        let mut sock = listener.accept().unwrap().0;
+        sock.set_read_timeout(Some(WAIT)).unwrap();
+        let mut buf = [0; 1];
+        let mut seen = Vec::new();
+        loop {
+            match sock.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => seen.push(buf[0]),
+            }
+            if seen.ends_with(b"\r\n\r\n") {
+                break;
+            }
+        }
+        accepted_tx.send(()).unwrap();
+        match release_rx.recv_timeout(WAIT) {
+            Ok(()) | Err(_) => {}
+        }
+        drop(
+            sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"),
+        );
+    });
+    let provider = LuaProvider::new(Arc::clone(&ext), "acme");
+    let rx = start_token(&provider);
+    accepted_rx
+        .recv_timeout(WAIT)
+        .expect("the credential never reached the held endpoint");
+    assert_eq!(run(&ext, "ping", "").unwrap(), "pong");
+    release_tx.send(()).unwrap();
+    let error = finish(&rx).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::AuthenticationFailed, "{error}");
+    assert!(error.to_string().contains("host.oauth.open"), "{error}");
 }

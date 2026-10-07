@@ -215,7 +215,9 @@ function oauth.poll(opts)
     need_person("poll")
     local reply = host.http(request)
     local ok, body = pcall(json.decode, reply.body)
-    if not ok or type(body) ~= "table" then
+    -- A JSON array decodes to a Lua table too: only a `{` after any
+    -- space opens the object ruling 17 requires.
+    if not ok or type(body) ~= "table" or reply.body:match("^%s*(.)") ~= "{" then
       error(failure("unreadable_reply", "host.oauth.poll: status " .. reply.status .. " with a body that is not a JSON object"), 0)
     end
     local code = body.error

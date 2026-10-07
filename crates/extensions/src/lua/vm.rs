@@ -162,7 +162,6 @@ impl Vm {
         timeout: Duration,
         deadline: Option<Instant>,
     ) -> Result<Step, Error> {
-        self.failures.clear();
         let fail = |e: mlua::Error| self.error(&e);
         let run = match target {
             Target::Timer { id } => self

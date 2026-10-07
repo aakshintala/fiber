@@ -38,11 +38,6 @@ const MAX_PENDING: usize = 32;
 pub(crate) struct FailureState(Arc<Mutex<Vec<PendingFailure>>>);
 
 impl FailureState {
-    /// Discard errors caught by Lua before the next callback starts.
-    pub(crate) fn clear(&self) {
-        lock(&self.0).clear();
-    }
-
     /// Take the pending failure when `error` is it escaping the callback.
     ///
     /// mlua hands an uncaught error value over as its `tostring`, which for a
@@ -119,7 +114,8 @@ pub(crate) struct FailureLib {
     pub(crate) note_failure: Function,
     /// Lets mlua re-raise a Rust panic instead of exposing it as a Lua error.
     pub(crate) rethrow_panic: Function,
-    /// State read by `Vm::error` and cleared at callback start.
+    /// State read by `Vm::error`; records stay across callbacks so a
+    /// suspended callback's caught failure still classifies its rethrow.
     pub(crate) state: FailureState,
 }
 

@@ -91,15 +91,23 @@ fn an_escaping_failure_is_matched_through_mlua_s_traceback() {
                 .is_none()
         );
     }
-    // A failure with no boundary records nothing.
-    lib.state.clear();
-    lua.load(format!(
-        "error(failure('authentication_failed', '{message}'), 0)"
-    ))
-    .exec()
-    .unwrap_err();
+    // A failure with no boundary records nothing: a fresh state, since
+    // the run above leaves its own record behind.
+    let clean = Lua::new();
+    let clean_lib = install(&clean).unwrap();
+    clean
+        .globals()
+        .set("failure", clean_lib.failure.clone())
+        .unwrap();
+    clean
+        .load(format!(
+            "error(failure('authentication_failed', '{message}'), 0)"
+        ))
+        .exec()
+        .unwrap_err();
     assert!(
-        lib.state
+        clean_lib
+            .state
             .take_matching(&mlua::Error::RuntimeError(message.to_owned()))
             .is_none()
     );
@@ -385,14 +393,19 @@ fn the_list_keeps_the_cap_and_drops_the_oldest() {
             .take_matching(&mlua::Error::RuntimeError("text-0".to_owned()))
             .is_some()
     );
-    lib.state.clear();
+    // A fresh state for the eviction phase: the run above leaves the rest
+    // of its records behind.
+    let clean = Lua::new();
+    let clean_lib = install(&clean).unwrap();
     for i in 0..super::MAX_PENDING {
-        lib.note_failure
+        clean_lib
+            .note_failure
             .call::<()>((format!("text-{i}"), "m", "refresh:reached"))
             .unwrap();
     }
     // One past the cap evicts the oldest.
-    lib.note_failure
+    clean_lib
+        .note_failure
         .call::<()>((
             format!("text-{}", super::MAX_PENDING),
             "m",
@@ -400,18 +413,21 @@ fn the_list_keeps_the_cap_and_drops_the_oldest() {
         ))
         .unwrap();
     assert!(
-        lib.state
+        clean_lib
+            .state
             .take_matching(&mlua::Error::RuntimeError("text-0".to_owned()))
             .is_none(),
         "the oldest record past the cap is dropped"
     );
     assert!(
-        lib.state
+        clean_lib
+            .state
             .take_matching(&mlua::Error::RuntimeError("text-1".to_owned()))
             .is_some()
     );
     assert!(
-        lib.state
+        clean_lib
+            .state
             .take_matching(&mlua::Error::RuntimeError(format!(
                 "text-{}",
                 super::MAX_PENDING
