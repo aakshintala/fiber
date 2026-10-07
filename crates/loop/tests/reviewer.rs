@@ -668,12 +668,62 @@ fn with_no_reviewer_every_reviewed_call_goes_to_a_person_with_one_notice() {
     for line in &resolved {
         assert_eq!(line.payload["decision"], "deny");
         assert_eq!(line.payload["decided_by"], "reviewer");
+        assert_eq!(line.payload.get("reviewer"), None);
+        assert_eq!(
+            line.payload["reason"],
+            "No reviewer model is set, so every reviewed call goes to a person. Set reviewer.model."
+        );
     }
     for done in completed(&lines) {
         assert_eq!(done.payload["status"], "denied");
         assert_eq!(done.payload["reason"], "reviewer");
     }
     assert!(!kinds(&lines).contains(&"tool_call_started"));
+    assert!(tool.ran().is_empty());
+}
+
+/// A reviewer that could not be set up denies with no `reviewer` object:
+/// no reviewer request was sent, so no model reference or stage exists to
+/// write, whatever the failure's code.
+#[test]
+fn a_reviewer_that_could_not_be_set_up_denies_with_no_reviewer_object() {
+    let tool = shell(None, None);
+    let mut session = Session::with_tools(
+        vec![
+            calls_reply("", &[("shell", paris())]),
+            Scripted::text("Done."),
+        ],
+        None,
+        vec![tool.clone() as Arc<dyn Tool>],
+    )
+    .answerable(false);
+    session.looped = session.looped.take().map(|l| {
+        l.reviewer(
+            Err(Failure {
+                code: ErrorCode::CredentialMissing,
+                message: "No key for the reviewer's provider.".into(),
+                retry_after_ms: None,
+                provider: None,
+            }),
+            r#loop::BlockLimits::default(),
+        )
+    });
+    let lines = go(&mut session);
+    // No `notice`: the notice is for `no_model` only.
+    assert_eq!(
+        kinds(&lines),
+        kinds_with(&["permission_resolved", "tool_call_completed"], 0)
+    );
+    let resolved = line(&lines, "permission_resolved");
+    assert_eq!(resolved.payload["decision"], "deny");
+    assert_eq!(resolved.payload["decided_by"], "reviewer");
+    assert_eq!(
+        resolved.payload["reason"],
+        "No key for the reviewer's provider."
+    );
+    assert_eq!(resolved.payload.get("reviewer"), None);
+    let done = completed(&lines)[0];
+    assert_eq!(done.payload["status"], "denied");
     assert!(tool.ran().is_empty());
 }
 
@@ -1197,6 +1247,11 @@ fn headless_failures_count_toward_the_block_budget() {
         assert_eq!(line.payload["decision"], "deny");
         assert_eq!(line.payload["decided_by"], "reviewer");
         assert_eq!(line.payload["reason"], "the reviewer timed out");
+        assert_eq!(
+            line.payload["reviewer"],
+            json!({"model": REVIEWER_MODEL, "stage": 1})
+        );
+        assert_eq!(line.payload.get("request_id"), None);
     }
     let end = line(&lines, "turn_completed");
     assert_eq!(end.payload["outcome"], "failed");
@@ -1205,6 +1260,52 @@ fn headless_failures_count_toward_the_block_budget() {
         end.payload["error"]["message"],
         "The reviewer blocked 2 calls and no person can answer."
     );
+    assert_eq!(reviewer.requests().len(), 2);
+    assert!(tool.ran().is_empty());
+}
+
+/// A headless stage-2 failure denies naming the reviewer at stage 2: the
+/// `check` reply sent one reviewer request, and the failed reasoning
+/// request decided nothing, so the denial carries the failed stage.
+#[test]
+fn a_headless_stage_2_failure_denies_naming_the_reviewer_at_stage_2() {
+    let tool = shell(None, None);
+    let mut session = Session::with_tools(
+        vec![
+            calls_reply("", &[("shell", paris())]),
+            Scripted::text("Done."),
+        ],
+        None,
+        vec![tool.clone() as Arc<dyn Tool>],
+    )
+    .answerable(false);
+    let reviewer = session.reviewer(vec![
+        Scripted::text("check"),
+        Scripted::failed(Failure {
+            code: ErrorCode::Timeout,
+            message: "the reviewer timed out".into(),
+            retry_after_ms: None,
+            provider: None,
+        }),
+    ]);
+    let lines = go(&mut session);
+    // One usage line, for the `check` reply; the failed call writes none.
+    assert_eq!(
+        kinds(&lines),
+        kinds_with(&["permission_resolved", "tool_call_completed"], 1)
+    );
+    let resolved = line(&lines, "permission_resolved");
+    assert_eq!(resolved.payload["decision"], "deny");
+    assert_eq!(resolved.payload["decided_by"], "reviewer");
+    assert_eq!(resolved.payload["reason"], "the reviewer timed out");
+    assert_eq!(
+        resolved.payload["reviewer"],
+        json!({"model": REVIEWER_MODEL, "stage": 2})
+    );
+    assert_eq!(resolved.payload.get("request_id"), None);
+    let done = completed(&lines)[0];
+    assert_eq!(done.payload["status"], "denied");
+    assert_eq!(done.payload["reason"], "reviewer");
     assert_eq!(reviewer.requests().len(), 2);
     assert!(tool.ran().is_empty());
 }
@@ -1269,7 +1370,8 @@ fn a_review_at_the_spending_budget_denies_without_sending() {
         .collect();
     assert_eq!(resolved[0].payload["decision"], "allow");
     assert_eq!(resolved[1].payload["decision"], "deny");
-    assert_eq!(resolved[1].payload["decided_by"], "reviewer");
+    assert_eq!(resolved[1].payload["decided_by"], "budget");
+    assert_eq!(resolved[1].payload.get("reviewer"), None);
     assert_eq!(
         resolved[1].payload["reason"],
         "The session reached its spending budget."
@@ -1499,6 +1601,111 @@ fn close_taken_during_an_escalation_leaves_later_calls_unanswerable() {
         assert_eq!(done.payload["reason"], "reviewer");
     }
     assert_eq!(reviewer.requests().len(), 4);
+    assert!(tool.ran().is_empty());
+}
+
+/// `close` taken while a failed review's escalation waits denies with the
+/// failed stage named: the closed request carries it, and the later call,
+/// denied with no request raised, carries it too.
+#[test]
+fn close_taken_during_a_failed_review_names_the_failed_stage() {
+    let tool = shell(None, None);
+    let mut session = Session::with_tools(
+        vec![
+            calls_reply("", &[("shell", paris()), ("shell", paris())]),
+            Scripted::text("Done."),
+        ],
+        None,
+        vec![tool.clone() as Arc<dyn Tool>],
+    );
+    let failed = || {
+        Scripted::failed(Failure {
+            code: ErrorCode::Timeout,
+            message: "the reviewer timed out".into(),
+            retry_after_ms: None,
+            provider: None,
+        })
+    };
+    let reviewer = session.reviewer(vec![failed(), failed()]);
+    let closer = on_request(&session, {
+        let inbox = session.inbox.clone();
+        move |_| {
+            inbox.send(Delivery::Close(ignore())).unwrap();
+        }
+    });
+    session.inbox.send(delivery("go")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    let lines = session.lines();
+    closer.join().unwrap();
+    // One `permission_requested`, then two `permission_resolved`, with no
+    // reviewer `usage_recorded`: failed reviewer calls write no usage.
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "permission_requested",
+            "permission_resolved",
+            "permission_resolved",
+            "tool_call_completed",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    let requested: Vec<&Envelope> = lines
+        .iter()
+        .filter(|l| l.kind == "permission_requested")
+        .collect();
+    assert_eq!(requested.len(), 1);
+    assert_eq!(
+        requested[0].payload["escalation"],
+        json!({
+            "cause": "reviewer_failed",
+            "error": {"code": "timeout", "message": "the reviewer timed out"},
+        })
+    );
+    let resolved: Vec<&Envelope> = lines
+        .iter()
+        .filter(|l| l.kind == "permission_resolved")
+        .collect();
+    assert_eq!(resolved.len(), 2);
+    assert_eq!(
+        resolved[0].payload["request_id"],
+        requested[0].payload["request_id"]
+    );
+    assert_eq!(resolved[0].payload["decided_by"], "reviewer");
+    assert_eq!(
+        resolved[0].payload["reviewer"],
+        json!({"model": REVIEWER_MODEL, "stage": 1})
+    );
+    assert_eq!(resolved[1].payload.get("request_id"), None);
+    assert_eq!(
+        resolved[1].payload["reviewer"],
+        json!({"model": REVIEWER_MODEL, "stage": 1})
+    );
+    for done in completed(&lines) {
+        assert_eq!(done.payload["status"], "denied");
+        assert_eq!(done.payload["reason"], "reviewer");
+    }
+    assert_eq!(reviewer.requests().len(), 2);
     assert!(tool.ran().is_empty());
 }
 

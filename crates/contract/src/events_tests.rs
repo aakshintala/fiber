@@ -402,6 +402,11 @@ fn samples() -> Vec<(&'static str, Value)> {
             "reviewer": {"model": "p/m", "stage": 2}}),
         ),
         (
+            "permission_resolved",
+            json!({"decision": "deny", "decided_by": "budget",
+            "reason": "The session reached its spending budget."}),
+        ),
+        (
             "interaction_requested",
             json!({"request_id": "r", "kind": "multi_select",
             "action_ids": ["a"], "extension": "e", "prompt": "p",

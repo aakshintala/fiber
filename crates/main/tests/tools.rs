@@ -66,7 +66,12 @@ impl Setup {
     /// Installs a provider `fake` with model `m` on `openai-responses` at the
     /// fake server, and makes `fake/m` the configured model.
     fn provider(&self, server: &ProviderServer) {
-        self.provider_on(server, "openai-responses");
+        self.provider_on_cost(server, "openai-responses", None);
+    }
+
+    /// [`Setup::provider`] with `cost` as model `m`'s declared prices.
+    fn provider_priced(&self, server: &ProviderServer, cost: Value) {
+        self.provider_on_cost(server, "openai-responses", Some(cost));
     }
 
     /// [`Setup::provider`] on `protocol`.
@@ -77,6 +82,18 @@ impl Setup {
     /// [`Setup::provider_on`], with `input` as the model's declared input
     /// kinds, or none when it declares none.
     fn provider_on_input(&self, server: &ProviderServer, protocol: &str, input: Option<Vec<&str>>) {
+        self.provider_on_cost_input(server, protocol, None, input);
+    }
+
+    /// [`Setup::provider_on_input`], with `cost` as the model's declared
+    /// prices, or none when it declares none.
+    fn provider_on_cost(&self, server: &ProviderServer, protocol: &str, cost: Option<Value>) {
+        self.provider_on_cost_input(server, protocol, cost, Some(vec!["text", "image"]));
+    }
+
+    /// The shared body behind [`Setup::provider`] and
+    /// [`Setup::provider_priced`]: `cost` is written only when present.
+    fn provider_on_cost_input(&self, server: &ProviderServer, protocol: &str, cost: Option<Value>, input: Option<Vec<&str>>) {
         let source = self.root.path().join("src");
         write(
             &source.join("extension.json"),
@@ -86,6 +103,9 @@ impl Setup {
             "base_url": format!("{}/v1", server.url()), "context_window": 100000});
         if let Some(input) = input {
             model["input"] = json!(input);
+        }
+        if let Some(cost) = cost {
+            model["cost"] = cost;
         }
         write(
             &source.join("providers/fake.json"),
@@ -1973,6 +1993,210 @@ fn a_lua_write_in_a_data_directory_is_reviewed_and_blocked() {
     let run = setup.run(&["ask", "save the snippet"]);
 
     assert_blocked_by_reviewer(&run, &server);
+    assert!(!setup.home().join("data/notes/x.lua").exists());
+}
+
+#[test]
+fn a_reviewed_call_at_the_spending_budget_is_denied_by_the_budget() {
+    let setup = Setup::new();
+    let lua = setup.home().join("data/notes/x.lua").display().to_string();
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "write_lua",
+            "write",
+            &json!({"path": lua, "content": "return {}\n"}),
+        )]),
+        hello(),
+    ])
+    .unwrap();
+    // The first reply's 3 output tokens alone cost $0.003, so the reviewed
+    // call is denied at the budget before any reviewer request is sent.
+    setup.provider_priced(&server, json!({"input": 1000.0, "output": 1000.0}));
+    write(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "reviewer": {"model": "fake/m"}, "budget": {"usd": 0.001}}),
+    );
+
+    let run = setup.run(&["ask", "save the snippet"]);
+
+    assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "permission_resolved",
+            "tool_call_completed",
+            "step_started",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
+    assert!(
+        !run.lines
+            .iter()
+            .any(|line| line["kind"] == "permission_requested")
+    );
+    let requested = run
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "tool_call_requested")
+        .unwrap();
+    let action = &requested["action_id"];
+    let resolved = run
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "permission_resolved")
+        .unwrap();
+    assert_eq!(&resolved["action_id"], action);
+    assert_eq!(resolved["payload"]["decision"], "deny");
+    assert_eq!(resolved["payload"]["decided_by"], "budget");
+    assert_eq!(
+        resolved["payload"]["reason"],
+        "The session reached its spending budget."
+    );
+    assert!(resolved["payload"].get("reviewer").is_none());
+    assert!(resolved["payload"].get("request_id").is_none());
+    let done = run
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "tool_call_completed")
+        .unwrap();
+    assert_eq!(&done["action_id"], action);
+    assert_eq!(done["payload"]["status"], "denied");
+    assert_eq!(done["payload"]["reason"], "budget_exceeded");
+    let end = run
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "turn_completed")
+        .unwrap();
+    assert_eq!(end["payload"]["outcome"], "failed");
+    assert_eq!(end["payload"]["error"]["code"], "budget_exceeded");
+    // No reviewer request was sent: the only request is the session's own
+    // first reply.
+    assert_eq!(server.requests().len(), 1);
+    assert!(!setup.home().join("data/notes/x.lua").exists());
+}
+
+#[test]
+fn a_failed_reviewer_at_stage_1_denies_naming_the_reviewer() {
+    let setup = Setup::new();
+    let lua = setup.home().join("data/notes/x.lua").display().to_string();
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "write_lua",
+            "write",
+            &json!({"path": lua, "content": "return {}\n"}),
+        )]),
+        Response::status(400, "{}"),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    with_reviewer(&setup);
+
+    let run = setup.run(&["ask", "save the snippet"]);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert!(
+        !run.lines
+            .iter()
+            .any(|line| line["kind"] == "permission_requested")
+    );
+    let requested = run
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "tool_call_requested")
+        .unwrap();
+    let action = &requested["action_id"];
+    let resolved = run
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "permission_resolved")
+        .unwrap();
+    assert_eq!(&resolved["action_id"], action);
+    assert_eq!(resolved["payload"]["decision"], "deny");
+    assert_eq!(resolved["payload"]["decided_by"], "reviewer");
+    assert_eq!(
+        resolved["payload"]["reviewer"],
+        json!({"model": "fake/m", "stage": 1})
+    );
+    assert!(resolved["payload"].get("request_id").is_none());
+    let done = run
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "tool_call_completed")
+        .unwrap();
+    assert_eq!(&done["action_id"], action);
+    assert_eq!(done["payload"]["status"], "denied");
+    assert_eq!(done["payload"]["reason"], "reviewer");
+    assert_eq!(server.requests().len(), 3);
+    assert!(!setup.home().join("data/notes/x.lua").exists());
+}
+
+#[test]
+fn a_failed_reviewer_at_stage_2_denies_naming_the_reviewer() {
+    let setup = Setup::new();
+    let lua = setup.home().join("data/notes/x.lua").display().to_string();
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "write_lua",
+            "write",
+            &json!({"path": lua, "content": "return {}\n"}),
+        )]),
+        text_reply("check"),
+        Response::status(400, "{}"),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    with_reviewer(&setup);
+
+    let run = setup.run(&["ask", "save the snippet"]);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert!(
+        !run.lines
+            .iter()
+            .any(|line| line["kind"] == "permission_requested")
+    );
+    let requested = run
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "tool_call_requested")
+        .unwrap();
+    let action = &requested["action_id"];
+    let resolved = run
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "permission_resolved")
+        .unwrap();
+    assert_eq!(&resolved["action_id"], action);
+    assert_eq!(resolved["payload"]["decision"], "deny");
+    assert_eq!(resolved["payload"]["decided_by"], "reviewer");
+    assert_eq!(
+        resolved["payload"]["reviewer"],
+        json!({"model": "fake/m", "stage": 2})
+    );
+    assert!(resolved["payload"].get("request_id").is_none());
+    let done = run
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "tool_call_completed")
+        .unwrap();
+    assert_eq!(&done["action_id"], action);
+    assert_eq!(done["payload"]["status"], "denied");
+    assert_eq!(done["payload"]["reason"], "reviewer");
+    assert_eq!(server.requests().len(), 4);
     assert!(!setup.home().join("data/notes/x.lua").exists());
 }
 
