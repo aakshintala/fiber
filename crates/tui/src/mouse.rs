@@ -18,6 +18,16 @@ pub(crate) enum TargetId {
     /// The paste token with this number in the input box: opens its text
     /// in the editor.
     Token(usize),
+    /// A queued steering row, by its index: selects it.
+    Steering(usize),
+    /// A queued steering row's ✕, by its index: drops it.
+    DropSteering(usize),
+    /// A notice's box, by its id: shows its whole text.
+    Notice(usize),
+    /// A notice's ✕, by its id: dismisses it.
+    DismissNotice(usize),
+    /// "+N more" under the notices: lists them all.
+    MoreNotices,
 }
 
 /// One click target as drawn: what it does and the cells it covers.

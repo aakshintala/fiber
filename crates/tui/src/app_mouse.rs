@@ -8,9 +8,10 @@ use crate::mouse::TargetId;
 impl App {
     /// Handles a click on `target` (`docs/tui.md`, "Bindings"): the badge
     /// reopens the approval queue, "↓ New messages below" jumps to the end,
-    /// a conversation line opens or closes what it names, a paste token
-    /// opens in the editor as Ctrl+G on it does. A recall waiting for a
-    /// page waits no more.
+    /// a conversation line opens or closes what it names, a steering row is
+    /// selected, its ✕ drops it, a notice opens whole, its ✕ dismisses it,
+    /// "+N more" lists the notices, and a paste token opens in the editor
+    /// as Ctrl+G on it does. A recall waiting for a page waits no more.
     pub(crate) fn on_click(&mut self, target: TargetId) -> Effect {
         self.history.cancel();
         let effect = match target {
@@ -20,7 +21,24 @@ impl App {
                 Effect::None
             }
             TargetId::NewBelow => {
-                self.follow();
+                self.scroll.follow();
+                Effect::None
+            }
+            TargetId::Steering(at) => {
+                self.select_steering(at);
+                Effect::None
+            }
+            TargetId::DropSteering(at) => self.drop_steering(at),
+            TargetId::Notice(id) => {
+                self.open_notice(id);
+                Effect::None
+            }
+            TargetId::DismissNotice(id) => {
+                self.dismiss_notice(id);
+                Effect::None
+            }
+            TargetId::MoreNotices => {
+                self.open_more_notices();
                 Effect::None
             }
             TargetId::Token(number) => self.open_token(number),

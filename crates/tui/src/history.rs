@@ -22,13 +22,16 @@ const SEARCH: &str = "search prompts: ";
 /// What the search panel shows when nothing matches.
 const NO_MATCH: &str = "no matching prompts";
 
-/// What covers the input box: the approval panel, the key map, and a
-/// completion or search panel.
+/// What covers the input box or stands in for its draft: the approval
+/// panel, the key map, a completion or search panel, the notice overlay,
+/// and a selected steering row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Cover {
     approval: bool,
     keymap: bool,
     completions: bool,
+    notices: bool,
+    steering: bool,
 }
 
 /// The Ctrl+R panel's state.
@@ -234,7 +237,10 @@ impl App {
             | Key::BackTab
             | Key::F1
             | Key::CtrlG
-            | Key::CtrlR => return None,
+            | Key::CtrlR
+            | Key::AltUp
+            | Key::AltDown
+            | Key::AltX => return None,
         };
         Some(effect)
     }
@@ -272,7 +278,9 @@ impl App {
                 self.history.search = None;
             }
             Key::Esc => self.history.search = None,
-            Key::Tab | Key::BackTab | Key::CtrlG => {}
+            // Keys that would change the draft behind the panel do
+            // nothing while it is open.
+            Key::Tab | Key::BackTab | Key::CtrlG | Key::AltUp | Key::AltDown | Key::AltX => {}
             Key::CtrlC
             | Key::CtrlO
             | Key::PageUp
@@ -422,6 +430,8 @@ impl App {
             approval: self.panel().is_some(),
             keymap: self.keymap_top().is_some(),
             completions: self.completions().is_some(),
+            notices: self.notice_overlay().is_some(),
+            steering: self.steering.is_selected(),
         }
     }
 
@@ -452,7 +462,7 @@ impl App {
         self.history.pending = None;
         self.history.ended = true;
         self.history.cancel();
-        self.notice = Some(message.to_owned());
+        self.notices.push(message.to_owned());
         true
     }
 }

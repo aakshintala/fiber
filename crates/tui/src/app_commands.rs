@@ -117,6 +117,9 @@ impl App {
             | Key::PageDown
             | Key::End
             | Key::AltA
+            | Key::AltUp
+            | Key::AltDown
+            | Key::AltX
             | Key::Tab
             | Key::BackTab
             | Key::F1
@@ -333,6 +336,9 @@ impl App {
             | Key::PageDown
             | Key::End
             | Key::AltA
+            | Key::AltUp
+            | Key::AltDown
+            | Key::AltX
             | Key::BackTab
             | Key::F1
             | Key::CtrlO
@@ -362,6 +368,7 @@ impl App {
                 let args = (!rest.is_empty()).then(|| json!({ "instructions": rest }));
                 self.send_command("handoff", args)
             }
+            "name" => self.send_command("name", Some(json!({ "text": rest }))),
             "reload" => self.send_command("reload", None),
             "close" => self.close(),
             "quit" => Effect::Quit,
@@ -390,7 +397,7 @@ impl App {
         self.phase = Phase::Starting;
         self.turns.clear();
         self.overlays.slash_rows = slash::rows(&[]);
-        self.follow();
+        self.scroll.follow();
     }
 
     /// The attached session, when the command can go out: with none
@@ -398,7 +405,7 @@ impl App {
     /// draft stays.
     fn command_session(&mut self) -> Option<(contract::SessionId, bool)> {
         let Phase::Attached { session, busy } = &self.phase else {
-            self.notice = Some(NO_SESSION.to_owned());
+            self.notices.push(NO_SESSION.to_owned());
             self.draft.clear();
             return None;
         };
@@ -472,6 +479,9 @@ impl App {
             | Key::CtrlC
             | Key::End
             | Key::AltA
+            | Key::AltUp
+            | Key::AltDown
+            | Key::AltX
             | Key::Tab
             | Key::BackTab
             | Key::F1
@@ -495,11 +505,14 @@ impl App {
         if text.trim().is_empty() || self.link == Link::Down {
             return Effect::None;
         }
+        if self.steering.is_selected() {
+            return self.amend();
+        }
         let id = mint();
         let content = json!([{"type": "text", "text": text}]);
         let (kind, line) = match (&self.phase, shell::parse(&text)) {
             (Phase::Starting | Phase::Pending { .. }, Some(_)) => {
-                self.notice = Some("Start a session first.".to_owned());
+                self.notices.push("Start a session first.".to_owned());
                 return Effect::None;
             }
             (Phase::Pending { .. }, None) => return Effect::None,
@@ -588,7 +601,7 @@ impl App {
     /// draft stays.
     pub(crate) fn editor_returned(&mut self, target: Target, result: Result<String, String>) {
         match (result, target) {
-            (Err(notice), _) => self.notice = Some(notice),
+            (Err(notice), _) => self.notices.push(notice),
             (Ok(text), Target::Token(number)) => self.draft.set_token(number, &text),
             (Ok(text), Target::Draft) => self.draft.set(&text),
         }

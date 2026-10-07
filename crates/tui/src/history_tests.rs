@@ -757,3 +757,54 @@ fn a_recalled_slash_entry_keeps_its_panel_and_its_wait() {
     answer(&mut app, &request, &[line(S_B, "late")], None);
     assert_eq!(app.draft(), "late");
 }
+
+#[test]
+fn a_page_after_a_steering_row_is_selected_leaves_the_draft() {
+    let (mut app, request) = waiting();
+    app.on_line(from_a(
+        "steering_queue",
+        json!({"messages": [{"content": [{"type": "text", "text": "use the parser"}],
+            "source": "driver", "command_id": "c_1"}]}),
+    ));
+    // Selected without a key, as the click layer does: what stands in for
+    // the draft changed, so the page shows nothing.
+    app.select_steering(0);
+    let draft = app.draft();
+    answer(&mut app, &request, &[line(S_B, "late")], None);
+    assert_eq!(app.draft(), draft);
+    // ⌥↑ is a key: it ends the wait too.
+    let (mut app, request) = waiting();
+    press(&mut app, Key::AltUp);
+    answer(&mut app, &request, &[line(S_B, "late")], None);
+    assert_eq!(app.draft(), "x");
+}
+
+#[test]
+fn a_page_while_the_notice_overlay_is_open_leaves_the_draft() {
+    let (mut app, request) = waiting();
+    app.on_line(from_a(
+        "notice",
+        json!({"code": "extension_failed", "message": "Notice."}),
+    ));
+    app.open_more_notices();
+    assert!(app.notice_overlay().is_some());
+    answer(&mut app, &request, &[line(S_B, "late")], None);
+    assert_eq!(app.draft(), "x");
+}
+
+#[test]
+fn the_steering_keys_do_nothing_while_the_search_panel_is_open() {
+    let mut app = connected();
+    with_own(&mut app, &["x"]);
+    app.on_line(from_a(
+        "steering_queue",
+        json!({"messages": [{"content": [{"type": "text", "text": "use the parser"}],
+            "source": "driver", "command_id": "c_1"}]}),
+    ));
+    press(&mut app, Key::CtrlR);
+    for key in [Key::AltUp, Key::AltDown, Key::AltX] {
+        assert_eq!(press(&mut app, key), Effect::None);
+    }
+    assert_eq!(app.draft(), "");
+    assert!(app.completions().is_some());
+}
