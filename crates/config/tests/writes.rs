@@ -9,7 +9,10 @@ use std::sync::Arc;
 use std::thread;
 
 use common::{PROJECT, Setup, key};
-use config::{Layer, Scope, remove_extension_settings, set, set_global, set_global_if_unset};
+use config::{
+    Layer, Scope, get_global, remove_extension_settings, replace_global, set, set_global,
+    set_global_if_unset,
+};
 use contract::ErrorCode;
 use serde_json::json;
 
@@ -594,12 +597,15 @@ fn set_of_an_unknown_key_is_refused_and_writes_nothing() {
             &setup.workspace(),
             &key(),
             layer,
-            "hub.port",
+            "hub.nonexistent",
             json!(8080),
         )
         .unwrap_err();
         assert_eq!(e.code(), ErrorCode::Usage, "{layer:?}");
-        assert!(e.to_string().contains("`hub.port`"), "{layer:?}: {e}");
+        assert!(
+            e.to_string().contains("`hub.nonexistent`"),
+            "{layer:?}: {e}"
+        );
         assert!(
             e.to_string().contains("this Fiber does not know it"),
             "{layer:?}: {e}"
@@ -724,5 +730,80 @@ fn set_of_a_warm_cap_of_twelve_is_config_invalid_and_eleven_is_written() {
     assert_eq!(
         written,
         json!({"cache": {"warm_cap": 11, "warm_idle": true}})
+    );
+}
+
+#[test]
+fn replace_global_returns_the_value_it_replaced() {
+    let setup = Setup::new();
+    assert_eq!(
+        replace_global(&setup.home(), "hub.port", Some(json!(4040))).unwrap(),
+        None
+    );
+    assert_eq!(
+        replace_global(&setup.home(), "hub.port", Some(json!(5050))).unwrap(),
+        Some(json!(4040))
+    );
+    assert_eq!(
+        fs::read_to_string(setup.global()).unwrap(),
+        "{\n  \"hub\": {\n    \"port\": 5050\n  }\n}\n"
+    );
+}
+
+#[test]
+fn replace_global_with_none_removes_the_key_and_keeps_the_rest() {
+    let setup = Setup::new();
+    setup.write(
+        &setup.global(),
+        r#"{"model": "a/b", "hub": {"port": 4040, "idle_exit_ms": 5}}"#,
+    );
+    assert_eq!(
+        replace_global(&setup.home(), "hub.port", None).unwrap(),
+        Some(json!(4040))
+    );
+    assert_eq!(
+        fs::read_to_string(setup.global()).unwrap(),
+        "{\n  \"hub\": {\n    \"idle_exit_ms\": 5\n  },\n  \"model\": \"a/b\"\n}\n"
+    );
+}
+
+#[test]
+fn replace_global_removing_an_absent_key_writes_nothing() {
+    let setup = Setup::new();
+    assert_eq!(
+        replace_global(&setup.home(), "hub.port", None).unwrap(),
+        None
+    );
+    assert!(!setup.global().exists(), "no file was created");
+    let text = r#"{"model": "a/b", "hub": {"idle_exit_ms": 5}}"#;
+    setup.write(&setup.global(), text);
+    assert_eq!(
+        replace_global(&setup.home(), "hub.port", None).unwrap(),
+        None
+    );
+    assert_eq!(fs::read_to_string(setup.global()).unwrap(), text);
+}
+
+#[test]
+fn replace_global_of_the_wrong_type_is_refused_and_writes_nothing() {
+    let setup = Setup::new();
+    for value in [json!("x"), json!(65536), json!(-1)] {
+        let e = replace_global(&setup.home(), "hub.port", Some(value.clone())).unwrap_err();
+        assert_eq!(e.code(), ErrorCode::ConfigInvalid, "{value}: {e}");
+        assert!(!setup.global().exists(), "{value}");
+    }
+}
+
+#[test]
+fn get_global_reads_only_fiber_homes_file() {
+    let setup = Setup::new();
+    assert_eq!(get_global(&setup.home(), "hub.port").unwrap(), None);
+    setup.write(&setup.project(), r#"{"hub": {"port": 5050}}"#);
+    setup.write(&setup.global(), r#"{"model": "a/b"}"#);
+    assert_eq!(get_global(&setup.home(), "hub.port").unwrap(), None);
+    setup.write(&setup.global(), r#"{"hub": {"port": 4040}}"#);
+    assert_eq!(
+        get_global(&setup.home(), "hub.port").unwrap(),
+        Some(json!(4040))
     );
 }

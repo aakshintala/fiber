@@ -63,6 +63,17 @@ pub(crate) fn set(root: &mut Value, path: &[String], value: Value) {
     }
 }
 
+/// Removes the value at `path` and returns it, leaving every other key,
+/// the emptied objects on the way included. `None` when nothing is there.
+pub(crate) fn remove(root: &mut Value, path: &[String]) -> Option<Value> {
+    let (last, parents) = path.split_last()?;
+    let mut value = root;
+    for name in parents {
+        value = value.get_mut(name)?;
+    }
+    value.as_object_mut()?.remove(last)
+}
+
 /// Lays `upper` over `lower`: objects merge key by key, any other value,
 /// a list included, replaces the one below it.
 pub(crate) fn merge(lower: &mut Value, upper: &Value) {
