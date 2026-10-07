@@ -18,6 +18,7 @@ mod rerun;
 mod scripted_provider;
 mod temp_dir;
 mod watchdog;
+mod within;
 
 use std::path::{Path, PathBuf};
 
@@ -35,6 +36,7 @@ pub use rerun::rerun;
 pub use scripted_provider::{Scripted, ScriptedProvider, reply};
 pub use temp_dir::TempDir;
 pub use watchdog::Watchdog;
+pub use within::within;
 
 /// A stand-in script the kernel may exec: `dir/name` is a symlink to the
 /// checked-in trampoline, and the freshly written `body` runs through
