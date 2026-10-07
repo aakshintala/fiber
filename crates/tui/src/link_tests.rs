@@ -16,9 +16,15 @@ fn written_lines_are_exact_json() {
         serde_json::json!({"id": "c_1", "command": "cancel", "session_id": "s_x"}).to_string();
     write_line(&send, &line).unwrap_or_else(|err| panic!("write: {err}"));
     let mut buf = vec![0u8; line.len() + 1];
-    recv.set_read_timeout(Some(DEADLINE))
-        .unwrap_or_else(|err| panic!("timeout: {err}"));
-    recv.read_exact(&mut buf)
+    // One deadline for the whole read, however many reads it takes.
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name("link-read-exact".to_owned())
+        .spawn(move || done.send(recv.read_exact(&mut buf).map(|()| buf)).unwrap_or(()))
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    let buf = finished
+        .recv_timeout(DEADLINE)
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the line: {err}"))
         .unwrap_or_else(|err| panic!("read: {err}"));
     assert_eq!(buf, format!("{line}\n").into_bytes());
 }

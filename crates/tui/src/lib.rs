@@ -105,11 +105,9 @@ pub fn run(
         spawn_resize(signals, tx);
     }
     let code = terminal.run(&rx);
-    if let Some(hub) = terminal.hub.take() {
-        // Ends the hub reader thread; the input and resize threads stay
-        // blocked and end with the process.
-        hub.shutdown(std::net::Shutdown::Both).unwrap_or(());
-    }
+    // Ends the hub reader thread; the input and resize threads stay
+    // blocked and end with the process.
+    terminal.hang_up();
     code
 }
 
@@ -247,6 +245,11 @@ impl<B: Backend> Loop<B> {
                 self.hub = Some(stream);
                 let lines = self.app.on_line(Line::Hub(hello));
                 self.send(&lines);
+                // A `hub_hello` this terminal cannot read leaves it
+                // unconnected: it says so and disconnects.
+                if !self.app.connected() {
+                    self.hang_up();
+                }
             }
             Input::ConnectFailed(error) => {
                 self.app
@@ -271,16 +274,27 @@ impl<B: Backend> Loop<B> {
         None
     }
 
-    /// Writes command lines to the hub. A failed write drops the stream;
-    /// the reader then sees the end and reports the connection lost.
+    /// Writes command lines to the hub. A failed write hangs up: the
+    /// connection is lost, and the text of the lines not sent returns to
+    /// the draft.
     fn send(&mut self, lines: &[String]) {
-        for line in lines {
+        for (at, line) in lines.iter().enumerate() {
             let Some(hub) = &mut self.hub else {
                 return;
             };
             if link::write_line(hub, line).is_err() {
-                self.hub = None;
+                self.hang_up();
+                self.app.write_failed(lines.get(at..).unwrap_or_default());
+                return;
             }
+        }
+    }
+
+    /// Shuts the hub stream down both ways and drops it. The reader thread,
+    /// on its clone, then sees the end.
+    fn hang_up(&mut self) {
+        if let Some(hub) = self.hub.take() {
+            hub.shutdown(std::net::Shutdown::Both).unwrap_or(());
         }
     }
 }

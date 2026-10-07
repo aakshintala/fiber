@@ -187,13 +187,33 @@ fn hello() -> contract::HubLine {
     }
 }
 
-/// Reads one command line the loop wrote to the hub, with one deadline.
-fn command(reader: &mut BufReader<UnixStream>, what: &str) -> serde_json::Value {
-    let mut line = String::new();
-    reader
-        .read_line(&mut line)
-        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for {what}: {err}"));
-    serde_json::from_str(&line).unwrap_or_else(|err| panic!("{what}: {err}: {line:?}"))
+/// Runs `work` on a thread and returns its result, failing after
+/// [`DEADLINE`] with `what`: one deadline however many reads it makes.
+fn within<T: Send + 'static>(what: &str, work: impl FnOnce() -> T + Send + 'static) -> T {
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("lib-within".to_owned())
+        .spawn(move || done.send(work()).unwrap_or(()))
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    finished
+        .recv_timeout(DEADLINE)
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for {what}: {err}"))
+}
+
+/// Reads one command line the loop wrote to the hub, with one deadline,
+/// and hands the reader back.
+fn command(
+    mut reader: BufReader<UnixStream>,
+    what: &str,
+) -> (BufReader<UnixStream>, serde_json::Value) {
+    let (reader, line) = within(what, move || {
+        let mut line = String::new();
+        let read = reader.read_line(&mut line);
+        (reader, read.map(|_| line))
+    });
+    let line = line.unwrap_or_else(|err| panic!("{what}: {err}"));
+    let value = serde_json::from_str(&line).unwrap_or_else(|err| panic!("{what}: {err}: {line:?}"));
+    (reader, value)
 }
 
 #[test]
@@ -248,10 +268,7 @@ fn ctrl_c_twice_quits_with_zero() {
 fn the_hub_connection_starts_attaches_and_subscribes() {
     let (mut lp, attached) = new_loop(TestBackend::new(60, 12), None);
     let (ours, theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
-    theirs
-        .set_read_timeout(Some(DEADLINE))
-        .unwrap_or_else(|err| panic!("timeout: {err}"));
-    let mut reader = BufReader::new(theirs);
+    let reader = BufReader::new(theirs);
     // Enter before the hub connects: `start` goes out with `hub_hello`.
     feed(
         &mut lp,
@@ -260,7 +277,7 @@ fn the_hub_connection_starts_attaches_and_subscribes() {
             Input::Connected(ours, hello()),
         ],
     );
-    let start = command(&mut reader, "the start command");
+    let (reader, start) = command(reader, "the start command");
     assert_eq!(start["command"], "start");
     assert_eq!(start["args"]["workspace"], "/w");
     assert_eq!(start["args"]["content"][0]["text"], "hi");
@@ -273,19 +290,16 @@ fn the_hub_connection_starts_attaches_and_subscribes() {
             .cloned()
             .unwrap_or_default(),
     };
-    feed(
-        &mut lp,
-        vec![
-            Input::Hub(Line::Hub(accepted.clone())),
-            Input::Hub(Line::Hub(accepted)),
-        ],
-    );
-    let subscribe = command(&mut reader, "the subscribe command");
+    let seen = || attached.lock().map(|held| held.clone()).unwrap_or_default();
+    // The attach is reported when `start` is accepted, once.
+    feed(&mut lp, vec![Input::Hub(Line::Hub(accepted.clone()))]);
+    assert_eq!(seen(), vec!["s_aaaaaaaaaaaaaaaa".to_owned()]);
+    feed(&mut lp, vec![Input::Hub(Line::Hub(accepted))]);
+    assert_eq!(seen(), vec!["s_aaaaaaaaaaaaaaaa".to_owned()]);
+    let (_, subscribe) = command(reader, "the subscribe command");
     assert_eq!(subscribe["command"], "subscribe");
     assert_eq!(subscribe["session_id"], "s_aaaaaaaaaaaaaaaa");
     assert_eq!(subscribe["args"]["level"], "full");
-    let attached = attached.lock().map(|held| held.clone()).unwrap_or_default();
-    assert_eq!(attached, vec!["s_aaaaaaaaaaaaaaaa".to_owned()]);
 }
 
 #[test]
@@ -302,15 +316,87 @@ fn connect_failure_and_disconnect_are_notices() {
     assert!(lp.hub.is_none());
 }
 
+/// A clone of `ours`, as the hub reader thread holds one, that waits
+/// at most [`DEADLINE`] per read.
+fn reader_of(ours: &UnixStream) -> UnixStream {
+    let reader = ours
+        .try_clone()
+        .unwrap_or_else(|err| panic!("clone: {err}"));
+    reader
+        .set_read_timeout(Some(DEADLINE))
+        .unwrap_or_else(|err| panic!("timeout: {err}"));
+    reader
+}
+
+/// Whether `reader` sees the end at once: its stream was shut down for
+/// reading. A stream still open waits out [`DEADLINE`] and fails.
+fn sees_the_end(mut reader: UnixStream, what: &str) {
+    let mut byte = [0u8; 1];
+    match reader.read(&mut byte) {
+        Ok(0) => {}
+        Ok(_) => panic!("{what}: a byte instead of the end"),
+        Err(err) => panic!("waited {DEADLINE:?} for {what}: {err}"),
+    }
+}
+
 #[test]
-fn a_failed_write_drops_the_hub_stream() {
+fn a_failed_write_hangs_up_and_returns_the_draft() {
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
-    let (ours, theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
-    drop(theirs);
+    // The hub end stays open: only the write side fails, so the reader
+    // ends only if the loop shuts its stream down.
+    let (ours, _theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    let reader = reader_of(&ours);
+    ours.shutdown(std::net::Shutdown::Write)
+        .unwrap_or_else(|err| panic!("shutdown: {err}"));
     feed(&mut lp, vec![Input::Connected(ours, hello())]);
     assert!(lp.hub.is_some());
     feed(&mut lp, vec![Input::Bytes(b"hi\r".to_vec())]);
     assert!(lp.hub.is_none());
+    sees_the_end(reader, "the reader to see the hang-up");
+    assert_eq!(lp.app.notice(), Some("Connection lost."));
+    assert_eq!(lp.app.draft(), "hi");
+    // Enter on a lost connection keeps the draft.
+    feed(&mut lp, vec![Input::Bytes(b"\r".to_vec()), Input::Disconnected]);
+    assert_eq!(lp.app.draft(), "hi");
+}
+
+#[test]
+fn a_schema_mismatch_says_so_and_hangs_up() {
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    let (ours, _theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    let reader = reader_of(&ours);
+    let mut newer = hello();
+    newer.schema_version = contract::SCHEMA_VERSION + 1;
+    feed(&mut lp, vec![Input::Connected(ours, newer)]);
+    assert!(lp.hub.is_none());
+    sees_the_end(reader, "the reader to see the hang-up");
+    // The reader's end arrives next; the version notice stays.
+    feed(&mut lp, vec![Input::Disconnected]);
+    assert!(
+        lp.app
+            .notice()
+            .is_some_and(|notice| notice.contains("schema version"))
+    );
+}
+
+#[test]
+fn restore_puts_back_what_setup_changed() {
+    let pair = open();
+    crate::term::setup(&pair.slave).unwrap_or_else(|err| panic!("setup: {err}"));
+    let start = "\x1b[?1049h\x1b[?u\x1b[c";
+    assert_eq!(
+        read_exact(&pair.main, start.len(), "the start bytes"),
+        start.as_bytes()
+    );
+    super::restore();
+    let end = "\x1b[?1049l\x1b[?25h";
+    assert_eq!(
+        read_exact(&pair.main, end.len(), "the restore bytes"),
+        end.as_bytes()
+    );
+    assert!(is_cooked(
+        &rustix::termios::tcgetattr(&pair.slave).unwrap_or_else(|err| panic!("attr: {err}"))
+    ));
 }
 
 #[test]

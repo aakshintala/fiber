@@ -62,6 +62,18 @@ enum Kind {
     Cancel,
 }
 
+/// The hub connection, as the terminal sees it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Link {
+    /// Not connected yet: an Enter is held until `hub_hello`.
+    Waiting,
+    /// The hub spoke a `hub_hello` this terminal reads.
+    Up,
+    /// The hub could not be reached, was refused, or hung up. Nothing goes
+    /// out again; reconnecting is a later ticket.
+    Down,
+}
+
 /// One conversation item.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Item {
@@ -81,8 +93,7 @@ pub(crate) struct App {
     workspace: PathBuf,
     draft: String,
     phase: Phase,
-    /// Whether the hub spoke a `hub_hello` this terminal reads.
-    connected: bool,
+    link: Link,
     /// Lines held until the hub connects: the `start` of an early Enter.
     held: Vec<String>,
     /// Commands waiting for their answer: kind and the text they carried.
@@ -109,7 +120,7 @@ impl App {
             workspace,
             draft: String::new(),
             phase: Phase::Starting,
-            connected: false,
+            link: Link::Waiting,
             held: Vec::new(),
             pending: HashMap::new(),
             notice: None,
@@ -178,7 +189,7 @@ impl App {
     /// The hub could not be reached, or runs a schema this terminal cannot
     /// read: the notice, and a held `start` fails as if rejected.
     pub(crate) fn connect_failed(&mut self, notice: String) {
-        self.connected = false;
+        self.link = Link::Down;
         self.notice = Some(notice);
         self.held.clear();
         if let Phase::Pending { command_id } = &self.phase {
@@ -187,10 +198,35 @@ impl App {
         }
     }
 
-    /// The hub connection ended. Reconnecting is a later ticket.
+    /// The hub connection ended. Reconnecting is a later ticket. A
+    /// connection never connected, refused for its schema version, keeps
+    /// the notice that says why.
     pub(crate) fn disconnected(&mut self) {
-        self.connected = false;
-        self.notice = Some("Connection lost.".to_owned());
+        if self.link == Link::Up {
+            self.link = Link::Down;
+            self.notice = Some("Connection lost.".to_owned());
+        }
+    }
+
+    /// Writing `unsent`, command lines this app made, to the hub failed:
+    /// the connection is lost, and their commands fail as if rejected, so
+    /// a draft they carried returns to an empty draft.
+    pub(crate) fn write_failed(&mut self, unsent: &[String]) {
+        self.disconnected();
+        for line in unsent {
+            if let Some(id) = serde_json::from_str::<Value>(line)
+                .ok()
+                .and_then(|line| line.get("id").and_then(Value::as_str).map(str::to_owned))
+            {
+                self.fail(&id);
+            }
+        }
+    }
+
+    /// Whether the hub spoke a `hub_hello` this terminal reads, and the
+    /// connection has not ended since.
+    pub(crate) fn connected(&self) -> bool {
+        self.link == Link::Up
     }
 
     /// The attached session, if any.
@@ -284,15 +320,14 @@ impl App {
     /// Enter sends the draft: `start` with no session, `prompt` when idle,
     /// `steer` during a turn.
     fn on_enter(&mut self) -> Effect {
-        if self.draft.trim().is_empty() {
+        // A command sent after the connection is lost goes nowhere, so the
+        // draft stays.
+        if self.draft.trim().is_empty() || self.link == Link::Down {
             return Effect::None;
         }
         let (kind, session) = match &self.phase {
             Phase::Starting => (Kind::Start, None),
             Phase::Pending { .. } => return Effect::None,
-            // A command sent after the connection is lost goes nowhere, so
-            // the draft stays.
-            Phase::Attached { .. } if !self.connected => return Effect::None,
             Phase::Attached { session, busy } => {
                 let kind = if *busy { Kind::Steer } else { Kind::Prompt };
                 (kind, Some(session.clone()))
@@ -326,7 +361,7 @@ impl App {
         };
         self.pending.insert(id, (kind, text));
         let line = line.to_string();
-        if self.connected {
+        if self.link == Link::Up {
             Effect::Send(vec![line])
         } else {
             // An Enter before the hub connects is held, not lost: `start`
@@ -342,7 +377,7 @@ impl App {
             Phase::Attached {
                 session,
                 busy: true,
-            } if self.connected => session.clone(),
+            } if self.connected() => session.clone(),
             Phase::Starting | Phase::Pending { .. } | Phase::Attached { .. } => {
                 return Effect::None;
             }
@@ -357,7 +392,7 @@ impl App {
         let command_id = hub_string(&hub.payload, "command_id");
         match hub.kind.as_str() {
             "hub_hello" if hub.schema_version == contract::SCHEMA_VERSION => {
-                self.connected = true;
+                self.link = Link::Up;
                 std::mem::take(&mut self.held)
             }
             "hub_hello" => {

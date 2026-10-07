@@ -275,6 +275,9 @@ fn a_failed_connect_returns_a_held_start_to_the_draft() {
     app.connect_failed("Could not reach the hub: gone".to_owned());
     assert_eq!(app.notice(), Some("Could not reach the hub: gone"));
     assert_eq!(app.draft(), "hi");
+    // Enter with no hub to send to keeps the draft.
+    assert_eq!(app.on_key(Key::Enter, now), Effect::None);
+    assert_eq!(app.draft(), "hi");
     // Nothing is held any more: a hub that speaks later gets no `start`.
     let hello = contract::HubLine {
         kind: "hub_hello".to_owned(),
@@ -303,6 +306,7 @@ fn a_schema_mismatch_keeps_a_held_start_back() {
     assert!(app.on_line(Line::Hub(hello)).is_empty());
     assert_eq!(app.draft(), "hi");
     assert_eq!(app.on_key(Key::Enter, now), Effect::None);
+    assert_eq!(app.draft(), "hi");
 }
 
 #[test]
@@ -508,8 +512,73 @@ fn schema_mismatch_is_a_notice() {
 #[test]
 fn connection_lost_is_a_notice() {
     let mut app = app();
+    connect(&mut app);
+    assert!(app.connected());
     app.disconnected();
+    assert!(!app.connected());
     assert_eq!(app.notice(), Some("Connection lost."));
+}
+
+#[test]
+fn a_refused_schema_keeps_its_notice_when_the_hub_hangs_up() {
+    let mut app = app();
+    let hello = contract::HubLine {
+        kind: "hub_hello".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION + 1,
+        payload: Default::default(),
+    };
+    assert!(app.on_line(Line::Hub(hello)).is_empty());
+    assert!(!app.connected());
+    app.disconnected();
+    assert!(app.notice().is_some_and(|notice| notice.contains("schema version")));
+}
+
+#[test]
+fn a_failed_write_loses_the_connection_and_returns_the_draft() {
+    let clock = fakes::clock::FakeClock::new();
+    let now = clock.now();
+    let mut app = app();
+    attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
+    let line = one_line(send(&mut app, "again", now));
+    assert_eq!(app.draft(), "");
+    app.write_failed(&[line]);
+    assert!(!app.connected());
+    assert_eq!(app.notice(), Some("Connection lost."));
+    assert_eq!(app.draft(), "again");
+    // Nothing goes out on a lost connection; the draft stays.
+    assert_eq!(app.on_key(Key::Enter, now), Effect::None);
+    assert_eq!(app.draft(), "again");
+}
+
+#[test]
+fn a_rejection_after_acceptance_is_ignored() {
+    let clock = fakes::clock::FakeClock::new();
+    let now = clock.now();
+    let mut app = app();
+    attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
+    let line = one_line(send(&mut app, "again", now));
+    let id = parse(&line)
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    let accepted = session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "command_accepted",
+        serde_json::json!({"command_id": id}),
+        None,
+    );
+    assert!(app.on_line(accepted).is_empty());
+    let rejected = session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "command_rejected",
+        serde_json::json!({"command_id": id, "code": "busy", "message": "busy"}),
+        None,
+    );
+    assert!(app.on_line(rejected).is_empty());
+    assert!(app.notice().is_none());
+    assert_eq!(app.draft(), "");
 }
 
 #[test]
@@ -587,6 +656,22 @@ fn deltas_accumulate_and_completed_replaces() {
 }
 
 #[test]
+fn each_action_streams_its_own_reply() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = app();
+    attach(&mut app, clock.now(), "s_aaaaaaaaaaaaaaaa");
+    for (action, text) in [("a_1", "one"), ("a_2", "two"), ("a_1", " more")] {
+        app.on_line(session_line(
+            "s_aaaaaaaaaaaaaaaa",
+            "assistant_message_delta",
+            serde_json::json!({ "text": text }),
+            Some(action),
+        ));
+    }
+    assert_eq!(app.lines(), vec!["one more".to_owned(), "two".to_owned()]);
+}
+
+#[test]
 fn steering_applied_is_a_line() {
     let clock = fakes::clock::FakeClock::new();
     let mut app = app();
@@ -623,6 +708,7 @@ fn the_conversation_gives_up_a_row_each_for_input_hint_and_notice() {
     assert_eq!(app.conversation_height(), 11);
     app.on_key(Key::CtrlC, now);
     assert_eq!(app.conversation_height(), 10);
+    connect(&mut app);
     app.disconnected();
     assert_eq!(app.conversation_height(), 9);
     app.on_key(Key::Char('x'), now);
