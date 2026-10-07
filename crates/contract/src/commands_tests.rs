@@ -170,6 +170,47 @@ fn a_missing_args_is_read_as_an_empty_object() {
     );
 }
 
+/// `command`, which takes no `args`, reads as `expected` with `args` missing
+/// or empty, and still refuses a key in them.
+fn empty_args_read_as_missing(command: &str, expected: Command) {
+    let missing = format!(r#"{{"id":"c","command":"{command}"}}"#);
+    let empty = format!(r#"{{"id":"c","command":"{command}","args":{{}}}}"#);
+    let extra = format!(r#"{{"id":"c","command":"{command}","args":{{"future":1}}}}"#);
+    assert_eq!(parse(&missing).unwrap().command, expected);
+    assert_eq!(
+        parse(&empty)
+            .unwrap_or_else(|e| panic!("{empty}: {e}"))
+            .command,
+        expected
+    );
+    assert!(parse(&extra).is_err(), "{extra}");
+}
+
+#[test]
+fn cancel_reads_an_empty_args_as_a_missing_one() {
+    empty_args_read_as_missing("cancel", Command::Cancel);
+}
+
+#[test]
+fn background_reads_an_empty_args_as_a_missing_one() {
+    empty_args_read_as_missing("background", Command::Background);
+}
+
+#[test]
+fn reload_reads_an_empty_args_as_a_missing_one() {
+    empty_args_read_as_missing("reload", Command::Reload);
+}
+
+#[test]
+fn tools_reads_an_empty_args_as_a_missing_one() {
+    empty_args_read_as_missing("tools", Command::Tools);
+}
+
+#[test]
+fn close_reads_an_empty_args_as_a_missing_one() {
+    empty_args_read_as_missing("close", Command::Close);
+}
+
 #[test]
 fn args_that_are_present_are_never_replaced_by_an_empty_object() {
     // Every key of `handoff` is optional, so only a present `args` that does
