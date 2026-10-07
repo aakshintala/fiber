@@ -231,13 +231,12 @@ impl Hub {
     /// its own lock and never calls back into the hub, so the order
     /// hub-then-log never reverses.
     pub(crate) fn emit(&self, event: contract::events::Event) {
-        let shared = self.lock();
+        let mut shared = self.lock();
         if shared.disposed || shared.sealed {
             return;
         }
         let Some(emitter) = shared.emitter.clone() else {
-            drop(shared);
-            self.lock().emit_buffer.push(event);
+            shared.emit_buffer.push(event);
             return;
         };
         #[cfg(test)]
