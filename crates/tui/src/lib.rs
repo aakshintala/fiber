@@ -7,6 +7,11 @@
 
 mod app;
 mod approvals;
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "the app takes the draft in the next commit")
+)]
+mod input;
 mod keys;
 mod link;
 mod term;
