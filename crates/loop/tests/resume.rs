@@ -2687,7 +2687,8 @@ fn a_resumed_credential_refusal_hands_off_from_a_later_call() {
     let mut wrapup = support::TestTool::reads("wrapup", "");
     wrapup.output.content = Vec::new();
     wrapup.output.control = Some(contract::events::Control {
-        handoff: "the note".into(),
+        handoff: Some("the note".into()),
+        ..Default::default()
     });
     let wrapup = Arc::new(wrapup);
     let mut history = History::new(vec![Scripted::text("Hello.")]);
@@ -2742,7 +2743,8 @@ fn a_cancel_after_a_resumed_credential_refusal_skips_the_tool_handoff() {
     let mut wrapup = support::TestTool::reads("wrapup", "");
     wrapup.output.content = Vec::new();
     wrapup.output.control = Some(contract::events::Control {
-        handoff: "the note".into(),
+        handoff: Some("the note".into()),
+        ..Default::default()
     });
     let wrapup = Arc::new(wrapup);
     let mut slow = support::TestTool::reads("slow", "Paris.");
@@ -3687,7 +3689,8 @@ fn completed_with_note(text: &str, note: Option<&str>) -> Event {
         panic!("a completion");
     };
     done.control = note.map(|handoff| contract::events::Control {
-        handoff: handoff.into(),
+        handoff: Some(handoff.into()),
+        ..Default::default()
     });
     Event::ToolCallCompleted(done)
 }
@@ -4498,7 +4501,8 @@ fn an_allowed_call_that_sets_control_handoff_hands_off_after_the_batch() {
     let mut wrapup = support::TestTool::reads("wrapup", "");
     wrapup.output.content = Vec::new();
     wrapup.output.control = Some(contract::events::Control {
-        handoff: "the note".into(),
+        handoff: Some("the note".into()),
+        ..Default::default()
     });
     let wrapup = Arc::new(wrapup);
     let looped = history.resume(tools_of(&[&wrapup]));

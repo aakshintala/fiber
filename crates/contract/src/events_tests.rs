@@ -177,6 +177,9 @@ fn samples() -> Vec<(&'static str, Value)> {
         {"type": "image", "path": "artifacts/a.png", "mime_type": "image/png", "width": 2, "height": 3}]);
     let questions = json!([{"header": "h", "question": "q", "multiSelect": true,
         "options": [{"label": "a", "description": "d"}, {"label": "b"}]}]);
+    let asked = json!([{"header": "h", "question": "q",
+        "options": [{"label": "a"}, {"label": "b", "description": "d"}]},
+        {"header": "n", "question": "free text"}]);
     let tokens =
         json!({"input": 1, "cache_read": 2, "cache_write": {"5m": 3, "1h": 4}, "output": 5});
     let usage = json!({"tokens": tokens, "cost": 0.5, "subscription_cost": 0.1});
@@ -219,6 +222,10 @@ fn samples() -> Vec<(&'static str, Value)> {
         (
             "turn_completed",
             json!({"outcome": "failed", "error": error, "questions": questions}),
+        ),
+        (
+            "turn_completed",
+            json!({"outcome": "completed", "questions": asked}),
         ),
         (
             "steering_applied",
@@ -363,6 +370,16 @@ fn samples() -> Vec<(&'static str, Value)> {
             "process": process, "content": content, "details": [1], "artifact": "artifacts/x",
             "changes": [{"path": "/a", "added": 1, "removed": 2}],
             "control": {"handoff": "note"}, "changed_by": ["e"]}),
+        ),
+        (
+            "tool_call_completed",
+            json!({"status": "completed", "content": content,
+            "control": {"questions": asked}}),
+        ),
+        (
+            "tool_call_completed",
+            json!({"status": "completed", "content": content,
+            "control": {"handoff": "note", "questions": asked}}),
         ),
         (
             "tool_call_completed",
@@ -708,6 +725,25 @@ fn the_samples_cover_every_key_each_kind_lists() {
 
 fn read(kind: &str, payload: Value) -> Result<Option<Event>, serde_json::Error> {
     Event::from_envelope(&line(kind, payload))
+}
+
+#[test]
+fn an_empty_options_list_reads_as_a_free_text_question_and_writes_without_the_key() {
+    let asked = json!([{"header": "h", "question": "q", "options": []}]);
+    let event = read(
+        "turn_completed",
+        json!({"outcome": "completed", "questions": asked}),
+    )
+    .unwrap()
+    .unwrap();
+    let Event::TurnCompleted(completed) = &event else {
+        panic!("{event:?}");
+    };
+    assert!(completed.questions.as_ref().unwrap()[0].options.is_empty());
+    assert_eq!(
+        Value::Object(event.payload().unwrap()),
+        json!({"outcome": "completed", "questions": [{"header": "h", "question": "q"}]})
+    );
 }
 
 #[test]

@@ -597,7 +597,7 @@ fn noted(completed: &ToolCallCompleted) -> Option<&str> {
         .control
         .as_ref()
         .filter(|_| completed.status == CallStatus::Completed)
-        .map(|control| control.handoff.as_str())
+        .and_then(|control| control.handoff.as_deref())
 }
 
 /// What an `instruction_file` line appends to the conversation, if

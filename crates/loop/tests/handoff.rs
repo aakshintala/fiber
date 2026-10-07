@@ -1486,7 +1486,8 @@ fn wrapping(name: &'static str, note: &str) -> Arc<TestTool> {
     let mut tool = TestTool::reads(name, "");
     tool.output.content = Vec::new();
     tool.output.control = Some(Control {
-        handoff: note.into(),
+        handoff: Some(note.into()),
+        ..Default::default()
     });
     Arc::new(tool)
 }
@@ -1706,7 +1707,8 @@ fn the_loop_acts_on_the_field_and_never_on_the_tool_name() {
 fn a_call_that_failed_does_not_hand_off_whatever_it_set() {
     let mut tool = TestTool::failing("wrapup", ErrorCode::ToolError);
     tool.output.control = Some(Control {
-        handoff: "Never.".into(),
+        handoff: Some("Never.".into()),
+        ..Default::default()
     });
     let mut session = tool_session(
         vec![calling(&["wrapup"], 500), said("Done.", 50)],
