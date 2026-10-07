@@ -3086,3 +3086,360 @@ fn y_on_a_focused_x_copies_nothing() {
     );
     assert_eq!(app.on_key(Key::Char('y'), now), Effect::None);
 }
+
+#[test]
+fn a_crashed_left_marks_the_known_row_crashed() {
+    let mut app = home();
+    linked(&mut app);
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "fix the parser",
+        "/w",
+        "-w",
+        json!({"state": "streaming"}),
+    ));
+    app.on_line(live(
+        "s_bbbbbbbbbbbbbbbb",
+        "tidy docs",
+        "/w",
+        "-w",
+        json!({"state": "idle"}),
+    ));
+    // A crash marks the known row in place; the other row keeps working.
+    assert!(
+        app.on_line(left("s_aaaaaaaaaaaaaaaa", "crashed"))
+            .is_empty()
+    );
+    assert_eq!(rows(&app), ["✗  fix the parser", "✓  tidy docs"]);
+}
+
+#[test]
+fn an_accepted_hub_acknowledgement_does_not_retry_the_open() {
+    let mut app = home();
+    linked(&mut app);
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "fix the parser",
+        "/w",
+        "-w",
+        json!({"state": "streaming"}),
+    ));
+    let lines = open_first(&mut app);
+    let ack = lines[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("ack id"))
+        .to_owned();
+    // Accepting the open's last subscribe ends the gate: the session
+    // stays attached, with no note and no notice.
+    assert!(app.on_line(accepted(&ack, json!({}))).is_empty());
+    assert_eq!(
+        app.session().map(|session| session.0.as_str()),
+        Some("s_aaaaaaaaaaaaaaaa")
+    );
+    assert!(!app.on_home());
+    assert!(app.notice().is_none());
+}
+
+#[test]
+fn statuses_gate_only_the_opening_session() {
+    let mut app = home();
+    linked(&mut app);
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "fix the parser",
+        "/w",
+        "-w",
+        json!({"state": "streaming"}),
+    ));
+    app.on_line(live(
+        "s_bbbbbbbbbbbbbbbb",
+        "tidy docs",
+        "/w",
+        "-w",
+        json!({"state": "streaming"}),
+    ));
+    open_first(&mut app);
+    // While the first row opens, its statuses fold into its row and are
+    // dropped; another session's statuses still reach the conversation.
+    assert!(
+        app.home_line(&live(
+            "s_aaaaaaaaaaaaaaaa",
+            "renamed",
+            "/w",
+            "-w",
+            json!({"state": "streaming"}),
+        ))
+        .is_some()
+    );
+    assert!(
+        app.home_line(&live(
+            "s_bbbbbbbbbbbbbbbb",
+            "renamed",
+            "/w",
+            "-w",
+            json!({"state": "streaming"}),
+        ))
+        .is_none()
+    );
+}
+
+#[test]
+fn a_rejected_lower_while_home_sends_no_subscribe() {
+    let mut app = home();
+    linked(&mut app);
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "fix the parser",
+        "/w",
+        "-w",
+        json!({"state": "streaming"}),
+    ));
+    app.on_line(live(
+        "s_bbbbbbbbbbbbbbbb",
+        "tidy docs",
+        "/w",
+        "-w",
+        json!({"state": "streaming"}),
+    ));
+    // The second row opens at `full`; going home lowers it, with the
+    // lowering subscribe in flight.
+    let second = keys(&app)[1];
+    let lines = open(&mut app, second);
+    let full = lines[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("full id"))
+        .to_owned();
+    assert!(
+        app.on_line(session_accepted("s_bbbbbbbbbbbbbbbb", &full))
+            .is_empty()
+    );
+    let Effect::Send(lines) = enter_text(&mut app, "/home") else {
+        panic!("going home lowers");
+    };
+    assert_eq!(lines.len(), 1);
+    let lower: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(lower["command"], "subscribe");
+    assert_eq!(lower["args"]["level"], "summary");
+    let lowering = lower["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("lowering id"))
+        .to_owned();
+    // Refusing the lowering while home sends nothing more: the accepted
+    // level stays `full` without another subscribe.
+    assert!(
+        app.on_line(session_refused(
+            "s_bbbbbbbbbbbbbbbb",
+            &lowering,
+            "session_held",
+            "held by another process"
+        ))
+        .is_empty()
+    );
+}
+
+#[test]
+fn down_below_the_fold_steps_into_an_unscoped_row() {
+    let mut app = home();
+    linked(&mut app);
+    for n in 0..9u8 {
+        let session = format!("s_{n:016x}");
+        app.on_line(live(
+            &session,
+            "fix the parser",
+            "/w",
+            "-w",
+            json!({"state": "idle"}),
+        ));
+    }
+    // The tenth row lives in another project: outside git it still
+    // lists, below the fold.
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "away",
+        "/lens",
+        "-other",
+        json!({"state": "idle"}),
+    ));
+    for n in 9..14u8 {
+        let session = format!("s_{n:016x}");
+        app.on_line(live(
+            &session,
+            "fix the parser",
+            "/w",
+            "-w",
+            json!({"state": "idle"}),
+        ));
+    }
+    assert_eq!(keys(&app).len(), 15);
+    drawn(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    // Seventeen steps reach the ninth row, the next its ✕, and the one
+    // after moves below the fold, into the other project.
+    for _ in 0..19 {
+        assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    }
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(keys(&app)[9])))
+    );
+}
+
+#[test]
+fn down_below_the_fold_skips_rows_hidden_by_scope() {
+    let mut app = git_home();
+    linked(&mut app);
+    for n in 0..3u8 {
+        let session = format!("s_{n:016x}");
+        app.on_line(live(&session, "here", "/w", "-w", json!({"state": "idle"})));
+    }
+    // Another project's row hides while scoped; two more rows follow it
+    // below the fold.
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "away",
+        "/lens",
+        "-other",
+        json!({"state": "idle"}),
+    ));
+    for n in 3..5u8 {
+        let session = format!("s_{n:016x}");
+        app.on_line(live(&session, "here", "/w", "-w", json!({"state": "idle"})));
+    }
+    assert_eq!(keys(&app).len(), 5);
+    // A short screen draws the toggle and three rows; the last drawn
+    // row's ✕ is the last stop.
+    let area = ratatui::layout::Rect::new(0, 0, 80, 14);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let targets = crate::view::render(&app, area, &mut buf, None);
+    app.drawn(&targets);
+    let now = fakes::clock::FakeClock::new().now();
+    for _ in 0..7 {
+        assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    }
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Stop(keys(&app)[2])))
+    );
+    // Below the fold the next scoped row follows: the hidden row never
+    // focuses.
+    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(keys(&app)[3])))
+    );
+}
+
+#[test]
+fn an_accepted_delete_closes_its_question() {
+    let mut app = home();
+    let (_, recent) = linked(&mut app);
+    app.on_line(accepted(
+        &recent,
+        json!({"sessions": [
+            exited("s_aaaaaaaaaaaaaaaa", "old work"),
+            exited("s_bbbbbbbbbbbbbbbb", "older work"),
+        ]}),
+    ));
+    click_stop(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+        panic!("Enter deletes");
+    };
+    let delete = commands(lines)[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("delete id"))
+        .to_owned();
+    app.on_line(accepted(&delete, json!({})));
+    assert_eq!(rows(&app), ["○  older work"]);
+    // Its answer closes the question it asked about: the prompt clears,
+    // so the drawn question goes with it.
+    assert!(app.home.as_ref().is_some_and(|home| home.prompt.is_none()));
+    assert!(
+        app.home_screen()
+            .is_some_and(|screen| screen.question.is_none())
+    );
+}
+
+#[test]
+fn an_answer_for_another_delete_keeps_the_newer_question() {
+    let mut app = home();
+    let (_, recent) = linked(&mut app);
+    app.on_line(accepted(
+        &recent,
+        json!({"sessions": [
+            exited("s_aaaaaaaaaaaaaaaa", "old work"),
+            exited("s_bbbbbbbbbbbbbbbb", "older work"),
+        ]}),
+    ));
+    click_stop(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+        panic!("Enter deletes");
+    };
+    let delete = commands(lines)[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("delete id"))
+        .to_owned();
+    // A newer question asks about the second row; the first row's answer
+    // leaves it open.
+    let second = keys(&app)[1];
+    app.home_click(Spot::Stop(second));
+    app.on_line(accepted(&delete, json!({})));
+    assert_eq!(rows(&app), ["○  older work"]);
+    assert!(
+        question(&app).contains("s_bbbbbbbbbbbbbbbb"),
+        "the newer question stays open"
+    );
+}
+
+#[test]
+fn an_accepted_delete_in_git_scopes_its_recent_refill() {
+    let mut app = git_home();
+    let (_, recent) = linked(&mut app);
+    app.on_line(accepted(
+        &recent,
+        json!({"sessions": [
+            exited("s_aaaaaaaaaaaaaaaa", "old work"),
+            exited("s_bbbbbbbbbbbbbbbb", "older work"),
+        ]}),
+    ));
+    click_stop(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+        panic!("Enter deletes");
+    };
+    let delete = commands(lines)[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("delete id"))
+        .to_owned();
+    // Scoped, the refill names the launch project again.
+    let lines = commands(app.on_line(accepted(&delete, json!({}))));
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "recent");
+    assert_eq!(lines[0]["args"], json!({"project": "-w"}));
+}
+
+#[test]
+fn the_next_page_in_git_names_the_launch_project() {
+    let mut app = git_home();
+    let (_, recent) = linked(&mut app);
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "fix the parser",
+        "/w",
+        "-w",
+        json!({"state": "streaming"}),
+    ));
+    answer_recent(&mut app, &recent, &[("s_bbbbbbbbbbbbbbbb", "old work")]);
+    focus_last(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    let Effect::Send(lines) = app.on_key(Key::Down, now) else {
+        panic!("the last row asks the next page");
+    };
+    assert_eq!(lines.len(), 1);
+    let line: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(line["command"], "recent");
+    assert_eq!(line["args"]["before"], "s_bbbbbbbbbbbbbbbb");
+    assert_eq!(line["args"]["project"], "-w");
+}
