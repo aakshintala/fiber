@@ -8,7 +8,7 @@
     reason = "test helpers; a failure is the test's"
 )]
 
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
@@ -65,17 +65,87 @@ fn pid_alive(pid: u32) -> bool {
     kill_pid(pid, "0").unwrap()
 }
 
-/// `kill -0` succeeds on a zombie until its new parent reaps it.
-fn wait_until_pid_gone(pid: u32) {
-    let (done, finished) = mpsc::channel();
-    thread::spawn(move || {
-        while pid_alive(pid) {}
-        done.send(()).unwrap();
-    });
-    assert!(
-        finished.recv_timeout(DEADLINE).is_ok(),
-        "waited {DEADLINE:?} for pid {pid} to be gone"
-    );
+const LIFELINE: Duration = Duration::from_secs(2);
+
+/// A FIFO the command's processes hold open: end-of-file on the read end
+/// means no process holds a write end any more.
+///
+/// Limited to the `leaves_descendants`, `escapes_group` and
+/// `holds_the_pipe_and_exits` fixtures: the script's shell and every
+/// process it starts after the first line inherit fd 9, and none of them
+/// closes it. End-of-file therefore means each of them has exited, not
+/// that anything has reaped them.
+struct Lifeline {
+    path: PathBuf,
+}
+
+impl Lifeline {
+    /// Only computes `<dir>/life.fifo`: runs nothing and does not block.
+    fn new(dir: &Path) -> Self {
+        Self {
+            path: dir.join("life.fifo"),
+        }
+    }
+
+    /// Prefixes `script` with making the FIFO and holding it on fd 9. The
+    /// script makes the FIFO itself, so no test-side `mkfifo` wait exists.
+    /// A failure exits before the ready line, and `ready.wait` names it.
+    /// The read-write open never blocks.
+    fn hold(&self, script: &str) -> String {
+        format!(
+            "mkfifo {} && exec 9<>{} || exit 1\n{script}",
+            quote(&self.path),
+            quote(&self.path),
+        )
+    }
+
+    /// Watches the FIFO: a thread opens the read end read-only and reports
+    /// the open, then reads to end-of-file and reports that. Call only
+    /// when a holder exists, after its ready line and before anything
+    /// kills it: a read-only open with no writer blocks.
+    fn watch(&self) -> Holders {
+        let path = self.path.clone();
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let mut file = match std::fs::File::open(&path) {
+                Ok(file) => file,
+                Err(_) => return,
+            };
+            match tx.send(()) {
+                Ok(()) | Err(_) => {}
+            }
+            let mut buf = [0u8; 1024];
+            loop {
+                match file.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(_) => {}
+                    Err(_) => return,
+                }
+            }
+            match tx.send(()) {
+                Ok(()) | Err(_) => {}
+            }
+        });
+        match rx.recv_timeout(LIFELINE) {
+            Ok(()) => {}
+            Err(_) => panic!(
+                "waited {LIFELINE:?} for a holder of {}",
+                self.path.display()
+            ),
+        }
+        Holders(rx)
+    }
+}
+
+struct Holders(mpsc::Receiver<()>);
+
+impl Holders {
+    fn gone(self, what: &str) {
+        match self.0.recv_timeout(LIFELINE) {
+            Ok(()) => {}
+            Err(_) => panic!("waited {LIFELINE:?} for {what} to exit"),
+        }
+    }
 }
 
 struct Running {
@@ -495,16 +565,18 @@ fn a_command_that_ignores_sigterm_is_killed_after_the_grace() {
 fn a_descendant_that_ignores_sigterm_is_killed_with_the_group() {
     let dir = fakes::TempDir::new("fiber-shell-descendants");
     let ready = Ready::new(dir.path());
+    let life = Lifeline::new(dir.path());
     let cancel = CancelToken::new();
     let running = start(
         dir.path().to_path_buf(),
-        leaves_descendants(ready.path()),
+        life.hold(&leaves_descendants(ready.path())),
         None,
         cancel.clone(),
     );
     let pgid = ready.wait(DEADLINE)[0];
     let watchdog = Watchdog::group(pgid);
     let pids = ready.wait(DEADLINE);
+    let holders = life.watch();
     cancel.cancel();
     assert!(
         running
@@ -518,10 +590,7 @@ fn a_descendant_that_ignores_sigterm_is_killed_with_the_group() {
     let output = join(running);
     assert!(output.error.is_none(), "{}", text(&output));
     assert!(text(&output).contains("Cancelled and stopped."));
-    for pid in pids {
-        wait_until_pid_gone(pid);
-    }
-    assert!(!group_alive(pgid));
+    holders.gone("the shell and its descendant");
     watchdog.stand_down(DEADLINE);
 }
 
@@ -529,15 +598,17 @@ fn a_descendant_that_ignores_sigterm_is_killed_with_the_group() {
 fn a_pipe_held_open_after_a_normal_end_keeps_the_exit() {
     let dir = fakes::TempDir::new("fiber-shell-held");
     let ready = Ready::new(dir.path());
+    let life = Lifeline::new(dir.path());
     let running = start(
         dir.path().to_path_buf(),
-        holds_the_pipe_and_exits(ready.path()),
+        life.hold(&holds_the_pipe_and_exits(ready.path())),
         None,
         CancelToken::new(),
     );
     let pgid = ready.wait(DEADLINE)[0];
     let watchdog = Watchdog::group(pgid);
     let holder = ready.wait(DEADLINE)[0];
+    let holders = life.watch();
     let _guard = KillPid(holder);
     assert!(
         running
@@ -555,7 +626,7 @@ fn a_pipe_held_open_after_a_normal_end_keeps_the_exit() {
         text(&output)
     );
     kill_pid(holder, "KILL").unwrap();
-    wait_until_pid_gone(holder);
+    holders.gone("the pipe holder");
     watchdog.stand_down(DEADLINE);
 }
 
@@ -563,16 +634,18 @@ fn a_pipe_held_open_after_a_normal_end_keeps_the_exit() {
 fn an_escapee_that_holds_the_pipe_is_indeterminate() {
     let dir = fakes::TempDir::new("fiber-shell-escape");
     let ready = Ready::new(dir.path());
+    let life = Lifeline::new(dir.path());
     let cancel = CancelToken::new();
     let running = start(
         dir.path().to_path_buf(),
-        escapes_group(ready.path()),
+        life.hold(&escapes_group(ready.path())),
         None,
         cancel.clone(),
     );
     let pgid = ready.wait(DEADLINE)[0];
     let watchdog = Watchdog::group(pgid);
     let escapee = ready.wait(DEADLINE)[0];
+    let holders = life.watch();
     let _guard = KillPid(escapee);
     cancel.cancel();
     assert!(
@@ -592,7 +665,7 @@ fn an_escapee_that_holds_the_pipe_is_indeterminate() {
     assert!(!output.process.unwrap().timed_out);
     assert!(!group_alive(pgid));
     kill_pid(escapee, "KILL").unwrap();
-    wait_until_pid_gone(escapee);
+    holders.gone("the escapee");
     watchdog.stand_down(DEADLINE);
 }
 

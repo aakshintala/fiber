@@ -51,8 +51,7 @@ fn a_turn_runs_through_the_hub_and_the_hub_outlives_no_session() {
     drop(client);
     // SIGKILL the hub: the session keeps running on its own socket.
     let hub = hub.lock().unwrap().take().expect("the starter ran");
-    hub.kill("KILL");
-    let status = hub.wait();
+    let status = hub.kill_and_wait();
     assert!(!status.success());
     let direct = Socket::connect(&setup.session_socket(&session));
     close_session(&direct);
@@ -140,8 +139,7 @@ fn prompts_sent_through_the_hub_page_back_newest_first_and_ask_adds_none() {
     assert!(result.get("before").is_none(), "no older page: {result}");
     drop(client);
     let hub = hub.lock().unwrap().take().expect("the starter ran");
-    hub.kill("KILL");
-    hub.wait();
+    hub.kill_and_wait();
     let direct = Socket::connect(&setup.session_socket(&session));
     close_session(&direct);
     drop(direct);
@@ -229,8 +227,7 @@ fn two_racing_clients_share_one_hub() {
         drop(client);
         for slot in [&hub, &other_hub] {
             if let Some(running) = slot.lock().unwrap().take() {
-                running.kill("KILL");
-                running.wait();
+                running.kill_and_wait();
             }
         }
     });
@@ -301,8 +298,7 @@ fn a_relative_workspace_is_invalid_arguments() {
     assert_eq!(rejected["payload"]["command_id"], "c_start");
     drop(client);
     if let Some(running) = hub.lock().unwrap().take() {
-        running.kill("KILL");
-        running.wait();
+        running.kill_and_wait();
     }
 }
 
@@ -327,8 +323,7 @@ fn a_session_left_running_is_killed_by_its_guard() {
     );
     drop(client);
     let hub = hub.lock().unwrap().take().expect("the starter ran");
-    hub.kill("KILL");
-    hub.wait();
+    hub.kill_and_wait();
 }
 
 #[test]
@@ -375,8 +370,7 @@ fn a_session_stuck_in_setup_is_killed_by_its_guard() {
     assert_eq!(rejected["kind"], "command_rejected", "{rejected}");
     drop(client);
     let hub = hub.lock().unwrap().take().expect("the starter ran");
-    hub.kill("KILL");
-    hub.wait();
+    hub.kill_and_wait();
 }
 
 /// The lines of `home`'s `logs/hub.log`, parsed.

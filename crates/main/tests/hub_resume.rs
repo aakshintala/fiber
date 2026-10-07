@@ -141,7 +141,11 @@ impl Setup {
                 panic!("waited {DEADLINE:?} for `fiber {}` to exit", args.join(" "));
             }
         };
-        until_gone(group, "the run's process group");
+        assert!(
+            !group_alive(group),
+            "`fiber {}` left a process in its group behind",
+            args.join(" ")
+        );
         watchdog.stand_down(DEADLINE);
         let lines = String::from_utf8(output.stdout)
             .unwrap()
@@ -186,23 +190,6 @@ fn write_json(file: &Path, value: &Value) {
 /// Whether any process remains in process group `group`.
 fn group_alive(group: u32) -> bool {
     fakes::kill_group(group, "0").unwrap()
-}
-
-/// Waits under [`DEADLINE`] for process group `group` to empty.
-fn until_gone(group: u32, what: &str) {
-    let (done, gone) = mpsc::channel();
-    thread::spawn(move || {
-        while group_alive(group) {
-            thread::yield_now();
-        }
-        match done.send(()) {
-            Ok(()) | Err(mpsc::SendError(())) => {}
-        }
-    });
-    assert!(
-        gone.recv_timeout(DEADLINE).is_ok(),
-        "waited {DEADLINE:?} for {what} to empty"
-    );
 }
 
 /// Waits under [`DEADLINE`] until no process's command line holds `text`.
@@ -301,7 +288,6 @@ impl Hub {
             thread::spawn(move || done.send(child.wait().is_ok()).unwrap_or(()));
             assert!(finished.recv_timeout(DEADLINE).is_ok(), "the hub exited");
         }
-        until_gone(self.group, "the hub's process group");
         until_none_matching(&self.workspace, "every session to exit");
         if let Some(watchdog) = self.watchdog.take() {
             watchdog.stand_down(DEADLINE);

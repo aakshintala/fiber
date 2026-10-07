@@ -1,6 +1,7 @@
+use std::io::{BufRead, BufReader};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::panic::{self, AssertUnwindSafe};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, ChildStdout, Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -92,14 +93,63 @@ fn matching_refuses_an_empty_match() {
 }
 
 /// A shell in its own process group whose command line carries `marker`.
+/// It forks `sleep 30` into the group, echoes the sleep's pid, then waits:
+/// the sleep holds the piped stdout, and the pid line follows its fork.
 fn marked(marker: &str) -> Child {
     Command::new("sh")
-        .args(["-c", "sleep 30; :", marker])
+        .args(["-c", "sleep 30 & echo $!; wait", marker])
         .process_group(0)
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
         .unwrap()
+}
+
+/// Lines of a `marked` shell's stdout, ending at end-of-file.
+struct Piped(mpsc::Receiver<Option<String>>);
+
+impl Piped {
+    fn new(out: ChildStdout) -> Self {
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let mut reader = BufReader::new(out);
+            loop {
+                let mut line = String::new();
+                match reader.read_line(&mut line) {
+                    Ok(0) => break,
+                    Ok(_) => {
+                        if tx.send(Some(line)).is_err() {
+                            return;
+                        }
+                    }
+                    Err(_) => return,
+                }
+            }
+            match tx.send(None) {
+                Ok(()) | Err(_) => {}
+            }
+        });
+        Self(rx)
+    }
+
+    /// Waits [`DEADLINE`] for the forked `sleep`'s pid line.
+    fn forked(&self, what: &str) {
+        match self.0.recv_timeout(DEADLINE) {
+            Ok(Some(_)) => {}
+            _ => panic!("waited {DEADLINE:?} for {what}"),
+        }
+    }
+
+    /// Waits [`DEADLINE`] for end-of-file, proving the `sleep` exited.
+    fn closed(self, what: &str) {
+        loop {
+            match self.0.recv_timeout(DEADLINE) {
+                Ok(Some(_)) => {}
+                Ok(None) => return,
+                Err(_) => panic!("waited {DEADLINE:?} for {what}"),
+            }
+        }
+    }
 }
 
 #[test]
@@ -107,7 +157,9 @@ fn dropping_a_matching_watchdog_kills_every_match() {
     let dir = crate::TempDir::new("wm");
     let marker = dir.path().to_string_lossy().into_owned();
     let mut child = marked(&marker);
-    let group = child.id();
+    let out = child.stdout.take().unwrap();
+    let piped = Piped::new(out);
+    piped.forked("the sleep to fork");
     drop(Watchdog::matching(&marker));
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait()).unwrap());
@@ -116,17 +168,7 @@ fn dropping_a_matching_watchdog_kills_every_match() {
         Err(_) => panic!("waited {DEADLINE:?} for the matching process to die"),
     };
     assert_eq!(status.signal(), Some(9));
-    let (done, gone) = mpsc::channel();
-    thread::spawn(move || {
-        while group_alive(group) {
-            thread::yield_now();
-        }
-        done.send(()).unwrap();
-    });
-    assert!(
-        gone.recv_timeout(DEADLINE).is_ok(),
-        "waited {DEADLINE:?} for the matching process's group to empty"
-    );
+    piped.closed("the matching process's group to empty");
 }
 
 #[test]
