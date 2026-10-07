@@ -12,6 +12,7 @@ use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 
 use crate::error::ConfigError;
+use crate::home::one_file_name;
 use crate::secret::CredentialSource;
 
 /// The fields of `extension.json` that installing and loading read. Fields
@@ -56,6 +57,10 @@ pub struct Manifest {
     /// (`docs/configuration.md`, "Extension settings").
     #[serde(default)]
     pub repo_settings: Vec<String>,
+    /// The names the extension reads with `host.secret`; none by default
+    /// (`docs/configuration.md`, "Secrets").
+    #[serde(default)]
+    pub secrets: Vec<String>,
 }
 
 /// An extension section's files in the opening message
@@ -341,6 +346,13 @@ pub fn read_manifest(dir: &Path) -> Result<Manifest, ConfigError> {
                 });
             }
         }
+    }
+    if manifest.secrets.iter().any(|name| !one_file_name(name)) {
+        return Err(ConfigError::WrongType {
+            source_name: file.display().to_string(),
+            key: "secrets".into(),
+            expected: "names that are each one file name in credentials/".into(),
+        });
     }
     Ok(manifest)
 }

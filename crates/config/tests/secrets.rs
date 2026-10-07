@@ -345,3 +345,22 @@ fn deleting_refuses_a_name_that_is_not_one_file_name_and_a_symbolic_link() {
     assert_eq!(e.code(), ErrorCode::ConfigInvalid);
     assert!(behind.join("work").exists());
 }
+
+#[test]
+fn storing_a_secret_over_a_provider_directory_fails_and_leaves_it() {
+    let setup = Setup::new();
+    store_credential(
+        &setup.home(),
+        "opencode",
+        "default",
+        &Secret::new(VALUE.into()),
+    )
+    .unwrap();
+    let e = store_secret(&setup.home(), "opencode", &Secret::new("other".into())).unwrap_err();
+    assert_eq!(e.code(), ErrorCode::IoFailed);
+    assert!(!e.to_string().contains("other"));
+    assert_eq!(
+        fs::read_to_string(setup.home().join("credentials/opencode/default")).unwrap(),
+        VALUE
+    );
+}
