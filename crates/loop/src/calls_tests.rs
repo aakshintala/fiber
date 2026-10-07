@@ -468,6 +468,7 @@ fn a_session_remember_adds_a_grant_the_next_call_judged_matches() {
         &workspace,
         home.path(),
         &credentials,
+        &[],
     );
     assert!(matches!(
         verdict,

@@ -158,6 +158,8 @@ pub struct Loop {
     workspace: PathBuf,
     /// Fiber home's `credentials/` directory, symlinks resolved.
     credentials: PathBuf,
+    /// Each configured `file` credential source, resolved at start.
+    credential_files: Vec<PathBuf>,
     /// The standing rules, re-read every time a call reaches step 2.
     rules: Arc<dyn contract::rules::Rules>,
     /// The session grants this loop's answers added, in order: the fold of
@@ -261,8 +263,7 @@ impl Loop {
         let (tools, replaced) = calls::register(tools);
         let workspace = PathBuf::from(&permissions.workspace);
         let workspace = workspace.canonicalize().unwrap_or(workspace);
-        let credentials =
-            calls::resolve(&permissions.credentials).unwrap_or(permissions.credentials);
+        let credentials = permission::resolved(permissions.credentials);
         let started = log.append(
             &Event::SessionStarted(SessionStarted {
                 workspace: permissions.workspace.clone(),
@@ -308,6 +309,11 @@ impl Loop {
             replaced,
             workspace,
             credentials,
+            credential_files: permissions
+                .credential_files
+                .into_iter()
+                .map(permission::resolved)
+                .collect(),
             rules: permissions.rules,
             grants: Vec::new(),
             reviewer: Err(Failure {

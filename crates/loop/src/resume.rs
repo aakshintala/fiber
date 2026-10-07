@@ -352,8 +352,7 @@ impl Loop {
         let (tools, replaced) = calls::register(tools);
         let workspace = PathBuf::from(&permissions.workspace);
         let workspace = workspace.canonicalize().unwrap_or(workspace);
-        let credentials =
-            calls::resolve(&permissions.credentials).unwrap_or(permissions.credentials);
+        let credentials = crate::permission::resolved(permissions.credentials);
         // A log that already holds an opening message keeps it: the
         // conversation rebuild renders it from the log, so the first turn
         // writes none. A log with none gets one at its first turn.
@@ -417,6 +416,9 @@ impl Loop {
             replaced,
             workspace,
             credentials,
+            credential_files: (permissions.credential_files.into_iter())
+                .map(crate::permission::resolved)
+                .collect(),
             rules: permissions.rules,
             grants,
             reviewer: Err(Failure {

@@ -180,11 +180,30 @@ fn a_read_of_a_configured_credential_file_is_refused_and_never_runs() {
     let keys = support::TempDir::new();
     let key = keys.0.join("openrouter");
     std::fs::write(&key, "sk-file-secret").unwrap();
+    assert_file_refused(&key, &key);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_configured_credential_file_spelled_through_a_symlink_is_resolved_at_start() {
+    // The configuration names a link; the call reads the file it targets.
+    let keys = support::TempDir::new();
+    let key = keys.0.join("openrouter");
+    std::fs::write(&key, "sk-file-secret").unwrap();
+    let link = keys.0.join("link");
+    std::os::unix::fs::symlink(&key, &link).unwrap();
+    assert_file_refused(&link, &key);
+}
+
+/// Runs one session whose configured `file` source is `configured`, in
+/// which the model reads `read`, and asserts the credential deny refused
+/// the read before it ran.
+fn assert_file_refused(configured: &std::path::Path, read: &std::path::Path) {
     let tool = Arc::new(TestTool::declaring(
         "read",
         "sk-file-secret",
         vec![Effect::Reads],
-        Some(vec![key.display().to_string()]),
+        Some(vec![read.display().to_string()]),
     ));
     let mut session = Session::with_credential_files(
         vec![
@@ -192,7 +211,7 @@ fn a_read_of_a_configured_credential_file_is_refused_and_never_runs() {
             Scripted::text("Done."),
         ],
         vec![tool.clone() as Arc<dyn Tool>],
-        vec![key.clone()],
+        vec![configured.to_path_buf()],
     );
     let lines = go(&mut session);
     let resolved = line(&lines, "permission_resolved");
