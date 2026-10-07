@@ -325,6 +325,9 @@ A filter that matches no
 tests fails: nextest exits 4 with "no tests to run", where `cargo test` prints
 "0 passed" and exits 0. Doc-tests run under `cargo test --doc`.
 
+The tests need a user other than root: root bypasses file modes, so the tests
+that deny a file or socket by mode fail with a message saying so.
+
 Every portable test runs on all three release targets. A test that applies to
 one platform is compiled only for that platform, never skipped at runtime. CI
 reports the number of tests run on each target, so an empty suite cannot pass.
