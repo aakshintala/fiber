@@ -123,7 +123,9 @@ frameworks Fiber does not control. Listing with a cold cache is reported,
 never gated.
 
 No test asserts a timing (`docs/testing.md`). The budgets are a benchmark job,
-separate from the tests.
+separate from the tests. The harness, `cargo run -p main --example bench`,
+measures a `fiber` binary and writes its results to a file, and
+`cargo xtask bench-report` judges that file against the table above.
 
 ## When a budget is exceeded
 
