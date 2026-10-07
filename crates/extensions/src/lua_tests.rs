@@ -39,6 +39,7 @@ fn a_panic_in_a_host_function_passes_the_extensions_pcall() {
             memory_cap: MEMORY_CAP,
             browser: Arc::new(SystemBrowser::default()),
             session: None,
+            secrets: Vec::new(),
         },
     )
     .unwrap();
@@ -413,6 +414,7 @@ fn serve_after(
                 memory_cap: MEMORY_CAP,
                 browser: Arc::new(SystemBrowser::default()),
                 session: None,
+                secrets: Vec::new(),
             },
         );
         match done_tx.send(()) {
@@ -935,6 +937,7 @@ fn a_command_queued_behind_a_parked_hook_does_not_start() {
                 memory_cap: MEMORY_CAP,
                 browser: Arc::new(SystemBrowser::default()),
                 session: None,
+                secrets: Vec::new(),
             },
         );
         match done_tx.send(()) {
@@ -1014,6 +1017,7 @@ fn a_held_command_blocks_the_stream_until_released() {
                 memory_cap: MEMORY_CAP,
                 browser: Arc::new(SystemBrowser::default()),
                 session: None,
+                secrets: Vec::new(),
             },
         );
         match done_tx.send(()) {

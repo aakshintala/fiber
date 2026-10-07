@@ -223,7 +223,7 @@ fn run() -> i32 {
             }
         },
         cli::Invocation::Run(Some(cli::Commands::Login(args))) => {
-            ::cli::run_login(args.provider.as_deref(), args.label.as_deref())
+            ::cli::run_login(args.name.as_deref(), args.label.as_deref())
         }
         cli::Invocation::Run(Some(cli::Commands::Logout(args))) => {
             let target = match (args.label.as_deref(), args.all) {

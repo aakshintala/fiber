@@ -23,7 +23,7 @@ Sessions:
 
 Fiber itself:
   approve [--yes]                           Show what this repository ships and approve it
-  login [<provider>] [--as <label>]         Store a provider's key
+  login [<name>] [--as <label>]             Store a provider's key or an extension's secret
   logout <provider> [--as <label> | --all]  Delete a provider's stored key
   help [<command>]                          Print this menu, or a command's help
   version                                   Print the version
@@ -101,7 +101,7 @@ pub(crate) enum Commands {
     /// Print a configuration value, or write one
     #[command(subcommand, arg_required_else_help = false)]
     Config(ConfigCommands),
-    /// Store a provider's key
+    /// Store a provider's key or an extension's secret
     Login(LoginArgs),
     /// Delete a provider's stored key
     Logout(LogoutArgs),
@@ -280,12 +280,14 @@ pub(crate) struct ApproveArgs {
 
 #[derive(Debug, clap::Args)]
 pub(crate) struct LoginArgs {
-    /// The installed provider to store a key for. With none, a terminal
-    /// offers the installed providers.
-    #[arg(value_name = "provider")]
-    pub(crate) provider: Option<String>,
-    /// The credential label to store the key under. Without it the label is
-    /// the account's email when the login reveals one, otherwise `default`.
+    /// The installed provider to store a key for, or the declared secret to
+    /// store. With none, a terminal offers the installed providers and the
+    /// declared secrets.
+    #[arg(value_name = "name")]
+    pub(crate) name: Option<String>,
+    /// The credential label to store a provider's key under. Without it the
+    /// label is the account's email when the login reveals one, otherwise
+    /// `default`.
     #[arg(long = "as", value_name = "label")]
     pub(crate) label: Option<String>,
 }

@@ -82,6 +82,19 @@ impl Setup {
         .unwrap();
     }
 
+    /// Installs the extension `extension` with no provider, declaring
+    /// `secrets`.
+    fn declare(&self, extension: &str, secrets: &[&str]) {
+        let dir = self.home().join("extensions").join(extension);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("extension.json"),
+            json!({"name": extension, "version": "v0.0.0", "fiber": "0.0.0", "api": 1, "secrets": secrets})
+                .to_string(),
+        )
+        .unwrap();
+    }
+
     fn command(&self, args: &[&str]) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
         command
@@ -507,6 +520,61 @@ fn no_provider_is_a_usage_error_without_a_terminal() {
 }
 
 #[test]
+fn a_declared_secret_on_a_pipe_is_stored_then_replaced_and_never_printed() {
+    let setup = Setup::new();
+    setup.declare("acme", &["acme.api_key"]);
+    let login = setup.fiber(&["login", "acme.api_key"], "  v1-7f3a9c0d  \n");
+    assert_eq!(login.code, Some(0), "{}", login.stderr);
+    assert_eq!(login.stdout, "");
+    assert_eq!(login.stderr, "fiber: stored credentials/acme.api_key\n");
+    let file = setup.home().join("credentials/acme.api_key");
+    assert_eq!(fs::read_to_string(&file).unwrap(), "v1-7f3a9c0d");
+    assert_eq!(
+        fs::metadata(&file).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    assert_eq!(
+        setup.files_holding("v1-7f3a9c0d"),
+        std::slice::from_ref(&file),
+        "the value is in the secret's file alone"
+    );
+    assert!(!setup.home().join("config.json").exists());
+    let again = setup.fiber(&["login", "acme.api_key"], "v2-1e2b\n");
+    assert_eq!(again.code, Some(0), "{}", again.stderr);
+    assert_eq!(again.stderr, "fiber: replaced credentials/acme.api_key\n");
+    assert_eq!(fs::read_to_string(&file).unwrap(), "v2-1e2b");
+}
+
+#[test]
+fn a_mistyped_secret_or_one_with_as_is_a_usage_error_that_writes_nothing() {
+    let setup = Setup::new();
+    setup.provider("acme", None, None);
+    setup.declare("acme-secrets", &["acme.api_key"]);
+    let typo = setup.fiber(&["login", "acme.api_kye"], "v1\n");
+    assert_eq!(typo.code, Some(2));
+    assert!(
+        typo.stderr.contains("the installed providers are acme"),
+        "{}",
+        typo.stderr
+    );
+    assert!(
+        typo.stderr
+            .contains("the declared secrets are acme.api_key"),
+        "{}",
+        typo.stderr
+    );
+    assert!(!setup.home().join("credentials").exists());
+    let labelled = setup.fiber(&["login", "acme.api_key", "--as", "work"], "v1\n");
+    assert_eq!(labelled.code, Some(2));
+    assert_eq!(
+        labelled.stderr,
+        "fiber: --as applies only to a provider, and `acme.api_key` is a declared secret. Run `fiber --help` for usage.\n"
+    );
+    assert!(!setup.home().join("credentials").exists());
+    assert!(!setup.home().join("config.json").exists());
+}
+
+#[test]
 fn a_key_typed_on_a_terminal_is_not_echoed_and_echo_comes_back() {
     let setup = Setup::new();
     setup.provider("acme", None, None);
@@ -533,9 +601,16 @@ fn the_provider_menu_on_a_terminal_picks_by_number() {
     let setup = Setup::new();
     setup.provider("acme", None, None);
     setup.provider("beta", None, None);
+    setup.declare("acme-secrets", &["acme.api_key"]);
     let mut run = setup.on_terminal(&["login"]);
-    let menu = run.screen.wait_for("Provider, by number or name: ");
+    let menu = run
+        .screen
+        .wait_for("Provider or secret, by number or name: ");
     assert!(menu.contains("  1) acme\r\n  2) beta\r\n"), "{menu:?}");
+    assert!(
+        menu.contains("Secrets:\r\n  3) acme.api_key\r\n"),
+        "{menu:?}"
+    );
     run.screen.type_text("2\n");
     run.screen.wait_for("Key for beta: ");
     run.screen.type_text(&format!("{KEY}\n"));

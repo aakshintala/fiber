@@ -606,3 +606,61 @@ fn thinking_declaration_parses_and_an_unknown_level_fails_the_parse() {
     let err = read_providers(&dir).unwrap_err();
     assert_eq!(err.code(), ErrorCode::ConfigInvalid);
 }
+
+const BASE: &str = r#"{"name": "a", "version": "v1.0.0", "fiber": "0.1.0", "api": 1"#;
+
+#[test]
+fn secrets_default_to_none() {
+    let setup = Setup::new();
+    let dir = setup.root().join("ext");
+    setup.write(&dir.join("extension.json"), &format!("{BASE}}}"));
+    assert!(read_manifest(&dir).unwrap().secrets.is_empty());
+}
+
+#[test]
+fn secrets_read_in_order_and_a_repeated_name_is_kept() {
+    let setup = Setup::new();
+    let dir = setup.root().join("ext");
+    setup.write(
+        &dir.join("extension.json"),
+        &format!(r#"{BASE}, "secrets": ["acme.api_key", "acme.url", "acme.api_key"]}}"#),
+    );
+    assert_eq!(
+        read_manifest(&dir).unwrap().secrets,
+        ["acme.api_key", "acme.url", "acme.api_key"]
+    );
+}
+
+#[test]
+fn a_secret_name_with_dots_reads() {
+    let setup = Setup::new();
+    let dir = setup.root().join("ext");
+    setup.write(
+        &dir.join("extension.json"),
+        &format!(r#"{BASE}, "secrets": [".hidden", "mcp.server.KEY"]}}"#),
+    );
+    assert_eq!(
+        read_manifest(&dir).unwrap().secrets,
+        [".hidden", "mcp.server.KEY"]
+    );
+}
+
+#[test]
+fn a_secret_name_that_is_not_one_file_name_is_invalid() {
+    let setup = Setup::new();
+    let dir = setup.root().join("ext");
+    // Each entry is JSON string text, so the NUL is spelled as JSON escapes it.
+    for name in ["", ".", "..", "a/b", "/abs", r"a\u0000b"] {
+        setup.write(
+            &dir.join("extension.json"),
+            &format!(r#"{BASE}, "secrets": ["ok", "{name}"]}}"#),
+        );
+        let err = read_manifest(&dir).unwrap_err();
+        assert!(
+            matches!(&err, config::ConfigError::WrongType { key, .. } if key == "secrets"),
+            "{name}: {err:?}"
+        );
+        assert_eq!(err.code(), ErrorCode::ConfigInvalid, "{name}");
+        assert!(err.to_string().contains("extension.json"), "{err}");
+    }
+}

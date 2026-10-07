@@ -223,6 +223,8 @@ pub struct LuaExtension {
     browser: Arc<dyn Browser>,
     /// The state every caller and the extension's thread observe.
     hub: Arc<Hub>,
+    /// The names `host.secret` reads: the manifest's `secrets`.
+    secrets: Vec<String>,
 }
 
 impl LuaExtension {
@@ -243,6 +245,7 @@ impl LuaExtension {
             session: None,
             browser: Arc::new(SystemBrowser::default()),
             hub: Hub::new(clock),
+            secrets: Vec::new(),
         }
     }
 
@@ -265,6 +268,13 @@ impl LuaExtension {
     /// Sets the browser `host.oauth.open` uses.
     pub fn with_browser(mut self, browser: Arc<dyn Browser>) -> Self {
         self.browser = browser;
+        self
+    }
+
+    /// Sets the names `host.secret` reads. Without it, `host.secret` reads
+    /// none.
+    pub fn with_secrets(mut self, names: Vec<String>) -> Self {
+        self.secrets = names;
         self
     }
 

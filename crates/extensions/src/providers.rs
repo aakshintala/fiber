@@ -2,7 +2,7 @@
 //! model chosen from them (`docs/model-routing.md`, "Naming a model" and
 //! "Choosing the model").
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::ErrorKind;
 use std::path::Path;
@@ -38,6 +38,9 @@ pub struct Providers {
     /// One Lua provider per `fiber.provider` registration, by provider
     /// name: what signs its requests and refreshes its token.
     lua: BTreeMap<String, Arc<LuaProvider>>,
+    /// The secrets the installed extensions declare, each once
+    /// (`docs/configuration.md`, "Secrets").
+    secrets: BTreeSet<String>,
 }
 
 // `Arc<LuaProvider>` has no `Debug`: the registry prints its names.
@@ -272,6 +275,9 @@ impl Providers {
                 });
                 continue;
             }
+            // Secrets do not depend on the provider files, so they are kept
+            // even when those files leave the extension's providers out.
+            providers.secrets.extend(manifest.secrets.iter().cloned());
             let mut buffered: Vec<(ProviderData, BTreeMap<String, String>)> = Vec::new();
             let mut failed: Option<Notice> = None;
             for mut data in config::read_providers(&dir)? {
@@ -316,6 +322,11 @@ impl Providers {
     /// The installed providers' names, sorted.
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.by_name.keys().map(String::as_str)
+    }
+
+    /// The secrets the installed extensions declare, sorted, each once.
+    pub fn secrets(&self) -> impl Iterator<Item = &str> {
+        self.secrets.iter().map(String::as_str)
     }
 
     /// Adds the models `provider`'s `models()` returns: with no data file

@@ -1,10 +1,11 @@
 use super::*;
 
 fn lua() -> Lua {
-    lua_in(PathBuf::from("/nonexistent-fiber-home"))
+    lua_in(PathBuf::from("/nonexistent-fiber-home"), &[])
 }
 
-fn lua_in(home: PathBuf) -> Lua {
+/// Lua whose `host.secret` reads `secrets` from `home`.
+fn lua_in(home: PathBuf, secrets: &[&str]) -> Lua {
     let lua = Lua::new();
     let hub = crate::lua::Hub::new(fakes::clock::FakeClock::new());
     let failures = failure::install(&lua).unwrap();
@@ -16,6 +17,7 @@ fn lua_in(home: PathBuf) -> Lua {
             extension: "fiber.test/x".to_owned(),
             session: None,
             memory_cap: crate::MEMORY_CAP,
+            secrets: secrets.iter().map(|name| (*name).to_owned()).collect(),
         },
         Arc::new(crate::SystemBrowser::default()),
         Rc::default(),
@@ -28,8 +30,8 @@ fn lua_in(home: PathBuf) -> Lua {
 }
 
 /// Lua with the prelude installed, so `pcall` catches a failure as its table.
-fn lua_prelude(home: PathBuf) -> Lua {
-    let lua = lua_in(home);
+fn lua_prelude(home: PathBuf, secrets: &[&str]) -> Lua {
+    let lua = lua_in(home, secrets);
     let clock = fakes::clock::FakeClock::new();
     let deadline = crate::lua::Deadline::new(clock);
     let dir = fakes::TempDir::new("fiber-host-prelude");
@@ -145,7 +147,49 @@ fn the_hashes_match_their_published_test_vectors() {
 
 #[test]
 fn a_secret_that_is_not_stored_is_nil() {
-    assert_eq!(eval(&lua(), "return host.secret('nope')"), Value::Null);
+    let lua = lua_in(PathBuf::from("/nonexistent-fiber-home"), &["nope"]);
+    assert_eq!(eval(&lua, "return host.secret('nope')"), Value::Null);
+}
+
+#[test]
+fn a_declared_secret_that_is_stored_reads_trimmed() {
+    let home = fakes::TempDir::new("fiber-host-secret");
+    let home = home.path().to_path_buf();
+    config::store_secret(&home, "token", &config::Secret::new("  s3cr3t \n".into())).unwrap();
+    let lua = lua_in(home, &["token"]);
+    assert_eq!(eval(&lua, "return host.secret('token')"), "s3cr3t");
+}
+
+/// The string `host.secret` raises for a name the manifest does not list.
+const UNDECLARED: &str = "host.secret: `other.key` is not in the manifest's `secrets`";
+
+#[test]
+fn an_undeclared_secret_is_a_string_error_even_when_stored() {
+    let home = fakes::TempDir::new("fiber-host-secret");
+    let home = home.path().to_path_buf();
+    config::store_secret(&home, "other.key", &config::Secret::new("s3cr3t".into())).unwrap();
+    config::store_secret(&home, "token", &config::Secret::new("t0k3n".into())).unwrap();
+    let lua = lua_prelude(home.clone(), &["a", "token"]);
+    assert_eq!(eval(&lua, "return host.secret('token')"), "t0k3n");
+    let message = pcall_string_of(&lua, "return host.secret('other.key')");
+    assert!(message.ends_with(UNDECLARED), "{message}");
+    assert!(!message.contains("s3cr3t"), "{message}");
+    // A raw `coroutine.resume`, which the prelude's `pcall` never sees,
+    // catches the same string.
+    let lua = lua_in(home, &["a", "token"]);
+    let (ok, err): (bool, LuaValue) = lua
+        .load(
+            "return coroutine.resume(coroutine.create(function() \
+             return host.secret('other.key') end))",
+        )
+        .eval()
+        .unwrap();
+    assert!(!ok);
+    let LuaValue::String(message) = err else {
+        panic!("host.secret raised no string error: {err:?}");
+    };
+    let message = message.to_str().unwrap().to_owned();
+    assert!(message.ends_with(UNDECLARED), "{message}");
 }
 
 /// Present in a re-executed child, absent in the parent.
@@ -354,7 +398,7 @@ fn pcall_string_of(lua: &Lua, code: &str) -> String {
 fn a_secret_with_a_bad_name_is_a_string_at_its_source() {
     // Even a raw `coroutine.resume`, which the prelude's `pcall` never
     // sees, catches the string: the Lua half raises it at the call.
-    let lua = lua();
+    let lua = lua_in(PathBuf::from("/nonexistent-fiber-home"), &["a/b"]);
     let (ok, err): (bool, LuaValue) = lua
         .load("return coroutine.resume(coroutine.create(function() return host.secret('a/b') end))")
         .eval()
@@ -365,7 +409,7 @@ fn a_secret_with_a_bad_name_is_a_string_at_its_source() {
     };
     let message = message.to_str().unwrap().to_owned();
     assert!(message.contains("not a secret's name"), "{message}");
-    let lua = lua_prelude(PathBuf::from("/nonexistent-fiber-home"));
+    let lua = lua_prelude(PathBuf::from("/nonexistent-fiber-home"), &["a/b"]);
     let kind: String = lua
         .load("local ok, err = pcall(function() return host.secret('a/b') end); return type(err)")
         .eval()
@@ -392,9 +436,16 @@ fn pkce_resolves_through_its_wrapper() {
 
 #[test]
 fn a_secret_with_a_bad_name_is_a_string_for_pcall() {
-    let lua = lua_prelude(PathBuf::from("/nonexistent-fiber-home"));
+    let lua = lua_prelude(PathBuf::from("/nonexistent-fiber-home"), &["a/b"]);
     let message = pcall_string_of(&lua, "return host.secret('a/b')");
     assert!(message.contains("not a secret's name"), "{message}");
+    // Undeclared, the same name is refused before its shape is looked at.
+    let lua = lua_prelude(PathBuf::from("/nonexistent-fiber-home"), &[]);
+    let message = pcall_string_of(&lua, "return host.secret('a/b')");
+    assert!(
+        message.ends_with("host.secret: `a/b` is not in the manifest's `secrets`"),
+        "{message}"
+    );
 }
 
 #[test]
@@ -405,7 +456,7 @@ fn an_unreadable_secret_is_io_failed() {
     config::store_secret(&home, "token", &config::Secret::new("s3cr3t".to_owned())).unwrap();
     let path = home.join("credentials").join("token");
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
-    let lua = lua_prelude(home);
+    let lua = lua_prelude(home, &["token"]);
     let (code, message) = pcall_of(&lua, "return host.secret('token')");
     assert_eq!(code, "io_failed");
     assert!(message.contains("token"), "{message}");

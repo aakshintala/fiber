@@ -79,6 +79,7 @@ impl Vm {
             memory_cap,
             browser,
             session,
+            secrets,
         } = start;
         let deadline = Deadline::new(Arc::clone(&clock));
         deadline.restore(*load_by);
@@ -117,6 +118,7 @@ impl Vm {
                 extension: name.to_owned(),
                 session: session.clone(),
                 memory_cap: *memory_cap,
+                secrets: secrets.clone(),
             },
             Arc::clone(browser),
             Rc::clone(&entry),

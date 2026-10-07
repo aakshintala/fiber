@@ -56,12 +56,10 @@ fn fixture_on(setup: &Setup, server: &ProviderServer, clock: Arc<FakeClock>) -> 
     let home = setup.home();
     store_secret(&home, "fixture.url", &Secret::new(server.url())).unwrap();
     store_secret(&home, "fixture.api_key", &Secret::new("k1".into())).unwrap();
-    let extension = Arc::new(LuaExtension::new(
-        "fixture",
-        fakes::lua_fixture(),
-        &home,
-        clock,
-    ));
+    let extension = Arc::new(
+        LuaExtension::new("fixture", fakes::lua_fixture(), &home, clock)
+            .with_secrets(vec!["fixture.url".into(), "fixture.api_key".into()]),
+    );
     LuaProvider::new(extension, "fixture")
 }
 
@@ -406,12 +404,15 @@ fn sign_returns_while_a_background_refresh_is_stuck_on_http() {
     let home = setup.home();
     store_secret(&home, "fixture.url", &Secret::new(server.url())).unwrap();
     store_secret(&home, "fixture.api_key", &Secret::new("k1".into())).unwrap();
-    let extension = Arc::new(LuaExtension::new(
-        "fixture",
-        fakes::lua_fixture(),
-        &home,
-        fakes::clock::FakeClock::new(),
-    ));
+    let extension = Arc::new(
+        LuaExtension::new(
+            "fixture",
+            fakes::lua_fixture(),
+            &home,
+            fakes::clock::FakeClock::new(),
+        )
+        .with_secrets(vec!["fixture.url".into(), "fixture.api_key".into()]),
+    );
     let provider = LuaProvider::new(extension, "fixture");
     let refresh = provider.refresh(None).unwrap();
     assert!(
