@@ -130,7 +130,7 @@ fn no_status_follows_the_line_written_after_run_returns() {
         .expect("close ended the loop")
         .unwrap();
     // As `fiber ask` does: `fiber_exited` after `run` returns.
-    r#loop::fiber_exited(&session.log, &session.dir, Ok(()), None).unwrap();
+    r#loop::fiber_exited(&session.log, &session.dir, Ok(()), true, None).unwrap();
     loop {
         let line = watcher
             .recv_timeout(DEADLINE)

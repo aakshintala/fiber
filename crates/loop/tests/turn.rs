@@ -643,7 +643,7 @@ fn a_reply_logs_each_text_part_among_its_other_items() {
     assert_eq!(sent[4], assistant("B"));
     assert!(matches!(&sent[5], Input::ToolResult { text, .. } if text == "Sunny."));
 
-    r#loop::fiber_exited(&session.log, &session.dir, Ok(()), None).unwrap();
+    r#loop::fiber_exited(&session.log, &session.dir, Ok(()), true, None).unwrap();
     let exited = log::read(&session.dir).unwrap();
     assert_eq!(exited.last().unwrap().kind, "fiber_exited");
     assert_eq!(exited.last().unwrap().payload["text"], "AB");
@@ -750,7 +750,7 @@ fn a_subscription_model_logs_an_estimate_apart_from_billed_spend() {
     assert_eq!(usage.payload["subscription"], true);
     assert_eq!(usage.payload["cost"].as_f64(), Some(tier_cost()));
 
-    r#loop::fiber_exited(&session.log, &session.dir, Ok(()), None).unwrap();
+    r#loop::fiber_exited(&session.log, &session.dir, Ok(()), true, None).unwrap();
     let exited = log::read(&session.dir).unwrap();
     let totals = &exited.last().unwrap().payload["usage"];
     assert_eq!(totals["cost"], 0.0);

@@ -543,7 +543,7 @@ fn run_turn(
     session.quiesce();
     // A `fiber_exited` that cannot be written leaves a log that reads as a
     // process that died, which it then is.
-    match r#loop::fiber_exited(log, dir, ran, cancel.shutdown_code()) {
+    match r#loop::fiber_exited(log, dir, ran, one_turn, cancel.shutdown_code()) {
         Ok(exited) => {
             // `fiber ask` names its failure on stderr, the sentence
             // `fiber_exited` just carried (`docs/errors.md`, "What a
