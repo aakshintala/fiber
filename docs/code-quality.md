@@ -156,6 +156,10 @@ instead of its own enum.
 The crate that defines an enum maps each case to a stable code, with no
 wildcard arm. The codes and the mapping rule are `docs/errors.md`.
 
+A type that holds a secret prints it redacted in `Debug`, including header
+values, `env` values and command arguments. A key leaves `Secret` only on the
+line that sends it.
+
 ## `unsafe`
 
 `unsafe` is denied in every crate. A block that needs it, such as a call

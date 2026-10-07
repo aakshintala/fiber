@@ -24,7 +24,7 @@ the agent working, a research prototype of a better handoff.
 Its code runs in one of two ways, and a package may use both:
 
 - a **Lua extension** runs Lua 5.4 inside the session's own process, at about
-  150 KiB
+  120 to 150 KiB
 - a **process extension** is a separate program in any language, which the
   session starts and talks to over a pipe
 
@@ -162,7 +162,7 @@ failed ("When a hook fails"), and a late reply is dropped.
 
 A process extension written in Node, Bun or Python costs a runtime: an idle
 Node process measured 40 MiB, Bun 20 MiB and Python 10 MiB, against about
-150 KiB for a Lua extension (macOS arm64, `research/extension-process/`). A
+120 to 150 KiB for a Lua extension (macOS arm64, `research/extension-process/`). A
 round trip over the pipe took 56 to 79 µs for 16 KiB, against under 10 µs into
 Lua. An extension too heavy to run once per session is its author's to make
 smaller.
@@ -181,7 +181,15 @@ stream, in the order they happened in the session. Each finishes, including
 any host call it waits on, before the next starts, so a hook never sees state
 that misses an earlier event. Timers are not ordered against the session.
 They run in the gaps: when the stream is empty, or while its current item
-waits on a host call.
+waits on a host call. A tool call runs in the gaps, as timers do, so a long
+tool never holds up the extension's hooks.
+
+**A host call that fails raises a Lua error** whose value is
+`{ code, message }`, which `pcall` catches. An uncaught one fails the
+callback, and the callback's own failure rule applies. `state_too_large` and
+`closing` reach Lua this way. `host.drive` raises the rejection's `code` and
+`message` on `command_rejected`, and returns the command's `result`, or
+`true`, on `command_accepted`.
 
 **A host call suspends the code that made it.** Fiber runs every callback as
 a coroutine. A host call such as `host.http` or `host.model` suspends it until
@@ -236,6 +244,17 @@ fiber.command(name, { description, timeout, run })
 
 What a harness declares is `docs/delegates.md`, "Harness extensions".
 
+A tool's `effects` is a table, `{ effects, paths?, reversible }` as
+`docs/permissions.md`, "Effects", declares, or a function of the call's
+arguments that returns one. The function is bounded by the tool's `timeout`,
+and an error fails the call `tool_error` before it runs. `run` returns a
+string, one text part, or `{ content, details?, error = { code, message }?,
+control? }`, where `control` takes the fields any tool may set
+(`docs/tools.md`, "What a result carries"). A raised error fails the call
+`tool_error` with its message. When two extensions register one tool name,
+neither gets it, a `notice` names both, and configuration can rename one, as
+for commands ("Commands and screens").
+
 A tool, harness, search backend, hook or watcher registers before the
 session's tool set is fixed (`docs/prompt-cache.md`, "Tools"), which is why
 every enabled Lua extension runs its `init.lua` at session start ("Loading,
@@ -273,12 +292,18 @@ json.decode(str) / json.encode(value)   -- JSON, host-provided (Lua has none bui
 - **`host.secret`** reads only a name the manifest's `secrets` lists. Any
   other name is an error in the calling code. A declared secret that is not
   stored returns `nil`, and `fiber doctor` names it.
-- **`host.model`** takes a model reference or a role, messages and a token
-  limit. It goes through the session's provider routing and credentials, and
-  writes `usage_recorded` naming the extension. It uses its own prompt-cache
-  key, the session's id plus the extension's name, so it never shares the
-  session's key (`docs/prompt-cache.md`). Any callback may call it, bounded by
-  that callback's timeout.
+- **`host.model`** takes a model reference, never a role, an optional system
+  text, messages and a token limit, and returns `{ text, usage }`:
+  `host.model({ model, system, messages, max_tokens })`. A message's
+  `content` is a string or content parts (`docs/events.md`), and `usage` has
+  the `tokens` and `cost` of its `usage_recorded`. It goes through the
+  session's provider routing and credentials, and writes `usage_recorded`
+  naming the extension. Its prompt-cache key is `"{id}:extension:{name}"`,
+  where `{id}` is the calling session's own id, a fork's included, so it never
+  shares the session's key or the reviewer's (`docs/prompt-cache.md`). The
+  retry policy applies within the callback's timeout. At `budget.usd` it
+  raises `budget_exceeded` and does not fail the turn. Any callback may call
+  it, bounded by that callback's timeout.
 - **`host.exec`** runs a program in its own process group, which is stopped on
   cancel and at shutdown as a tool's is (`docs/tools.md`, "Shell"). Inside a
   tool call, the tool's declared `executes` effect is what the permission
@@ -419,7 +444,8 @@ state.keys()
   `latest`. A delegate that is not a fork starts with no extension state.
 - **A hook's writes go with its change.** A write made inside a hook is
   logged just before the line the hook changed, and is dropped if the hook
-  fails. Any other write takes effect for the extension at once and is logged
+  fails. A hook that changes no line has its writes logged when it returns,
+  before whatever it ran for. Any other write takes effect for the extension at once and is logged
   at the loop's next drain of its inbox, so a crash before then loses it.
   Once `fiber_exited` is written there is no next drain: `state.set` and
   `state.unset` fail with code `closing` ("When a session ends").
@@ -520,7 +546,7 @@ calls exactly as for the model's ("Running a tool").
 | `before_model_call` | A step's model request is built and the budget allows it, before it is sent (`docs/loop.md`, "Spending budget") | the model reference, and the session's `usage` so far, its delegates included (`docs/events.md`) | a refusal with a reason |
 | `after_tool` | A call that ran has returned, before its output is cut, its artifact is written or it is logged; and each job delivery, before it joins the conversation or is logged | the tool's name, the arguments, `status`, the full output, `details`, `process`, and `delivery` for a job delivery | replacement `content`, replacement `details`, text for the artifact |
 | `turn_end` | The model has replied without calling a tool, so the turn would complete, before `turn_completed` is written | the model's final reply | a message to continue the turn with |
-| `before_handoff` | A handoff has started, before the note request | the trigger, the person's instructions, and the conversation as the model would be sent it | a handoff note |
+| `before_handoff` | A handoff has started, before the note request | the trigger, the person's instructions, and the conversation as Fiber's messages of content parts, without the note request | a handoff note (a string) |
 
 Returning nothing leaves things as they were.
 
@@ -584,9 +610,19 @@ batch of a monitor's lines, and a delegate's final message (`docs/tools.md`,
 "Background jobs"). It gets the tool name of the call that started the job, and
 `delivery` says what arrived: `completion`, `monitor` or `delegate`. When a
 job ends, it runs once more on the job's whole output file, with `delivery`
-`output_file`, and the artifact text it returns replaces the file. `delivery`
-is absent for an ordinary call. A redaction hook can ignore it and treat every
-input alike, so job output takes the same path as every other tool output.
+`output_file`, and the artifact text it returns replaces the file. A Fiber
+delegate's `events.jsonl` is another session's log, so the `output_file` pass
+skips it. `delivery`
+is absent for an ordinary call. A `completion` delivery hands the hook, as
+`output`, the notice as the model would be sent it, with the job's `status`.
+An output file of at most 1 MiB is handed as `output`; a larger one is handed
+as `path` and `size`, and the hook rewrites it through `host.fs` under the
+per-path lock or returns artifact text that replaces it. When an
+`output_file` hook fails `blocking`, the file is replaced with a one-line note
+that the output was withheld; a `non-blocking` failure keeps the file and
+gives a `notice`. Apart from that large-file case, a redaction hook can ignore
+`delivery` and treat every input alike, so job output takes the same path as
+every other tool output.
 One window remains: while a job runs, its output file is written directly by
 the program, so it holds raw output until the job ends. An extension that
 compacts build and test output returns a short summary as `content` and the
@@ -605,6 +641,11 @@ agent working until a condition is met is built on this point.
 **`before_handoff`** lets an extension write the handoff note instead of the
 session's own model. When a hook returns a note, Fiber makes no note request.
 When none does, Fiber makes its own (`docs/handoff.md`, "The handoff note").
+With several hooks, each sees the note the one before returned, and the last
+note wins; `handoff_completed.extension` names the extension whose note was
+used. The hook does not run for a handoff a tool started, which already has
+its note. The hook is handed the whole conversation, so a Lua extension that
+registers it raises `memory_mib` to fit the conversations it handles.
 
 ### When several hooks share a point
 
@@ -801,6 +842,18 @@ plain: `/databricks-models`, not
 gets it, a `notice` names both, and configuration can rename one. An
 extension may replace a built-in command by name, as it may a tool.
 
+The `command` driver command is answered with `command_accepted` once it is
+admitted, before `run` runs, and `run`'s return value is ignored. A command
+reports through `host.status`, `host.widget`, `host.ask` or `host.emit`, and a
+`run` that errors gives a `notice` naming the extension. A command is allowed
+during a turn and joins the extension's ordered stream in session order; a
+`host.drive` inside it follows each driver command's own rules.
+`host.ask(kind, spec)` takes the keys of `interaction_requested` for that kind
+(`prompt`, `options`, `fields`) and returns the answer keys of
+`interaction_resolved` (`confirmed`, `labels`, `text`, `answers`, `note`), or
+`{ declined = true }`. When the callback's timeout passes while a `host.ask`
+is pending, the interaction is resolved `declined` with `by` `fiber`.
+
 A command may run tools with `host.tool`. The person or driver who invoked it
 is the admission, and each inner call names the command's invocation
 ("Running a tool").
@@ -864,7 +917,7 @@ installed Lua extension that is enabled for the project runs its `init.lua`,
 because a tool, hook, watcher, harness or search backend must register before
 the session's tool set is fixed (`docs/prompt-cache.md`, "Tools"), and Fiber
 cannot know what an extension registers without running it. Each started
-extension costs about 120 KiB and a thread for the whole session. These cost
+extension costs about 120 to 150 KiB and a thread for the whole session. These cost
 nothing at start:
 
 - an extension disabled for the project, which never starts;
@@ -883,7 +936,7 @@ must register before the session's first request. A TUI extension's VM is
 created before the terminal's first frame, since a replaced layout or input
 box changes that frame (`docs/tui.md`, "How a TUI extension runs").
 
-One VM per extension (rather than one shared VM for all) costs about 120 KiB per
+One VM per extension (rather than one shared VM for all) costs about 120 to 150 KiB per
 extension — measured, `research/extension-runtime/vm-isolation/` — and buys real
 isolation: each extension has its own globals, its own garbage collector, a
 per-extension memory cap, and a crash or runaway allocation contained to
@@ -892,7 +945,7 @@ extension counts and is the documented fallback if that ever matters.
 
 Each Lua extension's memory is capped at 1 MiB by default. Past the cap, an
 allocation fails with a Lua error in that extension's VM, and Fiber does not
-read a file larger than the cap. A Lua extension measures about 150 KiB, and
+read a file larger than the cap. A Lua extension measures about 120 to 150 KiB, and
 the busy-session budget is 24 MiB (`docs/performance.md`), so a small default
 keeps one extension from using the budget. An extension that needs more sets
 `memory_mib` in its manifest (`docs/configuration.md`, "An extension's
@@ -900,8 +953,8 @@ manifest"). The install summary shows a raised cap ("What an install shows").
 
 The `reload` driver command (`docs/invocation.md`) reloads extensions. It is how
 a running session picks up an installed or updated extension. Each reloaded
-Lua extension's VM is created again the next time it is invoked, and each
-process extension is restarted. Both are handed their folded state again.
+Lua extension runs `init.lua` again in a new VM before the new tool set is
+declared, and each process extension is restarted. Both are handed their folded state again.
 
 ## When an extension misbehaves
 
@@ -1004,8 +1057,10 @@ under `providers/` or `extensions/` in Fiber's own repository has one, and a
 new package adds one. `fiber extension install openrouter` means
 `github.com/aakshintala/fiber/providers/openrouter`. Today the provider short
 names are `anthropic`, `openai`, `gemini`, `codex`, `openrouter`, `opencode`,
-`databricks`, `muse`, `bedrock`, `vertex` and `azure`, and `hooks` and
-`memory` are short names for `github.com/aakshintala/fiber/extensions/<name>`.
+`databricks`, `muse`, `bedrock`, `vertex` and `azure`, and `claude`,
+`cursor-agent`, `hooks` and `memory` are short names for
+`github.com/aakshintala/fiber/extensions/<name>`. A harness's short name is
+the name it registers (`docs/delegates.md`, "Harness extensions").
 A short name also names the extension's directories in Fiber home
 (`docs/state.md`, "What each part holds").
 
@@ -1113,7 +1168,7 @@ runs at session start ("Loading, and cost when nothing is loaded").
 ### A fresh install
 
 A fresh install has every first-party extension: the eleven providers,
-`hooks` and `memory` (`docs/memory.md`). They arrive in the release's extensions archive, which `install.sh`
+the Claude Code and cursor-agent harnesses, `hooks` and `memory` (`docs/memory.md`). They arrive in the release's extensions archive, which `install.sh`
 installs into Fiber home's `extensions/` (`docs/releasing.md`), so a first run needs no
 `git` and no network beyond the download. They are ordinary extensions,
 recorded under their full names: nothing is compiled in, and
@@ -1173,7 +1228,10 @@ raises (`docs/events.md`, "Repository code"). Any client may answer, local or
 remote, and the first answer wins (`docs/invocation.md`, "Replying").
 
 Whether the session waits depends on whether a client that can answer is
-connected, not on how the session started:
+connected, not on how the session started. A client that can answer is a
+`full` connection, direct or through the hub: the connections `clients`
+counts. A `summary` connection and the `fiber ask` door never are.
+
 
 - **With one connected,** the session waits for the answer before its first
   request. Waiting counts as idle, so the idle exit bounds it
@@ -1265,7 +1323,15 @@ visible.
 installs it for the current project only: it loads in that project's sessions
 and no others. The scope is the person's `extensions."<name>".enabled` key:
 `false` in the global configuration and `true` in the project's, both in Fiber
-home (`docs/configuration.md`). A repository cannot set it.
+home (`docs/configuration.md`). A repository cannot set it. For each
+extension the command installs for the first time, its dependencies included,
+it writes `false` globally and `true` for the project. For one already
+installed, it writes only the project's `true`, so it never turns off an
+extension that is on elsewhere. It writes the keys before it installs, so a
+failed install leaves nothing loading outside the project. A plain `install`,
+`update` or `remove` never writes or clears the key;
+`fiber config set extensions."<name>".enabled true` enables a scoped extension
+everywhere.
 
 ### What an install shows
 

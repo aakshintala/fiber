@@ -56,7 +56,7 @@ as a message appended at the end, never as an edit (`docs/system-prompt.md`).
 
 Two requests built from the same inputs are the same bytes:
 
-- tools go in one list sorted by name, built-ins and MCP tools together
+- tools go in one list sorted by name, built-in, extension and MCP tools together
 - every JSON object in a tool definition is serialised with its keys sorted,
   including a schema an MCP server supplied
 - no value reaches a request through a hash map's iteration order
@@ -243,6 +243,9 @@ A cache entry also expires after its lifetime with no request.
 - Hooks: no hook rewrites a message the model has already been sent. Every
   hook point changes content before it is logged (`docs/extensions.md`,
   "Hooks").
+- An extension's `host.model` calls have their own key,
+  `"{id}:extension:{name}"`, with the calling session's own id, a fork's
+  included (`docs/extensions.md`, "Host calls").
 - The reviewer has its own cache. Its request is the shared instructions and
   the person's `reviewer.context`, global then per-project, fixed for the
   session, then the person's messages and the tool calls in log order, then

@@ -151,7 +151,7 @@ the command to resume it.
 ## Layout
 
 The screen is a session rail on the left while two or more sessions are
-live, a conversation column, and a side panel on the right. The panel is always shown while the screen is wide enough. It replaces
+live, a conversation column, and a side panel on the right. The panel is shown while the screen is wide enough, unless the person hides it with ⌥P. It replaces
 a footer and status line, and the input box spans only the conversation
 column.
 
@@ -725,9 +725,9 @@ keyboard's reach.
 - A paste over about 10 lines shows as one token, "[Pasted text #1 · 312
   lines]", and the full text is sent. Clicking the token, or Ctrl+G with the
   cursor on it, opens it in the editor.
-- Ctrl+V with an image saves it to the session's `artifacts/` and shows
-  "[Image #1]". The prompt carries its path, and the model looks with `read`,
-  which returns images.
+- Ctrl+V with an image shows "[Image #1]" and sends the image as an image
+  part in the prompt, which the session processes as it enters
+  (`docs/invocation.md`).
 - `!cmd` runs a shell command and sends its output with the next prompt.
   `!!cmd` runs it and shows the output only to the person (`shell` with
   `send` false, `docs/invocation.md`).
@@ -1217,6 +1217,8 @@ The terminal reads these keys (`docs/configuration.md`, "Keys"):
 
 | Key | What it sets |
 |---|---|
+| `tui.rail.width` | The rail's share of the screen's width |
+| `tui.panel.width` | The panel's share of the screen's width |
 | `tui.panel.cards` | Which cards the panel shows, and their order |
 | `tui.theme` | The theme; unset, it follows the terminal's appearance |
 | `tui.reduced_motion` | Reduced motion |

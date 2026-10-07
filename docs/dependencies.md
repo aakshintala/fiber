@@ -271,7 +271,8 @@ yaml-rust and bincode.
 
 Tool arguments are checked against a subset of JSON Schema: `type`,
 `properties`, `required`, `additionalProperties`, `enum`, `items`, `minimum`,
-`maximum`, `minLength`, `anyOf` and `$ref`. A `$ref` is followed only within
+`maximum`, `minLength`, `maxLength`, `minItems`, `maxItems`, `anyOf` and
+`$ref`. A `$ref` is followed only within
 the same schema, such as `#/$defs/name` or `#/definitions/name`; one that
 points elsewhere, or leads back to itself, fails the check with a message
 saying so. A built-in tool's schema uses only the

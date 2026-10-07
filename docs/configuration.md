@@ -47,9 +47,10 @@ another, or they pass `-c model=...` for one run.
 Objects merge key by key, so a layer changes only the keys it names. Any other
 value, a list included, replaces the one below it. Each entry under a provider's
 `credentials` replaces the one below it as a whole: it does not merge key by key.
-`reviewer.context` is the one string that does not replace: the reviewer reads
-the global value and then the per-project one (`docs/permissions.md`, "What the
-person tells it").
+Two values do not replace. `reviewer.context`: the reviewer reads the global
+value and then the per-project one (`docs/permissions.md`, "What the person
+tells it"). `skills.disabled`: the global list and the project's list both
+apply.
 
 The per-project file is the person's own setting for one project. It lives in
 Fiber home, not the repository, so it covers every worktree of the project
@@ -62,7 +63,10 @@ each session it asks the hub to start.
 The key is a dotted path and the value is JSON, or a bare string when it does
 not parse as JSON: `-c handoff.tokens=200000`, `-c model=openai/gpt-5.6`. It
 may be given more than once. A named flag such as `--model` is shorthand for
-the same thing. `FIBER_HOME` is the only environment variable of Fiber's own; no
+the same thing, read before every `-c`, so `-c model=` wins over `--model`.
+`FIBER_HOME` is the only environment variable of its own that the `fiber`
+binary reads (`install.sh` also reads `FIBER_INSTALL_DIR` and `FIBER_VERSION`,
+`docs/releasing.md`); no
 environment variable overrides a key. Fiber also honours the platform's proxy
 variables (`docs/dependencies.md`, "Proxies").
 
@@ -113,7 +117,7 @@ same key. A file that sets one key under both spellings is `config_invalid`.
 | `hub.idle_exit_ms` | 1800000 (30 minutes) | no | How long a hub a client started stays running with no client connected, the same default as `session.idle_exit_ms`; an installed hub never exits for being idle (`docs/invocation.md`, "The hub"). |
 | `hub.default` | none | no | On a client, the name of the hub in `hubs` it uses without `--hub`; unset, it uses the local hub. |
 | `hubs."<name>".address` | none | no | On a client, a hub's address: `ws://`, `wss://`, or `unix:` and a socket path (`docs/invocation.md`, "Several hubs"). The device token is in `credentials/hubs/<name>`, never here. |
-| `session.idle_exit_ms` | 1800000 (30 minutes) | no | How long a session stays running with no turn and no jobs, whoever is connected (`docs/invocation.md`, "Lifecycle"). |
+| `session.idle_exit_ms` | 1800000 (30 minutes) | no | How long a session stays running with no turn, no jobs and no cache warming, whoever is connected (`docs/invocation.md`, "Lifecycle"). |
 | `reviewer.model` | the session's provider's reviewer model | no | The reviewer's model (`docs/permissions.md`, "The reviewer"). |
 | `reviewer.context` | none | no | The person's notes about their environment, in prose, which the reviewer reads after its fixed instructions; the global and per-project values are both read, the project's winning where they conflict (`docs/permissions.md`, "What the person tells it"). |
 | `reviewer.block_limits.consecutive` | 3 | no | Consecutive blocks before a person is asked. |
@@ -124,7 +128,7 @@ same key. A file that sets one key under both spellings is `config_invalid`.
 | `handoff.nudge` | true | yes | Whether the nudge is given. |
 | `cache.lifetime` | `"1h"` | yes | The prompt-cache lifetime, `"5m"` or `"1h"` (`docs/prompt-cache.md`). |
 | `cache.warm_idle` | false | yes | Whether an idle session keeps its prompt cache warm (`docs/prompt-cache.md`, "Warming while idle"). |
-| `cache.warm_cap` | `"2h"` | yes | How long after the last turn warming stops, as a duration such as `"4h"`; never more than 19 cache lifetimes (`docs/prompt-cache.md`, "Warming while idle"). |
+| `cache.warm_cap` | `"2h"` | yes | How long after the last turn warming stops, as a duration such as `"4h"`; less than 19 cache lifetimes (`docs/prompt-cache.md`, "Warming while idle"). |
 | `keys."<action>"` | the binding in `docs/tui.md` | no | A key, or a list of keys, for a terminal action; `[]` unbinds it (`docs/tui.md`, "Bindings"). |
 | `retry.attempts` | 3 | yes | Retries of a failed model call (`docs/model-routing.md`, "When a model call fails"). |
 | `retry.initial_delay_ms` | 2000 | yes | The first backoff, doubling each retry. |
@@ -144,7 +148,7 @@ same key. A file that sets one key under both spellings is `config_invalid`.
 | `extensions."<name>".tools.enabled`, `extensions."<name>".tools.disabled` | none | yes | Lists of the extension's tool names to declare or leave out, as an MCP server's `tools.enabled` and `tools.disabled` do ("MCP servers"); the terminal's `/tools` switch writes them (`docs/tui.md`, "Swapped views"). |
 | `extensions."<name>".hook_timeout_ms` | the callback's own | no | Overrides the timeout of every hook and watcher the extension registers, including the entries the `hooks` extension registers from configuration. |
 | `hooks.order."<hook point>"` | none | no | Extension names in the order their hooks run at that point (`docs/extensions.md`, "When several hooks share a point"). |
-| `providers."<name>".credential` | the first label `fiber login` stored | no | The credential label a new session uses (`docs/model-routing.md`, "Which credential a session uses"). |
+| `providers."<name>".credential` | `default`; `fiber login` writes the first label it stores | no | The credential label a new session uses (`docs/model-routing.md`, "Which credential a session uses"). |
 | `providers."<name>".credentials."<label>"` | none | no | Where that label's key comes from, when it is not stored in Fiber home ("Secrets"). |
 | `tui.panel.cards` | `["session", "changed_files", "delegates", "jobs", "quota"]` | no | The cards the terminal's panel shows, in order; an extension widget is listed as a card too (`docs/tui.md`, "The panel"). The status line of the narrow layout follows the same order. |
 | `tui.rail.width` | 15 | no | The rail's share of the screen's width, in percent, kept from 22 to 48 columns; dragging its edge writes it (`docs/tui.md`, "Layout"). |
@@ -193,7 +197,7 @@ lists:
 
 | Field | Meaning |
 |---|---|
-| `command`, `args`, `env` | the program of a stdio server |
+| `command`, `args`, `env` | the program of a stdio server; an `env` value is a string, or `{ "secret": "<name>" }`, which reads `credentials/<name>` when the server starts. The name must start `mcp.<server>.`, so a server reads only its own secrets |
 | `url` | a remote server |
 | `required` | whether failing to start ends the session, default false |
 | `startup_timeout_ms` | the startup deadline, default 5000 |
@@ -273,7 +277,8 @@ global or per-project file, with one of:
 { "command": ["op", "read", "op://Private/OpenRouter/key"] }
 ```
 
-A command runs once per process. A repository can never set this, because a
+A command runs once per process, and is named by its program alone in every
+message, because its arguments may hold a key. A repository can never set this, because a
 command runs a program and a changed source sends the key elsewhere. A
 credential stored under the same label comes first.
 
@@ -309,7 +314,9 @@ at their next reload.
 A problem in a file is reported by file and key:
 
 - An unknown key is a `notice` and is otherwise ignored. A repository written
-  for a newer Fiber must not break an older one.
+  for a newer Fiber must not break an older one. A command that runs no
+  session, such as `fiber config`, `fiber login` or `fiber models`, prints
+  each notice as one line on stderr.
 - Invalid JSON, or a value of the wrong type, is a startup error. A headless
   run fails with `config_invalid`.
 
@@ -326,6 +333,10 @@ Fiber writes configuration in these places:
 - `/scoped-models` saves the global `scoped_models`, and the `/keys` screen
   saves the global `keys`, only the bindings that differ from the defaults
 - `host.config.set` writes an extension's settings file
+- `fiber extension install --project` writes `extensions."<name>".enabled`:
+  `true` in the project's file, and `false` in the global file for an
+  extension it installs for the first time (`docs/extensions.md`, "Code a
+  repository ships")
 - `fiber config set <key> <value>` writes the global file, the per-project
   file with `--project`, or the repository's `.fiber/config.json` with
   `--repo`
@@ -496,8 +507,9 @@ provider extension declares") lists:
   `openai-completions` always sends `stream_options.include_usage: true`,
   because OpenAI sends no usage without it (`docs/model-routing.md`,
   "openai-completions facts").
-- `extra_body` is added to every request for the model. It may not name a
-  field Fiber builds, such as `tools` or `messages`; a model that does is
+- `extra_body` is added to every request for the model. It may add a field
+  or replace one such as `max_tokens`, but may not name a field listed in
+  `docs/model-routing.md`, "Extra request body fields"; a model that does is
   left out with the notice `model_invalid` (`docs/model-routing.md`, "Extra
   request body fields").
 - A `{name}` in a `base_url` is a per-account host. Its value is the

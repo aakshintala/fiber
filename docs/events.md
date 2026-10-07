@@ -1,6 +1,8 @@
 # The event stream
 
-What Fiber writes down, what it emits, and what a consumer can rely on. This is
+What Fiber writes down, what it emits, and what a consumer can rely on. A
+consumer is anything that reads these lines: a client, or a program reading a
+session's `events.jsonl`. This is
 what is true now, not a plan. It is settled by
 [What is the event stream, and what is durable?](https://github.com/aakshintala/fiber/issues/6);
 that ticket's resolution holds the rationale and the rejected alternatives.
@@ -178,6 +180,7 @@ consumer shows an unknown part as a placeholder.
 |---|---|---|
 | `text` | `text` (string) | text |
 | `image` | `path` (string), `mime_type` (string), `width` (integer), `height` (integer) | the processed image file in the session's `artifacts/` (`docs/model-routing.md`, "Image limits"), its type, such as `image/png`, and its size in pixels, so a client lays it out without decoding it |
+| `pdf` | `path` (string), `page_count` (integer), `pages` (image parts, optional) | the PDF in the session's `artifacts/`, the number of pages sent, and the pages rendered as image parts, absent when they could not be rendered (`docs/tools.md`, "read") |
 
 The log never holds an image's bytes. A tool's image and a pasted image are
 both written to `artifacts/` and named by path.
@@ -223,7 +226,7 @@ optional `multiSelect` (`docs/tools.md`, "The call").
 
 | Key | Type | Required | Meaning |
 |---|---|---|---|
-| `source` | string | yes | `driver`, a client's command; `extension`, an extension's `host.drive`; `session`, another session's `session_message` (`docs/tools.md`, "Messaging other sessions"); or `fiber`, Fiber's own message, such as the ending notice (`docs/tools.md`, "Background jobs"); a closed set |
+| `source` | string | yes | `driver`, a client's command; `extension`, an extension's `host.drive`, or a message a `turn_end` hook returned; `session`, another session's `session_message` (`docs/tools.md`, "Messaging other sessions"); or `fiber`, Fiber's own message, such as the ending notice (`docs/tools.md`, "Background jobs"); a closed set |
 | `extension` | string | no | the extension's name, when `source` is `extension` |
 | `from_session_id` | string | no | the sending session's id, when `source` is `session` |
 | `command_id` | string | no | the id of the `prompt`, `steer` or `message` command that sent it; present unless `source` is `fiber` or a `turn_end` hook returned the message (`docs/extensions.md`, "The hook points") |
@@ -611,7 +614,7 @@ Durable. The call's outcome.
 | `details` | any JSON | no | data for clients, such as an edit's diff; never sent to the model |
 | `artifact` | string | no | the full output's path, when the result was cut or a hook returned text for it |
 | `changes` | array | no | on a call that changed files, one object per file: `path` (string) and `added` and `removed` (integers, lines) |
-| `control` | object | no | instructions to the loop; the one key is `handoff` (string), a handoff note (`docs/handoff.md`) |
+| `control` | object | no | instructions to the loop: `handoff` (string), a handoff note (`docs/handoff.md`); `questions` (`questions`); `name` (string), a session name (`docs/tools.md`, "What a result carries") |
 | `changed_by` | `changed_by` | no | when an `after_tool` hook rewrote the result |
 | `provider_item` | any JSON | no | on a call the provider ran, its result block exactly as it arrived, sent back unchanged only to the model that produced it (`docs/tools.md`, "Hosted by the provider"); absent on a call Fiber runs |
 
@@ -996,8 +999,8 @@ text ("Writing"), except a note a hook wrote, which appears on no earlier line.
 generated from its payload.
 
 A handoff that fails or is cancelled leaves the model's context as it was. A
-cancelled handoff is a person's cancellation of the turn, which then completes
-`interrupted`.
+cancelled handoff means the turn was cancelled, by a person or a shutdown, and
+the turn completes `interrupted`.
 
 ### MCP servers
 
@@ -1250,7 +1253,7 @@ Every driver command is answered with exactly one of these, echoing its id
 | Key | Type | Required | Meaning |
 |---|---|---|---|
 | `command_id` | string | yes | the command's id |
-| `result` | object | no | on `rewind`, `tools`, `history` and a `shell` sent with `send` false, as below; absent for every other command |
+| `result` | object | no | on the commands in the table below; absent for every other command |
 
 | Command | `result` keys |
 |---|---|

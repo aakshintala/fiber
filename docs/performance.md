@@ -58,6 +58,7 @@ a 20-thousand-token one fit the same ceiling.
 | Terminal to its first frame, new session | 50 ms | Linux x86_64 | picked |
 | Terminal to its first frame, attaching | 50 ms plus 10 ms per MiB of session log | Linux x86_64 | picked |
 | Listing 1,000 sessions in one project, warm cache | 50 ms | Linux x86_64 | picked |
+| `session_list`, waiting for every running session's status | 2 s for the whole call | Linux x86_64 | picked |
 
 Basis says where a number came from:
 

@@ -127,7 +127,7 @@ provider's `models()` only when it has no cached copy. A list older than
 `-c <key>=<value>` sets one configuration key for one run, the per-run layer
 (`docs/configuration.md`, "Layers"). Both doors take it, as they take
 `--model`, and it may be given more than once. The terminal passes it to each
-session it asks the hub to start.
+session it asks the hub to start, in `start`'s `overrides` ("The hub").
 
 `--credential <label>` on a resume switches the session to another credential
 label, and the log records the switch (`docs/model-routing.md`, "Which
@@ -183,7 +183,7 @@ a key is valid.
 | Command | What it does |
 |---|---|
 | `mcp add [--project \| --repo] <name> <url>` | Declares a remote server. |
-| `mcp add [--project \| --repo] <name> [-e KEY=value]... -- <command> [args]...` | Declares a stdio server. |
+| `mcp add [--project \| --repo] <name> [-e KEY=value]... [--secret KEY]... -- <command> [args]...` | Declares a stdio server. `--secret KEY` reads the value from a hidden prompt, or stdin without a terminal, stores it at `credentials/mcp.<name>.<KEY>`, and writes `{ "secret": "mcp.<name>.<KEY>" }` as the variable's value. |
 | `mcp remove [--project \| --repo] <name>` | Removes a server's declaration. |
 | `mcp list` | Lists every declared server, the layer that declares it, and whether a repository's server is approved. |
 | `mcp login <server>` | Logs in to a server that needs OAuth. |
@@ -195,7 +195,7 @@ a key is valid.
 
 | Command | What it does |
 |---|---|
-| `config get <key>` | Prints the effective value and the layer or flag it came from. |
+| `config get <key>` | Prints the effective value and the layer it came from. |
 | `config set [--project \| --repo] <key> <value>` | Writes one key. |
 
 The commands that write configuration take the same scope flags. With
@@ -226,8 +226,9 @@ Every command that talks to the hub takes `--hub <name>` to use a hub from
 the client's list instead of the default.
 
 **Internal commands.** Fiber starts its own processes with internal
-commands: the session command, the hub, the image child ("Processes") and
-the `grep` and `find` that the file tools run (`docs/tools.md`). None is in
+commands: the session command, the hub, the image child ("Processes"), the
+release install step that `install.sh` runs (`docs/releasing.md`,
+"Installing"), and the `grep` and `find` that the file tools run (`docs/tools.md`). None is in
 the menu, and no person or client runs them.
 
 The flags are `-h`, `--help`, `-v` and `--version`. There is no `-V`.
@@ -385,7 +386,12 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 Rejection codes: `malformed`, `invalid_arguments`, `unknown_command`,
 `not_subscribed`, `busy`, `stale_request`, `not_step_boundary`,
 `session_held`, `delegate_session`, `summary_failed`, `closing`,
-`duplicate_command`, `session_not_found`.
+`duplicate_command`, `session_not_found`, `message_refused`, `hook_failed`.
+
+A prompt or steer that a hook refuses is rejected `message_refused`, with the
+hook's reason and extension in the message. One whose blocking hook failed is
+rejected `hook_failed`. A `fiber ask` whose first
+prompt is rejected either way exits 1.
 
 **`reply` answers every interaction that asks something, not just approvals.**
 `docs/architecture.md` fixes the set: "Fiber ships one closed, versioned set
@@ -437,7 +443,8 @@ Settled by
 with `rewound` while it still holds its lock, and the hub starts the new one,
 whose `session_started` names the old session in `forked_from`. Each client
 connected to the old session is sent the new session's id and subscribes to
-it. A session no process holds is rewound by the hub opening it first.
+it. For a session no process holds, the hub starts a session process for it, and
+that process rewinds it.
 
 **The set is a floor, not a proof.** It is what Fiber's settled semantics
 require today. A later ticket may add one. Adding a command is additive and not
@@ -504,7 +511,7 @@ cancels. When the delay passes, Fiber exits.
 
 **A session left unattended with jobs running checks them once.** Unattended
 means no prompt or steer from a person or a driver for
-`session.idle_exit_ms`, jobs or no jobs. A running job keeps a session from being idle, so the idle delay
+`session.idle_exit_ms`, jobs or no jobs. A session message is neither. A running job keeps a session from being idle, so the idle delay
 never ends it; instead, when it has been unattended that long with jobs
 running, Fiber wakes the model once with the jobs check: a notice listing
 the running jobs and telling it to stop any that look hung or that it no
@@ -834,11 +841,11 @@ websocket for everything it does.
 | `feed` | none | Subscribes the connection to the feed: the latest `session_status` of every running or waiting top-level session, and every change after it, then a `session_left` line (`docs/events.md`) when one ends. Crashed sessions not yet dismissed come first: each one's last `session_status`, then its `session_left`. |
 | `dismiss` | `session` (string) | Drops a crashed session from the feed, for every client; its log stays, and it can still be resumed from `recent`. Rejected `stale_request` unless the session is crashed. |
 | `recent` | `before` (string, optional), `project` (string, optional) | Answers with a page of exited sessions from `recent.jsonl`, newest first (`docs/state.md`). |
-| `start` | `workspace` (string), `model` (string, optional), `content` (optional) | Starts a session in the workspace, any absolute path, and answers with its `session_id`. With `content`, its first prompt. |
+| `start` | `workspace` (string), `model` (string, optional), `overrides` (array of strings, optional), `worktree` (boolean, optional), `content` (optional) | Starts a session in the workspace, any absolute path, and answers with its `session_id`. Each of `overrides` is a `key=value` passed to the session as `-c` ("Commands and flags"). With `worktree` true, the session runs in a new worktree of the workspace ("Isolation"). With `content`, its first prompt. |
 | `delete` | `session` (string), `cascade` (boolean, optional) | Deletes an exited session ("Deleting and pruning"). |
 | `prompt_history` | `project` (string), `before` (integer, optional) | Answers with a page of the project's prompt history, newest first (`docs/state.md`). |
 | `read_file` | `session` (string), `path` (string) | Answers with one file from the session's `artifacts/` ("A session's files"). |
-| `status` | none | Answers with what `fiber hub status` prints. |
+| `status` | none | Answers with `running`, `fiber_version` and `clients` (`docs/events.md`, "`command_accepted`"). |
 | `refresh` | none | Rebuilds the hub's environment, as `fiber hub refresh` does. |
 | `pairing_code` | `device` (string) | Answers with a new pairing code for that device, as `fiber hub pair` prints. |
 | `devices` | none | Answers with the paired devices. |
@@ -983,8 +990,12 @@ delegate's `isolation: worktree` (`docs/delegates.md`), by the terminal's
 All three use the same rules (`docs/delegates.md`, "Worktrees"): a new branch
 from the workspace's HEAD in a worktree under
 `~/.fiber/projects/<key>/worktrees/<id>`, removed at the end when it holds
-nothing uncommitted and no commits beyond its base, kept otherwise, and
-`invalid_arguments` outside a git repository. Fiber runs the `git` program; no
+nothing uncommitted and no commits beyond its base, kept otherwise. Outside a
+git repository a delegate's `isolation: worktree` fails with
+`invalid_arguments`, and `fiber ask --worktree` is a usage error. The session
+records the worktree on `session_started` (`docs/events.md`). The `worktree`
+module creates and removes worktrees, for delegates, sessions and
+`fiber sessions prune` (`docs/architecture.md`). Fiber runs the `git` program; no
 git library is linked in. A supervisor that wants its own tree still makes it
 and passes the path.
 
@@ -1027,7 +1038,9 @@ session:
 session's `events.jsonl` and `artifacts/` into a directory, `./<id>/` by
 default. A path that already exists is refused, naming it; nothing is merged
 or overwritten. A running session's export holds the lines written so far. The
-export is the log as recorded: text a hook redacted before it was logged is
+export copies a symbolic link as a link and never reads through it. Its top
+directory is created with mode 0700; files keep their modes. The export is the
+log as recorded: text a hook redacted before it was logged is
 redacted, and nothing else is (`docs/extensions.md`, "Hooks"). What the person
 does with it is theirs. Another format, such as Markdown or HTML, or further
 redaction, is an extension command (`docs/extensions.md`, "Commands and

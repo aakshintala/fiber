@@ -7,6 +7,13 @@ It is deliberately small. Terms are added when a decision gives them meaning,
 not in advance. Nothing here was inherited wholesale from the archived Zig tree;
 each word was argued on its own merits.
 
+The process documents (`docs/workflow.md`, `docs/code-quality.md`,
+`docs/testing.md`, `docs/ci.md`, `docs/agents/`) describe how Fiber is built,
+not Fiber. There a reviewer reviews a pull request, a role is a part an agent
+plays, the gate is `scripts/check`, and a test seam is a point where a test
+injects a fake. Cargo's test harness and Rust's panic hook keep their own
+names. Everywhere else the words below have only the meanings given.
+
 ## Language
 
 ### Session
@@ -173,7 +180,7 @@ _Avoid_: compaction, summary, collapse, reset
 ### Handoff note
 
 The text a handoff restarts the model's context from, written by the session's
-own model.
+own model, or by an extension's `before_handoff` hook.
 _Avoid_: summary
 
 ### Prompt cache
@@ -267,11 +274,11 @@ _Avoid_: controller
 ### Client
 
 Something attached to a running session that watches it and may drive it: the
-terminal, a GUI, a phone, a parent session. Every client but a parent reaches
-a session through the hub, and every client has the same powers. A `full`
+terminal, a GUI, a phone, a parent session. Every client Fiber ships, except a
+parent, reaches a session through the hub, and every client has the same powers. A `full`
 client receives the whole stream; a `summary` client only the session's
 status. Clients do not keep a session alive.
-_Avoid_: frontend, UI, consumer
+_Avoid_: frontend, UI
 
 ### Participant
 

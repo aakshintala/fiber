@@ -566,13 +566,20 @@ A session has one reasoning setting, its thinking level: `off`, `minimal`,
 `low`, `medium`, `high`, `xhigh` or `max`. Fiber has no separate effort
 setting. Each protocol module maps the level to whatever its vendor takes,
 whether a token budget, an effort parameter or both. A model
-declares the levels it supports, and the model picker offers only those. A
-level the model does not support is `invalid_arguments`.
+declares the levels it supports, and the model picker offers only those.
 
 The level comes from, in order: a `:level` suffix typed with the model, which
 applies to that session only; the session's own choice, from the picker or
 `/thinking`; `models."provider/model".thinking`; the top-level `thinking` key;
 and otherwise the model's own default (`docs/configuration.md`).
+
+A level the model does not declare is checked by where it came from. One asked
+for now, by a `:level` suffix, the session's choice or a driver, fails with
+`invalid_arguments`. A configured one, from `models."provider/model".thinking`
+or the top-level `thinking`, is ignored: the session uses the model's own
+default and logs the notice `config_key_ignored`, naming the key, the level and
+the model. A model that declares no levels, such as a local Ollama model, runs
+with none.
 
 ## Choosing the model
 
@@ -637,7 +644,7 @@ file, unless that key is already set.
 
 ### Which credential a session uses
 
-A session fixes its credential label when it starts. Fiber picks it in this
+A session picks its credential label when it starts. Fiber picks it in this
 order:
 
 1. `--credential <label>` on a resume, which both doors accept.
@@ -645,6 +652,7 @@ order:
 3. For a delegate started with a role, the role's `credential`
    (`docs/delegates.md`, "Choosing a model").
 4. `providers."<name>".credential`, from any layer except a repository's.
+5. Otherwise `default`, the source the provider's data declares.
 
 A label that names no credential fails with `credential_missing`, naming the
 labels the provider has.
@@ -659,8 +667,8 @@ turn boundary and rebuilds the prompt cache, because a vendor holds the cache
 per account or workspace (`docs/prompt-cache.md`, "Switching model"). The
 terminal saves the label to the global `providers."<name>".credential`, unless
 the person marks the switch as this session only. A per-project file can pin a
-label for one project. A switch never changes a session that is already
-running.
+label for one project. Saving the label never changes another session that
+is already running.
 
 Fiber never changes a session's credential by itself. It does not rotate
 credentials, and it does not move to another label when one runs out of quota
