@@ -259,9 +259,10 @@ pub(crate) enum Reply {
     Http(Result<(u16, Vec<u8>), (contract::ErrorCode, String)>),
     /// How a `host.exec` run ended, or the code and message `host.exec` raises.
     Exec(Result<exec::Ran, (contract::ErrorCode, String)>),
-    /// The query parameters of the one request the callback served.
-    Query(Result<Vec<(String, String)>, String>),
-    Lock(Result<CredentialLock, String>),
+    /// The query parameters of the one request the callback served, or the
+    /// code and message `host.oauth.callback` raises.
+    Query(Result<Vec<(String, String)>, (contract::ErrorCode, String)>),
+    Lock(Result<CredentialLock, (contract::ErrorCode, String)>),
     Slept,
 }
 
@@ -416,13 +417,10 @@ pub(crate) fn resume_values(
             LuaValue::Integer(i64::from(status)),
             LuaValue::String(lua.create_string(bytes)?),
         ])),
-        Reply::Http(Err(failed_with)) | Reply::Exec(Err(failed_with)) => failed(failed_with),
-        // Task 3 migrates these halves to `(nil, code, message)`; until
-        // then their failures stay `(nil, message)` as their halves read.
-        Reply::Query(Err(message)) | Reply::Lock(Err(message)) => Ok(MultiValue::from_vec(vec![
-            LuaValue::Nil,
-            LuaValue::String(lua.create_string(message)?),
-        ])),
+        Reply::Http(Err(failed_with))
+        | Reply::Exec(Err(failed_with))
+        | Reply::Query(Err(failed_with))
+        | Reply::Lock(Err(failed_with)) => failed(failed_with),
         Reply::Query(Ok(pairs)) => {
             let table = lua.create_table()?;
             for (key, value) in pairs {

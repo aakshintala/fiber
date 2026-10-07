@@ -91,6 +91,18 @@ fiber.command("refresh", { timeout = 60000, run = function()
   return json.encode(host.oauth.refresh(function() return { token = "t", expires_at = 1 } end))
 end })
 
+fiber.command("poll_caught", { timeout = 60000, run = function(text)
+  local ok, err = pcall(host.oauth.poll, opts_from(text))
+  if ok then return "ok" end
+  return err.code .. "\n" .. err.message
+end })
+
+fiber.command("refresh_command", { timeout = 60000, run = function()
+  local ok, err = pcall(host.oauth.refresh, function() return { token = "t", expires_at = 1 } end)
+  if ok then return "ok" end
+  return err.code .. "\n" .. err.message
+end })
+
 -- The refresh function does what the secret `mode` says.
 fiber.provider("acme", { credential = { timeout = 60000, run = function()
   if host.secret("mode") == "outside" then error("outside") end
@@ -1204,4 +1216,159 @@ fn a_refresh_function_refused_after_a_failed_request_is_authentication_failed() 
     assert!(error.to_string().contains("host.oauth.poll"), "{error}");
     assert_eq!(env.stored().unwrap(), before);
     assert_eq!(server.request_count(), 0);
+}
+
+/// A provider whose `credential()` catches each failure as its table and
+/// smuggles the code out as the token: `credential()` must return a usable
+/// token shape, so the code rides in `token`.
+const CAUGHT: &str = r#"
+fiber.provider("acme", { credential = { timeout = 60000, run = function()
+  local mode = host.secret("mode")
+  local url = host.secret("url")
+  local function caught(ok, err)
+    if ok then return { token = "unexpected-ok", expires_at = 1700003600 } end
+    return { token = "caught:" .. err.code, expires_at = 1700003600 }
+  end
+  if mode == "string" then
+    return caught(pcall(host.oauth.refresh, function() error("boom") end))
+  end
+  if mode == "table" then
+    return caught(pcall(host.oauth.refresh, function()
+      host.http({ url = host.secret("dead") .. "/token", method = "POST" })
+      error("unreached")
+    end))
+  end
+  if mode == "open" then
+    return caught(pcall(host.oauth.open, url .. "/verify"))
+  end
+  if mode == "callback" then
+    return caught(pcall(host.oauth.callback, { port = tonumber(host.secret("port")) }))
+  end
+  if mode == "poll" then
+    return caught(pcall(host.oauth.poll, {
+      url = url .. "/device/token",
+      body = "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code&device_code=d",
+      headers = { ["content-type"] = "application/x-www-form-urlencoded" },
+    }))
+  end
+  return { token = "unreached", expires_at = 1700003600 }
+end } })
+"#;
+
+fn caught(env: &Env, browser: Arc<dyn Browser>) -> Arc<LuaExtension> {
+    let dir = env.setup.root().join("extensions").join("caught");
+    write(&dir.join("init.lua"), CAUGHT);
+    Arc::new(LuaExtension::new("caught", dir, env.home(), env.clock.clone()).with_browser(browser))
+}
+
+fn caught_token(env: &Env, ext: &Arc<LuaExtension>, server: &OauthServer, mode: &str) -> String {
+    let provider = env.provider(ext, server, mode);
+    finish(&start_token(&provider)).unwrap()
+}
+
+#[test]
+fn a_poll_failure_carries_its_code_for_pcall() {
+    let env = Env::new();
+    let ext = env.extension();
+    for (reply, code, wanted) in [
+        (
+            OauthReply::denied(),
+            "authentication_failed",
+            "access_denied",
+        ),
+        (
+            OauthReply::expired(),
+            "authentication_failed",
+            "expired_token",
+        ),
+        (
+            OauthReply::raw(200, "not json"),
+            "unreadable_reply",
+            "not a JSON object",
+        ),
+        (OauthReply::raw(500, "{}"), "http_error", "status 500"),
+    ] {
+        let server = device_server(vec![reply]);
+        let opts = format!(
+            "{{ url = \"{}/device/token\", method = \"POST\", headers = {{ [\"content-type\"] = \"application/x-www-form-urlencoded\" }}, body = \"grant_type=d\" }}",
+            server.url()
+        );
+        let caught = run(&ext, "poll_caught", &opts).unwrap();
+        let (name, message) = caught.split_once('\n').unwrap();
+        assert_eq!(name, code, "{message}");
+        assert!(message.starts_with("host.oauth.poll: "), "{message}");
+        assert!(message.contains(wanted), "{wanted}: {message}");
+    }
+}
+
+#[test]
+fn a_poll_slowed_down_past_3600_seconds_is_rate_limited() {
+    let env = Env::new();
+    let ext = env.extension();
+    let server = device_server(vec![OauthReply::slow_down()]);
+    let opts = format!(
+        "{{ url = \"{}/device/token\", method = \"POST\", interval = 3600, body = \"grant_type=d\" }}",
+        server.url()
+    );
+    let caught = run(&ext, "poll_caught", &opts).unwrap();
+    let (code, message) = caught.split_once('\n').unwrap();
+    assert_eq!(code, "rate_limited");
+    assert!(message.starts_with("host.oauth.poll: "), "{message}");
+    assert_eq!(server.request_count(), 1);
+}
+
+#[test]
+fn a_refresh_from_a_command_is_invalid_arguments() {
+    let env = Env::new();
+    let ext = env.extension();
+    let caught = run(&ext, "refresh_command", "").unwrap();
+    let (code, message) = caught.split_once('\n').unwrap();
+    assert_eq!(code, "invalid_arguments");
+    assert!(
+        message.contains("a command has no provider credential"),
+        "{message}"
+    );
+}
+
+#[test]
+fn a_refresh_function_that_raises_a_string_is_credential_failed_for_pcall() {
+    let env = Env::new();
+    let ext = caught(&env, Arc::new(Recording::never()));
+    let server = OauthServer::start(vec![]);
+    env.store(&json!({ "token": "old", "expires_at": WALL + 100 }));
+    assert_eq!(
+        caught_token(&env, &ext, &server, "string"),
+        "caught:credential_failed"
+    );
+}
+
+#[test]
+fn a_refresh_function_that_raises_a_table_passes_it_through_for_pcall() {
+    let env = Env::new();
+    let ext = caught(&env, Arc::new(Recording::never()));
+    let server = OauthServer::start(vec![]);
+    env.secret("dead", &dead_url());
+    env.store(&json!({ "token": "old", "expires_at": WALL + 100 }));
+    assert_eq!(
+        caught_token(&env, &ext, &server, "table"),
+        "caught:connection_failed"
+    );
+}
+
+#[test]
+fn an_unattended_open_callback_and_poll_are_authentication_failed_for_pcall() {
+    for mode in ["open", "callback", "poll"] {
+        let env = Env::new();
+        let ext = caught(&env, Arc::new(Recording::never()));
+        let server = OauthServer::start(vec![OauthReply::token("at", "rt", 3600)]);
+        if mode == "callback" {
+            env.secret("port", &free_port().to_string());
+        }
+        assert_eq!(
+            caught_token(&env, &ext, &server, mode),
+            "caught:authentication_failed",
+            "{mode}"
+        );
+        assert!(server.requests().is_empty(), "{mode}");
+    }
 }

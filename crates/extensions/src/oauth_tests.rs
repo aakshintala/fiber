@@ -247,3 +247,117 @@ fn a_malformed_parameter_is_named_only_when_recognised_and_its_value_never_shown
         assert!(!err.contains('\n'), "{query}: {err}");
     }
 }
+
+/// The reply `work` delivers: every failure carries its code and message.
+fn delivered(work: impl FnOnce(&Deliver)) -> Reply {
+    let (tx, rx) = mpsc::channel();
+    let deliver: Deliver = Arc::new(move |reply| {
+        let _ = tx.send(reply);
+    });
+    work(&deliver);
+    rx.recv_timeout(WAIT)
+        .expect("waited {WAIT:?} for the reply")
+}
+
+fn failed(reply: Reply) -> (contract::ErrorCode, String) {
+    match reply {
+        Reply::Query(Err(failed)) | Reply::Lock(Err(failed)) => failed,
+        _ => panic!("no failure was delivered"),
+    }
+}
+
+#[test]
+fn a_port_that_cannot_be_bound_is_io_failed() {
+    let held = bind(0).unwrap();
+    let port = held.local_addr().unwrap().port();
+    let (code, message) = failed(delivered(|deliver| {
+        assert!(listen(port, &deliver).is_none());
+    }));
+    assert_eq!(code, contract::ErrorCode::IoFailed);
+    assert!(message.contains(&format!("port {port}")), "{message}");
+}
+
+#[test]
+fn a_request_whose_query_cannot_be_read_is_unreadable_reply() {
+    let port = bind(0).unwrap().local_addr().unwrap().port();
+    let (tx, rx) = mpsc::channel();
+    let deliver: Deliver = Arc::new(move |reply| {
+        let _ = tx.send(reply);
+    });
+    let cancel = listen(port, &deliver).expect("the listener binds");
+    let mut stream = std::net::TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
+    std::io::Write::write_all(
+        &mut stream,
+        b"GET /cb?code=SECRET%zz HTTP/1.1\r\nHost: x\r\n\r\n",
+    )
+    .unwrap();
+    let (code, message) = failed(rx.recv_timeout(WAIT).expect("the reply arrives"));
+    assert_eq!(code, contract::ErrorCode::UnreadableReply);
+    assert!(message.starts_with("host.oauth.callback: "), "{message}");
+    assert!(!message.contains("SECRET"), "{message}");
+    drop(cancel);
+}
+
+#[test]
+fn a_lock_whose_file_cannot_be_written_is_io_failed() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = fakes::TempDir::new("fiber-oauth-lock");
+    let credentials = dir.path().join("credentials");
+    std::fs::create_dir(&credentials).unwrap();
+    std::fs::set_permissions(&credentials, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let (code, message) = failed(delivered(|deliver| {
+        // The directories check passes; the spawned wait fails writing
+        // the lock file and delivers the failure.
+        let _waiting = lock(dir.path(), "acme", deliver);
+    }));
+    assert_eq!(code, contract::ErrorCode::IoFailed);
+    assert!(message.starts_with("host.oauth.refresh: "), "{message}");
+    std::fs::set_permissions(&credentials, std::fs::Permissions::from_mode(0o700)).unwrap();
+}
+
+/// Calls each `held:` method in Lua and converts the caught failure to its
+/// code and message.
+
+#[test]
+fn a_credential_file_that_cannot_be_read_or_written_is_io_failed() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = fakes::TempDir::new("fiber-oauth-held");
+    let file = CredentialFile::new(dir.path(), "acme", LABEL).unwrap();
+    {
+        let lock = file.try_lock().unwrap().unwrap();
+        lock.write(&serde_json::json!({ "token": "old", "expires_at": 1 }))
+            .unwrap();
+    }
+    let cred_dir = dir.path().join("credentials").join("acme");
+    let path = cred_dir.join("default");
+    // Each phase runs in its own VM: dropping it frees the held lock.
+    let failed = |held: Held, method: &str| {
+        let lua = Lua::new();
+        let lib = crate::host::failure::install(&lua).unwrap();
+        lua.globals().set("held", held).unwrap();
+        let err = lua.load(method).eval::<LuaValue>().unwrap_err();
+        let converted: LuaValue = lib.convert.call(LuaValue::Error(Box::new(err))).unwrap();
+        let LuaValue::Table(table) = converted else {
+            panic!("{method} raised no failure table");
+        };
+        let (code, message): (String, String) =
+            (table.get("code").unwrap(), table.get("message").unwrap());
+        (code, message)
+    };
+    // An unreadable file fails the read.
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let clock = fakes::clock::FakeClock::new();
+    let held = Held::new(file.try_lock().unwrap().unwrap(), clock);
+    let (code, message) = failed(held, "return held:read()");
+    assert_eq!(code, "io_failed");
+    assert!(message.contains("default"), "{message}");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    // A read-only directory fails the atomic write's rename.
+    let clock = fakes::clock::FakeClock::new();
+    let held = Held::new(file.try_lock().unwrap().unwrap(), clock);
+    std::fs::set_permissions(&cred_dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let (code, message) = failed(held, "return held:write({ token = 't', expires_at = 1 })");
+    assert_eq!(code, "io_failed");
+    assert!(message.contains("default"), "{message}");
+    std::fs::set_permissions(&cred_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+}

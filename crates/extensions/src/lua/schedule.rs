@@ -370,6 +370,15 @@ fn settle(
             (Some(cancel_tx), None)
         }
         Request::Lock => {
+            // A command, hook or timer holds no provider credential: calling
+            // `refresh` there is an error in the calling code, raised as
+            // `{ code, message }` like any host failure.
+            let no_credential = |what: &str| {
+                (
+                    contract::ErrorCode::InvalidArguments,
+                    format!("host.oauth.refresh: a {what} has no provider credential to refresh"),
+                )
+            };
             let cancel = match &target {
                 Target::Provider {
                     credential: Some(pair),
@@ -386,24 +395,15 @@ fn settle(
                     None
                 }
                 Target::Command(_) => {
-                    deliver(Reply::Lock(Err(
-                        "host.oauth.refresh: a command has no provider credential to refresh"
-                            .to_owned(),
-                    )));
+                    deliver(Reply::Lock(Err(no_credential("command"))));
                     None
                 }
                 Target::Hook { .. } => {
-                    deliver(Reply::Lock(Err(
-                        "host.oauth.refresh: a hook has no provider credential to refresh"
-                            .to_owned(),
-                    )));
+                    deliver(Reply::Lock(Err(no_credential("hook"))));
                     None
                 }
                 Target::Timer { .. } => {
-                    deliver(Reply::Lock(Err(
-                        "host.oauth.refresh: a timer has no provider credential to refresh"
-                            .to_owned(),
-                    )));
+                    deliver(Reply::Lock(Err(no_credential("timer"))));
                     None
                 }
             };

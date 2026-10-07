@@ -134,9 +134,10 @@ local yield, resume, status = coroutine.yield, coroutine.resume, coroutine.statu
 local create = coroutine.create
 local pack, unpack = table.pack, table.unpack
 
--- Like `pcall(f, ...)`, but `f` may suspend on a host call. The VM's `pcall`
--- cannot be yielded across, so `f` runs in a coroutine of its own and each
--- yield it makes is passed up to the host, and the answer back down.
+-- Like `pcall(f, ...)`, but kept local: `refresh` needs the raw error value,
+-- an external Rust failure carrying whether the endpoint was reached, so an
+-- uncaught one still fails with the rejection's code. The global `pcall`
+-- converts only at the caller's own boundary.
 local function run(f, ...)
   local co = create(f)
   local args = pack(...)
@@ -178,8 +179,8 @@ function oauth.callback(opts)
     error("host.oauth.callback: `port` must be a whole number from 1 to 65535", 2)
   end
   need_person("callback")
-  local query, err = yield(tag, "callback", { port = port })
-  if query == nil then error(err, 0) end
+  local query, code, message = yield(tag, "callback", { port = port })
+  if query == nil then error(failure(code, message), 0) end
   return query
 end
 
@@ -205,22 +206,22 @@ function oauth.poll(opts)
     local reply = host.http(request)
     local ok, body = pcall(json.decode, reply.body)
     if not ok or type(body) ~= "table" then
-      error("host.oauth.poll: status " .. reply.status .. " with a body that is not a JSON object", 0)
+      error(failure("unreadable_reply", "host.oauth.poll: status " .. reply.status .. " with a body that is not a JSON object"), 0)
     end
     local code = body.error
     if code == nil then
       if reply.status < 200 or reply.status > 299 then
-        error("host.oauth.poll: status " .. reply.status, 0)
+        error(failure("http_error", "host.oauth.poll: status " .. reply.status), 0)
       end
       return body
     elseif code == "slow_down" then
       interval = interval + 5
       if interval > 3600 then
-        error("host.oauth.poll: the server asked for more than 3600 seconds between polls", 0)
+        error(failure("rate_limited", "host.oauth.poll: the server asked for more than 3600 seconds between polls"), 0)
       end
     elseif code ~= "authorization_pending" then
       local detail = type(body.error_description) == "string" and (": " .. body.error_description) or ""
-      error("host.oauth.poll: " .. tostring(code) .. detail, 0)
+      error(failure("authentication_failed", "host.oauth.poll: " .. tostring(code) .. detail), 0)
     end
     yield(tag, "sleep", interval)
   end
@@ -231,8 +232,8 @@ function oauth.refresh(fn)
   if type(fn) ~= "function" then
     error("host.oauth.refresh: takes a function", 2)
   end
-  local held, err = yield(tag, "lock")
-  if held == nil then error(err, 0) end
+  local held, code, message = yield(tag, "lock")
+  if held == nil then error(failure(code, message), 0) end
   local ok, result = run(function()
     local stored = held:read()
     if stored ~= nil and not held:due(stored) then return stored end
@@ -273,7 +274,9 @@ pub(crate) fn install(
     oauth.set(
         "pkce",
         lua.create_function(|lua, ()| {
-            let verifier = verifier().map_err(mlua::Error::runtime)?;
+            let verifier = verifier().map_err(|message| {
+                crate::host::failure::fail(contract::ErrorCode::IoFailed, message)
+            })?;
             let pair = lua.create_table()?;
             pair.set("challenge", challenge(&verifier))?;
             pair.set("verifier", verifier)?;
@@ -369,12 +372,12 @@ impl Held {
         }
     }
 
-    fn with<T>(&self, f: impl FnOnce(&CredentialLock) -> Result<T, String>) -> mlua::Result<T> {
+    fn with<T>(&self, f: impl FnOnce(&CredentialLock) -> mlua::Result<T>) -> mlua::Result<T> {
         let held = self.lock.borrow();
         let lock = held.as_ref().ok_or_else(|| {
             mlua::Error::runtime("host.oauth.refresh: the credential is no longer held")
         })?;
-        f(lock).map_err(mlua::Error::runtime)
+        f(lock)
     }
 
     /// Whether `stored` needs refreshing: not a usable credential, or one
@@ -403,7 +406,11 @@ fn usable(value: &Value) -> Option<i64> {
 impl UserData for Held {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         methods.add_method("read", |lua, this, ()| {
-            let stored = this.with(|lock| lock.read().map_err(|e| e.to_string()))?;
+            let stored = this.with(|lock| {
+                lock.read().map_err(|e| {
+                    crate::host::failure::fail(contract::ErrorCode::IoFailed, e.to_string())
+                })
+            })?;
             stored.map_or(Ok(LuaValue::Nil), |value| host::to_lua(lua, &value))
         });
         methods.add_method("due", |_, this, stored: LuaValue| {
@@ -416,7 +423,11 @@ impl UserData for Held {
                     "host.oauth.refresh: the function must return a table with a `token` string and an `expires_at` whole number of seconds",
                 ));
             }
-            this.with(|lock| lock.write(&value).map_err(|e| e.to_string()))
+            this.with(|lock| {
+                lock.write(&value).map_err(|e| {
+                    crate::host::failure::fail(contract::ErrorCode::IoFailed, e.to_string())
+                })
+            })
         });
         methods.add_method("release", |_, this, ()| {
             this.lock.borrow_mut().take();
@@ -435,9 +446,13 @@ fn bind(port: u16) -> io::Result<TcpListener> {
 /// frees the port. None when nothing is listening, in which case the error is
 /// already delivered.
 pub(crate) fn listen(port: u16, deliver: &Deliver) -> Option<Sender<()>> {
+    // A port that cannot be bound is `io_failed`; a request whose query
+    // cannot be read is `unreadable_reply`, both raised as `{ code,
+    // message }` by the callback half.
     let fail = |why: &dyn std::fmt::Display| {
-        deliver(Reply::Query(Err(format!(
-            "host.oauth.callback: port {port}: {why}"
+        deliver(Reply::Query(Err((
+            contract::ErrorCode::IoFailed,
+            format!("host.oauth.callback: port {port}: {why}"),
         ))));
     };
     let listener = match bind(port).and_then(|l| l.set_nonblocking(true).map(|()| l)) {
@@ -465,7 +480,7 @@ pub(crate) fn listen(port: u16, deliver: &Deliver) -> Option<Sender<()>> {
     }
 }
 
-type Query = Result<Vec<(String, String)>, String>;
+type Query = Result<Vec<(String, String)>, (contract::ErrorCode, String)>;
 
 /// Serves connections until one is a request, then returns its query. None
 /// when cancelled.
@@ -513,7 +528,10 @@ fn answer(mut stream: TcpStream, stop: &mpsc::Receiver<()>) -> Option<Query> {
         }
         Err(why) => {
             respond(&mut stream, "400 Bad Request");
-            Some(Err(format!("host.oauth.callback: {why}")))
+            Some(Err((
+                contract::ErrorCode::UnreadableReply,
+                format!("host.oauth.callback: {why}"),
+            )))
         }
     }
 }
@@ -644,7 +662,10 @@ fn decode(text: &str) -> Result<String, &'static str> {
 /// the error is already delivered.
 pub(crate) fn lock(home: &Path, pair: &CredentialPair, deliver: &Deliver) -> Option<Sender<()>> {
     let fail = |why: &dyn std::fmt::Display| {
-        deliver(Reply::Lock(Err(format!("host.oauth.refresh: {why}"))));
+        deliver(Reply::Lock(Err((
+            contract::ErrorCode::IoFailed,
+            format!("host.oauth.refresh: {why}"),
+        ))));
     };
     let file = match CredentialFile::new(home, &pair.credential, &pair.label) {
         Ok(file) => file,
@@ -663,7 +684,10 @@ pub(crate) fn lock(home: &Path, pair: &CredentialPair, deliver: &Deliver) -> Opt
                     Ok(Some(lock)) => return send(Reply::Lock(Ok(lock))),
                     Ok(None) => {}
                     Err(e) => {
-                        return send(Reply::Lock(Err(format!("host.oauth.refresh: {e}"))));
+                        return send(Reply::Lock(Err((
+                            contract::ErrorCode::IoFailed,
+                            format!("host.oauth.refresh: {e}"),
+                        ))));
                     }
                 }
                 match stop.recv_timeout(POLL) {
