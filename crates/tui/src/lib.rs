@@ -10,9 +10,11 @@ mod approvals;
 mod bindings;
 mod files;
 mod format;
+mod input;
 mod keymap;
 mod keys;
 mod link;
+mod shell;
 mod slash;
 mod term;
 mod turn;
@@ -162,11 +164,14 @@ pub fn draw(events: &str, width: u16, height: u16) -> Result<String, String> {
     Ok(view::text(&buf))
 }
 
+/// One frame: the cells, and where the cursor shows, if anywhere.
+type Frame = (Buffer, Option<Position>);
+
 /// The screen: ratatui on a fixed viewport, and the last frame drawn.
 struct Screen<B: Backend> {
     terminal: Terminal<TtySized<B>>,
     area: Rect,
-    last: Option<Buffer>,
+    last: Option<Frame>,
 }
 
 impl<B: Backend> Screen<B> {
@@ -188,16 +193,22 @@ impl<B: Backend> Screen<B> {
         })
     }
 
-    /// Draws `app`. A frame equal to the last one writes nothing; otherwise
-    /// only the cells that changed are written.
+    /// Draws `app`, the cursor shown at the draft's cursor or hidden. A
+    /// frame whose cells and cursor equal the last one's writes nothing;
+    /// otherwise only the cells that changed are written.
     fn draw(&mut self, app: &App) -> Result<(), B::Error> {
-        let mut next = Buffer::empty(self.area);
-        view::render(app, self.area, &mut next);
+        let mut cells = Buffer::empty(self.area);
+        view::render(app, self.area, &mut cells);
+        let next = (cells, view::cursor(app, self.area));
         if self.last.as_ref() == Some(&next) {
             return Ok(());
         }
-        self.terminal
-            .draw(|frame| frame.buffer_mut().clone_from(&next))?;
+        self.terminal.draw(|frame| {
+            frame.buffer_mut().clone_from(&next.0);
+            if let Some(cursor) = next.1 {
+                frame.set_cursor_position(cursor);
+            }
+        })?;
         self.last = Some(next);
         Ok(())
     }
@@ -309,20 +320,25 @@ impl<B: Backend> Loop<B> {
         match input {
             Input::Bytes(bytes) => {
                 for event in self.parser.feed(&bytes) {
-                    match event {
-                        Event::Key(key) => match self.app.on_key(key, self.clock.now()) {
-                            Effect::None => {}
-                            Effect::Send(lines) => self.send(&lines),
-                            Effect::Quit => return Some(0),
-                            Effect::ListFiles => self.list_files(),
-                            Effect::Search { generation, query } => {
-                                if let Some(search) = &self.search {
-                                    search.search(generation, query);
-                                }
+                    let effect = match event {
+                        Event::Key(key) => self.app.on_key(key, self.clock.now()),
+                        Event::Edit(edit) => self.app.on_edit(edit),
+                        Event::Reply(Reply::KittyFlags(_)) => {
+                            self.kitty();
+                            Effect::None
+                        }
+                        Event::Reply(Reply::DeviceAttributes) => Effect::None,
+                    };
+                    match effect {
+                        Effect::None => {}
+                        Effect::Send(lines) => self.send(&lines),
+                        Effect::Quit => return Some(0),
+                        Effect::ListFiles => self.list_files(),
+                        Effect::Search { generation, query } => {
+                            if let Some(search) = &self.search {
+                                search.search(generation, query);
                             }
-                        },
-                        Event::Reply(Reply::KittyFlags(_)) => self.app.set_kitty(),
-                        Event::Reply(Reply::DeviceAttributes) => {}
+                        }
                     }
                 }
             }
@@ -370,6 +386,21 @@ impl<B: Backend> Loop<B> {
             return Some(1);
         }
         None
+    }
+
+    /// Kitty's flags reply: the first pushes the flags the bindings need
+    /// (`docs/tui.md`, "Keys", "Rules"). A failed write leaves the legacy
+    /// keys, which every binding also has.
+    fn kitty(&mut self) {
+        if self.app.kitty() {
+            return;
+        }
+        self.app.set_kitty();
+        if let Some(mut tty) = self.tty.as_ref()
+            && io::Write::write_all(&mut tty, term::KITTY_PUSH).is_ok()
+        {
+            self.parser.set_kitty();
+        }
     }
 
     /// Starts the `@` panel's search worker on a listing of the workspace,

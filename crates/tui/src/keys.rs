@@ -44,6 +44,36 @@ pub(crate) enum Key {
     AltX,
 }
 
+/// One key that edits the draft (`docs/tui.md`, "The input box",
+/// "Bindings"). Kept apart from [`Key`]: the approval panel reads only
+/// [`Key`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Edit {
+    /// Left (`CSI D`, `SS3 D`).
+    Left,
+    /// Right (`CSI C`, `SS3 C`).
+    Right,
+    /// Shift+Enter (`CSI 13;2u`).
+    ShiftEnter,
+    /// Ctrl+J (`0x0a`, `CSI 106;5u`).
+    CtrlJ,
+    /// ⌥← or Ctrl+← (`CSI 1;3D`, `CSI 1;5D`, `ESC b`, `CSI 98;3u`).
+    WordLeft,
+    /// ⌥→ or Ctrl+→ (`CSI 1;3C`, `CSI 1;5C`, `ESC f`, `CSI 102;3u`).
+    WordRight,
+    /// ⌥Backspace (`ESC 0x7f`, `CSI 127;3u`).
+    DeleteWord,
+    /// ⌘← (`CSI 1;9D`).
+    LineStart,
+    /// ⌘→ (`CSI 1;9C`).
+    LineEnd,
+    /// Delete (`CSI 3~`).
+    Delete,
+    /// A bracketed paste's text: line breaks as `\n`, and no control
+    /// character but `\n` and `\t`.
+    Paste(String),
+}
+
 /// One detection reply.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Reply {
@@ -58,26 +88,94 @@ pub(crate) enum Reply {
 pub(crate) enum Event {
     /// A key.
     Key(Key),
+    /// A key that edits the draft.
+    Edit(Edit),
     /// A detection reply.
     Reply(Reply),
 }
 
+/// Starts a bracketed paste.
+const PASTE_START: &[u8] = b"\x1b[200~";
+/// Ends a bracketed paste.
+const PASTE_END: &[u8] = b"\x1b[201~";
+
+/// Kitty's modifier bits, after the 1 its field adds
+/// (`docs/tui.md`, "Keys").
+const SHIFT: u32 = 1;
+/// Alt, or ⌥.
+const ALT: u32 = 2;
+/// Ctrl.
+const CTRL: u32 = 4;
+/// Super, or ⌘.
+const SUPER: u32 = 8;
+/// Caps Lock (64) and Num Lock (128), which change no binding.
+const LOCKS: u32 = 0b1100_0000;
+
 /// Parses terminal bytes. An incomplete CSI or UTF-8 sequence at the end of
-/// a read is held for the next read; a lone `0x1b` ending a read is Esc.
+/// a read is held for the next read; a lone `0x1b` ending a read is Esc,
+/// until kitty's flags are pushed. A bracketed paste is held until its end
+/// marker, however many reads it takes, and yields no key.
 #[derive(Debug, Default)]
 pub(crate) struct Parser {
     /// Unprocessed tail from the previous read.
     pending: Vec<u8>,
+    /// The bytes of a bracketed paste whose end has not arrived.
+    paste: Option<Vec<u8>>,
+    /// Whether kitty's flags are pushed: Esc is then `CSI 27u`, so a lone
+    /// `0x1b` ending a read always starts a sequence and is held.
+    kitty: bool,
 }
 
 impl Parser {
+    /// Records that kitty's flags are pushed.
+    pub(crate) fn set_kitty(&mut self) {
+        self.kitty = true;
+    }
+
     /// Feeds one read's bytes, returning its events in order.
     pub(crate) fn feed(&mut self, bytes: &[u8]) -> Vec<Event> {
         let mut buf = std::mem::take(&mut self.pending);
         buf.extend_from_slice(bytes);
         let mut out = Vec::new();
         let mut rest = buf.as_slice();
-        while let Some((events, used)) = step(rest) {
+        loop {
+            if let Some(paste) = &mut self.paste {
+                // The end marker may have started in an earlier read: look
+                // again from where a split one would begin.
+                let held = paste.len();
+                let from = held.saturating_sub(PASTE_END.len().saturating_sub(1));
+                paste.extend_from_slice(rest);
+                let Some(at) = find(paste, PASTE_END, from) else {
+                    return out;
+                };
+                // The marker ends in this read, so its end is past `held`.
+                let after = at.saturating_add(PASTE_END.len()).saturating_sub(held);
+                paste.truncate(at);
+                let text = paste_text(paste);
+                self.paste = None;
+                if !text.is_empty() {
+                    out.push(Event::Edit(Edit::Paste(text)));
+                }
+                rest = rest.get(after..).unwrap_or_default();
+                continue;
+            }
+            if let Some(after) = rest.strip_prefix(PASTE_START) {
+                self.paste = Some(Vec::new());
+                rest = after;
+                continue;
+            }
+            // debt: without kitty's flags a lone ESC ending a read is Esc, so
+            // a paste start marker split right after its ESC reads as Esc and
+            // the paste as keys. Ceiling: only a read boundary landing exactly
+            // after that ESC. Upgrade trigger: a report of a paste typed as
+            // keys on a terminal without kitty's keyboard protocol; the fix
+            // is an Esc timeout.
+            if self.kitty && rest == [0x1b] {
+                break;
+            }
+            let Some((events, used)) = step(rest) else {
+                break;
+            };
             out.extend(events);
             // Every step takes at least one byte, so the loop ends.
             rest = rest.get(used.max(1)..).unwrap_or_default();
@@ -85,6 +183,26 @@ impl Parser {
         self.pending = rest.to_vec();
         out
     }
+}
+
+/// Where `needle` first starts in `haystack` at or after `from`.
+fn find(haystack: &[u8], needle: &[u8], from: usize) -> Option<usize> {
+    haystack
+        .get(from..)?
+        .windows(needle.len())
+        .position(|window| window == needle)
+        .map(|at| at.saturating_add(from))
+}
+
+/// A paste's text: `\r\n` and `\r` become `\n`, and every control
+/// character but `\n` and `\t` goes.
+fn paste_text(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes)
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .chars()
+        .filter(|ch| matches!(ch, '\n' | '\t') || !ch.is_control())
+        .collect()
 }
 
 /// The events of the bytes at the start of a buffer and how many bytes
@@ -99,6 +217,7 @@ fn step(buf: &[u8]) -> Step {
         0x03 => key(Key::CtrlC),
         0x0f => key(Key::CtrlO),
         0x08 | 0x7f => key(Key::Backspace),
+        0x0a => Some((vec![Event::Edit(Edit::CtrlJ)], 1)),
         0x09 => key(Key::Tab),
         0x0d => key(Key::Enter),
         // A lone ESC ending the read is Esc; ESC followed by bytes in the
@@ -117,11 +236,14 @@ fn step(buf: &[u8]) -> Step {
                     .filter_map(|event| match event {
                         Event::Key(Key::Up) => Some(Event::Key(Key::AltUp)),
                         Event::Key(Key::Down) => Some(Event::Key(Key::AltDown)),
-                        Event::Key(_) | Event::Reply(_) => None,
+                        Event::Key(_) | Event::Edit(_) | Event::Reply(_) => None,
                     })
                     .collect();
                 Some((alt, used.saturating_add(1)))
             }
+            Some(b'b') => Some((vec![Event::Edit(Edit::WordLeft)], 2)),
+            Some(b'f') => Some((vec![Event::Edit(Edit::WordRight)], 2)),
+            Some(0x7f) => Some((vec![Event::Edit(Edit::DeleteWord)], 2)),
             // Unknown escape sequence: drop ESC and the byte after it.
             Some(_) => Some((Vec::new(), 2)),
         },
@@ -165,16 +287,19 @@ fn parse_csi(buf: &[u8]) -> Step {
             // DA1: `CSI ? ... c` ends detection.
             vec![Event::Reply(Reply::DeviceAttributes)]
         }
+        0x75 => kitty_key(params).into_iter().collect(),
         0x7e => match params {
             [b'5'] => vec![Event::Key(Key::PageUp)],
             [b'6'] => vec![Event::Key(Key::PageDown)],
             [b'4'] => vec![Event::Key(Key::End)],
+            [b'3'] => vec![Event::Edit(Edit::Delete)],
             [b'1', b'1'] => vec![Event::Key(Key::F1)],
             _ => Vec::new(),
         },
         0x46 if params.is_empty() => vec![Event::Key(Key::End)],
         0x41 if params.is_empty() => vec![Event::Key(Key::Up)],
         0x42 if params.is_empty() => vec![Event::Key(Key::Down)],
+        0x43 | 0x44 => arrow(final_byte == 0x43, params).into_iter().collect(),
         0x5a if params.is_empty() => vec![Event::Key(Key::BackTab)],
         0x50 if params.is_empty() => vec![Event::Key(Key::F1)],
         0x41 if params == b"1;3" => vec![Event::Key(Key::AltUp)],
@@ -190,10 +315,80 @@ fn parse_ss3(buf: &[u8]) -> Step {
         b'F' => vec![Event::Key(Key::End)],
         b'A' => vec![Event::Key(Key::Up)],
         b'B' => vec![Event::Key(Key::Down)],
+        b'C' => vec![Event::Edit(Edit::Right)],
+        b'D' => vec![Event::Edit(Edit::Left)],
         b'P' => vec![Event::Key(Key::F1)],
         _ => Vec::new(),
     };
     Some((events, 3))
+}
+
+/// A decimal field: digits only, as `u32`'s parser would also take a
+/// leading `+`.
+fn number(field: &str) -> Option<u32> {
+    if field.is_empty() || !field.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    field.parse().ok()
+}
+
+/// A `CSI` key's parameters, `<code>[:...][;<modifiers>[:...]]`: the code
+/// and the modifier bits without the lock keys. `None` when they do not
+/// parse.
+fn code_and_mods(params: &[u8]) -> Option<(u32, u32)> {
+    let text = std::str::from_utf8(params).ok()?;
+    let mut fields = text.split(';');
+    let code = number(fields.next()?.split(':').next()?)?;
+    let mods = match fields.next() {
+        None => 1,
+        Some(field) => number(field.split(':').next()?)?,
+    };
+    Some((code, mods.saturating_sub(1) & !LOCKS))
+}
+
+/// A kitty key, `CSI <code>[;<modifiers>] u`: the bound ones only.
+fn kitty_key(params: &[u8]) -> Option<Event> {
+    let (code, mods) = code_and_mods(params)?;
+    let event = match (code, mods) {
+        (13, 0) => Event::Key(Key::Enter),
+        (13, SHIFT) => Event::Edit(Edit::ShiftEnter),
+        (27, 0) => Event::Key(Key::Esc),
+        (127, 0) => Event::Key(Key::Backspace),
+        (127, ALT) => Event::Edit(Edit::DeleteWord),
+        (99, CTRL) => Event::Key(Key::CtrlC),
+        (111, CTRL) => Event::Key(Key::CtrlO),
+        (106, CTRL) => Event::Edit(Edit::CtrlJ),
+        (9, 0) => Event::Key(Key::Tab),
+        (9, SHIFT) => Event::Key(Key::BackTab),
+        (97, ALT) => Event::Key(Key::AltA),
+        (98, ALT) => Event::Edit(Edit::WordLeft),
+        (102, ALT) => Event::Edit(Edit::WordRight),
+        _ => return None,
+    };
+    Some(event)
+}
+
+/// `CSI C` or `CSI D`, plain or `CSI 1;<modifiers>`: by character, word
+/// (⌥ or Ctrl) or line (⌘).
+fn arrow(right: bool, params: &[u8]) -> Option<Event> {
+    let mods = if params.is_empty() {
+        0
+    } else {
+        match code_and_mods(params)? {
+            (1, mods) => mods,
+            _ => return None,
+        }
+    };
+    let edit = match (mods, right) {
+        (0, true) => Edit::Right,
+        (0, false) => Edit::Left,
+        (ALT | CTRL, true) => Edit::WordRight,
+        (ALT | CTRL, false) => Edit::WordLeft,
+        (SUPER, true) => Edit::LineEnd,
+        (SUPER, false) => Edit::LineStart,
+        _ => return None,
+    };
+    Some(Event::Edit(edit))
 }
 
 /// Decodes one character at the start of `buf`. A control character is

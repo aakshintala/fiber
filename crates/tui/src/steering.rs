@@ -14,6 +14,7 @@ use contract::events::SteeringQueue;
 
 use super::{App, Effect, Kind, Link, mint, session_command};
 use crate::format;
+use crate::input::Draft;
 use crate::keys::Key;
 use serde_json::json;
 
@@ -33,13 +34,13 @@ pub(crate) struct Steering {
     /// The selected row's command id.
     selected: Option<String>,
     /// The draft from before the selection.
-    stash: String,
+    stash: Draft,
 }
 
 impl Steering {
     /// Replaces the queue with `queue`. A selected row that left it clears
     /// the selection, and the stash returns to `draft`.
-    pub(crate) fn fold(&mut self, queue: &SteeringQueue, draft: &mut String) {
+    pub(crate) fn fold(&mut self, queue: &SteeringQueue, draft: &mut Draft) {
         self.rows = queue
             .messages
             .iter()
@@ -85,7 +86,7 @@ impl Steering {
 
     /// ⌥↑: with nothing selected the newest row, else the next older one,
     /// stopping at the oldest.
-    pub(crate) fn up(&mut self, draft: &mut String) {
+    pub(crate) fn up(&mut self, draft: &mut Draft) {
         let next = match self.selected_at() {
             None => self.selectable().next_back(),
             Some(now) => self.selectable().rev().find(|at| *at < now),
@@ -96,7 +97,7 @@ impl Steering {
     }
 
     /// ⌥↓: the next newer row; past the newest, the selection clears.
-    pub(crate) fn down(&mut self, draft: &mut String) {
+    pub(crate) fn down(&mut self, draft: &mut Draft) {
         let Some(now) = self.selected_at() else {
             return;
         };
@@ -112,7 +113,7 @@ impl Steering {
     /// Selects the row at `at` and loads its text into `draft`, stashing
     /// the draft when nothing was selected; false when the row cannot be
     /// selected.
-    pub(crate) fn select(&mut self, at: usize, draft: &mut String) -> bool {
+    pub(crate) fn select(&mut self, at: usize, draft: &mut Draft) -> bool {
         let Some(row) = self.rows.get(at) else {
             return false;
         };
@@ -123,13 +124,13 @@ impl Steering {
         if self.selected.is_none() {
             self.stash = std::mem::take(draft);
         }
-        *draft = text;
+        draft.set(&text);
         self.selected = Some(id);
         true
     }
 
     /// Clears the selection, the stash back in `draft`.
-    pub(crate) fn clear(&mut self, draft: &mut String) {
+    pub(crate) fn clear(&mut self, draft: &mut Draft) {
         if self.selected.take().is_some() {
             *draft = std::mem::take(&mut self.stash);
         }
@@ -138,7 +139,7 @@ impl Steering {
     /// Enter with a row selected: the row's command id to drop before the
     /// edited text is sent, and the selection cleared without the stash.
     /// The stash is for the caller to restore after the send.
-    pub(crate) fn amend(&mut self) -> Option<(String, String)> {
+    pub(crate) fn amend(&mut self) -> Option<(String, Draft)> {
         let id = self.selected.take()?;
         Some((id, std::mem::take(&mut self.stash)))
     }
@@ -226,7 +227,7 @@ impl App {
             return Effect::None;
         };
         let id = mint();
-        let text = std::mem::replace(&mut self.draft, stash);
+        let text = std::mem::replace(&mut self.draft, stash).expand();
         let content = json!({"content": [{"type": "text", "text": text}]});
         lines.push(session_command(&id, "steer", &session, Some(content)).to_string());
         self.pending.insert(id, (Kind::Steer, text));

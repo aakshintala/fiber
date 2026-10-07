@@ -7,14 +7,18 @@ use std::hash::{BuildHasher, RandomState};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use contract::events::{CommandAccepted, CommandRejected, Notice, SessionNamed, SteeringQueue};
+use contract::events::{
+    CommandAccepted, CommandRejected, Notice, SessionNamed, ShellCommand, SteeringQueue,
+};
 use contract::shapes::ContentPart;
 use contract::{Envelope, HubLine, SessionId};
 use serde_json::{Map, Value, json};
 
 use crate::approvals::{self, Panel, PanelKey, Queue};
+use crate::input::Draft;
 use crate::keys::Key;
 use crate::link::Line;
+use crate::shell;
 use crate::turn::{Fold, Row, Turn};
 use crate::view::Scroll;
 use notices::Notices;
@@ -92,6 +96,7 @@ enum Kind {
     Cancel,
     Reply,
     SteerDrop,
+    Shell,
     /// A built-in command such as `handoff`, `reload` or `close`.
     Command,
 }
@@ -130,7 +135,7 @@ pub(crate) enum Target {
 pub(crate) struct App {
     /// The launch directory `start` names.
     workspace: PathBuf,
-    draft: String,
+    draft: Draft,
     phase: Phase,
     link: Link,
     /// Lines held until the hub connects: the `start` of an early Enter.
@@ -140,6 +145,7 @@ pub(crate) struct App {
     /// The notices floating over the conversation.
     notices: Notices,
     turns: Vec<Turn>,
+    shells: shell::Items,
     fold: Fold,
     scroll: Scroll,
     width: u16,
@@ -163,13 +169,14 @@ impl App {
     pub(crate) fn new(workspace: PathBuf) -> Self {
         Self {
             workspace,
-            draft: String::new(),
+            draft: Draft::default(),
             phase: Phase::Starting,
             link: Link::Waiting,
             held: Vec::new(),
             pending: HashMap::new(),
             notices: Notices::default(),
             turns: Vec::new(),
+            shells: shell::Items::default(),
             fold: Fold::default(),
             scroll: Scroll::default(),
             width: 80,
@@ -210,9 +217,10 @@ impl App {
         if let Some(effect) = self.completion_key(&key) {
             return effect;
         }
+        if let Some(effect) = self.draft_key(&key) {
+            return effect;
+        }
         match key {
-            Key::Char(ch) => self.type_char(ch),
-            Key::Backspace => self.backspace(),
             Key::Enter => self.on_enter(),
             Key::Esc if self.notices.close() => Effect::None,
             // Esc with a queued row selected puts the draft back, and
@@ -235,7 +243,9 @@ impl App {
                 Effect::None
             }
             Key::F1 => self.open_keymap(),
-            Key::Up | Key::Down | Key::Tab | Key::BackTab => Effect::None,
+            Key::Char(_) | Key::Backspace | Key::Up | Key::Down | Key::Tab | Key::BackTab => {
+                Effect::None
+            }
             Key::AltA => self.open_first(),
             Key::AltUp | Key::AltDown | Key::AltX => self.steering_key(&key),
         }
@@ -309,19 +319,18 @@ impl App {
         self.height = height.max(1);
     }
 
-    /// Records kitty's keyboard flags reply. No binding needs it yet.
+    /// Records kitty's keyboard flags reply.
     pub(crate) fn set_kitty(&mut self) {
         self.kitty = true;
     }
 
     /// Whether detection saw kitty's keyboard flags.
-    #[cfg(test)]
     pub(crate) fn kitty(&self) -> bool {
         self.kitty
     }
 
     /// The draft in the input box.
-    pub(crate) fn draft(&self) -> &str {
+    pub(crate) fn input(&self) -> &Draft {
         &self.draft
     }
 
@@ -329,6 +338,13 @@ impl App {
     #[cfg_attr(not(test), expect(dead_code, reason = "#668 and #669 draw it"))]
     pub(crate) fn name(&self) -> Option<&str> {
         self.name.as_deref()
+    }
+
+    /// The input box's rows: the draft's wrapped rows, at most a third of
+    /// the screen and at least one.
+    pub(crate) fn input_height(&self) -> usize {
+        let cap = usize::from(self.height / 3).max(1);
+        self.draft.rows(self.width).len().min(cap)
     }
 
     /// Whether the quit hint shows: armed by a first Ctrl+C.
@@ -346,11 +362,11 @@ impl App {
         self.scroll.top
     }
 
-    /// The conversation's rows: the screen less the input line or the
+    /// The conversation's rows: the screen less the input box or the
     /// panel in its place, the steering queue, the badge and the hint. None
     /// on a screen too short for them.
     pub(crate) fn conversation_height(&self) -> usize {
-        let input = self.panel().map_or(1, |panel| {
+        let input = self.panel().map_or(self.input_height(), |panel| {
             panel
                 .lines
                 .iter()
@@ -417,6 +433,7 @@ impl App {
             while let Some((_, aside)) = asides.next_if(|(after, _)| *after <= at) {
                 aside.rows(&mut out);
             }
+            self.shells.rows(at, &mut out);
             if let Some(turn) = self.turns.get(at) {
                 turn.rows(self.width, &mut out);
             }
@@ -461,83 +478,6 @@ impl App {
         }
         self.armed_at = Some(now);
         Effect::None
-    }
-
-    /// Enter sends the draft: `start` with no session, `prompt` when idle,
-    /// `steer` during a turn.
-    fn on_enter(&mut self) -> Effect {
-        if let Some(effect) = self.built_in() {
-            return effect;
-        }
-        // A command sent after the connection is lost goes nowhere, so the
-        // draft stays.
-        if self.draft.trim().is_empty() || self.link == Link::Down {
-            return Effect::None;
-        }
-        if self.steering.is_selected() {
-            return self.amend();
-        }
-        let (kind, session) = match &self.phase {
-            Phase::Starting => (Kind::Start, None),
-            Phase::Pending { .. } => return Effect::None,
-            Phase::Attached { session, busy } => {
-                let kind = if *busy { Kind::Steer } else { Kind::Prompt };
-                (kind, Some(session.clone()))
-            }
-        };
-        let id = mint();
-        let text = std::mem::take(&mut self.draft);
-        let content = json!([{"type": "text", "text": text}]);
-        let line = match session {
-            None => {
-                self.phase = Phase::Pending {
-                    command_id: id.clone(),
-                };
-                json!({
-                    "id": id,
-                    "command": "start",
-                    "args": {
-                        "workspace": self.workspace.display().to_string(),
-                        "content": content,
-                    },
-                })
-            }
-            Some(session) => {
-                let command = if kind == Kind::Steer {
-                    "steer"
-                } else {
-                    "prompt"
-                };
-                session_command(&id, command, &session, Some(json!({ "content": content })))
-            }
-        };
-        self.pending.insert(id, (kind, text));
-        let line = line.to_string();
-        if self.link == Link::Up {
-            Effect::Send(vec![line])
-        } else {
-            // An Enter before the hub connects is held, not lost: `start`
-            // goes out once the hub speaks `hub_hello`.
-            self.held.push(line);
-            Effect::None
-        }
-    }
-
-    /// Esc with nothing open interrupts the turn: `cancel`, only when busy.
-    fn on_esc(&mut self) -> Effect {
-        let session = match &self.phase {
-            Phase::Attached {
-                session,
-                busy: true,
-            } if self.connected() => session.clone(),
-            Phase::Starting | Phase::Pending { .. } | Phase::Attached { .. } => {
-                return Effect::None;
-            }
-        };
-        let id = mint();
-        let line = session_command(&id, "cancel", &session, None).to_string();
-        self.pending.insert(id, (Kind::Cancel, String::new()));
-        Effect::Send(vec![line])
     }
 
     fn on_hub(&mut self, hub: &HubLine) -> Vec<String> {
@@ -598,7 +538,15 @@ impl App {
             Some((Kind::Cancel | Kind::SteerDrop, _)) => {
                 self.pending.remove(id);
             }
-            Some((Kind::Start | Kind::Prompt | Kind::Steer | Kind::Reply | Kind::Command, _)) => {
+            Some((
+                Kind::Start
+                | Kind::Prompt
+                | Kind::Steer
+                | Kind::Reply
+                | Kind::Shell
+                | Kind::Command,
+                _,
+            )) => {
                 self.notices.push(message);
                 self.fail(id);
             }
@@ -611,7 +559,7 @@ impl App {
             return;
         };
         if self.draft.is_empty() {
-            self.draft = text;
+            self.draft.paste(&text);
         }
         if kind == Kind::Start {
             self.phase = Phase::Starting;
@@ -655,11 +603,15 @@ impl App {
         }
         // Only a line that changed a card shows the overlay.
         let changed = match envelope.kind.as_str() {
-            "command_accepted" => {
-                if let Some(accepted) = read!(envelope, CommandAccepted) {
-                    self.pending.remove(&accepted.command_id.0);
-                }
-                false
+            "command_accepted" => read!(envelope, CommandAccepted).is_some_and(|accepted| {
+                let sent = self.pending.remove(&accepted.command_id.0);
+                let shell = sent.filter(|(kind, _)| *kind == Kind::Shell);
+                let item = shell.and_then(|(_, text)| shell::answered(&text, accepted.result));
+                self.shells.add(self.turns.len(), item)
+            }),
+            "shell_command" => {
+                let item = read!(envelope, ShellCommand).map(|ran| shell::ran(&ran));
+                self.shells.add(self.turns.len(), item)
             }
             "command_rejected" => {
                 if let Some(rejected) = read!(envelope, CommandRejected)

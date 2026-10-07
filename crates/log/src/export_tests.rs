@@ -193,3 +193,71 @@ fn an_unreadable_artifacts_directory_fails_naming_it_and_removes_the_target() {
     assert!(!target.exists());
     fs::set_permissions(&artifacts, fs::Permissions::from_mode(0o755)).unwrap();
 }
+
+#[test]
+fn symlinks_are_copied_as_links_without_reading_through() {
+    let root = fakes::TempDir::new("log-export-symlink");
+    let dir = session(root.path(), "s_1", FIRST.as_bytes());
+    let secret = root.path().join("outside-secret.txt");
+    fs::write(&secret, b"super-secret").unwrap();
+    let outside_dir = root.path().join("outside-dir");
+    fs::create_dir_all(outside_dir.join("sub")).unwrap();
+    fs::write(outside_dir.join("sub/inner.txt"), b"inner-secret").unwrap();
+
+    std::os::unix::fs::symlink(&secret, dir.join("artifacts/x")).unwrap();
+    std::os::unix::fs::symlink(&outside_dir, dir.join("artifacts/d")).unwrap();
+
+    let target = root.path().join("out");
+    export(&dir, &target).unwrap();
+
+    for (name, original) in [("x", secret.as_path()), ("d", outside_dir.as_path())] {
+        let exported = target.join("artifacts").join(name);
+        let meta = fs::symlink_metadata(&exported).unwrap();
+        assert!(meta.file_type().is_symlink(), "{name} must stay a symlink");
+        assert_eq!(fs::read_link(&exported).unwrap(), original);
+        assert!(
+            !meta.file_type().is_file(),
+            "{name} must not be a regular file"
+        );
+    }
+    let mut regular = Vec::new();
+    for entry in fs::read_dir(target.join("artifacts")).unwrap() {
+        let entry = entry.unwrap();
+        if fs::symlink_metadata(entry.path())
+            .unwrap()
+            .file_type()
+            .is_file()
+        {
+            regular.push(entry.path());
+        }
+    }
+    assert!(
+        regular.is_empty(),
+        "secret bytes were written as files: {regular:?}"
+    );
+}
+
+#[test]
+fn the_top_directory_is_private_and_file_modes_are_kept() {
+    let root = fakes::TempDir::new("log-export-modes");
+    let dir = session(root.path(), "s_1", FIRST.as_bytes());
+    let artifact = dir.join("artifacts/a_1.txt");
+    fs::write(&artifact, b"kept").unwrap();
+    fs::set_permissions(&artifact, fs::Permissions::from_mode(0o640)).unwrap();
+
+    let target = root.path().join("out");
+    export(&dir, &target).unwrap();
+
+    assert_eq!(
+        fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    assert_eq!(
+        fs::metadata(target.join("artifacts/a_1.txt"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o640
+    );
+}
