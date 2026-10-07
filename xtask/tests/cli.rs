@@ -464,6 +464,39 @@ fn the_dependency_list_fails_an_unlisted_crate() {
 }
 
 #[test]
+fn the_isolation_checks_fail_a_crate_that_links_an_isolated_crate() {
+    let dir = workspace();
+    assert_eq!(
+        xtask(&dir, &["image-isolation"], &[], ""),
+        (
+            0,
+            "image-isolation: no crate but picture and main links image code\n".to_owned()
+        )
+    );
+    assert_eq!(
+        xtask(&dir, &["tui-isolation"], &[], ""),
+        (
+            0,
+            "tui-isolation: no crate but tui and main links ratatui or crossterm\n".to_owned()
+        )
+    );
+    // `outside` renamed `ratatui`: `a` links it, and so `b` and `c` do.
+    dir.write(
+        "outside/Cargo.toml",
+        "[package]\nname = \"ratatui\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
+    );
+    dir.write("crates/a/Cargo.toml", "[package]\nname = \"a\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[dependencies]\nratatui = { path = \"../../outside\" }\n");
+    let why = "its normal dependency tree holds ratatui; only the terminal links terminal UI code";
+    assert_eq!(
+        xtask(&dir, &["tui-isolation"], &[], ""),
+        (
+            1,
+            format!("tui-isolation: a: {why}\ntui-isolation: b: {why}\ntui-isolation: c: {why}\n")
+        )
+    );
+}
+
+#[test]
 fn the_docs_check_fails_a_broken_link() {
     let dir = workspace();
     dir.write("README.md", "[x][y]\n\n[y]: docs/missing.md\n");

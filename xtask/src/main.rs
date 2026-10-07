@@ -21,7 +21,7 @@
 //!   as tab-separated lines
 //! - `docs-only FILE...`: whether every file is a docs file, as `docs-only: yes` or
 //!   `docs-only: no`
-//! - `line-cap`, `unsafe-table`, `signal-sites`, `compiled-in`, `dependency-list`, `image-isolation`, `check-docs`: the checks
+//! - `line-cap`, `unsafe-table`, `signal-sites`, `compiled-in`, `dependency-list`, `image-isolation`, `tui-isolation`, `check-docs`: the checks
 
 #![allow(
     clippy::print_stdout,
@@ -205,30 +205,16 @@ fn run(args: &[String]) -> Result<bool, String> {
             let failures = rules::unlisted(&cargo_dependencies()?, &read("docs/dependencies.md")?)?;
             report("dependency-list", &failures, "ok")
         }
-        "image-isolation" => {
-            let members = workspace_members()?;
-            let mut trees = Vec::new();
-            for name in members.keys() {
-                let tree = output(
-                    "cargo",
-                    &[
-                        "tree",
-                        "-p",
-                        &select::spec(name, &members),
-                        "-e",
-                        "normal",
-                        "--prefix",
-                        "none",
-                    ],
-                )?;
-                trees.push((name.clone(), tree));
-            }
-            report(
-                "image-isolation",
-                &rules::image_leaks(&trees),
-                "no crate but picture and main links image code",
-            )
-        }
+        "image-isolation" => isolation(
+            "image-isolation",
+            &rules::IMAGE,
+            "no crate but picture and main links image code",
+        ),
+        "tui-isolation" => isolation(
+            "tui-isolation",
+            &rules::TUI,
+            "no crate but tui and main links ratatui or crossterm",
+        ),
         "check-docs" => {
             let root = Path::new(".");
             let mut failures = Vec::new();
@@ -239,6 +225,28 @@ fn run(args: &[String]) -> Result<bool, String> {
         }
         other => Err(format!("unknown command {other}")),
     }
+}
+
+/// Checks every workspace member's normal dependency tree against `rule`.
+fn isolation(name: &str, rule: &rules::Isolation, ok: &str) -> Result<bool, String> {
+    let members = workspace_members()?;
+    let mut trees = Vec::new();
+    for member in members.keys() {
+        let tree = output(
+            "cargo",
+            &[
+                "tree",
+                "-p",
+                &select::spec(member, &members),
+                "-e",
+                "normal",
+                "--prefix",
+                "none",
+            ],
+        )?;
+        trees.push((member.clone(), tree));
+    }
+    report(name, &rules::leaks(&trees, rule), ok)
 }
 
 fn report(name: &str, failures: &[String], ok: &str) -> Result<bool, String> {

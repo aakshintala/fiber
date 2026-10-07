@@ -36,6 +36,8 @@ mod reviewer_tests;
 
 use std::fmt::Display;
 use std::io::{self, IsTerminal, Write};
+use std::os::fd::AsFd;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -113,13 +115,9 @@ fn run() -> i32 {
         cli::Invocation::Run(Some(cli::Commands::Help { command })) => {
             print_help(command.as_slice())
         }
-        // The terminal door needs a tty and the hub; neither is built.
-        cli::Invocation::Run(None) => {
-            eprintln!(
-                "fiber: The terminal door is not built; run `fiber ask \"<prompt>\"`. Run `fiber --help` for usage."
-            );
-            2
-        }
+        // `fiber` with no arguments opens the terminal: this tty as a
+        // client of the hub, starting one when none runs.
+        cli::Invocation::Run(None) => terminal(),
         cli::Invocation::Usage {
             ask: true,
             sentence,
@@ -744,6 +742,54 @@ fn choose_reviewer(
         },
         cache_lifetime: settings::cache_lifetime(config, &model.reference()),
     })
+}
+
+/// `fiber` with no arguments: the terminal on this tty, a client of the hub
+/// (`docs/invocation.md`, "Two doors"). Without a tty it is a usage error
+/// naming `fiber ask`. The hub it starts listens on its local socket only
+/// and is never waited on.
+fn terminal() -> i32 {
+    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+        eprintln!(
+            "fiber: The terminal needs a tty; run `fiber ask \"<prompt>\"`. Run `fiber --help` for usage."
+        );
+        return 2;
+    }
+    let clock: Arc<dyn contract::clock::Clock> = Arc::new(clock::System);
+    let home = match config::fiber_home_from_env() {
+        Ok(home) => home,
+        Err(e) => return fail(failed(e.code(), e)),
+    };
+    let workspace = match std::env::current_dir() {
+        Ok(workspace) => workspace,
+        Err(e) => {
+            return fail(failed(
+                ErrorCode::IoFailed,
+                format!("the current directory: {e}"),
+            ));
+        }
+    };
+    let tty = match io::stdin().as_fd().try_clone_to_owned() {
+        Ok(tty) => std::fs::File::from(tty),
+        Err(e) => return fail(failed(ErrorCode::IoFailed, format!("the terminal: {e}"))),
+    };
+    let hub_clock = Arc::clone(&clock);
+    let connect: tui::Connect = Box::new(move || {
+        let mut start = || {
+            let exe = std::env::current_exe()?;
+            std::process::Command::new(exe)
+                .arg("hub")
+                .arg("serve")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .process_group(0)
+                .spawn()
+                .map(|_| ())
+        };
+        doors::hub::connect(&home, &mut start, hub_clock.as_ref())
+    });
+    tui::run(tty, workspace, connect, Box::new(crash::attach), clock)
 }
 
 fn usage(message: impl Into<String>) -> Failure {

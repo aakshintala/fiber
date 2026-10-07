@@ -267,8 +267,9 @@ also prints one `fiber_exited` line on stdout, carrying the exit code and
 `error` (`docs/errors.md`, "Before a session exists"). Any other parse
 error prints the sentence on stderr only, and stdout is empty.
 
-`fiber` with no arguments is a usage error naming `fiber ask`. Nothing is
-written to stdout. The sentence is `` The terminal door is not built; run `fiber ask "<prompt>"`. Run `fiber --help` for usage. ``
+`fiber` with no arguments opens the terminal. Without a tty on stdin and
+stdout it is a usage error naming `fiber ask`, and nothing is written to
+stdout. The sentence is `` The terminal needs a tty; run `fiber ask "<prompt>"`. Run `fiber --help` for usage. ``
 
 `-V` is an unknown argument: `Unexpected argument '-V' found.` An unknown
 command names the suggestion when there is one, as
