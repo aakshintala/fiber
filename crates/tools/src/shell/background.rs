@@ -18,8 +18,9 @@ use contract::shapes::ContentPart;
 use contract::tool::{Cancel, Output};
 use contract::{ErrorCode, JobId};
 
-use super::command::{Finished, MovePolicy, MoveReason, Moved, StopKind};
+use super::command::{Finished, MovePolicy, MoveReason, StopKind};
 use super::monitor::Feed;
+use super::moved::Moved;
 use super::output::JobStream;
 use super::tty;
 use super::{Limit, assemble};

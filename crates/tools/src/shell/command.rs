@@ -16,18 +16,10 @@ use contract::tool::Cancel;
 use super::background::MoveAsk;
 use super::drive::{LoopEnd, Phase, Run, pump};
 use super::groups;
-use super::moved::CancelBridge;
+use super::moved::{CancelBridge, Moved};
 use super::output::{Errors, OUTPUT_CAP, Shared, bump, lock, read_errors, read_output};
 use super::spawn::{detach, scrub_env};
 use super::tty;
-
-pub(super) use super::drive::park;
-#[cfg(test)]
-pub(super) use super::drive::{sooner, view};
-pub(super) use super::moved::Moved;
-#[cfg(test)]
-pub(super) use super::output::JobStream;
-pub(super) use super::process_group::{group_alive, signal_group};
 
 /// How often a group is re-checked while the shell has exited and members
 /// remain. Picked, not measured.

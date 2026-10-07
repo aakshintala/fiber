@@ -18,7 +18,7 @@ use rustix::fs::{Mode, OFlags, fcntl_getfl, fcntl_setfl};
 use rustix::io::{FdFlags, fcntl_setfd};
 use rustix::pty::{OpenptFlags, grantpt, openpt, ptsname, unlockpt};
 
-use super::command::park;
+use super::drive::park;
 use super::output::{Shared, lock};
 
 /// A `tty` call's receipt carries the output that arrives in this long

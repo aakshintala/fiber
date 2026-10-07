@@ -761,9 +761,9 @@ fn parked(shared: Arc<Shared>) -> Moved {
 fn the_cap_stops_a_running_job_like_a_cancel() {
     let shared = Shared::default();
     let cancel = CancelToken::new();
-    assert!(!super::view(&shared, &cancel).cancelled);
+    assert!(!super::super::drive::view(&shared, &cancel).cancelled);
     lock(&shared.inner).cap_fired = true;
-    assert!(super::view(&shared, &cancel).cancelled);
+    assert!(super::super::drive::view(&shared, &cancel).cancelled);
 }
 
 #[test]
@@ -779,11 +779,17 @@ fn finish_reports_a_fired_cap() {
 fn the_sooner_of_two_instants() {
     let early = at(1);
     let late = at(2);
-    assert_eq!(super::sooner(Some(late), Some(early)), Some(early));
-    assert_eq!(super::sooner(Some(early), Some(late)), Some(early));
-    assert_eq!(super::sooner(Some(late), None), Some(late));
-    assert_eq!(super::sooner(None, Some(early)), Some(early));
-    assert_eq!(super::sooner(None, None), None);
+    assert_eq!(
+        super::super::drive::sooner(Some(late), Some(early)),
+        Some(early)
+    );
+    assert_eq!(
+        super::super::drive::sooner(Some(early), Some(late)),
+        Some(early)
+    );
+    assert_eq!(super::super::drive::sooner(Some(late), None), Some(late));
+    assert_eq!(super::super::drive::sooner(None, Some(early)), Some(early));
+    assert_eq!(super::super::drive::sooner(None, None), None);
 }
 
 const JOB_DEADLINE: Duration = Duration::from_secs(10);
@@ -839,7 +845,7 @@ impl Job {
         moved.arm(&cancel);
         moved.detach_call_cancel();
         let deltas = Arc::new(fakes::jobs::JobDeltas::default());
-        let stream = super::JobStream::new(
+        let stream = super::super::output::JobStream::new(
             contract::JobId("j_t".to_owned()),
             Arc::clone(&deltas) as Arc<dyn contract::emit::Emit>,
         );
