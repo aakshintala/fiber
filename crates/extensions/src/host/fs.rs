@@ -371,10 +371,13 @@ fn fail(op: &str, path: &Path, err: std::io::Error) -> Failed {
 fn code_of(err: &std::io::Error) -> contract::ErrorCode {
     use contract::ErrorCode::{IoFailed, NotFound, UnsupportedFile};
     use std::io::ErrorKind::{IsADirectory, NotADirectory, NotFound as Missing};
-    match err.kind() {
-        Missing => NotFound,
-        IsADirectory | NotADirectory => UnsupportedFile,
-        _ => IoFailed,
+    let kind = err.kind();
+    if kind == Missing {
+        NotFound
+    } else if kind == IsADirectory || kind == NotADirectory {
+        UnsupportedFile
+    } else {
+        IoFailed
     }
 }
 

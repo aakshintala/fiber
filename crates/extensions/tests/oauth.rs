@@ -53,13 +53,10 @@ const WALL: u64 = 1_700_000_000;
 const INIT: &str = r#"
 local function opts_from(text) return load("return " .. text)() end
 
--- Like `pcall(host.http, opts)`, which cannot yield across the VM's `pcall`:
--- the call runs in a coroutine and its yield is passed up.
+-- A `host.http` the refresh function may fail on: `pcall` forwards the
+-- call's yield to the host, and a failure comes back as `{ code, message }`.
 local function try_http(opts)
-  local co = coroutine.create(host.http)
-  local r = table.pack(coroutine.resume(co, opts))
-  local answer = table.pack(coroutine.yield(table.unpack(r, 2, r.n)))
-  return coroutine.resume(co, table.unpack(answer, 1, answer.n))
+  return pcall(host.http, opts)
 end
 
 fiber.command("callback", { timeout = 60000, run = function(text)
@@ -152,13 +149,10 @@ end } })
 /// A provider whose `credential()` builds its login from one interactive
 /// `host.oauth` helper, named by the secret `mode`.
 const LOGIN: &str = r#"
--- Like `pcall(host.http, opts)`, which cannot yield across the VM's `pcall`:
--- the call runs in a coroutine and its yield is passed up.
+-- A `host.http` the refresh function may fail on: `pcall` forwards the
+-- call's yield to the host, and a failure comes back as `{ code, message }`.
 local function try_http(opts)
-  local co = coroutine.create(host.http)
-  local r = table.pack(coroutine.resume(co, opts))
-  local answer = table.pack(coroutine.yield(table.unpack(r, 2, r.n)))
-  return coroutine.resume(co, table.unpack(answer, 1, answer.n))
+  return pcall(host.http, opts)
 end
 
 fiber.provider("acme", { credential = { timeout = 60000, run = function()

@@ -77,7 +77,7 @@ fn spawn(
     deadline: Option<Instant>,
 ) -> (
     mpsc::Sender<()>,
-    mpsc::Receiver<Result<super::Ran, super::ExecError>>,
+    mpsc::Receiver<Result<super::Ran, Box<super::ExecError>>>,
 ) {
     let (cancel_tx, cancel_rx) = mpsc::channel::<()>();
     let (done_tx, done_rx) = mpsc::channel();
@@ -569,7 +569,7 @@ fn abort(
     child: std::process::Child,
     cwd: PathBuf,
     clock: Arc<FakeClock>,
-) -> mpsc::Receiver<super::ExecError> {
+) -> mpsc::Receiver<Box<super::ExecError>> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let req = sh("startup", cwd, CAP);

@@ -321,10 +321,10 @@ fn pcall_of(lua: &Lua, code: &str) -> (String, String) {
     let clock = fakes::clock::FakeClock::new();
     let deadline = crate::lua::Deadline::new(clock);
     let dir = fakes::TempDir::new("fiber-settings-prelude");
-    crate::lua::install_prelude(&lua, &deadline, dir.path().to_path_buf(), crate::MEMORY_CAP)
+    crate::lua::install_prelude(lua, &deadline, dir.path().to_path_buf(), crate::MEMORY_CAP)
         .unwrap();
     let (ok, err): (bool, LuaValue) = lua
-        .load(&format!("return pcall(function() {code} end)"))
+        .load(format!("return pcall(function() {code} end)"))
         .eval()
         .unwrap();
     assert!(!ok, "{code} unexpectedly succeeded");

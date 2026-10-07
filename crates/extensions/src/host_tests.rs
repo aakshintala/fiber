@@ -279,7 +279,7 @@ fn a_silent_server_past_the_backstop_is_timeout() {
     std::thread::spawn(move || {
         // Accept and never reply: the read, not the connect, passes the backstop.
         let _held = listener.accept();
-        std::thread::sleep(Duration::from_secs(10));
+        std::thread::park();
     });
     let (code, message) = get(
         &format!("http://127.0.0.1:{port}/"),
@@ -293,7 +293,7 @@ fn a_silent_server_past_the_backstop_is_timeout() {
 /// The failure a prelude `pcall` of `code` catches: its code and message.
 fn pcall_of(lua: &Lua, code: &str) -> (String, String) {
     let (ok, err): (bool, LuaValue) = lua
-        .load(&format!("return pcall(function() {code} end)"))
+        .load(format!("return pcall(function() {code} end)"))
         .eval()
         .unwrap();
     assert!(!ok, "{code} unexpectedly succeeded");

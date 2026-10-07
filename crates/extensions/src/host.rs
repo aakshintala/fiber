@@ -358,9 +358,12 @@ pub(crate) fn perform(
     use contract::ErrorCode::{ConnectionFailed, Timeout};
     // A passed backstop is `timeout`; DNS, TLS, a refused or dropped
     // connection, and an unreadable body are `connection_failed`.
-    let transport = |e: ureq::Error| match &e {
-        ureq::Error::Timeout(_) => (Timeout, format!("host.http: {e}")),
-        _ => (ConnectionFailed, format!("host.http: {e}")),
+    let transport = |e: ureq::Error| {
+        if matches!(e, ureq::Error::Timeout(_)) {
+            (Timeout, format!("host.http: {e}"))
+        } else {
+            (ConnectionFailed, format!("host.http: {e}"))
+        }
     };
     let config = Agent::config_builder()
         .tls_config(

@@ -251,8 +251,8 @@ fn a_malformed_parameter_is_named_only_when_recognised_and_its_value_never_shown
 /// The reply `work` delivers: every failure carries its code and message.
 fn delivered(work: impl FnOnce(&Deliver)) -> Reply {
     let (tx, rx) = mpsc::channel();
-    let deliver: Deliver = Arc::new(move |reply| {
-        let _ = tx.send(reply);
+    let deliver: Deliver = Arc::new(move |reply| match tx.send(reply) {
+        Ok(()) | Err(_) => {}
     });
     work(&deliver);
     rx.recv_timeout(WAIT)
@@ -262,7 +262,9 @@ fn delivered(work: impl FnOnce(&Deliver)) -> Reply {
 fn failed(reply: Reply) -> (contract::ErrorCode, String) {
     match reply {
         Reply::Query(Err(failed)) | Reply::Lock(Err(failed)) => failed,
-        _ => panic!("no failure was delivered"),
+        Reply::Http(_) | Reply::Exec(_) | Reply::Query(_) | Reply::Lock(_) | Reply::Slept => {
+            panic!("no failure was delivered")
+        }
     }
 }
 
@@ -271,7 +273,7 @@ fn a_port_that_cannot_be_bound_is_io_failed() {
     let held = bind(0).unwrap();
     let port = held.local_addr().unwrap().port();
     let (code, message) = failed(delivered(|deliver| {
-        assert!(listen(port, &deliver).is_none());
+        assert!(listen(port, deliver).is_none());
     }));
     assert_eq!(code, contract::ErrorCode::IoFailed);
     assert!(message.contains(&format!("port {port}")), "{message}");
@@ -281,8 +283,8 @@ fn a_port_that_cannot_be_bound_is_io_failed() {
 fn a_request_whose_query_cannot_be_read_is_unreadable_reply() {
     let port = bind(0).unwrap().local_addr().unwrap().port();
     let (tx, rx) = mpsc::channel();
-    let deliver: Deliver = Arc::new(move |reply| {
-        let _ = tx.send(reply);
+    let deliver: Deliver = Arc::new(move |reply| match tx.send(reply) {
+        Ok(()) | Err(_) => {}
     });
     let cancel = listen(port, &deliver).expect("the listener binds");
     let mut stream = std::net::TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();

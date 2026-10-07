@@ -704,7 +704,7 @@ fn stat_through_a_regular_file_raises_rather_than_returning_nil() {
 /// the host raises comes back as its table.
 fn pcall_of(lua: &Lua, code: &str) -> (String, String) {
     let (ok, err): (bool, LuaValue) = lua
-        .load(&format!("return pcall(function() {code} end)"))
+        .load(format!("return pcall(function() {code} end)"))
         .eval()
         .unwrap();
     assert!(!ok, "{code} unexpectedly succeeded");

@@ -254,16 +254,16 @@ the lines that carry it.
 | Code | Where | Meaning |
 |---|---|---|
 | `ambiguous_match` | tool call | an edit block's text occurs more than once (`docs/tools.md`, "File tools") |
-| `authentication_failed` | exit, model call, turn | the provider rejected the credential, an OAuth refresh was rejected, or a login was needed with nobody attached |
+| `authentication_failed` | exit, extension call, model call, turn | the provider rejected the credential, an OAuth refresh was rejected, or a login was needed with nobody attached |
 | `blocked` | turn | the block budget ran out with no human to answer |
 | `blocked_host` | tool call | `web_fetch` named a link-local address or a cloud metadata host (`docs/tools.md`, "Web fetch and web search") |
 | `budget_exceeded` | turn | the spending budget was reached, or an extension refused a model request (`docs/loop.md`, "Spending budget") |
 | `busy` | driver command | `prompt` or `reload` while a turn is running, or `rewind` mid-turn (`docs/invocation.md`, "What each command does") |
 | `closing` | tool call, extension call, driver command | `session_message` named a session that was sent `close` (`docs/tools.md`, "Messaging other sessions"), or `state.set` or `state.unset` ran after `fiber_exited` (`docs/extensions.md`, "When a session ends"), or a driver command after `close` (`docs/invocation.md`, "Driver commands") |
-| `config_invalid` | exit | a configuration file is invalid |
-| `connection_failed` | exit, model call, tool call, turn | the connection to the provider or its token endpoint failed, or `web_fetch` could not reach the host |
+| `config_invalid` | exit, extension call | a configuration file is invalid |
+| `connection_failed` | exit, extension call, model call, tool call, turn | the connection to the provider or its token endpoint failed, or `web_fetch` could not reach the host |
 | `context_overflow` | model call, turn | the request does not fit the context window |
-| `credential_failed` | exit, model call, turn | a stored credential cannot be used, or the provider's `credential()` or `sign()` failed; log in again or fix the credential |
+| `credential_failed` | exit, extension call, model call, turn | a stored credential cannot be used, or the provider's `credential()` or `sign()` failed; log in again or fix the credential |
 | `credential_missing` | exit | no credential was found for the session's model, or its credential label names none; the message lists the provider's labels |
 | `depth_exceeded` | tool call | a delegate tool at depth 2 (`docs/delegates.md`) |
 | `duplicate_command` | driver command | a command repeats the id of one the session already accepted, so it was not applied again (`docs/invocation.md`, "The command line") |
@@ -278,11 +278,11 @@ the lines that carry it.
 | `flooded` | job | a monitor was suppressed for 30 seconds (`docs/tools.md`) |
 | `hook_failed` | tool call, turn, handoff, notice | an extension hook errored or ran out of time |
 | `hook_unapproved` | exit | a repository's required hook is not approved; run `fiber approve` in the repository |
-| `http_error` | tool call | `web_fetch` got a status other than 2xx |
+| `http_error` | extension call, tool call | `web_fetch` got a status other than 2xx |
 | `indeterminate` | tool call, job | Fiber cannot tell whether the call completed |
-| `invalid_arguments` | tool call, driver command | the arguments failed the tool's schema or checks, or a driver command's `args` (`docs/invocation.md`, "Driver commands") |
+| `invalid_arguments` | driver command, extension call, tool call | the arguments failed the tool's schema or checks, or a driver command's `args` (`docs/invocation.md`, "Driver commands") |
 | `invalid_request` | model call, turn | the provider rejected the request for any other reason |
-| `io_failed` | exit | a filesystem failure, or a `git` command on a worktree that failed: a log write or fsync, or a configuration or credential file that exists but cannot be read or written; the message names the path |
+| `io_failed` | exit, extension call | a filesystem failure, or a `git` command on a worktree that failed: a log write or fsync, or a configuration or credential file that exists but cannot be read or written; the message names the path |
 | `log_corrupt` | exit | a log line that cannot be encoded, or one read back that does not parse |
 | `mcp_cancel_requested` | tool call | a cancelled call the server may still act on |
 | `mcp_required_server_failed` | exit | a required MCP server failed to start |
@@ -298,7 +298,7 @@ the lines that carry it.
 | `no_match` | tool call | an edit block's text was not found in the file |
 | `no_model` | exit, notice | nothing chose a model, or an installed provider lacks the named model |
 | `nonzero_exit` | tool call, job | a process exited nonzero |
-| `not_found` | tool call, hub command | the path `read` or `edit` names does not exist, or `read_file` names no file (`docs/invocation.md`, "A session's files") |
+| `not_found` | extension call, tool call, hub command | the path `read` or `edit` names does not exist, or `read_file` names no file (`docs/invocation.md`, "A session's files") |
 | `orphaned` | job | the process that ran the job died |
 | `output_cap` | job | a job's output file passed 5 GB |
 | `output_truncated` | tool call, turn, handoff | a reply was cut off by the output-token limit, so its calls did not run |
@@ -307,7 +307,7 @@ the lines that carry it.
 | `protocol_unsupported` | exit | the model's protocol is one this Fiber does not speak yet; pick another model |
 | `provider_unavailable` | model call, turn | a provider server error or overload |
 | `quota_exceeded` | model call, turn | a quota, billing or subscription limit |
-| `rate_limited` | model call, turn | the provider rate-limited the request |
+| `rate_limited` | extension call, model call, turn | the provider rate-limited the request |
 | `refused` | model call, turn | the provider declined on policy grounds |
 | `repository_code_skipped` | notice | an extension, hook or MCP server the repository declares was skipped, because nobody approved it and nobody could be asked (`docs/extensions.md`, "Code a repository ships") |
 | `session_has_dependents` | exit, hub command | a delete names a session that forks or rewinds point at; the message lists them, and `--cascade` deletes them too (`docs/invocation.md`, "Deleting and pruning") |
@@ -322,15 +322,15 @@ the lines that carry it.
 | `state_too_large` | extension call | a state value over 64 KiB |
 | `stream_incomplete` | model call, turn | the stream ended early or carried an unmatched error |
 | `summary_failed` | driver command | a `rewind` that asked for a summary could not get one, so no new session was created (`docs/events.md`, "Rewind") |
-| `timeout` | tool call, job | a deadline passed |
-| `too_large` | tool call, hub command | a `web_fetch` download, or a file `read_file` names, larger than 10 MiB |
+| `timeout` | extension call, tool call, job | a deadline passed |
+| `too_large` | extension call, tool call, hub command | a `web_fetch` download, or a file `read_file` names, larger than 10 MiB |
 | `tool_error` | tool call | the tool itself failed, or its effects function errored |
 | `unauthenticated` | hub connection | a remote connection's first message presented no valid device token; the hub closes the connection (`docs/invocation.md`, "Remote clients") |
 | `unknown_stop_reason` | model call, turn | the reply ended with a stop or finish reason Fiber does not map |
 | `unknown_tool` | tool call | the model named a tool that does not exist |
 | `unreachable` | tool call | `session_message` named an id no running session has |
-| `unreadable_reply` | permission request, handoff | a model replied, but not in the format Fiber asked for, such as a reviewer verdict that could not be read on the second ask (`docs/permissions.md`, "What happens on a block") |
-| `unsupported_file` | tool call | a file tool was given a directory, device or file it cannot handle |
+| `unreadable_reply` | extension call, permission request, handoff | a model replied, but not in the format Fiber asked for, such as a reviewer verdict that could not be read on the second ask (`docs/permissions.md`, "What happens on a block") |
+| `unsupported_file` | extension call, tool call | a file tool was given a directory, device or file it cannot handle |
 | `usage` | exit | the invocation or its environment is wrong; exits 2 |
 | `version_conflict` | exit | an install needs two majors of one dependency, no tag meets a minimum, or the versions cannot be settled; pick compatible versions. Not retried automatically (`docs/extensions.md`, "Versions") |
 
