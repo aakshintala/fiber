@@ -1,7 +1,8 @@
 //! Binary-level tests of the terminal door (`docs/testing.md`, "Screens"):
 //! the real binary in a pseudo-terminal: the first frame, a journey that
 //! types a prompt, sees the answer and cancels a turn, an approval
-//! answered from the panel, resize, and no tty.
+//! answered from the panel, a repository's offer answered from its view,
+//! resize, and no tty.
 
 #![allow(
     clippy::unwrap_used,
@@ -449,6 +450,38 @@ fn a_standing_ask_opens_the_approval_panel_and_allow_once_runs_the_call() {
         .find(|item| item["type"] == "function_call_output")
         .unwrap();
     assert_eq!(result["output"], "hi\nExit code 0.\n");
+}
+
+#[test]
+fn a_repository_offer_swaps_in_and_approve_lets_the_turn_run() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    // The workspace's repository declares one MCP server nobody approved.
+    write(
+        &setup.workspace().join(".fiber/config.json"),
+        &json!({"mcp": {"servers": {"db": {"command": "/bin/echo"}}}}),
+    );
+    let mut run = Run::terminal(&setup);
+    run.read_until(">");
+    run.write(b"say hi\r");
+    // One word: the 60-column terminal wraps the TUI-files line, and
+    // unchanged cells are never rewritten, so a phrase can arrive split.
+    run.read_until("installed");
+    // From skip, ← chooses approve; ↓ moves to Send, and Enter sends.
+    run.write(b"\x1b[D");
+    run.write(b"\x1b[B");
+    run.write(b"\r");
+    // The turn runs only once the offer resolves, so the answer shows the
+    // reply was accepted and the session counted this terminal first.
+    run.read_until("Hello.");
+    run.read_until("completed");
+    // As above: quitting either exits at once or asks first.
+    run.write(b"\x03\x03\r");
+    run.read_until("fiber resume");
+    let output = run.wait();
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(server.requests().len(), 1);
 }
 
 #[test]
