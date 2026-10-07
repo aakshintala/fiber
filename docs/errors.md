@@ -82,6 +82,7 @@ asked for the session.
 | `log_corrupt` | a log line that cannot be encoded, or one read back that does not parse | 1 |
 | `no_model` | nothing chose a model, an installed provider lacks the named model, or no installed provider has a bare model id (`docs/model-routing.md`, "Naming a model") | 1 |
 | `model_ambiguous` | a bare model id matches models of two or more installed providers; the message lists every match (`docs/model-routing.md`, "Naming a model") | 1 |
+| `model_unconfigured` | the session's model names a per-account host whose setting has no value or a value that is not a host; the message names the model and the setting (`docs/model-routing.md`, "A per-account host") | 1 |
 | `credential_missing` | the session model's credential cannot be found, or its credential label names none | 1 |
 | `credential_failed` | a stored credential is found but cannot be used, the provider's `credential()` call errors, or its `sign()` fails or returns unusable headers (`docs/model-routing.md`, "Credentials") | 1 |
 | `authentication_failed` | the startup OAuth refresh of the session model's token was rejected by the token endpoint, or its `credential()` needed a person to log in and nobody was attached (`docs/model-routing.md`, "Keys, tokens and OAuth") | 1 |
@@ -109,7 +110,8 @@ Each code names one fix. `no_model` means nothing chose a model: choose one.
 `model_ambiguous` means the id matches several providers: prefix the provider,
 as `provider/model`. `no_model` also covers an installed provider that lacks the
 named model, and a bare id no installed provider has: run `fiber models` and
-name one it lists. `extension_missing` means the provider is not installed:
+name one it lists. `model_unconfigured` means the model needs its host: set
+the setting it names. `extension_missing` means the provider is not installed:
 install it. `protocol_unsupported` means the provider is installed
 but Fiber cannot speak its protocol: pick another model. None of these is
 retried.
@@ -291,7 +293,7 @@ the lines that carry it.
 | `model_ambiguous` | exit | a bare model id matches models of two or more installed providers; prefix the provider |
 | `model_invalid` | notice | a model's `extra_body` names a field Fiber builds, its `web_search` names a type its protocol does not read, it declares no `context_window`, or its `thinking_default` is not among its `thinking_levels`, so the model is left out of the model list (`docs/model-routing.md`, "Extra request body fields", "Hosted web search", "Thinking") |
 | `model_not_found` | model call, turn | the provider's error body says it does not know the model |
-| `model_unconfigured` | notice | a model's base URL names a per-account host whose setting has no value, so the model is left out of the model list; the message names the setting (`docs/model-routing.md`, "A per-account host") |
+| `model_unconfigured` | exit, notice | a model's base URL names a per-account host whose setting has no value or a value that is not a host, so the model is left out of the model list; the message names the model and the setting (`docs/model-routing.md`, "A per-account host") |
 | `name_pinned` | tool call | `name_session` was called while the person's name pins the session |
 | `no_match` | tool call | an edit block's text was not found in the file |
 | `no_model` | exit, notice | nothing chose a model, or an installed provider lacks the named model |
@@ -344,7 +346,7 @@ Notices, for a failure outside any action:
 | `hook_failed` | a `non-blocking` hook or a watcher failed |
 | `instructions_large` | the instruction text passes 10% of the context window (`docs/system-prompt.md`, "Size") |
 | `model_invalid` | a model's `extra_body` names a field Fiber builds, such as `tools`, its `web_search` names a type its protocol does not read, it declares no `context_window`, or its `thinking_default` is not among its `thinking_levels`, so the model is left out of the model list; the message names the model and the field or type (`docs/model-routing.md`, "Extra request body fields", "Hosted web search", "Thinking") |
-| `model_unconfigured` | a model's base URL names a per-account host whose setting has no value, so the model is left out of the model list; the message names the model and the setting (`docs/model-routing.md`, "A per-account host") |
+| `model_unconfigured` | a model's base URL names a per-account host whose setting has no value or a value that is not a host, so the model is left out of the model list; the message names the model and the setting (`docs/model-routing.md`, "A per-account host") |
 | `no_model` | nothing chose the reviewer's model; set `reviewer.model` (`docs/permissions.md`, "How it runs") |
 | `repository_code_skipped` | an extension, hook or MCP server the repository declares was skipped, unapproved, with nobody to ask; the message names it and says to run `fiber approve` |
 | `skill_invalid` | a skill's `SKILL.md` header does not parse or lacks `name` or `description`, so it is left out; the message names its path (`docs/system-prompt.md`, "Skills") |

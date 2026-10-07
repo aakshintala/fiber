@@ -4,6 +4,7 @@
 #![allow(clippy::unwrap_used, reason = "test code; a failure is the test's")]
 
 use std::fs;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
@@ -58,7 +59,21 @@ impl Setup {
     }
 
     fn set(&self, layer: Layer, key: &str, value: &str) -> Result<(), Failure> {
-        run_set(&self.home(), &self.workspace(), layer, key, value)
+        run_set(
+            &self.home(),
+            &self.workspace(),
+            layer,
+            key,
+            value,
+            &mut std::io::sink(),
+        )
+    }
+
+    /// Runs `set` with stderr captured: its result and what it warned.
+    fn set_capturing(&self, layer: Layer, key: &str, value: &str) -> (Result<(), Failure>, String) {
+        let mut err = Vec::new();
+        let result = run_set(&self.home(), &self.workspace(), layer, key, value, &mut err);
+        (result, String::from_utf8(err).unwrap())
     }
 }
 
@@ -164,6 +179,40 @@ const CHILD: &str = "FIBER_CLI_TEST_CHILD";
 /// How long the child may run before the test kills it and fails.
 const CHILD_DEADLINE: Duration = Duration::from_secs(60);
 
+/// How long a killed child may take to be reaped.
+const REAP_DEADLINE: Duration = Duration::from_secs(10);
+
+/// Waits for `child`, the leader of its own process group, at most
+/// `deadline`, and returns what it wrote. A watchdog on that group kills
+/// it if the test process dies first, so a hung or broken run leaves
+/// nothing behind. On expiry the test kills the group, checks within
+/// [`REAP_DEADLINE`] that the child was reaped as killed, and fails naming
+/// `what`.
+fn reap_group_leader(
+    child: std::process::Child,
+    deadline: Duration,
+    what: &str,
+) -> std::process::Output {
+    use std::os::unix::process::ExitStatusExt;
+    let group = child.id();
+    let watchdog = fakes::Watchdog::group(group);
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || done.send(child.wait_with_output()));
+    let Ok(received) = finished.recv_timeout(deadline) else {
+        fakes::kill_group(group, "KILL").unwrap();
+        let killed = finished
+            .recv_timeout(REAP_DEADLINE)
+            .map(|output| output.map(|output| output.status.signal()));
+        assert!(
+            matches!(killed, Ok(Ok(Some(9)))),
+            "{what} was not reaped as killed within {REAP_DEADLINE:?}: {killed:?}"
+        );
+        panic!("waited {deadline:?} for {what} to exit");
+    };
+    watchdog.stand_down(REAP_DEADLINE);
+    received.unwrap()
+}
+
 /// Spawns this test binary filtered to `test`, with `FIBER_HOME` and the
 /// working directory set, and waits for it under a deadline.
 fn spawn_child(name: &str, test: &str, setup: &Setup) -> std::process::Output {
@@ -180,16 +229,14 @@ fn spawn_child(name: &str, test: &str, setup: &Setup) -> std::process::Output {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .process_group(0)
         .spawn()
         .unwrap();
-    let pid = child.id();
-    let (tx, rx) = mpsc::channel();
-    thread::spawn(move || tx.send(child.wait_with_output().unwrap()));
-    let Ok(output) = rx.recv_timeout(CHILD_DEADLINE) else {
-        fakes::kill_pid(pid, "KILL").unwrap();
-        panic!("waited {CHILD_DEADLINE:?} for the config child to exit");
-    };
-    output
+    reap_group_leader(
+        child,
+        CHILD_DEADLINE,
+        &format!("the config child for {test}"),
+    )
 }
 
 fn child_name() -> String {
@@ -427,4 +474,173 @@ fn distance_ranks_a_shared_prefix_closer_than_a_single_letter() {
     assert_eq!(super::distance("abc", "ab"), 1);
     assert_eq!(super::distance("abc", "a"), 2);
     assert!(super::distance("abc", "ab") < super::distance("abc", "a"));
+}
+
+/// As [`install`], with model `m` at `https://{workspace}/v1` read through
+/// `placeholders`: no `env` naming means the process environment can never
+/// leak into a test using it.
+fn install_host(home: &Path, extension: &str, name: &str, placeholders: serde_json::Value) {
+    let dir = home.join("extensions").join(extension);
+    fs::create_dir_all(dir.join("providers")).unwrap();
+    fs::write(
+        dir.join("extension.json"),
+        json!({"name": extension, "version": "v0.0.0", "fiber": "0.0.0", "api": 1}).to_string(),
+    )
+    .unwrap();
+    fs::write(
+        dir.join("providers").join(format!("{name}.json")),
+        json!({
+            "name": name,
+            "placeholders": placeholders,
+            "models": [{"id": "m", "protocol": "openai-responses",
+                        "base_url": "https://{workspace}/v1"}],
+        })
+        .to_string(),
+    )
+    .unwrap();
+}
+
+/// As [`install_host`], with `FIBER_TEST_1128_UNSET_HOST` read when the
+/// setting is unset.
+fn install_placeholder(home: &Path, extension: &str, name: &str) {
+    install_host(
+        home,
+        extension,
+        name,
+        json!({"workspace": {"env": "FIBER_TEST_1128_UNSET_HOST"}}),
+    );
+}
+
+#[test]
+fn config_set_of_an_unconfigured_model_warns_and_exits_zero() {
+    // Runs in a child with a Fiber home holding an unconfigured model, so
+    // the exit code is `config_set`'s own and the warning lands on the
+    // child's stderr. The parent checks the code, the line and the write:
+    // a code alone would not catch a `set` that returns 0 without warning.
+    if std::env::var_os(CHILD).is_some() {
+        std::process::exit(super::config_set(Layer::Global, "model", "acme/m"));
+    }
+    let setup = Setup::new();
+    install_placeholder(&setup.home(), "acme", "acme");
+    let output = spawn_child(
+        &child_name(),
+        "config_set_of_an_unconfigured_model_warns_and_exits_zero",
+        &setup,
+    );
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    let line = "fiber: The model `acme/m` needs the setting `workspace` for its base URL, \
+                which has no value, and `FIBER_TEST_1128_UNSET_HOST` has none either.";
+    assert_eq!(stderr.matches(line).count(), 1, "{stderr:?}");
+    let written: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(setup.home().join("config.json")).unwrap())
+            .unwrap();
+    assert_eq!(written, json!({"model": "acme/m"}));
+}
+
+#[test]
+fn set_of_an_unconfigured_model_warns_and_writes() {
+    for typed in ["acme/m", "acme/m:high", "m"] {
+        let setup = Setup::new();
+        install_host(&setup.home(), "acme", "acme", json!({"workspace": {}}));
+        let (result, err) = setup.set_capturing(Layer::Global, "model", typed);
+        result.unwrap();
+        assert_eq!(
+            err,
+            "fiber: The model `acme/m` needs the setting `workspace` for its base URL, \
+             which has no value.\n",
+            "{typed}"
+        );
+        let written: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(setup.home().join("config.json")).unwrap())
+                .unwrap();
+        assert_eq!(written, json!({"model": typed}), "{typed}");
+    }
+}
+
+#[test]
+fn set_of_a_configured_model_is_silent() {
+    let setup = Setup::new();
+    install(&setup.home(), "acme", "acme", &models(&["big"]));
+    let (result, err) = setup.set_capturing(Layer::Global, "model", "acme/big");
+    result.unwrap();
+    assert_eq!(err, "");
+    let written: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(setup.home().join("config.json")).unwrap())
+            .unwrap();
+    assert_eq!(written, json!({"model": "acme/big"}));
+}
+
+#[test]
+fn set_with_a_setting_that_is_not_a_host_names_the_setting_not_the_value() {
+    let setup = Setup::new();
+    install_host(&setup.home(), "acme", "acme", json!({"workspace": {}}));
+    setup.write(
+        &setup.home().join("config/acme.json"),
+        &json!({"workspace": "evil@x"}),
+    );
+    let (result, err) = setup.set_capturing(Layer::Global, "model", "acme/m");
+    result.unwrap();
+    assert_eq!(
+        err,
+        "fiber: The model `acme/m` needs the setting `workspace` for its base URL, \
+         whose value is not a host.\n"
+    );
+    assert!(!err.contains("evil@x"), "{err:?}");
+    let written: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(setup.home().join("config.json")).unwrap())
+            .unwrap();
+    assert_eq!(written, json!({"model": "acme/m"}));
+}
+
+#[test]
+fn set_ignores_a_repository_host_setting() {
+    // A repository never supplies the host, so its valid value still warns.
+    let setup = Setup::new();
+    install_host(&setup.home(), "acme", "acme", json!({"workspace": {}}));
+    setup.write(
+        &setup.workspace().join(".fiber/config/acme.json"),
+        &json!({"workspace": "adb-1.example"}),
+    );
+    let (result, err) = setup.set_capturing(Layer::Global, "model", "acme/m");
+    result.unwrap();
+    assert_eq!(
+        err,
+        "fiber: The model `acme/m` needs the setting `workspace` for its base URL, \
+         which has no value.\n"
+    );
+}
+
+#[test]
+fn set_of_a_bare_id_shared_with_a_configured_provider_is_ambiguous() {
+    let setup = Setup::new();
+    install(&setup.home(), "a", "a", &models(&["m"]));
+    install_host(&setup.home(), "b", "b", json!({"workspace": {}}));
+    let (result, err) = setup.set_capturing(Layer::Global, "model", "m");
+    let e = result.unwrap_err();
+    assert_eq!(e.code, ErrorCode::ModelAmbiguous);
+    assert!(e.message.contains("a/m"), "{}", e.message);
+    assert!(e.message.contains("b/m"), "{}", e.message);
+    assert_eq!(err, "");
+    assert!(!setup.home().join("config.json").exists());
+}
+
+#[test]
+fn set_of_a_model_in_an_all_unconfigured_provider_warns() {
+    // The uncached check ran before the fill: the provider's list is
+    // non-empty there, so its only model being unconfigured still warns
+    // instead of accepting the reference unchecked.
+    let setup = Setup::new();
+    install_host(&setup.home(), "acme", "acme", json!({"workspace": {}}));
+    let (result, err) = setup.set_capturing(Layer::Global, "model", "acme/m");
+    result.unwrap();
+    assert_eq!(
+        err,
+        "fiber: The model `acme/m` needs the setting `workspace` for its base URL, \
+         which has no value.\n"
+    );
+    let written: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(setup.home().join("config.json")).unwrap())
+            .unwrap();
+    assert_eq!(written, json!({"model": "acme/m"}));
 }

@@ -331,8 +331,20 @@ read when the setting is unset, such as `DATABRICKS_HOST`. A placeholder's
 setting is never a `repo_settings` key, so a repository never sets it, as it
 never changes a base URL ("Choosing the model").
 
-A model whose placeholder has no value is left out of the model list, with
-the notice `model_unconfigured` naming the model and the setting.
+Before a value fills its placeholder, Fiber strips one leading `https://`
+and one trailing `/`, so `DATABRICKS_HOST` can carry
+`https://adb-123.azuredatabricks.net/`. What remains must be a host: ASCII
+letters, digits, `.` and `-`, with an optional `:` and a port from 0 to
+65535. A setting that is not a host is not replaced by the environment
+variable.
+
+A model whose placeholder has no value, or a value that is not a host, is
+left out of the model list, with the notice `model_unconfigured` naming the
+model and the setting; for a value that is not a host it says so, without
+repeating the value. The model can still be named ("Naming a model"): a
+session that chooses it exits with `model_unconfigured`, and
+`fiber config set model` accepts it with that notice
+(`docs/configuration.md`, "When Fiber writes").
 
 ### openai-completions facts
 
@@ -552,6 +564,9 @@ When a person types a model:
    named model is `no_model`. A bare id that no installed provider has is
    `no_model` too, and its message says to run `fiber models`. Only a
    `provider/model` whose provider is not installed is `extension_missing`.
+   These rules match a model left out with `model_unconfigured` too, so naming
+   one is `model_unconfigured`, not `no_model`, and a bare id it shares with
+   another provider's model is `model_ambiguous`.
 
 The exact match comes first because OpenRouter model ids contain colons.
 
