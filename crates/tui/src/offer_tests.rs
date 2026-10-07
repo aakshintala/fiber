@@ -302,6 +302,30 @@ fn moving_up_scrolls_back() {
 }
 
 #[test]
+fn moving_at_the_top_row_with_zero_height_moves_top_past_it() {
+    let mut offer = holding(1);
+    for _ in 0..3 {
+        press(&mut offer, &Key::PageDown, 0);
+    }
+    assert_eq!(top(&offer), 3);
+
+    press(&mut offer, &Key::Up, 0);
+    assert_eq!(top(&offer), 4);
+}
+
+#[test]
+fn moving_above_top_with_zero_height_moves_top_to_the_cursor() {
+    let mut offer = holding(1);
+    for _ in 0..4 {
+        press(&mut offer, &Key::PageDown, 0);
+    }
+    assert_eq!(top(&offer), 4);
+
+    press(&mut offer, &Key::Up, 0);
+    assert_eq!(top(&offer), 3);
+}
+
+#[test]
 fn page_down_stops_at_the_end() {
     let mut offer = holding(3);
     let total = texts(&offer, 80).len();
