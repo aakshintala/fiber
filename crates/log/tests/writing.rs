@@ -55,6 +55,15 @@ fn sessions_live_under_the_project_key_in_fiber_home() {
 }
 
 #[test]
+fn the_project_key_makes_every_slash_a_dash() {
+    assert_eq!(
+        log::project_key(Path::new("/Users/alice/work/fiber/.git")),
+        "-Users-alice-work-fiber-.git"
+    );
+    assert_eq!(log::project_key(Path::new("a/b//c/")), "a-b--c-");
+}
+
+#[test]
 fn durable_lines_carry_contiguous_seq_and_ephemeral_lines_reach_no_file() {
     let tmp = TestDir::new("seq");
     let log = Log::create(tmp.path(), id("s_1"), fakes::clock::FakeClock::new()).unwrap();

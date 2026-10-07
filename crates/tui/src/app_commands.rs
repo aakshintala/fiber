@@ -9,6 +9,7 @@ use contract::events::OpeningMessage;
 use serde_json::json;
 
 use super::{App, Effect, Kind, Link, Phase, mint, read, session_command};
+use crate::editor::Target;
 use crate::keymap;
 use crate::keys::{Edit, Key};
 use crate::shell;
@@ -68,33 +69,46 @@ pub(crate) struct Completions {
 }
 
 impl App {
-    /// Handles one key at `now`, read from the injected clock.
+    /// Handles one key at `now`, read from the injected clock. A recall
+    /// waiting for a page waits on only through ↑ and the keys that move
+    /// the view.
     pub(crate) fn on_key(&mut self, key: Key, now: Instant) -> Effect {
+        if !matches!(
+            key,
+            Key::Up | Key::PageUp | Key::PageDown | Key::End | Key::CtrlO
+        ) {
+            self.history.cancel();
+        }
         let effect = self.route_key(key, now);
         self.edited();
+        self.settle();
         effect
     }
 
     /// Handles one key that edits the draft, the approval panel first.
-    /// Nothing while the key map is open.
+    /// Nothing while the key map is open. A recall waiting for a page
+    /// waits no more.
     pub(crate) fn on_edit(&mut self, edit: Edit) -> Effect {
         self.armed_at = None;
-        if self.overlays.keymap.is_some() {
+        self.history.cancel();
+        if self.overlays.keymap.is_some() || self.search_edit(&edit) {
             return Effect::None;
         }
         crate::input::route(edit, &mut self.draft, &mut self.queue);
         self.overlays.selected = 0;
-        self.query_changed()
+        let effect = self.query_changed();
+        self.settle();
+        effect
     }
 
     /// A key the draft takes: a character or Backspace, which may open or
-    /// search the `@` panel, or ↑ ↓ by wrapped row. `None` for any other
-    /// key.
+    /// search the `@` panel, or ↑ ↓ by wrapped row and then through earlier
+    /// prompts. `None` for any other key.
     pub(super) fn draft_key(&mut self, key: &Key) -> Option<Effect> {
         match key {
             Key::Char(ch) => Some(self.type_char(*ch)),
             Key::Backspace => Some(self.backspace()),
-            Key::Up | Key::Down => self.draft.key(key, self.width).then_some(Effect::None),
+            Key::Up | Key::Down => self.recall_key(key),
             Key::Enter
             | Key::Esc
             | Key::CtrlC
@@ -108,7 +122,9 @@ impl App {
             | Key::AltX
             | Key::Tab
             | Key::BackTab
-            | Key::F1 => None,
+            | Key::F1
+            | Key::CtrlG
+            | Key::CtrlR => None,
         }
     }
 
@@ -123,6 +139,9 @@ impl App {
     pub(crate) fn completions(&self) -> Option<Completions> {
         if self.panel().is_some() {
             return None;
+        }
+        if let Some(search) = self.search_panel() {
+            return Some(search);
         }
         let (all, selectable): (Vec<String>, bool) = if self.slash_open() {
             let rows = slash::filter(&self.overlays.slash_rows, &self.slash_query());
@@ -214,6 +233,7 @@ impl App {
             self.overlays.selected = self.overlays.selected.min(len.saturating_sub(1));
             panel.result = Some(result);
         }
+        self.settle();
     }
 
     /// Keeps the panels in step with the draft after every key: the `/`
@@ -221,6 +241,7 @@ impl App {
     /// the `@` panel closes once its `@` is gone or the cursor leaves the
     /// query, the text from the `@` to whitespace.
     pub(super) fn edited(&mut self) {
+        self.history.sync(&self.draft.expand());
         if !self.draft.expand().starts_with('/') {
             self.overlays.slash_closed = false;
         }
@@ -320,7 +341,9 @@ impl App {
             | Key::AltX
             | Key::BackTab
             | Key::F1
-            | Key::CtrlO => return None,
+            | Key::CtrlO
+            | Key::CtrlG
+            | Key::CtrlR => return None,
         }
         Some(Effect::None)
     }
@@ -462,7 +485,9 @@ impl App {
             | Key::Tab
             | Key::BackTab
             | Key::F1
-            | Key::CtrlO => Some(top),
+            | Key::CtrlO
+            | Key::CtrlG
+            | Key::CtrlR => Some(top),
         };
         Some(Effect::None)
     }
@@ -543,6 +568,46 @@ impl App {
         let line = session_command(&id, "cancel", &session, None).to_string();
         self.pending.insert(id, (Kind::Cancel, String::new()));
         Effect::Send(vec![line])
+    }
+
+    /// Ctrl+G: the paste token beside the cursor, or else the whole draft,
+    /// every token expanded. A recall waiting for a page waits no more.
+    pub(super) fn open_in_editor(&mut self) -> Effect {
+        if let Some(number) = self.draft.token_at_cursor() {
+            return self.open_token(number);
+        }
+        self.history.cancel();
+        Effect::Editor {
+            target: Target::Draft,
+            text: self.draft.expand(),
+        }
+    }
+
+    /// Paste token `number`'s text in the editor; nothing when the draft
+    /// holds no such token. A recall waiting for a page waits no more.
+    pub(super) fn open_token(&mut self, number: usize) -> Effect {
+        self.history.cancel();
+        match self.draft.token_text(number) {
+            Some(text) => Effect::Editor {
+                target: Target::Token(number),
+                text: text.to_owned(),
+            },
+            None => Effect::None,
+        }
+    }
+
+    /// The editor returned: its text replaces `target`'s, the whole draft's
+    /// as typed with the cursor at its end; an error is the notice, and the
+    /// draft stays.
+    pub(crate) fn editor_returned(&mut self, target: Target, result: Result<String, String>) {
+        match (result, target) {
+            (Err(notice), _) => self.notices.push(notice),
+            (Ok(text), Target::Token(number)) => self.draft.set_token(number, &text),
+            (Ok(text), Target::Draft) => self.draft.set(&text),
+        }
+        self.overlays.selected = 0;
+        self.edited();
+        self.settle();
     }
 
     /// `opening_message`: the session's skills join the `/` list.

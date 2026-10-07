@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 use contract::events::{
     CommandAccepted, CommandRejected, Notice, SessionNamed, ShellCommand, SteeringQueue,
+    TurnStarted,
 };
 use contract::shapes::ContentPart;
 use contract::{Envelope, HubLine, SessionId};
@@ -31,6 +32,8 @@ mod steering;
 
 #[path = "app_commands.rs"]
 mod commands;
+#[path = "history.rs"]
+mod history;
 #[path = "app_mouse.rs"]
 mod mouse;
 
@@ -86,6 +89,13 @@ pub(crate) enum Effect {
         generation: u64,
         /// The query.
         query: String,
+    },
+    /// Open `text` in the editor; its text goes back to `target`.
+    Editor {
+        /// Where the edited text goes.
+        target: crate::editor::Target,
+        /// What the editor opens.
+        text: String,
     },
 }
 
@@ -164,6 +174,8 @@ pub(crate) struct App {
     name: Option<String>,
     /// The `/` and `@` panels and the key map overlay.
     overlays: commands::Overlays,
+    /// Prompt recall and the Ctrl+R panel.
+    history: history::History,
 }
 
 impl App {
@@ -189,6 +201,7 @@ impl App {
             steering: Steering::default(),
             name: None,
             overlays: commands::Overlays::default(),
+            history: history::History::default(),
         }
     }
 
@@ -215,6 +228,9 @@ impl App {
             Some(PanelKey::Handled) => return Effect::None,
             Some(PanelKey::Answer) => return self.answer(),
             None => {}
+        }
+        if let Some(effect) = self.history_key(&key) {
+            return effect;
         }
         if let Some(effect) = self.completion_key(&key) {
             return effect;
@@ -249,19 +265,23 @@ impl App {
                 Effect::None
             }
             Key::AltA => self.open_first(),
+            Key::CtrlR => self.open_search(),
+            Key::CtrlG => self.open_in_editor(),
             Key::AltUp | Key::AltDown | Key::AltX => self.steering_key(&key),
         }
     }
 
     /// Folds one line from the hub, returning command lines to send.
     pub(crate) fn on_line(&mut self, line: Line) -> Vec<String> {
-        match line {
+        let lines = match line {
             Line::Hub(hub) => self.on_hub(&hub),
             Line::Session(envelope) => {
                 self.on_session(&envelope);
                 Vec::new()
             }
-        }
+        };
+        self.settle();
+        lines
     }
 
     /// The hub could not be reached, or runs a schema this terminal cannot
@@ -274,6 +294,7 @@ impl App {
             let id = command_id.clone();
             self.fail(&id);
         }
+        self.settle();
     }
 
     /// The hub connection ended. Reconnecting is a later ticket. A
@@ -284,6 +305,7 @@ impl App {
             self.link = Link::Down;
             self.notices.push("Connection lost.".to_owned());
         }
+        self.settle();
     }
 
     /// Writing `unsent`, command lines this app made, to the hub failed:
@@ -299,6 +321,7 @@ impl App {
                 self.fail(&id);
             }
         }
+        self.settle();
     }
 
     /// Whether the hub spoke a `hub_hello` this terminal reads, and the
@@ -493,6 +516,9 @@ impl App {
                 let Some(id) = command_id else {
                     return Vec::new();
                 };
+                if let Some(lines) = self.history_answered(&id, hub.payload.get("result")) {
+                    return lines;
+                }
                 let session = hub
                     .payload
                     .get("result")
@@ -507,7 +533,9 @@ impl App {
             "command_rejected" => {
                 if let Some(id) = command_id {
                     let message = hub_string(&hub.payload, "message").unwrap_or_default();
-                    self.rejected(&id, message);
+                    if !self.history_rejected(&id, &message) {
+                        self.rejected(&id, message);
+                    }
                 }
                 Vec::new()
             }
@@ -594,6 +622,11 @@ impl App {
         }
         if self.session() != Some(&envelope.session_id) {
             return;
+        }
+        if envelope.kind == "turn_started"
+            && let Some(started) = read!(envelope, TurnStarted)
+        {
+            self.history.saw(&envelope.session_id, &started.input);
         }
         // Only a line that changed a card shows the overlay.
         let changed = match envelope.kind.as_str() {

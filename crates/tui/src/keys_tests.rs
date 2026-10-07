@@ -406,7 +406,9 @@ fn with_kitty_pushed_a_lone_esc_ending_a_read_is_held() {
     // Esc is `CSI 27u` then, so the ESC starts a sequence: here a paste
     // start marker split right after it.
     let mut parser = Parser::default();
+    assert!(!parser.kitty());
     parser.set_kitty();
+    assert!(parser.kitty());
     assert_eq!(parser.feed(b"a\x1b"), vec![Event::Key(Key::Char('a'))]);
     assert_eq!(
         parser.feed(b"[200~x\x1b[201~"),
@@ -438,8 +440,31 @@ fn f1_in_its_three_forms() {
 }
 
 #[test]
+fn ctrl_g_and_ctrl_r_in_legacy_and_kitty_forms() {
+    assert_eq!(feed_all(&[b"\x07"]), vec![Event::Key(Key::CtrlG)]);
+    assert_eq!(feed_all(&[b"\x12"]), vec![Event::Key(Key::CtrlR)]);
+    assert_eq!(feed_all(&[b"\x1b[103;5u"]), vec![Event::Key(Key::CtrlG)]);
+    assert_eq!(feed_all(&[b"\x1b[114;5u"]), vec![Event::Key(Key::CtrlR)]);
+    // A lock key changes nothing; another modifier or a plain code is no
+    // binding.
+    assert_eq!(feed_all(&[b"\x1b[114;69u"]), vec![Event::Key(Key::CtrlR)]);
+    for bytes in [
+        b"\x1b[103u".as_slice(),
+        b"\x1b[103;3u",
+        b"\x1b[103;6u",
+        b"\x1b[114u",
+        b"\x1b[114;7u",
+    ] {
+        assert!(feed_all(&[bytes]).is_empty(), "{bytes:?}");
+    }
+}
+
+#[test]
 fn esc_x_in_one_read_is_alt_x() {
     assert_eq!(feed_all(&[b"\x1bx"]), vec![Event::Key(Key::AltX)]);
+    // With kitty's flags, Alt+X is `CSI 120;3u`.
+    assert_eq!(feed_all(&[b"\x1b[120;3u"]), vec![Event::Key(Key::AltX)]);
+    assert!(feed_all(&[b"\x1b[120u"]).is_empty());
     assert_eq!(
         feed_all(&[b"\x1b", b"x"]),
         vec![Event::Key(Key::Esc), Event::Key(Key::Char('x'))]

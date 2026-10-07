@@ -170,8 +170,10 @@ pub(super) fn new_loop<B: Backend>(
         wakeups: 0,
         files_out: None,
         search: None,
+        reader: None,
         pointer: crate::mouse::Pointer::default(),
         hover: true,
+        var: Box::new(|_| None),
     };
     (lp, attached)
 }
@@ -614,6 +616,7 @@ fn run_quits_on_double_ctrl_c_with_the_reader_blocked() {
             let code = super::run(
                 slave,
                 PathBuf::from("/w"),
+                "-w".to_owned(),
                 Box::new(move || Ok((hub, hello))),
                 Box::new(|_| {}),
                 clock,
@@ -676,6 +679,7 @@ fn run_shows_a_failed_connect_and_still_quits_restored() {
             let code = super::run(
                 slave,
                 PathBuf::from("/w"),
+                "-w".to_owned(),
                 Box::new(|| Err(io::Error::other("refused"))),
                 Box::new(|_| {}),
                 fakes::clock::FakeClock::new(),
@@ -723,6 +727,7 @@ fn run_redraws_on_sigwinch_at_the_new_size() {
             let code = super::run(
                 slave,
                 PathBuf::from("/w"),
+                "-w".to_owned(),
                 Box::new(|| Err(io::Error::other("refused"))),
                 Box::new(|_| {}),
                 fakes::clock::FakeClock::new(),
@@ -866,4 +871,303 @@ fn a_cursor_move_alone_writes_and_a_still_frame_writes_nothing() {
     let start = sink.len();
     feed(&mut lp, vec![Input::Bytes(b"\x1b[D".to_vec())]);
     assert_eq!(sink.len(), start);
+}
+
+/// A reader on a pipe standing in for the tty: the reader, the pipe's
+/// write end and the loop's channel.
+fn piped_reader() -> (super::Reader, io::PipeWriter, mpsc::Receiver<Input>) {
+    let (read, write) = io::pipe().unwrap_or_else(|err| panic!("pipe: {err}"));
+    let tty = File::from(std::os::fd::OwnedFd::from(read));
+    let (tx, rx) = mpsc::channel();
+    let reader = super::Reader::spawn(&tty, tx).unwrap_or_else(|| panic!("the reader started"));
+    (reader, write, rx)
+}
+
+/// The next bytes the reader sends, with one deadline.
+fn next_bytes(rx: &mpsc::Receiver<Input>, what: &str) -> Vec<u8> {
+    match rx.recv_timeout(DEADLINE) {
+        Ok(Input::Bytes(bytes)) => bytes,
+        Ok(_) => panic!("{what}: not bytes"),
+        Err(err) => panic!("waited {DEADLINE:?} for {what}: {err}"),
+    }
+}
+
+/// Pauses `reader` on a thread with one deadline, handing it back.
+fn paused(reader: super::Reader) -> super::Reader {
+    within("the pause to return", move || {
+        let mut reader = reader;
+        reader.pause();
+        reader
+    })
+}
+
+#[test]
+fn a_paused_reader_holds_the_ttys_bytes_until_resumed() {
+    let (reader, mut tty, rx) = piped_reader();
+    tty.write_all(b"a")
+        .unwrap_or_else(|err| panic!("write: {err}"));
+    assert_eq!(next_bytes(&rx, "the first byte"), b"a");
+    let reader = paused(reader);
+    // Pause returned only once the reader parked.
+    assert!(reader.gate.lock().parked);
+    tty.write_all(b"b")
+        .unwrap_or_else(|err| panic!("write: {err}"));
+    // Parked on the condition variable, it reads nothing.
+    assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    assert!(reader.gate.lock().parked);
+    reader.resume();
+    assert_eq!(next_bytes(&rx, "the byte after resume"), b"b");
+    assert!(!reader.gate.lock().parked);
+    // A second pause and resume works the same.
+    let reader = paused(reader);
+    tty.write_all(b"c")
+        .unwrap_or_else(|err| panic!("write: {err}"));
+    assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    reader.resume();
+    assert_eq!(next_bytes(&rx, "the byte after the second resume"), b"c");
+}
+
+#[test]
+fn bytes_read_before_the_pause_are_sent_not_lost() {
+    let (reader, mut tty, rx) = piped_reader();
+    tty.write_all(b"xy")
+        .unwrap_or_else(|err| panic!("write: {err}"));
+    let reader = paused(reader);
+    reader.resume();
+    let mut got = Vec::new();
+    while got.len() < 2 {
+        got.extend(next_bytes(&rx, "the bytes written before the pause"));
+    }
+    assert_eq!(got, b"xy");
+}
+
+#[test]
+fn pause_on_an_ended_reader_returns_at_once() {
+    let (reader, tty, rx) = piped_reader();
+    // The tty's end ends the reader: its sender drops.
+    drop(tty);
+    match rx.recv_timeout(DEADLINE) {
+        Err(mpsc::RecvTimeoutError::Disconnected) => {}
+        Ok(_) => panic!("bytes instead of the reader's end"),
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            panic!("waited {DEADLINE:?} for the reader to end")
+        }
+    }
+    let reader = paused(reader);
+    assert!(reader.gate.lock().ended);
+    assert!(!reader.gate.lock().parked);
+}
+
+#[test]
+fn a_reader_whose_channel_closed_ends() {
+    let (reader, mut tty, rx) = piped_reader();
+    drop(rx);
+    tty.write_all(b"a")
+        .unwrap_or_else(|err| panic!("write: {err}"));
+    // Its send fails, and it records its end.
+    let state = reader.gate.lock();
+    let (state, waited) = reader
+        .gate
+        .changed
+        .wait_timeout_while(state, DEADLINE, |state| !state.ended)
+        .unwrap_or_else(|err| panic!("lock: {err}"));
+    assert!(
+        !waited.timed_out(),
+        "waited {DEADLINE:?} for the reader to end"
+    );
+    drop(state);
+    // Pause on it returns at once.
+    let reader = paused(reader);
+    assert!(!reader.gate.lock().parked);
+}
+
+#[test]
+fn hand_over_gives_the_terminal_and_its_input_to_the_program() {
+    let mut pair = open();
+    crate::term::setup(&pair.slave, true).unwrap_or_else(|err| panic!("setup: {err}"));
+    let start = "\x1b[?1049h\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b[?u\x1b[c";
+    read_exact(&pair.main, start.len(), "the start bytes");
+    let tty = pair
+        .slave
+        .try_clone()
+        .unwrap_or_else(|err| panic!("dup: {err}"));
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), Some(tty));
+    let (tx, rx) = mpsc::channel();
+    lp.reader = super::Reader::spawn(&pair.slave, tx);
+    lp.parser.set_kitty();
+    let slave = pair
+        .slave
+        .try_clone()
+        .unwrap_or_else(|err| panic!("dup: {err}"));
+    let mut main = pair
+        .main
+        .try_clone()
+        .unwrap_or_else(|err| panic!("dup: {err}"));
+    // The pause inside blocks: the loop runs on a thread, with a deadline.
+    let (lp, code, seen) = within("the hand-over", move || {
+        let mut seen = None;
+        let code = lp.hand_over(|| {
+            let cooked =
+                rustix::termios::tcgetattr(&slave).unwrap_or_else(|err| panic!("attr: {err}"));
+            // A line typed now goes to the program, not to the paused reader.
+            main.write_all(b"typed\n")
+                .unwrap_or_else(|err| panic!("write: {err}"));
+            let line = within("the program's read", move || {
+                let mut line = String::new();
+                BufReader::new(slave).read_line(&mut line).map(|_| line)
+            });
+            seen = Some((is_cooked(&cooked), line.unwrap_or_default()));
+        });
+        (lp, code, seen)
+    });
+    drop(lp);
+    assert_eq!(code, None);
+    assert_eq!(seen, Some((true, "typed\n".to_owned())));
+    assert!(!is_cooked(
+        &rustix::termios::tcgetattr(&pair.slave).unwrap_or_else(|err| panic!("attr: {err}"))
+    ));
+    // The terminal was restored, then set up again with hover and kitty's
+    // flags.
+    let restore =
+        "\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?1049l\x1b[?25h";
+    let echoed = read_until(&pair.main, restore.as_bytes(), "the restore bytes");
+    assert!(echoed.ends_with(restore.as_bytes()));
+    // In between, the cooked terminal echoed the program's line.
+    let resumed =
+        "typed\r\n\x1b[?1049h\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b[>1u";
+    assert_eq!(
+        read_until(&pair.main, resumed.as_bytes(), "the resume bytes"),
+        resumed.as_bytes()
+    );
+    // The reader runs again.
+    pair.main
+        .write_all(b"k")
+        .unwrap_or_else(|err| panic!("write: {err}"));
+    assert_eq!(next_bytes(&rx, "a key after the program"), b"k");
+    crate::term::restore();
+}
+
+#[test]
+fn hand_over_that_cannot_take_the_terminal_back_quits_with_one() {
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    let mut ran = false;
+    assert_eq!(lp.hand_over(|| ran = true), Some(1));
+    assert!(ran);
+}
+
+#[test]
+fn ctrl_c_or_ctrl_backslash_in_a_cooked_terminal_leaves_fiber_running() {
+    // Each test runs in its own process, so the signals reach only this
+    // test; uncaught, either would end it.
+    super::catch_interrupts();
+    signal_hook::low_level::raise(signal_hook::consts::SIGINT)
+        .unwrap_or_else(|err| panic!("raise: {err}"));
+    signal_hook::low_level::raise(signal_hook::consts::SIGQUIT)
+        .unwrap_or_else(|err| panic!("raise: {err}"));
+}
+
+#[test]
+fn pause_on_a_reader_already_parked_returns_at_once() {
+    let (_woken, wake) = io::pipe().unwrap_or_else(|err| panic!("pipe: {err}"));
+    let gate = Arc::new(super::Gate::default());
+    gate.lock().parked = true;
+    let reader = paused(super::Reader { gate, wake });
+    assert!(reader.gate.lock().paused);
+}
+
+/// A fake editor and what keeps it in check.
+struct FakeEditor {
+    /// Holds the script.
+    _dir: fakes::TempDir,
+    /// The script's path: every editor process's command line names it.
+    script: String,
+    /// Kills any editor process left when the test ends or dies.
+    _watchdog: fakes::Watchdog,
+}
+
+impl FakeEditor {
+    /// Asserts no editor process is left.
+    fn assert_gone(&self) {
+        let left = fakes::matching(&self.script).unwrap_or_else(|err| panic!("ps: {err}"));
+        assert!(left.is_empty(), "editor processes left: {left:?}");
+    }
+}
+
+/// A fake editor whose script is `body`, run as `/bin/sh <script>`, under a
+/// watchdog matching its path; and an environment reader naming it as
+/// `$EDITOR`.
+fn fake_editor(body: &str) -> (FakeEditor, super::Var) {
+    let dir = fakes::TempDir::new("editor");
+    let script = dir.path().join("editor.sh");
+    std::fs::write(&script, body).unwrap_or_else(|err| panic!("script: {err}"));
+    let command = format!("/bin/sh {}", script.display());
+    let script = script.display().to_string();
+    let watchdog = fakes::Watchdog::matching(&script);
+    (
+        FakeEditor {
+            _dir: dir,
+            script,
+            _watchdog: watchdog,
+        },
+        Box::new(move |name| (name == "EDITOR").then(|| command.clone())),
+    )
+}
+
+/// Runs `lp` over `inputs` on a thread with one deadline: the exit code
+/// and the draft.
+fn feed_within(mut lp: Loop<TestBackend>, inputs: Vec<Input>) -> (i32, String) {
+    within("the loop", move || {
+        let code = feed(&mut lp, inputs);
+        (code, lp.app.draft())
+    })
+}
+
+#[test]
+fn ctrl_g_puts_the_editors_text_in_the_draft_and_the_loop_reads_on() {
+    let pair = open();
+    crate::term::setup(&pair.slave, true).unwrap_or_else(|err| panic!("setup: {err}"));
+    // Drain what the terminal is sent, so no write blocks.
+    let mut main = pair
+        .main
+        .try_clone()
+        .unwrap_or_else(|err| panic!("dup: {err}"));
+    std::thread::Builder::new()
+        .name("lib-drain".to_owned())
+        .spawn(move || io::copy(&mut main, &mut io::sink()))
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    let tty = pair
+        .slave
+        .try_clone()
+        .unwrap_or_else(|err| panic!("dup: {err}"));
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), Some(tty));
+    let (editor, var) = fake_editor("printf 'edited' > \"$1\"\n");
+    lp.var = var;
+    let inputs = ["a", "\x07", "!"].map(|bytes| Input::Bytes(bytes.as_bytes().to_vec()));
+    assert_eq!(feed_within(lp, inputs.into()), (0, "edited!".to_owned()));
+    editor.assert_gone();
+    crate::term::restore();
+}
+
+#[test]
+fn ctrl_g_that_cannot_take_the_terminal_back_quits_with_one() {
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    let (editor, var) = fake_editor("printf 'edited' > \"$1\"\n");
+    lp.var = var;
+    let inputs = ["a", "\x07", "!"].map(|bytes| Input::Bytes(bytes.as_bytes().to_vec()));
+    assert_eq!(feed_within(lp, inputs.into()), (1, "a".to_owned()));
+    editor.assert_gone();
+}
+
+#[test]
+fn ctrl_g_with_no_editor_says_so_and_the_loop_reads_on() {
+    let (lp, _) = new_loop(TestBackend::new(60, 12), None);
+    let inputs = ["a", "\x07", "!"].map(|bytes| Input::Bytes(bytes.as_bytes().to_vec()));
+    let (lp, code) = within("the loop", move || {
+        let mut lp = lp;
+        let code = feed(&mut lp, inputs.into());
+        (lp, code)
+    });
+    assert_eq!(code, 0);
+    assert_eq!(lp.app.draft(), "a!");
+    assert_eq!(lp.app.notice(), Some(crate::editor::NO_EDITOR));
 }

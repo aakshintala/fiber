@@ -529,7 +529,11 @@ mod through_the_app {
                 assert_eq!(lines.len(), 1);
                 lines.into_iter().next().unwrap_or_default()
             }
-            Effect::None | Effect::Quit | Effect::ListFiles | Effect::Search { .. } => {
+            Effect::None
+            | Effect::Quit
+            | Effect::ListFiles
+            | Effect::Search { .. }
+            | Effect::Editor { .. } => {
                 panic!("expected one line")
             }
         }
@@ -789,6 +793,15 @@ mod through_the_app {
                 "args": {"request_id": "r_1", "decision": "deny", "feedback": "no"}})
         );
     }
+}
+
+#[test]
+fn ctrl_g_and_ctrl_r_do_nothing_in_the_panel() {
+    let mut queue = folded(&[offering(S_A, "r_1")]);
+    let before = panel(&queue);
+    press(&mut queue, Key::CtrlG, 1);
+    press(&mut queue, Key::CtrlR, 1);
+    assert_eq!(panel(&queue), before);
 }
 
 #[test]

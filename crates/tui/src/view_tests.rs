@@ -877,6 +877,43 @@ fn file_panel() {
 }
 
 #[test]
+fn search_panel() {
+    let mut app = empty();
+    let now = fakes::clock::FakeClock::new().now();
+    attach(&mut app, "s_aaaaaaaaaaaaaaaa");
+    for prompt in [
+        "fix the build",
+        "run the tests",
+        "Fix the docs\nand the build",
+    ] {
+        app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", prompt));
+    }
+    for ch in "draft".chars() {
+        app.on_key(Key::Char(ch), now);
+    }
+    app.on_key(Key::CtrlR, now);
+    for ch in "fix".chars() {
+        app.on_key(Key::Char(ch), now);
+    }
+    app.on_key(Key::Down, now);
+    insta::assert_snapshot!("search_panel", sized(&mut app, 80, 24));
+    let (shown, buf) = wide(&mut app);
+    let rows: Vec<&str> = shown.lines().collect();
+    assert_eq!(rows[HEIGHT as usize - 4], "search prompts: fix", "{shown}");
+    let reversed = |row: u16| {
+        buf.cell((0, row))
+            .is_some_and(|cell| cell.modifier.contains(Modifier::REVERSED))
+    };
+    assert!(!reversed(HEIGHT - 4), "{shown}");
+    assert!(!reversed(HEIGHT - 3), "{shown}");
+    assert!(reversed(HEIGHT - 2), "{shown}");
+    // Nothing matching says so.
+    app.on_key(Key::Char('z'), now);
+    let (shown, _) = wide(&mut app);
+    assert!(shown.contains("no matching prompts"), "{shown}");
+}
+
+#[test]
 fn steering_rows_above_the_input() {
     let clock = fakes::clock::FakeClock::new();
     let mut app = empty();
@@ -1062,6 +1099,7 @@ fn lines(targets: &[crate::mouse::Target]) -> Vec<(crate::app::Target, Rect)> {
             crate::mouse::TargetId::Line(line) => Some((line, target.rect)),
             crate::mouse::TargetId::Badge
             | crate::mouse::TargetId::NewBelow
+            | crate::mouse::TargetId::Token(_)
             | crate::mouse::TargetId::Steering(_)
             | crate::mouse::TargetId::DropSteering(_)
             | crate::mouse::TargetId::Notice(_)
@@ -1182,4 +1220,145 @@ fn the_overlay_row_hits_new_messages_below_not_the_line_under_it() {
     assert_eq!(hit(&targets, WIDTH / 2, 1), Some(TargetId::NewBelow));
     assert_eq!(hit(&targets, 0, 1), None);
     assert!(matches!(hit(&targets, 0, 0), Some(TargetId::Line(_))));
+}
+
+/// An empty app with `see ` and then a 312-line paste token typed.
+fn with_token() -> App {
+    let mut app = empty();
+    type_draft(&mut app, "see ");
+    let pasted: Vec<String> = (1..=312).map(|n| format!("line {n}")).collect();
+    app.on_edit(Edit::Paste(pasted.join("\n")));
+    app
+}
+
+/// The rects of the targets for paste token 1.
+fn token_rects(targets: &[crate::mouse::Target]) -> Vec<Rect> {
+    targets
+        .iter()
+        .filter(|target| target.id == crate::mouse::TargetId::Token(1))
+        .map(|target| target.rect)
+        .collect()
+}
+
+/// The text in `rects` of `buf`, in order.
+fn cells(buf: &Buffer, rects: &[Rect]) -> String {
+    rects
+        .iter()
+        .flat_map(|rect| rect.positions())
+        .filter_map(|at| buf.cell(at).map(|cell| cell.symbol().to_owned()))
+        .collect()
+}
+
+const LABEL: &str = "[Pasted text #1 · 312 lines]";
+
+#[test]
+fn a_paste_token_is_a_target_over_its_label_on_every_row() {
+    let mut app = with_token();
+    let (buf, targets) = pointed(&mut app, WIDTH, HEIGHT, None);
+    let rects = token_rects(&targets);
+    assert_eq!(rects, vec![Rect::new(6, 11, 28, 1)]);
+    assert_eq!(cells(&buf, &rects), LABEL);
+    // Wrapped, one target per row the label takes.
+    let (buf, targets) = pointed(&mut app, 20, HEIGHT, None);
+    let rects = token_rects(&targets);
+    assert_eq!(rects.len(), 2, "{rects:?}");
+    assert_eq!(cells(&buf, &rects), LABEL);
+}
+
+#[test]
+fn a_paste_token_scrolled_out_of_the_box_is_no_target() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = with_token();
+    type_draft(&mut app, "\n2\n3\n4\n5");
+    // The box shows its last four rows; the token's row is above them.
+    let (_, targets) = pointed(&mut app, WIDTH, HEIGHT, None);
+    assert!(token_rects(&targets).is_empty(), "{targets:?}");
+    for _ in 0..4 {
+        app.on_key(Key::Up, now);
+    }
+    // Scrolled to its top, the token is on the box's first row.
+    let (buf, targets) = pointed(&mut app, WIDTH, HEIGHT, None);
+    let rects = token_rects(&targets);
+    assert_eq!(rects, vec![Rect::new(6, 8, 28, 1)]);
+    assert_eq!(cells(&buf, &rects), LABEL);
+}
+
+#[test]
+fn a_click_on_a_token_opens_it_and_a_click_elsewhere_in_the_box_does_not() {
+    use crate::app::Effect;
+    use crate::keys::{Button, Mouse, MouseKind};
+    use crate::mouse::Pointer;
+    let mut app = with_token();
+    let (_, targets) = pointed(&mut app, 20, HEIGHT, None);
+    let mut pointer = Pointer::default();
+    let mut click = |col: u16, row: u16| {
+        let press = Mouse {
+            kind: MouseKind::Press(Button::Left),
+            col,
+            row,
+        };
+        pointer.on_mouse(&press, &targets, true);
+        let release = Mouse {
+            kind: MouseKind::Release,
+            ..press
+        };
+        pointer.on_mouse(&release, &targets, true)
+    };
+    // The prompt, `see ` and the cell after the label are no token.
+    let rects = token_rects(&targets);
+    let (first, last) = (rects[0], rects[rects.len() - 1]);
+    for (col, row) in [(0, first.y), (first.x - 1, first.y), (last.right(), last.y)] {
+        assert_eq!(click(col, row), None, "{col},{row}");
+    }
+    let text = app.input().token_text(1).unwrap_or_default().to_owned();
+    for (col, row) in [(first.x, first.y), (last.right() - 1, last.y)] {
+        let clicked = click(col, row);
+        assert_eq!(clicked, Some(crate::mouse::TargetId::Token(1)));
+        let effect = clicked.map(|target| app.on_click(target));
+        let expected = Effect::Editor {
+            target: crate::editor::Target::Token(1),
+            text: text.clone(),
+        };
+        assert_eq!(effect, Some(expected), "{col},{row}");
+    }
+}
+
+#[test]
+fn hovering_a_token_tints_every_cell_of_its_label_only() {
+    let mut app = with_token();
+    let (plain, targets) = pointed(&mut app, 20, HEIGHT, None);
+    let rects = token_rects(&targets);
+    let first = rects[0];
+    let (hovered, _) = pointed(&mut app, 20, HEIGHT, Some((first.x, first.y)));
+    for y in 0..HEIGHT {
+        for x in 0..20 {
+            let (Some(before), Some(after)) = (plain.cell((x, y)), hovered.cell((x, y))) else {
+                panic!("no cell at {x},{y}");
+            };
+            let mut expected = before.clone();
+            if rects.iter().any(|rect| rect.contains(Position::new(x, y))) {
+                expected.bg = super::HOVER_TINT.bg.unwrap_or_default();
+            }
+            assert_eq!(after, &expected, "cell {x},{y}");
+        }
+    }
+}
+
+#[test]
+fn a_paste_token_below_the_box_or_with_no_room_is_no_target() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = empty();
+    type_draft(&mut app, "1\n2\n3\n4\n");
+    let pasted: Vec<String> = (1..=312).map(|n| format!("line {n}")).collect();
+    app.on_edit(Edit::Paste(pasted.join("\n")));
+    for _ in 0..4 {
+        app.on_key(Key::Up, now);
+    }
+    // The box shows rows 0 to 3; the token is on row 4, just below it.
+    let (_, targets) = pointed(&mut app, WIDTH, HEIGHT, None);
+    assert!(token_rects(&targets).is_empty(), "{targets:?}");
+    // Two columns wide, the label starts past the last column: no cells.
+    let mut app = with_token();
+    let (_, targets) = pointed(&mut app, 2, HEIGHT, None);
+    assert!(token_rects(&targets).is_empty(), "{targets:?}");
 }

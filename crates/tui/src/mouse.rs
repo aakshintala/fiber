@@ -15,6 +15,9 @@ pub(crate) enum TargetId {
     NewBelow,
     /// A conversation line: opens or closes what it names.
     Line(crate::app::Target),
+    /// The paste token with this number in the input box: opens its text
+    /// in the editor.
+    Token(usize),
     /// A queued steering row, by its index: selects it.
     Steering(usize),
     /// A queued steering row's ✕, by its index: drops it.

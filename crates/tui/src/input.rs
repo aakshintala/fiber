@@ -22,6 +22,8 @@ enum Piece {
     Char(char),
     /// A pasted text shown as its label.
     Paste {
+        /// Its number, the `N` of its label.
+        number: usize,
         /// What the draft shows, `[Pasted text #N · L lines]`.
         label: String,
         /// What is sent.
@@ -69,37 +71,24 @@ struct Layout {
     rows: Vec<String>,
     /// For each cursor position, 0 to the piece count: row and column.
     at: Vec<(usize, u16)>,
+    /// The cells each paste token's label takes, one span per row.
+    tokens: Vec<TokenSpan>,
+}
+
+/// The cells of one row a paste token's label takes in [`Draft::rows`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TokenSpan {
+    /// The token's number.
+    pub(crate) number: usize,
+    /// The row.
+    pub(crate) row: usize,
+    /// The first column.
+    pub(crate) start: u16,
+    /// The column after the last.
+    pub(crate) end: u16,
 }
 
 impl Draft {
-    /// Applies a key the draft takes: a character, Backspace, or ↑ or ↓
-    /// by wrapped row at `width`. `false` for any other key.
-    pub(crate) fn key(&mut self, key: &Key, width: u16) -> bool {
-        match key {
-            Key::Char(ch) => self.insert(*ch),
-            Key::Backspace => self.backspace(),
-            // debt: ↑ on the first row does nothing, upgrade when prompt
-            // recall lands (part 2 of #684).
-            Key::Up => drop(self.up(width)),
-            Key::Down => drop(self.down(width)),
-            Key::Enter
-            | Key::Esc
-            | Key::CtrlC
-            | Key::CtrlO
-            | Key::PageUp
-            | Key::PageDown
-            | Key::End
-            | Key::AltA
-            | Key::AltUp
-            | Key::AltDown
-            | Key::AltX
-            | Key::Tab
-            | Key::BackTab
-            | Key::F1 => return false,
-        }
-        true
-    }
-
     /// Applies one editing key.
     pub(crate) fn edit(&mut self, edit: Edit) {
         match edit {
@@ -134,24 +123,66 @@ impl Draft {
     /// [`PASTE_LINES`] lines, not counting a trailing line break, become
     /// one token.
     pub(crate) fn paste(&mut self, text: &str) {
-        let text: String = text
-            .replace("\r\n", "\n")
-            .replace('\r', "\n")
-            .chars()
-            .filter(|ch| matches!(ch, '\n' | '\t') || !ch.is_control())
-            .collect();
+        let text = clean(text);
         if text.is_empty() {
             return;
         }
-        let lines = text.strip_suffix('\n').unwrap_or(&text).split('\n').count();
-        if lines > PASTE_LINES {
-            let label = format!("[Pasted text #{} · {lines} lines]", self.next);
+        if line_count(&text) > PASTE_LINES {
+            let number = self.next;
             self.next = self.next.saturating_add(1);
-            self.put(Piece::Paste { label, text });
+            self.put(token(number, text));
         } else {
             for ch in text.chars() {
                 self.put(Piece::Char(ch));
             }
+        }
+    }
+
+    /// The number of the paste token directly before the cursor, else of
+    /// the one directly after it.
+    pub(crate) fn token_at_cursor(&self) -> Option<usize> {
+        [self.before(self.cursor), self.pieces.get(self.cursor)]
+            .into_iter()
+            .find_map(|piece| match piece {
+                Some(Piece::Paste { number, .. }) => Some(*number),
+                Some(Piece::Char(_)) | None => None,
+            })
+    }
+
+    /// The full text of paste token `number`.
+    pub(crate) fn token_text(&self, number: usize) -> Option<&str> {
+        self.pieces.iter().find_map(|piece| match piece {
+            Piece::Paste {
+                number: found,
+                text,
+                ..
+            } if *found == number => Some(text.as_str()),
+            Piece::Paste { .. } | Piece::Char(_) => None,
+        })
+    }
+
+    /// Replaces the text of paste token `number`, read as a paste is: the
+    /// token keeps its number and its label counts the new lines, or, at
+    /// [`PASTE_LINES`] lines or fewer, the text replaces the token inline.
+    /// The cursor stays beside the same pieces.
+    pub(crate) fn set_token(&mut self, number: usize, text: &str) {
+        let Some(at) = self.pieces.iter().position(
+            |piece| matches!(piece, Piece::Paste { number: found, .. } if *found == number),
+        ) else {
+            return;
+        };
+        let text = clean(text);
+        if line_count(&text) > PASTE_LINES {
+            if let Some(piece) = self.pieces.get_mut(at) {
+                *piece = token(number, text);
+            }
+            return;
+        }
+        let chars: Vec<Piece> = text.chars().map(Piece::Char).collect();
+        let len = chars.len();
+        self.pieces.splice(at..=at, chars);
+        if self.cursor > at {
+            self.cursor = self.cursor.saturating_add(len).saturating_sub(1);
         }
     }
 
@@ -261,10 +292,11 @@ impl Draft {
         *self = Self::default();
     }
 
-    /// Replaces the draft with `text`, typed, the cursor at its end.
+    /// Replaces the draft with `text`, typed, the cursor at its end: line
+    /// breaks read as a paste's do, and no token.
     pub(crate) fn set(&mut self, text: &str) {
         self.clear();
-        for ch in text.chars() {
+        for ch in clean(text).chars() {
             self.put(Piece::Char(ch));
         }
     }
@@ -342,6 +374,12 @@ impl Draft {
             .unwrap_or_default()
     }
 
+    /// The cells each paste token's label takes at `width`, in
+    /// [`Draft::rows`]' rows and columns: one span per row a label covers.
+    pub(crate) fn token_spans(&self, width: u16) -> Vec<TokenSpan> {
+        self.layout(width).tokens
+    }
+
     /// Inserts `piece` at the cursor and moves past it.
     fn put(&mut self, piece: Piece) {
         self.pieces.insert(self.cursor, piece);
@@ -413,6 +451,7 @@ impl Draft {
             .max(1);
         let mut rows = vec![PROMPT.to_owned()];
         let mut at = Vec::with_capacity(self.pieces.len().saturating_add(1));
+        let mut tokens: Vec<TokenSpan> = Vec::new();
         let mut col = 0usize;
         // Starts a new row when `need` columns do not fit after `col`.
         let wrap = |rows: &mut Vec<String>, col: &mut usize, need: usize| {
@@ -444,22 +483,33 @@ impl Draft {
                     push(&mut rows, ch);
                     col = col.saturating_add(w);
                 }
-                Piece::Paste { label, .. } => {
+                Piece::Paste { number, label, .. } => {
                     for (index, ch) in label.chars().enumerate() {
                         let w = char_width(ch);
                         wrap(&mut rows, &mut col, w);
+                        let (row, start) = place(&rows, col);
                         if index == 0 {
-                            at.push(place(&rows, col));
+                            at.push((row, start));
                         }
                         push(&mut rows, ch);
                         col = col.saturating_add(w);
+                        let end = place(&rows, col).1;
+                        match tokens.last_mut() {
+                            Some(span) if index > 0 && span.row == row => span.end = end,
+                            _ => tokens.push(TokenSpan {
+                                number: *number,
+                                row,
+                                start,
+                                end,
+                            }),
+                        }
                     }
                 }
             }
         }
         wrap(&mut rows, &mut col, 1);
         at.push(place(&rows, col));
-        Layout { rows, at }
+        Layout { rows, at, tokens }
     }
 }
 
@@ -478,6 +528,31 @@ impl Piece {
 /// A word is a run of alphanumeric characters or `_`.
 fn is_word_char(ch: char) -> bool {
     ch.is_alphanumeric() || ch == '_'
+}
+
+/// Pasted text as the draft holds it: `\r\n` and `\r` become line breaks,
+/// and control characters but line breaks and tabs go.
+fn clean(text: &str) -> String {
+    text.replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .chars()
+        .filter(|ch| matches!(ch, '\n' | '\t') || !ch.is_control())
+        .collect()
+}
+
+/// The lines of `text`, not counting a trailing line break.
+fn line_count(text: &str) -> usize {
+    text.strip_suffix('\n').unwrap_or(text).split('\n').count()
+}
+
+/// Paste token `number` holding `text`.
+fn token(number: usize, text: String) -> Piece {
+    let label = format!("[Pasted text #{number} · {} lines]", line_count(&text));
+    Piece::Paste {
+        number,
+        label,
+        text,
+    }
 }
 
 /// Appends `ch` to the last row.

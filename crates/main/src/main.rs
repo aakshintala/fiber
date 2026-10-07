@@ -630,9 +630,11 @@ fn terminal() -> i32 {
     let hub_clock = Arc::clone(&clock);
     let connect: tui::Connect =
         Box::new(move || doors::hub::connect(&home, &mut start_hub, hub_clock.as_ref()));
+    let project = log::project_key(&doors::project(&workspace));
     tui::run(
         tty,
         workspace,
+        project,
         connect,
         Box::new(crash::attach),
         clock,

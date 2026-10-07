@@ -34,13 +34,17 @@ pub(crate) enum Key {
     BackTab,
     /// F1 (`SS3 P`, `CSI 11~`, `CSI P`).
     F1,
+    /// Ctrl+G (`0x07`, `CSI 103;5u`): `open_in_editor`.
+    CtrlG,
+    /// Ctrl+R (`0x12`, `CSI 114;5u`): `search_prompts`.
+    CtrlR,
     /// Alt+Up (`CSI 1;3A`, or `ESC` then `CSI A` in one read):
     /// `select_steering`.
     AltUp,
     /// Alt+Down (`CSI 1;3B`, or `ESC` then `CSI B` in one read):
     /// `select_steering`.
     AltDown,
-    /// Alt+X (`ESC x` in one read): `drop_steering`.
+    /// Alt+X (`ESC x` in one read, `CSI 120;3u`): `drop_steering`.
     AltX,
 }
 
@@ -168,6 +172,11 @@ impl Parser {
         self.kitty = true;
     }
 
+    /// Whether kitty's flags are pushed.
+    pub(crate) fn kitty(&self) -> bool {
+        self.kitty
+    }
+
     /// Feeds one read's bytes, returning its events in order.
     pub(crate) fn feed(&mut self, bytes: &[u8]) -> Vec<Event> {
         let mut buf = std::mem::take(&mut self.pending);
@@ -252,6 +261,8 @@ fn step(buf: &[u8]) -> Step {
     match *buf.first()? {
         0x03 => key(Key::CtrlC),
         0x0f => key(Key::CtrlO),
+        0x07 => key(Key::CtrlG),
+        0x12 => key(Key::CtrlR),
         0x08 | 0x7f => key(Key::Backspace),
         0x0a => Some((vec![Event::Edit(Edit::CtrlJ)], 1)),
         0x09 => key(Key::Tab),
@@ -442,10 +453,13 @@ fn kitty_key(params: &[u8]) -> Option<Event> {
         (127, ALT) => Event::Edit(Edit::DeleteWord),
         (99, CTRL) => Event::Key(Key::CtrlC),
         (111, CTRL) => Event::Key(Key::CtrlO),
+        (103, CTRL) => Event::Key(Key::CtrlG),
+        (114, CTRL) => Event::Key(Key::CtrlR),
         (106, CTRL) => Event::Edit(Edit::CtrlJ),
         (9, 0) => Event::Key(Key::Tab),
         (9, SHIFT) => Event::Key(Key::BackTab),
         (97, ALT) => Event::Key(Key::AltA),
+        (120, ALT) => Event::Key(Key::AltX),
         (98, ALT) => Event::Edit(Edit::WordLeft),
         (102, ALT) => Event::Edit(Edit::WordRight),
         _ => return None,
