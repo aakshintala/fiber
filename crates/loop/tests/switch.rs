@@ -127,6 +127,16 @@ const REPLY: &[&str] = &[
     "usage_recorded",
     "assistant_message_completed",
 ];
+const REASONING_REPLY: &[&str] = &[
+    "assistant_message_started",
+    "reasoning_started",
+    "reasoning_delta",
+    "assistant_message_delta",
+    "reasoning_completed",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+];
 const ENDED: &[&str] = &["turn_completed"];
 const SWITCHED_OPENING: &[&str] = &["model_changed", "preamble_built", "turn_started"];
 
@@ -699,8 +709,9 @@ fn thinking_only_switches_the_level_with_the_same_events() {
         prepare_to(Arc::clone(&next), MODEL, Arc::clone(&recorded)),
         switchable(),
     );
-    let (outcome, _) = run(&mut session, "hi");
+    let (outcome, first) = run(&mut session, "hi");
     assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(&first, &[OPENING, STEP, REASONING_REPLY, ENDED]);
 
     session.inbox.send(model(MODEL, Some("high"))).unwrap();
     let (outcome, lines) = run(&mut session, "again");
@@ -736,8 +747,9 @@ fn another_model_leaves_out_earlier_reasoning() {
         prepare_to(Arc::clone(&next), NEW_MODEL, Arc::clone(&recorded)),
         switchable(),
     );
-    let (outcome, _) = run(&mut session, "hi");
+    let (outcome, first) = run(&mut session, "hi");
     assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(&first, &[OPENING, STEP, REASONING_REPLY, ENDED]);
 
     session.inbox.send(model(NEW_MODEL, None)).unwrap();
     let (outcome, lines) = run(&mut session, "again");

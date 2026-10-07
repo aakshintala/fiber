@@ -4688,13 +4688,23 @@ fn switched(after: &str, thinking: Option<&str>, credential: Option<&str>) -> Ev
 
 #[test]
 fn resumed_folds_model_credential_and_thinking_from_the_last_switch() {
-    let history = History::new(vec![]);
+    let mut history = History::new(vec![]);
     history.write(preamble(Some("work")), None);
     history.write(
         switched("fake/second", Some("high"), Some("personal")),
         None,
     );
     history.write(switched("fake/third", None, None), None);
+    history.freeze();
+    assert_eq!(
+        kinds_of(&history.lines()),
+        vec![
+            "session_started",
+            "preamble_built",
+            "model_changed",
+            "model_changed"
+        ]
+    );
     let resumed = r#loop::resumed(&history.dir).unwrap();
     assert_eq!(resumed.model.as_deref(), Some("fake/third"));
     assert_eq!(resumed.credential, None);
@@ -4703,9 +4713,14 @@ fn resumed_folds_model_credential_and_thinking_from_the_last_switch() {
 
 #[test]
 fn resumed_keeps_the_switch_thinking_as_the_session_choice() {
-    let history = History::new(vec![]);
+    let mut history = History::new(vec![]);
     history.write(preamble(Some("work")), None);
     history.write(switched("fake/second", Some("high"), Some("work")), None);
+    history.freeze();
+    assert_eq!(
+        kinds_of(&history.lines()),
+        vec!["session_started", "preamble_built", "model_changed"]
+    );
     let resumed = r#loop::resumed(&history.dir).unwrap();
     assert_eq!(resumed.thinking.as_deref(), Some("high"));
     assert_eq!(resumed.model.as_deref(), Some("fake/second"));
@@ -4790,5 +4805,23 @@ fn resumed_thinking_seeds_the_session_choice_for_the_next_switch() {
         *recorded.lock().unwrap(),
         vec![Some(contract::ThinkingLevel::High)],
         "the folded thinking seeds `chosen`"
+    );
+    assert_eq!(
+        kinds_of(&history.lines()),
+        vec![
+            "session_started",
+            "preamble_built",
+            "model_changed",
+            "model_changed",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
     );
 }

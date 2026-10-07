@@ -1293,10 +1293,19 @@ impl Session {
     /// Every line emitted since the last call, ephemeral ones included,
     /// through the next `turn_completed`.
     pub(crate) fn lines(&mut self) -> Vec<Envelope> {
-        let watcher = self.lines.take().unwrap();
-        let (watcher, lines) = read_until(watcher, "a turn_completed line", |line| {
+        self.events_until("a turn_completed line", |line| {
             line.kind == "turn_completed"
-        });
+        })
+    }
+
+    /// Every line emitted through the first one matching `done`.
+    pub(crate) fn events_until(
+        &mut self,
+        what: &str,
+        done: impl Fn(&Envelope) -> bool + Send + 'static,
+    ) -> Vec<Envelope> {
+        let watcher = self.lines.take().unwrap();
+        let (watcher, lines) = read_until(watcher, what, done);
         self.lines = Some(watcher);
         // `run` starts the status observer, whose lines race the
         // loop's own; `tests/status.rs` reads them.

@@ -141,6 +141,16 @@ fn assert_refreshes(session: &Session, count: usize) {
     }
 }
 
+fn assert_kinds(lines: &[Envelope], expected: &[&str]) {
+    assert_eq!(
+        lines
+            .iter()
+            .map(|line| line.kind.as_str())
+            .collect::<Vec<_>>(),
+        expected
+    );
+}
+
 /// Each refresh's durable `usage_recorded`, in no turn and no action, and
 /// nothing else after the turn.
 fn assert_usage_only(session: &Session, count: usize) {
@@ -753,6 +763,9 @@ fn a_switch_while_warming_sends_no_refresh_and_restarts_idle_from_the_switch() {
     let start = session.clock.now();
     session.inbox.send(delivery("hi")).unwrap();
     let finished = spawn_run(&mut session);
+    let turn_lines = session.events_until("the first turn completion", |line| {
+        line.kind == "turn_completed"
+    });
     // Warming after the turn: the first refresh is due 30 s before 5 min.
     parked(
         &session.clock,
@@ -778,6 +791,29 @@ fn a_switch_while_warming_sends_no_refresh_and_restarts_idle_from_the_switch() {
         after.iter().map(|l| l.kind.as_str()).collect::<Vec<_>>(),
         vec!["model_changed"],
         "the switch writes one line and no refresh usage"
+    );
+    let switch_lines = session.events_until("the model_changed line", |line| {
+        line.kind == "model_changed"
+    });
+    let mut stream = turn_lines;
+    stream.extend(switch_lines);
+    assert_kinds(
+        &stream,
+        &[
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "model_changed",
+        ],
     );
 }
 
@@ -839,18 +875,59 @@ fn a_during_turn_switch_followed_by_a_turn_keeps_warming_the_new_cache() {
     arm(&mut session, MINUTE, Some(2));
     let start = session.clock.now();
     session.inbox.send(delivery("hi")).unwrap();
-    let finished = spawn_run(&mut session);
-    // The next turn's top applies the pending switch, clearing the first
-    // cache: no refresh, idle from the switch.
-    let idle_after_switch = start + MINUTE;
-    parked(
-        &session.clock,
-        idle_after_switch,
-        "idle counts from the switch",
+    assert_eq!(
+        session.turn(),
+        Some(contract::events::TurnOutcome::Completed)
     );
-    // Another turn sends on the new model: its cache warms from that send,
-    // not from the switch before it.
+    let first_lines = session.lines();
+    assert_eq!(
+        first_lines
+            .iter()
+            .map(|line| line.kind.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    // The next turn applies the pending switch and takes the queued prompt
+    // immediately, without parking idle before its first request.
     session.inbox.send(delivery("again")).unwrap();
+    assert_eq!(
+        session.turn(),
+        Some(contract::events::TurnOutcome::Completed)
+    );
+    let second_lines = session.lines();
+    assert_eq!(
+        second_lines
+            .iter()
+            .map(|line| line.kind.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "model_changed",
+            "preamble_built",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    let finished = spawn_run(&mut session);
     let first = start + Duration::from_secs(270);
     parked(&session.clock, first, "the new cache's first refresh");
     advance_to(&session, first);
@@ -880,4 +957,42 @@ fn a_during_turn_switch_followed_by_a_turn_keeps_warming_the_new_cache() {
         lines.iter().filter(|l| l.kind == "model_changed").collect();
     assert_eq!(changed.len(), 1);
     assert_eq!(changed[0].payload["after"]["model"], "fake/model-2");
+    let count = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::clone(&count);
+    let refresh_lines = session.events_until("two cache refreshes", move |line| {
+        line.kind == "usage_recorded" && seen.fetch_add(1, Ordering::SeqCst) == 1
+    });
+    let mut stream = first_lines;
+    stream.extend(second_lines);
+    stream.extend(refresh_lines);
+    assert_kinds(
+        &stream,
+        &[
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "model_changed",
+            "preamble_built",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "usage_recorded",
+            "usage_recorded",
+        ],
+    );
 }

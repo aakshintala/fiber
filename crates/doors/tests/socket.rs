@@ -179,6 +179,10 @@ fn seqs(lines: &[Value]) -> Vec<u64> {
         .collect()
 }
 
+fn kinds(lines: &[Value]) -> Vec<&str> {
+    lines.iter().map(kind).collect()
+}
+
 fn send(client: &Client, line: &str) {
     client.send(line).unwrap();
 }
@@ -1137,8 +1141,8 @@ fn model_arrives_as_delivery_with_its_args_and_its_rejection_stays_put() {
         .run(Vec::new(), Arc::new(|| false), move |inbox| {
             let sender = Client::connect(&socket).unwrap();
             let other = Client::connect(&socket).unwrap();
-            subscribe(&sender, "c_a", "full");
-            subscribe(&other, "c_b", "full");
+            let mut own = vec![subscribe(&sender, "c_a", "full")];
+            let mut other_stream = vec![subscribe(&other, "c_b", "full")];
             send(
                 &sender,
                 r#"{"id":"c_m1","command":"model","args":{"model":"fake/n","thinking":"high"}}"#,
@@ -1164,8 +1168,9 @@ fn model_arrives_as_delivery_with_its_args_and_its_rejection_stays_put() {
                 | Delivery::ExtensionLog(_)
                 | Delivery::Cancelled => panic!("the model arrives as a model"),
             }
-            let accepted = response(&sender, "c_m1");
-            assert_eq!(kind(&accepted), "command_accepted");
+            let accepted_lines = until(&sender, |line| command_id(line) == Some("c_m1"));
+            assert_eq!(kind(accepted_lines.last().unwrap()), "command_accepted");
+            own.extend(accepted_lines);
             send(
                 &sender,
                 r#"{"id":"c_m2","command":"model","args":{"model":"fake/nope"}}"#,
@@ -1193,8 +1198,12 @@ fn model_arrives_as_delivery_with_its_args_and_its_rejection_stays_put() {
                 | Delivery::ExtensionLog(_)
                 | Delivery::Cancelled => panic!("the model arrives as a model"),
             }
-            let rejected = response(&sender, "c_m2");
-            assert_eq!(rejection(&rejected), ("invalid_arguments", "no such model"));
+            let rejected_lines = until(&sender, |line| command_id(line) == Some("c_m2"));
+            assert_eq!(
+                rejection(rejected_lines.last().unwrap()),
+                ("invalid_arguments", "no such model")
+            );
+            own.extend(rejected_lines);
             // The other connection sees neither acknowledgement: both stay
             // on the connection that sent them.
             send(&other, r#"{"id":"c_tools","command":"tools"}"#);
@@ -1205,6 +1214,21 @@ fn model_arrives_as_delivery_with_its_args_and_its_rejection_stays_put() {
                 "the other connection sees no model acknowledgement"
             );
             assert_eq!(kind(seen.last().unwrap()), "command_accepted");
+            other_stream.extend(seen);
+            assert_eq!(
+                kinds(&own),
+                [
+                    "command_accepted",
+                    "clients",
+                    "clients",
+                    "command_accepted",
+                    "command_rejected"
+                ]
+            );
+            assert_eq!(
+                kinds(&other_stream),
+                ["command_accepted", "clients", "command_accepted"]
+            );
             Ok(())
         })
         .unwrap();
@@ -1219,22 +1243,38 @@ fn model_without_args_is_unfit_and_before_subscribe_is_not_subscribed() {
         .session
         .run(Vec::new(), Arc::new(|| false), move |_inbox| {
             let client = Client::connect(&socket).unwrap();
+            let mut stream = Vec::new();
             send(
                 &client,
                 r#"{"id":"c_early","command":"model","args":{"model":"fake/n"}}"#,
             );
             let early = next(&client);
             assert_eq!(rejection(&early), ("not_subscribed", NOT_SUBSCRIBED));
-            subscribe(&client, "c_sub", "full");
+            stream.push(early);
+            stream.push(subscribe(&client, "c_sub", "full"));
             send(&client, r#"{"id":"c_bare","command":"model"}"#);
+            let bare_lines = until(&client, |line| command_id(line) == Some("c_bare"));
             assert_eq!(
-                rejection(&response(&client, "c_bare")),
+                rejection(bare_lines.last().unwrap()),
                 ("invalid_arguments", UNFIT)
             );
+            stream.extend(bare_lines);
             send(&client, r#"{"id":"c_empty","command":"model","args":{}}"#);
+            let empty_lines = until(&client, |line| command_id(line) == Some("c_empty"));
             assert_eq!(
-                rejection(&response(&client, "c_empty")),
+                rejection(empty_lines.last().unwrap()),
                 ("invalid_arguments", UNFIT)
+            );
+            stream.extend(empty_lines);
+            assert_eq!(
+                kinds(&stream),
+                [
+                    "command_rejected",
+                    "command_accepted",
+                    "clients",
+                    "command_rejected",
+                    "command_rejected"
+                ]
             );
             Ok(())
         })
