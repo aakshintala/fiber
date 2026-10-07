@@ -49,7 +49,10 @@ impl Completions {
             ),
         ];
         if let Some(key) = &endpoint.key {
-            headers.push(("authorization".to_owned(), format!("Bearer {key}")));
+            headers.push((
+                "authorization".to_owned(),
+                format!("Bearer {}", key.expose()),
+            ));
         }
         headers.extend(endpoint.headers.iter().cloned());
         let body = body(endpoint, request);

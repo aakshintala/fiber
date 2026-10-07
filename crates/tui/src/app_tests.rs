@@ -1,7 +1,7 @@
 //! Tests for terminal state.
 
 use super::{App, Effect, QUIT_WINDOW};
-use crate::keys::{Key, Parser};
+use crate::keys::{Edit, Key, Parser};
 use crate::link::Line;
 use contract::clock::Clock;
 use std::path::PathBuf;
@@ -10,6 +10,13 @@ use std::time::Duration;
 /// The app's lines as text.
 fn texts(app: &App) -> Vec<String> {
     app.lines().iter().map(ToString::to_string).collect()
+}
+
+impl App {
+    /// The draft's text, its tokens expanded.
+    pub(crate) fn draft(&self) -> String {
+        self.draft.expand()
+    }
 }
 
 /// Creates an app in `/w`.
@@ -749,4 +756,353 @@ fn command_ids_are_c_and_sixteen_fresh_hex_digits() {
         );
     }
     assert_ne!(first, second);
+}
+
+/// `n` numbered lines joined by line breaks.
+fn numbered(n: usize) -> String {
+    (1..=n)
+        .map(|at| format!("l{at}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The text part a prompt or steer line carries.
+fn content_text(line: &str) -> String {
+    parse(line)
+        .pointer("/args/content/0/text")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_owned()
+}
+
+#[test]
+fn enter_sends_the_draft_with_its_tokens_expanded() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
+    app.on_key(Key::Char('a'), now);
+    app.on_edit(Edit::Paste(numbered(11)));
+    assert_eq!(app.input().rows(80), vec!["> a[Pasted text #1 · 11 lines]"]);
+    let line = one_line(app.on_key(Key::Enter, now));
+    assert_eq!(content_text(&line), format!("a{}", numbered(11)));
+    assert!(app.input().is_empty());
+    // The next draft numbers its tokens from 1 again.
+    app.on_edit(Edit::Paste(numbered(11)));
+    assert_eq!(app.input().rows(80), vec!["> [Pasted text #1 · 11 lines]"]);
+}
+
+#[test]
+fn shift_enter_and_ctrl_j_insert_line_breaks() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
+    app.on_key(Key::Char('a'), now);
+    app.on_edit(Edit::ShiftEnter);
+    app.on_key(Key::Char('b'), now);
+    app.on_edit(Edit::CtrlJ);
+    app.on_key(Key::Char('c'), now);
+    assert_eq!(app.draft(), "a\nb\nc");
+    let line = one_line(app.on_key(Key::Enter, now));
+    assert_eq!(content_text(&line), "a\nb\nc");
+}
+
+#[test]
+fn editing_keys_move_and_delete_in_the_draft() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    for ch in "one two".chars() {
+        app.on_key(Key::Char(ch), now);
+    }
+    app.on_edit(Edit::WordLeft);
+    app.on_edit(Edit::Left);
+    app.on_key(Key::Char('!'), now);
+    assert_eq!(app.draft(), "one! two");
+    app.on_edit(Edit::WordRight);
+    app.on_edit(Edit::DeleteWord);
+    assert_eq!(app.draft(), "one! ");
+    app.on_edit(Edit::LineStart);
+    app.on_edit(Edit::Delete);
+    app.on_edit(Edit::Right);
+    app.on_key(Key::Backspace, now);
+    assert_eq!(app.draft(), "e! ");
+    app.on_edit(Edit::LineEnd);
+    app.on_key(Key::Char('x'), now);
+    assert_eq!(app.draft(), "e! x");
+}
+
+#[test]
+fn up_and_down_move_through_a_draft_of_several_lines() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    for ch in "ab".chars() {
+        app.on_key(Key::Char(ch), now);
+    }
+    app.on_edit(Edit::ShiftEnter);
+    app.on_key(Key::Char('c'), now);
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
+    app.on_key(Key::Char('!'), now);
+    assert_eq!(app.draft(), "a!b\nc");
+    app.on_key(Key::Down, now);
+    app.on_key(Key::Char('?'), now);
+    assert_eq!(app.draft(), "a!b\nc?");
+}
+
+#[test]
+fn ctrl_c_clears_a_draft_with_tokens() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    app.on_edit(Edit::Paste(numbered(11)));
+    app.on_edit(Edit::Paste(numbered(11)));
+    assert_eq!(app.on_key(Key::CtrlC, now), Effect::None);
+    assert!(app.input().is_empty());
+    assert!(!app.hint());
+    app.on_edit(Edit::Paste(numbered(11)));
+    assert_eq!(app.input().rows(80), vec!["> [Pasted text #1 · 11 lines]"]);
+}
+
+#[test]
+fn an_editing_key_disarms_ctrl_c() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    app.on_key(Key::CtrlC, now);
+    assert!(app.hint());
+    app.on_edit(Edit::Left);
+    assert!(!app.hint());
+    assert_eq!(app.on_key(Key::CtrlC, now), Effect::None);
+}
+
+#[test]
+fn the_input_box_grows_to_a_third_of_the_screen() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    app.set_size(60, 12);
+    assert_eq!(app.input_height(), 1);
+    assert_eq!(app.conversation_height(), 11);
+    for _ in 0..2 {
+        app.on_edit(Edit::ShiftEnter);
+    }
+    assert_eq!(app.input_height(), 3);
+    assert_eq!(app.conversation_height(), 9);
+    for _ in 0..5 {
+        app.on_edit(Edit::ShiftEnter);
+    }
+    // 12 / 3 rows at most.
+    assert_eq!(app.input_height(), 4);
+    assert_eq!(app.conversation_height(), 8);
+    app.set_size(60, 14);
+    assert_eq!(app.input_height(), 4);
+    app.set_size(60, 15);
+    assert_eq!(app.input_height(), 5);
+    // A screen under 3 rows still shows one.
+    app.set_size(60, 2);
+    assert_eq!(app.input_height(), 1);
+    // Wrapped rows count.
+    let mut app = self::app();
+    app.set_size(10, 12);
+    for _ in 0..9 {
+        app.on_key(Key::Char('x'), now);
+    }
+    assert_eq!(app.input_height(), 2);
+}
+
+#[test]
+fn the_panel_takes_editing_keys_first_and_a_paste_goes_to_its_feedback() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
+    app.on_key(Key::Char('d'), now);
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "permission_requested",
+        serde_json::json!({"request_id": "r_1", "effects": ["executes"],
+            "reversible": true, "step": "review"}),
+        Some("a_1"),
+    ));
+    assert!(app.panel().is_some());
+    for edit in [
+        Edit::Left,
+        Edit::WordLeft,
+        Edit::LineStart,
+        Edit::Delete,
+        Edit::DeleteWord,
+        Edit::ShiftEnter,
+        Edit::CtrlJ,
+    ] {
+        app.on_edit(edit);
+    }
+    app.on_edit(Edit::Paste("no\nway".to_owned()));
+    assert_eq!(app.draft(), "d");
+    let feedback = app
+        .panel()
+        .and_then(|panel| panel.lines.last().cloned())
+        .unwrap_or_default();
+    assert_eq!(feedback, "› deny · no way");
+}
+
+/// The `args` of a command line.
+fn args(line: &str) -> serde_json::Value {
+    parse(line).get("args").cloned().unwrap_or_default()
+}
+
+#[test]
+fn one_bang_sends_shell_with_send_true() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
+    let line = one_line(send(&mut app, "!ls", now));
+    let value = parse(&line);
+    assert_eq!(value["command"], "shell");
+    assert_eq!(value["session_id"], "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(
+        args(&line),
+        serde_json::json!({"command": "ls", "send": true})
+    );
+    assert!(app.input().is_empty());
+}
+
+#[test]
+fn two_bangs_send_shell_with_send_false() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
+    let line = one_line(send(&mut app, "!!git status", now));
+    assert_eq!(
+        args(&line),
+        serde_json::json!({"command": "git status", "send": false})
+    );
+}
+
+#[test]
+fn a_bang_alone_is_a_prompt() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
+    let line = one_line(send(&mut app, "!", now));
+    assert_eq!(parse(&line)["command"], "prompt");
+    assert_eq!(content_text(&line), "!");
+}
+
+#[test]
+fn a_bang_command_expands_its_tokens() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
+    app.on_key(Key::Char('!'), now);
+    app.on_edit(Edit::Paste(numbered(11)));
+    let line = one_line(app.on_key(Key::Enter, now));
+    assert_eq!(args(&line)["command"], numbered(11).as_str());
+    assert_eq!(args(&line)["send"], true);
+}
+
+#[test]
+fn a_bang_command_before_a_session_says_start_one_first() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    connect(&mut app);
+    assert_eq!(send(&mut app, "!!ls", now), Effect::None);
+    assert_eq!(app.notice(), Some("Start a session first."));
+    assert_eq!(app.draft(), "!!ls");
+    // While `start` waits for its answer, the same.
+    let mut app = self::app();
+    started(&mut app, now);
+    assert_eq!(send(&mut app, "!ls", now), Effect::None);
+    assert_eq!(app.notice(), Some("Start a session first."));
+    assert_eq!(app.draft(), "!ls");
+}
+
+#[test]
+fn a_bang_command_during_a_turn_is_shell_not_steer() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "hi"));
+    let line = one_line(send(&mut app, "!!ls", now));
+    assert_eq!(parse(&line)["command"], "shell");
+    let line = one_line(send(&mut app, "!ls", now));
+    assert_eq!(parse(&line)["command"], "shell");
+}
+
+/// A `command_accepted` on the session stream for `id` with `result`.
+fn accepted(id: &str, result: Option<serde_json::Value>) -> Line {
+    let mut payload = serde_json::json!({"command_id": id});
+    if let (Some(result), Some(object)) = (result, payload.as_object_mut()) {
+        object.insert("result".to_owned(), result);
+    }
+    session_line("s_aaaaaaaaaaaaaaaa", "command_accepted", payload, None)
+}
+
+/// The id of a command line.
+fn id_of(line: &str) -> String {
+    parse(line)["id"].as_str().unwrap_or_default().to_owned()
+}
+
+#[test]
+fn a_show_only_result_is_one_item() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
+    let id = id_of(&one_line(send(&mut app, "!!git status", now)));
+    let result = serde_json::json!({"output": "clean\n",
+        "process": {"exit_code": 0, "timed_out": false}});
+    app.on_line(accepted(&id, Some(result.clone())));
+    assert_eq!(texts(&app), vec!["! git status", "clean"]);
+    // A repeat of the answer shows nothing more.
+    app.on_line(accepted(&id, Some(result)));
+    assert_eq!(app.lines().len(), 2);
+}
+
+#[test]
+fn a_sent_command_shows_once_from_its_event() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
+    let id = id_of(&one_line(send(&mut app, "!ls", now)));
+    // Even an answer carrying a result shows nothing for `send` true.
+    app.on_line(accepted(
+        &id,
+        Some(serde_json::json!({"output": "a",
+            "process": {"exit_code": 0, "timed_out": false}})),
+    ));
+    assert!(app.lines().is_empty());
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "shell_command",
+        serde_json::json!({"command": "ls", "output": "a\n",
+            "process": {"exit_code": 2, "timed_out": false}}),
+        None,
+    ));
+    assert_eq!(texts(&app), vec!["! ls", "a", "exit 2"]);
+}
+
+#[test]
+fn a_prompt_answer_with_a_shell_shaped_result_shows_nothing() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
+    let id = id_of(&one_line(send(&mut app, "!!ls", now)));
+    let line = one_line(send(&mut app, "hello", now));
+    app.on_line(accepted(
+        &id_of(&line),
+        Some(serde_json::json!({"output": "a",
+            "process": {"exit_code": 0, "timed_out": false}})),
+    ));
+    assert!(app.lines().is_empty());
+    app.on_line(accepted(&id, None));
+    assert!(app.lines().is_empty());
+}
+
+#[test]
+fn a_rejected_bang_command_returns_to_an_empty_draft() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
+    let id = id_of(&one_line(send(&mut app, "!!ls", now)));
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "command_rejected",
+        serde_json::json!({"command_id": id, "code": "busy", "message": "no"}),
+        None,
+    ));
+    assert_eq!(app.notice(), Some("no"));
+    assert_eq!(app.draft(), "!!ls");
 }

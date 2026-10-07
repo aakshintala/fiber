@@ -23,6 +23,7 @@ pub use error::Error;
 
 use std::sync::Arc;
 
+use contract::Secret;
 use contract::signing::Signer;
 use serde_json::{Map, Value};
 
@@ -38,7 +39,7 @@ pub struct Endpoint {
     /// `/responses`.
     pub base_url: String,
     /// The key, sent as a bearer token; `None` sends no `Authorization`.
-    pub key: Option<String>,
+    pub key: Option<Secret>,
     /// Headers sent on every request, in order.
     pub headers: Vec<(String, String)>,
     /// Signs each request just before it is sent, a retry included
@@ -80,7 +81,8 @@ impl Endpoint {
 }
 
 // `Arc<dyn Signer>` has no `Debug`: a debug print names the field without
-// reaching into it.
+// reaching into it. A header value can hold a key, so only names print
+// (`docs/code-quality.md`, "Errors").
 impl std::fmt::Debug for Endpoint {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Endpoint")
@@ -88,7 +90,14 @@ impl std::fmt::Debug for Endpoint {
             .field("model", &self.model)
             .field("base_url", &self.base_url)
             .field("key", &self.key)
-            .field("headers", &self.headers)
+            .field(
+                "headers",
+                &self
+                    .headers
+                    .iter()
+                    .map(|(name, _)| (name, "redacted"))
+                    .collect::<Vec<_>>(),
+            )
             .field("signer", &self.signer.as_ref().map(|_| "Signer"))
             .field("compat", &self.compat)
             .field("max_output_tokens", &self.max_output_tokens)

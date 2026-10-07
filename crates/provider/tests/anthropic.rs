@@ -58,7 +58,7 @@ fn endpoint(server: &ProviderServer) -> Endpoint {
         provider: "anthropic".into(),
         model: "claude-sonnet-5-5".into(),
         base_url: format!("{}/v1", server.url()),
-        key: Some("sk-secret".into()),
+        key: Some(contract::Secret::new("sk-secret".into())),
         direct: true,
         ..Endpoint::default()
     }

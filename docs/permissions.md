@@ -171,7 +171,9 @@ Like every other decision on this page, it relies on declared paths. The
 shell tool declares paths only for commands it recognises as read-only
 (`docs/tools.md`, "Shell"). A command it does not recognise, such as
 `python -c` opening a token file, declares no paths and the deny does not see
-it: the call is reviewed.
+it: the call is reviewed. A link-following recursive read, such as
+`grep -R`, is not read-only either, because the deny sees only the paths a
+call names and never a link below them.
 An extension tool that misdeclares its paths gets nothing it could not do
 directly, the same boundary the Effects section already states for
 extensions.

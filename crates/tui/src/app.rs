@@ -8,20 +8,24 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use contract::events::{
-    CommandAccepted, CommandRejected, InputItem, SteeringApplied, TurnCompleted, TurnStarted,
-    UsageRecorded,
+    CommandAccepted, CommandRejected, InputItem, ShellCommand, SteeringApplied, TurnCompleted,
+    TurnStarted, UsageRecorded,
 };
 use contract::shapes::ContentPart;
 use contract::{Envelope, HubLine, SessionId};
 use serde_json::{Map, Value, json};
 
 use crate::approvals::{self, Panel, PanelKey, Queue};
+use crate::input::Draft;
 use crate::keys::Key;
 use crate::link::Line;
+use crate::shell;
 use crate::turn::{Fold, Row, Turn};
 
 #[path = "app_commands.rs"]
 mod commands;
+#[path = "app_mouse.rs"]
+mod mouse;
 
 /// A line's payload as `$kind`; `None` when it does not parse, and the
 /// line is skipped.
@@ -86,6 +90,7 @@ enum Kind {
     Steer,
     Cancel,
     Reply,
+    Shell,
     /// A built-in command such as `handoff`, `reload` or `close`.
     Command,
 }
@@ -118,7 +123,7 @@ pub(crate) enum Target {
 pub(crate) struct App {
     /// The launch directory `start` names.
     workspace: PathBuf,
-    draft: String,
+    draft: Draft,
     phase: Phase,
     link: Link,
     /// Lines held until the hub connects: the `start` of an early Enter.
@@ -128,6 +133,7 @@ pub(crate) struct App {
     /// The one notice line, the latest.
     notice: Option<String>,
     turns: Vec<Turn>,
+    shells: shell::Items,
     fold: Fold,
     /// The top wrapped row while scrolled up; `None` follows new output.
     top: Option<usize>,
@@ -150,13 +156,14 @@ impl App {
     pub(crate) fn new(workspace: PathBuf) -> Self {
         Self {
             workspace,
-            draft: String::new(),
+            draft: Draft::default(),
             phase: Phase::Starting,
             link: Link::Waiting,
             held: Vec::new(),
             pending: HashMap::new(),
             notice: None,
             turns: Vec::new(),
+            shells: shell::Items::default(),
             fold: Fold::default(),
             top: None,
             has_new: false,
@@ -196,9 +203,10 @@ impl App {
         if let Some(effect) = self.completion_key(&key) {
             return effect;
         }
+        if let Some(effect) = self.draft_key(&key) {
+            return effect;
+        }
         match key {
-            Key::Char(ch) => self.type_char(ch),
-            Key::Backspace => self.backspace(),
             Key::Enter => self.on_enter(),
             Key::Esc => self.on_esc(),
             Key::PageUp => {
@@ -218,7 +226,9 @@ impl App {
                 Effect::None
             }
             Key::F1 => self.open_keymap(),
-            Key::Up | Key::Down | Key::Tab | Key::BackTab => Effect::None,
+            Key::Char(_) | Key::Backspace | Key::Up | Key::Down | Key::Tab | Key::BackTab => {
+                Effect::None
+            }
             Key::AltA => self.open_first(),
         }
     }
@@ -291,20 +301,26 @@ impl App {
         self.height = height.max(1);
     }
 
-    /// Records kitty's keyboard flags reply. No binding needs it yet.
+    /// Records kitty's keyboard flags reply.
     pub(crate) fn set_kitty(&mut self) {
         self.kitty = true;
     }
 
     /// Whether detection saw kitty's keyboard flags.
-    #[cfg(test)]
     pub(crate) fn kitty(&self) -> bool {
         self.kitty
     }
 
     /// The draft in the input box.
-    pub(crate) fn draft(&self) -> &str {
+    pub(crate) fn input(&self) -> &Draft {
         &self.draft
+    }
+
+    /// The input box's rows: the draft's wrapped rows, at most a third of
+    /// the screen and at least one.
+    pub(crate) fn input_height(&self) -> usize {
+        let cap = usize::from(self.height / 3).max(1);
+        self.draft.rows(self.width).len().min(cap)
     }
 
     /// The notice line, if any.
@@ -327,11 +343,11 @@ impl App {
         self.top
     }
 
-    /// The conversation's rows: the screen less the input line or the
+    /// The conversation's rows: the screen less the input box or the
     /// panel in its place, the badge, the hint and the notice. None on a
     /// screen too short for them.
     pub(crate) fn conversation_height(&self) -> usize {
-        let input = self.panel().map_or(1, |panel| {
+        let input = self.panel().map_or(self.input_height(), |panel| {
             panel
                 .lines
                 .iter()
@@ -363,10 +379,6 @@ impl App {
 
     /// For each line of [`Self::lines`] that opens something, its index and
     /// what it opens.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "#682 clicks and #683 focus call it")
-    )]
     pub(crate) fn targets(&self) -> Vec<(usize, Target)> {
         self.rows()
             .into_iter()
@@ -376,10 +388,6 @@ impl App {
     }
 
     /// Opens or closes what `target` names.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "#682 clicks and #683 focus call it")
-    )]
     pub(crate) fn open(&mut self, target: Target) {
         if self.turns.iter_mut().any(|turn| turn.toggle(target)) {
             self.changed();
@@ -388,9 +396,11 @@ impl App {
 
     fn rows(&self) -> Vec<Row> {
         let mut out = Vec::new();
-        for turn in &self.turns {
+        for (at, turn) in self.turns.iter().enumerate() {
+            self.shells.rows(at, &mut out);
             turn.rows(self.width, &mut out);
         }
+        self.shells.rows(self.turns.len(), &mut out);
         out
     }
 
@@ -431,80 +441,6 @@ impl App {
         }
         self.armed_at = Some(now);
         Effect::None
-    }
-
-    /// Enter sends the draft: `start` with no session, `prompt` when idle,
-    /// `steer` during a turn.
-    fn on_enter(&mut self) -> Effect {
-        if let Some(effect) = self.built_in() {
-            return effect;
-        }
-        // A command sent after the connection is lost goes nowhere, so the
-        // draft stays.
-        if self.draft.trim().is_empty() || self.link == Link::Down {
-            return Effect::None;
-        }
-        let (kind, session) = match &self.phase {
-            Phase::Starting => (Kind::Start, None),
-            Phase::Pending { .. } => return Effect::None,
-            Phase::Attached { session, busy } => {
-                let kind = if *busy { Kind::Steer } else { Kind::Prompt };
-                (kind, Some(session.clone()))
-            }
-        };
-        let id = mint();
-        let text = std::mem::take(&mut self.draft);
-        let content = json!([{"type": "text", "text": text}]);
-        let line = match session {
-            None => {
-                self.phase = Phase::Pending {
-                    command_id: id.clone(),
-                };
-                json!({
-                    "id": id,
-                    "command": "start",
-                    "args": {
-                        "workspace": self.workspace.display().to_string(),
-                        "content": content,
-                    },
-                })
-            }
-            Some(session) => {
-                let command = if kind == Kind::Steer {
-                    "steer"
-                } else {
-                    "prompt"
-                };
-                session_command(&id, command, &session, Some(json!({ "content": content })))
-            }
-        };
-        self.pending.insert(id, (kind, text));
-        let line = line.to_string();
-        if self.link == Link::Up {
-            Effect::Send(vec![line])
-        } else {
-            // An Enter before the hub connects is held, not lost: `start`
-            // goes out once the hub speaks `hub_hello`.
-            self.held.push(line);
-            Effect::None
-        }
-    }
-
-    /// Esc with nothing open interrupts the turn: `cancel`, only when busy.
-    fn on_esc(&mut self) -> Effect {
-        let session = match &self.phase {
-            Phase::Attached {
-                session,
-                busy: true,
-            } if self.connected() => session.clone(),
-            Phase::Starting | Phase::Pending { .. } | Phase::Attached { .. } => {
-                return Effect::None;
-            }
-        };
-        let id = mint();
-        let line = session_command(&id, "cancel", &session, None).to_string();
-        self.pending.insert(id, (Kind::Cancel, String::new()));
-        Effect::Send(vec![line])
     }
 
     fn on_hub(&mut self, hub: &HubLine) -> Vec<String> {
@@ -564,7 +500,15 @@ impl App {
             Some((Kind::Cancel, _)) => {
                 self.pending.remove(id);
             }
-            Some((Kind::Start | Kind::Prompt | Kind::Steer | Kind::Reply | Kind::Command, _)) => {
+            Some((
+                Kind::Start
+                | Kind::Prompt
+                | Kind::Steer
+                | Kind::Reply
+                | Kind::Shell
+                | Kind::Command,
+                _,
+            )) => {
                 self.notice = Some(message);
                 self.fail(id);
             }
@@ -577,7 +521,7 @@ impl App {
             return;
         };
         if self.draft.is_empty() {
-            self.draft = text;
+            self.draft.paste(&text);
         }
         if kind == Kind::Start {
             self.phase = Phase::Starting;
@@ -623,11 +567,15 @@ impl App {
         let ts = envelope.ts;
         // Only a line that changed a card shows the overlay.
         let changed = match envelope.kind.as_str() {
-            "command_accepted" => {
-                if let Some(accepted) = read!(envelope, CommandAccepted) {
-                    self.pending.remove(&accepted.command_id.0);
-                }
-                false
+            "command_accepted" => read!(envelope, CommandAccepted).is_some_and(|accepted| {
+                let sent = self.pending.remove(&accepted.command_id.0);
+                let shell = sent.filter(|(kind, _)| *kind == Kind::Shell);
+                let item = shell.and_then(|(_, text)| shell::answered(&text, accepted.result));
+                self.shells.add(self.turns.len(), item)
+            }),
+            "shell_command" => {
+                let item = read!(envelope, ShellCommand).map(|ran| shell::ran(&ran));
+                self.shells.add(self.turns.len(), item)
             }
             "command_rejected" => {
                 if let Some(rejected) = read!(envelope, CommandRejected)

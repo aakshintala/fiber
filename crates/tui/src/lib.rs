@@ -10,9 +10,12 @@ mod approvals;
 mod bindings;
 mod files;
 mod format;
+mod input;
 mod keymap;
 mod keys;
 mod link;
+mod mouse;
+mod shell;
 mod slash;
 mod term;
 mod turn;
@@ -38,6 +41,7 @@ use signal_hook::iterator::Signals;
 use crate::app::{App, Effect};
 use crate::keys::{Event, Parser, Reply};
 use crate::link::Line;
+use crate::mouse::{Pointer, Target};
 
 /// Connects to the hub, starting one when none runs: the stream and the
 /// `hub_hello` it spoke first.
@@ -72,21 +76,23 @@ pub(crate) enum Input {
     },
 }
 
-/// Runs the terminal on `tty`, starting sessions in `workspace`. Returns 0
-/// on quit and 1 when the terminal cannot be set up or drawn. The terminal
-/// is restored on every return.
+/// Runs the terminal on `tty`, starting sessions in `workspace`. `hover`
+/// is `tui.hover`: with it off, mouse mode 1003 is never sent and nothing
+/// is tinted under the pointer. Returns 0 on quit and 1 when the terminal
+/// cannot be set up or drawn. The terminal is restored on every return.
 pub fn run(
     tty: File,
     workspace: PathBuf,
     connect: Connect,
     on_attach: OnAttach,
     clock: Arc<dyn Clock>,
+    hover: bool,
 ) -> i32 {
     // SIGWINCH is caught from before the size is read, so no resize is
     // missed; its thread starts after the first frame.
     let signals = Signals::new([SIGWINCH]).ok();
     let _restore = term::Guard;
-    let Ok((width, height)) = term::setup(&tty) else {
+    let Ok((width, height)) = term::setup(&tty, hover) else {
         return 1;
     };
     let Ok(out) = tty.try_clone() else {
@@ -108,10 +114,12 @@ pub fn run(
         wakeups: 0,
         files_out: None,
         search: None,
+        pointer: Pointer::default(),
+        hover,
     };
     // The first frame waits on nothing: the queries are out, and nothing
     // reads the tty or the hub until it is drawn.
-    if terminal.screen.draw(&terminal.app).is_err() {
+    if terminal.screen.draw(&terminal.app, None).is_err() {
         return 1;
     }
     let (tx, rx) = mpsc::channel();
@@ -130,8 +138,9 @@ pub fn run(
     code
 }
 
-/// Restores the terminal [`run`] set up: leaves the alternate screen, shows
-/// the cursor and restores the saved terminal modes. Idempotent, takes no
+/// Restores the terminal [`run`] set up: turns mouse reporting off, leaves
+/// the alternate screen, shows the cursor and restores the saved terminal
+/// modes. Idempotent, takes no
 /// lock, and does nothing when [`run`] never set the terminal up. The panic
 /// hook calls it first.
 pub fn restore() {
@@ -143,6 +152,61 @@ pub fn restore() {
 /// trimmed of trailing spaces. An unreadable line is an error naming its
 /// number. The `draw` jig prints it (`docs/testing.md`, "Jigs").
 pub fn draw(events: &str, width: u16, height: u16) -> Result<String, String> {
+    let app = fold(events, width, height)?;
+    let area = Rect::new(0, 0, width, height);
+    let mut buf = Buffer::empty(area);
+    view::render(&app, area, &mut buf, None);
+    Ok(view::text(&buf))
+}
+
+/// Folds `events` as [`draw`] does and puts the request the panel shows
+/// aside, so it waits on the badge, a click target. Then draws them at
+/// `width` by `height` through the loop's screen, and moves the pointer to
+/// each of `pointer` in turn, drawing after each as the loop does for a
+/// motion report. Returns the bytes each report wrote. The `hover` jig
+/// times it (`docs/tui.md`, "Mouse and hover").
+pub fn hover_frames(
+    events: &str,
+    width: u16,
+    height: u16,
+    pointer: &[(u16, u16)],
+) -> Result<Vec<usize>, String> {
+    let mut app = fold(events, width, height)?;
+    app.put_aside();
+    let written = Counter::default();
+    let mut screen = Screen::new(CrosstermBackend::new(written.clone()), width, height)
+        .map_err(|error| error.to_string())?;
+    screen.draw(&app, None).map_err(|error| error.to_string())?;
+    let mut bytes = Vec::with_capacity(pointer.len());
+    for at in pointer {
+        let before = written.0.get();
+        screen
+            .draw(&app, Some(*at))
+            .map_err(|error| error.to_string())?;
+        bytes.push(written.0.get().saturating_sub(before));
+    }
+    Ok(bytes)
+}
+
+/// Counts the bytes written through it.
+#[derive(Clone, Default)]
+struct Counter(std::rc::Rc<std::cell::Cell<usize>>);
+
+impl io::Write for Counter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0.set(self.0.get().saturating_add(bytes.len()));
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+/// An app at `width` by `height` with `events` folded, one envelope per
+/// line as one session's stream. An unreadable line is an error naming
+/// its number.
+fn fold(events: &str, width: u16, height: u16) -> Result<App, String> {
     let mut app = App::new(PathBuf::new());
     app.set_size(width, height);
     for (at, line) in events.lines().enumerate() {
@@ -156,17 +220,20 @@ pub fn draw(events: &str, width: u16, height: u16) -> Result<String, String> {
         }
         app.on_line(Line::Session(envelope));
     }
-    let area = Rect::new(0, 0, width, height);
-    let mut buf = Buffer::empty(area);
-    view::render(&app, area, &mut buf);
-    Ok(view::text(&buf))
+    Ok(app)
 }
 
-/// The screen: ratatui on a fixed viewport, and the last frame drawn.
+/// One frame: the cells, and where the cursor shows, if anywhere.
+type Frame = (Buffer, Option<Position>);
+
+/// The screen: ratatui on a fixed viewport, and the last frame drawn with
+/// its click targets.
 struct Screen<B: Backend> {
     terminal: Terminal<TtySized<B>>,
     area: Rect,
-    last: Option<Buffer>,
+    last: Option<Frame>,
+    /// The click targets of the last frame drawn: what a click hits.
+    targets: Vec<Target>,
 }
 
 impl<B: Backend> Screen<B> {
@@ -185,19 +252,27 @@ impl<B: Backend> Screen<B> {
             terminal,
             area,
             last: None,
+            targets: Vec::new(),
         })
     }
 
-    /// Draws `app`. A frame equal to the last one writes nothing; otherwise
-    /// only the cells that changed are written.
-    fn draw(&mut self, app: &App) -> Result<(), B::Error> {
-        let mut next = Buffer::empty(self.area);
-        view::render(app, self.area, &mut next);
+    /// Draws `app`, the cursor shown at the draft's cursor or hidden,
+    /// tinting the click target under `pointer`, and keeps the frame's
+    /// targets. A frame whose cells and cursor equal the last one's writes
+    /// nothing; otherwise only the cells that changed are written.
+    fn draw(&mut self, app: &App, pointer: Option<(u16, u16)>) -> Result<(), B::Error> {
+        let mut cells = Buffer::empty(self.area);
+        self.targets = view::render(app, self.area, &mut cells, pointer);
+        let next = (cells, view::cursor(app, self.area));
         if self.last.as_ref() == Some(&next) {
             return Ok(());
         }
-        self.terminal
-            .draw(|frame| frame.buffer_mut().clone_from(&next))?;
+        self.terminal.draw(|frame| {
+            frame.buffer_mut().clone_from(&next.0);
+            if let Some(cursor) = next.1 {
+                frame.set_cursor_position(cursor);
+            }
+        })?;
         self.last = Some(next);
         Ok(())
     }
@@ -288,6 +363,10 @@ struct Loop<B: Backend> {
     files_out: Option<Sender<Input>>,
     /// The `@` panel's search worker, while the panel is open.
     search: Option<files::Search>,
+    /// The pointer's last cell and a pending click.
+    pointer: Pointer,
+    /// `tui.hover`: whether the pointer's cell is recorded and tinted.
+    hover: bool,
 }
 
 impl<B: Backend> Loop<B> {
@@ -309,20 +388,31 @@ impl<B: Backend> Loop<B> {
         match input {
             Input::Bytes(bytes) => {
                 for event in self.parser.feed(&bytes) {
-                    match event {
-                        Event::Key(key) => match self.app.on_key(key, self.clock.now()) {
-                            Effect::None => {}
-                            Effect::Send(lines) => self.send(&lines),
-                            Effect::Quit => return Some(0),
-                            Effect::ListFiles => self.list_files(),
-                            Effect::Search { generation, query } => {
-                                if let Some(search) = &self.search {
-                                    search.search(generation, query);
-                                }
+                    let effect = match event {
+                        Event::Key(key) => self.app.on_key(key, self.clock.now()),
+                        Event::Edit(edit) => self.app.on_edit(edit),
+                        Event::Mouse(mouse) => {
+                            let clicked =
+                                self.pointer
+                                    .on_mouse(&mouse, &self.screen.targets, self.hover);
+                            clicked.map_or(Effect::None, |target| self.app.on_click(target))
+                        }
+                        Event::Reply(Reply::KittyFlags(_)) => {
+                            self.kitty();
+                            Effect::None
+                        }
+                        Event::Reply(Reply::DeviceAttributes) => Effect::None,
+                    };
+                    match effect {
+                        Effect::None => {}
+                        Effect::Send(lines) => self.send(&lines),
+                        Effect::Quit => return Some(0),
+                        Effect::ListFiles => self.list_files(),
+                        Effect::Search { generation, query } => {
+                            if let Some(search) = &self.search {
+                                search.search(generation, query);
                             }
-                        },
-                        Event::Reply(Reply::KittyFlags(_)) => self.app.set_kitty(),
-                        Event::Reply(Reply::DeviceAttributes) => {}
+                        }
                     }
                 }
             }
@@ -366,10 +456,25 @@ impl<B: Backend> Loop<B> {
         if !self.app.files_open() {
             self.search = None;
         }
-        if self.screen.draw(&self.app).is_err() {
+        if self.screen.draw(&self.app, self.pointer.at).is_err() {
             return Some(1);
         }
         None
+    }
+
+    /// Kitty's flags reply: the first pushes the flags the bindings need
+    /// (`docs/tui.md`, "Keys", "Rules"). A failed write leaves the legacy
+    /// keys, which every binding also has.
+    fn kitty(&mut self) {
+        if self.app.kitty() {
+            return;
+        }
+        self.app.set_kitty();
+        if let Some(mut tty) = self.tty.as_ref()
+            && io::Write::write_all(&mut tty, term::KITTY_PUSH).is_ok()
+        {
+            self.parser.set_kitty();
+        }
     }
 
     /// Starts the `@` panel's search worker on a listing of the workspace,
@@ -473,3 +578,7 @@ fn spawn_resize(mut signals: Signals, tx: Sender<Input>) {
 #[cfg(test)]
 #[path = "lib_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "lib_mouse_tests.rs"]
+mod mouse_tests;

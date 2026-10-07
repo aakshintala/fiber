@@ -69,7 +69,7 @@ fn endpoint(server: &ProviderServer) -> Endpoint {
         provider: "gemini".into(),
         model: "gemini-3.1-flash-lite".into(),
         base_url: format!("{}/v1beta", server.url()),
-        key: Some("AIza-secret".into()),
+        key: Some(contract::Secret::new("AIza-secret".into())),
         direct: true,
         ..Endpoint::default()
     }

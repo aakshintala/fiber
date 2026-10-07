@@ -8,6 +8,18 @@ use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::Duration;
 
+/// What `setup` writes with hover on: the alternate screen, bracketed
+/// paste, mouse modes 1000, 1002, 1006 and 1003, then the two queries.
+const START_HOVER: &[u8] =
+    b"\x1b[?1049h\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b[?u\x1b[c";
+/// What `setup` writes with hover off: no mode 1003.
+const START_NO_HOVER: &[u8] =
+    b"\x1b[?1049h\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?u\x1b[c";
+/// What `restore` writes: kitty's flags popped, bracketed paste and every
+/// mouse mode off, the alternate screen left, the cursor shown.
+const END: &[u8] =
+    b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?1049l\x1b[?25h";
+
 /// One named wall-clock deadline for every blocking wait.
 const DEADLINE: Duration = Duration::from_secs(10);
 
@@ -65,16 +77,23 @@ fn restore_before_setup_does_nothing() {
 }
 
 #[test]
-fn setup_writes_alt_screen_then_queries() {
+fn setup_writes_alt_screen_mouse_modes_then_queries() {
     let pair = open();
-    setup(&pair.slave).unwrap_or_else(|err| panic!("setup: {err}"));
-    let bytes = read_exact(
-        &pair.main,
-        "\x1b[?1049h".len() + "\x1b[?u\x1b[c".len(),
-        "the alternate screen and queries",
-    );
-    assert_eq!(bytes, b"\x1b[?1049h\x1b[?u\x1b[c");
+    setup(&pair.slave, true).unwrap_or_else(|err| panic!("setup: {err}"));
+    let bytes = read_exact(&pair.main, START_HOVER.len(), "the start bytes");
+    assert_eq!(bytes, START_HOVER);
     restore();
+    assert_eq!(read_exact(&pair.main, END.len(), "the restore bytes"), END);
+}
+
+#[test]
+fn setup_without_hover_drops_mode_1003_and_restore_still_turns_it_off() {
+    let pair = open();
+    setup(&pair.slave, false).unwrap_or_else(|err| panic!("setup: {err}"));
+    let bytes = read_exact(&pair.main, START_NO_HOVER.len(), "the start bytes");
+    assert_eq!(bytes, START_NO_HOVER);
+    restore();
+    assert_eq!(read_exact(&pair.main, END.len(), "the restore bytes"), END);
 }
 
 #[test]
@@ -82,21 +101,13 @@ fn setup_sets_raw_mode_and_restore_puts_it_back() {
     let pair = open();
     let before =
         rustix::termios::tcgetattr(&pair.slave).unwrap_or_else(|err| panic!("attr: {err}"));
-    setup(&pair.slave).unwrap_or_else(|err| panic!("setup: {err}"));
-    let _ = read_exact(
-        &pair.main,
-        "\x1b[?1049h".len() + "\x1b[?u\x1b[c".len(),
-        "the alternate screen and queries",
-    );
+    setup(&pair.slave, true).unwrap_or_else(|err| panic!("setup: {err}"));
+    let _ = read_exact(&pair.main, START_HOVER.len(), "the start bytes");
     let raw = rustix::termios::tcgetattr(&pair.slave).unwrap_or_else(|err| panic!("attr: {err}"));
     assert!(is_cooked(&before));
     assert!(!is_cooked(&raw));
     restore();
-    let _ = read_exact(
-        &pair.main,
-        "\x1b[?1049l\x1b[?25h".len(),
-        "the restore bytes",
-    );
+    let _ = read_exact(&pair.main, END.len(), "the restore bytes");
     let after = rustix::termios::tcgetattr(&pair.slave).unwrap_or_else(|err| panic!("attr: {err}"));
     assert!(is_cooked(&after));
 }
