@@ -128,6 +128,11 @@ impl Parser {
         self.kitty = true;
     }
 
+    /// Whether kitty's flags are pushed.
+    pub(crate) fn kitty(&self) -> bool {
+        self.kitty
+    }
+
     /// Feeds one read's bytes, returning its events in order.
     pub(crate) fn feed(&mut self, bytes: &[u8]) -> Vec<Event> {
         let mut buf = std::mem::take(&mut self.pending);

@@ -2,7 +2,7 @@
 
 use super::{restore, setup, size};
 use std::fs::File;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
 use std::sync::mpsc;
@@ -126,4 +126,83 @@ fn size_reads_the_winsize() {
         size(&pair.slave).unwrap_or_else(|err| panic!("size: {err}")),
         (60, 12)
     );
+}
+
+/// The bytes `setup` writes first.
+const START: &[u8] = b"\x1b[?1049h\x1b[?2004h\x1b[?u\x1b[c";
+
+/// The bytes `restore` and `suspend` write.
+const RESTORE: &[u8] = b"\x1b[<u\x1b[?2004l\x1b[?1049l\x1b[?25h";
+
+#[test]
+fn suspend_restores_and_resume_sets_up_again_without_kitty() {
+    let pair = open();
+    setup(&pair.slave).unwrap_or_else(|err| panic!("setup: {err}"));
+    read_exact(&pair.main, START.len(), "the start bytes");
+    super::suspend().unwrap_or_else(|err| panic!("suspend: {err}"));
+    assert_eq!(
+        read_exact(&pair.main, RESTORE.len(), "the suspend bytes"),
+        RESTORE
+    );
+    let cooked =
+        rustix::termios::tcgetattr(&pair.slave).unwrap_or_else(|err| panic!("attr: {err}"));
+    assert!(is_cooked(&cooked));
+    super::resume(false).unwrap_or_else(|err| panic!("resume: {err}"));
+    let raw = rustix::termios::tcgetattr(&pair.slave).unwrap_or_else(|err| panic!("attr: {err}"));
+    assert!(!is_cooked(&raw));
+    // No kitty push: the next bytes after the setup are the test's own.
+    (&pair.slave)
+        .write_all(b"END")
+        .unwrap_or_else(|err| panic!("write: {err}"));
+    assert_eq!(
+        read_exact(
+            &pair.main,
+            "\x1b[?1049h\x1b[?2004hEND".len(),
+            "the resume bytes"
+        ),
+        b"\x1b[?1049h\x1b[?2004hEND"
+    );
+    // Set up again: restore writes the restore bytes once more.
+    restore();
+    assert_eq!(
+        read_exact(&pair.main, RESTORE.len(), "the restore bytes"),
+        RESTORE
+    );
+}
+
+#[test]
+fn resume_pushes_kitty_when_it_was_pushed() {
+    let pair = open();
+    setup(&pair.slave).unwrap_or_else(|err| panic!("setup: {err}"));
+    read_exact(&pair.main, START.len(), "the start bytes");
+    super::suspend().unwrap_or_else(|err| panic!("suspend: {err}"));
+    read_exact(&pair.main, RESTORE.len(), "the suspend bytes");
+    super::resume(true).unwrap_or_else(|err| panic!("resume: {err}"));
+    let resumed = b"\x1b[?1049h\x1b[?2004h\x1b[>1u";
+    assert_eq!(
+        read_exact(&pair.main, resumed.len(), "the resume bytes"),
+        resumed
+    );
+    restore();
+}
+
+#[test]
+fn restore_after_a_suspend_writes_nothing_more() {
+    let pair = open();
+    setup(&pair.slave).unwrap_or_else(|err| panic!("setup: {err}"));
+    read_exact(&pair.main, START.len(), "the start bytes");
+    super::suspend().unwrap_or_else(|err| panic!("suspend: {err}"));
+    read_exact(&pair.main, RESTORE.len(), "the suspend bytes");
+    restore();
+    // A second suspend does nothing either.
+    super::suspend().unwrap_or_else(|err| panic!("suspend: {err}"));
+    (&pair.slave)
+        .write_all(b"mark")
+        .unwrap_or_else(|err| panic!("write: {err}"));
+    assert_eq!(read_exact(&pair.main, 4, "the mark"), b"mark");
+}
+
+#[test]
+fn resume_before_setup_fails() {
+    assert!(super::resume(false).is_err());
 }

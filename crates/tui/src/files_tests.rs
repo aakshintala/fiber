@@ -231,6 +231,7 @@ fn the_loop_lists_searches_and_drops_the_worker_on_close() {
         wakeups: 0,
         files_out: Some(out),
         search: None,
+        reader: None,
     };
     assert_eq!(lp.step(Input::Bytes(b"@".to_vec())), None);
     assert!(lp.search.is_some());

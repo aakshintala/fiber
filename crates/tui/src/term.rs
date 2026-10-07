@@ -71,6 +71,44 @@ pub(crate) fn restore() {
     termios::tcsetattr(tty, OptionalActions::Now, saved).unwrap_or(());
 }
 
+/// Hands the terminal back for a program run in the foreground, such as the
+/// editor: writes the restore bytes and puts the saved modes back, as
+/// [`restore`] does. [`restore`] after it writes nothing more. Does nothing
+/// before `setup` or while already restored.
+pub(crate) fn suspend() -> io::Result<()> {
+    if !ACTIVE.swap(false, Ordering::SeqCst) {
+        return Ok(());
+    }
+    let Some((tty, saved)) = SAVED.get() else {
+        return Ok(());
+    };
+    let mut out: &File = tty;
+    out.write_all(RESTORE)?;
+    out.flush()?;
+    termios::tcsetattr(tty, OptionalActions::Now, saved)?;
+    Ok(())
+}
+
+/// Takes the terminal back after [`suspend`]: raw mode, the alternate
+/// screen and bracketed paste, and kitty's flags pushed again when `kitty`
+/// says they were. Fails before `setup`, or when the tty is gone.
+pub(crate) fn resume(kitty: bool) -> io::Result<()> {
+    let (tty, saved) = SAVED
+        .get()
+        .ok_or_else(|| io::Error::other("the terminal was never set up"))?;
+    let mut raw = saved.clone();
+    raw.make_raw();
+    ACTIVE.store(true, Ordering::SeqCst);
+    termios::tcsetattr(tty, OptionalActions::Now, &raw)?;
+    let mut out: &File = tty;
+    out.write_all(ALTERNATE_SCREEN)?;
+    out.write_all(BRACKETED_PASTE)?;
+    if kitty {
+        out.write_all(KITTY_PUSH)?;
+    }
+    out.flush()
+}
+
 /// Restores the terminal when dropped, on every return from `run`.
 pub(crate) struct Guard;
 

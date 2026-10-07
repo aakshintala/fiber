@@ -167,6 +167,7 @@ fn new_loop<B: Backend>(backend: B, tty: Option<File>) -> (Loop<B>, Arc<Mutex<Ve
         wakeups: 0,
         files_out: None,
         search: None,
+        reader: None,
     };
     (lp, attached)
 }
@@ -850,4 +851,183 @@ fn a_cursor_move_alone_writes_and_a_still_frame_writes_nothing() {
     let start = sink.len();
     feed(&mut lp, vec![Input::Bytes(b"\x1b[D".to_vec())]);
     assert_eq!(sink.len(), start);
+}
+
+/// A reader on a pipe standing in for the tty: the reader, the pipe's
+/// write end and the loop's channel.
+fn piped_reader() -> (super::Reader, io::PipeWriter, mpsc::Receiver<Input>) {
+    let (read, write) = io::pipe().unwrap_or_else(|err| panic!("pipe: {err}"));
+    let tty = File::from(std::os::fd::OwnedFd::from(read));
+    let (tx, rx) = mpsc::channel();
+    let reader = super::Reader::spawn(&tty, tx).unwrap_or_else(|| panic!("the reader started"));
+    (reader, write, rx)
+}
+
+/// The next bytes the reader sends, with one deadline.
+fn next_bytes(rx: &mpsc::Receiver<Input>, what: &str) -> Vec<u8> {
+    match rx.recv_timeout(DEADLINE) {
+        Ok(Input::Bytes(bytes)) => bytes,
+        Ok(_) => panic!("{what}: not bytes"),
+        Err(err) => panic!("waited {DEADLINE:?} for {what}: {err}"),
+    }
+}
+
+/// Pauses `reader` on a thread with one deadline, handing it back.
+fn paused(reader: super::Reader) -> super::Reader {
+    within("the pause to return", move || {
+        let mut reader = reader;
+        reader.pause();
+        reader
+    })
+}
+
+#[test]
+fn a_paused_reader_holds_the_ttys_bytes_until_resumed() {
+    let (reader, mut tty, rx) = piped_reader();
+    tty.write_all(b"a")
+        .unwrap_or_else(|err| panic!("write: {err}"));
+    assert_eq!(next_bytes(&rx, "the first byte"), b"a");
+    let reader = paused(reader);
+    // Pause returned only once the reader parked.
+    assert!(reader.gate.lock().parked);
+    tty.write_all(b"b")
+        .unwrap_or_else(|err| panic!("write: {err}"));
+    // Parked on the condition variable, it reads nothing.
+    assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    assert!(reader.gate.lock().parked);
+    reader.resume();
+    assert_eq!(next_bytes(&rx, "the byte after resume"), b"b");
+    assert!(!reader.gate.lock().parked);
+    // A second pause and resume works the same.
+    let reader = paused(reader);
+    tty.write_all(b"c")
+        .unwrap_or_else(|err| panic!("write: {err}"));
+    assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    reader.resume();
+    assert_eq!(next_bytes(&rx, "the byte after the second resume"), b"c");
+}
+
+#[test]
+fn bytes_read_before_the_pause_are_sent_not_lost() {
+    let (reader, mut tty, rx) = piped_reader();
+    tty.write_all(b"xy")
+        .unwrap_or_else(|err| panic!("write: {err}"));
+    let reader = paused(reader);
+    reader.resume();
+    let mut got = Vec::new();
+    while got.len() < 2 {
+        got.extend(next_bytes(&rx, "the bytes written before the pause"));
+    }
+    assert_eq!(got, b"xy");
+}
+
+#[test]
+fn pause_on_an_ended_reader_returns_at_once() {
+    let (reader, tty, rx) = piped_reader();
+    // The tty's end ends the reader: its sender drops.
+    drop(tty);
+    match rx.recv_timeout(DEADLINE) {
+        Err(mpsc::RecvTimeoutError::Disconnected) => {}
+        Ok(_) => panic!("bytes instead of the reader's end"),
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            panic!("waited {DEADLINE:?} for the reader to end")
+        }
+    }
+    let reader = paused(reader);
+    assert!(reader.gate.lock().ended);
+    assert!(!reader.gate.lock().parked);
+}
+
+#[test]
+fn a_reader_whose_channel_closed_ends() {
+    let (reader, mut tty, rx) = piped_reader();
+    drop(rx);
+    tty.write_all(b"a")
+        .unwrap_or_else(|err| panic!("write: {err}"));
+    // Its send fails, and it records its end.
+    let state = reader.gate.lock();
+    let (state, waited) = reader
+        .gate
+        .changed
+        .wait_timeout_while(state, DEADLINE, |state| !state.ended)
+        .unwrap_or_else(|err| panic!("lock: {err}"));
+    assert!(
+        !waited.timed_out(),
+        "waited {DEADLINE:?} for the reader to end"
+    );
+    drop(state);
+    // Pause on it returns at once.
+    let reader = paused(reader);
+    assert!(!reader.gate.lock().parked);
+}
+
+#[test]
+fn hand_over_gives_the_terminal_and_its_input_to_the_program() {
+    let mut pair = open();
+    crate::term::setup(&pair.slave).unwrap_or_else(|err| panic!("setup: {err}"));
+    let start = "\x1b[?1049h\x1b[?2004h\x1b[?u\x1b[c";
+    read_exact(&pair.main, start.len(), "the start bytes");
+    let tty = pair
+        .slave
+        .try_clone()
+        .unwrap_or_else(|err| panic!("dup: {err}"));
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), Some(tty));
+    let (tx, rx) = mpsc::channel();
+    lp.reader = super::Reader::spawn(&pair.slave, tx);
+    lp.parser.set_kitty();
+    let slave = pair
+        .slave
+        .try_clone()
+        .unwrap_or_else(|err| panic!("dup: {err}"));
+    let mut main = pair
+        .main
+        .try_clone()
+        .unwrap_or_else(|err| panic!("dup: {err}"));
+    // The pause inside blocks: the loop runs on a thread, with a deadline.
+    let (lp, code, seen) = within("the hand-over", move || {
+        let mut seen = None;
+        let code = lp.hand_over(|| {
+            let cooked =
+                rustix::termios::tcgetattr(&slave).unwrap_or_else(|err| panic!("attr: {err}"));
+            // A line typed now goes to the program, not to the paused reader.
+            main.write_all(b"typed\n")
+                .unwrap_or_else(|err| panic!("write: {err}"));
+            let line = within("the program's read", move || {
+                let mut line = String::new();
+                BufReader::new(slave).read_line(&mut line).map(|_| line)
+            });
+            seen = Some((is_cooked(&cooked), line.unwrap_or_default()));
+        });
+        (lp, code, seen)
+    });
+    drop(lp);
+    assert_eq!(code, None);
+    assert_eq!(seen, Some((true, "typed\n".to_owned())));
+    assert!(!is_cooked(
+        &rustix::termios::tcgetattr(&pair.slave).unwrap_or_else(|err| panic!("attr: {err}"))
+    ));
+    // The terminal was restored, then set up again with kitty's flags.
+    let restore = "\x1b[<u\x1b[?2004l\x1b[?1049l\x1b[?25h";
+    let echoed = read_until(&pair.main, restore.as_bytes(), "the restore bytes");
+    assert!(echoed.ends_with(restore.as_bytes()));
+    // In between, the cooked terminal echoed the program's line.
+    let resumed = "typed\r\n\x1b[?1049h\x1b[?2004h\x1b[>1u";
+    assert_eq!(
+        read_until(&pair.main, resumed.as_bytes(), "the resume bytes"),
+        resumed.as_bytes()
+    );
+    // The reader runs again.
+    pair.main
+        .write_all(b"k")
+        .unwrap_or_else(|err| panic!("write: {err}"));
+    assert_eq!(next_bytes(&rx, "a key after the program"), b"k");
+    crate::term::restore();
+}
+
+#[test]
+fn hand_over_that_cannot_take_the_terminal_back_quits_with_one() {
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    let mut ran = false;
+    assert_eq!(lp.hand_over(|| ran = true), Some(1));
+    assert!(ran);
 }
