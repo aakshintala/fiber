@@ -7,10 +7,10 @@ use std::path::Path;
 
 use contract::RequestId;
 use contract::events::{
-    Event, ExtensionsLoaded, FiberExited, FiberStarted, FinalMessage, LoadedExtension,
-    McpServerFailed, MessageOutcome, Notice, TurnOutcome,
+    Answer, Event, ExtensionsLoaded, FiberExited, FiberStarted, FinalMessage, InteractionResolved,
+    LoadedExtension, McpServerFailed, MessageOutcome, Notice, ResolvedBy, TurnOutcome,
 };
-use contract::shapes::{Failure, Question};
+use contract::shapes::{Failure, Question, True};
 use log::Log;
 
 use crate::Error;
@@ -108,6 +108,7 @@ pub fn fiber_exited(
         Some(code) => (code, None, None),
         None => (i32::from(error.is_some()), error, fold.final_message),
     };
+    decline_extension_asks(log, &fold.open_extension)?;
     let exited = Event::FiberExited(FiberExited {
         exit_code,
         usage: fold.ledger.usage(),
@@ -131,7 +132,29 @@ struct Fold {
     questions: Option<Vec<Question>>,
     ledger: Ledger,
     /// The latest approval or question this process left unresolved.
+    /// Extension asks are never here; they are declined at exit instead.
     suspended_on: Option<RequestId>,
+    /// The extension asks still unresolved, oldest first. Unlike `open`
+    /// below, these survive `fiber_started`: a resumed session starts a new
+    /// VM, so no callback waits for the answer and nothing can raise the
+    /// question again (`docs/events.md`, `interaction_resolved`).
+    open_extension: Vec<RequestId>,
+}
+
+/// Declines every still-open extension ask with `by: fiber`, in log order,
+/// before `fiber_exited`'s own line. A resumed session's status never waits
+/// on a question no callback holds. A fold that failed to read leaves the
+/// default fold, so nothing is declined then.
+fn decline_extension_asks(log: &Log, open: &[RequestId]) -> Result<(), Error> {
+    for request_id in open {
+        let resolved = Event::InteractionResolved(InteractionResolved {
+            request_id: request_id.clone(),
+            by: ResolvedBy::Fiber,
+            answer: Answer::Declined { declined: True },
+        });
+        log.append(&resolved, None, None)?;
+    }
+    Ok(())
 }
 
 /// Folds `lines`, one at a time. With `keep_open`, the requests raised
@@ -149,6 +172,10 @@ fn fold(lines: log::Lines, keep_open: bool) -> Result<Fold, Error> {
     // Requests this process raised and has not resolved, oldest first.
     // `suspended_on` is the latest (`docs/events.md`, `fiber_exited`).
     let mut open = Vec::new();
+    // Extension asks still unresolved, oldest first. These survive
+    // `fiber_started`: an earlier process's ask, such as after a crash,
+    // is declined too (an_ask_an_earlier_process_left_open_is_declined).
+    let mut open_extension = Vec::new();
     // The first payload since the latest `fiber_started` that did not read.
     let mut unread = None;
     for line in lines {
@@ -175,13 +202,23 @@ fn fold(lines: log::Lines, keep_open: bool) -> Result<Fold, Error> {
         if let Some(Event::PermissionRequested(requested)) = &event {
             open.push(requested.request_id.clone());
         } else if let Some(Event::InteractionRequested(requested)) = &event {
-            open.push(requested.request_id.clone());
+            // an_open_extension_ask_is_declined_at_exit, not suspended: an
+            // extension question belongs to a callback in this process's
+            // VM, so resuming never raises it again.
+            if requested.extension.is_some() {
+                open_extension.push(requested.request_id.clone());
+            } else {
+                open.push(requested.request_id.clone());
+            }
         } else if let Some(Event::PermissionResolved(resolved)) = &event {
             if let Some(id) = &resolved.request_id {
                 open.retain(|pending| pending != id);
             }
         } else if let Some(Event::InteractionResolved(resolved)) = &event {
+            // a_resolved_extension_ask_is_left_alone: whoever answered it
+            // already wrote the one resolution.
             open.retain(|pending| pending != &resolved.request_id);
+            open_extension.retain(|pending| pending != &resolved.request_id);
         }
         if let Some(Event::TurnStarted(_)) = &event {
             fold.final_message = None;
@@ -213,5 +250,10 @@ fn fold(lines: log::Lines, keep_open: bool) -> Result<Fold, Error> {
         return Err(e);
     }
     fold.suspended_on = open.last().cloned();
+    fold.open_extension = open_extension;
     Ok(fold)
 }
+
+#[cfg(test)]
+#[path = "process_tests.rs"]
+mod tests;
