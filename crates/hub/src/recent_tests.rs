@@ -266,6 +266,22 @@ fn seeds_are_crashed_and_waiting_rows_whose_directory_is_there() {
 }
 
 #[test]
+fn seeds_skip_delegate_rows() {
+    let temp = Temp::new();
+    temp.append(&temp.row(1, "p", Left::Crashed, Some("idle")));
+    // A crashed delegate and a waiting delegate: neither seeds the feed.
+    let mut crashed_delegate = temp.row(2, "p", Left::Crashed, None);
+    crashed_delegate.status =
+        Some(serde_json::from_value(status("n", "/w", "idle", Some(&id(1)))).unwrap());
+    temp.append(&crashed_delegate);
+    let mut waiting_delegate = temp.row(3, "p", Left::Exited, None);
+    waiting_delegate.status =
+        Some(serde_json::from_value(status("n", "/w", "waiting", Some(&id(1)))).unwrap());
+    temp.append(&waiting_delegate);
+    assert_eq!(ids(&seeds(&temp.dir)), [id(1)]);
+}
+
+#[test]
 fn a_seed_is_the_sessions_newest_row() {
     let temp = Temp::new();
     temp.append(&temp.row(1, "p", Left::Crashed, Some("idle")));
