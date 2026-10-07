@@ -71,6 +71,12 @@ pub(crate) struct Gate {
     /// The session's hooks, which receive the loop's inbox so an extension's
     /// program run can be logged as `extension_exec`.
     hooks: Mutex<Option<Arc<dyn contract::hook::Hooks>>>,
+    /// The image child's driver, which pasted images are processed through.
+    /// None leaves image parts rejected: this Fiber processes no images yet.
+    images: Mutex<Option<Arc<dyn contract::images::Images>>>,
+    /// The cancel a pasted image in flight sees: one per session, cancelled
+    /// by shutdown alongside the driver shells, and never by `cancel`.
+    pub(crate) pasting: Arc<crate::shell::ShellCancel>,
     /// The project's `history.jsonl`, set by [`Session::serve`] alone, so
     /// `fiber ask` and a bare [`Session::run`] append no prompt.
     pub(crate) history: OnceLock<Option<PathBuf>>,
@@ -218,6 +224,13 @@ impl Session {
         *lock(&self.gate.hooks) = Some(hooks);
     }
 
+    /// The image child's driver, which a pasted image is processed through
+    /// (`docs/architecture.md`, "The call rules"). With none set, an image
+    /// part is rejected: this Fiber processes no images yet.
+    pub fn images(&self, images: Arc<dyn contract::images::Images>) {
+        *lock(&self.gate.images) = Some(images);
+    }
+
     /// What a shutdown calls to stop the door side's work
     /// (`docs/invocation.md`, "Shutdown"): every driver shell is cancelled,
     /// a later one is cancelled as it starts, and the loop is woken. Once
@@ -335,6 +348,12 @@ impl Gate {
         lock(&self.driver_shell).clone()
     }
 
+    /// The image child's driver, cloned out of the lock so no child run
+    /// holds it.
+    pub(crate) fn images(&self) -> Option<Arc<dyn contract::images::Images>> {
+        lock(&self.images).clone()
+    }
+
     pub(crate) fn deliver(&self, delivery: Delivery) {
         let inbox = lock(&self.inbox);
         let Some(inbox) = inbox.as_ref() else {
@@ -388,6 +407,8 @@ fn open_in(
         driver_shell: Mutex::new(None),
         jobs: Mutex::new(None),
         hooks: Mutex::new(None),
+        images: Mutex::new(None),
+        pasting: Arc::new(crate::shell::ShellCancel::new()),
         history: OnceLock::new(),
         shells: Mutex::new(RunningShells {
             stopped: false,
