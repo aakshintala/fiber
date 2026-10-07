@@ -393,8 +393,11 @@ impl UserData for Held {
                 Ok(None) => Ok(mlua::MultiValue::from_vec(vec![LuaValue::Nil])),
                 Ok(Some(value)) => Ok(mlua::MultiValue::from_vec(vec![host::to_lua(lua, &value)?])),
                 Err(e) => {
-                    let (code, message) = (e.code(), e.to_string());
-                    crate::host::failure::raw_failure(lua, &code, message)
+                    crate::host::failure::raw_failure(
+                        lua,
+                        &contract::ErrorCode::IoFailed,
+                        e.to_string(),
+                    )
                 }
             }
         });
@@ -417,8 +420,11 @@ impl UserData for Held {
             match lock.write(&value) {
                 Ok(()) => Ok(mlua::MultiValue::from_vec(vec![])),
                 Err(e) => {
-                    let (code, message) = (e.code(), e.to_string());
-                    crate::host::failure::raw_failure(lua, &code, message)
+                    crate::host::failure::raw_failure(
+                        lua,
+                        &contract::ErrorCode::IoFailed,
+                        e.to_string(),
+                    )
                 }
             }
         });

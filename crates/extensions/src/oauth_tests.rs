@@ -377,6 +377,44 @@ fn a_credential_file_that_cannot_be_read_or_written_is_io_failed() {
     std::fs::set_permissions(&cred_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
 }
 
+/// A credential file that is not JSON, or a path that is a symlink, fails the
+/// held read as `io_failed`, the code the file layer's
+/// `config_invalid` must not replace on this path.
+#[test]
+fn a_malformed_or_symlinked_credential_is_io_failed_through_held() {
+    let triple = |held: Held, method: &str| {
+        let lua = Lua::new();
+        crate::host::failure::install(&lua).unwrap();
+        lua.globals().set("held", held).unwrap();
+        let values: mlua::MultiValue = lua.load(format!("return {method}")).eval().unwrap();
+        let values = values.into_vec();
+        assert_eq!(values.len(), 3, "{method} returned no failure triple");
+        match &values[1] {
+            mlua::Value::String(code) => code.to_str().unwrap().to_owned(),
+            other => panic!("{method} raised no code: {other:?}"),
+        }
+    };
+    let dir = fakes::TempDir::new("fiber-oauth-held-shape");
+    let file = CredentialFile::new(dir.path(), "acme", LABEL).unwrap();
+    {
+        let lock = file.try_lock().unwrap().unwrap();
+        lock.write(&serde_json::json!({ "token": "old", "expires_at": 1 }))
+            .unwrap();
+    }
+    let path = dir.path().join("credentials").join("acme").join("default");
+    std::fs::write(&path, b"not json").unwrap();
+    let clock = fakes::clock::FakeClock::new();
+    let held = Held::new(file.try_lock().unwrap().unwrap(), clock);
+    assert_eq!(triple(held, "held:read()"), "io_failed");
+    std::fs::remove_file(&path).unwrap();
+    let elsewhere = dir.path().join("elsewhere");
+    std::fs::write(&elsewhere, b"{}").unwrap();
+    std::os::unix::fs::symlink(&elsewhere, &path).unwrap();
+    let clock = fakes::clock::FakeClock::new();
+    let held = Held::new(file.try_lock().unwrap().unwrap(), clock);
+    assert_eq!(triple(held, "held:read()"), "io_failed");
+}
+
 fn unattended_oauth_lua() -> Lua {
     let lua = Lua::new();
     let failures = crate::host::failure::install(&lua).unwrap();
