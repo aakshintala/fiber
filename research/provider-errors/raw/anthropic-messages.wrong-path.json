@@ -1,0 +1,25 @@
+{
+ "case": "anthropic-messages.wrong-path",
+ "url": "https://api.anthropic.com/v1/messagez",
+ "stream": false,
+ "request_bytes": 101,
+ "status": 404,
+ "headers": {
+  "Date": "Wed, 07 Oct 2026 08:38:00 GMT",
+  "Content-Type": "application/json",
+  "Transfer-Encoding": "chunked",
+  "Connection": "close",
+  "x-should-retry": "false",
+  "request-id": "[redacted]",
+  "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+  "Server": "cloudflare",
+  "vary": "Accept-Encoding",
+  "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+  "server-timing": "x-originResponse;dur=36",
+  "cf-cache-status": "DYNAMIC",
+  "X-Robots-Tag": "none",
+  "CF-RAY": "[redacted]"
+ },
+ "body": "{\"type\":\"error\",\"error\":{\"type\":\"not_found_error\",\"message\":\"Not found\"},\"request_id\":\"[redacted]\"}",
+ "seconds": 0.225
+}

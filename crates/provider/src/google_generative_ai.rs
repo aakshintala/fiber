@@ -151,6 +151,7 @@ fn retry_info(error: Error) -> Error {
             body,
             retry_after: None,
             should_retry,
+            url,
         } => {
             let retry_after = serde_json::from_str::<Value>(&body).ok().and_then(|v| {
                 v.pointer("/error/details")?
@@ -168,6 +169,7 @@ fn retry_info(error: Error) -> Error {
                 body,
                 retry_after,
                 should_retry,
+                url,
             }
         }
         other @ (Error::Status { .. }

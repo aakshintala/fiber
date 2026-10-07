@@ -1,7 +1,8 @@
 """Trigger provider failures on purpose and record status, headers and body.
 
 Usage: python3 probe.py [case-name-substring ...]
-Keys come from MUSE_API_KEY and OPENROUTER_API_KEY. Request headers are
+Keys come from MUSE_API_KEY and OPENROUTER_API_KEY, and for the wrong-path
+cases ANTHROPIC_API_KEY and OPENAI_API_KEY (a missing one sends no key). Request headers are
 never recorded. Results land in raw/<case>.json.
 """
 import json, os, re, sys, time, urllib.request, urllib.error
@@ -9,6 +10,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 MUSE = os.environ['MUSE_API_KEY']
 OR = os.environ['OPENROUTER_API_KEY']
+ANTHROPIC = os.environ.get('ANTHROPIC_API_KEY')
+OPENAI = os.environ.get('OPENAI_API_KEY')
 RAW = os.path.join(os.path.dirname(__file__), 'raw')
 
 # endpoint name -> (url, key, model, protocol)
@@ -76,7 +79,9 @@ def redact(out):
     # Cookies, request ids and the encoded client address are not evidence.
     out['headers'] = {k: ('[redacted]' if k.lower() in SECRET_HEADERS else v) for k, v in out.get('headers', {}).items()}
     for k in ('body',):
-        if k in out: out[k] = re.sub(r'"user_id":"[^"]*"', '"user_id":"[redacted]"', out[k])
+        if k in out:
+            out[k] = re.sub(r'"user_id":"[^"]*"', '"user_id":"[redacted]"', out[k])
+            out[k] = re.sub(r'"request_id":"[^"]*"', '"request_id":"[redacted]"', out[k])
     return out
 
 def overflow_text(model):
@@ -99,6 +104,15 @@ for ep, (url, key, model, proto) in ENDPOINTS.items():
     b = body(proto, model); b['max_tokens' if proto != 'responses' else 'max_output_tokens'] = 50_000_000; add('max-tokens-huge', b)
     add('overflow', body(proto, model, overflow_text(model)))
     add('overflow-stream', body(proto, model, overflow_text(model), stream=True), stream=True)
+
+# A misspelt endpoint path, for comparison with an unknown model: both are 404.
+for name, url, key, proto, model in (
+    ('anthropic-messages.wrong-path', 'https://api.anthropic.com/v1/messagez', ANTHROPIC, 'messages', 'claude-haiku-4-5'),
+    ('openai-completions.wrong-path', 'https://api.openai.com/v1/chat/completionz', OPENAI, 'completions', 'gpt-4o-mini'),
+    ('or-completions.wrong-path', 'https://openrouter.ai/api/v1/chat/completionz', OR, 'completions', 'anthropic/claude-haiku-4.5'),
+    ('anthropic-messages.unknown-model', 'https://api.anthropic.com/v1/messages', ANTHROPIC, 'messages', 'claude-no-such-model'),
+):
+    CASES[name] = (url, proto, key, body(proto, model), False)
 
 # Dense text: OpenRouter estimates Latin text at about 4 characters a token, so
 # random alphanumerics pass its check and reach the vendor, whose tokenizer
@@ -152,5 +166,5 @@ if __name__ == '__main__':
         r = send(url, headers(proto, key), b, stream)
         r = {'case': name, 'url': url, 'stream': stream, **r}
         json.dump(r, open(os.path.join(RAW, name + '.json'), 'w'), indent=1)
-        tail = r.get('body') or ''.join(l[1] for l in r.get('stream', [])[-3:]) or r.get('exception', '')
+        tail = r.get('body') or ''.join(l[1] for l in (r.get('stream') or [])[-3:]) or r.get('exception', '')
         print(f"{name:45s} {r.get('status')} {r['seconds']:7.2f}s {tail[:200]!r}", flush=True)

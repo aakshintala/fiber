@@ -27,6 +27,7 @@ fn recorded(path: &str) -> Error {
             .and_then(Value::as_str)
             .and_then(|wait| wait.parse::<f64>().ok()),
         should_retry: None,
+        url: crate::error::target(value["url"].as_str().unwrap_or_default()),
     }
 }
 
@@ -54,6 +55,7 @@ fn status(status: u16, body: &str, retry_after: Option<f64>) -> ErrorCode {
         body: body.to_owned(),
         retry_after,
         should_retry: None,
+        url: String::new(),
     }
     .code()
 }
@@ -84,22 +86,120 @@ fn a_recorded_unknown_model_is_model_not_found() {
         "retry-signals/raw/gemini.unknown-model.json",
         "retry-signals/raw/openrouter.unknown-model.json",
         "provider-errors/raw/or-completions-haiku.unknown-model.json",
+        "provider-errors/raw/muse-completions.unknown-model.json",
+        "provider-errors/raw/muse-responses.unknown-model.json",
+        "provider-errors/raw/muse-messages.unknown-model.json",
+        "provider-errors/raw/anthropic-messages.unknown-model.json",
     ] {
         assert_eq!(recorded(path).code(), ErrorCode::ModelNotFound, "{path}");
     }
 }
 
 #[test]
+fn a_recorded_wrong_path_is_invalid_request() {
+    for path in [
+        "provider-errors/raw/anthropic-messages.wrong-path.json",
+        "provider-errors/raw/openai-completions.wrong-path.json",
+        "provider-errors/raw/or-completions.wrong-path.json",
+        "retry-signals/raw/anthropic.wrong-path.json",
+        "retry-signals/raw/muse.wrong-path.json",
+    ] {
+        assert_eq!(recorded(path).code(), ErrorCode::InvalidRequest, "{path}");
+    }
+}
+
+#[test]
+fn a_wrong_path_failure_names_the_host_and_path_not_the_query() {
+    let message = recorded("provider-errors/raw/openai-completions.wrong-path.json")
+        .failure("openai", &Secrets::default())
+        .message;
+    assert_eq!(
+        message,
+        "openai answered HTTP 404 for api.openai.com/v1/chat/completionz. Check the base URL."
+    );
+    let wrong_key = Error::Status {
+        status: 404,
+        body: String::new(),
+        retry_after: None,
+        should_retry: None,
+        url: crate::error::target("https://user:pw@host.test:8080/v1beta/m:gen?key=SECRET#frag"),
+    };
+    let message = wrong_key.failure("p", &Secrets::default()).message;
+    assert_eq!(
+        message,
+        "p answered HTTP 404 for host.test:8080/v1beta/m:gen. Check the base URL."
+    );
+    assert_eq!(crate::error::target("host.test"), "host.test");
+    assert_eq!(crate::error::target("http://host.test?q=1"), "host.test");
+}
+
+#[test]
+fn a_404_that_names_the_model_keeps_the_provider_wording() {
+    let message = recorded("provider-errors/raw/muse-messages.unknown-model.json")
+        .failure("muse", &Secrets::default())
+        .message;
+    assert_eq!(message, "muse answered HTTP 404.");
+    let other = Error::Status {
+        status: 400,
+        body: String::new(),
+        retry_after: None,
+        should_retry: None,
+        url: "h/p".to_owned(),
+    };
+    assert_eq!(
+        other.failure("p", &Secrets::default()).message,
+        "p answered HTTP 400."
+    );
+}
+
+#[test]
 fn only_the_unknown_model_shapes_are_model_not_found() {
-    assert_eq!(status(404, "{}", None), ErrorCode::ModelNotFound);
+    assert_eq!(status(404, "{}", None), ErrorCode::InvalidRequest);
+    assert_eq!(status(404, "", None), ErrorCode::InvalidRequest);
+    assert_eq!(
+        status(
+            404,
+            r#"{"error":{"type":"not_found_error","message":"Not found"}}"#,
+            None
+        ),
+        ErrorCode::InvalidRequest,
+    );
+    assert_eq!(
+        status(
+            404,
+            r#"{"error":{"type":"not_found_error","message":"model: x"}}"#,
+            None
+        ),
+        ErrorCode::ModelNotFound,
+    );
     assert_eq!(status(400, "{}", None), ErrorCode::InvalidRequest);
     assert_eq!(
         status(400, r#"{"error":{"code":"model_not_found"}}"#, None),
         ErrorCode::ModelNotFound,
     );
     assert_eq!(
-        status(400, r#"{"error":{"type":"not_found_error"}}"#, None),
+        status(
+            400,
+            r#"{"error":{"type":"not_found_error","message":"Model not found"}}"#,
+            None
+        ),
         ErrorCode::ModelNotFound,
+    );
+    for body in [
+        r#"{"error":{"status":"NOT_FOUND","message":"models/x is not found"}}"#,
+        r#"{"error":{"status":"NOT_FOUND","message":"the page is not found"}}"#,
+        r#"{"error":{"status":"INVALID_ARGUMENT","message":"models/x is not found"}}"#,
+    ] {
+        let expected = if body.contains("NOT_FOUND\",\"message\":\"models/") {
+            ErrorCode::ModelNotFound
+        } else {
+            ErrorCode::InvalidRequest
+        };
+        assert_eq!(status(404, body, None), expected, "{body}");
+    }
+    assert_eq!(
+        status(400, r#"{"error":{"type":"not_found_error"}}"#, None),
+        ErrorCode::InvalidRequest,
     );
     assert_eq!(
         status(
@@ -285,14 +385,14 @@ fn quota_wins_over_every_code_but_authentication() {
         ),
         ErrorCode::AuthenticationFailed,
     );
-    // `insufficient_quota` is exact to 429: elsewhere the old code stands.
+    // `insufficient_quota` is exact to 429: a 404 with it names no model.
     assert_eq!(
         status(404, r#"{"error":{"type":"insufficient_quota"}}"#, None),
-        ErrorCode::ModelNotFound,
+        ErrorCode::InvalidRequest,
     );
     assert_eq!(
         status(404, r#"{"error":{"code":"insufficient_quota"}}"#, None),
-        ErrorCode::ModelNotFound,
+        ErrorCode::InvalidRequest,
     );
     assert_eq!(
         status(
@@ -333,6 +433,7 @@ fn no_recorded_reply_is_quota_exceeded() {
                 body: body.to_owned(),
                 retry_after: None,
                 should_retry: None,
+                url: String::new(),
             }
             .code();
             assert_ne!(code, ErrorCode::QuotaExceeded, "{}", file.path().display());

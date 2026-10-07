@@ -26,6 +26,8 @@ pub enum Error {
         retry_after: Option<f64>,
         /// The `x-should-retry` header, when the response carried one.
         should_retry: Option<bool>,
+        /// The host and path the request went to, from [`target`].
+        url: String,
     },
     /// The stream ended before its terminal event, or carried something
     /// Fiber could not read.
@@ -126,15 +128,22 @@ impl Error {
             | Self::Refused(_)
             | Self::Sign(_) => (None, None),
         };
-        let message =
-            if let (Self::Status { status, .. }, ErrorCode::AuthenticationFailed) = (self, &code) {
-                format!(
-                    "{provider} rejected the credential (HTTP {status}). Check the key it is \
+        let message = match (self, &code) {
+            (Self::Status { status, .. }, ErrorCode::AuthenticationFailed) => format!(
+                "{provider} rejected the credential (HTTP {status}). Check the key it is \
                  configured with, or log in again with `fiber login {provider}`."
-                )
-            } else {
-                format!("{provider} {self}")
-            };
+            ),
+            // A 404 that does not name the model is often a wrong base URL.
+            (
+                Self::Status {
+                    status: 404, url, ..
+                },
+                ErrorCode::InvalidRequest,
+            ) => {
+                format!("{provider} answered HTTP 404 for {url}. Check the base URL.")
+            }
+            _ => format!("{provider} {self}"),
+        };
         Failure {
             code,
             message,
@@ -165,7 +174,6 @@ fn status_code(status: u16, retry_after: Option<f64>, body: &str) -> ErrorCode {
         _ if quota_status(status, body) => ErrorCode::QuotaExceeded,
         429 => ErrorCode::RateLimited,
         408 | 409 | 500..=599 => ErrorCode::ProviderUnavailable,
-        404 => ErrorCode::ModelNotFound,
         _ if unknown_model(body) => ErrorCode::ModelNotFound,
         _ if overflow(body_code(body).as_deref(), &body_message(body)) => {
             ErrorCode::ContextOverflow
@@ -268,18 +276,37 @@ pub(crate) fn stream_failure(error: &Value, code: Option<String>) -> Error {
     Error::ReplyFailed { code, message }
 }
 
-/// Whether an error body, on a status other than 404, says the provider does not know the model: the
-/// code `model_not_found` (muse, OpenAI), the type `not_found_error`
-/// (Anthropic, muse on messages), or OpenRouter's "is not a valid model ID"
-/// (`research/provider-errors`, "Unknown model").
+/// The host and path of `url`: no scheme, credentials, query or fragment, so
+/// a failure can name where a request went without leaking a key in the
+/// query string.
+pub(crate) fn target(url: &str) -> String {
+    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
+    let rest = rest.split(['?', '#']).next().unwrap_or(rest);
+    let (authority, path) = rest.find('/').map_or((rest, ""), |i| rest.split_at(i));
+    let host = authority.rsplit('@').next().unwrap_or(authority);
+    format!("{host}{path}")
+}
+
+/// Whether an error body says the provider does not know the model: the
+/// code `model_not_found` (muse, OpenAI), OpenRouter's "is not a valid model
+/// ID", a `not_found_error` whose message names the model (Anthropic, muse
+/// on messages; the same type with "Not found" is a wrong path), or Gemini's
+/// `NOT_FOUND` for a `models/` name (`research/provider-errors`, "Unknown
+/// model" and "Wrong path").
 fn unknown_model(body: &str) -> bool {
     let value: Option<Value> = serde_json::from_str(body).ok();
-    let error_type = value
-        .as_ref()
-        .and_then(|v| v.pointer("/error/type")?.as_str());
+    let field = |pointer: &str| {
+        value
+            .as_ref()
+            .and_then(|v| v.pointer(pointer)?.as_str())
+            .unwrap_or("")
+    };
+    let message = body_message(body);
     body_code(body).as_deref() == Some("model_not_found")
-        || error_type == Some("not_found_error")
-        || body_message(body).contains("is not a valid model ID")
+        || message.contains("is not a valid model ID")
+        || (field("/error/type") == "not_found_error"
+            && message.to_ascii_lowercase().contains("model"))
+        || (field("/error/status") == "NOT_FOUND" && message.starts_with("models/"))
 }
 
 /// The code for a failure inside a 200 stream: from the provider's own code,

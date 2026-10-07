@@ -130,7 +130,7 @@ policy is `docs/model-routing.md`, "When a model call fails".
 | `authentication_failed` | HTTP 401, a rejected key, an OAuth refresh the token endpoint rejected | never |
 | `context_overflow` | the request does not fit the model's context window | the overflow rule (`docs/handoff.md`, "Overflow") |
 | `refused` | the provider declined to answer on policy grounds, including an `openai-completions` `finish_reason` of `content_filter` and a Gemini safety finish reason | never |
-| `model_not_found` | the provider's error body says it does not know the model: a code `model_not_found`, a `not_found_error` whose message names the model, or OpenRouter's "is not a valid model ID" (`research/provider-errors/README.md`, "Unknown model"). A 404 alone is not enough, since a wrong base URL also returns 404 | never |
+| `model_not_found` | the provider's error body says it does not know the model: a code `model_not_found`, a `not_found_error` whose message names the model, Gemini's `NOT_FOUND` for a `models/` name, or OpenRouter's "is not a valid model ID" (`research/provider-errors/README.md`, "Unknown model"). A 404 alone is not enough, since a wrong base URL also returns 404 | never |
 | `invalid_request` | any other HTTP 4xx; for a 404 the message names the status and the requested host and path, never the query string | never |
 | `unknown_stop_reason` | a stop or finish reason the protocol does not map; the message carries the raw value | never |
 
