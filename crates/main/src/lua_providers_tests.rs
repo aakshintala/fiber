@@ -42,7 +42,7 @@ fn install_acme(home: &std::path::Path) {
             "name": "acme",
             "placeholders": {"workspace": {}},
             "models": [{"id": "m", "protocol": "openai-responses",
-                        "base_url": "https://{workspace}/v1"}],
+                        "base_url": "https://{workspace}/v1", "context_window": 1000}],
         })
         .to_string(),
     )

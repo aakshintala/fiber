@@ -63,7 +63,7 @@ pub(crate) fn manifest(name: &str) -> Value {
 pub(crate) fn provider(name: &str, ids: &[&str]) -> Value {
     let models: Vec<Value> = ids
         .iter()
-        .map(|id| json!({ "id": id, "protocol": "openai-responses", "base_url": "http://127.0.0.1:1/v1" }))
+        .map(|id| json!({ "id": id, "protocol": "openai-responses", "base_url": "http://127.0.0.1:1/v1", "context_window": 1000 }))
         .collect();
     json!({ "name": name, "credential": { "env": "FIBER_TEST_UNSET_KEY" }, "models": models })
 }

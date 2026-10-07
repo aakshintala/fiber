@@ -255,13 +255,13 @@ fn a_model_whose_web_search_its_protocol_does_not_read_is_left_out() {
         "name": "acme",
         "models": [
             {"id": "good", "protocol": "anthropic-messages",
-             "base_url": "http://127.0.0.1:1/v1", "web_search": "web_search_20250305"},
+             "base_url": "http://127.0.0.1:1/v1", "context_window": 1000, "web_search": "web_search_20250305"},
             {"id": "plain", "protocol": "anthropic-messages",
-             "base_url": "http://127.0.0.1:1/v1"},
+             "base_url": "http://127.0.0.1:1/v1", "context_window": 1000},
             {"id": "bad", "protocol": "anthropic-messages",
-             "base_url": "http://127.0.0.1:1/v1", "web_search": "web_search_20260209"},
+             "base_url": "http://127.0.0.1:1/v1", "context_window": 1000, "web_search": "web_search_20260209"},
             {"id": "wrong", "protocol": "openai-responses",
-             "base_url": "http://127.0.0.1:1/v1", "web_search": "web_search_20250305"},
+             "base_url": "http://127.0.0.1:1/v1", "context_window": 1000, "web_search": "web_search_20250305"},
         ]
     });
     let source = setup.source("acme", &manifest("acme"), std::slice::from_ref(&data));
@@ -304,13 +304,13 @@ fn reserved_case(protocol: &str, reserved: &[&str]) {
         models.push(json!({
             "id": format!("bad-{field}"),
             "protocol": protocol,
-            "base_url": "http://127.0.0.1:1/v1",
+            "base_url": "http://127.0.0.1:1/v1", "context_window": 1000,
             "extra_body": { (*field): 1 }
         }));
     }
     models.push(json!({
         "id": "ok", "protocol": protocol,
-        "base_url": "http://127.0.0.1:1/v1",
+        "base_url": "http://127.0.0.1:1/v1", "context_window": 1000,
         "extra_body": { "max_tokens": 1 }
     }));
     let data = json!({ "name": "acme", "models": models });
@@ -400,7 +400,7 @@ fn extra_body_matching_is_exact_and_top_level_only() {
         "name": "acme",
         "models": [{
             "id": "ok", "protocol": "google-generative-ai",
-            "base_url": "http://127.0.0.1:1/v1",
+            "base_url": "http://127.0.0.1:1/v1", "context_window": 1000,
             "extra_body": {
                 "Tools": [],
                 "generationConfig": { "tools": 1 }
@@ -421,7 +421,7 @@ fn a_model_with_two_reserved_fields_and_an_unread_search_gets_two_notices() {
         "name": "acme",
         "models": [{
             "id": "bad", "protocol": "anthropic-messages",
-            "base_url": "http://127.0.0.1:1/v1",
+            "base_url": "http://127.0.0.1:1/v1", "context_window": 1000,
             "web_search": "web_search_20260209",
             "extra_body": { "tools": 1, "system": 1 }
         }]
@@ -463,7 +463,7 @@ fn a_cached_list_replaces_the_data_files_models() {
         &setup.home(),
         "acme",
         &json!([{"id": "b", "protocol": "openai-responses",
-                 "base_url": "http://127.0.0.1:1/v1"}]),
+                 "base_url": "http://127.0.0.1:1/v1", "context_window": 1000}]),
     )
     .unwrap();
     let (providers, notices) = Providers::load(&setup.home()).unwrap();
@@ -504,7 +504,7 @@ fn a_cached_invalid_model_is_left_out_with_a_notice() {
         &setup.home(),
         "acme",
         &json!([{"id": "bad", "protocol": "openai-responses",
-                 "base_url": "http://127.0.0.1:1/v1",
+                 "base_url": "http://127.0.0.1:1/v1", "context_window": 1000,
                  "extra_body": { "tools": 1 }}]),
     )
     .unwrap();
@@ -522,9 +522,9 @@ fn a_cached_invalid_model_is_left_out_with_a_notice() {
 fn leave_out_invalid_filters_a_model_list_like_models_returns() {
     let list = json!([
         {"id": "bad", "protocol": "anthropic-messages",
-         "base_url": "http://127.0.0.1:1/v1", "extra_body": { "tools": 1 }},
+         "base_url": "http://127.0.0.1:1/v1", "context_window": 1000, "extra_body": { "tools": 1 }},
         {"id": "ok", "protocol": "anthropic-messages",
-         "base_url": "http://127.0.0.1:1/v1", "extra_body": { "max_tokens": 1 }}
+         "base_url": "http://127.0.0.1:1/v1", "context_window": 1000, "extra_body": { "max_tokens": 1 }}
     ]);
     let mut models: Vec<ModelData> = serde_json::from_value(list).unwrap();
     let notices = leave_out_invalid("acme", "acme", &mut models);
@@ -629,7 +629,7 @@ fn lua_list(ids: &[&str]) -> String {
         .map(|id| {
             format!(
                 "{{ id = \"{id}\", protocol = \"openai-responses\", \
-                 base_url = \"http://127.0.0.1:1/v1\" }}"
+                 base_url = \"http://127.0.0.1:1/v1\", context_window = 1000 }}"
             )
         })
         .collect();
@@ -684,9 +684,9 @@ fn add_lua_leaves_out_an_invalid_model_with_a_notice() {
         "ext",
         &[
             "{ { id = \"ok\", protocol = \"openai-responses\", \
-             base_url = \"http://127.0.0.1:1/v1\" }, ",
+             base_url = \"http://127.0.0.1:1/v1\", context_window = 1000 }, ",
             "{ id = \"bad\", protocol = \"openai-responses\", \
-             base_url = \"http://127.0.0.1:1/v1\", extra_body = { tools = 1 } } }",
+             base_url = \"http://127.0.0.1:1/v1\", context_window = 1000, extra_body = { tools = 1 } } }",
         ]
         .concat(),
     );
@@ -714,9 +714,9 @@ fn add_lua_filters_a_cached_list_without_running_lua() {
         "acme",
         &json!([
             {"id": "bad", "protocol": "openai-responses",
-             "base_url": "http://127.0.0.1:1/v1", "extra_body": { "tools": 1 }},
+             "base_url": "http://127.0.0.1:1/v1", "context_window": 1000, "extra_body": { "tools": 1 }},
             {"id": "ok", "protocol": "openai-responses",
-             "base_url": "http://127.0.0.1:1/v1"},
+             "base_url": "http://127.0.0.1:1/v1", "context_window": 1000},
         ]),
     )
     .unwrap();
@@ -793,7 +793,7 @@ fn provider_with_addendum(name: &str, id: &str, addendum: &str) -> serde_json::V
         "name": name,
         "credential": { "env": "FIBER_TEST_UNSET_KEY" },
         "models": [{"id": id, "protocol": "openai-responses",
-                    "base_url": "http://127.0.0.1:1/v1",
+                    "base_url": "http://127.0.0.1:1/v1", "context_window": 1000,
                     "prompt_addendum": addendum}]
     })
 }
@@ -802,7 +802,7 @@ fn provider_with_addendum(name: &str, id: &str, addendum: &str) -> serde_json::V
 fn lua_addendum_run(id: &str, addendum: &str) -> String {
     format!(
         "{{ {{ id = \"{id}\", protocol = \"openai-responses\", \
-         base_url = \"http://127.0.0.1:1/v1\", prompt_addendum = \"{addendum}\" }} }}"
+         base_url = \"http://127.0.0.1:1/v1\", context_window = 1000, prompt_addendum = \"{addendum}\" }} }}"
     )
 }
 
@@ -814,7 +814,7 @@ fn an_addendum_file_is_read_for_static_data() {
         .as_array_mut()
         .unwrap()
         .push(json!({"id": "without", "protocol": "openai-responses",
-                     "base_url": "http://127.0.0.1:1/v1"}));
+                     "base_url": "http://127.0.0.1:1/v1", "context_window": 1000}));
     let source = setup.source("acme", &manifest("acme"), &[with]);
     install(&setup.home(), &source, "0.1.0").unwrap();
     write(
@@ -978,7 +978,7 @@ fn wrote(home: &std::path::Path, provider: &str, ids: &[&str]) {
     let models: Vec<serde_json::Value> = ids
         .iter()
         .map(|id| {
-            json!({"id": id, "protocol": "openai-responses", "base_url": "http://127.0.0.1:1/v1"})
+            json!({"id": id, "protocol": "openai-responses", "base_url": "http://127.0.0.1:1/v1", "context_window": 1000})
         })
         .collect();
     write_model_cache(home, provider, &serde_json::Value::Array(models)).unwrap();
@@ -1187,10 +1187,10 @@ fn add_lua_without_a_cache_or_a_credential_runs_no_models() {
 fn leave_out_invalid_drops_a_model_whose_default_is_not_among_its_levels() {
     let list = json!([
         {"id": "bad", "protocol": "anthropic-messages",
-         "base_url": "http://127.0.0.1:1/v1",
+         "base_url": "http://127.0.0.1:1/v1", "context_window": 1000,
          "thinking_levels": ["low"], "thinking_default": "high"},
         {"id": "ok", "protocol": "anthropic-messages",
-         "base_url": "http://127.0.0.1:1/v1",
+         "base_url": "http://127.0.0.1:1/v1", "context_window": 1000,
          "thinking_levels": ["low", "high"], "thinking_default": "high"}
     ]);
     let mut models: Vec<ModelData> = serde_json::from_value(list).unwrap();
@@ -1207,4 +1207,33 @@ fn leave_out_invalid_drops_a_model_whose_default_is_not_among_its_levels() {
         "{}",
         notices[0].message
     );
+}
+
+#[test]
+fn leave_out_invalid_drops_a_model_that_declares_no_context_window() {
+    let list = json!([
+        {"id": "bare", "protocol": "anthropic-messages",
+         "base_url": "http://127.0.0.1:1/v1"},
+        {"id": "zero", "protocol": "anthropic-messages",
+         "base_url": "http://127.0.0.1:1/v1", "context_window": 0},
+        {"id": "ok", "protocol": "anthropic-messages",
+         "base_url": "http://127.0.0.1:1/v1", "context_window": 200000}
+    ]);
+    let mut models: Vec<ModelData> = serde_json::from_value(list).unwrap();
+    let notices = leave_out_invalid("acme", "acme", &mut models);
+    assert_eq!(
+        models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+        ["ok"]
+    );
+    assert_eq!(notices.len(), 2);
+    for (notice, id) in notices.iter().zip(["bare", "zero"]) {
+        assert_eq!(notice.code, ErrorCode::ModelInvalid);
+        assert_eq!(notice.extension.as_deref(), Some("acme"));
+        assert!(
+            notice.message.contains(&format!("acme/{id}"))
+                && notice.message.contains("context_window"),
+            "{}",
+            notice.message
+        );
+    }
 }

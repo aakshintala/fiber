@@ -83,7 +83,7 @@ impl Setup {
             &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
         );
         let mut model = json!({"id": "m", "protocol": protocol,
-            "base_url": format!("{}/v1", server.url())});
+            "base_url": format!("{}/v1", server.url()), "context_window": 100000});
         if let Some(input) = input {
             model["input"] = json!(input);
         }

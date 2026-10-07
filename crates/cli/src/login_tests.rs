@@ -87,7 +87,7 @@ impl Setup {
         let dir = self.home().join("extensions").join(name);
         let mut data = json!({
             "name": name,
-            "models": [{"id": "m", "protocol": "openai-responses", "base_url": "http://x/v1"}],
+            "models": [{"id": "m", "protocol": "openai-responses", "base_url": "http://x/v1", "context_window": 1000}],
         });
         if let Some(stored) = credential_name {
             data["credential_name"] = json!(stored);

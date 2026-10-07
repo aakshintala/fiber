@@ -28,7 +28,7 @@ const DATABRICKS: &str = r#"{
       "input": ["text", "image"],
       "cost": { "input": 5.0, "output": 25.0, "cache_read": 0.5, "cache_write": 6.25 }
     },
-    { "id": "gpt", "protocol": "openai-responses", "base_url": "https://x/v1", "subscription": true }
+    { "id": "gpt", "protocol": "openai-responses", "base_url": "https://x/v1", "context_window": 1000, "subscription": true }
   ]
 }"#;
 
@@ -39,8 +39,8 @@ fn prompt_addendum_reads_and_defaults_to_none() {
     setup.write(
         &dir.join("providers/p.json"),
         r#"{"name":"p","models":[
-            {"id":"with","protocol":"anthropic-messages","base_url":"u","prompt_addendum":"prompts/with.md"},
-            {"id":"without","protocol":"anthropic-messages","base_url":"u"}]}"#,
+            {"id":"with","protocol":"anthropic-messages","base_url":"u", "context_window": 1000,"prompt_addendum":"prompts/with.md"},
+            {"id":"without","protocol":"anthropic-messages","base_url":"u", "context_window": 1000}]}"#,
     );
     let models = &read_providers(&dir).unwrap()[0].models;
     assert_eq!(
@@ -231,7 +231,7 @@ fn cost_tiers_read_from_provider_data() {
     {
       "id": "tiered",
       "protocol": "openai-responses",
-      "base_url": "https://x/v1",
+      "base_url": "https://x/v1", "context_window": 1000,
       "cost": {
         "input": 2.0,
         "output": 10.0,
@@ -251,7 +251,7 @@ fn cost_tiers_read_from_provider_data() {
     {
       "id": "flat",
       "protocol": "openai-responses",
-      "base_url": "https://x/v1",
+      "base_url": "https://x/v1", "context_window": 1000,
       "cost": { "input": 1.0, "output": 2.0 }
     }
   ]
@@ -286,7 +286,7 @@ fn a_tier_missing_a_price_is_invalid() {
         setup.write(
             &dir.join("providers/p.json"),
             &format!(
-                r#"{{"name":"p","models":[{{"id":"m","protocol":"openai-responses","base_url":"u","cost":{{"input":1,"output":1,"tiers":[{{{}}}]}}}}]}}"#,
+                r#"{{"name":"p","models":[{{"id":"m","protocol":"openai-responses","base_url":"u", "context_window": 1000,"cost":{{"input":1,"output":1,"tiers":[{{{}}}]}}}}]}}"#,
                 tier.join(",")
             ),
         );
@@ -309,7 +309,7 @@ fn every_protocol_name_reads_and_an_unknown_one_is_invalid() {
         setup.write(
             &dir.join("providers/p.json"),
             &format!(
-                r#"{{"name":"p","models":[{{"id":"m","protocol":"{name}","base_url":"u"}}]}}"#
+                r#"{{"name":"p","models":[{{"id":"m","protocol":"{name}","base_url":"u", "context_window": 1000}}]}}"#
             ),
         );
         assert_eq!(
@@ -319,7 +319,7 @@ fn every_protocol_name_reads_and_an_unknown_one_is_invalid() {
     }
     setup.write(
         &dir.join("providers/p.json"),
-        r#"{"name":"p","models":[{"id":"m","protocol":"smoke-signals","base_url":"u"}]}"#,
+        r#"{"name":"p","models":[{"id":"m","protocol":"smoke-signals","base_url":"u", "context_window": 1000}]}"#,
     );
     let err = read_providers(&dir).unwrap_err();
     assert_eq!(err.code(), ErrorCode::ConfigInvalid);
@@ -474,8 +474,8 @@ fn web_search_reads_and_defaults_to_none() {
     setup.write(
         &dir.join("providers/p.json"),
         r#"{"name":"p","models":[
-            {"id":"s","protocol":"anthropic-messages","base_url":"u","web_search":"web_search_20250305"},
-            {"id":"plain","protocol":"anthropic-messages","base_url":"u"}]}"#,
+            {"id":"s","protocol":"anthropic-messages","base_url":"u", "context_window": 1000,"web_search":"web_search_20250305"},
+            {"id":"plain","protocol":"anthropic-messages","base_url":"u", "context_window": 1000}]}"#,
     );
     let models = &read_providers(&dir).unwrap()[0].models;
     assert_eq!(models[0].web_search.as_deref(), Some("web_search_20250305"));
@@ -591,7 +591,7 @@ fn thinking_declaration_parses_and_an_unknown_level_fails_the_parse() {
     setup.write(
         &dir.join("providers/p.json"),
         r#"{"name":"p","models":[
-            {"id":"m","protocol":"anthropic-messages","base_url":"u",
+            {"id":"m","protocol":"anthropic-messages","base_url":"u", "context_window": 1000,
              "thinking_levels": ["low", "high"], "thinking_default": "high"}]}"#,
     );
     let models = &read_providers(&dir).unwrap()[0].models;
@@ -600,7 +600,7 @@ fn thinking_declaration_parses_and_an_unknown_level_fails_the_parse() {
     setup.write(
         &dir.join("providers/p.json"),
         r#"{"name":"p","models":[
-            {"id":"m","protocol":"anthropic-messages","base_url":"u",
+            {"id":"m","protocol":"anthropic-messages","base_url":"u", "context_window": 1000,
              "thinking_levels": ["turbo"]}]}"#,
     );
     let err = read_providers(&dir).unwrap_err();

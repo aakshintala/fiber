@@ -125,7 +125,7 @@ fn a_cached_list_is_served_without_running_lua_until_the_refresh_returns() {
     let setup = Setup::new();
     let server = ProviderServer::start([listing(&["new"])]).unwrap();
     let provider = fixture(&setup, &server);
-    let old = json!([{ "id": "old", "protocol": "openai-responses", "base_url": "http://x/v1" }]);
+    let old = json!([{ "id": "old", "protocol": "openai-responses", "base_url": "http://x/v1", "context_window": 1000 }]);
     write(
         &setup.home().join("cache/models/fixture.json"),
         &old.to_string(),

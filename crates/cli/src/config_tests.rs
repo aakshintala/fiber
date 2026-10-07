@@ -321,7 +321,7 @@ fn install(home: &Path, extension: &str, name: &str, models: &serde_json::Value)
 }
 
 fn model(id: &str) -> serde_json::Value {
-    json!({"id": id, "protocol": "openai-responses", "base_url": "http://127.0.0.1:1/v1"})
+    json!({"id": id, "protocol": "openai-responses", "base_url": "http://127.0.0.1:1/v1", "context_window": 1000})
 }
 
 fn models(ids: &[&str]) -> serde_json::Value {
@@ -493,7 +493,7 @@ fn install_host(home: &Path, extension: &str, name: &str, placeholders: serde_js
             "name": name,
             "placeholders": placeholders,
             "models": [{"id": "m", "protocol": "openai-responses",
-                        "base_url": "https://{workspace}/v1"}],
+                        "base_url": "https://{workspace}/v1", "context_window": 1000}],
         })
         .to_string(),
     )
