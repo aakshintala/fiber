@@ -19,7 +19,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 
@@ -152,8 +152,9 @@ fn group_alive(group: u32) -> bool {
     fakes::kill_group(group, "0").unwrap()
 }
 
-/// The terminal under test: its child, the pty master, one reader thread
-/// feeding every master chunk into a channel, and the output so far.
+/// The terminal under test: its child, the pty master, and one reader
+/// thread appending every master chunk to the output, waking a waiter
+/// after each.
 /// Sessions the hub starts run in their own process groups, guarded by
 /// a matching watchdog on the workspace; the hub idles out on its own.
 struct Run {
@@ -164,8 +165,9 @@ struct Run {
     #[allow(dead_code, reason = "held until the end to kill sessions on drop")]
     sessions: Watchdog,
     main: fs::File,
-    chunks: mpsc::Receiver<Vec<u8>>,
-    output: Vec<u8>,
+    /// One wake per chunk appended; held by one waiter at a time.
+    wakes: Arc<Mutex<mpsc::Receiver<()>>>,
+    output: Arc<Mutex<Vec<u8>>>,
     /// Where the last `read_until` match ended.
     seen: usize,
 }
@@ -190,6 +192,8 @@ impl Run {
         let (child, watchdog) = spawn_watched(&mut command);
         let main = fs::File::from(terminal.main);
         let (tx, rx) = mpsc::channel();
+        let output = Arc::new(Mutex::new(Vec::new()));
+        let appended = Arc::clone(&output);
         let mut dup = main.try_clone().unwrap();
         thread::Builder::new()
             .name("terminal-read".to_owned())
@@ -199,7 +203,8 @@ impl Run {
                     match dup.read(&mut buf) {
                         Ok(0) => break,
                         Ok(n) => {
-                            if tx.send(buf[..n].to_vec()).is_err() {
+                            appended.lock().unwrap().extend_from_slice(&buf[..n]);
+                            if tx.send(()).is_err() {
                                 break;
                             }
                         }
@@ -214,8 +219,8 @@ impl Run {
             watchdog,
             sessions,
             main,
-            chunks: rx,
-            output: Vec::new(),
+            wakes: Arc::new(Mutex::new(rx)),
+            output,
             seen: 0,
         }
     }
@@ -226,25 +231,41 @@ impl Run {
         self.main.flush().unwrap();
     }
 
-    /// Reads until the output after the last match holds `needle`, one
-    /// named deadline per read. On expiry the panic names what it waited
-    /// for and shows the output, so a stall says how far the journey got.
+    /// The output so far.
+    fn output(&self) -> Vec<u8> {
+        self.output.lock().unwrap().clone()
+    }
+
+    /// Reads until the output after the last match holds `needle`, under
+    /// one named deadline for the whole wait, however much other output
+    /// arrives. On expiry the panic names what it waited for and shows the
+    /// output, so a stall says how far the journey got.
     fn read_until(&mut self, needle: &str) {
-        loop {
-            let unread = &self.output[self.seen..];
-            if let Some(at) = unread
-                .windows(needle.len())
-                .position(|window| window == needle.as_bytes())
-            {
-                self.seen += at + needle.len();
-                return;
+        let (output, wakes, seen) = (Arc::clone(&self.output), Arc::clone(&self.wakes), self.seen);
+        let wanted = needle.as_bytes().to_vec();
+        let (done, found) = mpsc::channel();
+        thread::spawn(move || {
+            let wakes = wakes.lock().unwrap();
+            loop {
+                let end = output.lock().unwrap()[seen..]
+                    .windows(wanted.len())
+                    .position(|window| window == wanted)
+                    .map(|at| seen + at + wanted.len());
+                if let Some(end) = end {
+                    done.send(end).unwrap_or(());
+                    return;
+                }
+                if wakes.recv().is_err() {
+                    return;
+                }
             }
-            let Ok(chunk) = self.chunks.recv_timeout(DEADLINE) else {
-                let output = String::from_utf8_lossy(&self.output);
-                panic!("waited {DEADLINE:?} for {needle:?}; output: {output:?}");
-            };
-            self.output.extend_from_slice(&chunk);
-        }
+        });
+        let Ok(end) = found.recv_timeout(DEADLINE) else {
+            let output = self.output();
+            let output = String::from_utf8_lossy(&output);
+            panic!("waited {DEADLINE:?} for {needle:?}; output: {output:?}");
+        };
+        self.seen = end;
     }
 
     /// Waits for the child to exit, reaps it, and returns its output, then
@@ -366,7 +387,7 @@ fn resize_redraws_the_input_line_on_the_new_last_row() {
     setup.provider(&server);
     let mut run = Run::terminal(&setup);
     run.read_until(">");
-    let marked = run.output.len();
+    let marked = run.output().len();
     rustix::termios::tcsetwinsize(
         &run.main,
         rustix::termios::Winsize {
@@ -381,7 +402,8 @@ fn resize_redraws_the_input_line_on_the_new_last_row() {
     // The next frame draws the input line on row 10; rows 11 and 12 are
     // never addressed again.
     run.read_until("\x1b[10;1H");
-    let fresh = &run.output[marked..];
+    let output = run.output();
+    let fresh = &output[marked..];
     assert!(!contains(fresh, "\x1b[11;1H"));
     assert!(!contains(fresh, "\x1b[12;1H"));
     // The hub `fiber` started is up before the quit, so `wait` sees it
@@ -394,6 +416,18 @@ fn resize_redraws_the_input_line_on_the_new_last_row() {
 
 #[test]
 fn without_a_tty_bare_fiber_names_ask() {
+    assert_names_ask(Stdio::piped(), "standard input and output");
+}
+
+#[test]
+fn a_tty_on_standard_input_alone_is_not_enough() {
+    let terminal = Terminal::open();
+    assert_names_ask(terminal.stdin(), "standard output");
+}
+
+/// Runs bare `fiber` with `stdin` and standard output and error piped:
+/// with no tty on `missing`, it exits 2 naming `fiber ask`.
+fn assert_names_ask(stdin: Stdio, missing: &str) {
     let setup = Setup::new();
     let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
     command
@@ -402,7 +436,7 @@ fn without_a_tty_bare_fiber_names_ask() {
         .env("PATH", std::env::var_os("PATH").unwrap_or_default())
         .env("HOME", setup.root.path())
         .env("FIBER_HOME", setup.home())
-        .stdin(Stdio::piped())
+        .stdin(stdin)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let (child, watchdog) = spawn_watched(&mut command);
@@ -412,12 +446,12 @@ fn without_a_tty_bare_fiber_names_ask() {
     thread::spawn(move || done.send(child.wait_with_output()).unwrap());
     let output = finished
         .recv_timeout(DEADLINE)
-        .unwrap_or_else(|_| panic!("waited {DEADLINE:?} for `fiber` to exit"))
+        .unwrap_or_else(|_| panic!("waited {DEADLINE:?} for `fiber` to exit, no tty on {missing}"))
         .unwrap();
     assert!(!group_alive(group));
     std::mem::forget(guard);
     watchdog.stand_down(DEADLINE);
-    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(output.status.code(), Some(2), "no tty on {missing}");
     assert!(output.stdout.is_empty());
     assert_eq!(
         String::from_utf8(output.stderr).unwrap(),
