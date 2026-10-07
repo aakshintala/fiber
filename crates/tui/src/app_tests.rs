@@ -55,6 +55,7 @@ fn one_line(effect: Effect) -> String {
         | Effect::ListFiles
         | Effect::Search { .. }
         | Effect::Editor { .. }
+        | Effect::Exit(_)
         | Effect::Copy(_) => {
             panic!("expected one line")
         }
@@ -230,6 +231,7 @@ fn esc_busy_sends_cancel() {
         | Effect::ListFiles
         | Effect::Search { .. }
         | Effect::Editor { .. }
+        | Effect::Exit(_)
         | Effect::Copy(_) => {
             panic!("expected cancel")
         }
@@ -461,6 +463,7 @@ fn rejected_cancel_shows_nothing() {
         | Effect::ListFiles
         | Effect::Search { .. }
         | Effect::Editor { .. }
+        | Effect::Exit(_)
         | Effect::Copy(_) => {
             panic!("expected cancel")
         }
@@ -968,6 +971,7 @@ fn sent(effect: Effect) -> Vec<serde_json::Value> {
     match effect {
         Effect::Send(lines) => lines.iter().map(|line| parse(line)).collect(),
         Effect::None
+        | Effect::Exit(_)
         | Effect::Copy(_)
         | Effect::Quit
         | Effect::ListFiles

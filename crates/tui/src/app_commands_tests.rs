@@ -60,6 +60,7 @@ fn sent(effect: Effect) -> Vec<Value> {
         | Effect::ListFiles
         | Effect::Search { .. }
         | Effect::Editor { .. }
+        | Effect::Exit(_)
         | Effect::Copy(_) => Vec::new(),
     }
 }

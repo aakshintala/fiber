@@ -2,7 +2,8 @@
 //! `recent` pages, keys, glyphs and lines.
 
 use super::{
-    Left, Level, Row, Sessions, State, Subs, dependents, from_status, line, opening, recent_rows,
+    Left, Level, Row, Sessions, State, Subs, dependents, from_status, line, opening, quit_line,
+    recent_rows,
 };
 use contract::{Envelope, SessionId};
 use serde_json::{Value, json};
@@ -461,6 +462,9 @@ fn a_note_replaces_the_detail() {
         left: None,
         waiting: Some("approval: shell".to_owned()),
         spend: 0.41,
+        jobs: 0,
+        delegates: 0,
+        clients: 0,
         note: Some("held by another process".to_owned()),
     };
     assert_eq!(
@@ -598,4 +602,24 @@ fn dependents_reads_each_backticked_id_once_in_order() {
     assert!(dependents("Session `s_short` has sessions.").is_empty());
     assert!(dependents("Session `s_0123456789ABCDEF` has sessions.").is_empty());
     assert!(dependents("Session s_0123456789abcdef has sessions.").is_empty());
+}
+
+#[test]
+fn quit_line_names_working_and_elsewhere() {
+    assert_eq!(
+        quit_line(2, 0),
+        "2 sessions working · enter leave them running · c close all · esc stay"
+    );
+    assert_eq!(
+        quit_line(1, 0),
+        "1 session working · enter leave them running · c close all · esc stay"
+    );
+    assert_eq!(
+        quit_line(1, 1),
+        "1 session working, 1 also open elsewhere · enter leave them running · c close all · esc stay"
+    );
+    assert_eq!(
+        quit_line(3, 2),
+        "3 sessions working, 2 also open elsewhere · enter leave them running · c close all · esc stay"
+    );
 }

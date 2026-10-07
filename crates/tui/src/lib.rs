@@ -425,6 +425,13 @@ impl<B: Backend> Loop<B> {
                         }
                         Effect::Send(lines) => self.send(&lines),
                         Effect::Quit => return Some(0),
+                        Effect::Exit(lines) => {
+                            // The quit question's closes go out, then the
+                            // terminal quits: a close never written keeps
+                            // its resume line.
+                            self.send(&lines);
+                            return Some(0);
+                        }
                         Effect::ListFiles => self.list_files(),
                         Effect::Search { generation, query } => {
                             if let Some(search) = &self.search {

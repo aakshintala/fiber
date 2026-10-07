@@ -18,6 +18,9 @@ use crate::link::Line;
 use crate::mouse::{Target, TargetId};
 use contract::SessionId;
 
+#[path = "app_exit.rs"]
+mod exit;
+
 /// Home's state: the launch description, and whether a `start` went out in
 /// this run, which hides the input box's placeholder.
 pub(super) struct Home {
@@ -57,6 +60,9 @@ pub(super) struct Home {
     prompt: Option<Prompt>,
     /// The stops and deletes waiting for their answers, by command id.
     asks: HashMap<String, Ask>,
+    /// The sessions `close` went out for from the quit question, with
+    /// their close ids: a close never written keeps its resume line.
+    closing: Vec<(SessionId, String)>,
 }
 
 /// A stop or delete waiting for its answer: a refusal becomes the row's
@@ -79,13 +85,18 @@ enum Prompt {
         id: SessionId,
         expect: Option<Vec<SessionId>>,
     },
+    /// Asking to quit while sessions work: Enter leaves them running,
+    /// `c` closes them all now, Esc stays. It stores nothing: the
+    /// question recomputes from the current rows on every frame.
+    Quit,
 }
 
 impl Prompt {
-    /// The session the question asks about.
-    fn id(&self) -> &SessionId {
+    /// The session the question asks about; none for quitting.
+    fn id(&self) -> Option<&SessionId> {
         match self {
-            Prompt::Delete { id, .. } => id,
+            Prompt::Delete { id, .. } => Some(id),
+            Prompt::Quit => None,
         }
     }
 }
@@ -128,6 +139,7 @@ impl App {
             picker: None,
             prompt: None,
             asks: HashMap::new(),
+            closing: Vec::new(),
         });
     }
 
@@ -138,6 +150,14 @@ impl App {
             && self.session().is_none()
             && self.keymap_top().is_none()
             && self.panel().is_none()
+    }
+
+    /// Whether the quit question is open, on home or not: while it is,
+    /// every key goes to it first.
+    pub(crate) fn quit_open(&self) -> bool {
+        self.home
+            .as_ref()
+            .is_some_and(|home| matches!(home.prompt, Some(Prompt::Quit)))
     }
 
     /// What home draws, or `None` unless [`App::on_home`] holds.
@@ -172,11 +192,13 @@ impl App {
                         .collect::<Vec<_>>(),
                 ),
             }),
-            None => None,
+            // The quit question draws through the hint below, recomputed
+            // every frame.
+            Some(Prompt::Quit) | None => None,
         };
         let foot = question.unwrap_or_else(|| {
-            if self.armed_at.is_some() {
-                super::QUIT_HINT.to_owned()
+            if self.hint() {
+                self.hint_text()
             } else {
                 "↓ the session list · F1 the key map · Ctrl+C twice to quit".to_owned()
             }
@@ -490,6 +512,38 @@ impl App {
     /// the fold. `None` for anything else, so the focused stops keep
     /// moving as they do on the conversation.
     pub(super) fn home_key(&mut self, key: &Key) -> Option<Effect> {
+        // The quit question takes every key first, on home or not:
+        // Enter leaves working sessions running, `c` closes them all
+        // now, Esc stays, and anything else, Ctrl+C included, does
+        // nothing.
+        if self.quit_open() {
+            match key {
+                Key::Enter => return Some(Effect::Quit),
+                Key::Char('c') => return Some(self.close_all()),
+                Key::Esc => {
+                    self.close_prompt();
+                    return Some(Effect::None);
+                }
+                Key::Char(_)
+                | Key::Backspace
+                | Key::Up
+                | Key::Down
+                | Key::PageUp
+                | Key::PageDown
+                | Key::End
+                | Key::AltA
+                | Key::Tab
+                | Key::BackTab
+                | Key::F1
+                | Key::CtrlO
+                | Key::CtrlG
+                | Key::CtrlR
+                | Key::CtrlC
+                | Key::AltUp
+                | Key::AltDown
+                | Key::AltX => return Some(Effect::None),
+            }
+        }
         if !self.on_home() {
             return None;
         }
@@ -732,10 +786,9 @@ impl App {
     /// with the confirmed set from the cascade question. With the link
     /// down nothing goes out and the question stays.
     fn send_delete(&mut self) -> Effect {
-        let ask = self.home.as_ref().and_then(|home| {
-            home.prompt
-                .as_ref()
-                .map(|Prompt::Delete { id, expect }| (id.clone(), expect.clone()))
+        let ask = self.home.as_ref().and_then(|home| match &home.prompt {
+            Some(Prompt::Delete { id, expect }) => Some((id.clone(), expect.clone())),
+            Some(Prompt::Quit) | None => None,
         });
         let Some((id, expect)) = ask else {
             return Effect::None;
@@ -835,7 +888,10 @@ impl App {
     /// an older question leaves a newer one open.
     fn clear_prompt(&mut self, id: &SessionId) {
         if let Some(home) = self.home.as_mut()
-            && home.prompt.as_ref().is_some_and(|prompt| prompt.id() == id)
+            && home
+                .prompt
+                .as_ref()
+                .is_some_and(|prompt| prompt.id() == Some(id))
         {
             home.prompt = None;
         }

@@ -388,7 +388,7 @@ impl App {
             "name" => self.send_command("name", Some(json!({ "text": rest }))),
             "reload" => self.send_command("reload", None),
             "close" => self.close(),
-            "quit" => Effect::Quit,
+            "quit" => self.quit(),
             "approvals" => {
                 self.draft.clear();
                 self.open_first()

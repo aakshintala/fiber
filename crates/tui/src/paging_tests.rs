@@ -563,6 +563,7 @@ fn refolding_leaves_session_state_alone() {
         | Effect::ListFiles
         | Effect::Search { .. }
         | Effect::Editor { .. }
+        | Effect::Exit(_)
         | Effect::Copy(_) => Vec::new(),
     };
     assert!(
@@ -1562,6 +1563,7 @@ fn a_resumed_crash_leaves_the_session_idle() {
         | Effect::ListFiles
         | Effect::Search { .. }
         | Effect::Editor { .. }
+        | Effect::Exit(_)
         | Effect::Copy(_) => panic!("expected a sent line"),
     };
     assert_eq!(sent.len(), 1);

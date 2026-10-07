@@ -1380,3 +1380,64 @@ fn opening_a_row_by_key_calls_on_attach() {
     let seen = || attached.lock().map(|held| held.clone()).unwrap_or_default();
     assert_eq!(seen(), vec!["s_aaaaaaaaaaaaaaaa".to_owned()]);
 }
+
+/// A live `session_status` for `session` in `state`.
+fn live_status(session: &str, state: &str) -> Line {
+    Line::Session(contract::Envelope {
+        kind: "session_status".to_owned(),
+        session_id: contract::SessionId(session.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: serde_json::json!({
+            "name": "fix the parser",
+            "workspace": "/w",
+            "project": "-w",
+            "state": state,
+            "since": 0,
+            "spend": {"tokens": {"input": 1, "cache_read": 0,
+                "cache_write": {}, "output": 2},
+                "cost": 0.0, "subscription_cost": 0.0},
+            "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0,
+        })
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    })
+}
+
+#[test]
+fn an_exit_sends_its_lines_then_quits() {
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    lp.app.set_home(launch());
+    let (ours, theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    let reader = BufReader::new(theirs);
+    let (_tx, rx) = mpsc::channel();
+    assert_eq!(lp.step(Input::Connected(ours, hello()), &rx), None);
+    assert_eq!(
+        lp.step(
+            Input::Hub(live_status("s_aaaaaaaaaaaaaaaa", "streaming")),
+            &rx
+        ),
+        None
+    );
+    // Ctrl+C twice asks while the session works, and `c` closes all.
+    assert_eq!(lp.step(Input::Bytes(vec![0x03]), &rx), None);
+    assert_eq!(lp.step(Input::Bytes(vec![0x03]), &rx), None);
+    let (reader, feed) = command(reader, "the feed");
+    assert_eq!(feed["command"], "feed");
+    let (reader, recent) = command(reader, "the recent");
+    assert_eq!(recent["command"], "recent");
+    // The close lines reach the far end, and the step quits with 0.
+    assert_eq!(lp.step(Input::Bytes(b"c".to_vec()), &rx), Some(0));
+    let (reader, subscribe) = command(reader, "the subscribe");
+    assert_eq!(subscribe["command"], "subscribe");
+    assert_eq!(subscribe["session_id"], "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(subscribe["args"]["level"], "summary");
+    let (_, close) = command(reader, "the close");
+    assert_eq!(close["command"], "close");
+    assert_eq!(close["session_id"], "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(close["args"], serde_json::json!({"now": true}));
+}

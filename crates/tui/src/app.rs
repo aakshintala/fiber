@@ -90,6 +90,8 @@ pub(crate) enum Effect {
     Send(Vec<String>),
     /// Quit the terminal.
     Quit,
+    /// Send these command lines, then quit.
+    Exit(Vec<String>),
     /// Start the `@` panel's search worker on a listing of the workspace's
     /// files, searching for an empty query at the current generation.
     ListFiles,
@@ -349,8 +351,10 @@ impl App {
 
     /// Writing `unsent`, command lines this app made, to the hub failed:
     /// the connection is lost, and their commands fail as if rejected, so
-    /// a draft they carried returns to an empty draft.
+    /// a draft they carried returns to an empty draft. A close from the
+    /// quit question that was never written keeps its resume line.
     pub(crate) fn write_failed(&mut self, unsent: &[String]) {
+        self.home_unsent(unsent);
         self.disconnected();
         for line in unsent {
             if let Some(id) = serde_json::from_str::<Value>(line)
@@ -414,9 +418,10 @@ impl App {
         self.draft.rows(self.width).len().min(cap)
     }
 
-    /// Whether the quit hint shows: armed by a first Ctrl+C.
+    /// Whether the quit hint shows: armed by a first Ctrl+C, or asking
+    /// while sessions work.
     pub(crate) fn hint(&self) -> bool {
-        self.armed_at.is_some()
+        self.armed_at.is_some() || self.quit_open()
     }
 
     /// Whether new output arrived while scrolled up.
@@ -528,7 +533,8 @@ impl App {
     }
 
     /// Ctrl+C clears, then quits: a second press before [`QUIT_WINDOW`]
-    /// has passed since the first quits; a later one re-arms.
+    /// has passed since the first asks while sessions work, and quits
+    /// otherwise; a later one re-arms.
     fn on_ctrl_c(&mut self, now: Instant) -> Effect {
         if !self.draft.is_empty() {
             self.draft.clear();
@@ -540,7 +546,7 @@ impl App {
             .and_then(|armed| armed.checked_add(QUIT_WINDOW))
             .is_some_and(|end| now < end);
         if quits {
-            return Effect::Quit;
+            return self.quit();
         }
         self.armed_at = Some(now);
         Effect::None

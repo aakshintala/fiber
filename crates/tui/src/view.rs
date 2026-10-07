@@ -10,7 +10,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 
-use crate::app::{App, QUIT_HINT};
+use crate::app::App;
 use crate::markdown::{Role, style};
 use crate::mouse::{self, Target, TargetId};
 
@@ -152,7 +152,7 @@ pub(crate) fn render(
         });
     }
     if app.hint() {
-        put(buf, area, &mut bottom, QUIT_HINT, Style::default());
+        put(buf, area, &mut bottom, &app.hint_text(), Style::default());
     }
     let rows = bottom.saturating_sub(area.y);
     let conversation = Rect::new(area.x, area.y, area.width, rows);

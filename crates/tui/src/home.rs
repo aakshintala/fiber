@@ -205,6 +205,14 @@ pub(crate) struct Row {
     pub(crate) waiting: Option<String>,
     /// Its spend so far, in US dollars; left out of the line at zero.
     pub(crate) spend: f64,
+    /// Jobs running, delegates excluded: an idle row with jobs counts as
+    /// working for the quit question.
+    pub(crate) jobs: u32,
+    /// Delegates running: an idle row with delegates counts as working.
+    pub(crate) delegates: u32,
+    /// The `full` connections attached, as the latest `clients` line
+    /// counts them: less this connection's own, how many open elsewhere.
+    pub(crate) clients: u32,
     /// What a refusal says about the row, in place of its detail.
     pub(crate) note: Option<String>,
 }
@@ -306,6 +314,11 @@ impl Sessions {
             .collect()
     }
 
+    /// The live feed rows, in feed order.
+    pub(crate) fn live(&self) -> Vec<&Row> {
+        self.feed.iter().filter(|row| row.left.is_none()).collect()
+    }
+
     /// Flips the scope toggle: showing every project, or only the launch
     /// one.
     pub(crate) fn toggle(&mut self) {
@@ -403,6 +416,9 @@ pub(crate) fn from_status(envelope: &Envelope) -> Row {
             left: None,
             waiting: None,
             spend: 0.0,
+            jobs: 0,
+            delegates: 0,
+            clients: 0,
             note: None,
         };
     };
@@ -429,6 +445,9 @@ pub(crate) fn from_status(envelope: &Envelope) -> Row {
         left: None,
         waiting,
         spend: status.spend.cost.unwrap_or(0.0) + status.spend.subscription_cost,
+        jobs: status.jobs,
+        delegates: status.delegates,
+        clients: status.clients,
         note: None,
     }
 }
@@ -473,6 +492,12 @@ pub(crate) fn recent_rows(result: &Value) -> Vec<Row> {
                             )
                         }
                     };
+                    // A row without a last status ran nothing: no jobs,
+                    // delegates or clients.
+                    let (jobs, delegates, clients) = match &status {
+                        None => (0, 0, 0),
+                        Some(status) => (status.jobs, status.delegates, status.clients),
+                    };
                     let how = match session.get("how").and_then(Value::as_str) {
                         Some("crashed") => Left::Crashed,
                         _ => Left::Exited,
@@ -499,6 +524,9 @@ pub(crate) fn recent_rows(result: &Value) -> Vec<Row> {
                         left: Some(how),
                         waiting,
                         spend,
+                        jobs,
+                        delegates,
+                        clients,
                         note: None,
                     })
                 })
@@ -515,6 +543,26 @@ pub(crate) fn toggle_line(waiting: usize, show_all: bool) -> String {
     } else {
         format!("{waiting} waiting in other projects · show all")
     }
+}
+
+/// The quit question on the foot: how many sessions work, and of them
+/// how many are also open elsewhere. With some working it asks: "2
+/// sessions working · enter leave them running · c close all · esc
+/// stay".
+pub(crate) fn quit_line(working: usize, elsewhere: usize) -> String {
+    let sessions = if working == 1 {
+        "1 session working".to_owned()
+    } else {
+        format!("{working} sessions working")
+    };
+    let elsewhere = if elsewhere == 0 {
+        String::new()
+    } else if elsewhere == 1 {
+        ", 1 also open elsewhere".to_owned()
+    } else {
+        format!(", {elsewhere} also open elsewhere")
+    };
+    format!("{sessions}{elsewhere} · enter leave them running · c close all · esc stay")
 }
 
 /// The delete question on the foot: the session and that deleting is

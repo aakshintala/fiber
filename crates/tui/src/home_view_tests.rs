@@ -652,3 +652,30 @@ fn home_cascade_question() {
     ));
     insta::assert_snapshot!("home_cascade_question", screen(&app, 80, 24));
 }
+
+/// Opens the quit question: Ctrl+C twice while a session works.
+fn ask_quit(app: &mut App) {
+    let now = fakes::clock::FakeClock::new().now();
+    app.on_key(Key::CtrlC, now);
+    app.on_key(Key::CtrlC, now);
+}
+
+#[test]
+fn quit_prompt_on_home() {
+    let mut app = home(80, 24);
+    app.on_line(hello());
+    app.on_line(status("s_aaaaaaaaaaaaaaaa", "fix the parser", live()));
+    app.on_line(status("s_bbbbbbbbbbbbbbbb", "tidy docs", idle()));
+    ask_quit(&mut app);
+    insta::assert_snapshot!("quit_prompt_on_home", screen(&app, 80, 24));
+}
+
+#[test]
+fn quit_prompt_over_a_session() {
+    let mut app = home(80, 24);
+    app.on_line(hello());
+    app.on_line(status("s_aaaaaaaaaaaaaaaa", "fix the parser", live()));
+    app.attach(contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned()));
+    ask_quit(&mut app);
+    insta::assert_snapshot!("quit_prompt_over_a_session", screen(&app, 80, 24));
+}
