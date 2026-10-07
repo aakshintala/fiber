@@ -423,3 +423,46 @@ fn an_item_that_opens_with_a_code_block_shows_its_marker_first() {
     let lines = texts("- ```\n  x\n  ```\n- b", 12);
     assert_eq!(lines, vec!["• ", "        copy", "1 │ x       ", "• b"]);
 }
+
+#[test]
+fn the_widest_of_unequal_columns_shrinks_first() {
+    let lines = texts("| aaaaaaaaaa | bbbbbbb |\n|---|---|\n| x | y |", 17);
+    assert_eq!(lines[0], "aaaaaaaa  bbbbbbb");
+}
+
+/// `text` wrapped by [`super::wrap_cells`], each row as a string.
+fn wrapped(text: &str, first: usize, rest: usize, words: bool) -> Vec<String> {
+    let cells: Vec<(char, Style)> = text.chars().map(|ch| (ch, Style::default())).collect();
+    super::wrap_cells(&cells, first, rest, words)
+        .iter()
+        .map(|row| row.iter().map(|(ch, _)| ch).collect())
+        .collect()
+}
+
+#[test]
+fn wrapping_by_words_breaks_before_a_word_that_fits_the_next_row() {
+    assert_eq!(wrapped("ab cd ef", 5, 5, true), vec!["ab cd", "ef"]);
+    assert_eq!(wrapped("abcde f", 5, 5, true), vec!["abcde", "f"]);
+    assert_eq!(wrapped("ab   cd", 3, 3, true), vec!["ab", "cd"]);
+}
+
+#[test]
+fn a_word_longer_than_a_row_splits_from_where_the_row_stands() {
+    assert_eq!(
+        wrapped("ab cdefghij", 5, 5, true),
+        vec!["ab cd", "efghi", "j"]
+    );
+    assert_eq!(wrapped("abcdef", 3, 10, true), vec!["abc", "def"]);
+}
+
+#[test]
+fn leading_spaces_stay_on_the_first_row_only() {
+    assert_eq!(wrapped("  a b", 10, 10, true), vec!["  a b"]);
+    assert_eq!(wrapped("a\n  b", 10, 10, true), vec!["a", "b"]);
+}
+
+#[test]
+fn wrapping_by_cells_ignores_words() {
+    assert_eq!(wrapped("ab cd", 3, 3, false), vec!["ab ", "cd"]);
+    assert_eq!(wrapped("a\n\nb", 3, 3, false), vec!["a", "", "b"]);
+}

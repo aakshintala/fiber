@@ -182,3 +182,15 @@ fn a_click_on_the_blank_rows_above_a_short_conversation_copies_nothing() {
         Effect::Copy("let a = 1;".to_owned())
     );
 }
+
+#[test]
+fn a_click_copies_from_the_reply_it_lands_on() {
+    let mut app = with_reply(30, 14, "```rust\nlet a = 1;\n```");
+    app.on_line(session_line(
+        "assistant_message_delta",
+        serde_json::json!({ "text": "```sh\necho b\n```" }),
+        Some("a_2"),
+    ));
+    let second = row_of(&app, 30, 14, "sh  ").expect("second reply's header");
+    assert_eq!(app.on_click(29, second), Effect::Copy("echo b".to_owned()));
+}

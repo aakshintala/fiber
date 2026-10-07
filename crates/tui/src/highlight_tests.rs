@@ -366,3 +366,195 @@ fn html_self_closing_tags_bare_ampersands_and_unclosed_comments() {
     );
     assert_eq!(role_of("html", "<a b='c'>", "'c'"), Some(Role::String));
 }
+
+/// A language, a sample in it, and the roles of runs in the sample.
+type Sample = (&'static str, &'static str, &'static [(&'static str, Role)]);
+
+#[test]
+fn each_language_table_field_takes_effect() {
+    let samples: &[Sample] = &[
+        (
+            "python",
+            "# c\nint\nNone",
+            &[
+                ("# c", Role::Comment),
+                ("int", Role::Type),
+                ("None", Role::Constant),
+            ],
+        ),
+        (
+            "javascript",
+            "`a\nb`\n$el()\nundefined",
+            &[
+                ("`a", Role::String),
+                ("b`", Role::String),
+                ("$el", Role::Function),
+                ("undefined", Role::Constant),
+            ],
+        ),
+        ("typescript", "string", &[("string", Role::Type)]),
+        (
+            "go",
+            "`a\nb`\nrune\nnil",
+            &[
+                ("`a", Role::String),
+                ("b`", Role::String),
+                ("rune", Role::Type),
+                ("nil", Role::Constant),
+            ],
+        ),
+        (
+            "c",
+            "Foo\ntypedef\nint",
+            &[
+                ("Foo", Role::CodeText),
+                ("typedef", Role::Keyword),
+                ("int", Role::Type),
+            ],
+        ),
+        ("cpp", "nullptr", &[("nullptr", Role::Constant)]),
+        (
+            "java",
+            "synchronized\nboolean\nnull",
+            &[
+                ("synchronized", Role::Keyword),
+                ("boolean", Role::Type),
+                ("null", Role::Constant),
+            ],
+        ),
+        (
+            "bash",
+            "# c\n'a\nb'",
+            &[
+                ("# c", Role::Comment),
+                ("'a", Role::String),
+                ("b'", Role::String),
+            ],
+        ),
+        (
+            "json",
+            "'a'\nnull",
+            &[("'a'", Role::CodeText), ("null", Role::Constant)],
+        ),
+        (
+            "toml",
+            "# c\n\"\"\"a\nb\"\"\"\na-b = 1",
+            &[
+                ("# c", Role::Comment),
+                ("b\"\"\"", Role::String),
+                ("a-b", Role::Type),
+            ],
+        ),
+        (
+            "yaml",
+            "# c\na-b: 1\nnull",
+            &[
+                ("# c", Role::Comment),
+                ("a-b", Role::Type),
+                ("null", Role::Constant),
+            ],
+        ),
+        (
+            "css",
+            "/* c */\nfont-size: none",
+            &[
+                ("/* c */", Role::Comment),
+                ("font-size", Role::Type),
+                ("none", Role::Constant),
+            ],
+        ),
+        (
+            "sql",
+            "/* c */\nvarchar\nnull\n'a'\n\"b\"",
+            &[
+                ("/* c */", Role::Comment),
+                ("varchar", Role::Type),
+                ("null", Role::Constant),
+                ("'a'", Role::String),
+                ("\"b\"", Role::String),
+            ],
+        ),
+        (
+            "c",
+            "NULL\ntrue",
+            &[("NULL", Role::Constant), ("true", Role::Constant)],
+        ),
+    ];
+    for (lang, code, expected) in samples {
+        for (text, role) in *expected {
+            assert_eq!(role_of(lang, code, text), Some(*role), "{lang}: {text}");
+        }
+    }
+}
+
+#[test]
+fn a_block_comment_ends_after_its_close() {
+    assert_eq!(
+        runs("c", "/* a */ x")[0],
+        vec![
+            (Role::Comment, "/* a */".to_owned()),
+            (Role::CodeText, " x".to_owned()),
+        ]
+    );
+}
+
+#[test]
+fn a_dot_without_digits_is_no_list_marker() {
+    assert_eq!(
+        runs("md", ". a")[0],
+        vec![(Role::CodeText, ". a".to_owned())]
+    );
+}
+
+#[test]
+fn a_dash_is_an_operator_where_words_may_hold_one() {
+    assert_eq!(
+        runs("yaml", "- a")[0],
+        vec![
+            (Role::Operator, "-".to_owned()),
+            (Role::CodeText, " a".to_owned()),
+        ]
+    );
+}
+
+#[test]
+fn html_tag_names_take_bangs_and_dashes_and_an_entity_stops_at_a_tag() {
+    assert_eq!(
+        role_of("html", "<!DOCTYPE html>", "!DOCTYPE"),
+        Some(Role::Keyword)
+    );
+    assert_eq!(role_of("html", "<my-el>", "my-el"), Some(Role::Keyword));
+    assert_eq!(
+        runs("html", "&x<b>;")[0][0],
+        (Role::Constant, "&".to_owned())
+    );
+    assert_eq!(runs("html", "& x;")[0][0], (Role::Constant, "&".to_owned()));
+}
+
+#[test]
+fn every_language_lexes_a_mixed_sample_to_its_end() {
+    // A lexer step that takes nothing trips a debug assertion here rather
+    // than looping.
+    let sample = "fn f<'a>(x) { /* c */ // d\n#x \"s\" 'c' `t` 1.5 $v a-b: c = <p a='b'>&amp; &x</p> }\n\n- `i`\n";
+    for tag in [
+        "rust",
+        "python",
+        "javascript",
+        "typescript",
+        "go",
+        "c",
+        "cpp",
+        "java",
+        "bash",
+        "json",
+        "toml",
+        "yaml",
+        "html",
+        "css",
+        "sql",
+        "diff",
+        "markdown",
+    ] {
+        assert_eq!(joined(&runs(tag, sample)), sample, "{tag}");
+    }
+}

@@ -148,7 +148,7 @@ pub(crate) fn render(text: &str, width: u16) -> Rendered {
         table: None,
         separator: None,
     };
-    let options = Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH;
+    let options = Options::ENABLE_TABLES.union(Options::ENABLE_STRIKETHROUGH);
     for event in Parser::new_ext(text, options) {
         writer.event(event);
     }
@@ -562,41 +562,38 @@ fn wrap_cells(cells: &[Cell], first: usize, rest: usize, words: bool) -> Vec<Vec
     let mut row: Vec<Cell> = Vec::new();
     let mut used = 0usize;
     let mut at = 0usize;
+    // Each pass takes at least the cell at `at`, so the loop ends.
     while let Some(&(ch, _)) = cells.get(at) {
-        let room = if rows.is_empty() { first } else { rest };
         if ch == '\n' {
             rows.push(std::mem::take(&mut row));
             used = 0;
             at = at.saturating_add(1);
             continue;
         }
-        if words && ch == ' ' && row.is_empty() && !rows.is_empty() {
-            at = at.saturating_add(1);
-            continue;
-        }
+        let next = at.saturating_add(1);
         let end = if words && ch != ' ' {
             cells
                 .iter()
-                .skip(at)
+                .skip(next)
                 .position(|(ch, _)| *ch == ' ' || *ch == '\n')
-                .map_or(cells.len(), |len| at.saturating_add(len))
+                .map_or(cells.len(), |len| next.saturating_add(len))
         } else {
-            at.saturating_add(1)
+            next
         };
         let piece = cells.get(at..end).unwrap_or_default();
+        at = end;
         let width: usize = piece.iter().map(|(ch, _)| char_width(*ch)).sum();
-        if used.saturating_add(width) <= room {
-            row.extend_from_slice(piece);
-            used = used.saturating_add(width);
-            at = end;
-            continue;
-        }
-        if words && !row.is_empty() && (ch == ' ' || width <= rest) {
+        let room = if rows.is_empty() { first } else { rest };
+        // A word that overflows goes to the next row when it fits there.
+        if words && !row.is_empty() && used.saturating_add(width) > room && width <= rest {
             while row.last().is_some_and(|(ch, _)| *ch == ' ') {
                 row.pop();
             }
             rows.push(std::mem::take(&mut row));
             used = 0;
+        }
+        // Spaces at the start of a wrapped row are dropped.
+        if words && ch == ' ' && row.is_empty() && !rows.is_empty() {
             continue;
         }
         for &cell in piece {
@@ -609,7 +606,6 @@ fn wrap_cells(cells: &[Cell], first: usize, rest: usize, words: bool) -> Vec<Vec
             row.push(cell);
             used = used.saturating_add(width);
         }
-        at = end;
     }
     if !row.is_empty() {
         rows.push(row);

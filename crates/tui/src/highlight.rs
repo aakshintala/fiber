@@ -136,7 +136,6 @@ const C: Lang = Lang {
     caps_types: false,
     keywords: C_KEYWORDS,
     types: C_TYPES,
-    constants: "NULL true false",
     ..C_LIKE
 };
 
@@ -194,7 +193,6 @@ const CSS: Lang = Lang {
 const SQL: Lang = Lang {
     line_comments: &["--"],
     block_comment: Some(("/*", "*/")),
-    quotes: &['\'', '"'],
     any_case: true,
     keywords: "add all alter and as asc begin between by case commit create default delete desc distinct drop else end exists foreign from full group having in index inner insert into is join key left like limit not offset on or order outer primary references returning right rollback select set table then union update values when where with",
     types: "bigint boolean char date decimal double float int integer numeric real serial smallint text timestamp varchar",
@@ -347,6 +345,7 @@ fn markdown_line(line: &str) -> Vec<(Role, usize)> {
             ),
             None => (Role::CodeText, rest.find('`').unwrap_or(rest.len())),
         };
+        debug_assert!(len > 0, "each run takes at least one byte");
         runs.push((role, len));
         rest = rest.get(len..).unwrap_or_default();
     }
@@ -387,11 +386,13 @@ impl<'a> Lexer<'a> {
     /// Reads each line with `read`, which returns its runs as lengths.
     fn lines(&mut self, read: fn(&str) -> Vec<(Role, usize)>) {
         while self.at < self.code.len() {
+            let before = self.at;
             let line = self.rest().split('\n').next().unwrap_or_default();
             for (role, len) in read(line) {
                 self.emit(role, len);
             }
             self.emit(Role::CodeText, 1);
+            debug_assert!(self.at > before, "each line takes at least one byte");
         }
     }
 
@@ -399,6 +400,7 @@ impl<'a> Lexer<'a> {
     fn code(&mut self, lang: &Lang) {
         let mut line_start = true;
         while let Some(ch) = self.rest().chars().next() {
+            let before = self.at;
             let rest = self.rest();
             let starts_line = line_start;
             line_start = ch == '\n' || (line_start && ch.is_whitespace());
@@ -409,7 +411,7 @@ impl<'a> Lexer<'a> {
                     .get(open.len()..)
                     .and_then(|body| body.find(close))
                     .map_or(rest.len(), |end| {
-                        end.saturating_add(open.len() + close.len())
+                        end.saturating_add(open.len()).saturating_add(close.len())
                     });
                 self.emit(Role::Comment, len);
             } else if lang.line_comments.iter().any(|open| rest.starts_with(open)) {
@@ -447,6 +449,7 @@ impl<'a> Lexer<'a> {
             } else {
                 self.emit(Role::CodeText, ch.len_utf8());
             }
+            debug_assert!(self.at > before, "each token takes at least one byte");
         }
     }
 
@@ -522,6 +525,7 @@ impl<'a> Lexer<'a> {
     fn markup(&mut self) {
         let mut in_tag = false;
         while let Some(ch) = self.rest().chars().next() {
+            let before = self.at;
             let rest = self.rest();
             if rest.starts_with("<!--") {
                 let len = rest
@@ -561,6 +565,7 @@ impl<'a> Lexer<'a> {
                 let len = rest.find(['<', '&']).unwrap_or(rest.len()).max(1);
                 self.emit(Role::CodeText, len);
             }
+            debug_assert!(self.at > before, "each token takes at least one byte");
         }
     }
 }
