@@ -34,6 +34,8 @@ mod steering;
 mod commands;
 #[path = "history.rs"]
 mod history;
+#[path = "copy.rs"]
+mod copy;
 #[path = "app_mouse.rs"]
 mod mouse;
 
@@ -429,16 +431,6 @@ impl App {
         self.rows().into_iter().map(|(line, _)| line).collect()
     }
 
-    /// For each line of [`Self::lines`] that opens something, its index and
-    /// what it opens.
-    pub(crate) fn targets(&self) -> Vec<(usize, Target)> {
-        self.rows()
-            .into_iter()
-            .enumerate()
-            .filter_map(|(at, (_, target))| target.map(|target| (at, target)))
-            .collect()
-    }
-
     /// Opens or closes what `target` names.
     pub(crate) fn open(&mut self, target: Target) {
         let asides = self.fold.asides.iter_mut().map(|(_, aside)| aside);
@@ -451,23 +443,6 @@ impl App {
 
     /// The turns' cards, each aside after the turns there were when it
     /// came.
-
-    /// A left click at a 0-based cell: on a code block's `copy` it copies
-    /// the code and shows "Copied", which any click first clears.
-    #[cfg_attr(not(test), expect(dead_code, reason = "#995's mouse events call it"))]
-    pub(crate) fn on_click(&mut self, col: u16, row: u16) -> Effect {
-        let code = crate::view::target_at(self, self.width, usize::from(row))
-            .and_then(|target| crate::turn::copy_target(&self.turns, target, self.width))
-            .filter(|copy| copy.cols.contains(&col));
-        self.copied = code.is_some();
-        code.map_or(Effect::None, |copy| Effect::Copy(copy.code))
-    }
-
-    /// Whether "Copied" shows.
-    pub(crate) fn copied(&self) -> bool {
-        self.copied
-    }
-
     fn rows(&self) -> Vec<Row> {
         let mut out = Vec::new();
         let mut asides = self.fold.asides.iter().peekable();
