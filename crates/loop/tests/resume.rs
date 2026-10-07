@@ -4370,25 +4370,18 @@ fn reply_delivery(request_id: &str, decision: Decision) -> (Delivery, Arc<Mutex<
 }
 
 /// Runs `send` once the log holds the re-raised `permission_requested`:
-/// the signal the finishing turn is waiting for an answer. Bounded by
+/// the signal the finishing turn is waiting for an answer. One
 /// [`support::DEADLINE`].
 fn on_reraise(
     history: &History,
     send: impl FnOnce() + Send + 'static,
 ) -> std::thread::JoinHandle<()> {
-    let mut watcher = history.log.watch();
+    let watcher = history.log.watch();
     std::thread::spawn(move || {
-        loop {
-            let line = watcher
-                .recv_timeout(support::DEADLINE)
-                .expect("a re-raised permission_requested in time")
-                .expect("the log outlives the request")
-                .expect("the log ended before the re-raise");
-            if line.kind == "permission_requested" {
-                send();
-                return;
-            }
-        }
+        support::read_until(watcher, "a re-raised permission_requested line", |line| {
+            line.kind == "permission_requested"
+        });
+        send();
     })
 }
 

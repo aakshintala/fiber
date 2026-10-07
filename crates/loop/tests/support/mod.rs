@@ -39,7 +39,35 @@ use r#loop::{BlockLimits, Loop, Model, Reviewer, TurnCancel};
 use serde_json::{Map, Value, json};
 
 /// How long a turn may take before a test fails instead of hanging.
-pub(crate) const DEADLINE: Duration = Duration::from_secs(10);
+pub(crate) const DEADLINE: Duration = Duration::from_secs(5);
+
+/// Reads `watcher` on its own thread with blocking `recv` until `done`
+/// accepts a line, under one [`DEADLINE`] naming `what`. Returns the
+/// watcher and every line read, the accepted one last.
+pub(crate) fn read_until(
+    watcher: Watcher,
+    what: &str,
+    done: impl Fn(&Envelope) -> bool + Send + 'static,
+) -> (Watcher, Vec<Envelope>) {
+    let what_owned = what.to_owned();
+    fakes::within(what, DEADLINE, move || {
+        let mut watcher = watcher;
+        let mut lines = Vec::new();
+        loop {
+            match watcher.recv() {
+                Ok(Some(line)) => {
+                    let last = done(&line);
+                    lines.push(line);
+                    if last {
+                        return (watcher, lines);
+                    }
+                }
+                Ok(None) => panic!("the log ended before {what_owned}"),
+                Err(err) => panic!("the log failed before {what_owned}: {err}"),
+            }
+        }
+    })
+}
 
 /// The model reference the scripted provider answers as.
 pub(crate) const MODEL: &str = "fake/model-1";
@@ -49,28 +77,22 @@ pub(crate) const REVIEWER_MODEL: &str = "fake/reviewer-1";
 
 /// Watches the log for the turn's `permission_requested`, then runs `send`
 /// with its request id: the signal the loop is waiting for a reply. The wait
-/// is bounded by [`DEADLINE`]: a turn that never asks fails naming the
+/// is one [`DEADLINE`]: a turn that never asks fails naming the
 /// missing `permission_requested`, and the thread's end drops its inbox
 /// sender, releasing a loop still waiting for a reply.
 pub(crate) fn on_request(
     session: &Session,
     send: impl FnOnce(RequestId) + Send + 'static,
 ) -> thread::JoinHandle<()> {
-    let mut watcher = session.log.watch();
+    let watcher = session.log.watch();
     thread::spawn(move || {
-        loop {
-            let line = watcher
-                .recv_timeout(DEADLINE)
-                .expect("a permission_requested line in time")
-                .expect("the log outlives the request")
-                .expect("the log ended before permission_requested");
-            if line.kind == "permission_requested" {
-                send(RequestId(
-                    line.payload["request_id"].as_str().unwrap().into(),
-                ));
-                return;
-            }
-        }
+        let (_, lines) = read_until(watcher, "a permission_requested line", |line| {
+            line.kind == "permission_requested"
+        });
+        let line = lines.last().unwrap();
+        send(RequestId(
+            line.payload["request_id"].as_str().unwrap().into(),
+        ));
     })
 }
 
@@ -696,7 +718,7 @@ pub(crate) struct Session {
     /// The standing rules the loop reads.
     pub(crate) rules: Arc<FakeRules>,
     pub(crate) inbox: Sender<Delivery>,
-    lines: Watcher,
+    lines: Option<Watcher>,
     pub(crate) looped: Option<Loop>,
     /// Cancels the session's running turn, as a driver does.
     pub(crate) cancel: Arc<TurnCancel>,
@@ -1049,7 +1071,7 @@ impl Session {
         std::fs::create_dir_all(&credentials).unwrap();
         let id = SessionId("s_test".into());
         let log = Arc::new(Log::create(&home.0, id.clone(), clock.clone()).unwrap());
-        let lines = log.watch();
+        let lines = Some(log.watch());
         let (inbox, rx) = mpsc::channel();
         let seam = Seam {
             inner: provider,
@@ -1226,25 +1248,17 @@ impl Session {
     /// Every line emitted since the last call, ephemeral ones included,
     /// through the next `turn_completed`.
     pub(crate) fn lines(&mut self) -> Vec<Envelope> {
-        let mut lines = Vec::new();
-        loop {
-            let line = self
-                .lines
-                .recv_timeout(DEADLINE)
-                .expect("a turn_completed line in time")
-                .expect("the log outlives the turn")
-                .expect("the log ended before turn_completed");
-            // `run` starts the status observer, whose lines race the
-            // loop's own; `tests/status.rs` reads them.
-            if line.kind == "session_status" {
-                continue;
-            }
-            let last = line.kind == "turn_completed";
-            lines.push(line);
-            if last {
-                return lines;
-            }
-        }
+        let watcher = self.lines.take().unwrap();
+        let (watcher, lines) = read_until(watcher, "a turn_completed line", |line| {
+            line.kind == "turn_completed"
+        });
+        self.lines = Some(watcher);
+        // `run` starts the status observer, whose lines race the
+        // loop's own; `tests/status.rs` reads them.
+        lines
+            .into_iter()
+            .filter(|line| line.kind != "session_status")
+            .collect()
     }
 }
 
@@ -1358,7 +1372,7 @@ pub(crate) fn assert_scheduled_attempts(lines: &[Envelope]) {
 /// a deadline, alongside `Session::lines`, which drains after the turn.
 /// Lines read here stay in the session's own queue: each watcher has one.
 pub(crate) struct Tap {
-    watcher: Mutex<Watcher>,
+    watcher: Mutex<Option<Watcher>>,
     buffered: Mutex<Vec<Envelope>>,
 }
 
@@ -1366,7 +1380,7 @@ impl Tap {
     /// Taps `log` from now on.
     pub(crate) fn new(log: &Arc<Log>) -> Self {
         Self {
-            watcher: Mutex::new(log.watch()),
+            watcher: Mutex::new(Some(log.watch())),
             buffered: Mutex::default(),
         }
     }
@@ -1374,43 +1388,45 @@ impl Tap {
     /// The next line of `kind`, buffering the rest for later calls, and
     /// failing the test at [`DEADLINE`].
     pub(crate) fn wait_for(&self, kind: &str) -> Envelope {
-        self.wait_until(|line| line.kind == kind)
+        let owned = kind.to_owned();
+        let what = format!("a {kind} line");
+        self.wait_until(move |line| line.kind == owned, what)
     }
 
     /// The next `tool_call_delta` whose text is `text`, buffering the
     /// rest, and failing the test at [`DEADLINE`].
     pub(crate) fn wait_for_delta(&self, text: &str) -> Envelope {
-        self.wait_until(|line| delta_text(line) == Some(text))
+        let owned = text.to_owned();
+        let what = format!("a tool_call_delta with {text:?}");
+        self.wait_until(move |line| delta_text(line) == Some(owned.as_str()), what)
     }
 
     /// The next line `matches` accepts, buffering the rest, and failing the
     /// test at [`DEADLINE`]. Takes the watcher lock and the buffer lock one
     /// at a time, never nested, and never holds the buffer lock across the
     /// wait.
-    fn wait_until(&self, matches: impl Fn(&Envelope) -> bool) -> Envelope {
-        loop {
-            if let Some(found) = take_from(&self.buffered, &matches) {
-                return found;
-            }
-            let line = self
-                .watcher
-                .lock()
-                .unwrap()
-                .recv_timeout(DEADLINE)
-                .expect("a line in time")
-                .expect("the log outlives the tap")
-                .expect("the log ended before the awaited line");
-            if matches(&line) {
-                return line;
-            }
-            self.buffered.lock().unwrap().push(line);
+    fn wait_until(
+        &self,
+        matches: impl Fn(&Envelope) -> bool + Send + 'static,
+        what: String,
+    ) -> Envelope {
+        if let Some(found) = take_from(&self.buffered, &matches) {
+            return found;
         }
+        let watcher = self.watcher.lock().unwrap().take().unwrap();
+        let (watcher, lines) = read_until(watcher, &what, matches);
+        *self.watcher.lock().unwrap() = Some(watcher);
+        let mut lines = lines.into_iter();
+        let last = lines.next_back().unwrap();
+        self.buffered.lock().unwrap().extend(lines);
+        last
     }
 
     /// Every line received and buffered so far, without waiting.
     pub(crate) fn pending(&self) -> Vec<Envelope> {
         let mut lines = std::mem::take(&mut *self.buffered.lock().unwrap());
-        let mut watcher = self.watcher.lock().unwrap();
+        let mut slot = self.watcher.lock().unwrap();
+        let watcher = slot.as_mut().unwrap();
         loop {
             match watcher.try_recv() {
                 Ok(Some(line)) => lines.push(line),
