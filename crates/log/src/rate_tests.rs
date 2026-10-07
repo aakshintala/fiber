@@ -239,6 +239,14 @@ fn preamble_size_ignores_the_fields_no_request_sends() {
     let mut name = built(PreambleReason::Start, "hi");
     name.tools[0].name = "write-a-longer-name".into();
     assert_eq!(sized(name), base);
+    // A tool with no definition contributes nothing to the request.
+    let mut bare = payload(&Event::PreambleBuilt(built(PreambleReason::Start, "hi")));
+    bare.get_mut("tools")
+        .unwrap()
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"name": "ghost"}));
+    assert_eq!(preamble_size(&bare), base);
 }
 
 #[test]
