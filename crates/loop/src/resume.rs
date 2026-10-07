@@ -486,6 +486,11 @@ impl Loop {
         // suspended before its path became a configured credential file:
         // it is refused without asking, as `judge` refuses it before any
         // ask. A call that cannot be checked waits for its answer as ever.
+        // The refusal answers the previously raised request, and the batch
+        // completes through the run phase every step uses: the calls
+        // before the action complete `cancelled` without running, as an
+        // answered request's calls do, and the calls after it are judged
+        // and run with it (`docs/loop.md`, "Tool calls that do not run").
         if let Some((_, call)) = suspended
             .batch
             .iter()
@@ -503,23 +508,42 @@ impl Loop {
                 &suspended.action,
                 &turn,
                 crate::completion::resolved(
-                    None,
+                    Some(suspended.request.request_id.clone()),
                     Decision::Deny,
                     DecidedBy::CredentialDeny,
                     Some(why),
                     None,
                 ),
             )?;
-            for (id, _) in &suspended.batch {
-                let completed = if *id == suspended.action {
-                    crate::completion::denied("credentials", text.clone())
+            let mut decision: Option<Decided> =
+                Some(Err(crate::completion::denied("credentials", text)));
+            let mut before = true;
+            let mut calls = Vec::with_capacity(suspended.batch.len());
+            for (id, call) in suspended.batch {
+                let already = if id == suspended.action {
+                    before = false;
+                    decision.take()
+                } else if before {
+                    Some(Err(self.cancelled_before_ran()))
                 } else {
-                    self.cancelled_before_ran()
+                    None
                 };
-                self.append(&Event::ToolCallCompleted(*completed), &turn, Some(id))?;
+                calls.push((id, call, already));
+            }
+            let cancelled = self.run_batch(calls, &turn)?;
+            // A later call's approval reached the idle delay: nothing more
+            // is written, as in any step.
+            if self.idle_left {
+                self.cancel.disarm();
+                return Ok(None);
             }
             // Orphan notices the resume logged behind the open batch.
             self.conversation.append(&mut self.held);
+            // A cancel that ended the batch ends the turn `interrupted` at
+            // the next step's start, as a step's cancel does.
+            if !cancelled {
+                self.handoff_from_tools(&turn)?;
+            }
             return self.run_steps(&turn);
         }
         // Armed with the re-raise: a shutdown before it leaves the request

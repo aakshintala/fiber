@@ -2458,7 +2458,7 @@ fn a_suspended_call_touching_a_configured_credential_file_is_refused_without_ask
         new[2].payload["reason"],
         "The call touches a configured credential file."
     );
-    assert_eq!(new[2].payload.get("request_id"), None);
+    assert_eq!(new[2].payload["request_id"], "r_9");
     assert_eq!(new[3].payload["status"], "denied");
     assert_eq!(new[3].payload["reason"], "credentials");
     assert!(
@@ -2466,6 +2466,106 @@ fn a_suspended_call_touching_a_configured_credential_file_is_refused_without_ask
         "a denied call never starts"
     );
     assert!(tool.ran().is_empty(), "a denied call never runs");
+}
+
+#[test]
+fn a_resumed_credential_refusal_answers_its_request_and_spares_later_calls() {
+    // The batch is `[a_1, a_2, a_3]` with the standing ask `r_9` pending
+    // on `a_2`, which touches a configured `file` credential source. The
+    // resume refuses `a_2` through the credential deny, answering `r_9`:
+    // the call before it is cancelled, as the batch path does, but the
+    // call after it is judged and runs normally (`docs/loop.md`, "Tool
+    // calls that do not run").
+    let keys = fakes::TempDir::new("fiber-resume-keys");
+    let key = keys.path().join("openrouter");
+    std::fs::write(&key, "sk-file-secret").unwrap();
+    let first = reads("first");
+    let denied = Arc::new(support::TestTool::declaring(
+        "read",
+        "sk-file-secret",
+        vec![contract::shapes::Effect::Reads],
+        Some(vec![key.display().to_string()]),
+    ));
+    let last = reads("last");
+    let mut history = History::new(vec![Scripted::text("Hello.")]);
+    history.write(user_turn("one"), None);
+    history.write(message_started(), Some("a_0"));
+    history.write(requested("first"), Some("a_1"));
+    history.write(requested("read"), Some("a_2"));
+    history.write(requested("last"), Some("a_3"));
+    history.write(standing_request("r_9"), Some("a_2"));
+    history.write(fiber_started(), None);
+    history.write(fiber_exited(Some("r_9")), None);
+    history.freeze();
+
+    let looped = history.resume_headless_with_files(
+        vec![
+            ("builtin".into(), first.clone() as Arc<dyn Tool>),
+            ("builtin".into(), denied.clone() as Arc<dyn Tool>),
+            ("builtin".into(), last.clone() as Arc<dyn Tool>),
+        ],
+        vec![key.clone()],
+    );
+    let (looped, finishing) = history.step(looped);
+    assert_eq!(finishing, Some(contract::events::TurnOutcome::Completed));
+    let _ = looped;
+
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "opening_message",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+            "tool_call_completed",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    let new = history.new_lines();
+    // The refusal answers the previously raised request.
+    assert_eq!(new[2].payload["request_id"], "r_9");
+    assert_eq!(new[2].payload["decision"], "deny");
+    assert_eq!(new[2].payload["decided_by"], "credential_deny");
+    // In request order: the call before is cancelled, the credential call
+    // denied, the call after completed. Only the call after started.
+    let done: Vec<(String, String)> = new[4..7]
+        .iter()
+        .map(|line| {
+            assert_eq!(line.kind, "tool_call_completed");
+            (
+                line.action_id.as_ref().unwrap().0.clone(),
+                line.payload["status"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        done,
+        [
+            ("a_1".to_owned(), "cancelled".to_owned()),
+            ("a_2".to_owned(), "denied".to_owned()),
+            ("a_3".to_owned(), "completed".to_owned()),
+        ]
+    );
+    let started: Vec<String> = history
+        .new_lines()
+        .into_iter()
+        .filter(|line| line.kind == "tool_call_started")
+        .map(|line| line.action_id.as_ref().unwrap().0.clone())
+        .collect();
+    assert_eq!(started, ["a_3".to_owned()]);
+    assert!(
+        first.ran().is_empty(),
+        "a call before the refusal never runs"
+    );
+    assert!(denied.ran().is_empty(), "a denied call never runs");
+    assert_eq!(last.ran().len(), 1, "a call after the refusal runs");
 }
 
 #[test]

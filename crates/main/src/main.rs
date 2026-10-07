@@ -449,17 +449,11 @@ fn parts_in(
     // providers are added so their sources are protected too: a relative
     // path joins the workspace the reader reads it from, an absolute one
     // stands (`docs/permissions.md`, "Credentials").
-    let credential_files: Vec<PathBuf> = {
-        let datas: Vec<_> = providers
-            .names()
-            .filter_map(|name| providers.get(name))
-            .collect();
-        config
-            .credential_files(datas)
-            .into_iter()
-            .map(|file| workspace.join(file))
-            .collect()
-    };
+    let credential_files: Vec<PathBuf> = config
+        .credential_files(providers.names().filter_map(|name| providers.get(name)))
+        .into_iter()
+        .map(|file| workspace.join(file))
+        .collect();
     // `recorded` first, then `--model` and configuration's `model`
     // (`docs/model-routing.md`, "Choosing the model").
     let model = providers
