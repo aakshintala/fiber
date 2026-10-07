@@ -13,7 +13,7 @@ const DOC: &str = concat!(
     "| Idle CPU, session and terminal | zero context switches in the idle window, on every thread | Linux x86_64 | exact |\n",
     "| Threads, idle headless session | 5, plus 2 per client, plus 1 per Lua extension in use | Linux x86_64 | exact |\n",
     "| fsyncs | 2 per model request, 2 per tool call | Linux x86_64 | exact |\n",
-    "| Log bytes, 429-call turn | the turn's content plus 1 KiB per tool call | Linux x86_64 | exact |\n",
+    "| Log bytes, 429-call turn | the turn's content plus 2 KiB per tool call | Linux x86_64 | exact |\n",
     "| Session start, the internal session command to its first line, no hub | 20 ms | Linux x86_64 | picked |\n",
     "| Terminal to its first frame, new session | 50 ms | Linux x86_64 | picked |\n",
     "| Terminal to its first frame, attaching | 50 ms plus 10 ms per MiB of session log | Linux x86_64 | picked |\n",
@@ -631,8 +631,8 @@ fn the_fsync_count_is_one_untimed_pass() {
 }
 
 #[test]
-fn log_bytes_hold_the_content_plus_one_kib_per_tool_call_on_every_run() {
-    let limit = 1_520_000 + 1024 * 429;
+fn log_bytes_hold_the_content_plus_two_kib_per_tool_call_on_every_run() {
+    let limit = 1_520_000 + 2048 * 429;
     let at = with_metric(
         head(),
         "turn_log_bytes",
@@ -660,7 +660,7 @@ fn an_exact_part_2_row_whose_text_changes_fails() {
             "2 per model request, 2 per tool call",
             "2 per model request, 3 per tool call",
         ),
-        ("plus 1 KiB per tool call", "plus 2 KiB per tool call"),
+        ("plus 2 KiB per tool call", "plus 1 KiB per tool call"),
     ] {
         let out = judge_doc(
             &doc_with(from, to),

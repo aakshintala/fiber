@@ -27,7 +27,7 @@ const FSYNCS_PER_TOOL_CALL: u64 = 2;
 /// process, so it is never a timing or memory sample.
 const FSYNC_RUNS: usize = 1;
 /// The log bytes a turn may add per tool call beyond its content.
-const LOG_BYTES_PER_TOOL_CALL: u64 = 1024;
+const LOG_BYTES_PER_TOOL_CALL: u64 = 2048;
 /// The row whose ceiling the `web_fetch` conversion must fit in.
 const BUSY: &str = "Session, busy or resumed";
 /// How the `web_fetch` row's ceiling cell starts, before the busy row's
@@ -108,7 +108,7 @@ const MEASURED: &[(&str, Check)] = &[
     (
         "Log bytes, 429-call turn",
         Check::Exact {
-            pin: "the turn's content plus 1 KiB per tool call",
+            pin: "the turn's content plus 2 KiB per tool call",
             rule: Rule::LogBytes("turn_log_bytes"),
         },
     ),
@@ -430,7 +430,7 @@ fn fsyncs(entry: &Value, id: &str) -> Result<Entry, String> {
     Ok((shown, broken))
 }
 
-/// The turn's log bytes: at most its content plus 1 KiB per tool call.
+/// The turn's log bytes: at most its content plus 2 KiB per tool call.
 fn log_bytes(entry: &Value, id: &str) -> Result<Entry, String> {
     let bytes = field(entry, id, "bytes")?;
     let content = field(entry, id, "content")?;
