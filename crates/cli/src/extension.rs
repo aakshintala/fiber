@@ -126,9 +126,6 @@ pub fn extension_list(clock: &dyn Clock) -> i32 {
     }
 }
 
-/// Installs `request`: fetches and checks what it and its dependencies
-/// need, shows what they register and asks when the terminal says so,
-/// and prints each name installed.
 fn install(
     home: &Path,
     request: Request,
@@ -151,8 +148,6 @@ fn install(
     report_install(commit_plan(plan, terminal, input, err), err)
 }
 
-/// Updates every installed extension a person asked for, in listing
-/// order, stopping at the first declined install or the first failure.
 fn update_all(
     home: &Path,
     fiber_version: &str,
@@ -187,7 +182,6 @@ fn update_all(
     Ok(0)
 }
 
-/// Removes the extension `typed` names, asking first in a terminal.
 fn remove(home: &Path, typed: &str, clock: &dyn Clock, io: Io<'_>) -> Result<i32, Failure> {
     let Io {
         terminal,
@@ -208,12 +202,8 @@ fn remove(home: &Path, typed: &str, clock: &dyn Clock, io: Io<'_>) -> Result<i32
     Ok(0)
 }
 
-/// Lists what `home` holds: each damaged directory first, then one line
-/// per installed extension.
 fn list(home: &Path, clock: &dyn Clock, out: &mut dyn Write) -> Result<(), Failure> {
     let listing = extensions::list(home, clock).map_err(|e| failed(e.code(), e))?;
-    // Each damaged directory first, one line each, then the healthy
-    // rows.
     for hit in &listing.damaged {
         writeln!(out, "{hit}").unwrap_or(());
     }
@@ -228,8 +218,6 @@ fn list(home: &Path, clock: &dyn Clock, out: &mut dyn Write) -> Result<(), Failu
     Ok(())
 }
 
-/// Prints what an approved install did: each name installed, or that
-/// nothing was installed.
 fn report_install(
     result: Result<Option<Vec<String>>, Failure>,
     err: &mut dyn Write,
@@ -249,7 +237,6 @@ fn report_install(
     }
 }
 
-/// Fetches and checks what `request` and its dependencies need.
 fn plan_request(
     home: &Path,
     request: Request,
@@ -260,8 +247,6 @@ fn plan_request(
     extensions::plan(home, &request, fiber_version, origin, clock).map_err(|e| failed(e.code(), e))
 }
 
-/// Shows what `plan` registers, asks when the terminal says so, and
-/// installs once approved; `None` when the person declined.
 fn commit_plan(
     plan: extensions::Plan,
     terminal: bool,
