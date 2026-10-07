@@ -4,7 +4,7 @@
 //! markdown.
 
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -137,6 +137,11 @@ impl Artifact {
         }
     }
 
+    /// Whether every write so far reached the file.
+    fn saving(&self) -> bool {
+        self.failed.is_none()
+    }
+
     /// The saved file's path, kept on disk, or why it could not be saved.
     pub(super) fn keep(mut self) -> Result<String, String> {
         match self.failed.take() {
@@ -163,6 +168,50 @@ impl Drop for Artifact {
         self.file = None;
         self.remove();
     }
+}
+
+/// Where a download's pieces go as they are read: its artifact, if it is
+/// saved, and its converter, if it is HTML. A body that is neither is only
+/// counted.
+pub(super) struct Sink<'a> {
+    pub(super) artifact: Option<Artifact>,
+    pub(super) html: Option<Html>,
+    /// Whether the fetch was stopped: checked before each piece.
+    pub(super) stopped: &'a dyn Fn() -> bool,
+}
+
+impl Write for Sink<'_> {
+    /// Takes one piece. Once the fetch is stopped it takes nothing more and
+    /// fails, ending the read. A save failure never fails the read: the
+    /// body is still counted to the limit, so a page too large is reported
+    /// as too large, and from then on nothing is saved or converted.
+    fn write(&mut self, piece: &[u8]) -> io::Result<usize> {
+        if (self.stopped)() {
+            return Err(io::Error::other("the fetch was stopped"));
+        }
+        let saving = match &mut self.artifact {
+            Some(artifact) => {
+                artifact.write(piece);
+                artifact.saving()
+            }
+            None => false,
+        };
+        if saving && let Some(html) = &mut self.html {
+            html.push(piece);
+        }
+        Ok(piece.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Reads `body` into `sink` in pieces of at most 64 KiB, at most `limit`
+/// bytes: how many were read.
+pub(super) fn copy(body: &mut dyn Read, limit: u64, sink: &mut Sink<'_>) -> io::Result<u64> {
+    let mut reader = BufReader::with_capacity(PIECE, body.take(limit));
+    io::copy(&mut reader, sink)
 }
 
 /// The message for a download that could not be saved to `path`.
