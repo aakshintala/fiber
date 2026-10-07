@@ -287,6 +287,7 @@ fn no_switcher_is_invalid_arguments() {
         .unwrap();
     let (outcome, lines) = run(&mut session, "hi");
     assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(&lines, &[OPENING, STEP, REPLY, ENDED]);
     let answer = rx.recv_timeout(DEADLINE).expect("the model is answered");
     let rejection = answer.unwrap_err();
     assert_eq!(rejection.code, ErrorCode::InvalidArguments);
@@ -318,8 +319,9 @@ fn after_close_prepare_is_not_called() {
     });
     let mut session = Session::new(vec![Scripted::text("Old.")], None);
     with_switch(&mut session, prepare, switchable());
-    let (outcome, _) = run(&mut session, "hi");
+    let (outcome, first) = run(&mut session, "hi");
     assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(&first, &[OPENING, STEP, REPLY, ENDED]);
 
     let (close_tx, close_rx) = mpsc::channel::<Answer>();
     let (model_tx, model_rx) = mpsc::channel::<Answer>();
@@ -357,6 +359,24 @@ fn after_close_prepare_is_not_called() {
     assert!(
         !*called.lock().unwrap(),
         "prepare runs only before `closing`"
+    );
+    let all = log::read(&session.dir).unwrap();
+    // The log holds the turn's durable lines only: no deltas, and the
+    // refused `model` and `close` write nothing.
+    assert_kinds(
+        &all,
+        &[&[
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ] as &[&str]],
     );
 }
 
@@ -437,6 +457,33 @@ fn during_an_approval_wait_is_accepted_and_applied_after_the_turn() {
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     let lines = session.lines();
     // Accepted during the wait, applied after the turn: no `model_changed` yet.
+    assert_kinds(
+        &lines,
+        &[
+            &[
+                "session_started",
+                "preamble_built",
+                "opening_message",
+                "turn_started",
+            ] as &[&str],
+            &["step_started"],
+            &[
+                "assistant_message_started",
+                "assistant_message_delta",
+                "tool_call_arguments_delta",
+                "tool_call_requested",
+                "usage_recorded",
+                "assistant_message_completed",
+                "permission_requested",
+                "permission_resolved",
+                "tool_call_started",
+                "tool_call_completed",
+            ],
+            &["step_started"],
+            REPLY,
+            ENDED,
+        ],
+    );
     assert!(of_kind(&lines, "model_changed").is_empty());
     let answer = ack_rx
         .recv_timeout(DEADLINE)
@@ -519,14 +566,23 @@ fn an_idle_deadline_in_an_approval_wait_writes_no_model_changed() {
         "the idle deadline ends the turn with no `turn_completed`"
     );
     assert!(next.requests().is_empty());
-    let kinds_now: Vec<String> = log::read(&session.dir)
-        .unwrap()
-        .into_iter()
-        .map(|l| l.kind)
-        .collect();
-    assert!(
-        !kinds_now.contains(&"model_changed".to_owned()),
-        "the switch is dropped"
+    let idle_wait = log::read(&session.dir).unwrap();
+    // The idle deadline ends the wait with no `turn_completed`, and the
+    // switch queued during it is dropped: no `model_changed`.
+    assert_kinds(
+        &idle_wait,
+        &[&[
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "permission_requested",
+        ] as &[&str]],
     );
 }
 
@@ -552,16 +608,27 @@ fn a_shutdown_after_turn_completed_writes_model_changed_and_starts_no_turn() {
     session.cancel.shutdown(143);
     let outcome = session.turn();
     assert_eq!(outcome, None, "no next turn starts");
-    let kinds_now: Vec<String> = log::read(&session.dir)
-        .unwrap()
-        .into_iter()
-        .map(|l| l.kind)
-        .collect();
-    assert!(
-        kinds_now.contains(&"model_changed".to_owned()),
-        "the pending switch is written"
+    let shutdown = log::read(&session.dir).unwrap();
+    assert_kinds(
+        &shutdown,
+        &[&[
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "model_changed",
+        ] as &[&str]],
     );
-    assert_eq!(kinds_now.iter().filter(|k| *k == "turn_started").count(), 1);
+    assert_eq!(
+        shutdown.iter().filter(|l| l.kind == "turn_started").count(),
+        1
+    );
 }
 
 #[test]
@@ -597,12 +664,23 @@ fn close_applies_after_the_closing_turn() {
             .expect("close answered")
             .is_ok()
     );
-    let kinds_now: Vec<String> = log::read(&session.dir)
-        .unwrap()
-        .into_iter()
-        .map(|l| l.kind)
-        .collect();
-    assert!(kinds_now.contains(&"model_changed".to_owned()));
+    let closed = log::read(&session.dir).unwrap();
+    assert_kinds(
+        &closed,
+        &[&[
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "model_changed",
+        ] as &[&str]],
+    );
 }
 
 #[test]
@@ -688,17 +766,20 @@ fn chosen_persists_to_a_model_only_switch_and_queued_switches_see_each_other() {
         prepare_to(Arc::clone(&next), NEW_MODEL, Arc::clone(&recorded)),
         switchable(),
     );
-    let (outcome, _) = run(&mut session, "hi");
+    let (outcome, first) = run(&mut session, "hi");
     assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(&first, &[OPENING, STEP, REPLY, ENDED]);
 
     // Thinking `high` chosen, then a model-only switch: the new model
     // keeps `high`.
     session.inbox.send(model(NEW_MODEL, Some("high"))).unwrap();
-    let (outcome, _) = run(&mut session, "again");
+    let (outcome, second) = run(&mut session, "again");
     assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(&second, &[SWITCHED_OPENING, STEP, REPLY, ENDED]);
     session.inbox.send(model(NEW_MODEL, None)).unwrap();
-    let (outcome, _) = run(&mut session, "third");
+    let (outcome, third) = run(&mut session, "third");
     assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(&third, &[&["turn_started"] as &[&str], STEP, REPLY, ENDED]);
     let requests = next.requests();
     assert_eq!(requests.len(), 2);
     assert_eq!(requests[0].thinking, Some(ThinkingLevel::High));
@@ -718,6 +799,16 @@ fn chosen_persists_to_a_model_only_switch_and_queued_switches_see_each_other() {
     session.inbox.send(delivery("fourth")).unwrap();
     let outcome = session.turn();
     assert_eq!(outcome, Some(TurnOutcome::Completed));
+    let fourth = session.lines();
+    assert_kinds(
+        &fourth,
+        &[
+            &["model_changed", "preamble_built", "turn_started"] as &[&str],
+            STEP,
+            REPLY,
+            ENDED,
+        ],
+    );
     let seen = recorded.lock().unwrap().clone();
     assert_eq!(seen.len(), 2);
     assert_eq!(seen[1], Some(ThinkingLevel::Low));
@@ -769,8 +860,9 @@ fn a_new_model_lacking_the_chosen_level_is_invalid_arguments() {
         .inbox
         .send(support::model_reported(NEW_MODEL, Some("high"), tx))
         .unwrap();
-    let (outcome, _) = run(&mut session, "hi");
+    let (outcome, first) = run(&mut session, "hi");
     assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(&first, &[OPENING, STEP, REPLY, ENDED]);
     // Admitted while idle ahead of the prompt: rejected, so the turn runs on.
     let rejected = rx
         .recv_timeout(DEADLINE)
@@ -813,8 +905,9 @@ fn reviewer_collision_is_invalid_arguments_and_changes_nothing() {
         .inbox
         .send(support::model_reported(NEW_MODEL, None, tx))
         .unwrap();
-    let (outcome, _) = run(&mut session, "hi");
+    let (outcome, first) = run(&mut session, "hi");
     assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(&first, &[OPENING, STEP, REPLY, ENDED]);
     let rejected = rx
         .recv_timeout(DEADLINE)
         .expect("the model is answered")
@@ -823,6 +916,7 @@ fn reviewer_collision_is_invalid_arguments_and_changes_nothing() {
     assert!(rejected.message.contains(NEW_MODEL));
     let (outcome, lines) = run(&mut session, "again");
     assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(&lines, &[&["turn_started"] as &[&str], STEP, REPLY, ENDED]);
     assert!(of_kind(&lines, "model_changed").is_empty());
 }
 
@@ -863,8 +957,9 @@ fn hosted_search_mismatch_is_invalid_arguments_in_both_directions() {
             .inbox
             .send(support::model_reported(NEW_MODEL, None, tx))
             .unwrap();
-        let (outcome, _) = run(&mut session, "hi");
+        let (outcome, first) = run(&mut session, "hi");
         assert_eq!(outcome, Some(TurnOutcome::Completed));
+        assert_kinds(&first, &[OPENING, STEP, REPLY, ENDED]);
         let rejected = rx
             .recv_timeout(DEADLINE)
             .expect("the model is answered")
@@ -907,12 +1002,27 @@ fn two_switches_apply_in_order_with_one_rebuild() {
     );
     let mut session = Session::new(vec![Scripted::text("Old.")], None);
     with_switch(&mut session, prepare, switchable());
-    let (outcome, _) = run(&mut session, "hi");
+    let (outcome, first) = run(&mut session, "hi");
     assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(&first, &[OPENING, STEP, REPLY, ENDED]);
     session.inbox.send(model("fake/mid", None)).unwrap();
     session.inbox.send(model(NEW_MODEL, None)).unwrap();
     let (outcome, lines) = run(&mut session, "again");
     assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(
+        &lines,
+        &[
+            &[
+                "model_changed",
+                "model_changed",
+                "preamble_built",
+                "turn_started",
+            ] as &[&str],
+            STEP,
+            REPLY,
+            ENDED,
+        ],
+    );
     let changed = of_kind(&lines, "model_changed");
     assert_eq!(changed.len(), 2);
     assert_eq!(changed[0].payload["after"]["model"], "fake/mid");
@@ -935,12 +1045,14 @@ fn a_noop_switch_writes_nothing_but_keeps_the_choice() {
         prepare_to(Arc::clone(&next), MODEL, Arc::clone(&recorded)),
         switchable(),
     );
-    let (outcome, _) = run(&mut session, "hi");
+    let (outcome, first) = run(&mut session, "hi");
     assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(&first, &[OPENING, STEP, REPLY, ENDED]);
     // Same model, same thinking, same credential and lifetime: a no-op.
     session.inbox.send(model(MODEL, None)).unwrap();
     let (outcome, lines) = run(&mut session, "again");
     assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(&lines, &[&["turn_started"] as &[&str], STEP, REPLY, ENDED]);
     assert!(of_kind(&lines, "model_changed").is_empty());
     assert!(
         of_kind(&lines, "preamble_built").is_empty(),
@@ -973,11 +1085,21 @@ fn a_notice_is_written_after_model_changed() {
     });
     let mut session = Session::new(vec![Scripted::text("Old.")], None);
     with_switch(&mut session, prepare, switchable());
-    let (outcome, _) = run(&mut session, "hi");
+    let (outcome, first) = run(&mut session, "hi");
     assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(&first, &[OPENING, STEP, REPLY, ENDED]);
     session.inbox.send(model(NEW_MODEL, None)).unwrap();
     let (outcome, lines) = run(&mut session, "again");
     assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(
+        &lines,
+        &[
+            &["model_changed", "notice", "preamble_built", "turn_started"] as &[&str],
+            STEP,
+            REPLY,
+            ENDED,
+        ],
+    );
     let kinds_now = kinds(&lines);
     let changed_at = kinds_now
         .iter()
@@ -1023,11 +1145,13 @@ fn a_switch_replaces_the_reviewer() {
         vec![tool as Arc<dyn contract::tool::Tool>],
     );
     with_switch(&mut session, prepare, switchable());
-    let (outcome, _) = run(&mut session, "hi");
+    let (outcome, first) = run(&mut session, "hi");
     assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(&first, &[OPENING, STEP, REPLY, ENDED]);
     session.inbox.send(model(NEW_MODEL, None)).unwrap();
     let (outcome, lines) = run(&mut session, "again");
     assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(&lines, &[SWITCHED_OPENING, STEP, REPLY, ENDED]);
     assert_eq!(of_kind(&lines, "model_changed").len(), 1);
     assert_eq!(new_review.requests().len(), 0, "no review ran yet");
 }
@@ -1251,6 +1375,40 @@ fn resume_interleaving_holds_arrival_order() {
     let outcome = looped.turn().unwrap();
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     let lines = log::read(&dir).unwrap();
+    assert_kinds(
+        &lines,
+        &[&[
+            "session_started",
+            "turn_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "permission_requested",
+            "fiber_started",
+            "fiber_exited",
+            "preamble_built",
+            "opening_message",
+            "permission_requested",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "model_changed",
+            "model_changed",
+            "preamble_built",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ] as &[&str]],
+    );
     let changed: Vec<&contract::Envelope> =
         lines.iter().filter(|l| l.kind == "model_changed").collect();
     assert_eq!(changed.len(), 2);

@@ -18,6 +18,8 @@ use crate::{Error, Loop};
 /// What a prepared switch carries: everything applying it replaces.
 pub struct Prepared {
     /// The new model's provider.
+    /// debt: only the session's and the reviewer's providers (#1094);
+    /// #1094 lifts it after #649 merges.
     pub provider: Arc<dyn contract::provider::Provider>,
     /// The new model, and how its calls are priced.
     pub model: crate::Model,
@@ -26,6 +28,8 @@ pub struct Prepared {
     /// The session's explicit choice after this switch.
     pub chosen: Option<ThinkingLevel>,
     /// The credential label every request uses.
+    /// debt: only a credential read at startup; no command runs for a
+    /// switch (#1094). #1094 lifts it after #649 merges.
     pub credential: Option<String>,
     /// The prompt-cache lifetime.
     pub cache_lifetime: contract::events::CacheLifetime,
@@ -106,10 +110,11 @@ impl Loop {
             reject(ack, ErrorCode::Closing, CLOSING);
             return Ok(());
         }
-        let Some((prepare, switchable)) = self.switcher.clone() else {
+        let Some((prepare, switchable)) = self.switcher.as_ref() else {
             reject(ack, ErrorCode::InvalidArguments, NO_SWITCH);
             return Ok(());
         };
+        let prepare = Arc::clone(prepare);
         let chosen = self
             .pending
             .last()
@@ -135,6 +140,8 @@ impl Loop {
             );
             return Ok(());
         }
+        // debt: the switch keeps the session's hosted search (#1094);
+        // #1094 lifts it after #649 merges.
         if let Some(started) = &switchable.web_search
             && prepared.web_search.as_ref() != Some(started)
         {
@@ -188,7 +195,7 @@ impl Loop {
                 &mut self.changes.had,
                 &mut self.handoff.carry,
             )?;
-            if let Some(notice) = prepared.notice.clone() {
+            if let Some(notice) = prepared.notice {
                 crate::util::write(
                     &self.log,
                     &mut self.conversation,

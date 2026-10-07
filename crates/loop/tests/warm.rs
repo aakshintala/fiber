@@ -780,3 +780,104 @@ fn a_switch_while_warming_sends_no_refresh_and_restarts_idle_from_the_switch() {
         "the switch writes one line and no refresh usage"
     );
 }
+
+#[test]
+fn a_during_turn_switch_followed_by_a_turn_keeps_warming_the_new_cache() {
+    use support::model as model_delivery;
+
+    let next: Arc<ScriptedProvider> = Arc::new(ScriptedProvider::new(vec![
+        Scripted::text("again."),
+        refresh_reply(),
+        refresh_reply(),
+    ]));
+    let for_prepare = Arc::clone(&next);
+    let prepare: r#loop::Prepare = Arc::new(
+        move |args: &contract::commands::ModelArgs, chosen: Option<contract::ThinkingLevel>| {
+            let _ = chosen;
+            Ok(r#loop::Prepared {
+                provider: Arc::clone(&for_prepare) as Arc<dyn contract::provider::Provider>,
+                model: r#loop::Model {
+                    reference: args.model.clone(),
+                    cost: None,
+                    subscription: false,
+                },
+                thinking: None,
+                chosen: None,
+                credential: Some("work".into()),
+                cache_lifetime: CacheLifetime::FiveMinutes,
+                context_window: None,
+                addendum: None,
+                handoff: r#loop::HandoffSettings::default(),
+                reviewer: Err(contract::shapes::Failure {
+                    code: ErrorCode::NoModel,
+                    message: r#loop::NO_MODEL_MESSAGE.into(),
+                    retry_after_ms: None,
+                    provider: None,
+                }),
+                web_search: None,
+                notice: None,
+            })
+        },
+    );
+    // The first turn's call sends the switch while it runs: it waits in
+    // `pending` for the next turn boundary.
+    let mut session = Session::with_tools_injecting(
+        vec![Scripted::text("ok.")],
+        vec![model_delivery("fake/model-2", None)],
+        Vec::new(),
+    );
+    {
+        let looped = session.looped.take().unwrap().switcher(
+            prepare,
+            r#loop::Switchable {
+                chosen: None,
+                web_search: None,
+            },
+        );
+        session.looped = Some(looped);
+    }
+    arm(&mut session, MINUTE, Some(2));
+    let start = session.clock.now();
+    session.inbox.send(delivery("hi")).unwrap();
+    let finished = spawn_run(&mut session);
+    // The next turn's top applies the pending switch, clearing the first
+    // cache: no refresh, idle from the switch.
+    let idle_after_switch = start + MINUTE;
+    parked(
+        &session.clock,
+        idle_after_switch,
+        "idle counts from the switch",
+    );
+    // Another turn sends on the new model: its cache warms from that send,
+    // not from the switch before it.
+    session.inbox.send(delivery("again")).unwrap();
+    let first = start + Duration::from_secs(270);
+    parked(&session.clock, first, "the new cache's first refresh");
+    advance_to(&session, first);
+    let second = first + Duration::from_secs(270);
+    parked(&session.clock, second, "the second counts from the first");
+    advance_to(&session, second);
+    let exit = start + Duration::from_secs(600) + MINUTE;
+    parked(&session.clock, exit, "idle counts from the second cap");
+    advance_to(&session, exit);
+    ended(&finished);
+    // One step on each provider, then two refreshes of the second step,
+    // capped at one token.
+    assert_eq!(session.requests().len(), 1);
+    let requests = next.requests();
+    assert_eq!(requests.len(), 3);
+    assert_eq!(requests[0].max_output_tokens, None);
+    assert_eq!(requests[1], capped(&requests[0]));
+    assert_eq!(requests[2], capped(&requests[0]));
+    let after = after_turns(&session);
+    assert_eq!(
+        after.iter().map(|l| l.kind.as_str()).collect::<Vec<_>>(),
+        vec!["usage_recorded", "usage_recorded"],
+        "two refreshes and nothing else after the last turn"
+    );
+    let lines = log::read(&session.dir).unwrap();
+    let changed: Vec<&contract::Envelope> =
+        lines.iter().filter(|l| l.kind == "model_changed").collect();
+    assert_eq!(changed.len(), 1);
+    assert_eq!(changed[0].payload["after"]["model"], "fake/model-2");
+}
