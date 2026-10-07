@@ -10,7 +10,9 @@
 mod test_dir;
 
 use std::io::Write;
-use std::process::{Command, Output, Stdio};
+use std::os::unix::process::CommandExt as _;
+use std::process::{Child, Command, Output, Stdio};
+use std::time::Duration;
 
 use test_dir::TestDir;
 
@@ -38,39 +40,90 @@ const CODE_QUALITY: &str = "# Code quality
 | none yet | | |
 ";
 
+/// How long a test waits for one child (`git` or `xtask`) to exit, in real
+/// time.
+///
+/// The worst test, `select_counts_untracked_and_committed_changes`, waits on
+/// 9 children (`workspace()`'s 3 `git` + 3 `git` + 3 `xtask`), plus one
+/// bounded reap after the first miss, then stops: (9 + 1) x 5 s = 50 s <=
+/// 60 s, half of nextest's 120 s kill. A passing run never waits on it; it
+/// only bounds a hang.
+const CHILD_WITHIN: Duration = Duration::from_secs(5);
+
+#[allow(
+    clippy::panic,
+    reason = "a child that cannot run, or one still running past its deadline, fails the test naming the wait"
+)]
+/// Runs a child's stdin write and `wait_with_output` on a thread and returns
+/// its output. A thread writes `stdin` to the child's stdin (when
+/// non-empty; the handle is dropped either way), then sends
+/// `wait_with_output()`; the test thread receives with a deadline. On a
+/// miss it kills the child's own process group, receives once more under
+/// the bound to reap, then fails naming the wait (`docs/testing.md`,
+/// "Waits and timeouts"). The child leads its own group
+/// (`process_group(0)` at spawn), so the kill never reaches the test's.
+fn finished(what: &str, mut child: Child, stdin: &[u8]) -> Output {
+    let pid = child.id();
+    let stdin = stdin.to_vec();
+    let (done, waited) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let outcome = (|| {
+            if stdin.is_empty() {
+                drop(child.stdin.take());
+            } else if let Some(mut input) = child.stdin.take() {
+                input.write_all(&stdin)?;
+            }
+            child.wait_with_output()
+        })();
+        done.send(outcome).unwrap_or(());
+    });
+    match waited.recv_timeout(CHILD_WITHIN) {
+        Ok(outcome) => match outcome {
+            Ok(output) => output,
+            Err(err) => panic!("{what} has no output: {err}"),
+        },
+        Err(_) => {
+            match fakes::kill_group(pid, "KILL") {
+                Ok(_) | Err(_) => {}
+            }
+            let reaped = waited.recv_timeout(CHILD_WITHIN).is_ok();
+            panic!("waited {CHILD_WITHIN:?} for {what} (reaped: {reaped})");
+        }
+    }
+}
+
 fn xtask(dir: &TestDir, args: &[&str], env: &[(&str, &str)], stdin: &str) -> (i32, String) {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_xtask"))
+    let child = Command::new(env!("CARGO_BIN_EXE_xtask"))
         .args(args)
         .envs(env.iter().copied())
         .current_dir(dir.path())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .process_group(0)
         .spawn()
-        .unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(stdin.as_bytes())
         .unwrap();
     let Output {
         status,
         stdout,
         stderr,
-    } = child.wait_with_output().unwrap();
+    } = finished(&format!("xtask {args:?}"), child, stdin.as_bytes());
     let text = String::from_utf8(stdout).unwrap() + &String::from_utf8(stderr).unwrap();
     (status.code().unwrap(), text)
 }
 
 fn git(dir: &TestDir, args: &[&str]) {
-    let status = Command::new("git")
+    let child = Command::new("git")
         .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
         .args(args)
         .current_dir(dir.path())
-        .output()
-        .unwrap()
-        .status;
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let status = finished(&format!("git {args:?}"), child, &[]).status;
     assert!(status.success(), "git {args:?}");
 }
 
