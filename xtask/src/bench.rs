@@ -57,7 +57,7 @@ const MEASURED: &[(&str, Check)] = &[
     (
         "Threads, idle headless session",
         Check::Exact {
-            pin: "5, plus 2 per client, plus 1 for `fiber ask`'s printer, plus 1 per Lua extension in use",
+            pin: "5, plus 2 per client, plus 1 per Lua extension in use",
             rule: Rule::Threads("session_threads"),
         },
     ),

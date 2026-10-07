@@ -11,7 +11,7 @@ const DOC: &str = concat!(
     "| Session, busy or resumed | 24 MiB peak RSS | Linux x86_64 | from components |\n",
     "| `web_fetch` converting a 10 MiB HTML page, the download cap | within the busy session's 24 MiB peak RSS | Linux x86_64 | from components |\n",
     "| Idle CPU, session and terminal | zero context switches in the idle window, on every thread | Linux x86_64 | exact |\n",
-    "| Threads, idle headless session | 5, plus 2 per client, plus 1 for `fiber ask`'s printer, plus 1 per Lua extension in use | Linux x86_64 | exact |\n",
+    "| Threads, idle headless session | 5, plus 2 per client, plus 1 per Lua extension in use | Linux x86_64 | exact |\n",
     "| fsyncs | 2 per model request, 2 per tool call | Linux x86_64 | exact |\n",
     "| Log bytes, 429-call turn | the turn's content plus 1 KiB per tool call | Linux x86_64 | exact |\n",
     "| Session start, the internal session command to its first line, no hub | 20 ms | Linux x86_64 | picked |\n",
