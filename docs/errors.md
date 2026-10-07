@@ -200,7 +200,7 @@ the exception.
   one of the quota `ErrorInfo` reasons above.
 
 Authentication is checked first: a 401, or a 400 with an `API_KEY_INVALID`
-`ErrorInfo`, keeps `authentication_failed`. Any other match above is
+reason, keeps `authentication_failed`. Any other match above is
 `quota_exceeded`, whatever the status: it wins over a 429, a 5xx, a 404 and
 an unknown-model or overflow shape, since only paying or raising a limit
 fixes it.
