@@ -2485,3 +2485,97 @@ fn a_handoff_rebuilds_the_section_from_its_current_files() {
     assert!(text.contains("Section v2."), "{text}");
     assert!(!text.contains("Section v1."), "{text}");
 }
+
+#[test]
+fn a_tool_handoff_in_a_step_that_already_handed_off_is_an_ordinary_result() {
+    // The check hands off automatically, then the first reply in the new
+    // context calls a tool that sets `control.handoff`: at most one handoff
+    // runs per step, so the call's result stays as any result does.
+    let mut session = tool_session(
+        vec![
+            called(TRIGGER - 1),
+            Scripted::text("The note."),
+            calling(&["wrapup"], 50),
+            said("Done.", 50),
+        ],
+        vec![weather(), wrapping("wrapup", "Tool note.")],
+    );
+
+    let (outcome, lines) = run(&mut session, "hi");
+    assert_kinds(
+        &lines,
+        &[
+            OPENING,
+            STEP,
+            CALL_BODY,
+            STEP,
+            HANDED_OFF,
+            &call_lines(1),
+            STEP,
+            REPLY,
+            ENDED,
+        ],
+    );
+
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_eq!(of_kind(&lines, "handoff_completed").len(), 1);
+    let wrapup = of_kind(&lines, "tool_call_requested")[1]
+        .action_id
+        .as_ref()
+        .unwrap()
+        .0
+        .clone();
+    let requests = session.requests();
+    assert_eq!(requests.len(), 4);
+    // The context did not restart from the tool's note: the call and its
+    // empty result follow the automatic handoff's note.
+    let next = &requests[3].conversation;
+    assert_eq!(next.len(), 5);
+    assert!(is_opening(&next[0]));
+    assert_eq!(next[1], user("hi"));
+    assert_eq!(next[2], user("The note."));
+    assert!(matches!(&next[3], Input::ToolCall { action_id, .. } if action_id.0 == wrapup));
+    assert!(matches!(
+        &next[4],
+        Input::ToolResult { action_id, text, .. } if action_id.0 == wrapup && text.is_empty()
+    ));
+    assert_eq!(rebuild(&lines, MODEL).unwrap()[..5], next[..]);
+}
+
+#[test]
+fn a_tool_may_hand_off_in_the_step_after_an_automatic_handoff() {
+    let mut session = tool_session(
+        vec![
+            called(TRIGGER - 1),
+            Scripted::text("The note."),
+            calling(&["get_weather"], 50),
+            calling(&["wrapup"], 60),
+            said("Done.", 50),
+        ],
+        vec![weather(), wrapping("wrapup", "Tool note.")],
+    );
+
+    let (outcome, lines) = run(&mut session, "hi");
+    assert_kinds(
+        &lines,
+        &[
+            OPENING,
+            STEP,
+            CALL_BODY,
+            STEP,
+            HANDED_OFF,
+            &call_lines(1),
+            STEP,
+            &call_lines(1),
+            &["handoff_completed", "opening_message"],
+            STEP,
+            REPLY,
+            ENDED,
+        ],
+    );
+
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    let next = &session.requests()[4].conversation;
+    assert_eq!(next.len(), 3);
+    assert_eq!(next[2], user("Tool note."));
+}
