@@ -10,7 +10,7 @@
 
 use std::fs;
 use std::io::Write;
-use std::os::unix::net::UnixListener;
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -224,5 +224,155 @@ fn a_hello_on_another_schema_version_is_refused_naming_both() {
             contract::SCHEMA_VERSION + 1,
             contract::SCHEMA_VERSION,
         ),
+    );
+}
+
+/// Runs `connect_within` on a thread with a starter that must not run.
+fn run_connect_within(home: PathBuf, hello_within: Duration) -> io::Result<Hub> {
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::Builder::new()
+        .name("hub-test-connect-within".to_owned())
+        .spawn(move || {
+            let clock = fakes::clock::FakeClock::new();
+            let mut start = || -> io::Result<()> { panic!("a hub that accepts is not started") };
+            let hub = connect_within(&home, &mut start, &*clock, hello_within);
+            done_tx.send(hub).unwrap_or(());
+        })
+        .unwrap();
+    done_rx
+        .recv_timeout(DEADLINE)
+        .expect("connect_within answers before its deadline")
+}
+
+#[test]
+fn a_hub_that_accepts_and_never_speaks_times_out_naming_the_socket() {
+    let temp = Temp::new();
+    let socket = temp.run().join("hub");
+    let listener = UnixListener::bind(&socket).unwrap();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    thread::spawn(move || {
+        let (silent, _) = listener.accept().unwrap();
+        // Held open, silent, until the test is done.
+        release_rx.recv_timeout(DEADLINE).unwrap_or(());
+        drop(silent);
+    });
+    let error = run_connect_within(temp.dir.clone(), Duration::from_millis(10))
+        .expect_err("a silent hub times out");
+    assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "the hub at {} accepted but did not say hub_hello in 0.01 s",
+            socket.display()
+        )
+    );
+    release_tx.send(()).unwrap_or(());
+}
+
+#[test]
+fn a_hello_in_two_parts_inside_the_deadline_connects() {
+    let temp = Temp::new();
+    let listener = UnixListener::bind(temp.run().join("hub")).unwrap();
+    thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let line = hello_line();
+        let (first, second) = line.split_at(10);
+        stream.write_all(first).unwrap();
+        stream.flush().unwrap();
+        stream.write_all(second).unwrap();
+        stream.write_all(b"\n").unwrap();
+    });
+    let hub = run_connect_within(temp.dir.clone(), DEADLINE).unwrap();
+    assert_eq!(hub.1.kind, "hub_hello");
+}
+
+#[test]
+fn a_hello_then_close_still_connects() {
+    let temp = Temp::new();
+    let listener = UnixListener::bind(temp.run().join("hub")).unwrap();
+    thread::spawn(move || serve_once(listener, &hello_line()));
+    let hub = run_connect_within(temp.dir.clone(), DEADLINE).unwrap();
+    assert_eq!(hub.1.kind, "hub_hello");
+}
+
+#[test]
+fn a_hello_from_a_peer_that_already_closed_is_read() {
+    // Setting or clearing the read timeout on a socket whose peer has
+    // closed fails on macOS, while the buffered hello stays readable.
+    let (mut peer, reader) = UnixStream::pair().unwrap();
+    peer.write_all(&hello_line()).unwrap();
+    peer.write_all(b"\n").unwrap();
+    drop(peer);
+    let clock = fakes::clock::FakeClock::new();
+    let got = read_hello_with(reader, Path::new("run/hub"), DEADLINE, &*clock, &mut || {});
+    let Ok((stream, hello)) = got else {
+        panic!("the buffered hello is read");
+    };
+    assert_eq!(hello.kind, "hub_hello");
+    assert_eq!(stream.read_timeout().unwrap(), None);
+}
+
+#[test]
+fn the_connected_stream_has_no_read_timeout() {
+    let temp = Temp::new();
+    let listener = UnixListener::bind(temp.run().join("hub")).unwrap();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream.write_all(&hello_line()).unwrap();
+        stream.write_all(b"\n").unwrap();
+        release_rx.recv_timeout(DEADLINE).unwrap_or(());
+    });
+    let (stream, hello) = run_connect_within(temp.dir.clone(), DEADLINE).unwrap();
+    assert_eq!(hello.kind, "hub_hello");
+    assert_eq!(stream.read_timeout().unwrap(), None);
+    release_tx.send(()).unwrap_or(());
+}
+
+#[test]
+fn a_trickling_hub_cannot_extend_the_handshake_deadline() {
+    let (mut peer, reader) = UnixStream::pair().unwrap();
+    let clock = fakes::clock::FakeClock::new();
+    let (read_tx, read_rx) = mpsc::channel();
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::Builder::new()
+        .name("hub-test-trickle".to_owned())
+        .spawn({
+            let clock = Arc::clone(&clock);
+            move || {
+                let mut before_read = || read_tx.send(()).unwrap_or(());
+                let got = read_hello_with(
+                    reader,
+                    Path::new("run/hub"),
+                    DEADLINE,
+                    &*clock,
+                    &mut before_read,
+                );
+                done_tx.send(got).unwrap_or(());
+            }
+        })
+        .unwrap();
+    let line = hello_line();
+    peer.write_all(&line[..1]).unwrap();
+    for n in 1..=2 {
+        read_rx
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap_or_else(|_| panic!("the reader is about to read for the {n}th time"));
+    }
+    // The reader read the first byte and checked the time left for the
+    // next: at the deadline now, with no time left, so the next byte ends
+    // the handshake.
+    clock.advance(DEADLINE);
+    peer.write_all(&line[1..2]).unwrap();
+    let got = done_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the reader returns once the deadline has passed");
+    let Err(Poll::Failed(error)) = got else {
+        panic!("a trickle past the deadline fails");
+    };
+    assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+    assert!(
+        read_rx.try_recv().is_err(),
+        "no read after the deadline passed"
     );
 }
