@@ -181,12 +181,12 @@ fn in_group(pid: u32, group: u32) -> bool {
 }
 
 fn mkfifo(path: &Path) {
-    let status = Command::new("mkfifo").arg(path).status().unwrap();
-    assert!(
-        status.success(),
-        "mkfifo {} exited {status}",
-        path.display()
-    );
+    let path = path.to_path_buf();
+    let shown = path.display().to_string();
+    let status = within("mkfifo to exit", DEADLINE, move || {
+        Command::new("mkfifo").arg(&path).status().unwrap()
+    });
+    assert!(status.success(), "mkfifo {shown} exited {status}");
 }
 
 #[test]
