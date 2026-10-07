@@ -19,6 +19,7 @@ use crate::approvals::{self, Panel, PanelKey, Queue};
 use crate::input::Draft;
 use crate::keys::Key;
 use crate::link::Line;
+use crate::mouse::TargetId;
 use crate::shell;
 use crate::turn::{Fold, Row, Turn};
 
@@ -228,6 +229,18 @@ impl App {
                 Effect::None
             }
             Key::AltA => self.open_first(),
+        }
+    }
+
+    /// Handles a click on `target` (`docs/tui.md`, "Bindings"): the badge
+    /// reopens the approval queue, "↓ New messages below" jumps to the end.
+    pub(crate) fn on_click(&mut self, target: TargetId) -> Effect {
+        match target {
+            TargetId::Badge => self.open_first(),
+            TargetId::NewBelow => {
+                self.follow();
+                Effect::None
+            }
         }
     }
 

@@ -17,7 +17,7 @@ const HEIGHT: u16 = 12;
 fn screen(app: &App) -> String {
     let area = Rect::new(0, 0, WIDTH, HEIGHT);
     let mut buf = Buffer::empty(area);
-    render(app, area, &mut buf);
+    render(app, area, &mut buf, None);
     text(&buf)
 }
 
@@ -268,7 +268,7 @@ fn sized(app: &mut App, width: u16, height: u16) -> String {
     app.set_size(width, height);
     let area = Rect::new(0, 0, width, height);
     let mut buf = Buffer::empty(area);
-    render(app, area, &mut buf);
+    render(app, area, &mut buf, None);
     text(&buf)
 }
 
@@ -314,7 +314,7 @@ fn wide(app: &mut App) -> (String, Buffer) {
     app.set_size(80, HEIGHT);
     let area = Rect::new(0, 0, 80, HEIGHT);
     let mut buf = Buffer::empty(area);
-    render(app, area, &mut buf);
+    render(app, area, &mut buf, None);
     (text(&buf), buf)
 }
 
@@ -785,7 +785,7 @@ fn styles_reach_the_screen() {
     tool_turn(&mut app);
     let area = Rect::new(0, 0, WIDTH, HEIGHT);
     let mut buf = Buffer::empty(area);
-    render(&app, area, &mut buf);
+    render(&app, area, &mut buf, None);
     let rows: Vec<String> = text(&buf).lines().map(str::to_owned).collect();
     let row = |start: &str| {
         rows.iter()
@@ -858,4 +858,98 @@ fn file_panel() {
     let found = ["src/main.rs", "crates/tui/src/main.rs"].map(str::to_owned);
     app.on_files(app.generation(), Ok(found.to_vec()));
     insta::assert_snapshot!("file_panel", sized(&mut app, 80, 24));
+}
+
+/// Renders `app` at `width` by `height` with the pointer at `pointer`,
+/// returning the buffer and the click targets.
+fn pointed(
+    app: &mut App,
+    width: u16,
+    height: u16,
+    pointer: Option<(u16, u16)>,
+) -> (Buffer, Vec<crate::mouse::Target>) {
+    app.set_size(width, height);
+    let area = Rect::new(0, 0, width, height);
+    let mut buf = Buffer::empty(area);
+    let targets = render(app, area, &mut buf, pointer);
+    (buf, targets)
+}
+
+/// An app with one request put aside, so the badge shows.
+fn badged() -> App {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = asked();
+    app.on_line(standing(S_A, "a_1", "r_1"));
+    app.on_key(Key::Esc, now);
+    app
+}
+
+#[test]
+fn the_badge_is_a_target_over_the_cells_it_drew() {
+    use crate::mouse::{Target, TargetId};
+    let mut app = badged();
+    // The badge's 30 characters on the row above the input line.
+    let (_, targets) = pointed(&mut app, 40, 12, None);
+    let badge = Target {
+        id: TargetId::Badge,
+        rect: Rect::new(0, 10, 30, 1),
+    };
+    assert_eq!(targets, vec![badge]);
+    // Narrower than its text, it takes the whole row.
+    let (_, targets) = pointed(&mut app, 20, 12, None);
+    assert_eq!(targets.first().map(|target| target.rect.width), Some(20));
+    // A screen with no row for the badge draws no target.
+    let (_, targets) = pointed(&mut app, 40, 1, None);
+    assert!(targets.is_empty());
+}
+
+#[test]
+fn new_messages_below_is_a_target_over_the_cells_it_drew() {
+    use crate::mouse::{Target, TargetId};
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = empty();
+    attach(&mut app, S_A);
+    app.on_line(turn_started(S_A, "one"));
+    app.on_key(Key::PageUp, now);
+    app.on_line(delta(S_A, "a_1", "streamed"));
+    // "↓ New messages below" is 20 cells, centred on the row above the
+    // input line.
+    let (_, targets) = pointed(&mut app, 30, 2, None);
+    let below = Target {
+        id: TargetId::NewBelow,
+        rect: Rect::new(5, 0, 20, 1),
+    };
+    assert_eq!(targets, vec![below]);
+    let (_, targets) = pointed(&mut app, 10, 2, None);
+    assert_eq!(
+        targets.first().map(|target| target.rect),
+        Some(Rect::new(0, 0, 10, 1))
+    );
+    // No conversation row, no overlay and no target.
+    let (_, targets) = pointed(&mut app, 30, 1, None);
+    assert!(targets.is_empty());
+}
+
+#[test]
+fn the_target_under_the_pointer_gets_the_hover_background_only() {
+    let mut app = badged();
+    let (plain, _) = pointed(&mut app, 40, 12, None);
+    let (hovered, _) = pointed(&mut app, 40, 12, Some((7, 10)));
+    for y in 0..12 {
+        for x in 0..40 {
+            let (Some(before), Some(after)) = (plain.cell((x, y)), hovered.cell((x, y))) else {
+                panic!("no cell at {x},{y}");
+            };
+            let mut expected = before.clone();
+            if y == 10 && x < 30 {
+                expected.bg = super::HOVER_TINT.bg.unwrap_or_default();
+            }
+            assert_eq!(after, &expected, "cell {x},{y}");
+        }
+    }
+    // Off every target, the frame is the one with no pointer.
+    for pointer in [(30, 10), (0, 11), (0, 9), (39, 0)] {
+        let (off, _) = pointed(&mut app, 40, 12, Some(pointer));
+        assert_eq!(off, plain, "{pointer:?}");
+    }
 }

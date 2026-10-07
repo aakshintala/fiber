@@ -1,0 +1,198 @@
+//! Tests for the loop's mouse handling: clicks on the targets drawn, and
+//! hover's bytes.
+
+use super::Input;
+use super::tests::{Sink, feed, new_loop, offering};
+use crate::link::Line;
+use ratatui::backend::{Backend, ClearType, CrosstermBackend, TestBackend, WindowSize};
+use ratatui::buffer::Cell;
+use ratatui::layout::{Position, Size};
+
+/// A left click at 0-based `col`, `row`: the press and the release.
+fn click(col: u16, row: u16) -> Input {
+    let (col, row) = (col + 1, row + 1);
+    Input::Bytes(format!("\x1b[<0;{col};{row}M\x1b[<0;{col};{row}m").into_bytes())
+}
+
+/// A motion report at 0-based `col`, `row`.
+fn motion(col: u16, row: u16) -> Input {
+    Input::Bytes(format!("\x1b[<35;{};{}M", col + 1, row + 1).into_bytes())
+}
+
+/// Esc, which puts the request shown aside, so the badge shows on row 10
+/// of the 60x12 screen, at columns 0 to 29.
+fn esc() -> Input {
+    Input::Bytes(b"\x1b".to_vec())
+}
+
+#[test]
+fn a_click_on_the_badge_reopens_the_approval_queue() {
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    feed(&mut lp, vec![offering("r_1"), esc()]);
+    assert!(lp.app.panel().is_none());
+    // A click beside the badge does nothing.
+    feed(&mut lp, vec![click(30, 10)]);
+    assert!(lp.app.panel().is_none());
+    feed(&mut lp, vec![click(29, 10)]);
+    assert!(lp.app.panel().is_some());
+}
+
+#[test]
+fn a_press_and_release_split_across_reads_still_click() {
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    feed(&mut lp, vec![offering("r_1"), esc()]);
+    feed(
+        &mut lp,
+        vec![
+            Input::Bytes(b"\x1b[<0;1;11M".to_vec()),
+            Input::Bytes(b"\x1b[<0;2;11m".to_vec()),
+        ],
+    );
+    assert!(lp.app.panel().is_some());
+}
+
+/// One envelope of session `s_aaaaaaaaaaaaaaaa`.
+fn session(kind: &str, payload: serde_json::Value, action: Option<&str>) -> Input {
+    Input::Hub(Line::Session(contract::Envelope {
+        kind: kind.to_owned(),
+        session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: action.map(|id| contract::ActionId(id.to_owned())),
+        seq: None,
+        payload: payload.as_object().cloned().unwrap_or_default(),
+    }))
+}
+
+#[test]
+fn a_click_on_new_messages_below_jumps_to_the_end() {
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    lp.app
+        .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    let started = serde_json::json!({"input": [{"type": "message", "source": "driver",
+        "content": [{"type": "text", "text": "hi"}]}]});
+    feed(
+        &mut lp,
+        vec![
+            session("turn_started", started, None),
+            Input::Bytes(b"\x1b[5~".to_vec()),
+            session(
+                "assistant_message_delta",
+                serde_json::json!({"text": "Hello."}),
+                Some("a_1"),
+            ),
+        ],
+    );
+    assert!(lp.app.has_new());
+    // The overlay's 20 cells are centred on row 10: columns 20 to 39.
+    feed(&mut lp, vec![click(19, 10)]);
+    assert!(lp.app.has_new());
+    feed(&mut lp, vec![click(39, 10)]);
+    assert!(!lp.app.has_new());
+    assert_eq!(lp.app.top(), None);
+}
+
+#[test]
+fn hover_writes_only_when_the_target_under_the_pointer_changes() {
+    let sink = Sink::default();
+    let (mut lp, _) = new_loop(CrosstermBackend::new(sink.clone()), None);
+    feed(&mut lp, vec![offering("r_1"), esc()]);
+    let mut written = sink.len();
+    let mut wrote = |lp: &mut super::Loop<_>, input: Input| {
+        feed(lp, vec![input]);
+        let now = sink.len();
+        let bytes = now - written;
+        written = now;
+        bytes
+    };
+    assert_eq!(wrote(&mut lp, motion(40, 5)), 0, "off every target");
+    assert!(wrote(&mut lp, motion(2, 10)) > 0, "onto the badge");
+    assert_eq!(wrote(&mut lp, motion(2, 10)), 0, "the same cell");
+    assert_eq!(wrote(&mut lp, motion(29, 10)), 0, "the same target");
+    assert!(wrote(&mut lp, motion(30, 10)) > 0, "off the badge");
+    assert_eq!(wrote(&mut lp, motion(31, 10)), 0, "still off");
+}
+
+#[test]
+fn hover_redraws_only_the_targets_row() {
+    let (mut lp, _) = new_loop(Cells::default(), None);
+    feed(&mut lp, vec![offering("r_1"), esc()]);
+    lp.screen.terminal.backend_mut().inner.drawn.clear();
+    feed(&mut lp, vec![motion(2, 10)]);
+    let drawn = &lp.screen.terminal.backend().inner.drawn;
+    assert_eq!(drawn.len(), 30);
+    assert!(drawn.iter().all(|&(x, y)| y == 10 && x < 30), "{drawn:?}");
+}
+
+#[test]
+fn with_hover_off_motion_writes_nothing_and_clicks_still_work() {
+    let sink = Sink::default();
+    let (mut lp, _) = new_loop(CrosstermBackend::new(sink.clone()), None);
+    lp.hover = false;
+    feed(&mut lp, vec![offering("r_1"), esc()]);
+    let before = sink.len();
+    feed(&mut lp, vec![motion(2, 10)]);
+    assert_eq!(sink.len(), before);
+    assert_eq!(lp.pointer.at, None);
+    feed(&mut lp, vec![click(2, 10)]);
+    assert!(lp.app.panel().is_some());
+}
+
+/// A test backend that records each cell it is asked to draw.
+#[derive(Default)]
+struct Cells {
+    /// Every cell drawn, as column and row.
+    drawn: Vec<(u16, u16)>,
+}
+
+impl Backend for Cells {
+    type Error = std::convert::Infallible;
+
+    fn draw<'a, I>(&mut self, content: I) -> Result<(), Self::Error>
+    where
+        I: Iterator<Item = (u16, u16, &'a Cell)>,
+    {
+        self.drawn.extend(content.map(|(x, y, _)| (x, y)));
+        Ok(())
+    }
+
+    fn hide_cursor(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    fn show_cursor(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    fn get_cursor_position(&mut self) -> Result<Position, Self::Error> {
+        Ok(Position::new(0, 0))
+    }
+
+    fn set_cursor_position<P: Into<Position>>(&mut self, _: P) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    fn clear(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    fn clear_region(&mut self, _: ClearType) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    fn size(&self) -> Result<Size, Self::Error> {
+        Ok(Size::new(60, 12))
+    }
+
+    fn window_size(&mut self) -> Result<WindowSize, Self::Error> {
+        Ok(WindowSize {
+            columns_rows: Size::new(60, 12),
+            pixels: Size::default(),
+        })
+    }
+
+    fn flush(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
+}
