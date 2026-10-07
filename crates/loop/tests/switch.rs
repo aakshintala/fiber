@@ -613,7 +613,8 @@ fn a_shutdown_after_turn_completed_writes_model_changed_and_starts_no_turn() {
     session.inbox.send(delivery("hi")).unwrap();
     let outcome = session.turn();
     assert_eq!(outcome, Some(TurnOutcome::Completed));
-    let _ = session.lines();
+    let first = session.lines();
+    assert_kinds(&first, &[OPENING, STEP, REPLY, ENDED]);
     // A shutdown requested with the switch pending.
     session.cancel.shutdown(143);
     let outcome = session.turn();
@@ -658,7 +659,8 @@ fn close_applies_after_the_closing_turn() {
     session.inbox.send(delivery("hi")).unwrap();
     let outcome = session.turn();
     assert_eq!(outcome, Some(TurnOutcome::Completed));
-    let _ = session.lines();
+    let first = session.lines();
+    assert_kinds(&first, &[OPENING, STEP, REPLY, ENDED]);
     let (close_tx, close_rx) = mpsc::channel::<Answer>();
     session
         .inbox
