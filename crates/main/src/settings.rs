@@ -4,7 +4,7 @@
 use std::time::Duration;
 
 use config::{Config, ModelData};
-use contract::events::CacheLifetime;
+use contract::events::{CacheLifetime, Notice};
 use contract::shapes::Failure;
 use contract::{ErrorCode, ThinkingLevel};
 use serde_json::Value;
@@ -114,6 +114,7 @@ pub(crate) fn thinking(
     config: &Config,
     model: &ModelData,
     reference: &str,
+    _notices: &mut Vec<Notice>,
 ) -> Result<Option<ThinkingLevel>, Failure> {
     let configured = config
         .get("thinking", Some(reference))

@@ -2,8 +2,10 @@
 //! "Thinking"): each source beats every later one, and a level the model
 //! does not take fails before any request.
 
-use super::thinking;
+use super::thinking as resolve;
 use config::ModelData;
+use contract::events::Notice;
+use contract::shapes::Failure;
 use contract::{ErrorCode, ThinkingLevel};
 use serde_json::json;
 
@@ -41,6 +43,16 @@ fn config(overrides: Vec<String>) -> config::Config {
         overrides,
     })
     .unwrap()
+}
+
+fn thinking(
+    suffix: Option<ThinkingLevel>,
+    session: Option<ThinkingLevel>,
+    config: &config::Config,
+    model: &ModelData,
+    reference: &str,
+) -> Result<Option<ThinkingLevel>, Failure> {
+    resolve(suffix, session, config, model, reference, &mut Vec::new())
 }
 
 fn empty() -> config::Config {
@@ -138,14 +150,80 @@ fn a_level_the_model_does_not_take_is_invalid_arguments() {
     );
 }
 
+fn resolved(
+    config: &config::Config,
+    model: &ModelData,
+    reference: &str,
+) -> (Option<ThinkingLevel>, Vec<Notice>) {
+    let mut notices = Vec::new();
+    let level = resolve(None, None, config, model, reference, &mut notices).unwrap();
+    (level, notices)
+}
+
 #[test]
-fn a_configured_level_the_model_does_not_take_is_invalid_arguments() {
-    let model = model();
+fn a_top_level_level_the_model_does_not_declare_is_ignored_with_a_notice() {
+    let (level, notices) = resolved(
+        &config(vec!["thinking=high".into()]),
+        &model_without_levels(),
+        "openai/mini",
+    );
+    assert_eq!(level, None);
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0].code, ErrorCode::ConfigKeyIgnored);
+    for part in ["`thinking`", "`high`", "`openai/mini`"] {
+        assert!(notices[0].message.contains(part), "{}", notices[0].message);
+    }
+}
+
+#[test]
+fn a_per_model_level_the_model_does_not_declare_falls_back_to_its_default() {
+    let (level, notices) = resolved(
+        &config(vec!["models.\"openai/gpt-5.6\".thinking=max".into()]),
+        &model(),
+        "openai/gpt-5.6",
+    );
+    assert_eq!(level, Some(ThinkingLevel::Low));
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0].code, ErrorCode::ConfigKeyIgnored);
+    for part in ["models.\"openai/gpt-5.6\".thinking", "`max`", "`openai/gpt-5.6`"] {
+        assert!(notices[0].message.contains(part), "{}", notices[0].message);
+    }
+}
+
+#[test]
+fn a_declared_configured_level_logs_no_notice() {
+    let (level, notices) = resolved(
+        &config(vec!["thinking=high".into()]),
+        &model(),
+        "openai/gpt-5.6",
+    );
+    assert_eq!(level, Some(ThinkingLevel::High));
+    assert!(notices.is_empty(), "{notices:?}");
+}
+
+#[test]
+fn an_asked_for_level_beside_an_undeclared_configured_one_logs_no_notice() {
+    let mut notices = Vec::new();
+    let level = resolve(
+        Some(ThinkingLevel::High),
+        None,
+        &config(vec!["thinking=max".into()]),
+        &model(),
+        "openai/gpt-5.6",
+        &mut notices,
+    )
+    .unwrap();
+    assert_eq!(level, Some(ThinkingLevel::High));
+    assert!(notices.is_empty(), "{notices:?}");
+}
+
+#[test]
+fn a_session_choice_the_model_does_not_declare_is_invalid_arguments() {
     let err = thinking(
         None,
-        None,
-        &config(vec!["thinking=off".into()]),
-        &model,
+        Some(ThinkingLevel::Max),
+        &config(vec!["thinking=high".into()]),
+        &model(),
         "openai/gpt-5.6",
     )
     .unwrap_err();

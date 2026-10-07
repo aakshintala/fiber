@@ -512,12 +512,14 @@ fn parts_in(
     let handoff = handoff::handoff_settings(&config, &model.reference());
     let idle = settings::idle_exit(&config);
     let warm = settings::warm(&config);
+    let mut startup_notices = Vec::new();
     let thinking = settings::thinking(
         model.thinking,
         None,
         &config,
         model.model,
         &model.reference(),
+        &mut startup_notices,
     )
     .map_err(|e| failed(e.code, e.message))?;
     // The extensions loaded above, started before the model was chosen:
