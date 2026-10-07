@@ -68,7 +68,8 @@ fn command(run: &str) -> String {
 }
 
 fn interaction(rx: &mpsc::Receiver<Delivery>) -> InteractionRequested {
-    let Delivery::Interaction(requested) = rx.recv_timeout(WAIT).expect("the Interaction arrives") else {
+    let Delivery::Interaction(requested) = rx.recv_timeout(WAIT).expect("the Interaction arrives")
+    else {
         panic!("an unexpected delivery arrives");
     };
     requested
@@ -296,7 +297,8 @@ fn a_timed_out_ask_is_declined_by_fiber_and_late_answers_hand_back() {
     });
     let requested = interaction(&rx);
     clock.advance(Duration::from_millis(1000));
-    let Delivery::Resolved(resolved, _) = rx.recv_timeout(WAIT).expect("the decline arrives") else {
+    let Delivery::Resolved(resolved, _) = rx.recv_timeout(WAIT).expect("the decline arrives")
+    else {
         panic!("a decline arrives");
     };
     assert_eq!(resolved.request_id, requested.request_id);
@@ -338,7 +340,8 @@ fn a_timer_that_asks_and_expires_is_declined_the_same_way() {
     clock.advance(Duration::from_millis(60));
     let requested = interaction(&rx);
     clock.advance(Duration::from_millis(200));
-    let Delivery::Resolved(resolved, _) = rx.recv_timeout(WAIT).expect("the decline arrives") else {
+    let Delivery::Resolved(resolved, _) = rx.recv_timeout(WAIT).expect("the decline arrives")
+    else {
         panic!("a decline arrives");
     };
     assert_eq!(resolved.request_id, requested.request_id);

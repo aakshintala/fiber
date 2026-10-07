@@ -110,7 +110,8 @@ fn run(
 }
 
 fn interaction(rx: &mpsc::Receiver<Delivery>) -> InteractionRequested {
-    let Delivery::Interaction(requested) = rx.recv_timeout(WAIT).expect("the Interaction arrives") else {
+    let Delivery::Interaction(requested) = rx.recv_timeout(WAIT).expect("the Interaction arrives")
+    else {
         panic!("an unexpected delivery arrives");
     };
     requested
