@@ -16,7 +16,7 @@ No harness is assumed. Any agent harness can fill any role below.
 ## Roles
 
 - The orchestrator owns a ticket from start to merge. It writes the brief,
-  runs the gate, opens the pull request, answers the review and merges.
+  opens the pull request, answers the review, waits for `CI` and merges.
 - An implementer writes the code. It may be the orchestrator's own session
   or a separate one the orchestrator briefs; that is the harness's choice.
 - The reviewer reads the finished diff, read-only, and reports findings.
@@ -62,13 +62,11 @@ push, the implementer runs the checks for the crates they changed:
 `cargo clippy -p <crate> --all-targets -- -D warnings` and
 `cargo nextest run -p <crate>`.
 
-It runs, for the crates `docs/ci.md`, "Selection", chooses, what CI's
-per-platform job runs: `cargo fmt --check`, clippy with the workspace lints,
-the tests under nextest, and doc-tests. It also runs the cheap Linux x86_64
-checks from `docs/ci.md`: the 800-line file cap, the `unsafe` table, the
-compiled-in list, the dependency list and the docs check. CI runs the same
-script, the platform-independent checks on Linux x86_64 only, so the gate
-and CI cannot drift.
+`scripts/check` runs, for the crates `docs/ci.md`, "Selection", chooses,
+`cargo fmt --check`, clippy with the workspace lints, the tests under
+nextest, and doc-tests. It also runs the cheap checks from `docs/ci.md`: the
+800-line file cap, the `unsafe` table, the compiled-in list, the dependency
+list and the docs check. CI runs these cheap checks on Linux x86_64 only.
 
 Mutation testing runs in CI only.
 
