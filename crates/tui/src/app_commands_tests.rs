@@ -73,24 +73,35 @@ fn session_line(kind: &str, payload: Value) -> Line {
     })
 }
 
-/// An `opening_message` listing skills named `names`.
-fn opening(names: &[&str]) -> Line {
-    let skills: Vec<Value> = names
+/// A `reloaded` line from `session`.
+fn reloaded(session: &str) -> Line {
+    let mut line = session_line(
+        "reloaded",
+        json!({"servers": {"kept": [], "restarted": [], "started": [], "stopped": []},
+            "extensions": []}),
+    );
+    if let Line::Session(envelope) = &mut line {
+        envelope.session_id = contract::SessionId(session.to_owned());
+    }
+    line
+}
+
+/// The session answers the `commands` a `reloaded` asks for with skills
+/// named `names`.
+fn answer_commands(app: &mut App, names: &[&str]) {
+    let asked = app.on_line(reloaded(SESSION));
+    assert_eq!(asked.len(), 1);
+    let asked: Value = serde_json::from_str(&asked[0]).unwrap_or_default();
+    assert_eq!(asked["command"], "commands");
+    let rows: Vec<Value> = names
         .iter()
-        .map(|name| {
-            json!({"name": name, "description": format!("Runs {name}."),
-                "path": format!("/s/{name}/SKILL.md"), "source": "repository"})
-        })
+        .map(|name| json!({"name": name, "description": format!("Runs {name}."), "tag": "skill"}))
         .collect();
-    session_line(
-        "opening_message",
-        json!({
-            "environment": {"date": "2026-10-06", "os": "macos", "arch": "aarch64",
-                "shell": "zsh", "workspace": "/w", "session_log": "/l"},
-            "instruction_files": [],
-            "skills": skills,
-        }),
-    )
+    let answer = session_line(
+        "command_accepted",
+        json!({"command_id": asked["id"], "result": {"commands": rows}}),
+    );
+    assert!(app.on_line(answer).is_empty());
 }
 
 /// A turn starts on [`SESSION`].
@@ -133,7 +144,7 @@ fn slash_alone_shows_every_row_from_the_top() {
 #[test]
 fn typing_filters_prefix_matches_first() {
     let mut app = attached();
-    assert!(app.on_line(opening(&["tdd", "areview"])).is_empty());
+    answer_commands(&mut app, &["tdd", "areview"]);
     type_text(&mut app, "/re");
     assert_eq!(
         shown(&app),
@@ -147,9 +158,9 @@ fn typing_filters_prefix_matches_first() {
 }
 
 #[test]
-fn a_skill_from_the_opening_message_is_a_row_and_runs_as_a_prompt() {
+fn a_skill_from_the_commands_answer_is_a_row_and_runs_as_a_prompt() {
     let mut app = attached();
-    assert!(app.on_line(opening(&["tdd"])).is_empty());
+    answer_commands(&mut app, &["tdd"]);
     type_text(&mut app, "/td");
     assert_eq!(shown(&app), ["/tdd  Runs tdd.  skill"]);
     let lines = sent(app.on_key(Key::Enter, now()));
@@ -159,15 +170,16 @@ fn a_skill_from_the_opening_message_is_a_row_and_runs_as_a_prompt() {
 }
 
 #[test]
-fn another_sessions_opening_message_is_ignored() {
+fn another_sessions_reloaded_asks_nothing() {
     let mut app = attached();
-    let mut line = opening(&["tdd"]);
-    if let Line::Session(envelope) = &mut line {
-        envelope.session_id = contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned());
-    }
-    assert!(app.on_line(line).is_empty());
-    type_text(&mut app, "/td");
-    assert_eq!(app.completions(), None);
+    assert!(app.on_line(reloaded("s_bbbbbbbbbbbbbbbb")).is_empty());
+}
+
+#[test]
+fn reloaded_with_the_link_down_asks_nothing() {
+    let mut app = App::new(PathBuf::from("/w"));
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    assert!(app.on_line(reloaded(SESSION)).is_empty());
 }
 
 #[test]
@@ -354,7 +366,7 @@ fn quit_quits() {
 fn home_and_new_return_to_the_screen_before_a_session() {
     for command in ["/home", "/new"] {
         let mut app = attached();
-        assert!(app.on_line(opening(&["tdd"])).is_empty());
+        answer_commands(&mut app, &["tdd"]);
         turn_starts(&mut app);
         app.set_size(80, 3);
         app.on_key(Key::PageUp, now());

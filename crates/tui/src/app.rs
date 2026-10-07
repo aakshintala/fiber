@@ -227,10 +227,7 @@ impl App {
     pub(crate) fn on_line(&mut self, line: Line) -> Vec<String> {
         match line {
             Line::Hub(hub) => self.on_hub(&hub),
-            Line::Session(envelope) => {
-                self.on_session(&envelope);
-                Vec::new()
-            }
+            Line::Session(envelope) => self.on_session(&envelope),
         }
     }
 
@@ -548,11 +545,15 @@ impl App {
         }
     }
 
-    /// `start` was accepted: attach with a `full` connection.
+    /// `start` was accepted: attach with a `full` connection, and ask for
+    /// the session's `/` commands.
     fn started(&mut self, session: SessionId) -> Vec<String> {
         self.attach(session.clone());
         let args = json!({"level": "full"});
-        vec![session_command(&mint(), "subscribe", &session, Some(args)).to_string()]
+        vec![
+            session_command(&mint(), "subscribe", &session, Some(args)).to_string(),
+            self.ask_commands(&session),
+        ]
     }
 
     /// A command the terminal sent was rejected: one notice line, and its
@@ -610,15 +611,17 @@ impl App {
         Effect::None
     }
 
-    fn on_session(&mut self, envelope: &Envelope) {
+    /// Folds one session line, returning command lines to send.
+    fn on_session(&mut self, envelope: &Envelope) -> Vec<String> {
         // The queue takes every session's requests; everything else is the
         // attached session's alone.
         if approvals::KINDS.contains(&envelope.kind.as_str()) {
             self.queue.fold(envelope);
         }
         if self.session() != Some(&envelope.session_id) {
-            return;
+            return Vec::new();
         }
+        let mut send = Vec::new();
         let action = envelope.action_id.as_ref().map(|id| id.0.as_str());
         let ts = envelope.ts;
         // Only a line that changed a card shows the overlay.
@@ -626,6 +629,7 @@ impl App {
             "command_accepted" => {
                 if let Some(accepted) = read!(envelope, CommandAccepted) {
                     self.pending.remove(&accepted.command_id.0);
+                    self.commands_answered(&accepted);
                 }
                 false
             }
@@ -637,7 +641,12 @@ impl App {
                 }
                 false
             }
-            "opening_message" => self.opening(envelope),
+            "reloaded" => {
+                if self.link == Link::Up {
+                    send.push(self.ask_commands(&envelope.session_id));
+                }
+                false
+            }
             "turn_started" => read!(envelope, TurnStarted).is_some_and(|started| {
                 self.set_busy(true);
                 let prompts = started
@@ -696,6 +705,7 @@ impl App {
         if changed {
             self.changed();
         }
+        send
     }
 
     /// The turn still running, if any.

@@ -723,6 +723,46 @@ fn slash_panel() {
 }
 
 #[test]
+fn slash_panel_with_the_sessions_commands() {
+    let mut app = asked_nothing();
+    let asked = app.on_line(session_line(
+        S_A,
+        "reloaded",
+        serde_json::json!({"servers": {"kept": [], "restarted": [], "started": [],
+            "stopped": []}, "extensions": []}),
+        None,
+    ));
+    let asked: serde_json::Value = serde_json::from_str(&asked[0]).unwrap_or_default();
+    app.on_line(session_line(
+        S_A,
+        "command_accepted",
+        serde_json::json!({"command_id": asked["id"], "result": {"commands": [
+            {"name": "review", "description": "Reviews a diff.", "argument_hint": "[base]",
+             "tag": "template"},
+            {"name": "refactor", "description": "Refactors a module.", "tag": "skill"}]}}),
+        None,
+    ));
+    let now = fakes::clock::FakeClock::new().now();
+    for ch in "/re".chars() {
+        app.on_key(Key::Char(ch), now);
+    }
+    insta::assert_snapshot!("slash_panel_with_the_sessions_commands", sized(&mut app, 80, 24));
+}
+
+/// A connected app attached to `S_A`, with nothing on screen.
+fn asked_nothing() -> App {
+    let mut app = empty();
+    app.on_line(Line::Hub(contract::HubLine {
+        kind: "hub_hello".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::Map::new(),
+    }));
+    attach(&mut app, S_A);
+    app
+}
+
+#[test]
 fn the_selected_completion_is_reversed_and_the_others_are_not() {
     let mut app = empty();
     let now = fakes::clock::FakeClock::new().now();

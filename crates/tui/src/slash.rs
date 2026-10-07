@@ -1,7 +1,7 @@
-//! The `/` list: built-in commands and skills in one filtered list
-//! (`docs/tui.md`, "Keys" › "Rules", "Slash commands").
+//! The `/` list: built-in commands and the session's `commands` answer in
+//! one filtered list (`docs/tui.md`, "Keys" › "Rules", "Slash commands").
 
-use contract::events::SkillListed;
+use contract::events::CommandInfo;
 
 /// How many rows a completion panel shows at most.
 pub(crate) const SHOWN: usize = 8;
@@ -31,9 +31,6 @@ const BUILT_INS: &[(&str, &str, Option<&str>)] = &[
 /// The tag of a built-in command's row.
 pub(crate) const COMMAND: &str = "command";
 
-/// The tag of a skill's row.
-pub(crate) const SKILL: &str = "skill";
-
 /// One row of the `/` list.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Row {
@@ -43,8 +40,8 @@ pub(crate) struct Row {
     pub(crate) description: String,
     /// An argument hint, such as `[instructions]`.
     pub(crate) hint: Option<String>,
-    /// `command`, `skill`, or the name of the extension or MCP server the
-    /// row comes from.
+    /// `command`, `skill`, `template`, or the name of the extension or MCP
+    /// server the row comes from.
     pub(crate) tag: String,
 }
 
@@ -64,25 +61,26 @@ pub(crate) fn is_built_in(name: &str) -> bool {
     BUILT_INS.iter().any(|(built_in, _, _)| *built_in == name)
 }
 
-/// The list: the built-in commands, then `skills` in order. A skill named
-/// like a built-in is left out: the built-in wins.
-pub(crate) fn rows(skills: &[SkillListed]) -> Vec<Row> {
+/// The list: the built-in commands, then `commands`, the session's
+/// `commands` answer, in order, each with the hint and tag it gives. A row
+/// named like a built-in is left out: the built-in wins.
+pub(crate) fn rows(commands: &[CommandInfo]) -> Vec<Row> {
     let built_ins = BUILT_INS.iter().map(|(name, description, hint)| Row {
         name: (*name).to_owned(),
         description: (*description).to_owned(),
         hint: hint.map(str::to_owned),
         tag: COMMAND.to_owned(),
     });
-    let skills = skills
+    let session = commands
         .iter()
-        .filter(|skill| !is_built_in(&skill.name))
-        .map(|skill| Row {
-            name: skill.name.clone(),
-            description: skill.description.clone(),
-            hint: None,
-            tag: SKILL.to_owned(),
+        .filter(|command| !is_built_in(&command.name))
+        .map(|command| Row {
+            name: command.name.clone(),
+            description: command.description.clone(),
+            hint: command.argument_hint.clone(),
+            tag: command.tag.clone(),
         });
-    built_ins.chain(skills).collect()
+    built_ins.chain(session).collect()
 }
 
 /// The rows matching `query`, the text after `/`, ignoring case: those

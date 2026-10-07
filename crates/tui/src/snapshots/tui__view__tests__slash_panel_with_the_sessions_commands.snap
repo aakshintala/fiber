@@ -1,0 +1,28 @@
+---
+source: crates/tui/src/view_tests.rs
+expression: "sized(&mut app, 80, 24)"
+---
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/reload  Reloads configuration, MCP servers and extensions.  command
+/review [base]  Reviews a diff.  template
+/refactor  Refactors a module.  skill
+> /re

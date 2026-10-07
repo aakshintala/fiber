@@ -1,15 +1,15 @@
 //! Tests for the `/` list.
 
 use super::{Row, SHOWN, filter, is_built_in, rows, window_start};
-use contract::events::{SkillListed, SkillSource};
+use contract::events::CommandInfo;
 
-/// A skill named `name`.
-fn skill(name: &str) -> SkillListed {
-    SkillListed {
+/// A `commands` answer row for the skill `name`, with no hint.
+fn skill(name: &str) -> CommandInfo {
+    CommandInfo {
         name: name.to_owned(),
         description: format!("The {name} skill."),
-        path: format!("/s/{name}/SKILL.md"),
-        source: SkillSource::Repository,
+        argument_hint: None,
+        tag: "skill".to_owned(),
     }
 }
 
@@ -18,7 +18,7 @@ fn names(rows: &[&Row]) -> Vec<String> {
 }
 
 #[test]
-fn built_ins_come_in_table_order_then_skills() {
+fn built_ins_come_in_table_order_then_the_answer_rows() {
     let all = rows(&[skill("tdd"), skill("review")]);
     let all: Vec<&Row> = all.iter().collect();
     assert_eq!(
@@ -48,7 +48,7 @@ fn built_ins_come_in_table_order_then_skills() {
 }
 
 #[test]
-fn a_skill_named_like_a_built_in_shows_once_as_the_built_in() {
+fn an_answer_row_named_like_a_built_in_shows_once_as_the_built_in() {
     let all = rows(&[skill("reload"), skill("tdd")]);
     let reloads: Vec<&Row> = all.iter().filter(|row| row.name == "reload").collect();
     assert_eq!(reloads.len(), 1);
@@ -100,4 +100,27 @@ fn the_window_scrolls_only_past_the_last_shown_row() {
     assert_eq!(window_start(SHOWN - 1), 0);
     assert_eq!(window_start(SHOWN), 1);
     assert_eq!(window_start(SHOWN + 3), 4);
+}
+
+#[test]
+fn an_answer_row_keeps_its_hint_and_tag() {
+    let template = CommandInfo {
+        name: "review".to_owned(),
+        description: "Review a diff.".to_owned(),
+        argument_hint: Some("[base]".to_owned()),
+        tag: "template".to_owned(),
+    };
+    let from_extension = CommandInfo {
+        tag: "acme".to_owned(),
+        ..skill("deploy")
+    };
+    let all = rows(&[template, from_extension]);
+    let lines: Vec<String> = all.iter().skip(9).map(Row::line).collect();
+    assert_eq!(
+        lines,
+        [
+            "/review [base]  Review a diff.  template",
+            "/deploy  The deploy skill.  acme",
+        ]
+    );
 }

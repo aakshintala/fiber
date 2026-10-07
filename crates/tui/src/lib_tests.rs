@@ -753,7 +753,9 @@ fn each_approval_choice_goes_to_the_hub_as_a_reply() {
             .unwrap_or_default(),
     };
     feed(&mut lp, vec![Input::Hub(Line::Hub(accepted))]);
-    let (mut reader, _) = command(reader, "the subscribe command");
+    let (reader, _) = command(reader, "the subscribe command");
+    let (mut reader, asked) = command(reader, "the commands command");
+    assert_eq!(asked["command"], "commands");
     feed(
         &mut lp,
         ["r_1", "r_2", "r_3", "r_4"]
