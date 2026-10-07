@@ -20,12 +20,29 @@ const MIN_IDLE_SECS: u64 = 10;
 const SESSION_THREADS: u64 = 5;
 /// The threads each client adds: its reader and its writer.
 const THREADS_PER_CLIENT: u64 = 2;
+/// The fsyncs that bracket each model request, and each tool call.
+const FSYNCS_PER_REQUEST: u64 = 2;
+const FSYNCS_PER_TOOL_CALL: u64 = 2;
+/// The fsyncs are counted in one pass under strace, which slows the
+/// process, so it is never a timing or memory sample.
+const FSYNC_RUNS: usize = 1;
+/// The log bytes a turn may add per tool call beyond its content.
+const LOG_BYTES_PER_TOOL_CALL: u64 = 1024;
+/// The row whose ceiling the `web_fetch` conversion must fit in.
+const BUSY: &str = "Session, busy or resumed";
+/// How the `web_fetch` row's ceiling cell starts, before the busy row's
+/// ceiling cell.
+const WITHIN: &str = "within the busy session's ";
 
 /// What a benchmarked row checks, and the result-file metric ids it reads.
 #[derive(Debug, Clone, Copy)]
 enum Check {
-    /// Peak RSS in KiB per run; the median must not exceed the ceiling.
-    Memory(&'static str),
+    /// Peak RSS in KiB per run, one metric per workload; each median must
+    /// not exceed the ceiling.
+    Memory(&'static [&'static str]),
+    /// Peak RSS in KiB per run, held to `row`'s ceiling: the cell must read
+    /// `within the busy session's ` and that row's ceiling cell.
+    Within { row: &'static str, id: &'static str },
     /// Milliseconds per run; head and base medians, never failing.
     Timing(&'static str),
     /// A formula held here; the row's ceiling cell must read `pin` exactly.
@@ -38,15 +55,35 @@ enum Rule {
     IdleSwitches(&'static [&'static str]),
     /// Per run, the thread count at each client count.
     Threads(&'static str),
+    /// One pass: `fdatasync` calls against the log's model requests and
+    /// tool calls.
+    Fsyncs(&'static str),
+    /// Per run, the turn's log bytes against its content and tool calls.
+    LogBytes(&'static str),
 }
 
 /// Each benchmarked row of the table, by its Budget cell.
 const MEASURED: &[(&str, Check)] = &[
     (
         "Session, idle, headless",
-        Check::Memory("session_idle_rss_kib"),
+        Check::Memory(&["session_idle_rss_kib"]),
     ),
-    ("Terminal, idle", Check::Memory("terminal_idle_rss_kib")),
+    ("Terminal, idle", Check::Memory(&["terminal_idle_rss_kib"])),
+    (
+        BUSY,
+        Check::Memory(&[
+            "busy_turn_rss_kib",
+            "resume_20k_rss_kib",
+            "resume_2m_rss_kib",
+        ]),
+    ),
+    (
+        "`web_fetch` converting a 10 MiB HTML page, the download cap",
+        Check::Within {
+            row: BUSY,
+            id: "web_fetch_rss_kib",
+        },
+    ),
     (
         "Idle CPU, session and terminal",
         Check::Exact {
@@ -62,6 +99,20 @@ const MEASURED: &[(&str, Check)] = &[
         },
     ),
     (
+        "fsyncs",
+        Check::Exact {
+            pin: "2 per model request, 2 per tool call",
+            rule: Rule::Fsyncs("fsyncs"),
+        },
+    ),
+    (
+        "Log bytes, 429-call turn",
+        Check::Exact {
+            pin: "the turn's content plus 1 KiB per tool call",
+            rule: Rule::LogBytes("turn_log_bytes"),
+        },
+    ),
+    (
         "Session start, the internal session command to its first line, no hub",
         Check::Timing("session_start_ms"),
     ),
@@ -71,17 +122,8 @@ const MEASURED: &[(&str, Check)] = &[
     ),
 ];
 
-const PART_2: &str = "Part 2 of #217";
-
 /// Each row with no benchmark yet, by its Budget cell, and what owns it.
 const NOT_MEASURED: &[(&str, &str)] = &[
-    ("Session, busy or resumed", PART_2),
-    (
-        "`web_fetch` converting a 10 MiB HTML page, the download cap",
-        PART_2,
-    ),
-    ("fsyncs", PART_2),
-    ("Log bytes, 429-call turn", PART_2),
     (
         "Terminal to its first frame, attaching",
         "#410 (`fiber resume`) and #668 (home)",
@@ -266,12 +308,26 @@ fn field(entry: &Value, id: &str, name: &str) -> Result<u64, String> {
 
 /// The rule's failures, and what the head column shows.
 fn exact(rule: Rule, head: Option<&Results>) -> (Vec<String>, String) {
+    match rule {
+        Rule::IdleSwitches(ids) => per_thread(List::Switches, ids, head),
+        Rule::Threads(id) => per_thread(List::Threads, &[id], head),
+        Rule::Fsyncs(id) => per_entry(id, FSYNC_RUNS, head, fsyncs),
+        Rule::LogBytes(id) => per_entry(id, RUNS, head, log_bytes),
+    }
+}
+
+/// What each entry of a per-run list is: a thread's switches, or a thread
+/// count.
+#[derive(Debug, Clone, Copy)]
+enum List {
+    Switches,
+    Threads,
+}
+
+/// A rule whose runs each hold a list of entries.
+fn per_thread(list: List, ids: &[&str], head: Option<&Results>) -> (Vec<String>, String) {
     let mut failures = Vec::new();
     let mut observed = Vec::new();
-    let ids: &[&str] = match rule {
-        Rule::IdleSwitches(ids) => ids,
-        Rule::Threads(id) => &[id][..],
-    };
     for id in ids {
         let runs = match runs(head, id) {
             Ok(runs) => runs,
@@ -283,14 +339,14 @@ fn exact(rule: Rule, head: Option<&Results>) -> (Vec<String>, String) {
         let mut switches = 0;
         for (i, run) in runs.iter().enumerate() {
             for entry in *run {
-                let checked = match rule {
-                    Rule::IdleSwitches(_) => idle_thread(entry, id).map(|(thread, v, n)| {
+                let checked = match list {
+                    List::Switches => idle_thread(entry, id).map(|(thread, v, n)| {
                         switches += v + n;
                         (v != 0 || n != 0).then(|| {
                             format!("thread {thread}: {v} voluntary, {n} involuntary switches")
                         })
                     }),
-                    Rule::Threads(_) => thread_count(entry, id).map(|(clients, threads)| {
+                    List::Threads => thread_count(entry, id).map(|(clients, threads)| {
                         let expected = SESSION_THREADS + THREADS_PER_CLIENT * clients;
                         if i == 0 {
                             observed.push(format!("{threads} at {clients} clients"));
@@ -307,11 +363,84 @@ fn exact(rule: Rule, head: Option<&Results>) -> (Vec<String>, String) {
                 }
             }
         }
-        if matches!(rule, Rule::IdleSwitches(_)) {
+        if matches!(list, List::Switches) {
             observed.push(format!("{id}: {switches} switches"));
         }
     }
     (failures, observed.join(", "))
+}
+
+/// What one entry shows in the head column, and why it breaks its rule.
+type Entry = (String, Option<String>);
+
+/// A rule whose metric holds exactly `count` entries, one per run, each
+/// judged by `check`. The head column shows the first.
+fn per_entry(
+    id: &str,
+    count: usize,
+    head: Option<&Results>,
+    check: fn(&Value, &str) -> Result<Entry, String>,
+) -> (Vec<String>, String) {
+    let entries = match metric(head, id).and_then(|value| {
+        value
+            .as_array()
+            .ok_or_else(|| format!("{id}: not an array"))
+    }) {
+        Ok(entries) => entries,
+        Err(e) => return (vec![e], String::new()),
+    };
+    if entries.len() != count {
+        return (
+            vec![format!("{id}: {} runs, expected {count}", entries.len())],
+            String::new(),
+        );
+    }
+    let mut failures = Vec::new();
+    let mut observed = String::new();
+    for (i, entry) in entries.iter().enumerate() {
+        match check(entry, id) {
+            Ok((shown, broken)) => {
+                if i == 0 {
+                    observed = shown;
+                }
+                if let Some(broken) = broken {
+                    failures.push(format!("{id}: run {}: {broken}", i + 1));
+                }
+            }
+            Err(e) => failures.push(e),
+        }
+    }
+    (failures, observed)
+}
+
+/// Two fsyncs per model request and two per tool call, and at least one.
+fn fsyncs(entry: &Value, id: &str) -> Result<Entry, String> {
+    let requests = field(entry, id, "model_requests")?;
+    let calls = field(entry, id, "tool_calls")?;
+    let counted = field(entry, id, "fdatasync")?;
+    let expected = FSYNCS_PER_REQUEST * requests + FSYNCS_PER_TOOL_CALL * calls;
+    let shown = format!("{counted} fdatasync for {requests} model requests and {calls} tool calls");
+    let broken = if counted != expected {
+        Some(format!("{shown}, expected {expected}"))
+    } else if counted == 0 {
+        Some("no fdatasync call was counted".to_owned())
+    } else {
+        None
+    };
+    Ok((shown, broken))
+}
+
+/// The turn's log bytes: at most its content plus 1 KiB per tool call.
+fn log_bytes(entry: &Value, id: &str) -> Result<Entry, String> {
+    let bytes = field(entry, id, "bytes")?;
+    let content = field(entry, id, "content")?;
+    let calls = field(entry, id, "tool_calls")?;
+    let limit = content + LOG_BYTES_PER_TOOL_CALL * calls;
+    let shown = format!("{bytes} bytes for {content} bytes of content and {calls} tool calls");
+    Ok((
+        shown.clone(),
+        (bytes > limit).then(|| format!("{shown}, over {limit}")),
+    ))
 }
 
 /// The thread as `tid` or `tid (name)`, and its voluntary and involuntary
@@ -398,7 +527,7 @@ pub(crate) fn report(
         let budget = cells.first().map_or("", String::as_str);
         let cell = cells.get(1).map_or("", String::as_str);
         if let Some((_, check)) = MEASURED.iter().find(|(b, _)| *b == budget) {
-            let (broken, line) = judge(budget, cell, *check, head.as_ref(), &base);
+            let (broken, line) = judge(budget, cell, *check, head.as_ref(), &base, &rows);
             failures.extend(broken.into_iter().map(|f| format!("{budget}: {f}")));
             lines.push(line);
         } else if !NOT_MEASURED.iter().any(|(b, _)| *b == budget) {
@@ -434,6 +563,7 @@ fn judge(
     check: Check,
     head: Option<&Results>,
     base: &Base,
+    rows: &[Vec<String>],
 ) -> (Vec<String>, Line) {
     let mut failures = Vec::new();
     let mut line = Line {
@@ -444,19 +574,25 @@ fn judge(
         result: "pass",
     };
     match check {
-        Check::Memory(id) => match ceiling(cell) {
-            Ok(Quantity::Kib(limit)) => match run_median(head, id) {
-                Ok(value) => {
-                    line.head = format!("{value:.0} KiB");
-                    if value > limit {
-                        failures.push(format!("median {value:.0} KiB is over {limit:.0} KiB"));
+        Check::Memory(ids) => line.head = memory(cell, ids, head, &mut failures),
+        Check::Within { row, id } => {
+            let other = rows
+                .iter()
+                .find(|cells| cells.first().map(String::as_str) == Some(row))
+                .and_then(|cells| cells.get(1));
+            match other {
+                None => failures.push(format!("no {row:?} row holds its ceiling")),
+                Some(other) => {
+                    let expected = format!("{WITHIN}{other}");
+                    if cell != expected {
+                        failures.push(format!(
+                            "the ceiling reads {cell:?}; it must read {expected:?}, the {row:?} row's ceiling"
+                        ));
                     }
+                    line.head = memory(other, &[id], head, &mut failures);
                 }
-                Err(e) => failures.push(e),
-            },
-            Ok(Quantity::Ms(_)) => failures.push(format!("{cell:?} is not a memory ceiling")),
-            Err(e) => failures.push(e),
-        },
+            }
+        }
         Check::Timing(id) => {
             line.result = "advisory";
             match ceiling(cell) {
@@ -490,6 +626,37 @@ fn judge(
         line.result = "fail";
     }
     (failures, line)
+}
+
+/// Each metric's median against the memory ceiling in `cell`, and what the
+/// head column shows.
+fn memory(cell: &str, ids: &[&str], head: Option<&Results>, failures: &mut Vec<String>) -> String {
+    let limit = match ceiling(cell) {
+        Ok(Quantity::Kib(limit)) => limit,
+        Ok(Quantity::Ms(_)) => {
+            failures.push(format!("{cell:?} is not a memory ceiling"));
+            return String::new();
+        }
+        Err(e) => {
+            failures.push(e);
+            return String::new();
+        }
+    };
+    let mut shown = Vec::new();
+    for id in ids {
+        match run_median(head, id) {
+            Ok(value) => {
+                shown.push(format!("{id}: {value:.0} KiB"));
+                if value > limit {
+                    failures.push(format!(
+                        "median {value:.0} KiB of {id} is over {limit:.0} KiB"
+                    ));
+                }
+            }
+            Err(e) => failures.push(e),
+        }
+    }
+    shown.join(", ")
 }
 
 fn comment(lines: &[Line], failures: &[String], base: &Base, idle_secs: Option<u64>) -> String {

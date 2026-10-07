@@ -113,9 +113,10 @@ footprint on macOS, by the method in `docs/dependencies.md`. Idle CPU is the
 voluntary and involuntary context switch counts in
 `/proc/<pid>/task/*/status`, read before and after the idle window: 10
 seconds on a pull request and 60 at release. A truly idle process switches
-zero times in either. fsyncs are
-counted at the call site and log bytes are the size of `events.jsonl`, so both
-are exact on any platform.
+zero times in either. fsyncs are the session's `fdatasync` calls, counted
+with strace in one more run of the busy turn, which is never a timing or
+memory sample, and log bytes are the size of `events.jsonl`, so both are
+exact.
 
 Linux x86_64 gates every pull request, and the backstop on `main` measures
 the same benchmarks. Linux arm64 and macOS arm64 are

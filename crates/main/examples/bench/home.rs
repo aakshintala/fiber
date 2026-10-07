@@ -7,7 +7,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use fakes::{ProviderServer, TempDir, Watchdog};
+use fakes::{ProviderServer, Response, TempDir, Watchdog};
 use serde_json::{Value, json};
 
 use crate::run::{STOP, System};
@@ -35,9 +35,18 @@ pub(crate) struct Home {
 
 impl Home {
     /// Copies `fiber` into a new root and installs the provider and the
-    /// configuration.
+    /// configuration. The provider answers no request.
     pub(crate) fn new(fiber: &Path) -> Result<Self, String> {
-        let server = ProviderServer::start([])
+        Self::scripted(fiber, [])
+    }
+
+    /// [`Home::new`], with the provider answering each request with the
+    /// next response of `script`.
+    pub(crate) fn scripted(
+        fiber: &Path,
+        script: impl IntoIterator<Item = Response>,
+    ) -> Result<Self, String> {
+        let server = ProviderServer::start(script)
             .map_err(|err| format!("starting the fake provider: {err}"))?;
         let root = TempDir::new("fb");
         for dir in ["h", "w"] {
@@ -97,6 +106,11 @@ impl Home {
                 "hub": {"idle_exit_ms": HUB_IDLE_EXIT_MS}
             }),
         )
+    }
+
+    /// The fake provider, which records every request it received.
+    pub(crate) fn server(&self) -> &ProviderServer {
+        &self.server
     }
 
     pub(crate) fn root(&self) -> &Path {
