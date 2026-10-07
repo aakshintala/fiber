@@ -1509,6 +1509,74 @@ fn cancel_from_another_connection_stops_a_driver_shell() {
     opened.close();
 }
 
+/// The answer to `id`, or none when a line is not read within [`DEADLINE`].
+/// Lets a test close its session before it asserts.
+fn answer_within(client: &Client, id: &str) -> Option<Value> {
+    loop {
+        let line = client.recv(DEADLINE)?;
+        if command_id(&line) == Some(id) {
+            return Some(line);
+        }
+    }
+}
+
+#[test]
+fn cancel_on_the_same_connection_stops_a_driver_shell() {
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let saw_cancel = Arc::new(AtomicBool::new(false));
+    let opened = Opened::open(vec![]);
+    opened.session.shell(Arc::new(Hangs {
+        entered: Mutex::new(Some(entered_tx)),
+        saw_cancel: Arc::clone(&saw_cancel),
+    }));
+    let socket = opened.socket.clone();
+    let dir = opened.dir.clone();
+    let mut seen = None;
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(&client, &shell_line("c_shell", "sleep 60"));
+            entered_rx
+                .recv_timeout(DEADLINE)
+                .expect("the shell is running");
+            send(&client, r#"{"id":"c_cancel","command":"cancel"}"#);
+            let cancel = answer_within(&client, "c_cancel");
+            let woken = !matches!(inbox.try_recv(), Err(mpsc::TryRecvError::Empty));
+            // On a reader blocked in the shell, the shell's answer would
+            // only follow close.
+            let shell = cancel
+                .as_ref()
+                .and_then(|_| answer_within(&client, "c_shell"));
+            no_durable(&dir);
+            seen = Some((cancel, woken, shell, client));
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+    let (cancel, woken, shell, _client) = seen.expect("the client ran");
+    let cancel = cancel.expect("cancel on the shell's own connection was answered");
+    assert_eq!(kind(&cancel), "command_accepted", "{cancel}");
+    assert!(!woken, "a shell cancel does not wake the loop");
+    assert!(
+        saw_cancel.load(Ordering::Relaxed),
+        "the tool saw its cancel"
+    );
+    let line = shell.expect("the cancelled shell was answered");
+    assert_eq!(kind(&line), "command_accepted", "{line}");
+    assert_eq!(
+        line["payload"]["result"]["output"],
+        "Cancelled and stopped.\n"
+    );
+    assert!(
+        line["payload"]["result"]["process"]
+            .get("exit_code")
+            .is_none()
+    );
+    assert_eq!(line["payload"]["result"]["process"]["timed_out"], false);
+}
+
 #[test]
 fn close_cancels_a_shell_blocked_in_its_tool() {
     let (entered_tx, entered_rx) = mpsc::channel();
