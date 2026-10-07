@@ -10,11 +10,13 @@ use std::path::Path;
 
 use serde_json::{Value, json};
 
-/// One thread's context switch counters.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// One thread's context switch counters, and its name when it could be
+/// read.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Counts {
     pub(crate) voluntary: u64,
     pub(crate) involuntary: u64,
+    pub(crate) name: Option<String>,
 }
 
 /// The number at the start of `name`'s value in a status text. A missing
@@ -40,11 +42,22 @@ pub(crate) fn switches(status: &str) -> Result<Counts, String> {
     Ok(Counts {
         voluntary: field(status, "voluntary_ctxt_switches")?,
         involuntary: field(status, "nonvoluntary_ctxt_switches")?,
+        name: None,
     })
 }
 
+/// A thread's name from its `comm` text: the one line, without its newline.
+pub(crate) fn comm(text: &str) -> Result<String, String> {
+    let name = text.strip_suffix('\n').unwrap_or(text);
+    if name.is_empty() || name.contains('\n') {
+        return Err(format!("comm is not one name: {text:?}"));
+    }
+    Ok(name.to_owned())
+}
+
 /// The switches each thread made between `before` and `after`, one
-/// `{"tid", "voluntary", "involuntary"}` entry per thread present in both.
+/// `{"tid", "voluntary", "involuntary"}` entry per thread present in both,
+/// with `"name"` when the thread's name was read.
 /// A thread present in only one, or a counter that went backwards, cannot
 /// be compared: it is noted in `notes` as a self-check failure.
 pub(crate) fn idle_switches(
@@ -63,7 +76,14 @@ pub(crate) fn idle_switches(
             end.involuntary.checked_sub(start.involuntary),
         ) {
             (Some(voluntary), Some(involuntary)) => {
-                deltas.push(json!({"tid": tid, "voluntary": voluntary, "involuntary": involuntary}))
+                let mut delta = serde_json::Map::new();
+                delta.insert("tid".to_owned(), json!(tid));
+                delta.insert("voluntary".to_owned(), json!(voluntary));
+                delta.insert("involuntary".to_owned(), json!(involuntary));
+                if let Some(name) = end.name.as_ref().or(start.name.as_ref()) {
+                    delta.insert("name".to_owned(), json!(name));
+                }
+                deltas.push(Value::Object(delta));
             }
             _ => notes.push(format!("thread {tid}'s switch counters went backwards")),
         }
@@ -98,7 +118,8 @@ pub(crate) fn peak_rss_kib(pid: u32) -> Result<u64, String> {
     )?)
 }
 
-/// Every thread of `pid` and its switch counters, by thread id.
+/// Every thread of `pid` and its switch counters and name, by thread id. A
+/// name that cannot be read is left out: the thread may have just exited.
 pub(crate) fn threads(pid: u32) -> Result<BTreeMap<u32, Counts>, String> {
     let dir = Path::new("/proc").join(pid.to_string()).join("task");
     let entries = fs::read_dir(&dir).map_err(|err| format!("reading {}: {err}", dir.display()))?;
@@ -109,7 +130,11 @@ pub(crate) fn threads(pid: u32) -> Result<BTreeMap<u32, Counts>, String> {
         let Some(tid) = name.to_str().and_then(|name| name.parse().ok()) else {
             continue;
         };
-        threads.insert(tid, switches(&read(&entry.path().join("status"))?)?);
+        let mut counts = switches(&read(&entry.path().join("status"))?)?;
+        counts.name = read(&entry.path().join("comm"))
+            .and_then(|text| comm(&text))
+            .ok();
+        threads.insert(tid, counts);
     }
     Ok(threads)
 }

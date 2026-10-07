@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use serde_json::json;
 
-use super::{Counts, hub_connected, idle_switches, switches, vm_hwm_kib};
+use super::{Counts, comm, hub_connected, idle_switches, switches, vm_hwm_kib};
 
 const STATUS: &str = "Name:\tfiber\nState:\tS (sleeping)\nVmHWM:\t   10840 kB\nVmRSS:\t   10812 kB\nThreads:\t5\nvoluntary_ctxt_switches:\t12\nnonvoluntary_ctxt_switches:\t3\n";
 
@@ -17,7 +17,8 @@ fn switches_are_the_voluntary_and_involuntary_counts() {
         switches(STATUS),
         Ok(Counts {
             voluntary: 12,
-            involuntary: 3
+            involuntary: 3,
+            name: None,
         })
     );
 }
@@ -57,7 +58,47 @@ fn counts(voluntary: u64, involuntary: u64) -> Counts {
     Counts {
         voluntary,
         involuntary,
+        name: None,
     }
+}
+
+fn named(voluntary: u64, involuntary: u64, name: &str) -> Counts {
+    Counts {
+        name: Some(name.to_owned()),
+        ..counts(voluntary, involuntary)
+    }
+}
+
+#[test]
+fn a_thread_name_is_its_comm_line() {
+    assert_eq!(comm("status\n"), Ok("status".to_owned()));
+    assert_eq!(comm("tokio-runtime-w"), Ok("tokio-runtime-w".to_owned()));
+    assert!(comm("\n").is_err());
+    assert!(comm("").is_err());
+    assert!(comm("a\nb\n").is_err());
+}
+
+#[test]
+fn a_named_thread_carries_its_name_in_its_entry() {
+    let before = BTreeMap::from([(4101, named(1, 0, "fiber")), (4102, counts(0, 0))]);
+    let after = BTreeMap::from([(4101, named(2, 0, "fiber")), (4102, named(0, 0, "status"))]);
+    let mut notes = Vec::new();
+    assert_eq!(
+        idle_switches(&before, &after, &mut notes),
+        vec![
+            json!({"tid": 4101, "voluntary": 1, "involuntary": 0, "name": "fiber"}),
+            json!({"tid": 4102, "voluntary": 0, "involuntary": 0, "name": "status"}),
+        ]
+    );
+    let after = BTreeMap::from([(4101, counts(1, 0)), (4102, counts(0, 0))]);
+    assert_eq!(
+        idle_switches(&before, &after, &mut notes),
+        vec![
+            json!({"tid": 4101, "voluntary": 0, "involuntary": 0, "name": "fiber"}),
+            json!({"tid": 4102, "voluntary": 0, "involuntary": 0}),
+        ]
+    );
+    assert!(notes.is_empty());
 }
 
 #[test]
