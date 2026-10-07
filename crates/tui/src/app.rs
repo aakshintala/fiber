@@ -201,7 +201,7 @@ impl App {
                 self.follow();
                 Effect::None
             }
-            Key::Up | Key::Down => Effect::None,
+            Key::Up | Key::Down | Key::Tab | Key::BackTab | Key::F1 => Effect::None,
             Key::AltA => self.open_first(),
         }
     }
