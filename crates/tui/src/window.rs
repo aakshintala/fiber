@@ -37,6 +37,10 @@ struct Seed {
     trigger_at: Option<u64>,
     /// The last `fiber_exited` carried `suspended_on`.
     suspended: bool,
+    /// The live durations of the page's groups, in order: a reload folds
+    /// the page's durable lines only, without the ephemeral lines that
+    /// timed them.
+    spans: Vec<(u64, u64)>,
 }
 
 impl Seed {
@@ -52,6 +56,7 @@ impl Seed {
             ledgers,
             trigger_at,
             suspended,
+            spans: Vec::new(),
         }
     }
 }
@@ -353,7 +358,11 @@ impl Pages {
         self.pending = None;
         let at = self.closed.len();
         let part = std::mem::replace(&mut self.open, Part::seeded(seed.clone()));
+        let spans = group_spans(&part);
         self.closed.push(Some(part));
+        if let Some(closing) = self.seeds.get_mut(at) {
+            closing.spans = spans;
+        }
         self.seeds.push(seed);
         self.count(at);
     }
@@ -390,8 +399,10 @@ impl Pages {
             card.end_group();
         }
         let at = self.closed.len();
+        let spans = group_spans(&before);
         if let Some(closing) = self.seeds.get_mut(at) {
             closing.cut = true;
+            closing.spans = spans;
         }
         self.closed.push(Some(before));
         self.seeds.push(seed);
@@ -439,6 +450,9 @@ impl Pages {
         }
         for (target, open) in &self.overrides {
             set(&mut part, target, *open);
+        }
+        if let Some(seed) = self.seeds.get(at) {
+            restore_spans(&mut part, &seed.spans);
         }
         if let Some(slot) = self.closed.get_mut(at) {
             *slot = Some(part);
@@ -759,6 +773,30 @@ impl Pages {
             self.recounts = self.recounts.saturating_add(1);
         }
         self.index.set_rows(at, rows);
+    }
+}
+
+/// The live durations of `part`'s groups, in order.
+fn group_spans(part: &Part) -> Vec<(u64, u64)> {
+    part.turns
+        .iter()
+        .flat_map(Turn::groups)
+        .map(|group| (group.first, group.last))
+        .collect()
+}
+
+/// Restores `spans` onto a refolded page's groups, pair by pair: the same
+/// durable lines fold the same groups in the same order, so the reload
+/// draws the live durations without the ephemeral lines that timed them.
+fn restore_spans(part: &mut Part, spans: &[(u64, u64)]) {
+    let mut spans = spans.iter();
+    for card in &mut part.turns {
+        for group in card.groups_mut() {
+            if let Some(&(first, last)) = spans.next() {
+                group.first = first;
+                group.last = last;
+            }
+        }
     }
 }
 

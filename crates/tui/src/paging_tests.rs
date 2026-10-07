@@ -866,6 +866,37 @@ fn a_handoff_sized_pages_earlier_reloads_unchanged() {
 }
 
 #[test]
+fn reloading_keeps_the_live_durations_and_counts() {
+    let mut lines = session(2, true);
+    // Production deltas arrive before the durable lines they announce, so
+    // the live fold times groups from the deltas while a reload times them
+    // from the requests: backdate the argument deltas past a duration
+    // boundary, where the longer text wraps rows the shorter one does not.
+    for line in &mut lines {
+        if line.kind == "tool_call_arguments_delta" {
+            line.ts = line.ts.saturating_sub(61_000);
+        }
+    }
+    for width in [16, 20, 24, 30, 40] {
+        let mut pages = Pages::new(width);
+        for line in &lines {
+            pages.apply(line);
+        }
+        assert!(pages.index().pages().len() > 2, "too few pages");
+        let live = pages.rows();
+        let before = (pages.index().starts(), pages.index().total());
+        drop_all(&mut pages);
+        let got = joined(&mut pages, &lines);
+        assert_eq!(differs(&got, &live), None, "at width {width}");
+        assert_eq!(
+            (pages.index().starts(), pages.index().total()),
+            before,
+            "at width {width}"
+        );
+    }
+}
+
+#[test]
 fn close_keeps_the_open_page_as_a_closed_one() {
     let mut pages = Pages::new(20);
     pages.close();
