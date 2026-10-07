@@ -7,9 +7,13 @@
 # <dir> holds `tools.json`, a JSON array of tool objects, each with `name`
 # and optionally `description`, `inputSchema` and `annotations`, and one
 # `call-<tool>.json` file per tool holding that call's `result` object. A
-# tool whose result file holds exactly `hang` is never answered. A
-# `delay-<tool>` file holding seconds delays that tool's answer, so two
-# concurrent calls resolve out of order.
+# tool whose result file holds exactly `hang` is never answered, and one
+# whose result file holds exactly `exit` makes the server exit without
+# answering. A `delay-<tool>` file holding seconds delays that tool's
+# answer, so two concurrent calls resolve out of order. A `notify-<tool>`
+# file makes the server send `notifications/tools/list_changed` before it
+# answers that tool's call. A `fail-start` file makes the server exit 1
+# before reading anything.
 #
 # It answers `initialize`, `tools/list`, `tools/call` and `ping`, appends
 # every received line to `requests.log`, and writes its working directory
@@ -20,6 +24,9 @@ set -u
 dir="$1"
 pwd -P > "$dir/cwd.txt"
 printf '%s\n' "$$" > "$dir/pid.txt"
+if [ -f "$dir/fail-start" ]; then
+    exit 1
+fi
 # A `noise` file's lines go to stdout first, so a test can prove a
 # non-JSON line is ignored.
 if [ -f "$dir/noise" ]; then
@@ -67,6 +74,12 @@ while IFS= read -r line; do
             tool="$(printf '%s' "$line" | sed -n 's/.*"name":"\([^"]*\)".*/\1/p')"
             result="$dir/call-$tool.json"
             if [ -f "$result" ]; then
+                if [ "$(cat "$result")" = "exit" ]; then
+                    exit 0
+                fi
+                if [ -f "$dir/notify-$tool" ]; then
+                    answer '{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}'
+                fi
                 if [ "$(cat "$result")" != "hang" ]; then
                     delay="0"
                     if [ -f "$dir/delay-$tool" ]; then
