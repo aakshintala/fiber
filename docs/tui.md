@@ -151,7 +151,9 @@ the command to resume it.
 ## Layout
 
 The screen is a session rail on the left while two or more sessions are
-live, a conversation column, and a side panel on the right. The panel is shown while the screen is wide enough, unless the person hides it with ⌥P. It replaces
+live, a conversation column, and a side panel on the right. The conversation
+column's top row is a header holding the session's name, or its first prompt
+when it has none. The panel is shown while the screen is wide enough, unless the person hides it with ⌥P. It replaces
 a footer and status line, and the input box spans only the conversation
 column.
 
@@ -210,9 +212,8 @@ conversation and the panel to that session, and the rail scrolls the card
 into view; the mouse wheel scrolls the rail. ⌥A goes to the oldest request
 waiting anywhere ("Bindings").
 
-Delegates are not on the rail; the parent's panel shows them. A delegate
-waiting on the person puts its wait on its parent's card. Exited sessions are
-not on the rail either; their project header counts them.
+Delegates are not on the rail; the parent's panel shows them. Exited sessions
+are not on the rail either; their project header counts them.
 
 A session whose process died stays on the rail as a ✗ CRASHED card until the
 person resumes it, by clicking the card, or dismisses it, with the ✕ that
@@ -238,9 +239,10 @@ pulses.
 ### The panel
 
 The panel is a column of cards. `tui.panel.cards` lists which cards show and
-in what order, and an extension widget (`host.widget`, `docs/extensions.md`)
-is a card in the same list. The panel scrolls when its cards outgrow the
-screen.
+in what order. An extension widget (`host.widget`, `docs/extensions.md`) is
+listed as `"<extension>/<widget>"`, which places it. A widget the list does not
+name shows after the listed cards, in the order widgets arrived. The panel
+scrolls when its cards outgrow the screen.
 
 The default cards, in order:
 
@@ -360,7 +362,7 @@ While Fiber waits to retry a failed model call, the working line says so:
 
 ### The narrow layout
 
-The conversation has a minimum width. Below it the panel goes away, and rows
+The conversation has a minimum width of 84 columns. Below it the panel goes away, and rows
 under the conversation take its place. From the top:
 
 1. the working line
@@ -385,9 +387,9 @@ waiting" joins the Session card, or the status line in the narrow layout; a
 click on it shows the rail. A hidden rail leaves its grip at the screen's left
 edge, and dragging the grip out shows the rail again, as does ⌥R. A rail hidden
 for width returns when the screen grows; one the person hid, by ⌥R or by
-dragging it below its floor, stays hidden until shown. Below the narrow layout, the
-screen sheds in this order: the panel, then the status rows, then the working
-line's detail. Below a floor of about 40 by 10
+dragging it below its floor, stays hidden until shown. Below the narrow layout, which
+has already dropped the panel, the screen sheds the status rows, then the
+working line's detail. Below a floor of about 40 by 10
 cells it shows one centred line, "Fiber needs 40×10 · now 32×8". The session
 keeps running, nothing is lost, and the screen redraws on resize.
 
@@ -398,8 +400,7 @@ conversation is its log. Sending a prompt resumes it through the hub, with no
 banner.
 
 When the hub cannot be reached, a banner replaces the working line:
-"Connection lost · reconnecting (attempt 2)…", or "Hub restarting" during an
-upgrade. The terminal retries with backoff while the conversation and the
+"Connection lost · reconnecting (attempt 2)…". The terminal retries with backoff while the conversation and the
 draft stay.
 
 ## The conversation
