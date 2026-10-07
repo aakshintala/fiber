@@ -16,6 +16,7 @@ mod write;
 pub use edit::Edit;
 pub use files::{Files, PathGuard, PathLocks};
 pub use handoff::Handoff;
+pub use image::ImageChild;
 pub use read::Read;
 pub use search::{find_main, grep_main};
 pub use shell::{Shell, kill_every_group};
