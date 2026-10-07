@@ -198,15 +198,25 @@ impl Drop for Client {
             }
         }
         if let Some(handle) = lock(&self.reader).take() {
-            // The shutdown above wakes the reader's `read` at once
-            // (`docs/testing.md`, "Waits and timeouts"); the bound only
-            // reports a reader that missed the wake.
-            match crate::within("the fake client's reader to stop", READER_STOP, move || {
-                handle.join()
-            }) {
-                Ok(()) | Err(_) => {}
-            }
+            stop_reader(handle, READER_STOP);
         }
+    }
+}
+
+/// Joins the reader within `deadline` of real time, failing the test when it
+/// misses. The shutdown in `Drop` wakes the reader's `read` at once
+/// (`docs/testing.md`, "Waits and timeouts"), so the bound only reports a
+/// reader that missed the wake. While the thread is already panicking, such
+/// as in a timeout's unwind, it leaves the reader unjoined instead: a second
+/// panic would abort the test process and lose the first one's message.
+fn stop_reader(handle: JoinHandle<()>, deadline: Duration) {
+    if std::thread::panicking() {
+        return;
+    }
+    match crate::within("the fake client's reader to stop", deadline, move || {
+        handle.join()
+    }) {
+        Ok(()) | Err(_) => {}
     }
 }
 
