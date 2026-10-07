@@ -855,6 +855,23 @@ fn a_missing_credential_fails_before_the_session() {
 }
 
 #[test]
+fn a_failing_credential_command_is_named_by_its_program_alone() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([]).unwrap();
+    setup.provider(&server);
+    write(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "providers": {"fake": {"credentials": {"default": {"command": ["false", "sk-in-argument"]}}}}}),
+    );
+
+    let run = setup.fiber(&["ask", "hi"], None);
+    assert_pre_session(&run, 1, "credential_missing");
+    assert!(run.stderr.contains("`false` failed"), "{}", run.stderr);
+    assert!(!run.stdout.contains("sk-in-argument"), "{}", run.stdout);
+    assert!(!run.stderr.contains("sk-in-argument"), "{}", run.stderr);
+}
+
+#[test]
 fn a_bedrock_converse_model_fails_before_the_session() {
     let setup = Setup::new();
     let server = ProviderServer::start([]).unwrap();
@@ -1269,9 +1286,7 @@ fn install_in_a_terminal_shows_the_providers_and_their_urls_and_asks() {
     let setup = Setup::new();
     let opencode = package("opencode");
     let path = opencode.to_str().unwrap();
-    let installed = setup
-        .home()
-        .join("extensions/github.com-aakshintala-fiber-providers-opencode");
+    let installed = setup.home().join("extensions/opencode");
 
     let declined = setup.fiber_typing(&["extension", "install", path], "n\n");
     assert_eq!(declined.code, Some(1), "stderr: {}", declined.stderr);
@@ -1548,7 +1563,7 @@ fn install_by_short_name_fetches_from_git_headless_and_list_shows_the_commit() {
     assert!(
         setup
             .home()
-            .join("extensions/github.com-aakshintala-fiber-providers-muse/providers/muse.json")
+            .join("extensions/muse/providers/muse.json")
             .is_file()
     );
 }
@@ -1558,9 +1573,7 @@ fn install_by_name_in_a_terminal_shows_the_version_asks_and_can_show_the_source(
     let setup = Setup::new();
     let gh = Github::new(&setup);
     gh.release("v0.1.0");
-    let installed = setup
-        .home()
-        .join("extensions/github.com-aakshintala-fiber-providers-muse");
+    let installed = setup.home().join("extensions/muse");
     let declined = setup.fiber_typing_env(&["extension", "install", "muse"], "n\n", &gh.env());
     assert_eq!(declined.code, Some(1), "stderr: {}", declined.stderr);
     assert!(
@@ -1606,12 +1619,8 @@ fn remove_in_a_terminal_lists_the_data_and_asks_and_headless_goes_ahead() {
             .code,
         Some(0)
     );
-    let data = setup
-        .home()
-        .join("data/github.com-aakshintala-fiber-providers-muse");
-    let settings = setup
-        .home()
-        .join("config/github.com-aakshintala-fiber-providers-muse.json");
+    let data = setup.home().join("data/muse");
+    let settings = setup.home().join("config/muse.json");
     fs::create_dir_all(&data).unwrap();
     fs::create_dir_all(settings.parent().unwrap()).unwrap();
     fs::write(data.join("index"), "x").unwrap();

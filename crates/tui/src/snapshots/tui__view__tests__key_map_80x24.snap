@@ -1,0 +1,28 @@
+---
+source: crates/tui/src/view_tests.rs
+expression: "screen_at(&mut app, 80, 24)"
+---
+Sessions
+  Send a prompt, or a steering message during a turn · Enter
+  Insert a line break · Shift+Enter · Ctrl+J
+  Close what is on top; interrupt the turn when nothing is open · Esc
+  Clear the draft, then quit · Ctrl+C, twice within about a second on an empty
+box · /quit
+  Go home · ⌥0 · /home
+  Start a new session · Ctrl+N · /new
+  Switch to the session of rail card N · ⌥1 to ⌥9 · click the card
+  Delete the selected exited session in the session list · Delete, or Backspace,
+on the row
+
+The input box
+  Recall an earlier prompt from the project of the session on screen · ↑ in an
+empty box
+  Search those prompts · Ctrl+R
+  Move by word · ⌥← ⌥→, Ctrl+← Ctrl+→
+  Delete a word · ⌥Backspace
+  Start or end of the line · ⌘← ⌘→, where the terminal passes them
+  Open the draft, or a pasted token, in $VISUAL or $EDITOR · Ctrl+G · click the
+token
+  Paste an image · Ctrl+V
+
+>
