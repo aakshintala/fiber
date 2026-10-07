@@ -132,6 +132,10 @@ The cut is the step boundary at which the handoff ran. Everything after that
 boundary in the log follows as usual. This is the rule `docs/prompt-cache.md`
 builds on.
 
+The reviewer hands off at the same boundary. It keeps the person's messages
+that still bind, word for word, and starts again from them
+(`docs/permissions.md`, "At a handoff").
+
 ## Looking back
 
 The model reads the session log, `events.jsonl`, with its ordinary tools, and
