@@ -61,6 +61,7 @@ const OUT_OF_SVG: [&str; 44] = [
 ];
 
 /// Hidden elements and the HTML head state, independent of markdown output.
+#[derive(Default)]
 pub(super) struct Hidden {
     /// Open `svg`, `noscript` and `template` elements, whose content is
     /// dropped. Each has a depth, its place among them counted from the
@@ -75,18 +76,6 @@ pub(super) struct Hidden {
     noscripts: Vec<usize>,
     templates: Vec<usize>,
     in_head: bool,
-}
-
-impl Default for Hidden {
-    fn default() -> Self {
-        Self {
-            hidden: 0,
-            svgs: Vec::new(),
-            noscripts: Vec::new(),
-            templates: Vec::new(),
-            in_head: false,
-        }
-    }
 }
 
 impl Hidden {
@@ -115,11 +104,11 @@ impl Hidden {
         let depth = self.hidden;
         if name == "head" {
             self.in_head = true;
-        } else if let Some(depths) = self.depths(name) {
-            if !tag.self_closing {
-                depths.push(depth);
-                self.hidden += 1;
-            }
+        } else if let Some(depths) = self.depths(name)
+            && !tag.self_closing
+        {
+            depths.push(depth);
+            self.hidden += 1;
         }
     }
 

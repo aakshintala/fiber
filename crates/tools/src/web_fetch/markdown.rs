@@ -128,6 +128,7 @@ struct List {
     count: u64,
 }
 
+#[derive(Default)]
 struct Converter {
     title: Option<String>,
     /// The text of the title being collected, when one is.
@@ -145,22 +146,6 @@ struct Converter {
     /// first. The writer's `quote` and `pre` are already counts, not stacks.
     over: usize,
     cells: usize,
-}
-
-impl Default for Converter {
-    fn default() -> Self {
-        Self {
-            title: None,
-            title_text: String::new(),
-            title_done: false,
-            raw: None,
-            hidden: Hidden::default(),
-            writer: Writer::default(),
-            lists: Vec::new(),
-            over: 0,
-            cells: 0,
-        }
-    }
 }
 
 impl Converter {
