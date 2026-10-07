@@ -6,8 +6,9 @@
 //!
 //! A subscription belongs to the hub connection, not to one session
 //! socket: the connection's first `subscribe` for a session is kept, and a
-//! reconnect to that session sends it again under a hub-minted id before
-//! the client's command, dropping the session's acknowledgement of it.
+//! later accepted `subscribe` replaces the kept one, so a reconnect to
+//! that session sends it again under a hub-minted id before the client's
+//! command, dropping the session's acknowledgement of it.
 //!
 //! A `closing` answer from a session whose log ends in `fiber_exited` is
 //! not passed on: the command is routed again to the resumed session.
@@ -82,6 +83,19 @@ impl Relays {
         let subscribes = line.get("command").and_then(Value::as_str) == Some("subscribe");
         if subscribes && !self.subscribed.iter().any(|(kept, _)| kept == session) {
             self.subscribed.push((session.to_owned(), line.clone()));
+        }
+    }
+
+    /// Replaces `session`'s kept subscription with `line` when `line` is a
+    /// `subscribe`; adds it when none is kept. Anything else changes nothing.
+    fn accepted(&mut self, session: &str, line: Map<String, Value>) {
+        if line.get("command").and_then(Value::as_str) != Some("subscribe") {
+            return;
+        }
+        if let Some((_, kept)) = self.subscribed.iter_mut().find(|(kept, _)| kept == session) {
+            *kept = line;
+        } else {
+            self.subscribed.push((session.to_owned(), line));
         }
     }
 
@@ -258,9 +272,11 @@ fn not_found(writer: &Arc<Mutex<UnixStream>>, hub: &Hub, id: &CommandId, session
 /// writer, except the acknowledgement of the subscription the hub sent
 /// again, which the client never sent, and a `closing` answer from a
 /// session whose log ends in `fiber_exited`: that drops this thread's map
-/// entry, without shutting the stream, and routes the command again. The
-/// session closing its socket drops the map entry; the next command for it
-/// reconnects.
+/// entry, without shutting the stream, and routes the command again. An
+/// accepted `subscribe` replaces the connection's kept subscription before
+/// its acknowledgement is forwarded, so a client that has read it and
+/// triggers a reconnect gets the new level replayed. The session closing
+/// its socket drops the map entry; the next command for it reconnects.
 fn relay(
     owned: RelayThread,
     session: &str,
@@ -289,14 +305,19 @@ fn relay(
                     replayed = None;
                     continue;
                 }
-                if let Some((id, line)) = settle(&buf, &kept, hub, session, exiting) {
-                    exiting = true;
-                    lock(relays).finish(session, epoch);
-                    route(&CommandId(id), session, line, hub, writer, relays, true);
-                    continue;
+                match settle(&buf, &kept, hub, session, exiting) {
+                    Some(Settled::Reroute(id, line)) => {
+                        exiting = true;
+                        lock(relays).finish(session, epoch);
+                        route(&CommandId(id), session, line, hub, writer, relays, true);
+                        continue;
+                    }
+                    Some(Settled::Subscribed(line)) => {
+                        lock(relays).accepted(session, line);
+                    }
+                    None => {}
                 }
-                let mut out = lock(writer);
-                if out.write_all(&buf).and_then(|()| out.flush()).is_err() {
+                if forward(&buf, writer, relays, hub).is_err() {
                     break;
                 }
             }
@@ -305,33 +326,82 @@ fn relay(
     lock(relays).finish(session, epoch);
 }
 
+/// The only writer of session lines to the client: every session line the
+/// relay passes back goes through it. It runs the `before_forward` test
+/// hook first, with no lock held, so the hook observes each acknowledgement
+/// after it is recorded.
+fn forward(
+    buf: &[u8],
+    writer: &Arc<Mutex<UnixStream>>,
+    relays: &Arc<Mutex<Relays>>,
+    hub: &Hub,
+) -> std::io::Result<()> {
+    #[cfg(test)]
+    {
+        let mut held = lock(&hub.before_forward);
+        if let Some(mut before) = held.take() {
+            before(buf, relays);
+            *held = Some(before);
+        }
+    }
+    #[cfg(not(test))]
+    {
+        let _ = (relays, hub);
+    }
+    let mut out = lock(writer);
+    out.write_all(buf).and_then(|()| out.flush())
+}
+
 /// Settles a kept command `line` acknowledges: it is no longer kept. A
 /// `closing` rejection of it returns it, to be routed again, once this
 /// thread has seen the exited window, whether in this answer
-/// (`crate::resume::exited`) or an earlier one (`exiting`).
-fn settle(
-    line: &[u8],
-    kept: &Kept,
-    hub: &Hub,
-    session: &str,
-    exiting: bool,
-) -> Option<(String, Map<String, Value>)> {
-    let (id, closing) = {
+/// (`crate::resume::exited`) or an earlier one (`exiting`). An accepted
+/// `subscribe` returns its line, to replace the kept subscription.
+/// What settling an acknowledged command decides: either the command is
+/// routed again, or an accepted `subscribe` replaces the kept subscription.
+enum Settled {
+    Reroute(String, Map<String, Value>),
+    Subscribed(Map<String, Value>),
+}
+
+fn settle(line: &[u8], kept: &Kept, hub: &Hub, session: &str, exiting: bool) -> Option<Settled> {
+    let ((id, command), verdict) = {
         let mut kept = lock(kept);
         if kept.is_empty() {
             return None;
         }
-        let (id, closing) = acknowledgement(line)?;
+        let (id, verdict) = acknowledgement(line)?;
         let at = kept.iter().position(|(kept, _)| *kept == id)?;
-        (kept.remove(at), closing)
+        let (_, command) = kept.remove(at);
+        ((id, command), verdict)
     };
-    (closing && (exiting || crate::resume::exited(&hub.home, &SessionId(session.to_owned()))))
-        .then_some(id)
+    // The kept lock is released before the caller takes the relays lock:
+    // `route` takes relays and then kept, so the reverse order deadlocks.
+    match verdict {
+        Verdict::Closing
+            if exiting || crate::resume::exited(&hub.home, &SessionId(session.to_owned())) =>
+        {
+            Some(Settled::Reroute(id, command))
+        }
+        Verdict::Accepted
+            if command.get("command").and_then(Value::as_str) == Some("subscribe") =>
+        {
+            Some(Settled::Subscribed(command))
+        }
+        Verdict::Accepted | Verdict::Rejected | Verdict::Closing => None,
+    }
 }
 
 /// The `command_id` of a session's `command_accepted` or
-/// `command_rejected`, and whether it is a `closing` rejection.
-fn acknowledgement(line: &[u8]) -> Option<(String, bool)> {
+/// `command_rejected`, and what the acknowledgement settles.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Verdict {
+    Accepted,
+    Rejected,
+    Closing,
+}
+
+fn acknowledgement(line: &[u8]) -> Option<(String, Verdict)> {
     let line = serde_json::from_slice::<Value>(line).ok()?;
     let kind = line.get("kind").and_then(Value::as_str)?;
     if !matches!(kind, "command_accepted" | "command_rejected") {
@@ -339,9 +409,14 @@ fn acknowledgement(line: &[u8]) -> Option<(String, bool)> {
     }
     let payload = line.get("payload")?;
     let id = payload.get("command_id").and_then(Value::as_str)?;
-    let closing = kind == "command_rejected"
-        && payload.get("code").and_then(Value::as_str) == Some("closing");
-    Some((id.to_owned(), closing))
+    let verdict = if kind == "command_accepted" {
+        Verdict::Accepted
+    } else if payload.get("code").and_then(Value::as_str) == Some("closing") {
+        Verdict::Closing
+    } else {
+        Verdict::Rejected
+    };
+    Some((id.to_owned(), verdict))
 }
 
 /// Whether `line` is a session's `command_accepted` or `command_rejected`

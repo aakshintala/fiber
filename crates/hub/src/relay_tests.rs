@@ -92,6 +92,60 @@ fn only_the_first_subscribe_for_a_session_is_kept() {
 }
 
 #[test]
+fn an_accepted_subscribe_replaces_the_kept_one() {
+    let line = |id: &str, command: &str| {
+        json!({"id": id, "command": command, "args": {"level": "full"}})
+            .as_object()
+            .unwrap()
+            .clone()
+    };
+    let mut relays = Relays::default();
+    relays.keep("s_aaaaaaaaaaaaaaaa", &line("c_1", "subscribe"));
+    relays.accepted("s_aaaaaaaaaaaaaaaa", line("c_2", "subscribe"));
+    assert_eq!(
+        relays.subscription("s_aaaaaaaaaaaaaaaa"),
+        Some(line("c_2", "subscribe"))
+    );
+    assert_eq!(relays.subscribed.len(), 1, "one entry per session");
+    // Another session's entry is added or replaced on its own.
+    relays.accepted("s_bbbbbbbbbbbbbbbb", line("c_3", "subscribe"));
+    assert_eq!(
+        relays.subscription("s_bbbbbbbbbbbbbbbb"),
+        Some(line("c_3", "subscribe"))
+    );
+    assert_eq!(relays.subscribed.len(), 2);
+    relays.accepted("s_bbbbbbbbbbbbbbbb", line("c_4", "subscribe"));
+    assert_eq!(
+        relays.subscription("s_bbbbbbbbbbbbbbbb"),
+        Some(line("c_4", "subscribe"))
+    );
+    assert_eq!(relays.subscribed.len(), 2);
+    assert_eq!(
+        relays.subscription("s_aaaaaaaaaaaaaaaa"),
+        Some(line("c_2", "subscribe"))
+    );
+}
+
+#[test]
+fn an_accepted_command_that_is_not_subscribe_changes_nothing() {
+    let line = |id: &str, command: &str| {
+        json!({"id": id, "command": command, "args": {"level": "full"}})
+            .as_object()
+            .unwrap()
+            .clone()
+    };
+    let mut relays = Relays::default();
+    relays.accepted("s_aaaaaaaaaaaaaaaa", line("c_1", "prompt"));
+    assert_eq!(relays.subscription("s_aaaaaaaaaaaaaaaa"), None);
+    relays.keep("s_aaaaaaaaaaaaaaaa", &line("c_2", "subscribe"));
+    relays.accepted("s_aaaaaaaaaaaaaaaa", line("c_3", "prompt"));
+    assert_eq!(
+        relays.subscription("s_aaaaaaaaaaaaaaaa"),
+        Some(line("c_2", "subscribe"))
+    );
+}
+
+#[test]
 fn only_an_acknowledgement_of_the_replayed_id_is_dropped() {
     let line = |kind: &str, id: &str| {
         let mut bytes = serde_json::to_vec(&json!({
@@ -120,22 +174,20 @@ fn an_acknowledgement_names_its_command_and_whether_it_is_closing() {
     let closing = json!({"command_id": "c_1", "code": "closing", "message": "m"});
     assert_eq!(
         acknowledgement(&line("command_rejected", closing.clone())),
-        Some(("c_1".to_owned(), true))
+        Some(("c_1".to_owned(), Verdict::Closing))
     );
-    // Accepted, or rejected with another code: an acknowledgement, not
-    // closing.
     assert_eq!(
         acknowledgement(&line("command_accepted", closing.clone())),
-        Some(("c_1".to_owned(), false))
+        Some(("c_1".to_owned(), Verdict::Accepted))
     );
     let other = json!({"command_id": "c_1", "code": "busy", "message": "m"});
     assert_eq!(
         acknowledgement(&line("command_rejected", other)),
-        Some(("c_1".to_owned(), false))
+        Some(("c_1".to_owned(), Verdict::Rejected))
     );
     assert_eq!(
         acknowledgement(&line("command_rejected", json!({"command_id": "c_1"}))),
-        Some(("c_1".to_owned(), false))
+        Some(("c_1".to_owned(), Verdict::Rejected))
     );
     // No acknowledgement at all.
     assert_eq!(acknowledgement(&line("session_status", closing)), None);

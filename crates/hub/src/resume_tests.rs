@@ -409,6 +409,20 @@ impl Client {
         self.write.flush().unwrap();
     }
 
+    /// Sends a `subscribe` for the session at `level`.
+    fn subscribe(&mut self, id: &str, level: &str) {
+        let line = json!({
+            "id": id,
+            "session_id": SID,
+            "command": "subscribe",
+            "args": {"level": level},
+        });
+        let mut bytes = serde_json::to_vec(&line).unwrap();
+        bytes.push(b'\n');
+        self.write.write_all(&bytes).unwrap();
+        self.write.flush().unwrap();
+    }
+
     /// The next line. Panics past the deadline naming the wait.
     fn next(&mut self, what: &str) -> Value {
         let mut text = String::new();
@@ -666,4 +680,156 @@ fn an_exiting_process_that_never_ends_is_session_held_past_the_bound() {
     );
     assert_eq!(temp.clock.now(), temp.clock.origin() + SHUTDOWN_BOUND);
     assert!(starter.resumed().is_empty());
+}
+
+/// What the fake sessions received, as `(id, command, args.level)`: a
+/// `subscribe` carries its level, any other command the `send` helper's.
+fn received_levels(starter: &FakeStarter) -> Vec<(String, String, Option<String>)> {
+    starter
+        .received()
+        .iter()
+        .map(|text| {
+            let line: Value = serde_json::from_str(text).unwrap();
+            (
+                line["id"].as_str().unwrap().to_owned(),
+                line["command"].as_str().unwrap().to_owned(),
+                line.get("args")
+                    .and_then(|args| args.get("level"))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn a_resume_replays_the_level_the_connection_last_changed_to() {
+    let temp = Temp::new();
+    temp.recorded();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    client.subscribe("c_1", "summary");
+    assert_eq!(client.acknowledged("the subscribe"), "c_1");
+    client.subscribe("c_2", "full");
+    assert_eq!(client.acknowledged("the change"), "c_2");
+    assert!(starter.stop(&sid(), DEADLINE), "the fake session ended");
+    client.send("c_3", "reply");
+    // The client's lines are exactly the three acknowledgements.
+    assert_eq!(client.acknowledged("the reply"), "c_3");
+    let got = received_levels(&starter);
+    assert_eq!(got.len(), 4, "{got:?}");
+    assert_eq!(
+        got[0],
+        ("c_1".into(), "subscribe".into(), Some("summary".into()))
+    );
+    assert_eq!(
+        got[1],
+        ("c_2".into(), "subscribe".into(), Some("full".into()))
+    );
+    assert_eq!(got[2].1, "subscribe");
+    assert!(got[2].0.starts_with("c_"), "{got:?}");
+    assert_ne!(got[2].0, "c_1", "the replay carries an id of the hub's own");
+    assert_ne!(got[2].0, "c_2", "the replay carries an id of the hub's own");
+    assert_eq!(got[2].2, Some("full".into()), "{got:?}");
+    assert_eq!(got[3].0, "c_3");
+    assert_eq!(got[3].1, "reply");
+}
+
+#[test]
+fn the_level_is_recorded_before_its_acknowledgement_is_forwarded() {
+    let temp = Temp::new();
+    temp.recorded();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    // The hook runs inside the forward of each session line, with no lock
+    // held: on the line acknowledging `c_2` it reads the kept
+    // subscription, which the relay records before it forwards.
+    let (done, finished) = mpsc::channel();
+    *crate::connection::lock(&hub.before_forward) = Some(Box::new(move |line, relays| {
+        if crate::relay::acknowledges(line, "c_2") {
+            let level = crate::connection::lock(relays)
+                .subscribed
+                .iter()
+                .find(|(session, _)| session == SID)
+                .and_then(|(_, kept)| kept.get("args"))
+                .and_then(|args| args.get("level"))
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            if let Ok(()) = done.send(level) {}
+        }
+    }));
+    let mut client = Client::connect(&hub);
+    client.subscribe("c_1", "summary");
+    assert_eq!(client.acknowledged("the subscribe"), "c_1");
+    client.subscribe("c_2", "full");
+    assert_eq!(client.acknowledged("the change"), "c_2");
+    assert_eq!(
+        finished.recv_timeout(DEADLINE).expect("the hook ran"),
+        Some("full".into()),
+        "the recording runs before the forward"
+    );
+}
+
+#[test]
+fn a_rejected_change_leaves_the_replayed_level_unchanged() {
+    let temp = Temp::new();
+    temp.recorded();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    client.subscribe("c_1", "summary");
+    assert_eq!(client.acknowledged("the subscribe"), "c_1");
+    client.subscribe("c_2", "bogus");
+    let rejected = client.next("the rejection");
+    assert_eq!(rejected["kind"], "command_rejected", "{rejected}");
+    assert_eq!(rejected["payload"]["command_id"], "c_2");
+    assert_eq!(rejected["payload"]["code"], "invalid_arguments");
+    assert!(starter.stop(&sid(), DEADLINE), "the fake session ended");
+    client.send("c_3", "reply");
+    assert_eq!(client.acknowledged("the reply"), "c_3");
+    let got = received_levels(&starter);
+    assert_eq!(got.len(), 4, "{got:?}");
+    assert_eq!(
+        got[0],
+        ("c_1".into(), "subscribe".into(), Some("summary".into()))
+    );
+    assert_eq!(got[1].1, "subscribe");
+    assert_eq!(got[1].2, Some("bogus".into()), "{got:?}");
+    assert_eq!(got[2].1, "subscribe");
+    assert!(got[2].0.starts_with("c_"), "{got:?}");
+    assert_eq!(got[2].2, Some("summary".into()), "{got:?}");
+    assert_eq!(got[3].0, "c_3");
+    assert_eq!(got[3].1, "reply");
+}
+
+#[test]
+fn a_lowered_level_is_replayed() {
+    let temp = Temp::new();
+    temp.recorded();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    client.subscribe("c_1", "full");
+    assert_eq!(client.acknowledged("the subscribe"), "c_1");
+    client.subscribe("c_2", "summary");
+    assert_eq!(client.acknowledged("the change"), "c_2");
+    assert!(starter.stop(&sid(), DEADLINE), "the fake session ended");
+    client.send("c_3", "reply");
+    assert_eq!(client.acknowledged("the reply"), "c_3");
+    let got = received_levels(&starter);
+    assert_eq!(got.len(), 4, "{got:?}");
+    assert_eq!(
+        got[0],
+        ("c_1".into(), "subscribe".into(), Some("full".into()))
+    );
+    assert_eq!(
+        got[1],
+        ("c_2".into(), "subscribe".into(), Some("summary".into()))
+    );
+    assert_eq!(got[2].1, "subscribe");
+    assert!(got[2].0.starts_with("c_"), "{got:?}");
+    assert_eq!(got[2].2, Some("summary".into()), "{got:?}");
+    assert_eq!(got[3].0, "c_3");
+    assert_eq!(got[3].1, "reply");
 }
