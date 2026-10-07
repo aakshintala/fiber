@@ -1,0 +1,6 @@
+{
+  "case": "gemini.billing-disabled-chunk",
+  "source": "https://github.com/googleapis/googleapis/blob/master/google/api/error_reason.proto",
+  "raw_sse": "data: {\"error\":{\"code\":403,\"message\":\"The billing account for the project is disabled.\",\"status\":\"PERMISSION_DENIED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.ErrorInfo\",\"reason\":\"BILLING_DISABLED\",\"domain\":\"googleapis.com\"}]}}\n\n",
+  "note": "G2 applied to the stream. Only google_quota matches (code 403, not 402)."
+}

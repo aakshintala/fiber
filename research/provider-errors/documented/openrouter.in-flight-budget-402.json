@@ -1,0 +1,10 @@
+{
+  "case": "openrouter.in-flight-budget-402",
+  "source": "https://openrouter.ai/docs/api/reference/errors-and-debugging",
+  "status": 402,
+  "headers": {
+    "Retry-After": "5"
+  },
+  "body": "{\"error\":{\"code\":402,\"message\":\"No available provider could fulfill your request: in-flight request budget exceeded.\",\"metadata\":{\"error_type\":\"payment_required\",\"limit_source\":\"openrouter_in_flight_budget\"}}}",
+  "note": "Not mapped when the Retry-After header in seconds is present: the docs make it a wait-and-retry case. Stays rate_limited."
+}

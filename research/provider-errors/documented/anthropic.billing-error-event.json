@@ -1,0 +1,6 @@
+{
+  "case": "anthropic.billing-error-event",
+  "source": "https://platform.claude.com/docs/en/build-with-claude/streaming",
+  "raw_sse": "data: {\"type\":\"error\",\"error\":{\"type\":\"billing_error\",\"message\":\"There's an issue with your billing or payment information.\"}}\n\n",
+  "note": "An error event 'would normally correspond to' the HTTP error of the same type; applied to A1. Message is the docs' sentence (illustrative)."
+}

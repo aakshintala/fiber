@@ -3,7 +3,7 @@
 //! every new session, `fiber ask`'s included.
 
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use contract::clock::wall_ms;
@@ -23,7 +23,11 @@ use crate::{
 /// shared path reads it as the current directory exactly as `ask` does.
 /// With `--resume` the workspace is the one the log recorded, and the
 /// session is resumed instead of started. Stdin is never read.
-pub(crate) fn run(args: cli::SessionArgs, clock: Arc<dyn contract::clock::Clock>) -> i32 {
+pub(crate) fn run(
+    args: cli::SessionArgs,
+    clock: Arc<dyn contract::clock::Clock>,
+    fiber: Result<PathBuf, String>,
+) -> i32 {
     if let Err(e) = std::env::set_current_dir(&args.workspace) {
         return ask_failed(failed(
             ErrorCode::IoFailed,
@@ -36,7 +40,13 @@ pub(crate) fn run(args: cli::SessionArgs, clock: Arc<dyn contract::clock::Clock>
         Err(e) => return ask_failed(failed(ErrorCode::IoFailed, format!("signals: {e}"))),
     };
     if args.resume {
-        return crate::resume::session_resume(SessionId(args.id), args.model, clock, &signals);
+        return crate::resume::session_resume(
+            SessionId(args.id),
+            args.model,
+            clock,
+            &signals,
+            fiber,
+        );
     }
     new_session(
         SessionId(args.id),
@@ -45,6 +55,7 @@ pub(crate) fn run(args: cli::SessionArgs, clock: Arc<dyn contract::clock::Clock>
         false,
         clock,
         &signals,
+        fiber,
     )
 }
 
@@ -60,6 +71,7 @@ pub(crate) fn new_session(
     one_turn: bool,
     clock: Arc<dyn contract::clock::Clock>,
     signals: &doors::Signals,
+    fiber: Result<PathBuf, String>,
 ) -> i32 {
     let mut parts = match parts_with(model, None, None, Arc::clone(&clock)) {
         Ok(parts) => parts,
@@ -96,6 +108,7 @@ pub(crate) fn new_session(
     // Before the log exists: a failure here, such as not finding the running
     // binary, leaves no session line; every server starts with the session too.
     let (tools, infos, driver, session_servers) = match mcp_servers::session_tools(
+        fiber,
         &home,
         &workspace,
         &dir.join("artifacts"),

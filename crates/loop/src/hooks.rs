@@ -90,7 +90,7 @@ impl Loop {
             process: ran.process,
         });
         for notice in answer.notices {
-            self.append(&Event::Notice(notice), turn, Some(id))?;
+            self.append(&Event::Notice(notice), turn, None)?;
         }
         let changed_by = (!answer.changed_by.is_empty()).then_some(answer.changed_by);
         let mut shaped = match answer.outcome {

@@ -198,6 +198,7 @@ fn post_with(
             body,
             retry_after,
             should_retry,
+            url: crate::error::target(url),
         });
     }
     Ok((response.into_body().into_reader(), should_retry))

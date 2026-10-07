@@ -305,3 +305,62 @@ fn the_session_command_resumes_with_the_recorded_workspace_and_no_model() {
         ]
     );
 }
+
+/// An executable that prints a `fiber_exited` line whose message is
+/// `marker`, so a start through it is told apart from any other binary.
+fn stub_binary(root: &fakes::TempDir, marker: &str) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let path = root.path().join("fiber-stub");
+    let line = exited_line("io_failed", marker).replace('\'', "'\\''");
+    std::fs::write(&path, format!("#!/bin/sh\nprintf '%s\\n' '{line}'\n")).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    path
+}
+
+/// The failure a started session reports once it has exited.
+fn exit_of(started: Box<dyn hub::Started>) -> Failure {
+    let (done_tx, done_rx) = mpsc::channel();
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    thread::Builder::new()
+        .name("hub-test-exit".to_owned())
+        .spawn({
+            let stop = Arc::clone(&stop);
+            move || {
+                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    if let Some(failure) = started.exited() {
+                        done_tx.send(failure).unwrap_or(());
+                        return;
+                    }
+                    thread::yield_now();
+                }
+            }
+        })
+        .unwrap();
+    let exit = done_rx.recv_timeout(DRAIN_DEADLINE);
+    // The poll thread ends with the wait, whichever way the wait ended.
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    exit.expect("the session exits before its deadline")
+}
+
+#[test]
+fn start_runs_the_recorded_path() {
+    let root = fakes::TempDir::new("hstart");
+    let (_, workspace) = home_and_workspace(&root);
+    let starter = SpawnStarter {
+        exe: stub_binary(&root, "recorded start"),
+    };
+    let started =
+        hub::Starter::start(&starter, &SessionId("s1".to_owned()), &workspace, None).unwrap();
+    assert_eq!(exit_of(started).message, "recorded start");
+}
+
+#[test]
+fn resume_runs_the_recorded_path() {
+    let root = fakes::TempDir::new("hresume");
+    let (_, workspace) = home_and_workspace(&root);
+    let starter = SpawnStarter {
+        exe: stub_binary(&root, "recorded resume"),
+    };
+    let started = hub::Starter::resume(&starter, &SessionId("s1".to_owned()), &workspace).unwrap();
+    assert_eq!(exit_of(started).message, "recorded resume");
+}

@@ -673,7 +673,7 @@ fn images_follow_the_hooks_content() {
 }
 
 #[test]
-fn the_hooks_notices_are_written_under_the_call_before_its_completion() {
+fn the_hooks_notices_carry_no_action_id_and_precede_the_completion() {
     let notice = Notice {
         code: ErrorCode::HookFailed,
         message: "The `after_tool` hook failed: boom.".into(),
@@ -690,7 +690,7 @@ fn the_hooks_notices_are_written_under_the_call_before_its_completion() {
     let notice = &ran.streamed[at("notice")];
     assert_eq!(notice.payload["code"], "hook_failed");
     assert_eq!(notice.payload["extension"], "acme");
-    assert_eq!(notice.action_id, ran.completed().action_id);
+    assert!(notice.action_id.is_none());
     assert!(at("notice") < at("tool_call_completed"));
 }
 

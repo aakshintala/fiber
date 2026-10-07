@@ -18,16 +18,20 @@ use serde_json::Value;
 use crate::{cli, settings};
 
 /// Runs the internal hub command.
-pub(crate) fn run(command: cli::HubCommands) -> i32 {
+pub(crate) fn run(command: cli::HubCommands, exe: Result<PathBuf, String>) -> i32 {
     match command {
-        cli::HubCommands::Serve => serve(),
+        cli::HubCommands::Serve => serve(exe),
     }
 }
 
-fn serve() -> i32 {
+fn serve(exe: Result<PathBuf, String>) -> i32 {
     let home = match config::fiber_home_from_env() {
         Ok(home) => home,
         Err(error) => return fail(failure(error.code(), error.to_string())),
+    };
+    let exe = match exe {
+        Ok(exe) => exe,
+        Err(message) => return fail(failure(ErrorCode::IoFailed, message)),
     };
     let clock: Arc<dyn contract::clock::Clock> = Arc::new(crate::clock::System);
     let configure = {
@@ -38,7 +42,7 @@ fn serve() -> i32 {
         &home,
         configure,
         env!("CARGO_PKG_VERSION"),
-        Arc::new(SpawnStarter),
+        Arc::new(SpawnStarter { exe }),
         clock,
     ))
 }
@@ -89,13 +93,16 @@ fn fail(failure: Failure) -> i32 {
     doors::exit_code(&failure)
 }
 
-/// Starts the internal session command: `<current_exe> session --id <id>
+/// Starts the internal session command: `<exe> session --id <id>
 /// --workspace <workspace> [--model <model>]`, never `--prompt`, or with
 /// `--resume` for a session the log holds. Whoever starts a session
 /// generates its id and passes it on that command's line, so the starter
 /// knows the id before the process runs and nothing is read back
 /// (`docs/invocation.md`, "The hub").
-struct SpawnStarter;
+struct SpawnStarter {
+    /// This process's path, read once when the hub starts.
+    exe: PathBuf,
+}
 
 impl hub::Starter for SpawnStarter {
     fn start(
@@ -104,13 +111,11 @@ impl hub::Starter for SpawnStarter {
         workspace: &Path,
         model: Option<&str>,
     ) -> std::io::Result<Box<dyn hub::Started>> {
-        let exe = std::env::current_exe()?;
-        spawn(id, session_command(&exe, id, workspace, model, false))
+        spawn(id, session_command(&self.exe, id, workspace, model, false))
     }
 
     fn resume(&self, id: &SessionId, workspace: &Path) -> std::io::Result<Box<dyn hub::Started>> {
-        let exe = std::env::current_exe()?;
-        spawn(id, session_command(&exe, id, workspace, None, true))
+        spawn(id, session_command(&self.exe, id, workspace, None, true))
     }
 }
 

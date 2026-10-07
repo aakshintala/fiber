@@ -11,7 +11,7 @@
 //! debt: repository approval moves to #599; the trigger is that ticket landing.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -73,9 +73,10 @@ pub(crate) struct SessionServers {
 )]
 #[allow(
     clippy::too_many_arguments,
-    reason = "one session's tools: home joins the arguments builtin already takes"
+    reason = "one session's tools needs home and the recorded executable alongside builtin's arguments"
 )]
 pub(crate) fn session_tools(
+    fiber: Result<PathBuf, String>,
     home: &Path,
     workspace: &Path,
     artifacts: &Path,
@@ -93,8 +94,9 @@ pub(crate) fn session_tools(
     ),
     Failure,
 > {
+    let fiber = fiber.map_err(|message| crate::failed(ErrorCode::IoFailed, message))?;
     let (mut tools, mut infos, driver, forget) =
-        crate::builtin::builtin(workspace, artifacts, clock, jobs, locks, web_search)?;
+        crate::builtin::builtin(fiber, workspace, artifacts, clock, jobs, locks, web_search)?;
     // Every spec starts with the session, except a cached non-required
     // one, which is declared from its cache and starts on its first call;
     // a server that fails is left out and its failure is returned for the

@@ -1,0 +1,6 @@
+{
+  "case": "gemini.resource-exhausted-chunk",
+  "source": "https://ai.google.dev/gemini-api/docs/rate-limits",
+  "raw_sse": "data: {\"error\":{\"code\":429,\"message\":\"Quota exceeded for requests per minute.\",\"status\":\"RESOURCE_EXHAUSTED\"}}\n\n",
+  "note": "Not mapped: bare RESOURCE_EXHAUSTED in the stream, the RPM/TPM/RPD overrun shape. Stays rate_limited."
+}

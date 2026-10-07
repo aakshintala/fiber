@@ -1,0 +1,8 @@
+{
+  "case": "anthropic.billing-402",
+  "source": "https://platform.claude.com/docs/en/api/errors",
+  "status": 402,
+  "headers": {},
+  "body": "{\"type\":\"error\",\"error\":{\"type\":\"billing_error\",\"message\":\"There's an issue with your billing or payment information.\"},\"request_id\":\"req_illustrative\"}",
+  "note": "Message text is the docs' own sentence (illustrative); status 402 and type billing_error are documented."
+}

@@ -122,15 +122,15 @@ policy is `docs/model-routing.md`, "When a model call fails".
 
 | Code | What it covers | Retried |
 |---|---|---|
-| `rate_limited` | HTTP 429 | yes |
+| `rate_limited` | HTTP 429 other than a quota or billing error; an OpenRouter in-flight budget 402 that carries a `Retry-After` in seconds | yes |
 | `provider_unavailable` | HTTP 5xx, including 503 and 529 overload, HTTP 408 and HTTP 409 | yes |
 | `connection_failed` | DNS, TLS, a refused or dropped connection | yes |
 | `stream_incomplete` | a stream that ended before its protocol's terminal event, an `openai-responses` terminal event whose status is `in_progress` or `queued`, or an error inside an HTTP 200 response that no other code matches | yes |
-| `quota_exceeded` | quota, billing or a subscription limit | never |
+| `quota_exceeded` | quota, billing or a subscription limit, as an HTTP status or inside the stream ("Recognising a quota or billing error") | never |
 | `authentication_failed` | HTTP 401, a rejected key, an OAuth refresh the token endpoint rejected | never |
 | `context_overflow` | the request does not fit the model's context window | the overflow rule (`docs/handoff.md`, "Overflow") |
 | `refused` | the provider declined to answer on policy grounds, including an `openai-completions` `finish_reason` of `content_filter` and a Gemini safety finish reason | never |
-| `model_not_found` | the provider's error body says it does not know the model: a code `model_not_found`, a `not_found_error` whose message names the model, or OpenRouter's "is not a valid model ID" (`research/provider-errors/README.md`, "Unknown model"). A 404 alone is not enough, since a wrong base URL also returns 404 | never |
+| `model_not_found` | the provider's error body says it does not know the model: a code `model_not_found`, a `not_found_error` whose message names the model, Gemini's `NOT_FOUND` for a `models/` name, or OpenRouter's "is not a valid model ID" (`research/provider-errors/README.md`, "Unknown model"). A 404 alone is not enough, since a wrong base URL also returns 404 | never |
 | `invalid_request` | any other HTTP 4xx; for a 404 the message names the status and the requested host and path, never the query string | never |
 | `unknown_stop_reason` | a stop or finish reason the protocol does not map; the message carries the raw value | never |
 
@@ -173,6 +173,48 @@ way.
 Fiber also checks its own token estimate before sending, and hands off at
 the point `docs/handoff.md`, "Automatic", sets, so a provider-reported overflow is
 the exception.
+
+### Recognising a quota or billing error
+
+`quota_exceeded` is matched only on the shapes vendors document
+(`research/provider-errors/quota.md`, one fixture each in
+`research/provider-errors/documented/`):
+
+- Anthropic: HTTP 402 `billing_error`; HTTP 429 `rate_limit_error` with
+  `details.error_code` `enforced_spend_limit_reached` and no `retry-after`;
+  HTTP 400 `invalid_request_error` with a message beginning `You have
+  reached your specified API usage limits` or `You have reached your
+  specified workspace API usage limits`.
+- OpenAI: HTTP 429 with `error.code` `credit_balance_exhausted`,
+  `organization_spend_limit_exceeded`, `project_spend_limit_exceeded` or
+  `organization_usage_limit_exceeded`, or `insufficient_quota` as the
+  `error.type` or the `error.code`.
+- Gemini: HTTP 402 on depleted Prepay credits; on any status, an
+  `error.details[]` entry whose `@type` is
+  `type.googleapis.com/google.rpc.ErrorInfo` and whose `reason` is
+  `BILLING_DISABLED` or `RESOURCE_QUOTA_EXCEEDED`.
+- OpenRouter: HTTP 402 "Your account or API key has insufficient credits".
+- Inside a 200 stream: an Anthropic `error` event of the 402 or 429 shapes
+  above; an OpenRouter chunk whose `error.code` is the number 402; a Gemini
+  in-stream `error` whose `code` is the number 402 or whose `details` hold
+  one of the quota `ErrorInfo` reasons above.
+
+Authentication is checked first: a 401, or a 400 with an `API_KEY_INVALID`
+reason, keeps `authentication_failed`. Any other match above is
+`quota_exceeded`, whatever the status: it wins over a 429, a 5xx, a 404 and
+an unknown-model or overflow shape, since only paying or raising a limit
+fixes it.
+
+What stays `rate_limited`: a bare `RESOURCE_EXHAUSTED`, with only a
+`google.rpc.QuotaFailure` detail or none, in the status or the stream; a
+Google `ErrorInfo` reason `RATE_LIMIT_EXCEEDED`; the Claude Code
+workspace's spend-limit 429, which carries `retry-after` and has no field
+telling it apart from a rate limit; and an OpenRouter in-flight budget 402
+that carries a `Retry-After` in seconds.
+
+Amazon Bedrock waits for its framing: no Fiber request reaches its Invoke
+API yet, so its quota exception is classified in the ticket that builds it
+(#221).
 
 ### Output tokens
 
@@ -321,7 +363,9 @@ are `docs/invocation.md`, "Driver commands".
 
 - What a session does when a log write fails, such as a full disk. The code is
   `io_failed`.
-- Rate-limit, overload, quota, billing and refusal bodies were not reached by
+- Rate-limit, overload and refusal bodies were not reached by
   the probe; their matches rest on protocol documentation until one is seen.
+  Quota and billing matches rest on vendor documentation
+  (`research/provider-errors/quota.md`) until a live body is seen.
   ChatGPT/codex documents no usage-limit body, so its match rests on reference
   implementations (`docs/model-routing.md`, "Protocols and providers").

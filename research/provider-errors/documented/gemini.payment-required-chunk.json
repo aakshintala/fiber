@@ -1,0 +1,6 @@
+{
+  "case": "gemini.payment-required-chunk",
+  "source": "https://ai.google.dev/gemini-api/docs/billing",
+  "raw_sse": "data: {\"error\":{\"code\":402,\"message\":\"Your prepayment credits are depleted.\"}}\n\n",
+  "note": "Inferred from G1, not documented: Gemini documents no separate in-stream error shape. Code 402 as a number, no details."
+}
