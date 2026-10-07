@@ -7,6 +7,7 @@ publish.workspace = true
 
 [dependencies]
 contract = { path = "../contract" }
+log = { path = "../log" }
 serde.workspace = true
 serde_json.workspace = true
 signal-hook = "0.3"

@@ -144,6 +144,9 @@ fn run() -> i32 {
         }
         cli::Invocation::Run(Some(cli::Commands::Hub(command))) => hub_command::run(command),
         cli::Invocation::Run(Some(cli::Commands::Sessions(cmd))) => match cmd {
+            cli::SessionsCommands::Delete { cascade, yes, id } => {
+                sessions_delete(&id, cascade, yes, clock.as_ref())
+            }
             cli::SessionsCommands::Export { id, path } => ::cli::export(&id, path.as_deref()),
         },
         cli::Invocation::Run(Some(cli::Commands::Models(args))) => ::cli::models(
@@ -601,21 +604,8 @@ fn terminal() -> i32 {
         Err(e) => return fail(failed(ErrorCode::IoFailed, format!("the terminal: {e}"))),
     };
     let hub_clock = Arc::clone(&clock);
-    let connect: tui::Connect = Box::new(move || {
-        let mut start = || {
-            let exe = std::env::current_exe()?;
-            std::process::Command::new(exe)
-                .arg("hub")
-                .arg("serve")
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .process_group(0)
-                .spawn()
-                .map(|_| ())
-        };
-        doors::hub::connect(&home, &mut start, hub_clock.as_ref())
-    });
+    let connect: tui::Connect =
+        Box::new(move || doors::hub::connect(&home, &mut start_hub, hub_clock.as_ref()));
     let project = log::project_key(&doors::project(&workspace));
     tui::run(
         tty,
@@ -626,6 +616,30 @@ fn terminal() -> i32 {
         clock,
         hover,
     )
+}
+
+/// Starts `fiber hub serve` detached, as every client of the hub does when
+/// none is running (`docs/invocation.md`, "The hub").
+fn start_hub() -> io::Result<()> {
+    let exe = std::env::current_exe()?;
+    std::process::Command::new(exe)
+        .arg("hub")
+        .arg("serve")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .process_group(0)
+        .spawn()
+        .map(|_| ())
+}
+
+/// `fiber sessions delete`: the hub it reaches is started when none runs.
+fn sessions_delete(id: &str, cascade: bool, yes: bool, clock: &dyn contract::clock::Clock) -> i32 {
+    let mut connect = || {
+        let home = config::fiber_home_from_env().map_err(io::Error::other)?;
+        doors::hub::connect(&home, &mut start_hub, clock)
+    };
+    ::cli::delete(id, cascade, yes, &mut connect)
 }
 
 fn usage(message: impl Into<String>) -> Failure {

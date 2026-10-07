@@ -3,12 +3,13 @@
 //! It holds no session.
 //!
 //! [`serve`] listens on `run/hub`, answers `start`, `status`,
-//! `prompt_history`, `feed`, `dismiss` and `recent`, and relays session
-//! commands to `run/<session_id>` (`docs/invocation.md`, "What the hub
-//! speaks"). It exits once no client has been connected for
+//! `prompt_history`, `feed`, `dismiss`, `recent` and `delete`, and relays
+//! session commands to `run/<session_id>` (`docs/invocation.md`, "What the
+//! hub speaks"). It exits once no client has been connected for
 //! `hub.idle_exit_ms` (`docs/configuration.md`).
 
 mod connection;
+mod delete;
 mod diag;
 mod error;
 #[cfg(test)]

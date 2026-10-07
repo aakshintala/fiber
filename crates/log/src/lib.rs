@@ -7,6 +7,7 @@
 //! [`Watcher`] are the reading side, which `tui` and `doors` may use
 //! (`docs/architecture.md`, "The call rules").
 
+mod dependents;
 mod export;
 mod offsets;
 mod read;
@@ -18,6 +19,7 @@ use std::path::{Path, PathBuf};
 
 use contract::{ErrorCode, SessionId};
 
+pub use dependents::dependents;
 pub use export::export;
 pub use read::{Injector, Lines, Watcher, lines, read};
 pub use resolve::resolve;
