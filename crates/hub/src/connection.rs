@@ -399,6 +399,10 @@ fn on_command(
     match line.command.as_str() {
         "start" => on_start(&line.id, &line.args, hub, writer),
         "status" => on_status(&line.id, &line.args, hub, writer),
+        "prompt_history" => match crate::prompt_history::answer(&hub.home, &line.args) {
+            Ok(result) => accept_result(writer, hub, &line.id, result),
+            Err((code, message)) => reject(writer, hub, Some(&line.id), &code, message),
+        },
         command => {
             let message = format!("`{command}` is not a hub command.");
             reject(

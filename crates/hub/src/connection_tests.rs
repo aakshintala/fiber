@@ -226,6 +226,33 @@ fn status_answers_running_version_and_clients() {
 }
 
 #[test]
+fn prompt_history_answers_a_page_and_rejects_a_bad_key() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    let project = temp.dir.join("projects/k");
+    fs::create_dir_all(&project).unwrap();
+    let older = json!({"ts": 1, "session_id": "s_1", "content": [{"type": "text", "text": "a"}]});
+    let newer = json!({"ts": 2, "session_id": "s_1", "content": [{"type": "text", "text": "b"}]});
+    fs::write(project.join("history.jsonl"), format!("{older}\n{newer}\n")).unwrap();
+    let mut client = Client::connect(&hub);
+    client.hello();
+    client.send(&command("c_1", "prompt_history", json!({"project": "k"})));
+    let (id, result) = accepted(&client.next("the page"));
+    assert_eq!(id, "c_1");
+    assert_eq!(result, json!({"prompts": [newer, older]}));
+    client.send(&command("c_2", "prompt_history", json!({"project": ".."})));
+    let (code, id, message) = rejected(&client.next("the rejection"));
+    assert_eq!(
+        (code.as_str(), id.as_deref(), message.as_str()),
+        (
+            "invalid_arguments",
+            Some("c_2"),
+            "The arguments do not fit this command."
+        )
+    );
+}
+
+#[test]
 fn status_counts_both_open_connections() {
     let temp = Temp::new();
     let hub = temp.hub(FakeStarter::hang(&temp.dir));

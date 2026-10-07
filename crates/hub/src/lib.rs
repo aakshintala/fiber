@@ -14,6 +14,7 @@ mod error;
 pub(crate) mod fake;
 mod idle;
 mod listen;
+mod prompt_history;
 mod start;
 
 use std::io;
