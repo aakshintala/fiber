@@ -8,6 +8,7 @@
 //! `sign()` (`docs/model-routing.md`, "Model discovery", "Signing a request"
 //! and "Credentials").
 
+mod commands;
 mod git;
 mod hooks;
 mod host;

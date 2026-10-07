@@ -893,6 +893,12 @@ fn lua_providers_lists_each_registered_provider_in_provider_name_order() {
     let sessioned = Arc::clone(&session);
     let functions = bounded(move || sessioned.lua_providers()[0].1.functions().unwrap());
     assert_eq!(functions, ["models"]);
+    // A command-only extension stays loaded: its command is listed with its
+    // description and the extension's name as the tag.
+    let commands = session.commands();
+    assert_eq!(commands.len(), 1);
+    assert_eq!(commands[0].name, "x");
+    assert_eq!(commands[0].tag, "fiber.test/none");
 }
 
 #[test]
