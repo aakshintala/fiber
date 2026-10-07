@@ -3,13 +3,29 @@
 //! of a person's answer. No I/O and no log writes; `calls.rs` reads the rules
 //! once per call, writes the decision lines and waits for a reply.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use contract::commands::{RememberScope, ReplyAnswer};
 use contract::events::{DecidedBy, Decision, Grant, RuleOffer, RuleScope, StandingRule};
 use contract::rules::{RuleDecision, RulesError, StandingRules};
 use contract::shapes::{DeclaredEffects, Effect};
 use contract::tool::Effects;
+
+/// What a session's calls are judged against (`docs/permissions.md`, "The
+/// order a call is judged in").
+pub struct Permissions {
+    /// The workspace, as `session_started` records it; fast paths resolve
+    /// against it.
+    pub workspace: String,
+    /// Fiber home's `credentials/` directory.
+    pub credentials: PathBuf,
+    /// The path of every configured `file` credential source, absolute
+    /// (`docs/permissions.md`, "Credentials").
+    pub credential_files: Vec<PathBuf>,
+    /// The standing rules.
+    pub rules: Arc<dyn contract::rules::Rules>,
+}
 
 /// What steps 1 to 6 say about one call.
 pub(crate) enum Verdict {
@@ -33,7 +49,12 @@ pub(crate) enum Verdict {
 /// deny, a standing ask, a fast path, a session grant, then a standing
 /// allow. `rules` is both files read now; `grants` are the session's grants
 /// so far. `home` is Fiber home, resolved inside the fast-path check;
-/// `credentials` is the resolved credentials directory.
+/// `credentials` is the resolved credentials directory and `files` the
+/// resolved configured credential files.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "each is one input to the judgment; none belong together"
+)]
 pub(crate) fn judge(
     tool: &str,
     effects: &Effects,
@@ -42,8 +63,9 @@ pub(crate) fn judge(
     workspace: &Path,
     home: &Path,
     credentials: &Path,
+    files: &[PathBuf],
 ) -> Verdict {
-    if let Some(why) = credential_why(&effects.declared, workspace, credentials) {
+    if let Some(why) = credential_why(&effects.declared, workspace, credentials, files) {
         return Verdict::Deny {
             by: DecidedBy::CredentialDeny,
             reason: "credentials",
@@ -87,32 +109,43 @@ pub(crate) fn judge(
 }
 
 /// Why the credential deny refuses a call with `declared` effects, if it
-/// does: one of its paths touches the credentials directory, by being it,
-/// sitting inside it, or containing it (Fiber home, `$HOME`, `/`), since a
-/// recursive read of a containing directory reads every stored key.
-/// Containment is by whole path components. A path that does not resolve
-/// counts as touching (fail closed). No paths, or no declared paths, never
-/// matches.
+/// does: one of its paths touches the credentials directory or one of
+/// `files`, by being it, sitting inside it, or containing it (Fiber home,
+/// `$HOME`, `/`), since a recursive read of a containing directory reads
+/// every stored key. Containment is by whole path components. A path that
+/// does not resolve counts as touching (fail closed). No paths, or no
+/// declared paths, never matches. `credentials` and `files` are resolved.
 pub(crate) fn credential_why(
     declared: &DeclaredEffects,
     workspace: &Path,
     credentials: &Path,
+    files: &[PathBuf],
 ) -> Option<String> {
     let paths = declared.paths.as_ref()?;
-    paths
+    // `join` replaces the workspace when the path is absolute.
+    let resolved: Vec<Option<PathBuf>> = paths
         .iter()
-        .any(|path| {
-            // `join` replaces the workspace when the path is absolute.
-            match super::calls::resolve(&workspace.join(path)) {
-                None => true,
-                Some(resolved) => {
-                    resolved == credentials
-                        || resolved.starts_with(credentials)
-                        || credentials.starts_with(&resolved)
-                }
-            }
+        .map(|path| super::calls::resolve(&workspace.join(path)))
+        .collect();
+    let touches = |protected: &Path| {
+        resolved.iter().any(|path| match path {
+            None => true,
+            Some(path) => path.starts_with(protected) || protected.starts_with(path),
         })
-        .then(|| "The call touches Fiber's credential directory.".to_owned())
+    };
+    if touches(credentials) {
+        return Some("The call touches Fiber's credential directory.".to_owned());
+    }
+    files
+        .iter()
+        .any(|file| touches(file))
+        .then(|| "The call touches a configured credential file.".to_owned())
+}
+
+/// `path` with symlinks resolved and `..` removed, or as given when it does
+/// not resolve: how the loop holds what the credential deny protects.
+pub(crate) fn resolved(path: PathBuf) -> PathBuf {
+    super::calls::resolve(&path).unwrap_or(path)
 }
 
 /// Whether a call with `declared` effects takes a fast path

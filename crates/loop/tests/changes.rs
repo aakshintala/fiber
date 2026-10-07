@@ -1101,6 +1101,7 @@ impl Resumed {
         r#loop::Permissions {
             workspace: self.workspace.display().to_string(),
             credentials: self.credentials.clone(),
+            credential_files: Vec::new(),
             rules: self.rules.clone(),
         }
     }

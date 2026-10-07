@@ -182,6 +182,7 @@ impl World {
             crate::Permissions {
                 workspace: workspace.display().to_string(),
                 credentials: home.path().join("credentials"),
+                credential_files: Vec::new(),
                 rules: Arc::new(NoRules),
             },
         )
@@ -486,6 +487,7 @@ fn an_extension_log_taken_while_settling_is_written_and_never_saved() {
         crate::Permissions {
             workspace: workspace.display().to_string(),
             credentials: home.path().join("credentials"),
+            credential_files: Vec::new(),
             rules: Arc::new(NoRules),
         },
     )

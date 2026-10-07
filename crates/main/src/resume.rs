@@ -151,6 +151,7 @@ fn resumed_session(
         warm,
         home,
         project,
+        credential_files,
         extensions,
         locks,
         mcp,
@@ -183,7 +184,13 @@ fn resumed_session(
     };
     let forget = Arc::clone(&session_servers.forget);
     let workspace = std::path::PathBuf::from(&folded.workspace);
-    let permissions = crate::ask_permissions(&home, &project, folded.workspace.clone(), &clock);
+    let permissions = crate::ask_permissions(
+        &home,
+        &project,
+        folded.workspace.clone(),
+        credential_files,
+        &clock,
+    );
     let session = match Session::resume(
         &home,
         dir,

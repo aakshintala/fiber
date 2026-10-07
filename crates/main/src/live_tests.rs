@@ -269,6 +269,7 @@ fn live_reviewer() {
         r#loop::Permissions {
             workspace: workspace.display().to_string(),
             credentials,
+            credential_files: Vec::new(),
             rules: Arc::new(EmptyRules),
         },
     )

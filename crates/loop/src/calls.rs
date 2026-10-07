@@ -373,6 +373,7 @@ impl Loop {
             &self.workspace,
             &self.prompt.home,
             &self.credentials,
+            &self.credential_files,
         ) {
             super::permission::Verdict::Deny { by, reason, why } => {
                 let text = format!("{why} It did not run.");
