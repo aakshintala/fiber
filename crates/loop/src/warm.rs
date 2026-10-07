@@ -92,7 +92,7 @@ impl Loop {
             let prices = self.model.cost.clone();
             let subscription = self.model.subscription;
             let recorded =
-                crate::usage::recorded(*usage, None, &model, prices.as_ref(), subscription);
+                crate::usage::recorded(usage.clone(), None, &model, prices.as_ref(), subscription);
             self.log
                 .append(&Event::UsageRecorded(recorded.clone()), None, None)?;
             self.ledger.record(&recorded);
