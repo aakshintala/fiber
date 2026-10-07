@@ -841,6 +841,41 @@ fn a_failure_before_any_session_ends_stdout_with_fiber_exited_and_no_session_id(
 }
 
 #[test]
+fn a_model_with_no_context_window_is_left_out_before_the_session() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([]).unwrap();
+    setup.provider(&server);
+    let source = setup.home().join("extensions/fake/providers/fake.json");
+    let text = fs::read_to_string(&source)
+        .unwrap()
+        .replace("\"context_window\":100000,", "");
+    assert!(!text.contains("context_window"), "{text}");
+    fs::write(&source, text).unwrap();
+
+    let run = setup.fiber(&["ask", "hi"], None);
+
+    assert_pre_session(&run, 1, "no_model");
+    assert!(server.requests().is_empty());
+}
+
+#[test]
+fn preamble_built_records_the_models_declared_window() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+
+    let run = setup.fiber(&["ask", "hi"], None);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let built = run
+        .lines
+        .iter()
+        .find(|l| l["kind"] == "preamble_built")
+        .unwrap();
+    assert_eq!(built["payload"]["context_window"], 100_000);
+}
+
+#[test]
 fn a_missing_credential_fails_before_the_session() {
     let setup = Setup::new();
     let server = ProviderServer::start([]).unwrap();
