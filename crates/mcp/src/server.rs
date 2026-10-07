@@ -2,7 +2,7 @@
 //! pipe, requests answered by id, and a stop that closes stdin, waits a
 //! grace on the clock, then kills and reaps (`docs/mcp.md`, "Starting
 //! servers"); a signal during startup stops every start through
-//! [`stop_every_start`]. Time comes only from the injected
+//! [`crate::registry::stop_every_start`]. Time comes only from the injected
 //! [`contract::clock::Clock`]; no process group is ever signalled: only a
 //! server's own process, by pid.
 
@@ -10,16 +10,17 @@ use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak, mpsc};
+use std::sync::{Arc, Condvar, Mutex, PoisonError, Weak, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use contract::clock::{Clock, Wake};
 use contract::tool::Cancel;
-use rustix::process::{Pid, Signal};
+use rustix::process::Signal;
 use serde_json::Value;
 
 use crate::effects::Hints;
+use crate::registry::{LIVE, Stopping, before_lock, before_signal, lock, signal};
 use crate::rpc::{
     Incoming, Outcome, decode_line, encode_error, encode_notification, encode_request,
     encode_result,
@@ -36,96 +37,6 @@ const MAX_LINE: usize = 4 * 1024 * 1024;
 /// The grace between closing stdin and killing the child: the shell's
 /// `GRACE` (`crates/tools/src/shell/command.rs`).
 const GRACE: Duration = Duration::from_millis(800);
-
-/// Every server child's pid, from its spawn until its reap: what
-/// [`kill_every_server`] reaches.
-static LIVE: Mutex<Vec<u32>> = Mutex::new(Vec::new());
-
-/// Stops every server still starting, and every start after it: the flag is
-/// sticky for the life of the process. It sets the flag and wakes the parked
-/// handshakes; the stop and reap run on each start's own thread. Idempotent.
-pub fn stop_every_start() {
-    *lock(&STOPPED) = true;
-    // Dropped before any wake: a wake takes the shared lock.
-    let waiting = std::mem::take(&mut *lock(&WAITING));
-    for waker in waiting {
-        if let Some(waker) = waker.upgrade() {
-            waker.wake();
-        }
-    }
-}
-
-static STOPPED: Mutex<bool> = Mutex::new(false);
-static WAITING: Mutex<Vec<Weak<dyn Wake>>> = Mutex::new(Vec::new());
-
-/// The handshake's cancel, fired by [`stop_every_start`].
-struct Stopping;
-
-impl Cancel for Stopping {
-    fn is_cancelled(&self) -> bool {
-        *lock(&STOPPED)
-    }
-
-    fn subscribe(&self, waker: Weak<dyn Wake>) {
-        let mut waiting = lock(&WAITING);
-        // A finished start drops its bridge and leaves a dead entry: pruned
-        // here, so the list holds only the starts still running.
-        waiting.retain(|listed| listed.upgrade().is_some());
-        waiting.push(waker);
-    }
-}
-
-/// Sends SIGKILL to every server child not yet reaped, at once
-/// (`docs/invocation.md`, "Shutdown": the bound). A pid of 1 or less is
-/// never signalled.
-pub fn kill_every_server() {
-    // Held while `kill` runs: a reap unlists its pid under this lock before
-    // it waits, so every pid signalled here is still unreaped and cannot
-    // have been reused.
-    let live = lock(&LIVE);
-    before_signal();
-    signal(&live, Signal::KILL);
-}
-
-/// Runs while a signaller holds the lock that keeps its pids unreaped, just
-/// before `kill`: the seam a test pauses on to force a reap against it.
-#[cfg(test)]
-fn before_signal() {
-    tests::before_signal();
-}
-
-#[cfg(not(test))]
-fn before_signal() {}
-
-/// Runs as a reap is about to take `which` lock (`child` or `live`): the
-/// seam a test waits on to know the reap contends before it asserts.
-#[cfg(test)]
-fn before_lock(which: &'static str) {
-    tests::before_lock(which);
-}
-
-#[cfg(not(test))]
-fn before_lock(_which: &'static str) {}
-
-/// Sends `signal` to each of `pids`, leaving out every id [`refused`]
-/// names.
-fn signal(pids: &[u32], signal: Signal) {
-    for pid in pids.iter().filter(|pid| !refused(**pid)) {
-        if let Some(pid) = i32::try_from(*pid).ok().and_then(Pid::from_raw) {
-            // A server already gone refuses the signal; its reap still runs.
-            match rustix::process::kill_process(pid, signal) {
-                Ok(()) | Err(_) => {}
-            }
-        }
-    }
-}
-
-/// A pid of 1 or less is never a server's: `kill(-1)` reaches every
-/// process the user owns, and `kill(0)` this process's own group. Tested
-/// as a function, so a mutant of it signals nothing.
-fn refused(pid: u32) -> bool {
-    pid <= 1
-}
 
 /// One tool the server lists: its name, description, schema and hints, as
 /// [`crate::tool`] declares them.
@@ -640,10 +551,6 @@ impl Shared {
     }
 }
 
-fn lock<T>(state: &Mutex<T>) -> MutexGuard<'_, T> {
-    state.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
 /// Writes request lines to stdin. A write that never finishes blocks only
 /// this thread: the waiting call still times out or cancels on the clock.
 /// The thread ends when the sender is dropped, closing stdin.
@@ -790,4 +697,4 @@ impl Cancel for NoCancel {
 
 #[cfg(test)]
 #[path = "server_tests.rs"]
-mod tests;
+pub(crate) mod tests;

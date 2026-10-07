@@ -825,13 +825,6 @@ fn stopping(server: super::Server) -> mpsc::Receiver<()> {
 }
 
 #[test]
-fn a_pid_of_one_or_less_is_refused() {
-    assert!(super::refused(0));
-    assert!(super::refused(1));
-    assert!(!super::refused(2));
-}
-
-#[test]
 fn a_server_that_ignores_end_of_input_stops_on_sigterm_before_the_grace() {
     let setup = Setup::tools(&json!([{"name": "hang"}]));
     let opened = lingering(&setup, "exit 0");
@@ -852,7 +845,7 @@ fn kill_every_server_kills_one_that_ignores_sigterm() {
         setup.fake.await_parked(grace, WITHIN),
         "the stop waits out the grace on a server ignoring SIGTERM"
     );
-    super::kill_every_server();
+    crate::registry::kill_every_server();
     // Killed, its output ends: the stop returns with the clock unmoved.
     stopped
         .recv_timeout(WITHIN)
@@ -875,7 +868,7 @@ fn a_server_is_listed_until_its_reap() {
 static BEFORE_SIGNAL: std::sync::Mutex<Option<std::sync::Arc<dyn Fn() + Send + Sync>>> =
     std::sync::Mutex::new(None);
 
-pub(super) fn before_signal() {
+pub(crate) fn before_signal() {
     let hook = super::lock(&BEFORE_SIGNAL).clone();
     if let Some(hook) = hook {
         hook();
@@ -886,7 +879,7 @@ pub(super) fn before_signal() {
 static BEFORE_LOCK: std::sync::Mutex<Option<mpsc::Sender<&'static str>>> =
     std::sync::Mutex::new(None);
 
-pub(super) fn before_lock(which: &'static str) {
+pub(crate) fn before_lock(which: &'static str) {
     if let Some(tx) = super::lock(&BEFORE_LOCK).as_ref() {
         tx.send(which).unwrap_or(());
     }
@@ -950,7 +943,7 @@ fn kill_every_server_holds_its_pids_unreaped_while_it_signals() {
     let (entered, go) = pause_signallers();
     let (killed_tx, killed) = mpsc::channel();
     thread::spawn(move || {
-        super::kill_every_server();
+        crate::registry::kill_every_server();
         killed_tx.send(()).expect("collected");
     });
     entered
@@ -1120,7 +1113,7 @@ fn a_stopped_start_waits_out_the_grace_before_its_kill() {
     // After the trap: the script writes its pid only once `trap '' TERM`
     // is set, so the stop below cannot signal before it ignores SIGTERM.
     ready.wait(WITHIN);
-    super::stop_every_start();
+    crate::registry::stop_every_start();
     let grace = setup.fake.now().checked_add(super::GRACE).expect("grace");
     assert!(
         setup.fake.await_parked(grace, WITHIN),
@@ -1158,7 +1151,7 @@ fn a_stopped_start_whose_server_exits_on_sigterm_returns_without_the_clock_movin
     );
     await_listed();
     let before = setup.fake.now();
-    super::stop_every_start();
+    crate::registry::stop_every_start();
     assert_shutdown_failed(
         result
             .recv_timeout(WITHIN)
@@ -1171,7 +1164,7 @@ fn a_stopped_start_whose_server_exits_on_sigterm_returns_without_the_clock_movin
 #[test]
 fn a_start_after_stop_every_start_spawns_nothing() {
     let setup = Setup::tools(&json!([]));
-    super::stop_every_start();
+    crate::registry::stop_every_start();
     let workspace = setup.dir.path().to_path_buf();
     let result = starting(
         "/bin/true",
