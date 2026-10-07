@@ -76,12 +76,17 @@ fn wait_for_marker(path: &str) {
     std::thread::Builder::new()
         .name("clipboard-wait".to_owned())
         .spawn(move || {
-            // The park between polls reads no clock.
-            let (_, pace) = mpsc::channel::<()>();
-            while !std::path::Path::new(&path).exists() {
+            // The park between polls reads no clock. The sender stays
+            // alive so each `recv_timeout` parks, and the polls stop
+            // after about [`DEADLINE`] in 1 ms parks.
+            let (_pace_tx, pace) = mpsc::channel::<()>();
+            for _ in 0..DEADLINE.as_millis() {
+                if std::path::Path::new(&path).exists() {
+                    done.send(()).unwrap_or(());
+                    return;
+                }
                 pace.recv_timeout(Duration::from_millis(1)).unwrap_or(());
             }
-            done.send(()).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
     if finished.recv_timeout(DEADLINE).is_err() {
