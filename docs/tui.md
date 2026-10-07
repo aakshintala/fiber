@@ -880,9 +880,9 @@ at 160 by 48, 20,000 motion reports per case, the median of 5 runs: every
 report draws the screen in memory and compares it with the last frame, about
 80 µs, and writes nothing unless the target under the pointer changed; a
 report that moves along one target, or repeats one cell, costs the same and
-writes nothing; each change of target costs one frame, about 165 µs and 72
-bytes for the badge; a fast sweep wrote 168 frames in 20,000 reports. Linux
-numbers come from the same jig on a Linux host.
+writes nothing; each change of target costs one frame, about 150 µs and 72
+bytes for the badge; a fast sweep over a conversation whose lines are targets
+wrote 1,332 frames and 349,036 bytes in 20,000 reports.
 
 ## Look
 
