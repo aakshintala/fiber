@@ -508,3 +508,25 @@ fn after_remove_memory_the_opening_message_has_no_memory_section() {
     let body = String::from_utf8(server.requests()[0].body.clone()).unwrap();
     assert!(!body.contains("extensions/memory"), "{body}");
 }
+
+#[test]
+fn disabling_memory_by_its_short_name_stops_it_loading_and_keeps_its_store() {
+    let setup = Setup::new();
+    setup.memory();
+    let page = setup.machine_file("index.md", "- [[notes]] — what matters\n");
+    let server = ProviderServer::start(vec![hello()]).unwrap();
+    setup.provider(&server);
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "extensions": {"memory": {"enabled": false}}}),
+    );
+    let run = setup.run(&["ask", "hi"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert!(!loads_memory(&run));
+    assert!(
+        run.first("opening_message")["payload"]
+            .get("extension_sections")
+            .is_none()
+    );
+    assert!(page.is_file());
+}
