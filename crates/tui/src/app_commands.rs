@@ -79,7 +79,7 @@ impl App {
     /// Nothing while the key map is open.
     pub(crate) fn on_edit(&mut self, edit: Edit) -> Effect {
         self.armed_at = None;
-        if self.overlays.keymap.is_some() {
+        if self.overlays.keymap.is_some() || self.search_edit(&edit) {
             return Effect::None;
         }
         crate::input::route(edit, &mut self.draft, &mut self.queue);
@@ -88,13 +88,13 @@ impl App {
     }
 
     /// A key the draft takes: a character or Backspace, which may open or
-    /// search the `@` panel, or ↑ ↓ by wrapped row. `None` for any other
-    /// key.
+    /// search the `@` panel, or ↑ ↓ by wrapped row and then through earlier
+    /// prompts. `None` for any other key.
     pub(super) fn draft_key(&mut self, key: &Key) -> Option<Effect> {
         match key {
             Key::Char(ch) => Some(self.type_char(*ch)),
             Key::Backspace => Some(self.backspace()),
-            Key::Up | Key::Down => self.draft.key(key, self.width).then_some(Effect::None),
+            Key::Up | Key::Down => self.recall_key(key),
             Key::Enter
             | Key::Esc
             | Key::CtrlC
@@ -122,6 +122,9 @@ impl App {
     pub(crate) fn completions(&self) -> Option<Completions> {
         if self.panel().is_some() {
             return None;
+        }
+        if let Some(search) = self.search_panel() {
+            return Some(search);
         }
         let (all, selectable): (Vec<String>, bool) = if self.slash_open() {
             let rows = slash::filter(&self.overlays.slash_rows, &self.slash_query());
@@ -220,6 +223,7 @@ impl App {
     /// the `@` panel closes once its `@` is gone or the cursor leaves the
     /// query, the text from the `@` to whitespace.
     pub(super) fn edited(&mut self) {
+        self.history.sync(&self.draft.expand());
         if !self.draft.expand().starts_with('/') {
             self.overlays.slash_closed = false;
         }

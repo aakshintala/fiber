@@ -24,6 +24,8 @@ use crate::turn::{Fold, Row, Turn};
 
 #[path = "app_commands.rs"]
 mod commands;
+#[path = "history.rs"]
+mod history;
 
 /// A line's payload as `$kind`; `None` when it does not parse, and the
 /// line is skipped.
@@ -121,8 +123,6 @@ pub(crate) enum Target {
 pub(crate) struct App {
     /// The launch directory `start` names.
     workspace: PathBuf,
-    /// The project key `prompt_history` names.
-    project: String,
     draft: Draft,
     phase: Phase,
     link: Link,
@@ -149,6 +149,8 @@ pub(crate) struct App {
     queue: Queue,
     /// The `/` and `@` panels and the key map overlay.
     overlays: commands::Overlays,
+    /// Prompt recall and the Ctrl+R panel.
+    history: history::History,
 }
 
 impl App {
@@ -156,7 +158,6 @@ impl App {
     pub(crate) fn new(workspace: PathBuf) -> Self {
         Self {
             workspace,
-            project: String::new(),
             draft: Draft::default(),
             phase: Phase::Starting,
             link: Link::Waiting,
@@ -174,6 +175,7 @@ impl App {
             kitty: false,
             queue: Queue::default(),
             overlays: commands::Overlays::default(),
+            history: history::History::default(),
         }
     }
 
@@ -200,6 +202,9 @@ impl App {
             Some(PanelKey::Handled) => return Effect::None,
             Some(PanelKey::Answer) => return self.answer(),
             None => {}
+        }
+        if let Some(effect) = self.history_key(&key) {
+            return effect;
         }
         if let Some(effect) = self.completion_key(&key) {
             return effect;
@@ -231,7 +236,8 @@ impl App {
                 Effect::None
             }
             Key::AltA => self.open_first(),
-            Key::CtrlG | Key::CtrlR => Effect::None,
+            Key::CtrlR => self.open_search(),
+            Key::CtrlG => Effect::None,
         }
     }
 
@@ -295,11 +301,6 @@ impl App {
             Phase::Attached { session, .. } => Some(session),
             Phase::Starting | Phase::Pending { .. } => None,
         }
-    }
-
-    /// Sets the project key `prompt_history` names.
-    pub(crate) fn set_project(&mut self, project: String) {
-        self.project = project;
     }
 
     /// Sets the screen size for wrapping and paging.
@@ -477,6 +478,9 @@ impl App {
                 let Some(id) = command_id else {
                     return Vec::new();
                 };
+                if let Some(lines) = self.history_answered(&id, hub.payload.get("result")) {
+                    return lines;
+                }
                 let session = hub
                     .payload
                     .get("result")
@@ -491,7 +495,9 @@ impl App {
             "command_rejected" => {
                 if let Some(id) = command_id {
                     let message = hub_string(&hub.payload, "message").unwrap_or_default();
-                    self.rejected(&id, message);
+                    if !self.history_rejected(&id, &message) {
+                        self.rejected(&id, message);
+                    }
                 }
                 Vec::new()
             }
@@ -603,6 +609,7 @@ impl App {
             "opening_message" => self.opening(envelope),
             "turn_started" => read!(envelope, TurnStarted).is_some_and(|started| {
                 self.set_busy(true);
+                self.history.saw(&envelope.session_id, &started.input);
                 let prompts = started
                     .input
                     .iter()

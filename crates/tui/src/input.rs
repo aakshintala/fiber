@@ -72,33 +72,6 @@ struct Layout {
 }
 
 impl Draft {
-    /// Applies a key the draft takes: a character, Backspace, or ↑ or ↓
-    /// by wrapped row at `width`. `false` for any other key.
-    pub(crate) fn key(&mut self, key: &Key, width: u16) -> bool {
-        match key {
-            Key::Char(ch) => self.insert(*ch),
-            Key::Backspace => self.backspace(),
-            // debt: ↑ on the first row does nothing, upgrade when prompt
-            // recall lands (part 2 of #684).
-            Key::Up => drop(self.up(width)),
-            Key::Down => drop(self.down(width)),
-            Key::Enter
-            | Key::Esc
-            | Key::CtrlC
-            | Key::CtrlO
-            | Key::PageUp
-            | Key::PageDown
-            | Key::End
-            | Key::AltA
-            | Key::Tab
-            | Key::BackTab
-            | Key::F1
-            | Key::CtrlG
-            | Key::CtrlR => return false,
-        }
-        true
-    }
-
     /// Applies one editing key.
     pub(crate) fn edit(&mut self, edit: Edit) {
         match edit {

@@ -859,3 +859,40 @@ fn file_panel() {
     app.on_files(app.generation(), Ok(found.to_vec()));
     insta::assert_snapshot!("file_panel", sized(&mut app, 80, 24));
 }
+
+#[test]
+fn search_panel() {
+    let mut app = empty();
+    let now = fakes::clock::FakeClock::new().now();
+    attach(&mut app, "s_aaaaaaaaaaaaaaaa");
+    for prompt in [
+        "fix the build",
+        "run the tests",
+        "Fix the docs\nand the build",
+    ] {
+        app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", prompt));
+    }
+    for ch in "draft".chars() {
+        app.on_key(Key::Char(ch), now);
+    }
+    app.on_key(Key::CtrlR, now);
+    for ch in "fix".chars() {
+        app.on_key(Key::Char(ch), now);
+    }
+    app.on_key(Key::Down, now);
+    insta::assert_snapshot!("search_panel", sized(&mut app, 80, 24));
+    let (shown, buf) = wide(&mut app);
+    let rows: Vec<&str> = shown.lines().collect();
+    assert_eq!(rows[HEIGHT as usize - 4], "search prompts: fix", "{shown}");
+    let reversed = |row: u16| {
+        buf.cell((0, row))
+            .is_some_and(|cell| cell.modifier.contains(Modifier::REVERSED))
+    };
+    assert!(!reversed(HEIGHT - 4), "{shown}");
+    assert!(!reversed(HEIGHT - 3), "{shown}");
+    assert!(reversed(HEIGHT - 2), "{shown}");
+    // Nothing matching says so.
+    app.on_key(Key::Char('z'), now);
+    let (shown, _) = wide(&mut app);
+    assert!(shown.contains("no matching prompts"), "{shown}");
+}

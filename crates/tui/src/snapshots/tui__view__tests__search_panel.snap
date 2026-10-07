@@ -1,0 +1,28 @@
+---
+source: crates/tui/src/view_tests.rs
+expression: "sized(&mut app, 80, 24)"
+---
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                                  fix the build
+                                                                  run the tests
+                                                                  Fix the docs
+                                                                  and the build
+search prompts: fix
+Fix the docs and the build
+fix the build
+> draft
