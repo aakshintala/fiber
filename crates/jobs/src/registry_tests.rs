@@ -168,7 +168,7 @@ fn calling_end_records_that_result_and_drop_does_not_record_again() {
     let (_dir, registry) = world();
     let opened = registry.open(opening("npm test")).unwrap();
     let id = opened.started.job_id.0.clone();
-    opened.end.end(JobCompleted {
+    (opened.end.0)(JobCompleted {
         job_id: JobId(id.clone()),
         status: Outcome::Completed,
         error: None,
@@ -238,7 +238,7 @@ fn a_reported_end_sends_one_notice_with_its_own_id_and_no_fallback() {
     registry.deliver_to(tx);
     let opened = registry.open(opening("npm test")).unwrap();
     let id = opened.started.job_id.0.clone();
-    opened.end.end(ended_ok("j_other"));
+    (opened.end.0)(ended_ok("j_other"));
     let sent = notice(&rx);
     assert!(rx.try_recv().is_err(), "a reported end reports once");
     assert_eq!(sent.completed, ended_ok(&id));
@@ -249,7 +249,7 @@ fn the_completion_is_claimed_once() {
     let (_dir, registry) = world();
     let opened = registry.open(opening("npm test")).unwrap();
     let id = opened.started.job_id.0.clone();
-    opened.end.end(JobCompleted {
+    (opened.end.0)(JobCompleted {
         job_id: JobId(id.clone()),
         status: Outcome::Cancelled,
         error: None,
@@ -277,7 +277,7 @@ fn a_wake_after_the_sequence_snapshot_returns_the_wait() {
     thread::spawn(move || {
         super::BEFORE_PARK.with(|slot| {
             *slot.borrow_mut() = Some(Box::new(move || {
-                end.end(JobCompleted {
+                (end.0)(JobCompleted {
                     job_id: JobId(reported),
                     status: Outcome::Completed,
                     error: None,
@@ -328,7 +328,7 @@ fn an_unclaimed_end_sends_one_notice_whose_claim_holds_once() {
     registry.deliver_to(tx);
     let opened = registry.open(opening("npm test")).unwrap();
     let id = opened.started.job_id.0.clone();
-    opened.end.end(ended_ok(&id));
+    (opened.end.0)(ended_ok(&id));
     let sent = notice(&rx);
     assert!(rx.try_recv().is_err(), "one end sends one notice");
     assert_eq!(sent.completed, ended_ok(&id));
@@ -378,7 +378,7 @@ fn a_monitors_lines_reach_the_inbox_in_order_before_its_notice() {
     registry.deliver_to(tx);
     (lines.0)(line(&id, "one", None));
     (lines.0)(line(&id, "two", Some(3)));
-    opened.end.end(ended_ok(&id));
+    (opened.end.0)(ended_ok(&id));
     for expected in [line(&id, "one", None), line(&id, "two", Some(3))] {
         let delivery = rx.try_recv().expect("a batch");
         let Delivery::JobLine(sent) = delivery else {
@@ -397,7 +397,7 @@ fn a_notice_after_a_wait_claimed_the_end_does_not_hold() {
     registry.deliver_to(tx);
     let opened = registry.open(opening("npm test")).unwrap();
     let id = opened.started.job_id.0.clone();
-    opened.end.end(ended_ok(&id));
+    (opened.end.0)(ended_ok(&id));
     let answer = registry.wait(&id, 0, &CancelToken::new()).unwrap();
     assert!(matches!(answer.record, Some(JobRecord::Completed(_))));
     let sent = notice(&rx);
@@ -426,7 +426,7 @@ fn a_claim_after_the_registry_is_gone_does_not_hold() {
     registry.deliver_to(tx);
     let opened = registry.open(opening("npm test")).unwrap();
     let id = opened.started.job_id.0.clone();
-    opened.end.end(ended_ok(&id));
+    (opened.end.0)(ended_ok(&id));
     drop(registry);
     let sent = notice(&rx);
     assert!(!(sent.claim.0)());
@@ -437,7 +437,7 @@ fn without_an_inbox_an_end_sends_nothing() {
     let (_dir, registry) = world();
     let opened = registry.open(opening("npm test")).unwrap();
     let id = opened.started.job_id.0.clone();
-    opened.end.end(ended_ok(&id));
+    (opened.end.0)(ended_ok(&id));
     let answer = registry.wait(&id, 0, &CancelToken::new()).unwrap();
     assert!(matches!(answer.record, Some(JobRecord::Completed(_))));
 }
@@ -450,7 +450,7 @@ fn an_end_after_the_loop_is_gone_is_still_recorded() {
     drop(rx);
     let opened = registry.open(opening("npm test")).unwrap();
     let id = opened.started.job_id.0.clone();
-    opened.end.end(ended_ok(&id));
+    (opened.end.0)(ended_ok(&id));
     let answer = registry.wait(&id, 0, &CancelToken::new()).unwrap();
     assert!(matches!(answer.record, Some(JobRecord::Completed(_))));
 }
@@ -495,7 +495,7 @@ fn stop_through_the_trait_sends_the_stop_once_and_reports_running() {
 fn stop_through_the_trait_on_an_ended_or_unknown_job_is_false() {
     let (_dir, registry) = world();
     let (id, calls, opened) = counted_stop(&registry);
-    opened.end.end(ended_ok(&id.0));
+    (opened.end.0)(ended_ok(&id.0));
     assert!(!Jobs::stop(registry.as_ref(), &id));
     assert!(!Jobs::stop(registry.as_ref(), &JobId("j_missing".into())));
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
@@ -663,7 +663,7 @@ fn write_returns_at_once_with_the_final_state_when_the_job_ends_in_the_wait() {
     let deadline = clock.now().checked_add(Duration::from_millis(250)).unwrap();
     let rx = writing(&registry, &id, "hi\n", 250, CancelToken::new());
     assert!(clock.await_parked(deadline, DEADLINE));
-    opened.end.end(ended_ok(&id));
+    (opened.end.0)(ended_ok(&id));
     let answer = rx
         .recv_timeout(DEADLINE)
         .expect("the write returned")
@@ -712,7 +712,7 @@ fn write_does_not_reach_a_job_without_a_terminal_an_unknown_job_or_an_ended_one(
         Err(super::WriteError::Unknown)
     ));
     let (id, tty, typed) = open_tty(&registry, b"");
-    tty.end.end(ended_ok(&id));
+    (tty.end.0)(ended_ok(&id));
     assert!(matches!(
         registry.write(&id, "x", 0, &cancel),
         Err(super::WriteError::Ended(Outcome::Completed))
@@ -810,7 +810,7 @@ fn an_ended_job_drops_its_input() {
     let (_dir, _clock, registry) = clocked_world();
     let (id, opened, typed) = open_tty(&registry, b"");
     assert_eq!(Arc::strong_count(&typed), 2);
-    opened.end.end(ended_ok(&id));
+    (opened.end.0)(ended_ok(&id));
     assert_eq!(Arc::strong_count(&typed), 1, "the ended job kept its input");
     assert!(matches!(
         registry.write(&id, "x", 0, &CancelToken::new()),
@@ -859,10 +859,10 @@ fn running_lists_running_jobs_in_start_order_and_drops_ended_ones() {
         third.started.job_id.clone(),
     ];
     assert_eq!(seam.running(), ids.to_vec());
-    second.end.end(ended_ok(&ids[1].0));
+    (second.end.0)(ended_ok(&ids[1].0));
     assert_eq!(seam.running(), vec![ids[0].clone(), ids[2].clone()]);
     drop(first.end);
-    third.end.end(ended_ok(&ids[2].0));
+    (third.end.0)(ended_ok(&ids[2].0));
     assert!(seam.running().is_empty());
 }
 
@@ -875,7 +875,7 @@ fn deliver_to_through_the_seam_sends_the_end_before_running_drops_it() {
     let opened = seam.open(opening("npm test")).unwrap();
     let id = opened.started.job_id.clone();
     assert_eq!(seam.running(), vec![id.clone()]);
-    opened.end.end(ended_ok(&id.0));
+    (opened.end.0)(ended_ok(&id.0));
     assert!(seam.running().is_empty());
     let sent = notice(&rx);
     assert_eq!(sent.completed, ended_ok(&id.0));

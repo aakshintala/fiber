@@ -1852,7 +1852,7 @@ fn job_stop_for_an_unknown_or_ended_job_is_rejected_stale() {
     let (fired_tx, fired_rx) = mpsc::channel();
     let job = open_job(&jobs, fired_tx);
     let ended_id = job.started.job_id.0.clone();
-    job.end.end(contract::events::JobCompleted {
+    (job.end.0)(contract::events::JobCompleted {
         job_id: job.started.job_id.clone(),
         status: contract::events::Outcome::Completed,
         error: None,
