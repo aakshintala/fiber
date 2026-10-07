@@ -3,6 +3,10 @@
 //! feed subscriber the latest `session_status` of every running or waiting
 //! top-level session, then every change, then `session_left` when one ends.
 //!
+//! The summary lines also drive `attention` (`crate::attention`): a status
+//! that turns to `waiting`, or a turn end that turns the session `idle`,
+//! is told to every connection's attention listener.
+//!
 //! The hub rescans `run/` every [`RUN_SCAN`] on its clock. On a summary
 //! connection's end it reads the session log's last line: `fiber_exited` or
 //! `rewound` is `exited`, anything else `crashed`, and it appends a crashed
@@ -27,10 +31,11 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use contract::clock::{Clock, Wake, wall_ms};
-use contract::events::SessionStatus;
+use contract::events::{SessionState, SessionStatus};
 use contract::{CommandId, Envelope, ErrorCode, HubLine, SCHEMA_VERSION, SessionId};
 use serde_json::{Map, Value};
 
+use crate::attention::{Attention, Seen};
 use crate::connection::{Hub, accept_result, reject, send as send_line};
 use crate::recent::{self, Left, PageError, RecentRow};
 use crate::relay::valid_session_id;
@@ -40,14 +45,14 @@ pub(crate) const RUN_SCAN: Duration = Duration::from_millis(500);
 
 /// The most of a log's end read to find its last line: `fiber_exited` and
 /// `rewound` are far shorter, so a longer last line is neither.
-const TAIL: u64 = 64 * 1024;
+pub(crate) const TAIL: u64 = 64 * 1024;
 
 /// What the hub sends on each session's socket.
 const SUBSCRIBE: &[u8] =
     b"{\"id\":\"c_hub_feed\",\"command\":\"subscribe\",\"args\":{\"level\":\"summary\"}}\n";
 
 /// One line queued for a subscriber.
-type Line = Arc<[u8]>;
+pub(crate) type Line = Arc<[u8]>;
 
 /// A rejected feed command: its code and sentence.
 pub(crate) type Refusal = (ErrorCode, String);
@@ -56,6 +61,7 @@ pub(crate) type Refusal = (ErrorCode, String);
 pub(crate) struct Feed {
     home: PathBuf,
     clock: Arc<dyn Clock>,
+    pub(crate) attention: Attention,
     state: Mutex<State>,
     tick: Arc<Tick>,
     /// `tick` as the clock's subscriber: kept alive so advances wake the
@@ -116,9 +122,11 @@ impl Feed {
         let tick = Arc::new(Tick::default());
         let wake: Arc<dyn Wake> = Arc::clone(&tick) as Arc<dyn Wake>;
         clock.subscribe(Arc::downgrade(&wake));
+        let attention = Attention::new(Arc::clone(&clock));
         Self {
             home: home.to_path_buf(),
             clock,
+            attention,
             state: Mutex::new(State::default()),
             tick,
             _wake: wake,
@@ -182,18 +190,7 @@ impl Feed {
     /// status and its `session_left`, then every running one's status,
     /// then every change. The caller has written `command_accepted`.
     pub(crate) fn subscribe(&self, writer: Arc<Mutex<UnixStream>>) -> Option<u64> {
-        let (tx, rx) = mpsc::channel::<Line>();
-        let handle = thread::Builder::new()
-            .name("hub-feed-out".to_owned())
-            .spawn(move || {
-                for line in rx {
-                    let mut out = lock(&writer);
-                    if out.write_all(&line).and_then(|()| out.flush()).is_err() {
-                        return;
-                    }
-                }
-            })
-            .ok()?;
+        let (tx, handle) = spawn_writer(writer, "hub-feed-out")?;
         let mut state = lock(&self.state);
         if state.stopped {
             return None;
@@ -263,6 +260,7 @@ impl Feed {
     /// Drops any entry for `session`: its directory was deleted.
     pub(crate) fn forget(&self, session: &str) {
         lock(&self.state).entries.remove(session);
+        self.attention.forget(session);
     }
 
     /// `recent`: a page of exited sessions, newest first.
@@ -396,6 +394,7 @@ impl Feed {
 
     /// Reads session `id`'s summary lines until its socket closes.
     fn read_session(&self, id: &str, stream: UnixStream, found: Option<(String, PathBuf, u64)>) {
+        let log = found.as_ref().map(|(_, dir, _)| dir.join("events.jsonl"));
         let mut read = BufReader::new(stream);
         let mut buf = Vec::new();
         loop {
@@ -403,7 +402,7 @@ impl Feed {
             match read.read_until(b'\n', &mut buf) {
                 Ok(0) | Err(_) => break,
                 Ok(_) => {
-                    if !self.on_line(id, &buf) {
+                    if !self.on_line(id, &buf, log.as_deref()) {
                         read.get_ref().shutdown(Shutdown::Both).unwrap_or(());
                         return;
                     }
@@ -414,9 +413,19 @@ impl Feed {
     }
 
     /// Takes one summary line. False once it shows a delegate.
-    fn on_line(&self, id: &str, bytes: &[u8]) -> bool {
+    fn on_line(&self, id: &str, bytes: &[u8], log: Option<&Path>) -> bool {
         let Some(payload) = parse_status(bytes) else {
             return true;
+        };
+        // Ruling 5's probe, with no lock held: only a non-delegate `idle`
+        // with a known log and no live entry reads the log.
+        let unseen = if !matches!(payload.state, SessionState::Idle) || payload.parent.is_some() {
+            false
+        } else if let Some(log) = log {
+            let live = matches!(lock(&self.state).entries.get(id), Some(Entry::Running(_)));
+            !live && self.attention.ended_unseen(log, &payload)
+        } else {
+            false
         };
         let mut state = lock(&self.state);
         if state.stopped {
@@ -427,6 +436,18 @@ impl Feed {
             state.delegates.insert(id.to_owned());
             return false;
         }
+        let seen = match state.entries.get(id) {
+            Some(Entry::Running(status)) => Some(Seen {
+                status: &status.payload,
+                live: true,
+            }),
+            Some(Entry::Left(status, _)) => Some(Seen {
+                status: &status.payload,
+                live: false,
+            }),
+            None => None,
+        };
+        self.attention.notify(id, seen, &payload, unseen);
         let line: Line = Arc::from(bytes);
         broadcast(&mut state, &line);
         state
@@ -642,7 +663,28 @@ fn status_line(row: &RecentRow, payload: &SessionStatus) -> Line {
     })
 }
 
-fn to_line(value: &impl serde::Serialize) -> Line {
+/// A channel whose lines a new thread named `name` writes to `writer`, each flushed;
+/// the thread ends on the first failed write or once every sender is dropped.
+pub(crate) fn spawn_writer(
+    writer: Arc<Mutex<UnixStream>>,
+    name: &str,
+) -> Option<(Sender<Line>, JoinHandle<()>)> {
+    let (tx, rx) = mpsc::channel::<Line>();
+    let handle = thread::Builder::new()
+        .name(name.to_owned())
+        .spawn(move || {
+            for line in rx {
+                let mut out = lock(&writer);
+                if out.write_all(&line).and_then(|()| out.flush()).is_err() {
+                    return;
+                }
+            }
+        })
+        .ok()?;
+    Some((tx, handle))
+}
+
+pub(crate) fn to_line(value: &impl serde::Serialize) -> Line {
     let mut bytes = serde_json::to_vec(value).unwrap_or_default();
     bytes.push(b'\n');
     Arc::from(bytes)

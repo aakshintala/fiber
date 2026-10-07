@@ -1,6 +1,7 @@
 //! One client connection: `hub_hello` first, hub-command dispatch for
 //! `start`, `status`, `prompt_history`, `feed`, `dismiss`, `recent` and
-//! `delete`, and the relay to session sockets.
+//! `delete`, and the relay to session sockets. Every connection also hears
+//! `attention` (`crate::attention`) after its hello.
 //!
 //! A command with a `session_id` is for that session: the relay passes it
 //! to the session's socket (`crate::relay`). A command without one is for
@@ -51,6 +52,9 @@ pub(crate) struct Hub {
     /// Held across a resume: one at a time per hub, so two commands for
     /// one exited session start one process.
     pub(crate) resume_gate: Mutex<()>,
+    /// Tests only: a one-shot pause run before `hub_hello` is sent.
+    #[cfg(test)]
+    pub(crate) before_hello: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
 /// The open connections and the idle timer. `zero_since` is `Some` exactly
@@ -103,6 +107,8 @@ impl Hub {
             tick,
             wake,
             resume_gate: Mutex::new(()),
+            #[cfg(test)]
+            before_hello: Mutex::new(None),
         }
     }
 
@@ -341,6 +347,10 @@ pub(crate) fn serve_counted(stream: UnixStream, hub: Arc<Hub>, n: u64) {
             return;
         }
     };
+    #[cfg(test)]
+    if let Some(pause) = lock(&hub.before_hello).take() {
+        pause();
+    }
     send(
         &writer,
         &hub,
@@ -351,6 +361,7 @@ pub(crate) fn serve_counted(stream: UnixStream, hub: Arc<Hub>, n: u64) {
         )]),
     );
     let relays: Arc<Mutex<Relays>> = Arc::new(Mutex::new(Relays::default()));
+    let heard = hub.feed.attention.listen(Arc::clone(&writer));
     let mut read = BufReader::new(stream);
     let mut buf = Vec::new();
     let mut fed = None;
@@ -363,8 +374,12 @@ pub(crate) fn serve_counted(stream: UnixStream, hub: Arc<Hub>, n: u64) {
             }
         }
     }
+    read.get_ref().shutdown(Shutdown::Both).unwrap_or(());
     if let Some(fed) = fed {
         hub.feed.unsubscribe(fed);
+    }
+    if let Some(heard) = heard {
+        hub.feed.attention.unlisten(heard);
     }
     lock(&relays).close_all();
     disconnect(&hub, n);
