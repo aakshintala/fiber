@@ -28,11 +28,12 @@ pub use context::{
     SkillSent, SkillSource, SkillsChanged, SkillsResent, SwitchSource, ToolReplaced, UsageRecorded,
 };
 pub use host::{
-    CommandAccepted, CommandRejected, CommandResult, DelegateFinished, DelegateStarted,
-    ExtensionExec, ExtensionLog, ExtensionMessage, ExtensionStateSet, ExtensionStateUnset,
-    ExtensionUi, ExtensionsLoaded, FinishedWorktree, JobCompleted, JobDelta, JobLine, JobStarted,
-    JobsPendingNotified, LoadedExtension, McpServerFailed, McpServerReady, OnFork, PendingReason,
-    ReloadFailure, Reloaded, ReloadedServers, ServerFailure, ToolInfo, ToolSource, ToolState, Ui,
+    CommandAccepted, CommandInfo, CommandRejected, CommandResult, DelegateFinished,
+    DelegateStarted, ExtensionExec, ExtensionLog, ExtensionMessage, ExtensionStateSet,
+    ExtensionStateUnset, ExtensionUi, ExtensionsLoaded, FinishedWorktree, JobCompleted, JobDelta,
+    JobLine, JobStarted, JobsPendingNotified, LoadedExtension, McpServerFailed, McpServerReady,
+    OnFork, PendingReason, ReloadFailure, Reloaded, ReloadedServers, ServerFailure, ToolInfo,
+    ToolSource, ToolState, Ui,
 };
 pub use offer::{
     OfferDecision, OfferedItem, OfferedKind, RepositoryCodeOffered, RepositoryCodeResolved,
