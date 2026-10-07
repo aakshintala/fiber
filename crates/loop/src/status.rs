@@ -162,6 +162,8 @@ impl Fold {
             Event::PreambleBuilt(built) => {
                 self.model.clone_from(&built.model);
                 self.window = Some(built.context_window);
+                // A process that built its preamble no longer waits on an offer.
+                self.pending.retain(|p| p.kind != WaitingKind::Offer);
             }
             Event::ModelChanged(changed) => self.model.clone_from(&changed.after.model),
             Event::TurnStarted(started) => {
@@ -235,6 +237,22 @@ impl Fold {
             Event::InteractionResolved(resolved) => {
                 self.pending.retain(|p| p.request_id != resolved.request_id);
             }
+            // The offer comes before any approval its process raises, so it
+            // is shown first. A re-raise adds a second entry with the same
+            // id; the resolution removes both.
+            Event::RepositoryCodeOffered(offered) => {
+                self.pending.insert(
+                    0,
+                    Waiting {
+                        request_id: offered.request_id.clone(),
+                        kind: WaitingKind::Offer,
+                        summary: offer_summary(offered.items.len()),
+                    },
+                );
+            }
+            Event::RepositoryCodeResolved(resolved) => {
+                self.pending.retain(|p| p.request_id != resolved.request_id);
+            }
             Event::UsageRecorded(recorded) => {
                 let corrected = self.ledger.record(recorded);
                 self.spend = self.ledger.usage();
@@ -280,8 +298,6 @@ impl Fold {
             | Event::ReasoningDelta(_)
             | Event::ReasoningCompleted(_)
             | Event::ToolCallDelta(_)
-            | Event::RepositoryCodeOffered(_)
-            | Event::RepositoryCodeResolved(_)
             | Event::QuotaNoticed(_)
             | Event::Notice(_)
             | Event::OpeningMessage(_)
@@ -586,9 +602,18 @@ fn project_of(dir: &Path) -> String {
         .unwrap_or_default()
 }
 
+/// What an offer of `items` items says while it waits.
+fn offer_summary(items: usize) -> String {
+    if items == 1 {
+        "1 item from the repository".to_owned()
+    } else {
+        format!("{items} items from the repository")
+    }
+}
+
 /// The `count` of the log's latest `clients` line; 0 when there is none,
 /// it does not read as `clients`, or the log is gone.
-fn clients_of(log: &Weak<Log>) -> u32 {
+pub(crate) fn clients_of(log: &Weak<Log>) -> u32 {
     let Some(log) = log.upgrade() else {
         return 0;
     };

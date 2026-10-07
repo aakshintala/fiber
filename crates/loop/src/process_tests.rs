@@ -252,3 +252,87 @@ fn an_open_extension_ask_beside_an_open_approval_suspends_on_the_approval() {
     assert_eq!(session.resolved().len(), 1, "the ask is declined");
     assert_eq!(exited["suspended_on"], "r_approval");
 }
+
+fn offered(id: &str) -> Event {
+    Event::RepositoryCodeOffered(contract::events::RepositoryCodeOffered {
+        request_id: RequestId(id.into()),
+        items: Vec::new(),
+    })
+}
+
+fn offer_resolved(id: &str) -> Event {
+    Event::RepositoryCodeResolved(contract::events::RepositoryCodeResolved {
+        request_id: RequestId(id.into()),
+        decisions: Vec::new(),
+    })
+}
+
+fn preamble() -> Event {
+    Event::PreambleBuilt(
+        serde_json::from_value(serde_json::json!({
+            "reason": "start", "model": "fake/m", "context_window": 1000,
+            "tool_choice": "auto", "cache_lifetime": "5m", "system_prompt": "", "tools": []
+        }))
+        .unwrap(),
+    )
+}
+
+#[test]
+fn a_process_that_exits_on_its_offer_names_it() {
+    let session = Session::new();
+    fiber_started(&session.log, "1.2.3", false).unwrap();
+    session.append(&offered("r_o"));
+    let (_, exited) = session.exit_on(None);
+    assert_eq!(exited["suspended_on"], "r_o");
+}
+
+#[test]
+fn a_resolved_offer_is_not_suspended_on() {
+    let session = Session::new();
+    fiber_started(&session.log, "1.2.3", false).unwrap();
+    session.append(&offered("r_o"));
+    session.append(&offer_resolved("r_o"));
+    let (_, exited) = session.exit_on(None);
+    assert!(exited.get("suspended_on").is_none());
+}
+
+#[test]
+fn an_offer_left_behind_at_the_preamble_is_not_suspended_on() {
+    let session = Session::new();
+    fiber_started(&session.log, "1.2.3", false).unwrap();
+    session.append(&offered("r_o"));
+    session.append(&preamble());
+    let (_, exited) = session.exit_on(None);
+    assert!(exited.get("suspended_on").is_none());
+}
+
+#[test]
+fn an_approval_beside_an_offer_is_suspended_on() {
+    let session = Session::new();
+    fiber_started(&session.log, "1.2.3", false).unwrap();
+    session.append(&offered("r_o"));
+    session.append(&permission("r_a"));
+    let (_, exited) = session.exit_on(None);
+    assert_eq!(exited["suspended_on"], "r_a");
+}
+
+#[test]
+fn under_a_signal_an_earlier_approval_beats_this_process_offer() {
+    let session = Session::new();
+    fiber_started(&session.log, "1.2.3", false).unwrap();
+    session.append(&permission("r_a"));
+    fiber_started(&session.log, "1.2.3", true).unwrap();
+    session.append(&offered("r_o"));
+    let (_, exited) = session.exit_on(Some(143));
+    assert_eq!(exited["suspended_on"], "r_a");
+}
+
+#[test]
+fn an_offer_an_earlier_process_left_is_not_suspended_on() {
+    let session = Session::new();
+    fiber_started(&session.log, "1.2.3", false).unwrap();
+    session.append(&offered("r_o"));
+    fiber_started(&session.log, "1.2.3", true).unwrap();
+    let (_, exited) = session.exit_on(None);
+    assert!(exited.get("suspended_on").is_none());
+}
