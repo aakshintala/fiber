@@ -33,6 +33,8 @@ pub trait Signer: Send + Sync {
 
     /// The credential values the last `sign` used. Never more than the
     /// credentials the signer holds.
+    // `vec![]` is `Vec::new()`, so a mutant of this default changes nothing.
+    #[cfg_attr(false, mutants::skip)]
     fn credentials(&self) -> Vec<Secret> {
         Vec::new()
     }
