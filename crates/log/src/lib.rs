@@ -41,7 +41,9 @@ pub fn project_key(project: &Path) -> String {
 /// (`docs/state.md`, "Projects"): `projects/<key>/sessions`, the key from
 /// [`project_key`].
 pub fn sessions_dir(home: &Path, project: &Path) -> PathBuf {
-    home.join("projects").join(project_key(project)).join("sessions")
+    home.join("projects")
+        .join(project_key(project))
+        .join("sessions")
 }
 
 /// What can go wrong opening, writing or reading a session.
