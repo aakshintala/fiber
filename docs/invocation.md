@@ -505,7 +505,7 @@ cancels. When the delay passes, Fiber exits.
 
 **A session left unattended with jobs running checks them once.** Unattended
 means no prompt or steer from a person or a driver for
-`session.idle_exit_ms`, jobs or no jobs. A running job keeps a session from being idle, so the idle delay
+`session.idle_exit_ms`, jobs or no jobs. A session message is neither. A running job keeps a session from being idle, so the idle delay
 never ends it; instead, when it has been unattended that long with jobs
 running, Fiber wakes the model once with the jobs check: a notice listing
 the running jobs and telling it to stop any that look hung or that it no

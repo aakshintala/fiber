@@ -178,6 +178,7 @@ consumer shows an unknown part as a placeholder.
 |---|---|---|
 | `text` | `text` (string) | text |
 | `image` | `path` (string), `mime_type` (string), `width` (integer), `height` (integer) | the processed image file in the session's `artifacts/` (`docs/model-routing.md`, "Image limits"), its type, such as `image/png`, and its size in pixels, so a client lays it out without decoding it |
+| `pdf` | `path` (string), `page_count` (integer), `pages` (image parts, optional) | the PDF in the session's `artifacts/`, the number of pages sent, and the pages rendered as image parts, absent when they could not be rendered (`docs/tools.md`, "read") |
 
 The log never holds an image's bytes. A tool's image and a pasted image are
 both written to `artifacts/` and named by path.
@@ -614,6 +615,7 @@ Durable. The call's outcome.
 | `changes` | array | no | on a call that changed files, one object per file: `path` (string) and `added` and `removed` (integers, lines) |
 | `control` | object | no | instructions to the loop; the one key is `handoff` (string), a handoff note (`docs/handoff.md`) |
 | `changed_by` | `changed_by` | no | when an `after_tool` hook rewrote the result |
+| `loaded` | array of strings | no | on `tool_search`, the names of the tools it loaded (`docs/tools.md`, "Tool search") |
 | `provider_item` | any JSON | no | on a call the provider ran, its result block exactly as it arrived, sent back unchanged only to the model that produced it (`docs/tools.md`, "Hosted by the provider"); absent on a call Fiber runs |
 
 A failed model call is an assistant message that completed with a failed

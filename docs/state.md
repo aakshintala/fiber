@@ -204,8 +204,8 @@ for, such as a startup error, happen before anyone would think to turn a log
 on. Each process writes its own file, so every file has one writer, as a
 session log does: the hub writes `logs/hub.log`, and any other process that
 has something to record writes `logs/<kind>-<id>.log`, where `<kind>` is
-`session`, `ask` or `tui` and `<id>` its session id, or its process id when it
-has none.
+`session`, `ask` or `tui` and `<id>` its session id once its session log
+exists, or its process id until then.
 
 Each line is one JSON object: `ts`, `level` (`error`, `warn` or `info`),
 `process` (`hub`, `session`, `ask` or `tui`), `session_id` when one is known,

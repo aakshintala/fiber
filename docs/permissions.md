@@ -88,8 +88,8 @@ it. A hook can never approve a call (`docs/extensions.md`, "Hooks").
 7. Otherwise **reviewed** by the reviewer.
 
 A call whose effects function returns `always_reviewed` skips steps 4 to 6
-and is reviewed (`docs/tools.md`, "What a tool declares"). The delegate tools
-return it on every call ([Delegates](#delegates)). The loop reads the
+and is reviewed (`docs/tools.md`, "What a tool declares"). `delegate_spawn`,
+`delegate_fork` and `delegate_message` return it on every call ([Delegates](#delegates)). The loop reads the
 declaration and never names a tool.
 
 The credential deny and a standing deny are both evaluated before everything
@@ -425,7 +425,8 @@ With no answer possible, escalation is a block and the run continues under
 the rule above until it exhausts the block budget. The turn then completes
 `failed` with code `blocked`, so a headless caller learns the task needed
 permissions it was not given. No answer is possible in a
-session started by `fiber ask`, and in a session that has been sent `close`.
+session started by `fiber ask`, in a delegate, and in a session that has been
+sent `close`.
 Anywhere else, a person may come back: after `session.idle_exit_ms` the session
 exits on the pending escalation and raises it again when resumed
 (`docs/invocation.md`, "Lifecycle").

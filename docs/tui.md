@@ -725,9 +725,9 @@ keyboard's reach.
 - A paste over about 10 lines shows as one token, "[Pasted text #1 · 312
   lines]", and the full text is sent. Clicking the token, or Ctrl+G with the
   cursor on it, opens it in the editor.
-- Ctrl+V with an image saves it to the session's `artifacts/` and shows
-  "[Image #1]". The prompt carries its path, and the model looks with `read`,
-  which returns images.
+- Ctrl+V with an image shows "[Image #1]" and sends the image as an image
+  part in the prompt, which the session processes as it enters
+  (`docs/invocation.md`).
 - `!cmd` runs a shell command and sends its output with the next prompt.
   `!!cmd` runs it and shows the output only to the person (`shell` with
   `send` false, `docs/invocation.md`).

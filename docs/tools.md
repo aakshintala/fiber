@@ -229,8 +229,10 @@ path's directory, ending in `/`.
   provider module sends the PDF natively where its protocol accepts a PDF in a
   tool result, and otherwise sends the pages rendered as images, which go
   through the same limits (`docs/model-routing.md`, "Image limits").
-  Rendering uses poppler's `pdftoppm`; when it is not installed, the call
-  fails with `tool_error` and a message naming the package.
+  `read` renders the pages once, with poppler's `pdftoppm`, as the PDF
+  enters, so a later model switch has them. When `pdftoppm` is not installed,
+  the result says so and names the package, and a protocol that needs pages
+  gets that sentence in their place.
   `anthropic-messages` takes a `document` block inside `tool_result`,
   `openai-responses` an `input_file` in the `function_call_output` array, and
   `google-generative-ai` an `inlineData` part in `functionResponse.parts`.
@@ -572,7 +574,8 @@ The kinds are `docs/events.md`.
   (`docs/delegates.md`).
 - The call that starts a job completes in its own turn with a receipt naming
   the `job_id` and the path of the job's output file in the session's
-  `artifacts/`. There is no pending status. Every provider needs a tool result
+  `artifacts/`. A Fiber delegate's output file is its own `events.jsonl`
+  (`docs/delegates.md`, "The tools"). There is no pending status. Every provider needs a tool result
   before the model's next step, so a call held open across turns would stall
   the turn.
 - A job's output streams to that file. The model reads it with the ordinary
@@ -626,7 +629,8 @@ The kinds are `docs/events.md`.
 - A job whose output file passes 5 GB is stopped as `failed` with code
   `output_cap`.
 - Stopping one job uses the same mechanism as cancelling a tool call
-  ("Shell", "Stopping a command"). If a descendant that escaped the process
+  ("Shell", "Stopping a command"), except a Fiber delegate, which shuts down
+  as `docs/delegates.md`, "Lifetime", says. If a descendant that escaped the process
   group still holds the output pipe open past the bound, the job ends
   `failed` with code `indeterminate`, never `completed`. A stopped job ends
   `cancelled`.
@@ -852,7 +856,7 @@ does not know, is read as UTF-8, and bytes that are not valid UTF-8 become
   hosted search's blocks is protocol code in `anthropic-messages`,
   `openai-responses` and `google-generative-ai`.
 - Measured September 27, 2026: ChatGPT/codex, muse (only on its
-  `/v1/responses` endpoint), OpenRouter (its web plugin) and OpenCode (by
+  `/v1/responses` endpoint), OpenRouter (its `openrouter:web_search` server tool, on `openai-completions`, unprobed) and OpenCode (by
   passing Anthropic's and OpenAI's hosted tools through) host a search.
   Databricks does not: "Code interpreter and web search tools are not
   supported by Databricks."
@@ -911,6 +915,10 @@ does not know, is read as UTF-8, and bytes that are not valid UTF-8 become
   in the session, or was the host of a fetch a reviewer or a person allowed in
   the session. A host named only inside a fetched page is not known: otherwise an
   injected page could name its own host.
+- A host is named only by an `http` or `https` URL; a bare domain is not.
+  Hosts match case-insensitively and exactly, with the port (the scheme's
+  default when absent), so a subdomain is a different host. The result URLs of
+  a hosted search make their hosts known, as `hosts_surfaced` does.
 - A query string does not make a fetch suspicious. A search on a known host,
   such as a Jira query URL, needs no review.
 - What the reviewer is shown does not change: the person's messages and the
@@ -963,7 +971,9 @@ session is running when its socket accepts a connection (`docs/invocation.md`, "
 each session's latest `session_status`, read on a `summary` subscription to
 its socket (`docs/events.md`). The list includes the calling session, marked
 as itself, so the model can see its own id and name. The tool declares
-`reads`.
+`reads`. The call connects to every session's socket at once and waits at most
+2 s in all (`docs/performance.md`). A session that accepted the connection but
+sent no `session_status` in time is listed by id with `answering: false`.
 
 **`session_message` addresses a session by its full id.** The model lists
 sessions first, so a name or a prefix would add ambiguity and save nothing.
@@ -997,7 +1007,9 @@ and joins at the next step boundary. Between turns it starts a turn
 (`docs/loop.md`, "Starting a turn"). `before_message` runs on it with the
 sender's id and its parent's id, so an extension can rewrite or refuse it, or
 refuse every message from outside its own tree. It is logged with `source` `session`
-(`docs/events.md`, "Where a message came from"). The model sees it framed
+(`docs/events.md`, "Where a message came from"). A session message is not a
+person's or a driver's prompt, so it never makes an unattended session
+attended (`docs/invocation.md`, "Lifecycle"). The model sees it framed
 with the sender's id and name. The target reads the sender's name from the
 sender's latest `session_status`, as `session_list` does; when the sender has
 already exited, the framing gives its id alone. The framing is a fixed
@@ -1043,19 +1055,38 @@ flags").
   shell's `grep` ("Search"). There is no index: the answer is always
   current, and nothing is written. A line that matches is decoded, and the
   text is matched against the decoded strings, so escaped newlines and quotes
-  in the JSON never hide a match.
+  in the JSON never hide a match. The raw pass looks for the query as the log
+  escapes it (`"` as `\"`, `\` as `\\`, a newline as `\n`, other control
+  characters as `\u00XX`), case-insensitively, so it selects every line whose
+  decoded text could match.
 - It searches everything a log holds: messages from the person and the model,
   the inputs of tool calls, and their outputs, including the full outputs in
   `artifacts/`.
-- Each hit is labelled `message`, `tool_input` or `tool_output`. Messages and
-  tool inputs rank ahead of tool outputs, then newer before older, so a
+- Each hit is labelled `message`, `tool_input` or `tool_output`. `message` is
+  the text of `turn_started` message items, `steering_applied`,
+  `text_completed`, and the answers in `interaction_resolved`. `tool_input` is
+  the `arguments` of `tool_call_requested`, and of `tool_call_started` when a
+  hook rewrote them, and the `command` of `shell_command`. `tool_output` is the
+  `content` of `tool_call_completed`, the `output` of `shell_command`,
+  `job_line`, `delegate_finished` and `job_completed`'s `output_tail`. No other
+  event is searched, and reasoning is not.
+- Only text artifacts are searched. A hit in one is labelled `tool_output` and
+  takes the `seq` of the line that names the artifact's path (`artifact` on
+  `tool_call_completed`, `shell_command` or `delegate_finished`, or the job's
+  `job_started` for a job's output file), and gives that path. When the same
+  line also matched in its cut result, the result gives one hit, the
+  artifact's.
+- Messages and tool inputs rank ahead of tool outputs, then newer before older, so a
   decision is not buried under every file read that mentioned the same name.
-- Each hit carries the session id, its name, the event's `seq` and time, the
-  label, and a snippet of about 200 characters around the match. It never
+- Each hit carries the session id, its name as `session_status` gives it, the
+  event's `seq` and time, `offset`, the hit's line in `events.jsonl` (`seq` +
+  1) for `read`, the label, and a snippet of about 200 characters around the match. It never
   carries a whole event: the model reads around a hit with `read` on the log,
   whose path the result gives.
 - The result is bounded like any other ("Bounded results").
-- The tool declares `reads` on Fiber home and is never reviewed. Its
+- The tool declares `reads` on `projects/<key>/`, or on `projects/` with
+  `all_projects`, and is never reviewed. Neither is an ancestor of
+  `credentials/`. Its
   definition never changes, so it is declared in every session, in full, and
   counts toward the built-in budget ("Size budget in CI").
 - Scanning the owner's 1.3 GB of pi and Claude Code logs took 0.05 to 0.35 s
@@ -1247,9 +1278,11 @@ its tools are deferred, change only when the preamble is built.
 - The result goes back in each protocol's native form: `tool_reference`
   blocks on Anthropic, `tool_search_output` on OpenAI Responses. Fiber never
   uses a provider's own search, so every provider behaves the same and every
-  search is on the log.
+  search is on the log. The log records the result as `loaded`, the list of
+  tool names, and each protocol renders its block from that list, so a resume
+  sends the same bytes.
 - Its description lists the sources of the deferred tools (each MCP server's
-  name and description), fixed when the preamble is built.
+  name), fixed when the preamble is built.
 - A search is an ordinary tool call. A resume or fork re-sends its result
   byte for byte.
 - A loaded tool stays loaded until a handoff, which restarts the conversation

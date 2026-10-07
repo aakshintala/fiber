@@ -584,7 +584,9 @@ batch of a monitor's lines, and a delegate's final message (`docs/tools.md`,
 "Background jobs"). It gets the tool name of the call that started the job, and
 `delivery` says what arrived: `completion`, `monitor` or `delegate`. When a
 job ends, it runs once more on the job's whole output file, with `delivery`
-`output_file`, and the artifact text it returns replaces the file. `delivery`
+`output_file`, and the artifact text it returns replaces the file. A Fiber
+delegate's `events.jsonl` is another session's log, so the `output_file` pass
+skips it. `delivery`
 is absent for an ordinary call. A redaction hook can ignore it and treat every
 input alike, so job output takes the same path as every other tool output.
 One window remains: while a job runs, its output file is written directly by
@@ -1004,8 +1006,10 @@ under `providers/` or `extensions/` in Fiber's own repository has one, and a
 new package adds one. `fiber extension install openrouter` means
 `github.com/aakshintala/fiber/providers/openrouter`. Today the provider short
 names are `anthropic`, `openai`, `gemini`, `codex`, `openrouter`, `opencode`,
-`databricks`, `muse`, `bedrock`, `vertex` and `azure`, and `hooks` and
-`memory` are short names for `github.com/aakshintala/fiber/extensions/<name>`.
+`databricks`, `muse`, `bedrock`, `vertex` and `azure`, and `claude`,
+`cursor-agent`, `hooks` and `memory` are short names for
+`github.com/aakshintala/fiber/extensions/<name>`. A harness's short name is
+the name it registers (`docs/delegates.md`, "Harness extensions").
 A short name also names the extension's directories in Fiber home
 (`docs/state.md`, "What each part holds").
 
@@ -1113,7 +1117,7 @@ runs at session start ("Loading, and cost when nothing is loaded").
 ### A fresh install
 
 A fresh install has every first-party extension: the eleven providers,
-`hooks` and `memory` (`docs/memory.md`). They arrive in the release's extensions archive, which `install.sh`
+the Claude Code and cursor-agent harnesses, `hooks` and `memory` (`docs/memory.md`). They arrive in the release's extensions archive, which `install.sh`
 installs into Fiber home's `extensions/` (`docs/releasing.md`), so a first run needs no
 `git` and no network beyond the download. They are ordinary extensions,
 recorded under their full names: nothing is compiled in, and
@@ -1173,7 +1177,10 @@ raises (`docs/events.md`, "Repository code"). Any client may answer, local or
 remote, and the first answer wins (`docs/invocation.md`, "Replying").
 
 Whether the session waits depends on whether a client that can answer is
-connected, not on how the session started:
+connected, not on how the session started. A client that can answer is a
+`full` connection, direct or through the hub: the connections `clients`
+counts. A `summary` connection and the `fiber ask` door never are.
+
 
 - **With one connected,** the session waits for the answer before its first
   request. Waiting counts as idle, so the idle exit bounds it
