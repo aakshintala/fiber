@@ -79,6 +79,18 @@ struct State {
     threads: Vec<JoinHandle<()>>,
 }
 
+impl State {
+    /// The sessions among `names` to connect to: neither followed already
+    /// nor a delegate.
+    fn fresh(&self, names: &BTreeSet<String>) -> Vec<String> {
+        names
+            .iter()
+            .filter(|id| !self.tracked.contains_key(*id) && !self.delegates.contains(*id))
+            .cloned()
+            .collect()
+    }
+}
+
 /// A session in the feed and its latest `session_status`.
 enum Entry {
     Running(Status),
@@ -333,12 +345,7 @@ impl Feed {
                 .into_iter()
                 .partition(JoinHandle::is_finished);
             state.threads = live;
-            let fresh: Vec<String> = names
-                .iter()
-                .filter(|id| !state.tracked.contains_key(*id) && !state.delegates.contains(*id))
-                .cloned()
-                .collect();
-            (fresh, done)
+            (state.fresh(&names), done)
         };
         done.into_iter().for_each(join);
         for id in fresh {
@@ -360,7 +367,9 @@ impl Feed {
         }
         let found = recent::find(&self.home, &id);
         let mut state = lock(&self.state);
-        if state.stopped || state.tracked.contains_key(&id) {
+        // Only the scanner adds to `tracked`, so the scan's check still
+        // holds here.
+        if state.stopped {
             return;
         }
         let feed = Arc::clone(self);

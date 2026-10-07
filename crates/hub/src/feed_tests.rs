@@ -10,6 +10,7 @@
     reason = "test helpers; a failure is the test's"
 )]
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::os::unix::net::UnixStream;
@@ -436,10 +437,60 @@ fn a_dead_or_slow_subscriber_does_not_stop_a_live_one() {
         );
     }
     let before = lock(&feed.state).subscribers.len();
-    feed.unsubscribe(live.id);
+    // Under a deadline: ending the live subscriber must never wait on the
+    // slow one's blocked writer.
+    let (done_tx, done_rx) = mpsc::channel();
+    let ending = Arc::clone(&feed);
+    thread::spawn(move || {
+        ending.unsubscribe(live.id);
+        done_tx.send(()).unwrap_or(());
+    });
+    assert!(
+        done_rx.recv_timeout(DEADLINE).is_ok(),
+        "unsubscribe returns"
+    );
     assert_eq!(lock(&feed.state).subscribers.len(), before - 1);
     drop(slow_far);
     feed.stop();
+}
+
+#[test]
+fn each_subscriber_gets_its_own_id_and_unsubscribe_ends_only_that_one() {
+    let temp = Temp::new();
+    let (feed, _) = new_feed(&temp);
+    let first = Sub::new(&feed);
+    let second = Sub::new(&feed);
+    assert_eq!((first.id, second.id), (1, 2));
+    let (done_tx, done_rx) = mpsc::channel();
+    let ending = Arc::clone(&feed);
+    let id = second.id;
+    thread::spawn(move || {
+        ending.unsubscribe(id);
+        done_tx.send(()).unwrap_or(());
+    });
+    assert!(
+        done_rx.recv_timeout(DEADLINE).is_ok(),
+        "unsubscribe returns"
+    );
+    let left: Vec<u64> = lock(&feed.state)
+        .subscribers
+        .iter()
+        .map(|sub| sub.id)
+        .collect();
+    assert_eq!(left, [first.id]);
+    feed.stop();
+}
+
+#[test]
+fn a_scan_skips_followed_sessions_and_delegates() {
+    let temp = Temp::new();
+    let (feed, _) = new_feed(&temp);
+    let names = BTreeSet::from([id(1), id(2), id(3)]);
+    let mut state = lock(&feed.state);
+    let (followed, _far) = UnixStream::pair().unwrap();
+    state.tracked.insert(id(1), followed);
+    state.delegates.insert(id(2));
+    assert_eq!(state.fresh(&names), [id(3)]);
 }
 
 #[test]
@@ -595,13 +646,22 @@ fn stop_ends_every_thread_and_records_no_crash() {
     let mut sub = Sub::new(&feed);
     start(&feed, &clock);
     assert_eq!(sub.raw("the status"), line);
+    // A writer the test keeps a handle on: its thread drops the other.
+    let (kept, _kept_far) = UnixStream::pair().unwrap();
+    let kept = Arc::new(Mutex::new(kept));
+    feed.subscribe(Arc::clone(&kept)).unwrap();
     let (tx, rx) = mpsc::channel();
     let stopping = Arc::clone(&feed);
     thread::spawn(move || {
         stopping.stop();
+        drop(stopping);
         tx.send(()).unwrap_or(());
     });
     assert!(rx.recv_timeout(DEADLINE).is_ok(), "stop returns");
+    // Joined, not just told to end: the scanner and the summary thread
+    // each held the feed, and the writer thread held `kept`.
+    assert_eq!(Arc::strong_count(&feed), 1);
+    assert_eq!(Arc::strong_count(&kept), 1);
     assert!(temp.rows().is_empty());
     assert_eq!(entry_of(&feed, &id), Some("running"));
     assert!(lock(&feed.state).tracked.is_empty());
@@ -632,6 +692,16 @@ fn the_last_kind_reads_only_a_whole_last_line() {
     assert_eq!(last_kind(&log).as_deref(), Some("rewound"));
     // A last line longer than the tail is neither exit line.
     fs::write(&log, format!("{{\"kind\":\"fiber_exited\"}}\n{filler}")).unwrap();
+    assert_eq!(last_kind(&log), None);
+    // Even when the tail of that line happens to parse on its own.
+    let inner = |pad: usize| {
+        format!(
+            "{{\"kind\":\"fiber_exited\",\"p\":\"{}\"}}",
+            "y".repeat(pad)
+        )
+    };
+    let pad = usize::try_from(TAIL).unwrap() - 1 - inner(0).len();
+    fs::write(&log, format!("not json {}\n", inner(pad))).unwrap();
     assert_eq!(last_kind(&log), None);
     // A last line well inside the tail reads whole.
     let long = format!("{{\"kind\":\"z\",\"p\":\"{}\"}}\n", "y".repeat(2_000));
