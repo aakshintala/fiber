@@ -25,6 +25,8 @@ pub enum Key {
     PageUp,
     PageDown,
     Delete,
+    /// a function key, by number: F2 is F(2)
+    F(u8),
     Other,
 }
 
@@ -86,6 +88,11 @@ pub fn parse(b: &[u8]) -> Option<(Option<Ev>, usize)> {
                         b'D' => Key::Left,
                         b'H' => Key::Home,
                         b'F' => Key::End,
+                        // SS3 function keys, what terminals send without the kitty protocol
+                        b'P' => Key::F(1),
+                        b'Q' => Key::F(2),
+                        b'R' => Key::F(3),
+                        b'S' => Key::F(4),
                         _ => Key::Other,
                     };
                     k(key, 3)
@@ -185,6 +192,10 @@ fn csi(b: &[u8]) -> Option<(Option<Ev>, usize)> {
     match fin {
         b'u' => {
             let code = num(parts[0]);
+            // kitty's functional key codes live in private use, past any char
+            if (57344..=57355).contains(&code) {
+                return key(Key::F((code - 57343) as u8), mods);
+            }
             let kk = match code {
                 13 => Key::Enter,
                 9 => Key::Tab,
@@ -208,6 +219,19 @@ fn csi(b: &[u8]) -> Option<(Option<Ev>, usize)> {
                 3 => Key::Delete,
                 5 => Key::PageUp,
                 6 => Key::PageDown,
+                // legacy function keys, with the kitty modifiers after a `;`
+                11 => Key::F(1),
+                12 => Key::F(2),
+                13 => Key::F(3),
+                14 => Key::F(4),
+                15 => Key::F(5),
+                17 => Key::F(6),
+                18 => Key::F(7),
+                19 => Key::F(8),
+                20 => Key::F(9),
+                21 => Key::F(10),
+                23 => Key::F(11),
+                24 => Key::F(12),
                 // xterm's modifyOtherKeys form: 27;mods;code~
                 27 => match parts.get(2).map(|c| num(c)) {
                     Some(13) => Key::Enter,
@@ -337,6 +361,15 @@ mod tests {
         // sideways wheel, as a trackpad's drift sends it: not up and down
         assert_eq!(one(b"\x1b[<66;5;3M"), Some(Ev::Mouse(Mouse::Other, 4, 2, Mods::default())));
         assert_eq!(one(b"\x1b[<67;5;3M"), Some(Ev::Mouse(Mouse::Other, 4, 2, Mods::default())));
+        // function keys: SS3, legacy tilde (with modifiers), and kitty's private-use codes
+        assert_eq!(one(b"\x1bOQ"), Some(Ev::Key(Key::F(2), Mods::default())));
+        assert_eq!(one(b"\x1bOR"), Some(Ev::Key(Key::F(3), Mods::default())));
+        assert_eq!(one(b"\x1b[12~"), Some(Ev::Key(Key::F(2), Mods::default())));
+        assert_eq!(one(b"\x1b[13;2~"), Some(Ev::Key(Key::F(3), Mods { shift: true, ..Default::default() })));
+        assert_eq!(one("\x1b[57345u".as_bytes()), Some(Ev::Key(Key::F(2), Mods::default())));
+        // Alt+digit, both legacy ESC-prefix and kitty's `CSI 49;3u`
+        assert_eq!(one(b"\x1b3"), Some(Ev::Key(Key::Char('3'), Mods { alt: true, ..Default::default() })));
+        assert_eq!(one(b"\x1b[51;3u"), Some(Ev::Key(Key::Char('3'), Mods { alt: true, ..Default::default() })));
         assert_eq!(parse(b"\x1b"), None);
         assert_eq!(parse(b"\x1b[1;"), None);
         assert_eq!(one("é".as_bytes()), Some(Ev::Key(Key::Char('é'), Mods::default())));

@@ -1,7 +1,8 @@
 name: CI
 
 # docs/ci.md. Pull requests run what their diff selects. Every push to main
-# runs the backstop, which is the only run that saves the build cache.
+# runs the backstop, which runs every job the selection chooses and is the
+# only run that saves the build cache.
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
@@ -221,7 +222,7 @@ jobs:
 
   backstop_report:
     name: Report a failed backstop
-    needs: [select, test]
+    needs: [select, lint, test, mutants]
     if: failure() && github.event_name == 'push'
     runs-on: ubuntu-24.04
     permissions:

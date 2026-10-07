@@ -56,6 +56,7 @@ fn sent(effect: Effect) -> Vec<Value> {
             .map(|line| serde_json::from_str(line).unwrap_or_default())
             .collect(),
         Effect::None
+        | Effect::Copy(_)
         | Effect::Quit
         | Effect::ListFiles
         | Effect::Search { .. }

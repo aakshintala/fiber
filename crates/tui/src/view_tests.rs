@@ -707,7 +707,8 @@ fn tool_group_ledger_open_with_a_call_open() {
             | crate::app::Target::Thought(_)
             | crate::app::Target::Login
             | crate::app::Target::Note(_)
-            | crate::app::Target::Orphans(_) => None,
+            | crate::app::Target::Orphans(_)
+            | crate::app::Target::Copy { .. } => None,
         })
         .nth(1);
     if let Some(edit) = edit {
@@ -1021,6 +1022,36 @@ fn badged() -> App {
     app
 }
 
+/// Renders `app` at `width` by `height`, returning the buffer.
+fn buffer(app: &App, width: u16, height: u16) -> Buffer {
+    let area = Rect::new(0, 0, width, height);
+    let mut buf = Buffer::empty(area);
+    render(app, area, &mut buf, None);
+    buf
+}
+
+/// Clicks the target drawn at `col`, `row` of `app` at `width` by
+/// `height`, if any.
+fn click(app: &mut App, width: u16, height: u16, col: u16, row: u16) {
+    let (_, targets) = pointed(app, width, height, None);
+    if let Some(target) = crate::mouse::hit(&targets, col, row) {
+        app.on_click(target);
+    }
+}
+
+/// A reply in markdown, as one model streams it.
+const MARKDOWN: &str = "# Plan\n\n- read the **file**\n- write it\n\n```rust\nfn main() {\n    let x = 1;\n}\n```\n\n| step | ms |\n|---|---|\n| parse | 12 |\n| draw | 3 |";
+
+/// An app at `width` by `height` with `text` streamed as one reply.
+fn replying(width: u16, height: u16, text: &str) -> App {
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_size(width, height);
+    attach(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "plan it"));
+    app.on_line(delta("s_aaaaaaaaaaaaaaaa", "a_1", text));
+    app
+}
+
 #[test]
 fn the_badge_is_a_target_over_the_cells_it_drew() {
     use crate::mouse::{Target, TargetId};
@@ -1148,6 +1179,7 @@ fn ledger_rows_are_targets_over_their_rows() {
             Target::Thought(_) => 't',
             Target::Call(_) => 'c',
             Target::Login | Target::Note(_) | Target::Orphans(_) => 'o',
+            Target::Copy { .. } => 'y',
         })
         .collect();
     assert_eq!(kinds, vec!['g', 't', 'c', 'c', 'c']);
@@ -1361,4 +1393,100 @@ fn a_paste_token_below_the_box_or_with_no_room_is_no_target() {
     let mut app = with_token();
     let (_, targets) = pointed(&mut app, 2, HEIGHT, None);
     assert!(token_rects(&targets).is_empty(), "{targets:?}");
+}
+
+#[test]
+fn a_streaming_reply_renders_its_markdown_in_place() {
+    // Mid-stream: the fence is open, so the rest is code.
+    let cut = MARKDOWN.find("}\n```").unwrap_or_default();
+    let mut app = replying(40, 18, &MARKDOWN[..cut]);
+    insta::assert_snapshot!("markdown_reply_streaming", text(&buffer(&app, 40, 18)));
+    app.on_line(delta("s_aaaaaaaaaaaaaaaa", "a_1", &MARKDOWN[cut..]));
+    let buf = buffer(&app, 40, 18);
+    insta::assert_snapshot!("markdown_reply", text(&buf));
+    let fg = |x, y| buf.cell((x, y)).map(|cell| cell.fg);
+    let bg = |x, y| buf.cell((x, y)).map(|cell| cell.bg);
+    let shown = text(&buf);
+    let row = |needle: &str| {
+        let at = shown.lines().position(|line| line.contains(needle));
+        u16::try_from(at.unwrap_or_else(|| panic!("{needle} on screen"))).unwrap_or(0)
+    };
+    use crate::markdown::Role;
+    assert_eq!(fg(0, row("Plan")), Some(Role::Heading.color()));
+    assert_eq!(fg(0, row("read the")), Some(Role::Accent.color()));
+    assert_eq!(fg(2, row("read the")), Some(Role::Text.color()));
+    let header = row("rust");
+    assert_eq!(fg(36, header), Some(Role::Accent.color()));
+    for x in 0..40 {
+        assert_eq!(
+            bg(x, header),
+            Some(Role::CodeTint.color()),
+            "header col {x}"
+        );
+        assert_eq!(
+            bg(x, header + 2),
+            Some(Role::CodeTint.color()),
+            "code col {x}"
+        );
+    }
+    assert_eq!(fg(8, header + 2), Some(Role::Keyword.color()));
+    assert_eq!(fg(16, header + 2), Some(Role::Number.color()));
+    assert_eq!(fg(0, row("────")), Some(Role::Dim.color()));
+}
+
+#[test]
+fn a_resize_renders_the_reply_again_at_the_new_width() {
+    let mut app = replying(40, 18, "```rust\nlet x = 1;\n```");
+    assert!(text(&buffer(&app, 40, 18)).contains(&format!("rust{}copy", " ".repeat(32))));
+    app.set_size(20, 18);
+    assert!(text(&buffer(&app, 20, 18)).contains(&format!("rust{}copy", " ".repeat(12))));
+}
+
+#[test]
+fn text_completed_replaces_and_renders_the_reply_again() {
+    let mut app = replying(40, 8, "# Draft");
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "text_completed",
+        serde_json::json!({"text": "- done"}),
+        Some("a_1"),
+    ));
+    let shown = text(&buffer(&app, 40, 8));
+    assert!(shown.contains("• done"));
+    assert!(!shown.contains("Draft"));
+}
+
+#[test]
+fn copied_shows_on_the_conversations_top_row_until_the_next_key() {
+    let mut app = replying(30, 10, "```rust\nlet x = 1;\n```");
+    let shown = text(&buffer(&app, 30, 10));
+    let header = shown
+        .lines()
+        .position(|line| line.contains("rust"))
+        .and_then(|at| u16::try_from(at).ok())
+        .unwrap_or_default();
+    click(&mut app, 30, 10, 27, header);
+    let buf = buffer(&app, 30, 10);
+    insta::assert_snapshot!("copied", text(&buf));
+    assert_eq!(
+        buf.cell((24, 0)).map(|cell| cell.fg),
+        Some(crate::markdown::Role::Accent.color())
+    );
+    app.on_key(Key::Char('x'), fakes::clock::FakeClock::new().now());
+    assert!(!text(&buffer(&app, 30, 10)).contains("Copied"));
+}
+
+#[test]
+fn copied_needs_a_conversation_row_to_show_on() {
+    let mut app = replying(30, 10, "```rust\nlet x = 1;\n```");
+    assert!(
+        text(&buffer(&app, 30, 10))
+            .lines()
+            .nth(7)
+            .is_some_and(|row| row.starts_with("rust"))
+    );
+    click(&mut app, 30, 10, 27, 7);
+    assert!(app.copied());
+    app.set_size(30, 1);
+    assert_eq!(text(&buffer(&app, 30, 1)), ">\n");
 }

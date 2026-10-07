@@ -25,7 +25,7 @@ use serde_json::{Value, json};
 use super::*;
 use crate::connection::serve_connection;
 use crate::diag::Diag;
-use crate::fake::{FakeStarter, failure};
+use crate::fake::{FakeStarter, Handshake, failure};
 use crate::start::START_DEADLINE;
 
 /// One named deadline per wait: a resume answers before it.
@@ -101,6 +101,21 @@ impl Temp {
         workspace
     }
 
+    /// Appends `kind` as the last line of `SID`'s log.
+    fn append(&self, kind: &str) {
+        let log = self
+            .dir
+            .join("projects")
+            .join("-p")
+            .join("sessions")
+            .join(SID)
+            .join("events.jsonl");
+        let mut text = fs::read_to_string(&log).unwrap();
+        text.push_str(&json!({"kind": kind, "session_id": SID, "payload": {}}).to_string());
+        text.push('\n');
+        fs::write(log, text).unwrap();
+    }
+
     fn hub_log(&self) -> String {
         fs::read_to_string(self.dir.join("logs").join("hub.log")).unwrap_or_default()
     }
@@ -119,6 +134,20 @@ fn resumed(hub: &Arc<Hub>) -> Result<UnixStream, Refused> {
     finished
         .recv_timeout(DEADLINE)
         .expect("the resume answers before its deadline")
+}
+
+/// Runs `resume` on a thread and hands back where its result arrives: the
+/// test drives the fake clock while it waits.
+fn resuming(hub: &Arc<Hub>) -> mpsc::Receiver<Result<UnixStream, Refused>> {
+    let (done, finished) = mpsc::channel();
+    let hub = Arc::clone(hub);
+    thread::spawn(move || done.send(resume(&hub, &sid())).unwrap_or(()));
+    finished
+}
+
+/// How many held polls fit in the shutdown bound.
+fn polls() -> u32 {
+    u32::try_from(SHUTDOWN_BOUND.as_millis() / HELD_POLL.as_millis()).unwrap()
 }
 
 fn refused(result: Result<UnixStream, Refused>) -> Refused {
@@ -155,6 +184,23 @@ fn a_running_session_is_attached_to_without_a_resume() {
     assert!(resumed(&hub).is_ok());
     assert!(starter.resumed().is_empty());
     assert!(!temp.hub_log().contains("session_resumed"));
+}
+
+#[test]
+fn a_trusted_resume_returns_an_accepting_socket_past_fiber_exited_at_once() {
+    let temp = Temp::new();
+    temp.recorded();
+    temp.append("fiber_exited");
+    let run = temp.dir.join("run");
+    fs::create_dir_all(&run).unwrap();
+    let _running = UnixListener::bind(run.join(SID)).unwrap();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    // `resume` passes trusted=true: the accepting socket is the answer,
+    // even while the log ends in `fiber_exited`.
+    assert!(resumed(&hub).is_ok());
+    assert!(starter.resumed().is_empty());
+    assert_eq!(temp.clock.now(), temp.clock.origin());
 }
 
 #[test]
@@ -236,6 +282,75 @@ fn a_resumed_process_that_never_binds_fails_at_the_start_deadline() {
     let log = temp.hub_log();
     assert!(log.contains("could not resume."), "{log}");
     assert!(!log.contains(SECRET), "no workspace path in the log");
+}
+
+#[test]
+fn a_held_resume_of_an_exited_session_retries_until_the_lock_is_released() {
+    let temp = Temp::new();
+    temp.recorded();
+    temp.append("fiber_exited");
+    let starter = FakeStarter::held_then_bind(&temp.dir, 2);
+    let hub = temp.hub(starter.clone());
+    let finished = resuming(&hub);
+    for k in 1..=2 {
+        let until = temp.clock.origin() + HELD_POLL * k;
+        assert!(
+            temp.clock.await_parked(until, DEADLINE),
+            "the hub waits a poll after held failure {k}"
+        );
+        assert_eq!(starter.resumed().len(), usize::try_from(k).unwrap());
+        assert!(finished.try_recv().is_err(), "no answer while it waits");
+        temp.clock.advance(HELD_POLL);
+    }
+    let result = finished
+        .recv_timeout(DEADLINE)
+        .expect("the resume answers once the lock is released");
+    assert!(result.is_ok());
+    assert_eq!(starter.resumed().len(), 3);
+}
+
+#[test]
+fn a_resume_held_past_the_shutdown_bound_is_session_held() {
+    let temp = Temp::new();
+    temp.recorded();
+    temp.append("fiber_exited");
+    let starter = FakeStarter::held_then_bind(&temp.dir, usize::MAX);
+    let hub = temp.hub(starter.clone());
+    let finished = resuming(&hub);
+    for k in 1..=polls() {
+        let until = temp.clock.origin() + HELD_POLL * k;
+        assert!(
+            temp.clock.await_parked(until, DEADLINE),
+            "the hub waits poll {k} inside the bound"
+        );
+        assert!(finished.try_recv().is_err(), "no answer before the bound");
+        temp.clock.advance(HELD_POLL);
+    }
+    let refused = refused(
+        finished
+            .recv_timeout(DEADLINE)
+            .expect("the resume answers at the bound"),
+    );
+    assert_eq!(refused.code, ErrorCode::SessionHeld);
+    assert_eq!(refused.message, "Another process holds this session.");
+    assert_eq!(temp.clock.now(), temp.clock.origin() + SHUTDOWN_BOUND);
+    assert_eq!(
+        starter.resumed().len(),
+        usize::try_from(polls()).unwrap() + 1
+    );
+}
+
+#[test]
+fn a_held_resume_of_a_session_that_has_not_exited_is_session_held_at_once() {
+    let temp = Temp::new();
+    temp.recorded();
+    temp.append("turn_started");
+    let starter = FakeStarter::held_then_bind(&temp.dir, usize::MAX);
+    let hub = temp.hub(starter.clone());
+    let refused = refused(resumed(&hub));
+    assert_eq!(refused.code, ErrorCode::SessionHeld);
+    assert_eq!(starter.resumed().len(), 1);
+    assert_eq!(temp.clock.now(), temp.clock.origin());
 }
 
 #[test]
@@ -404,4 +519,151 @@ fn a_connection_that_never_subscribed_gets_no_replay() {
             ("c_2".into(), "reply".into())
         ]
     );
+}
+
+/// A session after `close` at `run/<SID>`: it answers every command but
+/// `subscribe` with `closing` until the test stops it.
+fn closing_session(temp: &Temp) -> FakeStarter {
+    let dying = FakeStarter::closing(&temp.dir);
+    let started = crate::Starter::start(&dying, &sid(), &temp.workspace(), None);
+    assert!(started.is_ok(), "the closing session binds");
+    dying
+}
+
+#[test]
+fn a_command_answered_closing_after_fiber_exited_reaches_the_resumed_session() {
+    let temp = Temp::new();
+    temp.recorded();
+    temp.append("fiber_exited");
+    let dying = closing_session(&temp);
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    client.send("c_1", "reply");
+    // The exiting process still accepts on its socket: the hub waits.
+    let until = temp.clock.origin() + HELD_POLL;
+    assert!(
+        temp.clock.await_parked(until, DEADLINE),
+        "the hub waits out the exiting process"
+    );
+    assert!(starter.resumed().is_empty());
+    assert!(dying.stop(&sid(), DEADLINE), "the exiting process ended");
+    temp.clock.advance(HELD_POLL);
+    // One acknowledgement, the resumed session's.
+    assert_eq!(client.acknowledged("the reply"), "c_1");
+    assert_eq!(starter.resumed().len(), 1);
+    assert_eq!(received(&starter), [("c_1".into(), "reply".into())]);
+    client.send("c_2", "steer");
+    assert_eq!(client.acknowledged("the steer"), "c_2");
+}
+
+#[test]
+fn two_commands_answered_closing_reach_one_resumed_session() {
+    let temp = Temp::new();
+    temp.recorded();
+    temp.append("fiber_exited");
+    let dying = closing_session(&temp);
+    // The resumed process writes its durable `fiber_started` while the
+    // relay thread is still draining the dying connection's answers, so
+    // the second `closing` re-routes only when the thread keeps what its
+    // first answer detected.
+    let starter = FakeStarter::bind_hold_and_append_started(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    client.send("c_1", "reply");
+    client.send("c_2", "steer");
+    assert!(
+        dying.await_received(2, DEADLINE),
+        "both commands were answered closing"
+    );
+    let until = temp.clock.origin() + HELD_POLL;
+    assert!(
+        temp.clock.await_parked(until, DEADLINE),
+        "the hub waits out the exiting process"
+    );
+    assert!(dying.stop(&sid(), DEADLINE), "the exiting process ended");
+    temp.clock.advance(HELD_POLL);
+    assert_eq!(client.acknowledged("the reply"), "c_1");
+    assert_eq!(client.acknowledged("the steer"), "c_2");
+    assert_eq!(starter.resumed().len(), 1, "one resume for both");
+    assert_eq!(
+        received(&starter),
+        [
+            ("c_1".into(), "reply".into()),
+            ("c_2".into(), "steer".into())
+        ]
+    );
+}
+
+#[test]
+fn closing_before_fiber_exited_is_passed_on() {
+    let temp = Temp::new();
+    temp.recorded();
+    temp.append("turn_ended");
+    let _dying = closing_session(&temp);
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    client.send("c_1", "reply");
+    let line = client.next("the rejection");
+    assert_eq!(line["kind"], "command_rejected", "{line}");
+    assert_eq!(line["payload"]["command_id"], "c_1");
+    assert_eq!(line["payload"]["code"], "closing");
+    assert_eq!(line["payload"]["message"], "The session is closing.");
+    assert!(starter.resumed().is_empty());
+}
+
+#[test]
+fn a_rejection_that_is_not_closing_after_fiber_exited_is_passed_on() {
+    let temp = Temp::new();
+    temp.recorded();
+    temp.append("fiber_exited");
+    let starter = FakeStarter::with_handshake(
+        &temp.dir,
+        Handshake {
+            accept: false,
+            code: "prompt_rejected".to_owned(),
+            message: "The prompt was rejected.".to_owned(),
+        },
+    );
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    client.send("c_1", "prompt");
+    let line = client.next("the rejection");
+    assert_eq!(line["kind"], "command_rejected", "{line}");
+    assert_eq!(line["payload"]["command_id"], "c_1");
+    assert_eq!(line["payload"]["code"], "prompt_rejected");
+    assert_eq!(line["payload"]["message"], "The prompt was rejected.");
+    // Passed on, not routed again: one resume, the first connection's.
+    assert_eq!(starter.resumed().len(), 1);
+}
+
+#[test]
+fn an_exiting_process_that_never_ends_is_session_held_past_the_bound() {
+    let temp = Temp::new();
+    temp.recorded();
+    temp.append("fiber_exited");
+    let _dying = closing_session(&temp);
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    client.send("c_1", "reply");
+    for k in 1..=polls() {
+        let until = temp.clock.origin() + HELD_POLL * k;
+        assert!(
+            temp.clock.await_parked(until, DEADLINE),
+            "the hub waits poll {k} inside the bound"
+        );
+        temp.clock.advance(HELD_POLL);
+    }
+    let line = client.next("the rejection");
+    assert_eq!(line["kind"], "command_rejected", "{line}");
+    assert_eq!(line["payload"]["command_id"], "c_1");
+    assert_eq!(line["payload"]["code"], "session_held");
+    assert_eq!(
+        line["payload"]["message"],
+        format!("Session {SID} is still held by its exiting process.")
+    );
+    assert_eq!(temp.clock.now(), temp.clock.origin() + SHUTDOWN_BOUND);
+    assert!(starter.resumed().is_empty());
 }
