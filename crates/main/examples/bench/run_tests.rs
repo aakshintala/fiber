@@ -169,8 +169,9 @@ fn output_held_open_by_a_process_outside_the_group_errs_instead_of_hanging() {
     // `Proc::stop` cannot catch the holder while it is still in the
     // group. Bounded: a counted wait, not a sleep-then-hope.
     let script = format!(
-        "perl -MPOSIX -e 'POSIX::setsid(); open my $f, \">>\", $ARGV[1] or die $!; print $f \"x\\n\"; close $f; sleep 3600' '{}' '{}' & i=0; while [ ! -e '{}' ] && [ \"$i\" -lt 100 ]; do sleep 0.05; i=$((i + 1)); done",
+        "perl -MPOSIX -e 'POSIX::setsid(); open my $f, \">>\", $ARGV[1] or die $!; print $f \"x\\n\"; close $f; sleep 3600' '{}' '{}' & i=0; while [ ! -e '{}' ] && [ \"$i\" -lt 100 ]; do sleep 0.05; i=$((i + 1)); done; [ -e '{}' ] || {{ echo 'the descendant never escaped its process group' >&2; exit 1; }}",
         dir.path().display(),
+        escaped.display(),
         escaped.display(),
         escaped.display(),
     );
