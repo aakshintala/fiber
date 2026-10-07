@@ -1628,3 +1628,52 @@ fn a_rejected_bang_command_returns_to_an_empty_draft() {
     assert_eq!(app.notice(), Some("no"));
     assert_eq!(app.draft(), "!!ls");
 }
+
+#[test]
+fn shell_output_marks_new_lines_while_scrolled_up() {
+    // `shell_command` changes no card, so only the shell item marks the
+    // scroll: `&=` would leave it unmarked.
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    app.set_size(60, 12);
+    attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
+    for n in 0..30 {
+        app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", &format!("hi {n}")));
+        app.on_line(turn_completed("s_aaaaaaaaaaaaaaaa", "completed"));
+    }
+    app.on_key(Key::PageUp, now);
+    assert!(app.top().is_some());
+    assert!(!app.has_new());
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "shell_command",
+        serde_json::json!({"command": "ls", "output": "a\n",
+            "process": {"exit_code": 2, "timed_out": false}}),
+        None,
+    ));
+    assert!(app.has_new());
+}
+
+#[test]
+fn an_answered_shell_command_marks_new_lines_while_scrolled_up() {
+    // `command_accepted` changes no card either: the answered shell item
+    // alone marks the scroll.
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    app.set_size(60, 12);
+    attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
+    for n in 0..30 {
+        app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", &format!("hi {n}")));
+        app.on_line(turn_completed("s_aaaaaaaaaaaaaaaa", "completed"));
+    }
+    let id = id_of(&one_line(send(&mut app, "!!ls", now)));
+    app.on_key(Key::PageUp, now);
+    assert!(app.top().is_some());
+    assert!(!app.has_new());
+    app.on_line(accepted(
+        &id,
+        Some(serde_json::json!({"output": "a",
+            "process": {"exit_code": 0, "timed_out": false}})),
+    ));
+    assert!(app.has_new());
+}
