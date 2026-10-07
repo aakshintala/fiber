@@ -15,7 +15,7 @@ use super::{Folded, Pages, Part, fold};
 use crate::app::{App, Effect, Target};
 use crate::keys::Key;
 use crate::link::Line;
-use crate::turn::Row;
+use crate::turn::{Row, Turn};
 
 const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 
@@ -1699,6 +1699,19 @@ fn set_opens_an_aside_only_past_the_turns() {
             aside,
             crate::turn::crash::Aside::Orphans { open: true, .. }
         ))
+    );
+}
+
+#[test]
+fn draw_data_skips_a_turn_drawing_no_rows() {
+    let pages = Pages::new(80);
+    let mut empty = part();
+    empty.turns.push(Turn::part(0));
+    let (rows, _, turns) = pages.draw_data(0, &empty);
+    assert!(rows.is_empty());
+    assert!(
+        turns.is_empty(),
+        "a turn with no rows leaves a range: {turns:?}"
     );
 }
 

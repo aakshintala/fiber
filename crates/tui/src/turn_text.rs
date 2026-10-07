@@ -4,6 +4,10 @@
 
 use crate::window::Pages;
 
+#[cfg(test)]
+#[path = "turn_text_tests.rs"]
+mod tests;
+
 /// A whole-turn copy waiting on dropped pages: its turn and the pages
 /// it keeps resident until the copy runs or is abandoned.
 pub(crate) struct PendingTurn {
