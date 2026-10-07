@@ -550,8 +550,9 @@ that ticket's resolution holds the rationale and the rejected alternatives.
 - Flags matter because read-only-looking commands have writing or
   executing flags: `git diff --output=<file>` writes a file,
   `rg --pre <cmd>` and `find -exec` run programs, `find -delete` deletes,
-  `sort -o` writes. The list and its flag rules are part of building the
-  shell tool.
+  `sort -o` writes. `grep -R` follows every link below the paths it names,
+  which the credential deny never sees, so it is not on the list. The list
+  and its flag rules are part of building the shell tool.
 - A call declared `reads` takes the permission fast path.
 - A command of one part, with nothing the classifier cannot read plainly,
   has the command as its subject. The prefix offered is its first word, and
