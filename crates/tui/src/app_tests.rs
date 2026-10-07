@@ -993,3 +993,95 @@ fn steering_keys_send_nothing_without_a_connection() {
     assert_eq!(app.draft(), "second");
     assert_eq!(app.steering(), ["↳ first", "▸ second"]);
 }
+
+#[test]
+fn slash_name_sends_name_and_clears_the_draft() {
+    let clock = fakes::clock::FakeClock::new();
+    let now = clock.now();
+    let mut app = app();
+    attach(&mut app, now, S_A);
+    let lines = sent(send(&mut app, "/name  Fix the parser ", now));
+    assert_eq!(lines.len(), 1);
+    assert_eq!(
+        command_of(&lines[0]),
+        (
+            "name".to_owned(),
+            serde_json::json!({"text": "Fix the parser"})
+        )
+    );
+    assert_eq!(
+        lines[0]
+            .get("session_id")
+            .and_then(serde_json::Value::as_str),
+        Some(S_A)
+    );
+    assert_eq!(app.draft(), "");
+    // Alone it clears the name; during a turn it is still `name`.
+    app.on_line(turn_started(S_A, "hi"));
+    let lines = sent(send(&mut app, "/name", now));
+    assert_eq!(
+        command_of(&lines[0]),
+        ("name".to_owned(), serde_json::json!({"text": ""}))
+    );
+    // A word that only starts with it is a prompt like any other.
+    let lines = sent(send(&mut app, "/named", now));
+    assert_eq!(command_of(&lines[0]).0, "steer");
+}
+
+#[test]
+fn a_rejected_name_is_a_notice_and_returns_the_draft() {
+    let clock = fakes::clock::FakeClock::new();
+    let now = clock.now();
+    let mut app = app();
+    attach(&mut app, now, S_A);
+    let lines = sent(send(&mut app, "/name x", now));
+    let rejected = session_line(
+        S_A,
+        "command_rejected",
+        serde_json::json!({"command_id": lines[0].get("id"), "code": "closing",
+            "message": "The session is closing."}),
+        None,
+    );
+    app.on_line(rejected);
+    assert_eq!(app.notice(), Some("The session is closing."));
+    assert_eq!(app.draft(), "/name x");
+}
+
+#[test]
+fn slash_name_with_no_session_keeps_the_draft() {
+    let clock = fakes::clock::FakeClock::new();
+    let now = clock.now();
+    let mut app = app();
+    connect(&mut app);
+    assert_eq!(send(&mut app, "/name x", now), Effect::None);
+    assert_eq!(app.draft(), "/name x");
+}
+
+#[test]
+fn session_named_sets_the_name_and_null_clears_it() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = app();
+    attach(&mut app, clock.now(), S_A);
+    assert_eq!(app.name(), None);
+    let named = |session: &str, name: serde_json::Value| {
+        session_line(
+            session,
+            "session_named",
+            serde_json::json!({"name": name, "by": "person"}),
+            None,
+        )
+    };
+    app.on_line(named(S_A, serde_json::json!("Fix the parser")));
+    assert_eq!(app.name(), Some("Fix the parser"));
+    app.on_line(named("s_bbbbbbbbbbbbbbbb", serde_json::json!("Other")));
+    assert_eq!(app.name(), Some("Fix the parser"));
+    app.on_line(session_line(
+        S_A,
+        "session_named",
+        serde_json::json!({"name": "Parser work", "by": "model"}),
+        None,
+    ));
+    assert_eq!(app.name(), Some("Parser work"));
+    app.on_line(named(S_A, serde_json::Value::Null));
+    assert_eq!(app.name(), None);
+}

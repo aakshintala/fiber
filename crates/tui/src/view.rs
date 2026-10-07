@@ -171,6 +171,50 @@ fn conversation_rows(app: &App, area: Rect, buf: &mut Buffer) {
     }
 }
 
+/// Where the conversation is scrolled to.
+#[derive(Debug, Default)]
+pub(crate) struct Scroll {
+    /// The top wrapped row while scrolled up; `None` follows new output.
+    pub(crate) top: Option<usize>,
+    /// New output arrived while scrolled up.
+    pub(crate) has_new: bool,
+}
+
+impl Scroll {
+    /// New output while scrolled up shows the overlay; the view stays put.
+    pub(crate) fn changed(&mut self) {
+        if self.top.is_some() {
+            self.has_new = true;
+        }
+    }
+
+    /// PageUp: up by `step` from the top row, or from `bottom` when
+    /// following.
+    pub(crate) fn up(&mut self, step: usize, bottom: usize) {
+        let top = self.top.unwrap_or(bottom);
+        self.top = Some(top.saturating_sub(step));
+    }
+
+    /// PageDown: down by `step`, following again on reaching `bottom`.
+    pub(crate) fn down(&mut self, step: usize, bottom: usize) {
+        let Some(top) = self.top else {
+            return;
+        };
+        let next = top.saturating_add(step);
+        if next >= bottom {
+            self.follow();
+        } else {
+            self.top = Some(next);
+        }
+    }
+
+    /// End jumps to the bottom and resumes following.
+    pub(crate) fn follow(&mut self) {
+        self.top = None;
+        self.has_new = false;
+    }
+}
+
 /// A row count as a screen coordinate; a screen is never taller than
 /// `u16::MAX`.
 fn to_u16(value: usize) -> u16 {

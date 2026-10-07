@@ -7,7 +7,7 @@ use std::hash::{BuildHasher, RandomState};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use contract::events::{CommandAccepted, CommandRejected, Notice, SteeringQueue};
+use contract::events::{CommandAccepted, CommandRejected, Notice, SessionNamed, SteeringQueue};
 use contract::shapes::ContentPart;
 use contract::{Envelope, HubLine, SessionId};
 use serde_json::{Map, Value, json};
@@ -16,6 +16,7 @@ use crate::approvals::{self, Panel, PanelKey, Queue};
 use crate::keys::Key;
 use crate::link::Line;
 use crate::turn::{Fold, Row, Turn};
+use crate::view::Scroll;
 use notices::Notices;
 use steering::Steering;
 
@@ -41,6 +42,9 @@ pub(crate) const QUIT_HINT: &str = "Press Ctrl+C again to quit";
 
 /// The draft that reopens the waiting queue.
 const APPROVALS: &str = "/approvals";
+
+/// The command that names the session.
+const NAME: &str = "/name";
 
 /// What the terminal is attached to.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -81,6 +85,7 @@ enum Kind {
     Cancel,
     Reply,
     SteerDrop,
+    Name,
 }
 
 /// The hub connection, as the terminal sees it.
@@ -128,10 +133,7 @@ pub(crate) struct App {
     notices: Notices,
     turns: Vec<Turn>,
     fold: Fold,
-    /// The top wrapped row while scrolled up; `None` follows new output.
-    top: Option<usize>,
-    /// New output arrived while scrolled up.
-    has_new: bool,
+    scroll: Scroll,
     width: u16,
     height: u16,
     /// The first Ctrl+C, waiting for the second. Its hint shows while set.
@@ -142,6 +144,8 @@ pub(crate) struct App {
     queue: Queue,
     /// The attached session's steering queue.
     steering: Steering,
+    /// The session's name, from the latest `session_named`.
+    name: Option<String>,
 }
 
 impl App {
@@ -157,14 +161,14 @@ impl App {
             notices: Notices::default(),
             turns: Vec::new(),
             fold: Fold::default(),
-            top: None,
-            has_new: false,
+            scroll: Scroll::default(),
             width: 80,
             height: 24,
             armed_at: None,
             kitty: false,
             queue: Queue::default(),
             steering: Steering::default(),
+            name: None,
         }
     }
 
@@ -206,12 +210,8 @@ impl App {
                 Effect::None
             }
             Key::Esc => self.on_esc(),
-            Key::PageUp => {
-                self.page_up();
-                Effect::None
-            }
-            Key::PageDown => {
-                self.page_down();
+            Key::PageUp | Key::PageDown => {
+                self.page(key == Key::PageUp);
                 Effect::None
             }
             Key::CtrlO => {
@@ -219,7 +219,7 @@ impl App {
                 Effect::None
             }
             Key::End | Key::CtrlC => {
-                self.follow();
+                self.scroll.follow();
                 Effect::None
             }
             Key::Up | Key::Down => Effect::None,
@@ -312,6 +312,12 @@ impl App {
         &self.draft
     }
 
+    /// The session's name, if it has one.
+    #[cfg_attr(not(test), expect(dead_code, reason = "#668 and #669 draw it"))]
+    pub(crate) fn name(&self) -> Option<&str> {
+        self.name.as_deref()
+    }
+
     /// Whether the quit hint shows: armed by a first Ctrl+C.
     pub(crate) fn hint(&self) -> bool {
         self.armed_at.is_some()
@@ -319,12 +325,12 @@ impl App {
 
     /// Whether new output arrived while scrolled up.
     pub(crate) fn has_new(&self) -> bool {
-        self.has_new
+        self.scroll.has_new
     }
 
     /// The top wrapped row while scrolled up; `None` follows.
     pub(crate) fn top(&self) -> Option<usize> {
-        self.top
+        self.scroll.top
     }
 
     /// The conversation's rows: the screen less the input line or the
@@ -384,7 +390,7 @@ impl App {
         if self.turns.iter_mut().any(|turn| turn.toggle(target))
             || asides.into_iter().any(|aside| aside.toggle(target))
         {
-            self.changed();
+            self.scroll.changed();
         }
     }
 
@@ -455,6 +461,9 @@ impl App {
         if self.draft.trim().is_empty() || self.link == Link::Down {
             return Effect::None;
         }
+        if let Some(effect) = self.rename() {
+            return effect;
+        }
         if self.steering.is_selected() {
             return self.amend();
         }
@@ -502,6 +511,25 @@ impl App {
             self.held.push(line);
             Effect::None
         }
+    }
+
+    /// `/name <text>` sends `name`; `/name` alone clears the name. With no
+    /// session nothing goes out and the draft stays. `None` when the draft
+    /// is not `/name`.
+    fn rename(&mut self) -> Option<Effect> {
+        let rest = self.draft.trim().strip_prefix(NAME)?;
+        if !rest.is_empty() && !rest.starts_with(' ') {
+            return None;
+        }
+        let text = rest.trim().to_owned();
+        let Some(session) = self.session().cloned() else {
+            return Some(Effect::None);
+        };
+        let id = mint();
+        let line = session_command(&id, "name", &session, Some(json!({ "text": text })));
+        self.pending
+            .insert(id, (Kind::Name, std::mem::take(&mut self.draft)));
+        Some(Effect::Send(vec![line.to_string()]))
     }
 
     /// Esc with nothing open interrupts the turn: `cancel`, only when busy.
@@ -579,7 +607,7 @@ impl App {
             Some((Kind::Cancel | Kind::SteerDrop, _)) => {
                 self.pending.remove(id);
             }
-            Some((Kind::Start | Kind::Prompt | Kind::Steer | Kind::Reply, _)) => {
+            Some((Kind::Start | Kind::Prompt | Kind::Steer | Kind::Reply | Kind::Name, _)) => {
                 self.notices.push(message);
                 self.fail(id);
             }
@@ -650,6 +678,12 @@ impl App {
                 }
                 false
             }
+            "session_named" => {
+                if let Some(named) = read!(envelope, SessionNamed) {
+                    self.name = named.name;
+                }
+                false
+            }
             "notice" => {
                 if let Some(notice) = read!(envelope, Notice) {
                     self.notices.push(notice.message);
@@ -666,20 +700,13 @@ impl App {
         };
         self.set_busy(self.turns.last().is_some_and(Turn::is_open));
         if changed {
-            self.changed();
+            self.scroll.changed();
         }
     }
 
     fn set_busy(&mut self, busy: bool) {
         if let Phase::Attached { busy: flag, .. } = &mut self.phase {
             *flag = busy;
-        }
-    }
-
-    /// New output while scrolled up shows the overlay; the view stays put.
-    fn changed(&mut self) {
-        if self.top.is_some() {
-            self.has_new = true;
         }
     }
 
@@ -693,32 +720,15 @@ impl App {
         total.saturating_sub(self.conversation_height())
     }
 
-    /// PageUp moves up by the conversation height less one.
-    fn page_up(&mut self) {
+    /// PageUp and PageDown move by the conversation height less one.
+    fn page(&mut self, up: bool) {
         let step = self.conversation_height().saturating_sub(1).max(1);
-        let top = self.top.unwrap_or_else(|| self.bottom_top());
-        self.top = Some(top.saturating_sub(step));
-    }
-
-    /// PageDown moves down by the conversation height less one, and follows
-    /// again on reaching the bottom.
-    fn page_down(&mut self) {
-        let Some(top) = self.top else {
-            return;
-        };
-        let step = self.conversation_height().saturating_sub(1).max(1);
-        let next = top.saturating_add(step);
-        if next >= self.bottom_top() {
-            self.follow();
+        let bottom = self.bottom_top();
+        if up {
+            self.scroll.up(step, bottom);
         } else {
-            self.top = Some(next);
+            self.scroll.down(step, bottom);
         }
-    }
-
-    /// End jumps to the bottom and resumes following.
-    fn follow(&mut self) {
-        self.top = None;
-        self.has_new = false;
     }
 }
 
