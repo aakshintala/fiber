@@ -14,12 +14,14 @@ use doors::failure;
 
 mod approve;
 mod config;
+mod extension;
 mod login;
 mod models;
 mod sessions;
 
 pub use approve::approve;
 pub use config::{config_get, config_set};
+pub use extension::{extension_install, extension_list, extension_remove, extension_update};
 pub use login::{LogoutTarget, run_login, run_logout};
 pub use models::{models, refresh_model_lists};
 pub use sessions::{delete, export};
