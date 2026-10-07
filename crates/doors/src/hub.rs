@@ -11,8 +11,8 @@ use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::Duration;
 
-use contract::HubLine;
 use contract::clock::Clock;
+use contract::{HubLine, SCHEMA_VERSION};
 
 /// How long `connect` retries the hub's socket on the injected clock.
 pub const CONNECT_DEADLINE: Duration = Duration::from_secs(5);
@@ -93,7 +93,7 @@ fn poll(
 }
 
 /// Reads the first line byte by byte, without buffered over-read, and
-/// requires `hub_hello`.
+/// requires `hub_hello` on this build's `schema_version`.
 fn read_hello(mut stream: UnixStream) -> Result<Hub, Poll> {
     let mut buf = Vec::new();
     let mut byte = [0u8; 1];
@@ -123,6 +123,16 @@ fn read_hello(mut stream: UnixStream) -> Result<Hub, Poll> {
         return Err(Poll::Failed(io::Error::new(
             io::ErrorKind::InvalidData,
             "the hub did not speak `hub_hello` first",
+        )));
+    }
+    if hello.schema_version != SCHEMA_VERSION {
+        return Err(Poll::Failed(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "the hub runs schema version {}, this Fiber runs schema version {SCHEMA_VERSION}; \
+                 update Fiber or restart the hub, then reconnect",
+                hello.schema_version,
+            ),
         )));
     }
     Ok((stream, hello))
