@@ -1100,6 +1100,10 @@ fn a_resumed_session_raising_its_request_again_is_not_announced_but_its_turn_end
     back.say(&status_line(&id(1), &state_of("waiting", "r1", WALL)));
     back.say(&status_line(&id(1), &state_of("streaming", "r1", WALL + 8)));
     back.say(&status_line(&id(1), &state_of("idle", "r1", WALL + 9)));
+    let dropped = Arc::clone(&feed);
+    await_true("the hub to drop the old run", move || {
+        entry_of(&dropped, &id(1)) != Some("running")
+    });
     clock.advance(RUN_SCAN);
     await_scanner(&clock);
     // The finished arrives next, so the repeated waiting r1 sent nothing.
@@ -1213,6 +1217,10 @@ fn a_resume_that_starts_idle_does_not_announce_a_turn_again() {
     let back = session.resumed(&temp.dir, &id(1));
     back.say(&status_line(&id(1), &state_of("idle", "r1", WALL + 5)));
     back.say(&status_line(&id(1), &state_of("waiting", "r1", WALL + 5)));
+    let dropped = Arc::clone(&feed);
+    await_true("the hub to drop the old run", move || {
+        entry_of(&dropped, &id(1)) != Some("running")
+    });
     clock.advance(RUN_SCAN);
     await_scanner(&clock);
     // The waiting r1 arrives next, so the repeated idle sent nothing.

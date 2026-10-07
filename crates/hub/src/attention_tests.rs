@@ -753,3 +753,47 @@ fn notify_remembers_what_it_announced_per_session_until_forgotten() {
         "waiting"
     );
 }
+
+#[test]
+fn unlisten_waits_for_its_writer_still_draining_its_backlog() {
+    let clock = FakeClock::new();
+    let attention = Arc::new(Attention::new(Arc::clone(&clock) as Arc<dyn Clock>));
+    let (writer, far) = UnixStream::pair().unwrap();
+    far.set_read_timeout(Some(DEADLINE)).unwrap();
+    let kept = Arc::new(Mutex::new(writer));
+    let id = attention.listen(Arc::clone(&kept)).unwrap();
+    // Megabytes queued, far more than the socket buffer holds: the writer
+    // thread cannot end until the far end has read nearly all of it.
+    let count = 4_000;
+    for n in 0..count {
+        let request = format!("r{n}");
+        let mut waiting = status_of("waiting", Some(&request), S, None);
+        waiting.name = format!("{n}:{}", "x".repeat(2_000));
+        attention.notify("s_0000000000000001", None, &waiting, false);
+    }
+    let (go_tx, go_rx) = mpsc::channel::<()>();
+    let drained = thread::spawn(move || {
+        go_rx.recv_timeout(DEADLINE).unwrap();
+        let mut read = BufReader::new(far);
+        let mut text = String::new();
+        for _ in 0..count {
+            text.clear();
+            read.read_line(&mut text).unwrap();
+            assert!(!text.is_empty());
+        }
+    });
+    let (tx, rx) = mpsc::channel();
+    let ending = Arc::clone(&attention);
+    let watched = Arc::clone(&kept);
+    thread::spawn(move || {
+        // The far end starts reading only as unlisten is called, so the
+        // writer is still busy unless unlisten waits for it.
+        go_tx.send(()).unwrap();
+        ending.unlisten(id);
+        tx.send(Arc::strong_count(&watched)).unwrap_or(());
+    });
+    let left = rx.recv_timeout(DEADLINE).expect("unlisten returns");
+    // The test's handle, `watched`, and none from the writer thread.
+    assert_eq!(left, 2, "unlisten returned before its writer ended");
+    drained.join().unwrap();
+}
