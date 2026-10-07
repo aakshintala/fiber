@@ -82,10 +82,12 @@ Basis says where a number came from:
 - **Picked** was chosen with no measurement behind it. The idle session's
   12 MiB is held as a placeholder: every runtime crate linked together costs
   7.4 MiB over an empty program on Linux x86_64 (`docs/dependencies.md`,
-  "Measuring memory"), and twice that is 15 MiB, so the first measured run
-  sets this ceiling.
-- **Measured** is a Fiber measurement times two. The first build that runs
-  replaces every "from components" and "picked" number with its measured one.
+  "Measuring memory"), and twice that is 15 MiB, so a first measured run
+  above 12 MiB sets this ceiling.
+- **Measured** is a Fiber measurement times two. The first build that runs a
+  benchmark replaces a "from components" or "picked" number with its measured
+  one only where the measurement exceeds that number. Every other ceiling stays
+  as it is, and a ceiling the measurement does not exceed keeps its basis.
 
 The busy-or-resumed ceiling holds on three workloads:
 
