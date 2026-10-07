@@ -219,11 +219,20 @@ impl<B: Backend> Screen<B> {
     /// A frame whose cells and cursor equal the last one's writes
     /// nothing; otherwise only the cells that changed are written.
     fn draw(&mut self, app: &mut App, pointer: Option<(u16, u16)>) -> Result<(), B::Error> {
+        self.draw_with(app, pointer, view::render)
+    }
+
+    fn draw_with(
+        &mut self,
+        app: &mut App,
+        pointer: Option<(u16, u16)>,
+        mut render: impl FnMut(&App, Rect, &mut Buffer, Option<(u16, u16)>) -> Vec<Target>,
+    ) -> Result<(), B::Error> {
         let mut cells = Buffer::empty(self.area);
-        self.targets = view::render(app, self.area, &mut cells, pointer);
+        self.targets = render(app, self.area, &mut cells, pointer);
         if app.drawn(&self.targets) {
-            let mut cells = Buffer::empty(self.area);
-            self.targets = view::render(app, self.area, &mut cells, pointer);
+            cells = Buffer::empty(self.area);
+            self.targets = render(app, self.area, &mut cells, pointer);
             let _ = app.drawn(&self.targets);
         }
         let next = (cells, view::cursor(app, self.area));

@@ -3,7 +3,10 @@
 
 use super::Input;
 use super::tests::{feed, new_loop};
+use crate::keys::Key;
 use crate::link::Line;
+use crate::mouse::{Target, TargetId};
+use contract::clock::Clock;
 use ratatui::backend::TestBackend;
 
 const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
@@ -65,6 +68,40 @@ fn replies_only() -> Vec<Input> {
 
 fn keys(bytes: &[u8]) -> Input {
     Input::Bytes(bytes.to_vec())
+}
+
+#[test]
+fn a_focus_reset_saves_the_rerendered_cells() {
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    let badge = Target {
+        id: TargetId::Badge,
+        rect: ratatui::layout::Rect::new(0, 0, 1, 1),
+    };
+    lp.app.drawn(&[badge]);
+    lp.app
+        .on_key(Key::BackTab, fakes::clock::FakeClock::new().now());
+    assert_eq!(lp.app.focused(), Some(TargetId::Badge));
+
+    let mut renders = 0;
+    lp.screen
+        .draw_with(&mut lp.app, None, |_, area, cells, _| {
+            renders += 1;
+            let text = if renders == 1 { "old" } else { "new" };
+            cells.set_string(area.x, area.y, text, ratatui::style::Style::default());
+            Vec::new()
+        })
+        .unwrap_or_else(|err| panic!("draw: {err}"));
+
+    assert_eq!(renders, 2, "a stale focus causes a rerender");
+    assert_eq!(
+        lp.screen
+            .last
+            .as_ref()
+            .and_then(|(cells, _)| cells.cell((0, 0)))
+            .map(|cell| cell.symbol()),
+        Some("n"),
+        "the saved frame contains the rerendered cells"
+    );
 }
 
 #[test]

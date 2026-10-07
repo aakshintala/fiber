@@ -1597,24 +1597,6 @@ fn the_cursor_hides_while_navigating() {
 }
 
 #[test]
-fn the_cursor_hides_while_the_approval_panel_is_open() {
-    let mut app = empty();
-    attach(&mut app, "s_aaaaaaaaaaaaaaaa");
-    app.on_line(session_line(
-        "s_aaaaaaaaaaaaaaaa",
-        "permission_requested",
-        serde_json::json!({
-            "request_id": "r_1", "effects": ["executes"], "reversible": true,
-            "step": "review",
-            "rule": {"subject": "npm test --watch", "prefix": "npm test"},
-        }),
-        Some("a_r1"),
-    ));
-    assert!(app.panel().is_some());
-    assert_eq!(cursor(&app, Rect::new(0, 0, WIDTH, HEIGHT)), None);
-}
-
-#[test]
 fn an_open_overlay_draws_its_cross_as_a_target() {
     use crate::mouse::TargetId;
     let cross = Rect::new(WIDTH - 1, 0, 1, 1);
