@@ -436,6 +436,7 @@ fn timeout_ms(timeout: Duration) -> u64 {
     u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX)
 }
 
+mod declared;
 mod hub;
 mod schedule;
 mod setup;
