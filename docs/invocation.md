@@ -214,7 +214,7 @@ pairing code, list devices and revoke one, through the hub commands
 |---|---|
 | `hub install [--port <port>]` | Registers the hub as a login service. Without `--port` it listens on its local socket only. With `--port` it also listens on `127.0.0.1:<port>`, where every connection presents a device token, and writes `hub.port`. |
 | `hub uninstall` | Removes the login service. Running sessions carry on. |
-| `hub status` | Prints whether the hub is running, its version, its port, the connected clients and the paired devices. It takes `--json`. |
+| `hub status` | Prints whether the hub is running, its version, its port, the connected clients, the paired devices and whether the login service is installed. It takes `--json`. |
 | `hub pair <device>` | Prints a pairing code for a device of that name, and in a terminal draws it as a QR code with the hub's address. The code works once, within 10 minutes. |
 | `hub token list` | Lists paired devices: name, when paired, last connection. |
 | `hub token revoke <device>` | Revokes a device's token and closes its live connections. |
@@ -837,6 +837,10 @@ Every client reaches sessions through the hub, the local terminal included.
   systemd on Linux) that never exits for being idle. With `--port`, it also
   listens on that port of `127.0.0.1`, and on no other address. `fiber update`
   restarts it through the service manager (`docs/releasing.md`).
+  The service is named after Fiber home's path, at
+  `~/Library/LaunchAgents/<name>.plist` on macOS and
+  `~/.config/systemd/user/<name>.service` on Linux, so each Fiber home has
+  its own.
 - **The hub runs as the account that owns Fiber home** and is trusted as a
   session is. On its local socket, being that account is the authentication.
   Every connection to its port presents a device token, because any process

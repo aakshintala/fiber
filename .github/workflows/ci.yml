@@ -193,6 +193,28 @@ jobs:
         run: cargo build --workspace --all-targets
       - name: scripts/check, the per-platform checks
         run: scripts/check --base "$BASE" --platform-only
+      # The hub's login service against systemd's user instance
+      # (crates/main/tests/hub_service.rs). The runner has no user instance
+      # until lingering is enabled for its user.
+      - name: The hub's login service under systemd
+        if: matrix.runner == 'ubuntu-24.04'
+        timeout-minutes: 5
+        run: |
+          sudo loginctl enable-linger "$USER"
+          export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          state=""
+          for _ in $(seq 1 30); do
+            state=$(systemctl --user is-system-running 2>/dev/null || true)
+            if [ "$state" = running ] || [ "$state" = degraded ]; then
+              break
+            fi
+            sleep 1
+          done
+          if [ "$state" != running ] && [ "$state" != degraded ]; then
+            echo "systemd's user instance is not running after 30 s: '$state'"
+            exit 1
+          fi
+          cargo nextest run -p main --test hub_service --run-ignored only
 
   mutants:
     name: Mutants (shard ${{ matrix.shard }})

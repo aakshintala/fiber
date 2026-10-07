@@ -2,8 +2,9 @@
 //! `fiber logout`, `fiber approve`, `fiber sessions`, `fiber sessions export`,
 //! `fiber sessions delete`, `fiber sessions prune`, `fiber models`,
 //! `fiber extension install`, `fiber extension update`,
-//! `fiber extension remove` and `fiber extension list`
-//! (`docs/architecture.md`, "The modules"). `main` parses argv and
+//! `fiber extension remove`, `fiber extension list`, `fiber hub install`,
+//! `fiber hub uninstall` and `fiber hub status`, and the hub restart
+//! `fiber update` calls (`docs/architecture.md`, "The modules"). `main` parses argv and
 //! dispatches here; this crate takes plain values.
 
 use std::fmt::Display;
