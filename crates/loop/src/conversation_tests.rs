@@ -1132,7 +1132,7 @@ mod window {
         };
         assert_eq!(halt(&window_halt), halt(&whole_halt));
         let open: HashSet<ActionId> = whole_halt
-            .map(|halted| halted.batch.into_iter().collect())
+            .map(|halted| halted.batch.into_iter().map(|(id, _)| id).collect())
             .unwrap_or_default();
 
         let whole = super::super::rebuild_and_sent(&all, MODEL, &open, Carry::default()).unwrap();

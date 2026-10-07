@@ -28,6 +28,7 @@ use contract::{ActionId, ErrorCode, TurnId};
 use log::Log;
 pub(crate) use util::{ended, mint, variables};
 
+mod answer;
 mod calls;
 mod cancel;
 mod changes;

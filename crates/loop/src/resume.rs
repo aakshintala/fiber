@@ -9,7 +9,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 
-use contract::events::{DecidedBy, Decision, Event, Grant, JobCompleted, Outcome, TurnOutcome};
+use contract::events::{
+    DecidedBy, Decision, Event, Grant, JobCompleted, Outcome, ToolCallRequested, TurnOutcome,
+};
 use contract::inbox::Delivery;
 use contract::provider::Provider;
 use contract::shapes::Failure;
@@ -17,7 +19,7 @@ use contract::tool::Tool;
 use contract::{ActionId, Envelope, ErrorCode, TurnId};
 use log::Log;
 
-use crate::calls;
+use crate::calls::{self, Asked, Decided};
 use crate::cancel::Commit;
 use crate::handoff::Carry;
 use crate::retry::Retry;
@@ -204,8 +206,9 @@ pub(crate) struct Suspended {
     pub(crate) action: ActionId,
     /// The calls with `tool_call_requested` after the log's last
     /// `assistant_message_started` and no `tool_call_completed`, in
-    /// request order: the batch the finishing turn completes.
-    pub(crate) batch: Vec<ActionId>,
+    /// request order, each with its request: the batch the finishing turn
+    /// completes.
+    pub(crate) batch: Vec<(ActionId, ToolCallRequested)>,
 }
 
 /// The suspended turn `lines` describe, if any: the last line is a
@@ -273,12 +276,14 @@ pub(crate) fn suspended(lines: &[Envelope]) -> Result<Option<Suspended>, Error> 
         }
         if let Some(id) = &line.action_id
             && !completed.contains(id)
-            && !batch.contains(id)
+            && !batch.iter().any(|(queued, _)| queued == id)
+            && let Some(Event::ToolCallRequested(call)) =
+                Event::from_envelope(line).map_err(Error::Unreadable)?
         {
-            batch.push(id.clone());
+            batch.push((id.clone(), call));
         }
     }
-    if !batch.contains(&action) {
+    if !batch.iter().any(|(id, _)| *id == action) {
         return Ok(None);
     }
     Ok(Some(Suspended {
@@ -335,7 +340,7 @@ impl Loop {
         let halted = suspended(&lines)?;
         let open: HashSet<ActionId> = halted
             .as_ref()
-            .map(|halted| halted.batch.iter().cloned().collect())
+            .map(|halted| halted.batch.iter().map(|(id, _)| id.clone()).collect())
             .unwrap_or_default();
         // The conversation, with the fixed results, and its length at the
         // last `assistant_message_started`: the previous request's end, for
@@ -442,15 +447,20 @@ impl Loop {
 impl Loop {
     /// Finishes a turn cut short on a pending approval, then runs the
     /// prompt as the next turn (`docs/invocation.md`, "Lifecycle"): the
-    /// request is raised again under the same `request_id`, refused as
-    /// headless, every call of the batch is completed in request order,
-    /// and the turn takes its next step as after any completed batch. The
-    /// preamble runs first, as before any turn; the finishing turn is not
-    /// a turn start, so it runs no instruction-file/date check (the next
-    /// turn, the prompt's, does it at its own start). `turn_started` is
-    /// not written again. Deliveries already
-    /// waiting are held aside in `deferred`, so the finishing turn's
-    /// drains do not reject the prompt `busy`.
+    /// request is raised again under the same `request_id` and answered,
+    /// every call of the batch is completed in request order, and the turn
+    /// takes its next step as after any completed batch. With no person to
+    /// answer, the request is refused as headless. With one, the loop waits
+    /// for the answer as any approval does: the calls before the action
+    /// complete `cancelled` without running, as an answered request's calls
+    /// do across a shutdown (`docs/invocation.md`, "Shutdown"), the action
+    /// follows the answer, and the calls after it are judged and run with
+    /// it. The preamble runs first, as before any turn; the finishing turn
+    /// is not a turn start, so it runs no instruction-file/date check (the
+    /// next turn, the prompt's, does it at its own start). `turn_started`
+    /// is not written again. Deliveries already waiting are held aside in
+    /// `deferred`, so the finishing turn's drains do not reject the prompt
+    /// `busy`; a reply to the request among them answers it.
     pub(crate) fn finish_suspended(
         &mut self,
         suspended: Suspended,
@@ -461,9 +471,10 @@ impl Loop {
         let turn = suspended.turn.clone();
         // Armed with the re-raise: a shutdown before it leaves the request
         // pending, so the next resume raises it again (`docs/invocation.md`,
-        // "Shutdown"). Once raised, the request's answer is the refusal
-        // below, already in hand: it stands, and a shutdown after the
-        // re-raise ends the turn `interrupted`.
+        // "Shutdown"). Once raised, a headless request's answer is the
+        // refusal below, already in hand: it stands, and a shutdown after
+        // the re-raise ends the turn `interrupted`. A shutdown while
+        // waiting for a person leaves the request pending again.
         let cancel = Arc::clone(&self.cancel);
         let raised = cancel.commit(Commit::Arm, || {
             self.append(
@@ -476,15 +487,15 @@ impl Loop {
             return Ok(None);
         };
         raised?;
-        // debt: refuses a suspended request whatever answerable says; the
-        // hub's resume raises it and waits for a reply (docs/invocation.md
-        // "Lifecycle").
+        if self.answerable {
+            return self.answer_suspended(suspended);
+        }
         let denied = self.unanswerable(
             &suspended.action,
             &turn,
             Some(suspended.request.request_id.clone()),
         )?;
-        for id in &suspended.batch {
+        for (id, _) in &suspended.batch {
             let completed = if *id == suspended.action {
                 denied.clone()
             } else {
@@ -494,6 +505,69 @@ impl Loop {
         }
         // Orphan notices the resume logged behind the open batch.
         self.conversation.append(&mut self.held);
+        self.run_steps(&turn)
+    }
+
+    /// The finishing turn once its request is raised again and a person can
+    /// answer it: waits for the answer, then completes the batch through
+    /// the run phase every step uses. The idle delay passing while waiting
+    /// writes nothing more: the session exits suspended on the same
+    /// request, and the next resume raises it again.
+    fn answer_suspended(&mut self, suspended: Suspended) -> Result<Option<TurnOutcome>, Error> {
+        let Suspended {
+            turn,
+            request,
+            action,
+            batch,
+        } = suspended;
+        // `suspended` only returns a batch that holds the action.
+        let Some((_, call)) = batch.iter().find(|(id, _)| *id == action) else {
+            return self.run_steps(&turn);
+        };
+        let decision: Decided = match self.await_answer(&action, &turn, &call.name, &request)? {
+            // The answer allows the call the request was raised for, as
+            // the model asked for it: checked again, it runs.
+            Asked::Allow => self
+                .checked(call)
+                .map(|(tool, arguments, effects)| (tool, arguments, effects.declared)),
+            Asked::Deny(completed) | Asked::Gone(completed) => Err(completed),
+            Asked::Cancelled => Err(self.cancelled_before_ran()),
+            Asked::Idle => {
+                self.cancel.disarm();
+                return Ok(None);
+            }
+            Asked::Closed(request_id) => {
+                Err(self.unanswerable(&action, &turn, Some(request_id))?)
+            }
+        };
+        let mut decision = Some(decision);
+        let mut before = true;
+        let mut calls = Vec::with_capacity(batch.len());
+        for (id, call) in batch {
+            let already = if id == action {
+                before = false;
+                decision.take()
+            } else if before {
+                Some(Err(self.cancelled_before_ran()))
+            } else {
+                None
+            };
+            calls.push((id, call, already));
+        }
+        let cancelled = self.run_batch(calls, &turn)?;
+        // A later call's approval reached the idle delay: nothing more is
+        // written, as in any step.
+        if self.idle_left {
+            self.cancel.disarm();
+            return Ok(None);
+        }
+        // Orphan notices the resume logged behind the open batch.
+        self.conversation.append(&mut self.held);
+        // A cancel that ended the batch ends the turn `interrupted` at the
+        // next step's start, as a step's cancel does.
+        if !cancelled {
+            self.handoff_from_tools(&turn)?;
+        }
         self.run_steps(&turn)
     }
 

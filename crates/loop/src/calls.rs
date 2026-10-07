@@ -17,12 +17,11 @@ use contract::events::{
 };
 use contract::provider::ToolDefinition;
 use contract::shapes::{ContentPart, DeclaredEffects};
-use contract::tool::{Bound, Cancel, Output, Tool};
+use contract::tool::{Bound, Cancel, Effects, Output, Tool};
 use contract::{ActionId, ErrorCode, RequestId, SessionId, TurnId};
 use serde_json::{Map, Value};
 
 use super::completion::{completed, denied, failed, resolved};
-use crate::inbox::{self, Waited};
 use crate::progress::{SharedWake, Stream};
 use crate::{Error, Loop, schema};
 
@@ -69,12 +68,19 @@ fn encoded(delta: &Progress) -> u64 {
 /// it declared.
 pub(crate) type Approved = (Arc<dyn Tool>, Map<String, Value>, DeclaredEffects);
 
+/// A call that names a tool and fits its schema: the tool, the arguments it
+/// runs with, and the effects it declared.
+pub(crate) type Checked = (Arc<dyn Tool>, Map<String, Value>, Effects);
+
+/// A call's decision: it runs, or it completes as given without running.
+pub(crate) type Decided = Result<Approved, Box<ToolCallCompleted>>;
+
 /// What a person's answer carries onto its `permission_resolved` line.
 pub(crate) struct Answered {
     /// Allow or deny.
-    decision: Decision,
+    pub(crate) decision: Decision,
     /// With a denial, what the person typed.
-    feedback: Option<String>,
+    pub(crate) feedback: Option<String>,
     /// On an allow that added a session grant.
     grant: Option<Grant>,
     /// On an allow that added a standing rule to the project's rules file.
@@ -88,7 +94,7 @@ impl Answered {
     /// `request_id` answered: a remembered session grant rides `grant`, a
     /// remembered project rule rides `rule`, and a rule that could not be
     /// saved rides `reason`.
-    fn allow(self, request_id: RequestId) -> PermissionResolved {
+    pub(crate) fn allow(self, request_id: RequestId) -> PermissionResolved {
         PermissionResolved {
             grant: self.grant,
             rule: self.rule,
@@ -146,8 +152,20 @@ impl Loop {
         calls: Vec<(ActionId, ToolCallRequested)>,
         turn: &TurnId,
     ) -> Result<bool, Error> {
+        let calls = calls.into_iter().map(|(id, call)| (id, call, None));
+        self.run_batch(calls.collect(), turn)
+    }
+
+    /// [`Loop::run_calls`] over a batch some of whose calls are already
+    /// decided: a call carrying its decision is not judged again, and the
+    /// rest are judged in order as `run_calls` judges them.
+    pub(crate) fn run_batch(
+        &mut self,
+        calls: Vec<(ActionId, ToolCallRequested, Option<Decided>)>,
+        turn: &TurnId,
+    ) -> Result<bool, Error> {
         let mut decided = Vec::with_capacity(calls.len());
-        for (id, call) in calls {
+        for (id, call, already) in calls {
             // Deciding stops at the first cancel: a call approved but not
             // yet started, and every call not yet decided, completes
             // `cancelled` with no `tool_call_started` and no permission
@@ -156,7 +174,10 @@ impl Loop {
                 decided.push((id, call.name, Err(self.cancelled_before_ran())));
                 continue;
             }
-            let decision = self.decide(&call, &id, turn)?;
+            let decision = match already {
+                Some(decision) => decision,
+                None => self.decide(&call, &id, turn)?,
+            };
             // An idle deadline ended the approval. Drop the decision: no
             // completion is written, including for calls already decided.
             if self.idle_left {
@@ -279,6 +300,52 @@ impl Loop {
         })
     }
 
+    /// The tool, arguments and effects of `call`, once it names a tool and
+    /// its arguments fit that tool's schema; otherwise the failed
+    /// completion it gets (`docs/loop.md`, "Tool calls that do not run").
+    pub(crate) fn checked(
+        &self,
+        call: &ToolCallRequested,
+    ) -> Result<Checked, Box<ToolCallCompleted>> {
+        let Some((_, tool, definition)) = self.tools.get(&call.name) else {
+            let names: Vec<String> = self.tools.keys().map(|n| format!("`{n}`")).collect();
+            let exist = if names.is_empty() {
+                "You have no tools.".to_owned()
+            } else {
+                format!("The tools are {}.", names.join(", "))
+            };
+            return Err(Box::new(failed(
+                ErrorCode::UnknownTool,
+                format!("No tool is named `{}`. {exist}", call.name),
+            )));
+        };
+        let arguments = match &call.repair {
+            Some(repair) => Value::Object(repair.repaired.clone()),
+            None => call.arguments.clone(),
+        };
+        let Value::Object(arguments) = arguments else {
+            return Err(Box::new(failed(
+                ErrorCode::InvalidArguments,
+                "The arguments are not a JSON object. Send them as one.".to_owned(),
+            )));
+        };
+        let errors = schema::check(&definition.input_schema, &Value::Object(arguments.clone()));
+        if !errors.is_empty() {
+            return Err(Box::new(failed(
+                ErrorCode::InvalidArguments,
+                format!(
+                    "The arguments do not match the tool's schema:\n{}",
+                    errors.join("\n")
+                ),
+            )));
+        }
+        let effects = match tool.effects(&arguments) {
+            Ok(effects) => effects,
+            Err(e) => return Err(Box::new(failed(ErrorCode::ToolError, e.to_string()))),
+        };
+        Ok((Arc::clone(tool), arguments, effects))
+    }
+
     /// Checks `call` and decides whether it runs (`docs/loop.md`, "Tool
     /// calls that do not run", and `docs/permissions.md`, "The order a call
     /// is judged in").
@@ -287,46 +354,11 @@ impl Loop {
         call: &ToolCallRequested,
         id: &ActionId,
         turn: &TurnId,
-    ) -> Result<Result<Approved, Box<ToolCallCompleted>>, Error> {
-        let Some((_, tool, definition)) = self.tools.get(&call.name) else {
-            let names: Vec<String> = self.tools.keys().map(|n| format!("`{n}`")).collect();
-            let exist = if names.is_empty() {
-                "You have no tools.".to_owned()
-            } else {
-                format!("The tools are {}.", names.join(", "))
-            };
-            return Ok(Err(Box::new(failed(
-                ErrorCode::UnknownTool,
-                format!("No tool is named `{}`. {exist}", call.name),
-            ))));
+    ) -> Result<Decided, Error> {
+        let (tool, arguments, effects) = match self.checked(call) {
+            Ok(checked) => checked,
+            Err(failed) => return Ok(Err(failed)),
         };
-        let arguments = match &call.repair {
-            Some(repair) => Value::Object(repair.repaired.clone()),
-            None => call.arguments.clone(),
-        };
-        let Value::Object(arguments) = arguments else {
-            return Ok(Err(Box::new(failed(
-                ErrorCode::InvalidArguments,
-                "The arguments are not a JSON object. Send them as one.".to_owned(),
-            ))));
-        };
-        let errors = schema::check(&definition.input_schema, &Value::Object(arguments.clone()));
-        if !errors.is_empty() {
-            return Ok(Err(Box::new(failed(
-                ErrorCode::InvalidArguments,
-                format!(
-                    "The arguments do not match the tool's schema:\n{}",
-                    errors.join("\n")
-                ),
-            ))));
-        }
-        let effects = match tool.effects(&arguments) {
-            Ok(effects) => effects,
-            Err(e) => {
-                return Ok(Err(Box::new(failed(ErrorCode::ToolError, e.to_string()))));
-            }
-        };
-        let tool = Arc::clone(tool);
         // The rules are read once for every call, including ones that later
         // fast-path, so a revoked rule applies to the next call judged
         // (`docs/tui.md`, "/rules"). `judge` runs the credential deny before
@@ -385,7 +417,7 @@ impl Loop {
     }
 
     /// Writes a `permission_resolved` line for `id`.
-    fn decided(
+    pub(crate) fn decided(
         &mut self,
         id: &ActionId,
         turn: &TurnId,
@@ -394,12 +426,9 @@ impl Loop {
         self.append(&Event::PermissionResolved(resolved), turn, Some(id))
     }
 
-    /// Asks a person about a call, waiting for their reply
-    /// (`docs/permissions.md`, "What the log records"). Other deliveries
-    /// are admitted as at any drain. A reply that does not fit is rejected
-    /// and the wait goes on; one that names another request is rejected
-    /// `stale_request`. `close` taken while waiting denies as the step
-    /// does; the inbox closing denies with no person to answer.
+    /// Asks a person about a call, then waits for their reply as
+    /// [`Loop::await_answer`] does (`docs/permissions.md`, "What the log
+    /// records").
     pub(crate) fn ask(
         &mut self,
         id: &ActionId,
@@ -413,114 +442,13 @@ impl Loop {
             // ask reaches this denial.
             return Ok(Asked::Gone(self.unanswerable(id, turn, None)?));
         }
-        let request_id = RequestId(super::mint("r_"));
-        let offer = match &step {
-            AskStep::StandingAsk { .. } => None,
-            AskStep::Review { rule, .. } => rule.clone(),
+        let request = PermissionRequested {
+            request_id: RequestId(super::mint("r_")),
+            declared: declared.clone(),
+            step,
         };
-        // Who denies when the inbox closes with no answer follows from
-        // the step, as the request carries it.
-        let closed_by = match &step {
-            AskStep::StandingAsk { .. } => DecidedBy::StandingRule,
-            AskStep::Review { .. } => DecidedBy::Reviewer,
-        };
-        self.append(
-            &Event::PermissionRequested(PermissionRequested {
-                request_id: request_id.clone(),
-                declared: declared.clone(),
-                step,
-            }),
-            turn,
-            Some(id),
-        )?;
-        // Waiting on an approval is idle (`docs/invocation.md`, "Lifecycle").
-        // The deadline is this moment, and a rejected reply does not move it.
-        let deadline = self.idle_deadline();
-        loop {
-            let delivery = match self.recv_until(deadline, false) {
-                super::inbox::InboxRecv::Delivery(delivery) => delivery,
-                // Without `check` the wait never ends unattended; the arm
-                // keeps the match total.
-                super::inbox::InboxRecv::Idle | super::inbox::InboxRecv::Unattended => {
-                    self.idle_left = true;
-                    return Ok(Asked::Idle);
-                }
-                // Every sender is gone, so no answer can come.
-                super::inbox::InboxRecv::Closed => {
-                    let reason = "The session ended while waiting for an answer.";
-                    self.decided(
-                        id,
-                        turn,
-                        resolved(
-                            Some(request_id),
-                            Decision::Deny,
-                            closed_by,
-                            Some(reason.to_owned()),
-                            None,
-                        ),
-                    )?;
-                    return Ok(Asked::Gone(denied(
-                        "no_person",
-                        format!("{reason} It did not run."),
-                    )));
-                }
-            };
-            match self.take_while_waiting(&request_id, delivery, turn)? {
-                Waited::Again => {}
-                Waited::Closed => return Ok(Asked::Closed(request_id)),
-                // The wake the door delivers after an accepted cancel:
-                // the request ends denied by the cancel, and the call
-                // completes `cancelled`. A stale wake from an earlier
-                // turn finds the signal not cancelled and keeps waiting.
-                Waited::Cancelled => {
-                    self.decided(
-                        id,
-                        turn,
-                        resolved(
-                            Some(request_id),
-                            Decision::Deny,
-                            DecidedBy::Cancel,
-                            None,
-                            None,
-                        ),
-                    )?;
-                    return Ok(Asked::Cancelled);
-                }
-                Waited::Reply(reply, ack) => {
-                    let Some(answered) = self.answered(tool, offer.as_ref(), &reply.answer) else {
-                        inbox::reject(ack, ErrorCode::InvalidArguments, inbox::UNFIT_REPLY);
-                        continue;
-                    };
-                    inbox::accept(ack);
-                    match answered.decision {
-                        Decision::Deny => {
-                            let text = match &answered.feedback {
-                                Some(feedback) => format!(
-                                    "A person refused this call: {feedback}. It did not run."
-                                ),
-                                None => "A person refused this call. It did not run.".to_owned(),
-                            };
-                            self.decided(
-                                id,
-                                turn,
-                                resolved(
-                                    Some(request_id),
-                                    Decision::Deny,
-                                    DecidedBy::Person,
-                                    None,
-                                    answered.feedback,
-                                ),
-                            )?;
-                            return Ok(Asked::Deny(denied("person", text)));
-                        }
-                        Decision::Allow => {
-                            self.decided(id, turn, answered.allow(request_id))?;
-                            return Ok(Asked::Allow);
-                        }
-                    }
-                }
-            }
-        }
+        self.append(&Event::PermissionRequested(request.clone()), turn, Some(id))?;
+        self.await_answer(id, turn, tool, &request)
     }
 
     /// Denies a call no person can answer (`docs/permissions.md`,

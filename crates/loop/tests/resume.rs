@@ -555,6 +555,8 @@ struct History {
     inbox_tx: mpsc::Sender<Delivery>,
     inbox_rx: Option<mpsc::Receiver<Delivery>>,
     history_len: usize,
+    /// The log's clock: what an idle wait reads.
+    clock: Arc<fakes::clock::FakeClock>,
 }
 
 impl History {
@@ -565,11 +567,12 @@ impl History {
         let credentials = root.path().join("credentials");
         std::fs::create_dir_all(&credentials).unwrap();
         let workspace = workspace_dir.display().to_string();
+        let clock = fakes::clock::FakeClock::new();
         let log = Arc::new(
             Log::create(
                 root.path(),
                 SessionId("s_1".into()),
-                fakes::clock::FakeClock::new(),
+                Arc::clone(&clock) as Arc<dyn contract::clock::Clock>,
             )
             .unwrap(),
         );
@@ -585,6 +588,7 @@ impl History {
             inbox_tx: mpsc::channel().0,
             inbox_rx: None,
             history_len: 0,
+            clock,
         };
         let (tx, rx) = mpsc::channel();
         let mut history = History {
@@ -3904,4 +3908,318 @@ fn a_turn_suspended_after_a_handoff_re_raises_its_request_past_lines_written_aft
     assert_eq!(raised.len(), 1, "{:?}", history.new_kinds());
     assert_eq!(raised[0].payload["request_id"], "r_9");
     assert_eq!(raised[0].action_id, Some(ActionId("a_1".into())));
+}
+
+// #614: a resumed session with a person to answer waits for the reply to
+// its re-raised request instead of refusing it.
+
+use contract::commands::{Reply, ReplyAnswer};
+
+/// A suspended history whose batch is `names`, in order, as `a_1`, `a_2`,
+/// …, with a standing ask `r_9` pending on `a_<action>`.
+fn suspended_batch(script: Vec<Scripted>, names: &[&str], action: usize) -> History {
+    let mut history = History::new(script);
+    history.write(user_turn("one"), None);
+    history.write(message_started(), Some("a_0"));
+    for (at, name) in names.iter().enumerate() {
+        history.write(requested(name), Some(&format!("a_{}", at + 1)));
+    }
+    history.write(standing_request("r_9"), Some(&format!("a_{action}")));
+    history.write(fiber_started(), None);
+    history.write(fiber_exited(Some("r_9")), None);
+    history.freeze();
+    history
+}
+
+/// A reply to `request_id` deciding `decision`, acknowledged into the
+/// returned slot.
+fn reply_delivery(request_id: &str, decision: Decision) -> (Delivery, Arc<Mutex<Option<Answer>>>) {
+    let (ack, seen) = recording();
+    let reply = Reply {
+        request_id: contract::RequestId(request_id.into()),
+        answer: ReplyAnswer::Approval {
+            decision,
+            feedback: None,
+            remember: None,
+        },
+    };
+    (Delivery::Reply(reply, ack), seen)
+}
+
+/// Runs `send` once the log holds the re-raised `permission_requested`:
+/// the signal the finishing turn is waiting for an answer. Bounded by
+/// [`support::DEADLINE`].
+fn on_reraise(
+    history: &History,
+    send: impl FnOnce() + Send + 'static,
+) -> std::thread::JoinHandle<()> {
+    let mut watcher = history.log.watch();
+    std::thread::spawn(move || {
+        loop {
+            let line = watcher
+                .recv_timeout(support::DEADLINE)
+                .expect("a re-raised permission_requested in time")
+                .expect("the log outlives the request")
+                .expect("the log ended before the re-raise");
+            if line.kind == "permission_requested" {
+                send();
+                return;
+            }
+        }
+    })
+}
+
+/// The new lines of `kind`.
+fn new_of(history: &History, kind: &str) -> Vec<Envelope> {
+    history
+        .new_lines()
+        .into_iter()
+        .filter(|line| line.kind == kind)
+        .collect()
+}
+
+fn reads(name: &'static str) -> Arc<support::TestTool> {
+    Arc::new(support::TestTool::reads(name, "Paris."))
+}
+
+fn tools_of(tools: &[&Arc<support::TestTool>]) -> Vec<(String, Arc<dyn Tool>)> {
+    tools
+        .iter()
+        .map(|tool| ("builtin".to_owned(), Arc::clone(tool) as Arc<dyn Tool>))
+        .collect()
+}
+
+#[test]
+fn an_answerable_resume_runs_the_call_a_person_allows() {
+    let mut history = suspended_batch(vec![Scripted::text("Done.")], &["act"], 1);
+    let act = reads("act");
+    let looped = history.resume(tools_of(&[&act]));
+    let (delivery, seen) = reply_delivery("r_9", Decision::Allow);
+    let inbox = history.inbox_tx.clone();
+    let replied = on_reraise(&history, move || inbox.send(delivery).unwrap());
+    let (_looped, outcome) = history.step(looped);
+    replied.join().unwrap();
+
+    assert_eq!(outcome, Some(contract::events::TurnOutcome::Completed));
+    assert!(is_accepted(&seen), "the reply was accepted");
+    let raised = new_of(&history, "permission_requested");
+    assert_eq!(raised.len(), 1);
+    assert_eq!(raised[0].payload["request_id"], "r_9");
+    let resolved = new_of(&history, "permission_resolved");
+    assert_eq!(resolved.len(), 1);
+    assert_eq!(resolved[0].payload["request_id"], "r_9");
+    assert_eq!(resolved[0].payload["decision"], "allow");
+    assert_eq!(resolved[0].payload["decided_by"], "person");
+    assert_eq!(act.ran().len(), 1);
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "opening_message",
+            "permission_requested",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    let done = new_of(&history, "tool_call_completed");
+    assert_eq!(done[0].payload["status"], "completed");
+    assert_eq!(done[0].action_id, Some(ActionId("a_1".into())));
+}
+
+#[test]
+fn a_reply_queued_before_the_resume_answers_the_re_raised_request() {
+    let mut history = suspended_batch(vec![Scripted::text("Done.")], &["act"], 1);
+    let act = reads("act");
+    let (delivery, seen) = reply_delivery("r_9", Decision::Allow);
+    history.inbox_tx.send(delivery).unwrap();
+    let looped = history.resume(tools_of(&[&act]));
+    let (_looped, outcome) = history.step(looped);
+
+    assert_eq!(outcome, Some(contract::events::TurnOutcome::Completed));
+    assert!(is_accepted(&seen), "the held reply was accepted");
+    let resolved = new_of(&history, "permission_resolved");
+    assert_eq!(resolved.len(), 1);
+    assert_eq!(resolved[0].payload["decided_by"], "person");
+    assert_eq!(act.ran().len(), 1);
+}
+
+#[test]
+fn an_answerable_resume_denies_the_call_a_person_refuses() {
+    let mut history = suspended_batch(vec![Scripted::text("Done.")], &["act"], 1);
+    let act = reads("act");
+    let looped = history.resume(tools_of(&[&act]));
+    let (delivery, seen) = reply_delivery("r_9", Decision::Deny);
+    let inbox = history.inbox_tx.clone();
+    let replied = on_reraise(&history, move || inbox.send(delivery).unwrap());
+    let (_looped, outcome) = history.step(looped);
+    replied.join().unwrap();
+
+    assert_eq!(outcome, Some(contract::events::TurnOutcome::Completed));
+    assert!(is_accepted(&seen));
+    let resolved = new_of(&history, "permission_resolved");
+    assert_eq!(resolved.len(), 1);
+    assert_eq!(resolved[0].payload["request_id"], "r_9");
+    assert_eq!(resolved[0].payload["decision"], "deny");
+    assert_eq!(resolved[0].payload["decided_by"], "person");
+    assert!(act.ran().is_empty());
+    assert!(new_of(&history, "tool_call_started").is_empty());
+    let done = new_of(&history, "tool_call_completed");
+    assert_eq!(done.len(), 1);
+    assert_eq!(done[0].payload["status"], "denied");
+}
+
+#[test]
+fn a_reply_naming_another_request_is_stale_and_the_wait_goes_on() {
+    let mut history = suspended_batch(vec![Scripted::text("Done.")], &["act"], 1);
+    let act = reads("act");
+    let looped = history.resume(tools_of(&[&act]));
+    let (stale, stale_seen) = reply_delivery("r_other", Decision::Allow);
+    let (good, good_seen) = reply_delivery("r_9", Decision::Allow);
+    let inbox = history.inbox_tx.clone();
+    let replied = on_reraise(&history, move || {
+        inbox.send(stale).unwrap();
+        inbox.send(good).unwrap();
+    });
+    let (_looped, outcome) = history.step(looped);
+    replied.join().unwrap();
+
+    assert_eq!(outcome, Some(contract::events::TurnOutcome::Completed));
+    match &*stale_seen.lock().unwrap() {
+        Some(Err(rejected)) => assert_eq!(rejected.code, ErrorCode::StaleRequest),
+        other => panic!("the stale reply was rejected stale_request, not {other:?}"),
+    }
+    assert!(is_accepted(&good_seen));
+    assert_eq!(new_of(&history, "permission_resolved").len(), 1);
+    assert_eq!(act.ran().len(), 1);
+}
+
+#[test]
+fn the_idle_delay_while_waiting_leaves_the_request_pending_again() {
+    let mut history = suspended_batch(vec![Scripted::text("Done.")], &["act"], 1);
+    let act = reads("act");
+    let looped = history
+        .resume(tools_of(&[&act]))
+        .idle_exit(Some(std::time::Duration::from_secs(60)));
+    r#loop::fiber_started(&history.log, "0.0.1", true).unwrap();
+    let clock = Arc::clone(&history.clock);
+    let deadline = contract::clock::Clock::now(clock.as_ref()) + std::time::Duration::from_secs(60);
+    let inbox = history.inbox_tx.clone();
+    let (done, finished) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut looped = looped;
+        done.send(looped.turn().unwrap()).unwrap();
+    });
+    assert!(
+        clock.await_parked(deadline, support::DEADLINE),
+        "the re-raised request's wait parks until the idle deadline"
+    );
+    clock.advance(std::time::Duration::from_secs(60));
+    inbox.send(Delivery::Cancelled).unwrap();
+    let outcome = finished
+        .recv_timeout(support::DEADLINE)
+        .expect("the finishing turn ended at the idle deadline");
+
+    assert_eq!(outcome, None);
+    assert!(act.ran().is_empty());
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "fiber_started",
+            "preamble_built",
+            "opening_message",
+            "permission_requested"
+        ]
+    );
+    r#loop::fiber_exited(&history.log, &history.dir, Ok(()), false, None).unwrap();
+    let exited = history.lines().pop().unwrap();
+    assert_eq!(exited.payload["suspended_on"], "r_9");
+}
+
+#[test]
+fn close_while_waiting_refuses_the_re_raised_request_as_headless() {
+    let mut history = suspended_batch(vec![Scripted::text("Done.")], &["act"], 1);
+    let act = reads("act");
+    let looped = history.resume(tools_of(&[&act]));
+    let (ack, closed) = recording();
+    let inbox = history.inbox_tx.clone();
+    let replied = on_reraise(&history, move || inbox.send(Delivery::Close(ack)).unwrap());
+    let (_looped, outcome) = history.step(looped);
+    replied.join().unwrap();
+
+    assert_eq!(outcome, Some(contract::events::TurnOutcome::Completed));
+    assert!(is_accepted(&closed), "close was accepted");
+    let resolved = new_of(&history, "permission_resolved");
+    assert_eq!(resolved.len(), 1);
+    assert_eq!(
+        resolved[0].payload,
+        denied_resolved(Some("r_9")).payload().unwrap()
+    );
+    assert!(act.ran().is_empty());
+    let done = new_of(&history, "tool_call_completed");
+    assert_eq!(done.len(), 1);
+    assert_eq!(done[0].payload["status"], "denied");
+}
+
+#[test]
+fn calls_before_the_action_are_cancelled_and_calls_after_it_run_after_the_reply() {
+    let mut history = suspended_batch(vec![Scripted::text("Done.")], &["first", "act", "last"], 2);
+    let first = reads("first");
+    let act = reads("act");
+    let last = reads("last");
+    let looped = history.resume(tools_of(&[&first, &act, &last]));
+    let (delivery, _seen) = reply_delivery("r_9", Decision::Allow);
+    let inbox = history.inbox_tx.clone();
+    let replied = on_reraise(&history, move || inbox.send(delivery).unwrap());
+    let (_looped, outcome) = history.step(looped);
+    replied.join().unwrap();
+
+    assert_eq!(outcome, Some(contract::events::TurnOutcome::Completed));
+    assert!(
+        first.ran().is_empty(),
+        "a call before the action never runs"
+    );
+    assert_eq!(act.ran().len(), 1);
+    assert_eq!(
+        last.ran().len(),
+        1,
+        "a call after the action is judged and runs"
+    );
+    let started: Vec<Option<ActionId>> = new_of(&history, "tool_call_started")
+        .into_iter()
+        .map(|line| line.action_id)
+        .collect();
+    assert_eq!(
+        started,
+        [Some(ActionId("a_2".into())), Some(ActionId("a_3".into()))]
+    );
+    let done: Vec<(Option<ActionId>, String)> = new_of(&history, "tool_call_completed")
+        .into_iter()
+        .map(|line| {
+            let status = line.payload["status"].as_str().unwrap().to_owned();
+            (line.action_id, status)
+        })
+        .collect();
+    assert_eq!(
+        done,
+        [
+            (Some(ActionId("a_1".into())), "cancelled".to_owned()),
+            (Some(ActionId("a_2".into())), "completed".to_owned()),
+            (Some(ActionId("a_3".into())), "completed".to_owned()),
+        ]
+    );
+    // Every decision line comes before any `tool_call_started`.
+    let kinds = history.new_kinds();
+    let last_decision = kinds
+        .iter()
+        .rposition(|k| k == "permission_resolved")
+        .unwrap();
+    let first_start = kinds.iter().position(|k| k == "tool_call_started").unwrap();
+    assert!(last_decision < first_start, "{kinds:?}");
 }
