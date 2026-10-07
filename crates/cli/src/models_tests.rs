@@ -590,12 +590,16 @@ fn models_spawns_its_refresh_child_from_the_recorded_path() {
     )
     .unwrap();
     std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut mkfifo = Command::new("mkfifo").arg(&fifo).spawn().unwrap();
+    let mkfifo_pid = mkfifo.id();
+    let (mkfifo_tx, mkfifo_rx) = mpsc::channel();
+    thread::spawn(move || mkfifo_tx.send(mkfifo.wait()));
+    let Ok(mkfifo_status) = mkfifo_rx.recv_timeout(CHILD_DEADLINE) else {
+        fakes::kill_pid(mkfifo_pid, "KILL").unwrap();
+        panic!("waited {CHILD_DEADLINE:?} for mkfifo to exit");
+    };
     assert!(
-        Command::new("mkfifo")
-            .arg(&fifo)
-            .status()
-            .unwrap()
-            .success(),
+        mkfifo_status.unwrap().success(),
         "mkfifo {}",
         fifo.display()
     );
