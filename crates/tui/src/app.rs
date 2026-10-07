@@ -598,10 +598,7 @@ impl App {
             Some((Kind::Cancel | Kind::SteerDrop, _)) => {
                 self.pending.remove(id);
             }
-            Some((
-                Kind::Start | Kind::Prompt | Kind::Steer | Kind::Reply | Kind::Command,
-                _,
-            )) => {
+            Some((Kind::Start | Kind::Prompt | Kind::Steer | Kind::Reply | Kind::Command, _)) => {
                 self.notices.push(message);
                 self.fail(id);
             }
