@@ -325,6 +325,48 @@ fn a_tag_that_cannot_be_in_svg_ends_it() {
 }
 
 #[test]
+fn leaving_svg_closes_what_is_open_inside_it() {
+    // Inside an `svg` a `noscript` or `template` is an element of the
+    // `svg`, so the tag that ends the `svg` ends it too.
+    assert_eq!(to_markdown("<svg><noscript><p>Hello</p>"), "Hello\n");
+    assert_eq!(
+        to_markdown("<svg><template><p>a</p></template>b"),
+        "a\n\nb\n"
+    );
+    assert_eq!(
+        to_markdown("<svg><noscript><p>a</p></noscript>b"),
+        "a\n\nb\n"
+    );
+    assert_eq!(to_markdown("<svg><noscript><svg></noscript></svg>b"), "b\n");
+}
+
+#[test]
+fn leaving_svg_keeps_what_hides_it_open() {
+    // A `template` or `noscript` around the `svg` stays open, and an
+    // `</svg>` after the `svg` has ended closes nothing.
+    assert_eq!(
+        to_markdown("<template><svg><p>x</p></svg>secret</template>shown"),
+        "shown\n"
+    );
+    assert_eq!(
+        to_markdown("<noscript><svg><p>x</p></svg>secret</noscript>shown"),
+        "shown\n"
+    );
+}
+
+#[test]
+fn a_hidden_end_tag_closes_what_the_html_standard_closes() {
+    // `</template>` closes its `template` through anything open inside it;
+    // `</noscript>` stops at a `template` inside its `noscript`.
+    assert_eq!(to_markdown("<template><noscript></template>x"), "x\n");
+    assert_eq!(
+        to_markdown("<noscript><template></noscript>x</template>y</noscript>z"),
+        "z\n"
+    );
+    assert_eq!(to_markdown("<noscript><svg></noscript>x"), "x\n");
+}
+
+#[test]
 fn a_head_never_closed_ends_at_the_body() {
     assert_eq!(
         to_markdown("<html><head><title>T</title><body><p>x</p></body></html>"),
