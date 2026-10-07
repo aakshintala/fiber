@@ -531,6 +531,13 @@ and its own jobs are done. It does not wait for `session.idle_exit_ms`. A later
 delivers the prompt. A client showing a session that exits keeps showing it,
 because its conversation is its log.
 
+**A delegate is never resumed through the hub.** It resumes only through its
+parent (`docs/delegates.md`, "Talking to a delegate"). A command for a delegate
+that is not running is refused `session_not_found`, "A delegate resumes only
+through its parent." A delegate whose log ends in `fiber_exited` is refused at
+once, without the shutdown wait below. A running delegate is reached as any
+session.
+
 A session whose log ends in `fiber_exited` has exited, even while its process
 is still shutting down. The hub does not pass on a `closing` answer from it: it
 resumes the session and delivers the command. If that resume fails
@@ -785,8 +792,9 @@ one rejects the copy `duplicate_command` ("The command line").
 
 Every client reaches sessions through the hub, the local terminal included.
 
-- **The hub holds no session.** It lists sessions, starts and resumes them,
-  and relays every client connection to a session's socket. A session is
+- **The hub holds no session.** It lists sessions, starts and resumes them
+  (never a delegate, which resumes only through its parent:
+  `docs/delegates.md`), and relays every client connection to a session's socket. A session is
   running when its socket accepts a connection; anything else is a log to
   resume. Its crash or its restart drops client connections and ends no
   session. Clients reconnect.
