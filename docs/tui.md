@@ -675,7 +675,7 @@ marked with OSC 8 or handled on click.
   that blocks for up to 2 seconds, so Fiber reads terminal input itself
   ([fiber-zig#16](https://github.com/aakshintala/fiber-zig/issues/16)).
 - **Every action has a key.** Every action also has a mouse target or a slash
-  command, except editing the draft in the input box. A mouse target is drawn only where one fits naturally, never as a
+  command, except editing the draft in the input box and search. A mouse target is drawn only where one fits naturally, never as a
   button added only so the mouse has a way in. A key that needs the kitty
   keyboard protocol also has one that does not, so every action keeps a key
   on any terminal.
@@ -770,7 +770,7 @@ keyboard's reach.
 | Move focus to the panel, the rail, then the conversation | `focus_area` | Tab | click the area |
 | Show or hide the panel | `toggle_panel` | ⌥P | `/panel` |
 | Show or hide the rail | `toggle_rail` | ⌥R | drag its edge |
-| Search | `search` | Ctrl+F; Cmd+F where forwarded | `/search` |
+| Search | `search` | Ctrl+F; Cmd+F where forwarded | |
 | Open the search results | `search_results` | Ctrl+F with search open | click the match count |
 | Jump to the end | `jump_to_end` | End | click "↓ New messages below" |
 | Select a queued steering message | `select_steering` | ⌥↑ ⌥↓ | its mouse target |
@@ -817,7 +817,6 @@ release still applies.
 | `/keys` | Opens the rebinding screen ("Bindings"). |
 | `/skills` | Opens the skills. |
 | `/rewind` | Opens the rewind view. |
-| `/search` | Opens search ("Search"). |
 | `/handoff [instructions]` | Starts a handoff (`docs/handoff.md`, "A person"). |
 | `/name <text>` | Names the session. |
 | `/login` | Logs in ("Logging in"). |

@@ -184,7 +184,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
         id: "search",
         description: "Search",
         keys: "Ctrl+F; Cmd+F where forwarded",
-        other_paths: "/search",
+        other_paths: "",
     },
     Binding {
         area: "The conversation",

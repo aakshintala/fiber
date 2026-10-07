@@ -2,10 +2,10 @@
 
 use super::BINDINGS;
 
-/// The ids of actions that edit the draft in the input box: the rule in
+/// The ids of actions that edit the draft in the input box, and search: the rule in
 /// `docs/tui.md`, "Rules" exempts them from having a mouse target or a
 /// slash command.
-const EDITING: [&str; 8] = [
+const EDITING: [&str; 9] = [
     "send",
     "line_break",
     "recall_prompt",
@@ -14,6 +14,7 @@ const EDITING: [&str; 8] = [
     "delete_word",
     "line_start_end",
     "paste_image",
+    "search",
 ];
 
 /// Substrings marking an other path as a slash command or a mouse path:
