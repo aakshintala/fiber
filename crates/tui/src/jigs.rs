@@ -2,14 +2,18 @@
 
 use std::io;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
 
-use contract::Envelope;
+use contract::clock::Clock;
+use contract::{Envelope, Seq};
 use ratatui::backend::CrosstermBackend;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
 use super::Screen;
 use crate::app::App;
+use crate::keys::Key;
 use crate::link::Line;
 use crate::view;
 
@@ -89,4 +93,165 @@ fn fold(events: &str, width: u16, height: u16) -> Result<App, String> {
         app.on_line(Line::Session(envelope));
     }
     Ok(app)
+}
+
+/// Opens `events`, one envelope per line as one session's stream, at
+/// `width` by `height` through the terminal's own paging, with `history`
+/// answered from the events in memory as the hub answers from the log. The
+/// lines after the last `turn_completed` are a turn still running: the
+/// rest is opened in one pass, then the jig pages to the top, jumps across
+/// the session, changes the width, and appends the running turn one line a
+/// frame, and reports what it measured. The `paging` jig prints it
+/// (`docs/testing.md`, "Jigs").
+pub fn measure_paging(
+    events: &str,
+    width: u16,
+    height: u16,
+    clock: Arc<dyn Clock>,
+) -> Result<String, String> {
+    const JUMPS: usize = 20;
+    let started = clock.now();
+    // The running turn follows the last `turn_completed`, by non-empty line.
+    let running = events
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .enumerate()
+        .filter_map(|(at, line)| {
+            line.contains(r#""kind":"turn_completed""#)
+                .then_some(at.saturating_add(1))
+        })
+        .last()
+        .unwrap_or(0);
+    let mut paging = Paging {
+        app: App::new(PathBuf::new()),
+        log: Vec::new(),
+        area: Rect::new(0, 0, width, height),
+        clock: Arc::clone(&clock),
+        most: 0,
+    };
+    paging.app.set_size(width, height);
+    let (mut turns, mut calls) = (0usize, 0usize);
+    let mut tail = Vec::new();
+    for (at, line) in events
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .enumerate()
+    {
+        let envelope: Envelope = serde_json::from_str(line)
+            .map_err(|error| format!("line {}: {error}", at.saturating_add(1)))?;
+        if let Some(seq) = envelope.seq {
+            paging.log.push((seq, line));
+        }
+        if at >= running {
+            tail.push(envelope);
+            continue;
+        }
+        if paging.app.session().is_none() {
+            paging.app.attach(envelope.session_id.clone());
+        }
+        turns = turns.saturating_add(usize::from(envelope.kind == "turn_started"));
+        calls = calls.saturating_add(usize::from(envelope.kind == "tool_call_requested"));
+        paging.app.on_line(Line::Session(envelope));
+        paging.most = paging.most.max(paging.app.pages().resident());
+    }
+    paging.frame()?;
+    let open = clock.now().saturating_duration_since(started);
+    let (mut loads, mut slowest_load) = (0usize, Duration::ZERO);
+    while paging.app.scroll().0 > 0 {
+        paging.app.on_key(Key::PageUp, clock.now());
+        let (took, loaded) = paging.frame()?;
+        if loaded {
+            loads = loads.saturating_add(1);
+            slowest_load = slowest_load.max(took);
+        }
+    }
+    let total = paging.app.scroll().1;
+    let mut slowest_jump = Duration::ZERO;
+    // The furthest row jumped to: the jump targets reach the report, so
+    // the spread across the session is pinned, not just its timing.
+    let mut jumped = 0usize;
+    for at in 0..JUMPS {
+        jumped = total.saturating_mul(at) / JUMPS;
+        paging.app.jump(jumped);
+        slowest_jump = slowest_jump.max(paging.frame()?.0);
+    }
+    let mut slowest_width = Duration::ZERO;
+    for wide in [width.saturating_sub(1), width] {
+        paging.app.set_size(wide, height);
+        slowest_width = slowest_width.max(paging.frame()?.0);
+    }
+    paging.app.on_key(Key::End, clock.now());
+    paging.frame()?;
+    let pages_before = paging.app.pages().index().pages().len();
+    paging.most = 0;
+    let mut slowest_append = Duration::ZERO;
+    let appended = tail.len();
+    for envelope in tail.drain(..) {
+        paging.app.on_line(Line::Session(envelope));
+        slowest_append = slowest_append.max(paging.frame()?.0);
+    }
+    let ms = |took: Duration| took.as_secs_f64() * 1000.0;
+    Ok(format!(
+        "lines: {}\nturns: {turns}\ncalls: {calls}\npages: {pages_before}\nrows: {total}\n\
+         open pass and first frame: {:.2} ms\n\
+         slowest frame that loaded pages: {:.2} ms, of {loads} paging up\n\
+         slowest jump frame: {:.2} ms, of {JUMPS} to row {jumped}\n\
+         slowest re-count at a new width: {:.2} ms\n\
+         slowest append frame: {:.2} ms, of {appended}; pages while appending: {} to {}, \
+         most resident {}\n",
+        paging.log.len(),
+        ms(open),
+        ms(slowest_load),
+        ms(slowest_jump),
+        ms(slowest_width),
+        ms(slowest_append),
+        pages_before,
+        paging.app.pages().index().pages().len(),
+        paging.most,
+    ))
+}
+
+/// The paging jig's terminal: the app, and the session's durable lines as
+/// the hub's log holds them, by `seq`.
+struct Paging<'a> {
+    app: App,
+    log: Vec<(Seq, &'a str)>,
+    area: Rect,
+    clock: Arc<dyn Clock>,
+    /// The most pages resident after any frame.
+    most: usize,
+}
+
+impl Paging<'_> {
+    /// One frame: loads what it needs from the log and draws. Returns how
+    /// long it took and whether it loaded a page.
+    fn frame(&mut self) -> Result<(Duration, bool), String> {
+        let started = self.clock.now();
+        let mut loaded = false;
+        while let Some(range) = self.app.needs().into_iter().next() {
+            let from = self.log.partition_point(|(seq, _)| seq < range.start());
+            let mut lines = Vec::new();
+            for (_, line) in self
+                .log
+                .iter()
+                .skip(from)
+                .take_while(|(seq, _)| range.contains(seq))
+            {
+                lines.push(serde_json::from_str(line).map_err(|error| error.to_string())?);
+            }
+            self.app.load(lines);
+            if self.app.needs().first() == Some(&range) {
+                return Err(format!(
+                    "the log holds no lines {}..={}",
+                    range.start().0,
+                    range.end().0
+                ));
+            }
+            loaded = true;
+        }
+        let mut buf = Buffer::empty(self.area);
+        view::render(&self.app, self.area, &mut buf, None);
+        self.most = self.most.max(self.app.pages().resident());
+        Ok((self.clock.now().saturating_duration_since(started), loaded))
+    }
 }

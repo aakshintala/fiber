@@ -128,20 +128,15 @@ impl App {
     /// target once at its first line, a turn before a line target on the
     /// same line.
     fn items(&self) -> Vec<(usize, TargetId)> {
-        let mut out: Vec<(usize, TargetId)> = self
-            .turn_lines()
-            .into_iter()
-            .map(|(at, range)| (range.start, TargetId::Turn(at)))
-            .collect();
-        for (line, target) in self.targets() {
-            let id = TargetId::Line(target);
+        let mut out = Vec::new();
+        for (row, _, id) in self.pages.focus_items() {
             if !out.iter().any(|(_, seen)| *seen == id) {
-                out.push((line, id));
+                out.push((row, id));
             }
         }
         // The sort is stable, so a turn stays before a line target on the
-        // same line.
-        out.sort_by_key(|(line, _)| *line);
+        // same row.
+        out.sort_by_key(|(row, _)| *row);
         out
     }
 
@@ -250,9 +245,13 @@ impl App {
     /// trimmed, joined by `\n`; None when no row carries it.
     fn line_text(&self, target: super::Target) -> Option<String> {
         if matches!(target, super::Target::Copy { .. }) {
-            return super::copy::copy_target(&self.turns, target, self.width).map(|copy| copy.code);
+            return self
+                .pages
+                .copy_target(target, self.width)
+                .map(|copy| copy.code);
         }
         let rows: Vec<String> = self
+            .pages
             .rows()
             .into_iter()
             .filter(|(_, own)| *own == Some(target))
@@ -266,73 +265,34 @@ impl App {
     /// right-aligned row, trimmed at both ends, every other row trimmed
     /// at the end, joined by `\n`; None when that leaves nothing.
     fn turn_text(&self, at: usize) -> Option<String> {
-        let (_, range) = self
-            .turn_lines()
-            .into_iter()
-            .find(|(seen, _)| *seen == at)?;
-        let rows: Vec<String> = self
-            .rows()
-            .into_iter()
-            .enumerate()
-            .filter(|(line, (_, own))| range.contains(line) && own.is_none())
-            .map(|(_, (line, _))| {
-                if line.alignment == Some(ratatui::layout::Alignment::Right) {
-                    line.to_string().trim().to_owned()
-                } else {
-                    line.to_string().trim_end().to_owned()
-                }
-            })
-            .collect();
-        (!rows.is_empty()).then(|| rows.join("\n"))
+        self.pages.turn_text(at)
     }
 
-    /// Scrolls so line `line` of [`Self::lines`] shows: the least scroll
-    /// putting one of its rows on screen, following again at the bottom.
+    /// Scrolls so focus row `row` shows, keeping a wrapped target together
+    /// when it fits and following again at the bottom.
     /// With no conversation rows there is nothing to show, and the
     /// scroll stays as it was.
-    fn reveal(&mut self, line: usize) {
+    fn reveal(&mut self, row: usize) {
         if self.conversation_height() == 0 {
             return;
         }
-        let heights: Vec<usize> = self
-            .lines()
+        let Some((_, rows, _)) = self
+            .pages
+            .focus_items()
             .into_iter()
-            .map(|text| crate::view::rows(text, self.width))
-            .collect();
-        let Some(&rows) = heights.get(line) else {
+            .find(|(at, _, _)| *at == row)
+        else {
             return;
         };
-        let start: usize = heights.iter().take(line).sum();
         let height = self.conversation_height().max(1);
         let bottom = self.bottom_top();
         let top = self.scroll.top.map_or(bottom, |top| top.min(bottom));
-        let end = start.saturating_add(rows.min(height));
-        let next = top.clamp(end.saturating_sub(height), start);
+        let end = row.saturating_add(rows.min(height));
+        let next = top.clamp(end.saturating_sub(height), row);
         if next >= bottom {
             self.scroll.follow();
         } else {
             self.scroll.top = Some(next);
-        }
-    }
-
-    /// The top row when following: the last screenful.
-    fn bottom_top(&self) -> usize {
-        let total: usize = self
-            .lines()
-            .into_iter()
-            .map(|line| crate::view::rows(line, self.width))
-            .sum();
-        total.saturating_sub(self.conversation_height())
-    }
-
-    /// PageUp and PageDown move by the conversation height less one.
-    pub(super) fn page(&mut self, up: bool) {
-        let step = self.conversation_height().saturating_sub(1).max(1);
-        let bottom = self.bottom_top();
-        if up {
-            self.scroll.up(step, bottom);
-        } else {
-            self.scroll.down(step, bottom);
         }
     }
 }

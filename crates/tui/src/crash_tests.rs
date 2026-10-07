@@ -302,3 +302,26 @@ fn each_orphaned_jobs_line_takes_and_opens_only_its_own_jobs() {
         ]
     );
 }
+
+#[test]
+fn set_open_reports_whether_the_orphans_line_matched() {
+    let is_open = |aside: &super::Aside| matches!(aside, super::Aside::Orphans { open: true, .. });
+    let mut aside = super::Aside::Orphans {
+        id: 7,
+        jobs: vec![("job".to_owned(), "lost".to_owned())],
+        open: false,
+    };
+    // The matching target sets the flag and answers true, both ways.
+    assert!(aside.set_open(&Target::Orphans(7), true));
+    assert!(is_open(&aside));
+    assert!(aside.set_open(&Target::Orphans(7), false));
+    assert!(!is_open(&aside));
+    // Another line's id and another kind answer false and change nothing.
+    assert!(!aside.set_open(&Target::Orphans(8), true));
+    assert!(!is_open(&aside));
+    assert!(!aside.set_open(&Target::Note(7), true));
+    assert!(!is_open(&aside));
+    // A plain line answers false too.
+    let mut line = super::Aside::Line(ratatui::text::Line::raw("hi"));
+    assert!(!line.set_open(&Target::Orphans(7), true));
+}

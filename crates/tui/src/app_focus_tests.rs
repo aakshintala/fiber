@@ -759,17 +759,13 @@ fn a_wrapped_item_is_revealed_whole() {
         if app.top() != before {
             let stops = frame(&mut app);
             let focused = app.focused().expect("focus");
-            let line = app
-                .items()
-                .into_iter()
-                .find(|(_, item)| *item == focused)
-                .map(|(line, _)| line)
-                .expect("the focused stop is an item");
             let rows = app
-                .lines()
-                .get(line)
-                .map(|text| crate::view::rows(text.clone(), 12))
-                .unwrap_or(0);
+                .pages
+                .focus_items()
+                .into_iter()
+                .find(|(_, _, item)| *item == focused)
+                .map(|(_, rows, _)| rows)
+                .expect("the focused stop is indexed");
             assert_eq!(rect_of(&stops, focused).height as usize, rows);
         }
     }

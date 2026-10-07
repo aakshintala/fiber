@@ -148,12 +148,17 @@ fn bold(line: &ratatui::text::Line<'_>) -> bool {
     line.style.add_modifier.contains(Modifier::BOLD)
 }
 
+/// An action no line names.
+fn none() -> usize {
+    usize::MAX
+}
+
 /// The first group target.
 fn group(app: &App) -> Target {
     app.targets()
         .into_iter()
         .find_map(|(_, target)| matches!(target, Target::Group(_)).then_some(target))
-        .unwrap_or(Target::Group(usize::MAX))
+        .unwrap_or(Target::Group(none()))
 }
 
 /// The target of the line that reads `text`.
@@ -164,7 +169,7 @@ fn target(app: &App, text: &str) -> Target {
         .find_map(|(at, target)| {
             (lines.get(at).map(String::as_str) == Some(text)).then_some(target)
         })
-        .unwrap_or(Target::Group(usize::MAX))
+        .unwrap_or(Target::Group(none()))
 }
 
 fn ctrl_o(app: &mut App) {
@@ -752,26 +757,18 @@ fn targets_name_the_lines_they_open() {
     assert_eq!(app.targets().len(), 1);
     app.open(group(&app));
     let targets = app.targets();
-    // The group line, one thought and six calls; ids are unique.
+    // The group line, one thought and six calls; targets are unique.
     assert_eq!(targets.len(), 8);
-    let mut ids: Vec<usize> = targets
-        .iter()
-        .map(|(_, target)| match target {
-            Target::Group(id) | Target::Call(id) | Target::Thought(id) => *id,
-            Target::Note(id) | Target::Orphans(id) => *id,
-            Target::Copy { reply, .. } => *reply,
-            Target::Login => usize::MAX,
-        })
-        .collect();
-    ids.sort_unstable();
-    ids.dedup();
-    assert_eq!(ids.len(), 8);
+    let mut identities: Vec<Target> = targets.iter().map(|(_, target)| *target).collect();
+    identities.sort_unstable();
+    identities.dedup();
+    assert_eq!(identities.len(), 8);
     assert_eq!(targets.first().map(|(at, _)| *at), Some(1));
     // Opening something that is not there changes nothing.
     let before = texts(&app);
-    app.open(Target::Call(usize::MAX));
-    app.open(Target::Thought(usize::MAX));
-    app.open(Target::Group(usize::MAX));
+    app.open(Target::Call(none()));
+    app.open(Target::Thought(none()));
+    app.open(Target::Group(none()));
     assert_eq!(texts(&app), before);
 }
 
@@ -1434,4 +1431,100 @@ fn a_failed_mcp_server_is_a_warning_line_in_or_out_of_a_turn() {
             "⚠ The MCP server three stopped.",
         ]
     );
+}
+
+#[test]
+fn a_part_turn_keeps_the_step_it_reached() {
+    // A page that begins inside a running turn folds from its step on: new
+    // items join that step's section, not the first.
+    let mut fold = super::Fold::default();
+    let mut turn = super::Turn::part(3);
+    assert!(turn.reasoning_started("a_r", 7, &mut fold));
+    let steps: Vec<u64> = turn
+        .groups()
+        .flat_map(|group| group.sections.iter().map(|section| section.step))
+        .collect();
+    assert_eq!(steps, vec![3]);
+}
+
+#[test]
+fn a_thoughts_toggle_target_is_its_actions_id() {
+    // Without its id the thought keeps the default zero, and its toggle
+    // target names nothing.
+    let id = super::target_id("a_t");
+    assert_ne!(id, 0);
+    let mut fold = super::Fold::default();
+    let mut turn = super::Turn::new(vec!["hi".to_owned()], 0);
+    assert!(turn.reasoning_started("a_t", 1, &mut fold));
+    assert_eq!(
+        turn.groups()
+            .flat_map(|group| group.thoughts())
+            .next()
+            .map(|thought| thought.id),
+        Some(id)
+    );
+    // The matching target opens it; another id opens nothing. The turn
+    // holds no asides, so only its groups answer.
+    assert!(turn.set_open(&Target::Thought(id), true));
+    assert!(
+        turn.groups()
+            .flat_map(|group| group.thoughts())
+            .next()
+            .is_some_and(|thought| thought.open)
+    );
+    assert!(!turn.set_open(&Target::Thought(id.wrapping_add(1)), false));
+}
+
+#[test]
+fn group_and_call_targets_name_only_their_item() {
+    // `0` names nothing: every id below is a hashed action, never zero.
+    let key_id = super::target_id("a_k");
+    let thought_id = super::target_id("a_t");
+    let call_id = super::target_id("a_c");
+    assert_ne!(key_id, 0);
+    assert_ne!(thought_id, 0);
+    assert_ne!(call_id, 0);
+    let mut group = super::Group {
+        key: Some("a_k".to_owned()),
+        sections: vec![super::Section {
+            step: 0,
+            thoughts: vec![super::Thought {
+                id: thought_id,
+                action: "a_t".to_owned(),
+                ..Default::default()
+            }],
+            calls: vec![super::Call {
+                id: call_id,
+                action: "a_c".to_owned(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    assert!(group.set_open(&Target::Group(key_id), true));
+    assert!(group.open);
+    assert!(!group.set_open(&Target::Group(0), false));
+    assert!(group.set_open(&Target::Thought(thought_id), true));
+    assert!(group.thoughts().next().is_some_and(|thought| thought.open));
+    assert!(!group.set_open(&Target::Thought(0), false));
+    assert!(group.set_open(&Target::Call(call_id), true));
+    assert!(group.calls().next().is_some_and(|call| call.open));
+    assert!(!group.set_open(&Target::Call(0), false));
+    assert!(!group.set_open(&Target::Login, false));
+}
+
+#[test]
+fn turn_set_open_finds_an_aside_with_no_groups() {
+    // No group answers, so only the aside can: `&&` for `||` fails here.
+    let mut turn = super::Turn::new(Vec::new(), 0);
+    turn.entries
+        .push(super::Entry::Aside(super::crash::Aside::Orphans {
+            id: 7,
+            jobs: vec![("job".to_owned(), "lost".to_owned())],
+            open: false,
+        }));
+    assert!(turn.set_open(&Target::Orphans(7), true));
+    assert!(!turn.set_open(&Target::Orphans(8), false));
+    assert!(!turn.set_open(&Target::Group(0), false));
 }

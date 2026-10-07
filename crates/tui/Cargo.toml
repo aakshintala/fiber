@@ -23,6 +23,10 @@ name = "draw"
 test = true
 
 [[example]]
+name = "paging"
+test = true
+
+[[example]]
 name = "hover"
 test = true
 

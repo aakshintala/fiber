@@ -29,7 +29,7 @@ const TINT: Style = Style::new().bg(Color::Indexed(23));
 const BY_MODEL: &str = "the model handed off";
 
 /// How a handoff stands.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum State {
     /// The note is being written.
     Writing,
@@ -42,7 +42,7 @@ enum State {
 }
 
 /// One text part of the note.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Part {
     action: String,
     text: String,
@@ -50,7 +50,7 @@ struct Part {
 }
 
 /// A handoff's band.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct Band {
     id: usize,
     trigger: String,
@@ -123,13 +123,23 @@ impl Band {
         }
     }
 
-    /// Toggles its note; false when `target` is not this band's.
-    pub(crate) fn toggle(&mut self, target: Target) -> bool {
-        let mine = target == Target::Note(self.id);
+    /// Sets its note's state; false when `target` is not this band's.
+    pub(crate) fn set_open(&mut self, target: &Target, open: bool) -> bool {
+        let mine = target == &Target::Note(self.id);
         if mine {
-            self.open = !self.open;
+            self.open = open;
         }
         mine
+    }
+
+    /// Toggles its note, returning the new state when `target` is this band's.
+    pub(crate) fn toggle(&mut self, target: Target) -> Option<bool> {
+        if target == Target::Note(self.id) {
+            self.open = !self.open;
+            Some(self.open)
+        } else {
+            None
+        }
     }
 
     /// Its lines: the band, then "▸ note" once there is a note, and the

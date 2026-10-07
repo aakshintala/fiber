@@ -170,6 +170,7 @@ pub(super) fn new_loop<B: Backend>(
         wakeups: 0,
         files_out: None,
         search: None,
+        stash: std::collections::VecDeque::new(),
         reader: None,
         pointer: crate::mouse::Pointer::default(),
         hover: true,

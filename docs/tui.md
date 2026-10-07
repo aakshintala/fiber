@@ -1001,26 +1001,51 @@ the session's offset table (`docs/invocation.md`, "Driver commands";
 Measured in the prototype on macOS arm64, on a session of 6,135 lines and
 1,047 tool calls (4.4 MiB), built to match the longest of the owner's sessions
 ([research/tui-prototype/PAGING.md](../research/tui-prototype/PAGING.md),
-[LARGE.md](../research/tui-prototype/LARGE.md)):
+[LARGE.md](../research/tui-prototype/LARGE.md)), and in Fiber by the `paging`
+jig (`docs/testing.md`, "Jigs") on macOS arm64 (Apple M3 Pro), release build,
+on a session it generates in the same shape: 10 turns, 965 steps with text and
+1,051 tool calls, 8,074 lines, 4.7 MiB with the running turn below. Fiber's
+session has more lines than the prototype's, because Fiber writes
+`step_started` and `text_completed` lines the prototype's fixture does not
+have. Its screen is 160 by 48; the session draws 2,915 rows in 120 pages.
+Fiber's figures are the median of three runs.
 
-| What | Measured |
-|---|---|
-| Peak footprint, whole log folded against paged | 36.7 MiB against 6.6 MiB |
-| Panel pass at open | 18.7 ms |
-| Counting rows | about 4 ms per MiB of log |
-| Slowest frame that loaded pages | 5.1 ms |
-| Search of the whole log | 19.6 ms |
+| What | Prototype | Fiber |
+|---|---|---|
+| Peak footprint, whole log folded against paged | 36.7 MiB against 6.6 MiB | 11.2 MiB paged, of which 4.7 MiB is the jig's copy of the session, standing in for the hub's log |
+| Panel pass at open | 18.7 ms | 55.0 ms, the opening pass and the first frame |
+| Counting rows | about 4 ms per MiB of log | in the opening pass; 12.1 ms to count every page again at a new width |
+| Slowest frame that loaded pages | 5.1 ms | 1.1 ms |
+| Search of the whole log | 19.6 ms | not built |
 
 Estimated row counts moved the scroll bar's thumb by up to 17 cells in one row,
 which is why counts are exact. The timings do not carry over to Linux; the
 row, page and match counts do.
 
-Not yet measured:
+Also measured in Fiber, on the same machine:
 
-- appending to the last page while a turn runs
-- Linux
-- sessions much larger than the one above
-- dragging the scroll bar's thumb
+- **Appending to the last page while a turn runs.** A running turn of 30
+  steps, 481 lines with its deltas, fed one line a frame: the slowest frame
+  took 0.85 ms, and at most 5 pages held cards throughout.
+- **A session ten times larger:** 80,709 lines, 10,505 tool calls, 46 MiB.
+  The opening pass and the first frame took 580 ms, the slowest frame that
+  loaded pages 0.62 ms, and counting every page again at a new width 133 ms.
+  Peak footprint was 61.9 MiB, of which 46 MiB is the jig's copy of the
+  session.
+- **Jumping the way dragging the scroll bar's thumb does.** No scroll bar is
+  built yet, so the jig moves the top row to 20 rows spread across the
+  session, one frame each. The slowest frame took 1.9 ms, and 1.1 ms on the
+  larger session.
+
+On Linux x86_64, in a 4-core shared Claude cloud container (16 GiB, so every
+timing is an upper bound), the same session gave, as the median of three runs:
+the opening pass and first frame 308 ms, the slowest frame that loaded pages
+1.3 ms, the slowest jump frame 2.6 ms, counting every page again at a new
+width 24 ms, and the slowest append frame 1.8 ms with at most 5 pages holding
+cards. The counts match macOS: 2,915 rows in 120 pages. Peak resident memory
+was 10.4 MiB (10,612 KiB), the jig's copy of the session included. Repeatable
+Linux numbers are future work in
+[#1172](https://github.com/aakshintala/fiber/issues/1172).
 
 ## Extension seams
 
@@ -1244,7 +1269,7 @@ CPU and time to first frame. The design keeps to them this way:
   extensions.** Keyboard detection, the logo's image and session listing each
   arrive after it. The budget is measured with no TUI extension installed.
   Attaching to a session reads its whole log once before the first frame
-  ("History and paging"): about 8.5 ms per MiB of log on macOS arm64, so a
+  ("History and paging"): about 12 ms per MiB of log on macOS arm64, so a
   large session takes longer to open than a new one.
 - **Memory follows the window, not the session,** because history is paged.
 - **A frame redraws only the rows that changed.**

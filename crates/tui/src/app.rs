@@ -4,6 +4,7 @@
 
 use std::collections::HashMap;
 use std::hash::{BuildHasher, RandomState};
+use std::ops::RangeInclusive;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -12,7 +13,7 @@ use contract::events::{
     TurnStarted,
 };
 use contract::shapes::ContentPart;
-use contract::{Envelope, HubLine, SessionId};
+use contract::{Envelope, HubLine, Seq, SessionId};
 use serde_json::{Map, Value, json};
 
 use crate::approvals::{self, Panel, PanelKey, Queue};
@@ -20,8 +21,10 @@ use crate::input::Draft;
 use crate::keys::Key;
 use crate::link::Line;
 use crate::shell;
-use crate::turn::{Fold, Row, Turn};
+#[cfg(test)]
+use crate::turn::Row;
 use crate::view::Scroll;
+use crate::window::Pages;
 use notices::Notices;
 use steering::Steering;
 
@@ -33,7 +36,7 @@ mod steering;
 #[path = "app_commands.rs"]
 mod commands;
 #[path = "copy.rs"]
-mod copy;
+pub(crate) mod copy;
 #[path = "app_focus.rs"]
 mod focus;
 #[path = "history.rs"]
@@ -131,9 +134,9 @@ enum Link {
     Down,
 }
 
-/// What clicking a line, or Enter on it, opens. Ids are unique within the
-/// app, assigned in fold order.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// What clicking a line, or Enter on it, opens, keyed by an id that stays
+/// with the item when a page is folded again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum Target {
     /// A tool group's ledger.
     Group(usize),
@@ -164,9 +167,8 @@ pub(crate) struct App {
     pending: HashMap<String, (Kind, String)>,
     /// The notices floating over the conversation.
     notices: Notices,
-    turns: Vec<Turn>,
-    shells: shell::Items,
-    fold: Fold,
+    /// The conversation, paged (`docs/tui.md`, "History and paging").
+    pages: Pages,
     scroll: Scroll,
     width: u16,
     height: u16,
@@ -206,9 +208,7 @@ impl App {
             held: Vec::new(),
             pending: HashMap::new(),
             notices: Notices::default(),
-            turns: Vec::new(),
-            shells: shell::Items::default(),
-            fold: Fold::default(),
+            pages: Pages::new(80),
             scroll: Scroll::default(),
             width: 80,
             height: 24,
@@ -360,10 +360,13 @@ impl App {
         }
     }
 
-    /// Sets the screen size for wrapping and paging.
+    /// Sets the screen size for wrapping and paging; a new width re-counts
+    /// every page.
     pub(crate) fn set_size(&mut self, width: u16, height: u16) {
         self.width = width.max(1);
         self.height = height.max(1);
+        self.pages.set_width(self.width);
+        self.settle();
     }
 
     /// Records kitty's keyboard flags reply.
@@ -438,70 +441,71 @@ impl App {
         self.queue.badge()
     }
 
-    /// The conversation's lines, before wrapping.
+    /// The resident conversation's lines, before wrapping.
+    #[cfg(test)]
     pub(crate) fn lines(&self) -> Vec<ratatui::text::Line<'static>> {
         self.rows().into_iter().map(|(line, _)| line).collect()
     }
 
     /// Opens or closes what `target` names.
     pub(crate) fn open(&mut self, target: Target) {
-        let asides = self.fold.asides.iter_mut().map(|(_, aside)| aside);
-        if self.turns.iter_mut().any(|turn| turn.toggle(target))
-            || asides.into_iter().any(|aside| aside.toggle(target))
-        {
+        if self.pages.open(&target) {
             self.scroll.changed();
+            self.settle();
         }
     }
 
-    /// The turns' cards, each aside after the turns there were when it
-    /// came.
+    /// The resident pages' lines.
+    #[cfg(test)]
     fn rows(&self) -> Vec<Row> {
-        self.rows_and_turns().0
+        self.pages.rows()
     }
 
-    /// The rows with each turn's range of row indices: the rows its
-    /// `turn.rows(..)` pushed.
-    fn rows_and_turns(&self) -> (Vec<Row>, Vec<(usize, std::ops::Range<usize>)>) {
-        let mut out = Vec::new();
-        let mut turns = Vec::new();
-        let mut asides = self.fold.asides.iter().peekable();
-        for at in 0..=self.turns.len() {
-            while let Some((_, aside)) = asides.next_if(|(after, _)| *after <= at) {
-                aside.rows(&mut out);
-            }
-            self.shells.rows(at, &mut out);
-            if let Some(turn) = self.turns.get(at) {
-                let start = out.len();
-                turn.rows(self.width, &mut out);
-                turns.push((at, start..out.len()));
-            }
-        }
-        (out, turns)
+    /// The top row shown and every row: what a scroll bar draws.
+    pub(crate) fn scroll(&self) -> (usize, usize) {
+        (self.view_top(), self.pages.index().total())
     }
 
-    /// Each turn's index with its range of row indices in [`Self::lines`].
-    pub(crate) fn turn_lines(&self) -> Vec<(usize, std::ops::Range<usize>)> {
-        self.rows_and_turns().1
+    /// The lines drawing rows `[top, top + height)`.
+    pub(crate) fn shown(&self, top: usize, height: usize) -> crate::window::Shown {
+        self.pages.shown(top, height)
+    }
+
+    /// The seq ranges of pages the next frame needs and does not hold.
+    pub(crate) fn needs(&self) -> Vec<RangeInclusive<Seq>> {
+        self.pages
+            .needs(self.view_top(), self.conversation_height())
+    }
+
+    /// Folds a fetched range's durable lines into their pages.
+    pub(crate) fn load(&mut self, lines: Vec<Envelope>) {
+        self.pages.load(&lines);
+        self.settle();
+    }
+
+    /// Loading `range` failed: its rows stay blank and the notice says why.
+    pub(crate) fn load_failed(&mut self, range: &RangeInclusive<Seq>, message: &str) {
+        self.pages.fail(*range.start());
+        self.notices
+            .push(format!("Could not load history: {message}"));
+    }
+
+    /// Scrolls so `row` is the top row, as dragging the scroll bar does.
+    pub(crate) fn jump(&mut self, row: usize) {
+        self.scroll.top = Some(row);
+        self.settle();
+    }
+
+    /// The pages.
+    pub(crate) fn pages(&self) -> &Pages {
+        &self.pages
     }
 
     /// `toggle_ledgers`: closes every ledger when all are open, else opens
     /// them all. Groups made later start the same way.
     fn toggle_ledgers(&mut self) {
-        let mut ledgers: Vec<_> = self
-            .turns
-            .iter_mut()
-            .flat_map(Turn::groups_mut)
-            .filter(|group| group.has_ledger())
-            .collect();
-        let open = if ledgers.is_empty() {
-            !self.fold.ledgers
-        } else {
-            !ledgers.iter().all(|group| group.open)
-        };
-        for group in &mut ledgers {
-            group.open = open;
-        }
-        self.fold.ledgers = open;
+        self.pages.toggle_ledgers();
+        self.settle();
     }
 
     /// Ctrl+C clears, then quits: a second press before [`QUIT_WINDOW`]
@@ -660,18 +664,22 @@ impl App {
         {
             self.history.saw(&envelope.session_id, &started.input);
         }
-        // Only a line that changed a card shows the overlay.
-        let changed = match envelope.kind.as_str() {
-            "command_accepted" => read!(envelope, CommandAccepted).is_some_and(|accepted| {
-                let sent = self.pending.remove(&accepted.command_id.0);
-                self.commands_answered(&accepted);
-                let shell = sent.filter(|(kind, _)| *kind == Kind::Shell);
-                let item = shell.and_then(|(_, text)| shell::answered(&text, accepted.result));
-                self.shells.add(self.turns.len(), item)
-            }),
+        let applied = self.pages.apply(envelope);
+        let mut changed = applied.changed;
+        match envelope.kind.as_str() {
+            "command_accepted" => {
+                if let Some(accepted) = read!(envelope, CommandAccepted) {
+                    let sent = self.pending.remove(&accepted.command_id.0);
+                    self.commands_answered(&accepted);
+                    let shell = sent.filter(|(kind, _)| *kind == Kind::Shell);
+                    let item = shell.and_then(|(_, text)| shell::answered(&text, accepted.result));
+                    changed |= self.pages.add_shell(item);
+                }
+            }
             "shell_command" => {
-                let item = read!(envelope, ShellCommand).map(|ran| shell::ran(&ran));
-                self.shells.add(self.turns.len(), item)
+                if let Some(ran) = read!(envelope, ShellCommand) {
+                    changed |= self.pages.add_shell(Some(shell::ran(&ran)));
+                }
             }
             "command_rejected" => {
                 if let Some(rejected) = read!(envelope, CommandRejected)
@@ -679,35 +687,32 @@ impl App {
                 {
                     self.rejected(&id.0, rejected.message);
                 }
-                false
             }
             "reloaded" => {
                 if self.link == Link::Up {
                     send.push(self.ask_commands(&envelope.session_id));
                 }
-                false
             }
             "session_named" => {
                 if let Some(named) = read!(envelope, SessionNamed) {
                     self.name = named.name;
                 }
-                false
             }
             "notice" => {
                 if let Some(notice) = read!(envelope, Notice) {
                     self.notices.push(notice.message);
                 }
-                false
             }
             "steering_queue" => {
                 if let Some(queue) = read!(envelope, SteeringQueue) {
                     self.steering.fold(&queue, &mut self.draft);
                 }
-                false
             }
-            _ => crate::turn::fold_line(&mut self.turns, &mut self.fold, envelope),
-        };
-        self.set_busy(self.turns.last().is_some_and(Turn::is_open));
+            _ => {}
+        }
+        if let Some(busy) = applied.busy {
+            self.set_busy(busy);
+        }
         if changed {
             self.scroll.changed();
         }
@@ -719,13 +724,45 @@ impl App {
             *flag = busy;
         }
     }
+
+    /// The top row when following: the last screenful.
+    fn bottom_top(&self) -> usize {
+        let total = self.pages.index().total();
+        total.saturating_sub(self.conversation_height())
+    }
+
+    /// The top row shown: the bottom while following, and never past it.
+    fn view_top(&self) -> usize {
+        let bottom = self.bottom_top();
+        self.scroll.top.map_or(bottom, |top| top.min(bottom))
+    }
+
+    /// Clamps the top to the bottom and drops the pages outside the window.
+    fn settle_pages(&mut self) {
+        if self.scroll.top.is_some() {
+            self.scroll.top = Some(self.view_top());
+        }
+        self.pages.trim(self.view_top(), self.conversation_height());
+    }
+
+    /// PageUp and PageDown move by the conversation height less one.
+    fn page(&mut self, up: bool) {
+        let step = self.conversation_height().saturating_sub(1).max(1);
+        let bottom = self.bottom_top();
+        if up {
+            self.scroll.up(step, bottom);
+        } else {
+            self.scroll.down(step, bottom);
+        }
+        self.settle();
+    }
 }
 
 /// A new command id from random bytes, as `doors::mint` makes one: `c_`
 /// and 16 hex digits. `tui` keeps its own copy because it may not depend on
 /// `doors`. `RandomState` seeds its keys from the operating system's
 /// randomness.
-fn mint() -> String {
+pub(crate) fn mint() -> String {
     format!("c_{:016x}", RandomState::new().hash_one(()))
 }
 
@@ -753,7 +790,6 @@ pub(crate) fn text_of(parts: &[ContentPart]) -> String {
         })
         .collect()
 }
-
 fn hub_string(payload: &Map<String, Value>, key: &str) -> Option<String> {
     payload.get(key).and_then(Value::as_str).map(str::to_owned)
 }
