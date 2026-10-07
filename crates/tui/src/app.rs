@@ -8,8 +8,8 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use contract::events::{
-    CommandAccepted, CommandRejected, InputItem, SteeringApplied, TurnCompleted, TurnStarted,
-    UsageRecorded,
+    CommandAccepted, CommandRejected, InputItem, SteeringApplied, SteeringQueue, TurnCompleted,
+    TurnStarted, UsageRecorded,
 };
 use contract::shapes::ContentPart;
 use contract::{Envelope, HubLine, SessionId};
@@ -18,6 +18,7 @@ use serde_json::{Map, Value, json};
 use crate::approvals::{self, Panel, PanelKey, Queue};
 use crate::keys::Key;
 use crate::link::Line;
+use crate::steering::Steering;
 use crate::turn::{Fold, Row, Turn};
 
 /// A line's payload as `$kind`; `None` when it does not parse, and the
@@ -76,6 +77,7 @@ enum Kind {
     Steer,
     Cancel,
     Reply,
+    SteerDrop,
 }
 
 /// The hub connection, as the terminal sees it.
@@ -129,6 +131,8 @@ pub(crate) struct App {
     kitty: bool,
     /// Approval requests from every session.
     queue: Queue,
+    /// The attached session's steering queue.
+    steering: Steering,
 }
 
 impl App {
@@ -151,6 +155,7 @@ impl App {
             armed_at: None,
             kitty: false,
             queue: Queue::default(),
+            steering: Steering::default(),
         }
     }
 
@@ -184,6 +189,12 @@ impl App {
                 Effect::None
             }
             Key::Enter => self.on_enter(),
+            // Esc with a queued row selected puts the draft back, and
+            // interrupts nothing.
+            Key::Esc if self.steering.is_selected() => {
+                self.steering.clear(&mut self.draft);
+                Effect::None
+            }
             Key::Esc => self.on_esc(),
             Key::PageUp => {
                 self.page_up();
@@ -203,7 +214,18 @@ impl App {
             }
             Key::Up | Key::Down => Effect::None,
             Key::AltA => self.open_first(),
-            Key::AltUp | Key::AltDown | Key::AltX => Effect::None,
+            Key::AltUp => {
+                self.steering.up(&mut self.draft);
+                Effect::None
+            }
+            Key::AltDown => {
+                self.steering.down(&mut self.draft);
+                Effect::None
+            }
+            Key::AltX => {
+                let rows = self.steering.to_drop();
+                self.steer_drop(rows)
+            }
         }
     }
 
@@ -296,6 +318,24 @@ impl App {
         self.notice.as_deref()
     }
 
+    /// The steering queue's rows, oldest first.
+    pub(crate) fn steering(&self) -> Vec<String> {
+        self.steering.lines(self.width)
+    }
+
+    /// `select_steering` on the queued row at `index`.
+    #[cfg_attr(not(test), expect(dead_code, reason = "#682 clicks call it"))]
+    pub(crate) fn select_steering(&mut self, index: usize) {
+        self.steering.select(index, &mut self.draft);
+    }
+
+    /// `drop_steering` on the queued row at `index`.
+    #[cfg_attr(not(test), expect(dead_code, reason = "#682 clicks call it"))]
+    pub(crate) fn drop_steering(&mut self, index: usize) -> Effect {
+        let row = self.steering.id_at(index);
+        self.steer_drop(row.into_iter().collect())
+    }
+
     /// Whether the quit hint shows: armed by a first Ctrl+C.
     pub(crate) fn hint(&self) -> bool {
         self.armed_at.is_some()
@@ -323,6 +363,7 @@ impl App {
                 .sum()
         });
         let below = input
+            + self.steering().len()
             + usize::from(self.badge().is_some())
             + usize::from(self.hint())
             + usize::from(self.notice.is_some());
@@ -428,6 +469,9 @@ impl App {
         if self.draft.trim().is_empty() || self.link == Link::Down {
             return Effect::None;
         }
+        if self.steering.is_selected() {
+            return self.amend();
+        }
         let (kind, session) = match &self.phase {
             Phase::Starting => (Kind::Start, None),
             Phase::Pending { .. } => return Effect::None,
@@ -472,6 +516,49 @@ impl App {
             self.held.push(line);
             Effect::None
         }
+    }
+
+    /// Enter with a queued row selected: `steer_drop` for the row, then
+    /// `steer` with the edited text; the draft from before the selection
+    /// comes back.
+    fn amend(&mut self) -> Effect {
+        let (Some(session), Link::Up) = (self.session().cloned(), self.link) else {
+            return Effect::None;
+        };
+        let Some((row, stash)) = self.steering.amend() else {
+            return Effect::None;
+        };
+        let Effect::Send(mut lines) = self.steer_drop(vec![row]) else {
+            return Effect::None;
+        };
+        let id = mint();
+        let text = std::mem::replace(&mut self.draft, stash);
+        let content = json!({"content": [{"type": "text", "text": text}]});
+        lines.push(session_command(&id, "steer", &session, Some(content)).to_string());
+        self.pending.insert(id, (Kind::Steer, text));
+        Effect::Send(lines)
+    }
+
+    /// One `steer_drop` per command id in `rows`; nothing when there are
+    /// none, or no connection to send them on.
+    fn steer_drop(&mut self, rows: Vec<String>) -> Effect {
+        let Some(session) = self.session().cloned() else {
+            return Effect::None;
+        };
+        if rows.is_empty() || self.link != Link::Up {
+            return Effect::None;
+        }
+        let lines = rows
+            .into_iter()
+            .map(|row| {
+                let id = mint();
+                let args = json!({ "command_id": row });
+                let line = session_command(&id, "steer_drop", &session, Some(args));
+                self.pending.insert(id, (Kind::SteerDrop, String::new()));
+                line.to_string()
+            })
+            .collect();
+        Effect::Send(lines)
     }
 
     /// Esc with nothing open interrupts the turn: `cancel`, only when busy.
@@ -545,7 +632,8 @@ impl App {
     fn rejected(&mut self, id: &str, message: String) {
         match self.pending.get(id) {
             None => {}
-            Some((Kind::Cancel, _)) => {
+            // Another client may have dropped or amended the row first.
+            Some((Kind::Cancel | Kind::SteerDrop, _)) => {
                 self.pending.remove(id);
             }
             Some((Kind::Start | Kind::Prompt | Kind::Steer | Kind::Reply, _)) => {
@@ -666,6 +754,12 @@ impl App {
                     true
                 })
             }),
+            "steering_queue" => {
+                if let Some(queue) = read!(envelope, SteeringQueue) {
+                    self.steering.fold(&queue, &mut self.draft);
+                }
+                false
+            }
             "step_started" => {
                 if let Some(turn) = self.open_turn() {
                     turn.step_started();
@@ -761,7 +855,7 @@ pub(crate) fn session_command(
 }
 
 /// The text parts of a message, joined.
-fn text_of(parts: &[ContentPart]) -> String {
+pub(crate) fn text_of(parts: &[ContentPart]) -> String {
     parts
         .iter()
         .filter_map(|part| match part {

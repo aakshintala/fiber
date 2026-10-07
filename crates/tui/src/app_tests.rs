@@ -725,6 +725,9 @@ fn the_conversation_gives_up_a_row_each_for_input_hint_and_notice() {
     assert_eq!(app.conversation_height(), 9);
     app.on_key(Key::Char('x'), now);
     assert_eq!(app.conversation_height(), 10);
+    app.attach(contract::SessionId(S_A.to_owned()));
+    app.on_line(steering_queue(S_A, &[("a", Some("c_1")), ("b", None)]));
+    assert_eq!(app.conversation_height(), 8);
     app.set_size(60, 1);
     assert_eq!(app.conversation_height(), 0);
 }
@@ -743,4 +746,249 @@ fn command_ids_are_c_and_sixteen_fresh_hex_digits() {
         );
     }
     assert_ne!(first, second);
+}
+
+const S_A: &str = "s_aaaaaaaaaaaaaaaa";
+
+/// A `steering_queue` line for `session`: each row its text and its
+/// `steer` id, `None` for Fiber's own message.
+fn steering_queue(session: &str, rows: &[(&str, Option<&str>)]) -> Line {
+    let messages: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|(text, id)| {
+            let mut message = serde_json::json!({
+                "content": [{"type": "text", "text": text}],
+                "source": "driver",
+            });
+            if let (Some(id), Some(object)) = (id, message.as_object_mut()) {
+                object.insert("command_id".to_owned(), serde_json::json!(id));
+            }
+            message
+        })
+        .collect();
+    session_line(
+        session,
+        "steering_queue",
+        serde_json::json!({ "messages": messages }),
+        None,
+    )
+}
+
+/// Every line an effect sends, parsed.
+fn sent(effect: Effect) -> Vec<serde_json::Value> {
+    match effect {
+        Effect::Send(lines) => lines.iter().map(|line| parse(line)).collect(),
+        Effect::None | Effect::Quit => Vec::new(),
+    }
+}
+
+/// A command line's `command` and its `args`.
+fn command_of(line: &serde_json::Value) -> (String, serde_json::Value) {
+    (
+        line.get("command")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        line.get("args").cloned().unwrap_or_default(),
+    )
+}
+
+/// An app attached to `S_A`, busy, with two queued rows `c_1` and `c_2`.
+fn queued(now: std::time::Instant) -> App {
+    let mut app = app();
+    attach(&mut app, now, S_A);
+    app.on_line(turn_started(S_A, "hi"));
+    app.on_line(steering_queue(
+        S_A,
+        &[("first", Some("c_1")), ("second", Some("c_2"))],
+    ));
+    app
+}
+
+#[test]
+fn the_latest_steering_queue_wins_and_another_sessions_is_ignored() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = queued(clock.now());
+    assert_eq!(app.steering(), ["↳ first", "↳ second"]);
+    app.on_line(steering_queue(
+        "s_bbbbbbbbbbbbbbbb",
+        &[("other", Some("c_9"))],
+    ));
+    assert_eq!(app.steering(), ["↳ first", "↳ second"]);
+    app.on_line(steering_queue(S_A, &[("second", Some("c_2"))]));
+    assert_eq!(app.steering(), ["↳ second"]);
+    // A turn ending leaves the queue; only a `steering_queue` changes it.
+    app.on_line(turn_completed(S_A, "completed"));
+    assert_eq!(app.steering(), ["↳ second"]);
+    app.on_line(steering_queue(S_A, &[]));
+    assert!(app.steering().is_empty());
+}
+
+#[test]
+fn alt_arrows_select_rows_stashing_and_restoring_the_draft() {
+    let clock = fakes::clock::FakeClock::new();
+    let now = clock.now();
+    let mut app = queued(now);
+    for ch in "draft".chars() {
+        app.on_key(Key::Char(ch), now);
+    }
+    assert_eq!(app.on_key(Key::AltUp, now), Effect::None);
+    assert_eq!(app.draft(), "second");
+    assert_eq!(app.steering(), ["↳ first", "▸ second"]);
+    app.on_key(Key::AltUp, now);
+    assert_eq!(app.draft(), "first");
+    app.on_key(Key::AltDown, now);
+    app.on_key(Key::AltDown, now);
+    assert_eq!(app.draft(), "draft");
+    assert_eq!(app.steering(), ["↳ first", "↳ second"]);
+}
+
+#[test]
+fn enter_on_a_selected_row_drops_it_then_steers_the_edit() {
+    let clock = fakes::clock::FakeClock::new();
+    let now = clock.now();
+    let mut app = queued(now);
+    for ch in "draft".chars() {
+        app.on_key(Key::Char(ch), now);
+    }
+    app.on_key(Key::AltUp, now);
+    app.on_key(Key::Backspace, now);
+    app.on_key(Key::Char('D'), now);
+    let lines = sent(app.on_key(Key::Enter, now));
+    assert_eq!(lines.len(), 2);
+    assert_eq!(
+        command_of(&lines[0]),
+        (
+            "steer_drop".to_owned(),
+            serde_json::json!({"command_id": "c_2"})
+        )
+    );
+    assert_eq!(
+        command_of(&lines[1]),
+        (
+            "steer".to_owned(),
+            serde_json::json!({"content": [{"type": "text", "text": "seconD"}]})
+        )
+    );
+    assert_eq!(
+        lines[1]
+            .get("session_id")
+            .and_then(serde_json::Value::as_str),
+        Some(S_A)
+    );
+    assert_ne!(lines[0].get("id"), lines[1].get("id"));
+    // The stash is back, and the selection is gone.
+    assert_eq!(app.draft(), "draft");
+    assert_eq!(app.steering(), ["↳ first", "↳ second"]);
+
+    // Another client dropped the row first: the rejected `steer_drop`
+    // changes nothing and shows nothing.
+    let rejected = |line: &serde_json::Value| {
+        session_line(
+            S_A,
+            "command_rejected",
+            serde_json::json!({
+                "command_id": line.get("id"),
+                "code": "stale_request",
+                "message": "gone",
+            }),
+            None,
+        )
+    };
+    app.on_line(rejected(&lines[0]));
+    assert_eq!(app.draft(), "draft");
+    assert!(app.notice().is_none());
+    // A rejected `steer` puts its edited text back into an empty draft.
+    app.on_key(Key::CtrlC, now);
+    app.on_line(rejected(&lines[1]));
+    assert_eq!(app.draft(), "seconD");
+}
+
+#[test]
+fn alt_x_drops_the_selected_row_or_every_row() {
+    let clock = fakes::clock::FakeClock::new();
+    let now = clock.now();
+    let mut app = queued(now);
+    let lines = sent(app.on_key(Key::AltX, now));
+    let drops: Vec<_> = lines.iter().map(command_of).collect();
+    assert_eq!(
+        drops,
+        [
+            (
+                "steer_drop".to_owned(),
+                serde_json::json!({"command_id": "c_1"})
+            ),
+            (
+                "steer_drop".to_owned(),
+                serde_json::json!({"command_id": "c_2"})
+            ),
+        ]
+    );
+    app.on_key(Key::AltUp, now);
+    app.on_key(Key::AltUp, now);
+    let lines = sent(app.on_key(Key::AltX, now));
+    assert_eq!(lines.len(), 1);
+    assert_eq!(
+        command_of(&lines[0]).1,
+        serde_json::json!({"command_id": "c_1"})
+    );
+    // The row leaving the queue restores the draft.
+    app.on_line(steering_queue(S_A, &[("second", Some("c_2"))]));
+    assert_eq!(app.draft(), "");
+    // An empty queue sends nothing.
+    app.on_line(steering_queue(S_A, &[]));
+    assert_eq!(app.on_key(Key::AltX, now), Effect::None);
+}
+
+#[test]
+fn esc_with_a_row_selected_clears_it_and_does_not_cancel() {
+    let clock = fakes::clock::FakeClock::new();
+    let now = clock.now();
+    let mut app = queued(now);
+    app.on_key(Key::AltUp, now);
+    assert_eq!(app.on_key(Key::Esc, now), Effect::None);
+    assert_eq!(app.draft(), "");
+    assert_eq!(app.steering(), ["↳ first", "↳ second"]);
+    // With nothing selected, Esc cancels again.
+    let lines = sent(app.on_key(Key::Esc, now));
+    assert_eq!(command_of(&lines[0]).0, "cancel");
+}
+
+#[test]
+fn select_and_drop_steering_by_index() {
+    let clock = fakes::clock::FakeClock::new();
+    let now = clock.now();
+    let mut app = queued(now);
+    app.on_line(steering_queue(
+        S_A,
+        &[("first", Some("c_1")), ("fiber's", None)],
+    ));
+    app.select_steering(1);
+    assert_eq!(app.draft(), "");
+    app.select_steering(0);
+    assert_eq!(app.draft(), "first");
+    assert_eq!(app.drop_steering(1), Effect::None);
+    assert_eq!(app.drop_steering(5), Effect::None);
+    let lines = sent(app.drop_steering(0));
+    assert_eq!(lines.len(), 1);
+    assert_eq!(
+        command_of(&lines[0]),
+        (
+            "steer_drop".to_owned(),
+            serde_json::json!({"command_id": "c_1"})
+        )
+    );
+}
+
+#[test]
+fn steering_keys_send_nothing_without_a_connection() {
+    let clock = fakes::clock::FakeClock::new();
+    let now = clock.now();
+    let mut app = queued(now);
+    app.disconnected();
+    assert_eq!(app.on_key(Key::AltX, now), Effect::None);
+    app.on_key(Key::AltUp, now);
+    assert_eq!(app.on_key(Key::Enter, now), Effect::None);
+    assert_eq!(app.draft(), "second");
+    assert_eq!(app.steering(), ["↳ first", "▸ second"]);
 }

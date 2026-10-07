@@ -10,6 +10,7 @@ mod approvals;
 mod format;
 mod keys;
 mod link;
+mod steering;
 mod term;
 mod turn;
 mod view;

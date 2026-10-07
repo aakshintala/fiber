@@ -162,6 +162,19 @@ pub(crate) fn width(text: &str) -> usize {
     Span::raw(text).width()
 }
 
+/// `text` cut to at most `max` columns.
+pub(crate) fn cut(text: &str, max: usize) -> String {
+    let mut out = String::new();
+    for ch in text.chars() {
+        let mut buf = [0u8; 4];
+        if width(&out) + width(ch.encode_utf8(&mut buf)) > max {
+            break;
+        }
+        out.push(ch);
+    }
+    out
+}
+
 /// `text` wrapped at word boundaries into rows at most `max` columns wide;
 /// a word wider than a row is broken where it reaches the edge. Each line
 /// of `text` starts a row.

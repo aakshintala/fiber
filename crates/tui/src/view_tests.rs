@@ -710,3 +710,22 @@ fn styles_reach_the_screen() {
     assert_ne!(cell(WIDTH - 1, bubble).bg, reset);
     assert_eq!(cell(0, bubble).bg, reset);
 }
+
+#[test]
+fn steering_rows_above_the_input() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = empty();
+    attach(&mut app, S_A);
+    app.on_line(turn_started(S_A, "hi"));
+    app.on_line(session_line(
+        S_A,
+        "steering_queue",
+        serde_json::json!({"messages": [
+            {"content": [{"type": "text", "text": "use the parser"}], "source": "driver", "command_id": "c_1"},
+            {"content": [{"type": "text", "text": "and test it"}], "source": "driver", "command_id": "c_2"},
+        ]}),
+        None,
+    ));
+    app.on_key(Key::AltUp, clock.now());
+    insta::assert_snapshot!("steering_rows_above_the_input", screen(&app));
+}

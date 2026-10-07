@@ -34,7 +34,8 @@ pub(crate) fn rows(line: Line<'_>, width: u16) -> usize {
 }
 
 /// Draws `app` into `area` of `buf`, from the bottom up: the input line
-/// on the last row, or the approval panel in its place, then the badge, the
+/// on the last row, or the approval panel in its place, then the steering
+/// queue, the badge, the
 /// quit hint and the notice when shown, and the conversation in the rows
 /// left. A screen too short for them all drops the notice first, then the
 /// hint, then the badge. A panel taller than the screen keeps its top.
@@ -72,6 +73,10 @@ pub(crate) fn render(app: &App, area: Rect, buf: &mut Buffer) {
         let skip = input.chars().count().saturating_sub(width);
         let shown: String = input.chars().skip(skip).collect();
         put(&shown);
+    }
+    // The steering queue sits above the input box, its newest row lowest.
+    for row in app.steering().iter().rev() {
+        put(row);
     }
     if let Some(badge) = app.badge() {
         put(&badge);
