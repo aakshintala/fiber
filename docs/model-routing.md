@@ -692,7 +692,12 @@ else.
 A provider whose credential is a token that expires declares a Lua
 `credential()` function. It returns `{ token = <string>, expires_at = <Unix
 seconds>, headers = { [name] = <string> }, email = <string> }`: the token, the
-time it expires, and two optional fields.
+time it expires, and two optional fields. It receives `{ label = <string>,
+credential = <string> }`: the session's credential label, and the stored
+credential's name, which is the shared credential name when the provider's
+data names one and the provider's own name otherwise. During `fiber login`,
+`label` is the `--as` value, and is absent when the label comes from the
+returned `email`.
 
 - `headers` are sent on every request that uses the token, and are cached and
   refreshed with it. ChatGPT/codex returns its `chatgpt-account-id` here. A
@@ -702,7 +707,8 @@ time it expires, and two optional fields.
   `--as` is absent ("Logging in"). Every other call ignores it.
 
 Fiber caches the
-token and calls the function again, off the request path, when a request
+token per credential name and label, so a `/credential` switch gets that
+label's token, never the previous one. It calls the function again, off the request path, when a request
 finds the token within 5 minutes of expiry. A request that finds the token
 already expired, because the session sat idle past it or the earlier refresh
 failed, waits for one call: an idle Fiber does no work, so nothing refreshes
