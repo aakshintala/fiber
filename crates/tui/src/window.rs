@@ -4,7 +4,7 @@
 //! outside the window keeps only its seq range and its counts. Each turn's
 //! totals, which its ▣ line draws, are kept for the whole session.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ops::RangeInclusive;
 
 use contract::events::{InputItem, SteeringApplied, TurnCompleted, TurnStarted, UsageRecorded};
@@ -142,6 +142,9 @@ pub(crate) struct Pages {
     /// Pages whose load failed since the width last changed.
     failed: BTreeSet<usize>,
     width: u16,
+    /// The rows of the open page's lines too wide for one row, by text, so
+    /// counting it again after each line wraps only what changed.
+    wrapped: HashMap<String, usize>,
 }
 
 impl Pages {
@@ -164,6 +167,7 @@ impl Pages {
             stale: BTreeSet::new(),
             failed: BTreeSet::new(),
             width,
+            wrapped: HashMap::new(),
         }
     }
 
@@ -214,7 +218,8 @@ impl Pages {
             Folded::Nothing | Folded::Changed | Folded::Stepped | Folded::Called => None,
         };
         self.summarise(folded, envelope.ts);
-        if changed || cut != Cut::None {
+        // A usage line counts the page holding its turn's ▣ line itself.
+        if (changed && kind != "usage_recorded") || cut != Cut::None {
             self.count(self.closed.len());
         }
         Applied { changed, busy }
@@ -438,6 +443,7 @@ impl Pages {
             return;
         }
         self.width = width;
+        self.wrapped.clear();
         self.failed.clear();
         self.recount();
     }
@@ -577,10 +583,6 @@ impl Pages {
     }
 
     /// How many pages hold cards, the open one included.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the paging jig calls it from the next commit")
-    )]
     pub(crate) fn resident(&self) -> usize {
         self.closed.iter().flatten().count().saturating_add(1)
     }
@@ -614,9 +616,28 @@ impl Pages {
         };
         let mut lines = Vec::new();
         self.draw(part, &mut lines);
-        let rows = lines.into_iter().fold(0usize, |sum, (line, _)| {
-            sum.saturating_add(crate::view::rows(line, self.width))
-        });
+        let width = self.width;
+        let open = at == self.closed.len();
+        let mut wrapped = HashMap::new();
+        let mut rows = 0usize;
+        for (line, _) in lines {
+            let count = if !open || line.width() <= usize::from(width) {
+                crate::view::rows(line, width)
+            } else {
+                let text = line.to_string();
+                let count = self
+                    .wrapped
+                    .get(&text)
+                    .copied()
+                    .unwrap_or_else(|| crate::view::rows(line, width));
+                wrapped.insert(text, count);
+                count
+            };
+            rows = rows.saturating_add(count);
+        }
+        if open {
+            self.wrapped = wrapped;
+        }
         self.index.set_rows(at, rows);
     }
 }

@@ -28,8 +28,12 @@ fn paragraph(line: Line<'_>) -> Paragraph<'_> {
     Paragraph::new(line).wrap(Wrap { trim: false })
 }
 
-/// How many rows `line` takes at `width`.
+/// How many rows `line` takes at `width`: one when it fits, without
+/// wrapping it.
 pub(crate) fn rows(line: Line<'_>, width: u16) -> usize {
+    if line.width() <= usize::from(width) {
+        return 1;
+    }
     paragraph(line).line_count(width).max(1)
 }
 
