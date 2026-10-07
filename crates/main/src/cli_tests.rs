@@ -268,10 +268,46 @@ fn sessions_export_takes_an_id_and_an_optional_path() {
 }
 
 #[test]
+fn sessions_delete_takes_cascade_yes_and_an_id() {
+    let Invocation::Run(Some(Commands::Sessions(SessionsCommands::Delete { cascade, yes, id }))) =
+        parse_from(["fiber", "sessions", "delete", "s_abc"])
+    else {
+        panic!("delete with an id");
+    };
+    assert_eq!((cascade, yes, id.as_str()), (false, false, "s_abc"));
+    let Invocation::Run(Some(Commands::Sessions(SessionsCommands::Delete { cascade, yes, id }))) =
+        parse_from(["fiber", "sessions", "delete", "--cascade", "--yes", "s_abc"])
+    else {
+        panic!("delete with both flags");
+    };
+    assert_eq!((cascade, yes, id.as_str()), (true, true, "s_abc"));
+    assert!(
+        sentence(&["fiber", "sessions", "delete"])
+            .starts_with("The following required arguments were not provided: <id>"),
+        "{}",
+        sentence(&["fiber", "sessions", "delete"])
+    );
+}
+
+#[test]
+fn the_menu_lists_sessions_delete_under_sessions() {
+    let menu = menu();
+    let sessions = menu
+        .split("\n\n")
+        .find(|group| group.starts_with("Sessions:"))
+        .unwrap();
+    assert!(
+        sessions.lines().any(|l|
+            l == "  sessions delete [--cascade] [--yes] <id>              Delete a session, and with --cascade the sessions that continue it"),
+        "{sessions}"
+    );
+}
+
+#[test]
 fn sessions_alone_is_a_one_line_usage_sentence() {
     assert_eq!(
         sentence(&["fiber", "sessions"]),
-        "'fiber sessions' requires a subcommand but one was not provided [subcommands: export]. Run `fiber --help` for usage."
+        "'fiber sessions' requires a subcommand but one was not provided [subcommands: delete, export]. Run `fiber --help` for usage."
     );
 }
 

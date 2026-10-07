@@ -14,6 +14,9 @@ use crate::{fail, failed, project_of, usage};
 /// What the prompt asks.
 const PROMPT: &str = "approve all? [y/N]";
 
+/// The usage failure when nobody can answer.
+const NOBODY: &str = "`fiber approve` has no terminal to ask on and no input. Pass `--yes` to approve without asking.";
+
 /// `fiber approve [--yes]` in the current directory. Without `--yes` it asks
 /// once, and refuses when nobody can answer.
 pub fn approve(yes: bool) -> i32 {
@@ -84,7 +87,7 @@ fn run(
             say(out, diff);
         }
     }
-    if !yes && !confirmed(terminal, input, err)? {
+    if !yes && !confirmed(PROMPT, NOBODY, terminal, input, err)? {
         say(err, "nothing approved\n");
         return Ok(());
     }
@@ -112,14 +115,16 @@ fn run(
     Ok(())
 }
 
-/// Asks once. With nothing to read and no terminal there is nobody to ask,
-/// which is a usage failure that names `--yes`.
-fn confirmed(
+/// Asks `prompt` once on `err`. With nothing to read and no terminal there
+/// is nobody to ask, which is the usage failure `nobody`, naming `--yes`.
+pub(crate) fn confirmed(
+    prompt: &str,
+    nobody: &str,
     terminal: bool,
     input: &mut dyn BufRead,
     err: &mut dyn Write,
 ) -> Result<bool, Failure> {
-    say(err, &format!("{PROMPT} "));
+    say(err, &format!("{prompt} "));
     err.flush().unwrap_or(());
     let mut line = String::new();
     let read = input
@@ -130,9 +135,7 @@ fn confirmed(
         say(err, "\n");
     }
     if read == 0 && !terminal {
-        return Err(usage(
-            "`fiber approve` has no terminal to ask on and no input. Pass `--yes` to approve without asking.",
-        ));
+        return Err(usage(nobody));
     }
     Ok(says_yes(&line))
 }
@@ -143,7 +146,7 @@ fn says_yes(line: &str) -> bool {
 }
 
 /// A closed stream leaves nobody to tell.
-fn say(to: &mut dyn Write, text: &str) {
+pub(crate) fn say(to: &mut dyn Write, text: &str) {
     write!(to, "{text}").unwrap_or(());
 }
 
