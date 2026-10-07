@@ -99,6 +99,18 @@ fn a_failure_is_a_warn_line_with_the_rejection_code() {
 }
 
 #[test]
+fn a_startup_failure_is_an_error_line_with_no_session() {
+    let temp = Temp::new();
+    let diag = temp.diag();
+    diag.error("config_invalid", "config.json is not valid JSON.");
+    assert_eq!(
+        temp.text(),
+        "{\"ts\":1700000000000,\"level\":\"error\",\"process\":\"hub\",\
+         \"code\":\"config_invalid\",\"message\":\"config.json is not valid JSON.\"}\n"
+    );
+}
+
+#[test]
 fn a_log_of_exactly_10_mib_is_not_rotated() {
     let temp = Temp::new();
     fs::create_dir_all(temp.dir.join("logs")).unwrap();

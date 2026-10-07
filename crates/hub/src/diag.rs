@@ -63,6 +63,12 @@ impl Diag {
         self.write("info", None, code, message);
     }
 
+    /// Writes an `error` line for a failure with no session to hold it,
+    /// such as a startup error: `code` is its code from `docs/errors.md`.
+    pub(crate) fn error(&self, code: &str, message: &str) {
+        self.write("error", None, code, message);
+    }
+
     /// Writes an `info` line naming the session, such as `session_started`.
     pub(crate) fn info_session(&self, session: &SessionId, code: &str, message: &str) {
         self.write("info", Some(session), code, message);
