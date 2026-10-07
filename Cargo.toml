@@ -70,3 +70,5 @@ panic = "abort"
 [profile.release]
 panic = "abort"
 overflow-checks = true
+lto = "fat"
+codegen-units = 1
