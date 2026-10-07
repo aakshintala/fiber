@@ -164,7 +164,16 @@ fn output_held_open_by_a_process_outside_the_group_errs_instead_of_hanging() {
     let dir = TempDir::new("fiber-bench-held");
     let marker = dir.path().to_string_lossy().into_owned();
     let watchdog = Watchdog::matching(&marker);
-    let script = format!("{} &", sleeper(dir.path(), true));
+    let escaped = dir.path().join("escaped");
+    // The leader waits for the descendant's marker before exiting, so
+    // `Proc::stop` cannot catch the holder while it is still in the
+    // group. Bounded: a counted wait, not a sleep-then-hope.
+    let script = format!(
+        "perl -MPOSIX -e 'POSIX::setsid(); open my $f, \">>\", $ARGV[1] or die $!; print $f \"x\\n\"; close $f; sleep 3600' '{}' '{}' & i=0; while [ ! -e '{}' ] && [ \"$i\" -lt 100 ]; do sleep 0.05; i=$((i + 1)); done",
+        dir.path().display(),
+        escaped.display(),
+        escaped.display(),
+    );
     let err = fakes::within("output held open", WALL, move || {
         let mut command = Command::new("/bin/sh");
         command.args(["-c", &script]);
