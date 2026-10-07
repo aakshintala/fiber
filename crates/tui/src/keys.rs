@@ -344,8 +344,8 @@ fn sgr_mouse(params: &[u8], release: bool) -> Option<Mouse> {
     if fields.next().is_some() {
         return None;
     }
-    // Shift, Alt and Ctrl are bits 4, 8 and 16; they are ignored.
-    let cb = cb & !(4 | 8 | 16);
+    // Shift, Alt and Ctrl are bits 4, 8 and 16 (0b1_1100); they are ignored.
+    let cb = cb & !0b1_1100;
     let button = match cb & 3 {
         0 => Some(Button::Left),
         1 => Some(Button::Middle),

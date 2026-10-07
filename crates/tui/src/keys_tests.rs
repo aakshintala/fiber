@@ -527,8 +527,9 @@ fn sgr_coordinates_up_to_u16_max() {
 #[test]
 fn a_malformed_sgr_report_is_dropped_and_the_rest_read() {
     // A non-digit parameter byte; a letter would end the CSI itself.
-    let malformed: [&[u8]; 10] = [
+    let malformed: [&[u8]; 11] = [
         b"\x1b[<0;0;5M",
+        b"\x1b[<+0;1;1M",
         b"\x1b[<0;5;0M",
         b"\x1b[<0;70000;1M",
         b"\x1b[<0;1;65536M",
@@ -548,8 +549,10 @@ fn a_malformed_sgr_report_is_dropped_and_the_rest_read() {
             "{report:?}"
         );
     }
-    // Without the `<` it is no SGR report.
+    // Without the `<` it is no SGR report, even when the parameters after
+    // the first byte would read as one.
     assert!(feed_all(&[b"\x1b[0;1;1M"]).is_empty());
+    assert!(feed_all(&[b"\x1b[10;10;5M"]).is_empty());
 }
 
 #[test]
