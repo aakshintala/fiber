@@ -3,6 +3,7 @@
 //! page returned as text or saved to the session's `artifacts/`.
 
 mod charset;
+mod download;
 mod http;
 mod markdown;
 mod target;
@@ -276,9 +277,16 @@ impl WebFetch {
         match kind {
             Kind::Markdown => match self.save(&bytes, "html") {
                 Ok(path) => {
-                    let page = charset::decode(head.content_type.as_deref(), &bytes);
-                    let markdown = markdown::to_markdown(&page);
-                    text_output(format!("{first}; raw page at {path}\n\n{markdown}"))
+                    let mut html = download::Html::new(head.content_type.as_deref());
+                    for piece in bytes.chunks(download::PIECE) {
+                        html.push(piece);
+                    }
+                    drop(bytes);
+                    // The markdown becomes the result: the first line goes
+                    // in front of it, never into a copy.
+                    let mut markdown = html.finish();
+                    markdown.insert_str(0, &format!("{first}; raw page at {path}\n\n"));
+                    text_output(markdown)
                 }
                 Err(message) => failed(ErrorCode::ToolError, message),
             },
