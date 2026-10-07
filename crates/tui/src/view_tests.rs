@@ -1178,6 +1178,7 @@ fn lines(targets: &[crate::mouse::Target]) -> Vec<(crate::app::Target, Rect)> {
             | crate::mouse::TargetId::DropSteering(_)
             | crate::mouse::TargetId::Notice(_)
             | crate::mouse::TargetId::DismissNotice(_)
+            | crate::mouse::TargetId::CloseOverlay
             | crate::mouse::TargetId::MoreNotices => None,
         })
         .collect()
@@ -1605,4 +1606,58 @@ fn the_cursor_hides_while_the_approval_panel_is_open() {
     ));
     assert!(app.panel().is_some());
     assert_eq!(cursor(&app, Rect::new(0, 0, WIDTH, HEIGHT)), None);
+}
+
+#[test]
+fn an_open_overlay_draws_its_cross_as_a_target() {
+    use crate::mouse::TargetId;
+    let cross = Rect::new(WIDTH - 1, 0, 1, 1);
+    let mut app = empty();
+    attach(&mut app, S_A);
+    app.on_key(Key::F1, fakes::clock::FakeClock::new().now());
+    let (buf, targets) = pointed(&mut app, WIDTH, HEIGHT, None);
+    assert!(
+        targets
+            .iter()
+            .any(|target| target.id == TargetId::CloseOverlay && target.rect == cross),
+        "the key map draws its cross"
+    );
+    assert_eq!(
+        buf.cell((WIDTH - 1, 0)).map(|cell| cell.symbol()),
+        Some("✕")
+    );
+    let mut app = empty();
+    attach(&mut app, S_A);
+    app.on_line(session_line(
+        S_A,
+        "notice",
+        serde_json::json!({"code": "x", "message": "Saved."}),
+        None,
+    ));
+    app.open_notice(0);
+    let (buf, targets) = pointed(&mut app, WIDTH, HEIGHT, None);
+    assert!(
+        targets
+            .iter()
+            .any(|target| target.id == TargetId::CloseOverlay && target.rect == cross),
+        "the notice overlay draws its cross"
+    );
+    assert_eq!(
+        buf.cell((WIDTH - 1, 0)).map(|cell| cell.symbol()),
+        Some("✕")
+    );
+}
+
+#[test]
+fn no_cross_without_conversation_rows() {
+    let mut app = empty();
+    attach(&mut app, S_A);
+    app.on_key(Key::F1, fakes::clock::FakeClock::new().now());
+    let (_, targets) = pointed(&mut app, WIDTH, 1, None);
+    assert!(
+        targets
+            .iter()
+            .all(|target| target.id != crate::mouse::TargetId::CloseOverlay),
+        "no cross on a screen with no conversation rows"
+    );
 }

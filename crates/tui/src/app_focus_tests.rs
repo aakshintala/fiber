@@ -988,3 +988,28 @@ fn y_on_a_code_blocks_copy_copies_its_code() {
     assert_eq!(app.on_key(Key::Char('y'), now()), clicked);
     assert!(matches!(clicked, Effect::Copy(_)));
 }
+
+#[test]
+fn the_overlay_cross_closes_the_key_map_first() {
+    let mut app = attached(60, 12);
+    app.notices.push("Saved.".to_owned());
+    app.open_notice(0);
+    key(&mut app, Key::F1);
+    assert!(app.keymap_top().is_some());
+    assert!(app.notice_overlay().is_some());
+    app.on_click(TargetId::CloseOverlay);
+    assert_eq!(app.keymap_top(), None);
+    assert!(app.notice_overlay().is_some());
+    app.on_click(TargetId::CloseOverlay);
+    assert_eq!(app.notice_overlay(), None);
+}
+
+#[test]
+fn the_overlay_cross_closes_the_notice_overlay() {
+    let mut app = attached(60, 12);
+    app.notices.push("Saved.".to_owned());
+    app.open_notice(0);
+    assert!(app.notice_overlay().is_some());
+    app.on_click(TargetId::CloseOverlay);
+    assert_eq!(app.notice_overlay(), None);
+}

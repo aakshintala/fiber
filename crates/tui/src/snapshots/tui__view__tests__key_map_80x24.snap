@@ -2,7 +2,7 @@
 source: crates/tui/src/view_tests.rs
 expression: "sized(&mut app, 80, 24)"
 ---
-Sessions
+Sessions                                                                       ✕
   Send a prompt, or a steering message during a turn · Enter
   Insert a line break · Shift+Enter · Ctrl+J
   Close what is on top; interrupt the turn when nothing is open · Esc · click

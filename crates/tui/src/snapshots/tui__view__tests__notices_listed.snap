@@ -2,7 +2,7 @@
 source: crates/tui/src/view_tests.rs
 expression: screen(&app)
 ---
-Notice 3.
+Notice 3.                                                  ✕
 Notice 2.
 Notice 1.
 Could not reach the hub: the socket refused the connection

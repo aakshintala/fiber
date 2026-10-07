@@ -207,6 +207,16 @@ impl App {
         effect
     }
 
+    /// The ✕ on an open overlay: closes the key map when open, else the
+    /// notice overlay.
+    pub(super) fn close_overlay(&mut self) {
+        if self.keymap_top().is_some() {
+            self.keymap_key(&Key::Esc);
+        } else {
+            self.notices.close();
+        }
+    }
+
     /// The text y copies and Ctrl+G opens: a conversation line's rows, a
     /// code block's code, a paste token's text, a notice's whole text, a
     /// steering row's text; None for a control.
@@ -220,7 +230,8 @@ impl App {
             | TargetId::NewBelow
             | TargetId::DropSteering(_)
             | TargetId::DismissNotice(_)
-            | TargetId::MoreNotices => None,
+            | TargetId::MoreNotices
+            | TargetId::CloseOverlay => None,
         }
     }
 

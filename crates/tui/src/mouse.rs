@@ -28,6 +28,8 @@ pub(crate) enum TargetId {
     DismissNotice(usize),
     /// "+N more" under the notices: lists them all.
     MoreNotices,
+    /// The open overlay's ✕: closes it.
+    CloseOverlay,
 }
 
 /// One click target as drawn: what it does and the cells it covers.

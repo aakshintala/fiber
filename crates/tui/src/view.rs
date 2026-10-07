@@ -145,10 +145,13 @@ pub(crate) fn render(
     let rows = bottom.saturating_sub(area.y);
     let conversation = Rect::new(area.x, area.y, area.width, rows);
     match app.keymap_top() {
-        Some(top) => Paragraph::new(crate::keymap::lines().join("\n"))
-            .wrap(Wrap { trim: false })
-            .scroll((to_u16(top), 0))
-            .render(conversation, buf),
+        Some(top) => {
+            Paragraph::new(crate::keymap::lines().join("\n"))
+                .wrap(Wrap { trim: false })
+                .scroll((to_u16(top), 0))
+                .render(conversation, buf);
+            overlay_cross(buf, conversation, &mut targets);
+        }
         None => {
             conversation_rows(app, conversation, buf, &mut targets);
             notices(app, conversation, buf, &mut targets);
@@ -209,7 +212,19 @@ fn put(buf: &mut Buffer, area: Rect, bottom: &mut u16, text: &str, style: Style)
     Some(Rect::new(area.x, row, end.saturating_sub(area.x), 1))
 }
 
-/// Floats the notices over the conversation's top-right corner, newest on
+/// The open overlay's ✕ on the conversation's top-right cell, a click
+/// target closing it; nothing when the conversation shows no rows.
+fn overlay_cross(buf: &mut Buffer, area: Rect, targets: &mut Vec<Target>) {
+    if area.is_empty() {
+        return;
+    }
+    let cross = Rect::new(area.right().saturating_sub(1), area.y, 1, 1);
+    buf.set_string(cross.x, cross.y, "✕", Style::default());
+    targets.push(Target {
+        id: TargetId::CloseOverlay,
+        rect: cross,
+    });
+}
 /// top, each a click target with its ✕ a target over it, or the notice
 /// overlay over the whole conversation while it is open, which hides the
 /// conversation's targets.
@@ -231,6 +246,7 @@ fn notices(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
             buf.set_stringn(area.x, y, &row, width, NOTICE_TINT);
             y = y.saturating_add(1);
         }
+        overlay_cross(buf, area, targets);
         return;
     }
     for notice in app.notices() {
