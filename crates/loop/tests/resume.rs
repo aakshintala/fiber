@@ -650,10 +650,9 @@ impl History {
     }
 
     fn resume(&mut self, tools: Vec<(String, Arc<dyn Tool>)>) -> Loop {
-        let lines = self.lines();
         Loop::resume(
             Arc::clone(&self.log),
-            &lines,
+            r#loop::resumed(&self.dir).unwrap(),
             Arc::clone(&self.provider) as Arc<dyn contract::provider::Provider>,
             Self::model(),
             self.prompt(),
@@ -993,11 +992,10 @@ fn reviewer_denies_from_before_the_resume_count_toward_the_session_limit() {
         Scripted::text("check"),
         Scripted::text("block: it writes"),
     ]));
-    let lines = history.lines();
     let (tx, rx) = mpsc::channel();
     let looped = Loop::resume(
         Arc::clone(&history.log),
-        &lines,
+        r#loop::resumed(&history.dir).unwrap(),
         Arc::clone(&history.provider) as Arc<dyn Provider>,
         History::model(),
         history.prompt(),
@@ -1095,11 +1093,10 @@ fn non_reviewer_denies_from_before_the_resume_do_not_count() {
         Scripted::text("check"),
         Scripted::text("block: it writes"),
     ]));
-    let lines = history.lines();
     let (tx, rx) = mpsc::channel();
     let looped = Loop::resume(
         Arc::clone(&history.log),
-        &lines,
+        r#loop::resumed(&history.dir).unwrap(),
         Arc::clone(&history.provider) as Arc<dyn Provider>,
         History::model(),
         history.prompt(),
@@ -1185,11 +1182,10 @@ fn the_reviewers_first_request_contains_the_earlier_tool_calls() {
 
     let reviewer = Arc::new(ScriptedProvider::new(vec![Scripted::text("allow")]));
     let reviewer_provider = Arc::clone(&reviewer);
-    let lines = history.lines();
     let (tx, rx) = mpsc::channel();
     let looped = Loop::resume(
         Arc::clone(&history.log),
-        &lines,
+        r#loop::resumed(&history.dir).unwrap(),
         Arc::clone(&history.provider) as Arc<dyn Provider>,
         History::model(),
         history.prompt(),
@@ -1404,7 +1400,7 @@ fn resumed_returns_the_first_workspace_and_the_last_model() {
         lines.iter().map(|l| l.kind.as_str()).collect::<Vec<_>>(),
         ["session_started", "usage_recorded", "usage_recorded"]
     );
-    let resumed = r#loop::resumed(&lines).unwrap();
+    let resumed = r#loop::resumed(&history.dir).unwrap();
     assert_eq!(resumed.session, "s_1");
     assert_eq!(resumed.workspace, history.workspace);
     assert_eq!(resumed.model.as_deref(), Some("fake/second"));
@@ -1420,7 +1416,7 @@ fn resumed_returns_no_model_for_a_log_with_none() {
         lines.iter().map(|l| l.kind.as_str()).collect::<Vec<_>>(),
         ["session_started", "turn_started"]
     );
-    let resumed = r#loop::resumed(&lines).unwrap();
+    let resumed = r#loop::resumed(&history.dir).unwrap();
     assert_eq!(resumed.session, "s_1");
     assert_eq!(resumed.workspace, history.workspace);
     assert_eq!(resumed.model, None);
@@ -1449,16 +1445,16 @@ fn resumed_returns_the_credential_label_of_the_last_preamble() {
     history.write(preamble(Some("work")), None);
     history.write(preamble(Some("personal")), None);
     history.write(user_turn("one"), None);
-    let resumed = r#loop::resumed(&history.lines()).unwrap();
+    let resumed = r#loop::resumed(&history.dir).unwrap();
     assert_eq!(resumed.credential.as_deref(), Some("personal"));
 }
 
 #[test]
 fn resumed_returns_no_credential_for_a_log_with_no_label() {
     let history = History::new(vec![]);
-    assert_eq!(r#loop::resumed(&history.lines()).unwrap().credential, None);
+    assert_eq!(r#loop::resumed(&history.dir).unwrap().credential, None);
     history.write(preamble(None), None);
-    assert_eq!(r#loop::resumed(&history.lines()).unwrap().credential, None);
+    assert_eq!(r#loop::resumed(&history.dir).unwrap().credential, None);
 }
 
 #[test]
@@ -1483,41 +1479,75 @@ fn resumed_fails_log_corrupt_on_a_log_with_no_session_started() {
         ["turn_started"]
     );
 
-    let error = match r#loop::resumed(&lines) {
+    let error = match r#loop::resumed(&dir) {
         Ok(_) => panic!("a log with no session_started resumes"),
         Err(error) => error,
     };
     assert_eq!(error.code(), ErrorCode::LogCorrupt);
 }
 
+/// Appends `line` to the log in `dir` as raw JSON, past the writer: a line
+/// whose envelope reads and whose payload need not.
+fn append_raw(dir: &std::path::Path, line: &Envelope) {
+    use std::io::Write as _;
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(dir.join("events.jsonl"))
+        .unwrap();
+    writeln!(file, "{}", serde_json::to_string(line).unwrap()).unwrap();
+}
+
+/// A `text_completed` line at `seq` whose payload does not read as its kind.
+fn unreadable_text(seq: u64) -> Envelope {
+    Envelope {
+        kind: "text_completed".into(),
+        session_id: SessionId("s_9".into()),
+        ts: 1,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: Some(contract::TurnId("t_1".into())),
+        action_id: Some(ActionId("a_0".into())),
+        seq: Some(contract::Seq(seq)),
+        payload: json!({"text": 7}).as_object().unwrap().clone(),
+    }
+}
+
 #[test]
-fn resume_fails_log_corrupt_on_a_log_with_no_session_started() {
+fn resume_fails_log_corrupt_on_an_unreadable_line_in_its_window() {
+    // The pass reads no `text_completed` payload, so the line passes it; the
+    // window's rebuild reads it and refuses the resume.
     let root = fakes::TempDir::new("fiber-resume");
-    let log = Arc::new(
-        Log::create(
-            root.path(),
-            SessionId("s_9".into()),
-            fakes::clock::FakeClock::new(),
+    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let created = Log::create(root.path(), SessionId("s_9".into()), Arc::clone(&clock)).unwrap();
+    created
+        .append(
+            &Event::SessionStarted(SessionStarted {
+                workspace: root.path().display().to_string(),
+                variables: Variables {
+                    path: String::new(),
+                    names: Vec::new(),
+                    source: VariablesSource::Inherited,
+                },
+                parent: None,
+                forked_from: None,
+                rewind: None,
+            }),
+            None,
+            None,
         )
-        .unwrap(),
-    );
-    log.append(
-        &user_turn("one"),
-        Some(contract::TurnId("t_1".into())),
-        None,
-    )
-    .unwrap();
+        .unwrap();
+    created
+        .append(&user_turn("one"), Some(contract::TurnId("t_1".into())), None)
+        .unwrap();
+    drop(created);
     let dir = root.path().join("s_9");
-    let lines = log::read(&dir).unwrap();
-    assert_eq!(
-        lines.iter().map(|l| l.kind.as_str()).collect::<Vec<_>>(),
-        ["turn_started"]
-    );
+    append_raw(&dir, &unreadable_text(2));
+    let log = Arc::new(Log::open(root.path(), SessionId("s_9".into()), clock).unwrap());
+    let resumed = r#loop::resumed(&dir).unwrap();
     let (_tx, rx) = mpsc::channel();
 
     let error = match Loop::resume(
         log,
-        &lines,
+        resumed,
         Arc::new(ScriptedProvider::new(vec![])) as Arc<dyn Provider>,
         History::model(),
         resume_prompt(root.path()),
@@ -1529,7 +1559,7 @@ fn resume_fails_log_corrupt_on_a_log_with_no_session_started() {
             rules: Arc::new(support::FakeRules::empty()),
         },
     ) {
-        Ok(_) => panic!("a log with no session_started resumes"),
+        Ok(_) => panic!("a window with an unreadable line resumes"),
         Err(error) => error,
     };
     assert_eq!(error.code(), ErrorCode::LogCorrupt);
@@ -1687,10 +1717,9 @@ impl History {
         provider: Arc<dyn Provider>,
         tools: Vec<(String, Arc<dyn Tool>)>,
     ) -> Loop {
-        let lines = self.lines();
         Loop::resume(
             Arc::clone(&self.log),
-            &lines,
+            r#loop::resumed(&self.dir).unwrap(),
             provider,
             Self::model(),
             self.prompt(),

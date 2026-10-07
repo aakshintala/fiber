@@ -4,12 +4,14 @@
 //! the same `request_id`, refuses it as headless, finishes the turn, and
 //! then runs the prompt as the next turn.
 
-use std::collections::{HashSet, VecDeque};
-use std::path::PathBuf;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 
-use contract::events::{DecidedBy, Decision, Event, TurnOutcome};
+use contract::events::{
+    DecidedBy, Decision, Event, Grant, JobCompleted, Outcome, TurnOutcome,
+};
 use contract::inbox::Delivery;
 use contract::provider::Provider;
 use contract::shapes::Failure;
@@ -20,12 +22,16 @@ use log::Log;
 use crate::calls;
 use crate::cancel::Commit;
 use crate::retry::Retry;
-use crate::reviewer::{BlockLimits, NO_MODEL_MESSAGE, render_reviewed};
+use crate::handoff::Carry;
+use crate::reviewer::{BlockLimits, NO_MODEL_MESSAGE, Reviewed, render_reviewed};
 use crate::{Error, Loop, Model, Permissions, Step};
 
-/// What a resume folds back: the session, the workspace the first
-/// `session_started` recorded, and the model the last `usage_recorded`
-/// names, if any.
+/// What a resume folds back in one streaming pass over the log: the
+/// session, the workspace the first `session_started` recorded, the model
+/// the last `usage_recorded` names, if any, and the session-wide state a
+/// resumed loop restores. The pass also finds the window a resume reads:
+/// the lines from the last completed handoff on (`docs/handoff.md`,
+/// "Resume").
 pub struct Resumed {
     /// The session's id, from the first `session_started` line: the cache
     /// keys are built from it (`docs/prompt-cache.md`, "Rules for other
@@ -42,42 +48,154 @@ pub struct Resumed {
     /// session keeps, beating the configured one (`docs/model-routing.md`,
     /// "Which credential a session uses"). `None` when the log holds none.
     pub credential: Option<String>,
+    /// The `seq` the window starts at: the latest `turn_started` of the
+    /// latest completed handoff's turn, before that handoff; 0 with no
+    /// completed handoff, or none of its turn's `turn_started` lines.
+    pub(crate) window: u64,
+    /// How many lines the pass read: the window ends there, before any line
+    /// written after the pass.
+    pub(crate) end: u64,
+    /// The render state at the window start that the window's own lines do
+    /// not rebuild: the jobs running and the session log's path.
+    pub(crate) seed: Carry,
+    /// Every `usage_recorded`, the whole session's.
+    pub(crate) ledger: crate::usage::Ledger,
+    /// Every grant a `permission_resolved` recorded.
+    pub(crate) grants: Vec<Grant>,
+    /// The reviewer's blocks this session.
+    pub(crate) session_blocks: u64,
+    /// What the reviewer is shown.
+    pub(crate) reviewed: Vec<Reviewed>,
+    /// The jobs started and never ended, each as its `orphaned` completion.
+    pub(crate) orphans: Vec<JobCompleted>,
 }
 
-/// Folds `lines` back to the session, the workspace, the model and the
-/// credential label. A log
-/// with no `session_started` is corrupt.
-pub fn resumed(lines: &[Envelope]) -> Result<Resumed, Error> {
-    let mut folded: Option<Resumed> = None;
+/// The kinds the pass reads a payload of. Every other line's envelope is
+/// read and its payload never parsed.
+const FOLDED: &[&str] = &[
+    "session_started",
+    "usage_recorded",
+    "preamble_built",
+    "permission_resolved",
+    "turn_started",
+    "steering_applied",
+    "tool_call_requested",
+    "job_started",
+    "job_completed",
+    "rewound",
+    "opening_message",
+    "handoff_completed",
+];
+
+/// Folds the log in the session directory `dir` in one pass, one line at a
+/// time, holding no parsed vector of it (`docs/events.md`, "Resume"): the
+/// session, the workspace, the model, the credential label, the
+/// session-wide state, and the window a resume reads. A log with no
+/// `session_started` is corrupt, as is a line that is not an envelope or a
+/// folded line whose payload does not read as its kind.
+pub fn resumed(dir: &Path) -> Result<Resumed, Error> {
+    let mut first: Option<(String, String)> = None;
     let mut model = None;
     let mut credential = None;
-    for line in lines {
-        let event = Event::from_envelope(line).map_err(Error::Unreadable)?;
-        if let Some(Event::SessionStarted(started)) = &event
-            && folded.is_none()
-        {
-            folded = Some(Resumed {
-                session: line.session_id.0.clone(),
-                workspace: started.workspace.clone(),
-                model: None,
-                credential: None,
-            });
+    let mut ledger = crate::usage::Ledger::default();
+    let mut grants = Vec::new();
+    let mut session_blocks = 0;
+    // debt: what the reviewer is shown grows with the whole transcript, as
+    // it does live; a handoff does not reset it. #940 decides its scope.
+    let mut reviewed = Vec::new();
+    let mut orphans = crate::jobs::Orphans::default();
+    // The jobs running and the session log's path as of the line read.
+    let mut running = Carry::default();
+    // Each turn's latest `turn_started` since the last completed handoff,
+    // with the state at it: a later handoff names one of them.
+    let mut starts: HashMap<TurnId, (u64, Carry)> = HashMap::new();
+    let mut window = (0, Carry::default());
+    let mut end = 0;
+    for line in log::lines(dir)? {
+        let line = line?;
+        end += 1;
+        if !line.is_durable() || !FOLDED.contains(&line.kind.as_str()) {
+            continue;
         }
-        if let Some(Event::UsageRecorded(recorded)) = &event {
-            model = Some(recorded.model.clone());
-        }
-        if let Some(Event::PreambleBuilt(built)) = &event {
-            credential.clone_from(&built.credential);
+        let Some(event) = Event::from_envelope(&line).map_err(Error::Unreadable)? else {
+            continue;
+        };
+        render_reviewed(&mut reviewed, &event, line.action_id.as_ref());
+        orphans.fold(&event);
+        running.fold_jobs(&event);
+        match &event {
+            Event::SessionStarted(started) if first.is_none() => {
+                first = Some((line.session_id.0.clone(), started.workspace.clone()));
+            }
+            Event::UsageRecorded(recorded) => {
+                model = Some(recorded.model.clone());
+                ledger.record(recorded);
+            }
+            Event::PreambleBuilt(built) => credential.clone_from(&built.credential),
+            Event::PermissionResolved(resolved) => {
+                if let Some(grant) = &resolved.grant {
+                    grants.push(grant.clone());
+                }
+                // A model's block: the spending-budget denial and
+                // a reviewer failure carry no `reviewer` object
+                // and are not counted. Escalated blocks a person
+                // answered are not distinguished in the log.
+                // debt: undercounts session blocks that a person
+                // answered or a reviewer failure caused; fixed
+                // when the log records blocks.
+                if resolved.decision == Decision::Deny
+                    && resolved.decided_by == DecidedBy::Reviewer
+                    && resolved.reviewer.is_some()
+                {
+                    session_blocks += 1;
+                }
+            }
+            Event::OpeningMessage(message) => {
+                running
+                    .session_log
+                    .clone_from(&message.environment.session_log);
+            }
+            Event::TurnStarted(_) => {
+                if let (Some(turn), Some(seq)) = (&line.turn_id, line.seq) {
+                    let state = Carry {
+                        jobs: running.jobs.clone(),
+                        session_log: running.session_log.clone(),
+                        ..Carry::default()
+                    };
+                    starts.insert(turn.clone(), (seq.0, state));
+                }
+            }
+            Event::HandoffCompleted(done) if done.outcome == Outcome::Completed => {
+                let turn = line.turn_id.as_ref();
+                window = turn
+                    .and_then(|turn| starts.get(turn))
+                    .cloned()
+                    .unwrap_or_default();
+                // Only this turn can complete another handoff before its
+                // next `turn_started`.
+                starts.retain(|started, _| Some(started) == turn);
+            }
+            _ => {}
         }
     }
-    match folded {
-        Some(mut folded) => {
-            folded.model = model;
-            folded.credential = credential;
-            Ok(folded)
-        }
-        None => Err(Error::NoSessionStarted),
-    }
+    let Some((session, workspace)) = first else {
+        return Err(Error::NoSessionStarted);
+    };
+    let (window, seed) = window;
+    Ok(Resumed {
+        session,
+        workspace,
+        model,
+        credential,
+        window,
+        end,
+        seed,
+        ledger,
+        grants,
+        session_blocks,
+        reviewed,
+        orphans: orphans.finish(),
+    })
 }
 
 /// A turn cut short on a pending approval: what the finishing turn writes
@@ -177,21 +295,23 @@ pub(crate) fn suspended(lines: &[Envelope]) -> Result<Option<Suspended>, Error> 
 }
 
 impl Loop {
-    /// Resumes the session `lines` describe on `log`, which already holds
-    /// the lock: the conversation is rebuilt with the fixed results for the
-    /// calls a crash left without one, and the folds a new loop builds from
-    /// nothing are restored. The only lines written are one `job_completed`
-    /// per job a crash left running, marked `orphaned`; `session_started` is
-    /// the first line's, and `seq` carries on. Every other argument is
-    /// [`Loop::start`]'s. `lines` is the whole log, read under the lock
-    /// `Log::open` took.
+    /// Resumes the session `resumed` folded on `log`, which already holds
+    /// the lock: the conversation is rebuilt from the window `resumed`
+    /// found, with the fixed results for the calls a crash left without
+    /// one, and the folds a new loop builds from nothing are restored. The
+    /// window is the only part of the log read here, up to the line count
+    /// the pass saw, so lines written since (`fiber_started` and the
+    /// like) are not in it. The only lines written are one `job_completed`
+    /// per job a crash left running, marked `orphaned`; `session_started`
+    /// is the first line's, and `seq` carries on. Every other argument is
+    /// [`Loop::start`]'s.
     #[allow(
         clippy::too_many_arguments,
-        reason = "#302's resume interface: the log's lines ride with Loop::start's arguments"
+        reason = "#302's resume interface: the folded log rides with Loop::start's arguments"
     )]
     pub fn resume(
         log: Arc<Log>,
-        lines: &[Envelope],
+        resumed: Resumed,
         provider: Arc<dyn Provider>,
         model: Model,
         prompt: crate::prompt::PromptInputs,
@@ -199,11 +319,25 @@ impl Loop {
         tools: Vec<(String, Arc<dyn Tool>)>,
         permissions: Permissions,
     ) -> Result<Self, Error> {
-        // Fails `log_corrupt` on a log with no `session_started`.
-        let folded = resumed(lines)?;
+        let Resumed {
+            session,
+            window,
+            end,
+            seed,
+            ledger,
+            grants,
+            session_blocks,
+            reviewed,
+            orphans,
+            ..
+        } = resumed;
+        let lines = log.range(
+            window,
+            usize::try_from(end.saturating_sub(window)).unwrap_or(usize::MAX),
+        )?;
         // The suspended turn, if any: its batch stays open, so the rebuild
         // writes no fixed result for it; the finishing turn completes it.
-        let halted = suspended(lines)?;
+        let halted = suspended(&lines)?;
         let open: HashSet<ActionId> = halted
             .as_ref()
             .map(|halted| halted.batch.iter().cloned().collect())
@@ -213,38 +347,7 @@ impl Loop {
         // the cache markers. Notices the log holds behind the open batch
         // are released after its results, as the finishing turn writes them.
         let (conversation, sent, held, carry) =
-            crate::conversation::rebuild_and_sent(lines, &model.reference, &open)?;
-        let mut reviewed = Vec::new();
-        let mut grants = Vec::new();
-        let mut session_blocks = 0;
-        let mut ledger = crate::usage::Ledger::default();
-        for line in lines.iter().filter(|l| l.is_durable()) {
-            let event = Event::from_envelope(line).map_err(Error::Unreadable)?;
-            if let Some(event) = &event {
-                render_reviewed(&mut reviewed, event, line.action_id.as_ref());
-            }
-            if let Some(Event::PermissionResolved(resolved)) = &event {
-                if let Some(grant) = &resolved.grant {
-                    grants.push(grant.clone());
-                }
-                // A model's block: the spending-budget denial and
-                // a reviewer failure carry no `reviewer` object
-                // and are not counted. Escalated blocks a person
-                // answered are not distinguished in the log.
-                // debt: undercounts session blocks that a person
-                // answered or a reviewer failure caused; fixed
-                // when the log records blocks.
-                if resolved.decision == Decision::Deny
-                    && resolved.decided_by == DecidedBy::Reviewer
-                    && resolved.reviewer.is_some()
-                {
-                    session_blocks += 1;
-                }
-            }
-            if let Some(Event::UsageRecorded(recorded)) = &event {
-                ledger.record(recorded);
-            }
-        }
+            crate::conversation::rebuild_and_sent(&lines, &model.reference, &open, seed)?;
         let (tools, replaced) = calls::register(tools);
         let workspace = PathBuf::from(&permissions.workspace);
         let workspace = workspace.canonicalize().unwrap_or(workspace);
@@ -256,7 +359,7 @@ impl Loop {
         // A completed handoff starts a new context, which needs a new
         // opening message: one the crash cut off is written at the next turn.
         let mut opened = false;
-        for line in lines {
+        for line in &lines {
             if line.kind == "opening_message" {
                 opened = true;
             } else if line.kind == "handoff_completed"
@@ -268,8 +371,15 @@ impl Loop {
         // The tracked state the log's lines describe, when the log holds
         // an opening message; without one the first turn writes it fresh
         // and rebuilds the state from it.
+        // Only the current context's lines: a completed handoff starts the
+        // tracked state afresh, as it does live.
         let changes = if opened {
-            crate::changes::State::resumed(lines, &workspace, &prompt)?
+            let context = lines
+                .iter()
+                .rposition(|line| line.kind == "opening_message")
+                .unwrap_or(0);
+            let context = lines.get(context..).unwrap_or_default();
+            crate::changes::State::resumed(context, &workspace, &prompt)?
         } else {
             crate::changes::State::empty(&prompt.home)
         };
@@ -287,8 +397,8 @@ impl Loop {
             // The session's own id, as `Loop::start` sets it: no parent or
             // fork exists yet (`docs/prompt-cache.md`, "Rules for other
             // areas").
-            cache_key: folded.session.clone(),
-            reviewer_key: format!("{}:reviewer", folded.session),
+            reviewer_key: format!("{session}:reviewer"),
+            cache_key: session,
             queued: VecDeque::new(),
             closing: false,
             suspended: halted,
@@ -329,7 +439,7 @@ impl Loop {
             handoff: crate::handoff::State::new(carry),
             ending: crate::jobs::Ending::default(),
         };
-        resumed.mark_orphans(lines)?;
+        resumed.mark_orphans(orphans)?;
         Ok(resumed)
     }
 }

@@ -641,7 +641,7 @@ fn a_notice_behind_an_open_batch_renders_at_the_end() {
         ["result a_1", "call a_1", "user"]
     );
     let open = std::collections::HashSet::from([ActionId("a_1".into())]);
-    let (rebuilt, _, held, _) = super::rebuild_and_sent(&lines, "fake/model-1", &open).unwrap();
+    let (rebuilt, _, held, _) = super::rebuild_and_sent(&lines, "fake/model-1", &open, crate::handoff::Carry::default()).unwrap();
     // Held apart for the finishing turn to release after the results.
     assert_eq!(shape(&rebuilt), ["call a_1"]);
     assert_eq!(shape(&held), ["user"]);

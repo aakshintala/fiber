@@ -10,7 +10,7 @@ use contract::events::{
     McpServerFailed, MessageOutcome, Notice, TurnOutcome,
 };
 use contract::shapes::{Failure, Question};
-use contract::{Envelope, RequestId};
+use contract::RequestId;
 use log::Log;
 
 use crate::Error;
@@ -89,9 +89,9 @@ pub fn fiber_exited(
     one_turn: bool,
     signal: Option<i32>,
 ) -> Result<Exited, Error> {
-    let folded = log::read(dir)
+    let folded = log::lines(dir)
         .map_err(Error::from)
-        .and_then(|lines| fold(&lines, signal.is_some()).map_err(Error::Unreadable));
+        .and_then(|lines| fold(lines, signal.is_some()));
     let (fold, unread) = match folded {
         Ok(fold) => (fold, None),
         Err(e) => (Fold::default(), Some(e)),
@@ -134,9 +134,10 @@ struct Fold {
     suspended_on: Option<RequestId>,
 }
 
-/// Folds `lines`. With `keep_open`, the requests raised before the latest
-/// `fiber_started` and still unresolved stay open across it.
-fn fold(lines: &[Envelope], keep_open: bool) -> Result<Fold, serde_json::Error> {
+/// Folds `lines`, one at a time. With `keep_open`, the requests raised
+/// before the latest `fiber_started` and still unresolved stay open across
+/// it. The first line that does not read ends the fold with its error.
+fn fold(lines: log::Lines, keep_open: bool) -> Result<Fold, Error> {
     let mut fold = Fold::default();
     // Text parts of the open assistant message, joined in log order.
     // Every message takes them: messages never interleave, and a failed
@@ -146,7 +147,8 @@ fn fold(lines: &[Envelope], keep_open: bool) -> Result<Fold, serde_json::Error> 
     // `suspended_on` is the latest (`docs/events.md`, `fiber_exited`).
     let mut open = Vec::new();
     for line in lines {
-        let event = Event::from_envelope(line)?;
+        let line = line?;
+        let event = Event::from_envelope(&line).map_err(Error::Unreadable)?;
         // Each process reports its own lines only: the fold restarts at
         // the latest `fiber_started` (`docs/events.md`, `fiber_exited`:
         // `usage` is "this process's model calls for the session").
