@@ -39,11 +39,13 @@ impl Temp {
     }
 
     fn hub(&self, starter: FakeStarter) -> Arc<Hub> {
+        let timed: Arc<dyn Clock> = fakes::clock::FakeClock::new();
         Arc::new(Hub::new(
             &self.dir,
             "0.0.0",
             Arc::new(starter),
-            fakes::clock::FakeClock::new(),
+            Arc::clone(&timed),
+            Diag::open(&self.dir, timed),
         ))
     }
 
@@ -588,7 +590,8 @@ fn hub_on(temp: &Temp, clock: &Arc<fakes::clock::FakeClock>) -> Hub {
         &temp.dir,
         "0.0.0",
         Arc::new(FakeStarter::hang(&temp.dir)),
-        timed,
+        Arc::clone(&timed),
+        Diag::open(&temp.dir, timed),
     )
 }
 

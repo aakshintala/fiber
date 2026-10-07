@@ -259,7 +259,7 @@ fn mint(prefix: &str) -> String {
     format!("{prefix}{:016x}", RandomState::new().hash_one(()))
 }
 
-fn code_name(code: &ErrorCode) -> String {
+pub(crate) fn code_name(code: &ErrorCode) -> String {
     serde_json::to_value(code)
         .ok()
         .and_then(|value| value.as_str().map(str::to_owned))

@@ -23,6 +23,7 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::connection::Hub;
+use crate::diag::Diag;
 use crate::fake::{FakeStarter, Handshake, failure};
 
 /// One named deadline per wait: `start` answers before it.
@@ -59,7 +60,13 @@ impl Temp {
     fn hub_with(&self, starter: impl crate::Starter + 'static) -> Hub {
         let clock = Arc::clone(&self.clock);
         let timed: Arc<dyn Clock> = clock;
-        Hub::new(&self.dir, "0.0.0", Arc::new(starter), timed)
+        Hub::new(
+            &self.dir,
+            "0.0.0",
+            Arc::new(starter),
+            Arc::clone(&timed),
+            Diag::open(&self.dir, timed),
+        )
     }
 
     fn workspace(&self) -> String {

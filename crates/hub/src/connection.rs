@@ -73,6 +73,7 @@ impl Hub {
         fiber_version: &str,
         starter: Arc<dyn Starter>,
         clock: Arc<dyn Clock>,
+        diag: Diag,
     ) -> Self {
         let tick = Arc::new(Tick::default());
         let wake = Arc::clone(&tick);
@@ -83,8 +84,8 @@ impl Hub {
             home: home.to_path_buf(),
             fiber_version: fiber_version.to_owned(),
             starter,
-            clock: Arc::clone(&clock),
-            diag: Diag::open(home, clock),
+            clock,
+            diag,
             next_client: AtomicU64::new(0),
             conns: Mutex::new(Conns {
                 open: Vec::new(),

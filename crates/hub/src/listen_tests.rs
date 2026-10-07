@@ -9,7 +9,6 @@
 )]
 
 use std::fs;
-use std::io::ErrorKind;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
@@ -33,6 +32,14 @@ impl Temp {
     fn socket(&self) -> PathBuf {
         self.dir.join("run").join("hub")
     }
+}
+
+/// Locks `run/` in `home` and binds `run/hub`, as the hub does at start.
+fn listen(home: &Path) -> Result<Option<Held>, StartError> {
+    let Some(lock) = lock(home)? else {
+        return Ok(None);
+    };
+    Ok(bind(&lock, home)?.map(|bound| Held::new(lock, bound)))
 }
 
 fn mode(path: &Path) -> u32 {
@@ -111,14 +118,42 @@ fn a_socket_path_at_the_limit_binds() {
 }
 
 #[test]
-fn a_socket_path_past_the_limit_is_invalid_input() {
+fn a_socket_path_past_the_limit_is_home_too_long_after_the_lock() {
     let temp = Temp::new();
     let pad = SOCKET_PATH_MAX - temp.dir.to_string_lossy().len() - 1 - 8 + 1;
     let home = temp.dir.join("p".repeat(pad));
-    let Err(error) = listen(&home) else {
+    let held = lock(&home).unwrap().expect("the lock is won");
+    let Err(error) = bind(&held, &home) else {
         panic!("past the limit is refused");
     };
-    assert_eq!(error.kind(), ErrorKind::InvalidInput);
+    assert!(
+        matches!(error, StartError::HomeTooLong { max } if max == SOCKET_PATH_MAX),
+        "{error:?}"
+    );
+    assert!(!home.join("run").join("hub").exists());
+}
+
+#[test]
+fn a_run_that_is_a_regular_file_is_io_failed_naming_it() {
+    let temp = Temp::new();
+    fs::write(temp.dir.join("run"), b"not a directory").unwrap();
+    let Err(error) = lock(&temp.dir) else {
+        panic!("a file at run/ is refused");
+    };
+    assert_eq!(error.code(), contract::ErrorCode::IoFailed);
+    assert!(
+        matches!(&error, StartError::Io { path, .. } if *path == temp.dir.join("run")),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn a_second_lock_would_block_while_the_first_is_held() {
+    let temp = Temp::new();
+    let first = lock(&temp.dir).unwrap().expect("the first lock is won");
+    assert!(lock(&temp.dir).unwrap().is_none());
+    drop(first);
+    assert!(lock(&temp.dir).unwrap().is_some());
 }
 
 #[test]
@@ -131,7 +166,14 @@ fn a_symlink_at_the_socket_path_is_not_replaced() {
     // file here. A symlink may lead to a live session, so the hub binds
     // nothing.
     std::os::unix::fs::symlink(temp.socket(), temp.socket()).unwrap();
-    assert!(listen(&temp.dir).is_err());
+    let Err(error) = listen(&temp.dir) else {
+        panic!("a symlink at run/hub is refused");
+    };
+    assert_eq!(error.code(), contract::ErrorCode::IoFailed);
+    assert!(
+        matches!(&error, StartError::Io { path, .. } if *path == temp.socket()),
+        "{error:?}"
+    );
     assert!(
         fs::symlink_metadata(temp.socket())
             .unwrap()

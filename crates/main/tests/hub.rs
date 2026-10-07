@@ -739,11 +739,10 @@ fn a_session_stuck_in_setup_is_killed_by_its_guard() {
     hub.wait();
 }
 
-#[test]
-fn a_hub_that_cannot_start_says_why_on_stderr() {
-    let setup = Setup::new();
-    fs::write(setup.home().join("config.json"), "{").unwrap();
-    let child = setup.fiber(&["hub", "serve"]).spawn().unwrap();
+/// Runs `command`, a hub that fails to start, to its exit under
+/// [`DEADLINE`], and checks it left no process in its group.
+fn run_failing(mut command: Command) -> std::process::Output {
+    let child = command.spawn().unwrap();
     let group = child.id();
     let watchdog = Watchdog::group(group);
     let (done, finished) = mpsc::channel();
@@ -757,8 +756,70 @@ fn a_hub_that_cannot_start_says_why_on_stderr() {
         "the hub left a process in its group behind"
     );
     watchdog.stand_down(DEADLINE);
+    output
+}
+
+/// The lines of `home`'s `logs/hub.log`, parsed.
+fn hub_log_lines(home: &Path) -> Vec<Value> {
+    fs::read_to_string(home.join("logs").join("hub.log"))
+        .unwrap_or_default()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+
+#[test]
+fn a_hub_that_cannot_start_says_why_on_stderr() {
+    let setup = Setup::new();
+    fs::write(setup.home().join("config.json"), "{").unwrap();
+    let output = run_failing(setup.fiber(&["hub", "serve"]));
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.starts_with("fiber: "), "{stderr}");
+    assert_eq!(stderr.lines().count(), 1, "{stderr}");
     assert!(!setup.hub_socket().exists());
+}
+
+#[test]
+fn an_invalid_config_is_written_to_the_hub_log() {
+    let setup = Setup::new();
+    fs::write(setup.home().join("config.json"), "{").unwrap();
+    let output = run_failing(setup.fiber(&["hub", "serve"]));
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    let lines = hub_log_lines(&setup.home());
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert_eq!(lines[0]["level"], "error");
+    assert_eq!(lines[0]["process"], "hub");
+    assert_eq!(lines[0]["code"], "config_invalid");
+    let message = lines[0]["message"].as_str().unwrap();
+    assert_eq!(stderr.trim_end(), format!("fiber: {message}"));
+}
+
+#[test]
+fn a_too_long_fiber_home_is_reported_on_stderr_and_in_the_hub_log() {
+    let setup = Setup::new();
+    // One component long enough that `<home>/run/hub` passes 107 bytes,
+    // the longer of the macOS and Linux limits.
+    let home = setup.home().join("p".repeat(120));
+    fs::create_dir_all(&home).unwrap();
+    let mut command = setup.fiber(&["hub", "serve"]);
+    command.env("FIBER_HOME", &home);
+    let output = run_failing(command);
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.starts_with("fiber: "), "{stderr}");
+    assert!(stderr.contains("FIBER_HOME"), "{stderr}");
+    assert_eq!(stderr.lines().count(), 1, "{stderr}");
+    let lines = hub_log_lines(&home);
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    let line = &lines[0];
+    assert_eq!(line["level"], "error");
+    assert_eq!(line["process"], "hub");
+    assert_eq!(line["code"], "usage");
+    assert!(
+        line["message"].as_str().unwrap().contains("FIBER_HOME"),
+        "{line}"
+    );
+    assert!(!home.join("run").join("hub").exists());
 }
