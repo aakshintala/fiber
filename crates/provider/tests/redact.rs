@@ -341,6 +341,42 @@ fn a_body_echoing_signed_header_values_is_stored_redacted() {
     }
 }
 
+/// Reports a credential no returned header carries: `sign()` replaced the
+/// `authorization` header carrying it.
+struct HiddenCredential;
+
+impl Signer for HiddenCredential {
+    fn sign(&self, _: &SignRequest<'_>) -> Result<Vec<(String, String)>, contract::signing::Error> {
+        Ok(vec![("x-sig".to_owned(), "s-1".to_owned())])
+    }
+
+    fn credentials(&self) -> Vec<contract::Secret> {
+        vec![contract::Secret::new("hidden-tok".to_owned())]
+    }
+}
+
+#[test]
+fn a_body_echoing_a_replaced_credential_is_stored_redacted() {
+    let server = ProviderServer::start([Response::status(
+        401,
+        r#"{"error":{"message":"bad hidden-tok"}}"#,
+    )])
+    .unwrap();
+    let endpoint = Endpoint {
+        provider: "openrouter".into(),
+        model: "m".into(),
+        base_url: format!("{}/v1", server.url()),
+        signer: Some(Arc::new(HiddenCredential) as Arc<dyn Signer>),
+        direct: true,
+        ..Endpoint::default()
+    };
+    let (failure, _) = failed((protocols()[2].call)(&endpoint));
+    assert_eq!(
+        failure.provider.as_ref().unwrap().message.as_str(),
+        "bad [redacted]"
+    );
+}
+
 #[test]
 fn an_error_inside_a_200_stream_is_stored_redacted() {
     for protocol in protocols() {

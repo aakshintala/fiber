@@ -130,14 +130,20 @@ fn post_with(
         return Err(Error::Connection("the call was cancelled".into()));
     }
     let signed = match signer {
-        Some(signer) => signer
-            .sign(&SignRequest {
-                method: "POST",
-                url,
-                headers,
-                body,
-            })
-            .map_err(Error::Sign)?,
+        Some(signer) => {
+            let signed = signer
+                .sign(&SignRequest {
+                    method: "POST",
+                    url,
+                    headers,
+                    body,
+                })
+                .map_err(Error::Sign)?;
+            for credential in signer.credentials() {
+                secrets.add(credential);
+            }
+            signed
+        }
         None => Vec::new(),
     };
     for (name, value) in &signed {

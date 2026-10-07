@@ -230,6 +230,16 @@ impl LuaProvider {
         Ok(token)
     }
 
+    /// The token `credential()` last returned, without fetching or
+    /// refreshing when there is none. What `LuaSigner::credentials`
+    /// redacts after `sign()` replaced the `authorization` header.
+    pub fn cached_token(&self) -> Option<Secret> {
+        lock(&self.token)
+            .current
+            .as_ref()
+            .map(|(token, _)| token.clone())
+    }
+
     /// Calls `credential()`, which returns `{ token, expires_at }`, the
     /// expiry in seconds since the Unix epoch.
     fn fetch_token(&self) -> Result<(Secret, SystemTime), Error> {
@@ -377,6 +387,13 @@ impl Signer for LuaSigner {
             headers.extend(signed);
         }
         Ok(headers)
+    }
+
+    fn credentials(&self) -> Vec<Secret> {
+        if !self.credential {
+            return Vec::new();
+        }
+        self.provider.cached_token().into_iter().collect()
     }
 }
 

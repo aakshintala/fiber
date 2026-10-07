@@ -47,7 +47,6 @@ impl Secrets {
             // (`docs/code-quality.md`, "Errors"): `expose` here borrows each
             // value only to compare it, copying no key bytes into the output.
             .map(Secret::expose)
-            .filter(|value| !value.is_empty())
             .collect();
         patterns.sort_by_key(|pattern| std::cmp::Reverse(pattern.len()));
         let mut out = String::with_capacity(text.len());

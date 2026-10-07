@@ -673,3 +673,48 @@ fn a_signer_that_fails_adds_nothing() {
     assert!(sent.is_err());
     assert_eq!(secrets.redact("Bearer tok-1"), "Bearer tok-1");
 }
+
+/// Reports a credential no returned header carries: `sign()` replaced the
+/// `authorization` header carrying it.
+struct HiddenCredential;
+
+impl contract::signing::Signer for HiddenCredential {
+    fn sign(
+        &self,
+        _: &contract::signing::SignRequest<'_>,
+    ) -> Result<Vec<(String, String)>, contract::signing::Error> {
+        Ok(vec![("x-sig".to_owned(), "s-1".to_owned())])
+    }
+
+    fn credentials(&self) -> Vec<contract::Secret> {
+        vec![contract::Secret::new("hidden-tok".to_owned())]
+    }
+}
+
+#[test]
+fn signer_credentials_join_the_secrets_even_when_no_header_carries_them() {
+    let server = fakes::ProviderServer::start([fakes::Response::status(200, "{}")]).unwrap();
+    let mut secrets = crate::redact::Secrets::default();
+    let sent = super::post_with(
+        &format!("{}/v1", server.url()),
+        &[],
+        b"{}",
+        Some(&HiddenCredential),
+        &std::sync::Arc::default(),
+        &mut secrets,
+        None,
+    );
+    assert!(sent.is_ok());
+    assert_eq!(secrets.redact("hidden-tok"), "[redacted]");
+    assert_eq!(secrets.redact("s-1"), "[redacted]");
+}
+
+#[test]
+fn a_signer_without_credentials_reports_none() {
+    use contract::signing::Signer as _;
+    assert!(
+        Recorder(std::sync::Mutex::default())
+            .credentials()
+            .is_empty()
+    );
+}
