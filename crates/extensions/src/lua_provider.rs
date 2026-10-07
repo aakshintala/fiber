@@ -340,11 +340,11 @@ impl LuaProvider {
         })
     }
 
-    fn call(&self, function: &'static str, arg: Value) -> Result<Value, Error> {
+    pub(crate) fn call(&self, function: &'static str, arg: Value) -> Result<Value, Error> {
         self.extension.provider_call(&self.name, function, arg)
     }
 
-    fn bad_return(&self, function: &str, why: String) -> Error {
+    pub(crate) fn bad_return(&self, function: &str, why: String) -> Error {
         Error::BadReturn {
             extension: self.extension.name().to_owned(),
             callback: format!("{}.{function}", self.name),

@@ -1014,3 +1014,59 @@ fn the_credential_sentence_is_literal() {
          start a session with `--model <ref>`."
     );
 }
+
+/// A retained Lua provider that registers only `cost` keeps its handle in
+/// the clone, so a switch to one of its data file's models carries its
+/// lookup; without the `models` guard the clone would hold no handle.
+#[test]
+fn a_switch_to_a_retained_cost_only_provider_carries_its_lookup() {
+    let root = fakes::TempDir::new("fiber-switch-lua-cost");
+    let home = root.path().join("home");
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let package =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../providers/openrouter");
+    extensions::plan(
+        &home,
+        &extensions::Request::Path(package),
+        "0.1.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    let config = Config::load(Sources {
+        home: home.clone(),
+        workspace,
+        project: ProjectKey::new("test").unwrap(),
+        overrides: Vec::new(),
+    })
+    .unwrap();
+    let (mut providers, _) = Providers::load(&home).unwrap();
+    let snapshot = providers.clone();
+    let mut extensions = extensions::SessionExtensions::load(
+        &home,
+        &config,
+        fakes::clock::FakeClock::new(),
+        Arc::new(tools::PathLocks::new()),
+    );
+    let naming = crate::lua_providers::add_lua(&extensions, &mut providers, &config).unwrap();
+    extensions.retain_lua_providers(&["openrouter"]);
+    assert_eq!(extensions.lua_providers().len(), 1);
+    let credentials: Credentials = [("openrouter", keyed("default"))]
+        .into_iter()
+        .map(|(name, entry)| (name.to_owned(), entry))
+        .collect();
+    let switching = Switching::new(
+        snapshot,
+        extensions.lua_providers(),
+        naming,
+        config,
+        credentials,
+    )
+    .unwrap();
+    let made = prepared(&switching, &args("openrouter/z-ai/glm-5.3-flash"), None);
+    assert_eq!(made.model.reference, "openrouter/z-ai/glm-5.3-flash");
+    assert!(made.provider.cost_lookup().is_some());
+}

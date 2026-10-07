@@ -236,11 +236,13 @@ impl Fold {
                 self.pending.retain(|p| p.request_id != resolved.request_id);
             }
             Event::UsageRecorded(recorded) => {
-                self.ledger.record(recorded);
+                let corrected = self.ledger.record(recorded);
                 self.spend = self.ledger.usage();
                 // A session-model reply: not the reviewer's (no action), a
-                // delegate's copy or an extension's call.
-                if line.action_id.is_some()
+                // delegate's copy or an extension's call. A late correction
+                // of an earlier call is not the context's latest size.
+                if !corrected
+                    && line.action_id.is_some()
                     && recorded.extension.is_none()
                     && recorded.origin_session_id.is_none()
                 {

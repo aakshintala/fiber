@@ -185,7 +185,7 @@ fn live_reviewer() {
         model: model_data,
         thinking: None,
     };
-    let provider = connect(reviewer, Some(contract::Secret::new(key)), None).unwrap();
+    let provider = connect(reviewer, Some(contract::Secret::new(key)), None, None).unwrap();
     let reference = format!("{provider_name}/{model_id}");
 
     let actions: Vec<ReplyAction> = COMMANDS

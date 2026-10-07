@@ -515,7 +515,7 @@ fn parts_in(
                 .map(|(_, key)| key)
         })?;
     let session_credential = (key.clone(), signer.clone());
-    let provider = connect(model, key, signer)?;
+    let provider = connect(model, key, signer, providers.lua(&model.provider.name))?;
     // The credentials read at startup, frozen into `Switching` once the
     // reviewer is chosen: the session's entry first, so a reviewer on the
     // session's provider reuses its key and signer.
@@ -694,7 +694,7 @@ fn choose_reviewer(
     // The token is read once, so a failing `credential()` fails here:
     // not a startup error, the loop gets it and every reviewed call
     // escalates it (`docs/permissions.md`, "How it runs").
-    let provider = connect(model, key, signer)?;
+    let provider = connect(model, key, signer, providers.lua(&model.provider.name))?;
     Ok(r#loop::Reviewer {
         provider,
         model: Model {

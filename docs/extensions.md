@@ -234,7 +234,7 @@ extension sends the same calls as messages.
 
 ```
 fiber.tool(name, { description, input_schema, effects, timeout, run })
-fiber.provider(name, { models, quota, credential, sign })
+fiber.provider(name, { models, quota, credential, sign, cost })
 fiber.harness(name, { auto, models, command, line, quota })
 fiber.search_backend(name, { timeout, run })
 fiber.hook(point, { phase, on_failure, timeout, run })
@@ -480,8 +480,8 @@ A provider may have five pieces of Lua:
   OAuth")
 - `sign()`, which adds headers to each request, for a scheme such as AWS SigV4
   (`docs/model-routing.md`, "Signing a request")
-- `cost(generation_id)`, which looks up the cost of a call that ended without
-  one (`docs/model-routing.md`, "Cost")
+- `cost({ generation_id, base_url, key })`, which looks up the cost of a call
+  that ended without one (`docs/model-routing.md`, "Cost")
 
 Each function is `{ timeout, run }`, like `fiber.command`: `timeout` in
 milliseconds, `run` the function Fiber calls. Only `sign()` runs while a

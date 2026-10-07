@@ -996,3 +996,51 @@ fn a_credential_error_is_its_own_first_line_with_its_code() {
     assert!(message.ends_with("refresh failed: body-xyz"), "{message}");
     assert!(!message.starts_with('`'), "{message}");
 }
+
+#[test]
+fn cost_registers_and_is_listed_among_the_provider_functions() {
+    let setup = Setup::new();
+    let dir = setup.home().join("ext");
+    write(
+        &dir.join("init.lua"),
+        "fiber.provider(\"p\", { cost = { timeout = 1000, run = function() return 0 end } })\n",
+    );
+    let extension = Arc::new(LuaExtension::new(
+        "ext",
+        dir,
+        setup.home(),
+        FakeClock::new(),
+    ));
+    let provider = LuaProvider::new(extension, "p");
+    let functions = within({
+        let provider = Arc::clone(&provider);
+        move || provider.functions()
+    })
+    .unwrap();
+    assert_eq!(functions, ["cost"]);
+    assert!(within(move || provider.registers("cost")).unwrap());
+}
+
+#[test]
+fn an_unknown_provider_function_is_refused_naming_cost_among_the_known_ones() {
+    let setup = Setup::new();
+    let dir = setup.home().join("ext");
+    write(
+        &dir.join("init.lua"),
+        "fiber.provider(\"p\", { list = { timeout = 1, run = function() end } })\n",
+    );
+    let extension = Arc::new(LuaExtension::new(
+        "ext",
+        dir,
+        setup.home(),
+        FakeClock::new(),
+    ));
+    let err = within(move || extension.provider_functions("p")).unwrap_err();
+    let Error::Lua { message, .. } = &err else {
+        panic!("{err:?}")
+    };
+    assert!(
+        message.contains("`list` is not models, quota, credential, sign or cost"),
+        "{message}"
+    );
+}

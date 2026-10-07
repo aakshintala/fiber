@@ -464,9 +464,11 @@ response or a generation lookup reports one, as OpenRouter's does
 model with neither has `cost` `null`, and the person sees its tokens only.
 
 A provider whose vendor offers a generation lookup declares a Lua `cost()`
-function. It receives a `generation_id` and returns the generation's cost in US
-dollars, or nothing when the vendor does not have it. It asks the vendor
-through `host.http`, so the lookup's URL and the shape of its answer stay in
+function. It receives a table `{ generation_id, base_url, key }`: the
+generation's id, the base URL the call went to, and the key the session used
+for the call (absent when the provider's token comes from `credential()`). It
+returns the generation's cost in US dollars, or nothing when the vendor does
+not have it. It asks the vendor through `host.http`, so the lookup's URL and the shape of its answer stay in
 the provider's package, as `quota()`'s do. The loop calls it once, 30 seconds
 after a call that ended without the vendor's own figure, on the session's
 injected clock: a stream closed early, cancelled or failed. A returned cost is

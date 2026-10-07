@@ -15,6 +15,7 @@ mod host;
 mod install;
 mod installed;
 mod lua;
+mod lua_cost;
 mod lua_provider;
 mod manage;
 mod oauth;

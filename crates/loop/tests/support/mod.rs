@@ -615,6 +615,17 @@ impl Provider for Seam {
         }
         self.inner.call(request)
     }
+
+    fn wire_tools(
+        &self,
+        tools: &[contract::provider::ToolDefinition],
+    ) -> Vec<serde_json::Map<String, Value>> {
+        self.inner.wire_tools(tools)
+    }
+
+    fn cost_lookup(&self) -> Option<Arc<dyn contract::provider::CostLookup>> {
+        self.inner.cost_lookup()
+    }
 }
 
 /// A provider that answers from a scripted provider and fires the

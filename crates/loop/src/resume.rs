@@ -42,9 +42,11 @@ pub struct Resumed {
     /// The first `session_started`'s workspace: a resumed session keeps it,
     /// wherever the resume runs (`docs/state.md`, "Sessions and resume").
     pub workspace: String,
-    /// The last `usage_recorded`'s model: the session's model, beating
-    /// `--model` (`docs/model-routing.md`, "Choosing the model"). `None`
-    /// when the log holds none.
+    /// The model of the last call recorded, or of the last `model_changed`
+    /// when it came later; a late cost's second record of a call is not a
+    /// new call. The session's model, beating `--model`
+    /// (`docs/model-routing.md`, "Choosing the model"). `None` when the log
+    /// holds none.
     pub model: Option<String>,
     /// The last `preamble_built`'s credential label: the label a resumed
     /// session keeps, beating the configured one (`docs/model-routing.md`,
@@ -138,8 +140,11 @@ pub fn resumed(dir: &Path) -> Result<Resumed, Error> {
         {
             first = Some((line.session_id.0.clone(), started.workspace.clone()));
         } else if let Event::UsageRecorded(recorded) = &event {
-            model = Some(recorded.model.clone());
-            ledger.record(recorded);
+            // A correction keeps the model the call was first recorded at,
+            // which may be an earlier model than the latest one.
+            if !ledger.record(recorded) {
+                model = Some(recorded.model.clone());
+            }
         } else if let Event::PreambleBuilt(built) = &event {
             credential.clone_from(&built.credential);
         } else if let Event::ModelChanged(changed) = &event {
@@ -470,6 +475,7 @@ impl Loop {
             pending: Vec::new(),
             chosen: thinking.and_then(|level| level.parse().ok()),
             warm_stopped: None,
+            late_cost: crate::late_cost::LateCost::default(),
         };
         resumed.mark_orphans(orphans)?;
         Ok(resumed)

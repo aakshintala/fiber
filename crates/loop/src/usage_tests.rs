@@ -323,3 +323,14 @@ fn a_partial_record_marks_media_and_subscription_only_when_set() {
     assert_eq!(marked.input_media, Some(true));
     assert_eq!(marked.subscription, Some(true));
 }
+
+#[test]
+fn record_says_whether_it_replaced_an_earlier_line_for_the_generation() {
+    let mut ledger = Ledger::default();
+    assert!(!ledger.record(&recorded("g1", 1, 0, 0, 1)));
+    assert!(!ledger.record(&recorded("g2", 1, 0, 0, 1)));
+    let mut corrected = recorded("g1", 1, 0, 0, 1);
+    corrected.cost = Some(3.0);
+    assert!(ledger.record(&corrected));
+    assert_eq!(ledger.usage().cost, Some(4.0));
+}

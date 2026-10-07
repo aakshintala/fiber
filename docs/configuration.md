@@ -21,8 +21,8 @@ survive anyway.
 Reading configuration never runs code. A repository's configuration is read
 before anyone has approved anything, so Lua is not a configuration format. The
 only Lua a provider runs is its optional `models()`, `quota()`,
-`credential()` and `sign()` functions (`docs/model-routing.md`, "Model
-discovery").
+`credential()`, `sign()` and `cost()` functions (`docs/model-routing.md`,
+"Model discovery").
 
 Configuration never holds a secret. Secrets live in `credentials/`
 ("Secrets").

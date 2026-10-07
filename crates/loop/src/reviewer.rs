@@ -519,31 +519,20 @@ impl Loop {
         };
         let call = endpoint.provider.call(&request);
         let reply = crate::cancel::run_cancellable(&self.cancel, call, &mut |_| {});
-        match &reply {
-            Ok(reply) => {
-                let recorded = crate::usage::recorded(
-                    reply.usage(),
-                    reply.cost,
-                    &endpoint.reference,
-                    endpoint.cost.as_ref(),
-                    endpoint.subscription,
-                );
-                self.append(&Event::UsageRecorded(recorded.clone()), turn, None)?;
-                self.ledger.record(&recorded);
-            }
-            Err(error) => {
-                if let Some(usage) = error.usage() {
-                    let recorded = crate::usage::recorded(
-                        usage.clone(),
-                        None,
-                        &endpoint.reference,
-                        endpoint.cost.as_ref(),
-                        endpoint.subscription,
-                    );
-                    self.append(&Event::UsageRecorded(recorded.clone()), turn, None)?;
-                    self.ledger.record(&recorded);
-                }
-            }
+        let seen = match &reply {
+            Ok(reply) => Some((reply.usage(), reply.cost)),
+            Err(error) => error.usage().map(|usage| (usage.clone(), None)),
+        };
+        if let Some((usage, inline)) = seen {
+            let recorded = crate::usage::recorded(
+                usage,
+                inline,
+                &endpoint.reference,
+                endpoint.cost.as_ref(),
+                endpoint.subscription,
+            );
+            let lookup = endpoint.provider.cost_lookup();
+            self.write_usage(recorded, inline, lookup, Some(turn), None)?;
         }
         Ok(reply)
     }

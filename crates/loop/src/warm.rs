@@ -85,33 +85,24 @@ impl Loop {
         let reply = crate::cancel::run_cancellable(&self.cancel, call, &mut |_| {});
         // A refresh that named its generation writes its usage at once,
         // before the notice a failure also writes.
-        if let Err(error) = &reply
-            && let Some(usage) = error.usage()
-        {
-            let model = self.model.reference.clone();
-            let prices = self.model.cost.clone();
-            let subscription = self.model.subscription;
-            let recorded =
-                crate::usage::recorded(usage.clone(), None, &model, prices.as_ref(), subscription);
-            self.log
-                .append(&Event::UsageRecorded(recorded.clone()), None, None)?;
-            self.ledger.record(&recorded);
+        let seen = match &reply {
+            Ok(reply) => Some((reply.usage(), reply.cost)),
+            Err(error) => error.usage().map(|usage| (usage.clone(), None)),
+        };
+        if let Some((usage, inline)) = seen {
+            let model = &self.model;
+            let recorded = crate::usage::recorded(
+                usage,
+                inline,
+                &model.reference,
+                model.cost.as_ref(),
+                model.subscription,
+            );
+            let lookup = self.provider.cost_lookup();
+            self.write_usage(recorded, inline, lookup, None, None)?;
         }
         match reply {
-            Ok(reply) => {
-                let model = self.model.reference.clone();
-                let prices = self.model.cost.clone();
-                let subscription = self.model.subscription;
-                let recorded = crate::usage::recorded(
-                    reply.usage(),
-                    reply.cost,
-                    &model,
-                    prices.as_ref(),
-                    subscription,
-                );
-                self.log
-                    .append(&Event::UsageRecorded(recorded.clone()), None, None)?;
-                self.ledger.record(&recorded);
+            Ok(_) => {
                 // The stored request stays the step's own; only the send
                 // the next refresh counts from moves.
                 if let Some((_, sent)) = &mut self.last_request {

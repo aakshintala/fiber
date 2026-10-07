@@ -1471,6 +1471,17 @@ fn resumed_returns_the_first_workspace_and_the_last_model() {
 }
 
 #[test]
+fn a_late_correction_of_an_earlier_model_s_call_leaves_the_switched_model() {
+    let history = History::new(vec![]);
+    history.write(History::usage("g1", "fake/first", None), Some("a_1"));
+    history.write(switched("fake/second", None, None), None);
+    // `g1`'s cost settles after the switch.
+    history.write(History::usage("g1", "fake/first", Some(1.0)), Some("a_1"));
+    let resumed = r#loop::resumed(&history.dir).unwrap();
+    assert_eq!(resumed.model.as_deref(), Some("fake/second"));
+}
+
+#[test]
 fn resumed_returns_no_model_for_a_log_with_none() {
     let history = History::new(vec![]);
     history.write(user_turn("one"), None);

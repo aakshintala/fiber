@@ -3,6 +3,7 @@
 //! [`Provider`] and [`ModelCall`], and never names one.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -33,6 +34,21 @@ pub trait Provider: Send + Sync {
             .filter_map(|tool| serde_json::to_value(tool).ok()?.as_object().cloned())
             .collect()
     }
+
+    /// The provider's generation lookup, when its package declares `cost()`
+    /// (`docs/model-routing.md`, "Cost"); `None` for every other provider.
+    fn cost_lookup(&self) -> Option<Arc<dyn CostLookup>> {
+        None
+    }
+}
+
+/// A provider's lookup of a generation's cost, for a call that ended without
+/// the vendor's own figure (`docs/model-routing.md`, "Cost").
+pub trait CostLookup: Send + Sync {
+    /// One lookup, which blocks up to the provider's declared timeout. `Some`
+    /// is a finite cost at or above 0, in US dollars. `None` covers nothing
+    /// returned, an error and a timeout.
+    fn cost(&self, generation_id: &GenerationId) -> Option<f64>;
 }
 
 /// One model call. The loop runs it on its own thread, and any other thread

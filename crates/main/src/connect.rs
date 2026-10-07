@@ -9,6 +9,7 @@ use contract::Secret;
 use contract::provider::Provider;
 use contract::shapes::Failure;
 use doors::failure;
+use extensions::LuaProvider;
 use provider::anthropic_messages::Messages;
 use provider::google_generative_ai::Gemini;
 use provider::openai_completions::Completions;
@@ -21,12 +22,18 @@ use serde_json::Value;
 /// back to the session's model (`docs/permissions.md`, "How it runs").
 /// `key` is `None` when a Lua `credential()` supplies the token, which
 /// rides the signing seam instead (`docs/model-routing.md`, "Keys, tokens
-/// and OAuth").
+/// and OAuth"). `lua` is the model's provider's Lua, when it has one: a
+/// provider whose package declares `cost()` carries it as its lookup, bound
+/// to this model's base URL and `key` (`docs/model-routing.md`, "Cost"). A
+/// package that fails to start gets no lookup; the calls' costs stay as
+/// first recorded.
 pub(crate) fn connect(
     model: extensions::Model<'_>,
     key: Option<Secret>,
     signer: Option<Arc<dyn contract::signing::Signer>>,
+    lua: Option<&Arc<LuaProvider>>,
 ) -> Result<Arc<dyn Provider>, Failure> {
+    let lookup_key = key.clone();
     let endpoint = Endpoint {
         provider: model.provider.name.clone(),
         model: model.model.id.clone(),
@@ -50,7 +57,7 @@ pub(crate) fn connect(
         .compat
         .get("cache_key_header")
         .and_then(Value::as_str);
-    Ok(match model.model.protocol {
+    let provider: Arc<dyn Provider> = match model.model.protocol {
         Protocol::OpenaiResponses => {
             let responses = Responses::new(endpoint);
             Arc::new(match cache_key_header {
@@ -88,5 +95,11 @@ pub(crate) fn connect(
                 ),
             ));
         }
+    };
+    Ok(match lua {
+        Some(lua) => lua
+            .costed(Arc::clone(&provider), &model.model.base_url, lookup_key)
+            .unwrap_or(provider),
+        None => provider,
     })
 }

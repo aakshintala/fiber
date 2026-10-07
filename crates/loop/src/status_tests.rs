@@ -353,6 +353,42 @@ fn only_a_session_model_reply_sets_the_context() {
 }
 
 #[test]
+fn a_late_correction_of_an_earlier_call_never_moves_the_context() {
+    let mut w = world();
+    w.start();
+    w.fold = {
+        let running = Arc::clone(&w.running);
+        let branch = Arc::clone(&w.branch);
+        Fold::new(
+            "-w".to_owned(),
+            "/w".to_owned(),
+            "fake/m".to_owned(),
+            Some(1000),
+            Box::new(move || running.lock().unwrap().clone()),
+            Box::new(move || branch.lock().unwrap().clone()),
+            Box::new(|| 0),
+        )
+    };
+    w.feed("usage_recorded", Some("a1"), &usage("g1", 40, None));
+    w.feed("usage_recorded", Some("a2"), &usage("g2", 7, None));
+    assert_eq!(w.status().context.unwrap().tokens, 12);
+    // `g1`'s cost settles after a newer call: the context stays the newer
+    // call's.
+    w.feed("usage_recorded", Some("a1"), &usage("g1", 40, Some(0.5)));
+    assert_eq!(w.status().context.unwrap().tokens, 12);
+    assert_eq!(w.status().spend.cost, Some(0.5));
+    // After a handoff, a correction of a call before it leaves the context
+    // unknown until the next reply.
+    w.feed(
+        "handoff_completed",
+        None,
+        &json!({"outcome": "completed", "tokens_before": 12}),
+    );
+    w.feed("usage_recorded", Some("a2"), &usage("g2", 7, Some(0.25)));
+    assert!(w.status().context.is_none());
+}
+
+#[test]
 fn spend_counts_every_usage_line_and_a_repeated_generation_once() {
     let mut w = world();
     w.start();

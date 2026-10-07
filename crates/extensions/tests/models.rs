@@ -1237,3 +1237,38 @@ fn leave_out_invalid_drops_a_model_that_declares_no_context_window() {
         );
     }
 }
+
+#[test]
+fn add_lua_for_a_provider_with_only_cost_keeps_its_data_models_and_its_handle() {
+    let setup = Setup::new();
+    let home = setup.home();
+    let mut data = provider("acme", &["a"]);
+    data["credential"] = json!({ "command": ["printf", "key-from-command\n"] });
+    let mut providers = installed(&setup, &[("acme", data)]);
+    let ext = home.join("ext");
+    write(
+        &ext.join("init.lua"),
+        "fiber.provider(\"acme\", { cost = { timeout = 1000, run = function() return 0 end } })\n",
+    );
+    let lua = extensions::LuaProvider::new(
+        std::sync::Arc::new(extensions::LuaExtension::new(
+            "acme-ext",
+            ext,
+            setup.home(),
+            fakes::clock::FakeClock::new(),
+        )),
+        "acme",
+    );
+    let config = config(&setup, &[]);
+    // A credential is there and no cache is: only the missing `models`
+    // keeps `add_lua` from calling it.
+    assert!(lua.has_credential(&config, providers.get("acme").unwrap()));
+    let notices = providers.add_lua("acme-ext", &lua, &config);
+    assert!(notices.is_empty(), "{notices:?}");
+    assert!(providers.resolve("acme/a").is_ok());
+    assert!(
+        config::read_model_cache(&home, "acme").unwrap().is_none(),
+        "no discovery ran, so no copy was written"
+    );
+    assert!(std::sync::Arc::ptr_eq(providers.lua("acme").unwrap(), &lua));
+}

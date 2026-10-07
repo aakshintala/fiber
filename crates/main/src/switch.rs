@@ -41,7 +41,8 @@ pub(crate) struct Switching {
 impl Switching {
     /// The registry `clone` is the `Providers::load` clone `parts_in`
     /// built before any `add_lua`: every retained Lua provider with a
-    /// model cache adds its cached models, then placeholders fill as at
+    /// model cache adds its cached models, and one that registers no
+    /// `models` adds its handle, then placeholders fill as at
     /// startup, with the same environment reader. No refresh thread
     /// starts for the clone.
     /// debt: a Lua provider the session unloaded is not loaded again for
@@ -55,7 +56,9 @@ impl Switching {
         credentials: Credentials,
     ) -> Result<Self, Failure> {
         for (extension, provider) in retained {
-            if provider.has_model_cache() {
+            // A provider without `models`, such as one with only `cost()`,
+            // only keeps its handle, so a switch to it has its lookup.
+            if provider.has_model_cache() || matches!(provider.registers("models"), Ok(false)) {
                 let _notices = registry.add_lua(extension, provider, &config);
             }
         }
@@ -130,7 +133,8 @@ pub(crate) fn prepare(
         code: failure.code,
         message: failure.message,
     })?;
-    let provider = crate::connect(resolved, key, signer).map_err(|failure| Rejection {
+    let lua = switching.registry.lua(&resolved.provider.name);
+    let provider = crate::connect(resolved, key, signer, lua).map_err(|failure| Rejection {
         code: ErrorCode::InvalidArguments,
         message: failure.message,
     })?;
