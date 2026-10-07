@@ -1,0 +1,16 @@
+---
+source: crates/tui/src/view_tests.rs
+expression: screen(&empty())
+---
+
+
+
+
+
+
+
+
+
+
+
+>

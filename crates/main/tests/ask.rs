@@ -1115,7 +1115,7 @@ fn bare_fiber_names_ask_and_prints_nothing() {
     assert!(run.lines.is_empty());
     assert_eq!(
         run.stderr,
-        "fiber: The terminal door is not built; run `fiber ask \"<prompt>\"`. Run `fiber --help` for usage.\n"
+        "fiber: The terminal needs a tty; run `fiber ask \"<prompt>\"`. Run `fiber --help` for usage.\n"
     );
 }
 

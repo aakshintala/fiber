@@ -24,6 +24,7 @@ picture = { path = "../picture" }
 provider = { path = "../provider" }
 serde_json.workspace = true
 tools = { path = "../tools" }
+tui = { path = "../tui" }
 
 [dev-dependencies]
 fakes = { path = "../fakes" }

@@ -1,0 +1,76 @@
+//! The injected tty: raw mode, the alternate screen, the detection queries,
+//! the size, and the restore (`docs/tui.md`, "Keys").
+
+use std::fs::File;
+use std::io::{self, Write};
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use rustix::termios::{self, OptionalActions, Termios};
+
+/// Enters the alternate screen.
+const ALTERNATE_SCREEN: &[u8] = b"\x1b[?1049h";
+/// Kitty's keyboard flags query, then the primary device attributes query.
+const QUERIES: &[u8] = b"\x1b[?u\x1b[c";
+/// Leaves the alternate screen and shows the cursor.
+const RESTORE: &[u8] = b"\x1b[?1049l\x1b[?25h";
+
+/// The tty `setup` changed and its modes from before. One terminal per
+/// process: the first `setup` records it.
+static SAVED: OnceLock<(File, Termios)> = OnceLock::new();
+/// Whether the terminal is set up and not yet restored.
+static ACTIVE: AtomicBool = AtomicBool::new(false);
+
+/// Sets `tty` up: raw mode, the alternate screen, then the two queries.
+/// Returns its size in columns and rows.
+pub(crate) fn setup(mut tty: &File) -> io::Result<(u16, u16)> {
+    let saved = termios::tcgetattr(tty)?;
+    let restore = tty.try_clone()?;
+    let mut raw = saved.clone();
+    raw.make_raw();
+    if SAVED.set((restore, saved)).is_err() {
+        return Err(io::Error::other("the terminal is already set up"));
+    }
+    ACTIVE.store(true, Ordering::SeqCst);
+    termios::tcsetattr(tty, OptionalActions::Now, &raw)?;
+    tty.write_all(ALTERNATE_SCREEN)?;
+    tty.write_all(QUERIES)?;
+    tty.flush()?;
+    size(tty)
+}
+
+/// The size of `tty` in columns and rows, at least 1 by 1.
+pub(crate) fn size(tty: &File) -> io::Result<(u16, u16)> {
+    let size = termios::tcgetwinsize(tty)?;
+    Ok((size.ws_col.max(1), size.ws_row.max(1)))
+}
+
+/// Restores the terminal `setup` set up, once: leaves the alternate
+/// screen, shows the cursor and puts the saved modes back. Does nothing
+/// before `setup` or after the first restore.
+pub(crate) fn restore() {
+    if !ACTIVE.swap(false, Ordering::SeqCst) {
+        return;
+    }
+    let Some((tty, saved)) = SAVED.get() else {
+        return;
+    };
+    let mut out: &File = tty;
+    out.write_all(RESTORE)
+        .and_then(|()| out.flush())
+        .unwrap_or(());
+    termios::tcsetattr(tty, OptionalActions::Now, saved).unwrap_or(());
+}
+
+/// Restores the terminal when dropped, on every return from `run`.
+pub(crate) struct Guard;
+
+impl Drop for Guard {
+    fn drop(&mut self) {
+        restore();
+    }
+}
+
+#[cfg(test)]
+#[path = "term_tests.rs"]
+mod tests;
