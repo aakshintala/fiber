@@ -1,7 +1,7 @@
 //! Tests for the feed: finding sessions in `run/` under the fake clock,
 //! relaying their status, deciding how each left, seeding from
-//! `recent.jsonl`, fan-out past a dead or slow client, `dismiss`,
-//! `recent` and stop.
+//! `recent.jsonl`, fan-out past a dead or slow client, `attention` for a
+//! waiting session and a finished turn, `dismiss`, `recent` and stop.
 
 #![allow(
     clippy::unwrap_used,
@@ -168,6 +168,18 @@ fn await_true(what: &str, done: impl Fn() -> bool + Send + 'static) {
         tx.send(()).unwrap_or(());
     });
     assert!(rx.recv_timeout(DEADLINE).is_ok(), "waited for {what}");
+}
+
+/// Drops attention listener `id` on a thread and receives its return
+/// under [`DEADLINE`]: joining its writer blocks.
+fn unlisten_within(feed: &Arc<Feed>, id: u64) {
+    let (done_tx, done_rx) = mpsc::channel();
+    let ending = Arc::clone(feed);
+    thread::spawn(move || {
+        ending.attention.unlisten(id);
+        done_tx.send(()).unwrap_or(());
+    });
+    assert!(done_rx.recv_timeout(DEADLINE).is_ok(), "unlisten returns");
 }
 
 fn entry_of(feed: &Feed, id: &str) -> Option<&'static str> {
@@ -834,5 +846,404 @@ fn an_exit_line_from_before_the_follow_is_not_the_followed_runs() {
     let rows = temp.rows();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["how"], "crashed");
+    stop_within(&feed);
+}
+
+/// An attention listener's far end: lines read under [`DEADLINE`].
+struct Heard {
+    id: u64,
+    read: BufReader<UnixStream>,
+}
+
+impl Heard {
+    fn new(feed: &Feed) -> Self {
+        let (a, b) = UnixStream::pair().unwrap();
+        b.set_read_timeout(Some(DEADLINE)).unwrap();
+        let id = feed.attention.listen(Arc::new(Mutex::new(a))).unwrap();
+        Self {
+            id,
+            read: BufReader::new(b),
+        }
+    }
+
+    fn next(&mut self, what: &str) -> Value {
+        let mut text = String::new();
+        self.read
+            .read_line(&mut text)
+            .unwrap_or_else(|_| panic!("never received {what}"));
+        assert!(!text.is_empty(), "attention closed before {what}");
+        serde_json::from_str(&text).unwrap()
+    }
+}
+
+/// A `session_status` payload with `state`: `since` is explicit because
+/// `fake::status` has `since: 1`, before the hub's start, so an `idle`
+/// built from it would never be fresh. `"tool"` runs `"shell"`;
+/// `"waiting"` carries `request_id` and `summary "run <request>"`.
+fn state_of(state: &str, request: &str, since: u64) -> Value {
+    let mut payload = status("n", "/w", "idle", None);
+    let map = payload.as_object_mut().unwrap();
+    map.insert("state".to_owned(), Value::String(state.to_owned()));
+    match state {
+        "tool" => {
+            map.insert("tool".to_owned(), Value::String("shell".to_owned()));
+        }
+        "waiting" => {
+            map.insert(
+                "waiting".to_owned(),
+                json!({
+                    "request_id": request,
+                    "kind": "approval",
+                    "summary": format!("run {request}"),
+                }),
+            );
+        }
+        _ => {}
+    }
+    map.insert("since".to_owned(), Value::Number(since.into()));
+    payload
+}
+
+/// A `turn_completed` log line with `ts`.
+fn turned(ts: u64) -> String {
+    format!("{{\"kind\":\"turn_completed\",\"ts\":{ts}}}\n")
+}
+
+impl Temp {
+    /// Appends one line to session `n`'s `events.jsonl` in `project`.
+    fn log(&self, n: u64, project: &str, line: &str) {
+        let log = recent::session_dir(&self.dir, project, &id(n)).join("events.jsonl");
+        fs::OpenOptions::new()
+            .append(true)
+            .open(log)
+            .unwrap()
+            .write_all(line.as_bytes())
+            .unwrap();
+    }
+}
+
+/// Binds session 1's socket: the feed follows it once started.
+
+#[test]
+fn waiting_then_a_finished_turn_each_send_one_attention() {
+    let temp = Temp::new();
+    let (feed, clock) = new_feed(&temp);
+    temp.session(1, "p", "turn_completed");
+    let heard = Heard::new(&feed);
+    let mut heard = heard;
+    let session = FakeSession::bind(&temp.dir, &id(1));
+    start(&feed, &clock);
+    assert!(session.await_subscribed(1, DEADLINE));
+    let say = |state: &str, request: &str, since: u64| {
+        session.say(&status_line(&id(1), &state_of(state, request, since)));
+    };
+    say("streaming", "r1", WALL + 1);
+    say("waiting", "r1", WALL + 1);
+    say("waiting", "r1", WALL + 2);
+    say("tool", "r1", WALL + 3);
+    say("streaming", "r1", WALL + 4);
+    say("idle", "r1", WALL + 5);
+    say("idle", "r1", WALL + 5);
+    say("waiting", "r2", WALL + 6);
+    let waiting = heard.next("the waiting attention");
+    assert_eq!(waiting["kind"], "attention");
+    assert_eq!(waiting["payload"]["reason"], "waiting");
+    assert_eq!(waiting["payload"]["summary"], "run r1");
+    assert_eq!(waiting["payload"]["session_id"], id(1).as_str());
+    let finished = heard.next("the finished attention");
+    assert_eq!(finished["payload"]["reason"], "finished");
+    assert!(finished["payload"].get("summary").is_none());
+    // The waiting r2 arrives third, so no duplicate finished came first.
+    let again = heard.next("the second waiting attention");
+    assert_eq!(again["payload"]["reason"], "waiting");
+    assert_eq!(again["payload"]["summary"], "run r2");
+    unlisten_within(&feed, heard.id);
+    stop_within(&feed);
+}
+
+#[test]
+fn idle_without_a_turn_sends_nothing() {
+    let temp = Temp::new();
+    let (feed, clock) = new_feed(&temp);
+    temp.session(1, "p", "turn_completed");
+    let mut heard = Heard::new(&feed);
+    let session = FakeSession::bind(&temp.dir, &id(1));
+    start(&feed, &clock);
+    assert!(session.await_subscribed(1, DEADLINE));
+    session.say(&status_line(&id(1), &state_of("idle", "r1", WALL)));
+    let mut renamed = state_of("idle", "r1", WALL);
+    renamed["name"] = json!("n2");
+    session.say(&status_line(&id(1), &renamed));
+    session.say(&status_line(&id(1), &state_of("jobs", "r1", WALL)));
+    session.say(&status_line(&id(1), &state_of("idle", "r1", WALL)));
+    session.say(&status_line(&id(1), &state_of("waiting", "r1", WALL)));
+    // The waiting r1 arrives first, so no idle or jobs line sent one.
+    let waiting = heard.next("the waiting attention");
+    assert_eq!(waiting["payload"]["reason"], "waiting");
+    unlisten_within(&feed, heard.id);
+    stop_within(&feed);
+}
+
+#[test]
+fn a_late_reader_still_sends_one_finished_per_turn() {
+    let temp = Temp::new();
+    let (feed, clock) = new_feed(&temp);
+    temp.session(1, "p", "turn_completed");
+    let session = FakeSession::bind(&temp.dir, &id(1));
+    let say = |state: &str, request: &str, since: u64| {
+        session.say(&status_line(&id(1), &state_of(state, request, since)));
+    };
+    say("streaming", "r1", WALL);
+    say("idle", "r1", WALL + 1);
+    say("streaming", "r1", WALL + 1);
+    say("idle", "r1", WALL + 2);
+    say("waiting", "r1", WALL + 2);
+    let mut heard = Heard::new(&feed);
+    start(&feed, &clock);
+    assert!(session.await_subscribed(1, DEADLINE));
+    assert_eq!(
+        heard.next("the first finished")["payload"]["reason"],
+        "finished"
+    );
+    assert_eq!(
+        heard.next("the second finished")["payload"]["reason"],
+        "finished"
+    );
+    // The waiting r1 arrives third, so each turn sent exactly one.
+    let waiting = heard.next("the waiting attention");
+    assert_eq!(waiting["payload"]["reason"], "waiting");
+    unlisten_within(&feed, heard.id);
+    stop_within(&feed);
+}
+
+#[test]
+fn a_turn_that_ended_before_the_hub_followed_is_announced() {
+    let temp = Temp::new();
+    let (feed, clock) = new_feed(&temp);
+    temp.session(1, "p", "session_started");
+    temp.log(1, "p", &turned(WALL + 5));
+    let mut heard = Heard::new(&feed);
+    let session = FakeSession::bind(&temp.dir, &id(1));
+    start(&feed, &clock);
+    assert!(session.await_subscribed(1, DEADLINE));
+    session.say(&status_line(&id(1), &state_of("idle", "r1", WALL + 5)));
+    let finished = heard.next("the finished attention");
+    assert_eq!(finished["payload"]["reason"], "finished");
+    assert_eq!(finished["payload"]["session_id"], id(1).as_str());
+    unlisten_within(&feed, heard.id);
+    stop_within(&feed);
+}
+
+#[test]
+fn a_turn_that_ended_before_the_hub_started_is_not() {
+    let temp = Temp::new();
+    let (feed, clock) = new_feed(&temp);
+    temp.session(1, "p", "session_started");
+    temp.log(1, "p", &turned(WALL - 1));
+    let mut heard = Heard::new(&feed);
+    let session = FakeSession::bind(&temp.dir, &id(1));
+    start(&feed, &clock);
+    assert!(session.await_subscribed(1, DEADLINE));
+    session.say(&status_line(&id(1), &state_of("idle", "r1", WALL - 1)));
+    session.say(&status_line(&id(1), &state_of("waiting", "r1", WALL)));
+    // The waiting r1 arrives first, so the stale idle sent nothing.
+    let waiting = heard.next("the waiting attention");
+    assert_eq!(waiting["payload"]["reason"], "waiting");
+    unlisten_within(&feed, heard.id);
+    stop_within(&feed);
+}
+
+#[test]
+fn a_delegate_never_sends_attention() {
+    let temp = Temp::new();
+    let (feed, clock) = new_feed(&temp);
+    temp.session(9, "p", "session_started");
+    temp.log(9, "p", &turned(WALL + 5));
+    temp.session(1, "p", "turn_completed");
+    let mut heard = Heard::new(&feed);
+    let delegate = FakeSession::bind(&temp.dir, &id(9));
+    let mut idle = state_of("idle", "r1", WALL + 5);
+    idle["parent"] = json!(id(1));
+    delegate.say(&status_line(&id(9), &idle));
+    let top = FakeSession::bind(&temp.dir, &id(1));
+    start(&feed, &clock);
+    assert!(top.await_subscribed(1, DEADLINE));
+    let marked = Arc::clone(&feed);
+    await_true("the delegate to be marked", move || {
+        lock(&marked.state).delegates.contains(&id(9))
+    });
+    top.say(&status_line(&id(1), &state_of("waiting", "r1", WALL)));
+    // The top-level waiting arrives first, so the delegate sent nothing.
+    let waiting = heard.next("the waiting attention");
+    assert_eq!(waiting["payload"]["session_id"], id(1).as_str());
+    assert_eq!(waiting["payload"]["reason"], "waiting");
+    unlisten_within(&feed, heard.id);
+    stop_within(&feed);
+}
+
+#[test]
+fn a_resumed_session_raising_its_request_again_is_not_announced_but_its_turn_end_is() {
+    let temp = Temp::new();
+    let (feed, clock) = new_feed(&temp);
+    temp.session(1, "p", "fiber_exited");
+    let mut heard = Heard::new(&feed);
+    let session = FakeSession::bind(&temp.dir, &id(1));
+    start(&feed, &clock);
+    assert!(session.await_subscribed(1, DEADLINE));
+    session.say(&status_line(&id(1), &state_of("waiting", "r1", WALL)));
+    assert_eq!(
+        heard.next("the waiting attention")["payload"]["reason"],
+        "waiting"
+    );
+    session.close();
+    let back = session.resumed(&temp.dir, &id(1));
+    back.say(&status_line(&id(1), &state_of("waiting", "r1", WALL)));
+    back.say(&status_line(&id(1), &state_of("streaming", "r1", WALL + 8)));
+    back.say(&status_line(&id(1), &state_of("idle", "r1", WALL + 9)));
+    let dropped = Arc::clone(&feed);
+    await_true("the hub to drop the old run", move || {
+        entry_of(&dropped, &id(1)) != Some("running")
+    });
+    clock.advance(RUN_SCAN);
+    await_scanner(&clock);
+    // The finished arrives next, so the repeated waiting r1 sent nothing.
+    let finished = heard.next("the finished attention");
+    assert_eq!(finished["payload"]["reason"], "finished");
+    unlisten_within(&feed, heard.id);
+    stop_within(&feed);
+}
+
+#[test]
+fn a_resumed_run_that_starts_idle_is_not_announced() {
+    let temp = Temp::new();
+    temp.session(1, "p", "turn_completed");
+    temp.append(&row(1, "p", "crashed", Some("streaming")));
+    let (feed, clock) = new_feed(&temp);
+    let mut heard = Heard::new(&feed);
+    let session = FakeSession::bind(&temp.dir, &id(1));
+    session.say(&status_line(&id(1), &state_of("idle", "r1", WALL + 7)));
+    session.say(&status_line(&id(1), &state_of("waiting", "r1", WALL + 7)));
+    start(&feed, &clock);
+    clock.advance(RUN_SCAN);
+    assert!(session.await_subscribed(1, DEADLINE));
+    // The waiting r1 arrives first, so the idle without a turn sent nothing.
+    let waiting = heard.next("the waiting attention");
+    assert_eq!(waiting["payload"]["reason"], "waiting");
+    unlisten_within(&feed, heard.id);
+    stop_within(&feed);
+}
+
+#[test]
+fn a_listener_added_later_gets_no_replay() {
+    let temp = Temp::new();
+    let (feed, clock) = new_feed(&temp);
+    temp.session(1, "p", "turn_completed");
+    let mut first = Heard::new(&feed);
+    let session = FakeSession::bind(&temp.dir, &id(1));
+    start(&feed, &clock);
+    assert!(session.await_subscribed(1, DEADLINE));
+    session.say(&status_line(&id(1), &state_of("waiting", "r1", WALL)));
+    assert_eq!(
+        first.next("the waiting attention")["payload"]["reason"],
+        "waiting"
+    );
+    let mut second = Heard::new(&feed);
+    session.say(&status_line(&id(1), &state_of("idle", "r1", WALL + 1)));
+    // Each listener's next line is the finished: nothing was replayed.
+    assert_eq!(
+        second.next("the finished attention")["payload"]["reason"],
+        "finished"
+    );
+    assert_eq!(
+        first.next("the finished attention")["payload"]["reason"],
+        "finished"
+    );
+    unlisten_within(&feed, first.id);
+    unlisten_within(&feed, second.id);
+    stop_within(&feed);
+}
+
+#[test]
+fn older_lines_after_a_snapshot_are_not_announced_twice() {
+    let temp = Temp::new();
+    let (feed, clock) = new_feed(&temp);
+    temp.session(1, "p", "session_started");
+    temp.log(1, "p", &turned(WALL + 5));
+    let session = FakeSession::bind(&temp.dir, &id(1));
+    let say = |state: &str, request: &str, since: u64| {
+        session.say(&status_line(&id(1), &state_of(state, request, since)));
+    };
+    say("idle", "r1", WALL + 5);
+    say("streaming", "r1", WALL + 5);
+    say("idle", "r1", WALL + 5);
+    say("waiting", "r1", WALL + 5);
+    say("streaming", "r1", WALL + 5);
+    say("waiting", "r1", WALL + 5);
+    say("waiting", "r2", WALL + 5);
+    let mut heard = Heard::new(&feed);
+    start(&feed, &clock);
+    assert!(session.await_subscribed(1, DEADLINE));
+    assert_eq!(
+        heard.next("the finished attention")["payload"]["reason"],
+        "finished"
+    );
+    let waiting = heard.next("the waiting attention");
+    assert_eq!(waiting["payload"]["summary"], "run r1");
+    // The waiting r2 arrives third, so neither line was announced twice.
+    let again = heard.next("the second waiting attention");
+    assert_eq!(again["payload"]["summary"], "run r2");
+    unlisten_within(&feed, heard.id);
+    stop_within(&feed);
+}
+
+#[test]
+fn a_resume_that_starts_idle_does_not_announce_a_turn_again() {
+    let temp = Temp::new();
+    let (feed, clock) = new_feed(&temp);
+    temp.session(1, "p", "session_started");
+    temp.log(1, "p", &turned(WALL + 5));
+    let mut heard = Heard::new(&feed);
+    let session = FakeSession::bind(&temp.dir, &id(1));
+    start(&feed, &clock);
+    assert!(session.await_subscribed(1, DEADLINE));
+    session.say(&status_line(&id(1), &state_of("streaming", "r1", WALL)));
+    session.say(&status_line(&id(1), &state_of("idle", "r1", WALL + 5)));
+    assert_eq!(
+        heard.next("the finished attention")["payload"]["reason"],
+        "finished"
+    );
+    temp.log(1, "p", "{\"kind\":\"fiber_exited\"}\n");
+    session.close();
+    let back = session.resumed(&temp.dir, &id(1));
+    back.say(&status_line(&id(1), &state_of("idle", "r1", WALL + 5)));
+    back.say(&status_line(&id(1), &state_of("waiting", "r1", WALL + 5)));
+    let dropped = Arc::clone(&feed);
+    await_true("the hub to drop the old run", move || {
+        entry_of(&dropped, &id(1)) != Some("running")
+    });
+    clock.advance(RUN_SCAN);
+    await_scanner(&clock);
+    // The waiting r1 arrives next, so the repeated idle sent nothing.
+    let waiting = heard.next("the waiting attention");
+    assert_eq!(waiting["payload"]["reason"], "waiting");
+    unlisten_within(&feed, heard.id);
+    stop_within(&feed);
+}
+
+#[test]
+fn a_feed_subscriber_alone_gets_no_attention() {
+    let temp = Temp::new();
+    let (feed, clock) = new_feed(&temp);
+    temp.session(1, "p", "turn_completed");
+    let session = FakeSession::bind(&temp.dir, &id(1));
+    let mut sub = Sub::new(&feed);
+    start(&feed, &clock);
+    assert!(session.await_subscribed(1, DEADLINE));
+    let streaming = status_line(&id(1), &state_of("streaming", "r1", WALL));
+    let waiting = status_line(&id(1), &state_of("waiting", "r1", WALL));
+    session.say(&streaming);
+    session.say(&waiting);
+    assert_eq!(sub.raw("the streaming status"), streaming);
+    assert_eq!(sub.raw("the waiting status"), waiting);
     stop_within(&feed);
 }

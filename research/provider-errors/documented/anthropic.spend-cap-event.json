@@ -1,0 +1,6 @@
+{
+  "case": "anthropic.spend-cap-event",
+  "source": "https://platform.claude.com/docs/en/build-with-claude/streaming",
+  "raw_sse": "data: {\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":\"You have reached your API usage limits.\",\"details\":{\"error_code\":\"enforced_spend_limit_reached\"}}}\n\n",
+  "note": "Applied to A2. Type, error_code and the absence of retry-after are documented; message is illustrative."
+}

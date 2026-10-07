@@ -652,17 +652,17 @@ impl Loop {
                 None => return Ok(false),
             },
         };
-        let (tool, declared) = match &call.state {
-            State::Running { tool, declared, .. } => (Some(tool.clone()), Some(declared.clone())),
-            State::Ready(_) | State::Done => (None, None),
+        let declared = match &call.state {
+            State::Running { declared, .. } => Some(declared.clone()),
+            State::Ready(_) | State::Done => None,
         };
-        // An over-budget section a completed `write` or `edit` touched
-        // ends its result with the prune line, before the line is
+        // An over-budget section a completed call that declared a write
+        // touched ends its result with the prune line, before the line is
         // written; the session's own edits below come after it.
-        if let (Some(tool), Some(declared)) = (tool.as_deref(), declared.as_ref())
+        if let Some(declared) = declared.as_ref()
             && completed.status == CallStatus::Completed
         {
-            for line in self.changes.prune_lines(&self.workspace, tool, declared) {
+            for line in self.changes.prune_lines(&self.workspace, declared) {
                 completed.content.push(ContentPart::Text { text: line });
             }
         }

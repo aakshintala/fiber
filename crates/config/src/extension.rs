@@ -239,7 +239,6 @@ impl Protocol {
                 "tools",
                 "tool_choice",
                 "stream",
-                "cache_control",
             ],
             Self::OpenaiCompletions => &["model", "messages", "tools", "tool_choice", "stream"],
             Self::OpenaiResponses => &[

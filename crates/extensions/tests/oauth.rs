@@ -395,9 +395,14 @@ fn callback_with_an_invalid_escape_is_a_lua_error_and_the_client_gets_a_400() {
     let ext = env.extension();
     let port = free_port();
     let rx = listening(&env, &ext, port);
-    let reply = get(port, "GET /?code=%zz HTTP/1.1\r\n\r\n");
+    let reply = get(port, "GET /?code=SECRETCODE%zz HTTP/1.1\r\n\r\n");
     assert!(reply.starts_with("HTTP/1.1 400"), "{reply}");
-    assert!(lua_message(&finish(&rx).unwrap_err()).contains("invalid % escape"));
+    let message = lua_message(&finish(&rx).unwrap_err());
+    assert!(
+        message.contains("the `code` parameter's value"),
+        "{message}"
+    );
+    assert!(!message.contains("SECRETCODE"), "{message}");
 }
 
 #[test]

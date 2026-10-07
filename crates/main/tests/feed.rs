@@ -1,7 +1,9 @@
 //! Binary-level tests of `recent.jsonl` and the hub's feed
 //! (`docs/invocation.md`, "The hub"; `docs/state.md`, "Recently exited
 //! sessions"): every session appends its own row as it exits, and the hub
-//! serves `feed` and `recent` across projects.
+//! serves `feed` and `recent` across projects. A client that never sends
+//! `feed` still hears `attention` when a session needs the person
+//! (`docs/invocation.md`, "Attention").
 
 #![allow(
     clippy::unwrap_used,
@@ -166,7 +168,7 @@ fn client(setup: &Setup) -> Socket {
 /// Subscribes `client` to the feed.
 fn feed(client: &Socket) {
     client.send(r#"{"id":"c_feed","command":"feed"}"#);
-    let ack = recv(client, "the feed acknowledgement");
+    let ack = recv_reply(client, "the feed acknowledgement");
     assert_eq!(ack["kind"], "command_accepted", "{ack}");
     assert_eq!(ack["payload"]["command_id"], "c_feed");
 }
@@ -174,7 +176,7 @@ fn feed(client: &Socket) {
 /// The session ids `recent` lists with `args`.
 fn recent(client: &Socket, args: &Value) -> Vec<String> {
     client.send(&json!({"id": "c_recent", "command": "recent", "args": args}).to_string());
-    let ack = recv(client, "the recent answer");
+    let ack = recv_reply(client, "the recent answer");
     assert_eq!(ack["kind"], "command_accepted", "{ack}");
     ack["payload"]["result"]["sessions"]
         .as_array()
@@ -308,10 +310,13 @@ fn the_feed_shows_sessions_across_projects_and_recent_lists_the_exited() {
     let fresh = client(&setup);
     feed(&fresh);
     let snapshot = until(&fresh, "the second session's status", |line| {
-        line["session_id"] == b.as_str()
+        line["kind"] != "attention" && line["session_id"] == b.as_str()
     });
     assert!(
-        snapshot.iter().all(|line| line["kind"] == "session_status"),
+        snapshot
+            .iter()
+            .filter(|line| line["kind"] != "attention")
+            .all(|line| line["kind"] == "session_status"),
         "{snapshot:?}"
     );
     let first_key = project_key(&setup.home(), &first);
@@ -456,4 +461,92 @@ fn a_killed_session_whose_listener_outlives_its_summary_connection_is_crashed() 
     let hub = hub.lock().unwrap().take().expect("the starter ran");
     hub.kill("TERM");
     hub.wait();
+}
+
+#[test]
+fn attention_reaches_a_client_without_a_feed_for_a_standing_ask_and_a_finished_turn() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([
+        stream(&[json!({
+            "type": "response.output_item.done",
+            "item": {"type": "function_call", "id": "fc_call_1", "call_id": "call_1",
+                "name": "shell",
+                "arguments": json!({"command": "echo hi"}).to_string()}
+        })]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    // A standing ask: the session waits on the person.
+    fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n",
+            json!({"decision": "ask", "tool": "shell", "prefix": "echo hi"})
+        ),
+    )
+    .unwrap();
+    let hub = std::sync::Arc::new(std::sync::Mutex::new(None));
+    // `watch` never sends a command: it hears only attention.
+    let (watch, _) = connect_hub(&setup, &hub);
+    let workspace = setup.workspace().to_string_lossy().into_owned();
+    let guard = SessionGuard::arm(&workspace);
+    let control = client(&setup);
+    let id = start_session(&control, &workspace, "run it");
+    // The waiting attention is the watcher's first line.
+    let waiting = until(&watch, "the waiting attention", |line| {
+        line["kind"] == "attention"
+    });
+    assert_eq!(waiting.len(), 1, "{waiting:?}");
+    let waiting = &waiting[0];
+    assert_eq!(waiting["kind"], "attention");
+    assert_eq!(waiting["schema_version"], 1);
+    assert!(waiting["ts"].as_u64().unwrap() > 0);
+    assert!(waiting.get("session_id").is_none());
+    assert_eq!(waiting["payload"]["session_id"], id.as_str());
+    assert_eq!(waiting["payload"]["reason"], "waiting");
+    assert_eq!(waiting["payload"]["summary"], "shell");
+    assert_eq!(waiting["payload"]["name"], "run it");
+    let canonical = fs::canonicalize(setup.workspace()).unwrap();
+    assert_eq!(
+        fs::canonicalize(waiting["payload"]["workspace"].as_str().unwrap()).unwrap(),
+        canonical
+    );
+    // Allowing the pending approval runs the turn to its end.
+    subscribe(&control, &id);
+    let asked = until(&control, "permission_requested", |line| {
+        line["kind"] == "permission_requested"
+    });
+    let request = asked.last().unwrap()["payload"]["request_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    control.send(&format!(
+        "{{\"id\":\"c_reply\",\"session_id\":\"{id}\",\"command\":\"reply\",\"args\":{{\"request_id\":\"{request}\",\"decision\":\"allow\"}}}}"
+    ));
+    until(&control, "turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    // The finished attention is the watcher's next line.
+    let finished = until(&watch, "the finished attention", |line| {
+        line["kind"] == "attention"
+    });
+    assert_eq!(finished.len(), 1, "{finished:?}");
+    let finished = &finished[0];
+    assert_eq!(finished["payload"]["reason"], "finished");
+    assert_eq!(finished["payload"]["session_id"], id.as_str());
+    assert_eq!(finished["payload"]["name"], "run it");
+    assert_eq!(
+        fs::canonicalize(finished["payload"]["workspace"].as_str().unwrap()).unwrap(),
+        canonical
+    );
+    assert!(finished["payload"].get("summary").is_none());
+    // No third line: the watcher's stream held exactly the pair.
+    close_session(&Socket::connect(&setup.session_socket(&id)));
+    guard.wait_gone();
+    let hub = hub.lock().unwrap().take().expect("the starter ran");
+    hub.kill("TERM");
+    hub.wait();
+    assert!(until_close(&watch).is_empty());
+    drop(control);
 }

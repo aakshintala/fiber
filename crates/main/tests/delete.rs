@@ -45,15 +45,19 @@ fn project(setup: &Setup) -> PathBuf {
 }
 
 /// Session `id` in the workspace's project, continuing `from`: its log,
-/// an artifact and an unheld lock file.
+/// an artifact and an unheld lock file. The first line starts the session
+/// in this workspace, so `resolve` keeps it.
 fn session(setup: &Setup, id: &str, from: Option<&str>) -> PathBuf {
     let dir = project(setup).join("sessions").join(id);
     fs::create_dir_all(dir.join("artifacts")).unwrap();
-    let mut payload = json!({"workspace": setup.workspace()});
+    let workspace = fs::canonicalize(setup.workspace()).unwrap();
+    let mut payload = json!({"workspace": workspace,
+        "variables": {"path": "/usr/bin", "names": [], "source": "inherited"}});
     if let Some(from) = from {
         payload["forked_from"] = json!({"session_id": from, "seq": 1});
     }
-    let first = json!({"kind": "session_started", "seq": 0, "session_id": id, "payload": payload});
+    let first = json!({"kind": "session_started", "session_id": id, "ts": 0,
+        "schema_version": 1, "seq": 0, "payload": payload});
     fs::write(dir.join("events.jsonl"), format!("{first}\n")).unwrap();
     fs::write(dir.join("artifacts/a_1.txt"), b"bytes").unwrap();
     fs::write(dir.join("session.lock"), b"").unwrap();

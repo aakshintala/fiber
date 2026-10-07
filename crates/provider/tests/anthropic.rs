@@ -893,7 +893,11 @@ fn an_error_event_mid_stream_fails_the_call_and_drops_what_it_streamed() {
     assert_eq!(failure.code, ErrorCode::ProviderUnavailable);
     let said = failure.provider.unwrap();
     assert_eq!(
-        (said.name.as_str(), said.status, said.message.as_str()),
+        (
+            said.name.as_str(),
+            said.status.unwrap(),
+            said.message.as_str()
+        ),
         ("anthropic", 200, "Overloaded")
     );
     assert_eq!(
@@ -2061,4 +2065,25 @@ fn thinking_levels_map_to_adaptive_thinking_and_effort() {
     let xhigh = sent_body(&server, 3);
     assert_eq!(xhigh["thinking"], json!({"type": "adaptive"}));
     assert_eq!(xhigh["output_config"], json!({"effort": "xhigh"}));
+}
+
+#[test]
+fn the_cache_key_goes_in_the_declared_header_and_nowhere_else_without_one() {
+    let server = ProviderServer::start([completed_reply(), completed_reply()]).unwrap();
+    let endpoint = endpoint(&server);
+    run(Box::new(
+        Messages::new(endpoint.clone()).request(&request()),
+    ))
+    .0
+    .unwrap();
+    run(Box::new(
+        Messages::new(endpoint)
+            .cache_key_header("x-opencode-session")
+            .request(&request()),
+    ))
+    .0
+    .unwrap();
+    let sent = server.requests();
+    assert_eq!(sent[0].header("x-opencode-session"), None);
+    assert_eq!(sent[1].header("x-opencode-session"), Some("session_1"));
 }

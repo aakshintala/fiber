@@ -1247,6 +1247,31 @@ fn a_failed_turn_says_why_then_closes() {
 }
 
 #[test]
+fn a_failure_without_a_status_shows_what_the_provider_said() {
+    let mut app = app();
+    start(&mut app, "go", 0);
+    feed(
+        &mut app,
+        "turn_completed",
+        None,
+        0,
+        json!({"outcome": "failed", "error": {"code": "credential_failed",
+            "message": "acme's credential() failed. Run `fiber login acme`.",
+            "provider": {"name": "acme", "message": "init.lua:3: boom"}}}),
+    );
+    let lines = texts(&app);
+    assert_eq!(
+        lines[1..],
+        [
+            "✗ acme's credential() failed. Run `fiber login acme`. · credential_failed",
+            "acme said: “init.lua:3: boom”",
+            "▣ failed",
+        ]
+    );
+    assert!(dim(&styled(&app, "acme said: “init.lua:3: boom”")));
+}
+
+#[test]
 fn a_failed_login_offers_log_in_on_its_error_line() {
     let mut app = app();
     start(&mut app, "go", 0);

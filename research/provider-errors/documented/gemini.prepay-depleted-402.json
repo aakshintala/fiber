@@ -1,0 +1,8 @@
+{
+  "case": "gemini.prepay-depleted-402",
+  "source": "https://ai.google.dev/gemini-api/docs/billing",
+  "status": 402,
+  "headers": {},
+  "body": "{\"error\":{\"code\":402,\"message\":\"Your prepayment credits are depleted. Add credits to resume API use.\",\"status\":\"PAYMENT_REQUIRED\"}}",
+  "note": "Status 402 on depleted Prepay credits is documented; the message is illustrative."
+}

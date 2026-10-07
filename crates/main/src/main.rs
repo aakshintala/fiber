@@ -103,6 +103,7 @@ fn main() -> ExitCode {
 }
 
 fn run() -> i32 {
+    let fiber = std::env::current_exe().map_err(|error| format!("the running binary: {error}"));
     // Help and version print before anything reads the home, configuration,
     // credentials, or stdin.
     let clock: Arc<dyn contract::clock::Clock> = Arc::new(clock::System);
@@ -128,7 +129,7 @@ fn run() -> i32 {
         }
         // `fiber` with no arguments opens the terminal: this tty as a
         // client of the hub, starting one when none runs.
-        cli::Invocation::Run(None) => terminal(),
+        cli::Invocation::Run(None) => terminal(fiber),
         cli::Invocation::Usage {
             ask: true,
             sentence,
@@ -142,17 +143,17 @@ fn run() -> i32 {
         }
         cli::Invocation::Run(Some(cli::Commands::Ask(args))) => {
             match cli::ask_parts(&args.prompt) {
-                Ok((prompt, dash)) => ask(args.model, args.resume, prompt, dash, clock),
+                Ok((prompt, dash)) => ask(args.model, args.resume, prompt, dash, clock, fiber),
                 Err(sentence) => ask_failed(usage(sentence)),
             }
         }
         cli::Invocation::Run(Some(cli::Commands::Session(args))) => {
-            session_command::run(args, clock)
+            session_command::run(args, clock, fiber)
         }
-        cli::Invocation::Run(Some(cli::Commands::Hub(command))) => hub_command::run(command),
+        cli::Invocation::Run(Some(cli::Commands::Hub(command))) => hub_command::run(command, fiber),
         cli::Invocation::Run(Some(cli::Commands::Sessions(cmd))) => match cmd {
             cli::SessionsCommands::Delete { cascade, yes, id } => {
-                sessions_delete(&id, cascade, yes, clock.as_ref())
+                sessions_delete(&id, cascade, yes, clock.as_ref(), fiber)
             }
             cli::SessionsCommands::Export { id, path } => ::cli::export(&id, path.as_deref()),
         },
@@ -161,6 +162,7 @@ fn run() -> i32 {
             args.json,
             clock,
             Arc::new(tools::PathLocks::new()),
+            fiber,
         ),
         cli::Invocation::Run(Some(cli::Commands::RefreshModelLists { providers })) => {
             ::cli::refresh_model_lists(&providers, clock, Arc::new(tools::PathLocks::new()));
@@ -236,6 +238,7 @@ fn ask(
     arg: Option<String>,
     dash: bool,
     clock: Arc<dyn contract::clock::Clock>,
+    fiber: Result<PathBuf, String>,
 ) -> i32 {
     // First: a signal while the prompt is read exits at once
     // (`docs/invocation.md`, "Shutdown").
@@ -250,8 +253,8 @@ fn ask(
         Err(e) => return ask_failed(e),
     };
     match resume {
-        Some(selector) => resume::ask_resume(selector, model, prompt, clock, &signals),
-        None => ask_new(model, prompt, clock, &signals),
+        Some(selector) => resume::ask_resume(selector, model, prompt, clock, &signals, fiber),
+        None => ask_new(model, prompt, clock, &signals, fiber),
     }
 }
 
@@ -261,6 +264,7 @@ fn ask_new(
     prompt: String,
     clock: Arc<dyn contract::clock::Clock>,
     signals: &doors::Signals,
+    fiber: Result<PathBuf, String>,
 ) -> i32 {
     session_command::new_session(
         SessionId(doors::mint("s_")),
@@ -269,6 +273,7 @@ fn ask_new(
         true,
         clock,
         signals,
+        fiber,
     )
 }
 
@@ -602,7 +607,7 @@ fn choose_reviewer(
 /// (`docs/invocation.md`, "Two doors"). Without a tty it is a usage error
 /// naming `fiber ask`. The hub it starts listens on its local socket only
 /// and is never waited on.
-fn terminal() -> i32 {
+fn terminal(fiber: Result<PathBuf, String>) -> i32 {
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         eprintln!(
             "fiber: The terminal needs a tty; run `fiber ask \"<prompt>\"`. Run `fiber --help` for usage."
@@ -644,8 +649,10 @@ fn terminal() -> i32 {
         Err(e) => return fail(failed(ErrorCode::IoFailed, format!("the terminal: {e}"))),
     };
     let hub_clock = Arc::clone(&clock);
-    let connect: tui::Connect =
-        Box::new(move || doors::hub::connect(&home, &mut start_hub, hub_clock.as_ref()));
+    let connect: tui::Connect = Box::new(move || {
+        let mut start = || start_hub(fiber.clone());
+        doors::hub::connect(&home, &mut start, hub_clock.as_ref())
+    });
     let project = log::project_key(&doors::project(&workspace));
     tui::run(
         tty,
@@ -660,8 +667,8 @@ fn terminal() -> i32 {
 
 /// Starts `fiber hub serve` detached, as every client of the hub does when
 /// none is running (`docs/invocation.md`, "The hub").
-fn start_hub() -> io::Result<()> {
-    let exe = std::env::current_exe()?;
+fn start_hub(exe: Result<PathBuf, String>) -> io::Result<()> {
+    let exe = exe.map_err(io::Error::other)?;
     std::process::Command::new(exe)
         .arg("hub")
         .arg("serve")
@@ -674,10 +681,17 @@ fn start_hub() -> io::Result<()> {
 }
 
 /// `fiber sessions delete`: the hub it reaches is started when none runs.
-fn sessions_delete(id: &str, cascade: bool, yes: bool, clock: &dyn contract::clock::Clock) -> i32 {
+fn sessions_delete(
+    id: &str,
+    cascade: bool,
+    yes: bool,
+    clock: &dyn contract::clock::Clock,
+    fiber: Result<PathBuf, String>,
+) -> i32 {
     let mut connect = || {
         let home = config::fiber_home_from_env().map_err(io::Error::other)?;
-        doors::hub::connect(&home, &mut start_hub, clock)
+        let mut start = || start_hub(fiber.clone());
+        doors::hub::connect(&home, &mut start, clock)
     };
     ::cli::delete(id, cascade, yes, &mut connect)
 }

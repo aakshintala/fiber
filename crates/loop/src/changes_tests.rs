@@ -2120,9 +2120,21 @@ fn budgeted(home: &Path, name: &str, content: &str, budget: Option<u64>) -> (Pat
     (path.clone(), vec![(name.into(), vec![path], budget)])
 }
 
-/// The prune lines a `tool` call declaring `paths` gets.
-fn pruned(state: &State, workspace: &Path, tool: &str, paths: Option<&[&str]>) -> Vec<String> {
-    state.prune_lines(workspace, tool, &declared(paths))
+/// The prune lines a call declaring `effects` over `paths` gets.
+fn pruned_with(
+    state: &State,
+    workspace: &Path,
+    effects: Vec<Effect>,
+    paths: &[&str],
+) -> Vec<String> {
+    let mut call = declared(Some(paths));
+    call.effects = effects;
+    state.prune_lines(workspace, &call)
+}
+
+/// The prune lines a write declaring `paths` gets.
+fn pruned(state: &State, workspace: &Path, paths: Option<&[&str]>) -> Vec<String> {
+    state.prune_lines(workspace, &declared(paths))
 }
 
 #[test]
@@ -2139,7 +2151,7 @@ fn prune_line_write_over_budget() {
     let state = initial_sectioned(&home, &workspace, &fake, sections);
     let key = first.display().to_string();
     assert_eq!(
-        pruned(&state, &workspace, "write", Some(&[key.as_str()])),
+        pruned(&state, &workspace, Some(&[key.as_str()])),
         vec![
             "Fiber: these files are 6 bytes, over their budget of 5 bytes. Prune them.".to_owned()
         ]
@@ -2156,7 +2168,7 @@ fn prune_line_edit_over_budget() {
     let state = initial_sectioned(&home, &workspace, &fake, sections);
     let key = path.display().to_string();
     assert_eq!(
-        pruned(&state, &workspace, "edit", Some(&[key.as_str()])),
+        pruned(&state, &workspace, Some(&[key.as_str()])),
         vec![
             "Fiber: these files are 6 bytes, over their budget of 5 bytes. Prune them.".to_owned()
         ]
@@ -2173,12 +2185,12 @@ fn prune_line_at_or_under_budget_is_none() {
     let fake = clock();
     let state = initial_sectioned(&home, &workspace, &fake, sections);
     let key = path.display().to_string();
-    assert!(pruned(&state, &workspace, "write", Some(&[key.as_str()])).is_empty());
+    assert!(pruned(&state, &workspace, Some(&[key.as_str()])).is_empty());
     // Under budget: silence too.
     let (path, sections) = budgeted(&home, "fiber.test/notes", "12", Some(5));
     let state = initial_sectioned(&home, &workspace, &fake, sections);
     let key = path.display().to_string();
-    assert!(pruned(&state, &workspace, "write", Some(&[key.as_str()])).is_empty());
+    assert!(pruned(&state, &workspace, Some(&[key.as_str()])).is_empty());
 }
 
 #[test]
@@ -2190,7 +2202,7 @@ fn prune_line_without_a_budget_is_none() {
     let fake = clock();
     let state = initial_sectioned(&home, &workspace, &fake, sections);
     let key = path.display().to_string();
-    assert!(pruned(&state, &workspace, "write", Some(&[key.as_str()])).is_empty());
+    assert!(pruned(&state, &workspace, Some(&[key.as_str()])).is_empty());
 }
 
 #[test]
@@ -2202,8 +2214,8 @@ fn prune_line_shell_call_over_budget_is_none() {
     let fake = clock();
     let state = initial_sectioned(&home, &workspace, &fake, sections);
     let key = path.display().to_string();
-    // A shell edit is never seen when it happens.
-    assert!(pruned(&state, &workspace, "bash", Some(&[key.as_str()])).is_empty());
+    // A shell edit is never seen when it happens: it declares no write.
+    assert!(pruned_with(&state, &workspace, vec![Effect::Executes], &[key.as_str()]).is_empty());
 }
 
 #[test]
@@ -2214,8 +2226,8 @@ fn prune_line_call_touching_no_section_file_is_none() {
     let (_path, sections) = budgeted(&home, "fiber.test/notes", "123456", Some(5));
     let fake = clock();
     let state = initial_sectioned(&home, &workspace, &fake, sections);
-    assert!(pruned(&state, &workspace, "write", Some(&["other.txt"])).is_empty());
-    assert!(pruned(&state, &workspace, "write", None).is_empty());
+    assert!(pruned(&state, &workspace, Some(&["other.txt"])).is_empty());
+    assert!(pruned(&state, &workspace, None).is_empty());
 }
 
 #[test]
@@ -2233,7 +2245,6 @@ fn prune_lines_two_over_budget_sections_come_in_name_order() {
     let lines = pruned(
         &state,
         &workspace,
-        "write",
         Some(&[
             beta.display().to_string().as_str(),
             alpha.display().to_string().as_str(),
@@ -2246,4 +2257,35 @@ fn prune_lines_two_over_budget_sections_come_in_name_order() {
             "Fiber: these files are 8 bytes, over their budget of 7 bytes. Prune them.".to_owned(),
         ]
     );
+}
+
+#[test]
+fn prune_line_follows_a_declared_write_not_the_tool_name() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let (path, sections) = budgeted(&home, "fiber.test/notes", "123456", Some(5));
+    let fake = clock();
+    let state = initial_sectioned(&home, &workspace, &fake, sections);
+    let key = path.display().to_string();
+    let line = "Fiber: these files are 6 bytes, over their budget of 5 bytes. Prune them.";
+    let keys = [key.as_str()];
+    // A tool of any name that declares `writes` gets the line.
+    assert_eq!(
+        pruned_with(&state, &workspace, vec![Effect::Writes], &keys),
+        vec![line.to_owned()]
+    );
+    // Writes among other effects still counts.
+    assert_eq!(
+        pruned_with(
+            &state,
+            &workspace,
+            vec![Effect::Reads, Effect::Writes],
+            &keys
+        ),
+        vec![line.to_owned()]
+    );
+    // A tool named `write` that declares only a read gets none.
+    assert!(pruned_with(&state, &workspace, vec![Effect::Reads], &keys).is_empty());
+    assert!(pruned_with(&state, &workspace, Vec::new(), &keys).is_empty());
 }

@@ -1,0 +1,8 @@
+{
+  "case": "anthropic.spend-limit-400",
+  "source": "https://platform.claude.com/docs/en/api/rate-limits#setting-your-own-spend-limit",
+  "status": 400,
+  "headers": {},
+  "body": "{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"You have reached your specified API usage limits. To increase your limits, visit Anthropic Console.\"}}",
+  "note": "Message beyond the documented prefix 'You have reached your specified API usage limits' is illustrative; status 400 and type invalid_request_error are documented."
+}

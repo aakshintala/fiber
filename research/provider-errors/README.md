@@ -191,6 +191,8 @@ Recorded so a decoder can tell a complete stream from a truncated one:
   triggered. Their shapes are not known from this probe.
 - No stream failed partway through generation. The only error after HTTP 200
   came before any content.
+- Quota and billing error shapes were not triggered either. The shapes vendors
+  document, with one fixture each, are in `quota.md`.
 - Anthropic and OpenAI were reached only through OpenRouter, never directly.
   The Anthropic and OpenAI bodies seen are the ones inside `metadata.raw`.
 - `openai-codex-responses` and `google-generative-ai` were not probed; no key

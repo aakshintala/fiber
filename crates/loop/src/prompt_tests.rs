@@ -279,3 +279,56 @@ fn section_strips_blank_lines_at_its_ends() {
 fn missing_section_is_empty() {
     assert_eq!(section("## a\nbody\n", "b"), "");
 }
+
+fn sent(name: &str, by: &str, deferred: bool, pad: usize) -> contract::events::SentTool {
+    let mut definition = serde_json::Map::new();
+    definition.insert("pad".into(), "x".repeat(pad).into());
+    contract::events::SentTool {
+        name: name.into(),
+        registered_by: by.into(),
+        deferred,
+        definition,
+    }
+}
+
+fn built(window: u64, tools: Vec<contract::events::SentTool>) -> contract::events::PreambleBuilt {
+    contract::events::PreambleBuilt {
+        reason: contract::events::PreambleReason::Start,
+        model: "m".into(),
+        context_window: window,
+        trigger_at: None,
+        thinking: None,
+        tool_choice: "auto".into(),
+        cache_lifetime: contract::events::CacheLifetime::OneHour,
+        credential: None,
+        system_prompt: String::new(),
+        tools,
+        replaced: Vec::new(),
+    }
+}
+
+#[test]
+fn definitions_notice_names_the_three_largest_sources_by_size() {
+    // Each definition is its pad plus 10 bytes of JSON: {"pad":"..."}.
+    let tools = vec![
+        sent("a", "small", false, 10),
+        sent("b", "big", false, 300),
+        sent("c", "mid", false, 100),
+        sent("d", "smaller", false, 20),
+    ];
+    let notice = super::definitions_notice(&built(100, tools)).unwrap();
+    let text = notice.message;
+    let big = text.find("big (310 bytes)").unwrap();
+    let mid = text.find("mid (110 bytes)").unwrap();
+    let smaller = text.find("smaller (30 bytes)").unwrap();
+    assert!(big < mid && mid < smaller, "{text}");
+    assert!(!text.contains("small ("), "{text}");
+}
+
+#[test]
+fn definitions_notice_ignores_deferred_tools_and_an_unknown_window() {
+    let deferred = vec![sent("a", "mcp__s", true, 10_000)];
+    assert!(super::definitions_notice(&built(100, deferred)).is_none());
+    let full = vec![sent("a", "builtin", false, 10_000)];
+    assert!(super::definitions_notice(&built(0, full)).is_none());
+}

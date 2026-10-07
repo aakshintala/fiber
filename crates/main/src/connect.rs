@@ -45,36 +45,39 @@ pub(crate) fn connect(
         text_only: !model.model.input.iter().any(|kind| kind == "image"),
         direct: false,
     };
+    let cache_key_header = model
+        .model
+        .compat
+        .get("cache_key_header")
+        .and_then(Value::as_str);
     Ok(match model.model.protocol {
         Protocol::OpenaiResponses => {
             let responses = Responses::new(endpoint);
-            Arc::new(
-                match model
-                    .model
-                    .compat
-                    .get("cache_key_header")
-                    .and_then(Value::as_str)
-                {
-                    Some(name) => responses.cache_key_header(name),
-                    None => responses,
-                },
-            )
+            Arc::new(match cache_key_header {
+                Some(name) => responses.cache_key_header(name),
+                None => responses,
+            })
         }
-        Protocol::OpenaiCompletions => Arc::new(Completions::new(endpoint)),
-        Protocol::AnthropicMessages => Arc::new(Messages::new(endpoint)),
+        Protocol::OpenaiCompletions => {
+            let completions = Completions::new(endpoint);
+            Arc::new(match cache_key_header {
+                Some(name) => completions.cache_key_header(name),
+                None => completions,
+            })
+        }
+        Protocol::AnthropicMessages => {
+            let messages = Messages::new(endpoint);
+            Arc::new(match cache_key_header {
+                Some(name) => messages.cache_key_header(name),
+                None => messages,
+            })
+        }
         Protocol::GoogleGenerativeAi => {
             let gemini = Gemini::new(endpoint);
-            Arc::new(
-                match model
-                    .model
-                    .compat
-                    .get("cache_key_header")
-                    .and_then(Value::as_str)
-                {
-                    Some(name) => gemini.cache_key_header(name),
-                    None => gemini,
-                },
-            )
+            Arc::new(match cache_key_header {
+                Some(name) => gemini.cache_key_header(name),
+                None => gemini,
+            })
         }
         Protocol::BedrockConverse => {
             return Err(failure(

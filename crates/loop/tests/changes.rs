@@ -439,6 +439,7 @@ fn an_own_write_to_a_section_file_sends_nothing_at_the_next_turn() {
         name: "write",
         target: path,
         content: "Revised by the call.\n".into(),
+        effect: Effect::Writes,
     });
     let mut session = Session::with_tools_sectioned(
         vec![
@@ -625,6 +626,7 @@ fn an_over_budget_write_ends_its_result_with_the_prune_line() {
         name: "write",
         target: path,
         content: "123456".into(),
+        effect: Effect::Writes,
     });
     let mut session = Session::with_tools_sectioned(
         vec![
@@ -691,6 +693,142 @@ fn an_over_budget_write_ends_its_result_with_the_prune_line() {
 }
 
 #[test]
+fn a_tool_declaring_a_write_gets_the_prune_line_whatever_its_name() {
+    let held = fakes::TempDir::new("fiber-section-file");
+    let path = held.path().join("a.md");
+    let sections = budgeted(&path, 5, "1234");
+    let writer = Arc::new(support::WriteFile {
+        name: "notes_writer",
+        target: path,
+        content: "123456".into(),
+        effect: Effect::Writes,
+    });
+    let mut session = Session::with_tools_sectioned(
+        vec![
+            calls_reply("Working.", &[("notes_writer", city())]),
+            Scripted::text("Done."),
+        ],
+        vec![writer as Arc<dyn Tool>],
+        sections,
+    );
+    session.rules.set(allow("notes_writer"));
+    session.inbox.send(delivery("hi")).unwrap();
+    session.turn();
+    let lines = session.lines();
+    // The complete turn, in order: as in
+    // `an_over_budget_write_ends_its_result_with_the_prune_line`, the
+    // own edit lands with its call's completion and the prune line ends
+    // the call's result; only the tool's name differs.
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "text_completed",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+            "instruction_file",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    let done = lines
+        .iter()
+        .find(|line| line.kind == "tool_call_completed")
+        .unwrap();
+    let parts = texts(done);
+    assert_eq!(
+        *parts.last().unwrap(),
+        "Fiber: these files are 6 bytes, over their budget of 5 bytes. Prune them."
+    );
+    drop(held);
+}
+
+#[test]
+fn a_tool_named_write_declaring_only_a_read_gets_no_prune_line() {
+    let held = fakes::TempDir::new("fiber-section-file");
+    let path = held.path().join("a.md");
+    let sections = budgeted(&path, 5, "1234");
+    let writer = Arc::new(support::WriteFile {
+        name: "write",
+        target: path,
+        content: "123456".into(),
+        effect: Effect::Reads,
+    });
+    let mut session = Session::with_tools_sectioned(
+        vec![
+            calls_reply("Working.", &[("write", city())]),
+            Scripted::text("Done."),
+        ],
+        vec![writer as Arc<dyn Tool>],
+        sections,
+    );
+    session.rules.set(allow("write"));
+    session.inbox.send(delivery("hi")).unwrap();
+    session.turn();
+    let lines = session.lines();
+    // The complete turn, in order: declaring only a read, the call takes
+    // the permission fast path, so no `permission_resolved`; the file is
+    // still rewritten, so the own edit is recorded.
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "text_completed",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "instruction_file",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    let done = lines
+        .iter()
+        .find(|line| line.kind == "tool_call_completed")
+        .unwrap();
+    assert!(
+        texts(done)
+            .iter()
+            .all(|text| !text.starts_with("Fiber: these files are")),
+        "{}",
+        done.payload["content"]
+    );
+    drop(held);
+}
+
+#[test]
 fn an_under_budget_write_has_no_prune_line() {
     let held = fakes::TempDir::new("fiber-section-file");
     let path = held.path().join("a.md");
@@ -699,6 +837,7 @@ fn an_under_budget_write_has_no_prune_line() {
         name: "edit",
         target: path,
         content: "12".into(),
+        effect: Effect::Writes,
     });
     let mut session = Session::with_tools_sectioned(
         vec![
@@ -765,6 +904,7 @@ fn a_write_touching_no_section_file_has_no_prune_line() {
         name: "write",
         target: held.path().join("b.md"),
         content: "Elsewhere.\n".into(),
+        effect: Effect::Writes,
     });
     let mut session = Session::with_tools_sectioned(
         vec![

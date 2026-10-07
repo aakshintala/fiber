@@ -780,7 +780,7 @@ fn an_error_chunk_mid_stream_fails_the_call_and_drops_what_it_streamed() {
         panic!("{result:?}");
     };
     assert_eq!(failure.code, ErrorCode::ContextOverflow);
-    assert_eq!(failure.provider.unwrap().status, 200);
+    assert_eq!(failure.provider.unwrap().status.unwrap(), 200);
     assert_eq!(
         deltas,
         [Delta::Text(TextDelta {
@@ -1760,4 +1760,25 @@ fn thinking_levels_map_to_either_reasoning_field() {
         sent_body(&server, 7)["reasoning"],
         json!({"effort": "xhigh"})
     );
+}
+
+#[test]
+fn the_cache_key_goes_in_the_declared_header_and_nowhere_else_without_one() {
+    let server = ProviderServer::start([completed_reply(), completed_reply()]).unwrap();
+    let endpoint = endpoint(&server);
+    run(Box::new(
+        Completions::new(endpoint.clone()).request(&request()),
+    ))
+    .0
+    .unwrap();
+    run(Box::new(
+        Completions::new(endpoint)
+            .cache_key_header("x-opencode-session")
+            .request(&request()),
+    ))
+    .0
+    .unwrap();
+    let sent = server.requests();
+    assert_eq!(sent[0].header("x-opencode-session"), None);
+    assert_eq!(sent[1].header("x-opencode-session"), Some("s_root"));
 }

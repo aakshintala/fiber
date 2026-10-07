@@ -6,7 +6,7 @@
 //! instead (`docs/invocation.md`, "Processes").
 
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use contract::SessionId;
@@ -27,6 +27,7 @@ pub(crate) fn ask_resume(
     prompt: String,
     clock: Arc<dyn contract::clock::Clock>,
     signals: &doors::Signals,
+    fiber: Result<PathBuf, String>,
 ) -> i32 {
     let home = match config::fiber_home_from_env() {
         Ok(home) => home,
@@ -41,8 +42,11 @@ pub(crate) fn ask_resume(
             ));
         }
     };
-    let sessions = log::sessions_dir(&home, &doors::project(&workspace));
-    let id = match log::resolve(&sessions, &selector) {
+    let project = doors::project(&workspace);
+    let sessions = log::sessions_dir(&home, &project);
+    let id = match log::resolve(&sessions, &selector, &|started| {
+        doors::project(Path::new(started)) == project
+    }) {
         Ok(id) => id,
         Err(e) => return ask_failed(failed(e.code(), e)),
     };
@@ -64,7 +68,7 @@ pub(crate) fn ask_resume(
         Err(e) => return ask_failed(failed(e.code(), e)),
     };
     let dir = sessions.join(&id.0);
-    resumed_session(log, &dir, model, Some(prompt), true, clock, signals)
+    resumed_session(log, &dir, model, Some(prompt), true, clock, signals, fiber)
 }
 
 /// The internal session command with `--resume`: resumes the session `id`
@@ -76,6 +80,7 @@ pub(crate) fn session_resume(
     model: Option<String>,
     clock: Arc<dyn contract::clock::Clock>,
     signals: &doors::Signals,
+    fiber: Result<PathBuf, String>,
 ) -> i32 {
     let home = match config::fiber_home_from_env() {
         Ok(home) => home,
@@ -97,7 +102,7 @@ pub(crate) fn session_resume(
         Err(e) => return ask_failed(failed(e.code(), e)),
     };
     let dir = sessions.join(&id.0);
-    resumed_session(log, &dir, model, None, false, clock, signals)
+    resumed_session(log, &dir, model, None, false, clock, signals, fiber)
 }
 
 /// One function builds and runs every resumed session, as `new_session`
@@ -106,6 +111,10 @@ pub(crate) fn session_resume(
 /// (`docs/permissions.md`, "Headless"). `log` holds the lock; every failure
 /// before `fiber_started` is written leaves the log byte for byte as it
 /// was.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one resumed session needs its log, directory, mode, clock, signals and recorded executable"
+)]
 fn resumed_session(
     log: Arc<Log>,
     dir: &Path,
@@ -114,6 +123,7 @@ fn resumed_session(
     one_turn: bool,
     clock: Arc<dyn contract::clock::Clock>,
     signals: &doors::Signals,
+    fiber: Result<PathBuf, String>,
 ) -> i32 {
     let folded = match r#loop::resumed(dir) {
         Ok(folded) => folded,
@@ -170,6 +180,7 @@ fn resumed_session(
     );
     crate::shutdown::arm(signals);
     let (tools, infos, driver, session_servers) = match crate::mcp_servers::session_tools(
+        fiber,
         &home,
         Path::new(&folded.workspace),
         &dir.join("artifacts"),

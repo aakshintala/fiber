@@ -1,0 +1,8 @@
+{
+  "case": "openai.credit-balance-exhausted-429",
+  "source": "https://developers.openai.com/api/docs/guides/error-codes",
+  "status": 429,
+  "headers": {},
+  "body": "{\"error\":{\"type\":\"insufficient_quota\",\"code\":\"credit_balance_exhausted\",\"message\":\"The documented credit_balance_exhausted error: retrying will not restore API access.\",\"param\":null}}",
+  "note": "Code credit_balance_exhausted is documented; type insufficient_quota and the message are illustrative."
+}

@@ -14,18 +14,31 @@
 
 use std::fs;
 use std::os::unix::process::CommandExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
 use fakes::Watchdog;
+use serde_json::json;
 
 /// How long one `fiber` run may take.
 const DEADLINE: Duration = Duration::from_secs(20);
 
-const FIRST: &str = "{\"seq\":0,\"kind\":\"a\"}\n";
+/// The `session_started` first line of session `id` in `workspace`: a full
+/// envelope, so `resolve` keeps it, in this project's workspace.
+fn first(id: &str, workspace: &Path) -> String {
+    format!(
+        "{}\n",
+        json!({"kind": "session_started", "session_id": id, "ts": 0,
+            "schema_version": 1, "seq": 0,
+            "payload": {"workspace": workspace,
+                "variables": {"path": "/usr/bin", "names": [],
+                    "source": "inherited"}}})
+    )
+}
+
 const SECOND: &str = "{\"seq\":1,\"kind\":\"b\"}\n";
 const TORN: &str = "{\"seq\":2,\"kin";
 
@@ -60,13 +73,23 @@ impl Setup {
     }
 
     /// A session directory with two complete lines, a torn tail, one
-    /// artifact and a lock file.
+    /// artifact and a lock file. The first line starts the session in
+    /// this workspace, so `resolve` keeps it.
     fn session(&self, id: &str) {
         let dir = self.sessions().join(id);
         fs::create_dir_all(dir.join("artifacts")).unwrap();
-        fs::write(dir.join("events.jsonl"), format!("{FIRST}{SECOND}{TORN}")).unwrap();
+        fs::write(
+            dir.join("events.jsonl"),
+            format!("{}{SECOND}{TORN}", self.first_line(id)),
+        )
+        .unwrap();
         fs::write(dir.join("artifacts/a_1.txt"), "artifact\n").unwrap();
         fs::write(dir.join("session.lock"), "held").unwrap();
+    }
+
+    /// The `session_started` first line `session` writes for `id`.
+    fn first_line(&self, id: &str) -> String {
+        first(id, &fs::canonicalize(self.workspace()).unwrap())
     }
 
     /// Runs `fiber sessions export` with `args` in the workspace.
@@ -143,7 +166,7 @@ fn a_unique_prefix_exports_the_complete_lines_and_the_artifacts() {
     assert_eq!(run.stdout, format!("{}\n", target.display()), "stdout");
     assert_eq!(
         fs::read(target.join("events.jsonl")).unwrap(),
-        format!("{FIRST}{SECOND}").as_bytes()
+        format!("{}{SECOND}", setup.first_line("s_exportaa01")).as_bytes()
     );
     assert_eq!(
         fs::read(target.join("artifacts/a_1.txt")).unwrap(),
@@ -162,7 +185,7 @@ fn an_explicit_relative_path_is_taken_from_the_workspace() {
     assert_eq!(run.stdout, format!("{}\n", target.display()), "stdout");
     assert_eq!(
         fs::read(target.join("events.jsonl")).unwrap(),
-        format!("{FIRST}{SECOND}").as_bytes()
+        format!("{}{SECOND}", setup.first_line("s_exportbb01")).as_bytes()
     );
     assert_eq!(
         fs::read(target.join("artifacts/a_1.txt")).unwrap(),

@@ -1,0 +1,8 @@
+{
+  "case": "gemini.billing-disabled-403",
+  "source": "https://github.com/googleapis/googleapis/blob/master/google/api/error_reason.proto",
+  "status": 403,
+  "headers": {},
+  "body": "{\"error\":{\"code\":403,\"message\":\"The billing account for the project is disabled. Enable billing to use the API.\",\"status\":\"PERMISSION_DENIED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.ErrorInfo\",\"reason\":\"BILLING_DISABLED\",\"domain\":\"googleapis.com\",\"metadata\":{\"consumer\":\"projects/123\"}}]}}",
+  "note": "Reason BILLING_DISABLED with the ErrorInfo @type is documented in error_reason.proto; status 403 and message are illustrative (the proto names no status)."
+}

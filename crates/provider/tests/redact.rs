@@ -135,7 +135,7 @@ fn a_401_that_echoes_the_key_stores_it_redacted() {
             protocol.name
         );
         let said = failure.provider.as_ref().unwrap();
-        assert_eq!(said.status, 401, "{}", protocol.name);
+        assert_eq!(said.status.unwrap(), 401, "{}", protocol.name);
         assert_eq!(
             said.message.as_str(),
             "Incorrect API key provided: [redacted]",
@@ -286,7 +286,7 @@ fn a_non_json_body_echoing_the_key_is_stored_redacted() {
         let endpoint = endpoint(protocol.name, &server);
         let (failure, _) = failed((protocol.call)(&endpoint));
         let said = failure.provider.as_ref().unwrap();
-        assert_eq!(said.status, 400, "{}", protocol.name);
+        assert_eq!(said.status.unwrap(), 400, "{}", protocol.name);
         assert_eq!(
             said.message.as_str(),
             "bad key [redacted]",
@@ -385,7 +385,7 @@ fn an_error_inside_a_200_stream_is_stored_redacted() {
         let endpoint = endpoint(protocol.name, &server);
         let (failure, _) = failed((protocol.call)(&endpoint));
         let said = failure.provider.as_ref().unwrap();
-        assert_eq!(said.status, 200, "{}", protocol.name);
+        assert_eq!(said.status.unwrap(), 200, "{}", protocol.name);
         assert_eq!(said.message.as_str(), expected, "{}", protocol.name);
     }
 }
@@ -463,4 +463,100 @@ fn gemini_classification_reads_the_original_body() {
         failure.provider.as_ref().unwrap().message.as_str(),
         "slow down [redacted]"
     );
+}
+
+/// Fails `sign()` echoing the credential only `credentials()` reports.
+struct EchoCredential;
+
+impl Signer for EchoCredential {
+    fn sign(&self, _: &SignRequest<'_>) -> Result<Vec<(String, String)>, contract::signing::Error> {
+        Err(contract::signing::Error::Failed("bad hidden-tok".into()))
+    }
+
+    fn credentials(&self) -> Vec<contract::Secret> {
+        vec![contract::Secret::new("hidden-tok".to_owned())]
+    }
+}
+
+#[test]
+fn a_sign_error_echoing_the_credential_is_stored_redacted() {
+    let server = ProviderServer::start([Response::status(500, "{}")]).unwrap();
+    let endpoint = Endpoint {
+        provider: "openrouter".into(),
+        model: "m".into(),
+        base_url: format!("{}/v1", server.url()),
+        signer: Some(Arc::new(EchoCredential) as Arc<dyn Signer>),
+        direct: true,
+        ..Endpoint::default()
+    };
+    let (failure, _) = failed((protocols()[2].call)(&endpoint));
+    assert_eq!(failure.code, ErrorCode::CredentialFailed);
+    assert_eq!(failure.message.as_str(), "openrouter's sign() failed.");
+    let said = failure.provider.as_ref().unwrap();
+    assert_eq!(said.status, None);
+    assert_eq!(said.message.as_str(), "bad [redacted]");
+}
+
+/// Fails `credential()` echoing the endpoint's key.
+struct EchoKey;
+
+impl Signer for EchoKey {
+    fn sign(&self, _: &SignRequest<'_>) -> Result<Vec<(String, String)>, contract::signing::Error> {
+        Err(contract::signing::Error::Credential {
+            code: ErrorCode::CredentialFailed,
+            message: "bad sk-key".into(),
+        })
+    }
+}
+
+#[test]
+fn a_credential_error_echoing_the_key_is_stored_redacted() {
+    let server = ProviderServer::start([Response::status(500, "{}")]).unwrap();
+    let mut endpoint = endpoint_key("openrouter", &server, "sk-key");
+    endpoint.signer = Some(Arc::new(EchoKey) as Arc<dyn Signer>);
+    let (failure, _) = failed((protocols()[2].call)(&endpoint));
+    assert_eq!(failure.code, ErrorCode::CredentialFailed);
+    let said = failure.provider.as_ref().unwrap();
+    assert_eq!(said.status, None);
+    assert_eq!(said.message.as_str(), "bad [redacted]");
+}
+
+/// Returns an unusable header name echoing the credential only
+/// `credentials()` reports.
+struct BadName;
+
+impl Signer for BadName {
+    fn sign(&self, _: &SignRequest<'_>) -> Result<Vec<(String, String)>, contract::signing::Error> {
+        Ok(vec![("hidden-tok\n".to_owned(), "x".to_owned())])
+    }
+
+    fn credentials(&self) -> Vec<contract::Secret> {
+        vec![contract::Secret::new("hidden-tok".to_owned())]
+    }
+}
+
+#[test]
+fn an_unusable_header_name_holding_the_credential_is_redacted() {
+    let server = ProviderServer::start([Response::status(500, "{}")]).unwrap();
+    let endpoint = Endpoint {
+        provider: "openrouter".into(),
+        model: "m".into(),
+        base_url: format!("{}/v1", server.url()),
+        signer: Some(Arc::new(BadName) as Arc<dyn Signer>),
+        direct: true,
+        ..Endpoint::default()
+    };
+    let (failure, _) = failed((protocols()[2].call)(&endpoint));
+    assert_eq!(failure.code, ErrorCode::CredentialFailed);
+    assert!(
+        !failure.message.contains("hidden-tok"),
+        "{}",
+        failure.message
+    );
+    assert!(
+        failure.message.contains("[redacted]"),
+        "{}",
+        failure.message
+    );
+    assert_eq!(failure.provider, None);
 }

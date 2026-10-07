@@ -53,13 +53,13 @@ impl Decoder {
     /// Takes one `GenerateContentResponse`.
     fn chunk(&mut self, chunk: &Value, sink: &mut dyn FnMut(Delta)) -> Result<(), Error> {
         if let Some(error) = chunk.get("error") {
-            return Err(Error::ReplyFailed {
-                code: error
+            return Err(crate::error::stream_failure(
+                error,
+                error
                     .get("status")
                     .and_then(Value::as_str)
                     .map(str::to_owned),
-                message: str_at(error, "message").to_owned(),
-            });
+            ));
         }
         if self.id.is_empty() {
             str_at(chunk, "responseId").clone_into(&mut self.id);
@@ -107,13 +107,18 @@ impl Decoder {
                 signature: None,
             });
             thought.text.push_str(piece);
-            if signature.is_some() {
+            let signed = signature.is_some();
+            if signed {
                 thought.signature = signature;
             }
             if !piece.is_empty() {
                 sink(Delta::Reasoning(TextDelta {
                     text: piece.to_owned(),
                 }));
+            }
+            // A signature ends its thought: the next thought part is its own.
+            if signed {
+                self.close_thought();
             }
             return;
         }

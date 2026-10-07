@@ -227,12 +227,15 @@ fn located(
     })
 }
 
-/// Non-overlapping matches: the search resumes at the end of each one, so
-/// overlapping copies of the needle count once. `(count, first byte)`.
+/// Every occurrence of `needle`, overlapping ones included: each character
+/// start is tried. `(count, first byte)`.
 fn hits(haystack: &str, needle: &str) -> (usize, usize) {
-    let mut found = haystack.match_indices(needle);
-    match found.next() {
-        Some((first, _)) => (1 + found.count(), first),
+    let mut starts = haystack
+        .char_indices()
+        .map(|(at, _)| at)
+        .filter(|&at| haystack[at..].starts_with(needle));
+    match starts.next() {
+        Some(first) => (1 + starts.count(), first),
         None => (0, 0),
     }
 }

@@ -65,7 +65,7 @@ push, the implementer runs the checks for the crates they changed:
 `scripts/check` runs, for the crates `docs/ci.md`, "Selection", chooses,
 `cargo fmt --check`, clippy with the workspace lints, the tests under
 nextest, and doc-tests. It also runs the cheap checks from `docs/ci.md`: the
-800-line file cap, the `unsafe` table, the compiled-in list, the `preserve_order` check, the dependency
+800-line file cap, the `unsafe` table, the compiled-in list, the dependency
 list and the docs check. CI runs these cheap checks on Linux x86_64 only.
 
 Mutation testing runs in CI only.

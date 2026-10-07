@@ -427,10 +427,18 @@ pub(crate) fn failure(error: &Failure, out: &mut Vec<Row>) {
     let line = format!("✗ {} · {}", error.message, code(&error.code));
     out.push((Line::raw(line), login));
     if let Some(provider) = &error.provider {
-        let said = format!(
-            "{} said HTTP {}: “{}”",
-            provider.name, provider.status, provider.message
-        );
+        let said = match provider.status {
+            Some(status) => format!(
+                "{name} said HTTP {status}: “{message}”",
+                name = provider.name,
+                message = provider.message
+            ),
+            None => format!(
+                "{name} said: “{message}”",
+                name = provider.name,
+                message = provider.message
+            ),
+        };
         out.push((dim(said), None));
     }
 }

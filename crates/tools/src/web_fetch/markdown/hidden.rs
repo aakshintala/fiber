@@ -60,6 +60,19 @@ const OUT_OF_SVG: [&str; 44] = [
     "var",
 ];
 
+/// Where the document is relative to its head.
+#[derive(Default, Clone, Copy, PartialEq, Eq)]
+enum Head {
+    /// A `head` start tag can still open the head.
+    #[default]
+    Before,
+    /// The head is open.
+    In,
+    /// The head has ended, or other content began before one opened: the
+    /// HTML standard ignores a `head` start tag from here on.
+    After,
+}
+
 /// Hidden elements and the HTML head state, independent of markdown output.
 #[derive(Default)]
 pub(super) struct Hidden {
@@ -75,7 +88,7 @@ pub(super) struct Hidden {
     svgs: Vec<usize>,
     noscripts: Vec<usize>,
     templates: Vec<usize>,
-    in_head: bool,
+    head: Head,
 }
 
 impl Hidden {
@@ -88,23 +101,25 @@ impl Hidden {
     }
 
     pub(super) fn in_head(&self) -> bool {
-        self.in_head
+        self.head == Head::In
     }
 
     /// Handles the hidden-element state changes for a start tag.
     pub(super) fn open(&mut self, name: &str, tag: &Tag) {
         // The HTML standard ends the head at the first start tag that cannot
         // be in it, and every open `svg` at the first that cannot be in one.
-        if !IN_HEAD.contains(&name) {
-            self.in_head = false;
+        if name == "head" {
+            if self.head == Head::Before {
+                self.head = Head::In;
+            }
+        } else if name != "html" && (self.head == Head::Before || !IN_HEAD.contains(&name)) {
+            self.head = Head::After;
         }
         if breaks_out_of_svg(name, tag) {
             self.close_svg();
         }
         let depth = self.hidden;
-        if name == "head" {
-            self.in_head = true;
-        } else if let Some(depths) = self.depths(name)
+        if let Some(depths) = self.depths(name)
             && !tag.self_closing
         {
             depths.push(depth);
@@ -118,7 +133,7 @@ impl Hidden {
         // The HTML standard also ends the head at these end tags, and every
         // open `svg` at `</p>` and `</br>`; `</br>` is then a `br`.
         if matches!(name, "head" | "body" | "html" | "br") {
-            self.in_head = false;
+            self.head = Head::After;
         }
         if matches!(name, "p" | "br") {
             self.close_svg();
@@ -133,8 +148,10 @@ impl Hidden {
 
     /// Whether the head is still open after this text token.
     pub(super) fn text_is_in_head(&mut self, text: &str) -> bool {
-        self.in_head &= text.chars().all(|c| c.is_ascii_whitespace());
-        self.in_head
+        if !text.chars().all(|c| c.is_ascii_whitespace()) {
+            self.head = Head::After;
+        }
+        self.head == Head::In
     }
 
     /// An end tag of a hidden element, as the HTML standard closes one.
