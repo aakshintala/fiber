@@ -376,3 +376,53 @@ fn zero_idle_exit_stops_at_the_first_empty_wait() {
         0
     );
 }
+
+/// An acceptor thread that returns after one `accept`, with a flag set as it
+/// ends, on a listener at `socket`.
+fn one_accept_thread(socket: &std::path::Path) -> (thread::JoinHandle<()>, Arc<AtomicBool>) {
+    let listener = std::os::unix::net::UnixListener::bind(socket).unwrap();
+    let ended = Arc::new(AtomicBool::new(false));
+    let handle = thread::Builder::new()
+        .name("hub-test-acceptor".to_owned())
+        .spawn({
+            let ended = Arc::clone(&ended);
+            move || {
+                listener.accept().map(drop).unwrap_or(());
+                ended.store(true, Ordering::SeqCst);
+            }
+        })
+        .unwrap();
+    (handle, ended)
+}
+
+#[test]
+fn join_after_wake_unblocks_and_joins_a_blocked_acceptor() {
+    let temp = Temp::new();
+    let socket = temp.dir.join("wake");
+    let (acceptor, ended) = one_accept_thread(&socket);
+    join_after_wake(&socket, acceptor);
+    assert!(
+        ended.load(Ordering::SeqCst),
+        "the acceptor ended before the join returned"
+    );
+}
+
+#[test]
+fn join_after_wake_returns_when_the_socket_path_is_gone() {
+    let temp = Temp::new();
+    let socket = temp.dir.join("wake");
+    let (acceptor, ended) = one_accept_thread(&socket);
+    fs::remove_file(&socket).unwrap();
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::Builder::new()
+        .name("hub-test-wake".to_owned())
+        .spawn(move || {
+            join_after_wake(&socket, acceptor);
+            done_tx.send(()).unwrap_or(());
+        })
+        .unwrap();
+    done_rx
+        .recv_timeout(DEADLINE)
+        .expect("the wake returns without a join");
+    assert!(!ended.load(Ordering::SeqCst), "nothing woke the acceptor");
+}
