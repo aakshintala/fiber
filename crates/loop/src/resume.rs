@@ -1,8 +1,9 @@
 //! Resuming a session (`docs/events.md`, "Resume"): rebuilding the loop's
 //! state from the log and its configuration, nothing else. A suspended turn
 //! (`fiber_exited` with `suspended_on`) re-raises its pending approval under
-//! the same `request_id`, refuses it as headless, finishes the turn, and
-//! then runs the prompt as the next turn.
+//! the same `request_id`, waits for a person's answer (or refuses it as
+//! headless when no person can answer), finishes the turn, and then runs
+//! the prompt as the next turn.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
