@@ -8,8 +8,10 @@ use crate::mouse::TargetId;
 impl App {
     /// Handles a click on `target` (`docs/tui.md`, "Bindings"): the badge
     /// reopens the approval queue, "↓ New messages below" jumps to the end,
-    /// a conversation line opens or closes what it names.
+    /// a conversation line opens or closes what it names. A recall waiting
+    /// for a page waits no more.
     pub(crate) fn on_click(&mut self, target: TargetId) -> Effect {
+        self.history.cancel();
         match target {
             TargetId::Badge => self.open_first(),
             TargetId::Line(line) => {

@@ -149,6 +149,12 @@ impl History {
         }
     }
 
+    /// Ends the wait for a page: the page still joins the list when it
+    /// comes, and shows nothing.
+    pub(super) fn cancel(&mut self) {
+        self.waiting = false;
+    }
+
     /// The `prompt_history` answer for `id`: its lines join the list.
     /// `false` when `id` is not the command waiting.
     fn answered(&mut self, id: &str, result: Option<&Value>) -> bool {
@@ -282,8 +288,10 @@ impl App {
         true
     }
 
-    /// Ctrl+R: opens the search panel, and asks for the first page.
+    /// Ctrl+R: opens the search panel, and asks for the first page. A
+    /// recall waiting for a page waits no more.
     pub(super) fn open_search(&mut self) -> Effect {
+        self.history.cancel();
         self.history.search = Some(Search::default());
         self.more()
     }
@@ -371,9 +379,9 @@ impl App {
     }
 
     /// A `command_accepted` for `id`: when it answers `prompt_history`, its
-    /// lines join the list, a waiting recall shows the next entry, and an
-    /// open search panel asks for the next page. `None` for another
-    /// command.
+    /// lines join the list, a waiting recall shows the next entry while no
+    /// panel covers the input box, and an open search panel asks for the
+    /// next page. `None` for another command.
     pub(super) fn history_answered(
         &mut self,
         id: &str,
@@ -383,7 +391,9 @@ impl App {
             return None;
         }
         let mut lines = Vec::new();
+        let covered = self.panel().is_some() || self.keymap_top().is_some();
         if std::mem::take(&mut self.history.waiting)
+            && !covered
             && let Effect::Send(more) = self.older()
         {
             lines.extend(more);

@@ -602,3 +602,82 @@ fn emptying_a_recalled_draft_by_hand_ends_the_wait() {
     answer(&mut app, &request, &[line(S_B, "late")], None);
     assert_eq!(app.draft(), "");
 }
+
+/// An app attached to `S_A` with `x` recalled, the oldest entry loaded,
+/// and an ↑ waiting for the first page; that page's request.
+fn waiting() -> (App, Value) {
+    let mut app = connected();
+    with_own(&mut app, &["x"]);
+    let request = asks(&mut app, Key::Up);
+    assert!(sent(press(&mut app, Key::Up)).is_empty());
+    assert_eq!(app.draft(), "x");
+    (app, request)
+}
+
+#[test]
+fn a_page_after_ctrl_r_opens_leaves_the_draft_and_joins_the_list() {
+    let (mut app, request) = waiting();
+    press(&mut app, Key::CtrlR);
+    answer(&mut app, &request, &[line(S_B, "late")], None);
+    assert_eq!(app.draft(), "x");
+    press(&mut app, Key::Esc);
+    assert_eq!(app.draft(), "x");
+    // The page joined the list: the next ↑ shows it.
+    press(&mut app, Key::Up);
+    assert_eq!(app.draft(), "late");
+}
+
+/// A named action on the app, and the draft expected after it.
+type Case = (&'static str, fn(&mut App), &'static str);
+
+#[test]
+fn a_page_after_any_edit_ctrl_g_send_or_clear_leaves_the_draft() {
+    let now = fakes::clock::FakeClock::new().now();
+    let cases: [Case; 6] = [
+        ("cursor move", |app| drop(app.on_edit(Edit::Left)), "x"),
+        (
+            "paste",
+            |app| drop(app.on_edit(Edit::Paste("y".into()))),
+            "xy",
+        ),
+        ("ctrl+g", |app| drop(press(app, Key::CtrlG)), "x"),
+        ("send", |app| drop(press(app, Key::Enter)), ""),
+        ("ctrl+c", |app| drop(press(app, Key::CtrlC)), ""),
+        ("key map", |app| drop(press(app, Key::F1)), "x"),
+    ];
+    for (name, act, draft) in cases {
+        let (mut app, request) = waiting();
+        act(&mut app);
+        answer(&mut app, &request, &[line(S_B, "late")], None);
+        assert_eq!(app.draft(), draft, "{name}");
+    }
+    let (mut app, request) = waiting();
+    app.on_click(crate::mouse::TargetId::NewBelow);
+    answer(&mut app, &request, &[line(S_B, "late")], None);
+    assert_eq!(app.draft(), "x", "click");
+    // A key that moves the view keeps the wait.
+    let (mut app, request) = waiting();
+    app.on_key(Key::PageUp, now);
+    answer(&mut app, &request, &[line(S_B, "late")], None);
+    assert_eq!(app.draft(), "late", "page up");
+}
+
+#[test]
+fn a_page_while_the_approval_panel_is_open_leaves_the_draft() {
+    let (mut app, request) = waiting();
+    let payload = json!({"request_id": "r_1", "effects": ["executes"], "reversible": true,
+        "step": "standing_ask", "standing_rule": {"scope": "global", "prefix": "echo hi"}});
+    app.on_line(Line::Session(contract::Envelope {
+        kind: "permission_requested".to_owned(),
+        session_id: contract::SessionId(S_A.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: Some(contract::ActionId("a_1".to_owned())),
+        seq: None,
+        payload: payload.as_object().cloned().unwrap_or_default(),
+    }));
+    assert!(app.panel().is_some());
+    answer(&mut app, &request, &[line(S_B, "late")], None);
+    assert_eq!(app.draft(), "x");
+}

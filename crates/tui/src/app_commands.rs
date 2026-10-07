@@ -69,17 +69,27 @@ pub(crate) struct Completions {
 }
 
 impl App {
-    /// Handles one key at `now`, read from the injected clock.
+    /// Handles one key at `now`, read from the injected clock. A recall
+    /// waiting for a page waits on only through ↑ and the keys that move
+    /// the view.
     pub(crate) fn on_key(&mut self, key: Key, now: Instant) -> Effect {
+        if !matches!(
+            key,
+            Key::Up | Key::PageUp | Key::PageDown | Key::End | Key::CtrlO
+        ) {
+            self.history.cancel();
+        }
         let effect = self.route_key(key, now);
         self.edited();
         effect
     }
 
     /// Handles one key that edits the draft, the approval panel first.
-    /// Nothing while the key map is open.
+    /// Nothing while the key map is open. A recall waiting for a page
+    /// waits no more.
     pub(crate) fn on_edit(&mut self, edit: Edit) -> Effect {
         self.armed_at = None;
+        self.history.cancel();
         if self.overlays.keymap.is_some() || self.search_edit(&edit) {
             return Effect::None;
         }
@@ -544,8 +554,9 @@ impl App {
     }
 
     /// Ctrl+G: the paste token beside the cursor, or else the whole draft,
-    /// every token expanded.
+    /// every token expanded. A recall waiting for a page waits no more.
     pub(super) fn open_in_editor(&mut self) -> Effect {
+        self.history.cancel();
         let (target, text) = match self.draft.token_at_cursor() {
             Some(number) => (
                 Target::Token(number),
