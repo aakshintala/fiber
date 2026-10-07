@@ -205,7 +205,7 @@ fn page_down_to_the_bottom_follows_again() {
     // The bottom shows prompts 20 to 30. A page is the conversation's 11
     // rows less one, and the top stops at the first row.
     app.on_key(Key::PageUp, now);
-    assert!(screen(&app).starts_with("› prompt 10\n"));
+    assert!(screen(&app).starts_with(format!("{:>59}\n", "prompt 10").as_str()));
     // One page down lands exactly on the bottom, which follows again: new
     // output scrolls in with no overlay.
     app.on_key(Key::PageDown, now);
@@ -213,18 +213,18 @@ fn page_down_to_the_bottom_follows_again() {
     app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "prompt 31"));
     let followed = screen(&app);
     assert!(!followed.contains("↓ New messages below"));
-    assert!(followed.contains("› prompt 31\n>"));
+    assert!(followed.contains(format!("{:>59}\n>", "prompt 31").as_str()));
     app.on_key(Key::PageUp, now);
-    assert!(screen(&app).starts_with("› prompt 11\n"));
+    assert!(screen(&app).starts_with(format!("{:>59}\n", "prompt 11").as_str()));
     app.on_key(Key::PageUp, now);
-    assert!(screen(&app).starts_with("› prompt 1\n"));
+    assert!(screen(&app).starts_with(format!("{:>59}\n", "prompt 1").as_str()));
     app.on_key(Key::PageDown, now);
-    assert!(screen(&app).starts_with("› prompt 11\n"));
+    assert!(screen(&app).starts_with(format!("{:>59}\n", "prompt 11").as_str()));
     app.on_key(Key::PageDown, now);
-    assert!(screen(&app).contains("› prompt 31\n>"));
+    assert!(screen(&app).contains(format!("{:>59}\n>", "prompt 31").as_str()));
     // PageDown while following does nothing.
     app.on_key(Key::PageDown, now);
-    assert!(screen(&app).contains("› prompt 31\n>"));
+    assert!(screen(&app).contains(format!("{:>59}\n>", "prompt 31").as_str()));
 }
 
 #[test]
@@ -255,7 +255,7 @@ fn draw_folds_an_events_file() {
     .map(|line| line.to_string())
     .join("\n");
     let shown = crate::draw(&events, 20, 4).unwrap_or_else(|error| panic!("draw: {error}"));
-    assert_eq!(shown, "\n› hi\nHello.\n>\n");
+    assert_eq!(shown, format!("\n{:>19}\nHello.\n>\n", "hi"));
     assert_eq!(
         crate::draw("not json", 20, 4).map_err(|e| e.starts_with("line 1:")),
         Err(true)
@@ -287,7 +287,7 @@ fn a_short_screen_keeps_the_input_line_last() {
     assert_eq!(sized(&mut app, 20, 3), "lost\nPress Ctrl+C again t\n>\n");
     assert_eq!(
         sized(&mut app, 20, 4),
-        "› two\nlost\nPress Ctrl+C again t\n>\n"
+        format!("{:>19}\nlost\nPress Ctrl+C again t\n>\n", "two")
     );
 }
 
@@ -589,4 +589,222 @@ fn the_cursor_stays_on_a_screen_one_column_wide() {
     type_draft(&mut app, "ab");
     let area = Rect::new(0, 0, 1, 3);
     assert_eq!(cursor(&app, area).map(|at| at.x), Some(0));
+}
+
+/// One session envelope at `ts` milliseconds.
+fn at(kind: &str, action: Option<&str>, ts: u64, payload: serde_json::Value) -> Line {
+    Line::Session(contract::Envelope {
+        kind: kind.to_owned(),
+        session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
+        ts,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: action.map(|id| contract::ActionId(id.to_owned())),
+        seq: None,
+        payload: payload.as_object().cloned().unwrap_or_default(),
+    })
+}
+
+/// A turn with a thought, a read and an edit in one step and a failed
+/// command in the next, a reply, and its usage, closed after 38 seconds.
+fn tool_turn(app: &mut App) {
+    use serde_json::json;
+    attach(app, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "fix the failing test"));
+    app.on_line(at("step_started", None, 0, json!({})));
+    app.on_line(at("reasoning_started", Some("a_t"), 0, json!({})));
+    app.on_line(at(
+        "reasoning_completed",
+        Some("a_t"),
+        4_000,
+        json!({"text": "## Find the test\nIt is in a.rs."}),
+    ));
+    for (action, name, arguments, ts) in [
+        ("a_1", "read", json!({"path": "src/a.rs"}), 5_000),
+        ("a_2", "edit", json!({"path": "src/a.rs"}), 6_000),
+        ("a_3", "shell", json!({"command": "cargo test"}), 9_000),
+    ] {
+        if action == "a_3" {
+            app.on_line(at("step_started", None, ts, json!({})));
+        }
+        app.on_line(at(
+            "tool_call_requested",
+            Some(action),
+            ts,
+            json!({"name": name, "arguments": arguments}),
+        ));
+    }
+    app.on_line(at(
+        "tool_call_completed",
+        Some("a_1"),
+        9_000,
+        json!({"status": "completed", "content": [{"type": "text", "text": "fn a() {}"}]}),
+    ));
+    app.on_line(at(
+        "tool_call_completed",
+        Some("a_2"),
+        9_000,
+        json!({"status": "completed", "content": [{"type": "text", "text": "Edited."}],
+            "details": {"diff": "-assert!(false)\n+assert!(true)"},
+            "changes": [{"path": "src/a.rs", "added": 3, "removed": 1}]}),
+    ));
+    app.on_line(at(
+        "tool_call_completed",
+        Some("a_3"),
+        12_000,
+        json!({"status": "failed", "content": [],
+            "error": {"code": "nonzero_exit", "message": "exit status 101"}}),
+    ));
+    app.on_line(at(
+        "text_completed",
+        Some("a_m"),
+        12_000,
+        json!({"text": "Fixed."}),
+    ));
+    for (id, cost, subscription) in [("g1", 0.41, false), ("g2", 1.1, true)] {
+        let mut usage = json!({"generation_id": id, "model": "fake/m",
+            "tokens": {"input": 9_100, "cache_read": 0, "cache_write": {}, "output": 0},
+            "cost": cost});
+        if subscription && let Some(usage) = usage.as_object_mut() {
+            usage.insert("subscription".to_owned(), json!(true));
+        }
+        app.on_line(at("usage_recorded", Some("a_m"), 12_000, usage));
+    }
+    app.on_line(at(
+        "turn_completed",
+        None,
+        38_000,
+        json!({"outcome": "completed"}),
+    ));
+}
+
+#[test]
+fn tool_group_collapsed() {
+    let mut app = empty();
+    tool_turn(&mut app);
+    insta::assert_snapshot!("tool_group_collapsed", screen(&app));
+}
+
+#[test]
+fn tool_group_ledger_open_with_a_call_open() {
+    let mut app = empty();
+    tool_turn(&mut app);
+    app.on_key(Key::CtrlO, fakes::clock::FakeClock::new().now());
+    let edit = app
+        .targets()
+        .into_iter()
+        .filter_map(|(_, target)| match target {
+            crate::app::Target::Call(_) => Some(target),
+            crate::app::Target::Group(_) | crate::app::Target::Thought(_) => None,
+        })
+        .nth(1);
+    if let Some(edit) = edit {
+        app.open(edit);
+    }
+    insta::assert_snapshot!(
+        "tool_group_ledger_open_with_a_call_open",
+        sized(&mut app, 60, 16)
+    );
+}
+
+#[test]
+fn tool_group_running_with_raw_arguments() {
+    use serde_json::json;
+    let mut app = empty();
+    attach(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "look around"));
+    app.on_line(at("step_started", None, 0, json!({})));
+    app.on_line(at(
+        "tool_call_requested",
+        Some("a_1"),
+        0,
+        json!({"name": "read", "arguments": {"path": "README.md"}}),
+    ));
+    app.on_line(at(
+        "tool_call_arguments_delta",
+        Some("a_m"),
+        0,
+        json!({"index": 1, "name": "shell", "text": "{\"command\": \"cargo"}),
+    ));
+    app.on_line(at("reasoning_started", Some("a_t"), 0, json!({})));
+    app.on_line(at(
+        "reasoning_delta",
+        Some("a_t"),
+        0,
+        json!({"text": "**Check the build**"}),
+    ));
+    insta::assert_snapshot!("tool_group_running_with_raw_arguments", screen(&app));
+}
+
+#[test]
+fn thought_line_opened_and_tokens_only() {
+    use serde_json::json;
+    let mut app = empty();
+    attach(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "why"));
+    app.on_line(at("reasoning_started", Some("a_t"), 0, json!({})));
+    app.on_line(at(
+        "reasoning_completed",
+        Some("a_t"),
+        22_000,
+        json!({"text": "# Plan the fix\nRead a.rs first."}),
+    ));
+    app.on_line(at(
+        "text_completed",
+        Some("a_m"),
+        23_000,
+        json!({"text": "Because."}),
+    ));
+    app.on_line(at(
+        "usage_recorded",
+        Some("a_m"),
+        23_000,
+        json!({"generation_id": "g1", "model": "fake/m",
+            "tokens": {"input": 300, "cache_read": 0, "cache_write": {}, "output": 40},
+            "cost": null}),
+    ));
+    app.on_line(at(
+        "turn_completed",
+        None,
+        24_000,
+        json!({"outcome": "completed"}),
+    ));
+    let before = screen(&app);
+    if let Some((_, thought)) = app.targets().into_iter().next() {
+        app.open(thought);
+    }
+    insta::assert_snapshot!("thought_line", before);
+    insta::assert_snapshot!("thought_line_opened", screen(&app));
+}
+
+#[test]
+fn styles_reach_the_screen() {
+    use ratatui::style::Modifier;
+    let mut app = empty();
+    tool_turn(&mut app);
+    let area = Rect::new(0, 0, WIDTH, HEIGHT);
+    let mut buf = Buffer::empty(area);
+    render(&app, area, &mut buf);
+    let rows: Vec<String> = text(&buf).lines().map(str::to_owned).collect();
+    let row = |start: &str| {
+        rows.iter()
+            .position(|row| row.trim_start().starts_with(start))
+            .and_then(|at| u16::try_from(at).ok())
+            .unwrap_or(u16::MAX)
+    };
+    let cell = |x: u16, y: u16| {
+        buf.cell((x, y))
+            .map(|cell| cell.style())
+            .unwrap_or_default()
+    };
+    // The summary line is dim from its dot on; the reply is not.
+    let summary = row("• Read");
+    assert!(cell(0, summary).add_modifier.contains(Modifier::DIM));
+    assert!(cell(0, summary + 1).add_modifier.contains(Modifier::DIM));
+    assert!(!cell(0, row("Fixed.")).add_modifier.contains(Modifier::DIM));
+    // The bubble is tinted to the right edge, and blank to its left.
+    let bubble = row("fix the failing test");
+    let reset = Some(ratatui::style::Color::Reset);
+    assert_ne!(cell(WIDTH - 1, bubble).bg, reset);
+    assert_eq!(cell(0, bubble).bg, reset);
 }

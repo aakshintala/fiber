@@ -17,7 +17,6 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use contract::clock::{Clock, Wake};
-use contract::events::ExtensionExec;
 use contract::inbox::Delivery;
 use mlua::Table;
 use serde_json::Value;
@@ -36,8 +35,8 @@ pub(crate) struct Hub {
     window: Mutex<Option<WindowHook>>,
 }
 
-/// Where a test may pause a `host.exec` delivery, inside the hub lock:
-/// `send_exec` has chosen the sender or the buffer, or `set_exec_inbox` has
+/// Where a test may pause an extension delivery, inside the hub lock:
+/// `send` has chosen the sender or the buffer, or `set_inbox` has
 /// set the sender and taken the buffer but not yet flushed it.
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -170,26 +169,26 @@ impl Hub {
         self.notify();
     }
 
-    /// Hands the session loop's inbox to the extension's `host.exec` runs:
-    /// a run that ended before any sender is buffered and sent on the first
-    /// sender; a later sender replaces the last. A run that ends after the
-    /// extension is dropped is dropped, as is a sender that arrives after
-    /// it. Routing holds one lock, so a run ending against `deliver_to` is
-    /// sent, never stranded: an `mpsc` send never blocks, so sending under
-    /// the lock is safe.
-    pub(crate) fn set_exec_inbox(&self, inbox: std::sync::mpsc::Sender<Delivery>) {
+    /// Hands the session loop's inbox to the extension's deliveries: one
+    /// that ended before any sender is buffered and sent on the first
+    /// sender; a later sender replaces the last. A delivery routed after
+    /// the extension is dropped is dropped, as is a sender that arrives
+    /// after it. Routing holds one lock, so a delivery ending against
+    /// `deliver_to` is sent, never stranded: an `mpsc` send never blocks,
+    /// so sending under the lock is safe.
+    pub(crate) fn set_inbox(&self, inbox: std::sync::mpsc::Sender<Delivery>) {
         let mut shared = self.lock();
         if shared.disposed {
             return;
         }
-        shared.exec_inbox = Some(inbox.clone());
-        let buffered = std::mem::take(&mut shared.exec_buffer);
+        shared.inbox = Some(inbox.clone());
+        let buffered = std::mem::take(&mut shared.buffer);
         #[cfg(test)]
         self.at_window(Window::Flushing);
-        for exec in buffered {
+        for delivery in buffered {
             // `send` on an `mpsc` Sender never blocks; held under the hub
-            // lock so a concurrent `send_exec` cannot interleave.
-            if inbox.send(Delivery::ExtensionExec(exec)).is_err() {
+            // lock so a concurrent `send` cannot interleave.
+            if inbox.send(delivery).is_err() {
                 return;
             }
         }
@@ -271,26 +270,25 @@ impl Hub {
         std::mem::take(&mut self.lock().timer_cleanup)
     }
 
-    /// Logs a finished `host.exec` run: sent to the loop's inbox, or
-    /// buffered when no sender arrived yet. A run that ends after the
-    /// extension is dropped is dropped instead. Routing holds one lock, so
-    /// a run ending against `deliver_to` or the drop is never stranded.
-    pub(super) fn send_exec(&self, exec: ExtensionExec) {
+    /// Routes an extension delivery to the loop's inbox, or buffers it in
+    /// call order when no sender arrived yet. One routed after the drop
+    /// is dropped instead; routing holds one lock, so nothing is stranded.
+    pub(crate) fn send(&self, delivery: Delivery) {
         let mut shared = self.lock();
         if shared.disposed {
             return;
         }
-        let inbox = shared.exec_inbox.clone();
+        let inbox = shared.inbox.clone();
         #[cfg(test)]
         self.at_window(Window::Selected);
         if let Some(inbox) = inbox {
             // `send` on an `mpsc` Sender never blocks; held under the hub
             // lock so sender choice, buffering and flushing serialize.
-            match inbox.send(Delivery::ExtensionExec(exec)) {
+            match inbox.send(delivery) {
                 Ok(()) | Err(_) => {}
             }
         } else {
-            shared.exec_buffer.push(exec);
+            shared.buffer.push(delivery);
         }
     }
 }
@@ -307,10 +305,11 @@ pub(crate) struct Shared {
     /// Every hook's timeout once the entry script returns, when
     /// configuration overrides them.
     pub(super) hook_timeout: Option<Duration>,
-    /// The loop's inbox for finished `host.exec` runs, set by `deliver_to`.
-    pub(super) exec_inbox: Option<std::sync::mpsc::Sender<Delivery>>,
-    /// Runs that ended before any inbox, in end order, sent on the first one.
-    pub(super) exec_buffer: Vec<ExtensionExec>,
+    /// The loop's inbox for the extension's deliveries, set by `deliver_to`.
+    pub(super) inbox: Option<std::sync::mpsc::Sender<Delivery>>,
+    /// Deliveries that ended before any inbox, in call order, sent on the
+    /// first one.
+    pub(super) buffer: Vec<Delivery>,
     /// The extension was dropped: anything routed after this is dropped,
     /// under the same lock that routes deliveries.
     pub(super) disposed: bool,

@@ -1,4 +1,4 @@
-//! Drawing the terminal: the conversation as plain text, the notice, the
+//! Drawing the terminal: the conversation's styled lines, the notice, the
 //! quit hint, the approval badge, and the input box or the approval panel
 //! in its place (`docs/tui.md`, "Turns", "The input box", "Approvals and
 //! questions").
@@ -6,6 +6,7 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Style};
+use ratatui::text::Line;
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 
 use crate::app::{App, QUIT_HINT};
@@ -23,13 +24,13 @@ pub(crate) const APPROVAL_TINT: Style = Style::new().bg(Color::Indexed(17));
 /// (see #685).
 pub(crate) const ALERT_TINT: Style = Style::new().bg(Color::Indexed(52));
 
-/// One plain line, wrapped the way it draws.
-fn paragraph(line: &str) -> Paragraph<'_> {
+/// One line, wrapped the way it draws.
+fn paragraph(line: Line<'_>) -> Paragraph<'_> {
     Paragraph::new(line).wrap(Wrap { trim: false })
 }
 
 /// How many rows `line` takes at `width`.
-pub(crate) fn rows(line: &str, width: u16) -> usize {
+pub(crate) fn rows(line: Line<'_>, width: u16) -> usize {
     paragraph(line).line_count(width).max(1)
 }
 
@@ -42,7 +43,11 @@ pub(crate) fn render(app: &App, area: Rect, buf: &mut Buffer) {
     let width = usize::from(area.width);
     let mut bottom = area.bottom();
     if let Some(panel) = app.panel() {
-        let height: usize = panel.lines.iter().map(|line| rows(line, area.width)).sum();
+        let height: usize = panel
+            .lines
+            .iter()
+            .map(|line| rows(Line::raw(line.as_str()), area.width))
+            .sum();
         let top = bottom.saturating_sub(to_u16(height)).max(area.y);
         let rect = Rect::new(area.x, top, area.width, bottom.saturating_sub(top));
         let tint = if panel.alert {
@@ -115,7 +120,10 @@ pub(crate) fn cursor(app: &App, area: Rect) -> Option<Position> {
 /// shorter than its area.
 fn conversation_rows(app: &App, area: Rect, buf: &mut Buffer) {
     let lines = app.lines();
-    let heights: Vec<usize> = lines.iter().map(|line| rows(line, area.width)).collect();
+    let heights: Vec<usize> = lines
+        .iter()
+        .map(|line| rows(line.clone(), area.width))
+        .collect();
     let total: usize = heights.iter().sum();
     let height = usize::from(area.height);
     let bottom_top = total.saturating_sub(height);
@@ -125,7 +133,7 @@ fn conversation_rows(app: &App, area: Rect, buf: &mut Buffer) {
     let mut y = area.y.saturating_add(to_u16(height.saturating_sub(shown)));
     let mut start = 0usize;
     // A line wholly above `top` or below `end` shows no rows.
-    for (line, rows) in lines.iter().zip(heights) {
+    for (line, rows) in lines.into_iter().zip(heights) {
         let next = start.saturating_add(rows);
         let skip = top.saturating_sub(start);
         let count = next.min(end).saturating_sub(start.max(top));

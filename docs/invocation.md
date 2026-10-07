@@ -529,6 +529,14 @@ and its own jobs are done. It does not wait for `session.idle_exit_ms`. A later
 delivers the prompt. A client showing a session that exits keeps showing it,
 because its conversation is its log.
 
+A session whose log ends in `fiber_exited` has exited, even while its process
+is still shutting down. The hub does not pass on a `closing` answer from it: it
+resumes the session and delivers the command. If that resume fails
+`session_held`, the hub waits for the old process to release the lock, up to
+the 5-second shutdown bound, and the client gets `session_held` only once the
+bound has passed. A command after `close` and before `fiber_exited` still gets
+`closing`.
+
 **A session that never got a prompt leaves nothing behind.** A session that
 exits with no `turn_started` in its log deletes its own directory.
 

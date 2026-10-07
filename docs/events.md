@@ -1106,6 +1106,17 @@ Ephemeral.
 | `extension` | string | yes | the extension's name |
 | `data` | any JSON | yes | what its session half sent its own TUI extension with `host.emit` |
 
+#### `extension_log`
+
+Ephemeral. A line an extension wrote with `host.log`. The session also
+records it in its diagnostic log (`docs/state.md`, "What each part holds"); it is
+never saved in the session log.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `extension` | string | yes | the extension's name |
+| `message` | string | yes | the line, as the extension wrote it |
+
 #### `extension_exec`
 
 Durable. A program an extension ran outside a tool call.

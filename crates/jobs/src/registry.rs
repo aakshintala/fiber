@@ -10,13 +10,57 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
-use contract::JobId;
 use contract::clock::{Clock, Wake};
 use contract::emit::Emit;
 use contract::events::{JobCompleted, JobLine, JobStarted, Outcome};
 use contract::inbox::{Claim, Delivery, JobNotice};
 use contract::jobs::{End, Foreground, JobRecord, Lines, OpenError, Opened, Opening};
+use contract::shapes::Failure;
 use contract::tool::Cancel;
+use contract::{ErrorCode, JobId};
+
+/// A job's end not yet reported, held by the closure in its [`End`].
+/// Reporting consumes it; dropped unreported, it records the job failed
+/// `indeterminate`, since a runner that returned without reporting would
+/// otherwise leave the job running. A panic aborts the process; this is
+/// not a panic handler.
+struct Unreported {
+    job_id: JobId,
+    /// Taken by the one report.
+    registry: Option<Arc<Registry>>,
+}
+
+impl Unreported {
+    /// Records `completed` for this job, whatever id the payload names: a
+    /// payload that names another id would record the wrong job, or none.
+    fn report(mut self, completed: JobCompleted) {
+        if let Some(registry) = self.registry.take() {
+            registry.finish(JobCompleted {
+                job_id: self.job_id.clone(),
+                ..completed
+            });
+        }
+    }
+}
+
+impl Drop for Unreported {
+    fn drop(&mut self) {
+        if let Some(registry) = self.registry.take() {
+            registry.finish(JobCompleted {
+                job_id: self.job_id.clone(),
+                status: Outcome::Failed,
+                error: Some(Failure {
+                    code: ErrorCode::Indeterminate,
+                    message: "The job ended without a result.".to_owned(),
+                    retry_after: None,
+                    provider: None,
+                }),
+                process: None,
+                output_tail: None,
+            });
+        }
+    }
+}
 
 /// The jobs one session started. `open` is the only way in; `list`, `wait`
 /// and `stop` are what the `jobs` tool calls.
@@ -148,18 +192,11 @@ impl Registry {
                 }
             }))
         });
-        let expected = job_id.clone();
-        let end = End::new(
+        let unreported = Unreported {
             job_id,
-            Box::new(move |completed| {
-                // This end belongs to one job. A payload that names another
-                // id would record the wrong job, or none.
-                registry.finish(JobCompleted {
-                    job_id: expected.clone(),
-                    ..completed
-                });
-            }),
-        );
+            registry: Some(registry),
+        };
+        let end = End(Box::new(move |completed| unreported.report(completed)));
         inner.jobs.push(Job {
             started: started.clone(),
             path: path.clone(),

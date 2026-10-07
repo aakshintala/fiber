@@ -3,7 +3,8 @@
 
 use ratatui::text::Span;
 
-use crate::keys::Edit;
+use crate::approvals::Queue;
+use crate::keys::{Edit, Key};
 
 /// A paste of more lines than this shows as one token.
 const PASTE_LINES: usize = 10;
@@ -48,6 +49,20 @@ impl Default for Draft {
     }
 }
 
+/// Routes one editing key: the approval panel, while open, takes a paste
+/// as typed feedback, its line breaks as spaces, and no other editing key;
+/// otherwise the draft takes it.
+pub(crate) fn route(edit: Edit, draft: &mut Draft, queue: &mut Queue) {
+    if queue.panel().is_none() {
+        draft.edit(edit);
+    } else if let Edit::Paste(text) = edit {
+        for ch in text.chars() {
+            let ch = if ch.is_control() { ' ' } else { ch };
+            queue.on_key(&Key::Char(ch));
+        }
+    }
+}
+
 /// The wrapped rows at one width, and where each cursor position shows.
 struct Layout {
     /// The rows, prefixed.
@@ -57,6 +72,28 @@ struct Layout {
 }
 
 impl Draft {
+    /// Applies a key the draft takes: a character, Backspace, or ↑ or ↓
+    /// by wrapped row at `width`. `false` for any other key.
+    pub(crate) fn key(&mut self, key: &Key, width: u16) -> bool {
+        match key {
+            Key::Char(ch) => self.insert(*ch),
+            Key::Backspace => self.backspace(),
+            // debt: ↑ on the first row does nothing, upgrade when prompt
+            // recall lands (part 2 of #684).
+            Key::Up => drop(self.up(width)),
+            Key::Down => drop(self.down(width)),
+            Key::Enter
+            | Key::Esc
+            | Key::CtrlC
+            | Key::CtrlO
+            | Key::PageUp
+            | Key::PageDown
+            | Key::End
+            | Key::AltA => return false,
+        }
+        true
+    }
+
     /// Applies one editing key.
     pub(crate) fn edit(&mut self, edit: Edit) {
         match edit {

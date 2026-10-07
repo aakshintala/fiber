@@ -1,5 +1,6 @@
 //! `fiber ask --resume <id>`: sends the prompt to an existing session
-//! (`docs/invocation.md`, "Lifecycle"). The log's lock is held before the
+//! (`docs/invocation.md`, "Lifecycle"); the internal session command's
+//! `--resume` serves one to clients. The log's lock is held before the
 //! lines it builds from are read, so no writer adds a line between the read
 //! and the first write. A session another process holds is attached to
 //! instead (`docs/invocation.md`, "Processes").
@@ -8,6 +9,7 @@ use std::io;
 use std::path::Path;
 use std::sync::Arc;
 
+use contract::SessionId;
 use doors::Session;
 use log::Log;
 use r#loop::Loop;
@@ -46,7 +48,6 @@ pub(crate) fn ask_resume(
     // A resume that attaches to a live session names the crash file by the
     // session it attaches to, as the TUI does.
     crate::crash::attach(&id);
-    let dir = sessions.join(&id.0);
     // `Log::open` takes the lock first; the log is folded under it.
     // A held lock means a live session: attach to it instead of opening a
     // second writer (`docs/invocation.md`, "Processes"). Its failure
@@ -61,7 +62,59 @@ pub(crate) fn ask_resume(
         }
         Err(e) => return ask_failed(failed(e.code(), e)),
     };
-    let folded = match r#loop::resumed(&dir) {
+    let dir = sessions.join(&id.0);
+    resumed_session(log, &dir, model, Some(prompt), true, clock, signals)
+}
+
+/// The internal session command with `--resume`: resumes the session `id`
+/// in the current directory's project to serve clients
+/// (`docs/invocation.md`, "The hub"). The hub attaches to a live session by
+/// its socket, so a held lock fails instead of attaching.
+pub(crate) fn session_resume(
+    id: SessionId,
+    model: Option<String>,
+    clock: Arc<dyn contract::clock::Clock>,
+    signals: &doors::Signals,
+) -> i32 {
+    let home = match config::fiber_home_from_env() {
+        Ok(home) => home,
+        Err(e) => return ask_failed(failed(e.code(), e)),
+    };
+    let workspace = match std::env::current_dir() {
+        Ok(workspace) => workspace,
+        Err(e) => {
+            return ask_failed(failed(
+                contract::ErrorCode::IoFailed,
+                format!("the current directory: {e}"),
+            ));
+        }
+    };
+    let sessions = log::sessions_dir(&home, &doors::project(&workspace));
+    crate::crash::attach(&id);
+    let log = match Log::open(&sessions, id.clone(), Arc::clone(&clock)) {
+        Ok(log) => Arc::new(log),
+        Err(e) => return ask_failed(failed(e.code(), e)),
+    };
+    let dir = sessions.join(&id.0);
+    resumed_session(log, &dir, model, None, false, clock, signals)
+}
+
+/// One function builds and runs every resumed session, as `new_session`
+/// does every new one: `fiber ask --resume` runs `prompt` as one turn with
+/// no client, and the session command serves clients that may answer
+/// (`docs/permissions.md`, "Headless"). `log` holds the lock; every failure
+/// before `fiber_started` is written leaves the log byte for byte as it
+/// was.
+fn resumed_session(
+    log: Arc<Log>,
+    dir: &Path,
+    model: Option<String>,
+    prompt: Option<String>,
+    one_turn: bool,
+    clock: Arc<dyn contract::clock::Clock>,
+    signals: &doors::Signals,
+) -> i32 {
+    let folded = match r#loop::resumed(dir) {
         Ok(folded) => folded,
         Err(e) => return ask_failed(failed(e.code(), e)),
     };
@@ -128,7 +181,7 @@ pub(crate) fn ask_resume(
     };
     let forget = Arc::clone(&session_servers.forget);
     let permissions = crate::ask_permissions(&home, &project, folded.workspace.clone(), &clock);
-    let session = match Session::resume(&home, &dir, &log, clock, infos, Box::new(io::stdout())) {
+    let session = match Session::resume(&home, dir, &log, clock, infos, Box::new(io::stdout())) {
         Ok(session) => session,
         Err(e) => {
             session_servers.servers.stop();
@@ -156,9 +209,9 @@ pub(crate) fn ask_resume(
     let code = run_turn(
         &session,
         &log,
-        &dir,
-        Some(prompt),
-        true,
+        dir,
+        prompt,
+        one_turn,
         cancel,
         |inbox, cancel| {
             crate::finish(
@@ -179,7 +232,7 @@ pub(crate) fn ask_resume(
                 budget,
                 idle,
                 // `fiber ask --resume` runs one turn with no client.
-                false,
+                !one_turn,
                 reviewer,
                 limits,
                 retry,

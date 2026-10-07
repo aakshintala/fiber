@@ -29,8 +29,8 @@ pub use context::{
 };
 pub use host::{
     CommandAccepted, CommandRejected, CommandResult, DelegateFinished, DelegateStarted,
-    ExtensionExec, ExtensionMessage, ExtensionStateSet, ExtensionStateUnset, ExtensionUi,
-    ExtensionsLoaded, FinishedWorktree, JobCompleted, JobDelta, JobLine, JobStarted,
+    ExtensionExec, ExtensionLog, ExtensionMessage, ExtensionStateSet, ExtensionStateUnset,
+    ExtensionUi, ExtensionsLoaded, FinishedWorktree, JobCompleted, JobDelta, JobLine, JobStarted,
     JobsPendingNotified, LoadedExtension, McpServerFailed, McpServerReady, OnFork, PendingReason,
     ReloadFailure, Reloaded, ReloadedServers, ServerFailure, ToolInfo, ToolSource, ToolState, Ui,
 };
@@ -169,6 +169,7 @@ kinds! {
     ExtensionStateUnset(ExtensionStateUnset) = "extension_state_unset", Durable;
     ExtensionUi(ExtensionUi) = "extension_ui", Ephemeral;
     ExtensionMessage(ExtensionMessage) = "extension_message", Ephemeral;
+    ExtensionLog(ExtensionLog) = "extension_log", Ephemeral;
     ExtensionExec(ExtensionExec) = "extension_exec", Durable;
     JobStarted(JobStarted) = "job_started", Durable;
     DelegateStarted(DelegateStarted) = "delegate_started", Durable;

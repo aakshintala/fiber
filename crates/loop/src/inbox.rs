@@ -7,7 +7,7 @@ use std::sync::mpsc::RecvTimeoutError;
 use std::time::{Duration, Instant};
 
 use contract::commands::Reply;
-use contract::events::{Event, QueuedMessage, SteeringQueue};
+use contract::events::{Event, ExtensionLog, QueuedMessage, SteeringQueue};
 use contract::inbox::{Ack, Delivery, Message, Rejection};
 use contract::shapes::ContentPart;
 use contract::{CommandId, ErrorCode, RequestId, TurnId};
@@ -372,6 +372,7 @@ impl Loop {
             | Delivery::Job(_)
             | Delivery::JobLine(_)
             | Delivery::ExtensionExec(_)
+            | Delivery::ExtensionLog(_)
             | Delivery::Cancelled) => {
                 self.admit_running(other, turn)?;
                 Ok(Waited::Again)
@@ -445,6 +446,19 @@ impl Loop {
             Delivery::ExtensionExec(exec) => {
                 self.log.append(&Event::ExtensionExec(exec), None, None)?;
             }
+            Delivery::ExtensionLog(entry) => self.record_extension_log(entry)?,
+        }
+        Ok(())
+    }
+
+    /// Writes an `extension_log` delivery live and to the diagnostic log.
+    /// The bound event goes to the log first, as the drains did before,
+    /// and lends the diagnostic line its fields, so no clone is kept.
+    pub(crate) fn record_extension_log(&self, entry: ExtensionLog) -> Result<(), Error> {
+        let event = Event::ExtensionLog(entry);
+        self.log.append(&event, None, None)?;
+        if let Event::ExtensionLog(entry) = &event {
+            self.diag.extension_log(&entry.extension, &entry.message);
         }
         Ok(())
     }
@@ -498,6 +512,7 @@ impl Loop {
             Delivery::ExtensionExec(exec) => {
                 self.log.append(&Event::ExtensionExec(exec), None, None)?;
             }
+            Delivery::ExtensionLog(entry) => self.record_extension_log(entry)?,
         }
         Ok(())
     }

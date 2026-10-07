@@ -15,6 +15,8 @@ pub(crate) mod fake;
 mod idle;
 mod listen;
 mod prompt_history;
+mod relay;
+mod resume;
 mod start;
 
 use std::io;
@@ -34,9 +36,10 @@ use crate::listen::Held;
 
 pub use crate::error::StartError;
 
-/// Starts a session the hub was asked for: runs the internal session
-/// command in `workspace` with `id`, so the starter knows the id before the
-/// process runs and nothing is read back (`docs/invocation.md`, "The hub").
+/// Starts a session the hub was asked for, or resumes one a relayed command
+/// names: runs the internal session command in `workspace` with `id`, so
+/// the starter knows the id before the process runs and nothing is read
+/// back (`docs/invocation.md`, "The hub").
 pub trait Starter: Send + Sync {
     /// Starts the session command for `id` in `workspace`, with `model`
     /// when the client named one.
@@ -46,6 +49,10 @@ pub trait Starter: Send + Sync {
         workspace: &Path,
         model: Option<&str>,
     ) -> io::Result<Box<dyn Started>>;
+
+    /// Starts the session command resuming `id` in `workspace`, the one
+    /// its log recorded (`docs/invocation.md`, "Lifecycle").
+    fn resume(&self, id: &SessionId, workspace: &Path) -> io::Result<Box<dyn Started>>;
 }
 
 /// A session process [`Starter::start`] started.

@@ -1315,3 +1315,151 @@ fn a_second_session_with_the_same_id_fails_and_leaves_the_first_alone() {
     assert_eq!(kinds(&stream), SOCKET_KINDS_ONE_TURN_AND_CLOSE);
     assert_eq!(kinds(&out), STDOUT_KINDS_ONE_TURN_AND_CLOSE);
 }
+
+/// Starts a session on a standing ask that idle-exits on it at once, and
+/// returns the request it stopped on, after restoring the default idle
+/// delay for the resume.
+fn suspend_on_an_approval(setup: &Setup, id: &str) -> String {
+    fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n",
+            json!({"decision": "ask", "tool": "shell", "prefix": "echo hi"})
+        ),
+    )
+    .unwrap();
+    setup.no_idle();
+    let running = setup.start_session(id, &["--prompt", "run it"]);
+    let (status, out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+    let exited = out.last().expect("fiber_exited is the last stdout line");
+    assert_eq!(exited["kind"], "fiber_exited");
+    let pending = exited["payload"]["suspended_on"]
+        .as_str()
+        .expect("the session exited suspended on the approval")
+        .to_owned();
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m"}),
+    );
+    pending
+}
+
+#[test]
+fn a_resumed_session_raises_its_request_again_and_a_reply_runs_the_call() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "call_1",
+            "shell",
+            &json!({"command": "echo hi"}),
+        )]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    let id = doors::mint("s_");
+    let pending = suspend_on_an_approval(&setup, &id);
+
+    let mut running = setup.start_session(&id, &["--resume"]);
+    let client = running.connect(&setup.socket(&id));
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    let sub = recv(&client, "the subscribe acknowledgement");
+    assert_eq!(sub["payload"]["command_id"], "c_sub");
+    // The replay holds the first process's request; the resumed process
+    // raises it again after its own `fiber_started`.
+    let mut resumed = false;
+    let replay = until(&client, "the re-raised permission_requested", |line| {
+        if line["kind"] == "fiber_started" && line["payload"]["resumed"] == true {
+            resumed = true;
+        }
+        resumed && line["kind"] == "permission_requested"
+    });
+    let raised = replay.last().unwrap();
+    assert_eq!(raised["payload"]["request_id"], pending.as_str());
+
+    // A second resume while this one runs fails on the held lock and
+    // writes nothing to the log.
+    let (code, lines, stderr) = setup.run(&[
+        "session",
+        "--id",
+        &id,
+        "--workspace",
+        setup.workspace().to_str().unwrap(),
+        "--resume",
+    ]);
+    assert_eq!(code, Some(1), "stderr: {stderr}");
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["payload"]["error"]["code"], "session_held");
+
+    send(
+        &client,
+        &format!(
+            r#"{{"id":"c_reply","command":"reply","args":{{"request_id":"{pending}","decision":"allow"}}}}"#
+        ),
+    );
+    let decided = until(&client, "turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    let accepted = decided
+        .iter()
+        .find(|line| line["kind"] == "command_accepted")
+        .expect("the reply was accepted");
+    assert_eq!(accepted["payload"]["command_id"], "c_reply");
+    let resolved = decided
+        .iter()
+        .find(|line| line["kind"] == "permission_resolved")
+        .expect("the reply resolved the request");
+    assert_eq!(resolved["payload"]["request_id"], pending.as_str());
+    assert_eq!(resolved["payload"]["decision"], "allow");
+    assert_eq!(resolved["payload"]["decided_by"], "person");
+    let completed = decided
+        .iter()
+        .find(|line| line["kind"] == "tool_call_completed")
+        .expect("the allowed call ran");
+    assert_eq!(completed["payload"]["status"], "completed");
+    assert!(
+        decided
+            .iter()
+            .any(|line| line["kind"] == "text_completed" && line["payload"]["text"] == "Hello."),
+        "the turn finished after the allowed call: {decided:?}"
+    );
+
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let _tail = until_close(&client);
+    drop(client);
+    let (status, _out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+
+    // One log, one writer at a time: one `session_started`, the second
+    // `fiber_started` resumed, and `seq` carrying on without a gap.
+    let text = fs::read_to_string(setup.session_dir(&id).join("events.jsonl")).unwrap();
+    let lines: Vec<Value> = text
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line["kind"] == "session_started")
+            .count(),
+        1
+    );
+    let started: Vec<&Value> = lines
+        .iter()
+        .filter(|line| line["kind"] == "fiber_started")
+        .collect();
+    assert_eq!(started.len(), 2);
+    assert_eq!(started[1]["payload"]["resumed"], true);
+    let seqs: Vec<u64> = lines
+        .iter()
+        .map(|line| line["seq"].as_u64().unwrap())
+        .collect();
+    assert!(
+        seqs.windows(2).all(|pair| pair[1] == pair[0] + 1),
+        "{seqs:?}"
+    );
+}
