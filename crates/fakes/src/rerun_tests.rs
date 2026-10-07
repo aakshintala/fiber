@@ -2,6 +2,7 @@ use super::*;
 
 const CHILD: &str = "FIBER_FAKES_RERUN_CHILD";
 const PROBE: &str = "FIBER_FAKES_RERUN_PROBE";
+const HANG: &str = "FIBER_FAKES_RERUN_HANG";
 
 #[test]
 #[allow(
@@ -56,4 +57,29 @@ fn rerun_scrubs_the_eight_proxy_variables() {
         assert!(SCRUBBED.contains(&var), "{var} is scrubbed");
     }
     assert_eq!(SCRUBBED.len(), 8);
+}
+
+#[test]
+fn rerun_within_kills_a_child_that_outlives_the_callers_bound() {
+    if std::env::var_os(HANG).is_some() {
+        loop {
+            std::thread::park();
+        }
+    }
+    let bound = Duration::from_millis(300);
+    let outcome = std::panic::catch_unwind(|| {
+        rerun_within(
+            "rerun::tests::rerun_within_kills_a_child_that_outlives_the_callers_bound",
+            &[(HANG, "1")],
+            bound,
+        )
+    });
+    let payload = outcome.expect_err("a child that never exits panics the caller");
+    let message = payload
+        .downcast_ref::<String>()
+        .expect("the panic carries a formatted message");
+    assert!(
+        message.contains("waited 300ms") && message.contains("reaped: true"),
+        "the panic names the caller's bound and the reaped child: {message}"
+    );
 }

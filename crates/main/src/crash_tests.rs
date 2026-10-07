@@ -9,6 +9,7 @@ use std::os::unix::process::ExitStatusExt as _;
 use std::panic::{AssertUnwindSafe, PanicHookInfo};
 use std::path::Path;
 use std::process::Output;
+use std::time::Duration;
 
 use super::{attach, file_name, install, message, report};
 
@@ -54,12 +55,24 @@ fn this(test: &str) -> String {
     format!("{module}::{test}")
 }
 
+/// How long a crash child may run. The panic hook symbolicates its backtrace,
+/// which reads the debuginfo of every object file under `target/debug/deps`:
+/// 8-22 s cold on macOS in a worktree with about 451k files under load, 1.2 s
+/// at most on loaded Linux. Waiting for the exit and for the reap after a kill
+/// take 2 x 30 s, half of nextest's 120 s kill (`docs/testing.md`, "Waits and
+/// timeouts").
+const CHILD_WITHIN: Duration = Duration::from_secs(30);
+
 /// Re-runs this test binary's `test` with the scenario marker and `home`,
-/// and returns the child's output. `fakes::rerun` bounds the child with its
-/// own 10 s deadline, so a hook that neither writes nor aborts fails fast.
+/// and returns the child's output, bounded by `CHILD_WITHIN` so a hook that
+/// neither writes nor aborts still fails.
 fn rerun(test: &str, scenario: &str, home: &Path) -> Output {
     let home = home.to_str().unwrap().to_owned();
-    fakes::rerun(&this(test), &[(CHILD, scenario), (HOME, home.as_str())])
+    fakes::rerun_within(
+        &this(test),
+        &[(CHILD, scenario), (HOME, home.as_str())],
+        CHILD_WITHIN,
+    )
 }
 
 /// Whether this process is the `scenario` child.
