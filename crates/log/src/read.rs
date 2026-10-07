@@ -271,15 +271,20 @@ impl Watcher {
     }
 
     /// A watcher from `seq` 0 whose first lines are `first`, the log's first
-    /// page, then the pages after it, then whatever arrives after it was
-    /// registered. `next` starts at 0 so a line already queued is skipped
-    /// once a page has returned it.
-    pub(crate) fn starting(queue: Arc<Queue>, offsets: Arc<Offsets>, first: Vec<Envelope>) -> Self {
+    /// page, then the pages after it when `more` says the log held lines
+    /// past it, then whatever arrives after it was registered. `next` starts
+    /// at 0 so a line already queued is skipped once a page has returned it.
+    pub(crate) fn starting(
+        queue: Arc<Queue>,
+        offsets: Arc<Offsets>,
+        first: Vec<Envelope>,
+        more: bool,
+    ) -> Self {
         Self {
             queue,
             offsets,
             next: 0,
-            more: first.len() == CAPACITY,
+            more,
             backlog: VecDeque::from(first),
         }
     }
@@ -358,11 +363,12 @@ impl Watcher {
     }
 
     /// Reads the next page of durable lines the watcher has not returned,
-    /// from `next`. A full page means there may be more. An error leaves
-    /// `more` set, so the next call reads the same page again.
+    /// from `next`. There may be more when the log held lines past the page.
+    /// An error leaves `more` set, so the next call reads the same page
+    /// again.
     fn page(&mut self) -> Result<(), Error> {
-        let page = self.offsets.range(self.next, CAPACITY)?;
-        self.more = page.len() == CAPACITY;
+        let (page, more) = self.offsets.page(self.next)?;
+        self.more = more;
         self.backlog = page.into();
         Ok(())
     }

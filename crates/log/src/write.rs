@@ -18,7 +18,7 @@ use contract::{ActionId, Envelope, SCHEMA_VERSION, Seq, SessionId, TurnId};
 
 use crate::offsets::Offsets;
 use crate::rate::{Rate, RateFold};
-use crate::read::{CAPACITY, Queue, Watcher};
+use crate::read::{Queue, Watcher};
 use crate::{ARTIFACTS, EVENTS, Error, LOCK, io_at, session_path};
 
 /// A session's log, open for writing. Only one exists per session at a time,
@@ -301,8 +301,8 @@ impl Log {
 
     /// Reads the log's first page into the watcher `armed` registered.
     fn finish(&self, armed: Armed) -> Result<Watcher, Error> {
-        let first = armed.offsets.range(0, CAPACITY)?;
-        Ok(Watcher::starting(armed.queue, armed.offsets, first))
+        let (first, more) = armed.offsets.page(0)?;
+        Ok(Watcher::starting(armed.queue, armed.offsets, first, more))
     }
 
     /// `full` cut to `bound`, with a notice of how many bytes were cut and
