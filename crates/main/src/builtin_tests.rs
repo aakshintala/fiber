@@ -429,7 +429,7 @@ fn every_builtin_schema_keeps_to_the_documented_subset() {
         Arc::clone(&clock),
         Arc::new(fakes::Recorder::default()),
     );
-    let (tools, _infos, _driver, _forget) = super::builtin(
+    let (tools, _infos, _driver, _forget, _images) = super::builtin(
         root.path().join("fiber-stub"),
         root.path(),
         &root.path().join("artifacts"),
