@@ -858,7 +858,10 @@ fn a_call_cancelled_before_it_runs_returns_without_connecting() {
     };
     let call = Completions::new(endpoint).request(&request());
     call.cancel();
-    assert_eq!(run(Box::new(call)).0, Err(CallError::Cancelled));
+    assert_eq!(
+        run(Box::new(call)).0,
+        Err(CallError::Cancelled { usage: None })
+    );
     let accepted = listener.accept().map(|_| ()).unwrap_err();
     assert_eq!(
         accepted.kind(),
@@ -895,7 +898,25 @@ fn cancelling_from_another_thread_ends_a_blocked_read() {
     let result = finished
         .recv_timeout(DEADLINE)
         .expect("waited for run to return after the cancel");
-    assert_eq!(result, Err(CallError::Cancelled));
+    let Err(CallError::Cancelled { usage: Some(usage) }) = result else {
+        panic!("{result:?}");
+    };
+    assert_eq!(usage.generation_id.0, "gen-1");
+    assert_eq!(
+        usage.tokens,
+        Tokens {
+            input: 0,
+            cache_read: 0,
+            cache_write: Default::default(),
+            output: 0,
+        }
+    );
+    assert_eq!(usage.web_searches, None);
+    assert_eq!(
+        usage.input_size.bytes,
+        u64::try_from(server.requests()[0].body.len()).unwrap()
+    );
+    assert!(!usage.input_size.media);
     assert!(
         server.await_closed(1, DEADLINE),
         "waited for the server to see the client close"

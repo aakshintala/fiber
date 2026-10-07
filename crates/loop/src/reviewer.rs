@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use contract::events::{
     AskStep, CacheLifetime, DecidedBy, Decision, Escalation, Event, Notice, PermissionResolved,
-    ReviewerRef, RuleOffer, ToolCallCompleted, ToolCallRequested, UsageRecorded,
+    ReviewerRef, RuleOffer, ToolCallCompleted, ToolCallRequested,
 };
 use contract::provider::{CallError, Cost, Input, ModelRequest, Provider, Reply};
 use contract::shapes::Failure;
@@ -302,7 +302,7 @@ impl Loop {
                     }
                 }
                 Err(CallError::Failed { failure, .. }) => return Ok(StageReply::Fail(failure)),
-                Err(CallError::Cancelled) => return Ok(StageReply::Cancelled),
+                Err(CallError::Cancelled { .. }) => return Ok(StageReply::Cancelled),
             }
         }
         // The escalation carries the last reply, quoted: a person's
@@ -479,8 +479,9 @@ impl Loop {
         (conversation, previous)
     }
 
-    /// Sends one reviewer request and records its usage. A failed call
-    /// writes no usage, and a reviewer reply is not streamed to watchers.
+    /// Sends one reviewer request and records its usage. A call that ended
+    /// without a reply, after the provider named its generation, writes what
+    /// it saw, and a reviewer reply is not streamed to watchers.
     fn send_review(
         &mut self,
         turn: &TurnId,
@@ -504,22 +505,31 @@ impl Loop {
         };
         let call = endpoint.provider.call(&request);
         let reply = crate::cancel::run_cancellable(&self.cancel, call, &mut |_| {});
-        if let Ok(reply) = &reply {
-            let cost = crate::usage::call_cost(reply.cost, endpoint.cost.as_ref(), &reply.tokens);
-            let recorded = UsageRecorded {
-                generation_id: reply.generation_id.clone(),
-                model: endpoint.reference.clone(),
-                tokens: reply.tokens.clone(),
-                input_bytes: reply.input_size.bytes,
-                input_media: reply.input_size.media.then_some(true),
-                web_searches: reply.web_searches,
-                cost,
-                subscription: endpoint.subscription.then_some(true),
-                extension: None,
-                origin_session_id: None,
-            };
-            self.append(&Event::UsageRecorded(recorded.clone()), turn, None)?;
-            self.ledger.record(&recorded);
+        match &reply {
+            Ok(reply) => {
+                let recorded = crate::usage::recorded(
+                    reply.usage(),
+                    reply.cost,
+                    &endpoint.reference,
+                    endpoint.cost.as_ref(),
+                    endpoint.subscription,
+                );
+                self.append(&Event::UsageRecorded(recorded.clone()), turn, None)?;
+                self.ledger.record(&recorded);
+            }
+            Err(error) => {
+                if let Some(usage) = error.usage() {
+                    let recorded = crate::usage::recorded(
+                        usage.clone(),
+                        None,
+                        &endpoint.reference,
+                        endpoint.cost.as_ref(),
+                        endpoint.subscription,
+                    );
+                    self.append(&Event::UsageRecorded(recorded.clone()), turn, None)?;
+                    self.ledger.record(&recorded);
+                }
+            }
         }
         Ok(reply)
     }

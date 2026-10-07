@@ -6,6 +6,7 @@ use super::*;
 use crate::events::{
     CallStatus, ReasoningCompleted, TextCompleted, ToolCallCompleted, ToolCallRequested,
 };
+use crate::shapes::Failure;
 use crate::shapes::Tokens;
 use crate::{ActionId, GenerationId, ProviderCallId};
 
@@ -235,4 +236,65 @@ fn a_tool_definition_without_hosted_has_no_hosted_key_and_reads_back() {
         serde_json::from_value::<ToolDefinition>(value).unwrap(),
         hosted
     );
+}
+
+fn call_usage() -> CallUsage {
+    CallUsage {
+        generation_id: GenerationId("gen_9".into()),
+        tokens: Tokens {
+            input: 7,
+            cache_read: 1,
+            cache_write: BTreeMap::from([("5m".to_owned(), 2)]),
+            output: 3,
+        },
+        web_searches: Some(2),
+        input_size: InputSize {
+            bytes: 900,
+            media: true,
+        },
+    }
+}
+
+#[test]
+fn a_reply_s_usage_carries_its_generation_tokens_searches_and_input_size() {
+    let usage = call_usage();
+    let mut acted = reply(Vec::new());
+    acted.generation_id = usage.generation_id.clone();
+    acted.tokens = usage.tokens.clone();
+    acted.web_searches = usage.web_searches;
+    acted.input_size = usage.input_size;
+    assert_eq!(acted.usage(), usage);
+}
+
+#[test]
+fn a_call_error_s_usage_is_what_each_variant_carries() {
+    let usage = call_usage();
+    let failed = CallError::Failed {
+        failure: Failure {
+            code: crate::ErrorCode::RateLimited,
+            message: "slow".into(),
+            retry_after_ms: None,
+            provider: None,
+        },
+        should_retry: None,
+        usage: Some(Box::new(usage.clone())),
+    };
+    assert_eq!(failed.usage(), Some(&usage));
+    let cancelled = CallError::Cancelled {
+        usage: Some(Box::new(usage.clone())),
+    };
+    assert_eq!(cancelled.usage(), Some(&usage));
+    let failed_none = CallError::Failed {
+        failure: Failure {
+            code: crate::ErrorCode::RateLimited,
+            message: "slow".into(),
+            retry_after_ms: None,
+            provider: None,
+        },
+        should_retry: None,
+        usage: None,
+    };
+    assert_eq!(failed_none.usage(), None);
+    let cancelled_none = CallError::Cancelled { usage: None };
+    assert_eq!(cancelled_none.usage(), None);
 }

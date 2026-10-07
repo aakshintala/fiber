@@ -5,7 +5,7 @@
 
 use std::time::{Duration, Instant};
 
-use contract::events::{CacheLifetime, Event, Notice, UsageRecorded};
+use contract::events::{CacheLifetime, Event, Notice};
 use contract::provider::CallError;
 
 use crate::{Error, Loop};
@@ -83,24 +83,32 @@ impl Loop {
         request.max_output_tokens = Some(1);
         let call = self.provider.call(&request);
         let reply = crate::cancel::run_cancellable(&self.cancel, call, &mut |_| {});
+        // A refresh that named its generation writes its usage at once,
+        // before the notice a failure also writes.
+        if let Err(error) = &reply
+            && let Some(usage) = error.usage()
+        {
+            let model = self.model.reference.clone();
+            let prices = self.model.cost.clone();
+            let subscription = self.model.subscription;
+            let recorded =
+                crate::usage::recorded(usage.clone(), None, &model, prices.as_ref(), subscription);
+            self.log
+                .append(&Event::UsageRecorded(recorded.clone()), None, None)?;
+            self.ledger.record(&recorded);
+        }
         match reply {
             Ok(reply) => {
-                let recorded = UsageRecorded {
-                    cost: crate::usage::call_cost(
-                        reply.cost,
-                        self.model.cost.as_ref(),
-                        &reply.tokens,
-                    ),
-                    generation_id: reply.generation_id,
-                    model: self.model.reference.clone(),
-                    tokens: reply.tokens,
-                    input_bytes: reply.input_size.bytes,
-                    input_media: reply.input_size.media.then_some(true),
-                    web_searches: reply.web_searches,
-                    subscription: self.model.subscription.then_some(true),
-                    extension: None,
-                    origin_session_id: None,
-                };
+                let model = self.model.reference.clone();
+                let prices = self.model.cost.clone();
+                let subscription = self.model.subscription;
+                let recorded = crate::usage::recorded(
+                    reply.usage(),
+                    reply.cost,
+                    &model,
+                    prices.as_ref(),
+                    subscription,
+                );
                 self.log
                     .append(&Event::UsageRecorded(recorded.clone()), None, None)?;
                 self.ledger.record(&recorded);
@@ -126,7 +134,7 @@ impl Loop {
                 )?;
                 Ok(Refreshed::Stopped(clock.now()))
             }
-            Err(CallError::Cancelled) => Ok(Refreshed::Stopped(clock.now())),
+            Err(CallError::Cancelled { .. }) => Ok(Refreshed::Stopped(clock.now())),
         }
     }
 }

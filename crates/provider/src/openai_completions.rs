@@ -14,8 +14,8 @@ use contract::events::{
     ToolCallRequested,
 };
 use contract::provider::{
-    CallError, Delta, Finish, InputSize, ModelCall, ModelRequest, Provider, Reply, ReplyAction,
-    ToolDefinition,
+    CallError, CallUsage, Delta, Finish, InputSize, ModelCall, ModelRequest, Provider, Reply,
+    ReplyAction, ToolDefinition,
 };
 use contract::shapes::Tokens;
 use contract::{GenerationId, ProviderCallId};
@@ -121,7 +121,7 @@ pub struct Call {
 impl ModelCall for Call {
     fn run(&self, sink: &mut dyn FnMut(Delta)) -> Result<Reply, CallError> {
         let mut secrets = self.secrets.clone();
-        let (reply, should_retry) = match http::post_signed(
+        let (decoded, should_retry) = match http::post_signed(
             &self.url,
             &self.headers,
             &self.body,
@@ -131,27 +131,32 @@ impl ModelCall for Call {
             &mut secrets,
         ) {
             Ok((stream, should_retry)) => (
-                decode(BufReader::new(stream), &self.lifetime, sink),
+                decode_tracked(BufReader::new(stream), &self.lifetime, sink),
                 should_retry,
             ),
             Err(e) => {
                 let should_retry = e.should_retry();
-                (Err(e), should_retry)
+                (Err((e, None)), should_retry)
             }
         };
         // Whatever a cancelled call returns, the cancel ended it.
         if self.cancel.is_cancelled() {
-            return Err(CallError::Cancelled);
+            return Err(CallError::Cancelled {
+                usage: crate::unfinished::carried(&decoded, self.input_size),
+            });
         }
-        reply
-            .map(|reply| Reply {
-                input_size: self.input_size,
-                ..reply
-            })
-            .map_err(|e| CallError::Failed {
-                failure: e.failure(&self.provider, &secrets),
+        let usage = crate::unfinished::carried(&decoded, self.input_size);
+        match decoded {
+            Ok(mut reply) => {
+                reply.input_size = self.input_size;
+                Ok(reply)
+            }
+            Err((error, _)) => Err(CallError::Failed {
+                failure: error.failure(&self.provider, &secrets),
                 should_retry,
-            })
+                usage,
+            }),
+        }
     }
 
     fn cancel(&self) {
@@ -240,9 +245,26 @@ pub fn decode(
     lifetime: &CacheLifetime,
     sink: &mut dyn FnMut(Delta),
 ) -> Result<Reply, Error> {
-    let mut reply = Decoder::default();
+    decode_tracked(stream, lifetime, sink).map_err(|(error, _)| error)
+}
+
+/// As [`decode`], also carrying what the stream had seen when it failed:
+/// the generation and its usage once a chunk named them, else none.
+#[allow(
+    clippy::result_large_err,
+    reason = "the decode carries its partial alongside the error for the call's usage"
+)]
+pub(crate) fn decode_tracked(
+    stream: impl BufRead,
+    lifetime: &CacheLifetime,
+    sink: &mut dyn FnMut(Delta),
+) -> Result<Reply, (Error, Option<CallUsage>)> {
+    let mut reply = Decoder {
+        lifetime: Some(*lifetime),
+        ..Decoder::default()
+    };
     let mut done = false;
-    sse::read(stream, |data| {
+    let read = sse::read(stream, |data| {
         if data == "[DONE]" {
             done = true;
             return Ok(true);
@@ -251,11 +273,18 @@ pub fn decode(
             .map_err(|e| Error::StreamIncomplete(format!("a chunk is not JSON ({e})")))?;
         reply.chunk(&chunk, sink)?;
         Ok(false)
-    })?;
-    if !done {
-        return Err(Error::StreamIncomplete("it ended before [DONE]".into()));
+    });
+    if let Err(error) = read {
+        return Err((error, reply.partial()));
     }
-    reply.finish(lifetime)
+    if !done {
+        return Err((
+            Error::StreamIncomplete("it ended before [DONE]".into()),
+            reply.partial(),
+        ));
+    }
+    let partial = reply.partial();
+    reply.finish(lifetime).map_err(|error| (error, partial))
 }
 
 /// One tool call as it streams in.
@@ -284,9 +313,28 @@ struct Decoder {
     calls: BTreeMap<u64, StreamedCall>,
     finish: Option<String>,
     usage: Value,
+    /// The request's cache lifetime, which a reported cache write is counted
+    /// under. Set from `decode`'s `lifetime`; `None` in unit tests counts
+    /// writes as five minutes.
+    lifetime: Option<CacheLifetime>,
 }
 
 impl Decoder {
+    /// What the stream had seen: the generation and its usage once a chunk
+    /// named them, else none.
+    fn partial(&self) -> Option<CallUsage> {
+        if self.id.is_empty() {
+            return None;
+        }
+        let lifetime = self.lifetime.unwrap_or(CacheLifetime::FiveMinutes);
+        Some(CallUsage {
+            generation_id: GenerationId(self.id.clone()),
+            tokens: tokens(&self.usage, &lifetime),
+            web_searches: None,
+            input_size: InputSize::default(),
+        })
+    }
+
     /// Takes one chunk.
     fn chunk(&mut self, chunk: &Value, sink: &mut dyn FnMut(Delta)) -> Result<(), Error> {
         // An error inside the 200 stream, as OpenRouter sends an upstream's

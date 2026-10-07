@@ -9,7 +9,8 @@ use std::sync::{Mutex, PoisonError};
 
 use contract::events::TextCompleted;
 use contract::provider::{
-    CallError, Delta, Finish, InputSize, ModelCall, ModelRequest, Provider, Reply, ReplyAction,
+    CallError, CallUsage, Delta, Finish, InputSize, ModelCall, ModelRequest, Provider, Reply,
+    ReplyAction,
 };
 use contract::shapes::{Failure, Tokens};
 use contract::{ErrorCode, GenerationId};
@@ -38,13 +39,36 @@ impl Scripted {
         }
     }
 
-    /// A call that fails with `failure`.
+    /// A call that fails with `failure` before any generation.
     pub fn failed(failure: Failure) -> Self {
         Self {
             deltas: Vec::new(),
             end: Err(CallError::Failed {
                 failure,
                 should_retry: None,
+                usage: None,
+            }),
+        }
+    }
+
+    /// A call that fails with `failure` after reporting `usage`.
+    pub fn failed_after(failure: Failure, usage: CallUsage) -> Self {
+        Self {
+            deltas: Vec::new(),
+            end: Err(CallError::Failed {
+                failure,
+                should_retry: None,
+                usage: Some(Box::new(usage)),
+            }),
+        }
+    }
+
+    /// A call cancelled after reporting `usage`.
+    pub fn cancelled_after(usage: CallUsage) -> Self {
+        Self {
+            deltas: Vec::new(),
+            end: Err(CallError::Cancelled {
+                usage: Some(Box::new(usage)),
             }),
         }
     }
@@ -72,6 +96,25 @@ pub fn reply(text: &str) -> Reply {
         },
         web_searches: None,
         cost: None,
+        input_size: InputSize {
+            bytes: 1000,
+            media: false,
+        },
+    }
+}
+
+/// A call's generation and what it reported: 10 input and 3 output tokens
+/// with 1000 input bytes, as `reply` uses.
+pub fn call_usage(generation: &str) -> CallUsage {
+    CallUsage {
+        generation_id: GenerationId(generation.into()),
+        tokens: Tokens {
+            input: 10,
+            cache_read: 0,
+            cache_write: Default::default(),
+            output: 3,
+        },
+        web_searches: None,
         input_size: InputSize {
             bytes: 1000,
             media: false,
@@ -146,22 +189,36 @@ impl ModelCall for Call {
             .unwrap_or_else(PoisonError::into_inner)
             .take();
         let Some(scripted) = scripted else {
-            return Err(CallError::Cancelled);
+            return Err(CallError::Cancelled { usage: None });
         };
         for delta in scripted.deltas {
             if self.cancelled.load(Ordering::SeqCst) {
-                return Err(CallError::Cancelled);
+                return cancelled_end(scripted.end);
             }
             sink(delta);
         }
         if self.cancelled.load(Ordering::SeqCst) {
-            return Err(CallError::Cancelled);
+            return cancelled_end(scripted.end);
         }
         scripted.end
     }
 
     fn cancel(&self) {
         self.cancelled.store(true, Ordering::SeqCst);
+    }
+}
+
+/// What a cancelled scripted call returns: its scripted end when that end
+/// is itself `Cancelled` (what the call saw when the cancel landed), and
+/// `Cancelled` with no usage otherwise.
+#[allow(
+    clippy::result_large_err,
+    reason = "the seam returns the call's error by value; the test fake mirrors it"
+)]
+fn cancelled_end(end: Result<Reply, CallError>) -> Result<Reply, CallError> {
+    match end {
+        Err(CallError::Cancelled { .. }) => end,
+        _ => Err(CallError::Cancelled { usage: None }),
     }
 }
 

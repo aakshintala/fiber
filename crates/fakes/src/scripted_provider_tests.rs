@@ -72,7 +72,10 @@ fn a_cancelled_call_returns_cancelled_and_streams_nothing() {
     let call = provider.call(&request("r"));
     call.cancel();
     let mut deltas = Vec::new();
-    assert_eq!(call.run(&mut |d| deltas.push(d)), Err(CallError::Cancelled));
+    assert_eq!(
+        call.run(&mut |d| deltas.push(d)),
+        Err(CallError::Cancelled { usage: None })
+    );
     assert!(deltas.is_empty());
 }
 
@@ -81,5 +84,30 @@ fn a_call_runs_once() {
     let provider = ScriptedProvider::new([Scripted::text("Hello")]);
     let call = provider.call(&request("r"));
     assert!(call.run(&mut |_| {}).is_ok());
-    assert_eq!(call.run(&mut |_| {}), Err(CallError::Cancelled));
+    assert_eq!(
+        call.run(&mut |_| {}),
+        Err(CallError::Cancelled { usage: None })
+    );
+}
+
+#[test]
+fn a_cancelled_call_keeps_a_scripted_cancelled_end_and_drops_any_other() {
+    use super::call_usage;
+    let usage = call_usage("gen_kept");
+    let provider = ScriptedProvider::new([Scripted::cancelled_after(usage.clone())]);
+    let call = provider.call(&request("r"));
+    call.cancel();
+    assert_eq!(
+        call.run(&mut |_| {}),
+        Err(CallError::Cancelled {
+            usage: Some(Box::new(usage))
+        })
+    );
+    let provider = ScriptedProvider::new([Scripted::text("Hello")]);
+    let call = provider.call(&request("r"));
+    call.cancel();
+    assert_eq!(
+        call.run(&mut |_| {}),
+        Err(CallError::Cancelled { usage: None })
+    );
 }

@@ -29,7 +29,7 @@ use contract::provider::{CallError, Delta, ModelCall, ModelRequest, Provider, Re
 use contract::shapes::Failure;
 use contract::{Envelope, ErrorCode, JobId, RequestId};
 use fakes::clock::FakeClock;
-use fakes::{Scripted, ScriptedProvider};
+use fakes::{Scripted, ScriptedProvider, call_usage};
 
 use support::{DEADLINE, Session, Tap, delivery};
 
@@ -592,7 +592,7 @@ impl ModelCall for Blocked {
         self.started.send(()).unwrap();
         let got = self.cancelled.lock().unwrap().recv_timeout(DEADLINE);
         assert!(got.is_ok(), "the shutdown cancels the refresh");
-        Err(CallError::Cancelled)
+        Err(CallError::Cancelled { usage: None })
     }
 
     fn cancel(&self) {
@@ -632,4 +632,72 @@ impl Provider for Advance {
         }
         self.inner.call(request)
     }
+}
+
+#[test]
+fn a_failed_refresh_after_its_generation_writes_its_usage_then_the_notice() {
+    let mut session = session(
+        vec![
+            Scripted::text("ok."),
+            Scripted::failed_after(
+                Failure {
+                    code: ErrorCode::ProviderUnavailable,
+                    message: "Overloaded.".into(),
+                    retry_after_ms: None,
+                    provider: None,
+                },
+                call_usage("gen_refresh"),
+            ),
+            refresh_reply(),
+        ],
+        CacheLifetime::FiveMinutes,
+    );
+    arm(&mut session, MINUTE, Some(2));
+    let mut watcher = session.log.watch();
+    let start = session.clock.now();
+    session.inbox.send(delivery("hi")).unwrap();
+    let finished = spawn_run(&mut session);
+    let due = start + Duration::from_secs(270);
+    parked(&session.clock, due, "the refresh is due");
+    advance_to(&session, due);
+    // The lines after the turn are exactly `usage_recorded, notice`, in
+    // order: consume to the turn's end, skipping the status observer's
+    // lines, then read the next two.
+    let mut next = || {
+        loop {
+            let line = watcher
+                .recv_timeout(DEADLINE)
+                .expect("a line in time")
+                .expect("the log outlives the turn")
+                .expect("the log ended before the awaited line");
+            if line.kind != "session_status" {
+                return line;
+            }
+        }
+    };
+    loop {
+        if next().kind == "turn_completed" {
+            break;
+        }
+    }
+    let usage = next();
+    assert_eq!(usage.kind, "usage_recorded");
+    assert!(usage.turn_id.is_none(), "a refresh belongs to no turn");
+    assert!(usage.action_id.is_none(), "a refresh belongs to no action");
+    assert_eq!(usage.payload["generation_id"], "gen_refresh");
+    let notice = next();
+    assert_eq!(notice.kind, "notice");
+    assert_eq!(notice.payload["code"], "provider_unavailable");
+    assert!(!notice.is_durable(), "the notice is ephemeral");
+    assert!(notice.turn_id.is_none());
+    let exit = due + MINUTE;
+    parked(&session.clock, exit, "idle counts from the failure");
+    advance_to(&session, exit);
+    ended(&finished);
+    assert_eq!(session.requests().len(), 2);
+    let after = after_turns(&session);
+    assert_eq!(
+        after.iter().map(|l| l.kind.as_str()).collect::<Vec<_>>(),
+        vec!["usage_recorded"]
+    );
 }

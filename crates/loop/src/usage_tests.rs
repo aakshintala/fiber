@@ -1,9 +1,9 @@
 use contract::GenerationId;
 use contract::events::UsageRecorded;
-use contract::provider::{Cost, Tier};
+use contract::provider::{CallUsage, Cost, InputSize, Tier};
 use contract::shapes::Tokens;
 
-use super::{Ledger, call_cost, price};
+use super::{Ledger, call_cost, price, recorded as built};
 
 fn tokens(input: u64, cache_read: u64, cache_write: &[(&str, u64)], output: u64) -> Tokens {
     Tokens {
@@ -286,4 +286,40 @@ fn the_inline_cost_wins_over_the_declared_prices() {
         call_cost(Some(0.000123), Some(&prices), &tokens(1_000_000, 0, &[], 0)),
         Some(0.000123)
     );
+}
+
+fn unfinished(media: bool) -> CallUsage {
+    CallUsage {
+        generation_id: GenerationId("gen_u".into()),
+        tokens: tokens(1_000_000, 0, &[], 0),
+        web_searches: None,
+        input_size: InputSize { bytes: 123, media },
+    }
+}
+
+#[test]
+fn a_partial_record_prices_its_tokens_at_the_declared_prices() {
+    let prices = priced();
+    let line = built(unfinished(false), None, "fake/m", Some(&prices), false);
+    assert_eq!(line.generation_id, GenerationId("gen_u".into()));
+    assert_eq!(line.model, "fake/m");
+    assert_eq!(line.input_bytes, 123);
+    assert_eq!(line.cost, Some(2.0));
+}
+
+#[test]
+fn a_partial_record_without_prices_has_no_cost() {
+    let line = built(unfinished(false), None, "fake/m", None, false);
+    assert_eq!(line.cost, None);
+}
+
+#[test]
+fn a_partial_record_marks_media_and_subscription_only_when_set() {
+    let prices = priced();
+    let plain = built(unfinished(false), None, "fake/m", Some(&prices), false);
+    assert_eq!(plain.input_media, None);
+    assert_eq!(plain.subscription, None);
+    let marked = built(unfinished(true), None, "fake/m", Some(&prices), true);
+    assert_eq!(marked.input_media, Some(true));
+    assert_eq!(marked.subscription, Some(true));
 }
