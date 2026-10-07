@@ -1,7 +1,8 @@
 //! What a signal does to a `fiber ask` session process (`docs/invocation.md`,
 //! "Shutdown"): the callbacks the signals thread runs, wired to the turn's
 //! cancel, the session's jobs, the door side, every command's process group
-//! and every MCP server.
+//! and every MCP server. A `close` with `now` takes the same path with exit
+//! code 0, through the hook wired here.
 
 use std::sync::Arc;
 
@@ -26,16 +27,17 @@ pub(crate) fn arm(signals: &Signals) {
 /// Starts the session just before its first line: the code of a signal
 /// that came while armed, or `None` with the shutdown wired. A shutdown
 /// cancels the turn for good, wakes the loop, and stops every job; a second
-/// SIGTERM or SIGINT kills every command group at once.
+/// SIGTERM or SIGINT kills every command group at once. With `None`, a
+/// `close` with `now` starts the same shutdown with exit code 0.
 pub(crate) fn start(
-    signals: &Signals,
+    signals: &Arc<Signals>,
     cancel: &Arc<TurnCancel>,
     session: &Session,
     jobs: Arc<dyn Jobs>,
 ) -> Option<i32> {
     let turn = Arc::clone(cancel);
     let stopper = session.stopper();
-    signals.start(
+    let started = signals.start(
         Box::new(move |code| {
             // The code first: the loop reads it once the stopper wakes it.
             turn.shutdown(code);
@@ -48,5 +50,17 @@ pub(crate) fn start(
             tools::kill_every_group();
             extensions::kill_every_group();
         }),
-    )
+    );
+    if started.is_some() {
+        return started;
+    }
+    // The `Weak` breaks the cycle the `on_signal` closure already holds
+    // through the stopper: `main` keeps the `Arc` for the whole process.
+    let weak = Arc::downgrade(signals);
+    session.close_now(Arc::new(move || {
+        if let Some(signals) = weak.upgrade() {
+            signals.close_now();
+        }
+    }));
+    None
 }

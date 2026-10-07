@@ -26,7 +26,7 @@ pub(crate) fn ask_resume(
     model: Option<String>,
     prompt: String,
     clock: Arc<dyn contract::clock::Clock>,
-    signals: &doors::Signals,
+    signals: &Arc<doors::Signals>,
     fiber: Result<PathBuf, String>,
 ) -> i32 {
     let home = match config::fiber_home_from_env() {
@@ -79,7 +79,7 @@ pub(crate) fn session_resume(
     id: SessionId,
     model: Option<String>,
     clock: Arc<dyn contract::clock::Clock>,
-    signals: &doors::Signals,
+    signals: &Arc<doors::Signals>,
     fiber: Result<PathBuf, String>,
 ) -> i32 {
     let home = match config::fiber_home_from_env() {
@@ -122,7 +122,7 @@ fn resumed_session(
     prompt: Option<String>,
     one_turn: bool,
     clock: Arc<dyn contract::clock::Clock>,
-    signals: &doors::Signals,
+    signals: &Arc<doors::Signals>,
     fiber: Result<PathBuf, String>,
 ) -> i32 {
     let folded = match r#loop::resumed(dir) {

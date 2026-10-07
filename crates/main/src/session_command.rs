@@ -70,7 +70,7 @@ pub(crate) fn new_session(
     prompt: Option<String>,
     one_turn: bool,
     clock: Arc<dyn contract::clock::Clock>,
-    signals: &doors::Signals,
+    signals: &Arc<doors::Signals>,
     fiber: Result<PathBuf, String>,
 ) -> i32 {
     let mut parts = match parts_with(model, None, None, Arc::clone(&clock)) {
