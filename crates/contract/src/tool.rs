@@ -9,7 +9,7 @@ use serde_json::{Map, Value};
 
 use crate::clock::Wake;
 use crate::emit::Emit;
-use crate::events::{Control, FileChange, McpServerFailed};
+use crate::events::{Control, FileChange, McpServerFailed, McpServerReady};
 use crate::jobs::JobRecord;
 use crate::provider::ToolDefinition;
 use crate::shapes::{ContentPart, DeclaredEffects, Failure, Process};
@@ -110,11 +110,21 @@ pub struct Output {
     /// Job lines the loop writes, in order, under this call's action, just
     /// before its `tool_call_completed`.
     pub jobs: Vec<JobRecord>,
-    /// On a call that started its server and failed to, the
-    /// `mcp_server_failed` the loop writes under this call's action,
-    /// before its `tool_call_completed`, like `jobs`. Set only for the
-    /// call that triggered the failed start.
-    pub server_failed: Option<McpServerFailed>,
+    /// Server lines the loop writes, in order, under this call's action,
+    /// before its job lines and `tool_call_completed`: what this call saw
+    /// of its server's deaths and restarts. Set only for the call that
+    /// observed each one, so each is written once.
+    pub servers: Vec<ServerRecord>,
+}
+
+/// One durable server line a call returns (`docs/mcp.md`, "When a server
+/// dies").
+#[derive(Debug, Clone, PartialEq)]
+pub enum ServerRecord {
+    /// `mcp_server_failed`: the server's start failed, or it died.
+    Failed(McpServerFailed),
+    /// `mcp_server_ready`: a server that died runs again after its restart.
+    Ready(McpServerReady),
 }
 
 /// How many bytes of a result's text the model is sent: the first `start`
