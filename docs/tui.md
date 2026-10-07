@@ -132,7 +132,7 @@ each, growing with the number of live sessions and scrolling past the screen:
 Live sessions come from the hub's feed, across every project. Exited sessions
 come from `recent.jsonl`, then from the hub's paged query for older ones.
 When the terminal was launched inside a git repository, home shows only that
-repository's project, every worktree of it, with a line saying "N waiting in
+repository's project, every worktree of it, by the `project` on each live session's `session_status` and on each exited session's `recent.jsonl` row, with a line saying "N waiting in
 other projects" and a toggle to show everything. Outside a git repository it
 shows everything. The rail always shows every project ("The rail").
 
@@ -858,7 +858,7 @@ SSH.
     (`docs/invocation.md`, "Lifecycle").
   - "Close all" sends each working session `cancel`, stops its jobs and
     delegates, then sends `close`. The prompt says how many of them are also
-    open elsewhere, from each session's `clients`.
+    open elsewhere: a session's `clients` on its `session_status`, less the terminal's own `full` connection to it when it holds one.
 - **Stopping one session** is `/close`, or the ✕ on its home row. It sends
   `cancel`, stops the session's jobs and delegates, then sends `close`.
 

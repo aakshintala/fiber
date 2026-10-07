@@ -228,6 +228,21 @@ fn reason_follows_the_documented_transitions() {
             },
         ),
         (
+            "live idle to idle with another count, since announced, sends nothing",
+            Case {
+                before: Some((true, status_of("idle", None, S, None))),
+                now: {
+                    let mut now = status_of("idle", None, S, None);
+                    now.clients = 1;
+                    now
+                },
+                unseen: false,
+                fresh: true,
+                announced: announced(None, Some(S)),
+                expected: None,
+            },
+        ),
+        (
             "none idle unseen announced sends nothing",
             Case {
                 before: None,
@@ -276,6 +291,21 @@ fn reason_follows_the_documented_transitions() {
             Case {
                 before: Some((true, status_of("waiting", Some("r1"), S, None))),
                 now: status_of("waiting", Some("r1"), S + 1, None),
+                unseen: false,
+                fresh: true,
+                announced: announced(Some("r1"), None),
+                expected: None,
+            },
+        ),
+        (
+            "live waiting r1 to waiting r1 with another count, r1 announced, sends nothing",
+            Case {
+                before: Some((true, status_of("waiting", Some("r1"), S, None))),
+                now: {
+                    let mut now = status_of("waiting", Some("r1"), S, None);
+                    now.clients = 1;
+                    now
+                },
                 unseen: false,
                 fresh: true,
                 announced: announced(Some("r1"), None),

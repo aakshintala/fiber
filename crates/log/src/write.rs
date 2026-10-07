@@ -181,8 +181,9 @@ impl Log {
         Ok(line)
     }
 
-    /// The newest line of a latest-wins kind (`session_status` or
-    /// `extensions_loaded`), recorded as it was appended. Nothing for any
+    /// The newest line of a latest-wins kind (`session_status`,
+    /// `extensions_loaded`, `steering_queue` or `clients`), recorded as it
+    /// was appended. Nothing for any
     /// other kind, and nothing before that kind has been written. A
     /// subscriber registers its watcher first and then reads this, so a line
     /// written in between is queued and may also be here; the latest wins.
@@ -460,14 +461,14 @@ impl Inner {
 }
 
 /// Keeps `line` in `latest` when its kind is one whose latest wins
-/// (`session_status`, `extensions_loaded`, `steering_queue`, and
+/// (`session_status`, `extensions_loaded`, `steering_queue`, `clients`, and
 /// `extension_ui`). `extension_ui` is kept per extension and per widget id:
 /// one key for the status line and one per widget; a clearing line (`status`
 /// `""`, or empty `lines`) removes its key.
 fn keep_latest(latest: &mut BTreeMap<String, Envelope>, line: &Envelope) {
     if matches!(
         line.kind.as_str(),
-        "session_status" | "extensions_loaded" | "steering_queue"
+        "session_status" | "extensions_loaded" | "steering_queue" | "clients"
     ) {
         latest.insert(line.kind.clone(), line.clone());
         return;
