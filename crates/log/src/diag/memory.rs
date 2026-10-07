@@ -15,7 +15,26 @@ fn read() -> Option<u64> {
         .and_then(|status| vm_hwm(&status))
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "macos")]
+#[allow(
+    unsafe_code,
+    reason = "proc_pid_rusage, the only call that reports the peak physical footprint"
+)]
+fn read() -> Option<u64> {
+    // SAFETY: `rusage_info_v4` is plain integers, so all zeroes is a valid
+    // value. `proc_pid_rusage` with `RUSAGE_INFO_V4` writes at most one
+    // `rusage_info_v4` through the pointer, which points at `info`, alive
+    // and exclusively borrowed for the call. `getpid` cannot fail.
+    let (status, info) = unsafe {
+        let mut info: libc::rusage_info_v4 = std::mem::zeroed();
+        let status =
+            libc::proc_pid_rusage(libc::getpid(), libc::RUSAGE_INFO_V4, (&raw mut info).cast());
+        (status, info)
+    };
+    (status == 0).then_some(info.ri_lifetime_max_phys_footprint / 1024)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn read() -> Option<u64> {
     None
 }

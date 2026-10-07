@@ -5,7 +5,7 @@
 
 use super::*;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn the_test_process_has_a_non_zero_peak() {
     assert!(peak_kib().unwrap() > 0);

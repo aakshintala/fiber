@@ -1224,6 +1224,7 @@ version = "0.0.0"
 dependencies = [
  "contract",
  "fakes",
+ "libc",
  "proptest",
  "serde_json",
  "thiserror 2.0.21",
