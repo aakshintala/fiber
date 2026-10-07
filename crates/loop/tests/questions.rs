@@ -438,20 +438,44 @@ fn a_directory_scanned_before_a_handoff_sends_its_file_once_in_the_new_context()
     session.inbox.send(delivery("go")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     let first = session.lines();
-    assert_eq!(count(&first, "instruction_file"), 0, "{:?}", kinds(&first));
+    let mut expected = vec![
+        "session_started",
+        "preamble_built",
+        "opening_message",
+        "turn_started",
+    ];
+    expected.extend(step_of(3));
+    expected.extend([
+        "tool_call_started",
+        "tool_call_started",
+        "tool_call_started",
+        "tool_call_completed",
+        "tool_call_completed",
+        "tool_call_completed",
+        "handoff_completed",
+        "opening_message",
+        "turn_completed",
+    ]);
+    assert_eq!(kinds(&first), expected);
     session.inbox.send(delivery("again")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     let second = session.lines();
-    assert_eq!(
-        count(&second, "instruction_file"),
-        1,
-        "{:?}",
-        kinds(&second)
-    );
-}
-
-fn count(lines: &[Envelope], kind: &str) -> usize {
-    lines.iter().filter(|line| line.kind == kind).count()
+    let mut expected = vec!["turn_started"];
+    expected.extend(step_of(1));
+    expected.extend([
+        "tool_call_started",
+        "tool_call_completed",
+        "step_started",
+        "instruction_file",
+        "assistant_message_started",
+        "assistant_message_delta",
+        "assistant_message_delta",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+    ]);
+    assert_eq!(kinds(&second), expected);
 }
 
 #[test]
