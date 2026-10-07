@@ -18,8 +18,10 @@ CI is GitHub Actions on GitHub-hosted runners: `ubuntu-24.04` for Linux
 x86_64, `ubuntu-24.04-arm` for Linux arm64, and a macOS arm64 runner. The
 repository is public, so minutes cost nothing. The account is on GitHub Pro,
 which runs at most 40 jobs at once and at most 5 macOS jobs at once, shared
-by every repository on the account. Each run uses one macOS job, so five
-pull requests can run before a sixth queues for macOS.
+by every repository on the account. A draft pull request runs only the
+Linux x86_64 leg, so its run uses no macOS job. A ready pull request's run
+uses one macOS job, so five ready pull requests can run before a sixth
+queues for macOS.
 
 Every runner has a C compiler, which `mlua` needs to build Lua
 ([ADR 0006](adr/0006-extension-runtime-lua.md)).
@@ -28,7 +30,9 @@ Every runner has a C compiler, which `mlua` needs to build Lua
 
 One check is required to merge: `CI`. It passes only when every job the
 selection chose succeeded and every job it did not choose was skipped. If
-the selection itself fails, `CI` fails.
+the selection itself fails, `CI` fails. On a draft pull request the verdict
+job reports as `CI (draft)`, so the required `CI` check stays pending until
+the pull request is marked ready, which starts the full run.
 
 The selection is one job that every other job waits for, so it does as
 little as it can: it works out the selection and, on a pull request, runs
@@ -76,9 +80,10 @@ The selector has its own tests.
 
 ## On every pull request that changes code
 
-On each of Linux x86_64, Linux arm64 and macOS arm64, one job runs
-`scripts/check`, the same command an implementer runs before every push to
-a pull request (`docs/workflow.md`, "The gate"). It:
+On a ready pull request, one job on each of Linux x86_64, Linux arm64 and
+macOS arm64 runs `scripts/check`, the gate CI applies (`docs/workflow.md`,
+"The gate"). A draft pull request runs only the Linux x86_64 leg. Each
+job:
 
 - compiles the selected crates with the debug profile, every target,
   through clippy and nextest; the whole workspace is built by the backstop

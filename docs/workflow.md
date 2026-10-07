@@ -51,15 +51,16 @@ An implementer is given:
 - the ticket
 - the `docs/<area>.md` pages the ticket cites
 - `GLOSSARY.md`
-- the gate command, `scripts/check`
+- the gate: `scripts/check` passing in CI (`docs/workflow.md`, "The gate")
 
 `AGENTS.md` at the repository root points every harness at these files.
 
 ## The gate
 
-`scripts/check` must pass before every push, whoever wrote the code: before
-the pull request opens and before each push that repairs it. CI is not where
-a lint or test failure is found first. No change is too small for it.
+`scripts/check` passing in CI on the exact head gates the merge. Before a
+push, the implementer runs the checks for the crates they changed:
+`cargo clippy -p <crate> --all-targets -- -D warnings` and
+`cargo nextest run -p <crate>`.
 
 It runs, for the crates `docs/ci.md`, "Selection", chooses, what CI's
 per-platform job runs: `cargo fmt --check`, clippy with the workspace lints,
@@ -202,6 +203,8 @@ that no longer makes sense is closed and its work replanned.
 
 ## Merging
 
-When `CI` is green and every review finding is resolved, the orchestrator
-squash-merges the pull request, deletes its branch and checks the ticket
-closed.
+A pull request opens as a draft and stays a draft until its review loop is
+done; marking it ready starts CI's full run (`docs/ci.md`). When `CI` is
+green, the full run passed on the exact head, and every review finding is
+resolved, the orchestrator squash-merges the pull request, deletes its
+branch and checks the ticket closed.
