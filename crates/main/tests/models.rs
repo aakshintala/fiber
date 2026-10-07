@@ -307,32 +307,17 @@ fn await_refreshed(file: &std::path::Path, old: &[u8]) {
     panic!("waited {DEADLINE:?} for the cached model list to refresh");
 }
 
-/// Whether a process whose command line contains `pattern` remains, in
-/// slices of 100 ms up to `within`: true once none does.
-fn gone_within(pattern: &str, within: Duration) -> bool {
-    let (_tx, rx) = mpsc::channel::<()>();
-    let slices = within.as_millis() / 100;
-    for _ in 0..=slices {
-        match fakes::matching(pattern) {
-            Ok(matched) if matched.is_empty() => return true,
-            _ => {}
-        }
-        let _waited = rx.recv_timeout(Duration::from_millis(100));
-    }
-    false
-}
-
 /// Waits until this test's refresh child is gone, up to [`DEADLINE`]: the
 /// detached child exits after it rewrites the cache, and a rewritten cache
 /// alone never proves it did. On expiry it kills the child and its group,
 /// checks they are gone within [`REAP_DEADLINE`], and fails.
 fn await_refresh_exit(pattern: &str) {
-    if gone_within(pattern, DEADLINE) {
+    if fakes::matching_exits(pattern, DEADLINE) {
         return;
     }
     fakes::kill_matching(pattern).unwrap();
     assert!(
-        gone_within(pattern, REAP_DEADLINE),
+        fakes::matching_exits(pattern, REAP_DEADLINE),
         "the refresh child outlived SIGKILL by {REAP_DEADLINE:?}"
     );
     panic!("waited {DEADLINE:?} for the refresh child to exit");

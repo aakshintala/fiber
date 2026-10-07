@@ -468,25 +468,6 @@ pub(crate) fn hello() -> Response {
     ])
 }
 
-/// Waits under [`DEADLINE`] until `done` holds for the processes whose
-/// command line contains `text`, naming `what` on expiry.
-pub(crate) fn until_matching(text: &str, what: &str, done: fn(&[u32]) -> bool) {
-    let (tx, rx) = mpsc::channel();
-    let text = text.to_owned();
-    thread::spawn(move || {
-        while !done(&fakes::matching(&text).unwrap()) {
-            thread::yield_now();
-        }
-        match tx.send(()) {
-            Ok(()) | Err(mpsc::SendError(())) => {}
-        }
-    });
-    assert!(
-        rx.recv_timeout(DEADLINE).is_ok(),
-        "waited {DEADLINE:?} for {what}"
-    );
-}
-
 /// Guards every session the hub starts in `workspace`: each carries the
 /// workspace path on its command line. Dropping it kills every process
 /// whose command line holds the path, and its process group; its watchdog
@@ -513,13 +494,14 @@ impl SessionGuard {
         }
     }
 
-    /// Waits under [`DEADLINE`] until no process's command line holds the
-    /// workspace path, then stands the guard down.
+    /// Called after the signal that every session in the workspace is ending
+    /// (its socket closed, its session_left, or the guard's SIGKILL): waits
+    /// under [`DEADLINE`] for every process holding the workspace path to
+    /// exit, then stands the guard down.
     pub(crate) fn wait_gone(mut self) {
-        until_matching(
-            &self.workspace,
-            "every process holding the workspace path to exit",
-            <[u32]>::is_empty,
+        assert!(
+            fakes::matching_exits(&self.workspace, DEADLINE),
+            "waited {DEADLINE:?} for every process holding the workspace path to exit"
         );
         self.stand_down_watchdog();
     }
