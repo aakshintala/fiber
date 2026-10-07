@@ -62,6 +62,7 @@ ephemeral event where it is display-only.
 | `doors` | `fiber ask` (argv or stdin in, JSON lines out), and the internal session command that it, the hub and a parent run. Which doors exist and what a driver may send is `docs/invocation.md`; this page only fixes that none has a privilege the TUI lacks. |
 | `picture` | The image child (`docs/invocation.md`, "Processes"): decodes, refuses, fits and re-encodes one image under the limits in `docs/model-routing.md`, "Image limits". Only `main` depends on it, so no session process runs image code. |
 | `cli` | Every command that does not run a session: `login`, `logout`, `approve`, `sessions export`, `sessions delete`, `sessions prune`, `models`, `extension install/update/remove/list` and `config get/set` today, and later `sessions search`, `upgrade` and `hub pair` as they are built. `main` dispatches to it. |
+| `main` | The composition root. Parses argv, builds everything once, picks a door. No feature logic. |
 
 ### Why contract exists
 
