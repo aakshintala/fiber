@@ -483,3 +483,135 @@ fn a_page_with_no_rows_is_outside_every_window() {
     assert!(index.intersects(2, 0, 20));
     assert!(!index.intersects(1, 0, 20));
 }
+
+#[test]
+fn turn_completed_discards_a_candidate_cut() {
+    let mut index = Index::default();
+    let mut seq = 0;
+    filler(&mut index, &mut seq, PAGE_LINES);
+    let at = seq;
+    assert_eq!(
+        push(&mut index, at, "step_started", None, true),
+        Cut::Candidate
+    );
+    assert!(index.pending());
+    assert_eq!(
+        push(&mut index, at + 1, "turn_completed", None, true),
+        Cut::None
+    );
+    assert!(!index.pending());
+    // The step's text opens nothing: the candidate died with the turn.
+    assert_eq!(
+        push(&mut index, at + 2, "text_completed", Some("a_m"), true),
+        Cut::None
+    );
+    assert_eq!(index.pages().len(), 1);
+}
+
+#[test]
+fn nothing_pends_on_a_fresh_index() {
+    assert!(!Index::default().pending());
+}
+
+#[test]
+fn page_of_holds_only_lines_on_a_page() {
+    // The fresh index's open page holds no lines: nothing is on it.
+    let empty = Index::default();
+    assert_eq!(empty.page_of(Seq(0)), None);
+    assert_eq!(empty.page_of(Seq(9)), None);
+    // Both sides of a cut between two pages holding lines.
+    let mut index = Index::default();
+    let mut seq = 0;
+    filler(&mut index, &mut seq, PAGE_LINES);
+    feed(&mut index, &mut seq, &[("turn_started", None)]);
+    let edge = PAGE_LINES as u64;
+    assert_eq!(index.page_of(Seq(edge - 1)), Some(0));
+    assert_eq!(index.page_of(Seq(edge)), Some(1));
+    assert_eq!(index.page_of(Seq(edge + 1)), None);
+}
+
+#[test]
+fn thinking_shown_opens_a_group_for_later_thinking() {
+    let mut index = Index::default();
+    let mut seq = 0;
+    filler(&mut index, &mut seq, PAGE_LINES);
+    let mut at = seq;
+    assert_eq!(
+        push(&mut index, at, "step_started", None, true),
+        Cut::Candidate
+    );
+    at += 1;
+    // Shown thinking opens a group; completing it only ends the flight.
+    assert_eq!(
+        push(&mut index, at, "reasoning_started", Some("a_r"), true),
+        Cut::None
+    );
+    at += 1;
+    assert_eq!(
+        push(&mut index, at, "reasoning_completed", Some("a_r"), true),
+        Cut::None
+    );
+    at += 1;
+    assert_eq!(
+        push(&mut index, at, "step_started", None, true),
+        Cut::Candidate
+    );
+    at += 1;
+    // The thinking joins the open group, so the candidate is discarded and
+    // the step's text cuts nothing.
+    assert_eq!(
+        push(&mut index, at, "reasoning_started", Some("a_r2"), true),
+        Cut::None
+    );
+    at += 1;
+    assert_eq!(
+        push(&mut index, at, "reasoning_completed", Some("a_r2"), true),
+        Cut::None
+    );
+    at += 1;
+    assert_eq!(
+        push(&mut index, at, "text_completed", Some("a_m"), true),
+        Cut::None
+    );
+    assert_eq!(index.pages().len(), 1);
+}
+
+#[test]
+fn a_call_shown_opens_a_group_for_later_thinking() {
+    let mut index = Index::default();
+    let mut seq = 0;
+    filler(&mut index, &mut seq, PAGE_LINES);
+    let mut at = seq;
+    assert_eq!(
+        push(&mut index, at, "tool_call_requested", Some("a_t"), true),
+        Cut::None
+    );
+    at += 1;
+    assert_eq!(
+        push(&mut index, at, "tool_call_completed", Some("a_t"), true),
+        Cut::None
+    );
+    at += 1;
+    assert_eq!(
+        push(&mut index, at, "step_started", None, true),
+        Cut::Candidate
+    );
+    at += 1;
+    // The thinking joins the call's open group, shown on no card or not,
+    // so the candidate is discarded and the step's text cuts nothing.
+    assert_eq!(
+        push(&mut index, at, "reasoning_started", Some("a_r"), false),
+        Cut::None
+    );
+    at += 1;
+    assert_eq!(
+        push(&mut index, at, "reasoning_completed", Some("a_r"), true),
+        Cut::None
+    );
+    at += 1;
+    assert_eq!(
+        push(&mut index, at, "text_completed", Some("a_m"), true),
+        Cut::None
+    );
+    assert_eq!(index.pages().len(), 1);
+}
