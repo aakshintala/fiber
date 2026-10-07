@@ -51,7 +51,7 @@ a 20-thousand-token one fit the same ceiling.
 | Session, busy or resumed | 24 MiB peak RSS | Linux x86_64 | from components |
 | `web_fetch` converting a 10 MiB HTML page, the download cap | within the busy session's 24 MiB peak RSS | Linux x86_64 | from components |
 | Idle CPU, session and terminal | zero context switches in the idle window, on every thread | Linux x86_64 | exact |
-| Threads, idle headless session | 4, plus 2 per client, plus 1 for `fiber ask`'s printer, plus 1 per Lua extension in use | Linux x86_64 | exact |
+| Threads, idle headless session | 5, plus 2 per client, plus 1 per Lua extension in use | Linux x86_64 | exact |
 | fsyncs | 2 per model request, 2 per tool call | Linux x86_64 | exact |
 | Log bytes, 429-call turn | the turn's content plus 1 KiB per tool call | Linux x86_64 | exact |
 | Session start, the internal session command to its first line, no hub | 20 ms | Linux x86_64 | picked |
@@ -73,19 +73,21 @@ Basis says where a number came from:
   300,000-token context is about 1.2 MB of text, and a 2 MiB conversation
   added about 3 MiB in `research/delegate-memory/`.
 - **Exact** follows from a rule, so the gate checks an equality, not a
-  ceiling. The four threads every session runs are the loop, signals, accept
-  and status. Each client adds its reader and its writer, and `fiber ask`
-  adds the printer for its stdout (`docs/architecture.md`, "The threads"). A
+  ceiling. The five threads every session runs are the loop, signals, accept,
+  status and the printer for its stdout. Each client adds its reader and its
+  writer (`docs/architecture.md`, "The threads"). A
   pull request that adds a thread changes this count and says why. Two fsyncs bracket each effect, and
   no line restates an earlier line in the same turn (`docs/events.md`,
   "Writing").
 - **Picked** was chosen with no measurement behind it. The idle session's
   12 MiB is held as a placeholder: every runtime crate linked together costs
   7.4 MiB over an empty program on Linux x86_64 (`docs/dependencies.md`,
-  "Measuring memory"), and twice that is 15 MiB, so the first measured run
-  sets this ceiling.
-- **Measured** is a Fiber measurement times two. The first build that runs
-  replaces every "from components" and "picked" number with its measured one.
+  "Measuring memory"), and twice that is 15 MiB, so a first measured run
+  above 12 MiB sets this ceiling.
+- **Measured** is a Fiber measurement times two. The first build that runs a
+  benchmark replaces a "from components" or "picked" number with its measured
+  one only where the measurement exceeds that number. Every other ceiling stays
+  as it is, and a ceiling the measurement does not exceed keeps its basis.
 
 The busy-or-resumed ceiling holds on three workloads:
 
@@ -121,7 +123,9 @@ frameworks Fiber does not control. Listing with a cold cache is reported,
 never gated.
 
 No test asserts a timing (`docs/testing.md`). The budgets are a benchmark job,
-separate from the tests.
+separate from the tests. The harness, `cargo run -p main --example bench`,
+measures a `fiber` binary and writes its results to a file, and
+`cargo xtask bench-report` judges that file against the table above.
 
 ## When a budget is exceeded
 

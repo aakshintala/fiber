@@ -67,28 +67,49 @@ pub(crate) fn call_cost(
     inline.or_else(|| prices.map(|prices| price(prices, tokens)))
 }
 
+/// A call's `usage_recorded`, and whether its cost may be looked up later.
+pub(crate) struct Recorded {
+    /// The line.
+    pub(crate) line: UsageRecorded,
+    /// True for a call without the vendor's own figure whose id the provider
+    /// named: only such a call is looked up (`docs/model-routing.md`,
+    /// "Cost").
+    pub(crate) lookable: bool,
+}
+
 /// One `usage_recorded` from what a call reported (`docs/events.md`,
 /// `usage_recorded`). A partial record carries no vendor figure, so its
-/// `cost` is the declared prices applied to its tokens.
+/// `cost` is the declared prices applied to its tokens. A call the provider
+/// named no generation for, or an empty one, gets an id Fiber mints,
+/// starting `fiber-`, once, here: its copies and its fold all carry that id.
+/// Such a call's `cost` is `null` and is never looked up, because the vendor
+/// never named the generation (`docs/model-routing.md`, "Cost").
 pub(crate) fn recorded(
     usage: CallUsage,
     inline_cost: Option<f64>,
     model: &str,
     prices: Option<&Cost>,
     subscription: bool,
-) -> UsageRecorded {
-    UsageRecorded {
-        generation_id: usage.generation_id,
+) -> Recorded {
+    let named = usage.generation_id.filter(|id| !id.0.is_empty());
+    let cost = match named {
+        Some(_) => call_cost(inline_cost, prices, &usage.tokens),
+        None => None,
+    };
+    let lookable = named.is_some() && inline_cost.is_none();
+    let line = UsageRecorded {
+        generation_id: named.unwrap_or_else(|| GenerationId(crate::mint("fiber-"))),
         model: model.to_owned(),
-        tokens: usage.tokens.clone(),
+        tokens: usage.tokens,
         input_bytes: usage.input_size.bytes,
         input_media: usage.input_size.media.then_some(true),
         web_searches: usage.web_searches,
-        cost: call_cost(inline_cost, prices, &usage.tokens),
+        cost,
         subscription: subscription.then_some(true),
         extension: None,
         origin_session_id: None,
-    }
+    };
+    Recorded { line, lookable }
 }
 
 impl crate::Loop {
@@ -104,29 +125,28 @@ impl crate::Loop {
         let subscription = self.model.subscription;
         let recorded = recorded(usage.clone(), None, &model, prices.as_ref(), subscription);
         let lookup = self.provider.cost_lookup();
-        self.write_usage(recorded, None, lookup, Some(turn), Some(message))
+        self.write_usage(recorded, lookup, Some(turn), Some(message))
     }
 
     /// Writes and ledgers one call's `usage_recorded`: the one path every
-    /// call's usage takes. A call without the vendor's own figure (`inline`
-    /// `None`) whose provider has a lookup is looked up once, later
-    /// (`docs/model-routing.md`, "Cost").
+    /// call's usage takes. A `lookable` record whose provider has a lookup
+    /// is looked up once, later (`docs/model-routing.md`, "Cost").
     pub(crate) fn write_usage(
         &mut self,
-        recorded: UsageRecorded,
-        inline: Option<f64>,
+        recorded: Recorded,
         lookup: Option<Arc<dyn CostLookup>>,
         turn: Option<&TurnId>,
         action: Option<&ActionId>,
     ) -> Result<(), crate::Error> {
-        self.put_usage(&recorded, turn, action)?;
-        let Some(lookup) = lookup.filter(|_| inline.is_none()) else {
+        let Recorded { line, lookable } = recorded;
+        self.put_usage(&line, turn, action)?;
+        let Some(lookup) = lookup.filter(|_| lookable) else {
             return Ok(());
         };
         let clock = Arc::clone(self.log.clock());
         let scheduled =
             self.late_cost
-                .schedule(lookup, recorded, turn.cloned(), action.cloned(), &clock);
+                .schedule(lookup, line, turn.cloned(), action.cloned(), &clock);
         if let Err(e) = scheduled {
             self.log.append(
                 &Event::Notice(Notice {

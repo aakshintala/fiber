@@ -384,9 +384,11 @@ fn a_failed_note_request_leaves_the_context_and_blocks_the_rest_of_the_turn() {
             &[
                 "handoff_started",
                 "assistant_message_started",
+                "usage_recorded",
                 "assistant_message_completed",
                 "retry_scheduled",
                 "assistant_message_started",
+                "usage_recorded",
                 "assistant_message_completed",
                 "handoff_completed",
             ],
@@ -440,6 +442,7 @@ fn a_new_turn_may_hand_off_after_a_failed_one() {
             &[
                 "handoff_started",
                 "assistant_message_started",
+                "usage_recorded",
                 "assistant_message_completed",
                 "handoff_completed",
             ],
@@ -497,6 +500,7 @@ fn a_cancel_during_the_note_request_ends_the_turn_interrupted() {
             &[
                 "handoff_started",
                 "assistant_message_started",
+                "usage_recorded",
                 "handoff_completed",
             ],
             ENDED,
@@ -506,10 +510,11 @@ fn a_cancel_during_the_note_request_ends_the_turn_interrupted() {
     assert_eq!(outcome, Some(TurnOutcome::Interrupted));
     let tail = kinds(&lines);
     assert_eq!(
-        tail[tail.len() - 4..],
+        tail[tail.len() - 5..],
         [
             "handoff_started",
             "assistant_message_started",
+            "usage_recorded",
             "handoff_completed",
             "turn_completed"
         ]
@@ -917,15 +922,7 @@ fn a_new_context_is_unmeasured_in_the_next_turn_too() {
     let (first, lines) = run(&mut session, "hi");
     assert_kinds(
         &lines,
-        &[
-            OPENING,
-            STEP,
-            CALL_BODY,
-            STEP,
-            HANDED_OFF,
-            &["assistant_message_started", "assistant_message_completed"],
-            ENDED,
-        ],
+        &[OPENING, STEP, CALL_BODY, STEP, HANDED_OFF, REJECTED, ENDED],
     );
     assert_eq!(first, Some(TurnOutcome::Failed));
     assert_eq!(
@@ -1372,6 +1369,7 @@ fn a_failed_handoff_between_turns_still_ends_the_turn_without_a_request() {
             &[
                 "handoff_started",
                 "assistant_message_started",
+                "usage_recorded",
                 "assistant_message_completed",
                 "handoff_completed",
             ],
@@ -1761,11 +1759,16 @@ fn a_held_person_handoff_still_runs_at_the_boundary_after_a_tool_handoff() {
 // Overflow (`docs/handoff.md`, "Overflow").
 
 /// A request the provider rejected for size: one assistant message, failed.
-const REJECTED: &[&str] = &["assistant_message_started", "assistant_message_completed"];
+const REJECTED: &[&str] = &[
+    "assistant_message_started",
+    "usage_recorded",
+    "assistant_message_completed",
+];
 /// A handoff whose note request failed.
 const FAILED_NOTE: &[&str] = &[
     "handoff_started",
     "assistant_message_started",
+    "usage_recorded",
     "assistant_message_completed",
     "handoff_completed",
 ];
@@ -1931,6 +1934,7 @@ fn a_retried_note_request_counts_its_own_attempts() {
             &[
                 "handoff_started",
                 "assistant_message_started",
+                "usage_recorded",
                 "assistant_message_completed",
                 "retry_scheduled",
                 "assistant_message_started",
@@ -2223,6 +2227,7 @@ fn a_cancel_during_the_overflow_note_request_ends_the_turn_interrupted() {
             &[
                 "handoff_started",
                 "assistant_message_started",
+                "usage_recorded",
                 "handoff_completed",
             ],
             ENDED,

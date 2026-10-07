@@ -79,6 +79,32 @@ fn band(app: &App) -> String {
 }
 
 #[test]
+fn a_call_that_reported_no_input_tokens_leaves_the_size_waiting() {
+    let mut app = app();
+    preamble(&mut app, Some(400_000));
+    start(&mut app);
+    started(&mut app, "auto");
+    completed(
+        &mut app,
+        json!({"outcome": "completed", "note": ["a_n"], "tokens_before": 402_000}),
+    );
+    // A call that failed before its provider named a generation: no input
+    // tokens, so no size, whatever its output.
+    usage(
+        &mut app,
+        "fiber-0123456789abcdef",
+        0,
+        json!({"tokens": {"input": 0, "cache_read": 0, "cache_write": {}, "output": 5}}),
+    );
+    assert_eq!(band(&app), "⇄ Handoff · automatic at 400.0k · 402.0k → …");
+    usage(&mut app, "g_next", 29_000, json!({}));
+    assert_eq!(
+        band(&app),
+        "⇄ Handoff · automatic at 400.0k · 402.0k → 32.0k"
+    );
+}
+
+#[test]
 fn each_trigger_reads_as_the_band_says_it() {
     for (trigger_at, trigger, says) in [
         (Some(400_000), "auto", "automatic at 400.0k"),

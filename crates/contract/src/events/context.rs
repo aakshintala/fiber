@@ -10,7 +10,8 @@ use crate::{ActionId, ErrorCode, GenerationId, SessionId};
 /// `usage_recorded`: one per model call, whatever started it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UsageRecorded {
-    /// The provider's id for the generation.
+    /// The provider's id for the generation, or an id Fiber mints, starting
+    /// `fiber-`, when the provider named none.
     pub generation_id: GenerationId,
     /// The model reference, `provider/model`.
     pub model: String,
@@ -29,7 +30,7 @@ pub struct UsageRecorded {
     pub web_searches: Option<u64>,
     /// In US dollars: the vendor's own figure where it reports one, otherwise
     /// the model's declared prices applied to `tokens`; `null` when neither
-    /// exists.
+    /// exists, and for an id Fiber minted.
     #[serde(deserialize_with = "crate::shapes::nullable")]
     pub cost: Option<f64>,
     /// `true` when a subscription login covered the call, so `cost` is an

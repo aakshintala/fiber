@@ -985,7 +985,8 @@ fn tools_give_tokens_from_the_first_request_after_each_preamble() {
             send(&client, r#"{"id":"c_t7","command":"tools"}"#);
             let t7 = response(&client, "c_t7");
             assert_eq!(tools_of(&t7)[0]["bytes"], 12);
-            assert_eq!(tools_of(&t7)[0]["tokens"], 0, "{t7}");
+            // A request that reported no input tokens gives no rate.
+            assert!(tools_of(&t7)[0].get("tokens").is_none(), "{t7}");
             Ok(())
         })
         .unwrap();

@@ -26,11 +26,11 @@ use contract::events::{
     CacheLifetime, ReasoningCompleted, TextCompleted, TextDelta, ToolCallRequested,
 };
 use contract::provider::{
-    CallError, Delta, Finish, Input, InputSize, ModelCall, ModelRequest, Provider, Reply,
-    ReplyAction, ToolDefinition,
+    CallError, CallUsage, Delta, Finish, Input, InputSize, ModelCall, ModelRequest, Provider,
+    Reply, ReplyAction, ToolDefinition,
 };
 use contract::shapes::Tokens;
-use contract::{ActionId, ErrorCode, ProviderCallId};
+use contract::{ActionId, ErrorCode, GenerationId, ProviderCallId};
 use fakes::{ProviderServer, Response, fingerprint};
 use provider::Endpoint;
 use provider::google_generative_ai::{Gemini, decode};
@@ -313,7 +313,7 @@ fn every_probe_recording_decodes_into_the_actions_and_usage_it_holds() {
                 "{label}"
             );
             assert!(reply.tokens.input > 0, "{label}");
-            assert!(!reply.generation_id.0.is_empty(), "{label}");
+            assert!(reply.generation_id.is_some(), "{label}");
         }
     }
     // 59 non-streamed bodies, 3 SSE bodies and the one text file; 39 HTTP
@@ -339,7 +339,10 @@ fn the_recorded_stream_decodes_its_text_and_trailing_signature() {
             .unwrap()
             .starts_with("EnMK")
     );
-    assert_eq!(reply.generation_id.0, "03y7apiQIoOg1MkP4eXTkAg");
+    assert_eq!(
+        reply.generation_id,
+        Some(GenerationId("03y7apiQIoOg1MkP4eXTkAg".into()))
+    );
     assert_eq!(
         reply.tokens,
         Tokens {
@@ -1011,10 +1014,12 @@ fn a_call_cancelled_before_it_runs_returns_without_connecting() {
     };
     let call = Gemini::new(endpoint).request(&request());
     call.cancel();
-    assert_eq!(
-        run(Box::new(call)).0,
-        Err(CallError::Cancelled { usage: None })
-    );
+    let Err(CallError::Cancelled { usage }) = run(Box::new(call)).0 else {
+        panic!("a call cancelled before run returns cancelled");
+    };
+    // Nothing was read, so the call carries only the body it built.
+    assert!(usage.input_size.bytes > 0);
+    assert_eq!(*usage, CallUsage::unnamed(usage.input_size));
     let accepted = listener.accept().map(|_| ()).unwrap_err();
     assert_eq!(accepted.kind(), std::io::ErrorKind::WouldBlock);
 }
@@ -1047,10 +1052,10 @@ fn cancelling_from_another_thread_ends_a_blocked_read() {
     let result = finished
         .recv_timeout(DEADLINE)
         .expect("waited for run to return after the cancel");
-    let Err(CallError::Cancelled { usage: Some(usage) }) = result else {
+    let Err(CallError::Cancelled { usage }) = result else {
         panic!("{result:?}");
     };
-    assert_eq!(usage.generation_id.0, "r1");
+    assert_eq!(usage.generation_id, Some(GenerationId("r1".into())));
     assert_eq!(
         usage.tokens,
         Tokens {

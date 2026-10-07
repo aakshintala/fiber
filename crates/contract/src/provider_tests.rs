@@ -14,7 +14,7 @@ fn reply(actions: Vec<ReplyAction>) -> Reply {
     Reply {
         actions,
         finish: Finish::Completed,
-        generation_id: GenerationId("g".into()),
+        generation_id: Some(GenerationId("g".into())),
         tokens: Tokens {
             input: 0,
             cache_read: 0,
@@ -240,7 +240,7 @@ fn a_tool_definition_without_hosted_has_no_hosted_key_and_reads_back() {
 
 fn call_usage() -> CallUsage {
     CallUsage {
-        generation_id: GenerationId("gen_9".into()),
+        generation_id: Some(GenerationId("gen_9".into())),
         tokens: Tokens {
             input: 7,
             cache_read: 1,
@@ -268,35 +268,57 @@ fn a_reply_s_usage_carries_its_generation_tokens_searches_and_input_size() {
 
 #[test]
 fn a_call_error_s_usage_is_what_each_variant_carries() {
-    let usage = call_usage();
-    let failed = CallError::Failed {
-        failure: Failure {
-            code: crate::ErrorCode::RateLimited,
-            message: "slow".into(),
-            retry_after_ms: None,
-            provider: None,
-        },
-        should_retry: None,
-        usage: Some(Box::new(usage.clone())),
+    let failure = Failure {
+        code: crate::ErrorCode::RateLimited,
+        message: "slow".into(),
+        retry_after_ms: None,
+        provider: None,
     };
-    assert_eq!(failed.usage(), Some(&usage));
-    let cancelled = CallError::Cancelled {
-        usage: Some(Box::new(usage.clone())),
+    let unnamed = CallUsage::unnamed(InputSize {
+        bytes: 40,
+        media: false,
+    });
+    for usage in [call_usage(), unnamed] {
+        let failed = CallError::Failed {
+            failure: failure.clone(),
+            should_retry: None,
+            usage: Box::new(usage.clone()),
+        };
+        assert_eq!(failed.usage(), &usage);
+        let cancelled = CallError::Cancelled {
+            usage: Box::new(usage.clone()),
+        };
+        assert_eq!(cancelled.usage(), &usage);
+    }
+}
+
+#[test]
+fn an_unnamed_usage_has_no_generation_no_counts_and_the_given_input() {
+    let size = InputSize {
+        bytes: 1234,
+        media: true,
     };
-    assert_eq!(cancelled.usage(), Some(&usage));
-    let failed_none = CallError::Failed {
-        failure: Failure {
-            code: crate::ErrorCode::RateLimited,
-            message: "slow".into(),
-            retry_after_ms: None,
-            provider: None,
-        },
-        should_retry: None,
-        usage: None,
-    };
-    assert_eq!(failed_none.usage(), None);
-    let cancelled_none = CallError::Cancelled { usage: None };
-    assert_eq!(cancelled_none.usage(), None);
+    assert_eq!(
+        CallUsage::unnamed(size),
+        CallUsage {
+            generation_id: None,
+            tokens: Tokens {
+                input: 0,
+                cache_read: 0,
+                cache_write: BTreeMap::new(),
+                output: 0,
+            },
+            web_searches: None,
+            input_size: size,
+        }
+    );
+}
+
+#[test]
+fn a_reply_the_provider_never_named_has_an_unnamed_usage() {
+    let mut unnamed = reply(Vec::new());
+    unnamed.generation_id = None;
+    assert_eq!(unnamed.usage().generation_id, None);
 }
 
 #[test]

@@ -1898,11 +1898,12 @@ const CLOSE_REPLY: [&str; 8] = [
 ];
 
 /// The stdout kinds of a turn a `close` with `now` interrupts mid-request:
-/// the step starts, the assistant message starts, and the shutdown ends
-/// the turn.
-const CLOSE_HELD: [&str; 3] = [
+/// the step starts, the assistant message starts, the cancelled call writes
+/// its usage, and the shutdown ends the turn.
+const CLOSE_HELD: [&str; 4] = [
     "step_started",
     "assistant_message_started",
+    "usage_recorded",
     "turn_completed",
 ];
 

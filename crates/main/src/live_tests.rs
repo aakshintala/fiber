@@ -207,7 +207,7 @@ fn live_reviewer() {
             end: Ok(Reply {
                 actions,
                 finish: Finish::Completed,
-                generation_id: GenerationId("gen_live".into()),
+                generation_id: Some(GenerationId("gen_live".into())),
                 tokens: contract::shapes::Tokens {
                     input: 10,
                     cache_read: 0,

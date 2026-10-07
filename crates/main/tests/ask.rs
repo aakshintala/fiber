@@ -773,12 +773,13 @@ fn a_failed_turn_exits_1_with_the_turns_error() {
             "turn_started",
             "step_started",
             "assistant_message_started",
+            "usage_recorded",
             "assistant_message_completed",
             "turn_completed",
             "fiber_exited",
         ]
     );
-    let turn = &run.lines[8]["payload"];
+    let turn = &run.lines[9]["payload"];
     assert_eq!(turn["outcome"], "failed");
     let exited = &run.last()["payload"];
     assert_eq!(exited["exit_code"], 1);
@@ -3321,6 +3322,7 @@ fn a_sign_error_keeps_the_token_out_of_every_line() {
             "turn_started",
             "step_started",
             "assistant_message_started",
+            "usage_recorded",
             "assistant_message_completed",
             "turn_completed",
             "fiber_exited",

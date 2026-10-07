@@ -3,16 +3,17 @@
 use std::collections::BTreeMap;
 use std::io::BufRead;
 
+use contract::ProviderCallId;
 use contract::events::{
     ReasoningCompleted, TextCompleted, TextDelta, ToolCallArgumentsDelta, ToolCallRequested,
 };
 use contract::provider::{CallUsage, Delta, Finish, InputSize, Reply, ReplyAction};
 use contract::shapes::Tokens;
-use contract::{GenerationId, ProviderCallId};
 use serde_json::{Value, json};
 
 use crate::google_generative_ai::str_at;
 use crate::google_generative_ai_request::with;
+use crate::unfinished::named;
 use crate::{Error, sse};
 
 /// Reads a reply stream, passing each fragment to `sink` as it arrives, and
@@ -41,10 +42,10 @@ pub(crate) fn decode_tracked(
         Ok(false)
     });
     if let Err(error) = read {
-        return Err((error, reply.partial()));
+        return Err((error, Some(reply.partial())));
     }
     let partial = reply.partial();
-    reply.finish().map_err(|error| (error, partial))
+    reply.finish().map_err(|error| (error, Some(partial)))
 }
 
 /// Thought text as it streams in, until a part that is not a thought.
@@ -68,19 +69,16 @@ struct Decoder {
 }
 
 impl Decoder {
-    /// What the stream had seen: the generation and its usage once a chunk
-    /// named them, else none. A count the decoder cannot represent is `0`,
-    /// and only that count.
-    fn partial(&self) -> Option<CallUsage> {
-        if self.id.is_empty() {
-            return None;
-        }
-        Some(CallUsage {
-            generation_id: GenerationId(self.id.clone()),
+    /// What the stream had seen: the generation once a chunk named it, and
+    /// the usage so far. A count the decoder cannot represent is `0`, and
+    /// only that count.
+    fn partial(&self) -> CallUsage {
+        CallUsage {
+            generation_id: named(self.id.clone()),
             tokens: partial_tokens(&self.usage),
             web_searches: None,
             input_size: InputSize::default(),
-        })
+        }
     }
 
     /// Takes one `GenerateContentResponse`.
@@ -312,7 +310,7 @@ impl Decoder {
         Ok(Reply {
             actions: self.actions,
             finish,
-            generation_id: GenerationId(self.id),
+            generation_id: named(self.id),
             tokens: tokens(&self.usage)?,
             web_searches: None,
             cost: None,

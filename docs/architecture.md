@@ -222,7 +222,7 @@ Fiber uses blocking threads and no async runtime.
 | signals | the process's SIGTERM, SIGINT and SIGHUP, and end of file on a delegate's lifeline; it starts a shutdown (`docs/invocation.md`, "Shutdown") | the process |
 | accept | the session's socket: it accepts each connection and starts that client's two threads | the session |
 | status | `session_status`: it folds the log as it is written into the session's status line (`docs/events.md`) | the session |
-| `fiber ask`'s printer | `ask`'s stdout, as a watcher | the run |
+| printer | the session's stdout, as a watcher: the `fiber ask` run's output, and the hub's drain of a hub-started session | the session |
 | one per blocking wait | one wait and nothing else: a command's exit, a web fetch's deadline, one Lua host call's HTTP request, a background refresh, the shutdown bound | the wait |
 
 A client is a reader and a writer on the session's socket, and every client

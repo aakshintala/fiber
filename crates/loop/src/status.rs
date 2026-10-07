@@ -258,11 +258,14 @@ impl Fold {
                 self.spend = self.ledger.usage();
                 // A session-model reply: not the reviewer's (no action), a
                 // delegate's copy or an extension's call. A late correction
-                // of an earlier call is not the context's latest size.
+                // of an earlier call is not the context's latest size, and a
+                // record that reported no input tokens measured nothing
+                // (`docs/events.md`, `session_status`).
                 if !corrected
                     && line.action_id.is_some()
                     && recorded.extension.is_none()
                     && recorded.origin_session_id.is_none()
+                    && crate::handoff::prompt_tokens(&recorded.tokens) > 0
                 {
                     self.context = Some(crate::handoff::context_tokens(&recorded.tokens));
                 }

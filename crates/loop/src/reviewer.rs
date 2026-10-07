@@ -494,8 +494,8 @@ impl Loop {
     }
 
     /// Sends one reviewer request and records its usage. A call that ended
-    /// without a reply, after the provider named its generation, writes what
-    /// it saw, and a reviewer reply is not streamed to watchers.
+    /// without a reply writes what it saw, and a reviewer reply is not
+    /// streamed to watchers.
     fn send_review(
         &mut self,
         turn: &TurnId,
@@ -519,21 +519,19 @@ impl Loop {
         };
         let call = endpoint.provider.call(&request);
         let reply = crate::cancel::run_cancellable(&self.cancel, call, &mut |_| {});
-        let seen = match &reply {
-            Ok(reply) => Some((reply.usage(), reply.cost)),
-            Err(error) => error.usage().map(|usage| (usage.clone(), None)),
+        let (usage, inline) = match &reply {
+            Ok(reply) => (reply.usage(), reply.cost),
+            Err(error) => (error.usage().clone(), None),
         };
-        if let Some((usage, inline)) = seen {
-            let recorded = crate::usage::recorded(
-                usage,
-                inline,
-                &endpoint.reference,
-                endpoint.cost.as_ref(),
-                endpoint.subscription,
-            );
-            let lookup = endpoint.provider.cost_lookup();
-            self.write_usage(recorded, inline, lookup, Some(turn), None)?;
-        }
+        let recorded = crate::usage::recorded(
+            usage,
+            inline,
+            &endpoint.reference,
+            endpoint.cost.as_ref(),
+            endpoint.subscription,
+        );
+        let lookup = endpoint.provider.cost_lookup();
+        self.write_usage(recorded, lookup, Some(turn), None)?;
         Ok(reply)
     }
 

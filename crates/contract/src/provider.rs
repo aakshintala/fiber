@@ -2,6 +2,7 @@
 //! a model and stream back actions". The loop reaches every protocol through
 //! [`Provider`] and [`ModelCall`], and never names one.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -237,18 +238,37 @@ pub struct InputSize {
 }
 
 /// A call's generation and what it reported: a reply's, or, for a call that
-/// ended without a reply after the provider named its generation, what it
-/// had seen (`docs/events.md`, "Usage and notices").
+/// ended without a reply, what it had seen (`docs/events.md`, "Usage and
+/// notices").
 #[derive(Debug, Clone, PartialEq)]
 pub struct CallUsage {
-    /// The provider's id for the generation. Never empty.
-    pub generation_id: GenerationId,
+    /// The provider's id for the generation; `None` when the provider named
+    /// none. Never `Some` of an empty id.
+    pub generation_id: Option<GenerationId>,
     /// The tokens seen; a count not seen is 0.
     pub tokens: Tokens,
     /// Hosted web searches seen; `None` when none seen.
     pub web_searches: Option<u64>,
     /// The input the protocol sent for the call.
     pub input_size: InputSize,
+}
+
+impl CallUsage {
+    /// What a call that ended before reading any stream saw: no generation,
+    /// every count 0, and the input it built.
+    pub fn unnamed(input_size: InputSize) -> Self {
+        Self {
+            generation_id: None,
+            tokens: Tokens {
+                input: 0,
+                cache_read: 0,
+                cache_write: BTreeMap::new(),
+                output: 0,
+            },
+            web_searches: None,
+            input_size,
+        }
+    }
 }
 
 /// A reply that reached its protocol's terminal event.
@@ -259,8 +279,9 @@ pub struct Reply {
     pub actions: Vec<ReplyAction>,
     /// Why the reply ended.
     pub finish: Finish,
-    /// The provider's id for the generation.
-    pub generation_id: GenerationId,
+    /// The provider's id for the generation; `None` when the provider named
+    /// none. Never `Some` of an empty id.
+    pub generation_id: Option<GenerationId>,
     /// The call's tokens.
     pub tokens: Tokens,
     /// Hosted web searches the reply reports; `None` when it reports none.
@@ -381,25 +402,24 @@ pub enum CallError {
         /// the code is retried (`docs/model-routing.md`, "When a model call
         /// fails"); `None` when the response carried none.
         should_retry: Option<bool>,
-        /// What the call had seen after the provider named its generation;
-        /// `None` when it ended before any generation id.
-        usage: Option<Box<CallUsage>>,
+        /// What the call had seen, named or not.
+        usage: Box<CallUsage>,
     },
     /// [`ModelCall::cancel`] ended it.
     Cancelled {
-        /// What the call had seen after the provider named its generation;
-        /// `None` when it ended before any generation id.
-        usage: Option<Box<CallUsage>>,
+        /// What the call had seen, named or not.
+        usage: Box<CallUsage>,
     },
 }
 
 impl CallError {
-    /// What the call had seen after the provider named its generation;
-    /// `None` when it ended before any generation id.
-    pub fn usage(&self) -> Option<&CallUsage> {
+    /// What the call had seen, named or not: every call writes its
+    /// `usage_recorded` however it ended (`docs/events.md`, "Usage and
+    /// notices").
+    pub fn usage(&self) -> &CallUsage {
         match self {
-            CallError::Failed { usage, .. } => usage.as_deref(),
-            CallError::Cancelled { usage } => usage.as_deref(),
+            CallError::Failed { usage, .. } => usage,
+            CallError::Cancelled { usage } => usage,
         }
     }
 }

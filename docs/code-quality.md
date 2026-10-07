@@ -209,8 +209,11 @@ line-cap` lists every such file and never fails. The pull request whose
 change takes a file over 800 lines files a ticket labelled `split` for it.
 The split separates what the file owns into modules with their own
 interfaces. Lines moved into another file that still reach the parent's
-private state, or a trim to get under the line, are not a split. 800 is
-picked rather than measured.
+private state, or a trim to get under the line, are not a split. Neither is
+a type invented only to get under the line. A `split` ticket looks for
+boundaries that have state of their own. When the file is cohesive and has
+none, the ticket closes with the reason posted on it, and the file stays
+over 800 lines. 800 is picked rather than measured.
 
 A module lives at its standard path: `src/<parent>/<name>.rs` beside
 `src/<parent>.rs`. `#[path]` names only a unit-test file, as below, or a

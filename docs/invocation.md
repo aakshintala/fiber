@@ -653,8 +653,9 @@ rationale and the rejected layouts are
   nothing takes 1.7 ms on macOS, measured with the probe in
   `research/image-limits/README.md`.
 - **The terminal is its own process, a client of the hub.** It has a `full`
-  connection to the session on screen and a `summary` connection to the rest,
-  through the hub. It draws what arrives and has no path to state the stream
+  connection to the session on screen and a `summary` connection to each
+  session it has opened, stopped or closed, through the hub. It shows every
+  other live session from the hub's feed. It draws what arrives and has no path to state the stream
   does not carry. A terminal crash, or an error in a TUI extension, cannot
   interrupt a session's work.
 - **Every running session listens on a local socket** at
