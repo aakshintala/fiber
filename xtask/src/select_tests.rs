@@ -253,13 +253,25 @@ fn a_pull_request_that_selects_no_crate_skips_the_tests() {
 }
 
 #[test]
-fn the_backstop_runs_the_tests_alone() {
+fn a_docs_push_runs_lint_and_tests_but_no_mutants() {
     let plan = plan("docs", &[], "push", true);
     assert_eq!(
         plan,
         Plan {
-            jobs: jobs(false, true, false, false),
+            jobs: jobs(true, true, false, false),
             shards: 0
+        }
+    );
+}
+
+#[test]
+fn a_code_push_runs_lint_tests_and_mutants_but_no_bug_check() {
+    let plan = plan("all", &strings(&["log"]), "push", true);
+    assert_eq!(
+        plan,
+        Plan {
+            jobs: jobs(true, true, true, false),
+            shards: MUTANT_SHARDS
         }
     );
 }
