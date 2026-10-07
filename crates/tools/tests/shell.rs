@@ -29,7 +29,10 @@ use fakes::{CancelToken, Recorder, Watchdog, kill_group, kill_pid};
 use serde_json::{Map, Value, json};
 use tools::Shell;
 
-const DEADLINE: Duration = Duration::from_secs(10);
+const DEADLINE: Duration = Duration::from_secs(5);
+
+/// One bound for a whole `print_steps` sequence.
+const STEPS: Duration = Duration::from_secs(15);
 
 fn text(output: &contract::tool::Output) -> String {
     match output.content.first() {
@@ -1938,32 +1941,35 @@ fn open_feed(ready: &Path) -> std::fs::File {
         .expect("waited for the command's read of the feed fifo")
 }
 
-/// One step: waits for the drive thread to park at its deadline, moves the
-/// clock by `step`, prints `line` and waits until the job's delta shows the
-/// drive thread took it. The drive thread offers what a delta carried before
-/// it parks again, so the next step's park means `line` was offered at this
-/// step's instant.
-fn print_step(
+/// Every step in order: the drive thread offers what a delta carried before
+/// it parks again, so the next step's park means the line was offered at the
+/// step's instant. One [`STEPS`] bound for the whole sequence.
+fn print_steps(
     run: &JobRun,
     deadline: Instant,
-    feed: &mut std::fs::File,
-    step: Duration,
-    line: &str,
-) {
-    assert!(
-        run.clock.await_parked(deadline, DEADLINE),
-        "the monitor did not park at its deadline before {line}"
-    );
-    run.clock.advance(step);
-    // One write: `writeln!` can split the newline into its own write, and
-    // a delta of the line alone would hold the newline past the step.
-    feed.write_all(format!("{line}\n").as_bytes()).unwrap();
-    assert!(
-        run.jobs
-            .deltas()
-            .wait_for_text(&format!("{line}\n"), DEADLINE),
-        "the monitor did not take {line}"
-    );
+    feed: std::fs::File,
+    steps: Vec<(Duration, String)>,
+) -> std::fs::File {
+    let clock = Arc::clone(&run.clock);
+    let jobs = Arc::clone(&run.jobs);
+    fakes::within("monitor steps", STEPS, move || {
+        let mut feed = feed;
+        for (step, line) in steps {
+            assert!(
+                clock.await_parked(deadline, DEADLINE),
+                "the monitor did not park at its deadline before {line}"
+            );
+            clock.advance(step);
+            // One write: `writeln!` can split the newline into its own write, and
+            // a delta of the line alone would hold the newline past the step.
+            feed.write_all(format!("{line}\n").as_bytes()).unwrap();
+            assert!(
+                jobs.deltas().wait_for_text(&format!("{line}\n"), DEADLINE),
+                "the monitor did not take {line}"
+            );
+        }
+        feed
+    })
 }
 
 fn errors_file(dir: &Path, job: &JobStarted) -> PathBuf {
@@ -2203,17 +2209,12 @@ fn a_suppressed_count_still_pending_is_sent_before_the_end() {
     let _own = ready.wait(DEADLINE);
     let _receipt = running.output.recv_timeout(DEADLINE).expect("the receipt");
     let deadline = running.start + Duration::from_millis(LONG_DEADLINE_MS);
-    let mut feed = open_feed(ready.path());
+    let feed = open_feed(ready.path());
     // Twelve deliveries 100 ms apart: ten spend the budget, two are dropped.
-    for k in 1..=12 {
-        print_step(
-            &running,
-            deadline,
-            &mut feed,
-            Duration::from_millis(100),
-            &format!("line{k}"),
-        );
-    }
+    let steps: Vec<(Duration, String)> = (1..=12)
+        .map(|k| (Duration::from_millis(100), format!("line{k}")))
+        .collect();
+    let feed = print_steps(&running, deadline, feed, steps);
     drop(feed);
     let ended = jobs.ended(DEADLINE).expect("the monitor to end");
     assert_eq!(ended.status, Outcome::Completed);
@@ -2249,26 +2250,20 @@ fn sustained_output_for_thirty_seconds_floods_and_stops_the_monitor() {
     let _own = ready.wait(DEADLINE);
     let _receipt = running.output.recv_timeout(DEADLINE).expect("the receipt");
     let deadline = running.start + Duration::from_millis(LONG_DEADLINE_MS);
-    let mut feed = open_feed(ready.path());
+    let feed = open_feed(ready.path());
     // One delivery every 500 ms, faster than the refill: the budget runs
     // out at the 14th (7 s), so the drop at the 74th (37 s) floods.
-    for k in 1..=73 {
-        print_step(
-            &running,
-            deadline,
-            &mut feed,
-            Duration::from_millis(500),
-            &format!("line{k}"),
-        );
-    }
+    let steps: Vec<(Duration, String)> = (1..=73)
+        .map(|k| (Duration::from_millis(500), format!("line{k}")))
+        .collect();
+    let feed = print_steps(&running, deadline, feed, steps);
     assert!(jobs.ended(Duration::ZERO).is_none(), "flooded early");
     assert!(group_alive(pgid));
-    print_step(
+    let feed = print_steps(
         &running,
         deadline,
-        &mut feed,
-        Duration::from_millis(500),
-        "line74",
+        feed,
+        vec![(Duration::from_millis(500), "line74".to_owned())],
     );
     let ended = jobs.ended(DEADLINE).expect("the flood to stop the monitor");
     assert_eq!(ended.status, Outcome::Failed);
@@ -2305,34 +2300,15 @@ fn output_that_pauses_for_two_seconds_ends_the_run_and_does_not_flood() {
     let _own = ready.wait(DEADLINE);
     let _receipt = running.output.recv_timeout(DEADLINE).expect("the receipt");
     let deadline = running.start + Duration::from_millis(LONG_DEADLINE_MS);
-    let mut feed = open_feed(ready.path());
+    let feed = open_feed(ready.path());
     // Suppressed from 7 s to 25 s, then 2.5 s with nothing, then suppressed
     // again to 50 s: 43 s after the first drop, but no run lasts 30 s.
-    for k in 1..=50 {
-        print_step(
-            &running,
-            deadline,
-            &mut feed,
-            Duration::from_millis(500),
-            &format!("line{k}"),
-        );
-    }
-    print_step(
-        &running,
-        deadline,
-        &mut feed,
-        Duration::from_millis(2_500),
-        "line51",
-    );
-    for k in 52..=96 {
-        print_step(
-            &running,
-            deadline,
-            &mut feed,
-            Duration::from_millis(500),
-            &format!("line{k}"),
-        );
-    }
+    let mut steps: Vec<(Duration, String)> = (1..=50)
+        .map(|k| (Duration::from_millis(500), format!("line{k}")))
+        .collect();
+    steps.push((Duration::from_millis(2_500), "line51".to_owned()));
+    steps.extend((52..=96).map(|k| (Duration::from_millis(500), format!("line{k}"))));
+    let feed = print_steps(&running, deadline, feed, steps);
     assert!(jobs.ended(Duration::ZERO).is_none(), "the monitor flooded");
     drop(feed);
     let ended = jobs.ended(DEADLINE).expect("the monitor to end");
