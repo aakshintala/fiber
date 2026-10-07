@@ -96,7 +96,7 @@ impl ModelCall for BlockingCall {
         // A call the cancel never reached is a missed signal, not a
         // cancellation: it must not report `Cancelled` after its timeout.
         assert!(got.is_ok(), "timed out waiting for the call's cancel");
-        Err(CallError::Cancelled)
+        Err(CallError::Cancelled { usage: None })
     }
 
     fn cancel(&self) {

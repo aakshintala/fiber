@@ -644,6 +644,7 @@ fn a_stream_ending_response_failed_drops_what_it_streamed() {
     let Err(CallError::Failed {
         failure,
         should_retry: None,
+        ..
     }) = result
     else {
         panic!("{result:?}");
@@ -763,6 +764,7 @@ fn a_status_other_than_2xx_fails_with_its_code_and_the_providers_words() {
         let Err(CallError::Failed {
             failure,
             should_retry: header,
+            ..
         }) = run(Box::new(responses.request(&request()))).0
         else {
             panic!("expected a failure");
@@ -800,7 +802,10 @@ fn a_call_cancelled_before_it_runs_returns_without_connecting() {
     };
     let call = Responses::new(endpoint).request(&request());
     call.cancel();
-    assert_eq!(run(Box::new(call)).0, Err(CallError::Cancelled));
+    assert_eq!(
+        run(Box::new(call)).0,
+        Err(CallError::Cancelled { usage: None })
+    );
     let accepted = listener.accept().map(|_| ()).unwrap_err();
     assert_eq!(
         accepted.kind(),
@@ -851,7 +856,7 @@ fn cancelling_from_another_thread_ends_a_blocked_read() {
     let result = finished
         .recv_timeout(DEADLINE)
         .expect("waited for run to return after the cancel");
-    assert_eq!(result, Err(CallError::Cancelled));
+    assert_eq!(result, Err(CallError::Cancelled { usage: None }));
     assert!(
         server.await_closed(1, DEADLINE),
         "waited for the server to see the client close"

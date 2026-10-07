@@ -1011,7 +1011,10 @@ fn a_call_cancelled_before_it_runs_returns_without_connecting() {
     };
     let call = Gemini::new(endpoint).request(&request());
     call.cancel();
-    assert_eq!(run(Box::new(call)).0, Err(CallError::Cancelled));
+    assert_eq!(
+        run(Box::new(call)).0,
+        Err(CallError::Cancelled { usage: None })
+    );
     let accepted = listener.accept().map(|_| ()).unwrap_err();
     assert_eq!(accepted.kind(), std::io::ErrorKind::WouldBlock);
 }
@@ -1044,7 +1047,7 @@ fn cancelling_from_another_thread_ends_a_blocked_read() {
     let result = finished
         .recv_timeout(DEADLINE)
         .expect("waited for run to return after the cancel");
-    assert_eq!(result, Err(CallError::Cancelled));
+    assert!(matches!(result, Err(CallError::Cancelled { .. })));
     assert!(
         server.await_closed(1, DEADLINE),
         "waited for the server to see the client close"

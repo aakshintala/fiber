@@ -40,6 +40,10 @@ pub trait Provider: Send + Sync {
 pub trait ModelCall: Send + Sync {
     /// Sends the request and reads the reply, passing each fragment to `sink`
     /// as it arrives. Blocks until the reply ends, fails, or is cancelled.
+    #[allow(
+        clippy::result_large_err,
+        reason = "the seam returns the call's error by value; the partial usage is boxed"
+    )]
     fn run(&self, sink: &mut dyn FnMut(Delta)) -> Result<Reply, CallError>;
 
     /// Ends the call from another thread: closes its socket, so a `run`
@@ -216,6 +220,21 @@ pub struct InputSize {
     pub media: bool,
 }
 
+/// A call's generation and what it reported: a reply's, or, for a call that
+/// ended without a reply after the provider named its generation, what it
+/// had seen (`docs/events.md`, "Usage and notices").
+#[derive(Debug, Clone, PartialEq)]
+pub struct CallUsage {
+    /// The provider's id for the generation. Never empty.
+    pub generation_id: GenerationId,
+    /// The tokens seen; a count not seen is 0.
+    pub tokens: Tokens,
+    /// Hosted web searches seen; `None` when none seen.
+    pub web_searches: Option<u64>,
+    /// The input the protocol sent for the call.
+    pub input_size: InputSize,
+}
+
 /// A reply that reached its protocol's terminal event.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Reply {
@@ -238,6 +257,16 @@ pub struct Reply {
 }
 
 impl Reply {
+    /// The reply's generation and what it reported.
+    pub fn usage(&self) -> CallUsage {
+        CallUsage {
+            generation_id: self.generation_id.clone(),
+            tokens: self.tokens.clone(),
+            web_searches: self.web_searches,
+            input_size: self.input_size,
+        }
+    }
+
     /// The reply's text: its text parts concatenated, in order, with no
     /// separator.
     pub fn text(&self) -> String {
@@ -336,9 +365,27 @@ pub enum CallError {
         /// the code is retried (`docs/model-routing.md`, "When a model call
         /// fails"); `None` when the response carried none.
         should_retry: Option<bool>,
+        /// What the call had seen after the provider named its generation;
+        /// `None` when it ended before any generation id.
+        usage: Option<Box<CallUsage>>,
     },
     /// [`ModelCall::cancel`] ended it.
-    Cancelled,
+    Cancelled {
+        /// What the call had seen after the provider named its generation;
+        /// `None` when it ended before any generation id.
+        usage: Option<Box<CallUsage>>,
+    },
+}
+
+impl CallError {
+    /// What the call had seen after the provider named its generation;
+    /// `None` when it ended before any generation id.
+    pub fn usage(&self) -> Option<&CallUsage> {
+        match self {
+            CallError::Failed { usage, .. } => usage.as_deref(),
+            CallError::Cancelled { usage } => usage.as_deref(),
+        }
+    }
 }
 
 #[cfg(test)]

@@ -48,6 +48,7 @@ fn header_failed(code: ErrorCode, should_retry: Option<bool>) -> Scripted {
                 provider: None,
             },
             should_retry,
+            usage: None,
         }),
     }
 }
@@ -63,6 +64,7 @@ fn waited(code: ErrorCode, retry_after_ms: u64) -> Scripted {
                 provider: None,
             },
             should_retry: None,
+            usage: None,
         }),
     }
 }
@@ -512,6 +514,7 @@ fn a_failed_stream_drops_its_partial_text_and_tool_calls() {
                         provider: None,
                     },
                     should_retry: None,
+                    usage: None,
                 }),
             },
             Scripted::text("Recovered."),

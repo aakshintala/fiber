@@ -592,7 +592,7 @@ impl ModelCall for Blocked {
         self.started.send(()).unwrap();
         let got = self.cancelled.lock().unwrap().recv_timeout(DEADLINE);
         assert!(got.is_ok(), "the shutdown cancels the refresh");
-        Err(CallError::Cancelled)
+        Err(CallError::Cancelled { usage: None })
     }
 
     fn cancel(&self) {

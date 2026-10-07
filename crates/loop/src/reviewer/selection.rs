@@ -202,7 +202,7 @@ impl Loop {
                 Err(CallError::Failed { failure, .. }) => {
                     return self.selection_fallback(turn, &persons, window, &failure.message);
                 }
-                Err(CallError::Cancelled) => {
+                Err(CallError::Cancelled { .. }) => {
                     return self.selection_fallback(
                         turn,
                         &persons,

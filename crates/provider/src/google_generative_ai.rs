@@ -130,7 +130,7 @@ impl ModelCall for Call {
         };
         // Whatever a cancelled call returns, the cancel ended it.
         if self.cancel.is_cancelled() {
-            return Err(CallError::Cancelled);
+            return Err(CallError::Cancelled { usage: None });
         }
         reply
             .map(|reply| Reply {
@@ -140,6 +140,7 @@ impl ModelCall for Call {
             .map_err(|e| CallError::Failed {
                 failure: e.failure(&self.provider, &secrets),
                 should_retry,
+                usage: None,
             })
     }
 

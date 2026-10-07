@@ -126,7 +126,7 @@ impl Loop {
                 )?;
                 Ok(Refreshed::Stopped(clock.now()))
             }
-            Err(CallError::Cancelled) => Ok(Refreshed::Stopped(clock.now())),
+            Err(CallError::Cancelled { .. }) => Ok(Refreshed::Stopped(clock.now())),
         }
     }
 }

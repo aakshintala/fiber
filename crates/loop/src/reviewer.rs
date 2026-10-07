@@ -302,7 +302,7 @@ impl Loop {
                     }
                 }
                 Err(CallError::Failed { failure, .. }) => return Ok(StageReply::Fail(failure)),
-                Err(CallError::Cancelled) => return Ok(StageReply::Cancelled),
+                Err(CallError::Cancelled { .. }) => return Ok(StageReply::Cancelled),
             }
         }
         // The escalation carries the last reply, quoted: a person's

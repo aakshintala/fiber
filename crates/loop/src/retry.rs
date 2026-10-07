@@ -184,6 +184,7 @@ impl crate::Loop {
                 Err(CallError::Failed {
                     failure,
                     should_retry,
+                    ..
                 }) => {
                     let decision = self.retry.decide(&failure, should_retry, retries);
                     let attempt = retries.saturating_add(1);
@@ -231,7 +232,7 @@ impl crate::Loop {
                 }
                 // An interrupted reply has no `assistant_message_completed`
                 // (`docs/architecture.md`, "Cancellation").
-                Err(CallError::Cancelled) => return Ok(Attempted::Interrupted),
+                Err(CallError::Cancelled { .. }) => return Ok(Attempted::Interrupted),
             }
         }
     }

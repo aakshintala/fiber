@@ -58,7 +58,7 @@ fn the_first_call_blocks_until_its_cancel() {
         provider.wait_started(WAIT);
         call.cancel();
         let (ended, drops) = run.join().unwrap();
-        assert!(matches!(ended, Err(CallError::Cancelled)));
+        assert!(matches!(ended, Err(CallError::Cancelled { .. })));
         assert_eq!(drops, 0);
     });
 }
@@ -85,7 +85,7 @@ fn a_cancel_before_the_call_starts_ends_it_at_once() {
     let ended = call.run(&mut |_: Delta| {
         drops += 1;
     });
-    assert!(matches!(ended, Err(CallError::Cancelled)));
+    assert!(matches!(ended, Err(CallError::Cancelled { .. })));
     assert_eq!(drops, 0);
     // `run` signalled it started to block.
     assert!(
