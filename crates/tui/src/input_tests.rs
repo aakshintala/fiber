@@ -306,6 +306,14 @@ fn wide_characters_take_two_columns_and_wrap_whole() {
 }
 
 #[test]
+fn a_character_wider_than_the_row_starts_no_empty_row() {
+    // Width 3 leaves 1 column after `> `: a wide character at a row's
+    // start stays on that row rather than wrapping below an empty one.
+    let draft = typed("日");
+    assert_eq!(draft.rows(3), vec!["> 日", "  "]);
+}
+
+#[test]
 fn a_tab_shows_as_one_space() {
     let draft = typed("a\tb");
     assert_eq!(draft.rows(80), vec!["> a b"]);
