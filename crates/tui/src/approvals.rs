@@ -279,7 +279,16 @@ impl Queue {
             // which stands in the input box's place; F1 opens the key map
             // over it.
             Key::Tab | Key::BackTab | Key::CtrlG | Key::CtrlR => {}
-            Key::PageUp | Key::PageDown | Key::End | Key::CtrlC | Key::F1 | Key::CtrlO => {
+            // The layout's keys reach the screen behind the panel.
+            Key::PageUp
+            | Key::PageDown
+            | Key::End
+            | Key::CtrlC
+            | Key::F1
+            | Key::CtrlO
+            | Key::AltP
+            | Key::AltR
+            | Key::AltDigit(_) => {
                 return None;
             }
             // The steering queue's keys do nothing while the panel is open.

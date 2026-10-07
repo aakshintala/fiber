@@ -5,11 +5,11 @@ expression: "screen(&app, 80, 24)"
 /home  Goes home.  command
 /new  Goes home with the cursor in the input box.  command
 /resume  Opens home at the session list.  command
-/handoff [instructions]  Starts a handoff.  command▀▄
-/name <text>  Names the session.  command ████  █▄▄▄▀
+/panel  Shows or hides the panel.  command█▀▀▀▀ █▀▀▀▄
+/handoff [instructions]  Starts a handoff.  command▄▀
+/name <text>  Names the session.  command █▀▀▀▀ █ ▀▄
 /reload  Reloads configuration, MCP servers and extensions.  command
-/close  Stops the session on screen.  command▄▄ █   █ 0.0.1
-/quit  Quits.  command
+/close  Stops the session on screen.  command
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 > /
 

@@ -21,10 +21,6 @@ mod input;
 mod jigs;
 mod keymap;
 mod keys;
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the session screen draws from it")
-)]
 mod layout;
 mod link;
 mod markdown;
