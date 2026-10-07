@@ -192,7 +192,7 @@ impl App {
                 Effect::None
             }
             Key::Up => {
-                // debt: ↑ on the first row does nothing; upgrade when prompt
+                // debt: ↑ on the first row does nothing, upgrade when prompt
                 // recall lands (part 2 of #684).
                 self.draft.up(self.width);
                 Effect::None
