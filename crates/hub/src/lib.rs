@@ -37,6 +37,7 @@ use crate::connection::Hub;
 use crate::diag::Diag;
 use crate::listen::Held;
 
+pub use crate::diag::wall_ms;
 pub use crate::error::StartError;
 pub use crate::recent::{Left, RecentRow, append};
 

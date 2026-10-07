@@ -111,7 +111,8 @@ struct Line<'a> {
     message: &'a str,
 }
 
-pub(crate) fn wall_ms(wall: SystemTime) -> u64 {
+/// `wall` as milliseconds since the Unix epoch: 0 before it, `u64::MAX` past it.
+pub fn wall_ms(wall: SystemTime) -> u64 {
     wall.duration_since(SystemTime::UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0)
