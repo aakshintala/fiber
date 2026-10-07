@@ -212,7 +212,7 @@ fn a_tool_with_no_cap_keeps_its_own_bound() {
 
 #[test]
 fn the_cap_is_found_by_the_registered_name_not_the_registrant() {
-    let bound = Bound { start: 10, end: 20 };
+    let bound = Bound { start: 10, end: 0 };
     let by_registrant = capped(vec![wrap("cat", tool("dog", bound))], &caps(&[("cat", 5)]));
     assert_eq!(by_registrant[0].1.bound(), bound);
     let by_name = capped(vec![wrap("cat", tool("dog", bound))], &caps(&[("dog", 5)]));
@@ -246,6 +246,11 @@ fn a_tool_that_cuts_its_own_output_keeps_its_registered_name() {
     let out = capped(tools, &caps(&[("cat", 5)]));
     assert_eq!(out[0].0, "ext");
     assert_eq!(out[0].1.definition().name, "cat");
+    let cutting = Arc::new({
+        let mut cutting = Fixed::named("cat");
+        cutting.with_cap_answer = Some(tool("cat", Bound { start: 77, end: 0 }) as Arc<dyn Tool>);
+        cutting
+    });
     let tools: Vec<(String, Arc<dyn Tool>)> =
         vec![("ext".to_owned(), cutting.clone() as Arc<dyn Tool>)];
     let out = capped(tools, &caps(&[("ext", 5)]));
