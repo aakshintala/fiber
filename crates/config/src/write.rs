@@ -371,7 +371,7 @@ pub(crate) fn before_rename(hook: impl Fn() + 'static) {
 /// Writes `bytes` to a temporary file created with `mode` beside `file`,
 /// syncs it, and renames it over `file`, so a reader sees the old file or the
 /// new one, never half.
-pub(crate) fn write_atomic(file: &Path, bytes: &[u8], mode: u32) -> Result<(), ConfigError> {
+pub fn write_atomic(file: &Path, bytes: &[u8], mode: u32) -> Result<(), ConfigError> {
     let io = |source| ConfigError::Io {
         file: file.to_path_buf(),
         source,
