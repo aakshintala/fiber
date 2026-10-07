@@ -413,6 +413,7 @@ fn state_of(state: &SessionState) -> (State, Option<String>) {
             let kind = match waiting.kind {
                 WaitingKind::Approval => "approval",
                 WaitingKind::Question => "question",
+                WaitingKind::Offer => "offer",
             };
             (State::Waiting, Some(format!("{kind}: {}", waiting.summary)))
         }

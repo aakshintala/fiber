@@ -479,6 +479,15 @@ fn the_line_shows_waiting_text_for_an_approval_and_a_question() {
         line(&question, PROJECT),
         "!  fix the parser  question: 2 of 3 answered"
     );
+    let offer = from_status(&envelope(
+        "s_cccccccccccccccc",
+        json!({"state": "waiting", "waiting": {"request_id": "o_1",
+            "kind": "offer", "summary": "switch to plan mode"}}),
+    ));
+    assert_eq!(
+        line(&offer, PROJECT),
+        "!  fix the parser  offer: switch to plan mode"
+    );
 }
 
 #[test]
