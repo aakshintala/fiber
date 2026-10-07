@@ -323,7 +323,9 @@ fn every_listed_command_with_a_plain_operand_reads() {
         let line = format!("{} x", command.name);
         assert_reads(&line);
         let paths = classified(&line).declared.paths;
-        if command.paths {
+        if command.pattern {
+            assert_eq!(paths, Some(vec!["/work".to_owned()]), "{line}");
+        } else if command.paths {
             assert_eq!(paths, Some(vec!["/work/x".to_owned()]), "{line}");
         } else {
             assert!(paths.is_none(), "{line}");
@@ -363,18 +365,18 @@ fn a_flag_value_is_not_a_declared_path() {
     );
     assert_eq!(
         classified("rg --glob '*.rs' pat").declared.paths,
-        Some(vec!["/work/pat".to_owned()])
+        Some(vec!["/work".to_owned()])
     );
     assert_eq!(
-        classified("rg --glob=pat file").declared.paths,
+        classified("rg --glob=pat foo file").declared.paths,
         Some(vec!["/work/file".to_owned()])
     );
     assert_eq!(
-        classified("grep --include='*.rs' file").declared.paths,
+        classified("grep --include='*.rs' foo file").declared.paths,
         Some(vec!["/work/file".to_owned()])
     );
     assert_eq!(
-        classified("grep --include=x y").declared.paths,
+        classified("grep --include=x foo y").declared.paths,
         Some(vec!["/work/y".to_owned()])
     );
     assert_eq!(
@@ -554,6 +556,25 @@ fn every_part_on_the_list_reads() {
     assert_reads("grep -n -A 3 pattern file");
     assert_eq!(
         classified("grep -n -A 3 pattern file").declared.paths,
-        Some(vec!["/work/pattern".to_owned(), "/work/file".to_owned()])
+        Some(vec!["/work/file".to_owned()])
     );
+}
+
+#[test]
+fn a_search_pattern_is_not_a_declared_path() {
+    for (command, paths) in [
+        ("grep -r foo", vec!["/work"]),
+        ("grep foo src lib", vec!["/work/src", "/work/lib"]),
+        ("grep -- -x file", vec!["/work/file"]),
+        ("grep -e foo src", vec!["/work/src"]),
+        ("grep src -e foo", vec!["/work/src"]),
+        ("rg foo", vec!["/work"]),
+        ("rg -n foo src", vec!["/work/src"]),
+        ("rg -e foo src", vec!["/work/src"]),
+        ("rg --files src", vec!["/work/src"]),
+    ] {
+        assert_reads(command);
+        let paths = paths.into_iter().map(str::to_owned).collect();
+        assert_eq!(classified(command).declared.paths, Some(paths), "{command}");
+    }
 }
