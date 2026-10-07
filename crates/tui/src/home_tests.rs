@@ -220,6 +220,73 @@ fn the_first_recent_page_replaces_skips_feed_rows_and_keeps_keys() {
 }
 
 #[test]
+fn an_older_page_skips_ids_already_in_the_feed() {
+    let mut sessions = Sessions::default();
+    sessions.status(from_status(&envelope(
+        "s_aaaaaaaaaaaaaaaa",
+        json!({"state": "streaming"}),
+    )));
+    // The older page names the live id again beside a new one: only
+    // the new one appends.
+    sessions.recent(
+        recent_rows(&result(vec![
+            recent_row("s_aaaaaaaaaaaaaaaa", "live", "exited", None),
+            recent_row("s_bbbbbbbbbbbbbbbb", "second", "exited", None),
+        ])),
+        false,
+    );
+    assert_eq!(shown(&sessions), ["●  fix the parser", "○  second"]);
+    assert_eq!(sessions.shown(PROJECT, false).len(), 2);
+}
+
+#[test]
+fn remove_drops_only_the_named_row() {
+    let mut sessions = Sessions::default();
+    sessions.recent(
+        recent_rows(&result(vec![
+            recent_row("s_aaaaaaaaaaaaaaaa", "first", "exited", None),
+            recent_row("s_bbbbbbbbbbbbbbbb", "second", "exited", None),
+        ])),
+        true,
+    );
+    sessions.remove(&SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    assert_eq!(shown(&sessions), ["○  second"]);
+}
+
+#[test]
+fn spend_adds_cost_and_subscription_cost() {
+    let mut spending = payload(json!({"state": "streaming"}));
+    spending["spend"] = json!({"tokens": {"input": 1, "cache_read": 0,
+        "cache_write": {}, "output": 2}, "cost": 0.41, "subscription_cost": 0.19});
+    let row = from_status(&Envelope {
+        payload: spending.as_object().cloned().unwrap_or_default(),
+        ..envelope("s_aaaaaaaaaaaaaaaa", json!({"state": "streaming"}))
+    });
+    assert!((row.spend - 0.60).abs() < 1e-9);
+    assert_eq!(line(&row, PROJECT), "●  fix the parser  $0.60");
+}
+
+#[test]
+fn a_recent_row_adds_cost_and_subscription_cost() {
+    let mut status = payload(json!({"state": "idle"}));
+    status["spend"] = json!({"tokens": {"input": 1, "cache_read": 0,
+        "cache_write": {}, "output": 2}, "cost": 0.41, "subscription_cost": 0.19});
+    let mut sessions = Sessions::default();
+    sessions.recent(
+        recent_rows(&result(vec![recent_row(
+            "s_aaaaaaaaaaaaaaaa",
+            "old work",
+            "exited",
+            Some(status),
+        )])),
+        true,
+    );
+    let rows = sessions.shown(PROJECT, false);
+    assert!((rows[0].spend - 0.60).abs() < 1e-9);
+    assert_eq!(shown(&sessions), ["○  old work  $0.60"]);
+}
+
+#[test]
 fn an_older_recent_page_appends_and_skips_rows_already_listed() {
     let mut sessions = Sessions::default();
     sessions.recent(
@@ -602,6 +669,10 @@ fn dependents_reads_each_backticked_id_once_in_order() {
     assert!(dependents("Session `s_short` has sessions.").is_empty());
     assert!(dependents("Session `s_0123456789ABCDEF` has sessions.").is_empty());
     assert!(dependents("Session s_0123456789abcdef has sessions.").is_empty());
+    // An empty pair, and a trailing id without its closing backtick,
+    // name nothing.
+    assert!(dependents("Session `` has sessions.").is_empty());
+    assert!(dependents("Session `s_0123456789abcdef has sessions.").is_empty());
 }
 
 #[test]

@@ -619,14 +619,14 @@ fn title(row: &Row) -> &str {
 /// the row first and deduplicates keeping first occurrence.
 pub(crate) fn dependents(message: &str) -> Vec<SessionId> {
     let mut out = Vec::new();
-    let mut rest = message;
-    while let Some(open) = rest.find('`') {
-        rest = &rest[open + 1..];
-        let Some(close) = rest.find('`') else {
+    // Odd segments sit inside backticks; a trailing one without its
+    // closing backtick names nothing.
+    let mut segments = message.split('`');
+    segments.next();
+    while let Some(token) = segments.next() {
+        if segments.next().is_none() {
             break;
-        };
-        let token = &rest[..close];
-        rest = &rest[close + 1..];
+        }
         let id = token
             .strip_prefix("s_")
             .filter(|hex| {
