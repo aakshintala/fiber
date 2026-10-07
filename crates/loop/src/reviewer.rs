@@ -73,6 +73,9 @@ pub(crate) struct Sections {
     pub second: String,
     /// The handoff selection's instruction.
     pub handoff: String,
+    /// The handoff selection's re-ask note, sent when a selection reply
+    /// does not read.
+    pub handoff_reask: String,
 }
 
 /// The reviewer's instructions, split per `docs/system-prompt.md`'s rule.
@@ -83,6 +86,7 @@ pub(crate) fn sections() -> Sections {
         first: crate::prompt::section(md, "first-pass"),
         second: crate::prompt::section(md, "second-pass"),
         handoff: crate::prompt::section(md, "handoff"),
+        handoff_reask: crate::prompt::section(md, "handoff-reask"),
     }
 }
 

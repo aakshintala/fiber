@@ -39,6 +39,10 @@ Keep each of the person's messages that still binds the agent: standing orders, 
 
 Reply with the numbers of the messages to keep, separated by commas and nothing else, or `none`.
 
+## handoff-reask
+
+Your reply could not be read: expected the numbers of the messages to keep, separated by commas, or `none`. Reply with the numbers of the messages to keep, separated by commas and nothing else, or `none`.
+
 ## second-pass
 
 You decide whether the call may run.

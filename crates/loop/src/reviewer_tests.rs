@@ -92,14 +92,20 @@ fn sections_run_heading_to_heading_with_blank_ends_removed() {
         "{:?}",
         split.handoff
     );
+    assert!(
+        split.handoff_reask.starts_with("## handoff-reask\n"),
+        "{:?}",
+        split.handoff_reask
+    );
     assert!(!split.shared.ends_with('\n'));
     assert!(!split.first.ends_with('\n'));
     assert!(!split.handoff.ends_with('\n'));
+    assert!(!split.handoff_reask.ends_with('\n'));
     assert!(!split.second.ends_with('\n'));
     assert_eq!(
         format!(
-            "{}\n\n{}\n\n{}\n\n{}\n",
-            split.shared, split.first, split.handoff, split.second
+            "{}\n\n{}\n\n{}\n\n{}\n\n{}\n",
+            split.shared, split.first, split.handoff, split.handoff_reask, split.second
         ),
         PROMPT,
     );

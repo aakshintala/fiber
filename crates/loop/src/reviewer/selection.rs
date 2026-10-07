@@ -94,18 +94,6 @@ pub(crate) fn fallback_notice(why: &str, dropped: usize) -> String {
     }
 }
 
-/// The text a listed person message shows. A person item is always a user
-/// item; any other shape lists empty.
-fn person_text(input: &Input) -> &str {
-    match input {
-        Input::User { text }
-        | Input::Assistant { text, .. }
-        | Input::Reasoning { text, .. }
-        | Input::ToolResult { text, .. } => text,
-        Input::ToolCall { .. } => "",
-    }
-}
-
 impl Loop {
     /// At a completed handoff (`docs/permissions.md`, "At a handoff"): asks
     /// the reviewer which of the person's messages still bind, records its
@@ -130,10 +118,14 @@ impl Loop {
         // its text and its size against the reviewer's window.
         let mut persons: Vec<(KeptMessage, String, u64)> = Vec::new();
         for item in &self.reviewed {
-            if let Shown::Person(message) = &item.shown {
+            // A person item is always a user item (`shown.rs` only builds
+            // `Shown::Person` with one), so anything else is skipped.
+            if let Shown::Person(message) = &item.shown
+                && let Input::User { text } = &item.input
+            {
                 persons.push((
                     *message,
-                    person_text(&item.input).to_owned(),
+                    text.clone(),
                     crate::handoff::estimate(&item.input),
                 ));
             }
@@ -195,12 +187,11 @@ impl Loop {
                             break;
                         }
                         Err(error) => {
+                            // The re-ask note is fixed text from the prompt file: the
+                            // reply's parse error never reaches the model. It stays in
+                            // `why` for the fallback notice, which the person reads.
                             why = error;
-                            note = Some(format!(
-                                "Your reply could not be read: {why}. Reply with the numbers of \
-                                 the messages to keep, separated by commas and nothing else, or \
-                                 `none`."
-                            ));
+                            note = Some(prompt.handoff_reask.clone());
                         }
                     }
                 }

@@ -24,7 +24,9 @@ use fakes::{Scripted, ScriptedProvider};
 use r#loop::{BlockLimits, Loop, Model, Permissions, PromptInputs, Reviewer};
 use serde_json::{Value, json};
 
-use support::{DEADLINE, MODEL, REVIEWER_MODEL, Session, TestTool, calls_reply, delivery, handoff};
+use support::{
+    DEADLINE, MODEL, REVIEWER_MODEL, Session, TestTool, calls_reply, delivery, handoff, kinds,
+};
 
 fn paris() -> Value {
     json!({"city": "Paris"})
@@ -148,6 +150,78 @@ fn the_reviewer_keeps_the_selected_messages_then_what_follows() {
         Scripted::text("allow"),
     ]);
     let lines = run_flow(&mut session);
+    // The whole flow in order: reviewed call, text, handoff with its selection, reviewed call.
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "usage_recorded",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "turn_started",
+            "step_started",
+            "handoff_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "handoff_completed",
+            "opening_message",
+            "usage_recorded",
+            "reviewer_kept",
+            "turn_completed",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "usage_recorded",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
 
     let seq = turn_started_seq(&lines, "never push to main");
     let kept = kept_lines(&lines);
@@ -190,6 +264,78 @@ fn selection_prose_never_reaches_a_later_prompt() {
         Scripted::text("allow"),
     ]);
     let lines = run_flow(&mut session);
+    // The whole flow in order, as above: the prose reply still reads as a selection.
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "usage_recorded",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "turn_started",
+            "step_started",
+            "handoff_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "handoff_completed",
+            "opening_message",
+            "usage_recorded",
+            "reviewer_kept",
+            "turn_completed",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "usage_recorded",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     assert_eq!(kept_lines(&lines).len(), 1);
     for request in reviewer.requests() {
         assert!(!request.system_prompt.contains("ZQX-PROSE"));
@@ -319,6 +465,78 @@ fn a_failed_selection_keeps_every_earlier_person_message() {
         Scripted::text("allow"),
     ]);
     let lines = run_flow(&mut session);
+    // The whole flow in order: the failed selection writes no usage, then the fallback line and notice.
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "usage_recorded",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "turn_started",
+            "step_started",
+            "handoff_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "handoff_completed",
+            "opening_message",
+            "reviewer_kept",
+            "notice",
+            "turn_completed",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "usage_recorded",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
 
     let first = turn_started_seq(&lines, "never push to main");
     let second = turn_started_seq(&lines, "say hi");
@@ -369,11 +587,86 @@ fn an_unreadable_selection_is_asked_once_more() {
         Scripted::text("allow"),
     ]);
     let lines = run_flow(&mut session);
+    // The whole flow in order: the re-ask costs a second selection request before the kept line.
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "usage_recorded",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "turn_started",
+            "step_started",
+            "handoff_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "handoff_completed",
+            "opening_message",
+            "usage_recorded",
+            "usage_recorded",
+            "reviewer_kept",
+            "turn_completed",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "usage_recorded",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     let requests = reviewer.requests();
     assert_eq!(requests.len(), 4);
     let second = texts(&requests[2]);
     let note = second[second.len() - 1];
-    assert!(note.starts_with("Your reply could not be read: "));
+    // The re-ask note is the prompt file's fixed section, not Rust text.
+    assert!(note.starts_with("## handoff-reask\n"));
+    assert!(note.contains("Your reply could not be read: "));
     assert!(!format!("{:?}", requests[2]).contains("keep all"));
     let seq = turn_started_seq(&lines, "never push to main");
     let kept = kept_lines(&lines);
@@ -391,6 +684,80 @@ fn an_unreadable_selection_is_asked_once_more() {
         Scripted::text("allow"),
     ]);
     let lines = run_flow(&mut session);
+    // The whole flow in order: two unreadable replies, then the fallback line and notice.
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "usage_recorded",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "turn_started",
+            "step_started",
+            "handoff_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "handoff_completed",
+            "opening_message",
+            "usage_recorded",
+            "usage_recorded",
+            "reviewer_kept",
+            "notice",
+            "turn_completed",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "usage_recorded",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     assert_eq!(reviewer.requests().len(), 4);
     let kept = kept_lines(&lines);
     assert_eq!(kept.len(), 1);
@@ -417,6 +784,39 @@ fn none_keeps_nothing_and_a_second_handoff_with_no_person_message_asks_nothing()
     prompt_turn(&mut session, "say hi");
     let mut lines = handoff_turn(&mut session, "c_first");
     lines.extend(handoff_turn(&mut session, "c_second"));
+    // Both handoffs in order: the first selects and the second asks nothing.
+    assert_eq!(
+        kinds(&lines),
+        [
+            "turn_started",
+            "step_started",
+            "handoff_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "handoff_completed",
+            "opening_message",
+            "usage_recorded",
+            "reviewer_kept",
+            "turn_completed",
+            "turn_started",
+            "step_started",
+            "handoff_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "handoff_completed",
+            "opening_message",
+            "reviewer_kept",
+            "turn_completed",
+        ]
+    );
 
     let kept = kept_lines(&lines);
     assert_eq!(kept.len(), 2);
@@ -444,6 +844,33 @@ fn without_a_reviewer_a_handoff_writes_no_selection() {
     assert!(kept_lines(&lines).is_empty());
     assert!(notice(&lines, "reviewer_selection_failed").is_none());
     lines.extend(prompt_turn(&mut session, "after"));
+    // The handoff writes no selection without a reviewer, then the prompt turn.
+    assert_eq!(
+        kinds(&lines),
+        [
+            "turn_started",
+            "step_started",
+            "handoff_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "handoff_completed",
+            "opening_message",
+            "turn_completed",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     assert!(kept_lines(&lines).is_empty());
 }
 
@@ -469,6 +896,47 @@ fn the_oldest_kept_messages_drop_past_the_reviewers_window() {
     let mut lines = prompt_turn(&mut session, "never push to main");
     lines.extend(prompt_turn(&mut session, "say hi"));
     lines.extend(handoff_turn(&mut session, "c_h"));
+    // Two text turns, then the handoff keeping only what fits the window.
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "turn_started",
+            "step_started",
+            "handoff_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "handoff_completed",
+            "opening_message",
+            "usage_recorded",
+            "reviewer_kept",
+            "turn_completed",
+        ]
+    );
     let kept = kept_lines(&lines);
     assert_eq!(kept.len(), 1);
     assert_eq!(
@@ -494,6 +962,47 @@ fn the_oldest_kept_messages_drop_past_the_reviewers_window() {
     let mut lines = prompt_turn(&mut session, "never push to main");
     lines.extend(prompt_turn(&mut session, "say hi"));
     lines.extend(handoff_turn(&mut session, "c_h"));
+    // Two text turns, then the handoff fallback capped to the window, with its notice.
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "turn_started",
+            "step_started",
+            "handoff_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "handoff_completed",
+            "opening_message",
+            "reviewer_kept",
+            "notice",
+            "turn_completed",
+        ]
+    );
     let kept = kept_lines(&lines);
     assert_eq!(kept.len(), 1);
     assert_eq!(
@@ -543,6 +1052,37 @@ fn the_selection_is_not_asked_past_the_spending_budget() {
     session.inbox.send(delivery("go")).unwrap();
     session.turn();
     let lines = session.lines();
+    // The single turn in order: the tool-triggered handoff falls back past the budget.
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "usage_recorded",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_started",
+            "tool_call_completed",
+            "tool_call_completed",
+            "handoff_completed",
+            "opening_message",
+            "reviewer_kept",
+            "notice",
+            "step_started",
+            "turn_completed",
+        ]
+    );
     assert_eq!(reviewer.requests().len(), 1);
     let kept = kept_lines(&lines);
     assert_eq!(kept.len(), 1);
