@@ -41,19 +41,28 @@ impl<'de> Deserialize<'de> for CommandLine {
         }
         // A missing `args` is read as `{}`, so a command whose keys are all
         // optional may leave it out. A command that takes no `args` reads
-        // without it, so the empty object is tried second.
+        // without it, so a missing `args` is tried as `{}` and an empty one
+        // as missing, each second.
         let line = match Line::deserialize(&value) {
             Ok(line) => line,
             Err(first) => {
-                let mut with_args = value;
-                let missing = with_args
+                let mut retry = value;
+                let Some(map) = retry
                     .as_object_mut()
-                    .filter(|map| map.contains_key("command") && !map.contains_key("args"));
-                let Some(map) = missing else {
+                    .filter(|map| map.contains_key("command"))
+                else {
                     return Err(D::Error::custom(first));
                 };
-                map.insert("args".into(), Value::Object(Default::default()));
-                Line::deserialize(with_args).map_err(D::Error::custom)?
+                match map.get("args") {
+                    None => {
+                        map.insert("args".into(), Value::Object(Default::default()));
+                    }
+                    Some(Value::Object(args)) if args.is_empty() => {
+                        map.remove("args");
+                    }
+                    Some(_) => return Err(D::Error::custom(first)),
+                }
+                Line::deserialize(retry).map_err(D::Error::custom)?
             }
         };
         Ok(Self {
