@@ -15,6 +15,9 @@ fn read() -> Option<u64> {
         .and_then(|status| vm_hwm(&status))
 }
 
+// Mutants run on Linux, where this function is not compiled, so no test can
+// reach it; the macOS CI tests run it for real.
+#[cfg_attr(false, mutants::skip)]
 #[cfg(target_os = "macos")]
 #[allow(
     unsafe_code,
@@ -34,6 +37,8 @@ fn read() -> Option<u64> {
     read_status_ok(status).then_some(footprint_kib(info.ri_lifetime_max_phys_footprint))
 }
 
+// Mutants run on Linux, where this function is not compiled.
+#[cfg_attr(false, mutants::skip)]
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn read() -> Option<u64> {
     None
