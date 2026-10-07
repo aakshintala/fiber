@@ -1180,6 +1180,12 @@ fn model_arrives_as_delivery_with_its_args_and_its_rejection_stays_put() {
             let other = Client::connect(&socket).unwrap();
             let mut own = vec![subscribe(&sender, "c_a", "full")];
             let mut other_stream = vec![subscribe(&other, "c_b", "full")];
+            // Which connection attaches first is not fixed, so `sender` may or may
+            // not have seen a count of 1 before `other` attached. Both streams
+            // read on to the attach that counts both before anything is sent.
+            let both = |line: &Value| kind(line) == "clients" && line["payload"]["count"] == 2;
+            own.extend(until(&sender, both));
+            other_stream.extend(until(&other, both));
             send(
                 &sender,
                 r#"{"id":"c_m1","command":"model","args":{"model":"fake/n","thinking":"high"}}"#,
@@ -1256,18 +1262,27 @@ fn model_arrives_as_delivery_with_its_args_and_its_rejection_stays_put() {
             );
             assert_eq!(kind(seen.last().unwrap()), "command_accepted");
             other_stream.extend(seen);
+            // A count of 1 is the first attach, seen by one or both connections
+            // depending on the order they attached in; only the count of 2 is
+            // certain to reach both.
+            let settled = |lines: &[Value]| -> Vec<Value> {
+                lines
+                    .iter()
+                    .filter(|line| !(kind(line) == "clients" && line["payload"]["count"] == 1))
+                    .cloned()
+                    .collect()
+            };
             assert_eq!(
-                kinds(&own),
+                kinds(&settled(&own)),
                 [
                     "command_accepted",
-                    "clients",
                     "clients",
                     "command_accepted",
                     "command_rejected"
                 ]
             );
             assert_eq!(
-                kinds(&other_stream),
+                kinds(&settled(&other_stream)),
                 ["command_accepted", "clients", "command_accepted"]
             );
             Ok(())
