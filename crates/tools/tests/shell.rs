@@ -633,7 +633,7 @@ fn a_pipe_held_open_after_a_normal_end_keeps_the_exit() {
     );
     let pgid = ready.wait(CHILD_START)[0];
     let watchdog = Watchdog::group(pgid);
-    let holder = ready.wait(CHILD_START)[0];
+    let holder = ready.wait(DEADLINE)[0];
     let holders = life.watch();
     let _guard = KillPid(holder);
     assert!(
@@ -670,7 +670,7 @@ fn an_escapee_that_holds_the_pipe_is_indeterminate() {
     );
     let pgid = ready.wait(CHILD_START)[0];
     let watchdog = Watchdog::group(pgid);
-    let escapee = ready.wait(CHILD_START)[0];
+    let escapee = ready.wait(DEADLINE)[0];
     let holders = life.watch();
     let _guard = KillPid(escapee);
     cancel.cancel();
