@@ -8,7 +8,8 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-/// How long [`rerun`] waits for the child to exit.
+/// How long [`rerun`] waits for the child to exit, and for it to be reaped
+/// after a kill.
 const CHILD_WITHIN: Duration = Duration::from_secs(10);
 
 /// Proxy variables a re-run child never inherits: ureq reads `ALL_PROXY`
@@ -33,14 +34,27 @@ const SCRUBBED: [&str; 8] = [
 ///
 /// # Panics
 ///
+/// As [`rerun_within`], with a 10 s bound.
+pub fn rerun(test: &str, env: &[(&str, &str)]) -> Output {
+    rerun_within(test, env, CHILD_WITHIN)
+}
+
+/// [`rerun`] with the caller's bound on the child: a child that runs slowly
+/// on a loaded host gets a longer one. The bound applies twice, once to the
+/// child's exit and once to its reaping after a kill, so a caller keeps
+/// `2 * within` inside half of nextest's per-test timeout
+/// (`docs/testing.md`, "Waits and timeouts").
+///
+/// # Panics
+///
 /// When the test binary cannot be re-run, or the child is still running
-/// after `CHILD_WITHIN`: the child is killed first, so a hung child never
-/// keeps running.
+/// after `within`: the child is killed first, so a hung child never keeps
+/// running.
 #[allow(
     clippy::panic,
     reason = "a child that cannot run means the test cannot proceed"
 )]
-pub fn rerun(test: &str, env: &[(&str, &str)]) -> Output {
+pub fn rerun_within(test: &str, env: &[(&str, &str)], within: Duration) -> Output {
     let exe = match std::env::current_exe() {
         Ok(exe) => exe,
         Err(err) => panic!("the test binary's path: {err}"),
@@ -64,7 +78,7 @@ pub fn rerun(test: &str, env: &[(&str, &str)]) -> Output {
             Ok(()) | Err(_) => {}
         }
     });
-    match finished.recv_timeout(CHILD_WITHIN) {
+    match finished.recv_timeout(within) {
         Ok(output) => match output {
             Ok(output) => output,
             Err(err) => panic!("`{test}` has no output: {err}"),
@@ -73,8 +87,8 @@ pub fn rerun(test: &str, env: &[(&str, &str)]) -> Output {
             match crate::kill_pid(pid, "KILL") {
                 Ok(_) | Err(_) => {}
             }
-            let reaped = finished.recv_timeout(CHILD_WITHIN).is_ok();
-            panic!("waited {CHILD_WITHIN:?} for `{test}` to exit (reaped: {reaped})");
+            let reaped = finished.recv_timeout(within).is_ok();
+            panic!("waited {within:?} for `{test}` to exit (reaped: {reaped})");
         }
     }
 }
