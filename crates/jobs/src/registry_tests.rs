@@ -57,7 +57,7 @@ fn failure() -> JobCompleted {
         job_id: JobId("j_other".into()),
         status: Outcome::Failed,
         error: Some(Failure {
-            code: ErrorCode::ToolError,
+            code: ErrorCode::Indeterminate,
             message: "The job ended without a result.".into(),
             retry_after: None,
             provider: None,
@@ -194,7 +194,7 @@ fn calling_end_records_that_result_and_drop_does_not_record_again() {
 }
 
 #[test]
-fn a_dropped_end_records_a_tool_error() {
+fn a_dropped_end_records_its_job_failed_indeterminate() {
     let (_dir, registry) = world();
     let opened = registry.open(opening("npm test")).unwrap();
     let id = opened.started.job_id.0.clone();
@@ -210,6 +210,38 @@ fn a_dropped_end_records_a_tool_error() {
     );
     let again = registry.wait(&id, 0, &cancel).unwrap();
     assert!(again.record.is_none());
+}
+
+#[test]
+fn a_dropped_end_sends_one_indeterminate_notice_for_its_own_job() {
+    let (_dir, registry) = world();
+    let (tx, rx) = mpsc::channel();
+    registry.deliver_to(tx);
+    let opened = registry.open(opening("npm test")).unwrap();
+    let id = opened.started.job_id.0.clone();
+    drop(opened);
+    let sent = notice(&rx);
+    assert!(rx.try_recv().is_err(), "a dropped end reports once");
+    assert_eq!(
+        sent.completed,
+        JobCompleted {
+            job_id: JobId(id),
+            ..failure()
+        }
+    );
+}
+
+#[test]
+fn a_reported_end_sends_one_notice_with_its_own_id_and_no_fallback() {
+    let (_dir, registry) = world();
+    let (tx, rx) = mpsc::channel();
+    registry.deliver_to(tx);
+    let opened = registry.open(opening("npm test")).unwrap();
+    let id = opened.started.job_id.0.clone();
+    opened.end.end(ended_ok("j_other"));
+    let sent = notice(&rx);
+    assert!(rx.try_recv().is_err(), "a reported end reports once");
+    assert_eq!(sent.completed, ended_ok(&id));
 }
 
 #[test]

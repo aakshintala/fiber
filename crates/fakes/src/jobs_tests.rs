@@ -70,7 +70,7 @@ fn open_creates_a_file_under_the_directory_and_records_the_start() {
     assert_eq!(dropped.status, Outcome::Failed);
     assert_eq!(
         dropped.error.as_ref().map(|error| error.code.clone()),
-        Some(ErrorCode::ToolError)
+        Some(ErrorCode::Indeterminate)
     );
 }
 
