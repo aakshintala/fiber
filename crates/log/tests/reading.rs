@@ -20,7 +20,7 @@ use std::time::Duration;
 
 use common::*;
 use contract::Envelope;
-use log::{Log, Watcher, read};
+use log::{Log, Watcher, lines, read};
 
 fn kinds(lines: &[Envelope]) -> Vec<&str> {
     lines.iter().map(|l| l.kind.as_str()).collect()
@@ -86,6 +86,80 @@ fn a_reader_refuses_a_complete_line_that_does_not_parse_and_names_it() {
 fn reading_a_missing_session_is_not_found() {
     let tmp = TestDir::new("read-missing");
     let err = read(&tmp.session(&id("s_x"))).unwrap_err();
+    assert_eq!(err.code(), contract::ErrorCode::SessionNotFound);
+}
+
+/// Appends `line` to the session's log as raw bytes, behind the writer's back.
+fn append_raw(dir: &std::path::Path, line: &[u8]) {
+    let mut file = fs::OpenOptions::new()
+        .append(true)
+        .open(dir.join("events.jsonl"))
+        .unwrap();
+    file.write_all(line).unwrap();
+}
+
+#[test]
+fn lines_yield_every_complete_line_in_order_and_skip_a_torn_tail() {
+    let tmp = TestDir::new("lines");
+    let log = Log::create(tmp.path(), id("s_1"), fakes::clock::FakeClock::new()).unwrap();
+    let written = [
+        log.append(&session_started(), None, None).unwrap(),
+        log.append(&empty("step_started"), None, None).unwrap(),
+        log.append(&empty("step_started"), None, None).unwrap(),
+    ];
+    let dir = tmp.session(&id("s_1"));
+    append_raw(&dir, br#"{"kind":"step_started","session_id":"s_1","#);
+    let got: Vec<Envelope> = lines(&dir).unwrap().map(Result::unwrap).collect();
+    assert_eq!(got, written);
+}
+
+#[test]
+fn lines_read_a_line_longer_than_64_kib_whole() {
+    let tmp = TestDir::new("lines-long");
+    let log = Log::create(tmp.path(), id("s_1"), fakes::clock::FakeClock::new()).unwrap();
+    let long = log
+        .append(
+            &event(
+                "session_named",
+                serde_json::json!({"name": "n".repeat(100 * 1024), "by": "person"}),
+            ),
+            None,
+            None,
+        )
+        .unwrap();
+    let after = log.append(&empty("step_started"), None, None).unwrap();
+    let got: Vec<Envelope> = lines(&tmp.session(&id("s_1")))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(got, [long, after]);
+}
+
+#[test]
+fn lines_end_after_an_unparseable_line_that_they_name() {
+    let tmp = TestDir::new("lines-bad");
+    let log = Log::create(tmp.path(), id("s_1"), fakes::clock::FakeClock::new()).unwrap();
+    let first = log.append(&session_started(), None, None).unwrap();
+    let dir = tmp.session(&id("s_1"));
+    append_raw(&dir, b"not json\n");
+    // A good line after the bad one is never reached.
+    let whole = fs::read(dir.join("events.jsonl")).unwrap();
+    let first_line = whole.split_inclusive(|b| *b == b'\n').next().unwrap().to_vec();
+    append_raw(&dir, &first_line);
+    let mut it = lines(&dir).unwrap();
+    assert_eq!(it.next().unwrap().unwrap(), first);
+    let err = it.next().unwrap().unwrap_err();
+    assert!(err.to_string().contains("line 2"), "{err}");
+    assert_eq!(err.code(), contract::ErrorCode::LogCorrupt);
+    assert!(it.next().is_none(), "the lines end after the first error");
+}
+
+#[test]
+fn lines_of_a_missing_session_are_not_found() {
+    let tmp = TestDir::new("lines-missing");
+    let Err(err) = lines(&tmp.session(&id("s_x"))) else {
+        panic!("read lines of a session that does not exist");
+    };
     assert_eq!(err.code(), contract::ErrorCode::SessionNotFound);
 }
 

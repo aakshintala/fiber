@@ -3,8 +3,8 @@
 //! and a reader stops at the last complete line (`docs/events.md`, "Writing").
 
 use std::collections::VecDeque;
-use std::fs;
-use std::io;
+use std::fs::File;
+use std::io::{self, BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
@@ -17,27 +17,83 @@ use crate::{EVENTS, Error, io_at};
 /// last complete line. A torn tail, a line cut short by a crash, is skipped;
 /// a complete line that is not an event line is an error naming it.
 pub fn read(dir: &Path) -> Result<Vec<Envelope>, Error> {
+    lines(dir)?.collect()
+}
+
+/// The durable lines in the session directory `dir`, read one at a time as
+/// [`read`] reads them, holding one line and never the whole file. A missing
+/// log is [`Error::NotFound`] here; after the first error the lines end.
+pub fn lines(dir: &Path) -> Result<Lines, Error> {
     let path = dir.join(EVENTS);
-    let bytes = fs::read(&path).map_err(|e| {
+    let file = File::open(&path).map_err(|e| {
         if e.kind() == io::ErrorKind::NotFound {
             Error::NotFound(dir.to_owned())
         } else {
             io_at(&path)(e)
         }
     })?;
-    bytes
-        .get(..complete_len(&bytes))
-        .unwrap_or_default()
-        .split_inclusive(|b| *b == b'\n')
-        .enumerate()
-        .map(|(i, line)| {
-            serde_json::from_slice(line).map_err(|source| Error::Unreadable {
-                path: path.clone(),
-                line: i + 1,
-                source,
-            })
-        })
-        .collect()
+    Ok(Lines {
+        reader: BufReader::new(file),
+        path,
+        buf: Vec::new(),
+        number: 0,
+        offset: 0,
+        done: false,
+    })
+}
+
+/// A session's durable lines, read one at a time: see [`lines`].
+pub struct Lines {
+    reader: BufReader<File>,
+    path: PathBuf,
+    /// The line being read.
+    buf: Vec<u8>,
+    /// How many complete lines have been read.
+    number: usize,
+    /// The byte offset just past the last complete line read.
+    offset: u64,
+    /// An error was returned or the complete lines ran out.
+    done: bool,
+}
+
+impl Lines {
+    /// The byte offset just past the last complete line returned: where the
+    /// next line starts, and, once the lines end, where a torn tail starts.
+    pub(crate) fn offset(&self) -> u64 {
+        self.offset
+    }
+}
+
+impl Iterator for Lines {
+    type Item = Result<Envelope, Error>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.done {
+            return None;
+        }
+        self.buf.clear();
+        let read = match self.reader.read_until(b'\n', &mut self.buf) {
+            Ok(read) => read,
+            Err(e) => {
+                self.done = true;
+                return Some(Err(io_at(&self.path)(e)));
+            }
+        };
+        // The end of the file, or a torn tail: a line with no newline.
+        if self.buf.last() != Some(&b'\n') {
+            self.done = true;
+            return None;
+        }
+        self.number += 1;
+        self.offset += u64::try_from(read).unwrap_or(u64::MAX);
+        let parsed = serde_json::from_slice(&self.buf).map_err(|source| Error::Unreadable {
+            path: self.path.clone(),
+            line: self.number,
+            source,
+        });
+        self.done = parsed.is_err();
+        Some(parsed)
+    }
 }
 
 /// The length of `bytes` up to and including its last newline: everything
