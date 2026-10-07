@@ -512,6 +512,11 @@ provider extension declares") lists:
 - `context_window` is required. A model without it is left out with the
   notice `model_invalid` (`docs/model-routing.md`, "What a provider extension
   declares").
+- `thinking_levels` lists the thinking levels the model takes, and
+  `thinking_default` is the model's own default, used when no session choice
+  or configured value names one (`docs/model-routing.md`, "Thinking").
+  Absent levels mean the model takes none. A default not among the levels
+  leaves the model out with `model_invalid`.
 - `deferred_tools` is set only after a probe (`docs/tools.md`, "Which tools the
   model sees"). Absent means false.
 - `cost` is in US dollars per million tokens. A model priced by request size

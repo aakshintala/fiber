@@ -17,7 +17,7 @@ fn request() -> ModelRequest {
     ModelRequest {
         system_prompt: String::new(),
         tools: Vec::new(),
-        effort: None,
+        thinking: None,
         tool_choice: "auto".to_owned(),
         cache_lifetime: CacheLifetime::OneHour,
         cache_key: "s_test".to_owned(),

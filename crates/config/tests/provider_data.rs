@@ -562,3 +562,27 @@ fn opening_rejects_paths_outside_the_data_directory() {
         }
     }
 }
+
+#[test]
+fn thinking_declaration_parses_and_an_unknown_level_fails_the_parse() {
+    use contract::ThinkingLevel::{High, Low};
+    let setup = Setup::new();
+    let dir = setup.root().join("ext");
+    setup.write(
+        &dir.join("providers/p.json"),
+        r#"{"name":"p","models":[
+            {"id":"m","protocol":"anthropic-messages","base_url":"u",
+             "thinking_levels": ["low", "high"], "thinking_default": "high"}]}"#,
+    );
+    let models = &read_providers(&dir).unwrap()[0].models;
+    assert_eq!(models[0].thinking_levels, vec![Low, High]);
+    assert_eq!(models[0].thinking_default, Some(High));
+    setup.write(
+        &dir.join("providers/p.json"),
+        r#"{"name":"p","models":[
+            {"id":"m","protocol":"anthropic-messages","base_url":"u",
+             "thinking_levels": ["turbo"]}]}"#,
+    );
+    let err = read_providers(&dir).unwrap_err();
+    assert_eq!(err.code(), ErrorCode::ConfigInvalid);
+}

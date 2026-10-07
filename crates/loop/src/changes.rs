@@ -72,12 +72,6 @@ pub(crate) struct State {
     /// Every directory checked: Fiber home and the repository chain, plus
     /// each subdirectory a call's paths reached. Canonical.
     dirs: BTreeSet<PathBuf>,
-    /// The paths a resume restored from calls' declared paths that are not
-    /// known directories: the log does not say whether each was a file or
-    /// a directory when its call ran. Each joins `dirs` at the first check
-    /// that finds it a directory; until then it is never read, so a file
-    /// here names no failure. Canonical.
-    maybe_dirs: BTreeSet<PathBuf>,
     /// The date last given, `YYYY-MM-DD`.
     date: String,
     /// Canonical Fiber home: its directory holds only `AGENTS.md`.
@@ -112,7 +106,6 @@ impl State {
         Self {
             files: BTreeMap::new(),
             dirs: BTreeSet::from([home.clone()]),
-            maybe_dirs: BTreeSet::new(),
             date: String::new(),
             home,
             had: BTreeMap::new(),
@@ -151,10 +144,11 @@ impl State {
     /// The state the log's lines describe: the content fold gives what the
     /// model last had, the parents of every instruction file restore each
     /// directory that held one, the declared paths of every call the
-    /// current context started and completed restore each subdirectory
-    /// they reached (each path itself waits in `maybe_dirs` until it is a
-    /// directory), and the last date wins. No size or time is
-    /// remembered, so the first check reads each file and sends nothing
+    /// current context started and completed resolve once at the resume
+    /// and each subdirectory they reach joins the checked directories,
+    /// and the last date wins. A declared path that is no directory at
+    /// the resume is dropped. No size or time is remembered, so the first
+    /// check reads each file and sends nothing
     /// when its content equals what the model had; a restored subdirectory
     /// queues nothing, and a file created in it later is `created` at the
     /// next check.
@@ -174,9 +168,9 @@ impl State {
         // Each started call's declared paths, until its completion: only a
         // call that ran and completed touched its directories, as live.
         let mut running: BTreeMap<ActionId, Vec<String>> = BTreeMap::new();
-        // The subdirectories the current context's calls reached.
-        let mut touched = BTreeSet::new();
-        // The paths those calls declared, of unknown kind.
+        // The current context's resolved declared paths, of unknown kind
+        // until the resume stats each once (`reached` skips any outside
+        // the workspace).
         let mut declared = BTreeSet::new();
         for line in lines.iter().filter(|l| l.is_durable()) {
             let Some(event) = Event::from_envelope(line).map_err(Error::Unreadable)? else {
@@ -186,7 +180,6 @@ impl State {
             // set: only these five restore the tracked state.
             if let Event::OpeningMessage(message) = &event {
                 // A new context: the calls before it touched nothing in it.
-                touched.clear();
                 declared.clear();
                 state.date = message.environment.date.clone();
                 for file in &message.instruction_files {
@@ -215,25 +208,17 @@ impl State {
             if let (Event::ToolCallCompleted(_), Some(action)) = (&event, &line.action_id)
                 && let Some(paths) = running.remove(action)
             {
-                let resolved = resolve(&workspace, &paths);
-                touched.extend(reached(&workspace, &resolved));
-                // Each path under the workspace, whatever it is today: a
-                // directory the call declared may be gone now and made
-                // again later. The workspace itself is in the repo chain,
-                // so the difference below drops it.
-                declared.extend(
-                    resolved
-                        .into_iter()
-                        .filter(|path| path.starts_with(&workspace)),
-                );
+                declared.extend(resolve(&workspace, &paths));
             }
             if let Event::DateChanged(changed) = &event {
                 state.date = changed.date.clone();
             }
             apply(&mut state.had, &event);
         }
-        state.dirs.extend(touched);
-        state.maybe_dirs = declared.difference(&state.dirs).cloned().collect();
+        // Each declared path stat'ed once: a directory at the resume
+        // joins the checked directories, anything else is dropped.
+        let declared: Vec<PathBuf> = declared.into_iter().collect();
+        state.dirs.extend(reached(&workspace, &declared));
         Ok(state)
     }
 
@@ -283,17 +268,6 @@ impl State {
         // Tracked files first, in path order (`BTreeMap` iteration).
         for path in self.files.keys().cloned().collect::<Vec<_>>() {
             self.check_file(&path, &mut out);
-        }
-        // A restored path that is a directory now is checked from here on.
-        let now_dirs: Vec<PathBuf> = self
-            .maybe_dirs
-            .iter()
-            .filter(|path| path.is_dir())
-            .cloned()
-            .collect();
-        for dir in now_dirs {
-            self.maybe_dirs.remove(&dir);
-            self.dirs.insert(dir);
         }
         // Then the candidates of checked directories: a path not yet
         // tracked is `created` with the full text.
@@ -608,7 +582,6 @@ impl State {
             .collect();
         // `BTreeSet` order: the queued lines read in path order.
         for dir in fresh {
-            self.maybe_dirs.remove(&dir);
             self.dirs.insert(dir.clone());
             let (file, notice) = self.adopt(&dir, InstructionReason::Subdirectory);
             if let Some(file) = file {

@@ -190,7 +190,12 @@ fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
     // Fiber keeps no state at the vendor, so it asks for the encrypted
     // reasoning to send back (`docs/loop.md`, "What the model is sent").
     body.insert("include".into(), json!(["reasoning.encrypted_content"]));
-    if let Some(effort) = &request.effort {
+    if let Some(level) = &request.thinking {
+        let effort = if *level == contract::ThinkingLevel::Off {
+            "none"
+        } else {
+            level.as_str()
+        };
         body.insert("reasoning".into(), json!({ "effort": effort }));
     }
     if let Some(store) = endpoint.compat.store {

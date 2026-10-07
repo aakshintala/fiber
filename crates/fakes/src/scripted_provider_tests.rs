@@ -8,7 +8,7 @@ fn request(text: &str) -> ModelRequest {
     ModelRequest {
         system_prompt: text.into(),
         tools: Vec::new(),
-        effort: None,
+        thinking: None,
         tool_choice: "auto".into(),
         cache_lifetime: CacheLifetime::OneHour,
         cache_key: "s_1".into(),

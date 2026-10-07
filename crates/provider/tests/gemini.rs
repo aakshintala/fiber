@@ -94,7 +94,7 @@ fn request() -> ModelRequest {
     ModelRequest {
         system_prompt: "You are terse.".into(),
         tools: vec![weather_tool()],
-        effort: None,
+        thinking: None,
         tool_choice: "auto".into(),
         cache_lifetime: CacheLifetime::OneHour,
         cache_key: "session_1".into(),
@@ -434,7 +434,7 @@ fn requests_from_the_same_inputs_are_byte_identical() {
 }
 
 #[test]
-fn tool_choice_and_effort_map_to_geminis_own_values() {
+fn tool_choice_and_thinking_map_to_geminis_own_values() {
     let script: Vec<Response> = (0..4).map(|_| completed_reply()).collect();
     let server = ProviderServer::start(script).unwrap();
     let gemini = Gemini::new(endpoint(&server));
@@ -444,7 +444,7 @@ fn tool_choice_and_effort_map_to_geminis_own_values() {
         run(Box::new(gemini.request(&request))).0.unwrap();
     }
     let mut request = request();
-    request.effort = Some("low".into());
+    request.thinking = Some(contract::ThinkingLevel::Low);
     request.tools.clear();
     run(Box::new(gemini.request(&request))).0.unwrap();
     let config: Vec<Value> = (0..3)
@@ -1742,5 +1742,40 @@ fn a_result_without_its_call_renders_as_today() {
         contents,
         json!([{"role": "user", "parts": [{"functionResponse":
             {"name": "", "response": {"output": "hello"}}}]}])
+    );
+}
+
+#[test]
+fn thinking_levels_map_to_geminis_thinking_config() {
+    use contract::ThinkingLevel::{Low, Off, Xhigh};
+    let server = ProviderServer::start([
+        completed_reply(),
+        completed_reply(),
+        completed_reply(),
+        completed_reply(),
+    ])
+    .unwrap();
+    for level in [None, Some(Off), Some(Low), Some(Xhigh)] {
+        let mut req = request();
+        req.thinking = level;
+        run(Box::new(Gemini::new(endpoint(&server)).request(&req)))
+            .0
+            .unwrap();
+    }
+    assert_eq!(
+        sent_body(&server, 0)["generationConfig"]["thinkingConfig"],
+        json!({"includeThoughts": true})
+    );
+    assert_eq!(
+        sent_body(&server, 1)["generationConfig"]["thinkingConfig"],
+        json!({"includeThoughts": true, "thinkingBudget": 0})
+    );
+    assert_eq!(
+        sent_body(&server, 2)["generationConfig"]["thinkingConfig"],
+        json!({"includeThoughts": true, "thinkingLevel": "LOW"})
+    );
+    assert_eq!(
+        sent_body(&server, 3)["generationConfig"]["thinkingConfig"],
+        json!({"includeThoughts": true, "thinkingLevel": "XHIGH"})
     );
 }

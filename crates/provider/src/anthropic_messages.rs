@@ -204,9 +204,11 @@ fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
     // Anthropic takes adaptive thinking plus an effort, not a token budget
     // (`research/anthropic-messages-probe`: "Use thinking.type.adaptive and
     // output_config.effort").
-    if let Some(effort) = &request.effort {
+    if let Some(level) = &request.thinking
+        && *level != contract::ThinkingLevel::Off
+    {
         body.insert("thinking".into(), json!({"type": "adaptive"}));
-        body.insert("output_config".into(), json!({"effort": effort}));
+        body.insert("output_config".into(), json!({"effort": level.as_str()}));
     }
     body.extend(endpoint.extra_body.clone());
     // Anthropic requires `max_tokens`. It is the model's limit, or the

@@ -239,6 +239,8 @@ struct Preamble {
     tool_choice: String,
     /// The cache lifetime as sent, and as `preamble_built` records it.
     cache_lifetime: CacheLifetime,
+    /// The session's one reasoning setting, as `preamble_built` records it.
+    thinking: Option<contract::ThinkingLevel>,
 }
 
 impl Loop {
@@ -391,7 +393,7 @@ impl Loop {
 
     /// Blocks until a prompt or a steer arrives, then runs one turn from
     /// everything waiting in the inbox, in arrival order (`docs/loop.md`,
-    /// "Starting a turn"). A later prompt in that drain is rejected `busy`.
+    /// "Starting a turn"). Every prompt in that drain joins the turn.
     /// Returns how the turn ended, or `None` once `close` was taken while
     /// idle or every sender of the inbox is gone.
     pub fn turn(&mut self) -> Result<Option<TurnOutcome>, Error> {
@@ -429,9 +431,9 @@ impl Loop {
             return Ok(None);
         };
         written?;
-        // A prompt is accepted once its `turn_started` is written. A log
-        // error or a shutdown above drops it uncalled.
-        if let Some(ack) = started.prompt {
+        // Each prompt is accepted once its `turn_started` is written, in
+        // arrival order. A log error or a shutdown above drops them uncalled.
+        for ack in started.prompts {
             inbox::accept(ack);
         }
         self.run_steps(&turn)
@@ -465,6 +467,7 @@ impl Loop {
             tools,
             tool_choice: event.tool_choice,
             cache_lifetime: event.cache_lifetime,
+            thinking: self.prompt.thinking,
         });
         self.ensure_opening()
     }

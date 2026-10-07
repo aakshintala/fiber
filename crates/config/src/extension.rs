@@ -155,6 +155,14 @@ pub struct ModelData {
     /// search for it.
     #[serde(default)]
     pub web_search: Option<String>,
+    /// The thinking levels the model takes (`docs/model-routing.md`,
+    /// "Thinking"); absent means it takes none.
+    #[serde(default)]
+    pub thinking_levels: Vec<contract::ThinkingLevel>,
+    /// The model's own default level, used when no session choice or
+    /// configured value names one (`docs/model-routing.md`, "Thinking").
+    #[serde(default)]
+    pub thinking_default: Option<contract::ThinkingLevel>,
     /// A Markdown file in the extension package whose text is appended to
     /// the system prompt for this model only
     /// (`docs/system-prompt.md`, "The model's addendum").

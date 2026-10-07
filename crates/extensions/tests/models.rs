@@ -58,12 +58,12 @@ fn an_exact_reference_resolves_even_when_its_id_holds_colons() {
 fn a_thinking_suffix_is_stripped_when_the_exact_string_matches_nothing() {
     let setup = Setup::new();
     let providers = installed(&setup, &[("openai", provider("openai", &["gpt-5.6"]))]);
-    for level in ["off", "minimal", "low", "medium", "high", "xhigh", "max"] {
+    for level in contract::ThinkingLevel::ALL.map(contract::ThinkingLevel::as_str) {
         let model = providers
             .resolve(&format!("openai/gpt-5.6:{level}"))
             .unwrap();
         assert_eq!(model.reference(), "openai/gpt-5.6");
-        assert_eq!(model.thinking, Some(level));
+        assert_eq!(model.thinking.map(|l| l.as_str()), Some(level));
     }
     let err = providers.resolve("openai/gpt-5.6:extreme").unwrap_err();
     assert!(matches!(err, Error::UnknownModel { .. }), "{err:?}");
@@ -83,7 +83,7 @@ fn a_bare_id_resolves_when_exactly_one_provider_has_it() {
     assert_eq!(model.reference(), "openai/gpt-5.6");
     let model = providers.resolve("glm-5:low").unwrap();
     assert_eq!(model.reference(), "opencode/glm-5");
-    assert_eq!(model.thinking, Some("low"));
+    assert_eq!(model.thinking, Some(contract::ThinkingLevel::Low));
 }
 
 #[test]
@@ -1167,5 +1167,31 @@ fn add_lua_without_a_cache_or_a_credential_runs_no_models() {
     assert!(
         config::read_model_cache(&home, "acme").unwrap().is_none(),
         "no discovery ran, so no copy was written"
+    );
+}
+
+#[test]
+fn leave_out_invalid_drops_a_model_whose_default_is_not_among_its_levels() {
+    let list = json!([
+        {"id": "bad", "protocol": "anthropic-messages",
+         "base_url": "http://127.0.0.1:1/v1",
+         "thinking_levels": ["low"], "thinking_default": "high"},
+        {"id": "ok", "protocol": "anthropic-messages",
+         "base_url": "http://127.0.0.1:1/v1",
+         "thinking_levels": ["low", "high"], "thinking_default": "high"}
+    ]);
+    let mut models: Vec<ModelData> = serde_json::from_value(list).unwrap();
+    let notices = leave_out_invalid("acme", "acme", &mut models);
+    assert_eq!(
+        models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+        ["ok"]
+    );
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0].code, ErrorCode::ModelInvalid);
+    assert_eq!(notices[0].extension.as_deref(), Some("acme"));
+    assert!(
+        notices[0].message.contains("acme/bad") && notices[0].message.contains("thinking_default"),
+        "{}",
+        notices[0].message
     );
 }
