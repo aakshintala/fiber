@@ -755,14 +755,42 @@ fn join(handle: JoinHandle<()>) {
 struct Tick {
     held: Mutex<()>,
     moved: Condvar,
+    /// Told once of the next wake: when it finds `held` taken, or else
+    /// once its notify has returned.
+    #[cfg(test)]
+    attempt: Mutex<Option<Sender<()>>>,
 }
 
 impl Wake for Tick {
     fn wake(&self) {
+        #[cfg(test)]
+        let attempt = self.tell_if_contended();
         // Taken before the notify, so a scanner that has checked and not
         // yet parked cannot miss it.
-        let _held = lock(&self.held);
+        let held = lock(&self.held);
         self.moved.notify_all();
+        drop(held);
+        #[cfg(test)]
+        if let Some(attempt) = attempt {
+            attempt.send(()).unwrap_or(());
+        }
+    }
+}
+
+#[cfg(test)]
+impl Tick {
+    /// Tells the armed sender at once when `held` is taken, and otherwise
+    /// returns it to be told after the notify.
+    fn tell_if_contended(&self) -> Option<Sender<()>> {
+        let attempt = lock(&self.attempt).take()?;
+        if matches!(
+            self.held.try_lock(),
+            Err(std::sync::TryLockError::WouldBlock)
+        ) {
+            attempt.send(()).unwrap_or(());
+            return None;
+        }
+        Some(attempt)
     }
 }
 
