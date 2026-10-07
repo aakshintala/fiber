@@ -67,15 +67,21 @@ pub(crate) fn trigger_at(settings: &HandoffSettings, window: u64) -> Option<u64>
     Some(settings.tokens.min(by_window))
 }
 
-/// The tokens a request held and its reply added: the prompt (`input`, the
-/// cache reads and every cache write) plus the output.
+/// The tokens a request held and its reply added: the prompt plus the
+/// output.
 pub(crate) fn context_tokens(tokens: &Tokens) -> u64 {
+    prompt_tokens(tokens).saturating_add(tokens.output)
+}
+
+/// The tokens a request held: `input`, the cache reads and every cache
+/// write. 0 for a call that reported no input, such as one that failed
+/// before its provider named a generation.
+pub(crate) fn prompt_tokens(tokens: &Tokens) -> u64 {
     let written: u64 = tokens.cache_write.values().sum();
     tokens
         .input
         .saturating_add(tokens.cache_read)
         .saturating_add(written)
-        .saturating_add(tokens.output)
 }
 
 /// An estimate of the tokens `input` adds: `ceil(bytes / 4)` of its text; a

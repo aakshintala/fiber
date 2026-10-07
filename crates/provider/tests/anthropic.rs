@@ -27,11 +27,11 @@ use std::time::Duration;
 
 use contract::events::{CacheLifetime, ReasoningCompleted, TextDelta, ToolCallRequested};
 use contract::provider::{
-    CallError, Delta, Finish, Input, InputSize, ModelCall, ModelRequest, Provider, Reply,
-    ReplyAction, ToolDefinition,
+    CallError, CallUsage, Delta, Finish, Input, InputSize, ModelCall, ModelRequest, Provider,
+    Reply, ReplyAction, ToolDefinition,
 };
 use contract::shapes::Tokens;
-use contract::{ActionId, ErrorCode, ProviderCallId};
+use contract::{ActionId, ErrorCode, GenerationId, ProviderCallId};
 use fakes::{ProviderServer, Response};
 use provider::Endpoint;
 use provider::anthropic_messages::{Messages, decode};
@@ -391,7 +391,10 @@ fn the_tool_use_stream_decodes_the_call() {
         |d| matches!(d, Delta::ToolCallArguments(a) if a.name.as_deref() == Some("get_weather"))
     ));
     assert_eq!(reply.finish, Finish::Completed);
-    assert_eq!(reply.generation_id.0, "msg_011CfXSx5JPwTKf8hnNi81M7");
+    assert_eq!(
+        reply.generation_id,
+        Some(GenerationId("msg_011CfXSx5JPwTKf8hnNi81M7".into()))
+    );
 }
 
 #[test]
@@ -1062,10 +1065,12 @@ fn a_call_cancelled_before_it_runs_returns_without_connecting() {
     };
     let call = Messages::new(endpoint).request(&request());
     call.cancel();
-    assert_eq!(
-        run(Box::new(call)).0,
-        Err(CallError::Cancelled { usage: None })
-    );
+    let Err(CallError::Cancelled { usage }) = run(Box::new(call)).0 else {
+        panic!("a call cancelled before run returns cancelled");
+    };
+    // Nothing was read, so the call carries only the body it built.
+    assert!(usage.input_size.bytes > 0);
+    assert_eq!(*usage, CallUsage::unnamed(usage.input_size));
     let accepted = listener.accept().map(|_| ()).unwrap_err();
     assert_eq!(
         accepted.kind(),
@@ -1106,7 +1111,16 @@ fn cancelling_from_another_thread_ends_a_blocked_read() {
     let result = finished
         .recv_timeout(DEADLINE)
         .expect("waited for run to return after the cancel");
-    assert_eq!(result, Err(CallError::Cancelled { usage: None }));
+    let sent = InputSize {
+        bytes: u64::try_from(server.requests()[0].body.len()).unwrap(),
+        media: false,
+    };
+    assert_eq!(
+        result,
+        Err(CallError::Cancelled {
+            usage: Box::new(CallUsage::unnamed(sent))
+        })
+    );
     assert!(
         server.await_closed(1, DEADLINE),
         "waited for the server to see the client close"

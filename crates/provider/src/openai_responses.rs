@@ -16,11 +16,12 @@ use contract::provider::{
     Reply, ReplyAction, ToolDefinition,
 };
 use contract::shapes::Tokens;
-use contract::{ActionId, GenerationId, ProviderCallId};
+use contract::{ActionId, ProviderCallId};
 use serde_json::{Map, Value, json};
 
 use crate::http::{self, Cancel};
 use crate::redact::Secrets;
+use crate::unfinished::named;
 use crate::{Endpoint, Error, sse, strict};
 
 /// One model reached over `openai-responses`.
@@ -384,13 +385,13 @@ pub(crate) fn decode_tracked(
         Ok(end.is_some())
     });
     if let Err(error) = read {
-        return Err((error, reply.partial()));
+        return Err((error, Some(reply.partial())));
     }
     match end {
         Some(reply) => Ok(reply),
         None => Err((
             Error::StreamIncomplete("it ended before its terminal event".into()),
-            reply.partial(),
+            Some(reply.partial()),
         )),
     }
 }
@@ -410,24 +411,22 @@ struct Decoder {
 }
 
 impl Decoder {
-    /// What the stream had seen: the generation and its usage once a
-    /// response event named them, else none.
-    fn partial(&self) -> Option<CallUsage> {
-        if self.id.is_empty() {
-            return None;
-        }
-        Some(CallUsage {
-            generation_id: GenerationId(self.id.clone()),
+    /// What the stream had seen: the generation once a response event named
+    /// it, and the usage so far.
+    fn partial(&self) -> CallUsage {
+        CallUsage {
+            generation_id: named(self.id.clone()),
             tokens: tokens(&self.usage),
             web_searches: None,
             input_size: InputSize::default(),
-        })
+        }
     }
 
-    /// Records the response's id and usage, from `response.created` on.
+    /// Records the response's usage, and its id from the first event that
+    /// names one: a later event's id never replaces it.
     fn note(&mut self, response: &Value) {
-        if let Some(id) = response.get("id").and_then(Value::as_str)
-            && !id.is_empty()
+        if self.id.is_empty()
+            && let Some(id) = response.get("id").and_then(Value::as_str)
         {
             id.clone_into(&mut self.id);
         }
@@ -610,7 +609,7 @@ impl Decoder {
         Ok(Reply {
             actions: std::mem::take(&mut self.actions),
             finish,
-            generation_id: GenerationId(str_at(response, "id").to_owned()),
+            generation_id: named(std::mem::take(&mut self.id)),
             tokens: tokens(&response["usage"]),
             web_searches: None,
             cost: None,

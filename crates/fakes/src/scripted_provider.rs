@@ -39,14 +39,15 @@ impl Scripted {
         }
     }
 
-    /// A call that fails with `failure` before any generation.
+    /// A call that fails with `failure` before any generation, having sent
+    /// 1000 input bytes, as `reply` does.
     pub fn failed(failure: Failure) -> Self {
         Self {
             deltas: Vec::new(),
             end: Err(CallError::Failed {
                 failure,
                 should_retry: None,
-                usage: None,
+                usage: Box::new(unnamed()),
             }),
         }
     }
@@ -58,7 +59,7 @@ impl Scripted {
             end: Err(CallError::Failed {
                 failure,
                 should_retry: None,
-                usage: Some(Box::new(usage)),
+                usage: Box::new(usage),
             }),
         }
     }
@@ -68,7 +69,7 @@ impl Scripted {
         Self {
             deltas: Vec::new(),
             end: Err(CallError::Cancelled {
-                usage: Some(Box::new(usage)),
+                usage: Box::new(usage),
             }),
         }
     }
@@ -87,7 +88,7 @@ pub fn reply(text: &str) -> Reply {
             })]
         },
         finish: Finish::Completed,
-        generation_id: GenerationId("gen_1".into()),
+        generation_id: Some(GenerationId("gen_1".into())),
         tokens: Tokens {
             input: 10,
             cache_read: 0,
@@ -107,7 +108,7 @@ pub fn reply(text: &str) -> Reply {
 /// with 1000 input bytes, as `reply` uses.
 pub fn call_usage(generation: &str) -> CallUsage {
     CallUsage {
-        generation_id: GenerationId(generation.into()),
+        generation_id: Some(GenerationId(generation.into())),
         tokens: Tokens {
             input: 10,
             cache_read: 0,
@@ -120,6 +121,24 @@ pub fn call_usage(generation: &str) -> CallUsage {
             media: false,
         },
     }
+}
+
+/// What a call the provider never named had seen: 10 input and 3 output
+/// tokens with 1000 input bytes, the counts `call_usage` uses.
+pub fn unnamed_usage() -> CallUsage {
+    CallUsage {
+        generation_id: None,
+        ..call_usage("")
+    }
+}
+
+/// A call that ended before any stream: no generation, no tokens, and 1000
+/// input bytes, as `reply` sends.
+fn unnamed() -> CallUsage {
+    CallUsage::unnamed(InputSize {
+        bytes: 1000,
+        media: false,
+    })
 }
 
 /// Answers each call with the next scripted one, in order. A call past the
@@ -189,7 +208,9 @@ impl ModelCall for Call {
             .unwrap_or_else(PoisonError::into_inner)
             .take();
         let Some(scripted) = scripted else {
-            return Err(CallError::Cancelled { usage: None });
+            return Err(CallError::Cancelled {
+                usage: Box::new(unnamed()),
+            });
         };
         for delta in scripted.deltas {
             if self.cancelled.load(Ordering::SeqCst) {
@@ -210,7 +231,7 @@ impl ModelCall for Call {
 
 /// What a cancelled scripted call returns: its scripted end when that end
 /// is itself `Cancelled` (what the call saw when the cancel landed), and
-/// `Cancelled` with no usage otherwise.
+/// `Cancelled` with an unnamed usage otherwise.
 #[allow(
     clippy::result_large_err,
     reason = "the seam returns the call's error by value; the test fake mirrors it"
@@ -218,7 +239,9 @@ impl ModelCall for Call {
 fn cancelled_end(end: Result<Reply, CallError>) -> Result<Reply, CallError> {
     match end {
         Err(CallError::Cancelled { .. }) => end,
-        _ => Err(CallError::Cancelled { usage: None }),
+        _ => Err(CallError::Cancelled {
+            usage: Box::new(unnamed()),
+        }),
     }
 }
 

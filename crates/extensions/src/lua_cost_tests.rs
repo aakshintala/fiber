@@ -13,7 +13,9 @@ use contract::GenerationId;
 use contract::clock::Clock;
 use contract::events::CacheLifetime;
 use contract::provider::ToolDefinition;
-use contract::provider::{CallError, Delta, ModelCall, ModelRequest, Provider, Reply};
+use contract::provider::{
+    CallError, CallUsage, Delta, InputSize, ModelCall, ModelRequest, Provider, Reply,
+};
 use fakes::clock::FakeClock;
 use serde_json::{Map, Value, json};
 
@@ -201,7 +203,9 @@ struct Idle;
 
 impl ModelCall for Idle {
     fn run(&self, _sink: &mut dyn FnMut(Delta)) -> Result<Reply, CallError> {
-        Err(CallError::Cancelled { usage: None })
+        Err(CallError::Cancelled {
+            usage: Box::new(CallUsage::unnamed(InputSize::default())),
+        })
     }
 
     fn cancel(&self) {}

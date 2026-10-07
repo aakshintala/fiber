@@ -45,6 +45,7 @@ fn cancel_mid_stream_writes_no_completion_and_ends_interrupted() {
             "turn_started",
             "step_started",
             "assistant_message_started",
+            "usage_recorded",
             "turn_completed",
         ]
     );
@@ -458,6 +459,7 @@ fn a_cancelled_review_completes_cancelled() {
             "tool_call_requested",
             "usage_recorded",
             "assistant_message_completed",
+            "usage_recorded",
             "permission_resolved",
             "tool_call_completed",
             "turn_completed",
@@ -692,6 +694,7 @@ fn a_cancel_after_a_failed_reply_leaves_the_turn_failed() {
             "turn_started",
             "step_started",
             "assistant_message_started",
+            "usage_recorded",
             "assistant_message_completed",
             "turn_completed",
         ]
@@ -1050,6 +1053,7 @@ fn a_shutdown_mid_stream_ends_the_turn_interrupted_and_starts_no_other() {
             "turn_started",
             "step_started",
             "assistant_message_started",
+            "usage_recorded",
             "turn_completed",
         ]
     );

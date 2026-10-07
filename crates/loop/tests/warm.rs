@@ -25,7 +25,9 @@ use contract::commands::{Reply as Answer, ReplyAnswer};
 use contract::events::{CacheLifetime, Decision};
 use contract::inbox::{Ack, Delivery};
 use contract::jobs::{Foreground, Jobs, OpenError, Opened, Opening};
-use contract::provider::{CallError, Delta, ModelCall, ModelRequest, Provider, Reply};
+use contract::provider::{
+    CallError, CallUsage, Delta, InputSize, ModelCall, ModelRequest, Provider, Reply,
+};
 use contract::shapes::Failure;
 use contract::{Envelope, ErrorCode, JobId, RequestId};
 use fakes::clock::FakeClock;
@@ -121,7 +123,7 @@ fn capped(step: &ModelRequest) -> ModelRequest {
 fn priced(text: &str, generation: &str, cost: f64) -> Scripted {
     let mut scripted = Scripted::text(text);
     if let Ok(reply) = &mut scripted.end {
-        reply.generation_id = contract::GenerationId(generation.into());
+        reply.generation_id = Some(contract::GenerationId(generation.into()));
         reply.cost = Some(cost);
     }
     scripted
@@ -419,9 +421,21 @@ fn a_failed_refresh_is_not_retried_and_stops_warming_with_a_notice() {
     parked(&session.clock, exit, "idle counts from the failure");
     advance_to(&session, exit);
     ended(&finished);
-    // One failed refresh, no retry.
+    // One failed refresh, no retry, and its record under an id Fiber
+    // minted, with the input it sent.
     assert_eq!(session.requests().len(), 2);
-    assert_usage_only(&session, 0);
+    assert_usage_only(&session, 1);
+    assert_minted_refresh(&session);
+}
+
+/// Asserts the one refresh record after the turns carries an id Fiber
+/// minted, no tokens and a `null` cost (`docs/events.md`, `usage_recorded`).
+fn assert_minted_refresh(session: &Session) {
+    let after = after_turns(session);
+    let id = after[0].payload["generation_id"].as_str().unwrap();
+    assert!(id.starts_with("fiber-"), "{id}");
+    assert_eq!(after[0].payload["tokens"]["input"], 0);
+    assert!(after[0].payload["cost"].is_null());
 }
 
 /// Jobs a test turns on and off: one job runs while `running` is set.
@@ -534,7 +548,7 @@ fn a_shutdown_while_waiting_for_a_refresh_ends_run() {
 }
 
 #[test]
-fn a_shutdown_cancels_a_refresh_in_flight_and_records_no_usage() {
+fn a_shutdown_cancels_a_refresh_in_flight_and_records_its_usage() {
     let started = Arc::new(Mutex::new(None));
     let signal = Arc::clone(&started);
     let mut session = Session::wrapped(
@@ -564,7 +578,8 @@ fn a_shutdown_cancels_a_refresh_in_flight_and_records_no_usage() {
     session.cancel.shutdown(130);
     ended(&finished);
     assert_eq!(session.requests().len(), 2);
-    assert_usage_only(&session, 0);
+    assert_usage_only(&session, 1);
+    assert_minted_refresh(&session);
 }
 
 /// A provider whose second call blocks until cancelled, signalling when it
@@ -602,7 +617,12 @@ impl ModelCall for Blocked {
         self.started.send(()).unwrap();
         let got = self.cancelled.lock().unwrap().recv_timeout(DEADLINE);
         assert!(got.is_ok(), "the shutdown cancels the refresh");
-        Err(CallError::Cancelled { usage: None })
+        Err(CallError::Cancelled {
+            usage: Box::new(CallUsage::unnamed(InputSize {
+                bytes: 1000,
+                media: false,
+            })),
+        })
     }
 
     fn cancel(&self) {

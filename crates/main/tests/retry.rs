@@ -320,7 +320,7 @@ fn gemini_cut() -> Response {
 
 /// The event kinds of an ask that fails its first model call, then
 /// answers `Hello.` in two fragments after one retry.
-const RETRIED_HELLO_KINDS: [&str; 18] = [
+const RETRIED_HELLO_KINDS: [&str; 19] = [
     "session_started",
     "fiber_started",
     "extensions_loaded",
@@ -329,6 +329,7 @@ const RETRIED_HELLO_KINDS: [&str; 18] = [
     "turn_started",
     "step_started",
     "assistant_message_started",
+    "usage_recorded",
     "assistant_message_completed",
     "retry_scheduled",
     "assistant_message_started",
@@ -440,9 +441,11 @@ fn a_stream_cut_short_is_retried_on_every_protocol() {
     // Each cut stream emits one fragment before it ends: the failed attempt
     // is one `assistant_message_delta`, then the retry answers `Hello.`.
     // Only `openai-responses` answers in two fragments, so only it has a
-    // second delta after its `retry_scheduled`. A cut that named its
-    // generation writes its zero-count `usage_recorded` before it fails
-    // (`docs/events.md`, "Usage and notices").
+    // second delta after its `retry_scheduled`. Every cut writes its
+    // zero-count `usage_recorded` before it fails, under the generation it
+    // named or, for a cut before any id, one Fiber minted (`docs/events.md`,
+    // "Usage and notices"). The model declares no prices, so each `cost` is
+    // `null`.
     for (protocol, cut, hello, retried_deltas, cut_usage) in [
         (
             "openai-responses",
@@ -487,10 +490,8 @@ fn a_stream_cut_short_is_retried_on_every_protocol() {
             "step_started",
             "assistant_message_started",
             "assistant_message_delta",
+            "usage_recorded",
         ];
-        if cut_usage.is_some() {
-            expected.push("usage_recorded");
-        }
         expected.extend([
             "assistant_message_completed",
             "retry_scheduled",
@@ -511,22 +512,27 @@ fn a_stream_cut_short_is_retried_on_every_protocol() {
         assert_eq!(run.kinds(), expected, "{protocol}");
         assert_eq!(run.retried(), ["stream_incomplete"], "{protocol}");
         assert_eq!(server.requests().len(), 2, "{protocol}");
-        if let Some(generation) = cut_usage {
-            let usages: Vec<&Value> = run
-                .lines
-                .iter()
-                .filter(|l| l["kind"] == "usage_recorded")
-                .collect();
-            assert_eq!(usages.len(), 2, "{protocol}");
-            assert_eq!(usages[0]["payload"]["generation_id"], generation);
-            assert_eq!(usages[0]["payload"]["tokens"]["input"], 0);
-            assert_eq!(usages[0]["payload"]["tokens"]["cache_read"], 0);
-            assert_eq!(usages[0]["payload"]["tokens"]["output"], 0);
-            assert_eq!(
-                usages[0]["payload"]["input_bytes"].as_u64().unwrap(),
-                u64::try_from(server.requests()[0].body.len()).unwrap(),
-                "{protocol}"
-            );
+        let usages: Vec<&Value> = run
+            .lines
+            .iter()
+            .filter(|l| l["kind"] == "usage_recorded")
+            .collect();
+        assert_eq!(usages.len(), 2, "{protocol}");
+        let id = usages[0]["payload"]["generation_id"].as_str().unwrap();
+        match cut_usage {
+            Some(generation) => assert_eq!(id, generation, "{protocol}"),
+            None => assert!(id.starts_with("fiber-"), "{protocol}: {id}"),
+        }
+        assert_eq!(usages[0]["payload"]["tokens"]["input"], 0);
+        assert_eq!(usages[0]["payload"]["tokens"]["cache_read"], 0);
+        assert_eq!(usages[0]["payload"]["tokens"]["output"], 0);
+        assert_eq!(
+            usages[0]["payload"]["input_bytes"].as_u64().unwrap(),
+            u64::try_from(server.requests()[0].body.len()).unwrap(),
+            "{protocol}"
+        );
+        for usage in &usages {
+            assert!(usage["payload"]["cost"].is_null(), "{protocol}");
         }
     }
 }
@@ -544,7 +550,7 @@ fn x_should_retry_true_retries_a_400() {
 }
 
 /// The event kinds of an ask whose model call fails without a retry.
-const FAILED_AT_ONCE_KINDS: [&str; 11] = [
+const FAILED_AT_ONCE_KINDS: [&str; 12] = [
     "session_started",
     "fiber_started",
     "extensions_loaded",
@@ -553,6 +559,7 @@ const FAILED_AT_ONCE_KINDS: [&str; 11] = [
     "turn_started",
     "step_started",
     "assistant_message_started",
+    "usage_recorded",
     "assistant_message_completed",
     "turn_completed",
     "fiber_exited",
@@ -606,9 +613,11 @@ fn two_503s_with_one_attempt_fail_the_ask() {
             "turn_started",
             "step_started",
             "assistant_message_started",
+            "usage_recorded",
             "assistant_message_completed",
             "retry_scheduled",
             "assistant_message_started",
+            "usage_recorded",
             "assistant_message_completed",
             "turn_completed",
             "fiber_exited",

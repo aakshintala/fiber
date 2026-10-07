@@ -718,6 +718,7 @@ fn a_failed_resumed_turn_prints_its_error_on_stderr() {
             "turn_started",
             "step_started",
             "assistant_message_started",
+            "usage_recorded",
             "assistant_message_completed",
             "turn_completed",
             "fiber_exited",
