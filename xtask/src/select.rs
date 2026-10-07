@@ -286,7 +286,12 @@ pub(crate) fn package_reader_mismatches(
     Ok(failures)
 }
 
+/// Whether `path` runs every job. `research/` is outside the rule: its
+/// manifests are not the workspace's (`docs/ci.md`, "Selection").
 fn runs_all(path: &str) -> bool {
+    if path.starts_with("research/") {
+        return false;
+    }
     let name = path.rsplit('/').next().unwrap_or(path);
     RUN_ALL_NAMES.contains(&name)
         || path.starts_with(".github/")
