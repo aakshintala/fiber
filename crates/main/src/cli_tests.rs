@@ -176,7 +176,7 @@ fn the_menu_and_approve_help_say_what_approve_does() {
 }
 
 #[test]
-fn login_and_logout_take_an_optional_provider() {
+fn login_takes_an_optional_name_and_logout_an_optional_provider() {
     for (args, provider) in [
         (&["fiber", "login"][..], None),
         (&["fiber", "login", "openrouter"], Some("openrouter")),
@@ -184,7 +184,7 @@ fn login_and_logout_take_an_optional_provider() {
         let Invocation::Run(Some(Commands::Login(login))) = parse_from(args.iter().copied()) else {
             panic!("{args:?}");
         };
-        assert_eq!(login.provider.as_deref(), provider, "{args:?}");
+        assert_eq!(login.name.as_deref(), provider, "{args:?}");
     }
     for (args, provider) in [
         (&["fiber", "logout"][..], None),
@@ -434,7 +434,7 @@ fn the_menu_lists_login_and_logout_under_fiber_itself() {
         .find(|group| group.starts_with("Fiber itself:"))
         .unwrap();
     for line in [
-        "  login [<provider>] [--as <label>]         Store a provider's key",
+        "  login [<name>] [--as <label>]             Store a provider's key or an extension's secret",
         "  logout <provider> [--as <label> | --all]  Delete a provider's stored key",
     ] {
         assert!(itself.lines().any(|l| l == line), "{line}\n{itself}");
