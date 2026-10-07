@@ -1920,3 +1920,9 @@ fn a_users_image_is_left_out_for_a_text_only_model() {
         ]}])
     );
 }
+
+#[test]
+fn a_user_without_images_keeps_its_text_part_even_when_empty() {
+    let (contents, _) = sent_contents(user_conversation("", Vec::new()));
+    assert_eq!(contents, json!([{"role": "user", "parts": [{"text": ""}]}]));
+}
