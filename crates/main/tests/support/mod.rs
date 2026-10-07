@@ -186,8 +186,8 @@ impl HubProc {
         fakes::kill_group(self.group, signal).unwrap();
     }
 
-    /// Waits under [`DEADLINE`] for the process to exit, and then for its
-    /// group to empty.
+    /// Waits under [`DEADLINE`] for a hub that exits on its own, then
+    /// asserts nothing remains in its group.
     pub(crate) fn wait(self) -> ExitStatus {
         let Self {
             mut child,
@@ -205,9 +205,35 @@ impl HubProc {
                 panic!("the hub's wait thread ended before the hub exited")
             }
         };
-        // A child the group kill caught, such as the startup `git`, is
-        // reaped by init after the hub: the group empties under a deadline.
-        until_gone(group, "the hub's process group");
+        assert!(
+            !group_alive(group),
+            "the hub left a process in its group behind"
+        );
+        watchdog.stand_down(DEADLINE);
+        status
+    }
+
+    /// Kills the hub's group, then waits under [`DEADLINE`] for the hub
+    /// to exit. For a test-sent SIGKILL: the hub's exit is proved by
+    /// reaping it, and other members are not waited on.
+    pub(crate) fn kill_and_wait(self) -> ExitStatus {
+        let Self {
+            mut child,
+            watchdog,
+            group,
+        } = self;
+        fakes::kill_group(group, "KILL").unwrap();
+        let (done, finished) = mpsc::channel();
+        thread::spawn(move || done.send(child.wait()).unwrap());
+        let status = match finished.recv_timeout(DEADLINE) {
+            Ok(status) => status.unwrap(),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                panic!("waited {DEADLINE:?} for the hub to exit")
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                panic!("the hub's wait thread ended before the hub exited")
+            }
+        };
         watchdog.stand_down(DEADLINE);
         status
     }
@@ -367,23 +393,6 @@ pub(crate) fn hello() -> Response {
             "type": "message", "content": [{"type": "output_text", "text": "Hello."}]
         }}),
     ])
-}
-
-/// Waits under [`DEADLINE`] for process group `group` to empty.
-pub(crate) fn until_gone(group: u32, what: &str) {
-    let (done, gone) = mpsc::channel();
-    thread::spawn(move || {
-        while group_alive(group) {
-            thread::yield_now();
-        }
-        match done.send(()) {
-            Ok(()) | Err(mpsc::SendError(())) => {}
-        }
-    });
-    assert!(
-        gone.recv_timeout(DEADLINE).is_ok(),
-        "waited {DEADLINE:?} for {what} to empty"
-    );
 }
 
 /// Waits under [`DEADLINE`] until `done` holds for the processes whose
