@@ -654,7 +654,11 @@ fn a_stream_ending_response_failed_drops_what_it_streamed() {
     assert_eq!(failure.code, ErrorCode::ProviderUnavailable);
     let said = failure.provider.unwrap();
     assert_eq!(
-        (said.name.as_str(), said.status, said.message.as_str()),
+        (
+            said.name.as_str(),
+            said.status.unwrap(),
+            said.message.as_str()
+        ),
         ("opencode", 200, "The model crashed.")
     );
     // It streamed, and kept none of it.

@@ -893,7 +893,11 @@ fn an_error_event_mid_stream_fails_the_call_and_drops_what_it_streamed() {
     assert_eq!(failure.code, ErrorCode::ProviderUnavailable);
     let said = failure.provider.unwrap();
     assert_eq!(
-        (said.name.as_str(), said.status, said.message.as_str()),
+        (
+            said.name.as_str(),
+            said.status.unwrap(),
+            said.message.as_str()
+        ),
         ("anthropic", 200, "Overloaded")
     );
     assert_eq!(

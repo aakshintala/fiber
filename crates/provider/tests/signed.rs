@@ -254,3 +254,96 @@ fn endpoint_debug_names_the_signer_without_reaching_into_it() {
     let text = format!("{signed:?}");
     assert!(text.contains("signer: Some(\"Signer\")"), "{text:?}");
 }
+
+/// Fails every request with its own signing error.
+struct Failing(contract::signing::Error);
+
+impl Signer for Failing {
+    fn sign(&self, _: &SignRequest<'_>) -> Result<Vec<(String, String)>, contract::signing::Error> {
+        Err(self.0.clone())
+    }
+}
+
+#[test]
+fn a_failed_credential_or_sign_keeps_its_text_apart_from_fiber_s_sentence() {
+    use contract::signing::Error as SignError;
+    let cases: &[(&str, SignError, ErrorCode, &str, Option<&str>)] = &[
+        (
+            "failed sign",
+            SignError::Failed("init.lua:3: boom".into()),
+            ErrorCode::CredentialFailed,
+            "acme's sign() failed.",
+            Some("init.lua:3: boom"),
+        ),
+        (
+            "failed credential",
+            SignError::Credential {
+                code: ErrorCode::CredentialFailed,
+                message: "init.lua:3: boom".into(),
+            },
+            ErrorCode::CredentialFailed,
+            "acme's credential() failed. Run `fiber login acme`.",
+            Some("init.lua:3: boom"),
+        ),
+        (
+            "quota credential",
+            SignError::Credential {
+                code: ErrorCode::QuotaExceeded,
+                message: "init.lua:3: boom".into(),
+            },
+            ErrorCode::QuotaExceeded,
+            "acme's credential() failed. Run `fiber login acme`.",
+            Some("init.lua:3: boom"),
+        ),
+        (
+            "rejected refresh",
+            SignError::Credential {
+                code: ErrorCode::AuthenticationFailed,
+                message: "init.lua:3: boom".into(),
+            },
+            ErrorCode::AuthenticationFailed,
+            "acme's credential() failed: the token endpoint rejected the refresh. Run `fiber login \
+             acme`.",
+            Some("init.lua:3: boom"),
+        ),
+        (
+            "unreachable refresh",
+            SignError::Credential {
+                code: ErrorCode::ConnectionFailed,
+                message: "init.lua:3: boom".into(),
+            },
+            ErrorCode::ConnectionFailed,
+            "acme's credential() failed: the token endpoint could not be reached.",
+            Some("init.lua:3: boom"),
+        ),
+        (
+            "unusable headers",
+            SignError::NotHeaders("a header name that is not valid HTTP: \"x\"".into()),
+            ErrorCode::CredentialFailed,
+            "acme could not be signed: `sign()` returned a header name that is not valid HTTP: \"x\"",
+            None,
+        ),
+    ];
+    for (name, error, code, message, provider_message) in cases {
+        let server = ProviderServer::start([Response::status(500, "{}")]).unwrap();
+        let endpoint = endpoint("acme", &server, Arc::new(Failing(error.clone())));
+        let (failure, should_retry) =
+            failed(Box::new(Responses::new(endpoint).request(&request())));
+        assert_eq!(failure.code, *code, "{name}");
+        assert_eq!(failure.message.as_str(), *message, "{name}");
+        assert_eq!(should_retry, Some(false), "{name}");
+        match (provider_message, &failure.provider) {
+            (None, None) => {}
+            (Some(expected), Some(said)) => {
+                assert_eq!(said.name.as_str(), "acme", "{name}");
+                assert_eq!(said.status, None, "{name}");
+                assert_eq!(said.message.as_str(), *expected, "{name}");
+            }
+            (expected, found) => panic!("{name}: expected provider {expected:?}, found {found:?}"),
+        }
+        assert!(
+            server.requests().is_empty(),
+            "{name}: an unsigned request is never sent"
+        );
+    }
+}

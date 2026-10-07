@@ -150,7 +150,7 @@ impl Error {
             retry_after,
             provider: said.map(|(status, message)| ProviderFailure {
                 name: provider.to_owned(),
-                status,
+                status: Some(status),
                 message,
             }),
         }

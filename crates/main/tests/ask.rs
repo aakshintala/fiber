@@ -3054,3 +3054,95 @@ fn a_thinking_suffix_is_recorded_and_an_unsupported_level_fails_first() {
         "invalid_arguments",
     );
 }
+
+/// Installs an inline extension `name` with `init_lua`, and makes `name/m1`
+/// the configured model.
+fn inline_extension(setup: &Setup, name: &str, init_lua: &str) {
+    let source = setup.root.path().join(format!("src-{name}"));
+    write(
+        &source.join("extension.json"),
+        &json!({"name": name, "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
+    );
+    fs::write(source.join("init.lua"), init_lua).unwrap();
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(source),
+        "0.0.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    write(
+        &setup.home().join("config.json"),
+        &json!({"model": format!("{name}/m1")}),
+    );
+}
+
+#[test]
+fn a_credential_error_at_startup_is_fiber_s_sentence_and_its_text_goes_in_provider() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([]).unwrap();
+    inline_extension(
+        &setup,
+        "acme",
+        &format!(
+            "fiber.provider(\"acme\", {{\n models = {{\n   timeout = 5000,\n   run = function()\n     return {{ {{ id = \"m1\", protocol = \"openai-responses\", base_url = \"{}/v1\" }} }}\n   end,\n }},\n credential = {{\n   timeout = 5000,\n   run = function()\n     error(\"refresh failed: body-xyz\")\n   end,\n }},\n}})\n",
+            server.url()
+        ),
+    );
+
+    let run = setup.fiber(&["ask", "hi"], None);
+
+    assert_pre_session(&run, 1, "credential_failed");
+    let error = &run.last()["payload"]["error"];
+    assert_eq!(
+        error["message"],
+        "acme's credential() failed. Run `fiber login acme`."
+    );
+    assert_eq!(error["provider"]["name"], "acme");
+    let said = error["provider"]["message"].as_str().unwrap();
+    assert!(said.ends_with("refresh failed: body-xyz"), "{said}");
+    assert!(error["provider"].get("status").is_none());
+    assert!(!run.stderr.contains("body-xyz"), "{}", run.stderr);
+}
+
+#[test]
+fn a_sign_error_keeps_the_token_out_of_every_line() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([]).unwrap();
+    inline_extension(
+        &setup,
+        "acme",
+        &format!(
+            "fiber.provider(\"acme\", {{\n models = {{\n   timeout = 5000,\n   run = function()\n     return {{ {{ id = \"m1\", protocol = \"openai-responses\", base_url = \"{}/v1\" }} }}\n   end,\n }},\n credential = {{\n   timeout = 5000,\n   run = function()\n     return {{ token = \"tok-secret-1\", expires_at = {EXPIRES_AT} }}\n   end,\n }},\n sign = {{\n   timeout = 5000,\n   run = function(request)\n     error(\"bad signature for \" .. request.headers.authorization)\n   end,\n }},\n}})\n",
+            server.url()
+        ),
+    );
+
+    let run = setup.fiber(&["ask", "hi"], None);
+
+    assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
+    let exited = &run.last()["payload"];
+    assert_eq!(exited["exit_code"], 1);
+    let error = &exited["error"];
+    assert_eq!(error["code"], "credential_failed");
+    assert_eq!(error["message"], "acme's sign() failed.");
+    let said = error["provider"]["message"].as_str().unwrap();
+    assert!(
+        said.ends_with("bad signature for Bearer [redacted]"),
+        "{said}"
+    );
+    assert!(error["provider"].get("status").is_none());
+    assert!(!run.stdout.contains("tok-secret-1"), "{}", run.stdout);
+    assert!(!run.stderr.contains("tok-secret-1"), "{}", run.stderr);
+    assert!(
+        !server
+            .requests()
+            .iter()
+            .any(|request| request.path == "/v1/responses"),
+        "{:?}",
+        server.requests()
+    );
+}

@@ -28,8 +28,10 @@ pub struct Failure {
 pub struct ProviderFailure {
     /// The provider's name.
     pub name: String,
-    /// The HTTP status.
-    pub status: u16,
+    /// The HTTP status; absent when an extension provider's `credential()`
+    /// or `sign()` failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<u16>,
     /// The provider's own message.
     pub message: String,
 }

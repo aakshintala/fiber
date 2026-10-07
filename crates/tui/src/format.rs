@@ -429,7 +429,9 @@ pub(crate) fn failure(error: &Failure, out: &mut Vec<Row>) {
     if let Some(provider) = &error.provider {
         let said = format!(
             "{} said HTTP {}: “{}”",
-            provider.name, provider.status, provider.message
+            provider.name,
+            provider.status.unwrap_or_default(),
+            provider.message
         );
         out.push((dim(said), None));
     }
