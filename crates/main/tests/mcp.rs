@@ -170,24 +170,39 @@ fn group_alive(group: u32) -> bool {
     fakes::kill_group(group, "0").unwrap()
 }
 
-/// Waits up to 5 s for process group `group` to empty. `fiber` kills and
-/// reaps its MCP server, but a transient child of the fixture script (a
-/// `cat` or `sed` in a command substitution) can outlive its parent by a
-/// moment under load, so one probe right after `fiber` exits is a race.
-/// Returns whether the group emptied. Deadlines in `run` sum to 45 s at
-/// most (20 + 20 + 5 on a timeout; 20 + 5 + 20 on a clean exit), under
-/// half of nextest's 120 s kill.
+/// How long [`group_empties`] waits on the wall clock.
+const GROUP_DEADLINE: Duration = Duration::from_secs(5);
+
+/// Waits up to [`GROUP_DEADLINE`] for process group `group` to empty.
+/// `fiber` kills and reaps its MCP server, but a transient child of the
+/// fixture script (a `cat` or `sed` in a command substitution) can outlive
+/// it for a moment under load, so one probe right after `fiber` exits is a
+/// race. The probes run on a thread, so the deadline holds even when a
+/// `kill` probe is slow. Returns whether the group emptied. Deadlines in
+/// `run` sum to 45 s at most (20 + 20 + 5 on a timeout; 20 + 5 + 20 on a
+/// clean exit), under half of nextest's 120 s kill.
 fn group_empties(group: u32) -> bool {
-    let (_held, tick) = mpsc::channel::<()>();
-    for _ in 0..100 {
-        if !group_alive(group) {
-            return true;
+    let (emptied, empty) = mpsc::channel();
+    let (stop, stopped) = mpsc::channel::<()>();
+    thread::spawn(move || {
+        loop {
+            if !group_alive(group) {
+                match emptied.send(()) {
+                    Ok(()) | Err(_) => {}
+                }
+                return;
+            }
+            if !matches!(
+                stopped.recv_timeout(Duration::from_millis(50)),
+                Err(mpsc::RecvTimeoutError::Timeout)
+            ) {
+                return;
+            }
         }
-        match tick.recv_timeout(Duration::from_millis(50)) {
-            Ok(()) | Err(_) => {}
-        }
-    }
-    false
+    });
+    let result = empty.recv_timeout(GROUP_DEADLINE).is_ok();
+    drop(stop);
+    result
 }
 
 /// Spawns `command` in a new process group, then a watchdog in its own
