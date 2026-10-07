@@ -231,6 +231,21 @@ in `docs/user/` is generated from the same command definitions as `fiber help`
 and shell completion, and the docs check fails when the committed copy differs
 from what the generator writes.
 
+## Job time limits
+
+Every job sets `timeout-minutes`. A hung runner then fails at the bound, `gh-ci`
+reports a failure, and `ci-triage` classifies it as infrastructure instead of
+the pull request waiting out GitHub's 6-hour default.
+
+A bound is about twice the job's median duration over its last 20 runs, rounded
+up to a round number, and never under 5 minutes, because runner start-up
+varies. A job with too little history gets a generous bound. The one exception
+is a mutants shard: 8 % of shards take 9 to 12 minutes when a pull request
+changes a widely used function, so its bound is twice that slow group, not
+twice the median. The median behind each bound is a comment beside its
+`timeout-minutes` line. A job that gains work past its bound has the bound
+raised in its workflow.
+
 ## Waiting on CI
 
 Every workflow's third-party actions are pinned to a commit hash. The hash is
