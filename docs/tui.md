@@ -856,11 +856,11 @@ SSH.
   - Enter, the default, leaves them running. The terminal closes its
     connections, and each session follows the lifecycle rules
     (`docs/invocation.md`, "Lifecycle").
-  - "Close all" sends each working session `cancel`, stops its jobs and
-    delegates, then sends `close`. The prompt says how many of them are also
+  - "Close all" sends each working session `close` with `now`. The prompt says how many of them are also
     open elsewhere: a session's `clients` on its `session_status`, less the terminal's own `full` connection to it when it holds one.
 - **Stopping one session** is `/close`, or the ✕ on its home row. It sends
-  `cancel`, stops the session's jobs and delegates, then sends `close`.
+  `close` with `now`, which ends its turn, stops its jobs and delegates,
+  and exits it (`docs/invocation.md`, "Shutdown").
 
 ### Getting the person's attention
 

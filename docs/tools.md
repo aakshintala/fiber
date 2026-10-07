@@ -663,7 +663,7 @@ The kinds are `docs/events.md`.
   a restart. A shutdown stops every job (`docs/invocation.md`, "Shutdown"); a
   crash stops none, and the jobs keep running unwatched.
 - When a session is about to end with jobs still running — a non-interactive
-  run whose model has given its final answer, `close`, or a delegate
+  run whose model has given its final answer, `close` without `now`, or a delegate
   finishing its task — Fiber wakes the model once with a notice listing the running jobs, telling it to stop the ones it
   does not need and that the rest will be waited for. Whatever is still
   running after that is waited for, whatever its kind, and each completion
