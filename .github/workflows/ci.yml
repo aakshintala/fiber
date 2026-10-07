@@ -236,9 +236,65 @@ jobs:
           tool: cargo-nextest
       - run: scripts/bug-red "$BASE" "$HEAD_SHA"
 
+  release:
+    name: Release build and size (Linux x86_64)
+    needs: select
+    if: fromJSON(needs.select.outputs.jobs).release
+    runs-on: ubuntu-24.04
+    # No history yet: a generous bound (docs/ci.md, "Job time limits").
+    timeout-minutes: 30
+    env:
+      BASE: ${{ needs.select.outputs.base }}
+      # C code (lua-src, ring) compiles against musl's headers; the Rust linker stays the default.
+      CC_x86_64_unknown_linux_musl: musl-gcc
+    steps:
+      # The pull request's head, not the merge commit, so the head and base
+      # binaries are the two ends of the diff the selection measured.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - *toolchain
+      - name: Install the musl target and C compiler
+        run: |
+          rustup target add x86_64-unknown-linux-musl
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends musl-tools
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: release
+          save-if: ${{ github.event_name == 'push' }}
+      - name: Find the base commit
+        if: github.event_name == 'pull_request'
+        id: base
+        run: |
+          commit=$(git merge-base "$BASE" HEAD)
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+      # Exact key only: a prefix match would hand back another commit's binary.
+      - name: Restore the base binary the backstop stored
+        if: github.event_name == 'pull_request'
+        id: stored
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/release/cache
+          key: release-musl-${{ steps.base.outputs.commit }}
+      - name: scripts/release-size
+        env:
+          BASE_COMMIT: ${{ steps.base.outputs.commit }}
+          BASE_CACHED: ${{ steps.stored.outputs.cache-hit }}
+        run: scripts/release-size "$BASE_COMMIT"
+      # Only the backstop saves, so a pull request's base comes from main.
+      - name: Store this commit's binary
+        if: github.event_name == 'push'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/release/cache
+          key: release-musl-${{ github.sha }}
+
   backstop_report:
     name: Report a failed backstop
-    needs: [select, lint, test, mutants]
+    needs: [select, lint, test, mutants, release]
     if: failure() && github.event_name == 'push'
     runs-on: ubuntu-24.04
     # No history: it makes only gh calls.
@@ -264,7 +320,7 @@ jobs:
   ci:
     # On a draft the required `CI` check stays pending, so a draft's partial run never satisfies it.
     name: ${{ github.event.pull_request.draft && 'CI (draft)' || 'CI' }}
-    needs: [select, lint, test, mutants, bug_red]
+    needs: [select, lint, test, mutants, bug_red, release]
     if: always()
     runs-on: ubuntu-24.04
     # Median 46 s; floor.
