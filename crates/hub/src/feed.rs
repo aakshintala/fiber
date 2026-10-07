@@ -40,6 +40,9 @@ use crate::connection::{Hub, accept_result, reject, send as send_line};
 use crate::recent::{self, Left, PageError, RecentRow};
 use crate::relay::valid_session_id;
 
+mod settle;
+use settle::Settle;
+
 /// How often the hub rescans `run/` for new sessions.
 pub(crate) const RUN_SCAN: Duration = Duration::from_millis(500);
 
@@ -68,6 +71,14 @@ pub(crate) struct Feed {
     /// scanner.
     _wake: Arc<dyn Wake>,
     scanner: Mutex<Option<JoinHandle<()>>>,
+    #[cfg(test)]
+    settle_pause: Mutex<Option<SettlePause>>,
+}
+
+#[cfg(test)]
+pub(super) struct SettlePause {
+    pub(super) arrived: mpsc::Sender<()>,
+    pub(super) release: mpsc::Receiver<()>,
 }
 
 #[derive(Default)]
@@ -83,6 +94,10 @@ struct State {
     next_subscriber: u64,
     /// Summary and finished subscriber threads, joined at stop or once done.
     threads: Vec<JoinHandle<()>>,
+    /// Whether the first scan of `run/` has finished.
+    scanned: bool,
+    /// Sessions the first scan followed that have sent no status yet.
+    awaited: BTreeSet<String>,
 }
 
 impl State {
@@ -131,6 +146,8 @@ impl Feed {
             tick,
             _wake: wake,
             scanner: Mutex::new(None),
+            #[cfg(test)]
+            settle_pause: Mutex::new(None),
         }
     }
 
@@ -354,6 +371,7 @@ impl Feed {
         for id in fresh {
             self.follow(id);
         }
+        self.scanned();
     }
 
     /// Subscribes `summary` to session `id` and follows it on a thread. A
@@ -387,6 +405,9 @@ impl Feed {
             .name("hub-feed-session".to_owned())
             .spawn(move || feed.read_session(&session, stream, found));
         if let Ok(handle) = spawned {
+            if !state.scanned {
+                state.awaited.insert(id.clone());
+            }
             state.tracked.insert(id, shutdown);
             state.threads.push(handle);
         }
@@ -417,6 +438,7 @@ impl Feed {
         let Some(payload) = parse_status(bytes) else {
             return true;
         };
+        let _settle = Settle(self, id);
         // The unseen-turn probe, with no lock held: only a non-delegate `idle`
         // with a known log and no live entry reads the log.
         let unseen = if !may_be_unseen(&payload) {
@@ -460,6 +482,7 @@ impl Feed {
     /// subscriber, and appends a crashed session's row. A session whose
     /// directory is gone was never prompted: it exited, leaving nothing.
     fn on_left(&self, id: &str, found: Option<(String, PathBuf, u64)>) {
+        let _settle = Settle(self, id);
         let how = found
             .as_ref()
             .filter(|(_, dir, _)| dir.is_dir())
@@ -731,14 +754,42 @@ fn join(handle: JoinHandle<()>) {
 struct Tick {
     held: Mutex<()>,
     moved: Condvar,
+    /// Told once of the next wake: when it finds `held` taken, or else
+    /// once its notify has returned.
+    #[cfg(test)]
+    attempt: Mutex<Option<Sender<()>>>,
 }
 
 impl Wake for Tick {
     fn wake(&self) {
+        #[cfg(test)]
+        let attempt = self.tell_if_contended();
         // Taken before the notify, so a scanner that has checked and not
         // yet parked cannot miss it.
-        let _held = lock(&self.held);
+        let held = lock(&self.held);
         self.moved.notify_all();
+        drop(held);
+        #[cfg(test)]
+        if let Some(attempt) = attempt {
+            attempt.send(()).unwrap_or(());
+        }
+    }
+}
+
+#[cfg(test)]
+impl Tick {
+    /// Tells the armed sender at once when `held` is taken, and otherwise
+    /// returns it to be told after the notify.
+    fn tell_if_contended(&self) -> Option<Sender<()>> {
+        let attempt = lock(&self.attempt).take()?;
+        if matches!(
+            self.held.try_lock(),
+            Err(std::sync::TryLockError::WouldBlock)
+        ) {
+            attempt.send(()).unwrap_or(());
+            return None;
+        }
+        Some(attempt)
     }
 }
 

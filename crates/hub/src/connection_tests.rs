@@ -1,5 +1,6 @@
 //! Tests for one client connection: `hub_hello` first, hub-command
-//! parsing, `status`, `start` over the wire, and the relay to sessions.
+//! parsing, `status`, `start` and `sessions` over the wire, and the relay
+//! to sessions.
 
 #![allow(
     clippy::unwrap_used,
@@ -828,6 +829,28 @@ fn recent_over_the_wire_answers_a_page() {
     assert_eq!(code, "invalid_arguments");
     assert_eq!(echoed.as_deref(), Some("c_2"));
     hub.feed.stop();
+}
+
+#[test]
+fn sessions_over_the_wire_answers_live_and_exited_once() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    let id = "s_00000000000000c1";
+    crashed_feed(&temp, &hub, id);
+    let mut client = Client::connect(&hub);
+    client.hello();
+    client.send(&json!({"id": "c_1", "command": "sessions"}));
+    let (echoed, result) = accepted(&client.next("the listing"));
+    assert_eq!(echoed, "c_1");
+    assert_eq!(result.get("live"), Some(&json!([])));
+    let exited = result.get("exited").unwrap().as_array().unwrap();
+    assert_eq!(exited.len(), 1);
+    assert_eq!(exited.first().unwrap().get("session_id"), Some(&json!(id)));
+    client.send(&command("c_2", "sessions", json!({"project": 1})));
+    let (code, echoed, _) = rejected(&client.next("the bad project"));
+    assert_eq!(code, "invalid_arguments");
+    assert_eq!(echoed.as_deref(), Some("c_2"));
+    stop_within(&hub);
 }
 
 /// Stops the feed on a thread and receives its return under [`DEADLINE`]:

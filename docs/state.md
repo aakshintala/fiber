@@ -311,9 +311,10 @@ not appended. Each line holds `ts` (integer, wall-clock milliseconds),
 `session_id` and `content`, the prompt's content parts as the session
 accepted them. Up-arrow recalls prompts typed anywhere in that project.
 
-Fiber writes no derived database in v0.0.1. Listing sessions reads the logs
-(`docs/events.md` has the measurement). Any future one is derived from the
-logs, rebuildable, never the truth.
+Fiber writes no derived database in v0.0.1. Listing sessions asks the hub,
+which answers with each running session's latest `session_status` and the
+exited sessions' `recent.jsonl` rows (`docs/invocation.md`, "The hub"). Any
+future database is derived from the logs, rebuildable, never the truth.
 
 ## Concurrent access
 

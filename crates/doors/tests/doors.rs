@@ -24,8 +24,8 @@ use contract::inbox::Delivery;
 use contract::shapes::{ContentPart, Failure, Origin};
 use contract::{ErrorCode, SessionId, TurnId};
 use doors::{
-    InstallSummary, Session, exit_before_session, failure, install_approved, mint, project, prompt,
-    remove_approved,
+    InstallSummary, Session, exit_before_session, failure, in_repository, install_approved, mint,
+    project, prompt, remove_approved,
 };
 use log::Log;
 use serde_json::Value;
@@ -216,6 +216,24 @@ fn the_project_is_gits_shared_directory_or_the_launch_directory() {
     let common = fs::canonicalize(repo.join(".git")).unwrap();
     assert_eq!(project(&repo), common);
     assert_eq!(project(&repo.join("docs")), common);
+}
+
+#[test]
+fn a_project_is_in_a_repository_only_when_it_is_not_the_launch_directory() {
+    let temp = Temp::new();
+    let plain = temp.0.join("plain");
+    fs::create_dir_all(&plain).unwrap();
+    assert!(!in_repository(&plain, &project(&plain)));
+    let repo = temp.0.join("repo");
+    fs::create_dir_all(repo.join("docs")).unwrap();
+    let init = Command::new("git")
+        .arg("init")
+        .arg("-q")
+        .arg(&repo)
+        .status();
+    assert!(init.unwrap().success());
+    let docs = repo.join("docs");
+    assert!(in_repository(&docs, &project(&docs)));
 }
 
 /// A session's log and the door side opened on it, in `home` under `temp`.
