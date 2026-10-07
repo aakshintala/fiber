@@ -1349,14 +1349,15 @@ that disables tools. The session runs anyway.
 
 ### Size budget in CI
 
-- CI fails the build when the built-in tool definitions, serialised as sent,
-  grow past a total budget in bytes. CI counts bytes because it cannot count
+- CI fails the build when the built-in tool definitions grow past a total
+  budget in bytes. It serialises them in every protocol's request shape, and
+  the budget limits the largest total. CI counts bytes because it cannot count
   tokens without calling a provider.
-- The budget is set from the total when the built-ins are first written.
-  Raising it is an explicit change in the same pull request that grows a
-  definition.
-- Every CI run prints the size of each built-in definition, so the tool that
-  grew can be seen without reproducing the build.
+- The budget starts at the largest total at the commit that adds the check,
+  with no headroom. Raising it is an explicit change in the same pull request
+  that grows a definition.
+- Every CI run prints the size of each built-in definition in each protocol,
+  so the tool that grew can be seen without reproducing the build.
 
 ## Not settled here
 
