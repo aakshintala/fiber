@@ -220,6 +220,12 @@ impl Feed {
         }
     }
 
+    /// How many subscribers the feed holds.
+    #[cfg(test)]
+    pub(crate) fn subscribers(&self) -> usize {
+        lock(&self.state).subscribers.len()
+    }
+
     /// `dismiss`: drops a crashed session from the feed.
     pub(crate) fn dismiss(&self, args: &Map<String, Value>) -> Result<Value, Refusal> {
         let session = match (args.len(), args.get("session")) {
