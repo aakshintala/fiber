@@ -9,8 +9,8 @@ use std::thread;
 use std::time::Duration;
 
 use super::{
-    MATCHING_PATTERN_VAR, MATCHING_WATCHDOG_SCRIPT, WATCHDOG_SCRIPT, kill_group, kill_matching,
-    kill_pid, matching, pattern,
+    MATCHING_PATTERN_VAR, MATCHING_WATCHDOG_SCRIPT, WATCHDOG_SCRIPT, group_empties, kill_group,
+    kill_matching, kill_pid, matching, pattern,
 };
 
 const DEADLINE: Duration = Duration::from_secs(5);
@@ -252,5 +252,51 @@ fn the_matching_watchdog_script_refuses_an_empty_pattern() {
     assert!(
         survived(sentinel),
         "the empty pattern signalled the sentinel"
+    );
+}
+
+#[test]
+fn group_empties_reports_an_empty_group_and_a_live_one() {
+    let child = marked("group_empties");
+    let group = child.id();
+    assert!(
+        !group_empties(group, Duration::from_millis(200)),
+        "a live group must not read as empty"
+    );
+    kill_group(group, "KILL").unwrap();
+    reaped(child, "the killed group leader");
+    assert!(
+        group_empties(group, DEADLINE),
+        "waited {DEADLINE:?} for the killed group to empty"
+    );
+}
+
+#[test]
+fn group_empties_keeps_waiting_while_the_group_lives_and_returns_once_it_empties() {
+    let mut child = Command::new("sh")
+        .args(["-c", "read line"])
+        .process_group(0)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let group = child.id();
+    let stdin = child.stdin.take().unwrap();
+    let (answered, answer) = mpsc::channel();
+    thread::spawn(move || answered.send(group_empties(group, DEADLINE)).unwrap());
+    // The group lives until its stdin closes, so the wait must still be
+    // running after several probe intervals: a wait that gave up after one
+    // live probe would have answered `false` by now.
+    assert!(
+        answer.recv_timeout(Duration::from_millis(500)).is_err(),
+        "group_empties answered while the group was alive"
+    );
+    drop(stdin);
+    reaped(child, "the group leader to exit once its stdin closed");
+    assert_eq!(
+        answer.recv_timeout(DEADLINE),
+        Ok(true),
+        "waited {DEADLINE:?} for group_empties to see the emptied group"
     );
 }

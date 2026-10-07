@@ -26,6 +26,9 @@ use serde_json::{Value, json};
 /// How long one `fiber` run may take.
 const DEADLINE: Duration = Duration::from_secs(20);
 
+/// How long a process group may take to empty after `fiber` exits.
+const GROUP_DEADLINE: Duration = Duration::from_secs(5);
+
 /// The fixture extension's name.
 const FIXTURE: &str = "fiber.test/notes";
 
@@ -173,7 +176,7 @@ impl Setup {
             }
         };
         assert!(
-            !fakes::kill_group(group, "0").unwrap(),
+            fakes::group_empties(group, GROUP_DEADLINE),
             "`fiber` left a process in its group behind"
         );
         std::mem::forget(guard);

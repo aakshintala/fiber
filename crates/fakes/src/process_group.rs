@@ -6,6 +6,9 @@
 
 use std::io;
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 
 /// The shell script of a watchdog: `sh -c WATCHDOG_SCRIPT watchdog <group>`.
 /// Reading a line from stdin means the run finished; EOF means the test
@@ -35,6 +38,39 @@ pub fn kill_group(group: u32, signal: &str) -> io::Result<bool> {
         .stderr(Stdio::null())
         .status()
         .map(|status| status.success())
+}
+
+/// Waits up to `deadline` on the wall clock for process group `group` to
+/// empty, and returns whether it did. One probe right after the group's
+/// leader exits is a race: a transient child, such as a `cat` in a command
+/// substitution, can outlive it for a moment under load. The probes run on
+/// a thread, so the deadline holds even when a `kill` probe is slow. A probe
+/// that cannot run counts as a live group.
+///
+/// # Panics
+///
+/// When `group` is 1 or less (see [`kill_group`]), on the probe thread, so the
+/// wait then returns `false`.
+#[must_use]
+pub fn group_empties(group: u32, deadline: Duration) -> bool {
+    let (emptied, empty) = mpsc::channel();
+    let (stop, stopped) = mpsc::channel::<()>();
+    thread::spawn(move || {
+        while matches!(kill_group(group, "0"), Ok(true) | Err(_)) {
+            if !matches!(
+                stopped.recv_timeout(Duration::from_millis(50)),
+                Err(mpsc::RecvTimeoutError::Timeout)
+            ) {
+                return;
+            }
+        }
+        match emptied.send(()) {
+            Ok(()) | Err(_) => {}
+        }
+    });
+    let result = empty.recv_timeout(deadline).is_ok();
+    drop(stop);
+    result
 }
 
 /// Sends `signal` (a name such as `KILL`, or `0` to probe) to process `pid`
