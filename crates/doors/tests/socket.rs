@@ -42,11 +42,15 @@ use serde_json::{Map, Value};
 /// A hang bound for one line, the same order as the log crate's watcher tests.
 const DEADLINE: Duration = Duration::from_secs(10);
 
-/// One deadline for a whole `until` wait. The busiest test waits on it seven
-/// times and closes its session once under [`DEADLINE`]: 7 x 6 + 10 = 52 s,
-/// at most half of nextest's 120 s kill (`docs/testing.md`, "Waits and
-/// timeouts").
+/// One deadline for a whole `until` wait or one `subscribe` acknowledgement.
+/// The busiest test makes seven such waits and closes its session once under
+/// [`DEADLINE`]: 7 x 6 + 10 = 52 s, at most half of nextest's 120 s kill
+/// (`docs/testing.md`, "Waits and timeouts").
 const UNTIL: Duration = Duration::from_secs(6);
+
+/// How long the reader inside `until` blocks on one receive, so it notices a
+/// missed deadline within this bound instead of one more [`UNTIL`].
+const SLICE: Duration = Duration::from_secs(1);
 
 const MALFORMED: &str = "A command is one JSON object per line, with a string `id` and `command`.";
 const NOT_SUBSCRIBED: &str = "Send `subscribe` first.";
@@ -168,10 +172,17 @@ fn until(client: &Client, mut done: impl FnMut(&Value) -> bool + Send) -> Vec<Va
         let stop = &stop;
         scope.spawn(move || {
             let mut lines = Vec::new();
+            let mut idle = 0;
             while !stop.load(Ordering::SeqCst) {
-                let Some(line) = client.recv(UNTIL) else {
-                    break;
+                let Some(line) = client.recv(SLICE) else {
+                    // A closed socket answers at once: stop instead of spinning.
+                    idle += 1;
+                    if idle > UNTIL.as_secs() {
+                        break;
+                    }
+                    continue;
                 };
+                idle = 0;
                 let finished = done(&line);
                 lines.push(line);
                 if finished {
@@ -222,7 +233,9 @@ fn subscribe(client: &Client, id: &str, level: &str) -> Value {
         client,
         &format!(r#"{{"id":"{id}","command":"subscribe","args":{{"level":"{level}"}}}}"#),
     );
-    let line = next(client);
+    let line = client
+        .recv(UNTIL)
+        .expect("the subscribe acknowledgement arrived");
     assert_eq!(kind(&line), "command_accepted", "{line}");
     assert_eq!(command_id(&line).unwrap(), id);
     assert_eq!(
