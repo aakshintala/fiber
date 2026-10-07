@@ -253,6 +253,7 @@ fn builtin_registers_the_tools_in_name_order_then_jobs() {
     assert_eq!(
         names,
         [
+            "ask_user",
             "edit",
             "handoff",
             "read",
@@ -266,6 +267,7 @@ fn builtin_registers_the_tools_in_name_order_then_jobs() {
     assert_eq!(
         listed,
         [
+            "ask_user",
             "edit",
             "handoff",
             "read",
@@ -462,7 +464,7 @@ fn every_builtin_schema_keeps_to_the_documented_subset() {
         Some("web_search_20250305"),
     )
     .unwrap();
-    assert!(tools.len() >= 8, "web_search and jobs register too");
+    assert!(tools.len() >= 9, "web_search and jobs register too");
     let mut found = Vec::new();
     for (_, tool) in &tools {
         let definition = tool.definition();

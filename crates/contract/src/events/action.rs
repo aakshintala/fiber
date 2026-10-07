@@ -313,10 +313,15 @@ pub struct FileChange {
 }
 
 /// A tool result's instructions to the loop.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Control {
     /// A handoff note (`docs/handoff.md`).
-    pub handoff: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handoff: Option<String>,
+    /// Questions for the driver: the turn ends with them at the step
+    /// boundary (`docs/tools.md`, "What a result carries").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub questions: Option<Vec<Question>>,
 }
 
 /// Which step of `docs/permissions.md`, "The order a call is judged in",

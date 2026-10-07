@@ -4,7 +4,7 @@
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 
 use contract::clock::Wake;
-use contract::events::{CallStatus, ToolCallCompleted, TurnOutcome};
+use contract::events::{CallStatus, ToolCallCompleted, TurnCompleted, TurnOutcome};
 use contract::provider::{CallError, Delta, ModelCall, Reply};
 use contract::tool::Cancel as _;
 
@@ -170,9 +170,9 @@ impl crate::Loop {
     /// of `completed` into `interrupted`; `failed` stays `failed`. A
     /// cancel after the disarm finds the signal disarmed and is
     /// `stale_request`.
-    pub(crate) fn disarm_cancel(&self, completed: &mut contract::events::TurnCompleted) {
-        if self.cancel.disarm() && completed.outcome == TurnOutcome::Completed {
-            completed.outcome = TurnOutcome::Interrupted;
+    pub(crate) fn disarm_cancel(&self, completed: &mut TurnCompleted) {
+        if self.cancel.disarm() {
+            interrupted(completed);
         }
     }
 
@@ -184,6 +184,16 @@ impl crate::Loop {
     /// Whether a shutdown started (`docs/invocation.md`, "Shutdown").
     pub(crate) fn shutting_down(&self) -> bool {
         self.cancel.shutdown_code().is_some()
+    }
+}
+
+/// A cancel landed before the disarm: `completed` becomes `interrupted` and
+/// carries no questions, which only a turn that ended on them carries;
+/// `failed` and `interrupted` are unchanged.
+pub(crate) fn interrupted(completed: &mut TurnCompleted) {
+    if completed.outcome == TurnOutcome::Completed {
+        completed.outcome = TurnOutcome::Interrupted;
+        completed.questions = None;
     }
 }
 

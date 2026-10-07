@@ -25,9 +25,9 @@ type SessionTools = (
     Arc<dyn contract::images::Images>,
 );
 
-/// `edit`, `handoff`, `read`, `shell`, `web_fetch`, `write` and `jobs`, each
-/// registered by `builtin`, and `web_search` when `web_search` names the
-/// hosted search type of the session's model. `read`, `write` and `edit`
+/// `ask_user`, `edit`, `handoff`, `read`, `shell`, `web_fetch`, `write` and
+/// `jobs`, each registered by `builtin`, and `web_search` when `web_search`
+/// names the hosted search type of the session's model. `read`, `write` and `edit`
 /// share one session's file state, which a handoff forgets, take `locks`,
 /// the session's per-path lock, which an extension's `host.fs` shares, and
 /// `read` runs the image child (`fiber image`) into `artifacts`, the session's
@@ -61,6 +61,7 @@ pub(crate) fn builtin(
     let driver =
         Arc::new(tools::Shell::new(workspace.to_path_buf(), Arc::clone(clock)).with_search(fiber));
     let mut built = vec![
+        registered(tools::AskUser)?,
         registered(files.edit())?,
         registered(tools::Handoff)?,
         registered(files.read())?,

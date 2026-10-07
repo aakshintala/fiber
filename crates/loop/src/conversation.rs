@@ -8,8 +8,8 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 
 use contract::events::{
-    CallStatus, Event, InputItem, InstructionFile, InstructionReason, InstructionSent, Outcome,
-    ToolCallCompleted, ToolCallRequested,
+    CallStatus, Control, Event, InputItem, InstructionFile, InstructionReason, InstructionSent,
+    Outcome, ToolCallCompleted, ToolCallRequested,
 };
 use contract::provider::{ImageRef, Input};
 use contract::shapes::ContentPart;
@@ -204,7 +204,7 @@ impl Rendered {
                         action,
                         &result,
                         completed.artifact.as_deref(),
-                        noted(completed),
+                        controlled(completed),
                     );
                     self.conversation.push(result);
                     self.pending.retain(|p| &p.action_id != action);
@@ -514,7 +514,12 @@ pub(crate) fn render(
         Event::ToolCallCompleted(completed) => {
             if let Some(action) = action {
                 let result = result_of(action, completed);
-                carry.call_completed(action, &result, completed.artifact.as_deref(), noted(completed));
+                carry.call_completed(
+                    action,
+                    &result,
+                    completed.artifact.as_deref(),
+                    controlled(completed),
+                );
                 conversation.push(result);
             }
         }
@@ -590,14 +595,14 @@ fn result_of(action: &ActionId, completed: &ToolCallCompleted) -> Input {
     }
 }
 
-/// The note a completed call's `control.handoff` carries. The loop acts on
-/// the field, never on the tool that set it (`docs/handoff.md`, "A tool").
-fn noted(completed: &ToolCallCompleted) -> Option<&str> {
+/// A completed call's `control`; a failed or denied call's is ignored. The
+/// loop acts on the fields, never on the tool that set them (`docs/tools.md`,
+/// "What a result carries").
+fn controlled(completed: &ToolCallCompleted) -> Option<&Control> {
     completed
         .control
         .as_ref()
         .filter(|_| completed.status == CallStatus::Completed)
-        .map(|control| control.handoff.as_str())
 }
 
 /// What an `instruction_file` line appends to the conversation, if

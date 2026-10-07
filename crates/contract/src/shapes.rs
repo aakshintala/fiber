@@ -142,7 +142,8 @@ pub struct Question {
     pub header: String,
     /// The question.
     pub question: String,
-    /// The options offered.
+    /// The options offered; a free-text question has none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub options: Vec<Choice>,
     /// Whether several options may be chosen.
     #[serde(

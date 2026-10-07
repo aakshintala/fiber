@@ -1030,7 +1030,8 @@ fn the_selection_is_not_asked_past_the_spending_budget() {
     let tool = shell();
     let mut handoffer = TestTool::reads("handoffer", "Noted.");
     handoffer.output.control = Some(Control {
-        handoff: "note".into(),
+        handoff: Some("note".into()),
+        ..Default::default()
     });
     // One priced reviewer call costs (10 + 3) / 1e6: the review of the
     // shell call spends past the tiny budget, so the handoff it triggers

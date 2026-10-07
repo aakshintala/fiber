@@ -92,8 +92,9 @@ fn check_list<'a>(
             }
             match value {
                 Value::Number(n) => bounds(schema, n, pointer, errors),
-                Value::String(text) => min_length(schema, text, pointer, errors),
-                Value::Object(_) | Value::Array(_) | Value::Bool(_) | Value::Null => {}
+                Value::String(text) => lengths(schema, text, pointer, errors),
+                Value::Array(items) => item_counts(schema, items, pointer, errors),
+                Value::Object(_) | Value::Bool(_) | Value::Null => {}
             }
             open.push(*schema);
         }
@@ -190,14 +191,42 @@ fn bounds(schema: &Value, n: &Number, pointer: &str, errors: &mut Vec<String>) {
     }
 }
 
-fn min_length(schema: &Value, text: &str, pointer: &str, errors: &mut Vec<String>) {
+/// `minLength` and `maxLength`, counted in characters, not bytes.
+fn lengths(schema: &Value, text: &str, pointer: &str, errors: &mut Vec<String>) {
+    let count = u64::try_from(text.chars().count()).unwrap_or(u64::MAX);
     if let Some(min) = schema.get("minLength").and_then(Value::as_u64)
-        && u64::try_from(text.chars().count()).unwrap_or(u64::MAX) < min
+        && count < min
     {
         errors.push(format!(
             "{}: must be at least {min} characters",
             place(pointer)
         ));
+    }
+    if let Some(max) = schema.get("maxLength").and_then(Value::as_u64)
+        && count > max
+    {
+        errors.push(format!(
+            "{}: must be at most {max} characters",
+            place(pointer)
+        ));
+    }
+}
+
+/// `minItems` and `maxItems`.
+fn item_counts(schema: &Value, items: &[Value], pointer: &str, errors: &mut Vec<String>) {
+    let count = u64::try_from(items.len()).unwrap_or(u64::MAX);
+    if let Some(min) = schema.get("minItems").and_then(Value::as_u64)
+        && count < min
+    {
+        errors.push(format!(
+            "{}: must have at least {min} items",
+            place(pointer)
+        ));
+    }
+    if let Some(max) = schema.get("maxItems").and_then(Value::as_u64)
+        && count > max
+    {
+        errors.push(format!("{}: must have at most {max} items", place(pointer)));
     }
 }
 

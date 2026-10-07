@@ -1,6 +1,7 @@
 //! The built-in tools (`docs/tools.md`). Reached only through the tool seam
 //! (`docs/architecture.md`).
 
+mod ask_user;
 mod edit;
 mod files;
 mod guidelines;
@@ -13,6 +14,7 @@ mod web_fetch;
 mod web_search;
 mod write;
 
+pub use ask_user::AskUser;
 pub use edit::Edit;
 pub use files::{Files, PathGuard, PathLocks};
 pub use handoff::Handoff;

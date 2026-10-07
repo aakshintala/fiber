@@ -11,7 +11,8 @@ use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 
 use contract::events::{
-    DecidedBy, Decision, Event, Grant, JobCompleted, Outcome, ToolCallRequested, TurnOutcome,
+    DecidedBy, Decision, Event, Grant, JobCompleted, Outcome, ToolCallRequested, TurnCompleted,
+    TurnOutcome,
 };
 use contract::inbox::Delivery;
 use contract::provider::Provider;
@@ -570,9 +571,17 @@ impl Loop {
             // Orphan notices the resume logged behind the open batch.
             self.conversation.append(&mut self.held);
             // A cancel that ended the batch ends the turn `interrupted` at
-            // the next step's start, as a step's cancel does.
+            // the next step's start, as a step's cancel does. A spent
+            // headless block budget ends the turn `failed` `blocked`
+            // before the batch's questions are processed, as a step's
+            // does.
             if !cancelled {
-                self.handoff_from_tools(&turn)?;
+                if let Some(blocked) = self.take_blocked_end() {
+                    return self.end_turn(&turn, blocked);
+                }
+                if let Some(completed) = self.after_calls(&turn)? {
+                    return self.end_turn(&turn, completed);
+                }
             }
             return self.run_steps(&turn);
         }
@@ -674,9 +683,16 @@ impl Loop {
         // Orphan notices the resume logged behind the open batch.
         self.conversation.append(&mut self.held);
         // A cancel that ended the batch ends the turn `interrupted` at the
-        // next step's start, as a step's cancel does.
+        // next step's start, as a step's cancel does. A spent headless
+        // block budget ends the turn `failed` `blocked` before the batch's
+        // questions are processed, as a step's does.
         if !cancelled {
-            self.handoff_from_tools(&turn)?;
+            if let Some(blocked) = self.take_blocked_end() {
+                return self.end_turn(&turn, blocked);
+            }
+            if let Some(completed) = self.after_calls(&turn)? {
+                return self.end_turn(&turn, completed);
+            }
         }
         self.run_steps(&turn)
     }
@@ -684,7 +700,7 @@ impl Loop {
     /// The step loop and the `turn_completed` tail every turn ends with:
     /// shared by a new turn and the finishing one, so the two cannot drift.
     pub(crate) fn run_steps(&mut self, turn: &TurnId) -> Result<Option<TurnOutcome>, Error> {
-        let mut completed = loop {
+        let completed = loop {
             match self.step(turn)? {
                 Step::Next => {}
                 // Anything waiting continues the turn (`docs/loop.md`,
@@ -699,6 +715,15 @@ impl Loop {
                 Step::Ended(completed) => break completed,
             }
         };
+        self.end_turn(turn, completed)
+    }
+
+    /// `run_steps`'s tail: the idle check, `disarm_cancel`, `turn_completed`.
+    fn end_turn(
+        &mut self,
+        turn: &TurnId,
+        mut completed: TurnCompleted,
+    ) -> Result<Option<TurnOutcome>, Error> {
         if self.idle_left {
             self.pending.clear();
             self.cancel.disarm();

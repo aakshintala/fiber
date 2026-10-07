@@ -66,7 +66,9 @@ So Fiber sends `strict` on every tool, on every protocol that has strict mode,
 and decides it per tool. It sends `true` only when the tool's schema already
 fits the vendor's strict subset, and `false` otherwise. Fiber never rewrites a
 schema to fit, and never moves keywords into the description. Fiber's built-in
-tools are written to fit the strict subset.
+tools are written to fit the strict subset, except a tool whose section in
+`docs/tools.md` says it is sent with `strict: false` (`ask_user`,
+`name_session`).
 
 An extension cannot add a protocol. A vendor with a new wire format needs a
 Fiber release.
@@ -151,6 +153,12 @@ Measured against `gemini-3.1-flash-lite` on the Gemini API:
 - Function-calling mode `VALIDATED` returned schema-valid arguments where
   `AUTO` returned arguments that broke an enum and an integer type. In the
   sample it did not force a call.
+
+Fiber sends mode `VALIDATED` only when every tool in the request fits the
+strict subset. A tool declared in every session, such as `ask_user`, is sent
+with `strict: false`, so Gemini requests use `AUTO` until #1214 settles it.
+Fiber's own argument check still validates every call (`docs/tools.md`,
+"Before a call runs").
 
 A `functionCall` that arrives without an `id` is logged with no `provider_id`
 (`docs/events.md`, `tool_call_requested`). Fiber pairs the call with its result

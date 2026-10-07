@@ -2687,7 +2687,8 @@ fn a_resumed_credential_refusal_hands_off_from_a_later_call() {
     let mut wrapup = support::TestTool::reads("wrapup", "");
     wrapup.output.content = Vec::new();
     wrapup.output.control = Some(contract::events::Control {
-        handoff: "the note".into(),
+        handoff: Some("the note".into()),
+        ..Default::default()
     });
     let wrapup = Arc::new(wrapup);
     let mut history = History::new(vec![Scripted::text("Hello.")]);
@@ -2724,6 +2725,240 @@ fn a_resumed_credential_refusal_hands_off_from_a_later_call() {
     assert_eq!(handed[0].payload["note"], json!(["a_3"]));
 }
 
+/// A tool whose calls return `control.questions` holding one question.
+fn asking(name: &'static str) -> Arc<support::TestTool> {
+    let mut tool = support::TestTool::reads(name, "Asked.");
+    tool.output.control = Some(contract::events::Control {
+        handoff: None,
+        questions: Some(vec![contract::shapes::Question {
+            header: "h".into(),
+            question: "Which?".into(),
+            options: Vec::new(),
+            multi_select: None,
+        }]),
+    });
+    Arc::new(tool)
+}
+
+/// The one new `turn_completed` holds the asked question and no request
+/// was sent.
+fn ended_on_the_question(history: &History) {
+    let ended = new_of(history, "turn_completed");
+    assert_eq!(ended.len(), 1, "{:?}", history.new_kinds());
+    assert_eq!(
+        serde_json::Value::Object(ended[0].payload.clone()),
+        json!({"outcome": "completed",
+            "questions": [{"header": "h", "question": "Which?"}]})
+    );
+    assert!(history.provider.requests().is_empty());
+    assert!(
+        !history
+            .new_kinds()
+            .iter()
+            .any(|kind| kind == "step_started"),
+        "{:?}",
+        history.new_kinds()
+    );
+}
+
+#[test]
+fn a_resumed_credential_refusal_ends_the_turn_on_a_later_calls_questions() {
+    let keys = fakes::TempDir::new("fiber-resume-keys");
+    let key = keys.path().join("openrouter");
+    std::fs::write(&key, "sk-file-secret").unwrap();
+    let denied = Arc::new(support::TestTool::declaring(
+        "read",
+        "sk-file-secret",
+        vec![contract::shapes::Effect::Reads],
+        Some(vec![key.display().to_string()]),
+    ));
+    let ask = asking("ask");
+    let mut history = History::new(Vec::new());
+    history.write(user_turn("one"), None);
+    history.write(message_started(), Some("a_0"));
+    history.write(requested("read"), Some("a_1"));
+    history.write(requested("ask"), Some("a_2"));
+    history.write(standing_request("r_9"), Some("a_1"));
+    history.write(fiber_started(), None);
+    history.write(fiber_exited(Some("r_9")), None);
+    history.freeze();
+
+    let looped = history.resume_headless_with_files(
+        vec![
+            ("builtin".into(), denied.clone() as Arc<dyn Tool>),
+            ("builtin".into(), ask.clone() as Arc<dyn Tool>),
+        ],
+        vec![key.clone()],
+    );
+    let (_looped, finishing) = history.step(looped);
+    assert_eq!(finishing, Some(contract::events::TurnOutcome::Completed));
+    assert_eq!(ask.ran().len(), 1, "a call after the refusal runs");
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "opening_message",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+            "tool_call_completed",
+            "turn_completed",
+        ]
+    );
+    ended_on_the_question(&history);
+}
+
+/// The one new `turn_completed` ends the turn `failed` with code
+/// `blocked` and carries no `questions` key: the headless block budget
+/// ends the turn before the batch's questions are processed.
+fn ended_blocked(history: &History) {
+    let ended = new_of(history, "turn_completed");
+    assert_eq!(ended.len(), 1, "{:?}", history.new_kinds());
+    assert_eq!(ended[0].payload["outcome"], "failed");
+    assert_eq!(ended[0].payload["error"]["code"], "blocked");
+    assert!(
+        ended[0].payload.get("questions").is_none(),
+        "{:?}",
+        ended[0].payload
+    );
+}
+
+/// Twenty reviewer denials, as `resume.rs` folds them: with the default
+/// session limit the next block spends the budget.
+fn twenty_prior_denials(history: &History) {
+    for _ in 0..20 {
+        history.write(
+            Event::PermissionResolved(PermissionResolved {
+                request_id: None,
+                decision: Decision::Deny,
+                decided_by: DecidedBy::Reviewer,
+                reason: Some("no".into()),
+                feedback: None,
+                grant: None,
+                rule: None,
+                reviewer: Some(ReviewerRef {
+                    model: "fake/reviewer-1".into(),
+                    stage: 2,
+                }),
+            }),
+            Some("a_old"),
+        );
+    }
+}
+
+/// A reviewer that blocks the next call it judges.
+fn blocking_reviewer() -> Arc<ScriptedProvider> {
+    Arc::new(ScriptedProvider::new(vec![
+        Scripted::text("check"),
+        Scripted::text("block: it writes"),
+    ]))
+}
+
+/// Judges `looped`'s calls with [`blocking_reviewer`] under the default
+/// limits.
+fn with_blocking_reviewer(looped: Loop, reviewer: Arc<ScriptedProvider>) -> Loop {
+    looped.reviewer(
+        Ok(r#loop::Reviewer {
+            provider: reviewer,
+            model: Model {
+                reference: "fake/reviewer-1".into(),
+                cost: None,
+                subscription: false,
+            },
+            cache_lifetime: contract::events::CacheLifetime::OneHour,
+            context_window: fakes::CONTEXT_WINDOW,
+        }),
+        r#loop::BlockLimits::default(),
+    )
+}
+
+/// A tool the reviewer judges: it executes, so it is not a fast path.
+fn judged(name: &'static str) -> Arc<support::TestTool> {
+    let mut tool =
+        support::TestTool::declaring(name, "done", vec![contract::shapes::Effect::Executes], None);
+    tool.subject = Some("run tests".into());
+    Arc::new(tool)
+}
+
+#[test]
+fn a_resumed_credential_refusal_prefers_the_block_budget_over_later_questions() {
+    let keys = fakes::TempDir::new("fiber-resume-keys");
+    let key = keys.path().join("openrouter");
+    std::fs::write(&key, "sk-file-secret").unwrap();
+    let denied = Arc::new(support::TestTool::declaring(
+        "read",
+        "sk-file-secret",
+        vec![contract::shapes::Effect::Reads],
+        Some(vec![key.display().to_string()]),
+    ));
+    let blocked = judged("exec");
+    let ask = asking("ask");
+    let mut history = History::new(Vec::new());
+    twenty_prior_denials(&history);
+    history.write(user_turn("one"), None);
+    history.write(message_started(), Some("a_0"));
+    history.write(requested("read"), Some("a_1"));
+    history.write(requested("exec"), Some("a_2"));
+    history.write(requested("ask"), Some("a_3"));
+    history.write(standing_request("r_9"), Some("a_1"));
+    history.write(fiber_started(), None);
+    history.write(fiber_exited(Some("r_9")), None);
+    history.freeze();
+
+    let reviewer = blocking_reviewer();
+    let (tx, rx) = mpsc::channel();
+    let looped = with_blocking_reviewer(
+        Loop::resume(
+            Arc::clone(&history.log),
+            r#loop::resumed(&history.dir).unwrap(),
+            Arc::clone(&history.provider) as Arc<dyn Provider>,
+            History::model(),
+            history.prompt(),
+            rx,
+            vec![
+                ("builtin".into(), denied.clone() as Arc<dyn Tool>),
+                ("builtin".into(), blocked.clone() as Arc<dyn Tool>),
+                ("builtin".into(), ask.clone() as Arc<dyn Tool>),
+            ],
+            r#loop::Permissions {
+                workspace: history.workspace.clone(),
+                credentials: history.credentials.clone(),
+                credential_files: vec![key.clone()],
+                rules: history.rules.clone(),
+            },
+        )
+        .unwrap()
+        .answerable(false),
+        reviewer,
+    );
+    history.inbox_tx = tx;
+    let (_looped, finishing) = history.step(looped);
+
+    // The second call's block is the session's 21st with no person to
+    // answer; the third call's questions never end the turn.
+    assert_eq!(finishing, Some(contract::events::TurnOutcome::Failed));
+    assert!(blocked.ran().is_empty(), "the blocked call never ran");
+    assert_eq!(ask.ran().len(), 1, "a call after the block still runs");
+    assert!(history.provider.requests().is_empty());
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "opening_message",
+            "permission_resolved",
+            "usage_recorded",
+            "usage_recorded",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+            "tool_call_completed",
+            "tool_call_completed",
+            "turn_completed",
+        ]
+    );
+    ended_blocked(&history);
+}
+
 #[test]
 fn a_cancel_after_a_resumed_credential_refusal_skips_the_tool_handoff() {
     // The batch ran with a note in hand but a cancel ended it, so the
@@ -2742,7 +2977,8 @@ fn a_cancel_after_a_resumed_credential_refusal_skips_the_tool_handoff() {
     let mut wrapup = support::TestTool::reads("wrapup", "");
     wrapup.output.content = Vec::new();
     wrapup.output.control = Some(contract::events::Control {
-        handoff: "the note".into(),
+        handoff: Some("the note".into()),
+        ..Default::default()
     });
     let wrapup = Arc::new(wrapup);
     let mut slow = support::TestTool::reads("slow", "Paris.");
@@ -3687,7 +3923,8 @@ fn completed_with_note(text: &str, note: Option<&str>) -> Event {
         panic!("a completion");
     };
     done.control = note.map(|handoff| contract::events::Control {
-        handoff: handoff.into(),
+        handoff: Some(handoff.into()),
+        ..Default::default()
     });
     Event::ToolCallCompleted(done)
 }
@@ -4498,7 +4735,8 @@ fn an_allowed_call_that_sets_control_handoff_hands_off_after_the_batch() {
     let mut wrapup = support::TestTool::reads("wrapup", "");
     wrapup.output.content = Vec::new();
     wrapup.output.control = Some(contract::events::Control {
-        handoff: "the note".into(),
+        handoff: Some("the note".into()),
+        ..Default::default()
     });
     let wrapup = Arc::new(wrapup);
     let looped = history.resume(tools_of(&[&wrapup]));
@@ -4513,6 +4751,110 @@ fn an_allowed_call_that_sets_control_handoff_hands_off_after_the_batch() {
     assert_eq!(handed.len(), 1, "{:?}", history.new_kinds());
     assert_eq!(handed[0].payload["outcome"], "completed");
     assert_eq!(handed[0].payload["note"], json!(["a_1"]));
+}
+
+#[test]
+fn an_allowed_call_that_asks_ends_the_finishing_turn_with_its_questions() {
+    let mut history = suspended_batch(Vec::new(), &["ask"], 1);
+    let ask = asking("ask");
+    let looped = history.resume(tools_of(&[&ask]));
+    let (delivery, seen) = reply_delivery("r_9", Decision::Allow);
+    history.inbox_tx.send(delivery).unwrap();
+    let (_looped, outcome) = history.step(looped);
+
+    assert_eq!(outcome, Some(contract::events::TurnOutcome::Completed));
+    assert!(is_accepted(&seen), "the reply was accepted");
+    assert_eq!(ask.ran().len(), 1);
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "opening_message",
+            "permission_requested",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+            "turn_completed",
+        ]
+    );
+    ended_on_the_question(&history);
+}
+
+#[test]
+fn an_answered_resume_prefers_the_block_budget_over_later_questions() {
+    // The batch is `act`, judged below, then `exec` and `ask`. The reply
+    // allows `act`; the `close` behind it ends the `exec` block's wait,
+    // so the headless budget spends the session's 21st block and the
+    // `ask` call's questions never end the turn.
+    let mut history = History::new(Vec::new());
+    twenty_prior_denials(&history);
+    history.write(user_turn("one"), None);
+    history.write(message_started(), Some("a_0"));
+    history.write(requested("act"), Some("a_1"));
+    history.write(requested("exec"), Some("a_2"));
+    history.write(requested("ask"), Some("a_3"));
+    history.write(standing_request("r_9"), Some("a_1"));
+    history.write(fiber_started(), None);
+    history.write(fiber_exited(Some("r_9")), None);
+    history.freeze();
+    let act = reads("act");
+    let blocked = judged("exec");
+    let ask = asking("ask");
+    let reviewer = blocking_reviewer();
+    let (tx, rx) = mpsc::channel();
+    let looped = with_blocking_reviewer(
+        Loop::resume(
+            Arc::clone(&history.log),
+            r#loop::resumed(&history.dir).unwrap(),
+            Arc::clone(&history.provider) as Arc<dyn Provider>,
+            History::model(),
+            history.prompt(),
+            rx,
+            tools_of(&[&act, &blocked, &ask]),
+            r#loop::Permissions {
+                workspace: history.workspace.clone(),
+                credentials: history.credentials.clone(),
+                credential_files: Vec::new(),
+                rules: history.rules.clone(),
+            },
+        )
+        .unwrap(),
+        reviewer,
+    );
+    history.inbox_tx = tx;
+    let (delivery, seen) = reply_delivery("r_9", Decision::Allow);
+    let (ack, closed) = recording();
+    history.inbox_tx.send(delivery).unwrap();
+    history.inbox_tx.send(Delivery::Close(ack)).unwrap();
+    let (_looped, outcome) = history.step(looped);
+
+    assert_eq!(outcome, Some(contract::events::TurnOutcome::Failed));
+    assert!(is_accepted(&seen), "the reply was accepted");
+    assert!(is_accepted(&closed), "close was accepted");
+    assert_eq!(act.ran().len(), 1);
+    assert!(blocked.ran().is_empty(), "the blocked call never ran");
+    assert_eq!(ask.ran().len(), 1, "a call after the block still runs");
+    assert!(history.provider.requests().is_empty());
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "opening_message",
+            "permission_requested",
+            "permission_resolved",
+            "usage_recorded",
+            "usage_recorded",
+            "permission_requested",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_started",
+            "tool_call_completed",
+            "tool_call_completed",
+            "tool_call_completed",
+            "turn_completed",
+        ]
+    );
+    ended_blocked(&history);
 }
 
 #[test]

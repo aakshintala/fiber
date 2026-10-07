@@ -64,7 +64,10 @@ impl Tool for Handoff {
     ) -> Output {
         match string_argument(arguments, "note", MISSING) {
             Ok(note) => Output {
-                control: Some(Control { handoff: note }),
+                control: Some(Control {
+                    handoff: Some(note),
+                    questions: None,
+                }),
                 ..Output::default()
             },
             Err(message) => failed(ErrorCode::InvalidArguments, message),

@@ -55,7 +55,9 @@ fn the_result_has_no_content_and_carries_the_note() {
 
     assert!(output.content.is_empty());
     assert!(output.error.is_none());
-    assert_eq!(output.control.unwrap().handoff, "Continue with the tests.");
+    let control = output.control.unwrap();
+    assert_eq!(control.handoff.as_deref(), Some("Continue with the tests."));
+    assert_eq!(control.questions, None);
 }
 
 #[test]

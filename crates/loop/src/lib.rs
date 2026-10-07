@@ -48,6 +48,7 @@ mod permission;
 mod process;
 mod progress;
 mod prompt;
+mod questions;
 mod resume;
 mod retry;
 mod reviewer;
@@ -784,13 +785,12 @@ impl Loop {
             // of taking a next step. An idle approval writes nothing more.
             return Ok(Step::Ended(ended(TurnOutcome::Interrupted, None)));
         }
-        if let Some(error) = self.turn_blocked.take() {
+        if let Some(blocked) = self.take_blocked_end() {
             // Headless, the block budget ran out: the step's calls
             // completed, and the turn ends `failed` with code `blocked`
             // (`docs/permissions.md`, "Headless").
-            return Ok(Step::Ended(ended(TurnOutcome::Failed, Some(error))));
+            return Ok(Step::Ended(blocked));
         }
-        self.handoff_from_tools(turn)?;
-        Ok(Step::Next)
+        Ok(self.after_calls(turn)?.map_or(Step::Next, Step::Ended))
     }
 }

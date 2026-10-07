@@ -125,7 +125,8 @@ fn a_result_carries_what_the_tool_returned() {
         removed: 0,
     }]);
     tool.output.control = Some(Control {
-        handoff: "note".into(),
+        handoff: Some("note".into()),
+        ..Default::default()
     });
     let (_, lines) = turn(vec![Arc::new(tool)], &[("get_weather", paris())]);
     let done = &completed(&lines)[0].payload;

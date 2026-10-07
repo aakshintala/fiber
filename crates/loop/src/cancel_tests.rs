@@ -4,10 +4,13 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use contract::ErrorCode;
 use contract::clock::Wake;
+use contract::events::{TurnCompleted, TurnOutcome};
+use contract::shapes::{Failure, Question};
 use contract::tool::Cancel as _;
 
-use super::TurnCancel;
+use super::{TurnCancel, interrupted};
 
 #[derive(Default)]
 struct Counter {
@@ -228,4 +231,44 @@ fn state_is_shutdown_when_a_cancel_also_landed() {
     assert!(cancel.cancel());
     cancel.shutdown(129);
     assert_eq!(cancel.state(), SignalState::Shutdown);
+}
+
+fn ended(outcome: TurnOutcome, error: Option<Failure>, asked: bool) -> TurnCompleted {
+    TurnCompleted {
+        outcome,
+        error,
+        questions: asked.then(|| {
+            vec![Question {
+                header: "h".into(),
+                question: "q".into(),
+                options: Vec::new(),
+                multi_select: None,
+            }]
+        }),
+    }
+}
+
+#[test]
+fn a_late_cancel_turns_completed_into_interrupted_without_questions() {
+    let mut completed = ended(TurnOutcome::Completed, None, true);
+    interrupted(&mut completed);
+    assert_eq!(completed, ended(TurnOutcome::Interrupted, None, false));
+}
+
+#[test]
+fn a_late_cancel_leaves_failed_and_interrupted_unchanged() {
+    let failure = Failure {
+        code: ErrorCode::Blocked,
+        message: "m".into(),
+        retry_after_ms: None,
+        provider: None,
+    };
+    for before in [
+        ended(TurnOutcome::Failed, Some(failure), false),
+        ended(TurnOutcome::Interrupted, None, false),
+    ] {
+        let mut after = before.clone();
+        interrupted(&mut after);
+        assert_eq!(after, before);
+    }
 }
