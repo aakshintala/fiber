@@ -204,3 +204,25 @@ fn a_first_line_that_is_not_hello_is_an_error() {
         assert!(failed.is_err());
     }
 }
+
+#[test]
+fn a_hello_on_another_schema_version_is_refused_naming_both() {
+    let temp = Temp::new();
+    let listener = UnixListener::bind(temp.run().join("hub")).unwrap();
+    let line = format!(
+        r#"{{"kind":"hub_hello","ts":1,"schema_version":{},"payload":{{"fiber_version":"0.0.0"}}}}"#,
+        contract::SCHEMA_VERSION + 1,
+    );
+    thread::spawn(move || serve_once(listener, line.as_bytes()));
+    let error = run_connect(temp.dir.clone(), || Ok(()), fakes::clock::FakeClock::new())
+        .expect_err("a hub on another schema version is refused");
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "the hub runs schema version {}, this Fiber runs schema version {}; \
+             update Fiber or restart the hub, then reconnect",
+            contract::SCHEMA_VERSION + 1,
+            contract::SCHEMA_VERSION,
+        ),
+    );
+}
