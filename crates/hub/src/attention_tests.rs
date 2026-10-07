@@ -23,6 +23,12 @@ use crate::fake;
 
 const DEADLINE: Duration = Duration::from_secs(10);
 
+/// How long `unlisten_waits_for_its_writer_still_draining_its_backlog` holds
+/// the far-end reader while asserting unlisten has not returned: long enough
+/// for a runnable unlisten thread to return under the no-op-`join` mutant,
+/// while the test itself waits on [`mpsc::Receiver::recv_timeout`].
+const SETTLED: Duration = Duration::from_millis(500);
+
 /// `wall()` on a fake clock nobody advanced, in milliseconds.
 const WALL: u64 = 1_700_000_000_000;
 
@@ -786,14 +792,28 @@ fn unlisten_waits_for_its_writer_still_draining_its_backlog() {
     let ending = Arc::clone(&attention);
     let watched = Arc::clone(&kept);
     thread::spawn(move || {
-        // The far end starts reading only as unlisten is called, so the
-        // writer is still busy unless unlisten waits for it.
-        go_tx.send(()).unwrap();
         ending.unlisten(id);
         tx.send(Arc::strong_count(&watched)).unwrap_or(());
     });
+    // The far end holds its reader while unlisten runs: a joining unlisten
+    // cannot return, so nothing arrives within SETTLED. Under the no-op-`join`
+    // mutant unlisten returns at once and this fails. The far end starts
+    // reading only after the blocked join is observed, so no schedule lets
+    // draining finish first.
+    assert!(
+        rx.recv_timeout(SETTLED).is_err(),
+        "unlisten returned while its writer still held a full backlog"
+    );
+    go_tx.send(()).unwrap();
     let left = rx.recv_timeout(DEADLINE).expect("unlisten returns");
     // The test's handle, `watched`, and none from the writer thread.
     assert_eq!(left, 2, "unlisten returned before its writer ended");
-    drained.join().unwrap();
+    let (joined_tx, joined_rx) = mpsc::channel();
+    thread::spawn(move || {
+        joined_tx.send(drained.join()).unwrap_or(());
+    });
+    let joined = joined_rx
+        .recv_timeout(DEADLINE)
+        .expect("the far end drains");
+    joined.unwrap();
 }
