@@ -463,7 +463,7 @@ threading this rests on is the concurrency section of `docs/architecture.md`;
 the driver commands that send and withdraw one, `steer` and `steer_drop`, are
 `docs/invocation.md`.
 
-`clients` lets a client know whether it is the only one attached, which the terminal asks before quitting (`docs/tui.md`, "Quit"). The latest wins, and a client that attaches is sent the latest.
+`clients` lets a client know whether it is the only one attached, which the terminal asks before quitting (`docs/tui.md`, "Quit"). The latest wins, and a client that attaches is sent the latest. `session_status` carries the same count, so a client holding only a `summary` connection, such as the hub's feed, reads it there.
 
 `steering_queue` lets every attached client show and edit the queue, not only
 the client that sent a message. It is ephemeral because `steering_applied`
