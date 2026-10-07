@@ -713,7 +713,7 @@ fn choose_reviewer(
             cost: model.model.cost.clone().map(cost::declared),
             subscription: model.model.subscription,
         },
-        cache_lifetime: contract::events::CacheLifetime::OneHour,
+        cache_lifetime: settings::cache_lifetime(config, &model.reference()),
     })
 }
 

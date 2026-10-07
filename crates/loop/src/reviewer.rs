@@ -264,6 +264,7 @@ struct ReviewEndpoint {
     reference: String,
     cost: Option<Cost>,
     subscription: bool,
+    cache_lifetime: CacheLifetime,
 }
 
 /// What one full stage (with its one re-ask) said.
@@ -303,6 +304,7 @@ impl Loop {
                 reference: reviewer.model.reference.clone(),
                 cost: reviewer.model.cost.clone(),
                 subscription: reviewer.model.subscription,
+                cache_lifetime: reviewer.cache_lifetime,
             },
             Err(failure) => {
                 let failure = failure.clone();
@@ -570,7 +572,7 @@ impl Loop {
             tools: Vec::new(),
             effort: None,
             tool_choice: "auto".to_owned(),
-            cache_lifetime: CacheLifetime::OneHour,
+            cache_lifetime: endpoint.cache_lifetime,
             cache_key: self.reviewer_key.clone(),
             conversation,
             previous_end,
