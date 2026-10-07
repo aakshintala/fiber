@@ -375,10 +375,15 @@ pub(super) fn render(
         row_y = row_y.saturating_add(1);
     }
     // The workspace picker draws above the box, upward from its top
-    // edge, over the logo rows. The selected row is reversed.
+    // edge, over the logo rows, scrolling around its selection so the
+    // selected entry always draws. The selected row is reversed.
     if let Some((items, selected)) = &screen.picker {
+        let visible = usize::from(placed.box_top.saturating_sub(area.y)).min(items.len());
+        let start = selected
+            .saturating_sub(visible.saturating_sub(1))
+            .min(items.len().saturating_sub(visible));
         let mut bottom = placed.box_top;
-        for (at, item) in items.iter().enumerate().rev() {
+        for (at, item) in items.iter().enumerate().skip(start).take(visible).rev() {
             let Some(row) = bottom.checked_sub(1).filter(|row| *row >= area.y) else {
                 break;
             };

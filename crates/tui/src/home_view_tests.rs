@@ -227,6 +227,66 @@ fn status(session: &str, name: &str, state: serde_json::Value) -> Line {
     })
 }
 
+/// A live `session_status` for `session`, named `name`, in `workspace`.
+fn status_in(session: &str, name: &str, workspace: &str) -> Line {
+    let mut payload = serde_json::json!({
+        "name": name,
+        "workspace": workspace,
+        "project": "-w",
+        "since": 0,
+        "spend": {"tokens": {"input": 1, "cache_read": 0,
+            "cache_write": {}, "output": 2},
+            "cost": 0.0, "subscription_cost": 0.0},
+        "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0,
+    });
+    for (key, value) in live().as_object().cloned().unwrap_or_default() {
+        payload[key] = value;
+    }
+    Line::Session(contract::Envelope {
+        kind: "session_status".to_owned(),
+        session_id: contract::SessionId(session.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: payload.as_object().cloned().unwrap_or_default(),
+    })
+}
+
+#[test]
+fn the_picker_keeps_its_selection_drawn() {
+    let mut app = home(80, 24);
+    app.on_line(hello());
+    for n in 0..9u8 {
+        app.on_line(status_in(
+            &format!("s_{n:016x}"),
+            "fix the parser",
+            &format!("/repo{n}"),
+        ));
+    }
+    app.on_click(crate::mouse::TargetId::Home(Spot::Workspace));
+    let now = fakes::clock::FakeClock::new().now();
+    // Ten entries, fewer rows above the box: every selection draws,
+    // scrolling the list around it.
+    for selected in 0..10usize {
+        let entry = app
+            .home_screen()
+            .and_then(|screen| screen.picker)
+            .and_then(|(list, at)| (at == selected).then(|| list[selected].clone()))
+            .unwrap_or_else(|| panic!("selection {selected}"));
+        // A picker row can share its row with the logo it draws over,
+        // so the entry heads its line.
+        let drawn = screen(&app, 80, 24);
+        assert!(
+            drawn.lines().any(|row| row.starts_with(&entry)),
+            "selection {selected} ({entry}) draws"
+        );
+        app.on_key(Key::Down, now);
+    }
+    insta::assert_snapshot!("home_picker_scrolled", screen(&app, 80, 24));
+}
+
 /// One exited `recent` row.
 fn recent_row(session: &str, name: &str, how: &str) -> serde_json::Value {
     serde_json::json!({
