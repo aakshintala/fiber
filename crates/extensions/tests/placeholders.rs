@@ -256,13 +256,13 @@ fn a_value_that_cannot_be_used_counts_as_no_value() {
             json!(5),
             json!({"workspace": {"env": "ACME_HOST"}}),
             "The model `acme/m` needs the setting `workspace` for its base URL, \
-          which has no value, and `ACME_HOST` has none either.",
+          whose value is not a host.",
         ),
         (
             json!(true),
             json!({"workspace": {"env": "ACME_HOST"}}),
             "The model `acme/m` needs the setting `workspace` for its base URL, \
-          which has no value, and `ACME_HOST` has none either.",
+          whose value is not a host.",
         ),
     ];
     for (setting, placeholders, message) in cases {
@@ -333,6 +333,54 @@ fn a_value_that_cannot_be_used_counts_as_no_value() {
         providers.resolve("acme/m").unwrap().model.base_url,
         "https://adb-4.example/v1"
     );
+}
+
+#[test]
+fn a_non_string_setting_is_not_replaced_by_the_environment() {
+    // A present setting that is not a string leaves the model out with the
+    // setting-source notice, even when the environment holds a valid host.
+    for setting in [json!(true), json!({"zone": "a"})] {
+        let setup = Setup::new();
+        let data = provider_with(
+            "acme",
+            json!([model("m", "https://{workspace}/v1")]),
+            json!({"workspace": {"env": "ACME_HOST"}}),
+        );
+        let source = setup.source("acme", &manifest("acme"), &[data]);
+        install(&setup.home(), &source, "0.1.0").unwrap();
+        let mut settings = serde_json::Map::new();
+        settings.insert("workspace".into(), setting.clone());
+        write(
+            &setup.home().join("config/acme.json"),
+            &Value::Object(settings).to_string(),
+        );
+        let cfg = config(&setup, &[]);
+        let (mut providers, _) = Providers::load(&setup.home()).unwrap();
+        let env = env_of(&[("ACME_HOST", "adb-2.example")]);
+        let notices = providers
+            .fill_placeholders(&cfg, &|name| env.get(name).cloned())
+            .unwrap();
+        assert_eq!(notices.len(), 1, "{setting}");
+        assert_eq!(notices[0].code, ErrorCode::ModelUnconfigured);
+        assert_eq!(
+            notices[0].message,
+            "The model `acme/m` needs the setting `workspace` for its base URL, \
+             whose value is not a host.",
+            "{setting}"
+        );
+        assert!(
+            !notices[0].message.contains("adb-2.example"),
+            "{setting}: {}",
+            notices[0].message
+        );
+        assert!(
+            !notices[0].message.contains(&setting.to_string()),
+            "{setting}: {}",
+            notices[0].message
+        );
+        let err = providers.resolve("acme/m").unwrap_err();
+        assert_eq!(err.code(), ErrorCode::ModelUnconfigured, "{setting}");
+    }
 }
 
 #[test]

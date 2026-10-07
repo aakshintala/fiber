@@ -412,7 +412,14 @@ impl Providers {
                             Some(Value::String(value)) if !value.is_empty() => {
                                 Ok(Some((value, placeholders::Source::Setting)))
                             }
-                            _ => {
+                            // Absent, JSON null, or an empty string leaves the
+                            // environment fallback in play. Any other present
+                            // value is the setting's: it is never a host, so it
+                            // fills as `Source::Setting` without consulting the
+                            // environment. The stand-in never reaches a URL or a
+                            // notice: `fill` reports it as not-a-host, and that
+                            // notice never repeats the value.
+                            Some(Value::String(_)) | Some(Value::Null) | None => {
                                 if let Some(variable) = placeholders
                                     .get(name)
                                     .and_then(|placeholder| placeholder.env.as_deref())
@@ -426,6 +433,7 @@ impl Providers {
                                 }
                                 Ok(None)
                             }
+                            Some(_) => Ok(Some((" ".to_owned(), placeholders::Source::Setting))),
                         }
                     };
                     match placeholders::fill(&template, &lookup)? {
