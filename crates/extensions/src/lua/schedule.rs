@@ -312,6 +312,80 @@ fn settle(
         Arc::new(move |reply| hub.deliver(id, reply))
     };
     let (cancel, wake) = match request {
+        Request::Drive(request) => {
+            match hub.driver() {
+                Some(driver) => {
+                    // The door runs the command elsewhere, as `host.http`
+                    // does: a driven `prompt` carrying an image blocks on
+                    // the image child, and the thread serves other work
+                    // meanwhile. Parked before the spawn: the door answers
+                    // in-process, so its reply can arrive before a spawn
+                    // returns, and a reply for an unparked id is dropped.
+                    // No off-thread wait to cancel: the parked deadline
+                    // bounds the call, and a late answer is dropped.
+                    parked.push(Parked {
+                        id,
+                        thread,
+                        target: target.clone(),
+                        deadline,
+                        timeout,
+                        wake: None,
+                        _cancel: None,
+                    });
+                    if let Some(progress) = hub.lock().calls.get_mut(&id) {
+                        *progress = Progress::Started {
+                            deadline,
+                            parked: true,
+                        };
+                    }
+                    hub.notify();
+                    let answered = Arc::clone(hub);
+                    let extension = name.to_owned();
+                    let command = request.command;
+                    let args = request.args;
+                    let spawned =
+                        thread::Builder::new()
+                            .name(format!("drive {name}"))
+                            .spawn(move || {
+                                let ack = contract::inbox::Ack(Box::new(move |answer| {
+                                    answered.deliver(
+                                        id,
+                                        match answer {
+                                            Ok(result) => Reply::Drive(Ok(result)),
+                                            Err(rejection) => Reply::Drive(Err((
+                                                rejection.code,
+                                                rejection.message,
+                                            ))),
+                                        },
+                                    );
+                                }));
+                                driver.drive(&extension, &command, args, ack);
+                            });
+                    if let Err(source) = spawned {
+                        // The spawn failed after the park: drop exactly the
+                        // callback just parked, so nothing later resumes it.
+                        take_parked(parked, id);
+                        return hub.finish(
+                            id,
+                            Err(Error::Io {
+                                path: dir.to_owned(),
+                                source,
+                            }),
+                        );
+                    }
+                    return;
+                }
+                None => {
+                    // drive_without_a_driver_is_closing: only a sealed
+                    // extension sees this; it raises `closing`.
+                    deliver(Reply::Drive(Err((
+                        contract::ErrorCode::Closing,
+                        "host.drive: the session is closing".to_owned(),
+                    ))));
+                    (None, None)
+                }
+            }
+        }
         Request::Http(request) => {
             let spawned = thread::Builder::new()
                 .name(format!("http {name}"))
@@ -429,6 +503,19 @@ fn settle(
     hub.notify();
 }
 
+/// Drops the parked callback `id`, when it is still parked, and reports
+/// whether it was there: a failed drive spawn drops exactly what `settle`
+/// just parked, so no later reply resumes it and the thread frees what it
+/// held. Only that entry goes; every other parked callback keeps its
+/// deadline.
+fn take_parked(parked: &mut Vec<Parked>, id: u64) -> bool {
+    let Some(pos) = parked.iter().position(|p| p.id == id) else {
+        return false;
+    };
+    parked.swap_remove(pos);
+    true
+}
+
 /// What a finished `host.exec` run is logged as: the extension, the program
 /// with its arguments and working directory, and how it ended.
 struct ExecMeta {
@@ -453,3 +540,7 @@ impl ExecMeta {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "schedule_tests.rs"]
+mod tests;

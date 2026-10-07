@@ -394,6 +394,11 @@ impl LuaExtension {
         self.hub.set_emit(emit);
     }
 
+    /// Hands the in-process driver to this extension's `host.drive`.
+    pub(crate) fn set_driver(&self, drive: std::sync::Arc<dyn contract::extension::Drive>) {
+        self.hub.set_driver(drive);
+    }
+
     /// Emits an ephemeral event through the late-bound emitter.
     pub(crate) fn emit(&self, event: contract::events::Event) {
         self.hub.emit(event);

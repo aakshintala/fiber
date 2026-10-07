@@ -158,7 +158,7 @@ impl Gate {
         self.writers.notify_all();
     }
 
-    pub(super) fn stopped(&self) -> bool {
+    pub(crate) fn stopped(&self) -> bool {
         self.stop.load(Ordering::Relaxed)
     }
 }

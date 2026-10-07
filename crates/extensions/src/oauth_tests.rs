@@ -266,7 +266,12 @@ fn failed(reply: Reply) -> (contract::ErrorCode, String) {
         Reply::Lock(Err(crate::host::LockError::Arg(message))) => {
             panic!("a string failure was delivered: {message}")
         }
-        Reply::Http(_) | Reply::Exec(_) | Reply::Query(_) | Reply::Lock(_) | Reply::Slept => {
+        Reply::Http(_)
+        | Reply::Drive(_)
+        | Reply::Exec(_)
+        | Reply::Query(_)
+        | Reply::Lock(_)
+        | Reply::Slept => {
             panic!("no failure was delivered")
         }
     }

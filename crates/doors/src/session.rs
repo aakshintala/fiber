@@ -239,6 +239,13 @@ impl Session {
         *lock(&self.gate.door) = Some(door);
     }
 
+    /// The in-process driver `host.drive` sends through (`docs/extensions.md`,
+    /// "Host calls"). It holds the gate weakly, so the extensions never keep
+    /// the door alive after [`Session::close`].
+    pub fn driver(&self) -> Arc<dyn contract::extension::Drive> {
+        Arc::new(crate::drive::Driver::new(Arc::downgrade(&self.gate)))
+    }
+
     /// The image child's driver, which a pasted image is processed through
     /// (`docs/architecture.md`, "The call rules"). With none set, an image
     /// part is rejected: this Fiber processes no images yet.

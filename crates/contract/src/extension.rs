@@ -16,3 +16,16 @@ pub trait ExtensionDoor: Send + Sync {
     /// Drops every later emission and delivery from the extensions; called by `Session::quiesce`.
     fn seal(&self);
 }
+
+/// Sends one driver command from inside the session; `answer` is called once.
+/// (`docs/extensions.md`, "Host calls": `host.drive`.)
+pub trait Drive: Send + Sync {
+    /// `extension` becomes `Origin::Extension` on any message the command carries.
+    fn drive(
+        &self,
+        extension: &str,
+        command: &str,
+        args: serde_json::Map<String, serde_json::Value>,
+        answer: crate::inbox::Ack,
+    );
+}

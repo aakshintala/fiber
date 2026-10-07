@@ -246,6 +246,26 @@ impl Hub {
         emitter.emit(&event);
     }
 
+    /// Hands the in-process driver to this extension's `host.drive`.
+    /// A later driver replaces the last, as `set_inbox` does.
+    pub(crate) fn set_driver(&self, drive: std::sync::Arc<dyn contract::extension::Drive>) {
+        let mut shared = self.lock();
+        if shared.disposed {
+            return;
+        }
+        shared.driver = Some(drive);
+    }
+
+    /// The driver `host.drive` sends through: none before `drive_to`, once
+    /// dropped, or once sealed, so no drive follows `fiber_exited`.
+    pub(crate) fn driver(&self) -> Option<std::sync::Arc<dyn contract::extension::Drive>> {
+        let shared = self.lock();
+        if shared.disposed || shared.sealed {
+            return None;
+        }
+        shared.driver.clone()
+    }
+
     /// Drops every later emission and delivery from this extension; called by
     /// `Session::quiesce` before `fiber_exited`. A running callback is not
     /// stopped; only its output is dropped.
@@ -389,6 +409,9 @@ pub(crate) struct Shared {
     /// The ephemeral emitter `host.status`, `host.widget` and `host.emit`
     /// write through, set late by `emit_to`.
     pub(super) emitter: Option<std::sync::Arc<dyn contract::emit::Emit>>,
+    /// The in-process driver `host.drive` sends through, set late by
+    /// `drive_to`. None before it, or once the extension is sealed.
+    pub(super) driver: Option<std::sync::Arc<dyn contract::extension::Drive>>,
     /// Ephemeral events emitted before any emitter, in call order, flushed
     /// on the first one.
     pub(super) emit_buffer: Vec<contract::events::Event>,
