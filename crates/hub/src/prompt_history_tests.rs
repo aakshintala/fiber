@@ -131,6 +131,18 @@ fn a_history_that_cannot_be_read_is_io_failed() {
 }
 
 #[test]
+fn a_history_that_cannot_be_opened_is_io_failed() {
+    // The project path is a file, so opening the history under it fails
+    // with something other than `NotFound`.
+    let home = Home::new();
+    let projects = home.dir.join("projects");
+    fs::create_dir_all(&projects).unwrap();
+    fs::write(projects.join(PROJECT), b"").unwrap();
+    let (code, _) = home.ask(json!({"project": PROJECT})).unwrap_err();
+    assert_eq!(code, ErrorCode::IoFailed);
+}
+
+#[test]
 fn a_full_page_returns_before_and_paging_reaches_the_oldest_line() {
     let home = Home::new();
     let names: Vec<String> = (0..PAGE * 2 + 3).map(|n| format!("p{n}")).collect();

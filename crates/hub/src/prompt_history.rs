@@ -17,8 +17,9 @@ use serde_json::{Map, Value};
 /// The most prompts one page holds: the session `history` command's cap.
 const PAGE: usize = 256;
 
-/// How many bytes one backward read takes.
-const CHUNK: usize = 64 * 1024;
+/// How many bytes one backward read takes: 64 KiB. A literal, since the
+/// size changes no answer, only how many reads one takes.
+const CHUNK: usize = 65_536;
 
 const UNFIT: &str = "The arguments do not fit this command.";
 const UNREADABLE: &str = "The prompt history could not be read.";
@@ -95,14 +96,15 @@ fn read_back(file: &mut (impl Read + Seek), end: u64, chunk: usize) -> io::Resul
     let mut ended = false;
     loop {
         while let Some(at) = held.iter().rposition(|byte| *byte == b'\n') {
+            // `line` is the newline at `at` and the line after it.
+            let line = held.split_off(at);
             if ended {
-                collect(&mut prompts, held.get(at + 1..).unwrap_or_default());
+                collect(&mut prompts, line.get(1..).unwrap_or_default());
                 if prompts.len() == PAGE {
                     return Ok((prompts, Some(start + at as u64 + 1)));
                 }
             }
             ended = true;
-            held.truncate(at);
         }
         if start == 0 {
             if ended {
