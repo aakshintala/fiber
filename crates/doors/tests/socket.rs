@@ -1560,8 +1560,18 @@ fn shell_exit_zero_stays_on_the_sending_connection() {
                 seen.iter().all(|line| command_id(line) != Some("c_1")),
                 "the other client sees the shell answer"
             );
-            send(&client, r#"{"id":"c_cancel","command":"cancel"}"#);
-            let rejected = response(&client, "c_cancel");
+            // The shell answers before it leaves the running list, so a
+            // `cancel` right after the answer may still be accepted. Each
+            // attempt waits on its own answer (DEADLINE) and the shell
+            // leaves the list within a few of them.
+            let rejected = (0..CANCEL_ATTEMPTS)
+                .map(|attempt| {
+                    let id = format!("c_cancel_{attempt}");
+                    send(&client, &format!(r#"{{"id":"{id}","command":"cancel"}}"#));
+                    response(&client, &id)
+                })
+                .find(|line| kind(line) != "command_accepted")
+                .expect("the finished shell left the running list");
             assert_eq!(
                 rejection(&rejected),
                 ("stale_request", "No turn is running.")
@@ -1572,6 +1582,9 @@ fn shell_exit_zero_stays_on_the_sending_connection() {
         .unwrap();
     opened.close();
 }
+
+/// Round trips a `cancel` may take to see the finished shell gone.
+const CANCEL_ATTEMPTS: usize = 10_000;
 
 #[test]
 fn shell_nonzero_exit_is_accepted() {
