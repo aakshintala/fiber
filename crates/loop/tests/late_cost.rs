@@ -523,6 +523,39 @@ fn only_a_call_without_the_vendor_s_figure_is_looked_up() {
 }
 
 #[test]
+fn a_call_whose_generation_was_never_named_is_never_looked_up() {
+    let (mut session, seen) = looked(
+        vec![
+            Scripted::failed(Failure {
+                code: ErrorCode::InvalidRequest,
+                message: "The call failed.".into(),
+                retry_after_ms: None,
+                provider: None,
+            }),
+            failed_after("gen_2"),
+        ],
+        CacheLifetime::OneHour,
+        Some(0.5),
+        no_hook,
+    );
+    let (first, first_lines) = first_turn(&mut session);
+    assert_eq!(kinds(&first_lines), FAILED_FIRST_KINDS);
+    let minted = first.payload["generation_id"].as_str().unwrap().to_owned();
+    assert!(minted.starts_with("fiber-"), "{minted}");
+    assert!(first.payload["cost"].is_null());
+    assert!(
+        session.clock.parked().is_empty(),
+        "no lookup waits, so no worker started"
+    );
+    let start = session.clock.now();
+    let lines = next_turn(&mut session);
+    assert_eq!(usage_lines(&lines).len(), 1);
+    assert_eq!(usage_lines(&lines)[0].payload["generation_id"], "gen_2");
+    settle(&session.clock, start + AFTER);
+    assert_eq!(seen.calls(), ["gen_2"]);
+}
+
+#[test]
 fn a_completed_reply_without_the_vendor_s_figure_is_looked_up() {
     let (mut session, seen) = looked(
         vec![unpriced("First.", "gen_1"), priced("Again.", "gen_2", 0.01)],

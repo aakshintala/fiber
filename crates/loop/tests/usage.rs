@@ -13,12 +13,11 @@ mod support;
 
 use std::sync::Arc;
 
-use contract::ErrorCode;
-use contract::RequestId;
 use contract::commands::{Reply, ReplyAnswer};
-use contract::events::{Decision, TurnOutcome};
+use contract::events::{Decision, Event, TurnOutcome, UsageRecorded};
 use contract::inbox::Delivery;
 use contract::shapes::{Effect, Failure};
+use contract::{Envelope, ErrorCode, RequestId, SessionId};
 use fakes::{Scripted, call_usage};
 use serde_json::{Value, json};
 
@@ -115,17 +114,27 @@ fn a_call_cancelled_after_its_generation_writes_its_usage_before_the_turn_ends()
     assert_eq!(lines.last().unwrap().payload["outcome"], "interrupted");
 }
 
+fn failure() -> Failure {
+    Failure {
+        code: ErrorCode::InvalidRequest,
+        message: "The call failed.".into(),
+        retry_after_ms: None,
+        provider: None,
+    }
+}
+
+/// Asserts `recorded` carries an id Fiber minted: `fiber-` and 16 hex
+/// digits (`docs/events.md`, `usage_recorded`).
+fn assert_minted(recorded: &Envelope) {
+    let id = recorded.payload["generation_id"].as_str().unwrap();
+    let digits = id.strip_prefix("fiber-").unwrap();
+    assert_eq!(digits.len(), 16, "{id}");
+    assert!(digits.chars().all(|c| c.is_ascii_hexdigit()), "{id}");
+}
+
 #[test]
-fn a_call_failed_before_any_generation_writes_no_usage() {
-    let mut session = Session::new(
-        vec![Scripted::failed(Failure {
-            code: ErrorCode::InvalidRequest,
-            message: "The call failed.".into(),
-            retry_after_ms: None,
-            provider: None,
-        })],
-        None,
-    );
+fn a_call_failed_before_any_generation_writes_a_minted_usage() {
+    let mut session = Session::new(vec![Scripted::failed(failure())], None);
     session.inbox.send(delivery("hi")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Failed));
     let lines = session.lines();
@@ -138,15 +147,26 @@ fn a_call_failed_before_any_generation_writes_no_usage() {
             "turn_started",
             "step_started",
             "assistant_message_started",
+            "usage_recorded",
             "assistant_message_completed",
             "turn_completed",
         ]
     );
-    assert!(lines.iter().all(|l| l.kind != "usage_recorded"));
+    let started = lines
+        .iter()
+        .find(|l| l.kind == "assistant_message_started")
+        .unwrap();
+    let recorded = lines.iter().find(|l| l.kind == "usage_recorded").unwrap();
+    assert_minted(recorded);
+    assert_eq!(recorded.action_id, started.action_id);
+    assert_eq!(recorded.payload["tokens"]["input"], 0);
+    assert_eq!(recorded.payload["tokens"]["output"], 0);
+    assert_eq!(recorded.payload["input_bytes"], 1000);
+    assert!(recorded.payload.get("cost").unwrap().is_null());
 }
 
 #[test]
-fn a_call_cancelled_before_any_generation_writes_no_usage() {
+fn a_call_cancelled_before_its_generation_writes_a_minted_usage() {
     let mut session = Session::cancelling_at_call(vec![Scripted::text("never")], 1, vec![]);
     session.inbox.send(delivery("hi")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Interrupted));
@@ -160,10 +180,21 @@ fn a_call_cancelled_before_any_generation_writes_no_usage() {
             "turn_started",
             "step_started",
             "assistant_message_started",
+            "usage_recorded",
             "turn_completed",
         ]
     );
-    assert!(lines.iter().all(|l| l.kind != "usage_recorded"));
+    let started = lines
+        .iter()
+        .find(|l| l.kind == "assistant_message_started")
+        .unwrap();
+    let recorded = lines.iter().find(|l| l.kind == "usage_recorded").unwrap();
+    assert_minted(recorded);
+    assert_eq!(recorded.action_id, started.action_id);
+    assert_eq!(recorded.payload["tokens"]["input"], 0);
+    assert_eq!(recorded.payload["tokens"]["output"], 0);
+    assert_eq!(recorded.payload["input_bytes"], 1000);
+    assert!(recorded.payload.get("cost").unwrap().is_null());
 }
 
 #[test]
@@ -323,4 +354,52 @@ fn a_failed_review_after_its_generation_writes_its_usage() {
     assert_eq!(review.payload["cost"].as_f64(), Some(want));
     assert_eq!(reviewer.requests().len(), 1);
     assert_eq!(tool.ran().len(), 1);
+}
+
+/// A call that fails before its provider names a generation.
+fn unnamed_failure() -> Scripted {
+    Scripted::failed(failure())
+}
+
+/// One turn of `session`, and its one `usage_recorded` payload.
+fn only_record(session: &mut Session) -> UsageRecorded {
+    session.inbox.send(delivery("hi")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Failed));
+    let lines = session.lines();
+    let recorded: Vec<_> = lines
+        .iter()
+        .filter(|l| l.kind == "usage_recorded")
+        .collect();
+    assert_eq!(recorded.len(), 1);
+    assert_minted(recorded[0]);
+    serde_json::from_value(Value::Object(recorded[0].payload.clone())).unwrap()
+}
+
+#[test]
+fn a_delegate_s_unnamed_call_copied_into_its_parent_is_counted_once() {
+    let mut child = Session::new(vec![unnamed_failure()], None);
+    let copied = only_record(&mut child);
+    let mut parent = Session::new(vec![unnamed_failure()], None);
+    let own = only_record(&mut parent);
+    assert_ne!(copied.generation_id, own.generation_id);
+    // The copy as the delegate's stream delivers it, then the copy a resume
+    // writes for a delegate marked `orphaned` (`docs/delegates.md`,
+    // "Streams"; `docs/loop.md`, "Spending budget").
+    let copy = UsageRecorded {
+        origin_session_id: Some(SessionId("s_child".into())),
+        ..copied
+    };
+    for _ in 0..2 {
+        parent
+            .log
+            .append(&Event::UsageRecorded(copy.clone()), None, None)
+            .unwrap();
+    }
+    r#loop::fiber_exited(&parent.log, &parent.dir, Ok(()), false, None).unwrap();
+    let all = log::read(&parent.dir).unwrap();
+    let exited = all.last().unwrap();
+    assert_eq!(exited.kind, "fiber_exited");
+    let usage = &exited.payload["usage"]["tokens"];
+    assert_eq!(usage["input"], own.tokens.input + copy.tokens.input);
+    assert_eq!(usage["output"], own.tokens.output + copy.tokens.output);
 }
