@@ -144,15 +144,27 @@ fn a_lua_providers_session_refreshes_its_cache_signed_with_only_the_cap_changed(
     let clock = FakeClock::new();
     let shared: Arc<dyn Clock> = clock.clone();
 
-    let parts = super::parts_in(
-        home.clone(),
-        workspace.clone(),
-        None,
-        None,
-        None,
-        Arc::clone(&shared),
-    )
-    .unwrap();
+    // Discovery and the credential request block, so setup runs on its own
+    // thread under a deadline instead of hanging the test.
+    let (setup_done, setup) = mpsc::channel();
+    let setup_home = home.clone();
+    let setup_workspace = workspace.clone();
+    let setup_clock = Arc::clone(&shared);
+    thread::spawn(move || {
+        drop(setup_done.send(super::parts_in(
+            setup_home,
+            setup_workspace,
+            None,
+            None,
+            None,
+            setup_clock,
+            None,
+        )));
+    });
+    let parts = setup
+        .recv_timeout(DEADLINE)
+        .expect("setup ended in time")
+        .unwrap();
 
     assert_eq!(parts.warm, Some(1), "the session warms for one lifetime");
     let log = Arc::new(

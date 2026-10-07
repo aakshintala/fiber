@@ -392,11 +392,21 @@ fn parts_with(
     let home = config::fiber_home_from_env().map_err(|e| failed(e.code(), e))?;
     let workspace = std::env::current_dir()
         .map_err(|e| failed(ErrorCode::IoFailed, format!("the current directory: {e}")))?;
-    parts_in(home, workspace, model, recorded, recorded_credential, clock)
+    parts_in(
+        home,
+        workspace,
+        model,
+        recorded,
+        recorded_credential,
+        clock,
+        prompt_files::agents_home(std::env::var_os("HOME")),
+    )
 }
 
 /// As [`parts_with`], for the Fiber home `home` and the workspace
-/// `workspace` rather than the environment's.
+/// `workspace` rather than the environment's. `agents_home` is the skills
+/// directory the prompt reads; the test passes `None` so the host's skills
+/// cannot overflow the fixture model's context.
 fn parts_in(
     home: PathBuf,
     workspace: PathBuf,
@@ -404,6 +414,7 @@ fn parts_in(
     recorded: Option<&str>,
     recorded_credential: Option<&str>,
     clock: Arc<dyn contract::clock::Clock>,
+    agents_home: Option<PathBuf>,
 ) -> Result<Parts, Failure> {
     let (sessions, project) = ::cli::project_of(&home, &workspace)?;
     let config = Config::load(Sources {
@@ -481,7 +492,7 @@ fn parts_in(
     prompt.system = prompt_files::system(&home, &project);
     prompt.append = prompt_files::append(&home, &project);
     prompt.context_window = model.model.context_window;
-    prompt.agents_home = prompt_files::agents_home(std::env::var_os("HOME"));
+    prompt.agents_home = agents_home;
     prompt.addendum = providers.addendum(&model).map(str::to_owned);
     prompt.extensions = extensions.prompts();
     prompt.extension_dirs = extensions.dirs();
