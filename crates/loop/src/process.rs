@@ -75,8 +75,10 @@ pub struct Exited {
 
 /// Writes `fiber_exited` once the loop has stopped: the final message and
 /// the usage, folded from the session's log in `dir`, and `ran`'s error or
-/// else the last turn's. Returns what it wrote: exit code 1 when either
-/// failed (`docs/errors.md`, "What a caller gets"), otherwise 0. Under a
+/// else, for a `one_turn` run (`fiber ask`), the last turn's. A session the
+/// hub started does not fail when a turn did: its clients saw each
+/// `turn_completed`. Returns what it wrote: exit code 1 with an `error`
+/// (`docs/errors.md`, "What a caller gets"), otherwise 0. Under a
 /// shutdown, `signal` is its exit code: it is the code written, with no
 /// `error` and no final message, and `suspended_on` also names a request an
 /// earlier process left unresolved (`docs/invocation.md`, "Shutdown").
@@ -84,6 +86,7 @@ pub fn fiber_exited(
     log: &Log,
     dir: &Path,
     ran: Result<(), Failure>,
+    one_turn: bool,
     signal: Option<i32>,
 ) -> Result<Exited, Error> {
     let folded = log::read(dir)
@@ -99,7 +102,8 @@ pub fn fiber_exited(
         retry_after: None,
         provider: None,
     });
-    let error = ran.err().or(unread).or(fold.error);
+    let turn_error = if one_turn { fold.error } else { None };
+    let error = ran.err().or(unread).or(turn_error);
     let (exit_code, error, final_message) = match signal {
         Some(code) => (code, None, None),
         None => (i32::from(error.is_some()), error, fold.final_message),

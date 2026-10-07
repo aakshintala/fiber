@@ -1096,7 +1096,8 @@ fn a_shutdown_during_an_approval_wait_leaves_the_request_pending() {
     assert!(ask.ran.lock().unwrap().is_empty());
     let request_id = lines.last().unwrap().payload["request_id"].clone();
 
-    let written = r#loop::fiber_exited(&session.log, &session.dir, Ok(()), Some(143)).unwrap();
+    let written =
+        r#loop::fiber_exited(&session.log, &session.dir, Ok(()), true, Some(143)).unwrap();
     assert_eq!(written.code, 143);
     let exited = log::read(&session.dir).unwrap().pop().unwrap();
     assert_eq!(exited.payload["suspended_on"], request_id);
@@ -1177,7 +1178,8 @@ fn a_reply_taken_before_the_shutdown_stands_and_the_call_never_runs() {
     assert_eq!(lines.last().unwrap().kind, "turn_completed");
     assert_eq!(lines.last().unwrap().payload["outcome"], "interrupted");
 
-    let written = r#loop::fiber_exited(&session.log, &session.dir, Ok(()), Some(143)).unwrap();
+    let written =
+        r#loop::fiber_exited(&session.log, &session.dir, Ok(()), true, Some(143)).unwrap();
     assert_eq!(written.code, 143);
     let exited = log::read(&session.dir).unwrap().pop().unwrap();
     assert_eq!(exited.kind, "fiber_exited");
@@ -1267,7 +1269,8 @@ fn a_reply_sent_after_the_shutdown_is_never_applied() {
     assert!(ask.ran.lock().unwrap().is_empty());
     let request_id = lines.last().unwrap().payload["request_id"].clone();
 
-    let written = r#loop::fiber_exited(&session.log, &session.dir, Ok(()), Some(143)).unwrap();
+    let written =
+        r#loop::fiber_exited(&session.log, &session.dir, Ok(()), true, Some(143)).unwrap();
     assert_eq!(written.code, 143);
     let exited = log::read(&session.dir).unwrap().pop().unwrap();
     assert_eq!(exited.payload["suspended_on"], request_id);

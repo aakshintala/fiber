@@ -52,14 +52,31 @@ impl Session {
             .unwrap();
     }
 
-    /// Writes `fiber_exited` and returns its exit code and payload.
+    /// Writes `fiber_exited` for a one-turn run (`fiber ask`) and returns
+    /// its exit code and payload.
     fn exit(&self, ran: Result<(), Failure>) -> (i32, Value) {
         self.exit_on(ran, None)
     }
 
+    /// As [`Self::exit`], for a session the hub started.
+    fn exit_served(&self, ran: Result<(), Failure>) -> (i32, Value) {
+        self.exit_as(ran, false, None)
+    }
+
     /// As [`Self::exit`], under a shutdown whose exit code is `signal`.
     fn exit_on(&self, ran: Result<(), Failure>, signal: Option<i32>) -> (i32, Value) {
-        let exited = fiber_exited(&self.log, &self.dir, ran, signal).unwrap();
+        self.exit_as(ran, true, signal)
+    }
+
+    /// Writes `fiber_exited` for a run that is `one_turn` or served, under
+    /// `signal`, and returns its exit code and payload.
+    fn exit_as(
+        &self,
+        ran: Result<(), Failure>,
+        one_turn: bool,
+        signal: Option<i32>,
+    ) -> (i32, Value) {
+        let exited = fiber_exited(&self.log, &self.dir, ran, one_turn, signal).unwrap();
         let lines = log::read(&self.dir).unwrap();
         let last = lines.last().unwrap();
         assert_eq!(last.kind, "fiber_exited");
@@ -147,14 +164,14 @@ fn fiber_exited_returns_the_error_it_wrote() {
         &turn_completed(TurnOutcome::Failed, Some(cause.clone())),
         None,
     );
-    let written = fiber_exited(&failed.log, &failed.dir, Ok(()), None).unwrap();
+    let written = fiber_exited(&failed.log, &failed.dir, Ok(()), true, None).unwrap();
     assert_eq!(written.code, 1);
     assert_eq!(written.error, Some(cause));
 
     let ok = Session::new();
     ok.append(&turn_started(), None);
     ok.append(&turn_completed(TurnOutcome::Completed, None), None);
-    let written = fiber_exited(&ok.log, &ok.dir, Ok(()), None).unwrap();
+    let written = fiber_exited(&ok.log, &ok.dir, Ok(()), true, None).unwrap();
     assert_eq!(written.code, 0);
     assert_eq!(written.error, None);
 
@@ -167,7 +184,7 @@ fn fiber_exited_returns_the_error_it_wrote() {
         ),
         None,
     );
-    let written = fiber_exited(&signalled.log, &signalled.dir, Ok(()), Some(143)).unwrap();
+    let written = fiber_exited(&signalled.log, &signalled.dir, Ok(()), true, Some(143)).unwrap();
     assert_eq!(written.code, 143);
     assert_eq!(written.error, None);
 }
@@ -238,6 +255,69 @@ fn a_failed_turn_exits_1_with_its_error_and_no_final_message() {
     assert_eq!(exited.get("text"), None);
     // No billed call: the cost is 0, not null.
     assert_eq!(exited["usage"]["cost"], 0.0);
+}
+
+#[test]
+fn a_served_session_whose_last_turn_failed_exits_0_with_no_error() {
+    let session = Session::new();
+    let cause = failure(ErrorCode::ProviderUnavailable, "down");
+    session.append(&turn_started(), None);
+    session.append(&text_part("Earlier."), Some("a_1"));
+    session.append(&message(), Some("a_1"));
+    session.append(&turn_completed(TurnOutcome::Failed, Some(cause)), None);
+
+    let (code, exited) = session.exit_served(Ok(()));
+
+    assert_eq!(code, 0);
+    assert_eq!(exited["exit_code"], 0);
+    assert_eq!(exited.get("error"), None);
+    // The failed turn still leaves no final message.
+    assert_eq!(exited.get("text"), None);
+    assert_eq!(exited.get("final_action_id"), None);
+}
+
+#[test]
+fn a_served_session_whose_run_failed_exits_1_with_the_runs_error() {
+    let session = Session::new();
+    session.append(&turn_started(), None);
+    session.append(
+        &turn_completed(
+            TurnOutcome::Failed,
+            Some(failure(ErrorCode::ProviderUnavailable, "down")),
+        ),
+        None,
+    );
+    let broke = failure(ErrorCode::IoFailed, "disk full");
+
+    let (code, exited) = session.exit_served(Err(broke.clone()));
+
+    assert_eq!(code, 1);
+    assert_eq!(exited["exit_code"], 1);
+    assert_eq!(exited["error"], serde_json::to_value(&broke).unwrap());
+}
+
+#[test]
+fn a_served_session_whose_earlier_turn_failed_exits_0_with_the_last_message() {
+    let session = Session::new();
+    session.append(&turn_started(), None);
+    session.append(
+        &turn_completed(
+            TurnOutcome::Failed,
+            Some(failure(ErrorCode::ProviderUnavailable, "down")),
+        ),
+        None,
+    );
+    session.append(&turn_started(), None);
+    session.append(&text_part("Hello."), Some("a_2"));
+    session.append(&message(), Some("a_2"));
+    session.append(&turn_completed(TurnOutcome::Completed, None), None);
+
+    let (code, exited) = session.exit_served(Ok(()));
+
+    assert_eq!(code, 0);
+    assert_eq!(exited.get("error"), None);
+    assert_eq!(exited["text"], "Hello.");
+    assert_eq!(exited["final_action_id"], "a_2");
 }
 
 #[test]

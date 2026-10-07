@@ -262,9 +262,9 @@ struct Running {
     guard: KillGroup,
     lines: mpsc::Receiver<String>,
     stderr: mpsc::Receiver<String>,
-    /// Stdout lines taken as the readiness signal, prepended to what
-    /// [`Running::wait`] returns.
-    first: Vec<Value>,
+    /// Stdout lines taken as the readiness signal, as written, prepended
+    /// to what [`Running::wait`] returns.
+    first: Vec<String>,
 }
 
 impl Running {
@@ -282,7 +282,7 @@ impl Running {
                 panic!("the session exited before its first stdout line")
             }
         };
-        self.first.push(serde_json::from_str(&line).unwrap());
+        self.first.push(line);
         Socket::connect(socket).expect("the session's socket accepted before the deadline")
     }
 
@@ -303,7 +303,7 @@ impl Running {
             };
             let value: Value = serde_json::from_str(&line).unwrap();
             let done = value["kind"] == kind;
-            self.first.push(value);
+            self.first.push(line);
             if done {
                 return;
             }
@@ -312,7 +312,17 @@ impl Running {
 
     /// Waits under [`DEADLINE`] for the process to exit, and asserts that
     /// nothing it started is left in its group.
-    fn wait(mut self) -> (ExitStatus, Vec<Value>, String) {
+    fn wait(self) -> (ExitStatus, Vec<Value>, String) {
+        let (status, raw, stderr) = self.wait_raw();
+        let out = raw
+            .iter()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        (status, out, stderr)
+    }
+
+    /// [`Running::wait`], with stdout's lines as written.
+    fn wait_raw(mut self) -> (ExitStatus, Vec<String>, String) {
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(self.child.wait()).unwrap());
         let status = match finished.recv_timeout(DEADLINE) {
@@ -337,7 +347,7 @@ impl Running {
         let mut out = std::mem::take(&mut self.first);
         loop {
             match self.lines.recv_timeout(DEADLINE) {
-                Ok(line) => out.push(serde_json::from_str(&line).unwrap()),
+                Ok(line) => out.push(line),
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     panic!("waited {DEADLINE:?} for the session's stdout to close")
                 }
@@ -924,6 +934,74 @@ fn a_session_started_with_a_prompt_keeps_serving_after_that_turn() {
             "turn_completed",
             "fiber_exited",
         ]
+    );
+}
+
+#[test]
+fn a_served_session_whose_last_turn_failed_exits_0() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    // A zero budget fails the turn before the provider is called, and
+    // idle exit 0 ends the session once that turn is done.
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "budget": {"usd": 0}, "session": {"idle_exit_ms": 0}}),
+    );
+    let id = doors::mint("s_");
+    let running = setup.start_session(&id, &["--prompt", "hi"]);
+
+    let (status, raw, stderr) = running.wait_raw();
+    let out: Vec<Value> = raw
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert!(
+        status.success(),
+        "{status}; fiber_exited: {}; stderr: {stderr}",
+        out.last().unwrap()
+    );
+    assert_eq!(stderr, "");
+    assert_eq!(
+        kinds(&out),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
+    // Its client saw the failure on the turn's own `turn_completed`.
+    let completed = out
+        .iter()
+        .find(|line| line["kind"] == "turn_completed")
+        .unwrap();
+    assert_eq!(completed["payload"]["outcome"], "failed");
+    assert_eq!(completed["payload"]["error"]["code"], "budget_exceeded");
+    // The process itself did not fail (`docs/errors.md`, "What a caller
+    // gets"): exit 0, no `error` and no final message.
+    let exited = &out.last().unwrap()["payload"];
+    assert_eq!(exited["exit_code"], 0);
+    assert_eq!(exited.get("error"), None);
+    assert_eq!(exited.get("text"), None);
+    assert!(server.requests().is_empty());
+
+    // Stdout filtered to this session's durable lines is the log, byte for
+    // byte.
+    let durable: String = raw
+        .iter()
+        .zip(&out)
+        .filter(|(_, l)| l.get("seq").is_some() && l["session_id"] == id.as_str())
+        .map(|(raw, _)| format!("{raw}\n"))
+        .collect();
+    assert_eq!(
+        fs::read_to_string(setup.session_dir(&id).join("events.jsonl")).unwrap(),
+        durable
     );
 }
 
