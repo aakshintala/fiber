@@ -23,11 +23,7 @@ mod note;
 pub(crate) use note::note_request_text;
 use note::{cancelled, failure};
 
-#[allow(
-    unused_imports,
-    reason = "preserves the handoff module's crate-local item path"
-)]
-pub(crate) use carry::{Carry, StepCall};
+pub(crate) use carry::Carry;
 
 /// How automatic handoff is set (`docs/configuration.md`, `handoff.*`).
 #[derive(Debug, Clone, PartialEq)]
