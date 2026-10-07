@@ -3,7 +3,8 @@ name: CI
 # docs/ci.md. Pull requests run what their diff selects. Every push to main
 # runs the backstop, which is the only run that saves the build cache.
 on:
-  pull_request: {}
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [main]
 
@@ -148,7 +149,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [ubuntu-24.04, ubuntu-24.04-arm, macos-26]
+        # A draft runs Linux x86_64 only; marking it ready runs all three (docs/ci.md).
+        runner: ${{ github.event.pull_request.draft && fromJSON('["ubuntu-24.04"]') || fromJSON('["ubuntu-24.04", "ubuntu-24.04-arm", "macos-26"]') }}
     runs-on: ${{ matrix.runner }}
     env:
       BASE: ${{ needs.select.outputs.base }}
@@ -241,7 +243,8 @@ jobs:
           fi
 
   ci:
-    name: CI
+    # On a draft the required `CI` check stays pending, so a draft's partial run never satisfies it.
+    name: ${{ github.event.pull_request.draft && 'CI (draft)' || 'CI' }}
     needs: [select, lint, test, mutants, bug_red]
     if: always()
     runs-on: ubuntu-24.04

@@ -16,7 +16,7 @@ No harness is assumed. Any agent harness can fill any role below.
 ## Roles
 
 - The orchestrator owns a ticket from start to merge. It writes the brief,
-  runs the gate, opens the pull request, answers the review and merges.
+  opens the pull request, answers the review, waits for `CI` and merges.
 - An implementer writes the code. It may be the orchestrator's own session
   or a separate one the orchestrator briefs; that is the harness's choice.
 - The reviewer reads the finished diff, read-only, and reports findings.
@@ -51,23 +51,22 @@ An implementer is given:
 - the ticket
 - the `docs/<area>.md` pages the ticket cites
 - `GLOSSARY.md`
-- the gate command, `scripts/check`
+- the gate: `scripts/check` passing in CI (`docs/workflow.md`, "The gate")
 
 `AGENTS.md` at the repository root points every harness at these files.
 
 ## The gate
 
-`scripts/check` must pass before every push, whoever wrote the code: before
-the pull request opens and before each push that repairs it. CI is not where
-a lint or test failure is found first. No change is too small for it.
+`scripts/check` passing in CI on the exact head gates the merge. Before a
+push, the implementer runs the checks for the crates they changed:
+`cargo clippy -p <crate> --all-targets -- -D warnings` and
+`cargo nextest run -p <crate>`.
 
-It runs, for the crates `docs/ci.md`, "Selection", chooses, what CI's
-per-platform job runs: `cargo fmt --check`, clippy with the workspace lints,
-the tests under nextest, and doc-tests. It also runs the cheap Linux x86_64
-checks from `docs/ci.md`: the 800-line file cap, the `unsafe` table, the
-compiled-in list, the dependency list and the docs check. CI runs the same
-script, the platform-independent checks on Linux x86_64 only, so the gate
-and CI cannot drift.
+`scripts/check` runs, for the crates `docs/ci.md`, "Selection", chooses,
+`cargo fmt --check`, clippy with the workspace lints, the tests under
+nextest, and doc-tests. It also runs the cheap checks from `docs/ci.md`: the
+800-line file cap, the `unsafe` table, the compiled-in list, the dependency
+list and the docs check. CI runs these cheap checks on Linux x86_64 only.
 
 Mutation testing runs in CI only.
 
@@ -202,6 +201,8 @@ that no longer makes sense is closed and its work replanned.
 
 ## Merging
 
-When `CI` is green and every review finding is resolved, the orchestrator
-squash-merges the pull request, deletes its branch and checks the ticket
-closed.
+A pull request opens as a draft and stays a draft until its review loop is
+done; marking it ready starts CI's full run (`docs/ci.md`). When `CI` is
+green, the full run passed on the exact head, and every review finding is
+resolved, the orchestrator squash-merges the pull request, deletes its
+branch and checks the ticket closed.

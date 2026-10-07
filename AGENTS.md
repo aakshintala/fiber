@@ -3,8 +3,9 @@
 Fiber is a terminal coding agent harness written in Rust. Read the file that
 matches the work before starting it.
 
-- How a ticket becomes a merged pull request: `docs/workflow.md`. Every code
-  change passes `scripts/check` before a pull request opens.
+- How a ticket becomes a merged pull request: `docs/workflow.md`.
+  `scripts/check` passing in CI gates every merge (`docs/workflow.md`,
+  "The gate").
 - Vocabulary: `GLOSSARY.md`. Use its terms in code, docs and issues.
 - Pages for a person using Fiber: `docs/user/`. Each links into the area docs
   rather than restating them, and is written only once its area is built.
