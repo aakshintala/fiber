@@ -332,7 +332,9 @@ fn a_hang_tool_times_out_only_after_the_clock_advances() {
     );
     setup.fake.advance(Duration::from_secs(1));
     assert_eq!(
-        result.recv_timeout(WITHIN).expect("the call ends"),
+        result
+            .recv_timeout(WITHIN)
+            .unwrap_or_else(|_| panic!("the timed-out call answers within {WITHIN:?}")),
         Err(CallError::Timeout),
     );
 }
@@ -475,7 +477,9 @@ fn a_server_that_misses_its_startup_deadline_is_left_out() {
     );
     setup.fake.advance(timeout);
     assert_eq!(
-        result.recv_timeout(WITHIN).expect("the start ends"),
+        result
+            .recv_timeout(WITHIN)
+            .unwrap_or_else(|_| panic!("the missed-deadline start ends within {WITHIN:?}")),
         StartError::Deadline,
     );
 }
@@ -654,7 +658,7 @@ fn lingering(setup: &Setup, term: &str) -> super::OpenServer {
     });
     result
         .recv_timeout(WITHIN)
-        .expect("the server starts within 5s")
+        .unwrap_or_else(|_| panic!("the lingering server starts within {WITHIN:?}"))
         .expect("the lingering server starts")
 }
 
@@ -674,9 +678,9 @@ fn a_server_that_ignores_end_of_input_stops_on_sigterm_before_the_grace() {
     let opened = lingering(&setup, "exit 0");
     let stopped = stopping(opened.server);
     // The clock never moves: only the SIGTERM ends the server.
-    stopped
-        .recv_timeout(WITHIN)
-        .expect("the stop returned without the grace passing");
+    stopped.recv_timeout(WITHIN).unwrap_or_else(|_| {
+        panic!("the stop returned without the grace passing within {WITHIN:?}")
+    });
 }
 
 #[test]
@@ -691,9 +695,9 @@ fn kill_every_server_kills_one_that_ignores_sigterm() {
     );
     crate::registry::kill_every_server();
     // Killed, its output ends: the stop returns with the clock unmoved.
-    stopped
-        .recv_timeout(WITHIN)
-        .expect("the stop returned once the server was killed");
+    stopped.recv_timeout(WITHIN).unwrap_or_else(|_| {
+        panic!("the stop returned once the server was killed within {WITHIN:?}")
+    });
 }
 
 #[test]
@@ -704,7 +708,7 @@ fn a_server_is_listed_until_its_reap() {
     assert_eq!(super::lock(&super::LIVE).len(), 1);
     stopping(opened.server)
         .recv_timeout(WITHIN)
-        .expect("the stop returned");
+        .unwrap_or_else(|_| panic!("the stop returned within {WITHIN:?}"));
     assert!(super::lock(&super::LIVE).is_empty());
 }
 
@@ -742,7 +746,7 @@ fn await_lock(locks: &mpsc::Receiver<&'static str>, which: &str) {
     loop {
         let reached = locks
             .recv_timeout(WITHIN)
-            .unwrap_or_else(|_| panic!("the reap reached the {which} lock within 5s"));
+            .unwrap_or_else(|_| panic!("the reap reached the {which} lock within {WITHIN:?}"));
         if reached == which {
             return;
         }
@@ -762,7 +766,7 @@ fn pause_signallers() -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
             .expect("the test is waiting");
         super::lock(&go_rx)
             .recv_timeout(WITHIN)
-            .expect("the test let the signaller go");
+            .unwrap_or_else(|_| panic!("the test let the signaller go within {WITHIN:?}"));
     }));
     (entered, go)
 }
@@ -774,7 +778,7 @@ fn await_gone(shared: &super::Shared) {
         .cv
         .wait_timeout_while(state, WITHIN, |state| !state.gone)
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    assert!(state.gone, "the server's output ended within 5s");
+    assert!(state.gone, "the server's output ended within {WITHIN:?}");
 }
 
 #[test]
@@ -792,7 +796,7 @@ fn kill_every_server_holds_its_pids_unreaped_while_it_signals() {
     });
     entered
         .recv_timeout(WITHIN)
-        .expect("kill_every_server reached its signal");
+        .unwrap_or_else(|_| panic!("kill_every_server reached its signal within {WITHIN:?}"));
     // A reap races the paused signaller: it stops the server, but cannot
     // reap it while the signaller holds the list.
     let locks = watch_reap_locks();
@@ -814,8 +818,10 @@ fn kill_every_server_holds_its_pids_unreaped_while_it_signals() {
     go.send(()).expect("the signaller waits");
     killed
         .recv_timeout(WITHIN)
-        .expect("kill_every_server returned");
-    reaped.recv_timeout(WITHIN).expect("the reap finished");
+        .unwrap_or_else(|_| panic!("kill_every_server returned within {WITHIN:?}"));
+    reaped
+        .recv_timeout(WITHIN)
+        .unwrap_or_else(|_| panic!("the reap finished within {WITHIN:?}"));
     assert!(!super::lock(&super::LIVE).contains(&pid));
 }
 
@@ -838,7 +844,7 @@ fn stop_holds_the_child_unreaped_while_it_sends_sigterm() {
     });
     entered
         .recv_timeout(WITHIN)
-        .expect("stop reached its SIGTERM");
+        .unwrap_or_else(|_| panic!("stop reached its SIGTERM within {WITHIN:?}"));
     // A reap races the paused SIGTERM: it cannot take the child while stop
     // holds it, so the server is neither killed nor reaped yet.
     let locks = watch_reap_locks();
@@ -860,8 +866,12 @@ fn stop_holds_the_child_unreaped_while_it_sends_sigterm() {
     assert!(!super::lock(&shared.inner).gone, "the server still runs");
     go.send(()).expect("stop waits");
     // The SIGTERM ends the server: the clock never moves.
-    stopped.recv_timeout(WITHIN).expect("stop returned");
-    reaped.recv_timeout(WITHIN).expect("the reap finished");
+    stopped
+        .recv_timeout(WITHIN)
+        .unwrap_or_else(|_| panic!("stop returned within {WITHIN:?}"));
+    reaped
+        .recv_timeout(WITHIN)
+        .unwrap_or_else(|_| panic!("the reap finished within {WITHIN:?}"));
     assert!(!super::lock(&super::LIVE).contains(&pid));
 }
 
@@ -972,7 +982,7 @@ fn a_stopped_start_waits_out_the_grace_before_its_kill() {
     assert_shutdown_failed(
         result
             .recv_timeout(WITHIN)
-            .expect("the start ends once the grace passes"),
+            .unwrap_or_else(|_| panic!("the start ends once the grace passes within {WITHIN:?}")),
     );
     assert!(
         !fakes::kill_pid(pid, "0").expect("probe"),
@@ -997,9 +1007,9 @@ fn a_stopped_start_whose_server_exits_on_sigterm_returns_without_the_clock_movin
     let before = setup.fake.now();
     crate::registry::stop_every_start();
     assert_shutdown_failed(
-        result
-            .recv_timeout(WITHIN)
-            .expect("the start ends without the clock moving"),
+        result.recv_timeout(WITHIN).unwrap_or_else(|_| {
+            panic!("the start ends without the clock moving within {WITHIN:?}")
+        }),
     );
     assert_eq!(setup.fake.now(), before, "the clock never moved");
     assert!(super::lock(&super::LIVE).is_empty());
@@ -1020,7 +1030,7 @@ fn a_start_after_stop_every_start_spawns_nothing() {
     assert_shutdown_failed(
         result
             .recv_timeout(WITHIN)
-            .expect("the start returns at once"),
+            .unwrap_or_else(|_| panic!("the start returns at once within {WITHIN:?}")),
     );
     assert!(
         super::lock(&super::LIVE).is_empty(),
