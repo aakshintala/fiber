@@ -497,6 +497,30 @@ fn the_isolation_checks_fail_a_crate_that_links_an_isolated_crate() {
 }
 
 #[test]
+fn the_preserve_order_check_fails_a_lock_where_serde_json_depends_on_indexmap() {
+    let dir = workspace();
+    let lock = |dependency: &str| {
+        format!(
+            "version = 4\n\n[[package]]\nname = \"serde_json\"\nversion = \"1.0.0\"\ndependencies = [\n \"{dependency}\",\n]\n"
+        )
+    };
+    dir.write("Cargo.lock", &lock("itoa"));
+    assert_eq!(
+        xtask(&dir, &["preserve-order"], &[], ""),
+        (0, "preserve-order: ok\n".to_owned())
+    );
+    dir.write("Cargo.lock", &lock("indexmap 2.0.0"));
+    assert_eq!(
+        xtask(&dir, &["preserve-order"], &[], ""),
+        (
+            1,
+            "preserve-order: serde_json depends on indexmap, so a dependency enables its `preserve_order` feature\n"
+                .to_owned()
+        )
+    );
+}
+
+#[test]
 fn the_docs_check_fails_a_broken_link() {
     let dir = workspace();
     dir.write("README.md", "[x][y]\n\n[y]: docs/missing.md\n");

@@ -420,3 +420,47 @@ fn a_member_whose_tree_names_a_tui_crate_is_reported_and_tui_and_main_are_exempt
         ]
     );
 }
+
+const LOCK: &str = r#"version = 4
+
+[[package]]
+name = "indexmap"
+version = "2.0.0"
+
+[[package]]
+name = "serde_json"
+version = "1.0.151"
+dependencies = [
+ "itoa",
+ "serde",
+]
+
+[[package]]
+name = "other"
+version = "1.0.0"
+dependencies = [
+ "indexmap 2.0.0",
+]
+"#;
+
+#[test]
+fn a_lock_whose_serde_json_has_no_indexmap_passes() {
+    assert!(preserve_order(LOCK).is_empty());
+}
+
+#[test]
+fn serde_json_depending_on_indexmap_is_reported() {
+    let enabled = LOCK.replacen(" \"itoa\",", " \"indexmap\",\n \"itoa\",", 1);
+    assert_eq!(
+        preserve_order(&enabled),
+        ["serde_json depends on indexmap, so a dependency enables its `preserve_order` feature"]
+    );
+    let versioned = LOCK.replacen(" \"itoa\",", " \"indexmap 2.0.0\",\n \"itoa\",", 1);
+    assert_eq!(preserve_order(&versioned).len(), 1);
+}
+
+#[test]
+fn indexmap_under_another_package_or_a_lookalike_name_is_not_reported() {
+    let lookalike = LOCK.replacen(" \"itoa\",", " \"indexmap_extra\",\n \"itoa\",", 1);
+    assert!(preserve_order(&lookalike).is_empty());
+}

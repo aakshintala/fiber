@@ -108,6 +108,8 @@ On Linux x86_64 alone:
 - the non-test source files over 800 lines are listed (`cargo xtask
   line-cap`); the list never fails the run (`docs/code-quality.md`, "Size")
 - a process signal appears only in the guarded helpers (`cargo xtask signal-sites`)
+- serde_json does not depend on `indexmap` in `Cargo.lock`, so no dependency
+  enables its `preserve_order` feature (`cargo xtask preserve-order`)
 - the compiled-in list matches the files crates compile in, Markdown
   anywhere or any file outside the crate, and every include argument is a
   string literal
