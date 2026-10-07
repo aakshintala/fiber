@@ -201,6 +201,21 @@ fn last_ts_skips_a_torn_tail_longer_than_one_step() {
 }
 
 #[test]
+fn last_ts_uses_the_last_complete_line_when_a_short_torn_tail_fits_in_one_step() {
+    // A first line longer than one step leaves `start` past 0 when the
+    // last newline is found, so `end - start` differs from `end + start`:
+    // the `+` mutant clamps to the window and returns the torn tail.
+    let home = fakes::TempDir::new("log-scan-torn-window");
+    let dir = home.path().join("s");
+    let big = format!(
+        "{{\"kind\":\"x\",\"ts\":1,\"pad\":\"{}\"}}\n",
+        "x".repeat(70 * 1024)
+    );
+    write_log(&dir, format!("{big}{}\npartial", event(9)).as_bytes());
+    assert_eq!(last_ts(&dir), Some(9));
+}
+
+#[test]
 fn last_ts_reads_a_last_line_longer_than_64_kib() {
     let home = fakes::TempDir::new("log-scan-long");
     let dir = home.path().join("s");

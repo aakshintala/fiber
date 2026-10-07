@@ -939,6 +939,7 @@ Sessions:
   ask [--model <model>] [--resume <id>] [<prompt>] [-]  Run one session of one turn; its events go to stdout
   sessions delete [--cascade] [--yes] <id>              Delete a session, and with --cascade the sessions that continue it
   sessions export <id> [<path>]                         Write the session's log and its artifacts to <path>
+  sessions prune [--older-than <duration>] [--dry-run]  Delete old sessions and diagnostic logs
   models [<search>] [--json]                            List the models the installed providers serve
 
 Fiber itself:
