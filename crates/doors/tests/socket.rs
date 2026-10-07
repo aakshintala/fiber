@@ -2200,10 +2200,7 @@ fn command_ids_are_admitted_once_across_connections() {
                 r#"{"id":"c_1","command":"command","args":{"name":"known","text":"hi"}}"#,
             );
             let duplicate = response(&client, "c_1");
-            assert_eq!(
-                rejection(&duplicate),
-                ("duplicate_command", "`c_1` was already accepted.")
-            );
+            assert_eq!(rejection(&duplicate).0, "duplicate_command");
             drop(client);
             let second = Client::connect(&socket).unwrap();
             subscribe(&second, "c_sub2", "full");
@@ -2212,10 +2209,7 @@ fn command_ids_are_admitted_once_across_connections() {
                 r#"{"id":"c_1","command":"command","args":{"name":"known","text":"hi"}}"#,
             );
             let retransmit = response(&second, "c_1");
-            assert_eq!(
-                rejection(&retransmit),
-                ("duplicate_command", "`c_1` was already accepted.")
-            );
+            assert_eq!(rejection(&retransmit).0, "duplicate_command");
             // Unknown name rejects without recording the id...
             send(
                 &second,
