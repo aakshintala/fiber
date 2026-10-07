@@ -254,12 +254,13 @@ impl Loop {
     }
 }
 
-/// Adds each of `read` to the credential deny `denied`, resolved as a
-/// configured source is at start, unless it is already there. The deny
-/// only grows.
+/// Adds each of `read` to the credential deny `denied`, unless it is
+/// already there. Each path is the canonical file the credential read
+/// actually read, so it joins as given: resolving it again could follow
+/// a symlink swapped in after the read and protect a file never read
+/// instead. The deny only grows.
 fn deny_also(denied: &mut Vec<PathBuf>, read: Vec<PathBuf>) {
     for path in read {
-        let path = crate::permission::resolved(path);
         if !denied.contains(&path) {
             denied.push(path);
         }

@@ -55,7 +55,8 @@ fn ready_line(file: &std::path::Path) -> String {
 #[test]
 fn run_returns_the_reads_value() {
     let reads = Reads::default();
-    assert_eq!(reads.run(|| 7).unwrap(), 7);
+    let value = fakes::within("the read", DEADLINE, move || reads.run(|| 7));
+    assert_eq!(value.unwrap(), 7);
 }
 
 #[test]
@@ -94,9 +95,10 @@ fn run_after_cancel_is_closing_without_running_the_read() {
     reads.cancel();
     let ran = Arc::new(AtomicBool::new(false));
     let flag = Arc::clone(&ran);
-    let failure = reads
-        .run(move || flag.store(true, Ordering::SeqCst))
-        .expect_err("a cancelled read");
+    let failure = fakes::within("the refused read", DEADLINE, move || {
+        reads.run(move || flag.store(true, Ordering::SeqCst))
+    })
+    .expect_err("a cancelled read");
     assert_eq!(failure.code, ErrorCode::Closing);
     assert!(!ran.load(Ordering::SeqCst), "the read never ran");
 }
@@ -112,6 +114,9 @@ fn a_command_leads_its_own_group_and_is_listed_until_the_group_empties() {
         ready.display(),
         go.display()
     );
+    // Before the spawn: the group is known only after it starts, so a
+    // command-line watchdog covers a spawn no later watchdog can reach.
+    let pre = fakes::Watchdog::matching(&go.display().to_string());
     let running = {
         let reads = Arc::clone(&reads);
         std::thread::spawn(move || reads.command(&mut sh(&script)))
@@ -127,9 +132,14 @@ fn a_command_leads_its_own_group_and_is_listed_until_the_group_empties() {
     assert_eq!(String::from_utf8_lossy(&output.stdout), "key\n");
     assert!(fakes::group_empties(pid, DEADLINE));
     // The next command prunes the empty group.
-    reads.command(&mut sh("true")).unwrap();
+    let probe = Arc::clone(&reads);
+    let pruned = fakes::within("the pruning command", DEADLINE, move || {
+        probe.command(&mut sh("true"))
+    });
+    pruned.unwrap();
     assert!(!listed(&reads).contains(&pid), "{:?}", listed(&reads));
     watchdog.stand_down(DEADLINE);
+    pre.stand_down(DEADLINE);
 }
 
 #[test]
@@ -138,6 +148,9 @@ fn cancel_kills_a_running_command_and_it_errs() {
     let ready = root.path().join("ready");
     let reads = Arc::new(Reads::default());
     let script = format!("echo $$ > '{}'; exec sleep 30", ready.display());
+    // Before the spawn, on the ready path the command line carries until
+    // it execs; the group watchdog below takes over once the pid is known.
+    let pre = fakes::Watchdog::matching(&ready.display().to_string());
     let running = {
         let reads = Arc::clone(&reads);
         std::thread::spawn(move || reads.command(&mut sh(&script)))
@@ -152,28 +165,39 @@ fn cancel_kills_a_running_command_and_it_errs() {
     assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
     assert!(fakes::group_empties(pid, DEADLINE));
     watchdog.stand_down(DEADLINE);
+    pre.stand_down(DEADLINE);
 }
 
 #[test]
 fn a_descendant_keeps_its_group_listed_and_cancel_kills_it() {
     let root = fakes::TempDir::new("fiber-read-descendant");
     let ready = root.path().join("ready");
-    let reads = Reads::default();
+    let reads = Arc::new(Reads::default());
     let script = format!(
         "sleep 30 >/dev/null 2>&1 & echo $$ > '{}'; echo key",
         ready.display()
     );
-    let output = reads.command(&mut sh(&script)).unwrap();
+    // Before the spawn: the shell exits fast and leaves `sleep` behind,
+    // so only a command-line watchdog covers the spawn itself.
+    let pre = fakes::Watchdog::matching(&ready.display().to_string());
+    let first = Arc::clone(&reads);
+    let output = fakes::within("the first command", DEADLINE, move || {
+        first.command(&mut sh(&script)).unwrap()
+    });
     assert_eq!(String::from_utf8_lossy(&output.stdout), "key\n");
     let group: u32 = ready_line(&ready).parse().unwrap();
     let watchdog = fakes::Watchdog::group(group);
     assert!(!fakes::group_empties(group, Duration::ZERO), "sleep lives");
     // A later command prunes only empty groups: `sleep` keeps this one.
-    reads.command(&mut sh("true")).unwrap();
+    let probe = Arc::clone(&reads);
+    fakes::within("the pruning command", DEADLINE, move || {
+        probe.command(&mut sh("true")).unwrap()
+    });
     assert!(listed(&reads).contains(&group), "{:?}", listed(&reads));
     reads.cancel();
     assert!(fakes::group_empties(group, DEADLINE), "cancel killed sleep");
     watchdog.stand_down(DEADLINE);
+    pre.stand_down(DEADLINE);
 }
 
 #[test]
@@ -181,6 +205,8 @@ fn a_cancel_between_a_read_starting_and_its_spawn_starts_no_command() {
     let root = fakes::TempDir::new("fiber-read-interleave");
     let marker = root.path().join("ran");
     let reads = Arc::new(Reads::default());
+    // No command starts here; the watchdog only fires if one ever does.
+    let pre = fakes::Watchdog::matching(&marker.display().to_string());
     let (open, gate) = mpsc::channel::<()>();
     let (started, began) = mpsc::channel();
     let job = {
@@ -200,6 +226,7 @@ fn a_cancel_between_a_read_starting_and_its_spawn_starts_no_command() {
     assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
     assert!(!marker.exists(), "the command never started");
     assert!(listed(&reads).is_empty());
+    pre.stand_down(DEADLINE);
 }
 
 #[test]

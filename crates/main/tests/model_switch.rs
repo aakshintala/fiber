@@ -1527,7 +1527,13 @@ fn a_failed_read_is_rejected_with_its_code_and_read_again_later() {
     assert!(message.contains("`sh`"), "{message}");
     assert!(!message.contains("exit 1"), "{message}");
     let before = log_kinds(&setup, &id);
-    assert!(!before.contains(&"model_changed".to_owned()), "{before:?}");
+    // The complete ordered kinds so far: startup only, since a rejected
+    // switch writes no durable line.
+    assert_eq!(
+        before,
+        ["session_started", "fiber_started", "extensions_loaded"].map(str::to_owned),
+        "{before:?}"
+    );
     fs::write(&fixed, "").unwrap();
     model(&client, "c_2", "other/om", None);
     stream.extend(until(&client, "model_changed", |line| {
@@ -1552,6 +1558,11 @@ fn a_failed_read_is_rejected_with_its_code_and_read_again_later() {
             "command_accepted",
             "fiber_exited",
         ]
+    );
+    // No turn ever started, so closing the session leaves no log behind.
+    assert!(
+        !session_dir(&setup, &id).exists(),
+        "a session never prompted keeps no log"
     );
 }
 
@@ -1594,13 +1605,28 @@ fn sigterm_during_a_switchs_read_exits_143_and_kills_the_command() {
         "the command was killed"
     );
     watchdog.stand_down(setup.deadline.cleanup());
-    let kinds = log_kinds(&setup, &id);
+    // The complete ordered kinds of the session log: the turn, then the
+    // exit, with no `model_changed`, since the switch died in its read.
     assert_eq!(
-        kinds.last().map(String::as_str),
-        Some("fiber_exited"),
-        "{kinds:?}"
+        log_kinds(&setup, &id),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+        .map(str::to_owned)
+        .to_vec(),
     );
-    assert!(!kinds.contains(&"model_changed".to_owned()), "{kinds:?}");
 }
 
 /// An `openai-responses` stream calling `read` on `path`.
