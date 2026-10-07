@@ -170,7 +170,13 @@ pub(crate) struct HubProc {
 impl HubProc {
     /// Spawns `fiber hub serve` in its own process group.
     pub(crate) fn spawn(setup: &Setup) -> Self {
-        let mut child = setup.fiber(&["hub", "serve"]).spawn().unwrap();
+        Self::spawn_command(&mut setup.fiber(&["hub", "serve"]))
+    }
+
+    /// Spawns the `hub serve` command `serve`, which runs in its own
+    /// process group.
+    pub(crate) fn spawn_command(serve: &mut Command) -> Self {
+        let mut child = serve.spawn().unwrap();
         let group = child.id();
         let _ = child.stdout.take();
         let _ = child.stderr.take();
@@ -343,12 +349,79 @@ pub(crate) fn until_close(client: &Socket) -> Vec<Value> {
 /// `fiber hub serve` when none runs. The starter records the hub for the
 /// caller to kill and wait. Returns the client and the `hub_hello`.
 pub(crate) fn connect_hub(setup: &Setup, hub: &Arc<Mutex<Option<HubProc>>>) -> (Socket, Value) {
+    connect_hub_within(setup, hub, DEADLINE)
+}
+
+/// The process clock running `scale` times slower, so the product's 5 s
+/// connect deadline spans the test's own: a hub started from a freshly
+/// built executable can take longer than 5 s on a loaded machine.
+struct StretchedClock {
+    anchor: std::time::Instant,
+    scale: u32,
+}
+
+impl contract::clock::Clock for StretchedClock {
+    fn now(&self) -> std::time::Instant {
+        self.anchor + SystemClock.now().saturating_duration_since(self.anchor) / self.scale
+    }
+
+    fn wall(&self) -> std::time::SystemTime {
+        SystemClock.wall()
+    }
+
+    fn sleep(&self, d: Duration) {
+        SystemClock.sleep(d);
+    }
+
+    fn wait_until(
+        &self,
+        until: Option<std::time::Instant>,
+        wait: &mut dyn FnMut(Option<Duration>),
+    ) {
+        let bound = until.map(|until| until.saturating_duration_since(self.now()) * self.scale);
+        wait(bound);
+    }
+
+    fn subscribe(&self, _waker: std::sync::Weak<dyn contract::clock::Wake>) {}
+}
+
+/// [`connect_hub`] with the whole connect, the hub's start and the
+/// `hub_hello` read included, bounded by `wait` on the wall clock. `connect`
+/// blocks, so it runs on a thread whose result the test receives with the
+/// deadline.
+pub(crate) fn connect_hub_within(
+    setup: &Setup,
+    hub: &Arc<Mutex<Option<HubProc>>>,
+    wait: Duration,
+) -> (Socket, Value) {
+    use contract::clock::Clock as _;
     let slot = Arc::clone(hub);
-    let mut start = move || {
-        *slot.lock().unwrap() = Some(HubProc::spawn(setup));
-        Ok(())
+    let mut serve = setup.fiber(&["hub", "serve"]);
+    let home = setup.home();
+    let (done, connected) = mpsc::channel();
+    thread::spawn(move || {
+        let mut start = move || {
+            *slot.lock().unwrap() = Some(HubProc::spawn_command(&mut serve));
+            Ok(())
+        };
+        let clock = StretchedClock {
+            anchor: SystemClock.now(),
+            scale: u32::try_from(wait.as_millis() / doors::hub::CONNECT_DEADLINE.as_millis())
+                .unwrap_or(1)
+                .max(1),
+        };
+        done.send(doors::hub::connect(&home, &mut start, &clock))
+            .unwrap();
+    });
+    let connected = match connected.recv_timeout(wait) {
+        Ok(connected) => connected.unwrap(),
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            panic!("waited {wait:?} for the hub to start and say hub_hello")
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            panic!("the hub connect thread ended without a result")
+        }
     };
-    let connected = doors::hub::connect(&setup.home(), &mut start, &SystemClock).unwrap();
     let hello = serde_json::to_value(&connected.1).unwrap();
     (Socket::from(connected.0), hello)
 }
