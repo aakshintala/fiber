@@ -171,3 +171,7 @@ impl Compat {
 #[cfg(test)]
 #[path = "endpoint_tests.rs"]
 mod endpoint_tests;
+
+#[cfg(test)]
+#[path = "error_tests.rs"]
+mod error_tests;
