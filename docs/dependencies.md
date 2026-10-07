@@ -116,6 +116,7 @@ only that crate, in KiB; the empty program is 323 KiB.
 | crossterm | terminal input, raw mode and output | ~0 | 256 | ~0 | 28 | 443 |
 | mlua | the extension runtime, Lua 5.4 vendored | 912 | 704 | ~0 | 23 | 785 |
 | clap | the command line | 452 | 448 | ~0 | 17 | 782 |
+| clap_complete | the shell completion scripts `fiber completion` prints (`docs/invocation.md`, "Fiber itself") | TBD | TBD | TBD | 18 | TBD |
 | thiserror | error types in library crates | ~0 | ~0 | ~0 | 6 | 325 |
 | signal-hook | SIGTERM, SIGINT and SIGHUP | ~0 | ~0 | ~0 | 4 | 352 |
 | ring | SHA-256, for PKCE, extension binary checksums, the content hash a repository's approvals pin, and an MCP tool's cut-short name; HMAC-SHA256, for `host.hmac_sha256`; credential fingerprints in the fake provider server | ~0 | ~0 | ~0 | 8 | 341 |

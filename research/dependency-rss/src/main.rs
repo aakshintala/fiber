@@ -303,6 +303,26 @@ fn main() {
         let cli = <Cli as clap::Parser>::parse_from(["fiber", "session", "rename", "abc", "new title"]);
         black_box(cli.cmd.is_some());
     }
+    #[cfg(feature = "clap_complete")]
+    {
+        #[derive(clap::Parser)]
+        struct Cli { #[command(subcommand)] cmd: Option<Cmd> }
+        #[derive(clap::Subcommand)]
+        enum Cmd {
+            Ask { prompt: String }, Continue, Sessions,
+            Session { #[command(subcommand)] cmd: SessionCmd },
+            Auth, Models, Usage, Status, Doctor, Config { key: Option<String> }, Mcp, Permissions,
+            Workspace, Upgrade, Serve, Remote, Install { name: String }, Update, List, Remove { name: String }, Approve,
+        }
+        #[derive(clap::Subcommand)]
+        enum SessionCmd { Show { id: String }, List, Rename { id: String, title: String }, Remove { id: String }, Resume, Recover { id: String } }
+        let mut cmd = <Cli as clap::CommandFactory>::command();
+        for shell in [clap_complete::Shell::Bash, clap_complete::Shell::Zsh, clap_complete::Shell::Fish] {
+            let mut out = Vec::new();
+            clap_complete::generate(shell, &mut cmd, "fiber", &mut out);
+            black_box(out.len());
+        }
+    }
     #[cfg(feature = "thiserror")]
     {
         #[derive(Debug, thiserror::Error)]

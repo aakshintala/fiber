@@ -18,6 +18,7 @@ crossterm = { version = "0.29", optional = true }
 rusqlite = { version = "0.37", features = ["bundled"], optional = true }
 mlua = { version = "0.11", features = ["lua54", "vendored"], optional = true }
 clap = { version = "4", features = ["derive"], optional = true }
+clap_complete = { version = "4", optional = true }
 thiserror = { version = "2", optional = true }
 signal-hook = { version = "0.3", optional = true }
 getrandom = { version = "0.3", optional = true }
@@ -44,6 +45,9 @@ image-webp = { version = "0.2", optional = true }
 fast_image_resize = { version = "6", optional = true }
 
 [features]
+# The shell completion scripts `fiber completion` prints, generated from a
+# clap command.
+clap_complete = ["clap", "dep:clap_complete"]
 image = ["dep:image"]
 # The four codecs and a resizer as separate crates, without the image crate.
 image-parts = ["dep:zune-jpeg", "dep:jpeg-encoder", "dep:png", "dep:gif", "dep:image-webp", "dep:fast_image_resize"]
