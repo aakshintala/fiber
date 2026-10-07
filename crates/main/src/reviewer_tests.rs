@@ -80,7 +80,11 @@ fn reviewer_lifetime(overrides: &[&str]) -> contract::events::CacheLifetime {
     let (providers, _notices) = extensions::Providers::load(&home).unwrap();
     let session = providers.resolve("fake/session").unwrap();
     let credential = (Some(contract::Secret::new("key".to_owned())), None);
-    let reviewer = crate::choose_reviewer(&providers, &config, &session, &credential).unwrap();
+    let mut lookup = |_: &config::ProviderData| -> Result<
+        (String, crate::lua_providers::KeyAndSigner),
+        contract::shapes::Failure,
+    > { Ok(("default".to_owned(), credential.clone())) };
+    let reviewer = crate::choose_reviewer(&providers, &config, &session, &mut lookup).unwrap();
     assert_eq!(reviewer.model.reference, "fake/reviewer");
     reviewer.cache_lifetime
 }
