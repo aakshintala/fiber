@@ -1037,11 +1037,13 @@ Also measured in Fiber, on the same machine:
   larger session.
 
 On Linux x86_64, in a 4-core shared Claude cloud container (16 GiB, so every
-timing is an upper bound), the same session gave: the opening pass and first
-frame 275 ms, the slowest frame that loaded pages 1.3 ms, the slowest jump
-frame 1.9 ms, counting every page again at a new width 22 ms, and the slowest
-append frame 1.1 ms with at most 5 pages holding cards. The counts match
-macOS: 2,915 rows in 120 pages. Peak resident memory on Linux: measured by
+timing is an upper bound), the same session gave, as the median of three runs:
+the opening pass and first frame 308 ms, the slowest frame that loaded pages
+1.3 ms, the slowest jump frame 2.6 ms, counting every page again at a new
+width 24 ms, and the slowest append frame 1.8 ms with at most 5 pages holding
+cards. The counts match macOS: 2,915 rows in 120 pages. Peak resident memory
+was 10.4 MiB (10,612 KiB), the jig's copy of the session included. Repeatable
+Linux numbers are future work in
 [#1172](https://github.com/aakshintala/fiber/issues/1172).
 
 ## Extension seams
