@@ -1,7 +1,7 @@
 //! HTML to markdown for `web_fetch` (`docs/tools.md`, "web_fetch"). One pass
 //! over the page, no tree: html5ever's tokenizer, with no document tree,
-//! feeds the single-pass writer below in slices, so the converter holds the
-//! page and its output, and no nesting depth in the input becomes recursion
+//! feeds the single-pass writer in a child module in slices, so the converter
+//! holds the page and its output, and no nesting depth in the input becomes recursion
 //! or an indent without a cap. Every character reference is decoded per the
 //! HTML standard by the tokenizer, in text and attributes.
 
@@ -13,8 +13,10 @@ use html5ever::tokenizer::{
 };
 
 mod hidden;
+mod writer;
 
 use hidden::Hidden;
+use writer::Writer;
 
 /// Levels of list indentation and block quote prefix kept; a hostile page
 /// that nests deeper than this gets no more indentation.
@@ -60,7 +62,8 @@ fn convert(html: &str, slice: usize) -> String {
         start = end;
     }
     tokenizer.end();
-    cell.into_inner().finish()
+    let converter = cell.into_inner();
+    converter.writer.finish(converter.title)
 }
 
 /// The tokenizer's sink: tags drive the writer, character tokens become
@@ -125,14 +128,7 @@ struct List {
     count: u64,
 }
 
-/// A link whose closing tag has not arrived.
-struct Link {
-    href: String,
-    text: String,
-}
-
 struct Converter {
-    out: String,
     title: Option<String>,
     /// The text of the title being collected, when one is.
     title_text: String,
@@ -142,39 +138,27 @@ struct Converter {
     /// The raw-text element whose text is arriving, if any.
     raw: Option<Raw>,
     hidden: Hidden,
-    /// Open `pre` elements; the text of one is verbatim.
-    pre: usize,
-    /// Where the content of the outermost `pre` starts in `out`.
-    pre_start: usize,
-    link: Option<Link>,
+    writer: Writer,
     lists: Vec<List>,
     /// Open lists past [`MAX_LEVELS`]: kept as a count, not entries, so a
     /// hostile page of opens cannot grow the stack. Closing tags pop this
-    /// first. `quote` and `pre` are already counts, not stacks.
+    /// first. The writer's `quote` and `pre` are already counts, not stacks.
     over: usize,
-    quote: usize,
     cells: usize,
-    /// Whether the last thing written was whitespace, so another is dropped.
-    last_space: bool,
 }
 
 impl Default for Converter {
     fn default() -> Self {
         Self {
-            out: String::new(),
             title: None,
             title_text: String::new(),
             title_done: false,
             raw: None,
             hidden: Hidden::default(),
-            pre: 0,
-            pre_start: 0,
-            link: None,
+            writer: Writer::default(),
             lists: Vec::new(),
             over: 0,
-            quote: 0,
             cells: 0,
-            last_space: true,
         }
     }
 }
@@ -261,17 +245,17 @@ impl Converter {
     }
 
     fn visible_tag(&mut self, name: &str, closing: bool, tag: &Tag) {
-        if self.pre > 0 && !matches!(name, "pre" | "br") {
+        if self.writer.in_pre() && !matches!(name, "pre" | "br") {
             return;
         }
         if matches!(name, "h1" | "h2" | "h3" | "h4" | "h5" | "h6") {
-            self.block_break();
+            self.writer.block_break();
             if !closing {
                 let level = name.as_bytes().get(1).map_or(1, |digit| digit - b'0');
                 for _ in 0..level {
-                    self.push('#');
+                    self.writer.push('#');
                 }
-                self.push(' ');
+                self.writer.push(' ');
             }
             return;
         }
@@ -279,53 +263,46 @@ impl Converter {
             name,
             "p" | "div" | "section" | "article" | "main" | "header" | "footer" | "nav" | "aside"
         ) {
-            self.block_break();
+            self.writer.block_break();
             return;
         }
         match name {
-            "br" => self.soft_break(),
+            "br" => self.writer.soft_break(),
             "hr" => {
-                self.block_break();
-                self.push_str("---");
-                self.block_break();
+                self.writer.block_break();
+                self.writer.push_str("---");
+                self.writer.block_break();
             }
-            "blockquote" => {
-                self.block_break();
-                self.quote = if closing {
-                    self.quote.saturating_sub(1)
-                } else {
-                    self.quote + 1
-                };
-            }
+            "blockquote" => self.writer.block_quote(closing),
             "ul" | "ol" => self.list(closing, name == "ol"),
             "li" => {
                 if !closing {
                     self.item();
                 } else {
-                    self.soft_break();
+                    self.writer.soft_break();
                 }
             }
             "a" => {
                 if closing {
-                    self.end_link();
+                    self.writer.end_link();
                 } else {
-                    self.start_link(tag);
+                    self.writer.start_link(tag);
                 }
             }
-            "strong" | "b" => self.push_str("**"),
-            "em" | "i" => self.push_str("_"),
-            "code" => self.push_str("`"),
+            "strong" | "b" => self.writer.push_str("**"),
+            "em" | "i" => self.writer.push_str("_"),
+            "code" => self.writer.push_str("`"),
             "img" if !closing => self.image(tag),
-            "pre" => self.pre_tag(closing),
-            "table" => self.block_break(),
+            "pre" => self.writer.pre_tag(closing),
+            "table" => self.writer.block_break(),
             "tr" => {
-                self.soft_break();
+                self.writer.soft_break();
                 self.cells = 0;
             }
             "td" | "th" if !closing => {
                 if self.cells > 0 {
-                    self.trim_inline();
-                    self.push_str(" | ");
+                    self.writer.trim_inline();
+                    self.writer.push_str(" | ");
                 }
                 self.cells += 1;
             }
@@ -340,21 +317,21 @@ impl Converter {
         if closing {
             if self.over > 0 {
                 self.over -= 1;
-                self.soft_break();
+                self.writer.soft_break();
                 return;
             }
             self.lists.pop();
             if self.lists.is_empty() {
-                self.block_break();
+                self.writer.block_break();
             } else {
-                self.soft_break();
+                self.writer.soft_break();
             }
             return;
         }
         if self.lists.is_empty() {
-            self.block_break();
+            self.writer.block_break();
         } else {
-            self.soft_break();
+            self.writer.soft_break();
         }
         if self.lists.len() >= MAX_LEVELS {
             self.over += 1;
@@ -364,10 +341,10 @@ impl Converter {
     }
 
     fn item(&mut self) {
-        self.soft_break();
+        self.writer.soft_break();
         let indent = self.lists.len().saturating_sub(1).min(MAX_LEVELS) * 2;
         for _ in 0..indent {
-            self.push(' ');
+            self.writer.push(' ');
         }
         let marker = match self.lists.last_mut() {
             Some(list) if list.ordered => {
@@ -376,83 +353,21 @@ impl Converter {
             }
             Some(_) | None => "- ".to_owned(),
         };
-        self.push_str(&marker);
-    }
-
-    fn start_link(&mut self, tag: &Tag) {
-        // No `pre` check: `visible_tag` returns before every tag but `pre`
-        // and `br` inside `pre`, so a link never opens there.
-        if self.link.is_some() {
-            return;
-        }
-        if let Some(href) = attribute(tag, "href") {
-            self.link = Some(Link {
-                href,
-                text: String::new(),
-            });
-            self.last_space = true;
-        }
-    }
-
-    fn end_link(&mut self) {
-        let Some(link) = self.link.take() else {
-            return;
-        };
-        let text = link
-            .text
-            .split_ascii_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ");
-        if text.is_empty() {
-            return;
-        }
-        self.push('[');
-        self.push_str(&text);
-        self.push_str("](");
-        self.push_str(&link.href);
-        self.push(')');
+        self.writer.push_str(&marker);
     }
 
     fn image(&mut self, tag: &Tag) {
         let alt = attribute(tag, "alt").unwrap_or_default();
         match attribute(tag, "src") {
             Some(src) => {
-                self.push_str("![");
-                self.push_str(&alt);
-                self.push_str("](");
-                self.push_str(&src);
-                self.push(')');
+                self.writer.push_str("![");
+                self.writer.push_str(&alt);
+                self.writer.push_str("](");
+                self.writer.push_str(&src);
+                self.writer.push(')');
             }
-            None => self.plain(&alt),
+            None => self.writer.plain(&alt),
         }
-    }
-
-    fn pre_tag(&mut self, closing: bool) {
-        if !closing {
-            if self.pre == 0 {
-                self.block_break();
-                self.push_str("```\n");
-                self.pre_start = self.out.len();
-            }
-            self.pre += 1;
-        } else if self.pre > 0 {
-            self.pre -= 1;
-            if self.pre == 0 {
-                self.close_fence();
-            }
-        }
-    }
-
-    fn close_fence(&mut self) {
-        while self.out.len() > self.pre_start && self.out.ends_with(['\n', '\r']) {
-            self.out.pop();
-        }
-        if self.out.len() > self.pre_start {
-            self.out.push('\n');
-        }
-        self.out.push_str("```");
-        self.last_space = false;
-        self.block_break();
     }
 
     /// Character tokens: already entity-decoded per the HTML standard by
@@ -475,136 +390,7 @@ impl Converter {
         if self.hidden.text_is_in_head(text) {
             return;
         }
-        self.plain(text);
-    }
-
-    fn plain(&mut self, text: &str) {
-        for c in text.chars() {
-            self.character(c);
-        }
-    }
-
-    fn character(&mut self, c: char) {
-        if self.pre == 0 && c.is_ascii_whitespace() {
-            if !self.last_space {
-                self.push(' ');
-            }
-        } else {
-            self.push(c);
-        }
-    }
-
-    /// Writes one character where the converter is writing: the open link's
-    /// text, or the output, which starts a quoted line with its prefix.
-    fn push(&mut self, c: char) {
-        self.last_space = c.is_ascii_whitespace();
-        if self.pre == 0
-            && let Some(link) = &mut self.link
-        {
-            link.text.push(c);
-            return;
-        }
-        // Without a quote the loop below runs zero times, so no guard is
-        // needed: one less comparison a mutant could flip for nothing.
-        if c != '\n' && (self.out.is_empty() || self.out.ends_with('\n')) {
-            for _ in 0..self.quote.min(MAX_LEVELS) {
-                self.out.push_str("> ");
-            }
-        }
-        self.out.push(c);
-    }
-
-    fn push_str(&mut self, text: &str) {
-        for c in text.chars() {
-            self.push(c);
-        }
-    }
-
-    /// Whether a break is inside `pre`, where it does nothing. `visible_tag`
-    /// returns before every tag that breaks, and `close_fence` runs after
-    /// `pre` hits zero, so a mutant of this check changes nothing.
-    #[cfg_attr(false, mutants::skip)]
-    fn break_in_pre(&self) -> bool {
-        self.pre > 0
-    }
-
-    /// Ends the line, and leaves a blank one after it. Inside a link, a
-    /// space: a link's text is one line. Inside `pre`, nothing.
-    fn block_break(&mut self) {
-        if self.break_in_pre() {
-            return;
-        }
-        if self.link.is_some() {
-            self.space();
-            return;
-        }
-        self.trim_inline();
-        if self.out.is_empty() || self.out.ends_with("\n\n") {
-            return;
-        }
-        self.out.push_str(if self.out.ends_with('\n') {
-            "\n"
-        } else {
-            "\n\n"
-        });
-        self.last_space = true;
-    }
-
-    /// Ends the line.
-    fn soft_break(&mut self) {
-        if self.pre > 0 {
-            self.out.push('\n');
-            return;
-        }
-        if self.link.is_some() {
-            self.space();
-            return;
-        }
-        self.trim_inline();
-        if self.out.is_empty() || self.out.ends_with('\n') {
-            return;
-        }
-        self.out.push('\n');
-        self.last_space = true;
-    }
-
-    fn space(&mut self) {
-        if self.last_space {
-            return;
-        }
-        self.push(' ');
-    }
-
-    fn trim_inline(&mut self) {
-        while self.out.ends_with([' ', '\t']) {
-            self.out.pop();
-        }
-        self.last_space = self
-            .out
-            .chars()
-            .next_back()
-            .is_none_or(|c| c.is_ascii_whitespace());
-    }
-
-    fn finish(mut self) -> String {
-        if self.pre > 0 {
-            self.pre = 0;
-            self.close_fence();
-        }
-        self.end_link();
-        self.out.truncate(self.out.trim_end().len());
-        if let Some(title) = self.title.take().filter(|title| !title.is_empty()) {
-            let head = if self.out.is_empty() {
-                format!("# {title}")
-            } else {
-                format!("# {title}\n\n")
-            };
-            self.out.insert_str(0, &head);
-        }
-        if !self.out.is_empty() {
-            self.out.push('\n');
-        }
-        self.out
+        self.writer.plain(text);
     }
 }
 

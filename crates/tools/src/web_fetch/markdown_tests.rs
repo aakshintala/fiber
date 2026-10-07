@@ -35,6 +35,11 @@ fn a_br_starts_a_new_line_without_a_blank_one() {
 }
 
 #[test]
+fn leading_and_repeated_breaks_add_no_empty_lines() {
+    assert_eq!(to_markdown("<br><br>a<br><br>b"), "a\nb\n");
+}
+
+#[test]
 fn at_most_one_blank_line_separates_blocks() {
     assert_eq!(
         to_markdown("<p>a</p><p></p><div></div><p> </p><p>b</p>"),
@@ -55,6 +60,14 @@ fn nested_blockquotes_double_the_prefix() {
     assert_eq!(
         to_markdown("<blockquote>a<blockquote>b</blockquote></blockquote>"),
         "> a\n\n> > b\n"
+    );
+}
+
+#[test]
+fn quoted_pre_newlines_do_not_get_a_prefix() {
+    assert_eq!(
+        to_markdown("<blockquote><pre>a\nb</pre></blockquote>"),
+        "> ```\n> a\n> b\n```\n"
     );
 }
 
