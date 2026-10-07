@@ -274,14 +274,15 @@ impl Loop {
     /// the note (`docs/handoff.md`, "A tool"). Runs once the step's calls
     /// have completed. At most one handoff runs per step: after an
     /// automatic or person's handoff in this step, it does nothing, and each
-    /// call's result stays in the conversation as an ordinary result.
-    pub(crate) fn handoff_from_tools(&mut self, turn: &TurnId) -> Result<(), Error> {
+    /// call's result stays in the conversation as an ordinary result. Returns
+    /// whether a handoff ran and restarted the context.
+    pub(crate) fn handoff_from_tools(&mut self, turn: &TurnId) -> Result<bool, Error> {
         if self.handoff.step_ran {
-            return Ok(());
+            return Ok(false);
         }
         let note = self.handoff.carry.noted();
         if note.is_empty() {
-            return Ok(());
+            return Ok(false);
         }
         let tokens_before = self.context_estimate();
         self.append(
@@ -295,7 +296,8 @@ impl Loop {
             turn,
             None,
         )?;
-        self.restarted(turn)
+        self.restarted(turn)?;
+        Ok(true)
     }
 
     /// The size of the context now: measured, or estimated when no reply has

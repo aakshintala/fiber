@@ -20,11 +20,14 @@ impl Loop {
 
     /// Collects the questions the step's completed calls set and, when any
     /// were asked, takes the queued subdirectory lines; runs the tools'
-    /// handoff; writes the taken lines; returns the turn's end when
-    /// questions were asked. Both are taken before the handoff, whose
-    /// restart empties the step and replaces the instruction-file state.
-    /// This ending builds no request, so the queued lines are written here,
-    /// before `turn_completed`, rather than at a next step's start.
+    /// handoff; writes the taken lines unless a handoff ran; returns the
+    /// turn's end when questions were asked. Both are taken before the
+    /// handoff, whose restart empties the step and replaces the
+    /// instruction-file state. This ending builds no request, so the queued
+    /// lines are written here, before `turn_completed`, rather than at a
+    /// next step's start. After a handoff they belong to the old context:
+    /// they are dropped, and a call that next touches the directory sends
+    /// the file again (`docs/system-prompt.md`, "Subdirectory files").
     pub(crate) fn after_calls(&mut self, turn: &TurnId) -> Result<Option<TurnCompleted>, Error> {
         let asked = self.handoff.carry.asked();
         if asked.is_empty() {
@@ -32,9 +35,10 @@ impl Loop {
             return Ok(None);
         }
         let queued = self.changes.take_queued();
-        self.handoff_from_tools(turn)?;
-        for event in queued {
-            self.append(&event, turn, None)?;
+        if !self.handoff_from_tools(turn)? {
+            for event in queued {
+                self.append(&event, turn, None)?;
+            }
         }
         let mut completed = crate::ended(TurnOutcome::Completed, None);
         completed.questions = Some(asked);
