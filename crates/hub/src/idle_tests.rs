@@ -514,3 +514,63 @@ fn join_after_wake_returns_when_the_socket_path_is_gone() {
         .expect("the wake returns without a join");
     assert!(!ended.load(Ordering::SeqCst), "nothing woke the acceptor");
 }
+
+#[test]
+fn a_signal_stop_keeps_peak_memory_next_to_hub_stopped_during_disconnects() {
+    let temp = Temp::new();
+    let clock = fakes::clock::FakeClock::new();
+    let (hub, got, done) = serve_with_hub_at(&temp, IDLE, Arc::clone(&clock), Level::Debug);
+    await_idle_park(&clock, clock.origin(), "at start");
+    let client = connect(&temp);
+    await_open_park(&clock, "after the arrival");
+    // A departing client writes `client_disconnected` while the hub shuts
+    // down. The writer logs its first line before the signal, then keeps
+    // writing until the hub has stopped, so its lines overlap the
+    // shutdown's writes; the handshake is channels with wall-clock
+    // deadlines, never sleeps.
+    let (stop_tx, stop_rx) = mpsc::channel();
+    let (started_tx, started_rx) = mpsc::channel();
+    let writer = thread::Builder::new()
+        .name("hub-test-disconnect".to_owned())
+        .spawn({
+            let hub = Arc::clone(&hub);
+            move || {
+                hub.diag
+                    .info("client_disconnected", "Client 7 disconnected.");
+                started_tx.send(()).unwrap();
+                while stop_rx.try_recv().is_err() {
+                    hub.diag
+                        .info("client_disconnected", "Client 7 disconnected.");
+                    thread::yield_now();
+                }
+            }
+        })
+        .unwrap();
+    started_rx
+        .recv_timeout(DEADLINE)
+        .expect("the disconnect writer starts");
+    got.store(signal_hook::consts::SIGTERM, Ordering::SeqCst);
+    hub.waker().wake();
+    assert_eq!(done.recv_timeout(DEADLINE).expect("the hub stops"), 143);
+    stop_tx.send(()).unwrap();
+    writer.join().unwrap();
+    drop(client);
+    let lines: Vec<serde_json::Value> = temp
+        .log()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert!(
+        lines
+            .iter()
+            .any(|line| line["code"] == "client_disconnected"),
+        "a disconnect line overlaps the shutdown"
+    );
+    let at = lines
+        .iter()
+        .position(|line| line["code"] == "hub_stopped")
+        .expect("the hub logs its stop");
+    assert!(at > 0, "a line comes before the stop");
+    assert_eq!(lines[at - 1]["code"], "peak_memory");
+    assert!(lines[at - 1]["data"]["peak_kib"].as_u64().unwrap() > 0);
+}

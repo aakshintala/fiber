@@ -84,9 +84,11 @@ impl Diag {
         self.log.line(Severity::Warn, Some(session), code, message);
     }
 
-    /// Writes a `peak_memory` line at the debug level.
-    pub(crate) fn peak_memory(&self) {
-        self.log.peak_memory();
+    /// Writes `peak_memory` at the debug level immediately followed by
+    /// `hub_stopped`, under one lock: a departing client's
+    /// `client_disconnected` line cannot come between the pair.
+    pub(crate) fn stopped(&self, message: &str) {
+        self.log.peak_memory_then_info("hub_stopped", message);
     }
 }
 

@@ -95,14 +95,12 @@ pub(crate) fn run(hub: &Arc<Hub>, held: &Held, idle_exit: Duration, got: &Atomic
                 stop.store(true, Ordering::SeqCst);
                 join_after_wake(&socket, acceptor);
                 hub.shutdown_clients();
-                hub.diag.peak_memory();
-                hub.diag.info("hub_stopped", "The hub stopped: signal.");
+                hub.diag.stopped("The hub stopped: signal.");
                 return Exit::Signal(signal);
             }
             Idle::Expired => {
                 join_after_wake(&socket, acceptor);
-                hub.diag.peak_memory();
-                hub.diag.info("hub_stopped", "The hub stopped: idle.");
+                hub.diag.stopped("The hub stopped: idle.");
                 return Exit::Idle;
             }
             Idle::Woken => {}

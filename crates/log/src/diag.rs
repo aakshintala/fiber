@@ -172,7 +172,9 @@ impl Diag {
         }
         if let Some(kib) = (self.peak)() {
             let data = format!("{{\"peak_kib\":{kib}}}");
-            self.write(
+            let state = lock(&self.state);
+            self.append(
+                &state,
                 "debug",
                 None,
                 "peak_memory",
@@ -180,6 +182,27 @@ impl Diag {
                 Some(&data),
             );
         }
+    }
+
+    /// Appends the `peak_memory` debug line, when debugging and the read
+    /// succeeds, immediately followed by the given `info` line, under one
+    /// lock: no other thread's line can come between the pair.
+    pub fn peak_memory_then_info(&self, code: &str, message: &str) {
+        let state = lock(&self.state);
+        if self.debugging()
+            && let Some(kib) = (self.peak)()
+        {
+            let data = format!("{{\"peak_kib\":{kib}}}");
+            self.append(
+                &state,
+                "debug",
+                None,
+                "peak_memory",
+                "The process's peak memory so far.",
+                Some(&data),
+            );
+        }
+        self.append(&state, "info", None, code, message, None);
     }
 
     fn write(
@@ -193,6 +216,21 @@ impl Diag {
         // The file and the attached id are read under the lock that also
         // covers rotation and append.
         let state = lock(&self.state);
+        self.append(&state, level, session, code, message, data);
+    }
+
+    /// Formats one line and appends it while the caller holds the state
+    /// lock, so [`Diag::peak_memory_then_info`] can write its pair with
+    /// nothing between them.
+    fn append(
+        &self,
+        state: &State,
+        level: &str,
+        session: Option<&SessionId>,
+        code: &str,
+        message: &str,
+        data: Option<&str>,
+    ) {
         let session = session.or(state.session.as_ref());
         // The fields are in the order `docs/state.md` lists them, so they
         // are formatted by hand: a `serde_json::Map` would order them

@@ -327,3 +327,45 @@ fn a_line_racing_attach_lands_whole_in_the_file_its_order_implies() {
     assert_eq!(after["code"], "after");
     assert_eq!(after["session_id"], "s_0123456789abcdef");
 }
+
+/// `peak_memory` and its `info` line stay adjacent while another thread
+/// writes: the handshake starts the other writes before the pair and
+/// stops them after, with wall-clock deadlines and no sleeps.
+#[test]
+fn peak_memory_then_info_writes_its_pair_with_nothing_between() {
+    let home = Home::new("ld-pair");
+    let diag = std::sync::Arc::new(home.diag(Process::Hub, Level::Debug).with_peak(|| Some(3)));
+    let (started_tx, started_rx) = mpsc::channel::<()>();
+    let (stop_tx, stop_rx) = mpsc::channel::<()>();
+    let writer = thread::Builder::new()
+        .name("log-test-pair".to_owned())
+        .spawn({
+            let diag = std::sync::Arc::clone(&diag);
+            move || {
+                diag.line(Severity::Info, None, "other", "Other.");
+                started_tx.send(()).unwrap();
+                while stop_rx.try_recv().is_err() {
+                    diag.line(Severity::Info, None, "other", "Other.");
+                    thread::yield_now();
+                }
+            }
+        })
+        .unwrap();
+    started_rx.recv_timeout(LIMIT).unwrap();
+    diag.peak_memory_then_info("hub_stopped", "The hub stopped: signal.");
+    stop_tx.send(()).unwrap();
+    writer.join().unwrap();
+    let lines: Vec<serde_json::Value> = fs::read_to_string(home.file("hub.log"))
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert!(lines.iter().any(|line| line["code"] == "other"));
+    let at = lines
+        .iter()
+        .position(|line| line["code"] == "hub_stopped")
+        .unwrap();
+    assert!(at > 0);
+    assert_eq!(lines[at - 1]["code"], "peak_memory");
+    assert_eq!(lines[at - 1]["data"]["peak_kib"], 3);
+}
