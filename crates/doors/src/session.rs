@@ -3,6 +3,7 @@
 //! stream copied to stdout, the clients on that socket, and what is left
 //! when it exits.
 
+use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -59,6 +60,9 @@ pub(crate) struct Gate {
     /// What the `commands` command answers with, set by
     /// [`Session::commands`]; empty until then.
     commands: Mutex<Vec<CommandInfo>>,
+    /// The id of every command this process accepted or is running, across
+    /// connections, so a repeat is rejected `duplicate_command` (`docs/invocation.md`).
+    accepted: Mutex<HashSet<String>>,
     inbox: Mutex<Option<Sender<Delivery>>>,
     /// What the `cancel` command asks: whether a turn is running. Stored
     /// by [`Session::run`], so a missing closure is no turn.
@@ -290,6 +294,17 @@ impl Session {
 }
 
 impl Gate {
+    /// Claims `id` before its command is dispatched. False when an earlier
+    /// command holds it, running or accepted.
+    pub(crate) fn reserve(&self, id: &CommandId) -> bool {
+        lock(&self.accepted).insert(id.0.clone())
+    }
+
+    /// Frees `id` once its command is rejected, so a client may retry it.
+    pub(crate) fn release(&self, id: &CommandId) {
+        lock(&self.accepted).remove(&id.0);
+    }
+
     #[cfg(test)]
     fn note(&self, point: tests::Probe) {
         let probe = lock(&self.probe).clone();
@@ -383,6 +398,7 @@ fn open_in(
         session_id,
         tools,
         commands: Mutex::new(Vec::new()),
+        accepted: Mutex::new(HashSet::new()),
         inbox: Mutex::new(None),
         cancel: Mutex::new(None),
         driver_shell: Mutex::new(None),
