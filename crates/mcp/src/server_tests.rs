@@ -24,12 +24,6 @@ use super::{CallError, ListedTool, Server, StartError};
 /// bounds a hang.
 const WITHIN: Duration = Duration::from_secs(10);
 
-/// One real-time poll of a child's exit.
-const POLL: Duration = Duration::from_millis(50);
-
-/// Poll iterations that span one `WITHIN` of `POLL` sleeps.
-const POLLS: u128 = WITHIN.as_millis() / POLL.as_millis();
-
 struct Setup {
     dir: TempDir,
     fake: std::sync::Arc<FakeClock>,
@@ -101,60 +95,6 @@ impl Setup {
             .parse()
             .expect("a pid")
     }
-}
-
-/// One call against a server that may already be gone: when the call is
-/// seen parked on its deadline the clock advances past it, and when the
-/// call answers without parking nothing moves. Either way the answer is
-/// collected; when neither happens within `WITHIN` the test fails naming
-/// the wait.
-fn gone_call(fake: &FakeClock, server: &Server, timeout: Duration) -> Result<Value, CallError> {
-    let deadline = fake.now().checked_add(timeout).expect("deadline");
-    let (done, result) = mpsc::channel();
-    thread::scope(|scope| {
-        scope.spawn(|| {
-            let call = server.call("hang", &json!({}), timeout, &fakes::CancelToken::new());
-            done.send(call).expect("collected");
-        });
-        // Either the answer arrives without a park (the server was gone
-        // before the call) or the call is parked on its deadline (then,
-        // and only then, the clock moves, once). Polling bounds neither: a
-        // late answer or park is seen on a later pass, and only a full
-        // `WITHIN` of neither fails the test naming the wait.
-        let mut advanced = false;
-        for _ in 0..POLLS {
-            if !advanced && fake.parked().contains(&Some(deadline)) {
-                fake.advance(timeout);
-                advanced = true;
-            }
-            if let Ok(answer) = result.recv_timeout(POLL) {
-                return answer;
-            }
-        }
-        // Release a caller parked on the fake clock so the scoped join can
-        // still finish, then fail naming the wait (as the cancel test does
-        // on its miss path).
-        fake.advance(timeout);
-        panic!("the call ends within {WITHIN:?}");
-    })
-}
-
-/// Up to 50 `gone_call` retries until one sees `Gone`, under one [`WITHIN`]:
-/// the reader marks the server gone when EOF arrives, which races the kill.
-fn gone_after_retries(
-    fake: std::sync::Arc<FakeClock>,
-    opened: super::OpenServer,
-) -> Result<Value, CallError> {
-    fakes::within("the server to go away", WITHIN, move || {
-        let mut answer = Err(CallError::Timeout);
-        for _ in 0..50 {
-            answer = gone_call(&fake, &opened.server, Duration::from_secs(1));
-            if answer == Err(CallError::Gone) {
-                break;
-            }
-        }
-        answer
-    })
 }
 
 fn write(dir: &TempDir, name: &str, content: &str) {
@@ -342,10 +282,14 @@ fn a_hang_tool_times_out_only_after_the_clock_advances() {
         setup.fake.await_parked(deadline, WITHIN),
         "the caller waits on the call deadline within {WITHIN:?}",
     );
-    setup.fake.advance(Duration::from_secs(59));
+    let mark = setup.fake.advance_marked(Duration::from_secs(59));
     assert!(
-        result.recv_timeout(Duration::from_millis(100)).is_err(),
-        "the call is still waiting a second before its deadline",
+        setup.fake.await_parked_since(&mark, Some(deadline), WITHIN),
+        "the call waits again a second before its deadline within {WITHIN:?}"
+    );
+    assert!(
+        result.try_recv().is_err(),
+        "the call is still waiting a second before its deadline"
     );
     setup.fake.advance(Duration::from_secs(1));
     assert_eq!(
@@ -358,8 +302,9 @@ fn a_hang_tool_times_out_only_after_the_clock_advances() {
 
 #[test]
 fn cancel_ends_the_wait_and_sends_cancelled() {
-    let setup = Setup::tools(&json!([{"name": "hang"}]));
+    let setup = Setup::tools(&json!([{"name":"hang"},{"name":"echo"}]));
     setup.result("hang", "hang");
+    setup.result("echo", r#"{"content":[]}"#);
     let opened = setup.start(Duration::from_secs(5));
     let timeout = Duration::from_secs(60);
     let deadline = setup.fake.now().checked_add(timeout).expect("deadline");
@@ -397,19 +342,30 @@ fn cancel_ends_the_wait_and_sends_cancelled() {
             panic!("cancel did not wake the waiter within {WITHIN:?} without a clock move");
         }
     }
-    // The waiter sends `notifications/cancelled` before it answers,
-    // but the fixture appends it when it reads it: poll the log.
-    let (_held, tick) = mpsc::channel::<()>();
-    for _ in 0..POLLS {
-        let log = std::fs::read_to_string(setup.dir.path().join("requests.log")).expect("requests");
-        if log.contains("notifications/cancelled") {
-            return;
-        }
-        match tick.recv_timeout(POLL) {
-            Ok(()) | Err(_) => {}
-        }
-    }
-    panic!("waited {WITHIN:?} for notifications/cancelled in requests.log");
+    // The fixture reads stdin in order and logs each line before it
+    // handles it; the waiter wrote `notifications/cancelled` before it
+    // answered, so the answer to a later call proves it is logged.
+    let after = std::sync::Arc::clone(&server);
+    let answer = fakes::within("a call after the cancel", WITHIN, move || {
+        after.call(
+            "echo",
+            &json!({}),
+            Duration::from_secs(30),
+            &fakes::CancelToken::new(),
+        )
+    });
+    assert_eq!(answer.expect("echo answers"), json!({"content": []}));
+    let log = std::fs::read_to_string(setup.dir.path().join("requests.log")).expect("requests");
+    let cancelled = log
+        .find("notifications/cancelled")
+        .unwrap_or_else(|| panic!("no notifications/cancelled: {log}"));
+    let echo = log
+        .find(r#""name":"echo""#)
+        .expect("the echo call is logged");
+    assert!(
+        cancelled < echo,
+        "cancelled is logged before the later call: {log}"
+    );
 }
 
 #[test]
@@ -511,13 +467,18 @@ fn a_server_killed_mid_call_is_gone() {
     let setup = Setup::tools(&json!([{"name": "hang"}]));
     setup.result("hang", "hang");
     let opened = setup.start(Duration::from_secs(5));
+    let shared = std::sync::Arc::clone(&opened.server.inner.as_ref().expect("running").shared);
     fakes::kill_pid(setup.pid(), "KILL").expect("the server dies");
-    // The reader marks the server gone when EOF arrives, which races the
-    // kill: retry short calls until one sees it, bounding the retries.
-    // A call made after `gone` is already set answers at once without
-    // parking, so the clock moves only when `await_parked` proves the
-    // caller is waiting on it (`docs/testing.md`, "Waits and timeouts").
-    let answer = gone_after_retries(std::sync::Arc::clone(&setup.fake), opened);
+    await_gone(&shared);
+    // Gone is set, so the call answers without parking on the clock.
+    let answer = fakes::within("a call to a gone server", WITHIN, move || {
+        opened.server.call(
+            "hang",
+            &json!({}),
+            Duration::from_secs(1),
+            &fakes::CancelToken::new(),
+        )
+    });
     assert_eq!(answer, Err(CallError::Gone));
 }
 
@@ -558,10 +519,18 @@ fn closing_stdin_lets_the_server_exit_on_eof() {
     let setup = Setup::tools(&json!([{"name": "hang"}]));
     setup.result("hang", "hang");
     let mut opened = setup.start(Duration::from_secs(5));
+    let shared = std::sync::Arc::clone(&opened.server.inner.as_ref().expect("running").shared);
     opened.server.shutdown();
-    // As above, `gone` may already be set before a retry's call starts:
-    // the clock moves only after `await_parked` proves the wait.
-    let answer = gone_after_retries(std::sync::Arc::clone(&setup.fake), opened);
+    await_gone(&shared);
+    // Gone is set, so the call answers without parking on the clock.
+    let answer = fakes::within("a call to a gone server", WITHIN, move || {
+        opened.server.call(
+            "hang",
+            &json!({}),
+            Duration::from_secs(1),
+            &fakes::CancelToken::new(),
+        )
+    });
     assert_eq!(answer, Err(CallError::Gone));
 }
 
@@ -577,17 +546,13 @@ fn dropping_the_server_reaps_the_child() {
         fakes::kill_pid(pid, "0").expect("probe"),
         "the server runs before the drop",
     );
-    drop(opened.server);
-    let (_held, probe) = mpsc::channel::<()>();
-    for _ in 0..POLLS {
-        if !fakes::kill_pid(pid, "0").expect("probe") {
-            return;
-        }
-        match probe.recv_timeout(POLL) {
-            Ok(()) | Err(_) => {}
-        }
-    }
-    panic!("waited {WITHIN:?} for pid {pid} to be reaped after the drop");
+    fakes::within("the drop to kill and reap the server", WITHIN, move || {
+        drop(opened.server)
+    });
+    assert!(
+        !fakes::kill_pid(pid, "0").expect("probe"),
+        "pid {pid} is still there after the drop"
+    );
 }
 
 #[test]
@@ -596,29 +561,37 @@ fn server_requests_are_answered_ping_ok_and_unknown_32601() {
     setup.result("echo", r#"{"content":[]}"#);
     write(&setup.dir, "ping-on-start", "");
     let opened = setup.start(Duration::from_secs(5));
-    // `Some` until the stop below moves it out: the stop runs inside the
-    // poll loop, where a plain move would read as a repeated move.
-    let mut server = Some(opened.server);
-    // The fixture's ping answers land in its own log as received lines:
-    // `ping` gets `result {}`, the unknown method gets `-32601`.
-    let (_held, tick) = mpsc::channel::<()>();
-    for _ in 0..POLLS {
-        let log = std::fs::read_to_string(setup.dir.path().join("requests.log")).expect("requests");
-        if log.contains("\"id\":\"probe\"")
-            && log.contains("\"result\":{}")
-            && log.contains("\"id\":\"bogus\"")
-            && log.contains("-32601")
-        {
-            stopping(server.take().expect("the stop runs once"))
-                .recv_timeout(WITHIN)
-                .unwrap_or_else(|_| panic!("the stop ends within {WITHIN:?}"));
-            return;
-        }
-        match tick.recv_timeout(POLL) {
-            Ok(()) | Err(_) => {}
-        }
-    }
-    panic!("waited {WITHIN:?} for ping answers in requests.log");
+    // The fixture prints `ping` and `bogus` before it reads anything. The
+    // reader answers each one through the shared writer channel before it
+    // reads the `initialize` reply, and `start` returns only after that
+    // reply. So once `start` returns, the answers are already logged.
+    let (answer, opened) = fakes::within("a call after the server's requests", WITHIN, move || {
+        let answer = opened.server.call(
+            "echo",
+            &json!({}),
+            Duration::from_secs(30),
+            &fakes::CancelToken::new(),
+        );
+        (answer, opened)
+    });
+    assert_eq!(answer.expect("echo answers"), json!({"content": []}));
+    let log = std::fs::read_to_string(setup.dir.path().join("requests.log")).expect("requests");
+    assert!(
+        log.contains("\"id\":\"probe\""),
+        "missing ping probe: {log}"
+    );
+    assert!(log.contains("\"result\":{}"), "missing ping result: {log}");
+    assert!(
+        log.contains("\"id\":\"bogus\""),
+        "missing bogus probe: {log}"
+    );
+    assert!(
+        log.contains("-32601"),
+        "missing unknown-method error: {log}"
+    );
+    stopping(opened.server)
+        .recv_timeout(WITHIN)
+        .unwrap_or_else(|_| panic!("the stop ends within {WITHIN:?}"));
 }
 
 #[test]
@@ -634,16 +607,10 @@ fn stop_leaves_no_running_child() {
     stopping(opened.server)
         .recv_timeout(WITHIN)
         .unwrap_or_else(|_| panic!("the stop ends within {WITHIN:?}"));
-    let (_held, probe) = mpsc::channel::<()>();
-    for _ in 0..POLLS {
-        if !fakes::kill_pid(pid, "0").expect("probe") {
-            return;
-        }
-        match probe.recv_timeout(POLL) {
-            Ok(()) | Err(_) => {}
-        }
-    }
-    panic!("waited {WITHIN:?} for pid {pid} to exit after the stop");
+    assert!(
+        !fakes::kill_pid(pid, "0").expect("probe"),
+        "pid {pid} is still there after the stop"
+    );
 }
 
 /// A server that keeps running after its stdin ends: the fixture under a
@@ -944,21 +911,6 @@ fn starting_silent_ignoring(
     )
 }
 
-/// Waits, at most [`WITHIN`], until a start has listed its child in
-/// [`super::LIVE`]: the signal that it spawned.
-fn await_listed() {
-    let (_held, tick) = mpsc::channel::<()>();
-    for _ in 0..POLLS {
-        if !super::lock(&super::LIVE).is_empty() {
-            return;
-        }
-        match tick.recv_timeout(POLL) {
-            Ok(()) | Err(_) => {}
-        }
-    }
-    panic!("the start listed its child within {WITHIN:?}");
-}
-
 fn assert_shutdown_failed(outcome: Result<super::OpenServer, StartError>) {
     match outcome {
         Err(StartError::StartFailed(message)) => assert_eq!(
@@ -1015,6 +967,11 @@ fn a_stopped_start_whose_server_exits_on_sigterm_returns_without_the_clock_movin
     let setup = Setup::tools(&json!([]));
     let workspace = setup.dir.path().to_path_buf();
     // Silent, but SIGTERM ends it: its output ends inside the grace.
+    let start_deadline = setup
+        .fake
+        .now()
+        .checked_add(Duration::from_secs(600))
+        .expect("deadline");
     let result = starting(
         "/bin/sleep",
         &["30".to_owned()],
@@ -1022,7 +979,15 @@ fn a_stopped_start_whose_server_exits_on_sigterm_returns_without_the_clock_movin
         &workspace,
         Duration::from_secs(600),
     );
-    await_listed();
+    assert!(
+        setup.fake.await_parked(start_deadline, WITHIN),
+        "the start waits on its startup deadline within {WITHIN:?}"
+    );
+    assert_eq!(
+        super::lock(&super::LIVE).len(),
+        1,
+        "the start listed its child before it waited"
+    );
     let before = setup.fake.now();
     crate::registry::stop_every_start();
     assert_shutdown_failed(
@@ -1062,17 +1027,10 @@ fn is_gone_turns_true_once_the_server_exits() {
     let setup = Setup::tools(&json!([{"name": "hang"}]));
     let opened = setup.start(Duration::from_secs(5));
     assert!(!opened.server.is_gone(), "a running server is not gone");
+    let shared = std::sync::Arc::clone(&opened.server.inner.as_ref().expect("running").shared);
     fakes::kill_pid(setup.pid(), "KILL").expect("the server dies");
-    let (_held, probe) = mpsc::channel::<()>();
-    for _ in 0..POLLS {
-        if opened.server.is_gone() {
-            return;
-        }
-        match probe.recv_timeout(POLL) {
-            Ok(()) | Err(_) => {}
-        }
-    }
-    panic!("waited {WITHIN:?} for the killed server to be gone");
+    await_gone(&shared);
+    assert!(opened.server.is_gone());
 }
 
 #[test]

@@ -69,20 +69,30 @@ fn stand_down_leaves_the_group_alive() {
         .spawn()
         .unwrap();
     let group = child.id();
-    Watchdog::group(group).stand_down(DEADLINE);
-    let (done, finished) = mpsc::channel();
-    thread::spawn(move || done.send(child.wait()).unwrap());
-    // Long enough that dropping the watchdog would have killed the group.
+    let watchdog = Watchdog::group(group);
+    let watchdog_pid = watchdog.child.as_ref().expect("a running watchdog").id();
+    // `stand_down` returns once the watchdog is reaped: from here nothing
+    // else can signal the group.
+    watchdog.stand_down(DEADLINE);
     assert!(
-        finished.recv_timeout(DEADLINE).is_err(),
-        "the group died after stand_down"
+        !crate::kill_pid(watchdog_pid, "0").unwrap(),
+        "stand_down returned before reaping the watchdog"
     );
-    match kill_group(group, "KILL") {
+    match kill_group(group, "TERM") {
         Ok(_) | Err(_) => {}
     }
-    assert!(
-        finished.recv_timeout(DEADLINE).is_ok(),
-        "waited {DEADLINE:?} for the slept process to exit"
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || done.send(child.wait()).unwrap());
+    let status = match finished.recv_timeout(DEADLINE) {
+        Ok(status) => status.unwrap(),
+        Err(_) => panic!("waited {DEADLINE:?} for the group to end on SIGTERM"),
+    };
+    // A SIGKILL the watchdog sent before it exited would still be pending,
+    // and it wins over the later SIGTERM.
+    assert_eq!(
+        status.signal(),
+        Some(15),
+        "the watchdog signalled the group after stand_down"
     );
 }
 
@@ -177,19 +187,29 @@ fn stand_down_leaves_matching_processes_alive() {
     let marker = dir.path().to_string_lossy().into_owned();
     let mut child = marked(&marker);
     let group = child.id();
-    Watchdog::matching(&marker).stand_down(DEADLINE);
-    let (done, finished) = mpsc::channel();
-    thread::spawn(move || done.send(child.wait()).unwrap());
-    // Long enough that dropping the watchdog would have killed the match.
+    let watchdog = Watchdog::matching(&marker);
+    let watchdog_pid = watchdog.child.as_ref().expect("a running watchdog").id();
+    // `stand_down` returns once the watchdog is reaped: from here nothing
+    // else can signal the group.
+    watchdog.stand_down(DEADLINE);
     assert!(
-        finished.recv_timeout(DEADLINE).is_err(),
-        "the matching process died after stand_down"
+        !crate::kill_pid(watchdog_pid, "0").unwrap(),
+        "stand_down returned before reaping the watchdog"
     );
-    match kill_group(group, "KILL") {
+    match kill_group(group, "TERM") {
         Ok(_) | Err(_) => {}
     }
-    assert!(
-        finished.recv_timeout(DEADLINE).is_ok(),
-        "waited {DEADLINE:?} for the matching process to exit"
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || done.send(child.wait()).unwrap());
+    let status = match finished.recv_timeout(DEADLINE) {
+        Ok(status) => status.unwrap(),
+        Err(_) => panic!("waited {DEADLINE:?} for the group to end on SIGTERM"),
+    };
+    // A SIGKILL the watchdog sent before it exited would still be pending,
+    // and it wins over the later SIGTERM.
+    assert_eq!(
+        status.signal(),
+        Some(15),
+        "the watchdog signalled the group after stand_down"
     );
 }

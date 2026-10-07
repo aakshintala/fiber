@@ -927,8 +927,19 @@ fn a_request_one_second_short_of_sixty_is_still_waiting() {
     let rig = Rig::new();
     let call = held(&rig, &server, &server.url(), Duration::from_secs(60));
     assert!(server.await_requests(1, SIGNAL));
-    rig.clock.advance(Duration::from_secs(59));
-    assert!(call.rx.recv_timeout(Duration::from_millis(200)).is_err());
+    let mark = rig.clock.advance_marked(Duration::from_secs(59));
+    assert!(
+        rig.clock.await_parked_since(
+            &mark,
+            Some(rig.clock.origin() + Duration::from_secs(60)),
+            SIGNAL
+        ),
+        "the watcher waits again a second before its deadline"
+    );
+    assert!(
+        call.rx.try_recv().is_err(),
+        "the fetch ended a second before its deadline"
+    );
     server.release();
     let output = call.wait();
     assert_eq!(code(&output), None, "{}", text(&output));
