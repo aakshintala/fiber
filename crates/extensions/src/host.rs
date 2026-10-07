@@ -20,6 +20,7 @@ use ureq::tls::{RootCerts, TlsConfig};
 
 use crate::oauth::{self, Browser};
 
+mod drive;
 pub(crate) mod exec;
 pub(crate) mod failure;
 mod fs;
@@ -193,7 +194,16 @@ pub(crate) fn install(
         in_entry,
         failure.clone(),
     ))?;
-    oauth::install(lua, &host, &tag, browser, entry, failure, note_failure)?;
+    oauth::install(
+        lua,
+        &host,
+        &tag,
+        browser,
+        entry.clone(),
+        failure.clone(),
+        note_failure,
+    )?;
+    drive::install(lua, &host, &tag, entry, failure)?;
     let timer_funcs = timers::install(lua, &host, hub)?;
     log::install(lua, &host, hub, &extension)?;
     ui::install(lua, &host, hub, &extension)?;
@@ -262,6 +272,8 @@ pub(crate) struct HttpRequest {
 pub(crate) enum Request {
     /// `host.http`.
     Http(HttpRequest),
+    /// `host.drive`: send one driver command from inside the session.
+    Drive(DriveRequest),
     /// `host.exec`: run a program in its own process group.
     Exec(exec::ExecRequest),
     /// `host.oauth.callback`: serve one request on this localhost port.
@@ -270,6 +282,15 @@ pub(crate) enum Request {
     Lock,
     /// `host.oauth.poll`: wait this long on the extension's clock.
     Sleep(Duration),
+}
+
+/// One `host.drive` call, copied out of Lua so the session's door can run
+/// it: the driver command and its arguments as JSON.
+pub(crate) struct DriveRequest {
+    /// The driver command, such as `steer`.
+    pub(crate) command: String,
+    /// Its arguments.
+    pub(crate) args: Map<String, Value>,
 }
 
 /// A `host.oauth.refresh` lock failure: a coded failure the refresh half
@@ -283,6 +304,9 @@ pub(crate) enum LockError {
 /// The answer to a [`Request`]. A failure is its code and the message Lua raises.
 pub(crate) enum Reply {
     Http(Result<(u16, Vec<u8>), (contract::ErrorCode, String)>),
+    /// How a `host.drive` call was answered: its result, or the code and
+    /// message `host.drive` raises.
+    Drive(Result<Option<contract::events::CommandResult>, (contract::ErrorCode, String)>),
     /// How a `host.exec` run ended, or the code and message `host.exec` raises.
     Exec(Result<exec::Ran, (contract::ErrorCode, String)>),
     /// The query parameters of the one request the callback served, or the
@@ -307,6 +331,7 @@ pub(crate) fn request_from(
 ) -> mlua::Result<Option<Request>> {
     Ok(Some(match (kind, arg) {
         ("http", Some(LuaValue::Table(opts))) => Request::Http(http_request(opts, timeout)?),
+        ("drive", Some(LuaValue::Table(spec))) => Request::Drive(drive_request(spec)?),
         ("exec", Some(LuaValue::Table(spec))) => Request::Exec(exec_request(spec, workspace, cap)?),
         ("callback", Some(LuaValue::Table(opts))) => Request::Callback {
             port: opts.get("port")?,
@@ -352,6 +377,24 @@ fn exec_request(spec: &Table, workspace: &Path, cap: usize) -> mlua::Result<exec
         cwd,
         cap,
     })
+}
+
+/// Reads a `host.drive` spec: the driver command and its arguments as
+/// JSON. The Lua half checked their shapes; an empty table reads as no
+/// arguments, since an empty Lua table is an empty JSON array.
+fn drive_request(spec: &Table) -> mlua::Result<DriveRequest> {
+    let command: String = spec.get("command")?;
+    let args: LuaValue = spec.get("args")?;
+    let args = match to_json(&args)? {
+        Value::Object(map) => map,
+        Value::Array(items) if items.is_empty() => Map::new(),
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Array(_) => {
+            return Err(mlua::Error::RuntimeError(
+                "host.drive: `args` must be a table".into(),
+            ));
+        }
+    };
+    Ok(DriveRequest { command, args })
 }
 
 fn http_request(opts: &Table, timeout: Option<Duration>) -> mlua::Result<HttpRequest> {
@@ -448,6 +491,7 @@ pub(crate) fn resume_values(
             LuaValue::String(lua.create_string(bytes)?),
         ])),
         Reply::Http(Err(failed_with))
+        | Reply::Drive(Err(failed_with))
         | Reply::Exec(Err(failed_with))
         | Reply::Query(Err(failed_with)) => failed(failed_with),
         Reply::Lock(Err(LockError::Coded(failed_with))) => failed(failed_with),
@@ -465,6 +509,14 @@ pub(crate) fn resume_values(
         Reply::Lock(Ok(lock)) => Ok(MultiValue::from_vec(vec![LuaValue::UserData(
             lua.create_userdata(oauth::Held::new(lock, Arc::clone(clock)))?,
         )])),
+        // `command_accepted` returns its `result` as a Lua table, or `true`
+        // when it has none.
+        Reply::Drive(Ok(None)) => Ok(MultiValue::from_vec(vec![LuaValue::Boolean(true)])),
+        Reply::Drive(Ok(Some(result))) => {
+            let json = serde_json::to_value(&result)
+                .map_err(|e| mlua::Error::RuntimeError(format!("host.drive: {e}")))?;
+            Ok(MultiValue::from_vec(vec![to_lua(lua, &json)?]))
+        }
         Reply::Exec(Ok(ran)) => {
             let returned = lua.create_table()?;
             if let Some(code) = ran.exit_code {

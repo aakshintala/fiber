@@ -483,6 +483,13 @@ impl SessionExtensions {
         }
     }
 
+    /// Hands the in-process driver to every extension's `host.drive`.
+    pub fn drive_to(&self, drive: Arc<dyn contract::extension::Drive>) {
+        for extension in &self.lua {
+            extension.set_driver(Arc::clone(&drive));
+        }
+    }
+
     /// Whether any extension registered a hook at any point.
     pub fn has_hooks(&self) -> bool {
         self.any

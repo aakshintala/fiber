@@ -312,6 +312,37 @@ fn settle(
         Arc::new(move |reply| hub.deliver(id, reply))
     };
     let (cancel, wake) = match request {
+        Request::Drive(request) => {
+            match hub.driver() {
+                Some(driver) => {
+                    let parked = Arc::clone(hub);
+                    let ack = contract::inbox::Ack(Box::new(move |answer| {
+                        parked.deliver(
+                            id,
+                            match answer {
+                                Ok(result) => Reply::Drive(Ok(result)),
+                                Err(rejection) => {
+                                    Reply::Drive(Err((rejection.code, rejection.message)))
+                                }
+                            },
+                        );
+                    }));
+                    driver.drive(name, &request.command, request.args, ack);
+                    // No off-thread wait to cancel: the parked deadline
+                    // bounds the call, and a late answer is dropped.
+                    (None, None)
+                }
+                None => {
+                    // drive_without_a_driver_is_closing: only a sealed
+                    // extension sees this; it raises `closing`.
+                    deliver(Reply::Drive(Err((
+                        contract::ErrorCode::Closing,
+                        "host.drive: the session is closing".to_owned(),
+                    ))));
+                    (None, None)
+                }
+            }
+        }
         Request::Http(request) => {
             let spawned = thread::Builder::new()
                 .name(format!("http {name}"))
