@@ -6,7 +6,7 @@ use std::process::{ChildStdin, ChildStdout};
 use std::sync::{Weak, mpsc};
 
 use crate::rpc::{Incoming, decode_line, encode_error, encode_result};
-use crate::server::Shared;
+use crate::wait::Shared;
 
 /// A stdout line past this long ends the reader, and the server counts as
 /// gone: a flood cannot grow memory without bound.

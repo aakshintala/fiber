@@ -14,6 +14,7 @@ mod server;
 mod slot;
 mod start;
 mod tool;
+mod wait;
 
 pub use effects::Hints;
 pub use registry::{kill_every_server, stop_every_start};
