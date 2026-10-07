@@ -411,6 +411,7 @@ pub const BUILT_IN_COMMANDS: &[&str] = &[
     "context",
     "usage",
     "tools",
+    "panel",
     "rules",
     "settings",
     "keys",
