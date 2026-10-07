@@ -48,12 +48,12 @@ a 20-thousand-token one fit the same ceiling.
 |---|---|---|---|
 | Session, idle, headless | 12 MiB peak RSS | Linux x86_64 | picked |
 | Terminal, idle | 9,048 KiB peak RSS | Linux x86_64 | from components |
-| Session, busy or resumed | 24 MiB peak RSS | Linux x86_64 | from components |
-| `web_fetch` converting a 10 MiB HTML page, the download cap | within the busy session's 24 MiB peak RSS | Linux x86_64 | from components |
+| Session, busy or resumed | 137 MiB peak RSS | Linux x86_64 | measured |
+| `web_fetch` converting a 10 MiB HTML page, the download cap | within the busy session's 137 MiB peak RSS | Linux x86_64 | measured |
 | Idle CPU, session and terminal | zero context switches in the idle window, on every thread | Linux x86_64 | exact |
 | Threads, idle headless session | 5, plus 2 per client, plus 1 per Lua extension in use | Linux x86_64 | exact |
 | fsyncs | 2 per model request, 2 per tool call | Linux x86_64 | exact |
-| Log bytes, 429-call turn | the turn's content plus 1 KiB per tool call | Linux x86_64 | exact |
+| Log bytes, 429-call turn | the turn's content plus 2 KiB per tool call | Linux x86_64 | exact |
 | Session start, the internal session command to its first line, no hub | 20 ms | Linux x86_64 | picked |
 | Terminal to its first frame, new session | 50 ms | Linux x86_64 | picked |
 | Terminal to its first frame, attaching | 50 ms plus 10 ms per MiB of session log | Linux x86_64 | picked |
@@ -111,9 +111,10 @@ footprint on macOS, by the method in `docs/dependencies.md`. Idle CPU is the
 voluntary and involuntary context switch counts in
 `/proc/<pid>/task/*/status`, read before and after the idle window: 10
 seconds on a pull request and 60 at release. A truly idle process switches
-zero times in either. fsyncs are
-counted at the call site and log bytes are the size of `events.jsonl`, so both
-are exact on any platform.
+zero times in either. fsyncs are the session's `fdatasync` calls, counted
+with strace in one more run of the busy turn, which is never a timing or
+memory sample, and log bytes are the size of `events.jsonl`, so both are
+exact.
 
 Linux x86_64 gates every pull request, and the backstop on `main` measures
 the same benchmarks. Linux arm64 and macOS arm64 are
