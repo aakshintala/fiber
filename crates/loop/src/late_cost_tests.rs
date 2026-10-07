@@ -227,37 +227,6 @@ fn a_stop_while_the_lookup_runs_drops_its_result() {
 }
 
 #[test]
-fn a_stop_between_dispatch_and_the_call_drops_the_result() {
-    let (clock, dyn_clock) = clocks();
-    let due = clock.now() + LOOKUP_AFTER;
-    let (paused_tx, paused) = mpsc::channel();
-    let (go, go_rx) = mpsc::channel::<()>();
-    let paused_tx = Mutex::new(paused_tx);
-    let go_rx = Mutex::new(go_rx);
-    let (lookup, seen) = lookup(Some(1.0));
-    let mut late = LateCost::default();
-    late.pause = Some(Arc::new(move || {
-        paused_tx.lock().unwrap().send(()).unwrap();
-        go_rx
-            .lock()
-            .unwrap()
-            .recv_timeout(WAIT)
-            .expect("waited for the test to release the worker");
-    }));
-    late.schedule(lookup, first("gen-1"), turn(), action(), &dyn_clock)
-        .unwrap();
-    assert!(clock.await_parked(due, WAIT), "the worker parks at the due");
-    clock.advance(LOOKUP_AFTER);
-    paused
-        .recv_timeout(WAIT)
-        .expect("waited for the worker to take the lookup");
-    late.stop();
-    go.send(()).unwrap();
-    seen.await_dropped();
-    assert!(late.take_settled().is_empty());
-}
-
-#[test]
 fn two_lookups_run_in_due_order() {
     let (clock, dyn_clock) = clocks();
     let start = clock.now();

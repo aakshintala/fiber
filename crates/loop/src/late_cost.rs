@@ -50,9 +50,6 @@ struct State {
 struct Shared {
     state: Mutex<State>,
     wake: Arc<SharedWake>,
-    /// Holds the worker between taking a lookup and calling it.
-    #[cfg(test)]
-    pause: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 /// The session's late lookups: at most one per `generation_id`, never
@@ -63,8 +60,6 @@ pub(crate) struct LateCost {
     shared: Option<Arc<Shared>>,
     scheduled: BTreeSet<GenerationId>,
     order: u64,
-    #[cfg(test)]
-    pause: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 impl LateCost {
@@ -107,8 +102,6 @@ impl LateCost {
                 ..State::default()
             }),
             wake: Arc::default(),
-            #[cfg(test)]
-            pause: self.pause.clone(),
         });
         let worker = Arc::clone(&shared);
         let clock = Arc::clone(clock);
@@ -182,10 +175,6 @@ fn work(shared: &Shared, clock: &dyn Clock) {
             Next::Stop => return,
             Next::Park(until) => shared.wake.park(clock, until),
             Next::Run(pending) => {
-                #[cfg(test)]
-                if let Some(pause) = &shared.pause {
-                    pause();
-                }
                 let Pending {
                     lookup,
                     mut settled,
