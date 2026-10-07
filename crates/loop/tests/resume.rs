@@ -3569,14 +3569,21 @@ fn a_second_resume_over_a_logged_orphan_keeps_it_after_the_results() {
     let conversation = &requests[0].conversation;
     let rebuilt = r#loop::rebuild(&lines, MODEL).unwrap();
     assert_eq!(&rebuilt[..conversation.len()], conversation.as_slice());
-    // The notice follows the open call's result. (The opening message the
-    // finishing turn writes between a_1 and its result is #696's.)
+    // The rebuild puts the opening message at index 0, so the a_1 call is
+    // followed directly by its result, and the notice follows the result.
+    let call = conversation
+        .iter()
+        .position(
+            |input| matches!(input, Input::ToolCall { action_id, .. } if action_id.0 == "a_1"),
+        )
+        .unwrap();
     let result = conversation
         .iter()
         .position(
             |input| matches!(input, Input::ToolResult { action_id, .. } if action_id.0 == "a_1"),
         )
         .unwrap();
+    assert_eq!(result, call + 1);
     assert_eq!(result, conversation.len() - 2);
     assert_eq!(
         conversation.last(),
