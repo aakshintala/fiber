@@ -63,10 +63,10 @@ impl Client {
         stream.flush()
     }
 
-    /// The next line, parsed as JSON, or `None` when none arrives within
-    /// `within` or the socket is closed. A line that is not JSON is returned
-    /// as a string, so a test can see what arrived.
-    pub fn recv(&self, within: Duration) -> Option<Value> {
+    /// The first line `matches` accepts, parsed as JSON, or as a string when it
+    /// is not JSON. The lines before it are dropped. `None` when none arrives
+    /// within `within` or the socket closes first; then nothing is consumed.
+    pub fn recv_until(&self, within: Duration, matches: impl Fn(&Value) -> bool) -> Option<Value> {
         if !lock(&self.state).slow {
             self.ensure_reader();
         }
@@ -74,12 +74,27 @@ impl Client {
         let (mut guard, _) = self
             .ready
             .wait_timeout_while(guard, within, |state| {
-                state.lines.is_empty() && !state.closed
+                !state.lines.iter().any(|line| {
+                    matches(&serde_json::from_str(line).unwrap_or(Value::String(line.clone())))
+                }) && !state.closed
             })
             .unwrap_or_else(PoisonError::into_inner);
+        let at = guard.lines.iter().position(|line| {
+            matches(&serde_json::from_str(line).unwrap_or(Value::String(line.clone())))
+        })?;
+        for _ in 0..at {
+            guard.lines.pop_front();
+        }
         let line = guard.lines.pop_front()?;
         drop(guard);
         Some(serde_json::from_str(&line).unwrap_or(Value::String(line)))
+    }
+
+    /// The next line, parsed as JSON, or `None` when none arrives within
+    /// `within` or the socket is closed. A line that is not JSON is returned
+    /// as a string, so a test can see what arrived.
+    pub fn recv(&self, within: Duration) -> Option<Value> {
+        self.recv_until(within, |_| true)
     }
 
     /// When `paused`, reads nothing from the socket until `slow(false)`.

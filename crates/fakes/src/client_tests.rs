@@ -8,6 +8,7 @@ use serde_json::Value;
 
 use super::*;
 use crate::TempDir;
+use crate::within;
 
 const DEADLINE: Duration = Duration::from_secs(2);
 
@@ -151,4 +152,55 @@ fn drop_closes_the_socket() {
     let mut buf = [0u8; 8];
     let n = server.read(&mut buf).expect("drop closes the socket");
     assert_eq!(n, 0, "drop closes the socket");
+}
+
+#[test]
+fn recv_until_skips_non_matching_lines_and_returns_the_match() {
+    let dir = TempDir::new("fc");
+    let path = dir.path().join("s");
+    let listener = UnixListener::bind(&path).unwrap();
+    let client = Client::connect(&path).unwrap();
+    let mut server = accept_within(&listener);
+    server
+        .write_all(b"{\"n\":1}\n{\"n\":2}\n{\"n\":3}\n{\"n\":4}\n")
+        .unwrap();
+    let got = client
+        .recv_until(DEADLINE, |line| {
+            line.get("n").and_then(Value::as_u64) == Some(3)
+        })
+        .expect("the matching line arrives");
+    assert_eq!(got["n"], 3);
+    let next = client.recv(DEADLINE).expect("the line after the match");
+    assert_eq!(
+        next["n"], 4,
+        "lines before the match are dropped, later ones kept"
+    );
+}
+
+#[test]
+fn recv_until_without_a_match_consumes_nothing() {
+    let dir = TempDir::new("fc");
+    let path = dir.path().join("s");
+    let listener = UnixListener::bind(&path).unwrap();
+    let client = Client::connect(&path).unwrap();
+    let mut server = accept_within(&listener);
+    server.write_all(b"{\"n\":1}\n{\"n\":2}\n").unwrap();
+    let got = client.recv_until(Duration::from_millis(100), |_| false);
+    assert!(got.is_none(), "no match returns none");
+    let first = client.recv(DEADLINE).expect("the first queued line");
+    assert_eq!(first["n"], 1, "a miss consumes nothing");
+}
+
+#[test]
+fn recv_until_returns_none_at_once_when_the_socket_closes() {
+    let dir = TempDir::new("fc");
+    let path = dir.path().join("s");
+    let listener = UnixListener::bind(&path).unwrap();
+    let client = Client::connect(&path).unwrap();
+    let server = accept_within(&listener);
+    drop(server);
+    let got = within("a closed socket", Duration::from_secs(10), move || {
+        client.recv_until(Duration::from_secs(60), |_| false)
+    });
+    assert!(got.is_none(), "a close with no match returns none");
 }

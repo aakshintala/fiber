@@ -40,7 +40,35 @@ use serde_json::{Map, Value, json};
 use super::{line_text, notice_text};
 use crate::{Loop, Model};
 
-const DEADLINE: Duration = Duration::from_secs(10);
+const DEADLINE: Duration = Duration::from_secs(5);
+
+/// Reads `watcher` on its own thread with blocking `recv` until `done`
+/// accepts a line, under one [`DEADLINE`] naming `what`. Returns the
+/// watcher and every line read, the accepted one last.
+fn read_until(
+    watcher: Watcher,
+    what: &str,
+    done: impl Fn(&Envelope) -> bool + Send + 'static,
+) -> (Watcher, Vec<Envelope>) {
+    let what_owned = what.to_owned();
+    fakes::within(what, DEADLINE, move || {
+        let mut watcher = watcher;
+        let mut lines = Vec::new();
+        loop {
+            match watcher.recv() {
+                Ok(Some(line)) => {
+                    let last = done(&line);
+                    lines.push(line);
+                    if last {
+                        return (watcher, lines);
+                    }
+                }
+                Ok(None) => panic!("the log ended before {what_owned}"),
+                Err(err) => panic!("the log failed before {what_owned}: {err}"),
+            }
+        }
+    })
+}
 const JOB: &str = "j_5e10c0ffee123456";
 const OTHER: &str = "j_0ddba11cafe00000";
 
@@ -273,7 +301,7 @@ struct World {
     provider: Arc<ScriptedProvider>,
     looped: Option<Loop>,
     /// Every line written, ephemeral ones too, from the loop's start.
-    watched: Watcher,
+    watched: Option<Watcher>,
     clock: Arc<fakes::clock::FakeClock>,
 }
 
@@ -293,7 +321,7 @@ impl World {
         let log = Arc::new(
             Log::create(home.path(), SessionId("s_test".into()), Arc::clone(&clock)).unwrap(),
         );
-        let watched = log.watch();
+        let watched = Some(log.watch());
         let provider = Arc::new(ScriptedProvider::new(script));
         let (inbox, rx) = mpsc::channel();
         let during = During {
@@ -346,25 +374,17 @@ impl World {
     /// The lines written since the last call, ephemeral ones too, through
     /// the next `turn_completed`: call it after a turn ends.
     fn watched(&mut self) -> Vec<Envelope> {
-        let mut lines = Vec::new();
-        loop {
-            let line = self
-                .watched
-                .recv_timeout(DEADLINE)
-                .expect("a turn_completed line in time")
-                .expect("the log outlives the turn")
-                .expect("the log ended before turn_completed");
-            // `run` starts the status observer, whose lines race the
-            // loop's own and are not what these tests pin.
-            if line.kind == "session_status" {
-                continue;
-            }
-            let done = line.kind == "turn_completed";
-            lines.push(line);
-            if done {
-                return lines;
-            }
-        }
+        let watcher = self.watched.take().unwrap();
+        let (watcher, lines) = read_until(watcher, "a turn_completed line", |line| {
+            line.kind == "turn_completed"
+        });
+        self.watched = Some(watcher);
+        // `run` starts the status observer, whose lines race the
+        // loop's own and are not what these tests pin.
+        lines
+            .into_iter()
+            .filter(|line| line.kind != "session_status")
+            .collect()
     }
 
     /// Starts one turn on its own thread.
@@ -890,21 +910,15 @@ fn a_notice_during_the_final_reply_continues_the_turn() {
 /// Watches the log for `permission_requested`, then runs `send` with its
 /// request id: the signal the loop is waiting for a reply.
 fn on_request(log: &Log, send: impl FnOnce(RequestId) + Send + 'static) -> thread::JoinHandle<()> {
-    let mut watcher = log.watch();
+    let watcher = log.watch();
     thread::spawn(move || {
-        loop {
-            let line = watcher
-                .recv_timeout(DEADLINE)
-                .expect("a permission_requested line in time")
-                .expect("the log outlives the request")
-                .expect("the log ended before permission_requested");
-            if line.kind == "permission_requested" {
-                send(RequestId(
-                    line.payload["request_id"].as_str().unwrap().into(),
-                ));
-                return;
-            }
-        }
+        let (_, lines) = read_until(watcher, "a permission_requested line", |line| {
+            line.kind == "permission_requested"
+        });
+        let line = lines.last().unwrap();
+        send(RequestId(
+            line.payload["request_id"].as_str().unwrap().into(),
+        ));
     })
 }
 
@@ -1776,7 +1790,9 @@ fn a_job_listed_while_idle_holds_the_deadline_gets_the_check_and_its_end_restart
     world.send(Delivery::Cancelled);
     // The wait read the job running past the deadline, and did not end:
     // the session was unattended that long, so the check is given.
-    while read.recv_timeout(DEADLINE).expect("the wait read the jobs") == 0 {}
+    fakes::within("the wait to read the jobs", DEADLINE, move || {
+        while read.recv_timeout(DEADLINE).expect("the wait read the jobs") == 0 {}
+    });
     assert_check(&world.next_turn(), JOB);
     // The job ends with its final state already claimed: no turn starts,
     // and the delay counts from when the wait saw no job running.

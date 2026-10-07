@@ -28,10 +28,10 @@ use crate::fake::FakeStarter;
 use crate::listen::Held;
 
 /// One named deadline per wait: the hub answers before it.
-const DEADLINE: Duration = Duration::from_secs(10);
+const DEADLINE: Duration = Duration::from_secs(5);
 
 /// How long `await_parked` waits for the hub to park, in wall time.
-const WITHIN: Duration = Duration::from_secs(10);
+const WITHIN: Duration = Duration::from_secs(5);
 
 /// Thirty idle minutes, the documented default.
 const IDLE: Duration = Duration::from_millis(1_800_000);

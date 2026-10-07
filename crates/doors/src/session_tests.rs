@@ -36,7 +36,7 @@ use serde_json::{Map, Value};
 
 use super::{Gate, Session};
 
-const DEADLINE: Duration = Duration::from_secs(10);
+const DEADLINE: Duration = Duration::from_secs(5);
 
 /// How long a test waits for `close` to return once the grace has passed:
 /// shorter than [`DEADLINE`], the blocked test writer's own wait, so that
@@ -282,12 +282,15 @@ fn many_connections_leave_nothing_held() {
                 );
             }
             drop(client);
-            for i in 0..40 {
-                let client = Client::connect(&socket).unwrap();
-                subscribe(&client, &format!("c_{i}"), "full");
-                let _ack = recv(&client);
-                drop(client);
-            }
+            let socket = socket.clone();
+            fakes::within("forty connections", DEADLINE, move || {
+                for i in 0..40 {
+                    let client = Client::connect(&socket).unwrap();
+                    subscribe(&client, &format!("c_{i}"), "full");
+                    let _ack = recv(&client);
+                    drop(client);
+                }
+            });
             wait_released(&gate, before);
             Ok(())
         })
@@ -1754,14 +1757,17 @@ fn after_quiesce_a_client_leaving_writes_no_clients_line() {
     // The ack precedes the connection's own `clients` line, so the test
     // reads that line before quiesce: one still unwritten would be taken
     // for a line that followed quiesce.
-    loop {
-        let line = lines
-            .recv_timeout(DEADLINE)
-            .expect("the joining client's clients line arrives");
-        if line.kind == "clients" {
-            break;
+    let lines = fakes::within("the joining client's clients line", DEADLINE, move || {
+        loop {
+            let line = lines
+                .recv_timeout(DEADLINE)
+                .expect("the joining client's clients line arrives");
+            if line.kind == "clients" {
+                break;
+            }
         }
-    }
+        lines
+    });
     opened.session.quiesce();
     drop(connected);
     wait_idle(&gate);
@@ -1770,13 +1776,16 @@ fn after_quiesce_a_client_leaving_writes_no_clients_line() {
     subscribe(&late, "c_late", "full");
     let _ack = recv(&late);
     opened.log.append(&notice(), None, None).unwrap();
-    loop {
-        let line = lines.recv_timeout(DEADLINE).expect("the notice arrives");
-        assert_ne!(line.kind, "clients", "a clients line followed quiesce");
-        if line.kind == "notice" {
-            break;
+    let _lines = fakes::within("the notice", DEADLINE, move || {
+        loop {
+            let line = lines.recv_timeout(DEADLINE).expect("the notice arrives");
+            assert_ne!(line.kind, "clients", "a clients line followed quiesce");
+            if line.kind == "notice" {
+                break;
+            }
         }
-    }
+        lines
+    });
     drop(late);
     close_within(opened.session, opened.log);
 }
@@ -1857,16 +1866,15 @@ fn send_text(client: &Client, id: &str, command: &str, text: &str) {
 
 /// The acknowledgement of command `id`, skipping any other line.
 fn answer_of(client: &Client, id: &str) -> Value {
-    loop {
-        let line = recv(client);
-        let acknowledges = matches!(
-            line["kind"].as_str(),
-            Some("command_accepted" | "command_rejected")
-        );
-        if acknowledges && line["payload"]["command_id"] == id {
-            return line;
-        }
-    }
+    let owned = id.to_owned();
+    client
+        .recv_until(DEADLINE, |line| {
+            matches!(
+                line["kind"].as_str(),
+                Some("command_accepted" | "command_rejected")
+            ) && line["payload"]["command_id"] == owned
+        })
+        .expect("the acknowledgement arrived before the deadline")
 }
 
 /// The next delivery, which must be a prompt; returns its acknowledgement.
@@ -2045,17 +2053,19 @@ fn a_full_subscriber_sees_the_kept_ui_line_before_a_later_one() {
             release_tx.send(()).unwrap();
             let ack = recv(&client);
             assert_eq!(ack["kind"], "command_accepted");
-            let mut seen = Vec::new();
-            for _ in 0..16 {
-                let line = recv(&client);
-                if line["kind"] == "extension_ui" {
-                    seen.push(line["payload"]["status"].as_str().unwrap().to_owned());
-                }
-                if seen.len() == 2 {
-                    break;
-                }
-            }
-            assert_eq!(seen, vec!["A".to_owned(), "B".to_owned()]);
+            let first = client
+                .recv_until(DEADLINE, |line| line["kind"] == "extension_ui")
+                .expect("the first extension_ui arrives");
+            let second = client
+                .recv_until(DEADLINE, |line| line["kind"] == "extension_ui")
+                .expect("the second extension_ui arrives");
+            assert_eq!(
+                [
+                    first["payload"]["status"].as_str().unwrap(),
+                    second["payload"]["status"].as_str().unwrap()
+                ],
+                ["A", "B"]
+            );
             Ok(())
         })
         .unwrap();

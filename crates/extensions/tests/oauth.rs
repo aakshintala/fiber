@@ -34,7 +34,7 @@ use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
 /// How long a test waits for one call, a socket or a server.
-const WAIT: Duration = Duration::from_secs(15);
+const WAIT: Duration = Duration::from_secs(10);
 
 /// The callbacks' declared timeout, in fake-clock time.
 const TIMEOUT: Duration = Duration::from_secs(60);
@@ -358,14 +358,18 @@ fn free_port() -> u16 {
         .port()
 }
 
-/// Sends `request` to `port` and reads the reply to its end.
+/// Sends `request` to `port` and reads the reply to its end, under one
+/// [`WAIT`].
 fn get(port: u16, request: &str) -> String {
-    let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
-    stream.set_read_timeout(Some(WAIT)).unwrap();
-    stream.write_all(request.as_bytes()).unwrap();
-    let mut reply = String::new();
-    stream.read_to_string(&mut reply).unwrap();
-    reply
+    let request = request.to_owned();
+    fakes::within("the oauth reply", WAIT, move || {
+        let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
+        stream.set_read_timeout(Some(WAIT)).unwrap();
+        stream.write_all(request.as_bytes()).unwrap();
+        let mut reply = String::new();
+        stream.read_to_string(&mut reply).unwrap();
+        reply
+    })
 }
 
 /// Waits until `callers` callers wait past `deadline` and `threads` extension
@@ -539,10 +543,13 @@ fn callback_skips_a_connection_that_is_not_a_request_and_a_head_that_is_too_larg
     match stream.write_all(huge.as_bytes()) {
         Ok(()) | Err(_) => {}
     }
-    let mut reply = String::new();
-    match stream.read_to_string(&mut reply) {
-        Ok(_) | Err(_) => {}
-    }
+    let reply: String = fakes::within("the oversized-head reply", WAIT, move || {
+        let mut reply = String::new();
+        match stream.read_to_string(&mut reply) {
+            Ok(_) | Err(_) => {}
+        }
+        reply
+    });
     assert!(
         reply.is_empty() || reply.starts_with("HTTP/1.1 431"),
         "{reply}"
@@ -637,8 +644,11 @@ fn callback_dropped_at_its_timeout_frees_the_port_from_a_client_that_keeps_sendi
         }
     });
     first.write_all(b"not http\r\n\r\n").unwrap();
-    let mut junk = String::new();
-    first.read_to_string(&mut junk).unwrap();
+    let junk: String = fakes::within("the first reply", WAIT, move || {
+        let mut junk = String::new();
+        first.read_to_string(&mut junk).unwrap();
+        junk
+    });
     assert!(junk.starts_with("HTTP/1.1 400"), "{junk}");
     env.clock.advance(TIMEOUT);
     assert!(matches!(finish(&rx), Err(Error::Timeout { .. })));
