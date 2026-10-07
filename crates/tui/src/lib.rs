@@ -293,7 +293,7 @@ impl<B: Backend> Loop<B> {
                             Effect::Send(lines) => self.send(&lines),
                             Effect::Quit => return Some(0),
                         },
-                        Event::Reply(Reply::KittyFlags(_)) => self.app.set_kitty(),
+                        Event::Reply(Reply::KittyFlags(_)) => self.kitty(),
                         Event::Reply(Reply::DeviceAttributes) | Event::Edit(_) => {}
                     }
                 }
@@ -337,6 +337,19 @@ impl<B: Backend> Loop<B> {
             return Some(1);
         }
         None
+    }
+
+    /// Kitty's flags reply: the first pushes the flags the bindings need
+    /// (`docs/tui.md`, "Keys", "Rules"). A failed write leaves the legacy
+    /// keys, which every binding also has.
+    fn kitty(&mut self) {
+        if self.app.kitty() {
+            return;
+        }
+        self.app.set_kitty();
+        if let Some(mut tty) = self.tty.as_ref() {
+            io::Write::write_all(&mut tty, term::KITTY_PUSH).unwrap_or(());
+        }
     }
 
     /// Writes command lines to the hub. A failed write hangs up: the

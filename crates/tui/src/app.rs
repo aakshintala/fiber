@@ -259,13 +259,12 @@ impl App {
         self.height = height.max(1);
     }
 
-    /// Records kitty's keyboard flags reply. No binding needs it yet.
+    /// Records kitty's keyboard flags reply.
     pub(crate) fn set_kitty(&mut self) {
         self.kitty = true;
     }
 
     /// Whether detection saw kitty's keyboard flags.
-    #[cfg(test)]
     pub(crate) fn kitty(&self) -> bool {
         self.kitty
     }

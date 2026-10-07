@@ -70,10 +70,10 @@ fn setup_writes_alt_screen_then_queries() {
     setup(&pair.slave).unwrap_or_else(|err| panic!("setup: {err}"));
     let bytes = read_exact(
         &pair.main,
-        "\x1b[?1049h".len() + "\x1b[?u\x1b[c".len(),
+        "\x1b[?1049h\x1b[?2004h".len() + "\x1b[?u\x1b[c".len(),
         "the alternate screen and queries",
     );
-    assert_eq!(bytes, b"\x1b[?1049h\x1b[?u\x1b[c");
+    assert_eq!(bytes, b"\x1b[?1049h\x1b[?2004h\x1b[?u\x1b[c");
     restore();
 }
 
@@ -85,7 +85,7 @@ fn setup_sets_raw_mode_and_restore_puts_it_back() {
     setup(&pair.slave).unwrap_or_else(|err| panic!("setup: {err}"));
     let _ = read_exact(
         &pair.main,
-        "\x1b[?1049h".len() + "\x1b[?u\x1b[c".len(),
+        "\x1b[?1049h\x1b[?2004h".len() + "\x1b[?u\x1b[c".len(),
         "the alternate screen and queries",
     );
     let raw = rustix::termios::tcgetattr(&pair.slave).unwrap_or_else(|err| panic!("attr: {err}"));
@@ -94,7 +94,7 @@ fn setup_sets_raw_mode_and_restore_puts_it_back() {
     restore();
     let _ = read_exact(
         &pair.main,
-        "\x1b[?1049l\x1b[?25h".len(),
+        "\x1b[<u\x1b[?2004l\x1b[?1049l\x1b[?25h".len(),
         "the restore bytes",
     );
     let after = rustix::termios::tcgetattr(&pair.slave).unwrap_or_else(|err| panic!("attr: {err}"));

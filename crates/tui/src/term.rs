@@ -10,10 +10,16 @@ use rustix::termios::{self, OptionalActions, Termios};
 
 /// Enters the alternate screen.
 const ALTERNATE_SCREEN: &[u8] = b"\x1b[?1049h";
+/// Turns bracketed paste on.
+const BRACKETED_PASTE: &[u8] = b"\x1b[?2004h";
 /// Kitty's keyboard flags query, then the primary device attributes query.
 const QUERIES: &[u8] = b"\x1b[?u\x1b[c";
-/// Leaves the alternate screen and shows the cursor.
-const RESTORE: &[u8] = b"\x1b[?1049l\x1b[?25h";
+/// Pushes kitty's keyboard flag 1, disambiguate escape codes. The loop
+/// writes it when kitty's flags reply arrives.
+pub(crate) const KITTY_PUSH: &[u8] = b"\x1b[>1u";
+/// Pops kitty's keyboard flags while still on the alternate screen, turns
+/// bracketed paste off, leaves the alternate screen and shows the cursor.
+const RESTORE: &[u8] = b"\x1b[<u\x1b[?2004l\x1b[?1049l\x1b[?25h";
 
 /// The tty `setup` changed and its modes from before. One terminal per
 /// process: the first `setup` records it.
@@ -21,7 +27,8 @@ static SAVED: OnceLock<(File, Termios)> = OnceLock::new();
 /// Whether the terminal is set up and not yet restored.
 static ACTIVE: AtomicBool = AtomicBool::new(false);
 
-/// Sets `tty` up: raw mode, the alternate screen, then the two queries.
+/// Sets `tty` up: raw mode, the alternate screen, bracketed paste, then
+/// the two queries.
 /// Returns its size in columns and rows.
 pub(crate) fn setup(mut tty: &File) -> io::Result<(u16, u16)> {
     let saved = termios::tcgetattr(tty)?;
@@ -34,6 +41,7 @@ pub(crate) fn setup(mut tty: &File) -> io::Result<(u16, u16)> {
     ACTIVE.store(true, Ordering::SeqCst);
     termios::tcsetattr(tty, OptionalActions::Now, &raw)?;
     tty.write_all(ALTERNATE_SCREEN)?;
+    tty.write_all(BRACKETED_PASTE)?;
     tty.write_all(QUERIES)?;
     tty.flush()?;
     size(tty)
@@ -45,8 +53,9 @@ pub(crate) fn size(tty: &File) -> io::Result<(u16, u16)> {
     Ok((size.ws_col.max(1), size.ws_row.max(1)))
 }
 
-/// Restores the terminal `setup` set up, once: leaves the alternate
-/// screen, shows the cursor and puts the saved modes back. Does nothing
+/// Restores the terminal `setup` set up, once: pops kitty's keyboard
+/// flags, turns bracketed paste off, leaves the alternate screen, shows
+/// the cursor and puts the saved modes back. Does nothing
 /// before `setup` or after the first restore.
 pub(crate) fn restore() {
     if !ACTIVE.swap(false, Ordering::SeqCst) {
