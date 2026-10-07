@@ -6,6 +6,7 @@ use std::io;
 use std::path::Path;
 use std::sync::Arc;
 
+use contract::clock::wall_ms;
 use contract::{ErrorCode, SessionId};
 use doors::Session;
 use log::Log;
@@ -211,10 +212,7 @@ pub(crate) fn close(
     };
     let row = hub::RecentRow {
         session_id: SessionId(name(Some(dir))),
-        ts: clock
-            .wall()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX)),
+        ts: wall_ms(clock.wall()),
         // `projects/<key>/sessions/<id>`: the key names the grandparent.
         project: name(dir.parent().and_then(Path::parent)),
         workspace: workspace.to_string_lossy().into_owned(),

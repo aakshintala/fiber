@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
-use contract::clock::{Clock, Wake};
+use contract::clock::{Clock, Wake, wall_ms};
 use contract::{CommandId, ErrorCode, HubLine, SCHEMA_VERSION};
 use serde_json::{Map, Value};
 
@@ -565,7 +565,7 @@ pub(crate) fn send(
 ) {
     let line = HubLine {
         kind: kind.to_owned(),
-        ts: crate::diag::wall_ms(hub.clock.wall()),
+        ts: wall_ms(hub.clock.wall()),
         schema_version: SCHEMA_VERSION,
         payload,
     };
