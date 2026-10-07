@@ -99,7 +99,10 @@ fn call(name: &str, arguments: serde_json::Value) -> Input {
 
 #[test]
 fn an_input_estimates_a_quarter_of_its_bytes_rounded_up() {
-    let user = |text: &str| Input::User { text: text.into() };
+    let user = |text: &str| Input::User {
+        text: text.into(),
+        images: Vec::new(),
+    };
     assert_eq!(estimate(&user("")), 0);
     assert_eq!(estimate(&user("abcd")), 1);
     assert_eq!(estimate(&user("abcde")), 2);
@@ -167,7 +170,10 @@ fn completed(note: Option<Note>) -> HandoffCompleted {
 }
 
 fn user(text: &str) -> Input {
-    Input::User { text: text.into() }
+    Input::User {
+        text: text.into(),
+        images: Vec::new(),
+    }
 }
 
 #[test]
@@ -208,7 +214,7 @@ fn a_restart_lists_the_jobs_still_running_in_start_order() {
     let restarted = carry.restart(&done);
     assert_eq!(restarted.len(), 2);
     assert_eq!(restarted[0], user("note"));
-    let Input::User { text } = &restarted[1] else {
+    let Input::User { text, .. } = &restarted[1] else {
         panic!("{restarted:?}");
     };
     assert!(

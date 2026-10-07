@@ -11,7 +11,7 @@ use std::sync::mpsc;
 use std::thread;
 
 use contract::clock::wall_ms;
-use contract::commands::{Command, CommandLine, SentPart};
+use contract::commands::{Command, CommandLine};
 use contract::events::{CommandAccepted, CommandRejected, CommandResult, Event};
 use contract::inbox::{Ack, Answer, Delivery, Message, Rejection};
 use contract::shapes::{ContentPart, Origin, Sender};
@@ -273,14 +273,22 @@ fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
                 Err(message) => reject(conn, Some(id), ErrorCode::InvalidArguments, message),
             }
         }
-        Command::Prompt(args) => match content(args.content) {
-            Ok(content) => deliver_message(conn, id, content, true),
-            Err(message) => reject(conn, Some(id), ErrorCode::InvalidArguments, &message),
-        },
-        Command::Steer(args) => match content(args.content) {
-            Ok(content) => deliver_message(conn, id, content, false),
-            Err(message) => reject(conn, Some(id), ErrorCode::InvalidArguments, &message),
-        },
+        Command::Prompt(args) => {
+            let images = conn.gate.images();
+            let pasting = Arc::clone(&conn.gate.pasting);
+            match crate::pasted::content(args.content, images.as_deref(), pasting.as_ref()) {
+                Ok(content) => deliver_message(conn, id, content, true),
+                Err((code, message)) => reject(conn, Some(id), code, &message),
+            }
+        }
+        Command::Steer(args) => {
+            let images = conn.gate.images();
+            let pasting = Arc::clone(&conn.gate.pasting);
+            match crate::pasted::content(args.content, images.as_deref(), pasting.as_ref()) {
+                Ok(content) => deliver_message(conn, id, content, false),
+                Err((code, message)) => reject(conn, Some(id), code, &message),
+            }
+        }
         Command::SteerDrop(args) => {
             let ack = inbox_ack(conn, id.clone());
             conn.gate.deliver(Delivery::SteerDrop(args.command_id, ack));
@@ -480,22 +488,6 @@ fn deliver_message(conn: &mut Conn, id: CommandId, content: Vec<ContentPart>, pr
     } else {
         conn.gate.deliver(Delivery::Steer(message, ack));
     }
-}
-
-fn content(parts: Vec<SentPart>) -> Result<Vec<ContentPart>, String> {
-    let mut out = Vec::new();
-    for (index, part) in parts.into_iter().enumerate() {
-        match part {
-            SentPart::Text { text } => out.push(ContentPart::Text { text }),
-            SentPart::Image { .. } => {
-                let number = index + 1;
-                return Err(format!(
-                    "Image {number} cannot be read: this Fiber processes no images yet."
-                ));
-            }
-        }
-    }
-    Ok(out)
 }
 
 /// The durable lines `args` asks for, at most [`HISTORY`] of them, read and

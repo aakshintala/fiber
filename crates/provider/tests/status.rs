@@ -36,7 +36,10 @@ fn request() -> ModelRequest {
         cache_key: "session_1".into(),
         previous_end: None,
         max_output_tokens: None,
-        conversation: vec![Input::User { text: "hi".into() }],
+        conversation: vec![Input::User {
+            text: "hi".into(),
+            images: Vec::new(),
+        }],
         session_dir: std::path::PathBuf::new(),
     }
 }

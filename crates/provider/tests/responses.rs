@@ -102,6 +102,7 @@ fn request() -> ModelRequest {
         cache_key: "s_root".into(),
         conversation: vec![Input::User {
             text: "What is the weather in Paris? Use the tool.".into(),
+            images: Vec::new(),
         }],
         previous_end: None,
         max_output_tokens: None,
@@ -1287,5 +1288,109 @@ fn thinking_levels_map_to_the_reasoning_effort() {
     assert_eq!(
         sent_body(&server, 3)["reasoning"],
         json!({"effort": "xhigh"})
+    );
+}
+
+/// A conversation whose one user message carries `images`.
+fn user_conversation(text: &str, images: Vec<contract::provider::ImageRef>) -> Vec<Input> {
+    vec![Input::User {
+        text: text.into(),
+        images,
+    }]
+}
+
+fn user_item(server: &ProviderServer) -> Value {
+    sent_body(server, 0)["input"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["role"] == "user")
+        .unwrap()
+        .clone()
+}
+
+#[test]
+fn a_users_image_is_sent_as_input_image_parts_after_the_text() {
+    let session = fakes::TempDir::new("fiber-responses-user-image");
+    std::fs::create_dir(session.path().join("artifacts")).unwrap();
+    std::fs::write(session.path().join("artifacts/i_1.png"), b"abcd").unwrap();
+    let request = ModelRequest {
+        conversation: user_conversation("look", vec![png_ref("artifacts/i_1.png")]),
+        session_dir: session.path().to_path_buf(),
+        ..request()
+    };
+    let server = ProviderServer::start([Response::stream(stream(&[completed(
+        "completed",
+        json!({}),
+    )]))])
+    .unwrap();
+    run(Box::new(
+        Responses::new(endpoint(&server)).request(&request),
+    ))
+    .0
+    .unwrap();
+    assert_eq!(
+        user_item(&server),
+        json!({"role": "user", "content": [
+            {"type": "input_text", "text": "look"},
+            {"type": "input_image", "image_url": "data:image/png;base64,YWJjZA=="},
+        ]})
+    );
+}
+
+#[test]
+fn a_users_empty_text_sends_no_input_text_part() {
+    let session = fakes::TempDir::new("fiber-responses-user-image");
+    std::fs::create_dir(session.path().join("artifacts")).unwrap();
+    std::fs::write(session.path().join("artifacts/i_1.png"), b"abcd").unwrap();
+    let request = ModelRequest {
+        conversation: user_conversation("", vec![png_ref("artifacts/i_1.png")]),
+        session_dir: session.path().to_path_buf(),
+        ..request()
+    };
+    let server = ProviderServer::start([Response::stream(stream(&[completed(
+        "completed",
+        json!({}),
+    )]))])
+    .unwrap();
+    run(Box::new(
+        Responses::new(endpoint(&server)).request(&request),
+    ))
+    .0
+    .unwrap();
+    assert_eq!(
+        user_item(&server),
+        json!({"role": "user", "content": [
+            {"type": "input_image", "image_url": "data:image/png;base64,YWJjZA=="},
+        ]})
+    );
+}
+
+#[test]
+fn a_users_image_is_left_out_for_a_text_only_model() {
+    let session = fakes::TempDir::new("fiber-responses-user-image");
+    std::fs::create_dir(session.path().join("artifacts")).unwrap();
+    std::fs::write(session.path().join("artifacts/i_1.png"), b"abcd").unwrap();
+    let request = ModelRequest {
+        conversation: user_conversation("look", vec![png_ref("artifacts/i_1.png")]),
+        session_dir: session.path().to_path_buf(),
+        ..request()
+    };
+    let server = ProviderServer::start([Response::stream(stream(&[completed(
+        "completed",
+        json!({}),
+    )]))])
+    .unwrap();
+    let endpoint = Endpoint {
+        text_only: true,
+        ..endpoint(&server)
+    };
+    run(Box::new(Responses::new(endpoint).request(&request)))
+        .0
+        .unwrap();
+    assert_eq!(
+        user_item(&server),
+        json!({"role": "user",
+            "content": "look\n[Image artifacts/i_1.png left out: this model does not take images.]"})
     );
 }

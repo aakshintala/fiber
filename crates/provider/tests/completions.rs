@@ -105,6 +105,7 @@ fn request() -> ModelRequest {
         cache_key: "s_root".into(),
         conversation: vec![Input::User {
             text: "What is the weather in Paris? Use the tool.".into(),
+            images: Vec::new(),
         }],
         previous_end: None,
         max_output_tokens: None,
@@ -550,6 +551,7 @@ fn four_turn_conversation() -> Vec<Input> {
     vec![
         Input::User {
             text: "What is the weather in Paris?".into(),
+            images: Vec::new(),
         },
         Input::ToolCall {
             action_id: ActionId("a_1".into()),
@@ -571,6 +573,7 @@ fn four_turn_conversation() -> Vec<Input> {
         },
         Input::User {
             text: "And Rome?".into(),
+            images: Vec::new(),
         },
     ]
 }
@@ -1392,6 +1395,7 @@ fn a_tool_results_image_goes_in_a_user_message_after_the_tool_message() {
     let session = image_session();
     let mut conversation = vec![Input::User {
         text: "What is the weather in Paris?".into(),
+        images: Vec::new(),
     }];
     conversation.extend(image_turn(
         "a_1",
@@ -1475,6 +1479,7 @@ fn a_user_turn_after_a_tool_result_comes_after_the_image_message() {
     let session = image_session();
     let mut conversation = vec![Input::User {
         text: "What is the weather in Paris?".into(),
+        images: Vec::new(),
     }];
     conversation.extend(image_turn(
         "a_1",
@@ -1484,6 +1489,7 @@ fn a_user_turn_after_a_tool_result_comes_after_the_image_message() {
     ));
     conversation.push(Input::User {
         text: "And Rome?".into(),
+        images: Vec::new(),
     });
     let request = ModelRequest {
         conversation,
@@ -1513,6 +1519,7 @@ fn a_text_only_model_sends_no_image_message_and_the_result_says_so() {
     let session = image_session();
     let mut conversation = vec![Input::User {
         text: "What is the weather in Paris?".into(),
+        images: Vec::new(),
     }];
     conversation.extend(image_turn(
         "a_1",
@@ -1549,6 +1556,7 @@ fn the_image_message_carries_the_cache_marker_as_the_new_and_previous_end() {
     let session = image_session();
     let mut conversation = vec![Input::User {
         text: "What is the weather in Paris?".into(),
+        images: Vec::new(),
     }];
     conversation.extend(image_turn(
         "a_1",
@@ -1781,4 +1789,82 @@ fn the_cache_key_goes_in_the_declared_header_and_nowhere_else_without_one() {
     let sent = server.requests();
     assert_eq!(sent[0].header("x-opencode-session"), None);
     assert_eq!(sent[1].header("x-opencode-session"), Some("s_root"));
+}
+
+/// A conversation whose one user message carries `images`.
+fn user_conversation(text: &str, images: Vec<contract::provider::ImageRef>) -> Vec<Input> {
+    vec![Input::User {
+        text: text.into(),
+        images,
+    }]
+}
+
+fn user_message(server: &ProviderServer) -> Value {
+    sent_body(server, 0)["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|message| message["role"] == "user")
+        .unwrap()
+        .clone()
+}
+
+#[test]
+fn a_users_image_is_sent_as_image_url_parts_after_the_text() {
+    let session = image_session();
+    let request = ModelRequest {
+        conversation: user_conversation("look", vec![png_ref("artifacts/i_1.png")]),
+        session_dir: session.path().to_path_buf(),
+        ..request()
+    };
+    let server = ProviderServer::start([completed_reply(), completed_reply()]).unwrap();
+    let endpoint = endpoint(&server);
+    send(endpoint.clone(), &request);
+    send(endpoint, &request);
+    let bodies: Vec<Vec<u8>> = server.requests().into_iter().map(|r| r.body).collect();
+    assert_eq!(bodies[0], bodies[1], "a resume sends the same bytes");
+    assert_eq!(
+        user_message(&server),
+        json!({"role": "user", "content": [
+            {"type": "text", "text": "look"},
+            image_url("YWJjZA=="),
+        ]})
+    );
+}
+
+#[test]
+fn a_users_empty_text_sends_no_text_part() {
+    let session = image_session();
+    let request = ModelRequest {
+        conversation: user_conversation("", vec![png_ref("artifacts/i_1.png")]),
+        session_dir: session.path().to_path_buf(),
+        ..request()
+    };
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    send(endpoint(&server), &request);
+    assert_eq!(
+        user_message(&server),
+        json!({"role": "user", "content": [image_url("YWJjZA==")]})
+    );
+}
+
+#[test]
+fn a_users_image_is_left_out_for_a_text_only_model() {
+    let session = image_session();
+    let request = ModelRequest {
+        conversation: user_conversation("look", vec![png_ref("artifacts/i_1.png")]),
+        session_dir: session.path().to_path_buf(),
+        ..request()
+    };
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let endpoint = Endpoint {
+        text_only: true,
+        ..endpoint(&server)
+    };
+    send(endpoint, &request);
+    assert_eq!(
+        user_message(&server),
+        json!({"role": "user",
+            "content": "look\n[Image artifacts/i_1.png left out: this model does not take images.]"})
+    );
 }

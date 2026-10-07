@@ -135,9 +135,11 @@ fn only_the_persons_messages_reach_the_reviewer() {
         vec![
             Input::User {
                 text: "The person: run the tests".into(),
+                images: Vec::new(),
             },
             Input::User {
                 text: "The person: and the linter".into(),
+                images: Vec::new(),
             },
         ],
     );
@@ -207,6 +209,7 @@ fn a_call_renders_with_the_arguments_that_run() {
         reviewed[0].input,
         Input::User {
             text: r#"Tool call: {"tool":"shell","arguments":{"city":"Paris"}}"#.into(),
+            images: Vec::new(),
         },
     );
     // The repaired arguments render: the same call renders identically under

@@ -135,6 +135,37 @@ fn default_wire_tools_is_each_definition_as_an_object_in_name_order() {
 }
 
 #[test]
+fn a_user_without_images_serialises_without_the_key_and_reads_back() {
+    let plain = Input::User {
+        text: "hi".into(),
+        images: Vec::new(),
+    };
+    let value = serde_json::to_value(&plain).unwrap();
+    assert_eq!(value, json!({"type": "user", "text": "hi"}));
+    assert!(value.get("images").is_none(), "{value}");
+    assert_eq!(serde_json::from_value::<Input>(value).unwrap(), plain);
+    // A line written before the field existed has none.
+    let old = json!({"type": "user", "text": "hi"});
+    assert_eq!(serde_json::from_value::<Input>(old).unwrap(), plain);
+}
+
+#[test]
+fn a_user_with_images_round_trips() {
+    let with = Input::User {
+        text: "look".into(),
+        images: vec![ImageRef {
+            path: "artifacts/i_1.png".into(),
+            mime_type: "image/png".into(),
+            width: 3,
+            height: 2,
+        }],
+    };
+    let value = serde_json::to_value(&with).unwrap();
+    assert_eq!(value["images"][0]["path"], "artifacts/i_1.png");
+    assert_eq!(serde_json::from_value::<Input>(value).unwrap(), with);
+}
+
+#[test]
 fn a_tool_result_without_images_serialises_without_the_key_and_reads_back() {
     let plain = Input::ToolResult {
         action_id: ActionId("a_1".into()),

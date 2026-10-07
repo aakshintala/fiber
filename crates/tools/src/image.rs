@@ -6,12 +6,15 @@
 use std::collections::hash_map::RandomState;
 use std::hash::BuildHasher;
 use std::io::Read;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output as Collected, Stdio};
 use std::thread;
 use std::time::Duration;
 
 use contract::ErrorCode;
+use contract::images::{ImageError, Images};
+use contract::provider::ImageRef;
 use contract::shapes::ContentPart;
 use contract::tool::{Cancel, Output};
 use serde_json::Value;
@@ -22,14 +25,141 @@ use crate::files::{failed, text_output};
 const MESSAGE_CAP: usize = 2048;
 
 /// The wiring of one session's image child.
-pub(crate) struct ImageChild {
+pub struct ImageChild {
     fiber: PathBuf,
     artifacts: PathBuf,
 }
 
 impl ImageChild {
-    pub(crate) fn new(fiber: PathBuf, artifacts: PathBuf) -> Self {
+    /// Runs `fiber image` with `fiber`, the running binary, writing into
+    /// `artifacts`, the session's `artifacts/` directory.
+    pub fn new(fiber: PathBuf, artifacts: PathBuf) -> Self {
         Self { fiber, artifacts }
+    }
+}
+
+impl Images for ImageChild {
+    fn process(&self, bytes: &[u8], cancel: &dyn Cancel) -> Result<ImageRef, ImageError> {
+        if cancel.is_cancelled() {
+            return Err(ImageError::Cancelled);
+        }
+        let stem = fresh_stem();
+        let spawned = Command::new(&self.fiber)
+            .arg("image")
+            .arg("/dev/stdin")
+            .arg(&self.artifacts)
+            .arg(&stem)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn();
+        let mut process = match spawned {
+            Ok(process) => process,
+            Err(error) => {
+                return Err(ImageError::Failed(format!(
+                    "the image child could not start: {error}."
+                )));
+            }
+        };
+        let out = process.stdout.take().map(drain);
+        let err = process.stderr.take().map(drain);
+        let stdin = process.stdin.take();
+        // The writer runs on a scoped thread borrowing `bytes`, so no copy;
+        // the drains are already running, so neither pipe fills while the
+        // other is read. The calling thread runs the same cancel-and-wait
+        // loop as `read`, so a cancel while the write is blocked still
+        // kills and reaps the child, then joins the writer.
+        let (status, write) = thread::scope(|scope| {
+            let writer = scope.spawn(move || {
+                let Some(mut stdin) = stdin else {
+                    return Ok(());
+                };
+                stdin.write_all(bytes)
+            });
+            let status = loop {
+                if cancel.is_cancelled() {
+                    // `Child::kill` signals this one pid: the child is not
+                    // a group leader, so no group signal is involved.
+                    // Already exited, or killed here: either way it is
+                    // reaped. The writer's next write then fails with
+                    // EPIPE, and the scope joins it.
+                    drop(process.kill());
+                    drop(process.wait());
+                    break None;
+                }
+                match process.try_wait() {
+                    Ok(Some(status)) => break Some(Ok(status)),
+                    Ok(None) => {
+                        // The wait is for a child's exit or a cancel, which an
+                        // injected clock sees neither of.
+                        #[allow(
+                            clippy::disallowed_methods,
+                            reason = "nothing a clock can signal: the wait is for a child process's exit"
+                        )]
+                        thread::sleep(POLL);
+                    }
+                    Err(error) => break Some(Err(error)),
+                }
+            };
+            let write = match writer.join() {
+                Ok(result) => result,
+                Err(_) => Err(std::io::Error::other("the image writer panicked")),
+            };
+            (status, write)
+        });
+        let Some(status) = status else {
+            return Err(ImageError::Cancelled);
+        };
+        let status = match status {
+            Ok(status) => status,
+            Err(error) => {
+                return Err(ImageError::Failed(format!(
+                    "the image child could not start: {error}."
+                )));
+            }
+        };
+        let join = |handle: Option<thread::JoinHandle<Vec<u8>>>| {
+            handle
+                .and_then(|handle| handle.join().ok())
+                .unwrap_or_default()
+        };
+        let collected = Collected {
+            status,
+            stdout: join(out),
+            stderr: join(err),
+        };
+        map_process(&collected, &stem, write)
+    }
+}
+
+/// Maps the child's exit and output to the processed reference. A write
+/// error after the child exited reports the exit first: an exit the
+/// mapping reports wins over the pipe.
+fn map_process(
+    output: &Collected,
+    stem: &str,
+    write: std::io::Result<()>,
+) -> Result<ImageRef, ImageError> {
+    let message = capped(&output.stderr);
+    match output.status.code() {
+        Some(0) => {
+            if let Err(error) = write {
+                return Err(ImageError::Failed(format!(
+                    "the image child did not take the image: {error}."
+                )));
+            }
+            match parse(&output.stdout, stem) {
+                Ok(stored) => Ok(image_ref(&stored)),
+                Err(why) => Err(ImageError::Failed(format!("the image child {why}."))),
+            }
+        }
+        Some(1) => Err(ImageError::Unreadable(message)),
+        Some(code) => Err(ImageError::Failed(format!(
+            "the image child exited with status {code}: {message}"
+        ))),
+        None => Err(ImageError::Failed(format!(
+            "the image child was killed by a signal: {message}"
+        ))),
     }
 }
 
@@ -52,7 +182,7 @@ pub(crate) fn read(child: Option<&ImageChild>, path: &Path, cancel: &dyn Cancel)
     };
     // A new name for every read: an older log line's path never points at
     // new bytes.
-    let stem = format!("i_{:016x}", RandomState::new().hash_one(()));
+    let stem = fresh_stem();
     let Some(output) = run_child(child, path, &stem, cancel) else {
         return text_output("Cancelled and stopped.\n".to_owned());
     };
@@ -67,7 +197,7 @@ pub(crate) fn read(child: Option<&ImageChild>, path: &Path, cancel: &dyn Cancel)
     };
     let message = capped(&output.stderr);
     match output.status.code() {
-        Some(0) => match parse(&output.stdout) {
+        Some(0) => match parse(&output.stdout, &stem) {
             Ok(stored) => rendered(&stored),
             Err(why) => failed(ErrorCode::ToolError, format!("the image child {why}.")),
         },
@@ -84,6 +214,25 @@ pub(crate) fn read(child: Option<&ImageChild>, path: &Path, cancel: &dyn Cancel)
             format!("the image child was killed by a signal: {message}"),
         ),
     }
+}
+
+/// A fresh stem per call: an older log line's path never points at new
+/// bytes.
+fn fresh_stem() -> String {
+    format!("i_{:016x}", RandomState::new().hash_one(()))
+}
+
+/// Whether `file` is the name asked for: `<stem>.<ext>`, where `<ext>` is
+/// one or more ASCII letters or digits. That shape has no separator, no
+/// `..` and no second dot.
+fn valid_file(stem: &str, file: &str) -> bool {
+    let Some(rest) = file.strip_prefix(stem) else {
+        return false;
+    };
+    let Some(ext) = rest.strip_prefix('.') else {
+        return false;
+    };
+    !ext.is_empty() && ext.bytes().all(|byte| byte.is_ascii_alphanumeric())
 }
 
 /// How often the wait looks for a cancel and for the child's exit. Picked,
@@ -173,8 +322,9 @@ fn capped(stderr: &[u8]) -> String {
         .to_owned()
 }
 
-/// The one JSON line the child prints, or why it is not.
-fn parse(stdout: &[u8]) -> Result<Stored, &'static str> {
+/// The one JSON line the child prints, or why it is not. The named file
+/// must be the one asked for.
+fn parse(stdout: &[u8], stem: &str) -> Result<Stored, &'static str> {
     let text = std::str::from_utf8(stdout).map_err(|_| "printed text that is not UTF-8")?;
     let line = text.strip_suffix('\n').unwrap_or(text);
     if line.contains('\n') {
@@ -194,13 +344,27 @@ fn parse(stdout: &[u8]) -> Result<Stored, &'static str> {
         number("width"),
         number("height"),
     ) {
-        (Some(file), Some(mime_type), Some(width), Some(height)) => Ok(Stored {
-            file,
-            mime_type,
-            width,
-            height,
-        }),
+        (Some(file), Some(mime_type), Some(width), Some(height)) => {
+            if !valid_file(stem, &file) {
+                return Err("named a file other than the one asked for");
+            }
+            Ok(Stored {
+                file,
+                mime_type,
+                width,
+                height,
+            })
+        }
         _ => Err("printed a line without file, mime_type, width and height"),
+    }
+}
+
+fn image_ref(stored: &Stored) -> ImageRef {
+    ImageRef {
+        path: format!("artifacts/{}", stored.file),
+        mime_type: stored.mime_type.clone(),
+        width: stored.width,
+        height: stored.height,
     }
 }
 

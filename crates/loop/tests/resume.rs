@@ -283,7 +283,7 @@ fn a_fixed_result_sits_before_the_next_user_message() {
     let (id, text, _) = result_of(&conversation[2]);
     assert_eq!(id.0, "a_1");
     assert_eq!(text, "It never ran.");
-    assert!(matches!(&conversation[3], Input::User { text } if text == "two"));
+    assert!(matches!(&conversation[3], Input::User { text , ..} if text == "two"));
 }
 
 #[test]
@@ -767,9 +767,9 @@ fn the_first_request_after_resume_carries_the_earlier_turn_the_fixed_result_and_
     // The log holds no opening message, so the resume writes one at its
     // first turn, at the front of the context.
     assert!(
-        matches!(&conversation[0], Input::User { text } if text.starts_with("This message is from Fiber"))
+        matches!(&conversation[0], Input::User { text , ..} if text.starts_with("This message is from Fiber"))
     );
-    assert!(matches!(&conversation[1], Input::User { text } if text == "one"));
+    assert!(matches!(&conversation[1], Input::User { text , ..} if text == "one"));
     let Input::ToolCall { action_id, .. } = &conversation[2] else {
         panic!("{conversation:?}");
     };
@@ -778,7 +778,7 @@ fn the_first_request_after_resume_carries_the_earlier_turn_the_fixed_result_and_
     assert_eq!(id.0, "a_1");
     assert_eq!(text, "It never ran.");
     assert!(is_error);
-    assert!(matches!(&conversation[4], Input::User { text } if text == "two"));
+    assert!(matches!(&conversation[4], Input::User { text , ..} if text == "two"));
     // `sent` is the conversation's length at the dead process's last
     // `assistant_message_started`: the previous request ended after "one".
     assert_eq!(requests[0].previous_end, Some(1));
@@ -1263,9 +1263,9 @@ fn the_reviewers_first_request_contains_the_earlier_tool_calls() {
     // The reviewer's key is the session's id plus `reviewer`.
     assert_eq!(requests[0].cache_key, "s_1:reviewer");
     let conversation = &requests[0].conversation;
-    assert!(matches!(&conversation[0], Input::User { text } if text == "The person: one"));
+    assert!(matches!(&conversation[0], Input::User { text , ..} if text == "The person: one"));
     assert!(
-        matches!(&conversation[1], Input::User { text } if text.contains("\"read\"")),
+        matches!(&conversation[1], Input::User { text , ..} if text.contains("\"read\"")),
         "{conversation:?}"
     );
 }
@@ -1376,9 +1376,9 @@ fn a_resume_over_a_log_with_an_opening_message_writes_none() {
     let requests = history.provider.requests();
     assert_eq!(requests.len(), 1);
     let conversation = &requests[0].conversation;
-    assert!(matches!(&conversation[0], Input::User { text } if text.contains("test-os")));
-    assert!(matches!(&conversation[1], Input::User { text } if text == "one"));
-    assert!(matches!(&conversation[2], Input::User { text } if text == "two"));
+    assert!(matches!(&conversation[0], Input::User { text , ..} if text.contains("test-os")));
+    assert!(matches!(&conversation[1], Input::User { text , ..} if text == "one"));
+    assert!(matches!(&conversation[2], Input::User { text , ..} if text == "two"));
 }
 
 #[test]
@@ -2387,7 +2387,7 @@ fn a_suspended_turn_is_refused_then_the_prompt_runs_next() {
     assert!(
         !first
             .iter()
-            .any(|input| matches!(input, Input::User { text } if text == "two")),
+            .any(|input| matches!(input, Input::User { text , ..} if text == "two")),
         "{first:?}"
     );
     // The second request holds the denial and then the prompt.
@@ -2399,7 +2399,7 @@ fn a_suspended_turn_is_refused_then_the_prompt_runs_next() {
         "{second:?}"
     );
     assert!(
-        matches!(second.last().unwrap(), Input::User { text } if text == "two"),
+        matches!(second.last().unwrap(), Input::User { text , ..} if text == "two"),
         "{second:?}"
     );
 }
@@ -3110,7 +3110,7 @@ fn a_job_with_no_completion_is_marked_orphaned_on_resume() {
         .conversation
         .iter()
         .filter_map(|input| match input {
-            Input::User { text } => Some(text.as_str()),
+            Input::User { text, .. } => Some(text.as_str()),
             Input::Assistant { .. }
             | Input::Reasoning { .. }
             | Input::ToolCall { .. }
@@ -3230,7 +3230,8 @@ fn an_orphan_behind_a_suspended_batch_renders_after_its_results() {
     assert_eq!(
         conversation.last(),
         Some(&Input::User {
-            text: format!("Fiber: background job j_a ended: failed.\n{ORPHANED}")
+            text: format!("Fiber: background job j_a ended: failed.\n{ORPHANED}"),
+            images: Vec::new()
         })
     );
     // A later resume renders the same conversation from the log.
@@ -3290,7 +3291,8 @@ fn a_second_resume_over_a_logged_orphan_keeps_it_after_the_results() {
     assert_eq!(
         conversation.last(),
         Some(&Input::User {
-            text: format!("Fiber: background job j_a ended: failed.\n{ORPHANED}")
+            text: format!("Fiber: background job j_a ended: failed.\n{ORPHANED}"),
+            images: Vec::new()
         })
     );
 }
@@ -3341,7 +3343,7 @@ fn handoff_done(outcome: contract::events::Outcome, note: &[&str]) -> Event {
 
 fn text_of(input: &Input) -> &str {
     match input {
-        Input::User { text } | Input::Assistant { text, .. } => text,
+        Input::User { text, .. } | Input::Assistant { text, .. } => text,
         other @ (Input::Reasoning { .. } | Input::ToolCall { .. } | Input::ToolResult { .. }) => {
             panic!("not a message: {other:?}")
         }
@@ -3483,6 +3485,7 @@ fn a_turn_resumed_after_an_unfinished_handoff_is_never_discarded() {
     let mut expected = before(false);
     expected.push(Input::User {
         text: "three".into(),
+        images: Vec::new(),
     });
     expected.push(Input::Assistant {
         model: MODEL.into(),
@@ -3528,7 +3531,10 @@ fn a_note_call_cut_short_by_a_crash_leaves_no_result_behind() {
     let conversation = r#loop::rebuild(&log.lines(), MODEL).unwrap();
 
     let mut expected = before(false);
-    expected.push(Input::User { text: "two".into() });
+    expected.push(Input::User {
+        text: "two".into(),
+        images: Vec::new(),
+    });
     assert_eq!(conversation, expected);
 }
 
@@ -4097,7 +4103,10 @@ fn a_resumed_session_replays_a_logged_section_byte_for_byte() {
         .iter()
         .find(|line| line.kind == "opening_message")
         .unwrap();
-    let Input::User { text: live_text } = &live.requests()[0].conversation[0] else {
+    let Input::User {
+        text: live_text, ..
+    } = &live.requests()[0].conversation[0]
+    else {
         panic!("not an opening message");
     };
     let live_text = live_text.clone();
@@ -4134,7 +4143,7 @@ fn a_resumed_session_replays_a_logged_section_byte_for_byte() {
 
     let requests = history.provider.requests();
     assert_eq!(requests.len(), 1);
-    let Input::User { text } = &requests[0].conversation[0] else {
+    let Input::User { text, .. } = &requests[0].conversation[0] else {
         panic!("not an opening message");
     };
     assert_eq!(text, &live_text);
@@ -4267,7 +4276,7 @@ fn a_resume_after_a_completed_handoff_sends_the_note_and_what_came_after_only() 
         .conversation
         .iter()
         .filter_map(|input| match input {
-            Input::User { text } | Input::Assistant { text, .. } => Some(text.as_str()),
+            Input::User { text, .. } | Input::Assistant { text, .. } => Some(text.as_str()),
             Input::Reasoning { .. } | Input::ToolCall { .. } | Input::ToolResult { .. } => None,
         })
         .collect();

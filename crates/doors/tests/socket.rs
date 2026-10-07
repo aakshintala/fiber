@@ -2080,3 +2080,221 @@ fn commands_with_none_given_answers_an_empty_list() {
         .unwrap();
     opened.close();
 }
+
+/// How long a pasted-image test waits for the fake to start and for the
+/// rejection after the stopper. A wait that reaches it fails the test.
+const PASTE_LIMIT: Duration = Duration::from_secs(10);
+
+struct OkImage;
+
+impl contract::images::Images for OkImage {
+    fn process(
+        &self,
+        _bytes: &[u8],
+        _cancel: &dyn contract::tool::Cancel,
+    ) -> Result<contract::provider::ImageRef, contract::images::ImageError> {
+        Ok(contract::provider::ImageRef {
+            path: "artifacts/i_test.png".into(),
+            mime_type: "image/png".into(),
+            width: 3,
+            height: 2,
+        })
+    }
+}
+
+struct FailingImage;
+
+impl contract::images::Images for FailingImage {
+    fn process(
+        &self,
+        _bytes: &[u8],
+        _cancel: &dyn contract::tool::Cancel,
+    ) -> Result<contract::provider::ImageRef, contract::images::ImageError> {
+        Err(contract::images::ImageError::Failed("boom".into()))
+    }
+}
+
+struct BlockingImage {
+    entered: Mutex<Option<mpsc::Sender<()>>>,
+}
+
+struct PasteWake {
+    tx: Mutex<Option<mpsc::Sender<()>>>,
+}
+
+impl contract::clock::Wake for PasteWake {
+    fn wake(&self) {
+        if let Some(tx) = self.tx.lock().unwrap().take()
+            && let Ok(()) = tx.send(())
+        {}
+        {}
+    }
+}
+
+impl contract::images::Images for BlockingImage {
+    fn process(
+        &self,
+        _bytes: &[u8],
+        cancel: &dyn contract::tool::Cancel,
+    ) -> Result<contract::provider::ImageRef, contract::images::ImageError> {
+        if let Some(tx) = self.entered.lock().unwrap().take()
+            && let Ok(()) = tx.send(())
+        {}
+        {}
+        if cancel.is_cancelled() {
+            return Err(contract::images::ImageError::Cancelled);
+        }
+        let (tx, rx) = mpsc::channel();
+        let waker: Arc<dyn contract::clock::Wake> = Arc::new(PasteWake {
+            tx: Mutex::new(Some(tx)),
+        });
+        cancel.subscribe(Arc::downgrade(&waker));
+        if cancel.is_cancelled() {
+            return Err(contract::images::ImageError::Cancelled);
+        }
+        if let Ok(()) = rx.recv_timeout(PASTE_LIMIT) {}
+        if cancel.is_cancelled() {
+            return Err(contract::images::ImageError::Cancelled);
+        }
+        Err(contract::images::ImageError::Failed(
+            "the test image was never cancelled".into(),
+        ))
+    }
+}
+
+#[test]
+fn prompt_with_an_image_is_delivered_with_the_processed_part() {
+    let opened = Opened::open(vec![]);
+    opened.session.images(Arc::new(OkImage));
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(
+                &client,
+                r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"look"},{"type":"image","data":"YQ==","mime_type":"image/png"}]}}"#,
+            );
+            let delivery = inbox.recv_timeout(DEADLINE).expect("the prompt is delivered");
+            let Delivery::Prompt(message, ack) = delivery else {
+                panic!("a prompt: {delivery:?}");
+            };
+            assert_eq!(
+                message.content,
+                vec![
+                    ContentPart::Text { text: "look".into() },
+                    ContentPart::Image {
+                        path: "artifacts/i_test.png".into(),
+                        mime_type: "image/png".into(),
+                        width: 3,
+                        height: 2,
+                    },
+                ]
+            );
+            ack.0(Ok(None));
+            let line = response(&client, "c_prompt");
+            assert_eq!(kind(&line), "command_accepted", "{line}");
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn steer_with_an_image_is_delivered_with_the_processed_part() {
+    let opened = Opened::open(vec![]);
+    opened.session.images(Arc::new(OkImage));
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(
+                &client,
+                r#"{"id":"c_steer","command":"steer","args":{"content":[{"type":"image","data":"YQ==","mime_type":"image/png"}]}}"#,
+            );
+            let delivery = inbox.recv_timeout(DEADLINE).expect("the steer is delivered");
+            let Delivery::Steer(message, ack) = delivery else {
+                panic!("a steer: {delivery:?}");
+            };
+            assert_eq!(
+                message.content,
+                vec![ContentPart::Image {
+                    path: "artifacts/i_test.png".into(),
+                    mime_type: "image/png".into(),
+                    width: 3,
+                    height: 2,
+                },]
+            );
+            ack.0(Ok(None));
+            let line = response(&client, "c_steer");
+            assert_eq!(kind(&line), "command_accepted", "{line}");
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn prompt_with_a_failed_image_is_rejected_io_failed() {
+    let opened = Opened::open(vec![]);
+    opened.session.images(Arc::new(FailingImage));
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(
+                &client,
+                r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"image","data":"YQ==","mime_type":"image/png"}]}}"#,
+            );
+            let line = response(&client, "c_prompt");
+            assert_eq!(
+                rejection(&line),
+                ("io_failed", "Image 1 could not be processed: boom")
+            );
+            assert!(
+                matches!(inbox.try_recv(), Err(mpsc::TryRecvError::Empty)),
+                "a rejected prompt reaches no inbox"
+            );
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn the_stopper_cancels_a_pasted_image_in_flight() {
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let opened = Opened::open(vec![]);
+    opened.session.images(Arc::new(BlockingImage {
+        entered: Mutex::new(Some(entered_tx)),
+    }));
+    let socket = opened.socket.clone();
+    let stopper = opened.session.stopper();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(
+                &client,
+                r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"image","data":"YQ==","mime_type":"image/png"}]}}"#,
+            );
+            entered_rx
+                .recv_timeout(PASTE_LIMIT)
+                .expect("the image started");
+            stopper();
+            let line = response(&client, "c_prompt");
+            assert_eq!(
+                rejection(&line),
+                ("closing", "Image 1 was not processed: the session is closing.")
+            );
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}

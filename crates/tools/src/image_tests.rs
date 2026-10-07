@@ -441,3 +441,335 @@ fn an_image_changed_after_the_read_is_stale_and_a_refused_read_sees_nothing() {
     assert_eq!(code(&failed), Some(ErrorCode::UnsupportedFile));
     assert_eq!(code(&write_png(&files)), Some(ErrorCode::StaleFile));
 }
+
+// `process` tests: the bytes reach the child on its standard input.
+// The child is a `/bin/sh` script, so `tools` links no image code.
+
+use contract::images::{ImageError, Images as _};
+
+use crate::image::ImageChild;
+
+fn process_with(
+    dir: &Path,
+    fiber: &Path,
+    bytes: &[u8],
+    cancel: &CancelToken,
+) -> Result<contract::provider::ImageRef, ImageError> {
+    let child = ImageChild::new(fiber.to_path_buf(), dir.join("artifacts"));
+    child.process(bytes, cancel)
+}
+
+#[test]
+fn process_copies_stdin_to_artifacts_and_names_it() {
+    let dir = workspace();
+    let fiber = stub(
+        dir.path(),
+        r#"echo "$2" > "$(dirname "$0")/argv"
+mkdir -p "$3"
+cp "$2" "$3/$4.png"
+printf '{"file":"%s.png","mime_type":"image/png","width":80,"height":60}\n' "$4""#,
+    );
+    let bytes = b"\x89PNG\r\n\x1a\nprocessed bytes";
+    let got = process_with(dir.path(), &fiber, bytes, &CancelToken::new()).unwrap();
+    assert_eq!(
+        (got.mime_type.as_str(), got.width, got.height),
+        ("image/png", 80, 60)
+    );
+    assert!(
+        got.path.starts_with("artifacts/i_") && got.path.ends_with(".png"),
+        "{}",
+        got.path
+    );
+    assert_eq!(got.path.len(), "artifacts/i_".len() + 16 + ".png".len());
+    let argv = fs::read_to_string(dir.path().join("argv")).unwrap();
+    assert!(argv.contains("/dev/stdin"), "{argv}");
+    let file = dir.path().join(&got.path);
+    assert_eq!(fs::read(&file).unwrap(), bytes);
+}
+
+#[test]
+fn two_process_calls_get_different_stems() {
+    let dir = workspace();
+    let fiber = stub(
+        dir.path(),
+        r#"cat >/dev/null
+mkdir -p "$3"
+: > "$3/$4.png"
+printf '{"file":"%s.png","mime_type":"image/png","width":1,"height":1}\n' "$4""#,
+    );
+    let first = process_with(dir.path(), &fiber, b"one", &CancelToken::new()).unwrap();
+    let second = process_with(dir.path(), &fiber, b"two", &CancelToken::new()).unwrap();
+    assert_ne!(first.path, second.path);
+}
+
+#[test]
+fn process_exit_1_is_unreadable_with_the_childs_message() {
+    let dir = workspace();
+    let fiber = stub(
+        dir.path(),
+        "echo '8000x7000 is 56000000 pixels; the limit is 50000000' >&2; exit 1",
+    );
+    let Err(ImageError::Unreadable(message)) =
+        process_with(dir.path(), &fiber, b"bytes", &CancelToken::new())
+    else {
+        panic!("unreadable");
+    };
+    assert!(
+        message.contains("8000x7000 is 56000000 pixels; the limit is 50000000"),
+        "{message}"
+    );
+}
+
+#[test]
+fn process_exit_2_exit_3_and_a_signal_are_failed() {
+    let dir = workspace();
+    for (body, expect) in [
+        ("echo disk full >&2; exit 3", "exited with status 3"),
+        ("exit 2", "exited with status 2"),
+        ("kill -9 $$", "killed by a signal"),
+    ] {
+        let fiber = stub(dir.path(), body);
+        let Err(ImageError::Failed(message)) =
+            process_with(dir.path(), &fiber, b"bytes", &CancelToken::new())
+        else {
+            panic!("failed for {body}");
+        };
+        assert!(message.contains(expect), "{body}: {message}");
+    }
+}
+
+#[test]
+fn process_unparseable_extra_or_incomplete_output_is_failed() {
+    let dir = workspace();
+    for (body, expect) in [
+        ("echo hello", "not JSON"),
+        ("echo '{\"file\":\"x.png\"}'", "without file"),
+        (
+            "echo '{\"file\":\"x.png\",\"mime_type\":\"image/png\",\"width\":1,\"height\":1}'; echo more",
+            "more than one line",
+        ),
+        ("", "not JSON"),
+    ] {
+        let fiber = stub(dir.path(), &format!("cat >/dev/null; {body}"));
+        let Err(ImageError::Failed(message)) =
+            process_with(dir.path(), &fiber, b"bytes", &CancelToken::new())
+        else {
+            panic!("failed for {body}");
+        };
+        assert!(message.contains(expect), "{body}: {message}");
+    }
+}
+
+#[test]
+fn process_with_a_missing_binary_is_failed() {
+    let dir = workspace();
+    let Err(ImageError::Failed(message)) = process_with(
+        dir.path(),
+        &dir.path().join("no-such-binary"),
+        b"bytes",
+        &CancelToken::new(),
+    ) else {
+        panic!("failed");
+    };
+    assert!(message.contains("could not start"), "{message}");
+}
+
+#[test]
+fn process_cancelled_before_the_spawn_runs_no_child() {
+    let dir = workspace();
+    let fiber = stub(dir.path(), r#"touch "$(dirname "$0")/ran""#);
+    let cancel = CancelToken::new();
+    cancel.cancel();
+    let result = process_with(dir.path(), &fiber, b"bytes", &cancel);
+    assert_eq!(result, Err(ImageError::Cancelled));
+    assert!(!dir.path().join("ran").exists());
+}
+
+/// How long a cancel test waits for the child to start, and for the call
+/// to end after the cancel. A wait that reaches it fails the test.
+const PROCESS_LIMIT: std::time::Duration = std::time::Duration::from_secs(20);
+
+#[test]
+fn process_cancel_after_the_child_started_stops_and_reaps_it() {
+    let dir = workspace();
+    let ready = fakes::children::Ready::new(dir.path());
+    let fiber = stub(
+        dir.path(),
+        &format!("echo $$ > '{}'\nexec sleep 3600", ready.path().display()),
+    );
+    let cancel = CancelToken::new();
+    let call_cancel = cancel.clone();
+    let root = dir.path().to_path_buf();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let child = ImageChild::new(fiber, root.join("artifacts"));
+        drop(done_tx.send(child.process(b"small", &call_cancel)));
+    });
+    let pid = ready.wait(PROCESS_LIMIT).first().copied().unwrap();
+    assert!(
+        done_rx.try_recv().is_err(),
+        "the call ended before the cancel"
+    );
+    cancel.cancel();
+    let result = done_rx.recv_timeout(PROCESS_LIMIT).expect("the call ends");
+    assert_eq!(result, Err(ImageError::Cancelled));
+    let alive = std::process::Command::new("ps")
+        .args(["-p", &pid.to_string()])
+        .stdout(std::process::Stdio::null())
+        .status()
+        .unwrap()
+        .success();
+    assert!(!alive, "the child {pid} still exists");
+}
+
+#[test]
+fn process_cancel_stops_a_stalled_child_while_the_write_is_blocked() {
+    let dir = workspace();
+    // A child that records its pid and then sleeps without reading
+    // stdin, while 4 MiB is passed, so the write blocks on a full pipe.
+    let ready = fakes::children::Ready::new(dir.path());
+    let fiber = stub(
+        dir.path(),
+        &format!("echo $$ > '{}'\nexec sleep 3600", ready.path().display()),
+    );
+    let bytes = vec![b'x'; 4 * 1024 * 1024];
+    let cancel = CancelToken::new();
+    let call_cancel = cancel.clone();
+    let root = dir.path().to_path_buf();
+    let fiber_path = fiber.clone();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let child = ImageChild::new(fiber_path, root.join("artifacts"));
+        drop(done_tx.send(child.process(&bytes, &call_cancel)));
+    });
+    let pid = ready.wait(PROCESS_LIMIT).first().copied().unwrap();
+    cancel.cancel();
+    let result = done_rx
+        .recv_timeout(PROCESS_LIMIT)
+        .expect("the call ends within the deadline");
+    assert_eq!(result, Err(ImageError::Cancelled));
+    let alive = std::process::Command::new("ps")
+        .args(["-p", &pid.to_string()])
+        .stdout(std::process::Stdio::null())
+        .status()
+        .unwrap()
+        .success();
+    assert!(!alive, "the child {pid} still exists");
+}
+
+fn bad_body_for(label: &str) -> String {
+    // Each body builds its filename from this invocation's `$4`, the stem
+    // the call minted, so a rejection names the shape, not a stale stem.
+    match label {
+        "../outside.png" => {
+            r#"printf '{"file":"../outside.png","mime_type":"image/png","width":1,"height":1}\n'"#
+                .to_owned()
+        }
+        "other.png" => {
+            r#"printf '{"file":"other.png","mime_type":"image/png","width":1,"height":1}\n'"#
+                .to_owned()
+        }
+        "sub/stem.png" => {
+            r#"printf '{"file":"sub/%s.png","mime_type":"image/png","width":1,"height":1}\n' "$4""#
+                .to_owned()
+        }
+        "stem.png.x" => {
+            r#"printf '{"file":"%s.png.x","mime_type":"image/png","width":1,"height":1}\n' "$4""#
+                .to_owned()
+        }
+        "stem." => r#"printf '{"file":"%s.","mime_type":"image/png","width":1,"height":1}\n' "$4""#
+            .to_owned(),
+        "stem" => r#"printf '{"file":"%s","mime_type":"image/png","width":1,"height":1}\n' "$4""#
+            .to_owned(),
+        _ => panic!("a bad file case: {label}"),
+    }
+}
+
+#[test]
+fn process_bad_file_names_are_failed_and_read_calls_them_tool_error() {
+    let dir = workspace();
+    let labels = [
+        "../outside.png",
+        "sub/stem.png",
+        "other.png",
+        "stem.png.x",
+        "stem.",
+        "stem",
+    ];
+    for label in labels {
+        let fiber = stub(
+            dir.path(),
+            &format!("cat >/dev/null\n{}", bad_body_for(label)),
+        );
+        let Err(ImageError::Failed(failure)) =
+            process_with(dir.path(), &fiber, b"bytes", &CancelToken::new())
+        else {
+            panic!("failed for {label}");
+        };
+        assert!(
+            failure.contains("other than the one asked for"),
+            "{label}: {failure}"
+        );
+        let output = run_with(dir.path(), &fiber, "a.png");
+        assert_eq!(code(&output), Some(ErrorCode::ToolError), "{label}");
+        assert!(
+            message(&output).contains("other than the one asked for"),
+            "{label}: {}",
+            message(&output)
+        );
+    }
+    for ext in ["png", "jpg"] {
+        let fiber = stub(
+            dir.path(),
+            &format!(
+                r#"cat >/dev/null
+mkdir -p "$3"
+: > "$3/$4.{ext}"
+printf '{{"file":"%s.{ext}","mime_type":"image/png","width":1,"height":1}}\n' "$4""#
+            ),
+        );
+        let result = process_with(dir.path(), &fiber, b"bytes", &CancelToken::new());
+        assert!(result.is_ok(), "{ext}: {result:?}");
+    }
+}
+
+#[test]
+fn process_child_that_exits_early_without_reading_does_not_hang() {
+    let dir = workspace();
+    let fiber = stub(dir.path(), "exit 0");
+    let bytes = vec![b'y'; 1024 * 1024];
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let root = dir.path().to_path_buf();
+    std::thread::spawn(move || {
+        let child = ImageChild::new(fiber, root.join("artifacts"));
+        drop(done_tx.send(child.process(&bytes, &CancelToken::new())));
+    });
+    let result = done_rx
+        .recv_timeout(PROCESS_LIMIT)
+        .expect("the call ends without hanging");
+    assert!(matches!(result, Err(ImageError::Failed(_))), "{result:?}");
+}
+
+#[test]
+fn process_child_that_reads_stdin_then_fills_both_pipes_does_not_deadlock() {
+    let dir = workspace();
+    let fiber = stub(
+        dir.path(),
+        r#"cat > /dev/null
+head -c 300000 /dev/zero | tr '\0' x >&2
+head -c 300000 /dev/zero | tr '\0' y
+exit 3"#,
+    );
+    let bytes = vec![b'z'; 64 * 1024];
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let root = dir.path().to_path_buf();
+    std::thread::spawn(move || {
+        let child = ImageChild::new(fiber, root.join("artifacts"));
+        drop(done_tx.send(child.process(&bytes, &CancelToken::new())));
+    });
+    let result = done_rx.recv_timeout(PROCESS_LIMIT).expect("the call ends");
+    let Err(ImageError::Failed(message)) = result else {
+        panic!("failed: {result:?}");
+    };
+    assert!(message.contains("exited with status 3"), "{message}");
+}
