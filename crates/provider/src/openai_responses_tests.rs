@@ -40,3 +40,27 @@ fn the_cache_key_goes_in_the_declared_header_and_nowhere_else_without_one() {
         Some(concat!("fiber/", env!("CARGO_PKG_VERSION")))
     );
 }
+
+fn sent_limit(extra: Option<u64>, requested: Option<u64>) -> Option<u64> {
+    let mut endpoint = Endpoint::default();
+    if let Some(limit) = extra {
+        endpoint
+            .extra_body
+            .insert("max_output_tokens".into(), limit.into());
+    }
+    let mut asked = request();
+    asked.max_output_tokens = requested;
+    let call = Responses::new(endpoint).request(&asked);
+    let body: serde_json::Value = serde_json::from_slice(&call.body).unwrap();
+    body["max_output_tokens"].as_u64()
+}
+
+#[test]
+fn an_extra_body_output_limit_and_the_requests_keep_the_smaller() {
+    assert_eq!(sent_limit(Some(100), Some(4096)), Some(100));
+    assert_eq!(sent_limit(Some(5000), Some(300)), Some(300));
+    assert_eq!(sent_limit(Some(100), None), Some(100));
+    assert_eq!(sent_limit(None, Some(300)), Some(300));
+    assert_eq!(sent_limit(None, None), None);
+    assert_eq!(sent_limit(Some(4), Some(4096)), Some(16));
+}
