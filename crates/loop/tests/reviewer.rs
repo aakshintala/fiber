@@ -554,7 +554,7 @@ fn a_failed_reviewer_call_escalates_with_its_failure() {
     });
     let lines = go(&mut session);
     answered.join().unwrap();
-    // The failed call writes no usage: only the reply's own line.
+    // The reply's own line, then the failed review's under a minted id.
     assert_eq!(
         kinds(&lines),
         [
@@ -569,6 +569,7 @@ fn a_failed_reviewer_call_escalates_with_its_failure() {
             "tool_call_requested",
             "usage_recorded",
             "assistant_message_completed",
+            "usage_recorded",
             "permission_requested",
             "permission_resolved",
             "tool_call_started",
@@ -600,11 +601,21 @@ fn a_failed_reviewer_call_escalates_with_its_failure() {
     assert_eq!(resolved.payload["decided_by"], "person");
     assert_eq!(tool.ran().len(), 1);
     assert_eq!(reviewer.requests().len(), 1);
+    // The failed review writes its record under an id Fiber minted, in no
+    // action, at the reviewer's model.
+    let review: Vec<_> = usages(&lines)
+        .into_iter()
+        .filter(|l| l.payload["model"] == REVIEWER_MODEL)
+        .collect();
+    assert_eq!(review.len(), 1);
+    assert!(review[0].action_id.is_none());
     assert!(
-        usages(&lines)
-            .iter()
-            .all(|l| l.payload["model"] != REVIEWER_MODEL)
+        review[0].payload["generation_id"]
+            .as_str()
+            .unwrap()
+            .starts_with("fiber-")
     );
+    assert!(review[0].payload["cost"].is_null());
 }
 
 #[test]
@@ -1236,7 +1247,9 @@ fn headless_failures_count_toward_the_block_budget() {
             "tool_call_requested",
             "usage_recorded",
             "assistant_message_completed",
+            "usage_recorded",
             "permission_resolved",
+            "usage_recorded",
             "permission_resolved",
             "tool_call_completed",
             "tool_call_completed",
@@ -1289,10 +1302,11 @@ fn a_headless_stage_2_failure_denies_naming_the_reviewer_at_stage_2() {
         }),
     ]);
     let lines = go(&mut session);
-    // One usage line, for the `check` reply; the failed call writes none.
+    // Two usage lines: the `check` reply's, and the failed call's under an
+    // id Fiber minted.
     assert_eq!(
         kinds(&lines),
-        kinds_with(&["permission_resolved", "tool_call_completed"], 1)
+        kinds_with(&["permission_resolved", "tool_call_completed"], 2)
     );
     let resolved = line(&lines, "permission_resolved");
     assert_eq!(resolved.payload["decision"], "deny");
@@ -1441,8 +1455,10 @@ fn failures_without_an_answer_count_toward_the_consecutive_limit() {
             "tool_call_requested",
             "usage_recorded",
             "assistant_message_completed",
+            "usage_recorded",
             "permission_requested",
             "permission_resolved",
+            "usage_recorded",
             "permission_requested",
             "permission_resolved",
             "usage_recorded",
@@ -1655,8 +1671,10 @@ fn close_taken_during_a_failed_review_names_the_failed_stage() {
             "tool_call_requested",
             "usage_recorded",
             "assistant_message_completed",
+            "usage_recorded",
             "permission_requested",
             "permission_resolved",
+            "usage_recorded",
             "permission_resolved",
             "tool_call_completed",
             "tool_call_completed",

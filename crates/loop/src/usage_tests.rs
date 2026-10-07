@@ -290,7 +290,7 @@ fn the_inline_cost_wins_over_the_declared_prices() {
 
 fn unfinished(media: bool) -> CallUsage {
     CallUsage {
-        generation_id: GenerationId("gen_u".into()),
+        generation_id: Some(GenerationId("gen_u".into())),
         tokens: tokens(1_000_000, 0, &[], 0),
         web_searches: None,
         input_size: InputSize { bytes: 123, media },
@@ -300,7 +300,7 @@ fn unfinished(media: bool) -> CallUsage {
 #[test]
 fn a_partial_record_prices_its_tokens_at_the_declared_prices() {
     let prices = priced();
-    let line = built(unfinished(false), None, "fake/m", Some(&prices), false);
+    let line = built(unfinished(false), None, "fake/m", Some(&prices), false).line;
     assert_eq!(line.generation_id, GenerationId("gen_u".into()));
     assert_eq!(line.model, "fake/m");
     assert_eq!(line.input_bytes, 123);
@@ -309,19 +309,85 @@ fn a_partial_record_prices_its_tokens_at_the_declared_prices() {
 
 #[test]
 fn a_partial_record_without_prices_has_no_cost() {
-    let line = built(unfinished(false), None, "fake/m", None, false);
+    let line = built(unfinished(false), None, "fake/m", None, false).line;
     assert_eq!(line.cost, None);
 }
 
 #[test]
 fn a_partial_record_marks_media_and_subscription_only_when_set() {
     let prices = priced();
-    let plain = built(unfinished(false), None, "fake/m", Some(&prices), false);
+    let plain = built(unfinished(false), None, "fake/m", Some(&prices), false).line;
     assert_eq!(plain.input_media, None);
     assert_eq!(plain.subscription, None);
-    let marked = built(unfinished(true), None, "fake/m", Some(&prices), true);
+    let marked = built(unfinished(true), None, "fake/m", Some(&prices), true).line;
     assert_eq!(marked.input_media, Some(true));
     assert_eq!(marked.subscription, Some(true));
+}
+
+/// `unfinished(false)` with `generation`, and the tokens 10 in and 3 out.
+fn named(generation: Option<&str>) -> CallUsage {
+    CallUsage {
+        generation_id: generation.map(|id| GenerationId(id.into())),
+        tokens: tokens(10, 0, &[], 3),
+        ..unfinished(false)
+    }
+}
+
+/// Asserts `id` is one Fiber minted: `fiber-` and 16 hex digits
+/// (`docs/events.md`, `usage_recorded`).
+fn assert_minted(id: &GenerationId) {
+    let digits = id.0.strip_prefix("fiber-").unwrap();
+    assert_eq!(id.0.len(), 22, "{id:?}");
+    assert!(
+        digits.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')),
+        "{id:?}"
+    );
+}
+
+#[test]
+fn a_call_the_provider_never_named_gets_a_fresh_minted_id_and_is_not_lookable() {
+    let first = built(named(None), None, "fake/m", None, false);
+    let second = built(named(None), None, "fake/m", None, false);
+    assert_minted(&first.line.generation_id);
+    assert_minted(&second.line.generation_id);
+    assert_ne!(first.line.generation_id, second.line.generation_id);
+    assert!(!first.lookable);
+    assert_eq!(first.line.tokens, tokens(10, 0, &[], 3));
+    assert_eq!(first.line.input_bytes, 123);
+}
+
+#[test]
+fn an_empty_id_is_minted_like_none_and_is_not_lookable() {
+    let empty = built(named(Some("")), None, "fake/m", None, false);
+    assert_minted(&empty.line.generation_id);
+    assert!(!empty.lookable);
+}
+
+#[test]
+fn a_named_call_keeps_its_id_and_is_lookable_only_without_the_vendor_s_figure() {
+    let without = built(named(Some("gen_u")), None, "fake/m", None, false);
+    assert_eq!(without.line.generation_id, GenerationId("gen_u".into()));
+    assert!(without.lookable);
+    let with = built(named(Some("gen_u")), Some(0.1), "fake/m", None, false);
+    assert_eq!(with.line.generation_id, GenerationId("gen_u".into()));
+    assert!(!with.lookable);
+    assert_eq!(with.line.cost, Some(0.1));
+}
+
+#[test]
+fn a_minted_record_s_cost_is_null_whatever_the_model_declares() {
+    let prices = priced();
+    let declared = built(named(None), None, "fake/m", Some(&prices), false);
+    assert_eq!(declared.line.cost, None);
+    let inline = built(named(None), Some(0.1), "fake/m", Some(&prices), false);
+    assert_eq!(inline.line.cost, None);
+    assert!(!inline.lookable);
+    // The same call, named, is priced as any call.
+    let named = built(named(Some("gen_u")), None, "fake/m", Some(&prices), false);
+    assert_eq!(
+        named.line.cost,
+        Some((2.0 * 10.0 + 10.0 * 3.0) / 1_000_000.0)
+    );
 }
 
 #[test]

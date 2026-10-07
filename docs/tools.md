@@ -1344,7 +1344,9 @@ that disables tools. The session runs anyway.
   request's input size in bytes (`input_bytes` on `usage_recorded`,
   `docs/events.md`). A request that carries an image or PDF part
   (`input_media`) is skipped for the next one without, because those parts'
-  bytes bear no relation to their tokens. Until a request gives a rate,
+  bytes bear no relation to their tokens. A request that reported no input
+  tokens, such as one that failed before the provider named its generation, is
+  skipped the same way. Until a request gives a rate,
   sizes are shown in bytes.
 - `preamble_built` records, for each tool definition, whether it was deferred
   (`docs/events.md`).

@@ -281,7 +281,9 @@ pub(crate) fn fold(turns: &mut [Turn], fold: &mut Fold, envelope: &Envelope) -> 
 
 /// A new model call's `usage_recorded`: the latest completed handoff still
 /// waiting for its size after takes the call's context size. A copy from
-/// another session, or an extension's own call, is not this context's.
+/// another session, or an extension's own call, is not this context's, and
+/// a call that reported no input tokens measured nothing, so the size waits
+/// for the next (`docs/tui.md`, the handoff band).
 pub(crate) fn sized(turns: &mut [Turn], line: &UsageRecorded) -> bool {
     if line.origin_session_id.is_some() || line.extension.is_some() {
         return false;
@@ -292,6 +294,9 @@ pub(crate) fn sized(turns: &mut [Turn], line: &UsageRecorded) -> bool {
         .values()
         .fold(tokens.input, |sum, n| sum.saturating_add(*n))
         .saturating_add(tokens.cache_read);
+    if context == 0 {
+        return false;
+    }
     let latest = turns
         .iter_mut()
         .rev()

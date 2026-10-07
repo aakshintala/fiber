@@ -83,24 +83,23 @@ impl Loop {
         request.max_output_tokens = Some(1);
         let call = self.provider.call(&request);
         let reply = crate::cancel::run_cancellable(&self.cancel, call, &mut |_| {});
-        // A refresh that named its generation writes its usage at once,
-        // before the notice a failure also writes.
-        let seen = match &reply {
-            Ok(reply) => Some((reply.usage(), reply.cost)),
-            Err(error) => error.usage().map(|usage| (usage.clone(), None)),
+        // A refresh writes its usage at once, however it ended, before the
+        // notice a failure also writes (`docs/events.md`, "Usage and
+        // notices").
+        let (usage, inline) = match &reply {
+            Ok(reply) => (reply.usage(), reply.cost),
+            Err(error) => (error.usage().clone(), None),
         };
-        if let Some((usage, inline)) = seen {
-            let model = &self.model;
-            let recorded = crate::usage::recorded(
-                usage,
-                inline,
-                &model.reference,
-                model.cost.as_ref(),
-                model.subscription,
-            );
-            let lookup = self.provider.cost_lookup();
-            self.write_usage(recorded, inline, lookup, None, None)?;
-        }
+        let model = &self.model;
+        let recorded = crate::usage::recorded(
+            usage,
+            inline,
+            &model.reference,
+            model.cost.as_ref(),
+            model.subscription,
+        );
+        let lookup = self.provider.cost_lookup();
+        self.write_usage(recorded, lookup, None, None)?;
         match reply {
             Ok(_) => {
                 // The stored request stays the step's own; only the send

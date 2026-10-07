@@ -8,7 +8,9 @@ use contract::shapes::{Question, Tokens};
 use contract::{ActionId, events::ContextNudged};
 use serde_json::json;
 
-use super::{Carry, HandoffSettings, context_tokens, estimate, note_request_text, trigger_at};
+use super::{
+    Carry, HandoffSettings, context_tokens, estimate, note_request_text, prompt_tokens, trigger_at,
+};
 
 fn settings(enabled: bool, tokens: u64, window_fraction: f64) -> HandoffSettings {
     HandoffSettings {
@@ -74,6 +76,7 @@ fn context_tokens_sum_the_prompt_and_the_output() {
         output: 10_000,
     };
     assert_eq!(context_tokens(&tokens), 11_111);
+    assert_eq!(prompt_tokens(&tokens), 1_111);
 }
 
 fn call(name: &str, arguments: serde_json::Value) -> Input {

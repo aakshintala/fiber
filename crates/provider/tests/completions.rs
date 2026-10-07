@@ -28,11 +28,11 @@ use contract::events::{
     CacheLifetime, ReasoningCompleted, TextCompleted, TextDelta, ToolCallRequested,
 };
 use contract::provider::{
-    CallError, Delta, Finish, Input, InputSize, ModelCall, ModelRequest, Provider, Reply,
-    ReplyAction, ToolDefinition,
+    CallError, CallUsage, Delta, Finish, Input, InputSize, ModelCall, ModelRequest, Provider,
+    Reply, ReplyAction, ToolDefinition,
 };
 use contract::shapes::Tokens;
-use contract::{ActionId, ErrorCode, ProviderCallId};
+use contract::{ActionId, ErrorCode, GenerationId, ProviderCallId};
 use fakes::{ProviderServer, Response};
 use provider::openai_completions::{Completions, decode};
 use provider::{Compat, Endpoint};
@@ -265,7 +265,7 @@ fn every_probe_recording_decodes_into_the_actions_and_usage_it_holds() {
             assert_eq!(reply.finish, finish, "{label}");
             assert_eq!(reply.text(), want.text, "{label}");
             assert_eq!(reply.tokens, tokens(&want.usage, "5m"), "{label}");
-            assert!(!reply.generation_id.0.is_empty(), "{label}");
+            assert!(reply.generation_id.is_some(), "{label}");
 
             // Text deltas add up to the reply's text.
             let text: String = deltas
@@ -858,10 +858,12 @@ fn a_call_cancelled_before_it_runs_returns_without_connecting() {
     };
     let call = Completions::new(endpoint).request(&request());
     call.cancel();
-    assert_eq!(
-        run(Box::new(call)).0,
-        Err(CallError::Cancelled { usage: None })
-    );
+    let Err(CallError::Cancelled { usage }) = run(Box::new(call)).0 else {
+        panic!("a call cancelled before run returns cancelled");
+    };
+    // Nothing was read, so the call carries only the body it built.
+    assert!(usage.input_size.bytes > 0);
+    assert_eq!(*usage, CallUsage::unnamed(usage.input_size));
     let accepted = listener.accept().map(|_| ()).unwrap_err();
     assert_eq!(
         accepted.kind(),
@@ -898,10 +900,10 @@ fn cancelling_from_another_thread_ends_a_blocked_read() {
     let result = finished
         .recv_timeout(DEADLINE)
         .expect("waited for run to return after the cancel");
-    let Err(CallError::Cancelled { usage: Some(usage) }) = result else {
+    let Err(CallError::Cancelled { usage }) = result else {
         panic!("{result:?}");
     };
-    assert_eq!(usage.generation_id.0, "gen-1");
+    assert_eq!(usage.generation_id, Some(GenerationId("gen-1".into())));
     assert_eq!(
         usage.tokens,
         Tokens {

@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use contract::ErrorCode;
 use contract::events::{TextDelta, ToolCallArgumentsDelta, TurnOutcome};
-use contract::provider::{CallError, Delta};
+use contract::provider::{CallError, CallUsage, Delta, InputSize};
 use contract::shapes::Failure;
 use fakes::{Scripted, call_usage};
 use r#loop::Retry;
@@ -48,7 +48,7 @@ fn header_failed(code: ErrorCode, should_retry: Option<bool>) -> Scripted {
                 provider: None,
             },
             should_retry,
-            usage: None,
+            usage: Box::new(CallUsage::unnamed(InputSize::default())),
         }),
     }
 }
@@ -64,7 +64,7 @@ fn waited(code: ErrorCode, retry_after_ms: u64) -> Scripted {
                 provider: None,
             },
             should_retry: None,
-            usage: None,
+            usage: Box::new(CallUsage::unnamed(InputSize::default())),
         }),
     }
 }
@@ -154,6 +154,7 @@ fn a_rate_limit_then_a_reply_retries_after_2s() {
             "turn_started",
             "step_started",
             "assistant_message_started",
+            "usage_recorded",
             "assistant_message_completed",
             "retry_scheduled",
             "assistant_message_started",
@@ -167,21 +168,34 @@ fn a_rate_limit_then_a_reply_retries_after_2s() {
     );
     assert_eq!(attempts(&lines), [1]);
     let failed_message = &lines[5];
-    let completed = &lines[6].payload;
+    let completed = &lines[7].payload;
     assert_eq!(completed["outcome"], "failed");
     assert!(completed.get("attempt").is_none());
     assert_eq!(completed["error"]["code"], "rate_limited");
     // The retry is a new action: its `retry_scheduled` names the failed
     // message, the next attempt and the wait.
-    let wait = &lines[7];
+    let wait = &lines[8];
     assert_eq!(wait.action_id, failed_message.action_id);
     assert_eq!(wait.payload["code"], "rate_limited");
     assert_eq!(wait.payload["attempt"], 2);
     assert_eq!(wait.payload["delay_ms"], 2000);
-    assert_ne!(lines[8].action_id, failed_message.action_id);
-    // The failed attempt writes no `usage_recorded`; the retry's reply does,
-    // before its completion.
-    assert_eq!(completed_count(&lines, "usage_recorded"), 1);
+    assert_ne!(lines[9].action_id, failed_message.action_id);
+    // Each attempt writes its `usage_recorded` before its completion: the
+    // failed one under an id Fiber minted, the retry's reply under its own.
+    let usages: Vec<_> = lines
+        .iter()
+        .filter(|l| l.kind == "usage_recorded")
+        .collect();
+    assert_eq!(usages.len(), 2);
+    assert_eq!(usages[0].action_id, failed_message.action_id);
+    assert!(
+        usages[0].payload["generation_id"]
+            .as_str()
+            .unwrap()
+            .starts_with("fiber-")
+    );
+    assert_eq!(usages[1].action_id, lines[9].action_id);
+    assert_eq!(usages[1].payload["generation_id"], "gen_1");
     // The retry resends the same request.
     assert_eq!(session.requests().len(), 2);
     assert_eq!(session.requests()[0], session.requests()[1]);
@@ -224,12 +238,15 @@ fn three_failures_then_success_waits_2_4_8s() {
             "turn_started",
             "step_started",
             "assistant_message_started",
+            "usage_recorded",
             "assistant_message_completed",
             "retry_scheduled",
             "assistant_message_started",
+            "usage_recorded",
             "assistant_message_completed",
             "retry_scheduled",
             "assistant_message_started",
+            "usage_recorded",
             "assistant_message_completed",
             "retry_scheduled",
             "assistant_message_started",
@@ -248,7 +265,7 @@ fn three_failures_then_success_waits_2_4_8s() {
         "each wait doubles, and `retry_scheduled.attempt` is the next attempt"
     );
     assert_eq!(session.requests().len(), 4);
-    assert_eq!(completed_count(&lines, "usage_recorded"), 1);
+    assert_eq!(completed_count(&lines, "usage_recorded"), 4);
 }
 
 #[test]
@@ -288,15 +305,19 @@ fn four_failures_exhaust_the_retries_with_the_last_error() {
             "turn_started",
             "step_started",
             "assistant_message_started",
+            "usage_recorded",
             "assistant_message_completed",
             "retry_scheduled",
             "assistant_message_started",
+            "usage_recorded",
             "assistant_message_completed",
             "retry_scheduled",
             "assistant_message_started",
+            "usage_recorded",
             "assistant_message_completed",
             "retry_scheduled",
             "assistant_message_started",
+            "usage_recorded",
             "assistant_message_completed",
             "turn_completed",
         ]
@@ -318,7 +339,7 @@ fn four_failures_exhaust_the_retries_with_the_last_error() {
         lines.last().unwrap().payload["error"],
         last.payload["error"]
     );
-    assert_eq!(completed_count(&lines, "usage_recorded"), 0);
+    assert_eq!(completed_count(&lines, "usage_recorded"), 4);
     assert_eq!(session.requests().len(), 4);
 }
 
@@ -338,6 +359,7 @@ fn a_never_retried_code_fails_at_once() {
             "turn_started",
             "step_started",
             "assistant_message_started",
+            "usage_recorded",
             "assistant_message_completed",
             "turn_completed",
         ]
@@ -366,6 +388,7 @@ fn x_should_retry_false_stops_a_5xx_at_once() {
             "turn_started",
             "step_started",
             "assistant_message_started",
+            "usage_recorded",
             "assistant_message_completed",
             "turn_completed",
         ]
@@ -398,6 +421,7 @@ fn x_should_retry_true_retries_an_invalid_request() {
             "turn_started",
             "step_started",
             "assistant_message_started",
+            "usage_recorded",
             "assistant_message_completed",
             "retry_scheduled",
             "assistant_message_started",
@@ -411,7 +435,7 @@ fn x_should_retry_true_retries_an_invalid_request() {
     );
     assert_eq!(scheduled(&lines), [(2, 0)]);
     assert_scheduled_attempts(&lines);
-    assert_eq!(completed_count(&lines, "usage_recorded"), 1);
+    assert_eq!(completed_count(&lines, "usage_recorded"), 2);
     assert_eq!(session.requests().len(), 2);
 }
 
@@ -447,6 +471,7 @@ fn an_asked_wait_within_the_cap_waits_the_larger() {
             "turn_started",
             "step_started",
             "assistant_message_started",
+            "usage_recorded",
             "assistant_message_completed",
             "retry_scheduled",
             "assistant_message_started",
@@ -478,12 +503,13 @@ fn an_asked_wait_over_the_cap_fails_at_once_as_rate_limited() {
             "turn_started",
             "step_started",
             "assistant_message_started",
+            "usage_recorded",
             "assistant_message_completed",
             "turn_completed",
         ]
     );
     assert_eq!(attempts(&lines), [1]);
-    let completed = &lines[6].payload;
+    let completed = &lines[7].payload;
     assert_eq!(completed["error"]["code"], "rate_limited");
     assert_eq!(completed["error"]["retry_after_ms"], 90_000);
     assert!(lines.iter().all(|l| l.kind != "retry_scheduled"));
@@ -514,7 +540,7 @@ fn a_failed_stream_drops_its_partial_text_and_tool_calls() {
                         provider: None,
                     },
                     should_retry: None,
-                    usage: None,
+                    usage: Box::new(CallUsage::unnamed(InputSize::default())),
                 }),
             },
             Scripted::text("Recovered."),
@@ -539,6 +565,7 @@ fn a_failed_stream_drops_its_partial_text_and_tool_calls() {
             "assistant_message_started",
             "assistant_message_delta",
             "tool_call_arguments_delta",
+            "usage_recorded",
             "assistant_message_completed",
             "retry_scheduled",
             "assistant_message_started",
@@ -577,6 +604,7 @@ fn zero_attempts_never_retries() {
             "turn_started",
             "step_started",
             "assistant_message_started",
+            "usage_recorded",
             "assistant_message_completed",
             "turn_completed",
         ]
@@ -615,6 +643,7 @@ fn a_cancel_during_the_wait_ends_the_turn_interrupted() {
             "turn_started",
             "step_started",
             "assistant_message_started",
+            "usage_recorded",
             "assistant_message_completed",
             "retry_scheduled",
             "turn_completed",
@@ -645,6 +674,7 @@ fn a_cancel_during_the_failing_call_is_interrupted_with_no_wait() {
             "turn_started",
             "step_started",
             "assistant_message_started",
+            "usage_recorded",
             "assistant_message_completed",
             "turn_completed",
         ]
@@ -693,6 +723,7 @@ fn a_clock_advance_during_the_failing_call_does_not_shorten_the_wait() {
             "turn_started",
             "step_started",
             "assistant_message_started",
+            "usage_recorded",
             "assistant_message_completed",
             "retry_scheduled",
             "assistant_message_started",

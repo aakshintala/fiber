@@ -1,15 +1,15 @@
 use std::collections::BTreeMap;
 
-use contract::provider::{CallUsage, InputSize};
+use contract::GenerationId;
+use contract::provider::{CallUsage, InputSize, Reply};
 use contract::shapes::Tokens;
-use contract::{GenerationId, ProviderCallId};
 
-use super::carried;
+use super::{carried, named};
 use crate::Error;
 
-fn usage(generation: &str) -> CallUsage {
+fn usage(generation: Option<&str>) -> CallUsage {
     CallUsage {
-        generation_id: GenerationId(generation.into()),
+        generation_id: generation.map(|id| GenerationId(id.into())),
         tokens: Tokens {
             input: 7,
             cache_read: 1,
@@ -24,9 +24,9 @@ fn usage(generation: &str) -> CallUsage {
     }
 }
 
-fn reply(generation: &str) -> contract::provider::Reply {
+fn reply(generation: Option<&str>) -> Reply {
     let usage = usage(generation);
-    contract::provider::Reply {
+    Reply {
         actions: Vec::new(),
         finish: contract::provider::Finish::Completed,
         generation_id: usage.generation_id.clone(),
@@ -44,59 +44,52 @@ fn sized(bytes: u64) -> InputSize {
     }
 }
 
-#[test]
-fn a_completed_reply_with_an_id_carries_its_usage_with_the_call_s_input_size() {
-    let mut completed = reply("gen_1");
-    completed.input_size = sized(1);
-    let carried = carried(&Ok(completed), sized(900));
-    let mut want = usage("gen_1");
+#[allow(
+    clippy::result_large_err,
+    reason = "the decode's own result shape, which carries its partial beside the error"
+)]
+fn failed(partial: Option<CallUsage>) -> Result<Reply, (Error, Option<CallUsage>)> {
+    Err((Error::StreamIncomplete("ended".into()), partial))
+}
+
+/// `usage(generation)` with the call's input size.
+fn sent(generation: Option<&str>) -> Box<CallUsage> {
+    let mut want = usage(generation);
     want.input_size = sized(900);
-    assert_eq!(carried, Some(Box::new(want)));
+    Box::new(want)
 }
 
 #[test]
-fn a_completed_reply_with_an_empty_id_carries_nothing() {
-    let mut completed = reply("");
-    completed.generation_id = GenerationId(String::new());
-    // An empty id carries none even when the reply holds tokens.
-    assert_eq!(carried(&Ok(completed), sized(900)), None);
+fn each_way_a_call_ends_carries_what_it_saw_with_the_call_s_input_size() {
+    let mut named_reply = reply(Some("gen_1"));
+    named_reply.input_size = sized(1);
+    let mut named_partial = usage(Some("gen_1"));
+    named_partial.input_size = sized(1);
+    let cases = [
+        (
+            "a named partial",
+            failed(Some(named_partial)),
+            sent(Some("gen_1")),
+        ),
+        ("an unnamed partial", failed(Some(usage(None))), sent(None)),
+        (
+            "no stream read",
+            failed(None),
+            Box::new(CallUsage::unnamed(sized(900))),
+        ),
+        ("a named reply", Ok(named_reply), sent(Some("gen_1"))),
+        ("an unnamed reply", Ok(reply(None)), sent(None)),
+    ];
+    for (case, decoded, want) in cases {
+        assert_eq!(carried(&decoded, sized(900)), want, "{case}");
+    }
 }
 
 #[test]
-fn a_failed_decode_carries_its_partial_with_the_call_s_input_size() {
-    let mut partial = usage("gen_1");
-    partial.input_size = sized(1);
-    let failed: Result<contract::provider::Reply, (Error, Option<CallUsage>)> =
-        Err((Error::StreamIncomplete("ended".into()), Some(partial)));
-    let mut want = usage("gen_1");
-    want.input_size = sized(900);
-    assert_eq!(carried(&failed, sized(900)), Some(Box::new(want)));
-}
-
-#[test]
-fn a_failed_decode_without_a_partial_carries_nothing() {
-    let failed: Result<contract::provider::Reply, (Error, Option<CallUsage>)> =
-        Err((Error::StreamIncomplete("ended".into()), None));
-    assert_eq!(carried(&failed, sized(900)), None);
-}
-
-#[test]
-fn a_provider_id_on_a_completed_reply_does_not_change_what_it_carries() {
-    // The reply's own provider ids (tool calls) are not the generation;
-    // only an empty generation id suppresses the carry.
-    let mut completed = reply("gen_1");
-    completed
-        .actions
-        .push(contract::provider::ReplyAction::ToolCall(
-            contract::events::ToolCallRequested {
-                name: "get_weather".into(),
-                arguments: serde_json::json!({}),
-                provider_id: Some(ProviderCallId("call_1".into())),
-                repair: None,
-                ran_by: None,
-                provider_item: None,
-            },
-        ));
-    let carried = carried(&Ok(completed), sized(5));
-    assert!(carried.is_some());
+fn only_a_non_empty_id_names_a_generation() {
+    assert_eq!(named(String::new()), None);
+    assert_eq!(
+        named("gen_1".to_owned()),
+        Some(GenerationId("gen_1".into()))
+    );
 }
