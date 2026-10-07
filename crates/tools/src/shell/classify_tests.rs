@@ -305,6 +305,14 @@ fn denied_flags_are_absent_from_every_allowed_list() {
         ("sort", "-T"),
         ("tail", "-f"),
         ("grep", "-f"),
+        ("grep", "-R"),
+        ("grep", "--dereference-recursive"),
+        ("rg", "-L"),
+        ("rg", "--follow"),
+        ("find", "-L"),
+        ("find", "-H"),
+        ("find", "-follow"),
+        ("ls", "-L"),
     ] {
         let command = COMMANDS
             .iter()

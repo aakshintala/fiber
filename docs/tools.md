@@ -400,6 +400,12 @@ Fiber.
 - An operand under `/proc/` makes a call not read-only, so it goes to
   review. A process's environment there can hold a key from an `env`
   credential source (`docs/configuration.md`, "Secrets").
+- A flag that makes a recursive read follow symbolic links, such as
+  `grep -R`, `rg -L` or `find -L`, makes a call not read-only, so it goes to
+  review: the credential deny sees only the paths a call names, never a
+  link below them. Any read-only command added later follows the same rule.
+  `grep -r` stays read-only, because it follows only links named on the
+  command line, and the deny canonicalises those.
 
 - A tool that must stay warm between calls, such as an index kept current by
   a file watcher or a language server, is an extension that registers a tool
@@ -553,9 +559,8 @@ that ticket's resolution holds the rationale and the rejected alternatives.
 - Flags matter because read-only-looking commands have writing or
   executing flags: `git diff --output=<file>` writes a file,
   `rg --pre <cmd>` and `find -exec` run programs, `find -delete` deletes,
-  `sort -o` writes. `grep -R` follows every link below the paths it names,
-  which the credential deny never sees, so it is not on the list. The list
-  and its flag rules are part of building the shell tool.
+  `sort -o` writes. The list and its flag rules are part of building the
+  shell tool.
 - A call declared `reads` takes the permission fast path.
 - A command of one part, with nothing the classifier cannot read plainly,
   has the command as its subject. The prefix offered is its first word, and
