@@ -55,8 +55,7 @@ pub(crate) struct Hub {
     /// Tests only: a one-shot pause run before `hub_hello` is sent.
     #[cfg(test)]
     pub(crate) before_hello: Mutex<Option<Box<dyn FnOnce() + Send>>>,
-    /// Tests only: run before each forwarded session line, with no lock
-    /// held.
+    /// Tests only: a one-shot pause before the next forwarded session line.
     #[cfg(test)]
     pub(crate) before_forward: ForwardHook,
 }
@@ -272,10 +271,10 @@ impl Hub {
     }
 }
 
-/// Tests only: what runs before each forwarded session line: the line
-/// about to be written, and the relays, with no lock held.
+/// Tests only: a one-shot pause before the next forwarded session line:
+/// the line about to be written, and the relays, with no lock held.
 #[cfg(test)]
-type ForwardHook = Mutex<Option<Box<dyn FnMut(&[u8], &Arc<Mutex<Relays>>) + Send>>>;
+type ForwardHook = Mutex<Option<Box<dyn FnOnce(&[u8], &Arc<Mutex<Relays>>) + Send>>>;
 
 /// What `poll_accept` decided for one accepted stream.
 pub(crate) enum Accept {

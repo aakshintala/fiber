@@ -742,26 +742,25 @@ fn the_level_is_recorded_before_its_acknowledgement_is_forwarded() {
     temp.recorded();
     let starter = FakeStarter::bind_and_hold(&temp.dir);
     let hub = temp.hub(starter.clone());
-    // The hook runs inside the forward of each session line, with no lock
-    // held: on the line acknowledging `c_2` it reads the kept
-    // subscription, which the relay records before it forwards.
     let (done, finished) = mpsc::channel();
-    *crate::connection::lock(&hub.before_forward) = Some(Box::new(move |line, relays| {
-        if crate::relay::acknowledges(line, "c_2") {
-            let level = crate::connection::lock(relays)
-                .subscribed
-                .iter()
-                .find(|(session, _)| session == SID)
-                .and_then(|(_, kept)| kept.get("args"))
-                .and_then(|args| args.get("level"))
-                .and_then(Value::as_str)
-                .map(str::to_owned);
-            if let Ok(()) = done.send(level) {}
-        }
-    }));
     let mut client = Client::connect(&hub);
     client.subscribe("c_1", "summary");
     assert_eq!(client.acknowledged("the subscribe"), "c_1");
+    // The one-shot hook runs inside the forward of the next session line,
+    // the acknowledgement of `c_2`: it reads the kept subscription, which
+    // the relay records before it forwards.
+    *crate::connection::lock(&hub.before_forward) = Some(Box::new(move |line, relays| {
+        assert!(crate::relay::acknowledges(line, "c_2"), "{line:?}");
+        let level = crate::connection::lock(relays)
+            .subscribed
+            .iter()
+            .find(|(session, _)| session == SID)
+            .and_then(|(_, kept)| kept.get("args"))
+            .and_then(|args| args.get("level"))
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        if let Ok(()) = done.send(level) {}
+    }));
     client.subscribe("c_2", "full");
     assert_eq!(client.acknowledged("the change"), "c_2");
     assert_eq!(

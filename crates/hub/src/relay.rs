@@ -86,9 +86,15 @@ impl Relays {
         }
     }
 
-    /// Replaces `session`'s kept subscription with `line` when `line` is a
-    /// `subscribe`; adds it when none is kept. Anything else changes nothing.
-    fn accepted(&mut self, session: &str, line: Map<String, Value>) {
+    /// Replaces `session`'s kept subscription with `line` when it is an
+    /// accepted `subscribe` from the relay still in the map: a stale
+    /// relay thread's buffered acknowledgement never overwrites the
+    /// replacement's level. Adds it when none is kept. Anything else
+    /// changes nothing.
+    fn accepted(&mut self, session: &str, epoch: u64, line: Map<String, Value>) {
+        if relay_slot(&self.entries, session, epoch).is_none() {
+            return;
+        }
         if line.get("command").and_then(Value::as_str) != Some("subscribe") {
             return;
         }
@@ -313,7 +319,7 @@ fn relay(
                         continue;
                     }
                     Some(Settled::Subscribed(line)) => {
-                        lock(relays).accepted(session, line);
+                        lock(relays).accepted(session, epoch, line);
                     }
                     None => {}
                 }
@@ -327,9 +333,9 @@ fn relay(
 }
 
 /// The only writer of session lines to the client: every session line the
-/// relay passes back goes through it. It runs the `before_forward` test
-/// hook first, with no lock held, so the hook observes each acknowledgement
-/// after it is recorded.
+/// relay passes back goes through it. It runs the one-shot
+/// `before_forward` test hook first, with no lock held, so the hook
+/// observes the acknowledgement after it is recorded.
 fn forward(
     buf: &[u8],
     writer: &Arc<Mutex<UnixStream>>,
@@ -338,10 +344,8 @@ fn forward(
 ) -> std::io::Result<()> {
     #[cfg(test)]
     {
-        let mut held = lock(&hub.before_forward);
-        if let Some(mut before) = held.take() {
+        if let Some(before) = lock(&hub.before_forward).take() {
             before(buf, relays);
-            *held = Some(before);
         }
     }
     #[cfg(not(test))]

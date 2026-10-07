@@ -15,6 +15,47 @@ use serde_json::{Value, json};
 use super::*;
 
 #[test]
+fn a_stale_relay_never_overwrites_a_reconnects_subscription() {
+    fn entry(session: &str, epoch: u64) -> Relay {
+        let (writer, _) = UnixStream::pair().unwrap();
+        Relay {
+            session: session.to_owned(),
+            epoch,
+            writer,
+            kept: Kept::default(),
+        }
+    }
+    let line = |id: &str, level: &str| {
+        json!({"id": id, "command": "subscribe", "args": {"level": level}})
+            .as_object()
+            .unwrap()
+            .clone()
+    };
+    let sid = "s_aaaaaaaaaaaaaaaa";
+    let mut relays = Relays::default();
+    // The first relay accepts `full`; a failed write drops its entry and
+    // a reconnect mints the next epoch.
+    let stale = relays.mint();
+    relays.entries.push(entry(sid, stale));
+    relays.keep(sid, &line("c_1", "full"));
+    relays.entries.remove(0);
+    let fresh = relays.mint();
+    assert_ne!(fresh, stale);
+    relays.entries.push(entry(sid, fresh));
+    // The replacement accepts `summary` first; the stale relay's buffered
+    // `full` acknowledgement arrives after. Forced order, no sleeps.
+    relays.accepted(sid, fresh, line("c_2", "summary"));
+    assert_eq!(relays.subscription(sid), Some(line("c_2", "summary")));
+    relays.accepted(sid, stale, line("c_1", "full"));
+    assert_eq!(
+        relays.subscription(sid),
+        Some(line("c_2", "summary")),
+        "the stale acknowledgement keeps the replacement's level"
+    );
+    assert_eq!(relays.subscribed.len(), 1, "one entry per session");
+}
+
+#[test]
 fn a_stale_relay_never_drops_a_reconnect_to_the_same_session() {
     fn entry(epoch: u64) -> Relay {
         let (writer, _) = UnixStream::pair().unwrap();
@@ -93,6 +134,15 @@ fn only_the_first_subscribe_for_a_session_is_kept() {
 
 #[test]
 fn an_accepted_subscribe_replaces_the_kept_one() {
+    fn entry(session: &str, epoch: u64) -> Relay {
+        let (writer, _) = UnixStream::pair().unwrap();
+        Relay {
+            session: session.to_owned(),
+            epoch,
+            writer,
+            kept: Kept::default(),
+        }
+    }
     let line = |id: &str, command: &str| {
         json!({"id": id, "command": command, "args": {"level": "full"}})
             .as_object()
@@ -100,21 +150,25 @@ fn an_accepted_subscribe_replaces_the_kept_one() {
             .clone()
     };
     let mut relays = Relays::default();
+    let first = relays.mint();
+    relays.entries.push(entry("s_aaaaaaaaaaaaaaaa", first));
     relays.keep("s_aaaaaaaaaaaaaaaa", &line("c_1", "subscribe"));
-    relays.accepted("s_aaaaaaaaaaaaaaaa", line("c_2", "subscribe"));
+    relays.accepted("s_aaaaaaaaaaaaaaaa", first, line("c_2", "subscribe"));
     assert_eq!(
         relays.subscription("s_aaaaaaaaaaaaaaaa"),
         Some(line("c_2", "subscribe"))
     );
     assert_eq!(relays.subscribed.len(), 1, "one entry per session");
     // Another session's entry is added or replaced on its own.
-    relays.accepted("s_bbbbbbbbbbbbbbbb", line("c_3", "subscribe"));
+    let second = relays.mint();
+    relays.entries.push(entry("s_bbbbbbbbbbbbbbbb", second));
+    relays.accepted("s_bbbbbbbbbbbbbbbb", second, line("c_3", "subscribe"));
     assert_eq!(
         relays.subscription("s_bbbbbbbbbbbbbbbb"),
         Some(line("c_3", "subscribe"))
     );
     assert_eq!(relays.subscribed.len(), 2);
-    relays.accepted("s_bbbbbbbbbbbbbbbb", line("c_4", "subscribe"));
+    relays.accepted("s_bbbbbbbbbbbbbbbb", second, line("c_4", "subscribe"));
     assert_eq!(
         relays.subscription("s_bbbbbbbbbbbbbbbb"),
         Some(line("c_4", "subscribe"))
@@ -135,10 +189,20 @@ fn an_accepted_command_that_is_not_subscribe_changes_nothing() {
             .clone()
     };
     let mut relays = Relays::default();
-    relays.accepted("s_aaaaaaaaaaaaaaaa", line("c_1", "prompt"));
+    let epoch = relays.mint();
+    relays.entries.push({
+        let (writer, _) = UnixStream::pair().unwrap();
+        Relay {
+            session: "s_aaaaaaaaaaaaaaaa".to_owned(),
+            epoch,
+            writer,
+            kept: Kept::default(),
+        }
+    });
+    relays.accepted("s_aaaaaaaaaaaaaaaa", epoch, line("c_1", "prompt"));
     assert_eq!(relays.subscription("s_aaaaaaaaaaaaaaaa"), None);
     relays.keep("s_aaaaaaaaaaaaaaaa", &line("c_2", "subscribe"));
-    relays.accepted("s_aaaaaaaaaaaaaaaa", line("c_3", "prompt"));
+    relays.accepted("s_aaaaaaaaaaaaaaaa", epoch, line("c_3", "prompt"));
     assert_eq!(
         relays.subscription("s_aaaaaaaaaaaaaaaa"),
         Some(line("c_2", "subscribe"))

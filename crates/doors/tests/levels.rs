@@ -164,12 +164,11 @@ fn send(client: &Client, line: &str) {
     client.send(line).unwrap();
 }
 
-/// The acknowledgement for `id`, skipping events that belong to the session.
-fn response(client: &Client, id: &str) -> Value {
+/// Every line up to and including the acknowledgement for `id`: the
+/// complete, ordered sequence, so a missing, duplicated or reordered line
+/// fails.
+fn response(client: &Client, id: &str) -> Vec<Value> {
     until(client, |line| command_id(line) == Some(id))
-        .into_iter()
-        .next_back()
-        .unwrap()
 }
 
 fn subscribe(client: &Client, id: &str, level: &str) -> Value {
@@ -502,16 +501,21 @@ fn a_repeated_subscribe_at_the_same_level_is_invalid_arguments() {
                 &summary,
                 r#"{"id":"c_a_2","command":"subscribe","args":{"level":"summary"}}"#,
             );
+            let repeated = response(&summary, "c_a_2");
+            assert_eq!(kinds(&repeated), ["command_rejected"], "{repeated:?}");
             assert_eq!(
-                rejection(&response(&summary, "c_a_2")),
+                rejection(repeated.last().unwrap()),
                 ("invalid_arguments", ALREADY)
             );
             send(
                 &full,
                 r#"{"id":"c_b_2","command":"subscribe","args":{"level":"full"}}"#,
             );
+            let held = response(&full, "c_b_2");
+            assert_eq!(kinds(&held), ["clients", "command_rejected"], "{held:?}");
+            assert_eq!(count(&held[0]), 1);
             assert_eq!(
-                rejection(&response(&full, "c_b_2")),
+                rejection(held.last().unwrap()),
                 ("invalid_arguments", ALREADY)
             );
             log.append(&notice("n"), None, None).unwrap();
@@ -552,8 +556,10 @@ fn a_failed_upgrade_keeps_summary() {
                 &client,
                 r#"{"id":"c_a_up","command":"subscribe","args":{"level":"full"}}"#,
             );
+            let failed = response(&client, "c_a_up");
+            assert_eq!(kinds(&failed), ["command_rejected"], "{failed:?}");
             assert_eq!(
-                rejection(&response(&client, "c_a_up")),
+                rejection(failed.last().unwrap()),
                 ("invalid_arguments", UNFIT)
             );
             log.append(&status("two"), None, None).unwrap();
@@ -566,8 +572,10 @@ fn a_failed_upgrade_keeps_summary() {
                 &client,
                 r#"{"id":"c_a_same","command":"subscribe","args":{"level":"summary"}}"#,
             );
+            let same = response(&client, "c_a_same");
+            assert_eq!(kinds(&same), ["command_rejected"], "{same:?}");
             assert_eq!(
-                rejection(&response(&client, "c_a_same")),
+                rejection(same.last().unwrap()),
                 ("invalid_arguments", ALREADY)
             );
             Ok(())
@@ -601,7 +609,9 @@ fn an_acknowledgement_pending_across_a_change_reaches_the_client() {
                 &client,
                 r#"{"id":"c_a_up","command":"subscribe","args":{"level":"full"}}"#,
             );
-            assert_eq!(command_id(&response(&client, "c_a_up")), Some("c_a_up"));
+            let up = response(&client, "c_a_up");
+            assert_eq!(kinds(&up), ["command_accepted"], "{up:?}");
+            assert_eq!(command_id(up.last().unwrap()), Some("c_a_up"));
             (ack.0)(Ok(None));
             let raised = until(&client, |line| command_id(line) == Some("c_a_p"));
             assert_eq!(
@@ -622,7 +632,9 @@ fn an_acknowledgement_pending_across_a_change_reaches_the_client() {
             send(&client, &prompt_line("c_a_q", "prompt"));
             let ack = take_prompt(&inbox);
             (ack.0)(Ok(None));
-            assert_eq!(kind(&response(&client, "c_a_q")), "command_accepted");
+            let answered = response(&client, "c_a_q");
+            assert_eq!(kinds(&answered), ["command_accepted"], "{answered:?}");
+            assert_eq!(kind(answered.last().unwrap()), "command_accepted");
             send(
                 &client,
                 r#"{"id":"c_a_down","command":"subscribe","args":{"level":"summary"}}"#,
@@ -651,10 +663,10 @@ fn an_acknowledgement_pending_across_a_change_reaches_the_client() {
                 &client,
                 r#"{"id":"c_a_down2","command":"subscribe","args":{"level":"summary"}}"#,
             );
-            assert_eq!(
-                command_id(&response(&client, "c_a_down2")),
-                Some("c_a_down2")
-            );
+            let down = response(&client, "c_a_down2");
+            assert_eq!(kinds(&down), ["clients", "command_accepted"], "{down:?}");
+            assert_eq!(command_id(down.last().unwrap()), Some("c_a_down2"));
+            assert_eq!(count(&down[0]), 0);
             (ack.0)(Ok(None));
             let steered = until(&client, |line| command_id(line) == Some("c_a_s"));
             assert_eq!(
@@ -666,7 +678,9 @@ fn an_acknowledgement_pending_across_a_change_reaches_the_client() {
             send(&client, &prompt_line("c_a_t", "steer"));
             let ack = take_steer(&inbox);
             (ack.0)(Ok(None));
-            assert_eq!(kind(&response(&client, "c_a_t")), "command_accepted");
+            let steered_ack = response(&client, "c_a_t");
+            assert_eq!(kinds(&steered_ack), ["command_accepted"], "{steered_ack:?}");
+            assert_eq!(kind(steered_ack.last().unwrap()), "command_accepted");
             send(
                 &client,
                 r#"{"id":"c_a_up3","command":"subscribe","args":{"level":"full"}}"#,
@@ -777,8 +791,11 @@ fn a_later_subscribe_that_does_not_parse_is_unfit() {
                 &client,
                 r#"{"id":"c_bogus","command":"subscribe","args":{"level":"bogus"}}"#,
             );
+            let bogus = response(&client, "c_bogus");
+            assert_eq!(kinds(&bogus), ["clients", "command_rejected"], "{bogus:?}");
+            assert_eq!(count(&bogus[0]), 1);
             assert_eq!(
-                rejection(&response(&client, "c_bogus")),
+                rejection(bogus.last().unwrap()),
                 ("invalid_arguments", UNFIT)
             );
             Ok(())
