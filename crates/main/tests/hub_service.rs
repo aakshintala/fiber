@@ -16,6 +16,8 @@
 
 mod support;
 
+use fakes::ProviderServer;
+use serde_json::json;
 use std::ffi::OsString;
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
@@ -23,15 +25,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
-
-use contract::clock::Clock;
-use fakes::ProviderServer;
-use serde_json::json;
 use support::*;
-
-/// How long the test waits between two looks at the manager or a socket.
-const RETRY: Duration = Duration::from_millis(50);
 
 /// The variables `systemctl --user` and `launchctl` need to reach the
 /// user's manager, which `Setup::fiber` clears.
@@ -80,8 +74,10 @@ fn succeeds(setup: &Setup, what: &str, command: Command) -> String {
     String::from_utf8(output.stdout).unwrap()
 }
 
-/// Calls `look` every [`RETRY`] until it gives a value, failing at the
-/// test's deadline naming `what`.
+/// Calls `look` until it gives a value, failing at the test's deadline
+/// naming `what`. Each `look` already waits on a signal: a manager call
+/// through [`run_to_exit`] or a socket `connect`, so the test never sleeps
+/// itself; it retries at once with what remains of the one deadline.
 fn wait_for<T>(setup: &Setup, what: &str, mut look: impl FnMut() -> Option<T>) -> T {
     loop {
         if let Some(found) = look() {
@@ -91,20 +87,33 @@ fn wait_for<T>(setup: &Setup, what: &str, mut look: impl FnMut() -> Option<T>) -
             !setup.deadline.left().is_zero(),
             "waited until the deadline for {what}"
         );
-        SystemClock.sleep(RETRY);
     }
 }
 
-/// A client of the hub once it speaks `hub_hello` on `run/hub`.
+/// A client of the hub once it speaks `hub_hello` on `run/hub`, waited on
+/// through `doors::hub::connect`'s own retry on the process clock: the
+/// retry sleeps in product code, the test only receives it with the one
+/// deadline and never sleeps itself.
 fn hub_client(setup: &Setup) -> Socket {
-    let socket = setup.hub_socket();
-    let stream = wait_for(setup, "run/hub to accept", || {
-        UnixStream::connect(&socket).ok()
-    });
-    let client = Socket::from(setup.deadline, stream);
-    let hello = recv(&client, "the installed hub's hub_hello");
-    assert_eq!(hello["kind"], "hub_hello", "{hello}");
-    client
+    let deadline = setup.deadline;
+    let home = setup.home();
+    let (stream, hello) = loop {
+        let home = home.clone();
+        match bounded(deadline, "run/hub to accept", move || {
+            let mut start = || -> std::io::Result<()> { Ok(()) };
+            doors::hub::connect(&home, &mut start, &SystemClock)
+        }) {
+            Ok(hub) => break hub,
+            Err(_) => {
+                assert!(
+                    !deadline.left().is_zero(),
+                    "waited until the deadline for run/hub to accept"
+                );
+            }
+        }
+    };
+    assert_eq!(hello.kind, "hub_hello");
+    Socket::from(deadline, stream)
 }
 
 /// The hub's pid as the manager reports it, once it reports one.

@@ -12,7 +12,7 @@
 use std::io::{self, Read};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use contract::clock::Clock;
 use contract::{HubLine, SCHEMA_VERSION};
@@ -40,6 +40,32 @@ pub fn connect(
     connect_within(home, start, clock, CONNECT_DEADLINE)
 }
 
+/// [`connect`], with `hub_hello` due by `deadline` on `clock`: the same
+/// absolute deadline bounds both connection attempts and the handshake,
+/// so a peer that closes just before it leaves no fresh deadline for the
+/// retry. Past it the connect fails `TimedOut`.
+pub fn connect_until(
+    home: &Path,
+    start: &mut dyn FnMut() -> io::Result<()>,
+    clock: &dyn Clock,
+    deadline: Instant,
+) -> io::Result<Hub> {
+    let total = deadline.saturating_duration_since(clock.now());
+    let mut started = false;
+    // EOF before `hub_hello` is the idle-exit race: the whole connect is
+    // retried once, with the same deadline.
+    for _ in 0..2 {
+        match poll_until(home, &mut started, start, clock, deadline, total) {
+            Ok(hub) => return Ok(hub),
+            Err(Poll::Race) => {}
+            Err(Poll::Failed(error)) => return Err(error),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::UnexpectedEof,
+        "the hub closed the connection before `hub_hello`",
+    ))
+}
 /// [`connect`], with `hub_hello` due within `hello_within` of the socket
 /// accepting, on `clock`. Past it the connect fails `TimedOut`.
 pub fn connect_within(
@@ -105,6 +131,132 @@ fn poll(
             Err(error) => return Err(Poll::Failed(error)),
         }
     }
+}
+
+/// Polls the hub's socket until it accepts and speaks `hub_hello`, all by
+/// `deadline` on `clock`: the bind wait and the handshake share it, so a
+/// retry gets only what remains.
+fn poll_until(
+    home: &Path,
+    started: &mut bool,
+    start: &mut dyn FnMut() -> io::Result<()>,
+    clock: &dyn Clock,
+    deadline: Instant,
+    total: Duration,
+) -> Result<Hub, Poll> {
+    let socket = home.join("run").join("hub");
+    loop {
+        match UnixStream::connect(&socket) {
+            Ok(stream) => {
+                return read_hello_until(stream, &socket, deadline, total, clock, &mut || {});
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
+                ) =>
+            {
+                if !*started {
+                    start().map_err(Poll::Failed)?;
+                    *started = true;
+                }
+                if clock.now() >= deadline {
+                    return Err(Poll::Failed(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        format!(
+                            "the hub did not bind {} in {} s",
+                            socket.display(),
+                            total.as_secs_f64()
+                        ),
+                    )));
+                }
+                clock.sleep(CONNECT_POLL);
+            }
+            Err(error) => return Err(Poll::Failed(error)),
+        }
+    }
+}
+
+/// Reads the first line byte by byte, without buffered over-read, and
+/// requires `hub_hello` on this build's `schema_version`. The line is due
+/// by `deadline` on `clock`: before each read the stream's read timeout is
+/// set to the time left, and with none left the read fails `TimedOut`.
+/// `total` names the deadline in the timeout message. `before_read` runs
+/// just before each read. The timeout is cleared once the line is read.
+fn read_hello_until(
+    mut stream: UnixStream,
+    socket: &Path,
+    deadline: Instant,
+    total: Duration,
+    clock: &dyn Clock,
+    before_read: &mut dyn FnMut(),
+) -> Result<Hub, Poll> {
+    let timed_out = || {
+        Poll::Failed(io::Error::new(
+            io::ErrorKind::TimedOut,
+            format!(
+                "the hub at {} accepted but did not say hub_hello in {} s",
+                socket.display(),
+                total.as_secs_f64()
+            ),
+        ))
+    };
+    let mut buf = Vec::new();
+    let mut byte = [0u8; 1];
+    loop {
+        let left = deadline
+            .checked_duration_since(clock.now())
+            .filter(|left| !left.is_zero())
+            .ok_or_else(timed_out)?;
+        set_read_timeout(&stream, Some(left)).map_err(Poll::Failed)?;
+        before_read();
+        match stream.read(&mut byte) {
+            Ok(0) => return Err(Poll::Race),
+            Ok(_) => {
+                if byte[0] == b'\n' {
+                    break;
+                }
+                buf.push(byte[0]);
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                ) =>
+            {
+                return Err(timed_out());
+            }
+            Err(error) => return Err(Poll::Failed(error)),
+        }
+    }
+    set_read_timeout(&stream, None).map_err(Poll::Failed)?;
+    // A carriage return ends the line too.
+    while buf.last() == Some(&b'\r') {
+        buf.pop();
+    }
+    let hello: HubLine = serde_json::from_slice(&buf).map_err(|_| {
+        Poll::Failed(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "the hub did not speak `hub_hello` first",
+        ))
+    })?;
+    if hello.kind != "hub_hello" {
+        return Err(Poll::Failed(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "the hub did not speak `hub_hello` first",
+        )));
+    }
+    if hello.schema_version != SCHEMA_VERSION {
+        return Err(Poll::Failed(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "the hub runs schema version {}, this Fiber runs schema version {SCHEMA_VERSION}; \
+                 update Fiber or restart the hub, then reconnect",
+                hello.schema_version,
+            ),
+        )));
+    }
+    Ok((stream, hello))
 }
 
 /// Reads the first line byte by byte, without buffered over-read, and

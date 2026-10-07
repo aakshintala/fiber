@@ -148,6 +148,7 @@ impl Setup {
             &*self.clock,
             answers,
             &mut out,
+            &super::write_unit,
         );
         (result, String::from_utf8(out).unwrap())
     }
@@ -337,6 +338,55 @@ fn launchd_bootstrap_failing_after_bootout_restores_and_the_rerun_bootstraps() {
         fs::read_to_string(&service.unit).unwrap(),
         service.render(Some(4040)).unwrap()
     );
+}
+
+#[test]
+fn a_write_that_fails_after_the_rename_restores_and_the_rerun_takes_the_changed_row() {
+    let setup = Setup::new();
+    let service = setup.service(Manager::Systemd);
+    setup.install(&service, None, &Fake::ok(), false).0.unwrap();
+    let previous = fs::read(&service.unit).unwrap();
+    let rendered = service.render(Some(4040)).unwrap();
+    assert_ne!(previous, rendered.as_bytes());
+
+    // The write leaves the new bytes in place (the rename succeeded)
+    // then fails (its directory sync failed), like `write_atomic` after
+    // the rename.
+    let failing = |path: &Path, bytes: &[u8]| -> Result<(), Failure> {
+        fs::write(path, bytes).unwrap();
+        Err(crate::failed(
+            ErrorCode::IoFailed,
+            format!("syncing {}: directory sync failed", path.display()),
+        ))
+    };
+    let mut out = Vec::new();
+    let error = install(
+        &service,
+        &setup.home(),
+        Some(4040),
+        &Fake::ok(),
+        &*setup.clock,
+        false,
+        &mut out,
+        &failing,
+    )
+    .unwrap_err();
+    assert!(error.message.ends_with(RERUN), "{}", error.message);
+    assert!(
+        error.message.contains("directory sync failed"),
+        "{}",
+        error.message
+    );
+    assert_eq!(fs::read(&service.unit).unwrap(), previous);
+    assert!(out.is_empty(), "{out:?}");
+
+    let rerun = Fake::ok();
+    setup
+        .install(&service, Some(4040), &rerun, false)
+        .0
+        .unwrap();
+    assert_eq!(rerun.calls(), changed_row(&service));
+    assert_eq!(fs::read_to_string(&service.unit).unwrap(), rendered);
 }
 
 #[test]

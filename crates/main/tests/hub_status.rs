@@ -14,17 +14,38 @@
 mod support;
 
 use std::fs;
-use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
-use contract::clock::Clock;
 use serde_json::Value;
 use support::*;
 
-/// How long the test waits between attempts to reach a hub still binding.
-const RETRY: Duration = Duration::from_millis(20);
+/// Connects to `run/hub` once the hub has bound it, through
+/// `doors::hub::connect`'s own retry on the process clock: the retry sleeps
+/// in product code, the test only receives it with the one deadline and
+/// never sleeps itself.
+fn connect_when_bound(setup: &Setup) -> Socket {
+    let deadline = setup.deadline;
+    let (stream, hello) = loop {
+        let home = setup.home();
+        match bounded(deadline, "the installed hub to bind run/hub", move || {
+            // The installed hub is already spawned; the starter starts
+            // nothing and lets the retry wait for its socket.
+            let mut start = || -> std::io::Result<()> { Ok(()) };
+            doors::hub::connect(&home, &mut start, &SystemClock)
+        }) {
+            Ok(hub) => break hub,
+            Err(error) => {
+                assert!(
+                    !deadline.left().is_zero(),
+                    "waited until the deadline for the installed hub to bind run/hub: {error}"
+                );
+            }
+        }
+    };
+    assert_eq!(hello.kind, "hub_hello");
+    Socket::from(deadline, stream)
+}
 
 /// Every path under `root`, relative to it, sorted.
 fn tree(root: &Path) -> Vec<PathBuf> {
@@ -41,29 +62,6 @@ fn tree(root: &Path) -> Vec<PathBuf> {
     }
     found.sort();
     found
-}
-
-/// Connects to `run/hub` once the hub has bound it, retrying until the
-/// test's deadline, and reads its `hub_hello`.
-fn connect_when_bound(setup: &Setup) -> Socket {
-    let socket = setup.hub_socket();
-    loop {
-        match UnixStream::connect(&socket) {
-            Ok(stream) => {
-                let client = Socket::from(setup.deadline, stream);
-                let hello = recv(&client, "the installed hub's hub_hello");
-                assert_eq!(hello["kind"], "hub_hello", "{hello}");
-                return client;
-            }
-            Err(error) => {
-                assert!(
-                    !setup.deadline.left().is_zero(),
-                    "waited until the deadline for the installed hub to bind run/hub: {error}"
-                );
-                SystemClock.sleep(RETRY);
-            }
-        }
-    }
 }
 
 fn status_json(setup: &Setup) -> Value {

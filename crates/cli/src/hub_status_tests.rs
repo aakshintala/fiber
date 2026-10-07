@@ -173,6 +173,50 @@ fn a_silent_hub_fails_at_the_deadline() {
     );
 }
 
+#[test]
+fn an_eof_retry_does_not_extend_the_total_deadline() {
+    let (_dir, home) = home();
+    let listener = UnixListener::bind(home.join("run/hub")).unwrap();
+    let clock = FakeClock::new();
+    let (eof_done, eof) = mpsc::channel::<()>();
+    let (second_accepted, second) = mpsc::channel::<()>();
+    let (go, wait_go) = mpsc::channel::<()>();
+    // First connection trickles one byte, then closes once the test lets
+    // it: the EOF retry. The second connection stays silent.
+    thread::spawn(move || {
+        let (mut first, _) = listener.accept().unwrap();
+        first.write_all(b"{").unwrap();
+        eof_done.send(()).unwrap();
+        wait_go.recv_timeout(DEADLINE).unwrap();
+        drop(first);
+        let (silent, _) = listener.accept().unwrap();
+        second_accepted.send(()).unwrap();
+        hold(&silent);
+    });
+    let (done, result) = mpsc::channel();
+    let probed_home = home.clone();
+    let probed_clock = Arc::clone(&clock);
+    thread::spawn(move || {
+        done.send(probe(&probed_home, &*probed_clock, ANSWER, false))
+            .unwrap_or(());
+    });
+    // The client read the first byte and blocks in its second read; move
+    // the fake clock to just before the deadline, then let the peer close
+    // so the retry starts with only what remains.
+    eof.recv_timeout(DEADLINE).unwrap();
+    clock.advance(ANSWER.checked_sub(Duration::from_millis(100)).unwrap());
+    go.send(()).unwrap();
+    second.recv_timeout(DEADLINE).unwrap();
+    // The retry's silent peer gets the remaining 100 ms, not a fresh
+    // 5 s: the whole probe fails at the one deadline, well within a wall
+    // bound far below a fresh handshake.
+    let error = result
+        .recv_timeout(Duration::from_secs(2))
+        .expect("the probe fails at its total deadline, not a fresh one")
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::IoFailed);
+}
+
 /// Runs `probe_with` on a thread, sending a signal before each read.
 fn probe_signalled(
     home: &Path,

@@ -76,6 +76,7 @@ pub fn hub_install(port: Option<u16>, clock: &dyn Clock) -> i32 {
             clock,
             answers,
             &mut io::stdout(),
+            &write_unit,
         )
     });
     ran.map_or_else(fail, |()| 0)
@@ -126,8 +127,19 @@ pub(crate) fn hub_answers(home: &Path, clock: &dyn Clock, within: Duration) -> b
     doors::hub::connect_within(home, &mut start, clock, within).is_ok()
 }
 
+/// Writes the unit file's bytes. The write may leave the new bytes in
+/// place while failing, when its rename succeeded before its directory
+/// sync failed.
+type UnitWrite = dyn Fn(&Path, &[u8]) -> Result<(), Failure>;
+
 /// Installs `service` listening on `port` as well as its socket, and loads
 /// it. `hub_answers` says whether a hub already answers on `run/hub`.
+/// `write` writes the unit file: a failed write restores like a failed
+/// manager call.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the install row: service, home, port, runner, clock, probe, output and writer"
+)]
 pub(crate) fn install(
     service: &Service,
     home: &Path,
@@ -136,6 +148,7 @@ pub(crate) fn install(
     clock: &dyn Clock,
     hub_answers: bool,
     out: &mut dyn Write,
+    write: &UnitWrite,
 ) -> Result<(), Failure> {
     config::replace_global(home, "hub.port", port.map(Value::from))
         .map_err(|e| failed(e.code(), e))?;
@@ -146,8 +159,8 @@ pub(crate) fn install(
         Manager::Launchd { uid } => call(runner, "launchctl", &print_args(service, uid))?.success,
         Manager::Systemd => previous.is_some(),
     };
-    if changed {
-        write_unit(&service.unit, rendered.as_bytes())?;
+    if changed && let Err(error) = write(&service.unit, rendered.as_bytes()) {
+        return Err(restore_or_rerun(&service.unit, previous.as_deref(), error));
     }
     if let Err(error) = load(service, runner, clock, loaded, changed) {
         let message = match changed.then(|| restore(&service.unit, previous.as_deref())) {
@@ -412,6 +425,21 @@ fn restore(unit: &Path, previous: Option<&[u8]>) -> Result<(), Failure> {
         Some(bytes) => write_unit(unit, bytes),
         None => delete_unit(unit).map(|_| ()),
     }
+}
+
+/// Restores `unit` to `previous` after a failed step, naming the rerun
+/// that converges, or the uninstall when the restore itself fails.
+fn restore_or_rerun(unit: &Path, previous: Option<&[u8]>, error: Failure) -> Failure {
+    let message = match restore(unit, previous) {
+        Err(lost) => format!(
+            "{} The unit file {} could not be put back ({}); run fiber hub uninstall.",
+            error.message,
+            unit.display(),
+            lost.message
+        ),
+        Ok(()) => format!("{} {RERUN}", error.message),
+    };
+    failed(error.code, message)
 }
 
 fn say(out: &mut dyn Write, line: &str) -> Result<(), Failure> {

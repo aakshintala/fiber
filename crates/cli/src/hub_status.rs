@@ -82,7 +82,10 @@ pub(crate) fn probe(
     probe_with(home, clock, answer_within, installed, &mut || {})
 }
 
-/// [`probe`], running `before_read` just before each read of the answer.
+/// Asks `home`'s hub for its status, all within `answer_within` on `clock`;
+/// a hub that is absent or refuses is not running. The connect, the
+/// handshake and the answer share one absolute deadline, so an EOF retry
+/// gets only what remains.
 fn probe_with(
     home: &Path,
     clock: &dyn Clock,
@@ -99,7 +102,7 @@ fn probe_with(
             absent = true;
             Err(io::Error::new(io::ErrorKind::NotFound, "no hub runs"))
         };
-        doors::hub::connect_within(home, &mut start, clock, answer_within)
+        doors::hub::connect_until(home, &mut start, clock, deadline)
     };
     let stream = match connected {
         Ok((stream, _)) => stream,
