@@ -15,10 +15,9 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Condvar, Mutex, PoisonError};
-use std::time::{Duration, Instant};
+use std::sync::PoisonError;
+use std::time::Duration;
 
-use contract::clock::{Clock, Wake};
 use contract::{ErrorCode, SessionId};
 use serde_json::Value;
 
@@ -89,7 +88,6 @@ fn reach(hub: &Hub, session: &SessionId, trusted: bool) -> Result<UnixStream, Re
     let deadline = hub.clock.now() + SHUTDOWN_BOUND;
     let mut trusted = trusted;
     let mut held = None;
-    let mut pause: Option<Arc<Pause>> = None;
     loop {
         match attempt(hub, session, &socket, trusted) {
             Step::Done(result) => return result,
@@ -107,9 +105,7 @@ fn reach(hub: &Hub, session: &SessionId, trusted: bool) -> Result<UnixStream, Re
                 }),
             });
         }
-        pause
-            .get_or_insert_with(|| Pause::subscribed(hub.clock.as_ref()))
-            .until(hub.clock.as_ref(), now + HELD_POLL);
+        hub.tick.until(hub.clock.as_ref(), now + HELD_POLL);
         trusted = false;
     }
 }
@@ -182,60 +178,6 @@ fn attempt(hub: &Hub, session: &SessionId, socket: &Path, trusted: bool) -> Step
         Bind::TimedOut => Err(io_failed(hub, session, "it did not bind its socket.")),
         Bind::Failed(detail) => Err(io_failed(hub, session, &detail)),
     })
-}
-
-/// A wait on the injected clock, woken by every clock move: a fake clock
-/// parks it until a test advances past its instant.
-#[derive(Default)]
-struct Pause {
-    held: Mutex<()>,
-    moved: Condvar,
-}
-
-impl Wake for Pause {
-    fn wake(&self) {
-        // Taken before the notify, so a waiter that has checked and not
-        // yet parked cannot miss it.
-        let _held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
-        self.moved.notify_all();
-    }
-}
-
-impl Pause {
-    fn subscribed(clock: &dyn Clock) -> Arc<Self> {
-        let pause = Arc::new(Self::default());
-        let wake: Arc<dyn Wake> = Arc::clone(&pause) as Arc<dyn Wake>;
-        clock.subscribe(Arc::downgrade(&wake));
-        pause
-    }
-
-    /// Returns once `clock` reads `until` or later.
-    fn until(&self, clock: &dyn Clock, until: Instant) {
-        loop {
-            let guard = self.held.lock().unwrap_or_else(PoisonError::into_inner);
-            if clock.now() >= until {
-                return;
-            }
-            let mut slot = Some(guard);
-            clock.wait_until(Some(until), &mut |bound| {
-                let Some(guard) = slot.take() else {
-                    return;
-                };
-                slot = Some(match bound {
-                    Some(limit) => {
-                        self.moved
-                            .wait_timeout(guard, limit)
-                            .unwrap_or_else(PoisonError::into_inner)
-                            .0
-                    }
-                    None => self
-                        .moved
-                        .wait(guard)
-                        .unwrap_or_else(PoisonError::into_inner),
-                });
-            });
-        }
-    }
 }
 
 /// The rejection for a session the hub cannot find: `session_not_found`.
