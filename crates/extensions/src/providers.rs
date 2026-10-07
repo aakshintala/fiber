@@ -339,8 +339,9 @@ impl Providers {
     /// the data file's, and one notice with the error's own code. A model
     /// whose addendum file is missing or outside the package leaves no
     /// models from it, with one `extension_failed` notice naming the
-    /// extension. The provider is kept either way, for its signer and
-    /// token.
+    /// extension. The provider is kept either way, for its signer, token
+    /// and cost lookup. A provider that did not register `models` only
+    /// has its handle kept: no `models()` call and no notice.
     pub fn add_lua(
         &mut self,
         extension: &str,
@@ -349,6 +350,11 @@ impl Providers {
     ) -> Vec<Notice> {
         let name = provider.name().to_owned();
         self.lua.insert(name.clone(), Arc::clone(provider));
+        // A provider that registers no `models`, such as one with only
+        // `cost()`, keeps its data file's models.
+        if matches!(provider.registers("models"), Ok(false)) {
+            return Vec::new();
+        }
         if !provider.has_model_cache() && !provider.has_credential(config, &self.data(&name)) {
             return Vec::new();
         }
