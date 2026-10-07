@@ -273,6 +273,9 @@ fn install_in_a_terminal_shows_the_summary_and_installs_on_yes() {
         &mut input,
     );
     assert_eq!(got.unwrap(), 0);
+    // The plan canonicalises the source, so the summary shows the
+    // resolved path (`/var` is a link to `/private/var` on macOS).
+    let shown = source.canonicalize().unwrap();
     assert_eq!(
         err,
         format!(
@@ -281,7 +284,7 @@ fn install_in_a_terminal_shows_the_summary_and_installs_on_yes() {
              Provider p: http://a.test/v1, http://b.test/v1\n\
              Runs the program: prog-acme --serve 8080\n\
              Go ahead? [y/N/s to show the full source] fiber: installed {NAME_A}\n",
-            source.display(),
+            shown.display(),
         )
     );
 }
@@ -624,14 +627,19 @@ const CHILD_DEADLINE: Duration = Duration::from_secs(60);
 const REAP_DEADLINE: Duration = Duration::from_secs(10);
 
 /// The child's stdout before the test's own lines: the libtest harness
-/// writes its prelude there, and never a result line, since the child
-/// exits from inside the test. Fails the test when the prelude is
-/// absent, so a harness change is loud rather than a false pass.
-fn strip_prelude(out: &str) -> &str {
+/// writes its prelude, then names the running test before it runs. No
+/// result line ever follows, since the child exits from inside the
+/// test. Fails the test when either marker is absent, so a harness
+/// change is loud rather than a false pass.
+fn strip_prelude<'a>(out: &'a str, name: &str) -> &'a str {
     const PRELUDE: &str = "running 1 test\n";
-    match out.find(PRELUDE) {
+    let rest = match out.find(PRELUDE) {
         Some(at) => &out[at + PRELUDE.len()..],
         None => panic!("the child wrote no libtest prelude: {out:?}"),
+    };
+    match rest.strip_prefix(&format!("test {name} ... ")) {
+        Some(command) => command,
+        None => panic!("the child wrote no test line: {rest:?}"),
     }
 }
 
@@ -719,7 +727,10 @@ fn each_command_gives_its_exit_code() {
         assert!(!fakes::kill_group(group, "0").unwrap(), "a child remains");
         watchdog.stand_down(REAP_DEADLINE);
         let stdout_text = String::from_utf8(output.stdout).unwrap();
-        let stdout = strip_prelude(&stdout_text);
+        let stdout = strip_prelude(
+            &stdout_text,
+            &format!("{name}::each_command_gives_its_exit_code"),
+        );
         let stderr = String::from_utf8(output.stderr).unwrap();
         match case {
             "list" => {

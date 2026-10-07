@@ -1,6 +1,8 @@
 //! The commands that run no session: `fiber config`, `fiber login`,
 //! `fiber logout`, `fiber approve`, `fiber sessions export`,
-//! `fiber sessions delete` and `fiber models`
+//! `fiber sessions delete`, `fiber models`, `fiber extension install`,
+//! `fiber extension update`, `fiber extension remove` and
+//! `fiber extension list`
 //! (`docs/architecture.md`, "The modules"). `main` parses argv and
 //! dispatches here; this crate takes plain values.
 

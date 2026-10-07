@@ -9,10 +9,9 @@
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
-use contract::ErrorCode;
 use contract::clock::Clock;
 use contract::shapes::Failure;
-use extensions::{Origin, Request};
+use extensions::{Origin, Provenance, Request};
 
 use crate::{fail, failed};
 
@@ -143,20 +142,13 @@ fn install(
         input,
         err,
     } = io;
-    let _ = (
-        home,
-        request,
-        fiber_version,
-        origin,
-        clock,
-        terminal,
-        input,
-        err,
-    );
-    Err(failed(
-        ErrorCode::IoFailed,
-        "fiber extension commands are not built in cli yet",
-    ))
+    let plan = plan_request(home, request, fiber_version, origin, clock)?;
+    // The plan's damaged directories are named before approval, so a
+    // declined or failed install still names them.
+    for hit in plan.damaged() {
+        writeln!(err, "fiber: {}", hit.skipped()).unwrap_or(());
+    }
+    report_install(commit_plan(plan, terminal, input, err), err)
 }
 
 /// Updates every installed extension a person asked for, in listing
@@ -173,11 +165,26 @@ fn update_all(
         input,
         err,
     } = io;
-    let _ = (home, fiber_version, origin, clock, terminal, input, err);
-    Err(failed(
-        ErrorCode::IoFailed,
-        "fiber extension commands are not built in cli yet",
-    ))
+    let listing = extensions::list(home, clock).map_err(|e| failed(e.code(), e))?;
+    // Each damaged directory is named once here; the per-extension
+    // installs below stay silent about them.
+    for hit in &listing.damaged {
+        writeln!(err, "fiber: {}", hit.skipped()).unwrap_or(());
+    }
+    for ext in listing.installed.iter().filter(|i| i.requested) {
+        let plan = plan_request(
+            home,
+            Request::Update(ext.name.clone()),
+            fiber_version,
+            origin,
+            clock,
+        )?;
+        let code = report_install(commit_plan(plan, terminal, input, err), err)?;
+        if code != 0 {
+            return Ok(code);
+        }
+    }
+    Ok(0)
 }
 
 /// Removes the extension `typed` names, asking first in a terminal.
@@ -187,21 +194,113 @@ fn remove(home: &Path, typed: &str, clock: &dyn Clock, io: Io<'_>) -> Result<i32
         input,
         err,
     } = io;
-    let _ = (home, typed, clock, terminal, input, err);
-    Err(failed(
-        ErrorCode::IoFailed,
-        "fiber extension commands are not built in cli yet",
-    ))
+    let removal = extensions::removal(home, typed, clock).map_err(|e| failed(e.code(), e))?;
+    let approved = doors::remove_approved(&removal.names, &removal.data, terminal, input, err)?;
+    if !approved {
+        writeln!(err, "fiber: nothing was removed.").unwrap_or(());
+        return Ok(1);
+    }
+    let names = removal.names.clone();
+    removal.commit().map_err(|e| failed(e.code(), e))?;
+    for name in names {
+        writeln!(err, "fiber: removed {name}").unwrap_or(());
+    }
+    Ok(0)
 }
 
 /// Lists what `home` holds: each damaged directory first, then one line
 /// per installed extension.
 fn list(home: &Path, clock: &dyn Clock, out: &mut dyn Write) -> Result<(), Failure> {
-    let _ = (home, clock, out);
-    Err(failed(
-        ErrorCode::IoFailed,
-        "fiber extension commands are not built in cli yet",
-    ))
+    let listing = extensions::list(home, clock).map_err(|e| failed(e.code(), e))?;
+    // Each damaged directory first, one line each, then the healthy
+    // rows.
+    for hit in &listing.damaged {
+        writeln!(out, "{hit}").unwrap_or(());
+    }
+    for i in &listing.installed {
+        let commit = match &i.provenance {
+            Provenance::Git { commit } => commit.as_str(),
+            Provenance::Path(_) => "local",
+        };
+        // A closed stdout leaves nobody to tell.
+        writeln!(out, "{} {} {commit}", i.name, i.version).unwrap_or(());
+    }
+    Ok(())
+}
+
+/// Prints what an approved install did: each name installed, or that
+/// nothing was installed.
+fn report_install(
+    result: Result<Option<Vec<String>>, Failure>,
+    err: &mut dyn Write,
+) -> Result<i32, Failure> {
+    match result {
+        Ok(Some(names)) => {
+            for name in names {
+                writeln!(err, "fiber: installed {name}").unwrap_or(());
+            }
+            Ok(0)
+        }
+        Ok(None) => {
+            writeln!(err, "fiber: nothing was installed.").unwrap_or(());
+            Ok(1)
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Fetches and checks what `request` and its dependencies need.
+fn plan_request(
+    home: &Path,
+    request: Request,
+    fiber_version: &str,
+    origin: &Origin,
+    clock: &dyn Clock,
+) -> Result<extensions::Plan, Failure> {
+    extensions::plan(home, &request, fiber_version, origin, clock).map_err(|e| failed(e.code(), e))
+}
+
+/// Shows what `plan` registers, asks when the terminal says so, and
+/// installs once approved; `None` when the person declined.
+fn commit_plan(
+    plan: extensions::Plan,
+    terminal: bool,
+    input: &mut dyn BufRead,
+    err: &mut dyn Write,
+) -> Result<Option<Vec<String>>, Failure> {
+    let summaries: Vec<doors::InstallSummary> = plan
+        .items()
+        .map(|item| doors::InstallSummary {
+            name: item.name.clone(),
+            source: item.source(),
+            version: item.version.clone(),
+            changes: item.changes.clone(),
+            providers: item
+                .providers
+                .iter()
+                .map(|p| {
+                    let mut urls: Vec<String> =
+                        p.models.iter().map(|m| m.base_url.clone()).collect();
+                    urls.sort();
+                    urls.dedup();
+                    (p.name.clone(), urls)
+                })
+                .collect(),
+            process: item.manifest.process.as_ref().map(|p| {
+                std::iter::once(p.program.as_str())
+                    .chain(p.args.iter().map(String::as_str))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            }),
+            install_step: item.manifest.install.as_ref().map(|step| step.join(" ")),
+            carries: item.carries(),
+            staged: item.staged().to_path_buf(),
+        })
+        .collect();
+    if !doors::install_approved(&summaries, terminal, input, err)? {
+        return Ok(None);
+    }
+    plan.commit().map(Some).map_err(|e| failed(e.code(), e))
 }
 
 #[cfg(test)]
