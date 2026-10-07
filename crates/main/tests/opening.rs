@@ -140,8 +140,8 @@ impl Setup {
         write(&self.home().join("config.json"), &config.to_string());
     }
 
-    /// Runs `fiber` in its own process group, waits for it under
-    /// [`DEADLINE`], and asserts that nothing it started is left in the
+    /// Runs `fiber` in its own process group, waits for it under the
+    /// test's [`Deadline`], and asserts that nothing it started is left in the
     /// group. A watchdog beside it kills that group if this process dies
     /// first.
     fn run(&self, args: &[&str]) -> Run {
@@ -164,14 +164,12 @@ impl Setup {
         thread::spawn(move || done.send(child.wait_with_output()).unwrap());
         let output = match finished.recv_timeout(self.deadline.left()) {
             Ok(output) => output.unwrap(),
-            Err(_) => {
-                support::kill_group(self.deadline, group, "KILL").unwrap();
-                let reaped = finished.recv_timeout(self.deadline.cleanup()).is_ok();
-                panic!(
-                    "waited until the deadline for `fiber {}` to exit (reaped after the kill: {reaped})",
-                    args.join(" ")
-                );
-            }
+            Err(_) => support::expired(
+                self.deadline,
+                group,
+                &finished,
+                &format!("`fiber {}` to exit", args.join(" ")),
+            ),
         };
         assert!(
             fakes::group_empties(group, self.deadline.left()),
@@ -219,9 +217,7 @@ struct KillGroup(u32);
 
 impl Drop for KillGroup {
     fn drop(&mut self) {
-        match support::kill_group_detached(self.0, "KILL") {
-            Ok(_) | Err(_) => {}
-        }
+        support::kill_group_detached(self.0, "KILL");
     }
 }
 

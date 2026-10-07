@@ -41,7 +41,8 @@ impl Setup {
         self.root.path().join("h")
     }
 
-    /// Runs `fiber` with `args` and waits for it under [`DEADLINE`].
+    /// Runs `fiber` with `args` and waits for it under the test's
+    /// [`Deadline`].
     fn fiber(&self, args: &[&str]) -> Run {
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
         command
@@ -61,18 +62,12 @@ impl Setup {
         thread::spawn(move || done.send(child.wait_with_output()).unwrap());
         let output = match finished.recv_timeout(self.deadline.left()) {
             Ok(output) => output.unwrap(),
-            Err(_) => {
-                support::kill_group(self.deadline, group, "KILL").unwrap();
-                let reaped = finished.recv_timeout(self.deadline.cleanup()).is_ok();
-                assert!(
-                    !group_alive(self.deadline, group),
-                    "`fiber` left a process behind"
-                );
-                panic!(
-                    "waited until the deadline for `fiber {}` to exit (reaped after the kill: {reaped})",
-                    args.join(" ")
-                );
-            }
+            Err(_) => support::expired(
+                self.deadline,
+                group,
+                &finished,
+                &format!("`fiber {}` to exit", args.join(" ")),
+            ),
         };
         assert!(
             !group_alive(self.deadline, group),
@@ -110,13 +105,9 @@ struct KillGroup(u32);
 
 impl Drop for KillGroup {
     fn drop(&mut self) {
-        match support::kill_group_detached(self.0, "KILL") {
-            Ok(_) | Err(_) => {}
-        }
+        support::kill_group_detached(self.0, "KILL");
     }
 }
-
-/// Whether any process remains in process group `group`.
 
 #[test]
 fn set_then_get_round_trips_the_value_and_its_layer() {

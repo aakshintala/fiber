@@ -8,6 +8,11 @@
     dead_code,
     reason = "each test binary uses its own subset of the helpers"
 )]
+#![allow(
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    reason = "test helpers; a failure is the test's"
+)]
 use std::fs;
 use std::io::{self, BufRead, BufReader, ErrorKind, Write};
 use std::os::unix::net::UnixStream;
