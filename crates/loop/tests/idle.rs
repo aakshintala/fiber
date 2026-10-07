@@ -14,7 +14,6 @@
 mod support;
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -93,8 +92,9 @@ fn an_empty_inbox_parks_until_the_idle_deadline() {
     parked(&clock, deadline, "the idle wait parks until the deadline");
 
     clock.advance(Duration::from_millis(59_999));
-    let rejected = stale_reply(&session);
+    // The wake goes first so the reply's acknowledgement shows it was taken.
     wake(&session);
+    let rejected = stale_reply(&session);
     assert!(
         rejected
             .recv_timeout(DEADLINE)
@@ -201,6 +201,7 @@ fn a_rejected_reply_a_steer_drop_and_a_wake_do_not_move_the_deadline() {
         deadline,
         "a rejected reply does not move the deadline",
     );
+    wake(&session);
 
     let (dropped, drop_rx) = mpsc::channel();
     session
@@ -218,10 +219,11 @@ fn a_rejected_reply_a_steer_drop_and_a_wake_do_not_move_the_deadline() {
             .expect("the drop was admitted"),
         "a steer_drop while idle is rejected"
     );
-    parked(&clock, deadline, "a steer_drop does not move the deadline");
-
-    wake(&session);
-    parked(&clock, deadline, "a wake does not move the deadline");
+    parked(
+        &clock,
+        deadline,
+        "a steer_drop and a wake do not move the deadline",
+    );
     assert!(
         finished.try_recv().is_err(),
         "junk does not end the idle wait"
@@ -261,12 +263,13 @@ fn no_deadline_never_expires() {
     let clock = Arc::clone(&session.clock);
     let finished = spawn_run(&mut session);
     assert!(
-        wait_parked_unbounded(&clock),
+        clock.await_parked_unbounded(DEADLINE),
         "a loop with no idle delay parks with no deadline"
     );
-    clock.advance(Duration::from_secs(24 * 60 * 60));
-    let rejected = stale_reply(&session);
+    let m = clock.advance_marked(Duration::from_secs(24 * 60 * 60));
+    // The wake goes first so the reply's acknowledgement shows it was taken.
     wake(&session);
+    let rejected = stale_reply(&session);
     assert!(
         rejected
             .recv_timeout(DEADLINE)
@@ -274,33 +277,13 @@ fn no_deadline_never_expires() {
         "a reply while idle is rejected"
     );
     assert!(
-        wait_parked_unbounded(&clock),
+        clock.await_parked_since(&m, None, DEADLINE),
         "a wake does not expire a loop with no idle delay"
     );
     assert!(
         finished.try_recv().is_err(),
         "no deadline means the idle wait does not end"
     );
-}
-
-/// True once a thread is parked in `wait_until` with no deadline, within
-/// [`DEADLINE`].
-fn wait_parked_unbounded(clock: &Arc<fakes::clock::FakeClock>) -> bool {
-    let clock = Arc::clone(clock);
-    let (done, waiting) = mpsc::channel();
-    // Stops the poller once the wait below has returned, so it never
-    // outlives its deadline.
-    let stop = Arc::new(AtomicBool::new(false));
-    let polling = Arc::clone(&stop);
-    thread::spawn(move || {
-        while !polling.load(Ordering::Relaxed) && !clock.parked().contains(&None) {
-            thread::yield_now();
-        }
-        if let Ok(()) = done.send(()) {}
-    });
-    let parked = waiting.recv_timeout(DEADLINE).is_ok();
-    stop.store(true, Ordering::Relaxed);
-    parked
 }
 
 fn shell(subject: &str) -> Arc<TestTool> {
@@ -353,8 +336,9 @@ fn an_approval_wait_parks_until_the_idle_deadline_and_writes_nothing_more() {
     );
 
     clock.advance(Duration::from_millis(59_999));
-    let rejected = stale_reply(&session);
+    // The wake goes first so the reply's acknowledgement shows it was taken.
     wake(&session);
+    let rejected = stale_reply(&session);
     assert!(
         rejected
             .recv_timeout(DEADLINE)
