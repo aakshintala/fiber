@@ -7,6 +7,11 @@ use contract::clock::Clock;
 use std::path::PathBuf;
 use std::time::Duration;
 
+/// The app's lines as text.
+fn texts(app: &App) -> Vec<String> {
+    app.lines().iter().map(ToString::to_string).collect()
+}
+
 /// Creates an app in `/w`.
 fn app() -> App {
     App::new(PathBuf::from("/w"))
@@ -38,7 +43,9 @@ fn one_line(effect: Effect) -> String {
             assert_eq!(lines.len(), 1);
             lines.into_iter().next().unwrap_or_default()
         }
-        Effect::None | Effect::Quit => panic!("expected one line"),
+        Effect::None | Effect::Quit | Effect::ListFiles | Effect::Search { .. } => {
+            panic!("expected one line")
+        }
     }
 }
 
@@ -199,7 +206,9 @@ fn esc_busy_sends_cancel() {
             let value = parse(&lines[0]);
             assert_eq!(value.get("command"), Some(&serde_json::json!("cancel")));
         }
-        Effect::None | Effect::Quit => panic!("expected cancel"),
+        Effect::None | Effect::Quit | Effect::ListFiles | Effect::Search { .. } => {
+            panic!("expected cancel")
+        }
     }
 }
 
@@ -423,7 +432,9 @@ fn rejected_cancel_shows_nothing() {
             .and_then(serde_json::Value::as_str)
             .unwrap_or_default()
             .to_owned(),
-        Effect::None | Effect::Quit => panic!("expected cancel"),
+        Effect::None | Effect::Quit | Effect::ListFiles | Effect::Search { .. } => {
+            panic!("expected cancel")
+        }
     };
     let rejected = session_line(
         "s_aaaaaaaaaaaaaaaa",
@@ -610,12 +621,12 @@ fn turn_started_sets_busy_and_completed_clears_it() {
     );
     app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "next"));
     assert_eq!(
-        app.lines(),
+        texts(&app),
         vec![
-            "› hi".to_owned(),
+            " hi ".to_owned(),
             "steer · more".to_owned(),
             "▣ completed".to_owned(),
-            "› next".to_owned(),
+            " next ".to_owned(),
         ]
     );
 }
@@ -627,7 +638,7 @@ fn failed_turn_closes_with_its_message() {
     attach(&mut app, clock.now(), "s_aaaaaaaaaaaaaaaa");
     app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "hi"));
     app.on_line(turn_completed("s_aaaaaaaaaaaaaaaa", "failed"));
-    assert_eq!(app.lines().last(), Some(&"▣ failed · boom".to_owned()));
+    assert_eq!(texts(&app).last(), Some(&"▣ failed · boom".to_owned()));
 }
 
 #[test]
@@ -648,14 +659,14 @@ fn deltas_accumulate_and_completed_replaces() {
         serde_json::json!({"text": "lo"}),
         Some("a_1"),
     ));
-    assert!(app.lines().contains(&"Hello".to_owned()));
+    assert!(texts(&app).contains(&"Hello".to_owned()));
     app.on_line(session_line(
         "s_aaaaaaaaaaaaaaaa",
         "text_completed",
         serde_json::json!({"text": "Hi."}),
         Some("a_1"),
     ));
-    assert!(app.lines().contains(&"Hi.".to_owned()));
+    assert!(texts(&app).contains(&"Hi.".to_owned()));
 }
 
 #[test]
@@ -663,6 +674,7 @@ fn each_action_streams_its_own_reply() {
     let clock = fakes::clock::FakeClock::new();
     let mut app = app();
     attach(&mut app, clock.now(), "s_aaaaaaaaaaaaaaaa");
+    app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "hi"));
     for (action, text) in [("a_1", "one"), ("a_2", "two"), ("a_1", " more")] {
         app.on_line(session_line(
             "s_aaaaaaaaaaaaaaaa",
@@ -671,7 +683,10 @@ fn each_action_streams_its_own_reply() {
             Some(action),
         ));
     }
-    assert_eq!(app.lines(), vec!["one more".to_owned(), "two".to_owned()]);
+    assert_eq!(
+        texts(&app),
+        vec![" hi ".to_owned(), "one more".to_owned(), "two".to_owned()]
+    );
 }
 
 #[test]
@@ -686,7 +701,7 @@ fn steering_applied_is_a_line() {
         serde_json::json!({"content": [{"type": "text", "text": "use x"}], "source": "driver"}),
         None,
     ));
-    assert!(app.lines().contains(&"steer · use x".to_owned()));
+    assert!(texts(&app).contains(&"steer · use x".to_owned()));
 }
 
 #[test]

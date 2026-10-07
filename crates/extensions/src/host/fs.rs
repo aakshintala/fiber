@@ -33,7 +33,7 @@ pub(crate) fn install(
     memory_cap: usize,
     session: Option<&Session>,
 ) -> mlua::Result<()> {
-    let slug = extension.replace('/', "-");
+    let slug = config::dir_name(extension);
     let project = session.map(|session| session.config.project().as_str().to_owned());
     let (machine_dir, project_dir) = match project.as_deref() {
         Some(key) => (

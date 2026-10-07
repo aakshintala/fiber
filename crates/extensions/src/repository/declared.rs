@@ -14,9 +14,6 @@ use serde_json::{Value, json};
 use crate::Error;
 use crate::install::io as io_error;
 
-/// Where the `hooks` extension's declarations live in a repository.
-const HOOKS_FILE: &str = ".fiber/config/github.com-aakshintala-fiber-extensions-hooks.json";
-
 /// One file an approval pins.
 #[derive(Debug, Clone)]
 pub(crate) struct PinnedFile {
@@ -58,6 +55,11 @@ pub fn declared_items(workspace: &Path) -> Result<Vec<RepoItem>, Error> {
     let declared = config::declared(workspace)?;
     let root = workspace.canonicalize().map_err(io_error(workspace))?;
     let mut items = Vec::new();
+    // Where the `hooks` extension's declarations live in a repository.
+    let hooks_file = format!(
+        ".fiber/config/{}.json",
+        config::dir_name(&config::full_name("hooks"))
+    );
     for ext in &declared.extensions {
         items.push(extension(&root, ext)?);
     }
@@ -67,7 +69,7 @@ pub fn declared_items(workspace: &Path) -> Result<Vec<RepoItem>, Error> {
             OfferedKind::Hook,
             name,
             entry,
-            HOOKS_FILE,
+            &hooks_file,
             false,
         )?);
     }

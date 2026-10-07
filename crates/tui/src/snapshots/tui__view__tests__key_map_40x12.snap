@@ -1,0 +1,16 @@
+---
+source: crates/tui/src/view_tests.rs
+expression: "screen_at(&mut app, 40, 12)"
+---
+Sessions
+  Send a prompt, or a steering message
+during a turn · Enter
+  Insert a line break · Shift+Enter ·
+Ctrl+J
+  Close what is on top; interrupt the
+turn when nothing is open · Esc
+  Clear the draft, then quit · Ctrl+C,
+twice within about a second on an empty
+box · /quit
+  Go home · ⌥0 · /home
+>

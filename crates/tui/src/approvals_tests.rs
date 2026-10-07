@@ -529,7 +529,9 @@ mod through_the_app {
                 assert_eq!(lines.len(), 1);
                 lines.into_iter().next().unwrap_or_default()
             }
-            Effect::None | Effect::Quit => panic!("expected one line"),
+            Effect::None | Effect::Quit | Effect::ListFiles | Effect::Search { .. } => {
+                panic!("expected one line")
+            }
         }
     }
 

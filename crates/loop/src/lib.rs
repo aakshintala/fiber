@@ -34,6 +34,7 @@ mod cancel;
 mod changes;
 mod completion;
 mod conversation;
+mod diag;
 mod handoff;
 mod hooks;
 mod hosted;
@@ -54,6 +55,7 @@ mod skills;
 mod status;
 mod usage;
 mod util;
+mod warm;
 
 pub use cancel::TurnCancel;
 pub use conversation::rebuild;
@@ -116,6 +118,7 @@ pub struct Permissions {
 /// One session's loop.
 pub struct Loop {
     log: Arc<Log>,
+    diag: diag::SessionDiag,
     provider: Arc<dyn Provider>,
     /// The model `provider` reaches, and how its calls are priced.
     model: Model,
@@ -226,6 +229,14 @@ pub struct Loop {
     handoff: handoff::State,
     /// The session's jobs, and how far the loop is in ending with them.
     ending: jobs::Ending,
+    /// `cache.warm_cap` when `cache.warm_idle` is set: how many cache
+    /// lifetimes after the last turn an idle wait keeps the cache warm.
+    /// `None` never warms (`docs/prompt-cache.md`, "Warming while idle").
+    warm: Option<u32>,
+    /// The last step's request and when it was handed to the provider, or
+    /// the last refresh's send: what a refresh resends and counts from.
+    /// Kept only while warming is on.
+    last_request: Option<(ModelRequest, std::time::Instant)>,
 }
 
 /// The one built preamble: what every request sends and what
@@ -278,8 +289,14 @@ impl Loop {
         // and rebuilds the state from it.
         let changes = changes::State::empty(&prompt.home);
         // `session_started` renders nothing into the conversation.
+        let diag = diag::SessionDiag::new(
+            &prompt.home,
+            started.session_id.clone(),
+            Arc::clone(log.clock()),
+        );
         Ok(Self {
             log,
+            diag,
             provider,
             model,
             prompt,
@@ -330,6 +347,8 @@ impl Loop {
             hooks: None,
             handoff: handoff::State::new(handoff::Carry::default()),
             ending: jobs::Ending::default(),
+            warm: None,
+            last_request: None,
         })
     }
 

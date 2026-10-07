@@ -14,6 +14,7 @@ use doors::Session;
 use log::Log;
 use r#loop::Loop;
 
+use crate::session_command::close;
 use crate::{ask_failed, failed, run_turn};
 
 /// `fiber ask --resume <selector>`: resolves the selector, opens the
@@ -147,6 +148,7 @@ fn resumed_session(
         retry,
         handoff,
         idle,
+        warm,
         home,
         project,
         extensions,
@@ -180,8 +182,16 @@ fn resumed_session(
         Err(e) => return ask_failed(e),
     };
     let forget = Arc::clone(&session_servers.forget);
+    let workspace = std::path::PathBuf::from(&folded.workspace);
     let permissions = crate::ask_permissions(&home, &project, folded.workspace.clone(), &clock);
-    let session = match Session::resume(&home, dir, &log, clock, infos, Box::new(io::stdout())) {
+    let session = match Session::resume(
+        &home,
+        dir,
+        &log,
+        Arc::clone(&clock),
+        infos,
+        Box::new(io::stdout()),
+    ) {
         Ok(session) => session,
         Err(e) => {
             session_servers.servers.stop();
@@ -195,7 +205,7 @@ fn resumed_session(
     // A signal while armed: the log stays as it was.
     if let Some(code) = crate::shutdown::start(signals, &cancel, &session, jobs.clone()) {
         session_servers.servers.stop();
-        session.close(log);
+        close(session, log, &home, dir, &workspace, &*clock);
         return code;
     }
     if let Err(e) = r#loop::fiber_started(&log, env!("CARGO_PKG_VERSION"), true)
@@ -203,7 +213,7 @@ fn resumed_session(
         .and_then(|()| r#loop::mcp_servers_started(&log, session_servers.failed, mcp.notices))
     {
         session_servers.servers.stop();
-        session.close(log);
+        close(session, log, &home, dir, &workspace, &*clock);
         return ask_failed(failed(e.code(), e));
     }
     let code = run_turn(
@@ -231,6 +241,7 @@ fn resumed_session(
                 }),
                 budget,
                 idle,
+                warm,
                 // `fiber ask --resume` runs one turn with no client.
                 !one_turn,
                 reviewer,
@@ -241,6 +252,6 @@ fn resumed_session(
         },
     );
     session_servers.servers.stop();
-    session.close(log);
+    close(session, log, &home, dir, &workspace, &*clock);
     code
 }

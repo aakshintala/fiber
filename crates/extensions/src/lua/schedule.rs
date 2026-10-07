@@ -323,10 +323,13 @@ fn settle(
                 .spawn(move || {
                     let outcome = exec::run(&request, clock.as_ref(), deadline, cancel_rx);
                     match &outcome {
-                        Ok(ran) => hub_exec.send_exec(meta.exec(ran)),
+                        Ok(ran) => {
+                            hub_exec.send(contract::inbox::Delivery::ExtensionExec(meta.exec(ran)))
+                        }
                         Err(failed) => {
                             if let Some(ran) = &failed.ran {
-                                hub_exec.send_exec(meta.exec(ran));
+                                hub_exec
+                                    .send(contract::inbox::Delivery::ExtensionExec(meta.exec(ran)));
                             }
                         }
                     }

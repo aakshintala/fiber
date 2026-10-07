@@ -54,8 +54,7 @@ impl Setup {
     }
 
     fn broken_dir(&self) -> PathBuf {
-        self.home()
-            .join("extensions/github.com-aakshintala-fiber-providers-opencode")
+        self.home().join("extensions/opencode")
     }
 
     /// A source package with this manifest name and version `v1`.

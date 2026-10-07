@@ -240,10 +240,10 @@ impl LuaExtension {
         &self.dir
     }
 
-    /// Hands the session loop's inbox to this extension's `host.exec` runs,
-    /// flushing a run that ended before any sender in order.
+    /// Hands the session loop's inbox to this extension's deliveries,
+    /// flushing what ended before any sender in order.
     pub fn deliver_to(&self, inbox: std::sync::mpsc::Sender<contract::inbox::Delivery>) {
-        self.hub.set_exec_inbox(inbox);
+        self.hub.set_inbox(inbox);
     }
 
     /// Whether the extension's VM and thread exist and take calls.
