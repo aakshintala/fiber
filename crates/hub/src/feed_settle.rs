@@ -11,7 +11,7 @@ use std::time::Instant;
 use contract::clock::Wake;
 use contract::events::SessionStatus;
 
-use super::{Entry, Feed, PoisonError, RUN_SCAN, lock};
+use super::{Entry, Feed, PoisonError, RUN_SCAN, State, lock};
 
 #[cfg(test)]
 const PAUSE_DEADLINE: Duration = Duration::from_secs(10);
@@ -43,36 +43,32 @@ impl Feed {
     /// statuses.
     pub(crate) fn settled(&self) {
         loop {
-            {
-                let state = lock(&self.state);
-                if state.stopped || state.scanned {
-                    break;
-                }
-            }
             #[cfg(test)]
             self.pause_before_wait();
-            self.wait_for(None);
-        }
-        let until = self.clock.now().checked_add(RUN_SCAN);
-        loop {
-            {
-                let state = lock(&self.state);
-                if state.stopped || state.awaited.is_empty() {
-                    return;
-                }
+            if self.wait_for(None, |state| state.stopped || state.scanned) {
+                break;
             }
-            if until.is_none_or(|until| self.clock.now() >= until) {
+        }
+        let Some(until) = self.clock.now().checked_add(RUN_SCAN) else {
+            return;
+        };
+        loop {
+            #[cfg(test)]
+            self.pause_before_wait();
+            if self.wait_for(Some(until), |state| {
+                state.stopped || state.awaited.is_empty() || self.clock.now() >= until
+            }) {
                 return;
             }
-            #[cfg(test)]
-            self.pause_before_wait();
-            self.wait_for(until);
         }
     }
 
     /// Parks until woken or `until` passes on the clock.
-    fn wait_for(&self, until: Option<Instant>) {
+    fn wait_for(&self, until: Option<Instant>, done: impl FnOnce(&State) -> bool) -> bool {
         let guard = lock(&self.tick.held);
+        if done(&lock(&self.state)) {
+            return true;
+        }
         let mut slot = Some(guard);
         self.clock.wait_until(until, &mut |bound| {
             let Some(held) = slot.take() else {
@@ -93,6 +89,7 @@ impl Feed {
                     .unwrap_or_else(PoisonError::into_inner),
             });
         });
+        false
     }
 
     #[cfg(test)]
