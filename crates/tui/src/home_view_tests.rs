@@ -1155,3 +1155,27 @@ fn no_token_target_draws_past_the_visible_rows() {
         .collect();
     assert_eq!(tokens.len(), 8);
 }
+
+#[test]
+fn a_token_span_starting_at_the_box_edge_has_no_target() {
+    // At width two the prompt fills the box, so every span of the
+    // token label starts where the box ends: `end` is `span.start`
+    // clipped to the box width, and the `start < end` guard keeps each
+    // zero-width span from becoming a target.
+    let mut app = home(2, 24);
+    let pasted: Vec<String> = (1..=11).map(|n| format!("line {n}")).collect();
+    app.on_edit(crate::keys::Edit::Paste(pasted.join("\n")));
+    let area = Rect::new(0, 0, 2, 24);
+    let mut buf = Buffer::empty(area);
+    let targets = render(&app, area, &mut buf, None);
+    let tokens: Vec<ratatui::layout::Rect> = targets
+        .iter()
+        .filter(|target| matches!(target.id, crate::mouse::TargetId::Token(_)))
+        .map(|target| target.rect)
+        .collect();
+    assert!(
+        tokens.iter().all(|rect| rect.width > 0),
+        "no zero-width token target: {tokens:?}"
+    );
+    assert_eq!(tokens, vec![]);
+}
