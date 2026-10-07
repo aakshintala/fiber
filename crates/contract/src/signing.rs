@@ -22,6 +22,8 @@ pub enum Error {
         code: ErrorCode,
         /// The first line of the credential failure's own text.
         message: String,
+        /// The failure was a login that needed a person, and nobody was attached.
+        unattended: bool,
     },
 }
 

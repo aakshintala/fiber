@@ -847,7 +847,7 @@ fn a_credential_error_at_send_time_is_credential_failed() {
         })
     })
     .unwrap_err();
-    let contract::signing::Error::Credential { code, message } = &err else {
+    let contract::signing::Error::Credential { code, message, .. } = &err else {
         panic!("{err:?}")
     };
     assert_eq!(*code, ErrorCode::CredentialFailed);
@@ -904,7 +904,7 @@ fn a_rejected_refresh_at_send_time_keeps_authentication_failed() {
     let setup = Setup::new();
     let server = fakes::OauthServer::start(vec![fakes::OauthReply::raw(400, "{}")]);
     let provider = refresh_provider(&setup, &server.url());
-    let contract::signing::Error::Credential { code, message } = &sign_error(&provider) else {
+    let contract::signing::Error::Credential { code, message, .. } = &sign_error(&provider) else {
         panic!("expected a credential error")
     };
     assert_eq!(*code, ErrorCode::AuthenticationFailed);
@@ -922,7 +922,7 @@ fn an_unreachable_refresh_at_send_time_keeps_connection_failed() {
         .unwrap()
         .port();
     let provider = refresh_provider(&setup, &format!("http://127.0.0.1:{port}"));
-    let contract::signing::Error::Credential { code, message } = &sign_error(&provider) else {
+    let contract::signing::Error::Credential { code, message, .. } = &sign_error(&provider) else {
         panic!("expected a credential error")
     };
     assert_eq!(*code, ErrorCode::ConnectionFailed);
@@ -997,7 +997,7 @@ fn a_credential_error_is_its_own_first_line_with_its_code() {
         })
     })
     .unwrap_err();
-    let contract::signing::Error::Credential { code, message } = &err else {
+    let contract::signing::Error::Credential { code, message, .. } = &err else {
         panic!("{err:?}")
     };
     assert_eq!(*code, ErrorCode::CredentialFailed);
