@@ -37,7 +37,7 @@ impl Aside {
 }
 
 /// Places `aside` in the open turn, or after the turns there are.
-fn place(turns: &mut [Turn], fold: &mut Fold, aside: Aside) {
+pub(super) fn place(turns: &mut [Turn], fold: &mut Fold, aside: Aside) {
     match open(turns) {
         Some(turn) => turn.entries.push(Entry::Aside(aside)),
         None => fold.asides.push((turns.len(), aside)),

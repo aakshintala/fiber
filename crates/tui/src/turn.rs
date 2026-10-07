@@ -23,6 +23,8 @@ use crate::format;
 
 #[path = "crash.rs"]
 pub(crate) mod crash;
+#[path = "handoff.rs"]
+mod handoff;
 
 /// One drawn line and what clicking it opens.
 pub(crate) type Row = (Line<'static>, Option<Target>);
@@ -37,6 +39,9 @@ pub(crate) struct Fold {
     /// Lines outside any turn, each after the turns there were when it
     /// came.
     pub(crate) asides: Vec<(usize, crash::Aside)>,
+    /// The context size an automatic handoff runs at, from the latest
+    /// `preamble_built`.
+    trigger_at: Option<u64>,
 }
 
 impl Fold {
@@ -58,6 +63,8 @@ enum Entry {
     Group(usize),
     /// A line that came while the turn ran.
     Aside(crash::Aside),
+    /// A handoff's band: what follows is the second card.
+    Band(handoff::Band),
 }
 
 /// Everything between two pieces of assistant text.
@@ -199,6 +206,9 @@ impl Turn {
         if text.is_empty() {
             return false;
         }
+        if self.note_text(action, text, false) {
+            return true;
+        }
         let mut found = None;
         for entry in self.entries.iter_mut().rev() {
             match entry {
@@ -206,7 +216,7 @@ impl Turn {
                     found = Some(text);
                     break;
                 }
-                Entry::Group(_) => break,
+                Entry::Group(_) | Entry::Band(_) => break,
                 Entry::Reply { .. } | Entry::Steer(_) | Entry::Aside(_) => {}
             }
         }
@@ -224,6 +234,9 @@ impl Turn {
         if text.is_empty() {
             return false;
         }
+        if self.note_text(action, &text, true) {
+            return true;
+        }
         let part = self.parts.entry(action.to_owned()).or_default();
         let nth = *part;
         *part = part.saturating_add(1);
@@ -232,7 +245,11 @@ impl Turn {
             .iter_mut()
             .filter_map(|entry| match entry {
                 Entry::Reply { action: has, text } if has == action => Some(text),
-                Entry::Reply { .. } | Entry::Steer(_) | Entry::Group(_) | Entry::Aside(_) => None,
+                Entry::Reply { .. }
+                | Entry::Steer(_)
+                | Entry::Group(_)
+                | Entry::Aside(_)
+                | Entry::Band(_) => None,
             })
             .nth(nth);
         match found {
@@ -454,6 +471,7 @@ impl Turn {
         self.groups_mut().any(|group| group.toggle(target))
             || self.entries.iter_mut().any(|entry| match entry {
                 Entry::Aside(aside) => aside.toggle(target),
+                Entry::Band(band) => band.toggle(target),
                 Entry::Reply { .. } | Entry::Steer(_) | Entry::Group(_) => false,
             })
     }
@@ -490,6 +508,7 @@ impl Turn {
                     }
                 }
                 Entry::Aside(aside) => aside.rows(out),
+                Entry::Band(band) => band.rows(out),
             }
         }
         if let Some((done, ts)) = &self.ended {
@@ -553,6 +572,8 @@ pub(crate) fn fold_line(turns: &mut Vec<Turn>, fold: &mut Fold, envelope: &Envel
             let known = turns
                 .iter()
                 .rposition(|turn| turn.spend.holds(&line.generation_id));
+            // A new call, not a correction, may size a handoff.
+            let sized = known.is_none() && handoff::sized(turns, &line);
             let turn = match known {
                 Some(at) => turns.get_mut(at),
                 None => open(turns),
@@ -560,7 +581,7 @@ pub(crate) fn fold_line(turns: &mut Vec<Turn>, fold: &mut Fold, envelope: &Envel
             turn.is_some_and(|turn| {
                 turn.spend.record(&line);
                 true
-            })
+            }) || sized
         }),
         "steering_applied" => read!(envelope, SteeringApplied).is_some_and(|applied| {
             open(turns).is_some_and(|turn| {
@@ -581,6 +602,9 @@ pub(crate) fn fold_line(turns: &mut Vec<Turn>, fold: &mut Fold, envelope: &Envel
             })
         }),
         "mcp_server_failed" => crash::fold(turns, fold, envelope),
+        "preamble_built" | "handoff_started" | "handoff_completed" | "context_nudged" => {
+            handoff::fold(turns, fold, envelope)
+        }
         _ => action.is_some_and(|action| fold_action(turns, fold, envelope, action)),
     }
 }
@@ -721,7 +745,7 @@ impl Group {
                 .flat_map(|section| section.calls.iter_mut())
                 .find(|call| call.id == id)
                 .map(|call| &mut call.open),
-            Target::Login => None,
+            Target::Login | Target::Note(_) => None,
         };
         flag.map(|open| *open = !*open).is_some()
     }

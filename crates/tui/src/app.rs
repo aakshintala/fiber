@@ -107,6 +107,8 @@ pub(crate) enum Target {
     Thought(usize),
     /// The login a failed turn offers.
     Login,
+    /// A handoff's note.
+    Note(usize),
 }
 
 /// The terminal's state.
