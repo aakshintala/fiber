@@ -32,3 +32,9 @@ fn the_wait_ends_on_a_new_response_or_cancel() {
     assert!(super::should_stop(7, 7, true));
     assert!(super::should_stop(8, 7, true));
 }
+
+#[test]
+fn no_cancel_never_cancels() {
+    use contract::tool::Cancel;
+    assert!(!super::NoCancel.is_cancelled());
+}
