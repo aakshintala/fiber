@@ -255,6 +255,12 @@ pub enum Error {
         /// The model id.
         model: String,
     },
+    /// The session's model, or one named, is left out for its per-account host.
+    #[error("{message}")]
+    Unconfigured {
+        /// Its `model_unconfigured` message.
+        message: String,
+    },
     /// A bare model id that more than one installed provider has.
     #[error("The model `{id}` is offered by more than one provider: {}. Name one as `provider/model`.", matches.join(", "))]
     Ambiguous {
@@ -426,6 +432,7 @@ impl Error {
             | Self::Stopped { .. } => ErrorCode::ExtensionFailed,
             Self::UnknownCommand { .. } => ErrorCode::UnknownCommand,
             Self::UnknownModel { .. } | Self::NoModel => ErrorCode::NoModel,
+            Self::Unconfigured { .. } => ErrorCode::ModelUnconfigured,
             Self::Ambiguous { .. } => ErrorCode::ModelAmbiguous,
             Self::Credential(_) => ErrorCode::CredentialFailed,
             Self::RefreshRejected { .. } | Self::Unattended { .. } => {

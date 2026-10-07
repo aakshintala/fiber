@@ -96,6 +96,7 @@ pub(super) fn again(name: &str, e: &Error) -> Error {
         | Error::ProviderMissing { .. }
         | Error::ModelMissing { .. }
         | Error::UnknownModel { .. }
+        | Error::Unconfigured { .. }
         | Error::Ambiguous { .. }
         | Error::UnknownCommand { .. }
         | Error::UnknownCallback { .. }
