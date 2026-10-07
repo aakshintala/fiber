@@ -80,6 +80,7 @@ const COMPILED_IN: &[(&str, &str)] = &[
     ("docs/errors.md", "contract"),
     ("docs/events.md", "contract"),
     ("docs/invocation.md", "contract"),
+    ("docs/tui.md", "contract"),
     ("crates/loop/prompt/messages.md", "loop"),
     ("crates/loop/prompt/opening.md", "loop"),
     ("crates/loop/prompt/reviewer.md", "loop"),

@@ -114,6 +114,9 @@ pub(crate) enum Probe {
     FirstShellWaitDone,
     /// A wait for the driver shells is about to block on one still running.
     ShellsWaiting,
+    /// A `full` subscribe has its watcher and seed queued, before the writer
+    /// starts.
+    SubscribeSeeded,
 }
 
 /// What [`Gate::probe`] calls at each [`Probe`] point.
@@ -872,14 +875,11 @@ fn a_full_subscribers_latest_status_survives_a_queue_saturated_after_registratio
     log.append(&status("latest"), None, None).unwrap();
     // Registration, as `subscribe` does it, then the queue saturates and lags
     // before the latest status is delivered.
-    let watcher = log.watch_all().unwrap();
-    let injector = watcher.injector();
-    let latest = log.latest("session_status");
+    let watcher = log.watch_all_seeded().unwrap();
     for _ in 0..1_200 {
         log.append(&notice(), None, None).unwrap();
     }
     log.append(&step(), None, None).unwrap();
-    crate::client::queue_latest(&injector, latest, None);
     let held = Held::new(Hold::Go);
     let write = HeldWrite {
         held: Arc::clone(&held),
@@ -1668,6 +1668,7 @@ fn close_waits_for_a_driver_shell_admitted_after_its_first_wait() {
                 .expect("the test resumes close");
         }
         Probe::ShellsWaiting => if let Ok(()) = waiting_tx.send(()) {},
+        Probe::SubscribeSeeded => {}
     }));
     let socket = opened.socket.clone();
     let mut connected = None;
@@ -1969,6 +1970,78 @@ fn an_ask_session_appends_no_prompt_even_one_a_client_sends() {
         })
         .unwrap();
     assert_eq!(history_lines(&file), Vec::<Value>::new());
+    close_within(opened.session, opened.log);
+}
+
+fn ui_status(extension: &str, status: &str) -> Event {
+    Event::ExtensionUi(contract::events::ExtensionUi {
+        extension: extension.to_owned(),
+        ui: contract::events::Ui::Status {
+            status: status.to_owned(),
+        },
+    })
+}
+
+#[test]
+fn a_full_subscriber_sees_the_kept_ui_line_before_a_later_one() {
+    // The seed and the registration sit under one lock: emit status A,
+    // connect a client whose subscribe parks at the seed probe, append
+    // status B through the log from the test thread, then release the probe
+    // and read the client's first lines. Required: A then B. On the old path
+    // (register, read `latest`, then inject) the same probe sits between the
+    // snapshot read and the injection, so B is queued live before A is
+    // injected and the client reads B then A.
+    reset();
+    let opened = open();
+    opened
+        .log
+        .append(&ui_status("fiber.test/a", "A"), None, None)
+        .unwrap();
+    let gate = Arc::clone(&opened.session.gate);
+    let (parked_tx, parked) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let release_rx = Mutex::new(release_rx);
+    *super::lock(&gate.probe) = Some(Arc::new(move |point| {
+        if point != Probe::SubscribeSeeded {
+            return;
+        }
+        if let Ok(()) = parked_tx.send(()) {}
+        lock(&release_rx)
+            .recv_timeout(DEADLINE)
+            .expect("the test releases the subscribe");
+    }));
+    let socket = opened.socket.clone();
+    let log = Arc::clone(&opened.log);
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_full", "full");
+            // The reader parks at the probe; it holds no test assertion yet.
+            parked
+                .recv_timeout(DEADLINE)
+                .expect("subscribe parked at its seed");
+            // Appended after the watcher is registered: `append` returns, so no
+            // lock is held when the probe releases.
+            log.append(&ui_status("fiber.test/a", "B"), None, None)
+                .unwrap();
+            release_tx.send(()).unwrap();
+            let ack = recv(&client);
+            assert_eq!(ack["kind"], "command_accepted");
+            let mut seen = Vec::new();
+            for _ in 0..16 {
+                let line = recv(&client);
+                if line["kind"] == "extension_ui" {
+                    seen.push(line["payload"]["status"].as_str().unwrap().to_owned());
+                }
+                if seen.len() == 2 {
+                    break;
+                }
+            }
+            assert_eq!(seen, vec!["A".to_owned(), "B".to_owned()]);
+            Ok(())
+        })
+        .unwrap();
     close_within(opened.session, opened.log);
 }
 

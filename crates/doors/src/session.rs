@@ -75,6 +75,9 @@ pub(crate) struct Gate {
     /// The session's hooks, which receive the loop's inbox so an extension's
     /// program run can be logged as `extension_exec`.
     hooks: Mutex<Option<Arc<dyn contract::hook::Hooks>>>,
+    /// The session's extensions as the door reaches them, for the `command`
+    /// driver command.
+    door: Mutex<Option<Arc<dyn contract::extension::ExtensionDoor>>>,
     /// The image child's driver, which pasted images are processed through.
     /// None leaves image parts rejected: this Fiber processes no images yet.
     images: Mutex<Option<Arc<dyn contract::images::Images>>>,
@@ -228,6 +231,11 @@ impl Session {
         *lock(&self.gate.hooks) = Some(hooks);
     }
 
+    /// The session's extensions as the `command` driver command reaches them.
+    pub fn extensions(&self, door: Arc<dyn contract::extension::ExtensionDoor>) {
+        *lock(&self.gate.door) = Some(door);
+    }
+
     /// The image child's driver, which a pasted image is processed through
     /// (`docs/architecture.md`, "The call rules"). With none set, an image
     /// part is rejected: this Fiber processes no images yet.
@@ -254,6 +262,9 @@ impl Session {
     pub fn quiesce(&self) {
         // An emission holds this lock, so one in flight finishes first.
         lock(&self.gate.clients).1 = true;
+        if let Some(door) = lock(&self.gate.door).clone() {
+            door.seal();
+        }
         self.gate.cancel_shells();
         self.gate.wait_shells();
     }
@@ -319,7 +330,7 @@ impl Gate {
     }
 
     #[cfg(test)]
-    fn note(&self, point: tests::Probe) {
+    pub(crate) fn note(&self, point: tests::Probe) {
         let probe = lock(&self.probe).clone();
         if let Some(probe) = probe {
             probe(point);
@@ -353,6 +364,10 @@ impl Gate {
 
     pub(crate) fn commands(&self) -> Vec<CommandInfo> {
         lock(&self.commands).clone()
+    }
+
+    pub(crate) fn door(&self) -> Option<Arc<dyn contract::extension::ExtensionDoor>> {
+        lock(&self.door).clone()
     }
 
     pub(crate) fn jobs(&self) -> Option<Arc<dyn contract::jobs::Jobs>> {
@@ -423,6 +438,7 @@ fn open_in(
         driver_shell: Mutex::new(None),
         jobs: Mutex::new(None),
         hooks: Mutex::new(None),
+        door: Mutex::new(None),
         images: Mutex::new(None),
         pasting: Arc::new(crate::shell::ShellCancel::new()),
         history: OnceLock::new(),
@@ -543,4 +559,4 @@ fn print(mut watcher: Watcher, mut out: Box<dyn Write + Send>) {
 
 #[cfg(test)]
 #[path = "session_tests.rs"]
-mod tests;
+pub(crate) mod tests;

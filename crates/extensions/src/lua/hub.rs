@@ -46,6 +46,8 @@ pub(crate) struct Hub {
 pub(super) enum Window {
     Selected,
     Flushing,
+    Emitting,
+    EmitFlushing,
 }
 
 #[cfg(test)]
@@ -197,6 +199,71 @@ impl Hub {
         }
     }
 
+    /// Sets the ephemeral emitter `host.status`, `host.widget` and `host.emit`
+    /// write through, flushing what was buffered before it in call order.
+    /// A later emitter replaces the last, as `set_inbox` does. Holds the hub
+    /// lock through the flush, so `seal` cannot return between the choice
+    /// and the last write: `fiber_exited` follows every flushed line. The
+    /// emitter is the log, which takes only its own lock and never calls
+    /// back into the hub, so the order hub-then-log never reverses.
+    pub(crate) fn set_emit(&self, emit: std::sync::Arc<dyn contract::emit::Emit>) {
+        let mut shared = self.lock();
+        if shared.disposed || shared.sealed {
+            return;
+        }
+        shared.emitter = Some(emit.clone());
+        let buffered = std::mem::take(&mut shared.emit_buffer);
+        #[cfg(test)]
+        self.at_window(Window::EmitFlushing);
+        for event in buffered {
+            // Ephemeral only, so the log takes its own lock and fans out
+            // without file I/O and never calls back into the hub; held
+            // under the hub lock so a concurrent `seal` cannot interleave.
+            emit.emit(&event);
+        }
+    }
+
+    /// Emits an ephemeral `event` through the late-bound emitter, or buffers
+    /// it in call order when none arrived yet. After the drop or `seal`,
+    /// it is dropped. Holds the hub lock through the emission, so `seal`
+    /// under the same lock drops every later emission and `fiber_exited`
+    /// follows every emitted line. The emitter is the log, which takes only
+    /// its own lock and never calls back into the hub, so the order
+    /// hub-then-log never reverses.
+    pub(crate) fn emit(&self, event: contract::events::Event) {
+        let mut shared = self.lock();
+        if shared.disposed || shared.sealed {
+            return;
+        }
+        let Some(emitter) = shared.emitter.clone() else {
+            shared.emit_buffer.push(event);
+            return;
+        };
+        #[cfg(test)]
+        self.at_window(Window::Emitting);
+        // Held under the hub lock so a concurrent `seal` cannot slip in
+        // between the choice and the write; `shared` drops after.
+        emitter.emit(&event);
+    }
+
+    /// Drops every later emission and delivery from this extension; called by
+    /// `Session::quiesce` before `fiber_exited`. A running callback is not
+    /// stopped; only its output is dropped.
+    pub(crate) fn seal(&self) {
+        self.lock().sealed = true;
+    }
+
+    /// Releases a held queued call, so the stream may start it.
+    pub(crate) fn release(&self, id: u64) {
+        {
+            let mut shared = self.lock();
+            if let Some(job) = shared.queue.iter_mut().find(|job| job.id == id) {
+                job.held = false;
+            }
+        }
+        self.notify();
+    }
+
     /// Records the extension's drop under the same lock that routes
     /// deliveries: anything routed after this is dropped.
     pub(crate) fn dispose(&self, name: &str) {
@@ -275,10 +342,10 @@ impl Hub {
 
     /// Routes an extension delivery to the loop's inbox, or buffers it in
     /// call order when no sender arrived yet. One routed after the drop
-    /// is dropped instead; routing holds one lock, so nothing is stranded.
+    /// or after `seal` is dropped instead; routing holds one lock, so nothing is stranded.
     pub(crate) fn send(&self, delivery: Delivery) {
         let mut shared = self.lock();
-        if shared.disposed {
+        if shared.disposed || shared.sealed {
             return;
         }
         let inbox = shared.inbox.clone();
@@ -316,6 +383,15 @@ pub(crate) struct Shared {
     /// The extension was dropped: anything routed after this is dropped,
     /// under the same lock that routes deliveries.
     pub(super) disposed: bool,
+    /// `seal` was called: every later emission and delivery is dropped,
+    /// under the same lock that routes them.
+    pub(super) sealed: bool,
+    /// The ephemeral emitter `host.status`, `host.widget` and `host.emit`
+    /// write through, set late by `emit_to`.
+    pub(super) emitter: Option<std::sync::Arc<dyn contract::emit::Emit>>,
+    /// Ephemeral events emitted before any emitter, in call order, flushed
+    /// on the first one.
+    pub(super) emit_buffer: Vec<contract::events::Event>,
     /// The timers `host.after` and `host.every` set, by id.
     pub(crate) timers: HashMap<u64, Timer>,
     /// Timer ids whose Lua functions the extension's thread still frees.
@@ -375,6 +451,8 @@ pub(super) struct Job {
     /// When Fiber asked. Waiting counts against the callback's timeout from
     /// here.
     pub(super) asked: Instant,
+    /// A held job never starts until `release`; every stream job behind it waits too.
+    pub(super) held: bool,
 }
 
 /// What registration lets a waiter do.
@@ -394,6 +472,15 @@ pub(super) enum Next {
 impl Shared {
     /// Queues a call and returns its id.
     pub(super) fn push(&mut self, target: Target, arg: Value, asked: Instant) -> u64 {
+        self.push_at(target, arg, asked, false)
+    }
+
+    /// Queues a held call, which never starts until `release`.
+    pub(super) fn push_held(&mut self, target: Target, arg: Value, asked: Instant) -> u64 {
+        self.push_at(target, arg, asked, true)
+    }
+
+    fn push_at(&mut self, target: Target, arg: Value, asked: Instant, held: bool) -> u64 {
         let id = self.next_id;
         self.next_id = self.next_id.wrapping_add(1);
         self.queue.push_back(Job {
@@ -401,6 +488,7 @@ impl Shared {
             target,
             arg,
             asked,
+            held,
         });
         self.calls.insert(id, Progress::Queued);
         id
@@ -431,6 +519,7 @@ impl Shared {
                 target: Target::Timer { id: timer_id },
                 arg: Value::Null,
                 asked: now,
+                held: false,
             },
             timeout,
             deadline,

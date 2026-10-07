@@ -4,6 +4,7 @@
 //! starts at session start, because a hook registers before the session's
 //! tool set is fixed ("Registering"). A session with none starts no VM.
 
+use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -18,6 +19,7 @@ use contract::hook::{AfterToolAnswer, AfterToolCall, AfterToolOutcome, Hooks};
 use contract::inbox::Delivery;
 use serde_json::{Map, Value};
 
+use crate::commands::{CommandSource, SessionCommands};
 use crate::git::short_name;
 use crate::host::Session;
 use crate::lua::{DeclaredHooks, HookPhase, LuaExtension};
@@ -54,6 +56,8 @@ pub struct SessionExtensions {
     after_tool: Vec<Entry>,
     /// Whether any hook registered at any point.
     any: bool,
+    /// The session's extension commands, built once from the same final names.
+    commands: SessionCommands,
 }
 
 /// One hook in a chain.
@@ -106,6 +110,21 @@ impl SessionExtensions {
         // debt: entry scripts load one after another, each up to its load
         // timeout; start every VM before waiting on any if session start
         // shows the sum (docs/performance.md).
+        // First pass: start every VM and collect hooks and commands, so final
+        // command names (renames, conflicts, `replaces`) settle globally
+        // before any extension is kept or unloaded.
+        struct Started {
+            name: String,
+            version: String,
+            slug: String,
+            dir: PathBuf,
+            manifest: config::Manifest,
+            prompt: Option<String>,
+            extension: Option<LuaExtension>,
+            declared: Option<DeclaredHooks>,
+            commands: Vec<(String, String)>,
+        }
+        let mut started: Vec<Started> = Vec::new();
         for item in installed {
             let quoted = format!("extensions.\"{}\"", item.name);
             let enabled = config
@@ -186,37 +205,167 @@ impl SessionExtensions {
                         continue;
                     }
                 };
-                // An extension that registered no hooks is held only by
-                // its providers: it never enters `lua`, so dropping its
-                // providers unloads its VM (`docs/model-routing.md`,
-                // "Model discovery"). An extension with hooks is used by
-                // the session and stays.
-                let runs_hooks = declared.by_point.values().any(|hooks| !hooks.is_empty());
-                session.register(&item.name, declared, &mut chain);
-                let extension = Arc::new(extension);
-                match extension.provider_names() {
-                    Ok(names) => {
-                        for name in names {
-                            let provider = LuaProvider::new(Arc::clone(&extension), name);
-                            session.lua_providers.push((item.name.clone(), provider));
-                        }
+                let commands = match extension.commands() {
+                    Ok(commands) => commands,
+                    Err(e) => {
+                        session.failed(&item.name, &e);
+                        continue;
                     }
-                    Err(e) => session.failed(&item.name, &e),
+                };
+                started.push(Started {
+                    name: item.name,
+                    version: item.version,
+                    slug,
+                    dir,
+                    manifest,
+                    prompt,
+                    extension: Some(extension),
+                    declared: Some(declared),
+                    commands,
+                });
+            } else {
+                started.push(Started {
+                    name: item.name,
+                    version: item.version,
+                    slug,
+                    dir,
+                    manifest,
+                    prompt,
+                    extension: None,
+                    declared: None,
+                    commands: Vec::new(),
+                });
+            }
+        }
+        // Settle final command names across every extension from metadata
+        // alone; real VMs attach below.
+        struct Meta {
+            extension: String,
+            replaces: Vec<String>,
+            commands: Vec<(String, String)>,
+        }
+        let metas: Vec<Meta> = started
+            .iter()
+            .filter(|s| s.extension.is_some())
+            .map(|s| Meta {
+                extension: s.name.clone(),
+                replaces: s.manifest.replaces.clone(),
+                commands: s.commands.clone(),
+            })
+            .collect();
+        // Temporary build for notices/unload/conflicts from metadata alone.
+        // Real `Arc<LuaExtension>` values are attached after, keyed by name.
+        let probe_sources: Vec<CommandSource> = metas
+            .iter()
+            .map(|m| CommandSource {
+                extension: m.extension.clone(),
+                replaces: m.replaces.clone(),
+                commands: m.commands.clone(),
+                lua: Arc::new(LuaExtension::new(
+                    &m.extension,
+                    home,
+                    home,
+                    Arc::clone(&clock),
+                )),
+            })
+            .collect();
+        let probe = SessionCommands::build(&probe_sources, config);
+        let unloaded = probe.unloaded();
+        session.notices.extend(probe.notices());
+        // Second pass: keep every loaded extension; an undeclared built-in
+        // replacement unloads the extension.
+        let mut real_sources: Vec<CommandSource> = Vec::new();
+        let mut kept: Vec<usize> = Vec::new();
+        for (idx, s) in started.iter().enumerate() {
+            if unloaded.contains(&s.name) {
+                continue;
+            }
+            kept.push(idx);
+        }
+        // Attach real VMs for kept Lua extensions, in load order.
+        let mut by_name: BTreeMap<String, Arc<LuaExtension>> = BTreeMap::new();
+        // Move real extensions out of `started` for kept entries.
+        let mut started = started;
+        for idx in &kept {
+            let Some(s) = started.get_mut(*idx) else {
+                continue;
+            };
+            if let Some(ext) = s.extension.take() {
+                by_name.insert(s.name.clone(), Arc::new(ext));
+            }
+        }
+        for idx in &kept {
+            let Some(s) = started.get(*idx) else {
+                continue;
+            };
+            if let Some(lua) = by_name.get(&s.name) {
+                real_sources.push(CommandSource {
+                    extension: s.name.clone(),
+                    replaces: s.manifest.replaces.clone(),
+                    commands: s.commands.clone(),
+                    lua: Arc::clone(lua),
+                });
+            }
+        }
+        session.commands = SessionCommands::build(&real_sources, config);
+        // The probe's notices are already recorded above, from the same
+        // metadata and config, so the real build keeps only its admission
+        // table: [`SessionExtensions::notices`] publishes the probe's, never
+        // the real build's, or every rename and conflict notice would appear
+        // twice.
+        for idx in kept {
+            let Some(s) = started.get(idx) else {
+                continue;
+            };
+            let Some(declared) = s.declared.clone() else {
+                // Data-only extension: no hooks, no commands, no providers.
+                if let Some(opening) = s.manifest.opening.clone() {
+                    session
+                        .openings
+                        .push((s.name.clone(), s.slug.clone(), opening));
                 }
-                if runs_hooks {
-                    session.lua.push(extension);
+                if let Some(text) = s.prompt.clone() {
+                    session.prompts.push((s.name.clone(), text));
                 }
+                session.dirs.push((s.name.clone(), s.dir.clone()));
+                session.loaded.push(LoadedExtension {
+                    name: s.name.clone(),
+                    version: s.version.clone(),
+                });
+                continue;
+            };
+            let runs_hooks = declared.by_point.values().any(|hooks| !hooks.is_empty());
+            let has_commands = !s.commands.is_empty();
+            let Some(lua) = by_name.get(&s.name) else {
+                continue;
+            };
+            session.register(&s.name, declared, &mut chain);
+            match lua.provider_names() {
+                Ok(names) => {
+                    for name in names {
+                        let provider = LuaProvider::new(Arc::clone(lua), name);
+                        session.lua_providers.push((s.name.clone(), provider));
+                    }
+                }
+                Err(e) => session.failed(&s.name, &e),
             }
-            if let Some(opening) = manifest.opening.clone() {
-                session.openings.push((item.name.clone(), slug, opening));
+            // Command-only extensions stay loaded: an extension with a hook
+            // or a command is used by the session and stays.
+            if runs_hooks || has_commands {
+                session.lua.push(Arc::clone(lua));
             }
-            if let Some(text) = prompt {
-                session.prompts.push((item.name.clone(), text));
+            if let Some(opening) = s.manifest.opening.clone() {
+                session
+                    .openings
+                    .push((s.name.clone(), s.slug.clone(), opening));
             }
-            session.dirs.push((item.name.clone(), dir));
+            if let Some(text) = s.prompt.clone() {
+                session.prompts.push((s.name.clone(), text));
+            }
+            session.dirs.push((s.name.clone(), s.dir.clone()));
             session.loaded.push(LoadedExtension {
-                name: item.name,
-                version: item.version,
+                name: s.name.clone(),
+                version: s.version.clone(),
             });
         }
         let order: Vec<String> = config
@@ -313,9 +462,25 @@ impl SessionExtensions {
     }
 
     /// What loading raised: an entry script that failed, a hook that did
-    /// not register.
+    /// not register, and the command renames, conflicts and `replaces`
+    /// check. Command notices come from the probe build at load alone; the
+    /// real build settles the same final names and keeps only its admission
+    /// table, so publishing both would duplicate every one.
     pub fn notices(&self) -> Vec<Notice> {
         self.notices.clone()
+    }
+
+    /// The extension entries of the `commands` answer, sorted by name.
+    pub fn commands(&self) -> Vec<contract::events::CommandInfo> {
+        self.commands.list()
+    }
+
+    /// Hands the ephemeral emitter to every extension's `host.status`,
+    /// `host.widget` and `host.emit`.
+    pub fn emit_to(&self, emit: Arc<dyn contract::emit::Emit>) {
+        for extension in &self.lua {
+            extension.set_emit(Arc::clone(&emit));
+        }
     }
 
     /// Whether any extension registered a hook at any point.
@@ -543,6 +708,46 @@ fn notice(code: ErrorCode, message: String, extension: Option<&str>) -> Notice {
         code,
         message,
         extension: extension.map(str::to_owned),
+    }
+}
+
+impl contract::extension::ExtensionDoor for SessionExtensions {
+    fn command(
+        &self,
+        name: &str,
+        text: &str,
+    ) -> Result<Box<dyn FnOnce() + Send>, contract::inbox::Rejection> {
+        let admitted = self.commands.admit_with(name, text)?;
+        let queued = std::sync::Arc::clone(admitted.queued());
+        let lua = std::sync::Arc::clone(admitted.lua());
+        let extension = admitted.extension().to_owned();
+        let command = name.to_owned();
+        // One waiter thread per admitted command waits for the call's end;
+        // an `Err` gives a `notice` naming the extension through the
+        // extension's late-bound emitter.
+        std::thread::Builder::new()
+            .name(format!("command {name}"))
+            .spawn(move || {
+                if let Err(e) = queued.wait() {
+                    lua.emit(contract::events::Event::Notice(notice(
+                        ErrorCode::ExtensionFailed,
+                        format!("Command `{command}` failed: {e}"),
+                        Some(&extension),
+                    )));
+                }
+            })
+            .map_err(|e| contract::inbox::Rejection {
+                code: ErrorCode::IoFailed,
+                message: format!("cannot start a thread: {e}"),
+            })?;
+        let release_queued = std::sync::Arc::clone(admitted.queued());
+        Ok(Box::new(move || release_queued.release()))
+    }
+
+    fn seal(&self) {
+        for extension in &self.lua {
+            extension.seal();
+        }
     }
 }
 
