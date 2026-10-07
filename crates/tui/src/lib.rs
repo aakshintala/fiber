@@ -11,6 +11,7 @@ mod bindings;
 mod clipboard;
 mod editor;
 mod files;
+mod focus;
 mod format;
 mod highlight;
 mod input;
@@ -135,7 +136,7 @@ pub fn run(
     };
     // The first frame waits on nothing: the queries are out, and nothing
     // reads the tty or the hub until it is drawn.
-    if terminal.screen.draw(&terminal.app, None).is_err() {
+    if terminal.screen.draw(&mut terminal.app, None).is_err() {
         return 1;
     }
     let (tx, rx) = mpsc::channel();
@@ -213,11 +214,18 @@ impl<B: Backend> Screen<B> {
 
     /// Draws `app`, the cursor shown at the draft's cursor or hidden,
     /// tinting the click target under `pointer`, and keeps the frame's
-    /// targets. A frame whose cells and cursor equal the last one's writes
+    /// targets. When the frame drops the focused target, focus returns to
+    /// the input box and the frame is drawn again, so the cursor shows.
+    /// A frame whose cells and cursor equal the last one's writes
     /// nothing; otherwise only the cells that changed are written.
-    fn draw(&mut self, app: &App, pointer: Option<(u16, u16)>) -> Result<(), B::Error> {
+    fn draw(&mut self, app: &mut App, pointer: Option<(u16, u16)>) -> Result<(), B::Error> {
         let mut cells = Buffer::empty(self.area);
         self.targets = view::render(app, self.area, &mut cells, pointer);
+        if app.drawn(&self.targets) {
+            let mut cells = Buffer::empty(self.area);
+            self.targets = view::render(app, self.area, &mut cells, pointer);
+            let _ = app.drawn(&self.targets);
+        }
         let next = (cells, view::cursor(app, self.area));
         if self.last.as_ref() == Some(&next) {
             return Ok(());
@@ -433,7 +441,7 @@ impl<B: Backend> Loop<B> {
         if !self.app.files_open() {
             self.search = None;
         }
-        if self.screen.draw(&self.app, self.pointer.at).is_err() {
+        if self.screen.draw(&mut self.app, self.pointer.at).is_err() {
             return Some(1);
         }
         None
@@ -713,6 +721,10 @@ fn spawn_resize(mut signals: Signals, tx: Sender<Input>) {
 #[cfg(test)]
 #[path = "lib_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "lib_focus_tests.rs"]
+mod focus_tests;
 
 #[cfg(test)]
 #[path = "lib_mouse_tests.rs"]

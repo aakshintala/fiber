@@ -42,12 +42,14 @@ pub fn hover_frames(
     let written = Counter::default();
     let mut screen = Screen::new(CrosstermBackend::new(written.clone()), width, height)
         .map_err(|error| error.to_string())?;
-    screen.draw(&app, None).map_err(|error| error.to_string())?;
+    screen
+        .draw(&mut app, None)
+        .map_err(|error| error.to_string())?;
     let mut bytes = Vec::with_capacity(pointer.len());
     for at in pointer {
         let before = written.0.get();
         screen
-            .draw(&app, Some(*at))
+            .draw(&mut app, Some(*at))
             .map_err(|error| error.to_string())?;
         bytes.push(written.0.get().saturating_sub(before));
     }

@@ -232,7 +232,7 @@ fn inputs_wake_the_loop_once_each_and_no_ops_write_nothing() {
     let sink = Sink::default();
     let (mut lp, _) = new_loop(CrosstermBackend::new(sink.clone()), None);
     lp.screen
-        .draw(&lp.app, None)
+        .draw(&mut lp.app, None)
         .unwrap_or_else(|err| panic!("draw: {err}"));
     let first = sink.len();
     assert!(first > 0);

@@ -40,6 +40,11 @@ const NOTICE_TINT: Style = Style::new().bg(Color::Indexed(236));
 /// (see #685).
 pub(crate) const HOVER_TINT: Style = Style::new().bg(Color::Indexed(238));
 
+/// The focused click target's style in navigate mode.
+/// debt: a fixed colour, not a theme role; upgrade when colour roles land
+/// (see #685).
+pub(crate) const FOCUS_STYLE: Style = Style::new().add_modifier(Modifier::REVERSED);
+
 /// One line, wrapped the way it draws.
 fn paragraph(line: Line<'_>) -> Paragraph<'_> {
     Paragraph::new(line).wrap(Wrap { trim: false })
@@ -152,6 +157,11 @@ pub(crate) fn render(
     if let Some(id) = pointer.and_then(|(col, row)| mouse::hit(&targets, col, row)) {
         for target in targets.iter().filter(|target| target.id == id) {
             buf.set_style(target.rect, HOVER_TINT);
+        }
+    }
+    if let Some(id) = app.focused() {
+        for target in targets.iter().filter(|target| target.id == id) {
+            buf.set_style(target.rect, FOCUS_STYLE);
         }
     }
     targets
@@ -278,10 +288,10 @@ fn input_box(app: &App, width: u16) -> (Vec<String>, usize, usize, u16) {
 }
 
 /// Where the terminal cursor shows: at the draft's cursor while the input
-/// box has focus, `None` while the approval panel is open or the cursor's
-/// row is off a screen too short for it.
+/// box has focus, `None` while navigating or the approval panel is open,
+/// or the cursor's row is off a screen too short for it.
 pub(crate) fn cursor(app: &App, area: Rect) -> Option<Position> {
-    if app.panel().is_some() {
+    if app.panel().is_some() || app.focused().is_some() {
         return None;
     }
     let (rows, _, row, col) = input_box(app, area.width);

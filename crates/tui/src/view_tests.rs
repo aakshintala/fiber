@@ -1533,3 +1533,76 @@ fn copied_needs_a_conversation_row_to_show_on() {
     app.set_size(30, 1);
     assert_eq!(text(&buffer(&app, 30, 1)), ">\n");
 }
+
+#[test]
+fn the_focused_target_is_drawn_reversed() {
+    let mut app = empty();
+    tool_turn(&mut app);
+    tool_turn(&mut app);
+    app.on_key(Key::BackTab, fakes::clock::FakeClock::new().now());
+    let (buf, targets) = pointed(&mut app, WIDTH, HEIGHT, None);
+    app.drawn(&targets);
+    let focused = app.focused().expect("focus");
+    let rect = targets
+        .iter()
+        .find(|target| target.id == focused)
+        .map(|target| target.rect)
+        .expect("the focused stop is drawn");
+    for y in rect.top()..rect.bottom() {
+        for x in rect.left()..rect.right() {
+            assert!(
+                buf.cell((x, y))
+                    .is_some_and(|cell| cell.modifier.contains(Modifier::REVERSED)),
+                "cell {x},{y} of the focused row is reversed"
+            );
+        }
+    }
+    let other = targets
+        .iter()
+        .find(|target| matches!(target.id, crate::mouse::TargetId::Line(_)) && target.id != focused)
+        .map(|target| target.rect)
+        .expect("another line stop");
+    for y in other.top()..other.bottom() {
+        for x in other.left()..other.right() {
+            assert!(
+                !buf.cell((x, y))
+                    .is_some_and(|cell| cell.modifier.contains(Modifier::REVERSED)),
+                "cell {x},{y} of the other row is not reversed"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_cursor_hides_while_navigating() {
+    let mut app = empty();
+    tool_turn(&mut app);
+    let area = Rect::new(0, 0, WIDTH, HEIGHT);
+    assert!(cursor(&app, area).is_some());
+    app.on_key(Key::BackTab, fakes::clock::FakeClock::new().now());
+    let (_, targets) = pointed(&mut app, WIDTH, HEIGHT, None);
+    app.drawn(&targets);
+    assert_eq!(cursor(&app, area), None);
+    app.on_key(Key::Esc, fakes::clock::FakeClock::new().now());
+    let (_, targets) = pointed(&mut app, WIDTH, HEIGHT, None);
+    app.drawn(&targets);
+    assert!(cursor(&app, area).is_some());
+}
+
+#[test]
+fn the_cursor_hides_while_the_approval_panel_is_open() {
+    let mut app = empty();
+    attach(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "permission_requested",
+        serde_json::json!({
+            "request_id": "r_1", "effects": ["executes"], "reversible": true,
+            "step": "review",
+            "rule": {"subject": "npm test --watch", "prefix": "npm test"},
+        }),
+        Some("a_r1"),
+    ));
+    assert!(app.panel().is_some());
+    assert_eq!(cursor(&app, Rect::new(0, 0, WIDTH, HEIGHT)), None);
+}
