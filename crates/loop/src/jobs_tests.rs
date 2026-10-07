@@ -1394,7 +1394,7 @@ fn the_idle_delay_with_a_job_running_gives_the_jobs_check_once_and_never_exits()
         "{:?}",
         clock.parked()
     );
-    clock.advance(IDLE);
+    let m1 = clock.advance_marked(IDLE);
     world.send(Delivery::Cancelled);
     let check = world.next_turn();
     assert_eq!(kinds(&check), one_step_with(&["jobs_pending_notified"]));
@@ -1412,10 +1412,20 @@ fn the_idle_delay_with_a_job_running_gives_the_jobs_check_once_and_never_exits()
             .count(),
         1
     );
+    assert!(
+        clock.await_parked_since(&m1, None, DEADLINE),
+        "after the check the wait has no deadline while the job runs: {:?}",
+        clock.parked()
+    );
     // Another two delays with no prompt: no second check, and the session
     // does not end while the job runs. A wake makes the wait look again.
-    clock.advance(IDLE + IDLE);
+    let m2 = clock.advance_marked(IDLE + IDLE);
     world.send(Delivery::Cancelled);
+    assert!(
+        clock.await_parked_since(&m2, None, DEADLINE),
+        "the wake finds no second check and no exit: {:?}",
+        clock.parked()
+    );
     assert!(matches!(
         finished.try_recv(),
         Err(mpsc::TryRecvError::Empty)
@@ -1463,9 +1473,14 @@ fn a_prompt_arms_the_jobs_check_again_from_when_it_was_taken() {
     let origin = clock.now();
     let finished = world.spawn_run();
     assert!(clock.await_parked(origin + IDLE, DEADLINE));
-    clock.advance(IDLE);
+    let m1 = clock.advance_marked(IDLE);
     world.send(Delivery::Cancelled);
     assert_check(&world.next_turn(), &id);
+    assert!(
+        clock.await_parked_since(&m1, None, DEADLINE),
+        "after the check the wait has no deadline: {:?}",
+        clock.parked()
+    );
     // Half a delay later a prompt arrives: the clock restarts from it.
     clock.advance(IDLE / 2);
     world.send(Delivery::Cancelled);
@@ -1604,7 +1619,7 @@ fn a_jobs_end_does_not_arm_the_check_again() {
     let origin = clock.now();
     let finished = world.spawn_run();
     assert!(clock.await_parked(origin + IDLE, DEADLINE));
-    clock.advance(IDLE);
+    let m1 = clock.advance_marked(IDLE);
     world.send(Delivery::Cancelled);
     let check = world.next_turn();
     assert_eq!(
@@ -1619,8 +1634,18 @@ fn a_jobs_end_does_not_arm_the_check_again() {
     // past another delay gives none.
     (first.end.0)(failed(&one));
     assert_eq!(kinds(&world.next_turn()), one_step_with(&["job_completed"]));
-    clock.advance(IDLE + IDLE);
+    assert!(
+        clock.await_parked_since(&m1, None, DEADLINE),
+        "a job's end leaves the check unarmed: {:?}",
+        clock.parked()
+    );
+    let m2 = clock.advance_marked(IDLE + IDLE);
     world.send(Delivery::Cancelled);
+    assert!(
+        clock.await_parked_since(&m2, None, DEADLINE),
+        "two delays on, no check comes due: {:?}",
+        clock.parked()
+    );
     (second.end.0)(failed(&two));
     assert_eq!(kinds(&world.next_turn()), one_step_with(&["job_completed"]));
     assert!(clock.await_parked(origin + IDLE * 4, DEADLINE));
@@ -1662,8 +1687,18 @@ fn with_no_idle_delay_a_job_running_gets_no_check() {
     let mut world = world.with_jobs(jobs.clone());
     let clock = Arc::clone(&world.clock);
     let finished = world.spawn_run();
-    clock.advance(IDLE * 10);
+    assert!(
+        clock.await_parked_unbounded(DEADLINE),
+        "with no idle delay the wait has no deadline: {:?}",
+        clock.parked()
+    );
+    let m1 = clock.advance_marked(IDLE * 10);
     world.send(Delivery::Cancelled);
+    assert!(
+        clock.await_parked_since(&m1, None, DEADLINE),
+        "ten delays on, no check comes due: {:?}",
+        clock.parked()
+    );
     (job.end.0)(failed(&id));
     assert_eq!(kinds(&world.next_turn()), one_step_with(&["job_completed"]));
     world.send(Delivery::Close(ignore()));
@@ -1787,6 +1822,11 @@ fn an_approval_wait_with_a_job_running_outlasts_the_idle_deadline() {
     let finished = world.spawn_run();
     let _request_id = request.recv_timeout(DEADLINE).expect("the call asked");
     watcher.join().unwrap();
+    assert!(
+        clock.await_parked_unbounded(DEADLINE),
+        "the approval wait has no deadline while a job runs: {:?}",
+        clock.parked()
+    );
     clock.advance(IDLE + Duration::from_secs(1));
     world.send(Delivery::Cancelled);
     let (rejected, answer) = mpsc::channel();
