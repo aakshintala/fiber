@@ -9,6 +9,8 @@ use std::time::SystemTime;
 
 use contract::ErrorCode;
 
+use super::ignored;
+
 /// A worktree row prune prints.
 #[derive(Debug)]
 pub(crate) enum WorktreeRow {
@@ -18,7 +20,8 @@ pub(crate) enum WorktreeRow {
         name: String,
         /// The short branch it checks out.
         branch: String,
-        /// Whether `git status` reports anything, ignored files included.
+        /// Whether `git status` reports anything. Ignored files are not
+        /// counted: they are not uncommitted.
         uncommitted: bool,
         /// Whole days old, floored, from the directory's mtime.
         age_days: u64,
@@ -26,6 +29,8 @@ pub(crate) enum WorktreeRow {
         bytes: u64,
         /// What removing it loses; set only with `--force`.
         forced: Option<String>,
+        /// The ignored files it holds, named on its row.
+        ignored: ignored::Summary,
     },
     /// A worktree kept because removing it would lose something.
     Skipped {
@@ -33,7 +38,8 @@ pub(crate) enum WorktreeRow {
         name: String,
         /// The short branch it checks out.
         branch: String,
-        /// Whether `git status` reports anything, ignored files included.
+        /// Whether `git status` reports anything. Ignored files are not
+        /// counted: they are not uncommitted.
         uncommitted: bool,
         /// Whole days old, floored, from the directory's mtime.
         age_days: u64,
@@ -174,31 +180,43 @@ pub(crate) fn select(
             };
             let bytes = log::session_bytes(&dir);
             let age = age_days(&dir, now);
-            let row = |forced: Option<String>| WorktreeRow::Removable {
+            let row = |forced: Option<String>, ignored: ignored::Summary| WorktreeRow::Removable {
                 name: name.clone(),
                 branch: inspected.branch.clone(),
                 uncommitted: inspected.uncommitted,
                 age_days: age,
                 bytes,
                 forced,
+                ignored,
             };
             let parts = || RemovalParts {
                 dir: dir.clone(),
                 bytes,
                 project: key.clone(),
             };
+            // The listing runs only for rows prune will remove: a failed
+            // listing keeps the worktree as uncertain, so prune never
+            // removes one whose ignored files it could not name.
+            let push_removable =
+                |forced: Option<String>, listed: &mut Vec<Listed>| match listed_ignored(&dir) {
+                    Ok(ignored) => listed.push(Listed {
+                        row: row(forced, ignored),
+                        removal: Some(parts()),
+                    }),
+                    Err(reason) => listed.push(Listed {
+                        row: WorktreeRow::Uncertain {
+                            name: name.clone(),
+                            reason,
+                        },
+                        removal: None,
+                    }),
+                };
             match (
                 losses(inspected.uncommitted, inspected.unique_commits),
                 force,
             ) {
-                (None, _) => listed.push(Listed {
-                    row: row(None),
-                    removal: Some(parts()),
-                }),
-                (Some(what), true) => listed.push(Listed {
-                    row: row(Some(what)),
-                    removal: Some(parts()),
-                }),
+                (None, _) => push_removable(None, &mut listed),
+                (Some(what), true) => push_removable(Some(what), &mut listed),
                 (Some(what), false) => listed.push(Listed {
                     row: WorktreeRow::Skipped {
                         name: name.clone(),
@@ -324,17 +342,18 @@ pub(crate) fn worktree_line(row: &WorktreeRow) -> String {
             age_days,
             bytes,
             forced,
-            ..
+            ignored,
         } => {
             let tail = forced
                 .as_ref()
                 .map(|what| format!("  forced: loses {what}"))
                 .unwrap_or_default();
             format!(
-                "worktree  {name}  {branch}  {}  {}  {}{tail}",
+                "worktree  {name}  {branch}  {}  {}  {}{}{tail}",
                 state(*uncommitted),
                 super::format_age(*age_days),
                 super::format_size(*bytes),
+                ignored::segment(ignored),
             )
         }
         WorktreeRow::Skipped {
@@ -421,6 +440,14 @@ fn hold_users(
     false
 }
 
+/// The ignored-file summary for a removable row, or the `Uncertain` reason.
+fn listed_ignored(dir: &Path) -> Result<ignored::Summary, String> {
+    match worktree::ignored(dir) {
+        Ok(entries) => Ok(ignored::summarize(dir, &entries)),
+        Err(error) => Err(format!("git cannot read it: {error}")),
+    }
+}
+
 /// What `inspect` found: the worktree, or the reason it is kept.
 fn judged(dir: &Path) -> Result<worktree::Inspected, String> {
     match worktree::inspect(dir) {
@@ -436,12 +463,12 @@ fn judged(dir: &Path) -> Result<worktree::Inspected, String> {
 fn losses(uncommitted: bool, unique_commits: u64) -> Option<String> {
     if unique_commits == 0 {
         if uncommitted {
-            Some("uncommitted or ignored files".to_owned())
+            Some("uncommitted files".to_owned())
         } else {
             None
         }
     } else if uncommitted {
-        Some("uncommitted or ignored files and commits found nowhere else".to_owned())
+        Some("uncommitted files and commits found nowhere else".to_owned())
     } else {
         Some("commits found nowhere else".to_owned())
     }
