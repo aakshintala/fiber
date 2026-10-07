@@ -26,7 +26,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use fakes::{Watchdog, group_empties, kill_group, kill_matching, matching_exits, within};
+use fakes::{Watchdog, group_empties, kill_group, kill_matching, matching_exits};
 use support::Setup;
 
 /// How long one `fiber` or shell run may take.
@@ -34,6 +34,49 @@ const RUN: Duration = Duration::from_secs(20);
 
 /// How long the checks and cleanup after one run may take in all.
 const REAP: Duration = Duration::from_secs(5);
+
+/// Each cleanup path has four steps, each with a quarter of the `REAP` budget.
+const GROUP_KILL: Duration = Duration::from_millis(1_250);
+const MATCHING_KILL: Duration = Duration::from_millis(1_250);
+const GROUP_EMPTY: Duration = Duration::from_millis(1_250);
+const MATCHING_EXIT: Duration = Duration::from_millis(1_250);
+const GROUP_WATCHDOG: Duration = Duration::from_millis(1_250);
+const MATCHING_WATCHDOG: Duration = Duration::from_millis(1_250);
+
+const _: () = assert!(
+    REAP.as_millis()
+        == GROUP_KILL.as_millis()
+            + MATCHING_KILL.as_millis()
+            + GROUP_EMPTY.as_millis()
+            + MATCHING_EXIT.as_millis()
+);
+const _: () = assert!(
+    REAP.as_millis()
+        == GROUP_EMPTY.as_millis()
+            + MATCHING_EXIT.as_millis()
+            + GROUP_WATCHDOG.as_millis()
+            + MATCHING_WATCHDOG.as_millis()
+);
+
+/// Runs one cleanup step on its own thread and returns failures so later
+/// cleanup checks still run before the test reports them.
+fn within_cleanup<T: Send + 'static>(
+    what: &str,
+    deadline: Duration,
+    work: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, String> {
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || {
+        let _sent = done.send(work());
+    });
+    match finished.recv_timeout(deadline) {
+        Ok(result) => Ok(result),
+        Err(mpsc::RecvTimeoutError::Timeout) => Err(format!("waited {deadline:?} for {what}")),
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            Err(format!("{what} worker stopped without a result"))
+        }
+    }
+}
 
 /// The grammar a person completes, taken from the parser: every visible
 /// command path, its subcommands, and its flags.
@@ -133,46 +176,85 @@ fn run_bounded(what: &str, mut command: Command, tag: &Path) -> Output {
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait_with_output()).unwrap_or(()));
     let Ok(output) = finished.recv_timeout(RUN) else {
-        let group_killed = kill_group(group, "KILL");
-        let tag_killed = kill_matching(&tag);
+        // Both bounded kills finish before either process check starts.
+        let group_killed = within_cleanup(
+            &format!("killing {what}'s process group"),
+            GROUP_KILL,
+            move || kill_group(group, "KILL"),
+        );
+        let tag_for_kill = tag.clone();
+        let tag_killed = within_cleanup(
+            &format!("killing processes matching {tag}"),
+            MATCHING_KILL,
+            move || kill_matching(&tag_for_kill),
+        );
         let tag_for_wait = tag.clone();
-        let (group_gone, tag_gone) =
-            within(&format!("the cleanup after {what}"), REAP, move || {
-                let group_gone = group_empties(group, REAP / 2);
-                let tag_gone = matching_exits(&tag_for_wait, REAP / 2);
-                (group_gone, tag_gone)
-            });
+        let group_gone = within_cleanup(
+            &format!("{what}'s process group to empty"),
+            GROUP_EMPTY,
+            move || group_empties(group, GROUP_EMPTY),
+        );
+        let tag_gone = within_cleanup(
+            &format!("processes matching {tag} to exit"),
+            MATCHING_EXIT,
+            move || matching_exits(&tag_for_wait, MATCHING_EXIT),
+        );
         drop((group_dog, tag_dog));
         panic!(
             "waited {RUN:?} for {what} to exit; killing its group: {group_killed:?}, \
-             group empty: {group_gone}; killing processes matching {tag}: {tag_killed:?}, \
-             all gone: {tag_gone}"
+             group empty: {group_gone:?}; killing processes matching {tag}: {tag_killed:?}, \
+             all gone: {tag_gone:?}"
         );
     };
     let tag_for_wait = tag.clone();
-    let (group_gone, tag_gone) =
-        within(&format!("{what}'s processes to be gone"), REAP, move || {
-            let group_gone = group_empties(group, REAP / 2);
-            let tag_gone = matching_exits(&tag_for_wait, REAP / 2);
-            (group_gone, tag_gone)
-        });
-    if group_gone && tag_gone {
-        // Watchdogs stay on this thread, not in the `within` closure: on a
-        // timeout the closure's thread is detached, so dogs moved into it
-        // would never drop and kill what is left.
-        group_dog.stand_down(REAP);
-        tag_dog.stand_down(REAP);
+    let group_gone = within_cleanup(
+        &format!("{what}'s process group to empty"),
+        GROUP_EMPTY,
+        move || group_empties(group, GROUP_EMPTY),
+    );
+    let tag_gone = within_cleanup(
+        &format!("processes matching {tag} to exit"),
+        MATCHING_EXIT,
+        move || matching_exits(&tag_for_wait, MATCHING_EXIT),
+    );
+    let stand_down = if group_gone.as_ref() == Ok(&true) && tag_gone.as_ref() == Ok(&true) {
+        let group_stood_down =
+            within_cleanup("the group watchdog to exit", GROUP_WATCHDOG, move || {
+                group_dog.stand_down(GROUP_WATCHDOG);
+            });
+        let tag_stood_down = within_cleanup(
+            "the matching watchdog to exit",
+            MATCHING_WATCHDOG,
+            move || {
+                tag_dog.stand_down(MATCHING_WATCHDOG);
+            },
+        );
+        Some((group_stood_down, tag_stood_down))
     } else {
         // A watchdog that is dropped, not stood down, kills what is left.
         // Drop before the asserts so the kill starts before the failure.
         drop((group_dog, tag_dog));
-    }
+        None
+    };
     drop(stdin);
-    assert!(group_gone, "{what} left a process in its group behind");
     assert!(
-        tag_gone,
-        "{what} left a process matching its directory behind"
+        group_gone.as_ref() == Ok(&true),
+        "{what} left a process in its group behind: {group_gone:?}"
     );
+    assert!(
+        tag_gone.as_ref() == Ok(&true),
+        "{what} left a process matching its directory behind: {tag_gone:?}"
+    );
+    if let Some((group_stood_down, tag_stood_down)) = stand_down {
+        assert!(
+            group_stood_down.is_ok(),
+            "{what}'s group watchdog did not exit: {group_stood_down:?}"
+        );
+        assert!(
+            tag_stood_down.is_ok(),
+            "{what}'s matching watchdog did not exit: {tag_stood_down:?}"
+        );
+    }
     output.unwrap()
 }
 
