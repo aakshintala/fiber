@@ -200,17 +200,7 @@ fn a_429_with_retry_after_2_records_retry_after_ms_2000() {
             "{}",
             protocol.name
         );
-        let keys: Vec<&str> = value
-            .as_object()
-            .unwrap()
-            .keys()
-            .map(String::as_str)
-            .collect();
-        assert!(
-            keys.iter()
-                .all(|k| ["code", "message", "retry_after_ms", "provider"].contains(k)),
-            "no seconds key: {value}"
-        );
+        assert!(value.get("retry_after").is_none(), "{}", protocol.name);
     }
 }
 

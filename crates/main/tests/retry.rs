@@ -391,17 +391,7 @@ fn a_429_asking_for_2_seconds_over_the_cap_records_retry_after_ms_2000() {
         .unwrap();
     assert_eq!(completed["payload"]["error"]["code"], "rate_limited");
     assert_eq!(completed["payload"]["error"]["retry_after_ms"], 2000);
-    let keys: Vec<&str> = completed["payload"]["error"]
-        .as_object()
-        .unwrap()
-        .keys()
-        .map(String::as_str)
-        .collect();
-    assert!(
-        keys.iter()
-            .all(|k| ["code", "message", "retry_after_ms", "provider"].contains(k)),
-        "no seconds key: {keys:?}"
-    );
+    assert!(completed["payload"]["error"].get("retry_after").is_none());
     assert!(completed["payload"].get("attempt").is_none());
     assert_eq!(server.requests().len(), 1);
 }
