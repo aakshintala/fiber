@@ -1,13 +1,15 @@
 //! The internal hub command (`docs/invocation.md`, "Commands and flags"):
-//! hidden, free to change, and named nowhere in the docs. It reads
-//! configuration, builds the session starter, and runs the hub.
+//! hidden, free to change, and named nowhere in the docs. It builds the
+//! session starter and runs the hub, which reads configuration once it holds
+//! the `run/` lock; a start failure prints one line on stderr.
 
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write};
 use std::os::unix::process::CommandExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
+use std::time::Duration;
 
 use contract::shapes::Failure;
 use contract::{ErrorCode, SessionId};
@@ -25,38 +27,66 @@ pub(crate) fn run(command: cli::HubCommands) -> i32 {
 fn serve() -> i32 {
     let home = match config::fiber_home_from_env() {
         Ok(home) => home,
-        Err(error) => return fail(&error.to_string()),
-    };
-    let workspace = match std::env::current_dir() {
-        Ok(workspace) => workspace,
-        Err(error) => return fail(&format!("the current directory: {error}")),
-    };
-    let (_, project) = match ::cli::project_of(&home, &workspace) {
-        Ok(found) => found,
-        Err(error) => return fail(&error.message),
-    };
-    let config = match config::Config::load(config::Sources {
-        home: home.clone(),
-        workspace,
-        project,
-        overrides: Vec::new(),
-    }) {
-        Ok(config) => config,
-        Err(error) => return fail(&error.to_string()),
+        Err(error) => return fail(failure(error.code(), error.to_string())),
     };
     let clock: Arc<dyn contract::clock::Clock> = Arc::new(crate::clock::System);
-    hub::serve(
+    let configure = {
+        let home = home.clone();
+        move || configure(&home, std::env::current_dir())
+    };
+    finish(hub::serve(
         &home,
-        settings::hub_idle_exit(&config),
+        configure,
         env!("CARGO_PKG_VERSION"),
         Arc::new(SpawnStarter),
         clock,
-    )
+    ))
 }
 
-fn fail(message: &str) -> i32 {
-    eprintln!("fiber: {message}");
-    1
+/// The hub's `hub.idle_exit_ms`, from the configuration read in
+/// `workspace`, the current directory.
+fn configure(home: &Path, workspace: std::io::Result<PathBuf>) -> Result<Duration, Failure> {
+    let workspace = workspace.map_err(|error| {
+        failure(
+            ErrorCode::IoFailed,
+            format!("the current directory: {error}"),
+        )
+    })?;
+    let (_, project) = ::cli::project_of(home, &workspace)?;
+    let config = config::Config::load(config::Sources {
+        home: home.to_path_buf(),
+        workspace,
+        project,
+        overrides: Vec::new(),
+    })
+    .map_err(|error| failure(error.code(), error.to_string()))?;
+    Ok(settings::hub_idle_exit(&config))
+}
+
+/// The hub's exit code, printing a start failure the way every command
+/// does.
+fn finish(served: Result<i32, hub::StartError>) -> i32 {
+    match served {
+        Ok(code) => code,
+        Err(error) => fail(failure(error.code(), error.to_string())),
+    }
+}
+
+fn failure(code: ErrorCode, message: String) -> Failure {
+    Failure {
+        code,
+        message,
+        retry_after: None,
+        provider: None,
+    }
+}
+
+/// Prints `fiber: <message>` on stderr and gives the failure's exit code:
+/// 2 for `usage`, otherwise 1.
+fn fail(failure: Failure) -> i32 {
+    // A closed stderr leaves nobody to tell.
+    writeln!(std::io::stderr(), "fiber: {}", failure.message).unwrap_or(());
+    doors::exit_code(&failure)
 }
 
 /// Starts the internal session command: `<current_exe> session --id <id>

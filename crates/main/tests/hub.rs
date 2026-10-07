@@ -776,7 +776,24 @@ fn a_hub_that_cannot_start_says_why_on_stderr() {
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.starts_with("fiber: "), "{stderr}");
+    assert_eq!(stderr.lines().count(), 1, "{stderr}");
     assert!(!setup.hub_socket().exists());
+}
+
+#[test]
+fn an_invalid_config_is_written_to_the_hub_log() {
+    let setup = Setup::new();
+    fs::write(setup.home().join("config.json"), "{").unwrap();
+    let output = run_failing(setup.fiber(&["hub", "serve"]));
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    let lines = hub_log_lines(&setup.home());
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert_eq!(lines[0]["level"], "error");
+    assert_eq!(lines[0]["process"], "hub");
+    assert_eq!(lines[0]["code"], "config_invalid");
+    let message = lines[0]["message"].as_str().unwrap();
+    assert_eq!(stderr.trim_end(), format!("fiber: {message}"));
 }
 
 #[test]
