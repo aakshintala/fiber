@@ -110,11 +110,18 @@ pub(crate) struct RemovedWorktrees {
     pub(crate) total: usize,
 }
 
-/// Lists the kept worktrees in scope, holding each one's users' locks:
-/// inside a git repository the repository's project, outside one every
-/// project. A symlinked entry is not listed. Dropping the plan releases
-/// every lock.
-pub(crate) fn select(home: &Path, workspace: &Path, force: bool, now: SystemTime) -> Planned {
+/// Lists the kept worktrees in scope: inside a git repository the
+/// repository's project, outside one every project. Unless `dry_run`,
+/// each one's users' locks are held until the run ends: `--dry-run` drops
+/// each lock at once, so the scan and output hold none. A symlinked entry
+/// is not listed. Dropping the plan releases every kept lock.
+pub(crate) fn select(
+    home: &Path,
+    workspace: &Path,
+    force: bool,
+    dry_run: bool,
+    now: SystemTime,
+) -> Planned {
     let keys = scope_keys(home, workspace);
     let users = log::started_sessions(home);
     let mut planned = Planned {
@@ -148,7 +155,7 @@ pub(crate) fn select(home: &Path, workspace: &Path, force: bool, now: SystemTime
                 });
                 continue;
             };
-            if hold_users(&users, &canonical, &mut planned) {
+            if hold_users(&users, &canonical, &mut planned, dry_run) {
                 listed.push(Listed {
                     row: WorktreeRow::Running { name },
                     removal: None,
@@ -165,7 +172,7 @@ pub(crate) fn select(home: &Path, workspace: &Path, force: bool, now: SystemTime
                     continue;
                 }
             };
-            let bytes = worktree_bytes(&dir);
+            let bytes = log::session_bytes(&dir);
             let age = age_days(&dir, now);
             let row = |forced: Option<String>| WorktreeRow::Removable {
                 name: name.clone(),
@@ -357,41 +364,6 @@ pub(crate) fn listed_bytes(planned: &Planned) -> u64 {
     planned.removals.iter().map(|removal| removal.bytes).sum()
 }
 
-/// The logical bytes under a worktree: the same walk
-/// `log::session_bytes` does, in `cli` because a worktree is not a session
-/// directory. Links are not followed.
-pub(crate) fn worktree_bytes(dir: &Path) -> u64 {
-    let Ok(meta) = std::fs::symlink_metadata(dir) else {
-        return 0;
-    };
-    if meta.is_file() {
-        return meta.len();
-    }
-    if !meta.is_dir() {
-        return 0;
-    }
-    let mut bytes = 0_u64;
-    let mut stack = vec![dir.to_path_buf()];
-    while let Some(next) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&next) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let Ok(kind) = entry.file_type() else {
-                continue;
-            };
-            if kind.is_file() {
-                if let Ok(meta) = std::fs::symlink_metadata(entry.path()) {
-                    bytes = bytes.saturating_add(meta.len());
-                }
-            } else if kind.is_dir() {
-                stack.push(entry.path());
-            }
-        }
-    }
-    bytes
-}
-
 /// The project keys in scope: the repository's project inside one, every
 /// project under `projects/` outside one.
 fn scope_keys(home: &Path, workspace: &Path) -> Vec<String> {
@@ -421,8 +393,14 @@ fn is_user(workspace: &Option<String>, canonical: &Path) -> bool {
 
 /// Holds every unheld user's lock, keeping each until the run ends: `true`
 /// when a user is running, with `--force` too. A user already held is
-/// never locked twice.
-fn hold_users(users: &[log::Started], canonical: &Path, planned: &mut Planned) -> bool {
+/// never locked twice. With `dry_run` each taken lock is dropped at once,
+/// so the plan holds none.
+fn hold_users(
+    users: &[log::Started],
+    canonical: &Path,
+    planned: &mut Planned,
+    dry_run: bool,
+) -> bool {
     for started in users {
         if !is_user(&started.workspace, canonical) {
             continue;
@@ -432,8 +410,10 @@ fn hold_users(users: &[log::Started], canonical: &Path, planned: &mut Planned) -
         }
         match log::try_hold(&started.dir) {
             Ok(log::Hold::Held(lock)) => {
-                planned.locks.push(lock);
                 planned.held.insert(started.id.0.clone());
+                if !dry_run {
+                    planned.locks.push(lock);
+                }
             }
             Ok(log::Hold::Busy) | Err(_) => return true,
         }

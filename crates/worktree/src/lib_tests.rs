@@ -142,6 +142,22 @@ fn the_same_commit_on_a_remote_counts_as_merged() {
 }
 
 #[test]
+fn an_ignored_only_worktree_is_uncommitted_when_untracked_files_are_hidden() {
+    let home = repo("worktree-ignored-hidden");
+    let path = add(home.path(), "fiber/x", "wt");
+    fs::write(path.join(".gitignore"), "secret\n").unwrap();
+    git(&path, &["add", ".gitignore"]);
+    git(&path, &["commit", "--quiet", "-m", "ignore"]);
+    fs::write(path.join("secret"), "precious").unwrap();
+    git(&path, &["config", "status.showUntrackedFiles", "no"]);
+    let inspected = worktree_of(inspect(&path).unwrap());
+    assert!(
+        inspected.uncommitted,
+        "an ignored-only worktree counts as uncommitted"
+    );
+}
+
+#[test]
 fn a_detached_head_is_detached() {
     let home = repo("worktree-detached");
     let path = home.path().join("wt");

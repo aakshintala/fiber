@@ -110,7 +110,7 @@ fn prune_run(
     let logs = old_diagnostics(&home.join("logs"), now);
     let crashes = old_diagnostics(&home.join("crashes"), now);
     let selected = sessions::select(home, workspace, older_than, args.cascade, now);
-    let mut planned = worktrees::select(home, workspace, args.force, now);
+    let mut planned = worktrees::select(home, workspace, args.force, args.dry_run, now);
     let has_sessions = !selected.deletes.is_empty();
     let has_worktrees = !planned.removals.is_empty();
     let has_diagnostics = !logs.is_empty() || !crashes.is_empty();

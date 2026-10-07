@@ -136,8 +136,20 @@ fn inspect_with(program: &str, path: &Path) -> Result<Inspection, Error> {
         return Err(git_failed(path, "symbolic-ref", &out));
     };
     // `git worktree remove` deletes ignored files too, so any output,
-    // ignored files included, counts as uncommitted.
-    let out = run(program, path, path, &["status", "--porcelain", "--ignored"])?;
+    // ignored files included, counts as uncommitted. `--untracked-files=all`
+    // pins `status.showUntrackedFiles`: `no` in the config would otherwise
+    // suppress ignored files too, hiding an ignored-only worktree.
+    let out = run(
+        program,
+        path,
+        path,
+        &[
+            "status",
+            "--porcelain",
+            "--ignored",
+            "--untracked-files=all",
+        ],
+    )?;
     if !out.status.success() {
         return Err(git_failed(path, "status", &out));
     }
@@ -189,17 +201,7 @@ pub enum Removed {
 /// Removes the worktree at `path` and its branch, through `git` run from
 /// the common directory.
 pub fn remove(path: &Path, inspected: &Inspected, force: bool) -> Result<Removed, Error> {
-    remove_with("git", path, inspected, force)
-}
-
-/// Removes with `program` as `git`.
-fn remove_with(
-    program: &str,
-    path: &Path,
-    inspected: &Inspected,
-    force: bool,
-) -> Result<Removed, Error> {
-    let mut remove = std::process::Command::new(program);
+    let mut remove = std::process::Command::new("git");
     remove
         .arg("-C")
         .arg(&inspected.common_dir)
@@ -215,7 +217,7 @@ fn remove_with(
     if !out.status.success() {
         return Err(git_failed(path, "worktree remove", &out));
     }
-    let out = std::process::Command::new(program)
+    let out = std::process::Command::new("git")
         .arg("-C")
         .arg(&inspected.common_dir)
         .args(["branch", "-D", &inspected.branch])

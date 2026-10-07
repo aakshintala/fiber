@@ -138,7 +138,7 @@ fn wall() -> std::time::SystemTime {
 }
 
 fn select(setup: &Setup, force: bool) -> Planned {
-    super::select(&setup.home(), &setup.workspace(), force, wall())
+    super::select(&setup.home(), &setup.workspace(), force, false, wall())
 }
 
 fn removable(row: &WorktreeRow) -> (&str, Option<&str>) {
@@ -169,7 +169,7 @@ fn a_clean_worktree_lists_one_removable_row() {
         line(&planned.rows[0]),
         format!(
             "worktree  s_00000000000000e1  fiber/s_00000000000000e1  clean  0d  {}",
-            super::super::format_size(worktree_bytes(&dir)),
+            super::super::format_size(log::session_bytes(&dir)),
         )
     );
 }
@@ -201,7 +201,7 @@ fn every_skip_reason_has_its_exact_text() {
     let planned = select(&setup, false);
     assert!(planned.removals.is_empty());
     let lines: Vec<String> = planned.rows.iter().map(line).collect();
-    let size = |dir: &Path| super::super::format_size(worktree_bytes(dir));
+    let size = |dir: &Path| super::super::format_size(log::session_bytes(dir));
     assert!(lines.contains(
         &format!(
             "worktree  s_00000000000000e2  fiber/s_00000000000000e2  uncommitted  0d  {}  skipped: removing it would lose uncommitted or ignored files",
@@ -432,26 +432,61 @@ fn dropping_the_plan_releases_every_lock() {
         "the lock is held while the plan lives"
     );
     drop(planned);
-    // Another test's `git` child can fork while the lock's descriptor is
-    // open and keep the flock past this thread's close until it execs, so
-    // the first re-acquires after the drop can see `Busy`. A lock the plan
-    // kept would never come back: the bound only passes what a scheduling
-    // artifact delays.
-    let mut held = false;
-    for _ in 0..200_000 {
-        if matches!(log::try_hold(&user), Ok(log::Hold::Held(_))) {
-            held = true;
-            break;
-        }
-    }
-    assert!(held, "no lock is kept once the plan drops");
+    // Nextest runs each test in its own process, so no other test's
+    // `git` child can hold the lock past this drop: it is free at once.
+    assert!(
+        matches!(log::try_hold(&user), Ok(log::Hold::Held(_))),
+        "no lock is kept once the plan drops"
+    );
+}
+
+#[test]
+fn dry_run_drops_each_lock_before_output() {
+    let setup = Setup::new("cli-prune-wt-dry-run-locks");
+    let dir = setup.worktree("s_00000000000000e1");
+    let user = setup.user("s_00000000000000a1", &dir);
+    let planned = super::select(&setup.home(), &setup.workspace(), false, true, wall());
+    assert_eq!(planned.removals.len(), 1);
+    assert!(
+        planned.locks.is_empty(),
+        "dry-run holds no lock while the plan lives"
+    );
+    // Output happens while the plan lives: the lock is already free
+    // here, not only after prune returns.
+    assert!(
+        matches!(log::try_hold(&user), Ok(log::Hold::Held(_))),
+        "the lock is free while the dry-run plan lives"
+    );
+}
+
+#[test]
+fn dry_run_still_skips_a_running_worktree() {
+    let setup = Setup::new("cli-prune-wt-dry-run-running");
+    let dir = setup.worktree("s_00000000000000e1");
+    let user = setup.user("s_00000000000000a1", &dir);
+    let held = match log::try_hold(&user) {
+        Ok(log::Hold::Held(held)) => held,
+        Ok(log::Hold::Busy) | Err(_) => panic!("the user's lock is held"),
+    };
+    let planned = super::select(&setup.home(), &setup.workspace(), false, true, wall());
+    assert!(planned.removals.is_empty());
+    assert!(
+        planned
+            .rows
+            .iter()
+            .map(line)
+            .any(|l| l == "worktree  s_00000000000000e1  skipped: a running session works in it"),
+        "{:?}",
+        planned.rows.iter().map(line).collect::<Vec<_>>()
+    );
+    drop(held);
 }
 
 #[test]
 fn a_partial_removal_is_reported_and_still_counts_as_freed() {
     let setup = Setup::new("cli-prune-wt-partial");
     let dir = setup.worktree("s_00000000000000e1");
-    let listed = worktree_bytes(&dir);
+    let listed = log::session_bytes(&dir);
     assert!(listed > 0);
     let mut planned = select(&setup, false);
     assert_eq!(planned.removals.len(), 1);
@@ -497,7 +532,7 @@ fn age_comes_from_the_directory_mtime() {
         .unwrap()
         .set_modified(ahead)
         .unwrap();
-    let planned = super::select(&setup.home(), &setup.workspace(), false, wall());
+    let planned = super::select(&setup.home(), &setup.workspace(), false, false, wall());
     assert_eq!(planned.rows.len(), 2);
     assert!(
         line(&planned.rows[0]).contains("  12d  "),
@@ -556,11 +591,11 @@ fn a_symlinked_entry_is_skipped() {
 fn a_symlink_inside_counts_no_bytes() {
     let setup = Setup::new("cli-prune-wt-link-bytes");
     let dir = setup.worktree("s_00000000000000e1");
-    let before = worktree_bytes(&dir);
+    let before = log::session_bytes(&dir);
     assert!(before > 0);
     fs::write(setup.repo().join("big.txt"), "y".repeat(100_000)).unwrap();
     std::os::unix::fs::symlink(setup.repo().join("big.txt"), dir.join("big.txt")).unwrap();
-    assert_eq!(worktree_bytes(&dir), before);
+    assert_eq!(log::session_bytes(&dir), before);
 }
 
 #[test]
@@ -568,7 +603,7 @@ fn force_through_prune_run_prints_forced_removes_and_frees() {
     let setup = Setup::new("cli-prune-wt-run");
     let dir = setup.worktree("s_00000000000000e2");
     fs::write(dir.join("notes.txt"), "scratch").unwrap();
-    let listed = worktree_bytes(&dir);
+    let listed = log::session_bytes(&dir);
     let args = PruneArgs {
         older_than: None,
         cascade: false,
