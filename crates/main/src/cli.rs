@@ -148,6 +148,14 @@ pub(crate) enum Commands {
     /// The internal session command: hidden and free to change.
     #[command(hide = true)]
     Session(SessionArgs),
+    /// The detached model-list refresh `fiber models` spawns: hidden and
+    /// free to change.
+    #[command(hide = true, disable_help_flag = true)]
+    RefreshModelLists {
+        /// The providers to refresh, by name.
+        #[arg(value_name = "provider")]
+        providers: Vec<String>,
+    },
     /// The internal hub command: hidden and free to change.
     #[command(hide = true, subcommand)]
     Hub(HubCommands),

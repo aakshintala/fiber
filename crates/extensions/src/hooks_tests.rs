@@ -363,9 +363,10 @@ fn every_enabled_extension_is_loaded_with_its_version_and_a_disabled_one_is_not(
     );
     assert!(session.notices().is_empty());
     assert!(!session.has_hooks());
-    // The data-only extension has no VM; the Lua one without hooks does.
-    assert_eq!(session.lua.len(), 1);
-    assert!(session.lua[0].is_running());
+    // The data-only extension starts no VM, and neither does the Lua one
+    // without hooks: it is held only by its providers, if any
+    // (`docs/model-routing.md`, "Model discovery").
+    assert!(session.lua.is_empty());
     assert_eq!(
         after_tool(&session, "x").outcome,
         AfterToolOutcome::Unchanged
@@ -892,4 +893,54 @@ fn lua_providers_lists_each_registered_provider_in_provider_name_order() {
     let sessioned = Arc::clone(&session);
     let functions = bounded(move || sessioned.lua_providers()[0].1.functions().unwrap());
     assert_eq!(functions, ["models"]);
+}
+
+#[test]
+fn a_refreshed_provider_the_session_does_not_use_is_unloaded() {
+    let home = Home::new();
+    home.install("used", Some(&registering("used")));
+    home.install("other", Some(&registering("other")));
+    home.install(
+        "hooked",
+        Some(&format!(
+            "{}{}",
+            tagging("h", "transform"),
+            registering("hp")
+        )),
+    );
+    let session = home.load(&[]);
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    let other = session
+        .lua_providers()
+        .iter()
+        .find(|(_, provider)| provider.name() == "other")
+        .map(|(_, provider)| Arc::clone(provider))
+        .expect("the other provider loads");
+    let weak = Arc::downgrade(&other);
+    // No cached copy, so the refresh runs; the thread holds the last Arc
+    // beside this test's.
+    let refresh = bounded(move || other.refresh(None)).expect("the refresh starts");
+    let mut session = Arc::try_unwrap(session)
+        .ok()
+        .expect("the test holds the only Arc");
+    session.retain_lua_providers(&["used"]);
+    let kept: Vec<&str> = session
+        .lua_providers()
+        .iter()
+        .map(|(_, provider)| provider.name())
+        .collect();
+    assert_eq!(kept, ["used"]);
+    // The extension with hooks stays for them, even though its provider
+    // went with the rest.
+    assert_eq!(session.lua.len(), 1);
+    bounded(move || {
+        refresh
+            .join()
+            .expect("the refresh ends")
+            .expect("models() runs")
+    });
+    assert!(
+        weak.upgrade().is_none(),
+        "the provider and its VM are gone once the refresh is written"
+    );
 }

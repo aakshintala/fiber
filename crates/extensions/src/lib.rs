@@ -39,7 +39,7 @@ pub use lua_provider::{LuaProvider, REFRESH_BEFORE};
 pub use manage::{Item, Plan, Request, plan};
 pub use oauth::{Browser, SystemBrowser};
 pub use prepare::platform;
-pub use providers::{Model, Providers, leave_out_invalid};
+pub use providers::{Model, Providers, StartedRefresh, leave_out_invalid, refresh_lists};
 pub use repository::{
     Decision, Index, Pending, RepoItem, Store, declared_items, hash, kind_name, pending,
 };

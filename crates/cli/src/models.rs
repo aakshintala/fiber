@@ -9,6 +9,7 @@
 use std::io::{self, Write};
 use std::path::Path;
 use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
 use config::{Config, Sources};
 use contract::ErrorCode;
@@ -19,6 +20,54 @@ use extensions::{Providers, SessionExtensions};
 use serde::Serialize;
 
 use crate::{fail, failed, project_of};
+
+/// Starts the detached refresh of stale model lists: the running binary
+/// re-run as its hidden refresh child: its own process group, nothing on
+/// any pipe, never waited on. `exe` is the binary to re-run: the real call
+/// passes `current_exe()`, a test passes its stub. The caller drops the
+/// returned child: dropping it neither waits on nor kills it.
+fn spawn_refresh(exe: &Path, providers: Vec<String>) -> io::Result<std::process::Child> {
+    let mut command = std::process::Command::new(exe);
+    command.arg("refresh-model-lists").args(&providers);
+    command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    command.spawn()
+}
+
+/// The providers due a background refresh: a credential and a cached list
+/// older than `max_age` (`docs/model-routing.md`, "Model discovery"). A
+/// list exactly `max_age` old is not stale, and one with no cached copy is
+/// not due: it already ran when the lists were read.
+fn stale_lists(
+    home: &Path,
+    providers: &Providers,
+    config: &Config,
+    max_age: Duration,
+    now: SystemTime,
+) -> Vec<String> {
+    let mut stale = Vec::new();
+    for name in providers.names() {
+        let Some(lua) = providers.lua(name) else {
+            continue;
+        };
+        if !lua.has_credential(config, &providers.data(name)) {
+            continue;
+        }
+        if let Ok(Some(age)) = config::model_cache_age(home, name, now)
+            && age > max_age
+        {
+            stale.push(name.to_owned());
+        }
+    }
+    stale
+}
 
 /// What `fiber models` says when no provider is installed.
 const NO_PROVIDER: &str =
@@ -107,6 +156,10 @@ fn text_lines(rows: &[Row]) -> Vec<String> {
 
 /// Lists the installed providers' models in `home`, marking the configured
 /// default, filtered by `search` and printed as text or JSON Lines.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one call of the one-shot command: inputs, writers, loader, spawner and clock"
+)]
 fn run(
     home: &Path,
     workspace: &Path,
@@ -115,6 +168,8 @@ fn run(
     out: &mut dyn Write,
     err: &mut dyn Write,
     load: &dyn Fn(&Config) -> SessionExtensions,
+    spawn: &dyn Fn(Vec<String>) -> io::Result<()>,
+    clock: &dyn Clock,
 ) -> Result<(), Failure> {
     // debt: notices from loading are dropped, as `parts_with` drops them;
     // surfaced when #382 lands.
@@ -129,7 +184,20 @@ fn run(
     .map_err(|e| failed(e.code(), e))?;
     let extensions = load(&config);
     for (extension, provider) in extensions.lua_providers() {
-        let _notices = providers.add_lua(extension, provider);
+        let _notices = providers.add_lua(extension, provider, &config);
+    }
+    // A stale list refreshes in the background for the next run: the
+    // detached child, never waited on. A spawn that fails is ignored:
+    // `fiber models` still prints from the cache and exits 0.
+    let stale = stale_lists(
+        home,
+        &providers,
+        &config,
+        config::refresh_after(&config),
+        clock.wall(),
+    );
+    if !stale.is_empty() {
+        let _ignored = spawn(stale);
     }
     if providers.names().next().is_none() {
         writeln!(err, "{NO_PROVIDER}")
@@ -211,11 +279,78 @@ pub fn models(
                 &|config: &Config| {
                     SessionExtensions::load(&home, config, Arc::clone(&clock), Arc::clone(&locks))
                 },
+                &|providers| {
+                    std::env::current_exe()
+                        .and_then(|exe| spawn_refresh(&exe, providers))
+                        .map(drop)
+                },
+                clock.as_ref(),
             )
         });
     match ran {
         Ok(()) => 0,
         Err(e) => fail(e),
+    }
+}
+
+/// Refreshes the named providers' cached model lists with the age check.
+/// Only the named providers load: nothing else is discovered, and every
+/// refresh runs through the locked [`extensions::refresh_lists`] API, so a
+/// refresh beside another process refreshes once.
+fn refresh_named(
+    names: &[String],
+    providers: &Providers,
+    loaded: &SessionExtensions,
+    config: &Config,
+) {
+    let wanted: Vec<Arc<extensions::LuaProvider>> = loaded
+        .lua_providers()
+        .iter()
+        .filter(|(_, provider)| names.iter().any(|name| name == provider.name()))
+        .map(|(_, provider)| Arc::clone(provider))
+        .collect();
+    for (_, handle) in extensions::refresh_lists(
+        &wanted,
+        providers,
+        config,
+        Some(config::refresh_after(config)),
+    ) {
+        let _ignored = handle.join();
+    }
+}
+
+/// Refreshes the named providers' cached lists in `home`, with the age
+/// check: the testable body behind [`refresh_model_lists`], as `run` is
+/// behind `models`.
+fn refresh_run(
+    home: &Path,
+    workspace: &Path,
+    names: &[String],
+    clock: Arc<dyn Clock>,
+    locks: Arc<dyn PathLock>,
+) {
+    if let Ok((_, project)) = project_of(home, workspace)
+        && let Ok(config) = Config::load(Sources {
+            home: home.to_path_buf(),
+            workspace: workspace.to_path_buf(),
+            project,
+            overrides: Vec::new(),
+        })
+        && let Ok((providers, _)) = Providers::load(home)
+    {
+        let loaded = SessionExtensions::load(home, &config, clock, locks);
+        refresh_named(names, &providers, &loaded, &config);
+    }
+}
+
+/// `fiber refresh-model-lists <provider>...`: refreshes the named providers'
+/// cached model lists with the age check, for the next run. The hidden
+/// child `fiber models` spawns: hidden and free to change, like the other
+/// hidden subcommands. It joins every refresh it starts, and exits 0
+/// whatever the result: a background refresh never fails a command.
+pub fn refresh_model_lists(names: &[String], clock: Arc<dyn Clock>, locks: Arc<dyn PathLock>) {
+    if let (Ok(home), Ok(workspace)) = (config::fiber_home_from_env(), std::env::current_dir()) {
+        refresh_run(&home, &workspace, names, clock, locks);
     }
 }
 

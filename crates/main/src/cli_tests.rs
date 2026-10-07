@@ -981,3 +981,25 @@ fn hub_serve_parses_and_stays_hidden() {
         visible()
     );
 }
+
+#[test]
+fn the_hidden_refresh_child_takes_provider_names_only() {
+    let Invocation::Run(Some(Commands::RefreshModelLists { providers })) =
+        parse_from(["fiber", "refresh-model-lists", "openai", "anthropic"])
+    else {
+        panic!("refresh-model-lists with two providers");
+    };
+    assert_eq!(providers, ["openai", "anthropic"]);
+    let Invocation::Run(Some(Commands::RefreshModelLists { providers })) =
+        parse_from(["fiber", "refresh-model-lists"])
+    else {
+        panic!("bare refresh-model-lists");
+    };
+    assert!(providers.is_empty());
+    assert!(
+        !command()
+            .get_subcommands()
+            .any(|sub| sub.get_name() == "refresh-model-lists" && !sub.is_hide_set()),
+        "the refresh child stays out of the menu"
+    );
+}

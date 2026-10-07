@@ -6,6 +6,7 @@
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 use serde_json::Value;
 
@@ -36,6 +37,39 @@ pub fn write_model_cache(home: &Path, provider: &str, models: &Value) -> Result<
         models.to_string().as_bytes(),
         0o600,
     )
+}
+
+/// How old the cached model list of `provider` is, from its file's mtime;
+/// `None` when no cached copy exists. A file newer than `now` is fresh:
+/// its age is zero (`docs/model-routing.md`, "Model discovery").
+pub fn model_cache_age(
+    home: &Path,
+    provider: &str,
+    now: SystemTime,
+) -> Result<Option<Duration>, ConfigError> {
+    let file = cache_file(home, provider)?;
+    let mtime = match fs::metadata(&file) {
+        Ok(metadata) => metadata.modified().map_err(|source| ConfigError::Io {
+            file: file.clone(),
+            source,
+        })?,
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(source) => {
+            return Err(ConfigError::Io {
+                file: file.clone(),
+                source,
+            });
+        }
+    };
+    Ok(Some(now.duration_since(mtime).unwrap_or(Duration::ZERO)))
+}
+
+/// The lock file a refresh of `provider` holds while it runs, beside the
+/// cached list it replaces. The cache stays safe to delete, lock file
+/// included: a crash leaves the file, and the lock it held dies with the
+/// process (`docs/model-routing.md`, "Model discovery").
+pub fn model_cache_lock_file(home: &Path, provider: &str) -> Result<PathBuf, ConfigError> {
+    cache_file(home, provider).map(|path| path.with_extension("lock"))
 }
 
 fn cache_file(home: &Path, provider: &str) -> Result<PathBuf, ConfigError> {

@@ -20,7 +20,7 @@ mod sessions;
 pub use approve::approve;
 pub use config::{config_get, config_set};
 pub use login::{LogoutTarget, run_login, run_logout};
-pub use models::models;
+pub use models::{models, refresh_model_lists};
 pub use sessions::export;
 
 /// What `fiber logout` says when it is given no provider.

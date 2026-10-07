@@ -150,6 +150,10 @@ fn run() -> i32 {
             clock,
             Arc::new(tools::PathLocks::new()),
         ),
+        cli::Invocation::Run(Some(cli::Commands::RefreshModelLists { providers })) => {
+            ::cli::refresh_model_lists(&providers, clock, Arc::new(tools::PathLocks::new()));
+            0
+        }
         cli::Invocation::Run(Some(cli::Commands::Extension(cmd))) => extension(cmd, clock.as_ref()),
         cli::Invocation::Run(Some(cli::Commands::Approve(args))) => ::cli::approve(args.yes),
         cli::Invocation::Run(Some(cli::Commands::Config(cmd))) => match cmd {
@@ -598,9 +602,9 @@ fn parts_with(
     let (mut providers, _notices) = Providers::load(&home).map_err(|e| failed(e.code(), e))?;
     let locks = Arc::new(tools::PathLocks::new());
     let session_locks: Arc<dyn contract::files::PathLock> = locks.clone();
-    let extensions =
+    let mut extensions =
         extensions::SessionExtensions::load(&home, &config, Arc::clone(&clock), session_locks);
-    lua_providers::add_lua(&extensions, &mut providers);
+    lua_providers::add_lua(&extensions, &mut providers, &config);
     // `recorded` first, then `--model` and configuration's `model`
     // (`docs/model-routing.md`, "Choosing the model").
     let model = providers
@@ -615,6 +619,22 @@ fn parts_with(
     let session_credential = (key.clone(), signer.clone());
     let provider = connect(model, key, signer)?;
     let reviewer = choose_reviewer(&providers, &config, &model, &session_credential);
+    // Every refreshed provider the session does not use is unloaded once
+    // its list is written: only the session's and the reviewer's stay
+    // loaded (`docs/model-routing.md`, "Model discovery"). `providers` is
+    // a local, so dropping it unloads the rest; the session's and the
+    // reviewer's signers hold their own Arcs.
+    {
+        let mut keep = vec![model.provider.name.as_str()];
+        if let Some(name) = reviewer
+            .as_ref()
+            .ok()
+            .and_then(|judge| judge.model.reference.split_once('/').map(|(name, _)| name))
+        {
+            keep.push(name);
+        }
+        extensions.retain_lua_providers(&keep);
+    }
     let limits = settings::block_limits(&config);
     let retry = settings::retry_policy(&config);
     let handoff = handoff::handoff_settings(&config, &model.reference());

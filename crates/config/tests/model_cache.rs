@@ -8,6 +8,7 @@ mod common;
 
 use common::Setup;
 use config::{read_model_cache, write_model_cache};
+use contract::clock::Clock;
 use serde_json::json;
 
 #[test]
@@ -62,4 +63,51 @@ fn a_cache_that_cannot_be_read_is_io_failed() {
     std::fs::create_dir_all(home.join("cache/models/acme.json")).unwrap();
     let err = read_model_cache(&home, "acme").unwrap_err();
     assert_eq!(err.code(), contract::ErrorCode::IoFailed);
+}
+
+/// Sets the cache file's mtime, so its age reads against the fake clock.
+fn set_mtime(home: &std::path::Path, mtime: std::time::SystemTime) {
+    let file = home.join("cache/models/acme.json");
+    std::fs::File::options()
+        .write(true)
+        .open(&file)
+        .unwrap()
+        .set_modified(mtime)
+        .unwrap();
+}
+
+#[test]
+fn a_missing_list_has_no_age() {
+    let setup = Setup::new();
+    let home = setup.home();
+    let now = fakes::clock::FakeClock::new().wall();
+    assert_eq!(config::model_cache_age(&home, "acme", now).unwrap(), None);
+}
+
+#[test]
+fn a_lists_age_is_now_minus_its_mtime() {
+    let setup = Setup::new();
+    let home = setup.home();
+    let clock = fakes::clock::FakeClock::new();
+    let list = json!([{ "id": "m1", "protocol": "openai-responses", "base_url": "http://x/v1" }]);
+    write_model_cache(&home, "acme", &list).unwrap();
+    set_mtime(&home, clock.wall() - std::time::Duration::from_secs(90));
+    assert_eq!(
+        config::model_cache_age(&home, "acme", clock.wall()).unwrap(),
+        Some(std::time::Duration::from_secs(90))
+    );
+}
+
+#[test]
+fn a_list_newer_than_the_clock_is_fresh() {
+    let setup = Setup::new();
+    let home = setup.home();
+    let clock = fakes::clock::FakeClock::new();
+    let list = json!([{ "id": "m1", "protocol": "openai-responses", "base_url": "http://x/v1" }]);
+    write_model_cache(&home, "acme", &list).unwrap();
+    set_mtime(&home, clock.wall() + std::time::Duration::from_secs(60));
+    assert_eq!(
+        config::model_cache_age(&home, "acme", clock.wall()).unwrap(),
+        Some(std::time::Duration::ZERO)
+    );
 }
