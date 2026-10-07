@@ -173,8 +173,14 @@ fn the_tools_command_gives_tokens_after_the_first_request() {
     for (before_tool, tool) in tools0.iter().zip(tools1.iter()) {
         assert_eq!(tool["name"], before_tool["name"]);
         assert_eq!(tool["bytes"], before_tool["bytes"]);
-        assert_eq!(tool["tokens"], json!(0), "{tool}");
+        assert!(tool.get("tokens").is_some(), "{tool}");
     }
+    assert!(
+        tools1
+            .iter()
+            .any(|tool| tool["tokens"].as_u64().is_some_and(|tokens| tokens > 0)),
+        "{tools1:?}",
+    );
 
     server.release();
     until(&client, "fiber_exited", |line| {
