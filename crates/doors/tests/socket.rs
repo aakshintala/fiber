@@ -1560,8 +1560,24 @@ fn shell_exit_zero_stays_on_the_sending_connection() {
                 seen.iter().all(|line| command_id(line) != Some("c_1")),
                 "the other client sees the shell answer"
             );
-            send(&client, r#"{"id":"c_cancel","command":"cancel"}"#);
-            let rejected = response(&client, "c_cancel");
+            // The shell answers before it leaves the running list, so a
+            // `cancel` right after the answer may still be accepted. The
+            // retries run on a thread so the whole wait has one deadline.
+            let (tx, rx) = mpsc::channel();
+            thread::spawn(move || {
+                for attempt in 0.. {
+                    let id = format!("c_cancel_{attempt}");
+                    send(&client, &format!(r#"{{"id":"{id}","command":"cancel"}}"#));
+                    let line = response(&client, &id);
+                    if kind(&line) != "command_accepted" {
+                        drop(tx.send(line));
+                        return;
+                    }
+                }
+            });
+            let rejected = rx
+                .recv_timeout(DEADLINE)
+                .expect("the finished shell left the running list");
             assert_eq!(
                 rejection(&rejected),
                 ("stale_request", "No turn is running.")
