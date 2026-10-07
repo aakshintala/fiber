@@ -2,7 +2,7 @@
 
 use serde_json::{Map, Value};
 
-use super::{Cancel, Effects, EffectsError, Output, Tool};
+use super::{Answered, Ask, Asking, Cancel, Effects, EffectsError, Output, Tool};
 use crate::emit::Emit;
 use crate::provider::ToolDefinition;
 
@@ -53,4 +53,69 @@ fn an_effects_error_reads_as_its_message() {
         EffectsError::Tool("lua: boom".into()).to_string(),
         "lua: boom"
     );
+}
+
+/// A tool that implements only `run`, returning its arguments as details.
+struct Echo;
+
+impl Tool for Echo {
+    fn definition(&self) -> ToolDefinition {
+        NoGuidelines.definition()
+    }
+
+    fn effects(&self, _arguments: &Map<String, Value>) -> Result<Effects, EffectsError> {
+        Err(EffectsError::Arguments("echo".to_owned()))
+    }
+
+    fn run(
+        &self,
+        arguments: &Map<String, Value>,
+        _cancel: &dyn Cancel,
+        _emit: &dyn Emit,
+    ) -> Output {
+        Output {
+            details: Some(Value::Object(arguments.clone())),
+            ..Output::default()
+        }
+    }
+}
+
+/// An asker no test should reach.
+struct Unasked;
+
+impl Ask for Unasked {
+    fn action(&self) -> crate::ActionId {
+        unreachable!("the default run_asking never reads the asker")
+    }
+
+    fn ask(&self, _asking: Asking) -> Answered {
+        unreachable!("the default run_asking never asks")
+    }
+}
+
+struct NeverCancelled;
+
+impl Cancel for NeverCancelled {
+    fn is_cancelled(&self) -> bool {
+        false
+    }
+
+    fn subscribe(&self, _waker: std::sync::Weak<dyn crate::clock::Wake>) {}
+}
+
+struct Silent;
+
+impl Emit for Silent {
+    fn emit(&self, _event: &crate::events::Event) {}
+}
+
+#[test]
+fn a_tool_that_never_asks_runs_through_run_asking_unchanged() {
+    let arguments = serde_json::json!({"path": "a.txt"})
+        .as_object()
+        .cloned()
+        .unwrap_or_default();
+    let asked = Echo.run_asking(&arguments, &NeverCancelled, &Silent, &Unasked);
+    assert_eq!(asked, Echo.run(&arguments, &NeverCancelled, &Silent));
+    assert_eq!(asked.details, Some(Value::Object(arguments)));
 }

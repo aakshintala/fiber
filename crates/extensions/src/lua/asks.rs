@@ -1,14 +1,13 @@
 //! `host.ask`'s question and answer checks (`docs/extensions.md`,
 //! "Commands and screens"): reading a `kind` with its `spec` into an
-//! [`Interaction`], and fitting a [`ReplyAnswer`] to the [`Interaction`] it
-//! answers. Both are pure: the registry they guard lives on [`Shared`].
+//! [`Interaction`], and the registry of open asks on [`Shared`]. A reply is
+//! fitted by [`Interaction::fit`], the one rule every asker applies.
 
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use contract::commands::{ReplyAnswer, SentFormAnswer};
 use contract::events::{
-    Answer, FormAnswer, Interaction, InteractionRequested, InteractionResolved, ResolvedBy,
+    Answer, Interaction, InteractionRequested, InteractionResolved, ResolvedBy,
 };
 use contract::inbox::{Ack, Delivery, Rejection};
 use contract::shapes::True;
@@ -180,91 +179,6 @@ fn check_labels(labels: &[&str], kind: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Fits `answer` to the [`Interaction`] it answers: `Some` with the
-/// [`Answer`] the resolution carries, or `None` when the answer's keys do
-/// not fit the request (`docs/invocation.md`, "Replying"). `declined`
-/// fits every kind; an approval answer fits nothing.
-pub(crate) fn fit(asked: &Interaction, answer: &ReplyAnswer) -> Option<Answer> {
-    if matches!(answer, ReplyAnswer::Declined { .. }) {
-        // declined_fits_every_kind.
-        return Some(Answer::Declined { declined: True });
-    }
-    match (asked, answer) {
-        (Interaction::Confirm { .. }, ReplyAnswer::Confirmed { confirmed }) => {
-            Some(Answer::Confirmed {
-                confirmed: *confirmed,
-            })
-        }
-        (Interaction::Select { options, .. }, ReplyAnswer::Labels { labels }) => {
-            // select_takes_exactly_one_label.
-            if labels.len() != 1 {
-                return None;
-            }
-            fit_labels(options, labels).then(|| Answer::Labels {
-                labels: labels.clone(),
-            })
-        }
-        (Interaction::MultiSelect { options, .. }, ReplyAnswer::Labels { labels }) => {
-            // multi_select_takes_distinct_offered_labels.
-            if !distinct(labels) {
-                return None;
-            }
-            fit_labels(options, labels).then(|| Answer::Labels {
-                labels: labels.clone(),
-            })
-        }
-        (Interaction::TextInput { .. }, ReplyAnswer::Text { text }) => {
-            Some(Answer::Text { text: text.clone() })
-        }
-        (Interaction::Form { fields }, ReplyAnswer::Form { answers, note }) => {
-            // form_answers_match_the_fields_in_order.
-            if answers.len() != fields.len() {
-                return None;
-            }
-            let mut fitted = Vec::with_capacity(answers.len());
-            for (field, answer) in fields.iter().zip(answers.iter()) {
-                match answer {
-                    SentFormAnswer::Skipped { .. } => {
-                        fitted.push(FormAnswer::Skipped { skipped: True });
-                    }
-                    SentFormAnswer::Answered { labels, text } => {
-                        if !distinct(labels) || !fit_labels(&field.options, labels) {
-                            return None;
-                        }
-                        let multi = field.multi_select.is_some_and(|multi| multi);
-                        // at_most_one_label_unless_multi_select.
-                        if !multi && labels.len() > 1 {
-                            return None;
-                        }
-                        fitted.push(FormAnswer::Answered {
-                            labels: labels.clone(),
-                            text: text.clone(),
-                        });
-                    }
-                }
-            }
-            Some(Answer::Form {
-                answers: fitted,
-                note: note.clone(),
-            })
-        }
-        _ => None,
-    }
-}
-
-/// Whether every label is one of the offered options.
-fn fit_labels(options: &[contract::shapes::Choice], labels: &[String]) -> bool {
-    labels
-        .iter()
-        .all(|label| options.iter().any(|option| &option.label == label))
-}
-
-/// Whether no label repeats.
-fn distinct(labels: &[String]) -> bool {
-    let mut seen = HashSet::new();
-    labels.iter().all(|label| seen.insert(label))
-}
-
 #[cfg(test)]
 #[path = "asks_tests.rs"]
 mod tests;
@@ -371,7 +285,7 @@ impl Hub {
             // answer_for_an_id_not_held_hands_back.
             return Some((reply, ack));
         };
-        let Some(answer) = fit(&held.interaction, &reply.answer) else {
+        let Some(answer) = held.interaction.fit(&reply.answer) else {
             shared.asks.insert(reply.request_id.clone(), held);
             drop(shared);
             (ack.0)(Err(Rejection {
