@@ -1373,6 +1373,68 @@ fn y_on_a_turn_spanning_dropped_pages_loads_the_whole_turn() {
     assert_eq!(app.on_key(Key::Char('y'), now()), Effect::Copy(want));
 }
 
+/// Turn 0's dropped pages pinned by a first y press, with the pinned
+/// count from before the press to return to.
+fn pending_copy() -> (App, Vec<contract::Envelope>, usize) {
+    let lines = spanning_session();
+    let envelopes = envelopes_of(&lines);
+    let mut app = spanning_app(&lines, &envelopes, 8);
+    assert!(
+        app.pages().part(0).is_none(),
+        "the first page stays resident"
+    );
+    let prior = app.pages().pinned();
+    app.focus = Some(TargetId::Turn(0));
+    assert_eq!(app.on_key(Key::Char('y'), now()), Effect::None);
+    assert_eq!(app.notice(), Some("Loading history…"));
+    assert!(
+        app.pages().pinned() > prior,
+        "nothing pinned the dropped pages"
+    );
+    (app, envelopes, prior)
+}
+
+#[test]
+fn esc_releases_a_whole_turn_copy_waiting_on_dropped_pages() {
+    let (mut app, _, prior) = pending_copy();
+    // With the notice open Esc closes it and keeps focus: only the Esc
+    // path releases the pinned pages.
+    app.open_notice(0);
+    app.on_key(Key::Esc, now());
+    assert_eq!(app.focused(), Some(TargetId::Turn(0)));
+    assert_eq!(app.pages().pinned(), prior);
+}
+
+#[test]
+fn moving_focus_releases_a_whole_turn_copy_waiting_on_dropped_pages() {
+    let (mut app, _, prior) = pending_copy();
+    app.on_key(Key::BackTab, now());
+    assert_ne!(app.focused(), Some(TargetId::Turn(0)));
+    assert_eq!(app.pages().pinned(), prior);
+}
+
+#[test]
+fn a_failed_history_load_releases_a_whole_turn_copy_waiting_on_dropped_pages() {
+    let (mut app, _, prior) = pending_copy();
+    let needs: Vec<_> = app.needs().into_iter().collect();
+    assert!(!needs.is_empty(), "nothing asked for the dropped pages");
+    for range in &needs {
+        app.load_failed(range, "boom");
+    }
+    assert_eq!(app.pages().pinned(), prior);
+}
+
+#[test]
+fn requesting_another_turn_releases_the_pending_whole_turn_copy() {
+    let (mut app, _, prior) = pending_copy();
+    app.focus = Some(TargetId::Turn(1));
+    // No settle runs here, so only the replacement branch can release
+    // turn 0's pages.
+    let text = app.turn_text(1);
+    assert!(text.is_some(), "the resident turn has text");
+    assert_eq!(app.pages().pinned(), prior);
+}
+
 #[test]
 fn ctrl_g_on_a_turn_spanning_dropped_pages_opens_the_whole_turn() {
     let lines = spanning_session();

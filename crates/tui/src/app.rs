@@ -188,6 +188,9 @@ pub(crate) struct App {
     history: history::History,
     /// "Copied" shows, from a click on `copy` to the next key or click.
     copied: bool,
+    /// A whole-turn copy waiting on dropped pages (`docs/tui.md`,
+    /// "History and paging").
+    pending_turn: Option<crate::turn_text::PendingTurn>,
     /// The focused click target in navigate mode; None while the input
     /// box has focus.
     focus: Option<crate::mouse::TargetId>,
@@ -220,6 +223,7 @@ impl App {
             overlays: commands::Overlays::default(),
             history: history::History::default(),
             copied: false,
+            pending_turn: None,
             focus: None,
             stops: Vec::new(),
             regions: crate::focus::Regions::default(),
@@ -484,8 +488,10 @@ impl App {
     }
 
     /// Loading `range` failed: its rows stay blank and the notice says why.
+    /// A failed page ends a whole-turn copy waiting on dropped pages.
     pub(crate) fn load_failed(&mut self, range: &RangeInclusive<Seq>, message: &str) {
         self.pages.fail(*range.start());
+        self.cancel_pending_turn();
         self.notices
             .push(format!("Could not load history: {message}"));
     }

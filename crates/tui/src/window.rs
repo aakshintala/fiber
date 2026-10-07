@@ -562,6 +562,13 @@ impl Pages {
         self.wanted.remove(&at);
     }
 
+    /// How many dropped pages a whole-turn copy keeps resident (tests only:
+    /// what an abandoned copy must return to).
+    #[cfg(test)]
+    pub(crate) fn pinned(&self) -> usize {
+        self.wanted.len()
+    }
+
     /// Re-counts every page at `width`: a resident page in place, a dropped
     /// one once it is loaded again.
     pub(crate) fn set_width(&mut self, width: u16) {

@@ -4,6 +4,13 @@
 
 use crate::window::Pages;
 
+/// A whole-turn copy waiting on dropped pages: its turn and the pages
+/// it keeps resident until the copy runs or is abandoned.
+pub(crate) struct PendingTurn {
+    pub(crate) turn: usize,
+    pub(crate) pages: Vec<usize>,
+}
+
 /// The pages holding turn `turn`: page `at` holds it from its seed's first
 /// turn to the next page's first, inclusive when the page's cut says the
 /// next page begins inside the same turn. The open page holds every turn

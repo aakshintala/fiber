@@ -26,6 +26,7 @@ impl App {
             .is_some_and(|id| !targets.iter().any(|target| target.id == id))
         {
             self.focus = None;
+            self.cancel_pending_turn();
             return true;
         }
         false
@@ -104,6 +105,7 @@ impl App {
                 Some(Effect::None)
             }
             Key::Esc => {
+                self.cancel_pending_turn();
                 if !self.notices.close() {
                     self.focus = None;
                 }
@@ -268,14 +270,49 @@ impl App {
     /// at the end, joined by `\n`; None when that leaves nothing, and None
     /// with a notice while its dropped pages load.
     fn turn_text(&mut self, at: usize) -> Option<String> {
+        // A new request replaces the pending one: its pages page out again.
+        // A request for a turn that is gone flows through the same branch.
+        if self
+            .pending_turn
+            .as_ref()
+            .is_some_and(|pending| pending.turn != at)
+        {
+            self.cancel_pending_turn();
+        }
         let missing = crate::turn_text::request_turn(&mut self.pages, at);
         if !missing.is_empty() {
+            self.pending_turn = Some(crate::turn_text::PendingTurn {
+                turn: at,
+                pages: missing,
+            });
             self.notices.push("Loading history…".to_owned());
             return None;
         }
         let text = self.pages.turn_text(at);
         crate::turn_text::release_turn(&mut self.pages, at);
         text
+    }
+
+    /// Drops a whole-turn copy waiting on dropped pages, letting them page
+    /// out again.
+    pub(super) fn cancel_pending_turn(&mut self) {
+        if let Some(pending) = self.pending_turn.take() {
+            for at in pending.pages {
+                self.pages.unwant(at);
+            }
+        }
+    }
+
+    /// Releases a whole-turn copy whose focus moved on, so the window
+    /// bounds memory again (`docs/tui.md`, "History and paging").
+    pub(super) fn settle_pending_turn(&mut self) {
+        if self
+            .pending_turn
+            .as_ref()
+            .is_some_and(|pending| self.focus != Some(TargetId::Turn(pending.turn)))
+        {
+            self.cancel_pending_turn();
+        }
     }
 
     /// Scrolls so focus row `row` shows, keeping a wrapped target together
