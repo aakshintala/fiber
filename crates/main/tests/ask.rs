@@ -2901,12 +2901,11 @@ fn a_lua_providers_model_answers_with_the_token_and_sign_headers() {
 fn a_cached_list_serves_the_model_while_the_refresh_runs_in_the_background() {
     let setup = Setup::new();
     // Answered by path: the background refresh races the session's own
-    // requests, so no order of arrival is fixed.
+    // requests, so no order of arrival is fixed. The listing path fails, so
+    // a startup that fetched the list synchronously would fail the run: the
+    // run succeeding proves the cache served the model.
     let server = ProviderServer::start_routed(
         [
-            // No model list at the token path: if startup ran `models()`
-            // synchronously it would fail, so the run succeeding proves
-            // the cache served.
             (
                 "/token",
                 Response::status(
@@ -2914,7 +2913,7 @@ fn a_cached_list_serves_the_model_while_the_refresh_runs_in_the_background() {
                     json!({"access_token": "tok-1", "expires_at": EXPIRES_AT}).to_string(),
                 ),
             ),
-            ("/v1/models", listing_and_token()),
+            ("/v1/models", Response::status(500, "{}")),
             ("/v1/responses", hello()),
         ],
         Response::status(500, "{}"),
