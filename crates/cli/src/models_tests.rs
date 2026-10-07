@@ -1094,3 +1094,101 @@ fn the_hidden_refresh_child_refreshes_a_stale_list() {
         ["new"]
     );
 }
+
+#[test]
+fn an_unconfigured_model_is_not_listed() {
+    let setup = Setup::new();
+    setup.install(
+        "acme",
+        "acme",
+        &json!([
+            {"id": "m", "protocol": "openai-responses",
+             "base_url": "https://{workspace}/v1"},
+            {"id": "plain", "protocol": "openai-responses",
+             "base_url": "http://127.0.0.1:1/v1"},
+        ]),
+    );
+    // The installed provider has no `placeholders` entry yet; add one so
+    // the template is a per-account host.
+    let file = setup.home().join("extensions/acme/providers/acme.json");
+    let mut data: Value = serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+    data["placeholders"] = json!({"workspace": {}});
+    fs::write(&file, data.to_string()).unwrap();
+    let (result, out, _) = setup.run(None, false, &no_spawn, fakes::clock::FakeClock::new());
+    result.unwrap();
+    assert!(out.contains("acme/plain"), "{out:?}");
+    assert!(!out.contains("acme/m"), "{out:?}");
+    fs::create_dir_all(setup.home().join("config")).unwrap();
+    fs::write(
+        setup.home().join("config/acme.json"),
+        r#"{"workspace":"adb-1.example"}"#,
+    )
+    .unwrap();
+    let (result, out, _) = setup.run(None, false, &no_spawn, fakes::clock::FakeClock::new());
+    result.unwrap();
+    assert!(out.contains("acme/plain"), "{out:?}");
+    assert!(out.contains("acme/m"), "{out:?}");
+}
+
+#[test]
+fn a_repository_settings_file_cannot_supply_the_host() {
+    if std::env::var_os(CHILD).is_some() {
+        std::process::exit(super::models(
+            None,
+            false,
+            fakes::clock::FakeClock::new(),
+            std::sync::Arc::new(NoLock),
+            Ok(std::env::current_exe().unwrap()),
+        ));
+    }
+    let setup = Setup::new();
+    setup.install(
+        "acme",
+        "acme",
+        &json!([
+            {"id": "m", "protocol": "openai-responses",
+             "base_url": "https://{workspace}/v1"},
+            {"id": "plain", "protocol": "openai-responses",
+             "base_url": "http://127.0.0.1:1/v1"},
+        ]),
+    );
+    let dir = setup.home().join("extensions/acme");
+    let mut manifest: Value =
+        serde_json::from_str(&fs::read_to_string(dir.join("extension.json")).unwrap()).unwrap();
+    manifest["repo_settings"] = json!(["workspace"]);
+    fs::write(dir.join("extension.json"), manifest.to_string()).unwrap();
+    let file = dir.join("providers/acme.json");
+    let mut data: Value = serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+    data["placeholders"] = json!({"workspace": {}});
+    fs::write(&file, data.to_string()).unwrap();
+    let repo = setup.workspace().join(".fiber/config");
+    fs::create_dir_all(&repo).unwrap();
+    fs::write(repo.join("acme.json"), r#"{"workspace":"evil.example"}"#).unwrap();
+    let name = module_path!().split_once("::").unwrap().1;
+    let child = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            &format!("{name}::a_repository_settings_file_cannot_supply_the_host"),
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env("FIBER_HOME", setup.home())
+        .env(CHILD, "1")
+        .current_dir(setup.workspace())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let pid = child.id();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || tx.send(child.wait_with_output().unwrap()));
+    let Ok(output) = rx.recv_timeout(CHILD_DEADLINE) else {
+        fakes::kill_pid(pid, "KILL").unwrap();
+        panic!("waited {CHILD_DEADLINE:?} for `fiber models` to exit");
+    };
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("acme/plain"), "{stdout:?}");
+    assert!(!stdout.contains("acme/m"), "{stdout:?}");
+}
