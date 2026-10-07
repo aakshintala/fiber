@@ -1,5 +1,7 @@
-//! A driver `shell` with `send` false, run on the connection's reader thread
-//! (`docs/architecture.md`, "One inbox"). The loop never sees it.
+//! A driver `shell` with `send` false (`docs/architecture.md`, "One inbox").
+//! The connection's reader checks it and registers its cancel, then runs it
+//! on a thread of its own and reads on, so a `cancel` on the same connection
+//! reaches it. The loop never sees it.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
@@ -8,28 +10,29 @@ use contract::ErrorCode;
 use contract::clock::Wake;
 use contract::commands::Shell;
 use contract::emit::Emit;
-use contract::events::Event;
-use contract::shapes::{ContentPart, Process};
-use contract::tool::{Bound, Cancel, Output};
+use contract::events::{CommandResult, Event};
+use contract::inbox::{Ack, Rejection};
+use contract::shapes::ContentPart;
+use contract::tool::{Bound, Cancel, Output, Tool};
 use serde_json::{Map, Value};
 
 use crate::mint;
 use crate::session::Gate;
 
 const SEND: &str = "`send` is not built in this Fiber yet.";
-const COULD_NOT_START: &str = "The command could not start.";
+pub(crate) const COULD_NOT_START: &str = "The command could not start.";
 
-pub(crate) enum Answer {
+/// Why a `shell` does not start, answered on the reader.
+pub(crate) enum Refused {
     Unknown,
-    Rejected {
-        code: ErrorCode,
-        message: String,
-    },
-    Accepted {
-        output: String,
-        artifact: Option<String>,
-        process: Process,
-    },
+    Rejected { code: ErrorCode, message: String },
+}
+
+/// A driver shell that passed its checks, with its cancel registered.
+pub(crate) struct Running {
+    tool: Arc<dyn Tool>,
+    cancel: Arc<ShellCancel>,
+    arguments: Map<String, Value>,
 }
 
 /// The cancel signal one driver shell sees.
@@ -73,47 +76,66 @@ impl Emit for Silent {
     fn emit(&self, _event: &Event) {}
 }
 
-/// Runs `command` on the caller's thread. The registry lock is not held
-/// across [`Tool::run`].
-pub(crate) fn run(gate: &Arc<Gate>, command: &Shell) -> Answer {
+/// Checks `command` and registers its cancel with `gate`, so a `cancel`
+/// read after this returns reaches it. Called on the reader thread.
+pub(crate) fn start(gate: &Arc<Gate>, command: &Shell) -> Result<Running, Refused> {
     let Some(tool) = gate.driver_shell() else {
-        return Answer::Unknown;
+        return Err(Refused::Unknown);
     };
     if command.send {
-        return Answer::Rejected {
+        return Err(Refused::Rejected {
             code: ErrorCode::InvalidArguments,
             message: SEND.to_owned(),
-        };
+        });
     }
     let cancel = Arc::new(ShellCancel::new());
     gate.track_shell(Arc::clone(&cancel));
     let mut arguments = Map::new();
     arguments.insert("command".to_owned(), Value::String(command.command.clone()));
-    let output = tool.run(&arguments, cancel.as_ref(), &Silent);
-    // A panic aborts the process, so nothing later cancels this shell.
-    gate.untrack_shell(&cancel);
-    let bound = tool.bound();
-    answered(gate, output, bound)
+    Ok(Running {
+        tool,
+        cancel,
+        arguments,
+    })
 }
 
-fn answered(gate: &Gate, output: Output, bound: Bound) -> Answer {
+impl Running {
+    /// Runs the tool, answers through `ack`, then unregisters the cancel:
+    /// once [`Gate`] no longer lists the shell, its answer is queued. The
+    /// registry lock is not held across [`Tool::run`].
+    pub(crate) fn finish(self, gate: &Gate, ack: Ack) {
+        let output = self
+            .tool
+            .run(&self.arguments, self.cancel.as_ref(), &Silent);
+        (ack.0)(answered(gate, output, self.tool.bound()));
+        // A panic aborts the process, so nothing later cancels this shell.
+        gate.untrack_shell(&self.cancel);
+    }
+
+    /// Unregisters a shell that never ran, after the reader answered it.
+    pub(crate) fn abandon(self, gate: &Gate) {
+        gate.untrack_shell(&self.cancel);
+    }
+}
+
+fn answered(gate: &Gate, output: Output, bound: Bound) -> contract::inbox::Answer {
     let Some(process) = output.process else {
         let message = match output.error {
             Some(error) => error.message,
             None => COULD_NOT_START.to_owned(),
         };
-        return Answer::Rejected {
+        return Err(Rejection {
             code: ErrorCode::InvalidArguments,
             message,
-        };
+        });
     };
     let full = joined(&output.content);
     let (kept, artifact) = cut(gate, &full, bound);
-    Answer::Accepted {
+    Ok(Some(CommandResult::Shell {
         output: kept,
         artifact,
         process,
-    }
+    }))
 }
 
 fn joined(content: &[ContentPart]) -> String {

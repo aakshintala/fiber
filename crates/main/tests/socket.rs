@@ -531,3 +531,67 @@ fn an_empty_args_matches_a_missing_one_on_the_socket() {
     finish(running);
     drop(client);
 }
+
+#[test]
+fn cancel_on_the_same_socket_stops_a_driver_shell() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    server.hold();
+    setup.provider(&server);
+    let running = start(&setup);
+    let started = first_line(&running.stdout);
+    let session_id = started["session_id"].as_str().unwrap().to_owned();
+    assert!(
+        server.await_requests(1, DEADLINE),
+        "the held response was requested"
+    );
+
+    let client = Client::connect(&setup.home().join("run").join(&session_id)).unwrap();
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"summary"}}"#,
+    );
+    // The command writes to a FIFO once it runs, so the cancel reaches a
+    // started process, not one cancelled before it started. It outlives
+    // every deadline here, so only the cancel ends it; a bare `sleep` this
+    // long is refused before it starts.
+    let fifo = setup.root.path().join("started");
+    let made = Command::new("mkfifo").arg(&fifo).status().unwrap();
+    assert!(made.success(), "mkfifo failed");
+    let (opened, started) = mpsc::channel();
+    let reading = fifo.clone();
+    thread::spawn(move || {
+        let read = fs::read(&reading);
+        if let Ok(()) = opened.send(read.is_ok()) {}
+    });
+    send(
+        &client,
+        &json!({"id": "c_shell", "command": "shell", "args": {
+            "command": format!("echo > '{}'; sleep 60", fifo.display())
+        }})
+        .to_string(),
+    );
+    assert_eq!(
+        started.recv_timeout(DEADLINE),
+        Ok(true),
+        "waited {DEADLINE:?} for the shell to start"
+    );
+    send(&client, r#"{"id":"c_cancel","command":"cancel"}"#);
+    // The cancel wakes the shell before its own answer is queued, so either
+    // answer can come first.
+    let mut pending = vec!["c_cancel", "c_shell"];
+    let lines = until(&client, "the answers to c_cancel and c_shell", |line| {
+        pending.retain(|id| line["payload"]["command_id"] != *id);
+        pending.is_empty()
+    });
+    assert_eq!(answered(&lines, "c_cancel")["kind"], "command_accepted");
+    let shell = answered(&lines, "c_shell");
+    assert_eq!(shell["kind"], "command_accepted", "{shell}");
+    assert_eq!(
+        shell["payload"]["result"]["output"],
+        "Cancelled and stopped.\n"
+    );
+    server.release();
+    finish(running);
+    drop(client);
+}

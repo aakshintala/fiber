@@ -13,7 +13,7 @@ use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
@@ -1507,6 +1507,160 @@ fn cancel_from_another_connection_stops_a_driver_shell() {
         })
         .unwrap();
     opened.close();
+}
+
+/// The answer to `id`, or none when a line is not read within [`DEADLINE`].
+/// Lets a test close its session before it asserts.
+fn answer_within(client: &Client, id: &str) -> Option<Value> {
+    answers_within(client, &[id]).pop().flatten()
+}
+
+/// The answers to `ids` in the order named, whatever order they arrive in.
+/// Reading stops once each is answered, or when a line is not read within
+/// [`DEADLINE`], which leaves the rest none.
+fn answers_within(client: &Client, ids: &[&str]) -> Vec<Option<Value>> {
+    let mut answers: Vec<Option<Value>> = vec![None; ids.len()];
+    while answers.iter().any(Option::is_none) {
+        let Some(line) = client.recv(DEADLINE) else {
+            break;
+        };
+        if let Some(slot) = ids
+            .iter()
+            .position(|id| command_id(&line) == Some(*id))
+            .and_then(|at| answers.get_mut(at))
+        {
+            *slot = Some(line);
+        }
+    }
+    answers
+}
+
+#[test]
+fn cancel_on_the_same_connection_stops_a_driver_shell() {
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let saw_cancel = Arc::new(AtomicBool::new(false));
+    let opened = Opened::open(vec![]);
+    opened.session.shell(Arc::new(Hangs {
+        entered: Mutex::new(Some(entered_tx)),
+        saw_cancel: Arc::clone(&saw_cancel),
+    }));
+    let socket = opened.socket.clone();
+    let dir = opened.dir.clone();
+    let mut seen = None;
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(&client, &shell_line("c_shell", "sleep 60"));
+            entered_rx
+                .recv_timeout(DEADLINE)
+                .expect("the shell is running");
+            send(&client, r#"{"id":"c_cancel","command":"cancel"}"#);
+            // The cancel wakes the shell before its own answer is queued,
+            // so either answer can come first. On a reader blocked in the
+            // shell, neither would come before close.
+            let mut answers = answers_within(&client, &["c_cancel", "c_shell"]).into_iter();
+            let (cancel, shell) = (answers.next().flatten(), answers.next().flatten());
+            let woken = !matches!(inbox.try_recv(), Err(mpsc::TryRecvError::Empty));
+            no_durable(&dir);
+            seen = Some((cancel, woken, shell, client));
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+    let (cancel, woken, shell, _client) = seen.expect("the client ran");
+    let cancel = cancel.expect("cancel on the shell's own connection was answered");
+    assert_eq!(kind(&cancel), "command_accepted", "{cancel}");
+    assert!(!woken, "a shell cancel does not wake the loop");
+    assert!(
+        saw_cancel.load(Ordering::Relaxed),
+        "the tool saw its cancel"
+    );
+    let line = shell.expect("the cancelled shell was answered");
+    assert_eq!(kind(&line), "command_accepted", "{line}");
+    assert_eq!(
+        line["payload"]["result"]["output"],
+        "Cancelled and stopped.\n"
+    );
+    assert!(
+        line["payload"]["result"]["process"]
+            .get("exit_code")
+            .is_none()
+    );
+    assert_eq!(line["payload"]["result"]["process"]["timed_out"], false);
+}
+
+/// Hangs on its first call, as [`Hangs`]; answers every later one at once.
+struct HangsOnce {
+    hangs: Hangs,
+    calls: AtomicUsize,
+}
+
+impl Tool for HangsOnce {
+    fn definition(&self) -> ToolDefinition {
+        shell_definition()
+    }
+
+    fn effects(&self, _arguments: &Map<String, Value>) -> Result<Effects, EffectsError> {
+        Err(EffectsError::Tool("unused".into()))
+    }
+
+    fn run(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel, emit: &dyn Emit) -> Output {
+        if self.calls.fetch_add(1, Ordering::Relaxed) == 0 {
+            self.hangs.run(arguments, cancel, emit)
+        } else {
+            ended(0, "hi\n")
+        }
+    }
+
+    fn bound(&self) -> Bound {
+        Bound::DEFAULT
+    }
+}
+
+#[test]
+fn a_connection_reads_on_while_its_driver_shell_runs() {
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let saw_cancel = Arc::new(AtomicBool::new(false));
+    let opened = Opened::open(vec![tool()]);
+    opened.session.shell(Arc::new(HangsOnce {
+        hangs: Hangs {
+            entered: Mutex::new(Some(entered_tx)),
+            saw_cancel: Arc::clone(&saw_cancel),
+        },
+        calls: AtomicUsize::new(0),
+    }));
+    let socket = opened.socket.clone();
+    let mut seen = None;
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), |_inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(&client, &shell_line("c_held", "sleep 60"));
+            entered_rx
+                .recv_timeout(DEADLINE)
+                .expect("the shell is running");
+            send(&client, r#"{"id":"c_tools","command":"tools"}"#);
+            let tools = answer_within(&client, "c_tools");
+            send(&client, &shell_line("c_second", "echo hi"));
+            let second = answer_within(&client, "c_second");
+            seen = Some((tools, second, client));
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+    let (tools, second, _client) = seen.expect("the client ran");
+    let tools = tools.expect("tools was answered while the shell ran");
+    assert_eq!(kind(&tools), "command_accepted", "{tools}");
+    assert_eq!(tools["payload"]["result"]["tools"][0]["name"], "read");
+    let second = second.expect("a second shell was answered while the first ran");
+    assert_eq!(second["payload"]["result"]["output"], "hi\n");
+    assert!(
+        saw_cancel.load(Ordering::Relaxed),
+        "close cancelled the first shell"
+    );
 }
 
 #[test]

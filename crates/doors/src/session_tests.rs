@@ -107,6 +107,18 @@ pub(super) fn park_reader() {
     );
 }
 
+/// A point a test observes through [`Gate::probe`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Probe {
+    /// `close`'s first wait for the driver shells has returned.
+    FirstShellWaitDone,
+    /// A wait for the driver shells is about to block on one still running.
+    ShellsWaiting,
+}
+
+/// What [`Gate::probe`] calls at each [`Probe`] point.
+pub(crate) type Prober = Arc<dyn Fn(Probe) + Send + Sync>;
+
 pub(super) fn note_accept_wait() {
     let _held = lock(&CONTROL.accept_mu);
     CONTROL.accept_waiting.store(true, Ordering::Relaxed);
@@ -1500,6 +1512,31 @@ fn the_stopper_after_the_inbox_is_gone_still_cancels_later_shells() {
 }
 
 #[test]
+fn abandon_unregisters_a_driver_shell_that_never_ran() {
+    let opened = open();
+    opened.session.shell(Arc::new(HeldShell {
+        entered: Mutex::new(None),
+        cancelled: Mutex::new(None),
+        release: Mutex::new(None),
+    }));
+    let gate = Arc::clone(&opened.session.gate);
+    let command = contract::commands::Shell {
+        command: "true".to_owned(),
+        send: false,
+    };
+    let Ok(running) = crate::shell::start(&gate, &command) else {
+        panic!("the driver shell passed its checks");
+    };
+    assert_eq!(super::lock(&gate.shells).running.len(), 1);
+    running.abandon(&gate);
+    assert!(
+        super::lock(&gate.shells).running.is_empty(),
+        "close would wait for a shell that never runs"
+    );
+    close_within(opened.session, opened.log);
+}
+
+#[test]
 fn quiesce_cancels_a_running_driver_shell_and_waits_for_it() {
     let running = running_shell(|_, _| {});
     let session = running.opened.session;
@@ -1527,6 +1564,156 @@ fn quiesce_cancels_a_running_driver_shell_and_waits_for_it() {
     assert!(super::lock(&gate.shells).running.is_empty());
     drop(running.client);
     close_within(session, running.opened.log);
+}
+
+#[test]
+fn close_cancels_a_running_driver_shell_and_waits_for_its_answer() {
+    let running = running_shell(|_, _| {});
+    let session = running.opened.session;
+    let log = running.opened.log;
+    let (done_tx, done) = mpsc::channel();
+    let gate = Arc::clone(&session.gate);
+    thread::spawn(move || {
+        session.close(log);
+        done_tx.send(()).unwrap();
+    });
+    running
+        .cancelled
+        .recv_timeout(DEADLINE)
+        .expect("close cancelled the driver shell");
+    // The shell is cancelled but still running: close is still waiting,
+    // before it stops accepting. A subscriber's writer would hold close
+    // later anyway, as the shell's answer keeps its queue open.
+    assert!(!super::lock(&gate.shells).running.is_empty());
+    assert!(!gate.stopped(), "close went on before the shell ended");
+    running.release.send(()).unwrap();
+    // The answer is queued before the shell leaves the registry, so it
+    // reaches the client before close drops the log.
+    let answer = loop {
+        let line = recv(&running.client);
+        if line["payload"]["command_id"] == "c_shell" {
+            break line;
+        }
+    };
+    assert_eq!(answer["kind"], "command_accepted", "{answer}");
+    assert_eq!(answer["payload"]["result"]["output"], "stopped");
+    done.recv_timeout(DEADLINE)
+        .expect("close returned once the shell ended");
+    assert!(super::lock(&gate.shells).running.is_empty());
+}
+
+#[test]
+fn a_driver_shell_started_after_the_stopper_is_cancelled_and_waited_for() {
+    let opened = open();
+    let (entered_tx, entered) = mpsc::channel();
+    let (cancelled_tx, cancelled) = mpsc::channel();
+    let (release, release_rx) = mpsc::channel();
+    opened.session.shell(Arc::new(HeldShell {
+        entered: Mutex::new(Some(entered_tx)),
+        cancelled: Mutex::new(Some(cancelled_tx)),
+        release: Mutex::new(Some(release_rx)),
+    }));
+    let gate = Arc::clone(&opened.session.gate);
+    let socket = opened.socket.clone();
+    let mut connected = None;
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), |_| {
+            (opened.session.stopper())();
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_full", "full");
+            let _ack = recv(&client);
+            client
+                .send(r#"{"id":"c_shell","command":"shell","args":{"command":"sleep 60"}}"#)
+                .unwrap();
+            connected = Some(client);
+            Ok(())
+        })
+        .unwrap();
+    entered
+        .recv_timeout(DEADLINE)
+        .expect("the driver shell started");
+    cancelled
+        .recv_timeout(DEADLINE)
+        .expect("the driver shell started cancelled");
+    // Registered although shutdown had begun, so close waits for it.
+    assert!(!super::lock(&gate.shells).running.is_empty());
+    release.send(()).unwrap();
+    drop(connected);
+    close_within(opened.session, opened.log);
+    assert!(super::lock(&gate.shells).running.is_empty());
+}
+
+#[test]
+fn close_waits_for_a_driver_shell_admitted_after_its_first_wait() {
+    let opened = open();
+    let (entered_tx, entered) = mpsc::channel();
+    let (cancelled_tx, cancelled) = mpsc::channel();
+    let (release, release_rx) = mpsc::channel();
+    opened.session.shell(Arc::new(HeldShell {
+        entered: Mutex::new(Some(entered_tx)),
+        cancelled: Mutex::new(Some(cancelled_tx)),
+        release: Mutex::new(Some(release_rx)),
+    }));
+    let gate = Arc::clone(&opened.session.gate);
+    let (first_tx, first) = mpsc::channel();
+    let (resume, resume_rx) = mpsc::channel::<()>();
+    let resume_rx = Mutex::new(resume_rx);
+    let (waiting_tx, waiting) = mpsc::channel();
+    *super::lock(&gate.probe) = Some(Arc::new(move |point| match point {
+        Probe::FirstShellWaitDone => {
+            if let Ok(()) = first_tx.send(()) {}
+            lock(&resume_rx)
+                .recv_timeout(DEADLINE)
+                .expect("the test resumes close");
+        }
+        Probe::ShellsWaiting => if let Ok(()) = waiting_tx.send(()) {},
+    }));
+    let socket = opened.socket.clone();
+    let mut connected = None;
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), |_| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_full", "full");
+            let _ack = recv(&client);
+            connected = Some(client);
+            Ok(())
+        })
+        .unwrap();
+    let client = connected.expect("the client connected");
+    let (done_tx, done) = mpsc::channel();
+    let session = opened.session;
+    let log = opened.log;
+    thread::spawn(move || {
+        session.close(log);
+        if let Ok(()) = done_tx.send(()) {}
+    });
+    first
+        .recv_timeout(DEADLINE)
+        .expect("close's first wait saw no driver shell");
+    client
+        .send(r#"{"id":"c_shell","command":"shell","args":{"command":"sleep 60"}}"#)
+        .unwrap();
+    entered
+        .recv_timeout(DEADLINE)
+        .expect("the reader admitted the driver shell");
+    cancelled
+        .recv_timeout(DEADLINE)
+        .expect("a shell admitted during teardown starts cancelled");
+    resume.send(()).unwrap();
+    waiting
+        .recv_timeout(DEADLINE)
+        .expect("close waits again for the shell once no reader is left");
+    assert!(
+        done.try_recv().is_err(),
+        "close returned while the shell ran"
+    );
+    release.send(()).unwrap();
+    done.recv_timeout(DEADLINE)
+        .expect("close returned once the shell ended");
+    assert!(super::lock(&gate.shells).running.is_empty());
+    drop(client);
 }
 
 #[test]
