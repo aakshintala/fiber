@@ -94,6 +94,7 @@ fn provider(name: &str, urls: &[&str]) -> serde_json::Value {
                 "id": format!("m{i}"),
                 "protocol": "openai-responses",
                 "base_url": url,
+                "context_window": 1000,
             })
         })
         .collect();

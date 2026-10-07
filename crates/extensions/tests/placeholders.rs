@@ -32,7 +32,7 @@ fn provider_with(name: &str, models: Value, placeholders: Value) -> Value {
 }
 
 fn model(id: &str, base_url: &str) -> Value {
-    json!({"id": id, "protocol": "openai-responses", "base_url": base_url})
+    json!({"id": id, "protocol": "openai-responses", "base_url": base_url, "context_window": 1000})
 }
 
 /// Installs extension `acme` registering provider `acme` with model `m` at
@@ -489,7 +489,7 @@ fn lua_models_are_filled_and_the_cache_keeps_the_template() {
         "ext",
         "acme",
         "{ { id = \"m\", protocol = \"openai-responses\", \
-         base_url = \"https://{workspace}/v1\" } }",
+         base_url = \"https://{workspace}/v1\", context_window = 1000 } }",
     );
     let cfg = config(
         &setup,

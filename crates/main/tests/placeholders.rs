@@ -51,7 +51,7 @@ fn an_unconfigured_model_exits_model_unconfigured_naming_the_setting() {
             "credential": {"env": "FIBER_TEST_FAKE_KEY"},
             "placeholders": {"workspace": {"env": "FIBER_TEST_1128_UNSET_HOST"}},
             "models": [{"id": "m", "protocol": "openai-responses",
-                        "base_url": "https://{workspace}/v1"}],
+                        "base_url": "https://{workspace}/v1", "context_window": 1000}],
         }),
     );
     let output = run_to_exit("fiber ask", setup.fiber(&["ask", "hi"]));
@@ -77,7 +77,7 @@ fn a_host_value_that_is_not_a_host_never_reaches_the_provider() {
             "credential": {"env": "FIBER_TEST_FAKE_KEY"},
             "placeholders": {"workspace": {}},
             "models": [{"id": "m", "protocol": "openai-responses",
-                        "base_url": "https://{workspace}/v1"}],
+                        "base_url": "https://{workspace}/v1", "context_window": 1000}],
         }),
     );
     write_json(

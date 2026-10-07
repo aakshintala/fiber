@@ -493,7 +493,7 @@ fn install_host(home: &Path, extension: &str, name: &str, placeholders: serde_js
             "name": name,
             "placeholders": placeholders,
             "models": [{"id": "m", "protocol": "openai-responses",
-                        "base_url": "https://{workspace}/v1"}],
+                        "base_url": "https://{workspace}/v1", "context_window": 1000}],
         })
         .to_string(),
     )

@@ -3099,7 +3099,7 @@ fn a_credential_error_at_startup_is_fiber_s_sentence_and_its_text_goes_in_provid
         &setup,
         "acme",
         &format!(
-            "fiber.provider(\"acme\", {{\n models = {{\n   timeout = 5000,\n   run = function()\n     return {{ {{ id = \"m1\", protocol = \"openai-responses\", base_url = \"{}/v1\" }} }}\n   end,\n }},\n credential = {{\n   timeout = 5000,\n   run = function()\n     error(\"refresh failed: body-xyz\")\n   end,\n }},\n}})\n",
+            "fiber.provider(\"acme\", {{\n models = {{\n   timeout = 5000,\n   run = function()\n     return {{ {{ id = \"m1\", protocol = \"openai-responses\", base_url = \"{}/v1\", context_window = 100000 }} }}\n   end,\n }},\n credential = {{\n   timeout = 5000,\n   run = function()\n     error(\"refresh failed: body-xyz\")\n   end,\n }},\n}})\n",
             server.url()
         ),
     );
@@ -3127,7 +3127,7 @@ fn a_sign_error_keeps_the_token_out_of_every_line() {
         &setup,
         "acme",
         &format!(
-            "fiber.provider(\"acme\", {{\n models = {{\n   timeout = 5000,\n   run = function()\n     return {{ {{ id = \"m1\", protocol = \"openai-responses\", base_url = \"{}/v1\" }} }}\n   end,\n }},\n credential = {{\n   timeout = 5000,\n   run = function()\n     return {{ token = \"tok-secret-1\", expires_at = {EXPIRES_AT} }}\n   end,\n }},\n sign = {{\n   timeout = 5000,\n   run = function(request)\n     error(\"bad signature for \" .. request.headers.authorization)\n   end,\n }},\n}})\n",
+            "fiber.provider(\"acme\", {{\n models = {{\n   timeout = 5000,\n   run = function()\n     return {{ {{ id = \"m1\", protocol = \"openai-responses\", base_url = \"{}/v1\", context_window = 100000 }} }}\n   end,\n }},\n credential = {{\n   timeout = 5000,\n   run = function()\n     return {{ token = \"tok-secret-1\", expires_at = {EXPIRES_AT} }}\n   end,\n }},\n sign = {{\n   timeout = 5000,\n   run = function(request)\n     error(\"bad signature for \" .. request.headers.authorization)\n   end,\n }},\n}})\n",
             server.url()
         ),
     );

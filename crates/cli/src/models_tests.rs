@@ -580,7 +580,7 @@ fn models_spawns_its_refresh_child_from_the_recorded_path() {
         &setup.home(),
         "acme",
         &json!([{"id": "old", "protocol": "openai-responses",
-                 "base_url": "http://127.0.0.1:1/v1"}]),
+                 "base_url": "http://127.0.0.1:1/v1", "context_window": 1000}]),
         clock.wall(),
     );
     let dir = fakes::TempDir::new("fiber-models-recorded");
@@ -669,7 +669,7 @@ fn models_with_an_unusable_recorded_path_still_prints_from_the_cache() {
         &setup.home(),
         "acme",
         &json!([{"id": "old", "protocol": "openai-responses",
-                 "base_url": "http://127.0.0.1:1/v1"}]),
+                 "base_url": "http://127.0.0.1:1/v1", "context_window": 1000}]),
         clock.wall(),
     );
     let name = module_path!().split_once("::").unwrap().1;
@@ -815,7 +815,7 @@ fn write_stale_cache(home: &std::path::Path, name: &str, list: &Value, now: std:
 fn lua_list(id: &str) -> String {
     format!(
         "{{ {{ id = \"{id}\", protocol = \"openai-responses\", \
-         base_url = \"http://127.0.0.1:1/v1\" }} }}"
+         base_url = \"http://127.0.0.1:1/v1\", context_window = 1000 }} }}"
     )
 }
 
@@ -1107,9 +1107,9 @@ fn an_unconfigured_model_is_not_listed() {
         "acme",
         &json!([
             {"id": "m", "protocol": "openai-responses",
-             "base_url": "https://{workspace}/v1"},
+             "base_url": "https://{workspace}/v1", "context_window": 1000},
             {"id": "plain", "protocol": "openai-responses",
-             "base_url": "http://127.0.0.1:1/v1"},
+             "base_url": "http://127.0.0.1:1/v1", "context_window": 1000},
         ]),
     );
     // The installed provider has no `placeholders` entry yet; add one so
@@ -1151,9 +1151,9 @@ fn a_repository_settings_file_cannot_supply_the_host() {
         "acme",
         &json!([
             {"id": "m", "protocol": "openai-responses",
-             "base_url": "https://{workspace}/v1"},
+             "base_url": "https://{workspace}/v1", "context_window": 1000},
             {"id": "plain", "protocol": "openai-responses",
-             "base_url": "http://127.0.0.1:1/v1"},
+             "base_url": "http://127.0.0.1:1/v1", "context_window": 1000},
         ]),
     );
     let dir = setup.home().join("extensions/acme");
