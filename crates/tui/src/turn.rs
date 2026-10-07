@@ -20,7 +20,7 @@ use serde_json::Value;
 
 use crate::app::{Target, read, text_of};
 use crate::format;
-use crate::markdown::{self, CopyTarget};
+use crate::markdown;
 
 #[path = "crash.rs"]
 pub(crate) mod crash;
@@ -57,7 +57,7 @@ impl Fold {
 
 /// One item inside a card.
 #[derive(Debug)]
-enum Entry {
+pub(crate) enum Entry {
     /// One text part of a reply, updated as deltas arrive.
     Reply {
         action: String,
@@ -141,7 +141,7 @@ pub(crate) struct Streaming {
 #[derive(Debug, Default)]
 pub(crate) struct Turn {
     prompts: Vec<String>,
-    entries: Vec<Entry>,
+    pub(crate) entries: Vec<Entry>,
     groups: Vec<Group>,
     /// The group new non-text items join, until the next reply.
     open_group: Option<usize>,
@@ -627,24 +627,6 @@ pub(crate) fn fold_line(turns: &mut Vec<Turn>, fold: &mut Fold, envelope: &Envel
 /// The turn still running, if any.
 fn open(turns: &mut [Turn]) -> Option<&mut Turn> {
     turns.last_mut().filter(|turn| turn.is_open())
-}
-
-/// The code block `target` names among `turns`, rendered at `width`.
-pub(crate) fn copy_target(turns: &[Turn], target: Target, width: u16) -> Option<CopyTarget> {
-    let Target::Copy { reply: id, block } = target else {
-        return None;
-    };
-    turns
-        .iter()
-        .flat_map(|turn| &turn.entries)
-        .find_map(|entry| match entry {
-            Entry::Reply { reply, .. } if reply.id() == id => reply.rendered(width).target(block),
-            Entry::Reply { .. }
-            | Entry::Steer(_)
-            | Entry::Group(_)
-            | Entry::Aside(_)
-            | Entry::Band(_) => None,
-        })
 }
 
 /// Folds a line about one action into `turns`; false when it changed no

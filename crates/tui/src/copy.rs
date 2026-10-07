@@ -5,6 +5,26 @@
 use std::ops::Range;
 
 use super::{App, Effect, Target};
+use crate::markdown::CopyTarget;
+use crate::turn::{Entry, Turn};
+
+/// The code block `target` names among `turns`, rendered at `width`.
+pub(crate) fn copy_target(turns: &[Turn], target: Target, width: u16) -> Option<CopyTarget> {
+    let Target::Copy { reply: id, block } = target else {
+        return None;
+    };
+    turns
+        .iter()
+        .flat_map(|turn| &turn.entries)
+        .find_map(|entry| match entry {
+            Entry::Reply { reply, .. } if reply.id() == id => reply.rendered(width).target(block),
+            Entry::Reply { .. }
+            | Entry::Steer(_)
+            | Entry::Group(_)
+            | Entry::Aside(_)
+            | Entry::Band(_) => None,
+        })
+}
 
 impl App {
     /// For each line of [`Self::lines`] that opens something, its index and
@@ -20,13 +40,13 @@ impl App {
     /// The columns of the `copy` cells `target` covers on its line, when
     /// it is a code block's copy target.
     pub(crate) fn copy_cells(&self, target: Target) -> Option<Range<u16>> {
-        crate::turn::copy_target(&self.turns, target, self.width).map(|copy| copy.cols)
+        copy_target(&self.turns, target, self.width).map(|copy| copy.cols)
     }
 
     /// A click on a code block's `copy`: copies its code and shows
     /// "Copied".
     pub(super) fn copy(&mut self, target: Target) -> Effect {
-        let code = crate::turn::copy_target(&self.turns, target, self.width);
+        let code = copy_target(&self.turns, target, self.width);
         self.copied = code.is_some();
         code.map_or(Effect::None, |copy| Effect::Copy(copy.code))
     }
