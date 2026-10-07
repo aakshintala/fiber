@@ -2,16 +2,33 @@
 //! --example resolve` prints the merged configuration for a Fiber home and
 //! project.
 
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test helpers; a failure is the test's"
+)]
+
 mod common;
 
-use std::process::{Command, Output};
+use std::os::unix::process::CommandExt;
+use std::process::{Command, Output, Stdio};
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 
 use common::{PROJECT, Setup};
 use config::{Secret, store_secret};
 use serde_json::{Value, json};
 
-fn resolve(setup: &Setup, args: &[&str]) -> std::io::Result<Output> {
-    Command::new(env!("CARGO"))
+/// How long the resolve jig may take. `.config/nextest.toml` kills a slow
+/// test after a 30s period times 4 (120s total), so this is half of that:
+/// `docs/testing.md`, "Waits and timeouts", needs nextest's timeout to be
+/// at least twice the test's own deadlines, so a hang reports which wait
+/// expired. A cold compile of the example can be slow.
+const JIG_DEADLINE: Duration = Duration::from_secs(60);
+
+fn resolve(setup: &Setup, args: &[&str]) -> Output {
+    let child = Command::new(env!("CARGO"))
         .args([
             "run",
             "--quiet",
@@ -26,7 +43,20 @@ fn resolve(setup: &Setup, args: &[&str]) -> std::io::Result<Output> {
         .args(args)
         .env("FIBER_HOME", setup.home())
         .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let watchdog = fakes::Watchdog::group(child.id());
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || done.send(child.wait_with_output()).unwrap());
+    let output = finished
+        .recv_timeout(JIG_DEADLINE)
+        .expect("the resolve jig finished: cargo run --example resolve")
+        .unwrap();
+    watchdog.stand_down(Duration::from_secs(5));
+    output
 }
 
 #[test]
@@ -44,7 +74,7 @@ fn it_prints_the_merged_configuration_and_the_notices() {
         r#"{"model": "databricks/databricks-claude-opus-5", "tui": {"hover": false}}"#,
     );
     setup.write(&setup.project(), r#"{"handoff": {"tokens": 100}}"#);
-    let out = resolve(&setup, &["--model", "a/b", "-c", "retry.attempts=9"]).unwrap();
+    let out = resolve(&setup, &["--model", "a/b", "-c", "retry.attempts=9"]);
     let stderr = String::from_utf8(out.stderr).unwrap();
     assert!(out.status.success(), "{stderr}");
     let merged: Value = serde_json::from_slice(&out.stdout).unwrap();
@@ -71,7 +101,7 @@ fn it_prints_the_merged_configuration_and_the_notices() {
 fn it_reports_an_invalid_file_and_fails() {
     let setup = Setup::new();
     setup.write(&setup.global(), "{,}");
-    let out = resolve(&setup, &[]).unwrap();
+    let out = resolve(&setup, &[]);
     assert_eq!(out.status.code(), Some(1));
     assert_eq!(
         String::from_utf8(out.stderr).unwrap(),
@@ -86,7 +116,7 @@ fn it_reports_an_invalid_file_and_fails() {
 #[test]
 fn it_prints_its_usage_for_bad_arguments() {
     let setup = Setup::new();
-    let out = resolve(&setup, &["--bogus"]).unwrap();
+    let out = resolve(&setup, &["--bogus"]);
     assert_eq!(out.status.code(), Some(1));
     assert!(
         String::from_utf8(out.stderr)
