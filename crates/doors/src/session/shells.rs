@@ -52,8 +52,10 @@ impl Gate {
     }
 
     /// Marks the gate so a shell that registers later is cancelled at once,
-    /// and cancels the shells already running. Closing the socket does not
-    /// stop a tool blocked in `run`.
+    /// and cancels the shells already running. A pasted image in flight is
+    /// cancelled too: the session started its child, so shutdown stops it
+    /// inside the bound. Closing the socket does not stop a tool blocked
+    /// in `run`.
     pub(super) fn cancel_shells(&self) {
         let running = {
             let mut shells = lock(&self.shells);
@@ -61,6 +63,7 @@ impl Gate {
             shells.running.clone()
         };
         cancel_each(&running);
+        self.pasting.cancel();
     }
 
     /// Registers a driver shell's cancel. After `close` or the stopper it

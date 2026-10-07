@@ -31,6 +31,7 @@ pub(crate) use util::{ended, mint, variables};
 mod answer;
 mod calls;
 mod cancel;
+mod caps;
 mod changes;
 mod commands;
 mod completion;
@@ -60,6 +61,7 @@ mod util;
 mod warm;
 
 pub use cancel::TurnCancel;
+pub use caps::{ResultCaps, capped};
 pub use commands::commands;
 pub use conversation::rebuild;
 pub use error::Error;

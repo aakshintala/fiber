@@ -854,7 +854,7 @@ fn scrubbed(request: &ModelRequest, homes: &[String]) -> (Option<usize>, Vec<Inp
     let mut conversation = request.conversation.clone();
     for input in &mut conversation {
         match input {
-            Input::User { text } => *text = scrub(text, homes),
+            Input::User { text, .. } => *text = scrub(text, homes),
             Input::Assistant {
                 text,
                 provider_item,

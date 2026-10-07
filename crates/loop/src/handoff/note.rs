@@ -141,6 +141,7 @@ impl Loop {
         };
         conversation.push(Input::User {
             text: note_request_text(&self.handoff.carry.session_log, instructions),
+            images: Vec::new(),
         });
         let Some(request) = self.request_for(conversation) else {
             return Ok(Noted::Failed(failure(

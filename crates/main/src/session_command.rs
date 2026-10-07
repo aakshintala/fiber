@@ -93,6 +93,7 @@ pub(crate) fn new_session(
         handoff,
         idle,
         warm,
+        caps,
         home,
         project,
         workspace,
@@ -147,6 +148,7 @@ pub(crate) fn new_session(
     };
     session.shell(driver);
     session.jobs(jobs.clone());
+    session.images(Arc::clone(&session_servers.images));
     session.hooks(Arc::clone(&extensions) as Arc<dyn contract::hook::Hooks>);
     session.commands(r#loop::commands(&prompt_inputs, &workspace));
     let cancel = Arc::new(r#loop::TurnCancel::default());
@@ -173,7 +175,7 @@ pub(crate) fn new_session(
                     model,
                     prompt_inputs,
                     inbox,
-                    tools,
+                    r#loop::capped(tools, &caps),
                     permissions,
                 )
                 .and_then(|looped| {

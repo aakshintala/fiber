@@ -28,7 +28,10 @@ use support::{
 };
 
 fn user(text: &str) -> Input {
-    Input::User { text: text.into() }
+    Input::User {
+        text: text.into(),
+        images: Vec::new(),
+    }
 }
 
 fn assistant(text: &str) -> Input {

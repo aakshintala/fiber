@@ -42,7 +42,7 @@ pub(crate) struct ShellCancel {
 }
 
 impl ShellCancel {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             cancelled: AtomicBool::new(false),
             wakers: Mutex::new(Vec::new()),

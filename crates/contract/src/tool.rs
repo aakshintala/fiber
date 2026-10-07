@@ -3,7 +3,7 @@
 //! alike; the loop looks a call's name up among them and never learns whose
 //! it is.
 
-use std::sync::Weak;
+use std::sync::{Arc, Weak};
 
 use serde_json::{Map, Value};
 
@@ -47,6 +47,14 @@ pub trait Tool: Send + Sync {
     /// How a long result is cut (`docs/tools.md`, "Bounded results").
     fn bound(&self) -> Bound {
         Bound::DEFAULT
+    }
+
+    /// This tool with its results capped at `cap` bytes of model-facing text,
+    /// for a tool that cuts its own output (`docs/tools.md`, "Bounded
+    /// results"). The returned tool keeps this tool's `definition().name`.
+    /// `None`, the default, leaves the cap to the loop's cut.
+    fn with_cap(&self, _cap: usize) -> Option<Arc<dyn Tool>> {
+        None
     }
 
     /// Guideline lines for the system prompt, if any

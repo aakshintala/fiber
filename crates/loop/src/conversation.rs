@@ -284,6 +284,7 @@ impl Rendered {
                 } else {
                     self.held.push(Input::User {
                         text: crate::jobs::line_text(line),
+                        images: Vec::new(),
                     });
                 }
             }
@@ -300,6 +301,7 @@ impl Rendered {
                     self.carry.fold_jobs(event);
                     self.held.push(Input::User {
                         text: crate::jobs::notice_text(job),
+                        images: Vec::new(),
                     });
                 } else {
                     self.render(event, action, model);
@@ -405,7 +407,7 @@ pub(crate) fn render(
         Event::ContextNudged(nudged) => {
             conversation.push(Input::User {
                 text: carry.nudge_text(nudged),
-            });
+             images: Vec::new(),});
             carry.nudged = true;
         }
         // A job's end the model was not already given: one message. A
@@ -413,11 +415,11 @@ pub(crate) fn render(
         // nothing; that call's result already said it.
         Event::JobCompleted(completed) if action.is_none() => conversation.push(Input::User {
             text: crate::jobs::notice_text(completed),
-        }),
+         images: Vec::new(),}),
         // A monitor's batch: one message, rendered from the line alone.
         Event::JobLine(line) => conversation.push(Input::User {
             text: crate::jobs::line_text(line),
-        }),
+         images: Vec::new(),}),
         // The opening message is rendered from its logged fields only, so
         // a resume renders the identical bytes; it is the conversation's
         // first message (`docs/system-prompt.md`, "Recording").
@@ -428,7 +430,7 @@ pub(crate) fn render(
                 0,
                 Input::User {
                     text: crate::opening::render(message),
-                },
+                 images: Vec::new(),},
             );
             carry.session_log.clone_from(&message.environment.session_log);
             crate::changes::apply(had, event);
@@ -439,7 +441,7 @@ pub(crate) fn render(
         // has, so a later diff renders identically on resume.
         Event::InstructionFile(file) => {
             if let Some(text) = changed_message(file, had) {
-                conversation.push(Input::User { text });
+                conversation.push(Input::User { text , images: Vec::new()});
             }
             crate::changes::apply(had, event);
         }
@@ -449,7 +451,7 @@ pub(crate) fn render(
                     &body(MESSAGES_MD, "date"),
                     &[("date", changed.date.as_str())],
                 ),
-            });
+             images: Vec::new(),});
         }
         Event::ReasoningCompleted(reasoning) => conversation.push(Input::Reasoning {
             model: model.to_owned(),
@@ -650,6 +652,7 @@ fn dir_of(path: &str) -> String {
 fn user(content: &[ContentPart]) -> Input {
     Input::User {
         text: text(content),
+        images: images(content),
     }
 }
 

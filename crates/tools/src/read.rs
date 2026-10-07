@@ -14,18 +14,24 @@ use crate::files::{
     inspect, resolve, string_argument, text_output, unsupported_message,
 };
 
-/// The tool's own cut (`docs/tools.md`, "Bounded results"). The loop's bound
-/// sits above this, so a result is not cut twice and no artifact is written.
+/// The tool's own cut (`docs/tools.md`, "Bounded results"): the default cap.
+/// The loop's bound sits above this, so a result is not cut twice and no
+/// artifact is written.
 const CAP: usize = 16_384;
+
+/// How far the loop's bound for a `read` sits above its own cut, so the loop
+/// never cuts a `read`'s own result and a cut `read` writes no artifact.
+const NOTICE_ROOM: usize = 16_384;
 
 /// Reads a text file or an image.
 pub struct Read {
     shared: Arc<Shared>,
+    cap: usize,
 }
 
 impl Read {
     pub(crate) fn new(shared: Arc<Shared>) -> Self {
-        Self { shared }
+        Self { shared, cap: CAP }
     }
 }
 
@@ -138,7 +144,7 @@ impl Tool for Read {
             Err(InspectError::Tool(message)) => return failed(ErrorCode::ToolError, message),
         };
         let body = text.strip_prefix('\u{feff}').unwrap_or(text.as_str());
-        match slice_text(body, offset, limit) {
+        match slice_text(body, offset, limit, self.cap) {
             Ok(shown) => {
                 self.shared.set_seen(&path, hash_bytes(text.as_bytes()));
                 text_output(shown)
@@ -149,9 +155,16 @@ impl Tool for Read {
 
     fn bound(&self) -> Bound {
         Bound {
-            start: 32_768,
+            start: self.cap.saturating_add(NOTICE_ROOM),
             end: 0,
         }
+    }
+
+    fn with_cap(&self, cap: usize) -> Option<Arc<dyn Tool>> {
+        Some(Arc::new(Self {
+            shared: Arc::clone(&self.shared),
+            cap,
+        }))
     }
 
     fn guidelines(&self) -> Option<String> {
@@ -181,7 +194,7 @@ fn line_argument(
     usize::try_from(value).map_err(|_| format!("`{key}` is too large."))
 }
 
-fn slice_text(text: &str, offset: usize, limit: usize) -> Result<String, String> {
+fn slice_text(text: &str, offset: usize, limit: usize, cap: usize) -> Result<String, String> {
     let lines: Vec<&str> = text.split_inclusive('\n').collect();
     let total = lines.len();
     if offset > total && !(total == 0 && offset == 1) {
@@ -200,12 +213,12 @@ fn slice_text(text: &str, offset: usize, limit: usize) -> Result<String, String>
     let mut cut_at = None;
     for line in lines.iter().take(end).skip(start) {
         let len = line.len();
-        if used.saturating_add(len) > CAP && count > 0 {
+        if used.saturating_add(len) > cap && count > 0 {
             break;
         }
-        if len > CAP && count == 0 {
+        if len > cap && count == 0 {
             let prefix = line
-                .get(..line.floor_char_boundary(CAP))
+                .get(..line.floor_char_boundary(cap))
                 .unwrap_or_default();
             cut_at = Some(prefix.len());
             shown.push_str(prefix);
@@ -219,7 +232,7 @@ fn slice_text(text: &str, offset: usize, limit: usize) -> Result<String, String>
     let last = offset + count - 1;
     if let Some(bytes) = cut_at {
         shown.push_str(&format!(
-            "[Line {offset} is longer than {CAP} bytes; showing its first {bytes} bytes. \
+            "[Line {offset} is longer than {cap} bytes; showing its first {bytes} bytes. \
              Read the rest by byte range through the shell, such as cut -c or dd. \
              The file has {total} lines.]"
         ));
