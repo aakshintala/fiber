@@ -16,7 +16,7 @@ use serde_json::{Map, Value, json};
 /// The largest per-protocol total the built-in definitions may take, in
 /// bytes. It started at the largest total at the commit that added the
 /// check, with no headroom.
-const BUDGET: usize = 7_262;
+const BUDGET: usize = 8_186;
 
 /// The one hosted tool type a protocol reads back
 /// (`config::Protocol::reads_web_search`).
@@ -54,6 +54,7 @@ fn builtin_definitions() -> Vec<ToolDefinition> {
     );
     let (tools, _infos, _driver, _forget, _images) = super::builtin(
         root.path().join("fiber-stub"),
+        &root.path().join("home"),
         root.path(),
         &root.path().join("artifacts"),
         &clock,

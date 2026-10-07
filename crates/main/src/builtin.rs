@@ -25,9 +25,13 @@ type SessionTools = (
     Arc<dyn contract::images::Images>,
 );
 
-/// `ask_user`, `edit`, `handoff`, `read`, `shell`, `web_fetch`, `write` and
-/// `jobs`, each registered by `builtin`, and `web_search` when `web_search`
-/// names the hosted search type of the session's model. `read`, `write` and `edit`
+/// `ask_user`, `edit`, `handoff`, `read`, `session_search`, `shell`,
+/// `web_fetch`, `write` and `jobs`, each registered by `builtin`, and
+/// `web_search` when `web_search` names the hosted search type of the
+/// session's model. `session_search` searches the logs under `home`, Fiber
+/// home, and counts a session as this project's when `doors::project` gives
+/// its workspace the same identity as `workspace`, as resume looks a
+/// session up. `read`, `write` and `edit`
 /// share one session's file state, which a handoff forgets, take `locks`,
 /// the session's per-path lock, which an extension's `host.fs` shares, and
 /// `read` runs the image child (`fiber image`) into `artifacts`, the session's
@@ -35,8 +39,13 @@ type SessionTools = (
 /// downloads; the model's `shell` moves commands into `jobs`, which the
 /// `jobs` tool lists, waits on and stops. The driver shell runs in the
 /// foreground only. `fiber` is the executable recorded at process startup.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one session's built-ins need Fiber home and the recorded executable alongside the session's own paths"
+)]
 pub(crate) fn builtin(
     fiber: PathBuf,
+    home: &Path,
     workspace: &Path,
     artifacts: &Path,
     clock: &Arc<dyn Clock>,
@@ -65,6 +74,11 @@ pub(crate) fn builtin(
         registered(files.edit())?,
         registered(tools::Handoff)?,
         registered(files.read())?,
+        registered(tools::SessionSearch::new(Arc::new(log::SessionScan::new(
+            home,
+            workspace,
+            Arc::new(doors::project),
+        ))))?,
         registered(shell)?,
         registered(tools::WebFetch::new(
             artifacts.to_path_buf(),

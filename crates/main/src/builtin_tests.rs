@@ -58,6 +58,7 @@ fn the_driver_shell_runs_echo() {
     );
     let (_tools, _infos, driver, _forget, _images) = super::builtin(
         root.path().join("fiber-stub"),
+        &root.path().join("home"),
         root.path(),
         &root.path().join("artifacts"),
         &clock,
@@ -102,6 +103,7 @@ fn read_is_wired_to_the_image_child() {
     );
     let (tools, _infos, _driver, _forget, _images) = super::builtin(
         fiber,
+        &root.path().join("home"),
         root.path(),
         &root.path().join("artifacts"),
         &clock,
@@ -143,6 +145,7 @@ fn the_forget_callback_clears_what_the_file_tools_have_seen() {
     );
     let (tools, _infos, _driver, forget, _images) = super::builtin(
         root.path().join("fiber-stub"),
+        &root.path().join("home"),
         root.path(),
         &root.path().join("artifacts"),
         &clock,
@@ -189,6 +192,7 @@ fn without_the_forget_callback_the_same_write_goes_through() {
     );
     let (tools, _infos, _driver, _forget, _images) = super::builtin(
         root.path().join("fiber-stub"),
+        &root.path().join("home"),
         root.path(),
         &root.path().join("artifacts"),
         &clock,
@@ -235,6 +239,7 @@ fn builtin_registers_the_tools_in_name_order_then_jobs() {
     );
     let (tools, infos, _driver, _forget, _images) = super::builtin(
         root.path().join("fiber-stub"),
+        &root.path().join("home"),
         root.path(),
         &root.path().join("artifacts"),
         &clock,
@@ -257,6 +262,7 @@ fn builtin_registers_the_tools_in_name_order_then_jobs() {
             "edit",
             "handoff",
             "read",
+            "session_search",
             "shell",
             "web_fetch",
             "write",
@@ -271,11 +277,63 @@ fn builtin_registers_the_tools_in_name_order_then_jobs() {
             "edit",
             "handoff",
             "read",
+            "session_search",
             "shell",
             "web_fetch",
             "write",
             "jobs"
         ]
+    );
+}
+
+/// `session_search` reads the session's own project under Fiber home: the
+/// key of the workspace's identity, which outside a repository is the
+/// workspace itself.
+#[test]
+fn session_search_declares_reads_on_the_workspace_project_in_fiber_home() {
+    let root = fakes::TempDir::new("fiber-builtin-session-search");
+    let home = root.path().join("home");
+    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    let jobs = jobs::Registry::new(
+        root.path().join("artifacts"),
+        Arc::clone(&clock),
+        Arc::new(fakes::Recorder::default()),
+    );
+    let (tools, _infos, _driver, _forget, _images) = super::builtin(
+        root.path().join("fiber-stub"),
+        &home,
+        root.path(),
+        &root.path().join("artifacts"),
+        &clock,
+        &jobs,
+        &Arc::new(tools::PathLocks::new()),
+        None,
+    )
+    .unwrap();
+    let (_, search) = tools
+        .iter()
+        .find(|(_, tool)| tool.definition().name == "session_search")
+        .expect("session_search is registered");
+    let search = Arc::clone(search);
+    let mut arguments = serde_json::Map::new();
+    arguments.insert("text".to_owned(), serde_json::Value::from("x"));
+
+    // The identity check runs git, a child process.
+    let effects = fakes::within("the session_search effects", CALL_WITHIN, move || {
+        search.effects(&arguments)
+    })
+    .unwrap();
+
+    let identity = root.path().canonicalize().unwrap();
+    let mut own = home
+        .join("projects")
+        .join(log::project_key(&identity))
+        .into_os_string();
+    own.push("/");
+    assert_eq!(effects.declared.effects, [contract::shapes::Effect::Reads]);
+    assert_eq!(
+        effects.declared.paths,
+        Some(vec![own.to_string_lossy().into_owned()])
     );
 }
 
@@ -293,6 +351,7 @@ fn the_model_shell_is_non_interactive() {
     );
     let (tools, _infos, _driver, _forget, _images) = super::builtin(
         root.path().join("fiber-stub"),
+        &root.path().join("home"),
         root.path(),
         &root.path().join("artifacts"),
         &clock,
@@ -331,6 +390,7 @@ fn registered_with(web_search: Option<&str>) -> (Vec<(String, Option<String>)>, 
     );
     let (tools, infos, _driver, _forget, _images) = super::builtin(
         root.path().join("fiber-stub"),
+        &root.path().join("home"),
         root.path(),
         &root.path().join("artifacts"),
         &clock,
@@ -456,6 +516,7 @@ fn every_builtin_schema_keeps_to_the_documented_subset() {
     );
     let (tools, _infos, _driver, _forget, _images) = super::builtin(
         root.path().join("fiber-stub"),
+        &root.path().join("home"),
         root.path(),
         &root.path().join("artifacts"),
         &clock,
