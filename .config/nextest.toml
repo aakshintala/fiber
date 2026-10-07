@@ -7,3 +7,8 @@ slow-timeout = { period = "30s", terminate-after = 4 }
 # caught mutant into a timeout.
 [profile.mutants]
 fail-fast = { max-fail = 1, terminate = "immediate" }
+
+# docs/tools.md, "Size budget in CI": the built-in definition sizes are printed on every run, a pass included.
+[[profile.default.overrides]]
+filter = 'package(main) & test(=builtin::tool_budget_tests::the_built_in_definitions_fit_their_budget)'
+success-output = "immediate"

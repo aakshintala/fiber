@@ -269,7 +269,7 @@ fn plan_prints_the_jobs_and_shards() {
     assert_eq!(code, 0);
     assert_eq!(
         out,
-        "jobs={\"bug_red\":true,\"lint\":true,\"mutants\":true,\"test\":true}\nshards=[0,1,2,3,4,5]\nshard_total=6\n"
+        "jobs={\"bug_red\":true,\"lint\":true,\"mutants\":true,\"release\":false,\"test\":true}\nshards=[0,1,2,3,4,5]\nshard_total=6\n"
     );
     let bad = [
         "plan",

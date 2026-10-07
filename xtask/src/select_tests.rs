@@ -232,12 +232,19 @@ fn uncompiled_docs_in_a_mixed_diff_do_not_add_crates() {
     }
 }
 
-fn jobs(lint: bool, test: bool, mutants: bool, bug_red: bool) -> BTreeMap<&'static str, bool> {
+fn jobs(
+    lint: bool,
+    test: bool,
+    mutants: bool,
+    bug_red: bool,
+    release: bool,
+) -> BTreeMap<&'static str, bool> {
     BTreeMap::from([
         ("lint", lint),
         ("test", test),
         ("mutants", mutants),
         ("bug_red", bug_red),
+        ("release", release),
     ])
 }
 
@@ -247,7 +254,7 @@ fn a_docs_only_pull_request_runs_no_job_after_the_selection() {
     assert_eq!(
         plan,
         Plan {
-            jobs: jobs(false, false, false, false),
+            jobs: jobs(false, false, false, false, false),
             shards: 0
         }
     );
@@ -259,7 +266,7 @@ fn a_code_pull_request_runs_what_it_selected() {
     assert_eq!(
         plan,
         Plan {
-            jobs: jobs(true, true, true, true),
+            jobs: jobs(true, true, true, true, false),
             shards: 6
         }
     );
@@ -268,13 +275,13 @@ fn a_code_pull_request_runs_what_it_selected() {
 #[test]
 fn a_pull_request_without_a_bug_label_skips_the_bug_check() {
     let plan = plan("all", &strings(&["log"]), "pull_request", false);
-    assert_eq!(plan.jobs, jobs(true, true, true, false));
+    assert_eq!(plan.jobs, jobs(true, true, true, false, false));
 }
 
 #[test]
 fn a_pull_request_that_selects_no_crate_skips_the_tests() {
     let plan = plan("crates", &[], "pull_request", false);
-    assert_eq!(plan.jobs, jobs(true, false, true, false));
+    assert_eq!(plan.jobs, jobs(true, false, true, false, false));
 }
 
 #[test]
@@ -283,7 +290,7 @@ fn a_docs_push_runs_lint_and_tests_but_no_mutants() {
     assert_eq!(
         plan,
         Plan {
-            jobs: jobs(true, true, false, false),
+            jobs: jobs(true, true, false, false, true),
             shards: 0
         }
     );
@@ -295,10 +302,29 @@ fn a_code_push_runs_lint_tests_and_mutants_but_no_bug_check() {
     assert_eq!(
         plan,
         Plan {
-            jobs: jobs(true, true, true, false),
+            jobs: jobs(true, true, true, false, true),
             shards: MUTANT_SHARDS
         }
     );
+}
+
+#[test]
+fn a_pull_request_that_selects_the_binary_runs_the_release_job() {
+    let plan = plan("crates", &strings(&["log", "main"]), "pull_request", false);
+    assert_eq!(plan.jobs, jobs(true, true, true, false, true));
+}
+
+#[test]
+fn a_pull_request_that_runs_everything_runs_the_release_job() {
+    let packages = strings(&["config", "log", "main", "xtask"]);
+    let plan = plan("all", &packages, "pull_request", false);
+    assert_eq!(plan.jobs, jobs(true, true, true, false, true));
+}
+
+#[test]
+fn a_pull_request_without_the_binary_skips_the_release_job() {
+    let plan = plan("crates", &strings(&["log", "xtask"]), "pull_request", false);
+    assert_eq!(plan.jobs, jobs(true, true, true, false, false));
 }
 
 fn results(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {

@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+# Builds the release profile for the target that ships,
+# x86_64-unknown-linux-musl, strips it, prints its size, and fails when the
+# stripped head binary is 20 MiB or more (docs/ci.md, "On every pull request
+# that changes code"; docs/dependencies.md). The checkout's HEAD is the head.
+#
+# Usage: scripts/release-size [BASE_COMMIT]
+# With a base commit (a pull request), the base binary is also stripped and
+# its size printed beside the head's; the base size never fails the script.
+# BASE_CACHED=true means the workflow restored the base binary and its
+# checksum into $RUNNER_TEMP/release/cache; anything else builds the base in
+# a git worktree, reusing this checkout's target directory. Without a base
+# commit (a push), the head binary and its checksum are also written to
+# $RUNNER_TEMP/release/cache for the workflow to store under the commit.
+#
+# Outputs: $RUNNER_TEMP/release/head/fiber, and $RUNNER_TEMP/release/base/fiber
+# with a base commit; both stripped and executable. Runs on Linux (GNU stat,
+# sha256sum, strip).
+set -euo pipefail
+shopt -s inherit_errexit
+cd "$(git rev-parse --show-toplevel)"
+
+readonly target=x86_64-unknown-linux-musl
+readonly limit=20971520 # 20 * 1024 * 1024
+base_commit=${1:-}
+out="${RUNNER_TEMP:?}/release"
+top=$PWD
+
+# Builds the checkout in the current directory into the shared target
+# directory and writes the stripped binary to $1.
+build() {
+  CARGO_TARGET_DIR="$top/target" cargo build --release --locked --target "$target" --bin fiber
+  mkdir -p "${1%/*}"
+  strip -o "$1" "$top/target/$target/release/fiber"
+}
+
+# Prints "<bytes> <MiB to 2 decimals>" for the file $1.
+size() {
+  local bytes mib
+  bytes=$(stat -c %s "$1")
+  mib=$(awk -v b="$bytes" 'BEGIN { printf "%.2f", b / 1048576 }')
+  echo "$bytes $mib"
+}
+
+head_sha=$(git rev-parse --short HEAD)
+# The head is stripped out of target/ before any base build overwrites it.
+build "$out/head/fiber"
+head_size=$(size "$out/head/fiber")
+read -r head_bytes head_mib <<<"$head_size"
+echo "release-size: head $head_sha fiber is $head_bytes bytes ($head_mib MiB); the limit is $limit bytes"
+
+if [ -z "$base_commit" ]; then
+  mkdir -p "$out/cache"
+  cp "$out/head/fiber" "$out/cache/fiber"
+  (cd "$out/cache" && sha256sum fiber > fiber.sha256)
+else
+  base_sha=$(git rev-parse --short "$base_commit")
+  mkdir -p "$out/base"
+  if [ "${BASE_CACHED:-}" = true ]; then
+    how=stored
+    if [ ! -f "$out/cache/fiber" ] || [ ! -f "$out/cache/fiber.sha256" ] ||
+      ! (cd "$out/cache" && sha256sum --check --strict fiber.sha256); then
+      echo "release-size: the stored base binary for $base_commit is missing or fails its checksum"
+      exit 1
+    fi
+    cp "$out/cache/fiber" "$out/base/fiber"
+  else
+    how=built
+    worktree="$RUNNER_TEMP/release-base"
+    trap 'git -C "$top" worktree remove --force "$worktree"' EXIT
+    git worktree add --detach "$worktree" "$base_commit"
+    # The base may pin another toolchain; each command reads its
+    # rust-toolchain.toml.
+    (
+      cd "$worktree"
+      rustup toolchain install
+      rustup target add "$target"
+      build "$out/base/fiber"
+    )
+  fi
+  base_size=$(size "$out/base/fiber")
+  read -r base_bytes base_mib <<<"$base_size"
+  echo "release-size: base $base_sha fiber is $base_bytes bytes ($base_mib MiB), $how"
+  delta=$((head_bytes - base_bytes))
+  if [ "$delta" -ge 0 ]; then
+    delta="+$delta"
+  fi
+  echo "release-size: head - base = $delta bytes"
+fi
+
+if [ "$head_bytes" -ge "$limit" ]; then
+  echo "release-size: the stripped head binary is $head_bytes bytes, at or over the 20 MiB limit (docs/dependencies.md)"
+  exit 1
+fi
