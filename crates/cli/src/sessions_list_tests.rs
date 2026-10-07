@@ -288,6 +288,7 @@ fn waiting_names_approval_or_question_live_and_exited_alike() {
             live("s_1", status("a", waiting_on("approval", "shell ls"), None, 0.0)),
             live("s_2", status("b", waiting_on("question", "2 of 3 answered"), None, 0.0)),
             live("s_3", idle("c")),
+            live("s_6", status("f", waiting_on("offer", "run repository code"), None, 0.0)),
         ],
         "exited": [
             exited("s_4", "d", "exited", Some(status("d", waiting_on("question", "pick"), None, 0.0))),
@@ -301,6 +302,7 @@ fn waiting_names_approval_or_question_live_and_exited_alike() {
             &json!("approval: shell ls"),
             &json!("question: 2 of 3 answered"),
             &Value::Null,
+            &json!("offer: run repository code"),
             &json!("question: pick"),
             &Value::Null,
         ]

@@ -154,13 +154,14 @@ fn state_word(state: &SessionState) -> &'static str {
 }
 
 /// What the session waits on: `approval: <summary>` or
-/// `question: <summary>`.
+/// `question: <summary>` or `offer: <summary>`.
 fn waiting(status: &SessionStatus) -> Option<String> {
     match &status.state {
         SessionState::Waiting { waiting } => {
             let kind = match waiting.kind {
                 WaitingKind::Approval => "approval",
                 WaitingKind::Question => "question",
+                WaitingKind::Offer => "offer",
             };
             Some(format!("{kind}: {}", waiting.summary))
         }
