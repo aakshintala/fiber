@@ -131,7 +131,7 @@ fn the_editor_gets_a_private_file_holding_the_text_and_its_edit_returns() {
     let copy = fake.out("copy");
     assert_eq!(
         std::fs::read_to_string(&copy).unwrap_or_default(),
-        "old text"
+        "old text\n"
     );
     let mode = std::os::unix::fs::PermissionsExt::mode(
         &std::fs::metadata(&copy)
@@ -158,17 +158,26 @@ fn the_editor_gets_a_private_file_holding_the_text_and_its_edit_returns() {
 }
 
 #[test]
-fn only_a_line_break_the_editor_added_is_dropped() {
+fn a_file_left_as_it_was_returns_the_same_text() {
     let fake = Fake::new(":\n");
-    // Left as it was: a text ending in a line break keeps it.
-    assert_eq!(fake.run("kept\n"), Ok("kept\n".to_owned()));
-    assert_eq!(fake.run("plain"), Ok("plain".to_owned()));
-    let fake = Fake::new("printf '\\n' >> \"$1\"\n");
-    assert_eq!(fake.run("a"), Ok("a".to_owned()));
-    assert_eq!(fake.run("a\n"), Ok("a\n\n".to_owned()));
+    for text in ["plain", "kept\n", "a\n", "a\n\n", ""] {
+        assert_eq!(fake.run(text), Ok(text.to_owned()), "{text:?}");
+    }
+    assert!(fake.left().is_empty());
+}
+
+#[test]
+fn one_trailing_line_break_is_dropped_from_the_edit() {
+    // Written without one, the text returns as written.
+    let fake = Fake::new("printf 'new' > \"$1\"\n");
+    assert_eq!(fake.run("a\n"), Ok("new".to_owned()));
     // Only one is dropped.
-    let fake = Fake::new("printf '\\n\\n' >> \"$1\"\n");
+    let fake = Fake::new("printf 'new\\n\\n' > \"$1\"\n");
+    assert_eq!(fake.run("a"), Ok("new\n".to_owned()));
+    // A line added at the end stays, whatever the text ended with.
+    let fake = Fake::new("printf '\\n' >> \"$1\"\n");
     assert_eq!(fake.run("a"), Ok("a\n".to_owned()));
+    assert_eq!(fake.run("a\n"), Ok("a\n\n".to_owned()));
     assert!(fake.left().is_empty());
 }
 

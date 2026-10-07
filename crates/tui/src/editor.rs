@@ -38,8 +38,10 @@ pub(crate) fn command(var: impl Fn(&str) -> Option<String>) -> Option<String> {
 
 /// Runs `command` on a new temporary file holding `text`, in the
 /// foreground with this process's stdio, and returns the file's text
-/// afterwards. One trailing line break the editor added is dropped. An
-/// error is the notice naming the cause; the file is removed on every path.
+/// afterwards. The file holds the text and one line break, and one
+/// trailing line break is dropped from what is read back, so a file left
+/// as it was returns the same text. An error is the notice naming the
+/// cause; the file is removed on every path.
 pub(crate) fn run(command: &str, text: &str) -> Result<String, String> {
     run_in(&std::env::temp_dir(), command, text)
 }
@@ -49,6 +51,7 @@ fn run_in(dir: &Path, command: &str, text: &str) -> Result<String, String> {
     let created = |err: io::Error| format!("Could not write a file for the editor: {err}");
     let (temp, mut file) = TempFile::create(dir).map_err(created)?;
     file.write_all(text.as_bytes())
+        .and_then(|()| file.write_all(b"\n"))
         .and_then(|()| file.flush())
         .map_err(created)?;
     drop(file);
@@ -72,12 +75,10 @@ fn run_in(dir: &Path, command: &str, text: &str) -> Result<String, String> {
             "The editor exited with status {code}; the draft is unchanged."
         ));
     }
-    let edited = fs::read_to_string(&temp.0)
+    let mut edited = fs::read_to_string(&temp.0)
         .map_err(|err| format!("Could not read the edited file: {err}"))?;
-    if !text.ends_with('\n')
-        && let Some(stripped) = edited.strip_suffix('\n')
-    {
-        return Ok(stripped.to_owned());
+    if edited.ends_with('\n') {
+        edited.pop();
     }
     Ok(edited)
 }
