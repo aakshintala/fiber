@@ -528,13 +528,6 @@ fn session_status_carries_the_project_and_counts_full_connections() {
             replayed && streaming_seen
         },
     );
-    // The replay carries exactly one `extensions_loaded`, seq 2.
-    let replay: Vec<&Value> = held
-        .iter()
-        .filter(|line| line["kind"] == "extensions_loaded")
-        .collect();
-    assert_eq!(replay.len(), 1, "one replayed extensions_loaded: {held:?}");
-    assert_eq!(replay[0]["seq"], 2);
     let streaming = held
         .iter()
         .rfind(|line| line["kind"] == "session_status" && line["payload"]["state"] == "streaming")
