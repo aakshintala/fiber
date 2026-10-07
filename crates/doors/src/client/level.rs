@@ -88,49 +88,55 @@ pub(super) fn change(conn: &mut Conn, id: CommandId, level: SubscribeLevel) {
         reject(conn, Some(id), ErrorCode::InvalidArguments, super::ALREADY);
         return;
     }
-    // The new watcher is registered before `latest` is read. A line
-    // written in between is queued and may also be in `latest`; the latest
-    // wins. The log is dropped here so this connection does not hold the
-    // session lock.
+    // The new watcher is registered before `latest` is read (summary),
+    // or seeded under the one log lock (full). A line written in between
+    // is queued and may also be in `latest`; the latest wins. The log is
+    // dropped here so this connection does not hold the session lock.
     let prepared = {
         let Some(log) = conn.gate.log.upgrade() else {
             reject(conn, Some(id), ErrorCode::Closing, super::ENDED);
             return;
         };
-        let watcher = if summary {
-            log.watch()
+        if summary {
+            let watcher = log.watch();
+            let cutoff = log.count();
+            let status = log.latest("session_status");
+            let extensions = log.latest("extensions_loaded");
+            drop(log);
+            let injector = watcher.injector();
+            let ack = crate::session::envelope(
+                &conn.gate.session_id,
+                conn.gate.clock.as_ref(),
+                &Event::CommandAccepted(CommandAccepted {
+                    command_id: id,
+                    result: None,
+                }),
+            );
+            let mut prelude = vec![ack];
+            prelude.extend([status, extensions].into_iter().flatten());
+            (watcher, injector, cutoff, prelude)
         } else {
-            match log.watch_all() {
+            let watcher = match log.watch_all_seeded() {
                 Ok(watcher) => watcher,
                 Err(_) => {
                     reject(conn, Some(id), ErrorCode::InvalidArguments, super::UNFIT);
                     return;
                 }
-            }
-        };
-        let cutoff = if summary { log.count() } else { 0 };
-        let status = log.latest("session_status");
-        let extensions = log.latest("extensions_loaded");
-        drop(log);
-        let injector = watcher.injector();
-        let ack = crate::session::envelope(
-            &conn.gate.session_id,
-            conn.gate.clock.as_ref(),
-            &Event::CommandAccepted(CommandAccepted {
-                command_id: id,
-                result: None,
-            }),
-        );
-        let (prelude, latest) = if summary {
-            let mut prelude = vec![ack];
-            prelude.extend([status, extensions].into_iter().flatten());
-            (prelude, None)
-        } else {
-            (vec![ack], Some([status, extensions]))
-        };
-        (watcher, injector, cutoff, prelude, latest)
+            };
+            drop(log);
+            let injector = watcher.injector();
+            let ack = crate::session::envelope(
+                &conn.gate.session_id,
+                conn.gate.clock.as_ref(),
+                &Event::CommandAccepted(CommandAccepted {
+                    command_id: id,
+                    result: None,
+                }),
+            );
+            (watcher, injector, 0, vec![ack])
+        }
     };
-    let (watcher, injector, cutoff, prelude, latest) = prepared;
+    let (watcher, injector, cutoff, prelude) = prepared;
     // The count changes before the writer can see the switch: the new
     // full watcher is registered, so an upgraded connection receives its
     // own `clients` line after the fold, and a downgrade's `clients` line
@@ -141,16 +147,9 @@ pub(super) fn change(conn: &mut Conn, id: CommandId, level: SubscribeLevel) {
     } else {
         conn.gate.attach();
     }
-    if !summary {
-        // Before the control line is published: otherwise the writer could
-        // switch, and a pending acknowledgement could enter the new queue
-        // ahead of the latest lines.
-        if let Some(latest) = latest {
-            for line in latest.into_iter().flatten() {
-                injector.push_kept(line);
-            }
-        }
-    }
+    // The seed lines are in the new queue before the control line is
+    // published (they were, by registration), so a pending
+    // acknowledgement cannot precede them.
     let switch = Switch {
         watcher,
         summary,

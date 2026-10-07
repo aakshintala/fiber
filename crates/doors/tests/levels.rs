@@ -316,10 +316,25 @@ fn summary_then_full_folds_the_stream_and_counts_in_clients() {
             }
             log.append(&status("one"), None, None).unwrap();
             log.append(&extensions(), None, None).unwrap();
-            // An upgrade does not seed the latest steering queue.
+            // An upgrade seeds the kept lines as a first `full` subscribe
+            // does: the latest `session_status`, `steering_queue` and
+            // `extension_ui`, in that order (see `socket.rs`: a first `full`
+            // subscribe queues the latest lines before it counts in
+            // `clients`).
             log.append(
                 &Event::SteeringQueue(contract::events::SteeringQueue {
                     messages: Vec::new(),
+                }),
+                None,
+                None,
+            )
+            .unwrap();
+            log.append(
+                &Event::ExtensionUi(contract::events::ExtensionUi {
+                    extension: "fiber.test/a".to_owned(),
+                    ui: contract::events::Ui::Status {
+                        status: "syncing".to_owned(),
+                    },
                 }),
                 None,
                 None,
@@ -333,7 +348,7 @@ fn summary_then_full_folds_the_stream_and_counts_in_clients() {
                 &client,
                 r#"{"id":"c_a_up","command":"subscribe","args":{"level":"full"}}"#,
             );
-            let lines = until(&client, |line| kind(line) == "session_status");
+            let lines = until(&client, |line| kind(line) == "clients");
             assert_eq!(
                 kinds(&lines),
                 [
@@ -342,14 +357,20 @@ fn summary_then_full_folds_the_stream_and_counts_in_clients() {
                     "step_started",
                     "step_started",
                     "extensions_loaded",
-                    "clients",
                     "session_status",
+                    "steering_queue",
+                    "extension_ui",
+                    "clients",
                 ],
                 "{lines:?}"
             );
             assert_eq!(command_id(&lines[0]), Some("c_a_up"));
-            assert_eq!(seqs(&lines[1..6]), vec![0, 1, 2, 3]);
-            assert_eq!(count(&lines[5]), 1);
+            assert_eq!(seqs(&lines[1..5]), vec![0, 1, 2, 3]);
+            assert_eq!(
+                lines[7]["payload"]["extension"], "fiber.test/a",
+                "{lines:?}"
+            );
+            assert_eq!(count(&lines[8]), 1);
             tx.send(client).unwrap();
             Ok(())
         })
@@ -389,18 +410,18 @@ fn full_then_summary_stops_the_stream_and_the_count() {
                 &client,
                 r#"{"id":"c_a_up","command":"subscribe","args":{"level":"full"}}"#,
             );
-            let raised = until(&client, |line| kind(line) == "session_status");
+            let raised = until(&client, |line| kind(line) == "clients");
             assert_eq!(
                 kinds(&raised),
                 [
                     "command_accepted",
                     "extensions_loaded",
-                    "clients",
                     "session_status",
+                    "clients",
                 ],
                 "{raised:?}"
             );
-            assert_eq!(count(&raised[2]), 2);
+            assert_eq!(count(&raised[3]), 2);
             assert_eq!(count(&next(&observer)), 2);
             send(
                 &client,
@@ -635,8 +656,8 @@ fn an_acknowledgement_pending_across_a_change_reaches_the_client() {
                     "step_started",
                     "step_started",
                     "extensions_loaded",
-                    "clients",
                     "session_status",
+                    "clients",
                     "command_accepted",
                 ],
                 "{raised:?}"
@@ -670,7 +691,7 @@ fn an_acknowledgement_pending_across_a_change_reaches_the_client() {
                 &client,
                 r#"{"id":"c_a_up2","command":"subscribe","args":{"level":"full"}}"#,
             );
-            let _ = until(&client, |line| kind(line) == "session_status");
+            let _ = until(&client, |line| kind(line) == "clients");
             send(&client, &prompt_line("c_a_s", "steer"));
             let ack = take_steer(&inbox);
             send(
@@ -699,7 +720,7 @@ fn an_acknowledgement_pending_across_a_change_reaches_the_client() {
                 &client,
                 r#"{"id":"c_a_up3","command":"subscribe","args":{"level":"full"}}"#,
             );
-            let _ = until(&client, |line| kind(line) == "session_status");
+            let _ = until(&client, |line| kind(line) == "clients");
             send(
                 &client,
                 r#"{"id":"c_a_down3","command":"subscribe","args":{"level":"summary"}}"#,
@@ -759,8 +780,8 @@ fn two_changes_in_one_write_apply_in_order() {
                     "step_started",
                     "step_started",
                     "extensions_loaded",
-                    "clients",
                     "session_status",
+                    "clients",
                     "clients",
                     "command_accepted",
                     "session_status",
@@ -770,7 +791,7 @@ fn two_changes_in_one_write_apply_in_order() {
             );
             assert_eq!(command_id(&lines[0]), Some("c_a_up"));
             assert_eq!(seqs(&lines[1..5]), vec![0, 1, 2, 3]);
-            assert_eq!(count(&lines[5]), 1);
+            assert_eq!(count(&lines[6]), 1);
             assert_eq!(count(&lines[7]), 0);
             assert_eq!(command_id(&lines[8]), Some("c_a_down"));
             log.append(&notice("n"), None, None).unwrap();
