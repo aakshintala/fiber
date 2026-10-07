@@ -18,25 +18,20 @@ use serde_json::Value;
 use crate::{cli, settings};
 
 /// Runs the internal hub command.
-pub(crate) fn run(command: cli::HubCommands) -> i32 {
+pub(crate) fn run(command: cli::HubCommands, exe: Result<PathBuf, String>) -> i32 {
     match command {
-        cli::HubCommands::Serve => serve(),
+        cli::HubCommands::Serve => serve(exe),
     }
 }
 
-fn serve() -> i32 {
+fn serve(exe: Result<PathBuf, String>) -> i32 {
     let home = match config::fiber_home_from_env() {
         Ok(home) => home,
         Err(error) => return fail(failure(error.code(), error.to_string())),
     };
-    let exe = match std::env::current_exe() {
+    let exe = match exe {
         Ok(exe) => exe,
-        Err(error) => {
-            return fail(failure(
-                ErrorCode::IoFailed,
-                format!("the running binary: {error}"),
-            ));
-        }
+        Err(message) => return fail(failure(ErrorCode::IoFailed, message)),
     };
     let clock: Arc<dyn contract::clock::Clock> = Arc::new(crate::clock::System);
     let configure = {
