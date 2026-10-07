@@ -85,10 +85,10 @@ What the macOS rows show:
   together.
 - Artifacts dominate when they are many small files: at one output in 25,
   the 1,300 MiB corpus took about twice as long as with none.
-- The warm figure in `docs/tools.md` (0.05 to 0.35 s for 1.3 GB) is
-  multithreaded `rg -l -F`, which stops reading each file at its first match.
-  It is not the scan's cost: one warm scan of 1,300 MiB of logs alone took
-  about 2.4 s here.
+- An earlier estimate of 0.05 to 0.35 s for 1.3 GB came from multithreaded
+  `rg -l -F`, which stops reading each file at its first match. It is not the
+  scan's cost: one warm scan of 1,300 MiB of logs alone took about 2.4 s here,
+  and `docs/tools.md` now states the measured figure.
 
 ## Results: Linux, cold and warm
 
