@@ -353,6 +353,47 @@ fn only_a_session_model_reply_sets_the_context() {
 }
 
 #[test]
+fn a_record_that_reported_no_input_tokens_never_moves_the_context() {
+    let mut w = world();
+    w.start();
+    w.fold = {
+        let running = Arc::clone(&w.running);
+        let branch = Arc::clone(&w.branch);
+        Fold::new(
+            "-w".to_owned(),
+            "/w".to_owned(),
+            "fake/m".to_owned(),
+            Some(1000),
+            Box::new(move || running.lock().unwrap().clone()),
+            Box::new(move || branch.lock().unwrap().clone()),
+            Box::new(|| 0),
+        )
+    };
+    w.feed("usage_recorded", Some("a1"), &usage("g1", 500, None));
+    assert_eq!(w.status().context.unwrap().tokens, 505);
+    // A call that failed before its provider named a generation, and a
+    // named one cut before its usage: no input tokens, output 5 each.
+    w.feed(
+        "usage_recorded",
+        Some("a2"),
+        &usage("fiber-0123456789abcdef", 0, None),
+    );
+    assert_eq!(w.status().context.unwrap().tokens, 505);
+    w.feed("usage_recorded", Some("a3"), &usage("g3", 0, None));
+    assert_eq!(w.status().context.unwrap().tokens, 505);
+    // After a handoff it waits for the next record that reports its input.
+    w.feed(
+        "handoff_completed",
+        None,
+        &json!({"outcome": "completed", "tokens_before": 505}),
+    );
+    w.feed("usage_recorded", Some("a4"), &usage("g4", 0, None));
+    assert!(w.status().context.is_none());
+    w.feed("usage_recorded", Some("a5"), &usage("g5", 30, None));
+    assert_eq!(w.status().context.unwrap().tokens, 35);
+}
+
+#[test]
 fn a_late_correction_of_an_earlier_call_never_moves_the_context() {
     let mut w = world();
     w.start();

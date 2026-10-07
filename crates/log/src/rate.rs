@@ -1,9 +1,11 @@
 //! The bytes-to-tokens rate of the last preamble build (`docs/tools.md`,
 //! "Seeing the tools"): every input token the build's first own request
 //! reported in `usage_recorded`, whether uncached, read from the cache or
-//! written to it, over that request's input size in bytes. [`Log`](crate::Log)
-//! folds one from every line it appends and every line
-//! [`Log::open`](crate::Log) replays.
+//! written to it, over that request's input size in bytes. A request that
+//! reported no input tokens, as one that failed before the provider named
+//! its generation, is skipped for the next. [`Log`](crate::Log) folds one
+//! from every line it appends and every line [`Log::open`](crate::Log)
+//! replays.
 
 use std::collections::HashSet;
 
@@ -77,6 +79,7 @@ impl RateFold {
                     && self.model.as_deref() == Some(recorded.model.as_str())
                     && recorded.input_media != Some(true)
                     && recorded.input_bytes > 0
+                    && input_tokens(&recorded) > 0
                 {
                     self.rate = Rate {
                         input_tokens: Some(input_tokens(&recorded)),

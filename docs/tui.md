@@ -486,7 +486,8 @@ handoff ran, and a tinted band carries:
 - the trigger: "automatic at 400k", "you asked with /handoff", "the request
   did not fit" or "the model handed off"
 - the context size before and after ("402k → 32k"); the size after comes from
-  the first request after the handoff, so it reads "…" until that returns
+  the first request after the handoff that reports its input tokens, so it
+  reads "…" until that returns
 - the time
 
 "▸ note" expands the note inside the band. While the note is being written the

@@ -440,7 +440,7 @@ sent the latest.
 | `waiting` | object | no | with `waiting`: `request_id` (string), `kind` (`approval`, `question` or `offer`, a repository's offer: "Repository code") and `summary` (string, one line) |
 | `since` | integer | yes | when this state began, as `ts` |
 | `git` | object | no | present in a git repository: `branch`, a string, or `null` when HEAD is detached |
-| `context` | object | no | after the first request: `tokens`, the context's size in tokens at the latest request, and `window`, the model's context window (integers) |
+| `context` | object | no | after the first request: `tokens`, the context's size in tokens at the latest request that reported its input tokens, and `window`, the model's context window (integers) |
 | `spend` | `usage` | yes | the session's spend so far, delegates included, from the `usage` fold |
 | `delegates` | integer | yes | delegates running |
 | `jobs` | integer | yes | jobs running, delegates excluded |

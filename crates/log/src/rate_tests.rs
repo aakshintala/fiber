@@ -509,6 +509,35 @@ fn a_zero_byte_request_is_skipped_for_the_next() {
 }
 
 #[test]
+fn a_request_that_reported_no_input_tokens_is_skipped_for_the_next() {
+    // A call that failed before its provider named a generation reports no
+    // input tokens; output alone does not count.
+    assert_tokens(
+        vec![
+            preamble_line(&built(PreambleReason::Start, "hi")),
+            start_line("a_1"),
+            usage_line(
+                Some("a_1"),
+                UsageRecorded {
+                    generation_id: GenerationId("fiber-0123456789abcdef".into()),
+                    input_bytes: 900,
+                    ..counted("g_1", 0, 0, &[])
+                },
+            ),
+            start_line("a_2"),
+            usage_line(
+                Some("a_2"),
+                UsageRecorded {
+                    input_bytes: 900,
+                    ..counted("g_2", 300, 0, &[])
+                },
+            ),
+        ],
+        vec![None, None, None, None, Some(4)],
+    );
+}
+
+#[test]
 fn another_models_usage_never_counts() {
     assert_tokens(
         vec![

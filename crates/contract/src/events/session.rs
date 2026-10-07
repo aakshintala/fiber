@@ -349,7 +349,8 @@ pub struct SessionStatus {
 /// The context's size at the latest request, on `session_status`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContextFill {
-    /// The context's size in tokens at the latest request.
+    /// The context's size in tokens at the latest request that reported its
+    /// input tokens.
     pub tokens: u64,
     /// The model's context window.
     pub window: u64,
