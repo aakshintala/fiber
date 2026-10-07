@@ -177,6 +177,9 @@ is a real child session process, because it is Fiber. The fakes are:
 - a scripted foreign harness, standing in for a delegate that is not Fiber
 - a local OAuth token endpoint
 - a second client on a session's socket, including a slow watcher
+- a counting allocator, which counts the blocks of 1 MiB or more a thread
+  holds at once; `fakes` only exports it, and each test binary that
+  measures installs it as its own global allocator and holds nothing else
 
 The fakes live in one crate, `fakes`, which depends only on `contract` and
 is a test-only dependency of the crates that use it (`docs/architecture.md`,

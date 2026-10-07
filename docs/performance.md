@@ -108,6 +108,13 @@ The busy-or-resumed ceiling holds on three workloads:
 - resuming a 20,000-token session
 - resuming a 2,000,000-token session that has handed off 7 times
 
+`web_fetch` holds at most one whole copy of the 10 MiB page: an HTML page
+streams into its artifact and its converter in 64 KiB pieces, so only its
+markdown (5.4 MiB) is held whole, and a text page is held once, as the
+result, when it is valid UTF-8. The fetch alone peaks at a 21,664 KiB
+footprint on macOS arm64, and the session's peak RSS on Linux x86_64 is
+estimated at about 19 MiB until the benchmark measures it.
+
 429 tool calls is the p99 of tool calls per user turn, measured on real
 sessions in the archived Zig tree. That tree's session peaked at 2.1 GiB on
 this turn.
