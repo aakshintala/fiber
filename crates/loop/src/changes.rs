@@ -12,7 +12,7 @@ use contract::clock::Clock;
 use contract::events::{
     DateChanged, Event, InstructionFile, InstructionReason, InstructionSent, Notice, OpeningMessage,
 };
-use contract::shapes::DeclaredEffects;
+use contract::shapes::{DeclaredEffects, Effect};
 use contract::{ActionId, Envelope};
 
 use crate::Error;
@@ -524,18 +524,13 @@ impl State {
         own
     }
 
-    /// The prune lines a completed `write` or `edit` call's result carries
+    /// The prune lines a completed call's result carries
     /// (`docs/system-prompt.md`, "Extension sections"): one per
     /// over-budget section the call's declared paths touch, in
-    /// extension-name order. Anything else gives nothing. Sizes only are
-    /// read, never content.
-    pub(crate) fn prune_lines(
-        &self,
-        workspace: &Path,
-        tool: &str,
-        declared: &DeclaredEffects,
-    ) -> Vec<String> {
-        if tool != "write" && tool != "edit" {
+    /// extension-name order, when the call declared a `writes` effect.
+    /// Anything else gives nothing. Sizes only are read, never content.
+    pub(crate) fn prune_lines(&self, workspace: &Path, declared: &DeclaredEffects) -> Vec<String> {
+        if !declared.effects.contains(&Effect::Writes) {
             return Vec::new();
         }
         let Some(paths) = declared.paths.as_ref() else {
