@@ -2,10 +2,14 @@
 //! went out, and what home draws (`docs/tui.md`, "Home"). The data it
 //! draws lives in [`crate::home`]; this module is `App`'s home.
 
+use std::path::PathBuf;
+
 use serde_json::{Value, json};
 
-use super::{App, Link, mint};
-use crate::home::{HomeScreen, Launch, Left, Sessions, from_status, line, recent_rows};
+use super::{App, Effect, Link, Phase, mint, session_command};
+use crate::home::{
+    HomeScreen, Launch, Left, Level, Sessions, Spot, Subs, from_status, line, opening, recent_rows,
+};
 use crate::link::Line;
 use contract::SessionId;
 
@@ -25,6 +29,28 @@ pub(super) struct Home {
     /// The latest `recent` command waiting for its answer, and whether it
     /// asked the first page.
     recent_ask: Option<(String, bool)>,
+    /// This connection's subscription level per session: the accepted
+    /// one, and every subscribe waiting for its answer.
+    subs: Subs,
+    /// The session being opened: lines for it fold into its row and are
+    /// dropped until the last subscribe's acknowledgement, which is the
+    /// first line at the new level.
+    opening: Option<Opening>,
+    /// Lowering lines reconciliation queued, sent from `on_line`'s tail.
+    outbox: Vec<String>,
+}
+
+/// A session opening from home: its subscribes, the last one whose
+/// acknowledgement ends the gate, and whether the same-level retry ran.
+struct Opening {
+    /// The session opening.
+    session: SessionId,
+    /// Every subscribe id the open sent, the retry's included.
+    ids: Vec<String>,
+    /// The last subscribe's id: only its rejection fails the open.
+    ack: String,
+    /// The one-step retry already ran.
+    retried: bool,
 }
 
 impl App {
@@ -43,6 +69,9 @@ impl App {
             fed: false,
             feed_id: None,
             recent_ask: None,
+            subs: Subs::default(),
+            opening: None,
+            outbox: Vec::new(),
         });
     }
 
@@ -100,7 +129,7 @@ impl App {
             return Vec::new();
         };
         if home.fed {
-            return Vec::new();
+            return std::mem::take(&mut home.outbox);
         }
         home.fed = true;
         let feed = mint();
@@ -117,8 +146,11 @@ impl App {
     /// `None` means `on_line` goes on as today. A hub `session_left` and
     /// every `session_status` fold into the rows; the answers to `feed`
     /// and the latest `recent` fill the list, and their refusals are one
-    /// notice. `attention` and other hub lines pass through untouched, and
-    /// a status still reaches the conversation below.
+    /// notice. Every subscribe acknowledgement updates the levels, and
+    /// while a session opens its lines fold into its row and are dropped
+    /// until the last subscribe's acknowledgement. `attention` and other
+    /// hub lines pass through untouched, and a status still reaches the
+    /// conversation below.
     pub(super) fn home_line(&mut self, line: &Line) -> Option<Vec<String>> {
         self.home.as_ref()?;
         match line {
@@ -138,6 +170,13 @@ impl App {
                 "command_accepted" | "command_rejected" => {
                     let id = hub.payload.get("command_id").and_then(Value::as_str)?;
                     let accepted = hub.kind.as_str() == "command_accepted";
+                    if self.answered(id, accepted).is_some() {
+                        if !accepted && self.is_ack(id) {
+                            let (code, message) = refusal_parts(&hub.payload);
+                            return Some(self.retry_or_fail(code, message));
+                        }
+                        return Some(Vec::new());
+                    }
                     let is_feed =
                         self.home.as_ref().and_then(|home| home.feed_id.as_deref()) == Some(id);
                     if is_feed {
@@ -179,14 +218,295 @@ impl App {
             },
             Line::Session(envelope) => {
                 if envelope.kind == "session_status" {
+                    let session = envelope.session_id.clone();
+                    let was_left = self
+                        .home
+                        .as_ref()
+                        .and_then(|home| home.sessions.row(&session))
+                        .is_some_and(|row| row.left.is_some());
                     let row = from_status(envelope);
                     if let Some(home) = self.home.as_mut() {
                         home.sessions.status(row);
                     }
+                    if was_left {
+                        self.reconcile(&session);
+                    }
+                    let gated = self
+                        .home
+                        .as_ref()
+                        .and_then(|home| home.opening.as_ref())
+                        .is_some_and(|opening| opening.session == session);
+                    if gated {
+                        return Some(Vec::new());
+                    }
+                    return None;
+                }
+                if matches!(
+                    envelope.kind.as_str(),
+                    "command_accepted" | "command_rejected"
+                ) {
+                    let accepted = envelope.kind == "command_accepted";
+                    let id = envelope.payload.get("command_id").and_then(Value::as_str)?;
+                    if self.answered(id, accepted).is_some() {
+                        if !accepted && self.is_ack(id) {
+                            let (code, message) = refusal_parts(&envelope.payload);
+                            return Some(self.retry_or_fail(code, message));
+                        }
+                        let session = envelope.session_id.clone();
+                        if accepted
+                            && self
+                                .home
+                                .as_ref()
+                                .is_some_and(|home| home.subs.full(&session))
+                        {
+                            self.reconcile(&session);
+                        }
+                        if accepted && self.is_ack(id) {
+                            if let Some(home) = self.home.as_mut() {
+                                home.opening = None;
+                            }
+                            return None;
+                        }
+                        return Some(Vec::new());
+                    }
+                }
+                let gated = self
+                    .home
+                    .as_ref()
+                    .and_then(|home| home.opening.as_ref())
+                    .is_some_and(|opening| opening.session == envelope.session_id);
+                if gated {
+                    return Some(Vec::new());
                 }
                 None
             }
         }
+    }
+
+    /// A `subscribe` line for `session` at `level`, recorded as sent:
+    /// the expected level is the last in-flight one, so no path sends a
+    /// subscribe at the level already held or asked for.
+    pub(super) fn subscribe(&mut self, session: &SessionId, level: Level) -> String {
+        let (id, line) = subscribe_line(session, level);
+        if let Some(home) = self.home.as_mut() {
+            home.subs.sent(id, session.clone(), level);
+        }
+        line
+    }
+
+    /// Leaves the session on screen for home: the conversation cleared
+    /// with the session left running, then lowered to `summary` when this
+    /// connection holds it at `full` and its row is live. `/close` keeps
+    /// `go_home` and lowers nothing: a command for an exited session
+    /// would resume it.
+    pub(super) fn leave(&mut self) -> Effect {
+        let attached = self.session().cloned();
+        self.go_home();
+        let Some(session) = attached else {
+            return Effect::None;
+        };
+        let lowers = self.link == Link::Up
+            && self.home.as_ref().is_some_and(|home| {
+                home.subs.expected(&session) == Some(Level::Full)
+                    && home
+                        .sessions
+                        .row(&session)
+                        .is_some_and(|row| row.left.is_none())
+            });
+        if lowers {
+            Effect::Send(vec![self.subscribe(&session, Level::Summary)])
+        } else {
+            Effect::None
+        }
+    }
+
+    /// Clicks `spot` on home: a row opens its session.
+    pub(super) fn home_click(&mut self, spot: Spot) -> Effect {
+        match spot {
+            Spot::Entry(key) => self.open_row(key),
+        }
+    }
+
+    /// The text y copies and Ctrl+G opens for `spot`: the row's line.
+    pub(super) fn home_text(&self, spot: Spot) -> Option<String> {
+        match spot {
+            Spot::Entry(key) => {
+                let home = self.home.as_ref()?;
+                let row = home.sessions.by_key(key)?;
+                Some(line(row, &home.launch.project))
+            }
+        }
+    }
+
+    /// The workspace in use on home: the attached session's row
+    /// workspace, else the launch workspace.
+    pub(super) fn home_workspace(&self) -> PathBuf {
+        if let Some(home) = &self.home {
+            if let Some(session) = self.session()
+                && let Some(row) = home.sessions.row(session)
+            {
+                return PathBuf::from(&row.workspace);
+            }
+            return home.launch.workspace.clone();
+        }
+        self.workspace.clone()
+    }
+
+    /// Opens the row with `key`: the subscribes its level needs, then the
+    /// session's commands. The conversation clears as going home does,
+    /// and the gate holds until the last subscribe is answered.
+    fn open_row(&mut self, key: u64) -> Effect {
+        if !self.on_home() || self.link != Link::Up || matches!(self.phase, Phase::Pending { .. }) {
+            return Effect::None;
+        }
+        let Some(row) = self
+            .home
+            .as_ref()
+            .and_then(|home| home.sessions.by_key(key))
+        else {
+            return Effect::None;
+        };
+        if row.state == crate::home::State::Unreadable {
+            self.notices.push(
+                "Cannot attach: this session's schema is newer than this terminal reads."
+                    .to_owned(),
+            );
+            return Effect::None;
+        }
+        let session = row.id.clone();
+        let expected = self
+            .home
+            .as_ref()
+            .and_then(|home| home.subs.expected(&session));
+        self.go_home();
+        self.attach(session.clone());
+        let mut ids = Vec::new();
+        let mut lines = Vec::new();
+        for level in opening(expected) {
+            let (id, line) = subscribe_line(&session, *level);
+            if let Some(home) = self.home.as_mut() {
+                home.subs.sent(id.clone(), session.clone(), *level);
+            }
+            ids.push(id);
+            lines.push(line);
+        }
+        lines.push(self.ask_commands(&session));
+        let ack = ids.last().cloned().unwrap_or_default();
+        if let Some(home) = self.home.as_mut() {
+            home.opening = Some(Opening {
+                session,
+                ids,
+                ack,
+                retried: false,
+            });
+        }
+        Effect::Send(lines)
+    }
+
+    /// Records the acknowledgement of the in-flight subscribe `id`:
+    /// the accepted level changes only on acceptance. Some with its
+    /// session when the id was in flight, either way.
+    fn answered(&mut self, id: &str, accepted: bool) -> Option<SessionId> {
+        self.home
+            .as_mut()
+            .and_then(|home| home.subs.answered(id, accepted))
+    }
+
+    /// Whether `id` is the open's last subscribe: only its rejection
+    /// fails the open, and only its acceptance ends the gate.
+    fn is_ack(&self, id: &str) -> bool {
+        self.home
+            .as_ref()
+            .and_then(|home| home.opening.as_ref())
+            .is_some_and(|opening| opening.ack == id)
+    }
+
+    /// Lowers `session` to `summary` when this connection holds it at
+    /// `full` without showing it: not the attached one, nothing in
+    /// flight, and its row live. Untouched live sessions get no
+    /// subscribe: their rows come from the hub's feed, which the hub
+    /// reads over its own connections, and subscribing each one would
+    /// send a command to every live session.
+    fn reconcile(&mut self, session: &SessionId) {
+        let lowers = self.link == Link::Up
+            && self.session() != Some(session)
+            && self.home.as_ref().is_some_and(|home| {
+                home.subs.full(session)
+                    && !home.subs.pending(session)
+                    && home
+                        .sessions
+                        .row(session)
+                        .is_some_and(|row| row.left.is_none())
+            });
+        if lowers {
+            let line = self.subscribe(session, Level::Summary);
+            if let Some(home) = self.home.as_mut() {
+                home.outbox.push(line);
+            }
+        }
+    }
+
+    /// A rejection of the open's last subscribe: a same-level refusal of
+    /// a one-step open retries once with `summary` then `full`, since
+    /// the hub keeps a connection's first subscribe even when rejected
+    /// and replays it on resume, dropping its acknowledgement. A second
+    /// same-level refusal, or any other code, fails the open: home again
+    /// when still attached, with the message as the row's note and a
+    /// notice. A rejection of an earlier step changes nothing by itself.
+    fn retry_or_fail(&mut self, code: &str, message: String) -> Vec<String> {
+        let retry = self
+            .home
+            .as_ref()
+            .and_then(|home| home.opening.as_ref())
+            .is_some_and(|opening| {
+                code == "invalid_arguments" && opening.ids.len() == 1 && !opening.retried
+            });
+        if retry {
+            let session = self
+                .home
+                .as_ref()
+                .and_then(|home| home.opening.as_ref())
+                .map(|opening| opening.session.clone());
+            let Some(session) = session else {
+                return Vec::new();
+            };
+            let mut ids = Vec::new();
+            let mut lines = Vec::new();
+            for level in [Level::Summary, Level::Full] {
+                let (id, line) = subscribe_line(&session, level);
+                if let Some(home) = self.home.as_mut() {
+                    home.subs.sent(id.clone(), session.clone(), level);
+                }
+                ids.push(id);
+                lines.push(line);
+            }
+            let ack = ids.last().cloned().unwrap_or_default();
+            if let Some(home) = self.home.as_mut()
+                && let Some(opening) = home.opening.as_mut()
+            {
+                opening.ids = ids;
+                opening.ack = ack;
+                opening.retried = true;
+            }
+            return lines;
+        }
+        let session = self
+            .home
+            .as_mut()
+            .and_then(|home| home.opening.take())
+            .map(|opening| opening.session);
+        let Some(session) = session else {
+            return Vec::new();
+        };
+        if let Some(home) = self.home.as_mut() {
+            home.sessions.note(&session, message.clone());
+        }
+        let attached = self.session() == Some(&session);
+        self.notices.push(message);
+        if attached {
+            self.go_home();
+        }
+        Vec::new()
     }
 
     /// The `start` args for `content`: the launch workspace on home, else
@@ -209,6 +529,25 @@ impl App {
     }
 }
 
+/// A `subscribe` line for `session` at `level`, with its id.
+fn subscribe_line(session: &SessionId, level: Level) -> (String, String) {
+    let id = mint();
+    let name = match level {
+        Level::Summary => "summary",
+        Level::Full => "full",
+    };
+    let line = session_command(&id, "subscribe", session, Some(json!({"level": name}))).to_string();
+    (id, line)
+}
+
+/// A refusal's code and message, for the open's acknowledgement.
+fn refusal_parts(payload: &serde_json::Map<String, Value>) -> (&str, String) {
+    let code = payload
+        .get("code")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    (code, refusal(payload))
+}
 /// A hub refusal's message, for a notice.
 fn refusal(payload: &serde_json::Map<String, Value>) -> String {
     payload

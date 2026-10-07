@@ -3,11 +3,22 @@
 //! "The session list"). Later parts add the subscriptions and the picker
 //! state.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use contract::events::{SessionState, SessionStatus, WaitingKind};
 use contract::{Envelope, SessionId};
 use serde_json::Value;
+
+/// A click target on home: one row's line, by the key [`Sessions`]
+/// gave it when it first appeared. Later parts add the toggle, the
+/// picker, the stop crosses and the worktree switch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Spot {
+    /// A session row: clicking it, or Enter on it while focused, opens
+    /// the session.
+    Entry(u64),
+}
 
 /// What the terminal knows about where it was launched.
 pub struct Launch {
@@ -38,6 +49,80 @@ pub(crate) struct HomeScreen {
     pub(crate) foot: String,
     /// The input box shows its placeholder.
     pub(crate) placeholder: bool,
+}
+
+/// A subscription level on this connection: `summary` carries only the
+/// latest `session_status`, `full` folds the whole stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Level {
+    /// Only the latest status.
+    Summary,
+    /// The whole stream.
+    Full,
+}
+
+/// What this connection holds, or will hold once its in-flight
+/// subscribes are answered, per session. The accepted level changes
+/// only on acceptance: answering removes the id from the in-flight
+/// list either way, and a rejection leaves the accepted level.
+#[derive(Default)]
+pub(crate) struct Subs {
+    accepted: HashMap<SessionId, Level>,
+    inflight: Vec<(String, SessionId, Level)>,
+}
+
+impl Subs {
+    /// Records a subscribe sent with `id` for `session` at `level`.
+    pub(crate) fn sent(&mut self, id: String, session: SessionId, level: Level) {
+        self.inflight.push((id, session, level));
+    }
+
+    /// The level a new subscribe for `session` must differ from: the
+    /// last in-flight subscribe's level, else the accepted one.
+    pub(crate) fn expected(&self, session: &SessionId) -> Option<Level> {
+        self.inflight
+            .iter()
+            .rev()
+            .find(|(_, id, _)| id == session)
+            .map(|(_, _, level)| *level)
+            .or_else(|| self.accepted.get(session).copied())
+    }
+
+    /// Answers the in-flight subscribe `id`: on acceptance the level
+    /// becomes the accepted one. Some when the id was in flight, with
+    /// its session, either way.
+    pub(crate) fn answered(&mut self, id: &str, accepted: bool) -> Option<SessionId> {
+        let at = self.inflight.iter().position(|(sent, _, _)| sent == id)?;
+        let (_, session, level) = self.inflight.remove(at);
+        if accepted {
+            self.accepted.insert(session.clone(), level);
+        }
+        Some(session)
+    }
+
+    /// Whether the accepted level for `session` is `full`.
+    pub(crate) fn full(&self, session: &SessionId) -> bool {
+        self.accepted.get(session) == Some(&Level::Full)
+    }
+
+    /// Whether a subscribe for `session` waits for its answer.
+    pub(crate) fn pending(&self, session: &SessionId) -> bool {
+        self.inflight.iter().any(|(_, id, _)| id == session)
+    }
+}
+
+/// The subscribes opening a session sends from `expected`: none or
+/// `summary` needs one `full`; `full` needs `summary` then `full`, since
+/// the hub resumes an exited session at the level last held and a lone
+/// `full` would be refused as already at that level.
+const ONE_FULL: [Level; 1] = [Level::Full];
+const SUMMARY_THEN_FULL: [Level; 2] = [Level::Summary, Level::Full];
+
+pub(crate) fn opening(expected: Option<Level>) -> &'static [Level] {
+    match expected {
+        Some(Level::Full) => &SUMMARY_THEN_FULL,
+        _ => &ONE_FULL,
+    }
 }
 
 /// What a session is doing, as its row's glyph names it.
@@ -185,6 +270,34 @@ impl Sessions {
             .chain(self.recent.iter())
             .filter(|row| !scoped || row.project == project)
             .collect()
+    }
+
+    /// The row for `id`, live or exited.
+    pub(crate) fn row(&self, id: &SessionId) -> Option<&Row> {
+        self.feed
+            .iter()
+            .chain(self.recent.iter())
+            .find(|row| row.id == *id)
+    }
+
+    /// The row with `key`, live or exited; a key naming no row opens
+    /// nothing.
+    pub(crate) fn by_key(&self, key: u64) -> Option<&Row> {
+        self.feed
+            .iter()
+            .chain(self.recent.iter())
+            .find(|row| row.key == key)
+    }
+
+    /// A refusal shows on the row, in place of its detail, as well as a
+    /// notice; an unknown id changes nothing.
+    pub(crate) fn note(&mut self, id: &SessionId, note: String) {
+        for row in self.feed.iter_mut().chain(self.recent.iter_mut()) {
+            if row.id == *id {
+                row.note = Some(note);
+                return;
+            }
+        }
     }
 
     /// The next key: unique, never reused, even after a row drops.

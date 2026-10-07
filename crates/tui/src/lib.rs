@@ -394,6 +394,7 @@ impl<B: Backend> Loop<B> {
     /// Handles one input, loads the pages the frame needs, and draws what
     /// changed. Returns the exit code when the terminal quits.
     fn step(&mut self, input: Input, rx: &Receiver<Input>) -> Option<i32> {
+        let before = self.app.session().cloned();
         match input {
             Input::Bytes(bytes) => {
                 for event in self.parser.feed(&bytes) {
@@ -439,11 +440,7 @@ impl<B: Backend> Loop<B> {
                 }
             }
             Input::Hub(line) => {
-                let attached = self.app.session().is_some();
                 let lines = self.app.on_line(line);
-                if !attached && let Some(session) = self.app.session() {
-                    (self.on_attach)(session);
-                }
                 self.send(&lines);
             }
             Input::Connected(stream, hello) => {
@@ -473,6 +470,13 @@ impl<B: Backend> Loop<B> {
                     }
                 }
             }
+        }
+        // An attach the input brought is reported once: the session
+        // changed to one, from none.
+        if before.is_none()
+            && let Some(session) = self.app.session()
+        {
+            (self.on_attach)(session);
         }
         // A closed `@` panel drops its worker and the listing it holds.
         if !self.app.files_open() {
@@ -506,7 +510,7 @@ impl<B: Backend> Loop<B> {
         let Some(out) = &self.files_out else {
             return;
         };
-        let workspace = self.app.workspace().to_path_buf();
+        let workspace = self.app.workspace();
         let search = files::Search::spawn(move || files::list(&workspace), out.clone());
         search.search(self.app.generation(), String::new());
         self.search = Some(search);

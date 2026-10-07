@@ -1,7 +1,7 @@
 //! Tests for the session list's data: folding statuses, `session_left`,
 //! `recent` pages, keys, glyphs and lines.
 
-use super::{Left, Row, Sessions, State, from_status, line, recent_rows};
+use super::{Left, Level, Row, Sessions, State, Subs, from_status, line, opening, recent_rows};
 use contract::{Envelope, SessionId};
 use serde_json::{Value, json};
 
@@ -464,5 +464,65 @@ fn a_note_replaces_the_detail() {
     assert_eq!(
         line(&row, PROJECT),
         "!  fix the parser  held by another process"
+    );
+}
+
+/// A session id for the subscription tests.
+fn session() -> SessionId {
+    SessionId("s_aaaaaaaaaaaaaaaa".to_owned())
+}
+
+#[test]
+fn expected_is_the_last_in_flight_level_then_the_accepted_one() {
+    let mut subs = Subs::default();
+    assert_eq!(subs.expected(&session()), None);
+    assert!(!subs.pending(&session()));
+    subs.sent("c_1".to_owned(), session(), Level::Full);
+    assert_eq!(subs.expected(&session()), Some(Level::Full));
+    assert!(subs.pending(&session()));
+    subs.sent("c_2".to_owned(), session(), Level::Summary);
+    assert_eq!(subs.expected(&session()), Some(Level::Summary));
+    subs.answered("c_2", true);
+    assert_eq!(subs.expected(&session()), Some(Level::Full));
+    assert!(!subs.full(&session()));
+    subs.answered("c_1", true);
+    assert_eq!(subs.expected(&session()), Some(Level::Full));
+    assert!(subs.full(&session()));
+    assert!(!subs.pending(&session()));
+}
+
+#[test]
+fn a_rejection_leaves_the_accepted_level() {
+    let mut subs = Subs::default();
+    subs.sent("c_1".to_owned(), session(), Level::Full);
+    subs.answered("c_1", true);
+    subs.sent("c_2".to_owned(), session(), Level::Summary);
+    subs.answered("c_2", false);
+    assert_eq!(subs.expected(&session()), Some(Level::Full));
+    assert!(subs.full(&session()));
+    assert!(!subs.pending(&session()));
+}
+
+#[test]
+fn an_id_not_in_flight_is_not_ours() {
+    let mut subs = Subs::default();
+    assert_eq!(subs.answered("c_deadbeefdeadbeef", true), None);
+    assert_eq!(subs.answered("c_deadbeefdeadbeef", false), None);
+    subs.sent("c_1".to_owned(), session(), Level::Full);
+    assert_eq!(
+        subs.answered("c_1", true),
+        Some(session()),
+        "an answered id names its session",
+    );
+    assert_eq!(subs.answered("c_1", true), None);
+}
+
+#[test]
+fn opening_from_each_level() {
+    assert_eq!(opening(None).to_vec(), vec![Level::Full]);
+    assert_eq!(opening(Some(Level::Summary)).to_vec(), vec![Level::Full]);
+    assert_eq!(
+        opening(Some(Level::Full)).to_vec(),
+        vec![Level::Summary, Level::Full]
     );
 }

@@ -17,6 +17,7 @@ use contract::{Envelope, HubLine, Seq, SessionId};
 use serde_json::{Map, Value, json};
 
 use crate::approvals::{self, Panel, PanelKey, Queue};
+use crate::home::Level;
 use crate::input::Draft;
 use crate::keys::Key;
 use crate::link::Line;
@@ -589,12 +590,11 @@ impl App {
     }
 
     /// `start` was accepted: attach with a `full` connection, and ask for
-    /// the session's `/` commands.
+    /// the session's `/` commands. A started session is the attached one.
     fn started(&mut self, session: SessionId) -> Vec<String> {
         self.attach(session.clone());
-        let args = json!({"level": "full"});
         vec![
-            session_command(&mint(), "subscribe", &session, Some(args)).to_string(),
+            self.subscribe(&session, Level::Full),
             self.ask_commands(&session),
         ]
     }

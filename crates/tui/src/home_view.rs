@@ -9,7 +9,7 @@ use ratatui::style::{Color, Modifier, Style};
 use super::{FOCUS_STYLE, HOVER_TINT};
 use crate::app::App;
 use crate::format::{cut, width};
-use crate::home::HomeScreen;
+use crate::home::{HomeScreen, Spot};
 use crate::markdown::{Role, style};
 use crate::mouse::{self, Target, TargetId};
 
@@ -185,9 +185,10 @@ pub(super) fn render(
         BOX_EDGE,
     );
     // The session list draws under the box, down to the row above the
-    // foot, scrolling past the screen.
+    // foot, scrolling past the screen. Each row is a target opening its
+    // session.
     let mut row_y = placed.edge.saturating_add(1);
-    for (_key, text, _has_x) in &screen.rows {
+    for (key, text, _has_x) in &screen.rows {
         if row_y >= placed.foot {
             break;
         }
@@ -200,6 +201,10 @@ pub(super) fn render(
             placed.width,
             Style::default(),
         );
+        targets.push(Target {
+            id: TargetId::Home(Spot::Entry(*key)),
+            rect: Rect::new(placed.x, row_y, placed.width, 1),
+        });
         row_y = row_y.saturating_add(1);
     }
     if let Some(completions) = app.completions() {

@@ -1184,6 +1184,7 @@ fn lines(targets: &[crate::mouse::Target]) -> Vec<(crate::app::Target, Rect)> {
             | crate::mouse::TargetId::Notice(_)
             | crate::mouse::TargetId::DismissNotice(_)
             | crate::mouse::TargetId::CloseOverlay
+            | crate::mouse::TargetId::Home(_)
             | crate::mouse::TargetId::Turn(_)
             | crate::mouse::TargetId::MoreNotices => None,
         })

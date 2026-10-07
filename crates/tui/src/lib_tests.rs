@@ -1323,3 +1323,57 @@ fn a_non_left_press_keeps_copied_and_a_left_press_clears_it() {
     feed(&mut lp, vec![at(0, 2, 0, 'M'), at(0, 2, 0, 'm')]);
     assert!(!lp.app.copied());
 }
+
+#[test]
+fn opening_a_row_by_key_calls_on_attach() {
+    let (mut lp, attached) = new_loop(TestBackend::new(60, 12), None);
+    lp.app.set_home(launch());
+    let (ours, theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    let reader = BufReader::new(theirs);
+    feed(&mut lp, vec![Input::Connected(ours, hello())]);
+    let (reader, feed_cmd) = command(reader, "the feed command");
+    assert_eq!(feed_cmd["command"], "feed");
+    let (reader, _) = command(reader, "the recent command");
+    let status = contract::Envelope {
+        kind: "session_status".to_owned(),
+        session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: serde_json::json!({
+            "name": "fix the parser",
+            "workspace": "/w",
+            "project": "-w",
+            "state": "streaming",
+            "since": 0,
+            "spend": {"tokens": {"input": 1, "cache_read": 0,
+                "cache_write": {}, "output": 2},
+                "cost": 0.0, "subscription_cost": 0.0},
+            "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0,
+        })
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    };
+    feed(&mut lp, vec![Input::Hub(Line::Session(status))]);
+    // The first row draws at the second column of the tenth row: a press
+    // then a release on it opens the session.
+    feed(
+        &mut lp,
+        vec![
+            Input::Bytes(b"\x1b[<0;1;10M".to_vec()),
+            Input::Bytes(b"\x1b[<0;1;10m".to_vec()),
+        ],
+    );
+    let (reader, subscribe) = command(reader, "the subscribe command");
+    assert_eq!(subscribe["command"], "subscribe");
+    assert_eq!(subscribe["session_id"], "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(subscribe["args"]["level"], "full");
+    let (_, commands) = command(reader, "the commands command");
+    assert_eq!(commands["command"], "commands");
+    assert_eq!(commands["session_id"], "s_aaaaaaaaaaaaaaaa");
+    let seen = || attached.lock().map(|held| held.clone()).unwrap_or_default();
+    assert_eq!(seen(), vec!["s_aaaaaaaaaaaaaaaa".to_owned()]);
+}

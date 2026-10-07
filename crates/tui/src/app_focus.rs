@@ -230,6 +230,7 @@ impl App {
     /// and the next press copies the whole turn.
     fn item_text(&mut self, id: TargetId) -> Option<String> {
         match id {
+            TargetId::Home(spot) => self.home_text(spot),
             TargetId::Line(target) => self.line_text(target),
             TargetId::Token(number) => self.draft.token_text(number).map(str::to_owned),
             TargetId::Notice(id) => self.notices.text(id).map(str::to_owned),

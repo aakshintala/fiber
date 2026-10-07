@@ -1,12 +1,12 @@
 //! Tests for home's state on the app: when home draws, and what `start`
 //! names.
 
-use super::App;
-use crate::home::Launch;
+use super::{App, Effect};
+use crate::home::{Launch, Spot};
 use crate::keys::Key;
 use crate::link::Line;
 use contract::clock::Clock;
-use serde_json::json;
+use serde_json::{Value, json};
 use std::path::PathBuf;
 
 /// An app on home at 80x24.
@@ -410,4 +410,1069 @@ fn start_names_the_launch_workspace() {
     assert_eq!(line["args"]["content"][0]["text"], "hi");
     // The placeholder goes with the first prompt.
     assert!(app.home_screen().is_some_and(|screen| !screen.placeholder));
+}
+
+/// The keys of the rows home draws, in order.
+fn keys(app: &App) -> Vec<u64> {
+    app.home_screen()
+        .map(|screen| screen.rows.into_iter().map(|(key, _, _)| key).collect())
+        .unwrap_or_default()
+}
+
+/// Opens the row with `key`, with the parsed lines going out.
+fn open(app: &mut App, key: u64) -> Vec<Value> {
+    match app.home_click(Spot::Entry(key)) {
+        Effect::Send(lines) => lines
+            .iter()
+            .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
+            .collect(),
+        Effect::None
+        | Effect::Quit
+        | Effect::ListFiles
+        | Effect::Search { .. }
+        | Effect::Editor { .. }
+        | Effect::Copy(_) => panic!("opening sends"),
+    }
+}
+
+/// A live `session_status` for `session`, named `name`, in `workspace` of
+/// `project`, in `state`.
+fn live(session: &str, name: &str, workspace: &str, project: &str, state: Value) -> Line {
+    let mut payload = json!({
+        "name": name,
+        "workspace": workspace,
+        "project": project,
+        "since": 0,
+        "spend": {"tokens": {"input": 1, "cache_read": 0,
+            "cache_write": {}, "output": 2},
+            "cost": 0.0, "subscription_cost": 0.0},
+        "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0,
+    });
+    for (key, value) in state.as_object().cloned().unwrap_or_default() {
+        payload[key] = value;
+    }
+    Line::Session(contract::Envelope {
+        kind: "session_status".to_owned(),
+        session_id: contract::SessionId(session.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: payload.as_object().cloned().unwrap_or_default(),
+    })
+}
+
+/// A session `command_accepted` for `id` from `session`.
+fn session_accepted(session: &str, id: &str) -> Line {
+    Line::Session(contract::Envelope {
+        kind: "command_accepted".to_owned(),
+        session_id: contract::SessionId(session.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: [("command_id".to_owned(), Value::String(id.to_owned()))]
+            .into_iter()
+            .collect(),
+    })
+}
+
+/// A session `command_rejected` for `id` from `session`, with `code` and
+/// `message`.
+fn session_refused(session: &str, id: &str, code: &str, message: &str) -> Line {
+    Line::Session(contract::Envelope {
+        kind: "command_rejected".to_owned(),
+        session_id: contract::SessionId(session.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: [
+            ("command_id".to_owned(), Value::String(id.to_owned())),
+            ("code".to_owned(), Value::String(code.to_owned())),
+            ("message".to_owned(), Value::String(message.to_owned())),
+        ]
+        .into_iter()
+        .collect(),
+    })
+}
+
+/// A hub `command_rejected` for `id`, with `code` and `message`.
+fn hub_refused(id: &str, code: &str, message: &str) -> Line {
+    Line::Hub(contract::HubLine {
+        kind: "command_rejected".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: [
+            ("command_id".to_owned(), Value::String(id.to_owned())),
+            ("code".to_owned(), Value::String(code.to_owned())),
+            ("message".to_owned(), Value::String(message.to_owned())),
+        ]
+        .into_iter()
+        .collect(),
+    })
+}
+
+/// One exited `recent` row for `session`.
+fn exited(session: &str, name: &str) -> Value {
+    json!({
+        "session_id": session,
+        "ts": 0,
+        "project": "-w",
+        "workspace": "/w",
+        "name": name,
+        "how": "exited",
+    })
+}
+
+/// Answers `recent` with exited rows for `sessions`.
+fn answer_recent(app: &mut App, recent: &str, sessions: &[(&str, &str)]) {
+    let result = json!({"sessions": sessions
+        .iter()
+        .map(|(session, name)| exited(session, name))
+        .collect::<Vec<_>>()});
+    assert!(app.on_line(accepted(recent, result)).is_empty());
+}
+
+/// Links the app: the feed and recent ids, both waiting for their
+/// answers.
+fn linked(app: &mut App) -> (String, String) {
+    let lines = commands(app.on_line(hello()));
+    assert_eq!(lines.len(), 2);
+    (
+        lines[0]["id"]
+            .as_str()
+            .unwrap_or_else(|| panic!("feed id"))
+            .to_owned(),
+        lines[1]["id"]
+            .as_str()
+            .unwrap_or_else(|| panic!("recent id"))
+            .to_owned(),
+    )
+}
+
+/// Types `text` without pressing Enter.
+fn type_text(app: &mut App, text: &str) {
+    let now = fakes::clock::FakeClock::new().now();
+    for ch in text.chars() {
+        assert_eq!(app.on_key(Key::Char(ch), now), Effect::None);
+    }
+}
+
+/// Types `text` and presses Enter.
+fn enter_text(app: &mut App, text: &str) -> Effect {
+    let now = fakes::clock::FakeClock::new().now();
+    for ch in text.chars() {
+        app.on_key(Key::Char(ch), now);
+    }
+    app.on_key(Key::Enter, now)
+}
+
+/// Opens the first row home draws, with the parsed lines going out.
+fn open_first(app: &mut App) -> Vec<Value> {
+    let key = keys(app)
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| panic!("a row"));
+    open(app, key)
+}
+
+/// Starts a session from the draft and accepts the start for `session`:
+/// the app attached, its `full` subscribe in flight.
+fn start_session(app: &mut App, session: &str) {
+    let Effect::Send(lines) = enter_text(app, "hi") else {
+        panic!("Enter sends the start");
+    };
+    assert_eq!(lines.len(), 1);
+    let start: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("{err}"));
+    let out: Vec<Value> = app
+        .on_line(accepted(
+            start["id"].as_str().unwrap_or_else(|| panic!("start id")),
+            json!({"session_id": session}),
+        ))
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{err}")))
+        .collect();
+    assert_eq!(out.len(), 2);
+    assert_eq!(out[0]["command"], "subscribe");
+}
+
+#[test]
+fn enter_on_a_focused_live_row_subscribes_full_asks_commands_and_attaches() {
+    let mut app = home();
+    linked(&mut app);
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "fix the parser",
+        "/w",
+        "-w",
+        json!({"state": "streaming"}),
+    ));
+    app.on_line(live(
+        "s_bbbbbbbbbbbbbbbb",
+        "tidy docs",
+        "/w",
+        "-w",
+        json!({"state": "idle"}),
+    ));
+    let area = ratatui::layout::Rect::new(0, 0, 80, 24);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let targets = crate::view::render(&app, area, &mut buf, None);
+    app.drawn(&targets);
+    // Shift+Tab focuses the last stop: the second row.
+    let now = fakes::clock::FakeClock::new().now();
+    app.on_key(Key::BackTab, now);
+    let row = keys(&app)[1];
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(row)))
+    );
+    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+        panic!("Enter opens the row");
+    };
+    let lines: Vec<Value> = lines
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
+        .collect();
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0]["command"], "subscribe");
+    assert_eq!(lines[0]["session_id"], "s_bbbbbbbbbbbbbbbb");
+    assert_eq!(lines[0]["args"]["level"], "full");
+    assert_eq!(lines[1]["command"], "commands");
+    assert_eq!(lines[1]["session_id"], "s_bbbbbbbbbbbbbbbb");
+    assert_ne!(lines[0]["id"], lines[1]["id"]);
+    assert_eq!(
+        app.session().map(|session| session.0.as_str()),
+        Some("s_bbbbbbbbbbbbbbbb")
+    );
+    assert!(!app.on_home());
+}
+
+#[test]
+fn opening_an_exited_row_sends_the_same_and_the_hub_resumes() {
+    let mut app = home();
+    let (_, recent) = linked(&mut app);
+    answer_recent(&mut app, &recent, &[("s_aaaaaaaaaaaaaaaa", "old work")]);
+    let lines = open_first(&mut app);
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0]["command"], "subscribe");
+    assert_eq!(lines[0]["session_id"], "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(lines[0]["args"]["level"], "full");
+    assert_eq!(lines[1]["command"], "commands");
+    assert_eq!(
+        app.session().map(|session| session.0.as_str()),
+        Some("s_aaaaaaaaaaaaaaaa")
+    );
+}
+
+#[test]
+fn a_started_session_is_recorded_full_and_leaving_lowers_it() {
+    let mut app = home();
+    linked(&mut app);
+    start_session(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "fix the parser",
+        "/w",
+        "-w",
+        json!({"state": "streaming"}),
+    ));
+    let Effect::Send(lines) = enter_text(&mut app, "/home") else {
+        panic!("/home leaves");
+    };
+    assert_eq!(lines.len(), 1);
+    let line: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(line["command"], "subscribe");
+    assert_eq!(line["session_id"], "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(line["args"]["level"], "summary");
+    assert!(app.on_home());
+}
+
+#[test]
+fn opening_a_summary_session_sends_one_full_subscribe() {
+    let mut app = home();
+    linked(&mut app);
+    start_session(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "fix the parser",
+        "/w",
+        "-w",
+        json!({"state": "streaming"}),
+    ));
+    assert!(matches!(enter_text(&mut app, "/home"), Effect::Send(_)));
+    let lines = open_first(&mut app);
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0]["args"]["level"], "full");
+    assert_eq!(lines[1]["command"], "commands");
+}
+
+#[test]
+fn opening_a_full_session_sends_summary_then_full() {
+    let mut app = home();
+    let (_, recent) = linked(&mut app);
+    answer_recent(&mut app, &recent, &[("s_aaaaaaaaaaaaaaaa", "old work")]);
+    let first = open_first(&mut app);
+    assert_eq!(first[0]["args"]["level"], "full");
+    // Home during the open, before any answer: the row is not live, so no
+    // lowering goes out.
+    assert_eq!(enter_text(&mut app, "/home"), Effect::None);
+    let lines = open_first(&mut app);
+    assert_eq!(lines.len(), 3);
+    assert_eq!(lines[0]["args"]["level"], "summary");
+    assert_eq!(lines[1]["args"]["level"], "full");
+    assert_eq!(lines[2]["command"], "commands");
+    assert_ne!(lines[0]["id"], lines[1]["id"]);
+}
+
+#[test]
+fn a_click_on_a_row_opens_it() {
+    let mut app = home();
+    linked(&mut app);
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "fix the parser",
+        "/w",
+        "-w",
+        json!({"state": "idle"}),
+    ));
+    let key = keys(&app)[0];
+    match app.on_click(crate::mouse::TargetId::Home(Spot::Entry(key))) {
+        Effect::Send(lines) => assert_eq!(lines.len(), 2),
+        Effect::None
+        | Effect::Quit
+        | Effect::ListFiles
+        | Effect::Search { .. }
+        | Effect::Editor { .. }
+        | Effect::Copy(_) => panic!("a click opens the row"),
+    }
+    assert_eq!(
+        app.session().map(|session| session.0.as_str()),
+        Some("s_aaaaaaaaaaaaaaaa")
+    );
+}
+
+#[test]
+fn a_click_on_a_key_with_no_row_does_nothing() {
+    let mut app = home();
+    linked(&mut app);
+    assert_eq!(
+        app.on_click(crate::mouse::TargetId::Home(Spot::Entry(9999))),
+        Effect::None
+    );
+    assert!(app.session().is_none());
+    assert!(app.on_home());
+}
+
+#[test]
+fn opening_requires_home() {
+    let mut app = home();
+    linked(&mut app);
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "fix the parser",
+        "/w",
+        "-w",
+        json!({"state": "idle"}),
+    ));
+    app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    let key = keys(&app).into_iter().next().unwrap_or(9999);
+    assert_eq!(app.home_click(Spot::Entry(key)), Effect::None);
+    assert!(app.home_screen().is_none());
+}
+
+#[test]
+fn opening_needs_the_link_up() {
+    let mut app = home();
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "fix the parser",
+        "/w",
+        "-w",
+        json!({"state": "idle"}),
+    ));
+    let key = keys(&app)
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| panic!("a row"));
+    assert_eq!(app.home_click(Spot::Entry(key)), Effect::None);
+    assert!(app.session().is_none());
+}
+
+#[test]
+fn opening_while_a_start_waits_does_nothing() {
+    let mut app = home();
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "fix the parser",
+        "/w",
+        "-w",
+        json!({"state": "idle"}),
+    ));
+    let now = fakes::clock::FakeClock::new().now();
+    for ch in "hi".chars() {
+        app.on_key(Key::Char(ch), now);
+    }
+    app.on_key(Key::Enter, now);
+    let key = keys(&app)
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| panic!("a row"));
+    assert_eq!(app.home_click(Spot::Entry(key)), Effect::None);
+    assert!(app.session().is_none());
+}
+
+#[test]
+fn an_unreadable_row_does_not_open_and_says_so() {
+    let mut app = home();
+    linked(&mut app);
+    let mut newer = live(
+        "s_aaaaaaaaaaaaaaaa",
+        "fix the parser",
+        "/w",
+        "-w",
+        json!({"state": "streaming"}),
+    );
+    if let Line::Session(envelope) = &mut newer {
+        envelope.schema_version = contract::SCHEMA_VERSION + 1;
+    }
+    app.on_line(newer);
+    let key = keys(&app)
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| panic!("a row"));
+    assert_eq!(app.home_click(Spot::Entry(key)), Effect::None);
+    assert!(app.session().is_none());
+    assert_eq!(
+        app.notice(),
+        Some("Cannot attach: this session's schema is newer than this terminal reads.")
+    );
+}
+
+#[test]
+fn lines_before_the_acknowledgement_fold_the_row_and_skip_the_conversation() {
+    let mut app = home();
+    linked(&mut app);
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "fix the parser",
+        "/w",
+        "-w",
+        json!({"state": "streaming"}),
+    ));
+    open_first(&mut app);
+    assert!(
+        app.on_line(live(
+            "s_aaaaaaaaaaaaaaaa",
+            "tidy docs",
+            "/w",
+            "-w",
+            json!({"state": "streaming"}),
+        ))
+        .is_empty()
+    );
+    assert!(app.on_line(turn_started("s_aaaaaaaaaaaaaaaa")).is_empty());
+    assert!(app.on_line(review()).is_empty());
+    assert_eq!(listed(&app), ["●  tidy docs"]);
+    assert!(app.lines().is_empty());
+    assert!(app.badge().is_none());
+    assert!(app.panel().is_none());
+}
+
+#[test]
+fn the_acknowledgement_and_lines_after_it_reach_the_conversation() {
+    let mut app = home();
+    linked(&mut app);
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "fix the parser",
+        "/w",
+        "-w",
+        json!({"state": "streaming"}),
+    ));
+    let lines = open_first(&mut app);
+    let ack = lines[0]["id"].as_str().unwrap_or_else(|| panic!("ack id"));
+    assert!(
+        app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", ack))
+            .is_empty()
+    );
+    assert!(app.on_line(turn_started("s_aaaaaaaaaaaaaaaa")).is_empty());
+    assert!(
+        app.lines()
+            .iter()
+            .any(|line| line.to_string().contains("hi"))
+    );
+}
+
+#[test]
+fn an_approval_before_the_acknowledgement_is_not_queued() {
+    let mut app = home();
+    linked(&mut app);
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "fix the parser",
+        "/w",
+        "-w",
+        json!({"state": "streaming"}),
+    ));
+    open_first(&mut app);
+    assert!(app.on_line(review()).is_empty());
+    assert!(app.badge().is_none());
+    assert!(app.panel().is_none());
+}
+
+#[test]
+fn a_refused_open_goes_home_with_a_note_and_a_notice() {
+    let mut app = home();
+    linked(&mut app);
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "fix the parser",
+        "/w",
+        "-w",
+        json!({"state": "streaming"}),
+    ));
+    let lines = open_first(&mut app);
+    let ack = lines[0]["id"].as_str().unwrap_or_else(|| panic!("ack id"));
+    assert!(
+        app.on_line(hub_refused(ack, "session_held", "held by another process"))
+            .is_empty()
+    );
+    assert!(app.session().is_none());
+    assert!(app.on_home());
+    assert_eq!(listed(&app), ["●  fix the parser  held by another process"]);
+    assert_eq!(app.notice(), Some("held by another process"));
+}
+
+#[test]
+fn a_session_rejection_of_the_full_subscribe_does_the_same() {
+    let mut app = home();
+    linked(&mut app);
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "fix the parser",
+        "/w",
+        "-w",
+        json!({"state": "streaming"}),
+    ));
+    let lines = open_first(&mut app);
+    let ack = lines[0]["id"].as_str().unwrap_or_else(|| panic!("ack id"));
+    assert!(
+        app.on_line(session_refused(
+            "s_aaaaaaaaaaaaaaaa",
+            ack,
+            "session_held",
+            "held by another process"
+        ))
+        .is_empty()
+    );
+    assert!(app.session().is_none());
+    assert_eq!(listed(&app), ["●  fix the parser  held by another process"]);
+    assert_eq!(app.notice(), Some("held by another process"));
+}
+
+#[test]
+fn a_refused_open_after_going_home_keeps_the_draft() {
+    let mut app = home();
+    linked(&mut app);
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "fix the parser",
+        "/w",
+        "-w",
+        json!({"state": "streaming"}),
+    ));
+    let lines = open_first(&mut app);
+    let ack = lines[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("ack id"))
+        .to_owned();
+    assert!(matches!(enter_text(&mut app, "/home"), Effect::Send(_)));
+    type_text(&mut app, "keep me");
+    assert!(
+        app.on_line(session_refused(
+            "s_aaaaaaaaaaaaaaaa",
+            &ack,
+            "session_held",
+            "held by another process"
+        ))
+        .is_empty()
+    );
+    assert_eq!(app.input().expand(), "keep me");
+    assert_eq!(app.notice(), Some("held by another process"));
+}
+
+#[test]
+fn a_stale_refusal_for_an_earlier_open_is_ignored() {
+    let mut app = home();
+    linked(&mut app);
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "fix the parser",
+        "/w",
+        "-w",
+        json!({"state": "streaming"}),
+    ));
+    let first = open_first(&mut app);
+    let stale = first[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("first id"))
+        .to_owned();
+    assert!(matches!(enter_text(&mut app, "/home"), Effect::Send(_)));
+    let second = open_first(&mut app);
+    assert_eq!(second[0]["args"]["level"], "full");
+    assert!(
+        app.on_line(session_refused(
+            "s_aaaaaaaaaaaaaaaa",
+            &stale,
+            "session_held",
+            "held by another process"
+        ))
+        .is_empty()
+    );
+    assert_eq!(
+        app.session().map(|session| session.0.as_str()),
+        Some("s_aaaaaaaaaaaaaaaa")
+    );
+    let ack = second[0]["id"].as_str().unwrap_or_else(|| panic!("ack id"));
+    assert!(
+        app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", ack))
+            .is_empty()
+    );
+    assert!(app.on_line(turn_started("s_aaaaaaaaaaaaaaaa")).is_empty());
+    assert!(
+        app.lines()
+            .iter()
+            .any(|line| line.to_string().contains("hi"))
+    );
+}
+
+#[test]
+fn a_refused_raise_leaves_the_level_and_the_next_open_sends_full_again() {
+    let mut app = home();
+    let (_, recent) = linked(&mut app);
+    answer_recent(&mut app, &recent, &[("s_aaaaaaaaaaaaaaaa", "old work")]);
+    let first = open_first(&mut app);
+    let ack = first[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("ack id"))
+        .to_owned();
+    assert!(
+        app.on_line(session_refused(
+            "s_aaaaaaaaaaaaaaaa",
+            &ack,
+            "session_held",
+            "held by another process"
+        ))
+        .is_empty()
+    );
+    assert!(app.session().is_none());
+    let second = open_first(&mut app);
+    assert_eq!(second.len(), 2);
+    assert_eq!(second[0]["args"]["level"], "full");
+    assert_eq!(second[1]["command"], "commands");
+}
+
+#[test]
+fn a_rejected_summary_step_alone_does_not_fail_the_open() {
+    let mut app = home();
+    let (_, recent) = linked(&mut app);
+    answer_recent(&mut app, &recent, &[("s_aaaaaaaaaaaaaaaa", "old work")]);
+    open_first(&mut app);
+    assert_eq!(enter_text(&mut app, "/home"), Effect::None);
+    let lines = open_first(&mut app);
+    assert_eq!(lines.len(), 3);
+    let summary = lines[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("summary id"))
+        .to_owned();
+    let ack = lines[1]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("ack id"))
+        .to_owned();
+    assert!(
+        app.on_line(session_refused(
+            "s_aaaaaaaaaaaaaaaa",
+            &summary,
+            "invalid_arguments",
+            "already at summary"
+        ))
+        .is_empty()
+    );
+    assert_eq!(
+        app.session().map(|session| session.0.as_str()),
+        Some("s_aaaaaaaaaaaaaaaa")
+    );
+    assert!(
+        app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", &ack))
+            .is_empty()
+    );
+    assert!(app.on_line(turn_started("s_aaaaaaaaaaaaaaaa")).is_empty());
+    assert!(
+        app.lines()
+            .iter()
+            .any(|line| line.to_string().contains("hi"))
+    );
+}
+
+#[test]
+fn a_two_step_open_never_retries() {
+    let mut app = home();
+    let (_, recent) = linked(&mut app);
+    answer_recent(&mut app, &recent, &[("s_aaaaaaaaaaaaaaaa", "old work")]);
+    open_first(&mut app);
+    assert_eq!(enter_text(&mut app, "/home"), Effect::None);
+    let lines = open_first(&mut app);
+    let ack = lines[1]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("ack id"))
+        .to_owned();
+    assert!(
+        app.on_line(session_refused(
+            "s_aaaaaaaaaaaaaaaa",
+            &ack,
+            "invalid_arguments",
+            "already at full"
+        ))
+        .is_empty()
+    );
+    assert!(app.session().is_none());
+    assert!(app.on_home());
+    assert_eq!(app.notice(), Some("already at full"));
+}
+
+#[test]
+fn a_same_level_refusal_after_a_hub_replay_retries_once_with_summary_then_full() {
+    let mut app = home();
+    let (_, recent) = linked(&mut app);
+    answer_recent(&mut app, &recent, &[("s_aaaaaaaaaaaaaaaa", "old work")]);
+    let first = open_first(&mut app);
+    let full = first[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("full id"))
+        .to_owned();
+    let out = app.on_line(session_refused(
+        "s_aaaaaaaaaaaaaaaa",
+        &full,
+        "invalid_arguments",
+        "the log cannot be read",
+    ));
+    assert_eq!(out.len(), 2);
+    let retry: Vec<Value> = out
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
+        .collect();
+    assert_eq!(retry[0]["args"]["level"], "summary");
+    assert_eq!(retry[1]["args"]["level"], "full");
+    assert_ne!(retry[0]["id"], retry[1]["id"]);
+    assert_ne!(retry[0]["id"], full);
+    let summary = retry[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("summary id"))
+        .to_owned();
+    let raised = retry[1]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("raised id"))
+        .to_owned();
+    assert!(
+        app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", &summary))
+            .is_empty()
+    );
+    assert!(
+        app.on_line(session_refused(
+            "s_aaaaaaaaaaaaaaaa",
+            &raised,
+            "invalid_arguments",
+            "the log cannot be read"
+        ))
+        .is_empty()
+    );
+    assert!(app.session().is_none());
+    assert_eq!(app.notice(), Some("the log cannot be read"));
+    assert!(app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited")).is_empty());
+    let second = open_first(&mut app);
+    assert_eq!(second.len(), 2);
+    assert_eq!(second[0]["args"]["level"], "full");
+    let again = second[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("again id"))
+        .to_owned();
+    let out = app.on_line(session_refused(
+        "s_aaaaaaaaaaaaaaaa",
+        &again,
+        "invalid_arguments",
+        "already at full",
+    ));
+    assert_eq!(out.len(), 2);
+    let retry: Vec<Value> = out
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
+        .collect();
+    assert_eq!(retry[0]["args"]["level"], "summary");
+    assert_eq!(retry[1]["args"]["level"], "full");
+    assert_ne!(retry[0]["id"], retry[1]["id"]);
+    assert_ne!(retry[0]["id"], again);
+    let summary = retry[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("summary id"))
+        .to_owned();
+    let raised = retry[1]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("raised id"))
+        .to_owned();
+    assert!(
+        app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", &summary))
+            .is_empty()
+    );
+    assert!(
+        app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", &raised))
+            .is_empty()
+    );
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "old work",
+        "/w",
+        "-w",
+        json!({"state": "idle"}),
+    ));
+    assert!(app.on_line(turn_started("s_aaaaaaaaaaaaaaaa")).is_empty());
+    assert!(
+        app.lines()
+            .iter()
+            .any(|line| line.to_string().contains("hi"))
+    );
+    // Held at full, leaving lowers it again.
+    let Effect::Send(lines) = enter_text(&mut app, "/home") else {
+        panic!("/home lowers");
+    };
+    assert_eq!(lines.len(), 1);
+    let line: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(line["args"]["level"], "summary");
+}
+
+#[test]
+fn a_second_same_level_refusal_fails_the_open() {
+    let mut app = home();
+    let (_, recent) = linked(&mut app);
+    answer_recent(&mut app, &recent, &[("s_aaaaaaaaaaaaaaaa", "old work")]);
+    let first = open_first(&mut app);
+    let full = first[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("full id"))
+        .to_owned();
+    let out = app.on_line(session_refused(
+        "s_aaaaaaaaaaaaaaaa",
+        &full,
+        "invalid_arguments",
+        "already at full",
+    ));
+    assert_eq!(out.len(), 2);
+    let retry: Vec<Value> = out
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
+        .collect();
+    let summary = retry[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("summary id"))
+        .to_owned();
+    let raised = retry[1]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("raised id"))
+        .to_owned();
+    assert!(
+        app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", &summary))
+            .is_empty()
+    );
+    assert!(
+        app.on_line(session_refused(
+            "s_aaaaaaaaaaaaaaaa",
+            &raised,
+            "invalid_arguments",
+            "already at full"
+        ))
+        .is_empty()
+    );
+    assert!(app.session().is_none());
+    assert!(app.on_home());
+    assert_eq!(listed(&app), ["○  old work  already at full"]);
+    assert_eq!(app.notice(), Some("already at full"));
+}
+
+#[test]
+fn leaving_a_session_that_left_sends_no_subscribe() {
+    let mut app = home();
+    linked(&mut app);
+    start_session(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "fix the parser",
+        "/w",
+        "-w",
+        json!({"state": "streaming"}),
+    ));
+    assert!(app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited")).is_empty());
+    assert_eq!(enter_text(&mut app, "/home"), Effect::None);
+    assert!(app.on_home());
+}
+
+#[test]
+fn leaving_with_the_link_down_sends_nothing() {
+    let mut app = home();
+    linked(&mut app);
+    start_session(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "fix the parser",
+        "/w",
+        "-w",
+        json!({"state": "streaming"}),
+    ));
+    app.disconnected();
+    assert_eq!(enter_text(&mut app, "/home"), Effect::None);
+    assert!(app.on_home());
+}
+
+#[test]
+fn slash_close_sends_close_now_and_no_subscribe() {
+    let mut app = home();
+    linked(&mut app);
+    app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    let Effect::Send(lines) = enter_text(&mut app, "/close") else {
+        panic!("/close sends");
+    };
+    assert_eq!(lines.len(), 1);
+    let line: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(line["command"], "close");
+    assert_eq!(line["session_id"], "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(line["args"], json!({"now": true}));
+    assert!(app.on_home());
+}
+
+#[test]
+fn home_without_home_state_sends_nothing_on_leave() {
+    let mut app = App::new(PathBuf::from("/w"));
+    assert_eq!(app.leave(), Effect::None);
+}
+
+#[test]
+fn home_during_an_open_of_a_resuming_session_lowers_it_once_its_status_is_live() {
+    let mut app = home();
+    let (_, recent) = linked(&mut app);
+    answer_recent(&mut app, &recent, &[("s_aaaaaaaaaaaaaaaa", "old work")]);
+    let first = open_first(&mut app);
+    assert_eq!(first[0]["args"]["level"], "full");
+    assert_eq!(enter_text(&mut app, "/home"), Effect::None);
+    let ack = first[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("ack id"))
+        .to_owned();
+    assert!(
+        app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", &ack))
+            .is_empty()
+    );
+    let out = app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "old work",
+        "/w",
+        "-w",
+        json!({"state": "idle"}),
+    ));
+    assert_eq!(out.len(), 1);
+    let line: Value = serde_json::from_str(&out[0]).unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(line["command"], "subscribe");
+    assert_eq!(line["session_id"], "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(line["args"]["level"], "summary");
+    assert!(app.session().is_none());
+}
+
+#[test]
+fn an_accepted_full_for_the_attached_session_sends_nothing() {
+    let mut app = home();
+    linked(&mut app);
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "fix the parser",
+        "/w",
+        "-w",
+        json!({"state": "streaming"}),
+    ));
+    let lines = open_first(&mut app);
+    let ack = lines[0]["id"].as_str().unwrap_or_else(|| panic!("ack id"));
+    assert!(
+        app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", ack))
+            .is_empty()
+    );
+}
+
+#[test]
+fn no_summary_while_a_subscribe_is_in_flight() {
+    let mut app = home();
+    linked(&mut app);
+    start_session(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "fix the parser",
+        "/w",
+        "-w",
+        json!({"state": "streaming"}),
+    ));
+    let Effect::Send(lowered) = enter_text(&mut app, "/home") else {
+        panic!("/home lowers");
+    };
+    assert_eq!(lowered.len(), 1);
+    assert!(
+        app.on_line(live(
+            "s_aaaaaaaaaaaaaaaa",
+            "fix the parser",
+            "/w",
+            "-w",
+            json!({"state": "streaming"}),
+        ))
+        .is_empty()
+    );
+}
+
+#[test]
+fn no_summary_for_a_left_row() {
+    let mut app = home();
+    let (_, recent) = linked(&mut app);
+    answer_recent(&mut app, &recent, &[("s_aaaaaaaaaaaaaaaa", "old work")]);
+    let first = open_first(&mut app);
+    assert_eq!(enter_text(&mut app, "/home"), Effect::None);
+    let ack = first[0]["id"].as_str().unwrap_or_else(|| panic!("ack id"));
+    assert!(
+        app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", ack))
+            .is_empty()
+    );
+    assert!(app.session().is_none());
+}
+
+#[test]
+fn the_file_listing_follows_an_opened_row_outside_the_launch_workspace() {
+    let mut app = home();
+    linked(&mut app);
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "lens work",
+        "/other",
+        "-other",
+        json!({"state": "streaming"}),
+    ));
+    let lines = open_first(&mut app);
+    assert_eq!(app.workspace(), PathBuf::from("/other"));
+    let ack = lines[0]["id"].as_str().unwrap_or_else(|| panic!("ack id"));
+    assert!(
+        app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", ack))
+            .is_empty()
+    );
+    assert_eq!(app.workspace(), PathBuf::from("/other"));
+}
+
+#[test]
+fn without_home_the_workspace_is_the_launch_directory() {
+    let app = App::new(PathBuf::from("/w"));
+    assert_eq!(app.workspace(), PathBuf::from("/w"));
 }

@@ -2,6 +2,7 @@
 //! the built-in commands and the key map overlay (`docs/tui.md`, "Keys",
 //! "Bindings", "Slash commands", "Quit").
 
+use std::path::PathBuf;
 use std::time::Instant;
 
 use contract::SessionId;
@@ -219,9 +220,14 @@ impl App {
         self.overlays.files.is_some()
     }
 
-    /// The launch directory, which the `@` panel lists.
-    pub(crate) fn workspace(&self) -> &std::path::Path {
-        &self.workspace
+    /// The workspace in use: the attached session's row workspace on
+    /// home, else the launch directory.
+    pub(crate) fn workspace(&self) -> PathBuf {
+        if self.home.is_some() {
+            self.home_workspace()
+        } else {
+            self.workspace.clone()
+        }
     }
 
     /// The current search generation.
@@ -368,10 +374,7 @@ impl App {
         }
         let rest = rest.trim().to_owned();
         let effect = match name {
-            "home" | "new" => {
-                self.go_home();
-                Effect::None
-            }
+            "home" | "new" => self.leave(),
             "handoff" => {
                 let args = (!rest.is_empty()).then(|| json!({ "instructions": rest }));
                 self.send_command("handoff", args)
@@ -397,7 +400,7 @@ impl App {
     /// Returns to the screen before a session: the conversation and the
     /// draft cleared, the old session left running. While a `start` waits
     /// for its answer only the draft is cleared.
-    fn go_home(&mut self) {
+    pub(super) fn go_home(&mut self) {
         self.draft.clear();
         if matches!(self.phase, Phase::Pending { .. }) {
             return;
