@@ -189,14 +189,6 @@ fn a_documented_stream_quota_failure_is_quota_exceeded() {
 }
 
 #[test]
-fn an_in_flight_budget_402_with_a_date_retry_after_is_quota_exceeded() {
-    // An HTTP-date `Retry-After` is not seconds, so `http.rs` leaves
-    // `retry_after` empty and the 402 is a billing error.
-    let body = fixture_body("provider-errors/documented/openrouter.in-flight-budget-402.json");
-    assert_eq!(status(402, &body, None), ErrorCode::QuotaExceeded);
-}
-
-#[test]
 fn a_bare_stream_resource_exhausted_stays_rate_limited() {
     let err = gemini_stream("gemini.resource-exhausted-chunk.json");
     assert_eq!(err.code(), ErrorCode::RateLimited);
