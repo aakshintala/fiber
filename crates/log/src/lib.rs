@@ -8,6 +8,7 @@
 //! (`docs/architecture.md`, "The call rules").
 
 mod export;
+mod offsets;
 mod read;
 mod resolve;
 mod write;

@@ -16,7 +16,8 @@ use contract::events::{Class, Event};
 use contract::tool::Bound;
 use contract::{ActionId, Envelope, SCHEMA_VERSION, Seq, SessionId, TurnId};
 
-use crate::read::{Queue, Watcher, complete_len};
+use crate::offsets::Offsets;
+use crate::read::{Queue, Watcher};
 use crate::{ARTIFACTS, EVENTS, Error, LOCK, io_at, session_path};
 
 /// A session's log, open for writing. Only one exists per session at a time,
@@ -42,6 +43,8 @@ struct Inner {
     _lock: Lock,
     /// The `seq` the next durable line gets.
     next: u64,
+    /// Where each durable line starts: as many lines as `next` counts.
+    offsets: Arc<Offsets>,
     fsyncs: u64,
     watchers: Vec<Weak<Queue>>,
     /// The newest line of each latest-wins kind. A subscriber reads it after
@@ -80,7 +83,8 @@ impl Log {
             .open(&path)
             .map_err(io_at(&path))?;
         sync_dir(&dir, &mut fsyncs)?;
-        let mut inner = Inner::new(id, dir, events, lock, 0);
+        let offsets = Offsets::new(path, Vec::new(), 0);
+        let mut inner = Inner::new(id, dir, events, lock, 0, offsets);
         inner.fsyncs = fsyncs;
         Ok(Self::from_parts(inner, clock))
     }
@@ -101,22 +105,28 @@ impl Log {
             .append(true)
             .open(&path)
             .map_err(io_at(&path))?;
-        // debt: reads the whole log to find its tail; resume folds the whole
-        // log anyway (docs/events.md, "Resume"). Seek to the tail once resume
-        // reads a range by seq.
-        let bytes = fs::read(&path).map_err(io_at(&path))?;
-        // A no-op unless the tail is torn.
-        let complete = u64::try_from(complete_len(&bytes)).unwrap_or(u64::MAX);
-        events.set_len(complete).map_err(io_at(&path))?;
-        let lines = crate::read(&dir)?;
-        let next = match lines.last() {
-            Some(line) => line.seq.map_or(0, |s| s.0 + 1),
-            None => 0,
-        };
-        let mut inner = Inner::new(id, dir, events, lock, next);
-        for line in &lines {
-            inner.remember(line);
+        // One pass over the complete lines, one line held at a time: where
+        // each starts, the latest-wins kinds, and where a torn tail begins.
+        let mut lines = crate::read::lines(&dir)?;
+        let mut starts = Vec::new();
+        let mut latest = BTreeMap::new();
+        let mut next = 0;
+        loop {
+            let start = lines.offset();
+            let Some(line) = lines.next() else {
+                break;
+            };
+            let line = line?;
+            starts.push(start);
+            next = line.seq.map_or(0, |s| s.0 + 1);
+            keep_latest(&mut latest, &line);
         }
+        let end = lines.offset();
+        // A no-op unless the tail is torn.
+        events.set_len(end).map_err(io_at(&path))?;
+        let offsets = Offsets::new(path, starts, end);
+        let mut inner = Inner::new(id, dir, events, lock, next, offsets);
+        inner.latest = latest;
         Ok(Self::from_parts(inner, clock))
     }
 
@@ -178,6 +188,20 @@ impl Log {
     /// written in between is queued and may also be here; the latest wins.
     pub fn latest(&self, kind: &str) -> Option<Envelope> {
         self.lock().latest.get(kind).cloned()
+    }
+
+    /// How many durable lines the log holds: the `seq` the next one gets.
+    pub fn count(&self) -> u64 {
+        self.lock().offsets.count()
+    }
+
+    /// The durable lines whose `seq` is `from..from + max`, in order, fewer
+    /// when the log ends first, none when `from` is past the last line.
+    /// Reads and parses only those lines (`docs/events.md`, "Resume"): a
+    /// line outside the window that does not parse is never seen.
+    pub fn range(&self, from: u64, max: usize) -> Result<Vec<Envelope>, Error> {
+        let offsets = Arc::clone(&self.lock().offsets);
+        offsets.range(from, max)
     }
 
     /// A watcher that receives every event appended from now on. On a log
@@ -333,13 +357,21 @@ impl Drop for Log {
 }
 
 impl Inner {
-    fn new(session_id: SessionId, dir: PathBuf, events: File, lock: Lock, next: u64) -> Self {
+    fn new(
+        session_id: SessionId,
+        dir: PathBuf,
+        events: File,
+        lock: Lock,
+        next: u64,
+        offsets: Offsets,
+    ) -> Self {
         Self {
             session_id,
             dir,
             events,
             _lock: lock,
             next,
+            offsets: Arc::new(offsets),
             fsyncs: 0,
             watchers: Vec::new(),
             latest: BTreeMap::new(),
@@ -350,12 +382,7 @@ impl Inner {
     /// Keeps `line` when its kind is one whose latest wins
     /// (`session_status`, `extensions_loaded`, `steering_queue`).
     fn remember(&mut self, line: &Envelope) {
-        if matches!(
-            line.kind.as_str(),
-            "session_status" | "extensions_loaded" | "steering_queue"
-        ) {
-            self.latest.insert(line.kind.clone(), line.clone());
-        }
+        keep_latest(&mut self.latest, line);
     }
 
     /// Appends one line in one write, and fsyncs it when `sync` says. A write
@@ -372,6 +399,8 @@ impl Inner {
             )));
         }
         self.next += 1;
+        self.offsets
+            .push(u64::try_from(bytes.len()).unwrap_or(u64::MAX));
         if sync {
             self.fsyncs += 1;
             self.events.sync_data().map_err(io_at(&path))?;
@@ -386,6 +415,17 @@ impl Inner {
             queue.fail(&self.session_id.0, &cause);
         }
         self.failed = Some(cause);
+    }
+}
+
+/// Keeps `line` in `latest` when its kind is one whose latest wins
+/// (`session_status`, `extensions_loaded`, `steering_queue`).
+fn keep_latest(latest: &mut BTreeMap<String, Envelope>, line: &Envelope) {
+    if matches!(
+        line.kind.as_str(),
+        "session_status" | "extensions_loaded" | "steering_queue"
+    ) {
+        latest.insert(line.kind.clone(), line.clone());
     }
 }
 

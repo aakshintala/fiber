@@ -403,3 +403,117 @@ fn a_writer_in_another_process_holds_the_session() {
     assert!(child.wait().unwrap().success());
     assert!(Log::open(tmp.path(), id("s_1"), fakes::clock::FakeClock::new()).is_ok());
 }
+
+/// Overwrites line `index` (from 0) of the session's log in place with bytes
+/// that do not parse, keeping its length, so every offset stays true.
+fn corrupt(dir: &std::path::Path, index: usize) {
+    use std::os::unix::fs::FileExt;
+    let path = dir.join("events.jsonl");
+    let whole = fs::read(&path).unwrap();
+    let mut start = 0;
+    for line in whole.split_inclusive(|b| *b == b'\n').take(index) {
+        start += line.len();
+    }
+    let len = whole[start..].iter().position(|b| *b == b'\n').unwrap();
+    let file = fs::OpenOptions::new().write(true).open(&path).unwrap();
+    file.write_all_at(&vec![b'x'; len], u64::try_from(start).unwrap())
+        .unwrap();
+}
+
+/// A log of `count` durable lines and what each append returned.
+fn steps(name: &str, count: usize) -> (TestDir, Log, Vec<Envelope>) {
+    let tmp = TestDir::new(name);
+    let log = Log::create(tmp.path(), id("s_1"), fakes::clock::FakeClock::new()).unwrap();
+    let written = (0..count)
+        .map(|_| log.append(&empty("step_started"), None, None).unwrap())
+        .collect();
+    (tmp, log, written)
+}
+
+#[test]
+fn a_range_returns_the_lines_at_its_positions() {
+    let (_tmp, log, written) = steps("range", 10);
+    assert_eq!(log.count(), 10);
+    assert_eq!(log.range(3, 4).unwrap(), written[3..7]);
+    assert_eq!(log.range(0, 10).unwrap(), written);
+    // The log ends first.
+    assert_eq!(log.range(7, 10).unwrap(), written[7..]);
+    assert_eq!(log.range(9, 1).unwrap(), written[9..]);
+    assert_eq!(log.range(9, 2).unwrap(), written[9..]);
+    assert!(log.range(10, 1).unwrap().is_empty());
+    assert!(log.range(11, 1).unwrap().is_empty());
+    assert!(log.range(3, 0).unwrap().is_empty());
+}
+
+#[test]
+fn a_range_of_an_empty_log_is_empty() {
+    let (_tmp, log, _) = steps("range-empty", 0);
+    assert_eq!(log.count(), 0);
+    assert!(log.range(0, 5).unwrap().is_empty());
+    // An ephemeral line takes no position.
+    log.append(&delta("x"), None, None).unwrap();
+    assert_eq!(log.count(), 0);
+    assert!(log.range(0, 5).unwrap().is_empty());
+}
+
+#[test]
+fn a_range_reads_lines_longer_than_64_kib_before_and_inside_it() {
+    let tmp = TestDir::new("range-long");
+    let log = Log::create(tmp.path(), id("s_1"), fakes::clock::FakeClock::new()).unwrap();
+    let long = || {
+        event(
+            "session_named",
+            serde_json::json!({"name": "n".repeat(100 * 1024), "by": "person"}),
+        )
+    };
+    let written = [
+        log.append(&long(), None, None).unwrap(),
+        log.append(&empty("step_started"), None, None).unwrap(),
+        log.append(&long(), None, None).unwrap(),
+        log.append(&empty("step_started"), None, None).unwrap(),
+    ];
+    assert_eq!(log.range(1, 3).unwrap(), written[1..]);
+    assert_eq!(log.range(2, 1).unwrap(), written[2..3]);
+}
+
+#[test]
+fn a_range_holds_lines_appended_after_open() {
+    let (tmp, log, mut written) = steps("range-reopen", 3);
+    drop(log);
+    let log = Log::open(tmp.path(), id("s_1"), fakes::clock::FakeClock::new()).unwrap();
+    assert_eq!(log.count(), 3);
+    assert_eq!(log.range(0, 10).unwrap(), written);
+    for _ in 0..2 {
+        written.push(log.append(&empty("step_started"), None, None).unwrap());
+    }
+    assert_eq!(log.count(), 5);
+    assert_eq!(log.range(3, 2).unwrap(), written[3..]);
+    assert_eq!(log.range(0, 10).unwrap(), written);
+}
+
+#[test]
+fn a_range_after_a_torn_tail_ends_before_it_and_appends_carry_on() {
+    let (tmp, log, mut written) = steps("range-torn", 2);
+    drop(log);
+    let dir = tmp.session(&id("s_1"));
+    append_raw(&dir, br#"{"kind":"step_started","session_id":"s_1","#);
+    let log = Log::open(tmp.path(), id("s_1"), fakes::clock::FakeClock::new()).unwrap();
+    assert_eq!(log.range(0, 10).unwrap(), written);
+    written.push(log.append(&empty("step_started"), None, None).unwrap());
+    assert_eq!(log.range(2, 1).unwrap(), written[2..]);
+    assert_eq!(log.range(0, 10).unwrap(), written);
+}
+
+#[test]
+fn a_range_parses_only_its_own_lines() {
+    let (tmp, log, written) = steps("range-bad", 6);
+    corrupt(&tmp.session(&id("s_1")), 1);
+    // A bad line before the window is never parsed.
+    assert_eq!(log.range(2, 4).unwrap(), written[2..]);
+    // One inside it is an error naming it.
+    let err = log.range(0, 3).unwrap_err();
+    assert!(err.to_string().contains("line 2"), "{err}");
+    assert_eq!(err.code(), contract::ErrorCode::LogCorrupt);
+    let err = log.range(1, 1).unwrap_err();
+    assert!(err.to_string().contains("line 2"), "{err}");
+}
