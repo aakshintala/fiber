@@ -106,6 +106,17 @@ fn start(feed: &Arc<Feed>, clock: &FakeClock) {
     await_scanner(clock);
 }
 
+/// Stops `feed` under [`DEADLINE`]: a stop that hangs fails the test.
+fn stop_within(feed: &Arc<Feed>) {
+    let (tx, rx) = mpsc::channel();
+    let stopping = Arc::clone(feed);
+    thread::spawn(move || {
+        stopping.stop();
+        tx.send(()).unwrap_or(());
+    });
+    assert!(rx.recv_timeout(DEADLINE).is_ok(), "stop returns");
+}
+
 /// A feed subscriber's far end: lines read under [`DEADLINE`].
 struct Sub {
     id: u64,
@@ -198,7 +209,7 @@ fn a_running_session_is_found_at_start_and_its_status_relayed_byte_for_byte() {
     assert!(session.await_subscribed(1, DEADLINE));
     assert_eq!(sub.raw("the session's status"), line);
     assert_eq!(entry_of(&feed, &id), Some("running"));
-    feed.stop();
+    stop_within(&feed);
 }
 
 #[test]
@@ -213,7 +224,7 @@ fn a_socket_that_appears_after_start_is_found_after_one_scan() {
     clock.advance(RUN_SCAN);
     assert!(session.await_subscribed(1, DEADLINE));
     assert_eq!(sub.raw("the late session's status"), line);
-    feed.stop();
+    stop_within(&feed);
 }
 
 #[test]
@@ -228,7 +239,7 @@ fn a_name_that_is_not_a_session_id_is_never_connected() {
     // The scan that found the session is complete: `hub` was skipped.
     assert!(!lock(&feed.state).tracked.contains_key("hub"));
     assert!(!hub.await_subscribed(1, Duration::ZERO));
-    feed.stop();
+    stop_within(&feed);
 }
 
 #[test]
@@ -260,7 +271,7 @@ fn a_delegate_never_reaches_a_subscriber_and_is_not_connected_again() {
     await_scanner(&clock);
     assert!(!child.await_subscribed(2, Duration::ZERO));
     assert_eq!(entry_of(&feed, &delegate), None);
-    feed.stop();
+    stop_within(&feed);
 }
 
 /// Runs session 1 to its socket's close, its log ending in `last` and its
@@ -296,7 +307,7 @@ fn a_log_ending_in_fiber_exited_is_exited_and_the_session_leaves_the_feed() {
     assert_eq!(how, "exited");
     assert_eq!(entry_of(&feed, &id(1)), None);
     assert!(temp.rows().is_empty(), "the session appends its own row");
-    feed.stop();
+    stop_within(&feed);
 }
 
 #[test]
@@ -305,7 +316,7 @@ fn a_log_ending_in_rewound_is_exited() {
     let (feed, _, _sub, how) = leave(&temp, "rewound", "idle", false);
     assert_eq!(how, "exited");
     assert_eq!(entry_of(&feed, &id(1)), None);
-    feed.stop();
+    stop_within(&feed);
 }
 
 #[test]
@@ -328,7 +339,7 @@ fn any_other_last_line_is_crashed_with_a_row_and_the_session_stays() {
     let mut fresh = Sub::new(&feed);
     assert_eq!(fresh.next("the crashed status")["kind"], "session_status");
     fresh.left(&id(1), "crashed");
-    feed.stop();
+    stop_within(&feed);
 }
 
 #[test]
@@ -342,7 +353,7 @@ fn a_session_that_exits_waiting_stays_in_the_feed() {
     let line = fresh.next("the waiting status");
     assert_eq!(line["payload"]["state"], "waiting");
     fresh.left(&id(1), "exited");
-    feed.stop();
+    stop_within(&feed);
 }
 
 #[test]
@@ -358,7 +369,7 @@ fn a_session_whose_directory_is_gone_exited_and_leaves_nothing() {
     sub.left(&id, "exited");
     assert_eq!(entry_of(&feed, &id), None);
     assert!(temp.rows().is_empty());
-    feed.stop();
+    stop_within(&feed);
 }
 
 #[test]
@@ -380,7 +391,7 @@ fn a_session_that_never_sent_a_status_gets_no_session_left() {
     let (_session, line) = running(&temp, &other, "idle");
     clock.advance(RUN_SCAN);
     assert_eq!(sub.raw("the next session's status"), line);
-    feed.stop();
+    stop_within(&feed);
 }
 
 #[test]
@@ -399,7 +410,7 @@ fn a_crashed_session_that_comes_back_is_running_again() {
     assert_eq!(entry_of(&feed, &id), Some("running"));
     let (code, _) = feed.dismiss(&args(json!({"session": id}))).unwrap_err();
     assert_eq!(code, ErrorCode::StaleRequest);
-    feed.stop();
+    stop_within(&feed);
 }
 
 #[test]
@@ -451,7 +462,7 @@ fn a_dead_or_slow_subscriber_does_not_stop_a_live_one() {
     );
     assert_eq!(lock(&feed.state).subscribers.len(), before - 1);
     drop(slow_far);
-    feed.stop();
+    stop_within(&feed);
 }
 
 #[test]
@@ -478,7 +489,7 @@ fn each_subscriber_gets_its_own_id_and_unsubscribe_ends_only_that_one() {
         .map(|sub| sub.id)
         .collect();
     assert_eq!(left, [first.id]);
-    feed.stop();
+    stop_within(&feed);
 }
 
 #[test]
@@ -515,7 +526,7 @@ fn a_snapshot_sends_left_sessions_before_running_ones() {
     assert_eq!(first["ts"], 2);
     sub.left(&crashed, "crashed");
     assert_eq!(sub.raw("the running status"), line);
-    feed.stop();
+    stop_within(&feed);
 }
 
 #[test]
@@ -551,7 +562,7 @@ fn start_seeds_crashed_and_waiting_sessions_but_not_running_or_gone_ones() {
     sub.left(&id(1), "crashed");
     assert_eq!(sub.next("the second seed")["payload"]["state"], "waiting");
     sub.left(&id(2), "exited");
-    feed.stop();
+    stop_within(&feed);
 }
 
 #[test]
@@ -575,8 +586,8 @@ fn dismiss_drops_only_a_crashed_session() {
     assert_eq!(feed.dismiss(&args(json!({ "session": crashed }))), Ok(None));
     assert_eq!(entry_of(&feed, &crashed), None);
     stale(&feed, &crashed);
-    seeded.stop();
-    feed.stop();
+    stop_within(&seeded);
+    stop_within(&feed);
 }
 
 #[test]
@@ -634,7 +645,7 @@ fn recent_answers_a_page_without_running_sessions() {
         ids(feed.recent(&args(json!({"before": id(2)}))).unwrap()),
         [id(1)]
     );
-    feed.stop();
+    stop_within(&feed);
 }
 
 #[test]
@@ -746,5 +757,5 @@ fn a_session_resumed_before_its_end_is_read_is_not_crashed() {
     assert!(temp.rows().is_empty());
     clock.advance(RUN_SCAN);
     assert_eq!(sub.raw("the resumed status"), again);
-    feed.stop();
+    stop_within(&feed);
 }
