@@ -244,7 +244,8 @@ final message, any questions, usage totals and worktree state. Their keys are
   a worktree under `~/.fiber/projects/<key>/worktrees/<id>`. Fiber runs the
   `git` program; no git library is linked in.
 - At the end of a run, a worktree with nothing uncommitted and no commits beyond
-  its base is removed. Otherwise it is kept. Fiber never removes a kept
+  its base is removed. Otherwise it is kept. Uncommitted follows git: files the
+  repository ignores, such as build output, are not changes. Fiber never removes a kept
   worktree on its own; `fiber sessions prune` removes one that holds nothing
   to lose, or any with `--force` (`docs/invocation.md`, "Deleting and
   pruning").
