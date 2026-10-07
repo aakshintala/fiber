@@ -35,10 +35,11 @@ pub(crate) fn rows(line: Line<'_>, width: u16) -> usize {
 
 /// Draws `app` into `area` of `buf`, from the bottom up: the input line
 /// on the last row with a completion panel above it, or the approval panel
-/// in their place, then the badge, the
-/// quit hint and the notice when shown, and the conversation in the rows
-/// left. A screen too short for them all drops the notice first, then the
-/// hint, then the badge. A panel taller than the screen keeps its top.
+/// in their place, then the badge, the quit hint and the notice when
+/// shown, and the conversation in the rows left, or the key map over them
+/// while it is open. A screen too short for them all drops the notice
+/// first, then the hint, then the badge. A panel taller than the screen
+/// keeps its top.
 pub(crate) fn render(app: &App, area: Rect, buf: &mut Buffer) {
     let width = usize::from(area.width);
     let mut bottom = area.bottom();
@@ -88,7 +89,14 @@ pub(crate) fn render(app: &App, area: Rect, buf: &mut Buffer) {
         put(buf, area, &mut bottom, notice, Style::default());
     }
     let rows = bottom.saturating_sub(area.y);
-    conversation_rows(app, Rect::new(area.x, area.y, area.width, rows), buf);
+    let conversation = Rect::new(area.x, area.y, area.width, rows);
+    match app.keymap_top() {
+        Some(top) => Paragraph::new(crate::keymap::lines().join("\n"))
+            .wrap(Wrap { trim: false })
+            .scroll((to_u16(top), 0))
+            .render(conversation, buf),
+        None => conversation_rows(app, conversation, buf),
+    }
 }
 
 /// Puts `text` on the row above `bottom` and moves `bottom` up to it;

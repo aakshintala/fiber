@@ -7,7 +7,9 @@
 
 mod app;
 mod approvals;
+mod bindings;
 mod format;
+mod keymap;
 mod keys;
 mod link;
 mod slash;

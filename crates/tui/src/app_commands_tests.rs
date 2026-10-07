@@ -457,3 +457,61 @@ fn an_open_approval_panel_wins_over_the_slash_panel() {
     assert!(app.panel().is_none());
     assert_eq!(shown(&app).len(), 8);
 }
+
+#[test]
+fn slash_question_mark_slash_help_and_f1_open_the_key_map() {
+    for open in ["/?", "/help", "F1"] {
+        let mut app = connected();
+        if open == "F1" {
+            assert_eq!(app.on_key(Key::F1, now()), Effect::None);
+        } else {
+            assert_eq!(enter(&mut app, open), Effect::None, "{open}");
+        }
+        assert_eq!(app.keymap_top(), Some(0), "{open}");
+        assert_eq!(app.draft(), "", "{open}");
+        assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+        assert_eq!(app.keymap_top(), None, "{open}");
+    }
+}
+
+#[test]
+fn the_key_map_scrolls_and_takes_every_key_but_ctrl_c() {
+    let mut app = attached();
+    app.set_size(80, 10);
+    turn_starts(&mut app);
+    app.on_key(Key::F1, now());
+    // A conversation of 9 rows: a page is 8.
+    assert_eq!(app.conversation_height(), 9);
+    app.on_key(Key::Up, now());
+    assert_eq!(app.keymap_top(), Some(0));
+    app.on_key(Key::Down, now());
+    assert_eq!(app.keymap_top(), Some(1));
+    app.on_key(Key::PageDown, now());
+    assert_eq!(app.keymap_top(), Some(9));
+    app.on_key(Key::PageUp, now());
+    assert_eq!(app.keymap_top(), Some(1));
+    app.on_key(Key::PageUp, now());
+    assert_eq!(app.keymap_top(), Some(0));
+    // Down and PageDown stop at the last screenful.
+    for _ in 0..20 {
+        app.on_key(Key::PageDown, now());
+    }
+    let last = app.keymap_top();
+    let rows: usize = crate::keymap::lines()
+        .iter()
+        .map(|line| crate::view::rows(ratatui::text::Line::raw(line.as_str()), 80))
+        .sum();
+    assert_eq!(last, Some(rows - 9));
+    app.on_key(Key::Down, now());
+    assert_eq!(app.keymap_top(), last);
+    // Other keys do nothing: no typing, no interrupt, no send.
+    for key in [Key::Char('x'), Key::Enter, Key::Tab, Key::End, Key::F1] {
+        assert_eq!(app.on_key(key, now()), Effect::None);
+    }
+    assert_eq!(app.draft(), "");
+    assert_eq!(app.keymap_top(), last);
+    // Ctrl+C still arms the quit.
+    app.on_key(Key::CtrlC, now());
+    assert!(app.hint());
+    assert_eq!(app.keymap_top(), last);
+}

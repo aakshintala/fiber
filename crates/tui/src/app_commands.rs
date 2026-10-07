@@ -7,6 +7,7 @@ use std::mem;
 use serde_json::json;
 
 use super::{App, Effect, Kind, Link, Phase, mint, session_command};
+use crate::keymap;
 use crate::keys::Key;
 use crate::slash::{self, SHOWN};
 
@@ -157,9 +158,10 @@ impl App {
                 self.draft.clear();
                 self.open_first()
             }
-            // `?` and `help` open the key map (the next commit).
+            // `?` and `help`.
             _ => {
                 self.draft.clear();
+                self.keymap = Some(0);
                 Effect::None
             }
         };
@@ -222,6 +224,43 @@ impl App {
             .insert(id, (Kind::Command, mem::take(&mut self.draft)));
         self.go_home();
         Effect::Send(lines)
+    }
+
+    /// The key map overlay's top row, while it is open.
+    pub(crate) fn keymap_top(&self) -> Option<usize> {
+        self.keymap
+    }
+
+    /// A key while the key map is open: ↑ ↓ PageUp PageDown scroll it, Esc
+    /// closes it, other keys do nothing.
+    pub(super) fn keymap_key(&mut self, key: &Key) {
+        let Some(top) = self.keymap else {
+            return;
+        };
+        let height = self.conversation_height();
+        let page = height.saturating_sub(1).max(1);
+        let total: usize = keymap::lines()
+            .iter()
+            .map(|line| crate::view::rows(ratatui::text::Line::raw(line.as_str()), self.width))
+            .sum();
+        let last = total.saturating_sub(height);
+        self.keymap = match key {
+            Key::Esc => None,
+            Key::Up => Some(top.saturating_sub(1)),
+            Key::Down => Some(top.saturating_add(1).min(last)),
+            Key::PageUp => Some(top.saturating_sub(page)),
+            Key::PageDown => Some(top.saturating_add(page).min(last)),
+            Key::Char(_)
+            | Key::Backspace
+            | Key::Enter
+            | Key::CtrlC
+            | Key::End
+            | Key::AltA
+            | Key::Tab
+            | Key::BackTab
+            | Key::F1
+            | Key::CtrlO => Some(top),
+        };
     }
 }
 

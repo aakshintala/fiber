@@ -720,3 +720,12 @@ fn slash_panel() {
     }
     insta::assert_snapshot!("slash_panel", sized(&mut app, 80, 24));
 }
+
+#[test]
+fn key_map() {
+    let mut app = empty();
+    let now = fakes::clock::FakeClock::new().now();
+    app.on_key(Key::F1, now);
+    insta::assert_snapshot!("key_map_80x24", sized(&mut app, 80, 24));
+    insta::assert_snapshot!("key_map_40x12", sized(&mut app, 40, 12));
+}

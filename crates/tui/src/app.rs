@@ -138,6 +138,8 @@ pub(crate) struct App {
     slash_closed: bool,
     /// The selected row of the open completion panel.
     selected: usize,
+    /// The key map overlay's top row, while it is open.
+    keymap: Option<usize>,
 }
 
 impl App {
@@ -163,6 +165,7 @@ impl App {
             slash_rows: slash::rows(&[]),
             slash_closed: false,
             selected: 0,
+            keymap: None,
         }
     }
 
@@ -182,13 +185,17 @@ impl App {
         effect
     }
 
-    /// Hands one key to what is on top: the approval panel, a
+    /// Hands one key to what is on top: the key map, the approval panel, a
     /// completion panel, then the input box.
     fn route_key(&mut self, key: Key, now: Instant) -> Effect {
         if key == Key::CtrlC {
             return self.on_ctrl_c(now);
         }
         self.armed_at = None;
+        if self.keymap.is_some() {
+            self.keymap_key(&key);
+            return Effect::None;
+        }
         match self.queue.on_key(&key) {
             Some(PanelKey::Handled) => return Effect::None,
             Some(PanelKey::Answer) => return self.answer(),
@@ -218,7 +225,11 @@ impl App {
                 self.follow();
                 Effect::None
             }
-            Key::Up | Key::Down | Key::Tab | Key::BackTab | Key::F1 => Effect::None,
+            Key::F1 => {
+                self.keymap = Some(0);
+                Effect::None
+            }
+            Key::Up | Key::Down | Key::Tab | Key::BackTab => Effect::None,
             Key::AltA => self.open_first(),
         }
     }
