@@ -327,7 +327,7 @@ impl<B: Backend> Loop<B> {
                             self.kitty();
                             Effect::None
                         }
-                        Event::Reply(Reply::DeviceAttributes) => Effect::None,
+                        Event::Reply(Reply::DeviceAttributes) | Event::Mouse(_) => Effect::None,
                     };
                     match effect {
                         Effect::None => {}

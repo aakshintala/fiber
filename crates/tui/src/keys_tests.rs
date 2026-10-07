@@ -1,6 +1,6 @@
 //! Tests for the byte parser.
 
-use super::{Edit, Event, Key, Parser, Reply};
+use super::{Button, Edit, Event, Key, Mouse, MouseKind, Parser, Reply};
 
 /// Feeds `chunks` in order, concatenating every read's events.
 fn feed_all(chunks: &[&[u8]]) -> Vec<Event> {
@@ -434,4 +434,130 @@ fn f1_in_its_three_forms() {
     assert!(feed_all(&[b"\x1b[12~"]).is_empty());
     assert!(feed_all(&[b"\x1b[1;2P"]).is_empty());
     assert!(feed_all(&[b"\x1b[1~"]).is_empty());
+}
+
+/// One mouse event at 0-based `col`, `row`.
+fn mouse(kind: MouseKind, col: u16, row: u16) -> Event {
+    Event::Mouse(Mouse { kind, col, row })
+}
+
+#[test]
+fn sgr_presses_and_releases() {
+    assert_eq!(
+        feed_all(&[b"\x1b[<0;10;5M"]),
+        vec![mouse(MouseKind::Press(Button::Left), 9, 4)]
+    );
+    assert_eq!(
+        feed_all(&[b"\x1b[<1;12;3M"]),
+        vec![mouse(MouseKind::Press(Button::Middle), 11, 2)]
+    );
+    assert_eq!(
+        feed_all(&[b"\x1b[<2;1;1M"]),
+        vec![mouse(MouseKind::Press(Button::Right), 0, 0)]
+    );
+    // A release is any `m`, whatever button it names.
+    assert_eq!(
+        feed_all(&[b"\x1b[<0;10;5m"]),
+        vec![mouse(MouseKind::Release, 9, 4)]
+    );
+    assert_eq!(
+        feed_all(&[b"\x1b[<3;10;5m"]),
+        vec![mouse(MouseKind::Release, 9, 4)]
+    );
+    // A press of no button is no event.
+    assert!(feed_all(&[b"\x1b[<3;10;5M"]).is_empty());
+}
+
+#[test]
+fn sgr_motion_drag_and_wheel() {
+    assert_eq!(
+        feed_all(&[b"\x1b[<35;3;2M"]),
+        vec![mouse(MouseKind::Motion, 2, 1)]
+    );
+    assert_eq!(
+        feed_all(&[b"\x1b[<32;3;2M"]),
+        vec![mouse(MouseKind::Drag(Button::Left), 2, 1)]
+    );
+    assert_eq!(
+        feed_all(&[b"\x1b[<34;3;2M"]),
+        vec![mouse(MouseKind::Drag(Button::Right), 2, 1)]
+    );
+    assert_eq!(
+        feed_all(&[b"\x1b[<64;1;1M"]),
+        vec![mouse(MouseKind::WheelUp, 0, 0)]
+    );
+    assert_eq!(
+        feed_all(&[b"\x1b[<65;1;1M"]),
+        vec![mouse(MouseKind::WheelDown, 0, 0)]
+    );
+    // Horizontal wheels, and buttons 8 and up, are no events.
+    assert!(feed_all(&[b"\x1b[<66;1;1M"]).is_empty());
+    assert!(feed_all(&[b"\x1b[<67;1;1M"]).is_empty());
+    assert!(feed_all(&[b"\x1b[<128;1;1M"]).is_empty());
+}
+
+#[test]
+fn sgr_modifier_bits_are_ignored() {
+    for cb in [4, 8, 16, 28] {
+        let report = format!("\x1b[<{cb};1;1M");
+        assert_eq!(
+            feed_all(&[report.as_bytes()]),
+            vec![mouse(MouseKind::Press(Button::Left), 0, 0)],
+            "{report:?}"
+        );
+    }
+    assert_eq!(
+        feed_all(&[b"\x1b[<51;4;4M"]),
+        vec![mouse(MouseKind::Motion, 3, 3)]
+    );
+    assert_eq!(
+        feed_all(&[b"\x1b[<80;1;1M"]),
+        vec![mouse(MouseKind::WheelUp, 0, 0)]
+    );
+}
+
+#[test]
+fn sgr_coordinates_up_to_u16_max() {
+    assert_eq!(
+        feed_all(&[b"\x1b[<0;65535;65535M"]),
+        vec![mouse(MouseKind::Press(Button::Left), 65534, 65534)]
+    );
+}
+
+#[test]
+fn a_malformed_sgr_report_is_dropped_and_the_rest_read() {
+    // A non-digit parameter byte; a letter would end the CSI itself.
+    let malformed: [&[u8]; 10] = [
+        b"\x1b[<0;0;5M",
+        b"\x1b[<0;5;0M",
+        b"\x1b[<0;70000;1M",
+        b"\x1b[<0;1;65536M",
+        b"\x1b[<0;1M",
+        b"\x1b[<0;1;1;1M",
+        b"\x1b[<?;1;1M",
+        b"\x1b[<0:1;1;1M",
+        b"\x1b[<0;;1M",
+        b"\x1b[<0;1;1X",
+    ];
+    for report in malformed {
+        let mut bytes = report.to_vec();
+        bytes.push(b'a');
+        assert_eq!(
+            feed_all(&[&bytes]),
+            vec![Event::Key(Key::Char('a'))],
+            "{report:?}"
+        );
+    }
+    // Without the `<` it is no SGR report.
+    assert!(feed_all(&[b"\x1b[0;1;1M"]).is_empty());
+}
+
+#[test]
+fn an_sgr_report_split_across_reads_is_one_event() {
+    let mut parser = Parser::default();
+    assert!(parser.feed(b"\x1b[<0;1").is_empty());
+    assert_eq!(
+        parser.feed(b"2;3M"),
+        vec![mouse(MouseKind::Press(Button::Left), 11, 2)]
+    );
 }
