@@ -258,6 +258,7 @@ fn resumed_session(
         close(session, log, &home, dir, &workspace, &*clock);
         return ask_failed(failed(e.code(), e));
     }
+    let inbox_wake = session.inbox_wake();
     let code = run_turn(
         &session,
         &log,
@@ -284,6 +285,7 @@ fn resumed_session(
                         .on_handoff(forget)
                         .switcher(switching.closure(door), switchable)
                         .repository_code(offer)
+                        .inbox_wake(inbox_wake)
                 }),
                 budget,
                 idle,

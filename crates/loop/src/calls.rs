@@ -22,6 +22,7 @@ use contract::{ActionId, ErrorCode, RequestId, SessionId, TurnId};
 use serde_json::{Map, Value};
 
 use super::completion::{completed, denied, failed, resolved};
+use crate::asking::Release;
 use crate::progress::{SharedWake, Stream};
 use crate::{Error, Loop, schema};
 
@@ -53,6 +54,15 @@ enum State {
 /// Whether a call's completion is written.
 fn is_done(call: &Running) -> bool {
     matches!(call.state, State::Done)
+}
+
+/// Each running call with its stream.
+fn asking(running: &[Running]) -> Vec<(&ActionId, &Stream)> {
+    let streams = running.iter().filter_map(|call| match &call.state {
+        State::Running { stream, .. } => Some((&call.id, stream.as_ref())),
+        State::Ready(_) | State::Done => None,
+    });
+    streams.collect()
 }
 
 /// The written delta's payload serialised as JSON, in bytes
@@ -204,6 +214,9 @@ impl Loop {
             let clock_wake: Arc<dyn Wake> = wake.clone();
             clock.subscribe(Arc::downgrade(&clock_wake));
             let mut running: Vec<Running> = Vec::new();
+            // Closes every call's ask on any return, so no worker the scope
+            // joins is left blocked in one.
+            let mut release = Release::default();
             for (id, name, decision) in decided {
                 let state = match decision {
                     Err(completed) => State::Ready(completed),
@@ -223,15 +236,17 @@ impl Loop {
                             Some(&id),
                         )?;
                         let bound = tool.bound();
-                        let stream = Arc::new(Stream::new(Arc::clone(&wake)));
+                        let stream = Arc::new(Stream::new(Arc::clone(&wake), id.clone()));
+                        release.add(Arc::clone(&stream));
                         let thread_stream = Arc::clone(&stream);
                         let call_cancel = Arc::clone(&cancel);
                         let arguments = Arc::new(arguments);
                         let thread_arguments = Arc::clone(&arguments);
                         scope.spawn(move || {
-                            let output = tool.run(
+                            let output = tool.run_asking(
                                 &thread_arguments,
                                 call_cancel.as_ref(),
+                                thread_stream.as_ref(),
                                 thread_stream.as_ref(),
                             );
                             thread_stream.finish(output);
@@ -248,6 +263,7 @@ impl Loop {
                 running.push(Running { id, state });
             }
             loop {
+                self.serve_interactions(&asking(&running), turn)?;
                 let now = clock.now();
                 // Every delta due now, in request order. A held change the
                 // interval still covers stays held for the flush in
@@ -285,17 +301,17 @@ impl Loop {
                 if running.iter().all(is_done) {
                     return Ok(self.turn_cancelled());
                 }
-                // Nothing to write: park until the earliest held change is
-                // due, an emit, a call returning or a clock move. Each pass
-                // either wrote something above or parks here, never spins.
-                let earliest = running
+                // Nothing to write: wait until the earliest held change or
+                // `until` is due, an emit, a call returning, an ask or a
+                // clock move. Each pass either wrote something above or
+                // waits here, never spins.
+                let calls = asking(&running);
+                let earliest = calls
                     .iter()
-                    .filter_map(|call| match &call.state {
-                        State::Running { stream, .. } => stream.deadline(),
-                        State::Ready(_) | State::Done => None,
-                    })
+                    .filter_map(|(_, stream)| stream.deadline())
+                    .chain(Self::interaction_deadline(&calls))
                     .min();
-                wake.park(clock.as_ref(), earliest);
+                self.wait_step(&wake, &calls, earliest, turn)?;
             }
         })
     }

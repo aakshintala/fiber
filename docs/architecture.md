@@ -46,7 +46,7 @@ ephemeral event where it is display-only.
 
 | Module | Job |
 |---|---|
-| `contract` | The vocabulary every other module speaks: what an event looks like, what a command looks like, and what a tool, a provider and a hook must each be able to do. It contains no behaviour at all. |
+| `contract` | The vocabulary every other module speaks: what an event looks like, what a command looks like, and what a tool, a provider and a hook must each be able to do. It contains no behaviour beyond checking that a value fits the vocabulary. |
 | `log` | Owns the session directory. The only thing that opens `events.jsonl`, holds the lock, mints `seq` and decides fsync order. Also hands events to whoever is watching, and writes the diagnostic files in `logs/`. |
 | `loop` | Runs turns and steps (`docs/loop.md`). The only thing that decides what happens next. |
 | `provider` | Talks to model APIs: wire formats, credentials, streaming. Reached only through the provider seam. |
@@ -256,7 +256,11 @@ and 0.35 ms of CPU over ten seconds on macOS arm64.
 
 Everything that wants the loop's attention between steps sends to one
 queue: a driver's commands and news from a background job. A step waits on
-its own tool calls directly ("Tool calls in a step"). The loop blocks on
+its own tool calls directly ("Tool calls in a step"). While a call waits on
+an interaction it raised, the step also reads the queue, as an approval
+wait does, so the `reply` reaches it: anything else it takes then is
+admitted as at a step boundary, and a steering message still applies at the
+next one (`docs/events.md`, "Interactions"). The loop blocks on
 that queue when it is idle, which is why an idle Fiber costs nothing.
 
 The loop drains the queue **at step boundaries** — between one round-trip to

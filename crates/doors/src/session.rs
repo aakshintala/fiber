@@ -311,6 +311,15 @@ impl Session {
         })
     }
 
+    /// The wake a running tool call's interaction reaches the loop through
+    /// (`docs/architecture.md`, "One inbox"): each wake puts
+    /// `Delivery::Cancelled` in the inbox. It holds the gate weakly, so the
+    /// loop never keeps its own inbox open, and after [`Session::close`] it
+    /// wakes nothing.
+    pub fn inbox_wake(&self) -> Arc<dyn Wake> {
+        Arc::new(InboxWake(Arc::downgrade(&self.gate)))
+    }
+
     /// Makes `fiber_exited` the last line this process writes: no later
     /// `clients` line is emitted, no new driver shell runs, and every
     /// running one is cancelled and waited for. Called just before
@@ -454,6 +463,17 @@ impl Gate {
         };
         if let Err(mpsc::SendError(delivery)) = inbox.send(delivery) {
             drop(delivery);
+        }
+    }
+}
+
+/// [`Session::inbox_wake`]'s wake.
+struct InboxWake(Weak<Gate>);
+
+impl Wake for InboxWake {
+    fn wake(&self) {
+        if let Some(gate) = self.0.upgrade() {
+            gate.deliver(Delivery::Cancelled);
         }
     }
 }

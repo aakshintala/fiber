@@ -23,6 +23,7 @@ use log::Log;
 pub(crate) use util::{ended, mint, variables};
 
 mod answer;
+mod asking;
 mod calls;
 mod cancel;
 mod caps;
@@ -36,6 +37,7 @@ mod handoff;
 mod hooks;
 mod hosted;
 mod inbox;
+mod interactions;
 mod jobs;
 mod late_cost;
 mod offer;
@@ -222,6 +224,8 @@ pub struct Loop {
     chosen: Option<contract::ThinkingLevel>,
     /// When a switch cleared the last request while warming.
     warm_stopped: Option<std::time::Instant>,
+    /// Puts a wake in the inbox; `None` leaves tool interactions unanswerable.
+    inbox_wake: Option<Arc<dyn contract::clock::Wake>>,
 }
 
 /// The one built preamble: what every request sends and what
@@ -344,6 +348,7 @@ impl Loop {
             pending: Vec::new(),
             chosen: None,
             warm_stopped: None,
+            inbox_wake: None,
         })
     }
 

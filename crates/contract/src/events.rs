@@ -5,6 +5,7 @@
 
 mod action;
 mod context;
+mod fit;
 mod host;
 mod offer;
 mod session;
