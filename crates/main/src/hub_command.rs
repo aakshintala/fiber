@@ -29,6 +29,15 @@ fn serve() -> i32 {
         Ok(home) => home,
         Err(error) => return fail(failure(error.code(), error.to_string())),
     };
+    let exe = match std::env::current_exe() {
+        Ok(exe) => exe,
+        Err(error) => {
+            return fail(failure(
+                ErrorCode::IoFailed,
+                format!("the running binary: {error}"),
+            ));
+        }
+    };
     let clock: Arc<dyn contract::clock::Clock> = Arc::new(crate::clock::System);
     let configure = {
         let home = home.clone();
@@ -38,7 +47,7 @@ fn serve() -> i32 {
         &home,
         configure,
         env!("CARGO_PKG_VERSION"),
-        Arc::new(SpawnStarter),
+        Arc::new(SpawnStarter { exe }),
         clock,
     ))
 }
@@ -95,7 +104,10 @@ fn fail(failure: Failure) -> i32 {
 /// generates its id and passes it on that command's line, so the starter
 /// knows the id before the process runs and nothing is read back
 /// (`docs/invocation.md`, "The hub").
-struct SpawnStarter;
+struct SpawnStarter {
+    /// This process's path, read once when the hub starts.
+    exe: PathBuf,
+}
 
 impl hub::Starter for SpawnStarter {
     fn start(
@@ -104,11 +116,13 @@ impl hub::Starter for SpawnStarter {
         workspace: &Path,
         model: Option<&str>,
     ) -> std::io::Result<Box<dyn hub::Started>> {
+        let _recorded = &self.exe;
         let exe = std::env::current_exe()?;
         spawn(id, session_command(&exe, id, workspace, model, false))
     }
 
     fn resume(&self, id: &SessionId, workspace: &Path) -> std::io::Result<Box<dyn hub::Started>> {
+        let _recorded = &self.exe;
         let exe = std::env::current_exe()?;
         spawn(id, session_command(&exe, id, workspace, None, true))
     }
