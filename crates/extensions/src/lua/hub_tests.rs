@@ -494,3 +494,42 @@ fn set_emit_after_seal_installs_nothing_and_flushes_nothing() {
         "nothing is emitted after seal"
     );
 }
+
+/// A driver whose presence is all `driver` reports: it answers `Ok(None)`.
+struct TestDrive;
+
+impl contract::extension::Drive for TestDrive {
+    fn drive(
+        &self,
+        _extension: &str,
+        _command: &str,
+        _args: serde_json::Map<String, serde_json::Value>,
+        answer: contract::inbox::Ack,
+    ) {
+        answer.0(Ok(None));
+    }
+}
+
+/// Disposed but not sealed: `driver` returns none, so the `||` becoming
+/// `&&` would wrongly return the driver.
+#[test]
+fn driver_after_dispose_alone_is_none() {
+    let hub = Hub::new(FakeClock::new());
+    hub.set_driver(Arc::new(TestDrive) as Arc<dyn contract::extension::Drive>);
+    assert!(hub.driver().is_some(), "a driver is bound before the drop");
+    hub.dispose("ext");
+    assert!(!hub.lock().sealed, "dispose alone does not seal");
+    assert!(hub.driver().is_none(), "no drive follows the drop");
+}
+
+/// Sealed but not disposed: `driver` returns none, so the `||` becoming
+/// `&&` would wrongly return the driver.
+#[test]
+fn driver_after_seal_alone_is_none() {
+    let hub = Hub::new(FakeClock::new());
+    hub.set_driver(Arc::new(TestDrive) as Arc<dyn contract::extension::Drive>);
+    assert!(hub.driver().is_some(), "a driver is bound before the seal");
+    hub.seal();
+    assert!(!hub.lock().disposed, "seal alone does not dispose");
+    assert!(hub.driver().is_none(), "no drive follows fiber_exited");
+}

@@ -362,9 +362,9 @@ fn settle(
                                 driver.drive(&extension, &command, args, ack);
                             });
                     if let Err(source) = spawned {
-                        if let Some(pos) = parked.iter().position(|p| p.id == id) {
-                            parked.swap_remove(pos);
-                        }
+                        // The spawn failed after the park: drop exactly the
+                        // callback just parked, so nothing later resumes it.
+                        take_parked(parked, id);
                         return hub.finish(
                             id,
                             Err(Error::Io {
@@ -503,6 +503,19 @@ fn settle(
     hub.notify();
 }
 
+/// Drops the parked callback `id`, when it is still parked, and reports
+/// whether it was there: a failed drive spawn drops exactly what `settle`
+/// just parked, so no later reply resumes it and the thread frees what it
+/// held. Only that entry goes; every other parked callback keeps its
+/// deadline.
+fn take_parked(parked: &mut Vec<Parked>, id: u64) -> bool {
+    let Some(pos) = parked.iter().position(|p| p.id == id) else {
+        return false;
+    };
+    parked.swap_remove(pos);
+    true
+}
+
 /// What a finished `host.exec` run is logged as: the extension, the program
 /// with its arguments and working directory, and how it ended.
 struct ExecMeta {
@@ -527,3 +540,7 @@ impl ExecMeta {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "schedule_tests.rs"]
+mod tests;

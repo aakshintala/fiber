@@ -1110,3 +1110,65 @@ fn lua_seal_directly_drops_late_status_log_and_emit_from_a_parked_command() {
         "nothing reaches the inbox after LuaExtension::seal"
     );
 }
+
+/// A fake door for `SessionExtensions::drive_to`: records each drive and
+/// answers `Ok(None)`, so `host.drive` returns true.
+struct FakeDrive {
+    calls: std::sync::Mutex<Vec<(String, String)>>,
+    called: mpsc::Sender<()>,
+}
+
+impl contract::extension::Drive for FakeDrive {
+    fn drive(
+        &self,
+        extension: &str,
+        command: &str,
+        _args: Map<String, serde_json::Value>,
+        answer: contract::inbox::Ack,
+    ) {
+        self.calls
+            .lock()
+            .unwrap()
+            .push((extension.to_owned(), command.to_owned()));
+        let _sent = self.called.send(());
+        answer.0(Ok(None));
+    }
+}
+
+/// `drive_to` hands the driver to every extension's `host.drive`: before
+/// it the command's drive raises `closing`, after it the drive reaches
+/// that driver. A `drive_to` replaced with `()` would still raise
+/// `closing` after it.
+#[test]
+fn drive_to_hands_the_driver_to_each_extension() {
+    let home = Home::new();
+    home.install(
+        "driver",
+        Some(
+            "fiber.command(\"go\", { timeout = 5000, run = function()\n\
+             local ok, err = pcall(host.drive, \"tools\", {})\n\
+             if ok then return \"drove\" else return err.code end\n\
+             end })\n",
+        ),
+    );
+    let session = home.load(&[]);
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    // No driver bound yet: `host.drive` raises `closing`.
+    let lua = Arc::clone(&session.lua[0]);
+    assert_eq!(bounded(move || lua.command("go", "")).unwrap(), "closing");
+    let (called_tx, called_rx) = mpsc::channel();
+    let drive = Arc::new(FakeDrive {
+        calls: std::sync::Mutex::new(Vec::new()),
+        called: called_tx,
+    });
+    session.drive_to(Arc::clone(&drive) as Arc<dyn contract::extension::Drive>);
+    let lua = Arc::clone(&session.lua[0]);
+    assert_eq!(bounded(move || lua.command("go", "")).unwrap(), "drove");
+    called_rx
+        .recv_timeout(WAIT)
+        .expect("waited for the drive to reach the driver");
+    assert_eq!(
+        drive.calls.lock().unwrap().clone(),
+        [("fiber.test/driver".to_owned(), "tools".to_owned())]
+    );
+}
