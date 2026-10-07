@@ -324,7 +324,7 @@ fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
         }
         Command::Cancel => cancel(conn, id),
         Command::Shell(args) => shell(conn, id, &args, name),
-        Command::Close => {
+        Command::Close(_) => {
             let ack = inbox_ack(conn, id);
             conn.gate.deliver(Delivery::Close(ack));
         }
