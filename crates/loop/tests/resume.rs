@@ -3709,8 +3709,8 @@ impl Provider for ShutsDown {
 
 /// `fiber_exited` under SIGTERM after the resumed process's lines.
 fn exited_on_signal(history: &History) -> Envelope {
-    let code = r#loop::fiber_exited(&history.log, &history.dir, Ok(()), Some(143)).unwrap();
-    assert_eq!(code, 143);
+    let written = r#loop::fiber_exited(&history.log, &history.dir, Ok(()), Some(143)).unwrap();
+    assert_eq!(written.code, 143);
     history.lines().pop().unwrap()
 }
 

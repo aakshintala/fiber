@@ -63,9 +63,19 @@ pub fn mcp_servers_started(
     Ok(())
 }
 
+/// What `fiber_exited` wrote: the exit code and the `error` it carried,
+/// byte for byte the `error` field of the `fiber_exited` line just
+/// appended (`docs/errors.md`, "What a caller gets").
+pub struct Exited {
+    /// The exit code written.
+    pub code: i32,
+    /// The `error` written, `None` on success and under a signal.
+    pub error: Option<Failure>,
+}
+
 /// Writes `fiber_exited` once the loop has stopped: the final message and
 /// the usage, folded from the session's log in `dir`, and `ran`'s error or
-/// else the last turn's. Returns the exit code it wrote: 1 when either
+/// else the last turn's. Returns what it wrote: exit code 1 when either
 /// failed (`docs/errors.md`, "What a caller gets"), otherwise 0. Under a
 /// shutdown, `signal` is its exit code: it is the code written, with no
 /// `error` and no final message, and `suspended_on` also names a request an
@@ -75,7 +85,7 @@ pub fn fiber_exited(
     dir: &Path,
     ran: Result<(), Failure>,
     signal: Option<i32>,
-) -> Result<i32, Error> {
+) -> Result<Exited, Error> {
     let folded = log::read(dir)
         .map_err(Error::from)
         .and_then(|lines| fold(&lines, signal.is_some()).map_err(Error::Unreadable));
@@ -98,12 +108,15 @@ pub fn fiber_exited(
         exit_code,
         usage: fold.ledger.usage(),
         final_message,
-        error,
+        error: error.clone(),
         suspended_on: fold.suspended_on,
         questions: fold.questions,
     });
     log.append(&exited, None, None)?;
-    Ok(exit_code)
+    Ok(Exited {
+        code: exit_code,
+        error,
+    })
 }
 
 /// What `fiber_exited` reports, folded from the session's log.
