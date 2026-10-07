@@ -5,11 +5,12 @@
 //! start or on a departure, it records the instant; while the count stays 0
 //! it waits on the injected clock until that instant plus `idle_exit`, and
 //! while a client is open it waits with no deadline. At expiry with 0
-//! clients it writes `hub_stopped`, removes `run/hub` while still holding
-//! the lock, and returns 0. On the first SIGTERM, SIGINT or SIGHUP it shuts
-//! down every client connection and relay stream, writes `hub_stopped`,
-//! removes `run/hub`, and returns 128 plus the signal. Sessions are
-//! untouched either way.
+//! clients it writes `peak_memory` at the debug level, then `hub_stopped`,
+//! removes `run/hub` while still holding the lock, and returns 0. On the
+//! first SIGTERM, SIGINT or SIGHUP it shuts down every client connection and
+//! relay stream, writes `peak_memory` at the debug level, then
+//! `hub_stopped`, removes `run/hub`, and returns 128 plus the signal.
+//! Sessions are untouched either way.
 
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
@@ -94,11 +95,13 @@ pub(crate) fn run(hub: &Arc<Hub>, held: &Held, idle_exit: Duration, got: &Atomic
                 stop.store(true, Ordering::SeqCst);
                 join_after_wake(&socket, acceptor);
                 hub.shutdown_clients();
+                hub.diag.peak_memory();
                 hub.diag.info("hub_stopped", "The hub stopped: signal.");
                 return Exit::Signal(signal);
             }
             Idle::Expired => {
                 join_after_wake(&socket, acceptor);
+                hub.diag.peak_memory();
                 hub.diag.info("hub_stopped", "The hub stopped: idle.");
                 return Exit::Idle;
             }

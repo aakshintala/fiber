@@ -9,7 +9,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
-use std::time::Duration;
 
 use contract::shapes::Failure;
 use contract::{ErrorCode, SessionId};
@@ -47,9 +46,9 @@ fn serve(exe: Result<PathBuf, String>) -> i32 {
     ))
 }
 
-/// The hub's `hub.idle_exit_ms`, from the configuration read in
-/// `workspace`, the current directory.
-fn configure(home: &Path, workspace: std::io::Result<PathBuf>) -> Result<Duration, Failure> {
+/// The hub's `hub.idle_exit_ms` and `diagnostics.level`, from the
+/// configuration read in `workspace`, the current directory.
+fn configure(home: &Path, workspace: std::io::Result<PathBuf>) -> Result<hub::Settings, Failure> {
     let workspace = workspace.map_err(|error| {
         failure(
             ErrorCode::IoFailed,
@@ -64,7 +63,14 @@ fn configure(home: &Path, workspace: std::io::Result<PathBuf>) -> Result<Duratio
         overrides: Vec::new(),
     })
     .map_err(|error| failure(error.code(), error.to_string()))?;
-    Ok(settings::hub_idle_exit(&config))
+    Ok(hub::Settings {
+        idle_exit: settings::hub_idle_exit(&config),
+        level: if config::diagnostics_debug(&config) {
+            log::diag::Level::Debug
+        } else {
+            log::diag::Level::Info
+        },
+    })
 }
 
 /// The hub's exit code, printing a start failure the way every command

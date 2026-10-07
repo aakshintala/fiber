@@ -207,12 +207,21 @@ has something to record writes `logs/<kind>-<id>.log`, where `<kind>` is
 `session`, `ask` or `tui` and `<id>` its session id once its session log
 exists, or its process id until then.
 
-Each line is one JSON object: `ts`, `level` (`error`, `warn` or `info`),
-`process` (`hub`, `session`, `ask` or `tui`), `session_id` when one is known,
-`code` and `message`, one sentence. For a failure, `code` is its code from
+Each line is one JSON object: `ts`, `level` (`error`, `warn`, `info` or
+`debug`), `process` (`hub`, `session`, `ask` or `tui`), `session_id` when one
+is known, `code` and `message`, one sentence, and on a `debug` line `data`,
+an object of named values. For a failure, `code` is its code from
 `docs/errors.md`. For one of the hub's operations it is the operation's name.
 This shape is a contract: a program that forwards these lines elsewhere reads
 these fields.
+
+`diagnostics.level` (`docs/configuration.md`, "Keys") sets how much is
+recorded. At `"info"`, the default, a process writes only the `error`, `warn`
+and `info` lines below. At `"debug"` it also writes `debug` lines; `error`,
+`warn` and `info` lines keep their shape and carry no `data`. A process reads
+the level when it starts, so a changed value reaches new processes only. A
+debug line holds no credential, token, header value, prompt, model text, tool
+argument or configuration value.
 
 What is recorded:
 
@@ -229,6 +238,11 @@ What is recorded:
   `device_paired` and `device_revoked`, naming the device and the client that
   acted; `session_started` and `session_resumed`, naming the session and the
   device that asked.
+- **At `debug`, the hub's peak memory:** a `peak_memory` line just before
+  each `hub_stopped`. `data.peak_kib` is the process's peak so far: peak RSS
+  (`VmHWM`) on Linux, and peak physical footprint on macOS
+  (`docs/performance.md`, "Measuring"). A peak that cannot be read writes no
+  line.
 
 An event inside a running session is recorded in that session's log and
 nowhere else; a hook that fails in a session, for example, is a `notice` or
@@ -236,8 +250,8 @@ nowhere else; a hook that fails in a session, for example, is a `notice` or
 `logs/` holds a credential or token, prompt or model text, a tool's arguments
 or a configuration value, with one exception: an `extension_log` line is the
 extension's own text, and Fiber records it as given. A failed hook is named
-with its code, never its content. There is one level of detail; a level that
-records requests, their paths, statuses and timings, is not built.
+with its code, never its content. A level that records requests, their paths,
+statuses and timings, is not built.
 
 **Bounds.** `logs/hub.log` is renamed to `logs/hub.log.1` when it passes
 10 MiB, replacing any older one; its single writer makes the rename safe.

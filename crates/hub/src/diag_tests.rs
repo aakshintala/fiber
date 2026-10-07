@@ -254,3 +254,22 @@ fn prune_keeps_100_files_and_leaves_subdirectories_alone() {
     temp.diag();
     assert_eq!(fs::read_dir(&logs).unwrap().count(), 101);
 }
+
+#[test]
+fn a_debug_hub_writes_peak_memory_as_a_hub_line() {
+    let temp = Temp::new();
+    let diag = temp.diag().with_level(log::diag::Level::Debug);
+    diag.peak_memory();
+    let line: serde_json::Value = serde_json::from_str(temp.text().trim_end()).unwrap();
+    assert_eq!(line["level"], "debug");
+    assert_eq!(line["process"], "hub");
+    assert_eq!(line["code"], "peak_memory");
+    assert!(line["data"]["peak_kib"].as_u64().unwrap() > 0, "{line}");
+}
+
+#[test]
+fn at_the_default_level_peak_memory_writes_nothing() {
+    let temp = Temp::new();
+    temp.diag().peak_memory();
+    assert!(!temp.log().exists());
+}

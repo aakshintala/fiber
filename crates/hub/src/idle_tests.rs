@@ -20,6 +20,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use contract::clock::Clock;
+use log::diag::Level;
 
 use super::*;
 use crate::connection::Hub;
@@ -68,6 +69,16 @@ fn serve_in(
     idle: Duration,
     clock: Arc<fakes::clock::FakeClock>,
 ) -> mpsc::Receiver<i32> {
+    serve_at(temp, idle, clock, Level::Info)
+}
+
+/// [`serve_in`] at a diagnostic level.
+fn serve_at(
+    temp: &Temp,
+    idle: Duration,
+    clock: Arc<fakes::clock::FakeClock>,
+    level: Level,
+) -> mpsc::Receiver<i32> {
     let home = temp.dir.clone();
     let timed: Arc<dyn contract::clock::Clock> = clock;
     let (done_tx, done_rx) = mpsc::channel();
@@ -76,7 +87,12 @@ fn serve_in(
         .spawn(move || {
             let code = crate::serve(
                 &home,
-                move || Ok(idle),
+                move || {
+                    Ok(crate::Settings {
+                        idle_exit: idle,
+                        level,
+                    })
+                },
                 "0.0.0",
                 Arc::new(FakeStarter::hang(&home)),
                 timed,
@@ -94,13 +110,23 @@ fn serve_with_hub(
     idle: Duration,
     clock: Arc<fakes::clock::FakeClock>,
 ) -> (Arc<Hub>, Arc<AtomicI32>, mpsc::Receiver<i32>) {
+    serve_with_hub_at(temp, idle, clock, Level::Info)
+}
+
+/// [`serve_with_hub`] at a diagnostic level.
+fn serve_with_hub_at(
+    temp: &Temp,
+    idle: Duration,
+    clock: Arc<fakes::clock::FakeClock>,
+    level: Level,
+) -> (Arc<Hub>, Arc<AtomicI32>, mpsc::Receiver<i32>) {
     let timed: Arc<dyn contract::clock::Clock> = clock;
     let hub = Arc::new(Hub::new(
         &temp.dir,
         "0.0.0",
         Arc::new(FakeStarter::hang(&temp.dir)),
         Arc::clone(&timed),
-        Diag::open(&temp.dir, timed),
+        Diag::open(&temp.dir, timed).with_level(level),
     ));
     hub.diag.info("hub_started", "The hub started.");
     let lock = crate::listen::lock(&temp.dir).unwrap().unwrap();
@@ -191,6 +217,39 @@ fn with_no_clients_the_hub_exits_at_idle_exit() {
     assert!(log.contains("\"code\":\"hub_started\""));
     assert!(log.contains("\"code\":\"hub_stopped\""));
     assert!(log.contains("The hub stopped: idle."));
+    assert!(!log.contains("\"level\":\"debug\""), "{log}");
+}
+
+/// The codes of the last two lines of `log`, and the peak of the first.
+fn last_two(log: &str) -> (String, String, u64) {
+    let lines: Vec<serde_json::Value> = log
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let [.., before, last] = lines.as_slice() else {
+        panic!("fewer than two lines: {log}");
+    };
+    (
+        before["code"].as_str().unwrap().to_owned(),
+        last["code"].as_str().unwrap().to_owned(),
+        before["data"]["peak_kib"].as_u64().unwrap_or(0),
+    )
+}
+
+#[test]
+fn a_debug_hub_writes_peak_memory_just_before_its_idle_stop() {
+    let temp = Temp::new();
+    let clock = fakes::clock::FakeClock::new();
+    let done = serve_at(&temp, IDLE, Arc::clone(&clock), Level::Debug);
+    await_idle_park(&clock, clock.origin(), "at start");
+    clock.advance(IDLE);
+    assert_eq!(done.recv_timeout(DEADLINE).expect("the hub exits idle"), 0);
+    let (before, last, peak) = last_two(&temp.log());
+    assert_eq!(
+        (before.as_str(), last.as_str()),
+        ("peak_memory", "hub_stopped")
+    );
+    assert!(peak > 0);
 }
 
 #[test]
@@ -337,6 +396,24 @@ fn a_signal_stops_the_hub_with_its_code() {
     assert_eq!(done.recv_timeout(DEADLINE).expect("the hub stops"), 143);
     assert!(!temp.socket().exists());
     assert!(temp.log().contains("The hub stopped: signal."));
+    assert!(!temp.log().contains("peak_memory"));
+}
+
+#[test]
+fn a_debug_hub_writes_peak_memory_just_before_its_signal_stop() {
+    let temp = Temp::new();
+    let clock = fakes::clock::FakeClock::new();
+    let (hub, got, done) = serve_with_hub_at(&temp, IDLE, Arc::clone(&clock), Level::Debug);
+    await_idle_park(&clock, clock.origin(), "at start");
+    got.store(signal_hook::consts::SIGTERM, Ordering::SeqCst);
+    hub.waker().wake();
+    assert_eq!(done.recv_timeout(DEADLINE).expect("the hub stops"), 143);
+    let (before, last, peak) = last_two(&temp.log());
+    assert_eq!(
+        (before.as_str(), last.as_str()),
+        ("peak_memory", "hub_stopped")
+    );
+    assert!(peak > 0);
 }
 
 #[test]

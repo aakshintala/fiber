@@ -85,7 +85,12 @@ fn serve_in(
         let starter = Arc::new(FakeStarter::hang(&home));
         let result = serve(
             &home,
-            configure,
+            move || {
+                configure().map(|idle_exit| crate::Settings {
+                    idle_exit,
+                    level: log::diag::Level::Info,
+                })
+            },
             "0.0.0",
             starter,
             fakes::clock::FakeClock::new(),
