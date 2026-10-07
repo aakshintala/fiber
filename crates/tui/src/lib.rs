@@ -9,6 +9,7 @@ mod app;
 mod approvals;
 mod bindings;
 mod editor;
+mod clipboard;
 mod files;
 mod format;
 mod highlight;
@@ -25,7 +26,7 @@ mod turn;
 mod view;
 
 use std::fs::File;
-use std::io::{self, PipeReader, PipeWriter};
+use std::io::{self, PipeReader, PipeWriter, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
@@ -126,6 +127,8 @@ pub fn run(
         pointer: Pointer::default(),
         hover,
         var: Box::new(|name| std::env::var(name).ok()),
+        copy_command: clipboard::command(|name| std::env::var_os(name), clipboard::on_path)
+            .map(|argv| argv.into_iter().map(str::to_owned).collect()),
     };
     // The first frame waits on nothing: the queries are out, and nothing
     // reads the tty or the hub until it is drawn.
@@ -399,6 +402,8 @@ struct Loop<B: Backend> {
     hover: bool,
     /// Reads an environment variable: `$VISUAL` and `$EDITOR` for Ctrl+G.
     var: Var,
+    /// The system clipboard command a copy is piped to, beside OSC 52.
+    copy_command: Option<Vec<String>>,
 }
 
 impl<B: Backend> Loop<B> {
@@ -436,7 +441,8 @@ impl<B: Backend> Loop<B> {
                         Event::Reply(Reply::DeviceAttributes) => Effect::None,
                     };
                     match effect {
-                        Effect::None | Effect::Copy(_) => {}
+                        Effect::None => {}
+                        Effect::Copy(text) => self.copy(text),
                         Effect::Send(lines) => self.send(&lines),
                         Effect::Quit => return Some(0),
                         Effect::ListFiles => self.list_files(),
@@ -583,6 +589,21 @@ impl<B: Backend> Loop<B> {
         };
         self.app.set_size(width, height);
         self.screen.resize(width, height).err().map(|_| 1)
+    }
+
+    /// Copies `text`: OSC 52 to the tty, then the system clipboard command
+    /// on its own thread. A failed write or a missing or failing command is
+    /// dropped: the other route may still have copied.
+    fn copy(&mut self, text: String) {
+        if let Some(tty) = &self.tty {
+            let mut out: &File = tty;
+            out.write_all(&clipboard::osc52(&text))
+                .and_then(|()| out.flush())
+                .unwrap_or(());
+        }
+        if let Some(argv) = self.copy_command.clone() {
+            drop(clipboard::pipe(argv, text));
+        }
     }
 
     /// Shuts the hub stream down both ways and drops it. The reader thread,
