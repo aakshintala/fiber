@@ -593,8 +593,9 @@ as one a central service keeps. A refusal fails the turn with
 before every step's model request, so it must answer fast: an extension that
 reports spend to a service does that from a watcher on `usage_recorded`
 ("Watchers"), keeps the service's verdict in its state ("State"), and the
-hook only reads it. A reviewer's call, a handoff note request and a
-`host.model` call are counted in `usage` but never reach this hook.
+hook only reads it. A reviewer's call, a handoff note request, a
+`host.model` call and a cache-warming refresh (`docs/prompt-cache.md`,
+"Warming while idle") are counted in `usage` but never reach this hook.
 
 **`after_tool`** runs on every call that ran: `completed`, `failed` and
 `cancelled` alike, since a cancelled command's partial output can hold a

@@ -397,6 +397,9 @@ Fiber.
 - Every operand of a command configured at `shell.read_only` is a path. A
   flag written ending in `=`, such as `--format=`, takes a value, after the
   `=` or as the next word; any other flag takes none.
+- An operand under `/proc/` makes a call not read-only, so it goes to
+  review. A process's environment there can hold a key from an `env`
+  credential source (`docs/configuration.md`, "Secrets").
 
 - A tool that must stay warm between calls, such as an index kept current by
   a file watcher or a language server, is an extension that registers a tool
