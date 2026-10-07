@@ -77,7 +77,7 @@ impl Loop {
         if let Some(forget) = &self.handoff.forget {
             forget();
         }
-        Ok(())
+        self.reviewer_handoff(turn)
     }
 
     /// One handoff: `handoff_started`, the note request, then

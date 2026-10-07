@@ -1036,6 +1036,7 @@ fn reviewer_denies_from_before_the_resume_count_toward_the_session_limit() {
                 subscription: false,
             },
             cache_lifetime: contract::events::CacheLifetime::OneHour,
+            context_window: None,
         }),
         r#loop::BlockLimits::default(),
     );
@@ -1139,6 +1140,7 @@ fn non_reviewer_denies_from_before_the_resume_do_not_count() {
                 subscription: false,
             },
             cache_lifetime: contract::events::CacheLifetime::OneHour,
+            context_window: None,
         }),
         r#loop::BlockLimits::default(),
     );
@@ -1229,6 +1231,7 @@ fn the_reviewers_first_request_contains_the_earlier_tool_calls() {
                 subscription: false,
             },
             cache_lifetime: contract::events::CacheLifetime::OneHour,
+            context_window: None,
         }),
         r#loop::BlockLimits::default(),
     );

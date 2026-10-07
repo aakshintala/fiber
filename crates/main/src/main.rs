@@ -637,6 +637,7 @@ fn choose_reviewer(
             subscription: model.model.subscription,
         },
         cache_lifetime: settings::cache_lifetime(config, &model.reference()),
+        context_window: model.model.context_window,
     })
 }
 

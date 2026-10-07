@@ -16,6 +16,7 @@ use serde_json::{Map, Value};
 use crate::calls::{Approved, Asked};
 use crate::{Error, Loop, Model};
 
+mod selection;
 mod shown;
 
 pub(crate) use shown::{Reviewed, render_reviewed};
@@ -39,6 +40,9 @@ pub struct Reviewer {
     /// resolved for the reviewer's model (`docs/prompt-cache.md`, "Cache
     /// lifetime").
     pub cache_lifetime: CacheLifetime,
+    /// The reviewer model's context window, in tokens; `None` or `Some(0)`
+    /// when unknown.
+    pub context_window: Option<u64>,
 }
 
 /// When a reviewer block hands the call to a person
@@ -67,6 +71,8 @@ pub(crate) struct Sections {
     pub first: String,
     /// The second stage's instruction.
     pub second: String,
+    /// The handoff selection's instruction.
+    pub handoff: String,
 }
 
 /// The reviewer's instructions, split per `docs/system-prompt.md`'s rule.
@@ -76,6 +82,7 @@ pub(crate) fn sections() -> Sections {
         shared: crate::prompt::section(md, "shared"),
         first: crate::prompt::section(md, "first-pass"),
         second: crate::prompt::section(md, "second-pass"),
+        handoff: crate::prompt::section(md, "handoff"),
     }
 }
 
