@@ -9,7 +9,7 @@ impl App {
     /// Handles a click on `target` (`docs/tui.md`, "Bindings"): the badge
     /// reopens the approval queue, "↓ New messages below" jumps to the end,
     /// a conversation line opens or closes what it names, a steering row is
-    /// selected, a notice opens whole, its ✕ dismisses it, and "+N more"
+    /// selected, its ✕ drops it, a notice opens whole, its ✕ dismisses it, and "+N more"
     /// lists the notices.
     pub(crate) fn on_click(&mut self, target: TargetId) -> Effect {
         match target {
@@ -26,6 +26,7 @@ impl App {
                 self.select_steering(at);
                 Effect::None
             }
+            TargetId::DropSteering(at) => self.drop_steering(at),
             TargetId::Notice(id) => {
                 self.open_notice(id);
                 Effect::None

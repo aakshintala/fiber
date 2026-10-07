@@ -169,6 +169,7 @@ fn rows_are_cut_to_the_width_on_one_line() {
         &queue(&[("a long message\nover lines", Some("c_1"))]),
         &mut draft,
     );
-    assert_eq!(steering.lines(10), ["↳ a long m"]);
+    // The last column is the ✕'s.
+    assert_eq!(steering.lines(10), ["↳ a long "]);
     assert_eq!(steering.lines(40), ["↳ a long message over lines"]);
 }

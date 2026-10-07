@@ -99,12 +99,23 @@ pub(crate) fn render(
             }
         }
     }
-    // The steering queue sits above the input box, its newest row lowest.
+    // The steering queue sits above the input box, its newest row lowest;
+    // a row a `steer` sent ends in a ✕ that drops it.
+    let drops = app.steering_drops();
     for (at, row) in app.steering().iter().enumerate().rev() {
-        if let Some(rect) = put(buf, area, &mut bottom, row, Style::default()) {
+        let Some(rect) = put(buf, area, &mut bottom, row, Style::default()) else {
+            continue;
+        };
+        targets.push(Target {
+            id: TargetId::Steering(at),
+            rect,
+        });
+        if drops.get(at) == Some(&true) && area.width > 0 {
+            let close = Rect::new(area.right().saturating_sub(1), rect.y, 1, 1);
+            buf.set_string(close.x, close.y, "✕", Style::default());
             targets.push(Target {
-                id: TargetId::Steering(at),
-                rect,
+                id: TargetId::DropSteering(at),
+                rect: close,
             });
         }
     }

@@ -186,7 +186,7 @@ pub(super) fn feed<B: Backend>(lp: &mut Loop<B>, inputs: Vec<Input>) -> i32 {
     lp.run(&rx)
 }
 
-fn hello() -> contract::HubLine {
+pub(super) fn hello() -> contract::HubLine {
     contract::HubLine {
         kind: "hub_hello".to_owned(),
         ts: 0,
@@ -210,7 +210,7 @@ fn within<T: Send + 'static>(what: &str, work: impl FnOnce() -> T + Send + 'stat
 
 /// Reads one command line the loop wrote to the hub, with one deadline,
 /// and hands the reader back.
-fn command(
+pub(super) fn command(
     mut reader: BufReader<UnixStream>,
     what: &str,
 ) -> (BufReader<UnixStream>, serde_json::Value) {

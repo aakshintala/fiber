@@ -1025,6 +1025,7 @@ fn lines(targets: &[crate::mouse::Target]) -> Vec<(crate::app::Target, Rect)> {
             crate::mouse::TargetId::Badge
             | crate::mouse::TargetId::NewBelow
             | crate::mouse::TargetId::Steering(_)
+            | crate::mouse::TargetId::DropSteering(_)
             | crate::mouse::TargetId::Notice(_)
             | crate::mouse::TargetId::DismissNotice(_)
             | crate::mouse::TargetId::MoreNotices => None,

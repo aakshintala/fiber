@@ -17,6 +17,8 @@ pub(crate) enum TargetId {
     Line(crate::app::Target),
     /// A queued steering row, by its index: selects it.
     Steering(usize),
+    /// A queued steering row's ✕, by its index: drops it.
+    DropSteering(usize),
     /// A notice's box, by its id: shows its whole text.
     Notice(usize),
     /// A notice's ✕, by its id: dismisses it.

@@ -157,13 +157,23 @@ impl Steering {
         }
     }
 
+    /// For each row, oldest first, whether it can be dropped: whether a
+    /// `steer` sent it.
+    pub(crate) fn droppable(&self) -> Vec<bool> {
+        self.rows
+            .iter()
+            .map(|row| row.command_id.is_some())
+            .collect()
+    }
+
     /// The command id of the row at `at`, when it has one.
     pub(crate) fn id_at(&self, at: usize) -> Option<String> {
         self.rows.get(at).and_then(|row| row.command_id.clone())
     }
 
     /// One line per row at `width`, oldest first: "↳ <text>", the selected
-    /// row "▸ <text>", each cut to the width.
+    /// row "▸ <text>", each cut to the width; a selectable row one cell
+    /// shorter, leaving its last column for the ✕ the view draws.
     pub(crate) fn lines(&self, width: u16) -> Vec<String> {
         self.rows
             .iter()
@@ -174,7 +184,8 @@ impl Steering {
                     '↳'
                 };
                 let line = format!("{mark} {}", row.text.replace('\n', " "));
-                format::cut(&line, usize::from(width))
+                let room = usize::from(width).saturating_sub(usize::from(row.command_id.is_some()));
+                format::cut(&line, room)
             })
             .collect()
     }
@@ -200,19 +211,17 @@ impl App {
         self.steering.lines(self.width)
     }
 
+    /// For each steering row, oldest first, whether it draws a ✕.
+    pub(crate) fn steering_drops(&self) -> Vec<bool> {
+        self.steering.droppable()
+    }
+
     /// `select_steering` on the queued row at `index`.
     pub(crate) fn select_steering(&mut self, index: usize) {
         self.steering.select(index, &mut self.draft);
     }
 
     /// `drop_steering` on the queued row at `index`.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "no drawn drop target yet: docs/tui.md places none"
-        )
-    )]
     pub(crate) fn drop_steering(&mut self, index: usize) -> Effect {
         let row = self.steering.id_at(index);
         self.steer_drop(row.into_iter().collect())

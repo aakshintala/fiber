@@ -503,3 +503,41 @@ fn a_click_on_the_orphaned_jobs_line_shows_each_jobs_message() {
         shown(&lp)
     );
 }
+
+#[test]
+fn a_click_on_a_steering_rows_cross_drops_it_and_its_text_still_selects() {
+    use serde_json::json;
+    use std::io::BufReader;
+    use std::os::unix::net::UnixStream;
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    let (ours, theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    feed(&mut lp, vec![Input::Connected(ours, super::tests::hello())]);
+    lp.app
+        .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    feed(
+        &mut lp,
+        vec![session(
+            "steering_queue",
+            json!({"messages": [
+                {"content": [{"type": "text", "text": "use the parser"}], "source": "driver", "command_id": "c_1"},
+                {"content": [{"type": "text", "text": "and test it"}], "source": "driver", "command_id": "c_2"},
+                {"content": [{"type": "text", "text": "from fiber"}], "source": "fiber"},
+            ]}),
+            None,
+        )],
+    );
+    // Rows 8 to 10 above the input line; Fiber's own row has no ✕.
+    let rows: Vec<String> = shown(&lp).lines().map(str::to_owned).collect();
+    assert!(rows[8].ends_with('✕') && rows[9].ends_with('✕'), "{rows:?}");
+    assert!(!rows[10].contains('✕'), "{rows:?}");
+    assert_eq!(hit_at(&lp, 59, 10), None);
+    feed(&mut lp, vec![click(59, 8)]);
+    let (_, dropped) = super::tests::command(BufReader::new(theirs), "the steer_drop");
+    assert_eq!(dropped["command"], "steer_drop");
+    assert_eq!(dropped["session_id"], "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(dropped["args"], json!({"command_id": "c_1"}));
+    // The ✕ selects nothing; the row's text still selects it.
+    assert_eq!(lp.app.input().expand(), "");
+    feed(&mut lp, vec![click(3, 9)]);
+    assert_eq!(lp.app.input().expand(), "and test it");
+}
