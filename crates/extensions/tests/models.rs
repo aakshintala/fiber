@@ -70,6 +70,19 @@ fn a_thinking_suffix_is_stripped_when_the_exact_string_matches_nothing() {
 }
 
 #[test]
+fn an_unknown_model_message_says_to_run_fiber_models() {
+    let setup = Setup::new();
+    let providers = installed(&setup, &[("openai", provider("openai", &["gpt-5.6"]))]);
+    let err = providers.resolve("openai/nope").unwrap_err();
+    let message = err.to_string();
+    assert!(
+        message.contains("openai") && message.contains("nope"),
+        "{message}"
+    );
+    assert!(message.contains("fiber models"), "{message}");
+}
+
+#[test]
 fn a_bare_id_resolves_when_exactly_one_provider_has_it() {
     let setup = Setup::new();
     let providers = installed(

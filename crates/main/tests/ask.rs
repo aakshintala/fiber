@@ -903,10 +903,15 @@ fn a_bedrock_converse_model_fails_before_the_session() {
         &json!({"model": "fake/m"}),
     );
 
-    assert_pre_session(
-        &setup.fiber_with_env(&["ask", "hi"], &[("FIBER_TEST_FAKE_KEY", "key")]),
-        1,
-        "protocol_unsupported",
+    let run = setup.fiber_with_env(&["ask", "hi"], &[("FIBER_TEST_FAKE_KEY", "key")]);
+    assert_pre_session(&run, 1, "protocol_unsupported");
+    let message = run.last()["payload"]["error"]["message"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        message.contains("fake/m") && message.contains("pick another model"),
+        "{message}"
     );
     assert!(server.requests().is_empty());
 }
