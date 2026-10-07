@@ -1233,6 +1233,9 @@ version = "0.0.0"
 dependencies = [
  "contract",
  "fakes",
+ "grep-matcher",
+ "grep-regex",
+ "grep-searcher",
  "libc",
  "proptest",
  "serde_json",

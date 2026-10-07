@@ -7,6 +7,9 @@ publish.workspace = true
 
 [dependencies]
 contract = { path = "../contract" }
+grep-matcher.workspace = true
+grep-regex.workspace = true
+grep-searcher.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 

@@ -15,6 +15,7 @@ mod rate;
 mod read;
 mod resolve;
 mod scan;
+mod search;
 mod weak_emit;
 mod write;
 
