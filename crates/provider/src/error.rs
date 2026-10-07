@@ -117,10 +117,14 @@ impl Error {
                 ..
             } => (
                 *retry_after,
-                Some((*status, secrets.redact(&body_message(body)))),
+                Some((Some(*status), secrets.redact(&body_message(body)))),
             ),
-            Self::ReplyFailed { message, .. } => (None, Some((200, secrets.redact(message)))),
-            Self::QuotaExceeded(message) => (None, Some((200, secrets.redact(message)))),
+            Self::ReplyFailed { message, .. } => (None, Some((Some(200), secrets.redact(message)))),
+            Self::QuotaExceeded(message) => (None, Some((Some(200), secrets.redact(message)))),
+            Self::Sign(
+                contract::signing::Error::Failed(text)
+                | contract::signing::Error::Credential { message: text, .. },
+            ) => (None, Some((None, secrets.redact(text)))),
             Self::Connection(_)
             | Self::StreamIncomplete(_)
             | Self::UnknownStopReason(_)
@@ -129,6 +133,7 @@ impl Error {
             | Self::Sign(_) => (None, None),
         };
         let message = match (self, &code) {
+            (Self::Sign(sign), _) => sign_sentence(provider, sign, secrets),
             (Self::Status { status, .. }, ErrorCode::AuthenticationFailed) => format!(
                 "{provider} rejected the credential (HTTP {status}). Check the key it is \
                  configured with, or log in again with `fiber login {provider}`."
@@ -150,10 +155,33 @@ impl Error {
             retry_after,
             provider: said.map(|(status, message)| ProviderFailure {
                 name: provider.to_owned(),
-                status: Some(status),
+                status,
                 message,
             }),
         }
+    }
+}
+
+/// Fiber's own sentence for a signing failure (`docs/errors.md`, "The
+/// shape"): it names the provider and the function, never the signer's
+/// text, which stays in `provider.message`, redacted.
+fn sign_sentence(provider: &str, error: &contract::signing::Error, secrets: &Secrets) -> String {
+    use contract::signing::Error as Sign;
+    match error {
+        Sign::Failed(_) => format!("{provider}'s sign() failed."),
+        Sign::Credential { code, .. } if *code == ErrorCode::AuthenticationFailed => format!(
+            "{provider}'s credential() failed: the token endpoint rejected the refresh. Run \
+             `fiber login {provider}`."
+        ),
+        Sign::Credential { code, .. } if *code == ErrorCode::ConnectionFailed => {
+            format!("{provider}'s credential() failed: the token endpoint could not be reached.")
+        }
+        Sign::Credential { .. } => {
+            format!("{provider}'s credential() failed. Run `fiber login {provider}`.")
+        }
+        // Today's wording, redacted: the interpolated header name can carry
+        // a known secret.
+        Sign::NotHeaders(_) => secrets.redact(&format!("{provider} could not be signed: {error}")),
     }
 }
 
