@@ -275,15 +275,17 @@ pub fn measure_paging(
 ) -> Result<String, String> {
     const JUMPS: usize = 20;
     let started = clock.now();
-    let raw: Vec<&str> = events
+    // The running turn follows the last `turn_completed`, by non-empty line.
+    let running = events
         .lines()
         .filter(|line| !line.trim().is_empty())
-        .collect();
-    // The running turn follows the last `turn_completed`.
-    let running = raw
-        .iter()
-        .rposition(|line| line.contains(r#""kind":"turn_completed""#))
-        .map_or(0, |at| at.saturating_add(1));
+        .enumerate()
+        .filter_map(|(at, line)| {
+            line.contains(r#""kind":"turn_completed""#)
+                .then_some(at.saturating_add(1))
+        })
+        .last()
+        .unwrap_or(0);
     let mut paging = Paging {
         app: App::new(PathBuf::new()),
         log: Vec::new(),
