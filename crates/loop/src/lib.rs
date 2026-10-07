@@ -32,9 +32,11 @@ mod answer;
 mod calls;
 mod cancel;
 mod changes;
+mod commands;
 mod completion;
 mod conversation;
 mod diag;
+mod error;
 mod handoff;
 mod hooks;
 mod hosted;
@@ -58,58 +60,15 @@ mod util;
 mod warm;
 
 pub use cancel::TurnCancel;
-
-/// Every `/name` the session runs, for the `commands` driver command
-/// (`docs/invocation.md`, "What each command does"): its skills and prompt
-/// templates, read from the places the opening message reads, from the
-/// repository's top level above `workspace`. Reads skill places only,
-/// writes nothing and raises no notice: the opening message raises
-/// discovery's.
-#[must_use]
-pub fn commands(
-    inputs: &PromptInputs,
-    workspace: &std::path::Path,
-) -> Vec<contract::events::CommandInfo> {
-    let workspace = opening::canonical(workspace);
-    let (chain, _) = opening::repo_chain(&workspace);
-    let top = chain.first().unwrap_or(&workspace);
-    skills::commands(
-        &skills::discover(inputs, top).skills,
-        &inputs.skills_disabled,
-    )
-}
+pub use commands::commands;
 pub use conversation::rebuild;
+pub use error::Error;
 pub use handoff::HandoffSettings;
 pub use process::{Exited, extensions_loaded, fiber_exited, fiber_started, mcp_servers_started};
 pub use prompt::PromptInputs;
 pub use resume::{Resumed, resumed};
 pub use retry::Retry;
 pub use reviewer::{BlockLimits, NO_MODEL_MESSAGE, Reviewer};
-
-/// What stops the loop.
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    /// The session log refused a write, so the turn cannot be recorded.
-    #[error(transparent)]
-    Log(#[from] log::Error),
-    /// A durable line's payload does not read as its kind.
-    #[error("a log line does not read as its kind: {0}")]
-    Unreadable(serde_json::Error),
-    /// The log has no `session_started`.
-    #[error("the log has no session_started")]
-    NoSessionStarted,
-}
-
-impl Error {
-    /// The stable code a consumer switches on (`docs/errors.md`,
-    /// "Registry").
-    pub fn code(&self) -> ErrorCode {
-        match self {
-            Self::Log(e) => e.code(),
-            Self::Unreadable(_) | Self::NoSessionStarted => ErrorCode::LogCorrupt,
-        }
-    }
-}
 
 /// The model a session's calls reach, and the prices those calls are logged
 /// at (`docs/model-routing.md`, "Cost").

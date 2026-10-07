@@ -13,19 +13,20 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use contract::clock::{Clock, Wake, wall_ms};
+use crate::client;
+use crate::socket::{bind, remove_socket};
+use crate::{failure, mint};
+use contract::clock::{Clock, Wake};
 use contract::emit::Emit;
 use contract::events::{Clients, CommandInfo, Event, ToolInfo};
 use contract::inbox::{Ack, Delivery, Message};
 use contract::shapes::{ContentPart, Failure, Origin, Sender as CommandSender};
 use contract::tool::Tool;
-use contract::{CommandId, ErrorCode, SCHEMA_VERSION, SessionId};
+use contract::{CommandId, ErrorCode, SessionId};
 use log::{Log, Watcher};
-use serde_json::Map;
 
-use crate::client;
-use crate::socket::{bind, remove_socket};
-use crate::{failure, mint};
+mod event;
+pub(crate) use event::envelope;
 
 // debt: 2 s grace is picked, not measured; a slow client's measured drain time would set it.
 /// How long [`Session::close`] waits for a connection's writer to finish
@@ -778,28 +779,6 @@ fn print(mut watcher: Watcher, mut out: Box<dyn Write + Send>) {
         if line.kind == "fiber_exited" {
             return;
         }
-    }
-}
-
-/// An envelope doors builds itself: an acknowledgement, or a control line
-/// that never leaves the process.
-pub(crate) fn envelope(
-    session: &SessionId,
-    clock: &dyn Clock,
-    event: &Event,
-) -> contract::Envelope {
-    contract::Envelope {
-        kind: event.kind().to_owned(),
-        session_id: session.clone(),
-        ts: wall_ms(clock.wall()),
-        schema_version: SCHEMA_VERSION,
-        turn_id: None,
-        action_id: None,
-        seq: None,
-        payload: match event.payload() {
-            Ok(payload) => payload,
-            Err(_) => Map::new(),
-        },
     }
 }
 

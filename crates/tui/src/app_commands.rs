@@ -635,7 +635,6 @@ impl App {
         self.edited();
         self.settle();
     }
-
 }
 
 #[cfg(test)]

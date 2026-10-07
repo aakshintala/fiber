@@ -116,7 +116,11 @@ fn an_answer_row_keeps_its_hint_and_tag() {
         ..skill("deploy")
     };
     let all = rows(&[template, from_extension]);
-    let lines: Vec<String> = all.iter().skip(9).map(Row::line).collect();
+    let lines: Vec<String> = all
+        .iter()
+        .filter(|row| !is_built_in(&row.name))
+        .map(Row::line)
+        .collect();
     assert_eq!(
         lines,
         [
