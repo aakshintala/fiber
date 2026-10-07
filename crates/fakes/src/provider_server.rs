@@ -5,7 +5,7 @@
 use std::collections::VecDeque;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -301,18 +301,33 @@ impl Drop for ProviderServer {
             state.hold = false;
         }
         self.arrived.notify_all();
-        // A connection wakes the accept thread to see `stopping`. If none can
-        // be made the thread is left blocked rather than joined forever.
-        if TcpStream::connect(self.addr).is_ok()
-            && let Some(accept) = self.accept.take()
-        {
-            // Builds abort on panic (docs/code-quality.md, "Panics"), so a
-            // join never carries one.
-            match accept.join() {
+        if let Some(accept) = self.accept.take() {
+            stop(self.addr, accept, STOP_DEADLINE);
+        }
+    }
+}
+
+/// How long dropping a [`ProviderServer`] waits on the wall clock for its
+/// accept thread to stop. A connection wakes the thread at once; the bound
+/// only stops a drop from hanging on one that never wakes.
+const STOP_DEADLINE: Duration = Duration::from_secs(2);
+
+/// Wakes the accept thread, which has seen `stopping`, by connecting to
+/// `addr`, then joins it. One thread makes the connection and the join, and
+/// one deadline bounds both. Returns whether the thread was joined: a
+/// connection that fails or a join that misses `deadline` leaves the thread
+/// blocked rather than waiting forever. Builds abort on panic
+/// (`docs/code-quality.md`, "Panics"), so a join never carries one.
+fn stop(addr: SocketAddr, accept: JoinHandle<()>, deadline: Duration) -> bool {
+    let (done, joined) = mpsc::channel::<()>();
+    thread::spawn(move || {
+        if TcpStream::connect(addr).is_ok() && accept.join().is_ok() {
+            match done.send(()) {
                 Ok(()) | Err(_) => {}
             }
         }
-    }
+    });
+    joined.recv_timeout(deadline).is_ok()
 }
 
 /// Whether `have` arrivals are still fewer than the `count` waited for.
