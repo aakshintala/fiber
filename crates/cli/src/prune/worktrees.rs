@@ -279,9 +279,9 @@ pub(crate) fn remove_planned(
             ));
             continue;
         }
-        // `remove` gets `force: true` only when `--force` was given and
-        // the second inspection is not clean.
-        let forced = force && unclean.is_some();
+        // An unclean second inspection reaches here only under `--force`,
+        // so `remove` gets `force: true` exactly when something is lost.
+        let forced = unclean.is_some();
         match worktree::remove(&removal.dir, &second, forced) {
             Ok(worktree::Removed::Whole) => freed += removal.bytes,
             Ok(worktree::Removed::BranchKept(error)) => {
