@@ -247,9 +247,15 @@ A separate file means an extension never rewrites the person's `config.json`.
 A secret is a file in `credentials/` in Fiber home, mode 0600. A provider's
 credentials are `credentials/<name>/<label>`, one file per credential label
 (`docs/model-routing.md`, "Credentials"). An extension's secrets share the
-directory as single files: `host.secret(name)` reads `credentials/<name>`. By
-convention, an extension prefixes its names with its own name, such as
-`acme.api_key`. `fiber login <name>` stores one.
+directory as single files: `host.secret(name)` reads `credentials/<name>`. An
+extension declares each name it reads in its manifest's `secrets`, and
+`host.secret` reads no other ("An extension's manifest"). By convention, an
+extension prefixes its names with its own name, such as `acme.api_key`.
+`fiber login <name>` stores a declared secret: it reads the value from a
+hidden prompt, or from stdin without a terminal, and writes
+`credentials/<name>` with mode 0600. A name that is neither a provider nor a
+secret an installed extension declares is refused, so a mistyped name is
+caught rather than stored where nothing reads it.
 
 This is one namespace, not a wall between extensions. An extension runs with
 the account's full rights and could read `credentials/` with `host.fs` anyway
@@ -407,6 +413,7 @@ holds what `docs/extensions.md` ("What a package holds") lists:
   "replaces": ["web_search"],
   "providers": { "acme": ["https://api.acme.dev/v1"] },
   "prompt": "prompt.md",
+  "secrets": ["acme.api_key"],
   "opening": {
     "machine": ["index.md"],
     "project": ["index.md"],
@@ -427,7 +434,9 @@ maps each provider it registers to its base URLs; both default to none, and a
 registration beyond them stops the extension loading (`docs/extensions.md`,
 "What a package holds"). `prompt` names a
 file in the package whose text goes in the system prompt
-(`docs/system-prompt.md`, "Extension texts"). `opening` names files whose text
+(`docs/system-prompt.md`, "Extension texts"). `secrets` lists the names the
+extension reads with `host.secret`, and defaults to none ("Secrets").
+`opening` names files whose text
 goes in the opening message: `machine` lists paths in the extension's machine
 data directory and `project` paths in its project data directory
 (`docs/state.md`, "What each part holds"), each relative to that directory

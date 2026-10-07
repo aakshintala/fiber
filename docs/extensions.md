@@ -62,6 +62,8 @@ An extension is one directory. Its manifest, `extension.json`, states
 - the files in its data directories whose text goes in the opening message,
   and their byte budget (`opening`; `docs/system-prompt.md`, "Extension
   sections")
+- the names of the secrets it reads with `host.secret` (`secrets`), which
+  `fiber login` can then store (`docs/configuration.md`, "Secrets")
 
 Beside the manifest it may hold:
 
@@ -268,6 +270,9 @@ host.hmac_sha256(key, bytes)       -- HMAC-SHA256; returns raw bytes
 json.decode(str) / json.encode(value)   -- JSON, host-provided (Lua has none built in)
 ```
 
+- **`host.secret`** reads only a name the manifest's `secrets` lists. Any
+  other name is an error in the calling code. A declared secret that is not
+  stored returns `nil`, and `fiber doctor` names it.
 - **`host.model`** takes a model reference or a role, messages and a token
   limit. It goes through the session's provider routing and credentials, and
   writes `usage_recorded` naming the extension. It uses its own prompt-cache
