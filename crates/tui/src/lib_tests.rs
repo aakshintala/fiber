@@ -21,6 +21,8 @@ fn launch() -> super::Launch {
         git: false,
         hover: true,
         version: "0.0.1".to_owned(),
+        model: None,
+        thinking: None,
         logo_glyph: "⌇".to_owned(),
     }
 }

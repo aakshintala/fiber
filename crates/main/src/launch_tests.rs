@@ -48,6 +48,34 @@ fn an_identity_elsewhere_is_git_and_names_the_project() {
 }
 
 #[test]
+fn model_thinking_and_logo_glyph_come_from_config() {
+    let dir = fakes::TempDir::new("fiber-launch-model");
+    let workspace = dir.path().to_path_buf();
+    let identity = workspace
+        .canonicalize()
+        .unwrap_or_else(|err| panic!("canonical: {err}"));
+    let set_config = config(
+        dir.path(),
+        &workspace,
+        vec![
+            "model=openai/gpt-5".to_owned(),
+            "thinking=low".to_owned(),
+            "tui.logo_glyph=≈".to_owned(),
+        ],
+    );
+    let set = launch(workspace.clone(), &identity, &set_config);
+    assert_eq!(set.model.as_deref(), Some("openai/gpt-5"));
+    assert_eq!(set.thinking.as_deref(), Some("low"));
+    assert_eq!(set.logo_glyph, "≈");
+    // Unset, the chips show their defaults and the logo its wave.
+    let plain_config = config(dir.path(), &workspace, Vec::new());
+    let unset = launch(workspace, &identity, &plain_config);
+    assert_eq!(unset.model, None);
+    assert_eq!(unset.thinking, None);
+    assert_eq!(unset.logo_glyph, "⌇");
+}
+
+#[test]
 fn tui_hover_defaults_to_on_and_reads_off() {
     let dir = fakes::TempDir::new("fiber-launch-hover");
     let workspace = dir.path().to_path_buf();

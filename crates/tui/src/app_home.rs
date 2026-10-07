@@ -43,6 +43,11 @@ pub(super) struct Home {
     outbox: Vec<String>,
     /// `/resume` asks the next frame to focus the list.
     focus_list: bool,
+    /// The workspace picked for the next `start`, else the launch one.
+    chosen: Option<String>,
+    /// The workspace picker above the box: its list, fixed at open, and
+    /// the selected index.
+    picker: Option<(Vec<String>, usize)>,
 }
 
 /// A session opening from home: its subscribes, the last one whose
@@ -78,6 +83,8 @@ impl App {
             opening: None,
             outbox: Vec::new(),
             focus_list: false,
+            chosen: None,
+            picker: None,
         });
     }
 
@@ -93,25 +100,45 @@ impl App {
     /// What home draws, or `None` unless [`App::on_home`] holds.
     pub(crate) fn home_screen(&self) -> Option<HomeScreen> {
         let home = self.home.as_ref().filter(|_| self.on_home())?;
-        let segment = home
-            .launch
-            .workspace
+        // The workspace in use: the picked one, else the launch
+        // directory. Clicking its chip opens the workspace picker.
+        let workspace = home
+            .chosen
+            .as_deref()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.launch.workspace.clone());
+        let segment = workspace
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .filter(|name| !name.is_empty())
-            .unwrap_or_else(|| home.launch.workspace.display().to_string());
+            .unwrap_or_else(|| workspace.display().to_string());
         Some(HomeScreen {
             version: home.launch.version.clone(),
             // A remote client has no launch directory; the picker it would
             // always show is a later ticket's.
             glyph: home.launch.logo_glyph.clone(),
-            chips: vec![format!("[{segment}]"), "enter starts a session".to_owned()],
+            chips: vec![
+                (Some(Spot::Workspace), format!("[{segment}]")),
+                (
+                    None,
+                    format!("[{}]", home.launch.model.as_deref().unwrap_or("no model")),
+                ),
+                (
+                    None,
+                    format!(
+                        "[thinking: {}]",
+                        home.launch.thinking.as_deref().unwrap_or("default")
+                    ),
+                ),
+                (None, "enter starts a session".to_owned()),
+            ],
             rows: home
                 .sessions
                 .shown(&home.launch.project, false)
                 .iter()
                 .map(|row| (row.key, line(row, &home.launch.project), false))
                 .collect(),
+            picker: home.picker.clone(),
             foot: if self.armed_at.is_some() {
                 super::QUIT_HINT.to_owned()
             } else {
@@ -353,12 +380,44 @@ impl App {
         true
     }
 
-    /// A key for home, ahead of the key map and focus: down in an empty
-    /// box focuses the first row, and down on the last drawn row focuses
-    /// the next one below the fold. `None` for anything else, so the
-    /// focused stops keep moving as they do on the conversation.
+    /// A key for home, ahead of the key map and focus: the picker's keys
+    /// while it is open, then down in an empty box focusing the first
+    /// row, and down on the last drawn row focusing the next one below
+    /// the fold. `None` for anything else, so the focused stops keep
+    /// moving as they do on the conversation.
     pub(super) fn home_key(&mut self, key: &Key) -> Option<Effect> {
-        if !self.on_home() || !matches!(key, Key::Down | Key::Char('j')) {
+        if !self.on_home() {
+            return None;
+        }
+        // The picker takes every key first: moving, choosing and closing
+        // it, while Ctrl+C passes through and anything else is swallowed
+        // so the draft keeps nothing typed into the picker.
+        if self.home.as_ref().is_some_and(|home| home.picker.is_some()) {
+            match key {
+                Key::CtrlC => return None,
+                Key::Up => self.move_picker(false),
+                Key::Down => self.move_picker(true),
+                Key::Enter => self.choose_picker(),
+                Key::Esc => self.close_picker(),
+                Key::Char(_)
+                | Key::Backspace
+                | Key::CtrlO
+                | Key::PageUp
+                | Key::PageDown
+                | Key::End
+                | Key::AltA
+                | Key::Tab
+                | Key::BackTab
+                | Key::F1
+                | Key::CtrlG
+                | Key::CtrlR
+                | Key::AltUp
+                | Key::AltDown
+                | Key::AltX => {}
+            }
+            return Some(Effect::None);
+        }
+        if !matches!(key, Key::Down | Key::Char('j')) {
             return None;
         }
         if self.focus.is_none() {
@@ -397,14 +456,89 @@ impl App {
         None
     }
 
-    /// Clicks `spot` on home: a row opens its session.
+    /// Clicks `spot` on home: a row opens its session, the workspace chip
+    /// opens the picker, and a picker row chooses its workspace.
     pub(super) fn home_click(&mut self, spot: Spot) -> Effect {
         match spot {
             Spot::Entry(key) => self.open_row(key),
+            Spot::Workspace => self.open_picker(),
+            Spot::Pick(at) => self.pick(at),
         }
     }
 
-    /// The text y copies and Ctrl+G opens for `spot`: the row's line.
+    /// Opens the workspace picker above the box: the launch directory
+    /// first, then each distinct workspace from the feed rows and then
+    /// the recent rows, at most ten. Its list is fixed at open.
+    fn open_picker(&mut self) -> Effect {
+        let Some(home) = self.home.as_mut() else {
+            return Effect::None;
+        };
+        let project = home.launch.project.clone();
+        let mut list = vec![home.launch.workspace.display().to_string()];
+        for row in home.sessions.shown(&project, false) {
+            if list.len() == PICKER_CAP {
+                break;
+            }
+            if !list.contains(&row.workspace) {
+                list.push(row.workspace.clone());
+            }
+        }
+        home.picker = Some((list, 0));
+        Effect::None
+    }
+
+    /// Moves the picker's selection one row, clamped to its list.
+    fn move_picker(&mut self, down: bool) {
+        if let Some(home) = self.home.as_mut()
+            && let Some((list, selected)) = home.picker.as_mut()
+        {
+            *selected = if down {
+                (*selected)
+                    .saturating_add(1)
+                    .min(list.len().saturating_sub(1))
+            } else {
+                (*selected).saturating_sub(1)
+            };
+        }
+    }
+
+    /// Chooses the picker's selected workspace for the next `start`.
+    fn choose_picker(&mut self) {
+        let choice = self
+            .home
+            .as_ref()
+            .and_then(|home| home.picker.as_ref())
+            .and_then(|(list, selected)| list.get(*selected).cloned());
+        if let (Some(home), Some(workspace)) = (self.home.as_mut(), choice) {
+            home.chosen = Some(workspace);
+            home.picker = None;
+        }
+    }
+
+    /// Closes the picker, keeping the workspace as it was.
+    fn close_picker(&mut self) {
+        if let Some(home) = self.home.as_mut() {
+            home.picker = None;
+        }
+    }
+
+    /// Clicks the picker row `at`: past the list fixed at open it does
+    /// nothing.
+    fn pick(&mut self, at: usize) -> Effect {
+        let choice = self
+            .home
+            .as_ref()
+            .and_then(|home| home.picker.as_ref())
+            .and_then(|(list, _)| list.get(at).cloned());
+        if let (Some(home), Some(workspace)) = (self.home.as_mut(), choice) {
+            home.chosen = Some(workspace);
+            home.picker = None;
+        }
+        Effect::None
+    }
+
+    /// The text y copies and Ctrl+G opens for `spot`: the row's line;
+    /// controls copy nothing.
     pub(super) fn home_text(&self, spot: Spot) -> Option<String> {
         match spot {
             Spot::Entry(key) => {
@@ -412,17 +546,21 @@ impl App {
                 let row = home.sessions.by_key(key)?;
                 Some(line(row, &home.launch.project))
             }
+            Spot::Workspace | Spot::Pick(_) => None,
         }
     }
 
     /// The workspace in use on home: the attached session's row
-    /// workspace, else the launch workspace.
+    /// workspace, else the picked one, else the launch workspace.
     pub(super) fn home_workspace(&self) -> PathBuf {
         if let Some(home) = &self.home {
             if let Some(session) = self.session()
                 && let Some(row) = home.sessions.row(session)
             {
                 return PathBuf::from(&row.workspace);
+            }
+            if let Some(chosen) = &home.chosen {
+                return PathBuf::from(chosen);
             }
             return home.launch.workspace.clone();
         }
@@ -586,15 +724,19 @@ impl App {
         Vec::new()
     }
 
-    /// The `start` args for `content`: the launch workspace on home, else
-    /// the launch directory as today. Sending one hides the placeholder
-    /// until the run ends.
+    /// The `start` args for `content`: the picked workspace on home,
+    /// else the launch workspace, and the launch directory as today.
+    /// Sending one hides the placeholder until the run ends.
     pub(super) fn start_args(&mut self, content: Value) -> Value {
         match &mut self.home {
             Some(home) => {
                 home.prompted = true;
+                let workspace = home
+                    .chosen
+                    .clone()
+                    .unwrap_or_else(|| home.launch.workspace.display().to_string());
                 json!({
-                    "workspace": home.launch.workspace.display().to_string(),
+                    "workspace": workspace,
                     "content": content,
                 })
             }
@@ -605,6 +747,9 @@ impl App {
         }
     }
 }
+
+/// The picker's rows: the launch directory and nine row workspaces.
+const PICKER_CAP: usize = 10;
 
 /// A `subscribe` line for `session` at `level`, with its id.
 fn subscribe_line(session: &SessionId, level: Level) -> (String, String) {

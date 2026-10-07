@@ -25,12 +25,22 @@ pub(crate) fn launch(workspace: PathBuf, identity: &Path, config: &Config) -> tu
         .get("tui.hover", None)
         .and_then(|(value, _)| value.as_bool())
         .unwrap_or(true);
+    // `model` and `thinking`, unset for the chips' defaults
+    // (`docs/configuration.md`).
+    let model = config
+        .get("model", None)
+        .and_then(|(value, _)| value.as_str().map(str::to_owned));
+    let thinking = config
+        .get("thinking", None)
+        .and_then(|(value, _)| value.as_str().map(str::to_owned));
     tui::Launch {
         workspace,
         project,
         git,
         hover,
         version: env!("CARGO_PKG_VERSION").to_owned(),
+        model,
+        thinking,
         // `tui.logo_glyph`, defaulting to ⌇ (`docs/configuration.md`).
         logo_glyph: config
             .get("tui.logo_glyph", None)

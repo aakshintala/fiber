@@ -26,6 +26,11 @@ const BOX_TINT: Style = Style::new().bg(Color::Indexed(235));
 /// (see #685).
 const BOX_EDGE: Style = Style::new().fg(Color::Indexed(235));
 
+/// The workspace picker's tint.
+/// debt: a fixed colour, not a theme role; upgrade when colour roles land
+/// (see #685).
+const PICKER_TINT: Style = Style::new().bg(Color::Indexed(236));
+
 /// The input box's placeholder, after `> `, while the draft is empty and
 /// no `start` went out in this run.
 const PLACEHOLDER: &str = "> /? for shortcuts";
@@ -195,15 +200,32 @@ pub(super) fn render(
             put(buf, area, placed.x, y, row, placed.width, BOX_TINT);
         }
     }
+    // The chip row: the workspace, the model, the thinking level, and
+    // what Enter does. The workspace chip opens the picker.
+    let texts: Vec<&str> = screen.chips.iter().map(|(_, text)| text.as_str()).collect();
     put(
         buf,
         area,
         placed.x,
         placed.chip,
-        &screen.chips.join("  "),
+        &texts.join("  "),
         placed.width,
         BOX_TINT,
     );
+    let mut chip_x = placed.x;
+    for (at, (spot, text)) in screen.chips.iter().enumerate() {
+        if at > 0 {
+            chip_x = chip_x.saturating_add(2);
+        }
+        let wide = super::to_u16(width(text));
+        if let Some(spot) = spot {
+            targets.push(Target {
+                id: TargetId::Home(*spot),
+                rect: Rect::new(chip_x, placed.chip, wide, 1),
+            });
+        }
+        chip_x = chip_x.saturating_add(wide);
+    }
     put(
         buf,
         area,
@@ -246,6 +268,27 @@ pub(super) fn render(
             rect: Rect::new(placed.x, row_y, placed.width, 1),
         });
         row_y = row_y.saturating_add(1);
+    }
+    // The workspace picker draws above the box, upward from its top
+    // edge, over the logo rows. The selected row is reversed.
+    if let Some((items, selected)) = &screen.picker {
+        let mut bottom = placed.box_top;
+        for (at, item) in items.iter().enumerate().rev() {
+            let Some(row) = bottom.checked_sub(1).filter(|row| *row >= area.y) else {
+                break;
+            };
+            bottom = row;
+            let item_style = if selected == &at {
+                Style::new().add_modifier(Modifier::REVERSED)
+            } else {
+                PICKER_TINT
+            };
+            put(buf, area, placed.x, row, item, placed.width, item_style);
+            targets.push(Target {
+                id: TargetId::Home(Spot::Pick(at)),
+                rect: Rect::new(placed.x, row, placed.width, 1),
+            });
+        }
     }
     if let Some(completions) = app.completions() {
         let mut bottom = placed.box_top;

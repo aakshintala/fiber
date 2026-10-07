@@ -18,6 +18,8 @@ fn home() -> App {
         git: false,
         hover: true,
         version: "0.0.1".to_owned(),
+        model: None,
+        thinking: None,
         logo_glyph: "⌇".to_owned(),
     });
     app.set_size(80, 24);
@@ -1726,4 +1728,203 @@ fn y_on_a_focused_row_copies_its_line() {
         app.on_key(Key::Char('y'), now),
         Effect::Copy("✓  fix the parser".to_owned())
     );
+}
+
+/// The chips home draws, as text left to right.
+fn chips(app: &App) -> Vec<String> {
+    app.home_screen()
+        .map(|screen| screen.chips.into_iter().map(|(_, text)| text).collect())
+        .unwrap_or_default()
+}
+
+/// The workspace picker home draws: its list and the selected index.
+fn picker(app: &App) -> Option<(Vec<String>, usize)> {
+    app.home_screen().and_then(|screen| screen.picker)
+}
+
+/// Three live rows: one in the launch directory, two elsewhere, one
+/// workspace twice.
+fn three_workspaces(app: &mut App) {
+    linked(app);
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "here",
+        "/w",
+        "-w",
+        json!({"state": "idle"}),
+    ));
+    app.on_line(live(
+        "s_bbbbbbbbbbbbbbbb",
+        "away",
+        "/other",
+        "-w",
+        json!({"state": "streaming"}),
+    ));
+    app.on_line(live(
+        "s_cccccccccccccccc",
+        "again",
+        "/other",
+        "-w",
+        json!({"state": "idle"}),
+    ));
+    app.on_line(live(
+        "s_dddddddddddddddd",
+        "third",
+        "/third",
+        "-w",
+        json!({"state": "idle"}),
+    ));
+}
+
+#[test]
+fn the_chip_defaults_to_the_launch_directory() {
+    let app = home();
+    assert_eq!(
+        chips(&app),
+        [
+            "[w]",
+            "[no model]",
+            "[thinking: default]",
+            "enter starts a session",
+        ]
+    );
+}
+
+#[test]
+fn the_picker_lists_the_launch_directory_then_row_workspaces_once_each() {
+    let mut app = home();
+    three_workspaces(&mut app);
+    assert_eq!(app.home_click(Spot::Workspace), Effect::None);
+    assert_eq!(
+        picker(&app),
+        Some((
+            vec!["/w".to_owned(), "/other".to_owned(), "/third".to_owned(),],
+            0,
+        ))
+    );
+}
+
+#[test]
+fn the_picker_holds_at_most_ten() {
+    let mut app = home();
+    linked(&mut app);
+    for n in 0..12u8 {
+        let session = format!("s_{n:016x}");
+        let workspace = format!("/w{n}");
+        app.on_line(live(
+            &session,
+            "fix the parser",
+            &workspace,
+            "-w",
+            json!({"state": "idle"}),
+        ));
+    }
+    assert_eq!(app.home_click(Spot::Workspace), Effect::None);
+    let (list, selected) = picker(&app).unwrap_or_else(|| panic!("the picker"));
+    assert_eq!(selected, 0);
+    assert_eq!(list.len(), 10);
+    assert_eq!(list[0], "/w");
+    assert_eq!(list[9], "/w8");
+}
+
+#[test]
+fn picker_keys_move_choose_and_close() {
+    let mut app = home();
+    three_workspaces(&mut app);
+    assert_eq!(app.home_click(Spot::Workspace), Effect::None);
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(picker(&app).map(|(_, selected)| selected), Some(1));
+    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(picker(&app).map(|(_, selected)| selected), Some(2));
+    // The selection clamps to the list.
+    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(picker(&app).map(|(_, selected)| selected), Some(2));
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
+    assert_eq!(picker(&app).map(|(_, selected)| selected), Some(1));
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
+    assert_eq!(picker(&app).map(|(_, selected)| selected), Some(0));
+    // Enter chooses the selected workspace for the next start.
+    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(app.on_key(Key::Enter, now), Effect::None);
+    assert_eq!(picker(&app), None);
+    assert_eq!(chips(&app)[0], "[other]");
+    // Esc closes the picker, keeping the workspace as it was.
+    assert_eq!(app.home_click(Spot::Workspace), Effect::None);
+    assert!(picker(&app).is_some());
+    assert_eq!(app.on_key(Key::Esc, now), Effect::None);
+    assert_eq!(picker(&app), None);
+    assert_eq!(chips(&app)[0], "[other]");
+}
+
+#[test]
+fn other_keys_do_nothing_in_the_picker() {
+    let mut app = home();
+    three_workspaces(&mut app);
+    assert_eq!(app.home_click(Spot::Workspace), Effect::None);
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Char('x'), now), Effect::None);
+    assert!(app.input().expand().is_empty());
+    assert_eq!(picker(&app).map(|(_, selected)| selected), Some(0));
+    assert_eq!(app.focused(), None);
+}
+
+#[test]
+fn ctrl_c_passes_through_the_picker() {
+    let mut app = home();
+    three_workspaces(&mut app);
+    assert_eq!(app.home_click(Spot::Workspace), Effect::None);
+    assert_eq!(app.home_key(&Key::CtrlC), None);
+    assert!(picker(&app).is_some());
+}
+
+#[test]
+fn start_names_the_chosen_workspace() {
+    let mut app = home();
+    three_workspaces(&mut app);
+    assert_eq!(app.home_click(Spot::Workspace), Effect::None);
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(app.on_key(Key::Enter, now), Effect::None);
+    for ch in "hi".chars() {
+        app.on_key(Key::Char(ch), now);
+    }
+    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+        panic!("Enter sends the start");
+    };
+    assert_eq!(lines.len(), 1);
+    let line: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("start: {err}"));
+    assert_eq!(line["command"], "start");
+    assert_eq!(line["args"]["workspace"], "/other");
+}
+
+#[test]
+fn a_click_on_a_picker_row_chooses_it() {
+    let mut app = home();
+    three_workspaces(&mut app);
+    assert_eq!(app.home_click(Spot::Workspace), Effect::None);
+    assert_eq!(app.home_click(Spot::Pick(2)), Effect::None);
+    assert_eq!(picker(&app), None);
+    assert_eq!(chips(&app)[0], "[third]");
+}
+
+#[test]
+fn a_click_past_the_picker_list_does_nothing() {
+    let mut app = home();
+    three_workspaces(&mut app);
+    assert_eq!(app.home_click(Spot::Workspace), Effect::None);
+    assert_eq!(app.home_click(Spot::Pick(99)), Effect::None);
+    assert!(picker(&app).is_some());
+    assert_eq!(chips(&app)[0], "[w]");
+}
+
+#[test]
+fn the_file_listing_follows_the_picked_workspace() {
+    let mut app = home();
+    three_workspaces(&mut app);
+    assert_eq!(app.workspace(), PathBuf::from("/w"));
+    assert_eq!(app.home_click(Spot::Workspace), Effect::None);
+    assert_eq!(app.home_click(Spot::Pick(1)), Effect::None);
+    assert_eq!(app.workspace(), PathBuf::from("/other"));
 }

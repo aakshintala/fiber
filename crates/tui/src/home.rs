@@ -11,13 +11,19 @@ use contract::{Envelope, SessionId};
 use serde_json::Value;
 
 /// A click target on home: one row's line, by the key [`Sessions`]
-/// gave it when it first appeared. Later parts add the toggle, the
-/// picker, the stop crosses and the worktree switch.
+/// gave it when it first appeared, the workspace chip opening the
+/// workspace picker, and one picker row by its index in the list fixed
+/// at open. Later parts add the toggle, the stop crosses and the
+/// worktree switch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Spot {
     /// A session row: clicking it, or Enter on it while focused, opens
     /// the session.
     Entry(u64),
+    /// The workspace chip: clicking it opens the workspace picker.
+    Workspace,
+    /// A picker row, by its index in the list fixed at open.
+    Pick(usize),
 }
 
 /// What the terminal knows about where it was launched.
@@ -33,6 +39,10 @@ pub struct Launch {
     pub hover: bool,
     /// Fiber's version, for the logo.
     pub version: String,
+    /// `model`: the chip's model, unset on a fresh install with no key.
+    pub model: Option<String>,
+    /// `thinking`: the chip's level, unset for the default.
+    pub thinking: Option<String>,
     /// `tui.logo_glyph`: the one-row logo's mark, "⌇" or "≈". The
     /// four-row logo's wave is drawn pixels, and never changes.
     pub logo_glyph: String,
@@ -44,10 +54,14 @@ pub(crate) struct HomeScreen {
     pub(crate) version: String,
     /// The glyph before the name in the one-row logo.
     pub(crate) glyph: String,
-    /// The chip row, left to right.
-    pub(crate) chips: Vec<String>,
+    /// The chip row, left to right: each chip's text, and its click
+    /// target when it has one.
+    pub(crate) chips: Vec<(Option<Spot>, String)>,
     /// The rows: their keys, their lines, and whether they end in a ✕.
     pub(crate) rows: Vec<(u64, String, bool)>,
+    /// The workspace picker above the box: its list, fixed at open, and
+    /// the selected index.
+    pub(crate) picker: Option<(Vec<String>, usize)>,
     /// The foot hint, or the quit hint while Ctrl+C is armed.
     pub(crate) foot: String,
     /// The input box shows its placeholder.

@@ -2,7 +2,7 @@
 
 use super::super::{cursor, render, text};
 use crate::app::{App, QUIT_HINT};
-use crate::home::Launch;
+use crate::home::{Launch, Spot};
 use crate::keys::Key;
 use crate::link::Line;
 use contract::clock::Clock;
@@ -24,6 +24,8 @@ fn home_with_glyph(width: u16, height: u16, glyph: &str) -> App {
         git: false,
         hover: true,
         version: "0.0.1".to_owned(),
+        model: None,
+        thinking: None,
         logo_glyph: glyph.to_owned(),
     });
     app.set_size(width, height);
@@ -269,6 +271,33 @@ fn the_logo_glyph_setting_changes_the_one_row_logo() {
     let short = screen(&home_with_glyph(80, 16, "≈"), 80, 16);
     assert!(short.contains("≈ fiber 0.0.1"), "the setting's glyph");
     assert!(!short.contains('⌇'), "no wave where the glyph goes");
+}
+
+#[test]
+fn home_chips() {
+    // The workspace, the model, the thinking level, and what Enter does.
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_home(Launch {
+        workspace: PathBuf::from("/w"),
+        project: "-w".to_owned(),
+        git: false,
+        hover: true,
+        version: "0.0.1".to_owned(),
+        model: Some("test/model".to_owned()),
+        thinking: Some("high".to_owned()),
+        logo_glyph: "⌇".to_owned(),
+    });
+    app.set_size(80, 24);
+    insta::assert_snapshot!("home_chips", screen(&app, 80, 24));
+}
+
+#[test]
+fn home_picker_open() {
+    let mut app = home(80, 24);
+    app.on_line(hello());
+    app.on_line(status("s_aaaaaaaaaaaaaaaa", "fix the parser", live()));
+    app.on_click(crate::mouse::TargetId::Home(Spot::Workspace));
+    insta::assert_snapshot!("home_picker_open", screen(&app, 80, 24));
 }
 
 #[test]
