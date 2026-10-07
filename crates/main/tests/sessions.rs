@@ -270,7 +270,11 @@ fn listing_setup(replies: usize) -> (support::Setup, ProviderServer) {
 fn fiber_in(setup: &support::Setup, dir: &Path, args: &[&str]) -> String {
     let mut command = setup.fiber(args);
     command.current_dir(dir);
-    let output = support::run_to_exit(&format!("fiber {}", args.join(" ")), command);
+    let output = support::run_to_exit(
+        Deadline::start(),
+        &format!("fiber {}", args.join(" ")),
+        command,
+    );
     assert_eq!(
         output.status.code(),
         Some(0),
@@ -371,7 +375,7 @@ fn a_session_the_hub_started_and_left_idle_is_listed_first_as_idle() {
     let ack = support::recv_reply(&watch, "the feed acknowledgement");
     assert_eq!(ack["kind"], "command_accepted", "{ack}");
     let workspace = setup.workspace().to_string_lossy().into_owned();
-    let guard = support::SessionGuard::arm(&workspace);
+    let guard = support::SessionGuard::arm(Deadline::start(), &workspace);
     let live = support::start_session(&watch, &workspace, "two");
     support::until(&watch, "the session's idle status", |line| {
         line["kind"] == "session_status"
@@ -382,7 +386,10 @@ fn a_session_the_hub_started_and_left_idle_is_listed_first_as_idle() {
     assert_eq!(listed_ids(&stdout), [live.clone(), exited]);
     let first: Value = serde_json::from_str(stdout.lines().next().unwrap()).unwrap();
     assert_eq!(first["state"], "idle", "{stdout}");
-    support::close_session(&support::Socket::connect(&setup.session_socket(&live)));
+    support::close_session(&support::Socket::connect(
+        Deadline::start(),
+        &setup.session_socket(&live),
+    ));
     guard.wait_gone();
     drop(watch);
     let hub = hub.lock().unwrap().take().expect("the starter ran");
