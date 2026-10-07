@@ -233,6 +233,14 @@ fn status_answers_running_version_and_clients() {
     )
     .unwrap();
     assert_eq!(
+        reread.result,
+        Some(contract::events::CommandResult::Status {
+            running: true,
+            fiber_version: "0.0.0".into(),
+            clients: 1,
+        })
+    );
+    assert_eq!(
         serde_json::to_value(&reread).unwrap(),
         json!({"command_id": "c_1", "result": result})
     );
@@ -327,6 +335,10 @@ fn start_answers_with_the_session_id() {
         json!({"command_id": "c_1", "result": result}),
     )
     .unwrap();
+    let Some(contract::events::CommandResult::Start { ref session_id }) = reread.result else {
+        panic!("not a start");
+    };
+    assert_eq!(session_id.0, session);
     assert_eq!(
         serde_json::to_value(&reread).unwrap(),
         json!({"command_id": "c_1", "result": result})

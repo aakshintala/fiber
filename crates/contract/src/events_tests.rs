@@ -985,3 +985,27 @@ fn every_other_result_still_reads_as_its_own_variant() {
         CommandResult::Shell { .. }
     ));
 }
+
+#[test]
+fn a_session_id_result_reads_as_start_and_a_status_object_as_status() {
+    assert_eq!(
+        result_of(json!({"command_id": "c", "result": {"session_id": "s2"}})),
+        CommandResult::Start {
+            session_id: SessionId("s2".into())
+        }
+    );
+    assert_eq!(
+        result_of(
+            json!({"command_id": "c", "result": {"clients": 2, "fiber_version": "0.0.0", "running": true}})
+        ),
+        CommandResult::Status {
+            running: true,
+            fiber_version: "0.0.0".into(),
+            clients: 2,
+        }
+    );
+    assert!(matches!(
+        result_of(json!({"command_id": "c", "result": {"new_session_id": "s2"}})),
+        CommandResult::Rewind { .. }
+    ));
+}
