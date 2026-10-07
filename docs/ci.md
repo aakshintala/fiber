@@ -106,12 +106,10 @@ On Linux x86_64 alone:
 
 - `cargo fmt --check`
 - no non-test source file over 800 lines
-- the `unsafe` table in `docs/code-quality.md` matches the code
 - a process signal appears only in the guarded helpers (`cargo xtask signal-sites`)
 - the compiled-in list matches the files crates compile in, Markdown
   anywhere or any file outside the crate, and every include argument is a
   string literal
-- every crate a `Cargo.toml` names is listed in `docs/dependencies.md`
 - no crate but `picture` and `main` has `image` or `fast_image_resize` in its
   normal dependency tree (`cargo xtask image-isolation`), so the session
   process links no image code
@@ -162,6 +160,13 @@ It runs in the selection job on every pull request, not only docs-only
 ones, because the change that breaks a citation is usually a code change
 that renames or deletes what a doc points at. External URLs are not checked: nothing in CI reaches the
 public network.
+
+The same job, on every pull request and every push to `main`, checks that
+the `unsafe` table in `docs/code-quality.md` matches the code
+(`cargo xtask unsafe-table`) and that every crate a `Cargo.toml` names is
+listed in `docs/dependencies.md` (`cargo xtask dependency-list`). Each
+compares a doc with the source, so a change to either side can break it,
+and a docs-only diff, which runs no other job, would otherwise skip it.
 
 ## Advisories
 
