@@ -270,3 +270,28 @@ fn group_empties_reports_an_empty_group_and_a_live_one() {
         "waited {DEADLINE:?} for the killed group to empty"
     );
 }
+
+#[test]
+fn group_empties_keeps_probing_until_a_group_that_is_still_alive_empties() {
+    let child = Command::new("sh")
+        .args(["-c", "sleep 0.4"])
+        .process_group(0)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let group = child.id();
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || {
+        let mut child = child;
+        done.send(child.wait()).unwrap();
+    });
+    assert!(
+        group_empties(group, DEADLINE),
+        "waited {DEADLINE:?} for a group alive at the first probe to empty"
+    );
+    assert!(
+        finished.recv_timeout(DEADLINE).is_ok(),
+        "waited {DEADLINE:?} for the group leader to be reaped"
+    );
+}
