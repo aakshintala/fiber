@@ -126,7 +126,7 @@ impl Stream {
     fn usage(&mut self, generation: &str, tokens: u64, extra: Value) {
         let mut payload = json!({"generation_id": generation, "model": "fake/m",
             "tokens": {"input": tokens, "cache_read": 0, "cache_write": {}, "output": 40},
-            "cost": null});
+            "input_bytes": 0, "cost": null});
         if let (Some(payload), Some(extra)) = (payload.as_object_mut(), extra.as_object()) {
             payload.extend(extra.clone());
         }
