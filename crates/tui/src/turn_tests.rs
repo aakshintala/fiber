@@ -1407,3 +1407,17 @@ fn a_failed_mcp_server_is_a_warning_line_in_or_out_of_a_turn() {
         ]
     );
 }
+
+#[test]
+fn a_part_turn_keeps_the_step_it_reached() {
+    // A page that begins inside a running turn folds from its step on: new
+    // items join that step's section, not the first.
+    let mut fold = super::Fold::default();
+    let mut turn = super::Turn::part(3);
+    assert!(turn.reasoning_started("a_r", 7, &mut fold));
+    let steps: Vec<u64> = turn
+        .groups()
+        .flat_map(|group| group.sections.iter().map(|section| section.step))
+        .collect();
+    assert_eq!(steps, vec![3]);
+}
