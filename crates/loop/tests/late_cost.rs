@@ -193,14 +193,69 @@ fn usage_lines(lines: &[Envelope]) -> Vec<&Envelope> {
         .collect()
 }
 
+/// A failed call's first turn: its usage, then the failure.
+const FAILED_FIRST_KINDS: [&str; 9] = [
+    "session_started",
+    "preamble_built",
+    "opening_message",
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+];
+
+/// A cancelled call's first turn: its usage, then the turn ends.
+const CANCELLED_FIRST_KINDS: [&str; 8] = [
+    "session_started",
+    "preamble_built",
+    "opening_message",
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "usage_recorded",
+    "turn_completed",
+];
+
+/// A completed reply's first turn.
+const COMPLETED_FIRST_KINDS: [&str; 12] = [
+    "session_started",
+    "preamble_built",
+    "opening_message",
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "assistant_message_delta",
+    "assistant_message_delta",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+];
+
+/// A second turn opening with the late record of the first.
+const LATE_NEXT_KINDS: [&str; 10] = [
+    "usage_recorded",
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "assistant_message_delta",
+    "assistant_message_delta",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+];
+
 /// The first turn's one `usage_recorded`, and its lines.
-fn first_turn(session: &mut Session) -> Envelope {
+fn first_turn(session: &mut Session) -> (Envelope, Vec<Envelope>) {
     session.inbox.send(delivery("hi")).unwrap();
     session.turn();
     let lines = session.lines();
     let usage = usage_lines(&lines);
     assert_eq!(usage.len(), 1, "one record at once");
-    usage[0].clone()
+    (usage[0].clone(), lines)
 }
 
 /// Runs a second turn and returns its lines.
@@ -213,8 +268,7 @@ fn next_turn(session: &mut Session) -> Vec<Envelope> {
 /// Asserts the second turn's lines open with the late record of `first`,
 /// at `cost`, before `turn_started`.
 fn assert_late_record_first(lines: &[Envelope], first: &Envelope, cost: f64) {
-    assert_eq!(lines[0].kind, "usage_recorded", "{:?}", kinds(lines));
-    assert_eq!(lines[1].kind, "turn_started", "{:?}", kinds(lines));
+    assert_eq!(kinds(lines), LATE_NEXT_KINDS);
     let late = &lines[0];
     assert_eq!(late.turn_id, first.turn_id);
     assert_eq!(late.action_id, first.action_id);
@@ -232,7 +286,8 @@ fn a_failed_call_s_cost_settles_30_seconds_later_and_is_counted_once() {
         no_hook,
     );
     let start = session.clock.now();
-    let first = first_turn(&mut session);
+    let (first, first_lines) = first_turn(&mut session);
+    assert_eq!(kinds(&first_lines), FAILED_FIRST_KINDS);
     assert!(first.payload["cost"].is_null());
     settle(&session.clock, start + AFTER);
     assert_eq!(seen.calls(), ["gen_failed"]);
@@ -242,6 +297,29 @@ fn a_failed_call_s_cost_settles_30_seconds_later_and_is_counted_once() {
     run_to_end(&mut session);
     r#loop::fiber_exited(&session.log, &session.dir, Ok(()), false, None).unwrap();
     let all = log::read(&session.dir).unwrap();
+    assert_eq!(
+        kinds(&all),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "usage_recorded",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
     let exited = all.last().unwrap();
     assert_eq!(exited.kind, "fiber_exited");
     // Two calls of 10 input tokens each: the correction replaces its call.
@@ -272,7 +350,8 @@ fn a_cancelled_call_s_cost_settles_30_seconds_later() {
     );
     cancel.set(Arc::clone(&session.cancel)).ok().unwrap();
     let start = session.clock.now();
-    let first = first_turn(&mut session);
+    let (first, first_lines) = first_turn(&mut session);
+    assert_eq!(kinds(&first_lines), CANCELLED_FIRST_KINDS);
     settle(&session.clock, start + AFTER);
     assert_eq!(seen.calls(), ["gen_cancelled"]);
     let lines = next_turn(&mut session);
@@ -288,13 +367,48 @@ fn a_lookup_returning_nothing_leaves_the_first_record_alone() {
         no_hook,
     );
     let start = session.clock.now();
-    let first = first_turn(&mut session);
+    let (first, first_lines) = first_turn(&mut session);
+    assert_eq!(kinds(&first_lines), FAILED_FIRST_KINDS);
     settle(&session.clock, start + AFTER);
     assert_eq!(seen.calls(), ["gen_failed"]);
     let lines = next_turn(&mut session);
-    assert_eq!(lines[0].kind, "turn_started", "{:?}", kinds(&lines));
+    assert_eq!(
+        kinds(&lines),
+        [
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     run_to_end(&mut session);
     let all = log::read(&session.dir).unwrap();
+    assert_eq!(
+        kinds(&all),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     let failed: Vec<_> = usage_lines(&all)
         .into_iter()
         .filter(|l| l.payload["generation_id"] == "gen_failed")
@@ -312,7 +426,8 @@ fn a_session_that_ends_before_30_seconds_writes_no_second_record() {
         no_hook,
     );
     let start = session.clock.now();
-    first_turn(&mut session);
+    let (_, first_lines) = first_turn(&mut session);
+    assert_eq!(kinds(&first_lines), FAILED_FIRST_KINDS);
     assert!(session.clock.await_parked(start + AFTER, DEADLINE));
     run_to_end(&mut session);
     session.clock.advance(AFTER);
@@ -322,6 +437,7 @@ fn a_session_that_ends_before_30_seconds_writes_no_second_record() {
         .expect("the worker let go of the lookup");
     assert!(seen.calls().is_empty());
     let all = log::read(&session.dir).unwrap();
+    assert_eq!(kinds(&all), FAILED_FIRST_KINDS);
     assert_eq!(usage_lines(&all).len(), 1);
 }
 
@@ -334,11 +450,27 @@ fn a_cost_settled_while_idle_is_written_when_the_session_ends() {
         no_hook,
     );
     let start = session.clock.now();
-    let first = first_turn(&mut session);
+    let (first, first_lines) = first_turn(&mut session);
+    assert_eq!(kinds(&first_lines), FAILED_FIRST_KINDS);
     settle(&session.clock, start + AFTER);
     assert_eq!(seen.calls(), ["gen_failed"]);
     run_to_end(&mut session);
     let all = log::read(&session.dir).unwrap();
+    assert_eq!(
+        kinds(&all),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "usage_recorded",
+        ]
+    );
     let usage = usage_lines(&all);
     assert_eq!(usage.len(), 2);
     assert_eq!(usage[1].turn_id, first.turn_id);
@@ -350,13 +482,15 @@ fn a_cost_settled_while_idle_is_written_when_the_session_ends() {
 #[test]
 fn a_provider_without_a_lookup_writes_one_record_and_starts_no_worker() {
     let mut session = Session::new(vec![failed_after("gen_failed")], None);
-    first_turn(&mut session);
+    let (_, first_lines) = first_turn(&mut session);
+    assert_eq!(kinds(&first_lines), FAILED_FIRST_KINDS);
     assert!(
         session.clock.parked().is_empty(),
         "nothing waits on the clock"
     );
     run_to_end(&mut session);
     let all = log::read(&session.dir).unwrap();
+    assert_eq!(kinds(&all), FAILED_FIRST_KINDS);
     assert_eq!(usage_lines(&all).len(), 1);
 }
 
@@ -369,8 +503,20 @@ fn only_a_call_without_the_vendor_s_figure_is_looked_up() {
         no_hook,
     );
     let start = session.clock.now();
-    first_turn(&mut session);
+    let (_, first_lines) = first_turn(&mut session);
+    assert_eq!(kinds(&first_lines), COMPLETED_FIRST_KINDS);
     let lines = next_turn(&mut session);
+    assert_eq!(
+        kinds(&lines),
+        [
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     assert_eq!(usage_lines(&lines).len(), 1);
     settle(&session.clock, start + AFTER);
     assert_eq!(seen.calls(), ["gen_2"]);
@@ -385,7 +531,8 @@ fn a_completed_reply_without_the_vendor_s_figure_is_looked_up() {
         no_hook,
     );
     let start = session.clock.now();
-    let first = first_turn(&mut session);
+    let (first, first_lines) = first_turn(&mut session);
+    assert_eq!(kinds(&first_lines), COMPLETED_FIRST_KINDS);
     settle(&session.clock, start + AFTER);
     assert_eq!(seen.calls(), ["gen_1"]);
     let lines = next_turn(&mut session);
@@ -462,6 +609,35 @@ fn a_reviewer_call_s_cost_settles_with_no_action() {
     session.inbox.send(delivery("go")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     let lines = session.lines();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "usage_recorded",
+            "permission_requested",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     answered.join().unwrap();
     let review = usage_lines(&lines)
         .into_iter()
@@ -546,6 +722,23 @@ fn a_warming_refresh_s_cost_settles_in_no_turn_and_no_action() {
     assert!(finished.recv_timeout(DEADLINE).expect("run ended in time"));
 
     let all = log::read(&session.dir).unwrap();
+    assert_eq!(
+        kinds(&all),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "usage_recorded",
+            "usage_recorded",
+        ]
+    );
     let warm: Vec<_> = usage_lines(&all)
         .into_iter()
         .filter(|l| l.payload["generation_id"] == "gen_warm")
@@ -586,8 +779,32 @@ fn a_cost_that_settles_mid_turn_is_written_at_the_next_step() {
         },
     );
     start.set(session.clock.now()).unwrap();
-    let first = first_turn(&mut session);
+    let (first, first_lines) = first_turn(&mut session);
+    assert_eq!(kinds(&first_lines), FAILED_FIRST_KINDS);
     let lines = next_turn(&mut session);
+    assert_eq!(
+        kinds(&lines),
+        [
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_completed",
+            "usage_recorded",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     assert_eq!(seen.calls(), ["gen_failed"]);
     let steps: Vec<usize> = lines
         .iter()
@@ -613,12 +830,22 @@ fn a_late_cost_counts_toward_the_next_turn_s_budget() {
     );
     let mut session = session.budget(Some(0.5));
     let start = session.clock.now();
-    first_turn(&mut session);
+    let (_, first_lines) = first_turn(&mut session);
+    assert_eq!(kinds(&first_lines), FAILED_FIRST_KINDS);
     settle(&session.clock, start + AFTER);
     assert_eq!(seen.calls(), ["gen_failed"]);
     session.inbox.send(delivery("again")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Failed));
     let lines = session.lines();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "usage_recorded",
+            "turn_started",
+            "step_started",
+            "turn_completed",
+        ]
+    );
     assert_eq!(
         lines.last().unwrap().payload["error"]["code"],
         "budget_exceeded"

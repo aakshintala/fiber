@@ -2223,6 +2223,31 @@ fn openrouter_installed_by_path_records_the_inline_cost_on_a_completed_turn() {
     assert_eq!(recorded[0]["payload"]["generation_id"], "gen-abc123");
 }
 
+/// The event kinds of a turn whose first stream closes early: the failed
+/// attempt's usage, the retry, and the completed turn.
+const EARLY_CLOSE_KINDS: [&str; 20] = [
+    "session_started",
+    "fiber_started",
+    "extensions_loaded",
+    "preamble_built",
+    "opening_message",
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "assistant_message_delta",
+    "usage_recorded",
+    "assistant_message_completed",
+    "retry_scheduled",
+    "assistant_message_started",
+    "assistant_message_delta",
+    "assistant_message_delta",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    "fiber_exited",
+];
+
 #[test]
 fn an_openrouter_stream_closed_early_records_its_generation_at_once() {
     let setup = Setup::new();
@@ -2251,6 +2276,7 @@ fn an_openrouter_stream_closed_early_records_its_generation_at_once() {
     );
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), EARLY_CLOSE_KINDS);
     // The package's `init.lua` ran and `fiber.provider` took `cost`: the
     // package loaded, and no notice says it failed.
     let loaded = run
