@@ -665,12 +665,12 @@ Durable. The envelope's `action_id` is the tool call.
 |---|---|---|---|
 | `request_id` | string | no | the request it answers; absent when the decision raised none |
 | `decision` | string | yes | `allow` or `deny`; a closed set |
-| `decided_by` | string | yes | `credential_deny`, `person`, `standing_rule`, `session_grant`, `reviewer` or `cancel`, the turn cancelled while the request was pending (`docs/architecture.md`, "Cancellation"); a closed set |
+| `decided_by` | string | yes | `credential_deny`, `person`, `standing_rule`, `session_grant`, `reviewer`, `budget`, a call that needed review once the spend reached `budget.usd`, denied without another reviewer request (`docs/loop.md`, "Spending budget"), or `cancel`, the turn cancelled while the request was pending (`docs/architecture.md`, "Cancellation"); a closed set |
 | `reason` | string | no | why, in words, such as the reviewer's reason |
 | `feedback` | string | no | what the person typed with a denial, which the model receives |
 | `grant` | object | no | on a person's `allow` that added a session grant: `tool` and `prefix` (strings), the later calls it allows (`docs/permissions.md`, "What a rule matches") |
 | `rule` | object | no | on a person's `allow` that added a standing rule to the project's rules file: `tool` and `prefix` (strings) |
-| `reviewer` | object | no | when `decided_by` is `reviewer`: `model` (string, a model reference) and `stage` (integer, `1` or `2`) |
+| `reviewer` | object | no | when `decided_by` is `reviewer`: `model` (string, a model reference) and `stage` (integer, `1` or `2`), the stage that decided or, on a reviewer failure, the stage that failed. Absent when the reviewer could not be set up, such as with no reviewer model (`no_model`): no reviewer request was sent, and the denial's `reason` says why |
 
 Both are durable so that a driver reconnecting to an unattended session learns
 it is blocked on a human rather than hanging on silence, and so that a session

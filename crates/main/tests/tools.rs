@@ -93,7 +93,13 @@ impl Setup {
 
     /// The shared body behind [`Setup::provider`] and
     /// [`Setup::provider_priced`]: `cost` is written only when present.
-    fn provider_on_cost_input(&self, server: &ProviderServer, protocol: &str, cost: Option<Value>, input: Option<Vec<&str>>) {
+    fn provider_on_cost_input(
+        &self,
+        server: &ProviderServer,
+        protocol: &str,
+        cost: Option<Value>,
+        input: Option<Vec<&str>>,
+    ) {
         let source = self.root.path().join("src");
         write(
             &source.join("extension.json"),

@@ -166,6 +166,14 @@ running delegates at once, outside the inbox, as cancellation is
 (`docs/architecture.md`, "One inbox"). The loop's next request is refused
 `budget_exceeded` as above.
 
+The reviewer checks the budget too, before each reviewer request
+(`docs/permissions.md`, "The reviewer"). A tool call that needs review once
+the spend has reached `budget.usd` is denied without another reviewer
+request. That holds even when the call's own first stage spent the last of
+the budget and its second stage is refused. Its `permission_resolved` has
+`decided_by: budget` and no `reviewer`, and the call completes `denied` with
+reason `budget_exceeded`. The next step's check then ends the turn as above.
+
 A call that crosses the limit completes, so the tree overshoots by at most
 one call in flight per running session in it, or by one run of a delegate on
 another harness, which reports its cost only when the run ends. A delegate checks no budget of its own; its

@@ -1087,8 +1087,8 @@ fn non_reviewer_denies_from_before_the_resume_do_not_count() {
     );
     tool.subject = Some("run tests".into());
     let tool = Arc::new(tool);
-    // Twenty denials with no `reviewer` object: a reviewer failure, not a
-    // model's block.
+    // Twenty denials with no `reviewer` object: a reviewer that could not
+    // be set up, not a model's block.
     for _ in 0..20 {
         history.write(
             Event::PermissionResolved(PermissionResolved {
