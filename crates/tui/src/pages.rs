@@ -219,10 +219,6 @@ impl Index {
     }
 
     /// The page holding `seq`, if any does.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the loop loads pages from the next commit")
-    )]
     pub(crate) fn page_of(&self, seq: Seq) -> Option<usize> {
         let at = self.pages.partition_point(|page| page.last_seq < seq);
         self.pages

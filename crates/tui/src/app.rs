@@ -405,30 +405,18 @@ impl App {
     }
 
     /// The seq ranges of pages the next frame needs and does not hold.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the loop loads pages from the next commit")
-    )]
     pub(crate) fn needs(&self) -> Vec<RangeInclusive<Seq>> {
         self.pages
             .needs(self.view_top(), self.conversation_height())
     }
 
     /// Folds a fetched range's durable lines into their pages.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the loop loads pages from the next commit")
-    )]
     pub(crate) fn load(&mut self, lines: Vec<Envelope>) {
         self.pages.load(&lines);
         self.settle();
     }
 
     /// Loading `range` failed: its rows stay blank and the notice says why.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the loop loads pages from the next commit")
-    )]
     pub(crate) fn load_failed(&mut self, range: &RangeInclusive<Seq>, message: &str) {
         self.pages.fail(*range.start());
         self.notice = Some(format!("Could not load history: {message}"));
@@ -437,7 +425,7 @@ impl App {
     /// Scrolls so `row` is the top row, as dragging the scroll bar does.
     #[cfg_attr(
         not(test),
-        expect(dead_code, reason = "the loop loads pages from the next commit")
+        expect(dead_code, reason = "the paging jig calls it from the next commit")
     )]
     pub(crate) fn jump(&mut self, row: usize) {
         self.top = Some(row);
@@ -447,7 +435,7 @@ impl App {
     /// The pages.
     #[cfg_attr(
         not(test),
-        expect(dead_code, reason = "the loop loads pages from the next commit")
+        expect(dead_code, reason = "the paging jig calls it from the next commit")
     )]
     pub(crate) fn pages(&self) -> &Pages {
         &self.pages

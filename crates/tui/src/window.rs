@@ -353,10 +353,6 @@ impl Pages {
     /// from each page's seed, and counts their rows. The open page is
     /// never folded again: it holds the live fold. Session state is the
     /// app's, so nothing here touches it.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the loop loads pages from the next commit")
-    )]
     pub(crate) fn load(&mut self, lines: &[Envelope]) {
         let mut folding: Option<(usize, Part)> = None;
         for line in lines {
@@ -384,10 +380,6 @@ impl Pages {
 
     /// Keeps page `at`'s folded cards, closes the group the next page ends,
     /// applies what the person opened, and counts its rows.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the loop loads pages from the next commit")
-    )]
     fn keep(&mut self, at: usize, mut part: Part) {
         if self.seeds.get(at).is_some_and(|seed| seed.cut)
             && let Some(card) = part.turns.last_mut()
@@ -407,10 +399,6 @@ impl Pages {
 
     /// The page holding `seq` could not be loaded: it is not asked for
     /// again until the width changes.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the loop loads pages from the next commit")
-    )]
     pub(crate) fn fail(&mut self, seq: Seq) {
         if let Some(at) = self.index.page_of(seq) {
             self.failed.insert(at);
@@ -420,10 +408,6 @@ impl Pages {
     /// The seq ranges to load, in order: the window's pages not resident,
     /// then the pages whose row counts are stale. A page may be listed
     /// twice; once loaded, it is no longer needed.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the loop loads pages from the next commit")
-    )]
     pub(crate) fn needs(&self, top: usize, height: usize) -> Vec<RangeInclusive<Seq>> {
         let wanted = |at: &usize| {
             !self.failed.contains(at) && self.closed.get(*at).is_some_and(Option::is_none)
@@ -595,7 +579,7 @@ impl Pages {
     /// How many pages hold cards, the open one included.
     #[cfg_attr(
         not(test),
-        expect(dead_code, reason = "the loop loads pages from the next commit")
+        expect(dead_code, reason = "the paging jig calls it from the next commit")
     )]
     pub(crate) fn resident(&self) -> usize {
         self.closed.iter().flatten().count().saturating_add(1)
