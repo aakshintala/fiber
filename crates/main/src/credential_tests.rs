@@ -68,17 +68,9 @@ fn a_recorded_label_that_names_nothing_is_credential_missing() {
 }
 
 #[test]
-fn the_reviewer_of_the_sessions_provider_uses_the_sessions_label() {
-    let root = fakes::TempDir::new("fiber-credential");
-    let config = config(&root, &STORED, SETTINGS);
-    let key = reviewer_credential(&config, &provider("acme"), &provider("acme"), "session");
-    assert_eq!(key.unwrap().expose(), "acme-session");
-}
-
-#[test]
 fn the_reviewer_of_another_provider_uses_its_own_label() {
     let root = fakes::TempDir::new("fiber-credential");
     let config = config(&root, &STORED, SETTINGS);
-    let key = reviewer_credential(&config, &provider("other"), &provider("acme"), "session");
+    let key = reviewer_credential(&config, &provider("other"));
     assert_eq!(key.unwrap().expose(), "other-own");
 }

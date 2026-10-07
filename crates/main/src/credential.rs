@@ -23,19 +23,14 @@ pub(crate) fn session_credential(
     Ok((label, key))
 }
 
-/// The reviewer's key: under the session's label when the reviewer is the
-/// session's own provider, else under its own configured label.
+/// The reviewer's key under its own configured label. When the reviewer is
+/// the session's own provider the caller reuses the session's key instead,
+/// so a `command` credential runs once per process.
 pub(crate) fn reviewer_credential(
     config: &Config,
     reviewer: &ProviderData,
-    session: &ProviderData,
-    session_label: &str,
 ) -> Result<Secret, Failure> {
-    let label = if reviewer.name == session.name {
-        session_label.to_owned()
-    } else {
-        config.credential_label(reviewer)
-    };
+    let label = config.credential_label(reviewer);
     config
         .credential(reviewer, &label)
         .map_err(|e| failed(e.code(), e))
