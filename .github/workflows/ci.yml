@@ -257,10 +257,10 @@ jobs:
     needs: select
     if: fromJSON(needs.select.outputs.jobs).release
     runs-on: ubuntu-24.04
-    # No history yet: a generous bound for the release build, the debug
-    # benchmark harness build and the benchmarks, the 429-call turn under
-    # strace included (docs/ci.md, "Job time limits").
-    timeout-minutes: 45
+    # The release build, the debug benchmark harness build and the benchmarks
+    # ran in about 5 minutes (docs/ci.md, "Job time limits"): twice that,
+    # rounded up.
+    timeout-minutes: 15
     env:
       BASE: ${{ needs.select.outputs.base }}
       # C code (lua-src, ring) compiles against musl's headers; the Rust linker stays the default.
