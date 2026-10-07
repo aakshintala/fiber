@@ -21,6 +21,10 @@
 //!   as tab-separated lines
 //! - `docs-only FILE...`: whether every file is a docs file, as `docs-only: yes` or
 //!   `docs-only: no`
+//! - `bench-report --head FILE [--base FILE] --doc docs/performance.md --event
+//!   pull_request|push --comment FILE`: judges the benchmark result files
+//!   against the budget table and writes the pull request comment; exit 1
+//!   when a budget, a head self-check or the table mapping fails
 //! - `line-cap`, `unsafe-table`, `signal-sites`, `compiled-in`, `dependency-list`, `image-isolation`, `tui-isolation`, `check-docs`: the checks
 
 #![allow(
@@ -29,6 +33,7 @@
     reason = "a command-line tool whose output is its interface"
 )]
 
+mod bench;
 mod docs;
 mod rules;
 mod select;
@@ -228,6 +233,23 @@ fn run(args: &[String]) -> Result<bool, String> {
             }
             report("check-docs", &failures, "ok")
         }
+        "bench-report" => {
+            let event = bench::Event::parse(&flag(rest, "--event")?)?;
+            let comment_path = flag(rest, "--comment")?;
+            let doc = read(&flag(rest, "--doc")?)?;
+            let head = read(&flag(rest, "--head")?)?;
+            // An unreadable base is reported in the comment, not as a usage
+            // error: the base only feeds advisory timings.
+            let base = optional(rest, "--base").map(|path| read(&path));
+            let out = bench::report(&doc, &head, base, event);
+            std::fs::write(&comment_path, &out.comment)
+                .map_err(|e| format!("{comment_path}: {e}"))?;
+            report(
+                "bench-report",
+                &out.failures,
+                "every exact and memory budget holds",
+            )
+        }
         other => Err(format!("unknown command {other}")),
     }
 }
@@ -265,11 +287,14 @@ fn report(name: &str, failures: &[String], ok: &str) -> Result<bool, String> {
 }
 
 fn flag(args: &[String], name: &str) -> Result<String, String> {
+    optional(args, name).ok_or(format!("{name} is required"))
+}
+
+fn optional(args: &[String], name: &str) -> Option<String> {
     args.iter()
         .position(|a| a == name)
         .and_then(|i| args.get(i + 1))
         .cloned()
-        .ok_or(format!("{name} is required"))
 }
 
 /// The JSON object in environment variable `name`; empty when unset.
