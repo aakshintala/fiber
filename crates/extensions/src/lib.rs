@@ -160,7 +160,10 @@ pub enum Error {
     )]
     Busy,
     /// Two names whose directory is the same.
-    #[error("`{name}` and `{other}` would both be installed at `extensions/{}`.", name.replace('/', "-"))]
+    #[error(
+        "`{name}` and `{other}` would both be installed at `extensions/{}`.",
+        config::dir_name(name)
+    )]
     SlugTaken {
         /// The name being installed.
         name: String,

@@ -174,11 +174,11 @@ pub fn remove_extension_settings(home: &Path, extension: &str) -> Result<(), Con
     Ok(())
 }
 
-/// `config/<slug>.json` under a layer's directory.
+/// `config/<extension>.json` under a layer's directory, `<extension>`
+/// named as in `extensions/` (`docs/state.md`, "What each part holds").
 pub(crate) fn settings_file(dir: &Path, extension: &str) -> PathBuf {
-    // `<extension>` is slugged as for `extensions/` (docs/state.md).
     dir.join("config")
-        .join(format!("{}.json", extension.replace('/', "-")))
+        .join(format!("{}.json", crate::names::dir_name(extension)))
 }
 
 /// Appends `line` to a line-based file under its lock, creating the

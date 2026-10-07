@@ -81,6 +81,11 @@ impl Setup {
     /// Lua with `host.fs` and `host.data_dir` for `fiber.test/notes` in
     /// project `p`, locking through the shared fake.
     fn lua(&self) -> Lua {
+        self.lua_for("fiber.test/notes")
+    }
+
+    /// [`Setup::lua`] for the extension named `extension`.
+    fn lua_for(&self, extension: &str) -> Lua {
         let session = self.session();
         let lua = Lua::new();
         let host = lua.create_table().unwrap();
@@ -89,7 +94,7 @@ impl Setup {
             &host,
             self.workspace(),
             self.home(),
-            "fiber.test/notes",
+            extension,
             crate::MEMORY_CAP,
             Some(&session),
         )
@@ -383,6 +388,44 @@ fn a_write_inside_each_data_directory_creates_it() {
             .home()
             .join("projects/p/data/fiber.test-notes/deep")
             .is_dir()
+    );
+}
+
+#[test]
+fn a_first_party_extensions_data_directories_are_named_by_its_short_name() {
+    let setup = Setup::new();
+    let lua = setup.lua_for("github.com/aakshintala/fiber/extensions/memory");
+    lua.load("host.fs.write(host.data_dir(\"machine\") .. \"/m.md\", \"m\")")
+        .exec()
+        .unwrap();
+    lua.load("host.fs.write(host.data_dir(\"project\") .. \"/p.md\", \"p\")")
+        .exec()
+        .unwrap();
+    assert_eq!(
+        fs::read(setup.home().join("data/memory/m.md")).unwrap(),
+        b"m"
+    );
+    assert_eq!(
+        fs::read(setup.home().join("projects/p/data/memory/p.md")).unwrap(),
+        b"p"
+    );
+}
+
+#[test]
+fn a_third_party_extensions_data_directory_is_its_slugged_address() {
+    let setup = Setup::new();
+    let lua = setup.lua_for("github.com/acme/lint");
+    let machine: String = lua
+        .load("return host.data_dir(\"machine\")")
+        .eval()
+        .unwrap();
+    assert_eq!(
+        machine,
+        setup
+            .home()
+            .join("data/github.com-acme-lint")
+            .to_str()
+            .unwrap()
     );
 }
 

@@ -113,3 +113,26 @@ fn the_manifest_reads_repo_settings_and_defaults_them_to_empty() {
     let manifest = config::read_manifest(&dir).unwrap();
     assert!(manifest.repo_settings.is_empty());
 }
+
+#[test]
+fn a_first_party_extensions_settings_file_is_named_by_its_short_name() {
+    let setup = Setup::new();
+    setup.write(
+        &setup.home().join("config/memory.json"),
+        r#"{"a": "short"}"#,
+    );
+    setup.write(
+        &setup
+            .home()
+            .join("config/github.com-aakshintala-fiber-extensions-memory.json"),
+        r#"{"b": "long"}"#,
+    );
+    let config = setup.load(&[]).unwrap();
+    let memory = "github.com/aakshintala/fiber/extensions/memory";
+    assert_eq!(
+        config.extension_setting(memory, &[], "a").unwrap(),
+        Some(json!("short"))
+    );
+    // Nothing reads a file under the old long slug.
+    assert_eq!(config.extension_setting(memory, &[], "b").unwrap(), None);
+}

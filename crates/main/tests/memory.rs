@@ -31,9 +31,9 @@ const DEADLINE: Duration = Duration::from_secs(12);
 /// The shipped extension's full name.
 const MEMORY: &str = "github.com/aakshintala/fiber/extensions/memory";
 
-/// Its data directory slug: every `/` becomes `-` (`docs/state.md`,
-/// "Extension data").
-const SLUG: &str = "github.com-aakshintala-fiber-extensions-memory";
+/// Its directory name in Fiber home: its short name (`docs/state.md`,
+/// "What each part holds").
+const SLUG: &str = "memory";
 
 /// The event kinds of a turn answered by [`hello`]: one text fragment in
 /// two deltas.
@@ -486,11 +486,17 @@ fn after_remove_memory_the_opening_message_has_no_memory_section() {
     let setup = Setup::new();
     setup.memory();
     setup.machine_file("index.md", "- [[notes]] — what matters\n");
+    let project = setup.project_file("index.md", "- [[here]] — this project\n");
+    let settings = setup.home().join("config/memory.json");
+    write_text(&settings, "{}");
 
     // Without a terminal the remove goes ahead without asking.
     let removed = setup.run(&["extension", "remove", "memory"]);
     assert_eq!(removed.code, Some(0), "stderr: {}", removed.stderr);
+    assert!(!setup.home().join("extensions").join(SLUG).exists());
     assert!(!setup.home().join("data").join(SLUG).exists());
+    assert!(!project.parent().unwrap().exists());
+    assert!(!settings.exists());
 
     let (run, server) = setup.ask(vec![hello()]);
     assert_eq!(run.kinds(), HELLO_KINDS);
