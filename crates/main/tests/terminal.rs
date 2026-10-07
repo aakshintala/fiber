@@ -12,6 +12,8 @@
     reason = "test helpers; a failure is the test's; a live test prints its outcome"
 )]
 
+mod support;
+
 use std::ffi::OsStr;
 use std::fs;
 use std::io::{Read, Write};
@@ -22,35 +24,28 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
-use std::time::Duration;
 
 use fakes::{ProviderServer, Response, Watchdog};
 use rustix::pty;
 use serde_json::{Value, json};
-
-/// One named wall-clock deadline for every blocking wait.
-const DEADLINE: Duration = Duration::from_secs(30);
-
-/// How long a process group may take to empty after `fiber` exits.
-const GROUP_DEADLINE: Duration = Duration::from_secs(5);
-
-/// How long the reap after a kill, and a watchdog's stand-down, may take:
-/// the child is already dead then. With [`DEADLINE`] and [`GROUP_DEADLINE`]
-/// the waits of one `fiber` run sum to 45 s at most, under half of nextest's
-/// 120 s kill.
-const REAP_DEADLINE: Duration = Duration::from_secs(10);
+use support::Deadline;
 
 /// A temporary root holding Fiber home and the workspace, removed on drop.
 struct Setup {
     root: fakes::TempDir,
+    deadline: Deadline,
 }
 
 impl Setup {
     fn new() -> Self {
+        Self::within(Deadline::start())
+    }
+
+    fn within(deadline: Deadline) -> Self {
         let root = fakes::TempDir::new("ft");
         fs::create_dir_all(root.path().join("h")).unwrap();
         fs::create_dir_all(root.path().join("w")).unwrap();
-        Self { root }
+        Self { deadline, root }
     }
 
     fn home(&self) -> PathBuf {
@@ -151,7 +146,7 @@ struct KillGroup(u32);
 
 impl Drop for KillGroup {
     fn drop(&mut self) {
-        match fakes::kill_group(self.0, "KILL") {
+        match support::kill_group_detached(self.0, "KILL") {
             Ok(_) | Err(_) => {}
         }
     }
@@ -265,10 +260,10 @@ impl Run {
                 }
             }
         });
-        let Ok(end) = found.recv_timeout(DEADLINE) else {
+        let Ok(end) = found.recv_timeout(self.deadline.left()) else {
             let output = self.output();
             let output = String::from_utf8_lossy(&output);
-            panic!("waited {DEADLINE:?} for {needle:?}; output: {output:?}");
+            panic!("waited until the deadline for {needle:?}; output: {output:?}");
         };
         self.seen = end;
     }
@@ -284,24 +279,26 @@ impl Run {
         let guard = KillGroup(group);
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(self.child.wait_with_output()).unwrap());
-        let output = match finished.recv_timeout(DEADLINE) {
+        let output = match finished.recv_timeout(self.deadline.left()) {
             Ok(output) => output.unwrap(),
             Err(_) => {
-                fakes::kill_group(group, "KILL").unwrap();
-                let reaped = finished.recv_timeout(REAP_DEADLINE).is_ok();
+                support::kill_group(self.deadline, group, "KILL").unwrap();
+                let reaped = finished.recv_timeout(self.deadline.cleanup()).is_ok();
                 assert!(
-                    fakes::group_empties(group, GROUP_DEADLINE),
+                    fakes::group_empties(group, self.deadline.cleanup()),
                     "`fiber` left a process in its group behind"
                 );
-                panic!("waited {DEADLINE:?} for `fiber` to exit (reaped after the kill: {reaped})");
+                panic!(
+                    "waited until the deadline for `fiber` to exit (reaped after the kill: {reaped})"
+                );
             }
         };
         assert!(
-            fakes::group_empties(group, GROUP_DEADLINE),
+            fakes::group_empties(group, self.deadline.left()),
             "`fiber` left a process in its group behind"
         );
         std::mem::forget(guard);
-        self.watchdog.stand_down(REAP_DEADLINE);
+        self.watchdog.stand_down(self.deadline.cleanup());
         until_socket(&self.hub_socket, false, "the hub to idle out");
         output
     }
@@ -319,8 +316,8 @@ fn until_socket(socket: &Path, present: bool, what: &str) {
         done.send(()).unwrap_or(());
     });
     assert!(
-        reached.recv_timeout(DEADLINE).is_ok(),
-        "waited {DEADLINE:?} for {what}"
+        reached.recv_timeout(deadline.left()).is_ok(),
+        "waited until the deadline for {what}"
     );
 }
 
@@ -463,7 +460,7 @@ fn resize_redraws_the_input_line_on_the_new_last_row() {
         },
     )
     .unwrap();
-    fakes::kill_pid(run.child.id(), "WINCH").unwrap();
+    support::kill_pid(setup.deadline, run.child.id(), "WINCH").unwrap();
     // The next frame draws the input line on row 10; rows 11 and 12 are
     // never addressed again.
     run.read_until("\x1b[10;1H");
@@ -510,15 +507,17 @@ fn assert_names_ask(stdin: Stdio, missing: &str) {
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait_with_output()).unwrap());
     let output = finished
-        .recv_timeout(DEADLINE)
-        .unwrap_or_else(|_| panic!("waited {DEADLINE:?} for `fiber` to exit, no tty on {missing}"))
+        .recv_timeout(setup.deadline.left())
+        .unwrap_or_else(|_| {
+            panic!("waited until the deadline for `fiber` to exit, no tty on {missing}")
+        })
         .unwrap();
     assert!(
-        fakes::group_empties(group, GROUP_DEADLINE),
-        "waited {GROUP_DEADLINE:?} for the process group to empty"
+        fakes::group_empties(group, setup.deadline.left()),
+        "waited until the deadline for the process group to empty"
     );
     std::mem::forget(guard);
-    watchdog.stand_down(REAP_DEADLINE);
+    watchdog.stand_down(setup.deadline.cleanup());
     assert_eq!(output.status.code(), Some(2), "no tty on {missing}");
     assert!(output.stdout.is_empty());
     assert_eq!(

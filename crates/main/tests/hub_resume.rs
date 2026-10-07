@@ -13,6 +13,8 @@
     reason = "test helpers; a failure is the test's"
 )]
 
+mod support;
+
 use std::fs;
 use std::io::{BufRead, BufReader, ErrorKind, Write};
 use std::os::unix::net::UnixStream;
@@ -27,23 +29,23 @@ use contract::events::{Event, Parent, SessionStarted, Variables, VariablesSource
 use contract::{JobId, SessionId};
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
-
-/// How long one `fiber` run, one socket line, or one exit may take.
-const DEADLINE: Duration = Duration::from_secs(20);
+use support::{Deadline, group_alive};
 
 /// A temporary root holding Fiber home and the workspace, removed on drop.
 /// Its name is short: a session's socket path must fit in 103 bytes on
 /// macOS.
 struct Setup {
     root: fakes::TempDir,
+    deadline: Deadline,
 }
 
 impl Setup {
     fn new() -> Self {
+        let deadline = Deadline::start();
         let root = fakes::TempDir::new("fr");
         fs::create_dir_all(root.path().join("h")).unwrap();
         fs::create_dir_all(root.path().join("w")).unwrap();
-        Self { root }
+        Self { deadline, root }
     }
 
     fn home(&self) -> PathBuf {
@@ -136,19 +138,22 @@ impl Setup {
         let watchdog = Watchdog::group(group);
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-        let output = match finished.recv_timeout(DEADLINE) {
+        let output = match finished.recv_timeout(self.deadline.left()) {
             Ok(output) => output.unwrap(),
             Err(_) => {
-                fakes::kill_group(group, "KILL").unwrap();
-                panic!("waited {DEADLINE:?} for `fiber {}` to exit", args.join(" "));
+                support::kill_group(self.deadline, group, "KILL").unwrap();
+                panic!(
+                    "waited until the deadline for `fiber {}` to exit",
+                    args.join(" ")
+                );
             }
         };
         assert!(
-            !group_alive(group),
+            !group_alive(self.deadline, group),
             "`fiber {}` left a process in its group behind",
             args.join(" ")
         );
-        watchdog.stand_down(DEADLINE);
+        watchdog.stand_down(self.deadline.cleanup());
         let lines = String::from_utf8(output.stdout)
             .unwrap()
             .lines()
@@ -197,9 +202,6 @@ fn write_json(file: &Path, value: &Value) {
 }
 
 /// Whether any process remains in process group `group`.
-fn group_alive(group: u32) -> bool {
-    fakes::kill_group(group, "0").unwrap()
-}
 
 /// The process clock behind `contract::clock::Clock`.
 struct SystemClock;
@@ -273,31 +275,34 @@ impl Hub {
     /// Kills the hub, then waits for every session holding the workspace
     /// path to exit on its own.
     fn finish(mut self) {
-        fakes::kill_group(self.group, "KILL").unwrap();
+        support::kill_group(self.deadline, self.group, "KILL").unwrap();
         if let Some(mut child) = self.child.take() {
             let (done, finished) = mpsc::channel();
             thread::spawn(move || done.send(child.wait().is_ok()).unwrap_or(()));
-            assert!(finished.recv_timeout(DEADLINE).is_ok(), "the hub exited");
+            assert!(
+                finished.recv_timeout(self.deadline.left()).is_ok(),
+                "the hub exited"
+            );
         }
         assert!(
-            fakes::matching_exits(&self.workspace, DEADLINE),
-            "waited {DEADLINE:?} for every session to exit"
+            fakes::matching_exits(&self.workspace, self.deadline.left()),
+            "waited until the deadline for every session to exit"
         );
         if let Some(watchdog) = self.watchdog.take() {
-            watchdog.stand_down(DEADLINE);
+            watchdog.stand_down(self.deadline.cleanup());
         }
         if let Some(watchdog) = self.sessions.take() {
-            watchdog.stand_down(DEADLINE);
+            watchdog.stand_down(self.deadline.cleanup());
         }
     }
 }
 
 impl Drop for Hub {
     fn drop(&mut self) {
-        match fakes::kill_group(self.group, "KILL") {
+        match support::kill_group_detached(self.group, "KILL") {
             Ok(_) | Err(_) => {}
         }
-        match fakes::kill_matching(&self.workspace) {
+        match support::kill_matching_detached(&self.workspace) {
             Ok(()) | Err(_) => {}
         }
         if let Some(child) = self.child.as_mut() {
@@ -341,7 +346,7 @@ impl Socket {
             Err(error)
                 if error.kind() == ErrorKind::TimedOut || error.kind() == ErrorKind::WouldBlock =>
             {
-                panic!("waited {DEADLINE:?} for {what}; got {got:?}")
+                panic!("waited until the deadline for {what}; got {got:?}")
             }
             Err(error) => panic!("reading the hub socket while waiting for {what}: {error}"),
         }
@@ -369,7 +374,7 @@ fn connect_hub(setup: &Setup, hub: &Arc<Mutex<Option<Hub>>>) -> Socket {
         Ok(())
     };
     let (stream, _hello) = doors::hub::connect(&setup.home(), &mut start, &SystemClock).unwrap();
-    Socket::from(stream)
+    Socket::from(setup.deadline, stream)
 }
 
 fn command(id: &str, session: &str, command: &str, args: Value) -> Value {
@@ -480,8 +485,8 @@ fn until_exited(client: &Socket, setup: &Setup) -> Vec<Value> {
         line["kind"] == "fiber_exited"
     });
     assert!(
-        fakes::matching_exits(&setup.workspace_text(), DEADLINE),
-        "waited {DEADLINE:?} for the session process to exit"
+        fakes::matching_exits(&setup.workspace_text(), setup.deadline.left()),
+        "waited until the deadline for the session process to exit"
     );
     lines
 }

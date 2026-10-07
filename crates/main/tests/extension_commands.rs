@@ -13,12 +13,14 @@
 )]
 
 mod extension_harness;
+mod support;
 
 use std::fs;
 
 use extension_harness::*;
 use fakes::ProviderServer;
 use serde_json::{Value, json};
+use support::Deadline;
 
 const SYNC: &str = "fiber.command(\"sync-now\", { timeout = 8000, description = \"Sync now.\", run = function(text) host.status(\"synced \" .. text) end })\n";
 
@@ -187,7 +189,7 @@ fn replacing_a_builtin_without_replaces_unloads_with_extension_failed() {
     // The load notices are written after `extensions_loaded`; wait for both.
     let mut started = Vec::new();
     loop {
-        let line = match running.lines.recv_timeout(DEADLINE) {
+        let line = match running.lines.recv_timeout(setup.deadline.left()) {
             Ok(line) => line,
             Err(_) => panic!("waited for extensions_loaded and its notices on stdout"),
         };
@@ -334,7 +336,7 @@ fn host_drive_prompt_from_a_command_carries_the_extension_sender() {
         "{message}"
     );
     assert!(
-        server.await_requests(1, DEADLINE),
+        server.await_requests(1, setup.deadline.left()),
         "the extension-driven turn requested its provider response"
     );
     send(&client, r#"{"id":"c_close","command":"close"}"#);
