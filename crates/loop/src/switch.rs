@@ -6,6 +6,7 @@
 //! cross-command rule lives here in `loop` (`docs/architecture.md`, "The
 //! call rules").
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use contract::events::{Event, ModelSettings, Notice, SwitchSource};
@@ -50,6 +51,10 @@ pub struct Prepared {
     /// Runs once, when the switch applies; never for a rejected switch or
     /// one that changes no setting.
     pub applied: Option<Box<dyn FnOnce() + Send>>,
+    /// Canonical paths of the `file` credential sources this preparation
+    /// read: the loop adds each to its credential deny when `prepare`
+    /// returns (`docs/permissions.md`, "Credentials").
+    pub credential_files: Vec<PathBuf>,
 }
 
 /// The hosted search tool after a switch applies. The tool set changes
@@ -113,7 +118,8 @@ impl Loop {
     /// turn waits in `pending` for the next turn boundary. `closing` is
     /// checked before `prepare`, the loop's own checks after it, and the
     /// acknowledgement answers only once the switch is accepted or
-    /// rejected: a rejection changes nothing.
+    /// rejected. A rejection changes nothing but the credential deny, which
+    /// only grows.
     pub(crate) fn take_switch(
         &mut self,
         args: contract::commands::ModelArgs,
@@ -134,13 +140,19 @@ impl Loop {
             .last()
             .map(|queued| queued.chosen)
             .unwrap_or(self.chosen);
-        let prepared = match prepare(&args, chosen) {
+        let mut prepared = match prepare(&args, chosen) {
             Ok(prepared) => prepared,
             Err(rejection) => {
                 reject(ack, rejection.code, &rejection.message);
                 return Ok(());
             }
         };
+        // The file is denied from the moment it was read: a call later in
+        // this turn, before the switch applies, is refused too.
+        deny_also(
+            &mut self.credential_files,
+            std::mem::take(&mut prepared.credential_files),
+        );
         if let Ok(reviewer) = &prepared.reviewer
             && reviewer.model.reference == prepared.model.reference
         {
@@ -244,3 +256,19 @@ impl Loop {
         Ok(())
     }
 }
+
+/// Adds each of `read` to the credential deny `denied`, resolved as a
+/// configured source is at start, unless it is already there. The deny
+/// only grows.
+fn deny_also(denied: &mut Vec<PathBuf>, read: Vec<PathBuf>) {
+    for path in read {
+        let path = crate::permission::resolved(path);
+        if !denied.contains(&path) {
+            denied.push(path);
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "switch_tests.rs"]
+mod tests;

@@ -184,6 +184,7 @@ pub(crate) fn prepare(
         // At most one notice: a configured level the model lacks.
         notice: notices.into_iter().next(),
         applied,
+        credential_files: Vec::new(),
     })
 }
 

@@ -87,6 +87,7 @@ fn prepare_to(
                 web_search: Hosted::Keep,
                 notice: None,
                 applied: None,
+                credential_files: Vec::new(),
             })
         },
     )
@@ -330,6 +331,7 @@ fn after_close_prepare_is_not_called() {
             web_search: Hosted::Keep,
             notice: None,
             applied: None,
+            credential_files: Vec::new(),
         })
     });
     let mut session = Session::new(vec![Scripted::text("Old.")], None);
@@ -867,6 +869,7 @@ fn a_new_model_lacking_the_chosen_level_is_invalid_arguments() {
                 web_search: Hosted::Keep,
                 notice: None,
                 applied: None,
+                credential_files: Vec::new(),
             })
         },
     );
@@ -915,6 +918,7 @@ fn reviewer_collision_is_invalid_arguments_and_changes_nothing() {
             web_search: Hosted::Keep,
             notice: None,
             applied: None,
+            credential_files: Vec::new(),
         })
     });
     let mut session = Session::new(
@@ -1006,6 +1010,7 @@ fn prepare_hosted(
             applied: Some(Box::new(move || {
                 count.fetch_add(1, Ordering::SeqCst);
             })),
+            credential_files: Vec::new(),
         })
     })
 }
@@ -1168,6 +1173,7 @@ fn applied_never_runs_for_a_rejected_or_noop_switch() {
             applied: Some(Box::new(move || {
                 count.fetch_add(1, Ordering::SeqCst);
             })),
+            credential_files: Vec::new(),
         })
     });
     let mut session = Session::new(vec![Scripted::text("Old.")], None);
@@ -1209,6 +1215,7 @@ fn applied_never_runs_for_a_rejected_or_noop_switch() {
             applied: Some(Box::new(move || {
                 count.fetch_add(1, Ordering::SeqCst);
             })),
+            credential_files: Vec::new(),
         })
     });
     let mut session = Session::new(
@@ -1256,6 +1263,7 @@ fn two_switches_apply_in_order_with_one_rebuild() {
                 web_search: Hosted::Keep,
                 notice: None,
                 applied: None,
+                credential_files: Vec::new(),
             })
         },
     );
@@ -1341,6 +1349,7 @@ fn a_notice_is_written_after_model_changed() {
                 extension: None,
             }),
             applied: None,
+            credential_files: Vec::new(),
         })
     });
     let mut session = Session::new(vec![Scripted::text("Old.")], None);
@@ -1398,6 +1407,7 @@ fn a_switch_replaces_the_reviewer() {
             web_search: Hosted::Keep,
             notice: None,
             applied: None,
+            credential_files: Vec::new(),
         })
     });
     let tool = executes_tool();
@@ -1565,6 +1575,7 @@ fn resume_interleaving_holds_arrival_order() {
                 web_search: Hosted::Keep,
                 notice: None,
                 applied: None,
+                credential_files: Vec::new(),
             })
         },
     );
@@ -1689,4 +1700,150 @@ fn resume_interleaving_holds_arrival_order() {
         "the next request goes to `p`"
     );
     assert!(provider_n.requests().is_empty());
+}
+
+/// A `Prepare` that switches to `NEW_MODEL` on `provider`, having read the
+/// `file` credential source `read`.
+fn prepare_reading(provider: Arc<ScriptedProvider>, read: std::path::PathBuf) -> Prepare {
+    Arc::new(move |_, chosen| {
+        Ok(Prepared {
+            provider: Arc::clone(&provider) as Arc<dyn Provider>,
+            model: model_of(NEW_MODEL),
+            thinking: None,
+            chosen,
+            credential: Some("work".into()),
+            cache_lifetime: CacheLifetime::OneHour,
+            context_window: fakes::CONTEXT_WINDOW,
+            addendum: None,
+            handoff: HandoffSettings::default(),
+            reviewer: no_reviewer(),
+            web_search: Hosted::Keep,
+            notice: None,
+            applied: None,
+            credential_files: vec![read.clone()],
+        })
+    })
+}
+
+/// The `permission_resolved` lines of `lines`, by decision and who decided.
+fn decisions(lines: &[Envelope]) -> Vec<(String, String)> {
+    of_kind(lines, "permission_resolved")
+        .into_iter()
+        .map(|line| {
+            (
+                line.payload["decision"].as_str().unwrap().to_owned(),
+                line.payload["decided_by"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn a_file_a_switch_read_is_denied_from_the_same_turn() {
+    let keys = fakes::TempDir::new("fiber-switch-read-deny");
+    let key = keys.path().join("key");
+    std::fs::write(&key, "sk-switch-secret").unwrap();
+    let key = key.canonicalize().unwrap();
+    let read = Arc::new(TestTool::declaring(
+        "read",
+        "sk-switch-secret",
+        vec![Effect::Reads],
+        Some(vec![key.display().to_string()]),
+    ));
+    let peek = Arc::new(TestTool::reads("peek", "nothing"));
+    let next = new_provider(vec![Scripted::text("New.")]);
+    // The switch arrives during the first model call; the loop admits it
+    // at the step boundary, and the next step's call reads the key.
+    let mut session = Session::with_tools_injecting(
+        vec![
+            calls_reply("", &[("peek", serde_json::json!({"city": "Paris"}))]),
+            calls_reply("", &[("read", serde_json::json!({"city": "Paris"}))]),
+            Scripted::text("Done."),
+        ],
+        vec![model(NEW_MODEL, None)],
+        vec![
+            read.clone() as Arc<dyn contract::tool::Tool>,
+            peek as Arc<dyn contract::tool::Tool>,
+        ],
+    );
+    with_switch(
+        &mut session,
+        prepare_reading(Arc::clone(&next), key.clone()),
+        switchable(),
+    );
+    let (outcome, lines) = run(&mut session, "go");
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    let call: &[&str] = &[
+        "assistant_message_started",
+        "assistant_message_delta",
+        "tool_call_arguments_delta",
+        "tool_call_requested",
+        "usage_recorded",
+        "assistant_message_completed",
+    ];
+    assert_kinds(
+        &lines,
+        &[
+            OPENING,
+            STEP,
+            call,
+            &["tool_call_started", "tool_call_completed"],
+            STEP,
+            call,
+            &["permission_resolved", "tool_call_completed"],
+            STEP,
+            REPLY,
+            ENDED,
+        ],
+    );
+    assert!(
+        of_kind(&lines, "model_changed").is_empty(),
+        "not applied yet"
+    );
+    assert_eq!(
+        decisions(&lines),
+        vec![("deny".to_owned(), "credential_deny".to_owned())]
+    );
+    let denied = of_kind(&lines, "permission_resolved");
+    assert_eq!(
+        denied[0].payload["reason"],
+        "The call touches a configured credential file."
+    );
+    assert!(read.ran().is_empty(), "a denied call never runs");
+}
+
+#[test]
+fn a_file_an_idle_switch_read_is_denied_in_the_next_turn() {
+    let keys = fakes::TempDir::new("fiber-switch-idle-deny");
+    let key = keys.path().join("key");
+    std::fs::write(&key, "sk-switch-secret").unwrap();
+    let key = key.canonicalize().unwrap();
+    let read = Arc::new(TestTool::declaring(
+        "read",
+        "sk-switch-secret",
+        vec![Effect::Reads],
+        Some(vec![key.display().to_string()]),
+    ));
+    let next = new_provider(vec![
+        calls_reply("", &[("read", serde_json::json!({"city": "Paris"}))]),
+        Scripted::text("Done."),
+    ]);
+    let mut session = Session::with_tools(
+        vec![],
+        None,
+        vec![read.clone() as Arc<dyn contract::tool::Tool>],
+    );
+    with_switch(
+        &mut session,
+        prepare_reading(Arc::clone(&next), key.clone()),
+        switchable(),
+    );
+    session.inbox.send(model(NEW_MODEL, None)).unwrap();
+    let (outcome, lines) = run(&mut session, "go");
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_eq!(
+        decisions(&lines),
+        vec![("deny".to_owned(), "credential_deny".to_owned())]
+    );
+    assert!(read.ran().is_empty(), "a denied call never runs");
 }

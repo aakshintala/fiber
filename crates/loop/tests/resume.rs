@@ -5165,6 +5165,7 @@ fn resumed_thinking_seeds_the_session_choice_for_the_next_switch() {
                 web_search: r#loop::Hosted::Keep,
                 notice: None,
                 applied: None,
+                credential_files: Vec::new(),
             })
         },
     );
