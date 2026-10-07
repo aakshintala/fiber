@@ -2,9 +2,10 @@
 //! resumes them, and relays every client connection to a session's socket.
 //! It holds no session.
 //!
-//! [`serve`] listens on `run/hub`, answers `start` and `status`, and relays
-//! session commands to `run/<session_id>` (`docs/invocation.md`, "What the
-//! hub speaks"). It exits once no client has been connected for
+//! [`serve`] listens on `run/hub`, answers `start`, `status`,
+//! `prompt_history`, `feed`, `dismiss` and `recent`, and relays session
+//! commands to `run/<session_id>` (`docs/invocation.md`, "What the hub
+//! speaks"). It exits once no client has been connected for
 //! `hub.idle_exit_ms` (`docs/configuration.md`).
 
 mod connection;
@@ -12,9 +13,11 @@ mod diag;
 mod error;
 #[cfg(test)]
 pub(crate) mod fake;
+mod feed;
 mod idle;
 mod listen;
 mod prompt_history;
+mod recent;
 mod relay;
 mod resume;
 mod start;
@@ -35,6 +38,7 @@ use crate::diag::Diag;
 use crate::listen::Held;
 
 pub use crate::error::StartError;
+pub use crate::recent::{Left, RecentRow, append};
 
 /// Starts a session the hub was asked for, or resumes one a relayed command
 /// names: runs the internal session command in `workspace` with `id`, so
@@ -99,7 +103,9 @@ pub fn serve(
     hub.diag.info("hub_started", "The hub started.");
     let got = Arc::new(AtomicI32::new(0));
     arm(&got, hub.waker());
+    hub.feed.start();
     let exit = idle::run(&hub, &held, idle_exit, &got);
+    hub.feed.stop();
     held.stop();
     Ok(exit.code())
 }
