@@ -782,10 +782,17 @@ backend.
   `localhost` or an intranet host works.
 - Fetch refuses link-local addresses (`169.254.0.0/16`, `fe80::/10`) and
   cloud metadata hosts such as `metadata.google.internal`, and fails with
-  `blocked_host`. The check runs on every hop after the name is resolved, so
-  a redirect or a DNS name cannot reach them. A metadata server hands out the
-  machine's cloud credentials; loopback and private addresses are allowed,
-  because reaching them is why fetch runs locally.
+  `blocked_host`. Without a proxy, the check runs on every hop after the name
+  is resolved, so a redirect or a DNS name cannot reach them. A metadata
+  server hands out the machine's cloud credentials; loopback and private
+  addresses are allowed, because reaching them is why fetch runs locally.
+- Through a proxy (`docs/dependencies.md`, "Proxies"), the proxy resolves the
+  name, so Fiber checks what it can see. The metadata host names are always
+  refused. When the name also resolves on this machine, every address it
+  resolves to must pass the check, or the fetch fails with `blocked_host`. A
+  name that does not resolve on this machine goes to the proxy, so an
+  intranet name only the proxy knows still works. What the proxy resolves a
+  name to is the proxy's responsibility.
 - Writing to `artifacts/` is part of the call. It is not a `writes` effect.
 
 #### HTML to markdown

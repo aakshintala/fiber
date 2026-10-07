@@ -140,7 +140,7 @@ credential a session uses"). A new session takes its label from
 |---|---|
 | `update` | Updates the Fiber binary and every installed extension together (`docs/releasing.md`, "Updating"). `upgrade` runs the same command. A repository's extensions are not updated: each changes only through a new offer. |
 | `approve [--yes]` | Run in a repository: shows every extension, hook and MCP server the repository declares, as one offer would, and approves them for this person (`docs/extensions.md`, "Code a repository ships"). `--yes` approves without asking, for a script or a machine image. It prints each approval on stderr. |
-| `login [<provider>] [--as <label>]` | Stores a provider's key under a credential label (`docs/model-routing.md`, "Logging in"). Without `--as`, the label is the account's email when the login reveals one, otherwise `default`; a label already stored is refused. With no provider, a terminal offers the installed providers; without a terminal, it is a usage error. |
+| `login [<name>] [--as <label>]` | Stores a provider's key under a credential label (`docs/model-routing.md`, "Logging in"), or a secret an installed extension declares (`docs/configuration.md`, "Secrets"). Without `--as`, a provider's label is the account's email when the login reveals one, otherwise `default`; a label already stored is refused. `--as` applies only to a provider. A name that is neither an installed provider nor a declared secret is a usage error that lists both. With no name, a terminal offers the installed providers and the declared secrets; without a terminal, it is a usage error. |
 | `logout <provider> [--as <label> \| --all]` | Deletes a provider's stored key. With several labels it needs `--as` or `--all`. A key from an environment variable, a file outside Fiber home or a command is named, not removed, and the exit is non-zero. |
 | `doctor` | Says whether a session can start, and how to fix it when it cannot. |
 | `completion <shell>` | Prints a completion script for `bash`, `zsh` or `fish`, such as `source <(fiber completion zsh)`. It completes commands and flags, generated from the same parser definitions, and no values. |
@@ -155,7 +155,10 @@ also prints the environment its sessions get: the `PATH`, the names of the
 other variables and whether the login-shell capture succeeded ("A session's
 environment"). A line that stops a
 session from starting carries its fix, such as
-`` no key for openrouter: run `fiber login openrouter` ``. It exits non-zero
+`` no key for openrouter: run `fiber login openrouter` ``. It also names each
+secret an enabled extension declares that is not stored, with the
+`fiber login <name>` that stores it; a missing secret does not stop a
+session from starting. It exits non-zero
 when a session cannot start. It also prints where the diagnostic logs are, the
 newest line at `error` level among them, and the newest crash file, with its
 age (`docs/state.md`, "What each part holds"). When `docs/` is missing from
