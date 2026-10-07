@@ -75,6 +75,16 @@ fn a_persons_server_becomes_a_spec_with_defaults() {
     assert_eq!(spec.enabled, None);
     assert!(spec.disabled.is_empty());
     assert!(spec.hints.is_empty());
+    assert!(!spec.required);
+}
+
+#[test]
+fn required_true_reaches_the_spec() {
+    let setup = Setup::new();
+    setup.global(&json!({"mcp": {"servers": {"fx": {"command": "/bin/bash", "required": true}}}}));
+    let specs = setup.specs();
+    assert_eq!(specs.specs.len(), 1);
+    assert!(specs.specs[0].required);
 }
 
 #[test]

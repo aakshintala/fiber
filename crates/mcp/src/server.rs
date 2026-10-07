@@ -199,8 +199,8 @@ struct Inner {
 pub(crate) struct OpenServer {
     /// The running server.
     pub server: Server,
-    /// Its tools, in the order listed.
-    pub tools: Vec<ListedTool>,
+    /// Its raw `tools/list` entries, in the order listed.
+    pub tools: Vec<Value>,
 }
 
 impl Server {
@@ -268,7 +268,7 @@ impl Server {
         // One shutdown on `Err`: every failure path below returns through
         // here, so no arm repeats `shutdown`. `NoCancel` never fires, so
         // `Cancelled` is just another failed start, not a deadline.
-        let handshake = |server: &Server| -> Result<Vec<ListedTool>, StartError> {
+        let handshake = |server: &Server| -> Result<Vec<Value>, StartError> {
             match server.request(
                 "initialize",
                 &serde_json::json!({
@@ -313,7 +313,7 @@ impl Server {
                     }
                 };
                 match object.get("tools").and_then(Value::as_array) {
-                    Some(listed) => tools.extend(listed.iter().map(ListedTool::read)),
+                    Some(listed) => tools.extend(listed.iter().cloned()),
                     None => {
                         return Err(StartError::StartFailed(
                             "The server's tool list was not a result.".to_owned(),
@@ -497,7 +497,7 @@ impl Drop for Server {
 impl ListedTool {
     /// Reads one `tools/list` entry. A nameless entry becomes `""`, and a
     /// missing description or schema takes the default the tool declares.
-    fn read(entry: &Value) -> Self {
+    pub(crate) fn read(entry: &Value) -> Self {
         let name = entry
             .get("name")
             .and_then(Value::as_str)

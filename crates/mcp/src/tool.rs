@@ -16,7 +16,8 @@ use serde_json::{Map, Value};
 
 use crate::effects::Hints;
 use crate::name::qualified;
-use crate::server::{CallError, Server};
+use crate::server::CallError;
+use crate::slot::{self, Run, Slot};
 
 /// One server tool declared to the model.
 pub(crate) struct McpTool {
@@ -32,14 +33,15 @@ struct Call {
     tool: String,
     /// The call timeout, from the spec.
     timeout: Duration,
-    /// The shared connection. A dead link means the server is gone.
-    link: Weak<Server>,
+    /// The server's slot. A dead link means the session is gone.
+    slot: Weak<Slot>,
 }
 
 impl McpTool {
     /// Declares `tool` of `server`: the qualified name, the server's
     /// description and schema, and `hints` already resolved (the person's
-    /// override replaces the server's set as a whole).
+    /// override replaces the server's set as a whole). Calls run through
+    /// the server's slot, starting it on the first call.
     pub(crate) fn declare(
         server: &str,
         tool: &str,
@@ -47,7 +49,7 @@ impl McpTool {
         schema: Value,
         hints: &Hints,
         timeout: Duration,
-        link: Weak<Server>,
+        slot: Weak<Slot>,
     ) -> Self {
         let name = qualified(server, tool);
         Self {
@@ -67,7 +69,7 @@ impl McpTool {
                 server: server.to_owned(),
                 tool: tool.to_owned(),
                 timeout,
-                link,
+                slot,
             },
         }
     }
@@ -88,28 +90,41 @@ impl Tool for McpTool {
     }
 
     fn run(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel, _emit: &dyn Emit) -> Output {
-        let Some(server) = self.call.link.upgrade() else {
+        let Some(slot) = self.call.slot.upgrade() else {
             return failed(
                 ErrorCode::McpServerUnavailable,
-                unavailable(&self.call.server),
+                slot::unavailable(&self.call.server),
             );
         };
-        match server.call(
-            &self.call.tool,
-            &Value::Object(arguments.clone()),
-            self.call.timeout,
-            cancel,
-        ) {
-            Ok(result) => answer(&self.call.server, &self.call.tool, &result),
-            Err(CallError::Timeout) => failed(ErrorCode::Timeout, timed_out(&self.call)),
-            Err(CallError::Cancelled) => {
-                failed(ErrorCode::McpCancelRequested, cancelled(&self.call))
-            }
-            Err(CallError::Gone) => failed(
-                ErrorCode::McpServerUnavailable,
-                unavailable(&self.call.server),
+        match slot.run(&self.call.tool) {
+            Run::Removed => failed(
+                ErrorCode::McpToolRemoved,
+                slot::removed(&self.call.server, &self.call.tool),
             ),
-            Err(CallError::JsonRpc { code: _, message }) => failed(ErrorCode::ToolError, message),
+            Run::Failed(failed) => Output {
+                error: Some(failed.error),
+                server_failed: failed.record,
+                ..Output::default()
+            },
+            Run::Call(server) => match server.call(
+                &self.call.tool,
+                &Value::Object(arguments.clone()),
+                self.call.timeout,
+                cancel,
+            ) {
+                Ok(result) => answer(&self.call.server, &self.call.tool, &result),
+                Err(CallError::Timeout) => failed(ErrorCode::Timeout, timed_out(&self.call)),
+                Err(CallError::Cancelled) => {
+                    failed(ErrorCode::McpCancelRequested, cancelled(&self.call))
+                }
+                Err(CallError::Gone) => failed(
+                    ErrorCode::McpServerUnavailable,
+                    slot::unavailable(&self.call.server),
+                ),
+                Err(CallError::JsonRpc { code: _, message }) => {
+                    failed(ErrorCode::ToolError, message)
+                }
+            },
         }
     }
 }
@@ -177,10 +192,6 @@ fn cancelled(call: &Call) -> String {
         "The call to `{}` on the MCP server `{}` was cancelled; the server may still act on it.",
         call.tool, call.server,
     )
-}
-
-fn unavailable(server: &str) -> String {
-    format!("The MCP server `{server}` did not start, or it has since exited.")
 }
 
 fn failed(code: ErrorCode, message: String) -> Output {

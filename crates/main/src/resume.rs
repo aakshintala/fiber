@@ -118,6 +118,7 @@ pub(crate) fn ask_resume(
     );
     crate::shutdown::arm(signals);
     let (tools, infos, driver, session_servers) = match crate::mcp_servers::session_tools(
+        &home,
         Path::new(&folded.workspace),
         &dir.join("artifacts"),
         &clock,

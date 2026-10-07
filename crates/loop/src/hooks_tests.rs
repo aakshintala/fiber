@@ -886,7 +886,7 @@ fn mcp_servers_started_writes_each_failure_then_each_notice() {
             will_restart: false,
             error: Failure {
                 code: ErrorCode::McpServerUnavailable,
-                message: "The MCP server `fx` did not answer before its startup deadline.".into(),
+                message: "The MCP server `fx` did not answer before its startup deadline of 5000 ms. Raise `startup_timeout_ms` under `mcp.servers.fx` if it needs longer.".into(),
                 retry_after: None,
                 provider: None,
             },

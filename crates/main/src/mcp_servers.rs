@@ -8,8 +8,7 @@
 //! `command` are #593's and are skipped silently. A server with neither is
 //! skipped silently too: there is nothing to start.
 //!
-//! debt: repository approval and `required` handling move to #599/#589; the
-//! trigger is those tickets landing.
+//! debt: repository approval moves to #599; the trigger is that ticket landing.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -72,7 +71,12 @@ pub(crate) struct SessionServers {
     clippy::type_complexity,
     reason = "one session's tools, as builtin's tuple carries them"
 )]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one session's tools: home joins the arguments builtin already takes"
+)]
 pub(crate) fn session_tools(
+    home: &Path,
     workspace: &Path,
     artifacts: &Path,
     clock: &Arc<dyn contract::clock::Clock>,
@@ -91,9 +95,27 @@ pub(crate) fn session_tools(
 > {
     let (mut tools, mut infos, driver, forget) =
         crate::builtin::builtin(workspace, artifacts, clock, jobs, locks, web_search)?;
-    // Every spec starts with the session; a server that fails is left out
-    // and its failure is returned for the log, written after `fiber_started`.
-    let started = mcp::start(specs, workspace, clock, env!("CARGO_PKG_VERSION"));
+    // Every spec starts with the session, except a cached non-required
+    // one, which is declared from its cache and starts on its first call;
+    // a server that fails is left out and its failure is returned for the
+    // log, written after `fiber_started`. A `required` failure stops what
+    // started and fails the session before any line is written.
+    let started = mcp::start(
+        specs,
+        workspace,
+        &home.join("cache").join("mcp"),
+        clock,
+        env!("CARGO_PKG_VERSION"),
+    );
+    if let Some(failure) = started.required_failed {
+        started.servers.stop();
+        return Err(Failure {
+            code: ErrorCode::McpRequiredServerFailed,
+            message: failure.error.message.clone(),
+            retry_after: None,
+            provider: None,
+        });
+    }
     tools.extend(started.tools);
     infos.extend(started.infos);
     infos.sort_by(|left, right| left.name.cmp(&right.name));
@@ -153,6 +175,9 @@ fn spec(config: &Config, name: &str) -> Keep {
         disabled: server_field(config, name, "tools.disabled")
             .map_or(Vec::new(), |(value, _)| strings(&value)),
         hints: hints(config, name),
+        required: server_field(config, name, "required")
+            .and_then(|(value, _)| value.as_bool())
+            .unwrap_or(false),
     })
 }
 
