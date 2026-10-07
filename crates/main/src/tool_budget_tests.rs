@@ -16,7 +16,7 @@ use serde_json::{Map, Value, json};
 /// The largest per-protocol total the built-in definitions may take, in
 /// bytes. It started at the largest total at the commit that added the
 /// check, with no headroom.
-const BUDGET: usize = 0;
+const BUDGET: usize = 7_262;
 
 /// The one hosted tool type a protocol reads back
 /// (`config::Protocol::reads_web_search`).
@@ -476,5 +476,16 @@ fn measure_sends_the_whole_set_through_wire_tools() {
             first,
             "{tool}"
         );
+    }
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn the_built_in_definitions_fit_their_budget() {
+    let measured = measure(&builtin_definitions());
+
+    eprintln!("{}", report(&measured, BUDGET));
+    if let Err(error) = check(&measured, BUDGET) {
+        panic!("{error}");
     }
 }
