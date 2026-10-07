@@ -1075,15 +1075,40 @@ fn pause_on_a_reader_already_parked_returns_at_once() {
     assert!(reader.gate.lock().paused);
 }
 
-/// A fake editor whose script is `body`, run as `/bin/sh <script>`; the
-/// directory holding it, and an environment reader naming it as `$EDITOR`.
-fn fake_editor(body: &str) -> (fakes::TempDir, super::Var) {
+/// A fake editor and what keeps it in check.
+struct FakeEditor {
+    /// Holds the script.
+    _dir: fakes::TempDir,
+    /// The script's path: every editor process's command line names it.
+    script: String,
+    /// Kills any editor process left when the test ends or dies.
+    _watchdog: fakes::Watchdog,
+}
+
+impl FakeEditor {
+    /// Asserts no editor process is left.
+    fn assert_gone(&self) {
+        let left = fakes::matching(&self.script).unwrap_or_else(|err| panic!("ps: {err}"));
+        assert!(left.is_empty(), "editor processes left: {left:?}");
+    }
+}
+
+/// A fake editor whose script is `body`, run as `/bin/sh <script>`, under a
+/// watchdog matching its path; and an environment reader naming it as
+/// `$EDITOR`.
+fn fake_editor(body: &str) -> (FakeEditor, super::Var) {
     let dir = fakes::TempDir::new("editor");
     let script = dir.path().join("editor.sh");
     std::fs::write(&script, body).unwrap_or_else(|err| panic!("script: {err}"));
     let command = format!("/bin/sh {}", script.display());
+    let script = script.display().to_string();
+    let watchdog = fakes::Watchdog::matching(&script);
     (
-        dir,
+        FakeEditor {
+            _dir: dir,
+            script,
+            _watchdog: watchdog,
+        },
         Box::new(move |name| (name == "EDITOR").then(|| command.clone())),
     )
 }
@@ -1115,20 +1140,22 @@ fn ctrl_g_puts_the_editors_text_in_the_draft_and_the_loop_reads_on() {
         .try_clone()
         .unwrap_or_else(|err| panic!("dup: {err}"));
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), Some(tty));
-    let (_dir, var) = fake_editor("printf 'edited' > \"$1\"\n");
+    let (editor, var) = fake_editor("printf 'edited' > \"$1\"\n");
     lp.var = var;
     let inputs = ["a", "\x07", "!"].map(|bytes| Input::Bytes(bytes.as_bytes().to_vec()));
     assert_eq!(feed_within(lp, inputs.into()), (0, "edited!".to_owned()));
+    editor.assert_gone();
     crate::term::restore();
 }
 
 #[test]
 fn ctrl_g_that_cannot_take_the_terminal_back_quits_with_one() {
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
-    let (_dir, var) = fake_editor("printf 'edited' > \"$1\"\n");
+    let (editor, var) = fake_editor("printf 'edited' > \"$1\"\n");
     lp.var = var;
     let inputs = ["a", "\x07", "!"].map(|bytes| Input::Bytes(bytes.as_bytes().to_vec()));
     assert_eq!(feed_within(lp, inputs.into()), (1, "a".to_owned()));
+    editor.assert_gone();
 }
 
 #[test]
