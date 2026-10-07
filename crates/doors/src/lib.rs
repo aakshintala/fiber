@@ -155,6 +155,9 @@ pub fn install_approved(
                 text.push('\n');
             }
         }
+        for built_in in &summary.replaces {
+            text.push_str(&format!("Replaces `{built_in}`\n"));
+        }
         if summary.providers.is_empty() {
             text.push_str("It registers no provider.\n");
         }
