@@ -3,6 +3,8 @@
 
 use ratatui::text::Span;
 
+use crate::keys::Edit;
+
 /// A paste of more lines than this shows as one token.
 const PASTE_LINES: usize = 10;
 
@@ -55,6 +57,22 @@ struct Layout {
 }
 
 impl Draft {
+    /// Applies one editing key.
+    pub(crate) fn edit(&mut self, edit: Edit) {
+        match edit {
+            Edit::Left => self.left(),
+            Edit::Right => self.right(),
+            Edit::ShiftEnter | Edit::CtrlJ => self.line_break(),
+            Edit::WordLeft => self.word_left(),
+            Edit::WordRight => self.word_right(),
+            Edit::DeleteWord => self.delete_word(),
+            Edit::LineStart => self.line_start(),
+            Edit::LineEnd => self.line_end(),
+            Edit::Delete => self.delete(),
+            Edit::Paste(text) => self.paste(&text),
+        }
+    }
+
     /// Inserts `ch` at the cursor. A control character other than a tab
     /// is not inserted; a line break comes from [`Draft::line_break`].
     pub(crate) fn insert(&mut self, ch: char) {

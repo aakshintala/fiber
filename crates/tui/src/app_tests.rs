@@ -916,3 +916,171 @@ fn the_panel_takes_editing_keys_first_and_a_paste_goes_to_its_feedback() {
         .unwrap_or_default();
     assert_eq!(feedback, "› deny · no way");
 }
+
+/// The `args` of a command line.
+fn args(line: &str) -> serde_json::Value {
+    parse(line).get("args").cloned().unwrap_or_default()
+}
+
+#[test]
+fn one_bang_sends_shell_with_send_true() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
+    let line = one_line(send(&mut app, "!ls", now));
+    let value = parse(&line);
+    assert_eq!(value["command"], "shell");
+    assert_eq!(value["session_id"], "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(
+        args(&line),
+        serde_json::json!({"command": "ls", "send": true})
+    );
+    assert!(app.input().is_empty());
+}
+
+#[test]
+fn two_bangs_send_shell_with_send_false() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
+    let line = one_line(send(&mut app, "!!git status", now));
+    assert_eq!(
+        args(&line),
+        serde_json::json!({"command": "git status", "send": false})
+    );
+}
+
+#[test]
+fn a_bang_alone_is_a_prompt() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
+    let line = one_line(send(&mut app, "!", now));
+    assert_eq!(parse(&line)["command"], "prompt");
+    assert_eq!(content_text(&line), "!");
+}
+
+#[test]
+fn a_bang_command_expands_its_tokens() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
+    app.on_key(Key::Char('!'), now);
+    app.on_edit(Edit::Paste(numbered(11)));
+    let line = one_line(app.on_key(Key::Enter, now));
+    assert_eq!(args(&line)["command"], numbered(11).as_str());
+    assert_eq!(args(&line)["send"], true);
+}
+
+#[test]
+fn a_bang_command_before_a_session_says_start_one_first() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    connect(&mut app);
+    assert_eq!(send(&mut app, "!!ls", now), Effect::None);
+    assert_eq!(app.notice(), Some("Start a session first."));
+    assert_eq!(app.draft(), "!!ls");
+    // While `start` waits for its answer, the same.
+    let mut app = self::app();
+    started(&mut app, now);
+    assert_eq!(send(&mut app, "!ls", now), Effect::None);
+    assert_eq!(app.notice(), Some("Start a session first."));
+    assert_eq!(app.draft(), "!ls");
+}
+
+#[test]
+fn a_bang_command_during_a_turn_is_shell_not_steer() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "hi"));
+    let line = one_line(send(&mut app, "!!ls", now));
+    assert_eq!(parse(&line)["command"], "shell");
+    let line = one_line(send(&mut app, "!ls", now));
+    assert_eq!(parse(&line)["command"], "shell");
+}
+
+/// A `command_accepted` on the session stream for `id` with `result`.
+fn accepted(id: &str, result: Option<serde_json::Value>) -> Line {
+    let mut payload = serde_json::json!({"command_id": id});
+    if let (Some(result), Some(object)) = (result, payload.as_object_mut()) {
+        object.insert("result".to_owned(), result);
+    }
+    session_line("s_aaaaaaaaaaaaaaaa", "command_accepted", payload, None)
+}
+
+/// The id of a command line.
+fn id_of(line: &str) -> String {
+    parse(line)["id"].as_str().unwrap_or_default().to_owned()
+}
+
+#[test]
+fn a_show_only_result_is_one_item() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
+    let id = id_of(&one_line(send(&mut app, "!!git status", now)));
+    let result = serde_json::json!({"output": "clean\n",
+        "process": {"exit_code": 0, "timed_out": false}});
+    app.on_line(accepted(&id, Some(result.clone())));
+    assert_eq!(app.lines(), vec!["! git status\nclean"]);
+    // A repeat of the answer shows nothing more.
+    app.on_line(accepted(&id, Some(result)));
+    assert_eq!(app.lines().len(), 1);
+}
+
+#[test]
+fn a_sent_command_shows_once_from_its_event() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
+    let id = id_of(&one_line(send(&mut app, "!ls", now)));
+    // Even an answer carrying a result shows nothing for `send` true.
+    app.on_line(accepted(
+        &id,
+        Some(serde_json::json!({"output": "a",
+            "process": {"exit_code": 0, "timed_out": false}})),
+    ));
+    assert!(app.lines().is_empty());
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "shell_command",
+        serde_json::json!({"command": "ls", "output": "a\n",
+            "process": {"exit_code": 2, "timed_out": false}}),
+        None,
+    ));
+    assert_eq!(app.lines(), vec!["! ls\na\nexit 2"]);
+}
+
+#[test]
+fn a_prompt_answer_with_a_shell_shaped_result_shows_nothing() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
+    let id = id_of(&one_line(send(&mut app, "!!ls", now)));
+    let line = one_line(send(&mut app, "hello", now));
+    app.on_line(accepted(
+        &id_of(&line),
+        Some(serde_json::json!({"output": "a",
+            "process": {"exit_code": 0, "timed_out": false}})),
+    ));
+    assert!(app.lines().is_empty());
+    app.on_line(accepted(&id, None));
+    assert!(app.lines().is_empty());
+}
+
+#[test]
+fn a_rejected_bang_command_returns_to_an_empty_draft() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
+    let id = id_of(&one_line(send(&mut app, "!!ls", now)));
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "command_rejected",
+        serde_json::json!({"command_id": id, "code": "busy", "message": "no"}),
+        None,
+    ));
+    assert_eq!(app.notice(), Some("no"));
+    assert_eq!(app.draft(), "!!ls");
+}

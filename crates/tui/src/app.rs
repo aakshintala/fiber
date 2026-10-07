@@ -8,8 +8,8 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use contract::events::{
-    CommandAccepted, CommandRejected, InputItem, SteeringApplied, TextCompleted, TextDelta,
-    TurnCompleted, TurnOutcome, TurnStarted,
+    CommandAccepted, CommandRejected, InputItem, ShellCommand, SteeringApplied, TextCompleted,
+    TextDelta, TurnCompleted, TurnOutcome, TurnStarted,
 };
 use contract::shapes::ContentPart;
 use contract::{Envelope, HubLine, SessionId};
@@ -19,6 +19,7 @@ use crate::approvals::{self, Panel, PanelKey, Queue};
 use crate::input::Draft;
 use crate::keys::{Edit, Key};
 use crate::link::Line;
+use crate::shell;
 
 /// How long the second Ctrl+C waits for the first.
 pub(crate) const QUIT_WINDOW: Duration = Duration::from_secs(1);
@@ -67,6 +68,7 @@ enum Kind {
     Steer,
     Cancel,
     Reply,
+    Shell,
 }
 
 /// The hub connection, as the terminal sees it.
@@ -92,6 +94,8 @@ enum Item {
     Reply { action: String, text: String },
     /// A closed turn.
     Closed(String),
+    /// A `!` command and its output.
+    Shell(String),
 }
 
 /// The terminal's state.
@@ -215,19 +219,7 @@ impl App {
             }
             return;
         }
-        let draft = &mut self.draft;
-        match edit {
-            Edit::Left => draft.left(),
-            Edit::Right => draft.right(),
-            Edit::ShiftEnter | Edit::CtrlJ => draft.line_break(),
-            Edit::WordLeft => draft.word_left(),
-            Edit::WordRight => draft.word_right(),
-            Edit::DeleteWord => draft.delete_word(),
-            Edit::LineStart => draft.line_start(),
-            Edit::LineEnd => draft.line_end(),
-            Edit::Delete => draft.delete(),
-            Edit::Paste(text) => draft.paste(&text),
-        }
+        self.draft.edit(edit);
     }
 
     /// Folds one line from the hub, returning command lines to send.
@@ -381,7 +373,7 @@ impl App {
             .map(|item| match item {
                 Item::Prompt(text) => format!("› {text}"),
                 Item::Steer(text) => format!("steer · {text}"),
-                Item::Reply { text, .. } | Item::Closed(text) => text.clone(),
+                Item::Reply { text, .. } | Item::Closed(text) | Item::Shell(text) => text.clone(),
             })
             .collect()
     }
@@ -405,8 +397,9 @@ impl App {
         Effect::None
     }
 
-    /// Enter sends the draft: `start` with no session, `prompt` when idle,
-    /// `steer` during a turn.
+    /// Enter sends the draft, its tokens expanded: `start` with no session,
+    /// `prompt` when idle, `steer` during a turn, and `shell` for a `!`
+    /// command whenever attached.
     fn on_enter(&mut self) -> Effect {
         let text = self.draft.expand();
         if text.trim() == APPROVALS {
@@ -418,11 +411,20 @@ impl App {
         if text.trim().is_empty() || self.link == Link::Down {
             return Effect::None;
         }
-        let (kind, session) = match &self.phase {
-            Phase::Starting => (Kind::Start, None),
-            Phase::Pending { .. } => return Effect::None,
-            Phase::Attached { session, busy } => {
-                let kind = if *busy { Kind::Steer } else { Kind::Prompt };
+        let bang = shell::parse(&text);
+        let (kind, session) = match (&self.phase, bang) {
+            (Phase::Starting | Phase::Pending { .. }, Some(_)) => {
+                self.notice = Some("Start a session first.".to_owned());
+                return Effect::None;
+            }
+            (Phase::Starting, None) => (Kind::Start, None),
+            (Phase::Pending { .. }, None) => return Effect::None,
+            (Phase::Attached { session, busy }, _) => {
+                let kind = match (bang, busy) {
+                    (Some(_), _) => Kind::Shell,
+                    (None, true) => Kind::Steer,
+                    (None, false) => Kind::Prompt,
+                };
                 (kind, Some(session.clone()))
             }
         };
@@ -442,6 +444,9 @@ impl App {
                         "content": content,
                     },
                 })
+            }
+            Some(session) if let Some((command, send)) = bang => {
+                shell::command(&id, &session, command, send)
             }
             Some(session) => {
                 let command = if kind == Kind::Steer {
@@ -538,7 +543,7 @@ impl App {
             Some((Kind::Cancel, _)) => {
                 self.pending.remove(id);
             }
-            Some((Kind::Start | Kind::Prompt | Kind::Steer | Kind::Reply, _)) => {
+            Some((Kind::Start | Kind::Prompt | Kind::Steer | Kind::Reply | Kind::Shell, _)) => {
                 self.notice = Some(message);
                 self.fail(id);
             }
@@ -599,7 +604,18 @@ impl App {
         match envelope.kind.as_str() {
             "command_accepted" => {
                 if let Ok(accepted) = serde_json::from_value::<CommandAccepted>(payload) {
-                    self.pending.remove(&accepted.command_id.0);
+                    let pending = self.pending.remove(&accepted.command_id.0);
+                    if let Some((Kind::Shell, text)) = pending
+                        && let Some(item) = shell::answered(&text, accepted.result)
+                    {
+                        self.push(Item::Shell(item));
+                    }
+                }
+            }
+            "shell_command" => {
+                if let Ok(ran) = serde_json::from_value::<ShellCommand>(payload) {
+                    let item = shell::item(&ran.command, &ran.output, &ran.process);
+                    self.push(Item::Shell(item));
                 }
             }
             "command_rejected" => {
@@ -672,7 +688,11 @@ impl App {
     fn reply(&mut self, action: &str, update: impl FnOnce(&mut String)) {
         let found = self.items.iter_mut().rev().find_map(|item| match item {
             Item::Reply { action: has, text } if has == action => Some(text),
-            Item::Prompt(_) | Item::Steer(_) | Item::Reply { .. } | Item::Closed(_) => None,
+            Item::Prompt(_)
+            | Item::Steer(_)
+            | Item::Reply { .. }
+            | Item::Closed(_)
+            | Item::Shell(_) => None,
         });
         match found {
             Some(text) => update(text),
