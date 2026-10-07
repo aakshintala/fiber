@@ -115,6 +115,51 @@ fn each_allowed_key_set_with_one_extra_key_raises_naming_it() {
 }
 
 #[test]
+fn a_form_field_option_takes_only_label_and_description() {
+    let field_with = |option: serde_json::Value| serde_json::json!({"header": "h", "question": "q", "options": [option]});
+    // Each operand of the `key != "label" && key != "description"`
+    // check: an option with only `label`, only `description`, or both
+    // is allowed.
+    let allowed = [
+        json!({"label": "a"}),
+        json!({"description": "d"}),
+        json!({"label": "a", "description": "d"}),
+    ];
+    for option in &allowed {
+        assert!(
+            check_field(&field_with(option.clone()), 0).is_ok(),
+            "option {option} is allowed"
+        );
+    }
+    let refused = [
+        (json!({"label": "a", "value": "v"}), "value"),
+        (json!({"description": "d", "name": "n"}), "name"),
+        (json!({"value": "v"}), "value"),
+    ];
+    for (option, key) in refused {
+        let error =
+            check_field(&field_with(option), 0).expect_err("an extra option key is refused");
+        assert!(error.contains(key), "the error names {key:?}: {error}");
+    }
+    // The spec level wires the same check: a form field option with an
+    // extra key is refused naming it, while a `label`-only option reads.
+    let error = interaction(
+        "form",
+        &json!({"fields": [{"header": "h", "question": "q", "options": [{"label": "a", "value": "v"}]}]}),
+    )
+    .expect_err("a form field option with an extra key is refused");
+    assert!(error.contains("value"), "the error names the key: {error}");
+    assert!(
+        interaction(
+            "form",
+            &json!({"fields": [{"header": "h", "question": "q", "options": [{"label": "a"}]}]}),
+        )
+        .is_ok(),
+        "a `label`-only form field option reads"
+    );
+}
+
+#[test]
 fn a_missing_prompt_options_or_fields_raises_naming_it() {
     let cases = [
         ("confirm", json!({}), "prompt"),

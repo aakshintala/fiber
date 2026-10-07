@@ -362,3 +362,113 @@ fn close_while_an_ask_is_pending_declines_it_by_fiber() {
     assert_eq!(resolved["payload"]["by"], "fiber");
     assert_eq!(resolved["payload"]["declined"], true);
 }
+
+#[test]
+fn a_resumed_interactive_session_answers_a_host_ask() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    setup.lua(
+        "worker",
+        "fiber.command(\"slowask\", { timeout = 8000, run = function(text)\nlocal answer = host.ask(\"confirm\", { prompt = \"go?\" })\nhost.status(tostring(answer.confirmed))\nend })\n",
+    );
+    // An exited session to resume.
+    let (status, out, stderr) = run_ask(&setup, &["ask", "hi"]);
+    assert!(status.success(), "stderr: {stderr}");
+    let id = out[0]["session_id"].as_str().unwrap().to_owned();
+    // A resumed session serving clients is answerable: the ask reaches a
+    // connected client instead of declining at once.
+    let mut running = setup.start_session(&id, &["--resume"]);
+    let client = running.connect_client(&setup.socket(&id));
+    running.wait_for("extensions_loaded");
+    subscribe(&client);
+    commanded(&client, "c_1", "slowask");
+    let asked = requested(&client);
+    let request_id = asked["payload"]["request_id"].as_str().unwrap().to_owned();
+    client
+        .send(&format!(
+            r#"{{"id":"c_reply","command":"reply","args":{{"request_id":"{request_id}","confirmed":true}}}}"#
+        ))
+        .unwrap();
+    let resolved = client
+        .recv_until(DEADLINE, |line| line["kind"] == "interaction_resolved")
+        .expect("the answer resolves");
+    assert_eq!(resolved["payload"]["request_id"], request_id);
+    assert_eq!(resolved["payload"]["by"], "person");
+    assert!(
+        resolved["payload"].get("declined").is_none(),
+        "the resumed ask was answered, not declined: {resolved}"
+    );
+    client
+        .recv_until(DEADLINE, |line| {
+            line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_reply"
+        })
+        .expect("the reply was accepted");
+    let ui = client
+        .recv_until(DEADLINE, |line| line["kind"] == "extension_ui")
+        .expect("the answer reaches the command");
+    assert_eq!(ui["payload"]["status"], "true");
+    client
+        .send(r#"{"id":"c_close","command":"close"}"#)
+        .unwrap();
+    drop(client);
+    let (status, _, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+}
+
+#[test]
+fn a_resumed_one_turn_session_declines_a_host_ask_at_once() {
+    // As `fiber_ask_declines_a_hook_ask_and_writes_no_question`, but on a
+    // resumed session: `fiber ask --resume` runs one turn with no client,
+    // so the hook's ask declines at once and writes no question.
+    let setup = Setup::new();
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "call_1",
+            "shell",
+            &json!({"command": "echo hi"}),
+        )]),
+        hello(),
+        stream(&[function_call(
+            "call_2",
+            "shell",
+            &json!({"command": "echo hi"}),
+        )]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n",
+            json!({"decision": "allow", "tool": "shell", "prefix": "echo hi"})
+        ),
+    )
+    .unwrap();
+    setup.lua(
+        "worker",
+        "fiber.hook(\"after_tool\", { timeout = 8000, on_failure = \"blocking\", run = function(call)\nlocal answer = host.ask(\"confirm\", { prompt = \"go?\" })\nreturn { content = \"declined=\" .. tostring(answer.declined) }\nend })\n",
+    );
+    let (status, out, stderr) = run_ask(&setup, &["ask", "hi"]);
+    assert!(status.success(), "stderr: {stderr}");
+    let id = out[0]["session_id"].as_str().unwrap().to_owned();
+    let (status, out, stderr) = run_ask(&setup, &["ask", "--resume", &id, "hi"]);
+    assert!(status.success(), "stderr: {stderr}");
+    assert!(
+        out.iter()
+            .any(|line| line["kind"] == "fiber_started" && line["payload"]["resumed"] == true),
+        "the second run resumed the session"
+    );
+    assert!(
+        !out.iter()
+            .any(|line| line["kind"] == "interaction_requested"),
+        "no question is written on the resumed one-turn run"
+    );
+    let requests = server.requests();
+    assert_eq!(requests.len(), 4);
+    assert!(
+        String::from_utf8_lossy(&requests[3].body).contains("declined=true"),
+        "the resumed hook saw declined at once"
+    );
+}
