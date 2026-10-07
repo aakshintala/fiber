@@ -20,6 +20,9 @@ use crate::keys::Key;
 use crate::link::Line;
 use crate::turn::{Fold, Row, Turn};
 
+#[path = "app_commands.rs"]
+mod commands;
+
 /// A line's payload as `$kind`; `None` when it does not parse, and the
 /// line is skipped.
 macro_rules! read {
@@ -34,9 +37,6 @@ pub(crate) const QUIT_WINDOW: Duration = Duration::from_secs(1);
 
 /// What the quit hint says.
 pub(crate) const QUIT_HINT: &str = "Press Ctrl+C again to quit";
-
-/// The draft that reopens the waiting queue.
-const APPROVALS: &str = "/approvals";
 
 /// What the terminal is attached to.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,6 +66,16 @@ pub(crate) enum Effect {
     Send(Vec<String>),
     /// Quit the terminal.
     Quit,
+    /// Start the `@` panel's search worker on a listing of the workspace's
+    /// files, searching for an empty query at the current generation.
+    ListFiles,
+    /// Search the listed files for `query`, the text after the `@`.
+    Search {
+        /// The generation the result is tagged with.
+        generation: u64,
+        /// The query.
+        query: String,
+    },
 }
 
 /// Which command the terminal sent and waits on.
@@ -76,6 +86,8 @@ enum Kind {
     Steer,
     Cancel,
     Reply,
+    /// A built-in command such as `handoff`, `reload` or `close`.
+    Command,
 }
 
 /// The hub connection, as the terminal sees it.
@@ -129,6 +141,8 @@ pub(crate) struct App {
     kitty: bool,
     /// Approval requests from every session.
     queue: Queue,
+    /// The `/` and `@` panels and the key map overlay.
+    overlays: commands::Overlays,
 }
 
 impl App {
@@ -151,6 +165,7 @@ impl App {
             armed_at: None,
             kitty: false,
             queue: Queue::default(),
+            overlays: commands::Overlays::default(),
         }
     }
 
@@ -163,26 +178,27 @@ impl App {
         };
     }
 
-    /// Handles one key at `now`, read from the injected clock.
-    pub(crate) fn on_key(&mut self, key: Key, now: Instant) -> Effect {
+    /// Hands one key to what is on top: the key map, the approval panel, a
+    /// completion panel, then the input box.
+    fn route_key(&mut self, key: Key, now: Instant) -> Effect {
         if key == Key::CtrlC {
             return self.on_ctrl_c(now);
         }
         self.armed_at = None;
+        if let Some(effect) = self.keymap_key(&key) {
+            return effect;
+        }
         match self.queue.on_key(&key) {
             Some(PanelKey::Handled) => return Effect::None,
             Some(PanelKey::Answer) => return self.answer(),
             None => {}
         }
+        if let Some(effect) = self.completion_key(&key) {
+            return effect;
+        }
         match key {
-            Key::Char(ch) => {
-                self.draft.push(ch);
-                Effect::None
-            }
-            Key::Backspace => {
-                self.draft.pop();
-                Effect::None
-            }
+            Key::Char(ch) => self.type_char(ch),
+            Key::Backspace => self.backspace(),
             Key::Enter => self.on_enter(),
             Key::Esc => self.on_esc(),
             Key::PageUp => {
@@ -201,7 +217,8 @@ impl App {
                 self.follow();
                 Effect::None
             }
-            Key::Up | Key::Down => Effect::None,
+            Key::F1 => self.open_keymap(),
+            Key::Up | Key::Down | Key::Tab | Key::BackTab => Effect::None,
             Key::AltA => self.open_first(),
         }
     }
@@ -322,6 +339,7 @@ impl App {
                 .sum()
         });
         let below = input
+            + self.completion_rows()
             + usize::from(self.badge().is_some())
             + usize::from(self.hint())
             + usize::from(self.notice.is_some());
@@ -418,9 +436,8 @@ impl App {
     /// Enter sends the draft: `start` with no session, `prompt` when idle,
     /// `steer` during a turn.
     fn on_enter(&mut self) -> Effect {
-        if self.draft.trim() == APPROVALS {
-            self.draft.clear();
-            return self.open_first();
+        if let Some(effect) = self.built_in() {
+            return effect;
         }
         // A command sent after the connection is lost goes nowhere, so the
         // draft stays.
@@ -547,7 +564,7 @@ impl App {
             Some((Kind::Cancel, _)) => {
                 self.pending.remove(id);
             }
-            Some((Kind::Start | Kind::Prompt | Kind::Steer | Kind::Reply, _)) => {
+            Some((Kind::Start | Kind::Prompt | Kind::Steer | Kind::Reply | Kind::Command, _)) => {
                 self.notice = Some(message);
                 self.fail(id);
             }
@@ -620,6 +637,7 @@ impl App {
                 }
                 false
             }
+            "opening_message" => self.opening(envelope),
             "turn_started" => read!(envelope, TurnStarted).is_some_and(|started| {
                 self.set_busy(true);
                 let prompts = started

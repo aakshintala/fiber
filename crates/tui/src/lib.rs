@@ -7,9 +7,13 @@
 
 mod app;
 mod approvals;
+mod bindings;
+mod files;
 mod format;
+mod keymap;
 mod keys;
 mod link;
+mod slash;
 mod term;
 mod turn;
 mod view;
@@ -57,6 +61,15 @@ pub(crate) enum Input {
     Disconnected,
     /// The terminal was resized.
     Resize,
+    /// A file search result for the `@` panel, tagged with the generation
+    /// it searched for: matching paths, or why there are none (the listing
+    /// failed). A result for a generation no longer current is dropped.
+    Files {
+        /// The generation searched for.
+        generation: u64,
+        /// The paths found, or the listing's error.
+        result: Result<Vec<String>, String>,
+    },
 }
 
 /// Runs the terminal on `tty`, starting sessions in `workspace`. Returns 0
@@ -93,6 +106,8 @@ pub fn run(
         on_attach,
         clock,
         wakeups: 0,
+        files_out: None,
+        search: None,
     };
     // The first frame waits on nothing: the queries are out, and nothing
     // reads the tty or the hub until it is drawn.
@@ -100,6 +115,7 @@ pub fn run(
         return 1;
     }
     let (tx, rx) = mpsc::channel();
+    terminal.files_out = Some(tx.clone());
     if let Some(tty) = &terminal.tty {
         spawn_input(tty, tx.clone());
     }
@@ -268,6 +284,10 @@ struct Loop<B: Backend> {
     clock: Arc<dyn Clock>,
     /// Inputs handled, for the idle test.
     wakeups: u64,
+    /// Where a file search worker posts its results.
+    files_out: Option<Sender<Input>>,
+    /// The `@` panel's search worker, while the panel is open.
+    search: Option<files::Search>,
 }
 
 impl<B: Backend> Loop<B> {
@@ -294,6 +314,12 @@ impl<B: Backend> Loop<B> {
                             Effect::None => {}
                             Effect::Send(lines) => self.send(&lines),
                             Effect::Quit => return Some(0),
+                            Effect::ListFiles => self.list_files(),
+                            Effect::Search { generation, query } => {
+                                if let Some(search) = &self.search {
+                                    search.search(generation, query);
+                                }
+                            }
                         },
                         Event::Reply(Reply::KittyFlags(_)) => self.app.set_kitty(),
                         Event::Reply(Reply::DeviceAttributes) => {}
@@ -326,6 +352,7 @@ impl<B: Backend> Loop<B> {
                 self.hub = None;
                 self.app.disconnected();
             }
+            Input::Files { generation, result } => self.app.on_files(generation, result),
             Input::Resize => {
                 if let Some(Ok((width, height))) = self.tty.as_ref().map(term::size) {
                     self.app.set_size(width, height);
@@ -335,10 +362,26 @@ impl<B: Backend> Loop<B> {
                 }
             }
         }
+        // A closed `@` panel drops its worker and the listing it holds.
+        if !self.app.files_open() {
+            self.search = None;
+        }
         if self.screen.draw(&self.app).is_err() {
             return Some(1);
         }
         None
+    }
+
+    /// Starts the `@` panel's search worker on a listing of the workspace,
+    /// searching for an empty query at the current generation.
+    fn list_files(&mut self) {
+        let Some(out) = &self.files_out else {
+            return;
+        };
+        let workspace = self.app.workspace().to_path_buf();
+        let search = files::Search::spawn(move || files::list(&workspace), out.clone());
+        search.search(self.app.generation(), String::new());
+        self.search = Some(search);
     }
 
     /// Writes command lines to the hub. A failed write hangs up: the
