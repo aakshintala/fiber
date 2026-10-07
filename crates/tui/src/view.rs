@@ -361,7 +361,7 @@ fn conversation_rows(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<
     for (at, range) in app.turn_lines() {
         let mut rect: Option<Rect> = None;
         for (line, (line_y, count)) in layout.iter().enumerate() {
-            if range.contains(&line) && *count > 0 {
+            if range.contains(&line) {
                 rect = Some(match rect {
                     Some(before) => Rect {
                         height: before.height.saturating_add(*count),
