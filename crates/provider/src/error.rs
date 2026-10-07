@@ -144,11 +144,26 @@ fn status_code(status: u16, body: &str) -> ErrorCode {
         400 if has_reason(body, "API_KEY_INVALID") => ErrorCode::AuthenticationFailed,
         429 => ErrorCode::RateLimited,
         408 | 409 | 500..=599 => ErrorCode::ProviderUnavailable,
+        _ if unknown_model(body) => ErrorCode::ModelNotFound,
         _ if overflow(body_code(body).as_deref(), &body_message(body)) => {
             ErrorCode::ContextOverflow
         }
         _ => ErrorCode::InvalidRequest,
     }
+}
+
+/// Whether an error body says the provider does not know the model: the
+/// code `model_not_found` (muse, OpenAI), the type `not_found_error`
+/// (Anthropic, muse on messages), or OpenRouter's "is not a valid model ID"
+/// (`research/provider-errors`, "Unknown model").
+fn unknown_model(body: &str) -> bool {
+    let value: Option<Value> = serde_json::from_str(body).ok();
+    let error_type = value
+        .as_ref()
+        .and_then(|v| v.pointer("/error/type")?.as_str());
+    body_code(body).as_deref() == Some("model_not_found")
+        || error_type == Some("not_found_error")
+        || body_message(body).contains("is not a valid model ID")
 }
 
 /// The code for a failure inside a 200 stream: from the provider's own code,
