@@ -4667,3 +4667,161 @@ fn calls_before_the_action_are_cancelled_and_calls_after_it_run_after_the_reply(
     let first_start = kinds.iter().position(|k| k == "tool_call_started").unwrap();
     assert!(last_decision < first_start, "{kinds:?}");
 }
+
+fn switched(after: &str, thinking: Option<&str>, credential: Option<&str>) -> Event {
+    Event::ModelChanged(contract::events::ModelChanged {
+        before: contract::events::ModelSettings {
+            model: support::MODEL.into(),
+            thinking: None,
+            cache_lifetime: contract::events::CacheLifetime::OneHour,
+            credential: Some("work".into()),
+        },
+        after: contract::events::ModelSettings {
+            model: after.into(),
+            thinking: thinking.map(str::to_owned),
+            cache_lifetime: contract::events::CacheLifetime::OneHour,
+            credential: credential.map(str::to_owned),
+        },
+        source: contract::events::SwitchSource::Driver,
+    })
+}
+
+#[test]
+fn resumed_folds_model_credential_and_thinking_from_the_last_switch() {
+    let mut history = History::new(vec![]);
+    history.write(preamble(Some("work")), None);
+    history.write(
+        switched("fake/second", Some("high"), Some("personal")),
+        None,
+    );
+    history.write(switched("fake/third", None, None), None);
+    history.freeze();
+    assert_eq!(
+        kinds_of(&history.lines()),
+        vec![
+            "session_started",
+            "preamble_built",
+            "model_changed",
+            "model_changed"
+        ]
+    );
+    let resumed = r#loop::resumed(&history.dir).unwrap();
+    assert_eq!(resumed.model.as_deref(), Some("fake/third"));
+    assert_eq!(resumed.credential, None);
+    assert_eq!(resumed.thinking.as_deref(), None);
+}
+
+#[test]
+fn resumed_keeps_the_switch_thinking_as_the_session_choice() {
+    let mut history = History::new(vec![]);
+    history.write(preamble(Some("work")), None);
+    history.write(switched("fake/second", Some("high"), Some("work")), None);
+    history.freeze();
+    assert_eq!(
+        kinds_of(&history.lines()),
+        vec!["session_started", "preamble_built", "model_changed"]
+    );
+    let resumed = r#loop::resumed(&history.dir).unwrap();
+    assert_eq!(resumed.thinking.as_deref(), Some("high"));
+    assert_eq!(resumed.model.as_deref(), Some("fake/second"));
+    assert_eq!(resumed.credential.as_deref(), Some("work"));
+}
+
+#[test]
+fn resumed_thinking_seeds_the_session_choice_for_the_next_switch() {
+    use std::sync::{Arc, Mutex};
+
+    let mut history = History::new(vec![Scripted::text("Hello."), Scripted::text("Again.")]);
+    history.write(preamble(Some("work")), None);
+    history.write(switched("fake/second", Some("high"), Some("work")), None);
+    history.freeze();
+
+    let recorded: Arc<Mutex<Vec<Option<contract::ThinkingLevel>>>> =
+        Arc::new(Mutex::new(Vec::new()));
+    let seen = Arc::clone(&recorded);
+    let next = Arc::new(ScriptedProvider::new(vec![Scripted::text("New.")]));
+    let prepare: r#loop::Prepare = Arc::new(
+        move |args: &contract::commands::ModelArgs, chosen: Option<contract::ThinkingLevel>| {
+            seen.lock().unwrap().push(chosen);
+            let thinking = match &args.thinking {
+                Some(level) => Some(level.parse().map_err(|_| contract::inbox::Rejection {
+                    code: contract::ErrorCode::InvalidArguments,
+                    message: "bad thinking".into(),
+                })?),
+                None => chosen,
+            };
+            let kept = thinking.or(chosen);
+            Ok(r#loop::Prepared {
+                provider: Arc::clone(&next) as Arc<dyn contract::provider::Provider>,
+                model: r#loop::Model {
+                    reference: "fake/third".into(),
+                    cost: None,
+                    subscription: false,
+                },
+                thinking: kept,
+                chosen: kept,
+                credential: Some("work".into()),
+                cache_lifetime: contract::events::CacheLifetime::OneHour,
+                context_window: None,
+                addendum: None,
+                handoff: r#loop::HandoffSettings::default(),
+                reviewer: Err(contract::shapes::Failure {
+                    code: contract::ErrorCode::NoModel,
+                    message: r#loop::NO_MODEL_MESSAGE.into(),
+                    retry_after_ms: None,
+                    provider: None,
+                }),
+                web_search: None,
+                notice: None,
+            })
+        },
+    );
+    let looped = history.resume(Vec::new()).switcher(
+        prepare,
+        r#loop::Switchable {
+            chosen: None,
+            web_search: None,
+        },
+    );
+    // A model-only switch after the resume is given the folded choice.
+    history
+        .inbox_tx
+        .send(Delivery::Model(
+            contract::commands::ModelArgs {
+                model: "fake/third".into(),
+                thinking: None,
+            },
+            support::ignore(),
+        ))
+        .unwrap();
+    history
+        .inbox_tx
+        .send(Delivery::Prompt(support::message("go"), support::ignore()))
+        .unwrap();
+    let (looped, outcome) = history.step(looped);
+    let _ = looped;
+    assert_eq!(outcome, Some(contract::events::TurnOutcome::Completed));
+    assert_eq!(
+        *recorded.lock().unwrap(),
+        vec![Some(contract::ThinkingLevel::High)],
+        "the folded thinking seeds `chosen`"
+    );
+    assert_eq!(
+        kinds_of(&history.lines()),
+        vec![
+            "session_started",
+            "preamble_built",
+            "model_changed",
+            "model_changed",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+}

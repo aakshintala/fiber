@@ -49,6 +49,10 @@ pub struct Resumed {
     /// session keeps, beating the configured one (`docs/model-routing.md`,
     /// "Which credential a session uses"). `None` when the log holds none.
     pub credential: Option<String>,
+    /// The last `model_changed`'s `after.thinking`: a resumed session
+    /// treats it as its own choice (`docs/model-routing.md`, "Thinking").
+    /// `None` when the log holds none.
+    pub thinking: Option<String>,
     /// The `seq` the window starts at: the latest `turn_started` of the
     /// latest completed handoff's turn, before that handoff; 0 with no
     /// completed handoff, or none of its turn's `turn_started` lines.
@@ -78,6 +82,7 @@ const FOLDED: &[&str] = &[
     "session_started",
     "usage_recorded",
     "preamble_built",
+    "model_changed",
     "permission_resolved",
     "turn_started",
     "steering_applied",
@@ -100,6 +105,7 @@ pub fn resumed(dir: &Path) -> Result<Resumed, Error> {
     let mut first: Option<(String, String)> = None;
     let mut model = None;
     let mut credential = None;
+    let mut thinking = None;
     let mut ledger = crate::usage::Ledger::default();
     let mut grants = Vec::new();
     let mut session_blocks = 0;
@@ -135,6 +141,10 @@ pub fn resumed(dir: &Path) -> Result<Resumed, Error> {
             ledger.record(recorded);
         } else if let Event::PreambleBuilt(built) = &event {
             credential.clone_from(&built.credential);
+        } else if let Event::ModelChanged(changed) = &event {
+            model = Some(changed.after.model.clone());
+            credential = changed.after.credential.clone();
+            thinking = changed.after.thinking.clone();
         } else if let Event::PermissionResolved(resolved) = &event {
             if let Some(grant) = &resolved.grant {
                 grants.push(grant.clone());
@@ -187,6 +197,7 @@ pub fn resumed(dir: &Path) -> Result<Resumed, Error> {
         workspace,
         model,
         credential,
+        thinking,
         window,
         end,
         seed,
@@ -332,6 +343,7 @@ impl Loop {
             session_blocks,
             reviewed,
             orphans,
+            thinking,
             ..
         } = resumed;
         let lines = log.range(
@@ -453,6 +465,10 @@ impl Loop {
             // after its own first step.
             warm: None,
             last_request: None,
+            switcher: None,
+            pending: Vec::new(),
+            chosen: thinking.and_then(|level| level.parse().ok()),
+            warm_stopped: None,
         };
         resumed.mark_orphans(orphans)?;
         Ok(resumed)
@@ -544,8 +560,10 @@ impl Loop {
             }
             let cancelled = self.run_batch(calls, &turn)?;
             // A later call's approval reached the idle delay: nothing more
-            // is written, as in any step.
+            // is written, as in any step. The turn resumes later, so a
+            // queued switch is dropped.
             if self.idle_left {
+                self.pending.clear();
                 self.cancel.disarm();
                 return Ok(None);
             }
@@ -622,6 +640,7 @@ impl Loop {
             Asked::Deny(completed) | Asked::Gone(completed) => Err(completed),
             Asked::Cancelled => Err(self.cancelled_before_ran()),
             Asked::Idle => {
+                self.pending.clear();
                 self.cancel.disarm();
                 return Ok(None);
             }
@@ -645,8 +664,10 @@ impl Loop {
         }
         let cancelled = self.run_batch(calls, &turn)?;
         // A later call's approval reached the idle delay: nothing more is
-        // written, as in any step.
+        // written, as in any step. The turn resumes later, so a queued
+        // switch is dropped.
         if self.idle_left {
+            self.pending.clear();
             self.cancel.disarm();
             return Ok(None);
         }
@@ -679,6 +700,7 @@ impl Loop {
             }
         };
         if self.idle_left {
+            self.pending.clear();
             self.cancel.disarm();
             return Ok(None);
         }

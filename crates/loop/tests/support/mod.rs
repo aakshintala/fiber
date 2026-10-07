@@ -521,6 +521,34 @@ pub(crate) fn steer(text: &str) -> Delivery {
     Delivery::Steer(message(text), ignore())
 }
 
+/// A driver's `model` command on the loop's inbox, with `thinking`.
+pub(crate) fn model(model: &str, thinking: Option<&str>) -> Delivery {
+    Delivery::Model(
+        contract::commands::ModelArgs {
+            model: model.into(),
+            thinking: thinking.map(str::to_owned),
+        },
+        ignore(),
+    )
+}
+
+/// A driver's `model` command reporting its answer on `answered`.
+pub(crate) fn model_reported(
+    model: &str,
+    thinking: Option<&str>,
+    answered: std::sync::mpsc::Sender<contract::inbox::Answer>,
+) -> Delivery {
+    Delivery::Model(
+        contract::commands::ModelArgs {
+            model: model.into(),
+            thinking: thinking.map(str::to_owned),
+        },
+        Ack(Box::new(move |answer| {
+            answered.send(answer).unwrap();
+        })),
+    )
+}
+
 /// A person's `handoff` on the loop's inbox, with `instructions`.
 pub(crate) fn handoff(id: &str, instructions: Option<&str>) -> Delivery {
     Delivery::Handoff(
@@ -1265,10 +1293,19 @@ impl Session {
     /// Every line emitted since the last call, ephemeral ones included,
     /// through the next `turn_completed`.
     pub(crate) fn lines(&mut self) -> Vec<Envelope> {
-        let watcher = self.lines.take().unwrap();
-        let (watcher, lines) = read_until(watcher, "a turn_completed line", |line| {
+        self.events_until("a turn_completed line", |line| {
             line.kind == "turn_completed"
-        });
+        })
+    }
+
+    /// Every line emitted through the first one matching `done`.
+    pub(crate) fn events_until(
+        &mut self,
+        what: &str,
+        done: impl Fn(&Envelope) -> bool + Send + 'static,
+    ) -> Vec<Envelope> {
+        let watcher = self.lines.take().unwrap();
+        let (watcher, lines) = read_until(watcher, what, done);
         self.lines = Some(watcher);
         // `run` starts the status observer, whose lines race the
         // loop's own; `tests/status.rs` reads them.

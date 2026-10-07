@@ -283,6 +283,7 @@ fn a_shutdown_answers_what_arrives_and_starts_nothing() {
     let (steer, steer_answer) = answered();
     let (drop_steer, drop_answer) = answered();
     let (reply, reply_answer) = answered();
+    let (model, model_answer) = answered();
     let (close, close_answer) = answered();
     world.cancel.shutdown(129);
     let (finished, inbox, held) = world.spawn_run();
@@ -306,6 +307,15 @@ fn a_shutdown_answers_what_arrives_and_starts_nothing() {
         .unwrap();
     inbox.send(Delivery::Close(close)).unwrap();
     inbox
+        .send(Delivery::Model(
+            contract::commands::ModelArgs {
+                model: "fake/model-2".into(),
+                thinking: None,
+            },
+            model,
+        ))
+        .unwrap();
+    inbox
         .send(Delivery::JobLine(JobLine {
             job_id: JobId("j_1".into()),
             lines: "tick\n".into(),
@@ -326,6 +336,7 @@ fn a_shutdown_answers_what_arrives_and_starts_nothing() {
         answer(&reply_answer).unwrap_err().code,
         ErrorCode::StaleRequest
     );
+    assert_eq!(answer(&model_answer).unwrap_err().code, ErrorCode::Closing);
     assert!(answer(&close_answer).is_ok());
     // The monitor's batch is dropped; the job's end is written.
     assert_eq!(held.kinds(), ["session_started", "job_completed"]);

@@ -141,6 +141,16 @@ fn assert_refreshes(session: &Session, count: usize) {
     }
 }
 
+fn assert_kinds(lines: &[Envelope], expected: &[&str]) {
+    assert_eq!(
+        lines
+            .iter()
+            .map(|line| line.kind.as_str())
+            .collect::<Vec<_>>(),
+        expected
+    );
+}
+
 /// Each refresh's durable `usage_recorded`, in no turn and no action, and
 /// nothing else after the turn.
 fn assert_usage_only(session: &Session, count: usize) {
@@ -699,5 +709,290 @@ fn a_failed_refresh_after_its_generation_writes_its_usage_then_the_notice() {
     assert_eq!(
         after.iter().map(|l| l.kind.as_str()).collect::<Vec<_>>(),
         vec!["usage_recorded"]
+    );
+}
+
+#[test]
+fn a_switch_while_warming_sends_no_refresh_and_restarts_idle_from_the_switch() {
+    use support::model as model_delivery;
+
+    let next: Arc<ScriptedProvider> = Arc::new(ScriptedProvider::new(vec![]));
+    let prepare: r#loop::Prepare = Arc::new(
+        move |args: &contract::commands::ModelArgs, chosen: Option<contract::ThinkingLevel>| {
+            let _ = chosen;
+            Ok(r#loop::Prepared {
+                provider: Arc::clone(&next) as Arc<dyn contract::provider::Provider>,
+                model: r#loop::Model {
+                    reference: args.model.clone(),
+                    cost: None,
+                    subscription: false,
+                },
+                thinking: None,
+                chosen: None,
+                credential: Some("work".into()),
+                cache_lifetime: CacheLifetime::FiveMinutes,
+                context_window: None,
+                addendum: None,
+                handoff: r#loop::HandoffSettings::default(),
+                reviewer: Err(contract::shapes::Failure {
+                    code: ErrorCode::NoModel,
+                    message: r#loop::NO_MODEL_MESSAGE.into(),
+                    retry_after_ms: None,
+                    provider: None,
+                }),
+                web_search: None,
+                notice: None,
+            })
+        },
+    );
+    let mut session = session(
+        vec![Scripted::text("ok."), refresh_reply()],
+        CacheLifetime::FiveMinutes,
+    );
+    {
+        let looped = session.looped.take().unwrap().switcher(
+            prepare,
+            r#loop::Switchable {
+                chosen: None,
+                web_search: None,
+            },
+        );
+        session.looped = Some(looped);
+    }
+    arm(&mut session, MINUTE, Some(2));
+    let start = session.clock.now();
+    session.inbox.send(delivery("hi")).unwrap();
+    let finished = spawn_run(&mut session);
+    let turn_lines = session.events_until("the first turn completion", |line| {
+        line.kind == "turn_completed"
+    });
+    // Warming after the turn: the first refresh is due 30 s before 5 min.
+    parked(
+        &session.clock,
+        start + Duration::from_secs(270),
+        "the refresh is due",
+    );
+    assert_refreshes(&session, 0);
+    // A switch at t1, before anything refreshes.
+    let switched = start + Duration::from_secs(100);
+    advance_to(&session, switched);
+    session
+        .inbox
+        .send(model_delivery("fake/model-2", None))
+        .unwrap();
+    // The idle exit lands at the switch plus the delay, not at the cap plus it.
+    let exit = switched + MINUTE;
+    parked(&session.clock, exit, "idle counts from the switch");
+    advance_to(&session, exit);
+    ended(&finished);
+    assert_refreshes(&session, 0);
+    let after = after_turns(&session);
+    assert_eq!(
+        after.iter().map(|l| l.kind.as_str()).collect::<Vec<_>>(),
+        vec!["model_changed"],
+        "the switch writes one line and no refresh usage"
+    );
+    let switch_lines = session.events_until("the model_changed line", |line| {
+        line.kind == "model_changed"
+    });
+    let mut stream = turn_lines;
+    stream.extend(switch_lines);
+    assert_kinds(
+        &stream,
+        &[
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "model_changed",
+        ],
+    );
+}
+
+#[test]
+fn a_during_turn_switch_followed_by_a_turn_keeps_warming_the_new_cache() {
+    use support::model as model_delivery;
+
+    let next: Arc<ScriptedProvider> = Arc::new(ScriptedProvider::new(vec![
+        Scripted::text("again."),
+        refresh_reply(),
+        refresh_reply(),
+    ]));
+    let for_prepare = Arc::clone(&next);
+    let prepare: r#loop::Prepare = Arc::new(
+        move |args: &contract::commands::ModelArgs, chosen: Option<contract::ThinkingLevel>| {
+            let _ = chosen;
+            Ok(r#loop::Prepared {
+                provider: Arc::clone(&for_prepare) as Arc<dyn contract::provider::Provider>,
+                model: r#loop::Model {
+                    reference: args.model.clone(),
+                    cost: None,
+                    subscription: false,
+                },
+                thinking: None,
+                chosen: None,
+                credential: Some("work".into()),
+                cache_lifetime: CacheLifetime::FiveMinutes,
+                context_window: None,
+                addendum: None,
+                handoff: r#loop::HandoffSettings::default(),
+                reviewer: Err(contract::shapes::Failure {
+                    code: ErrorCode::NoModel,
+                    message: r#loop::NO_MODEL_MESSAGE.into(),
+                    retry_after_ms: None,
+                    provider: None,
+                }),
+                web_search: None,
+                notice: None,
+            })
+        },
+    );
+    // The first turn's call sends the switch while it runs: it waits in
+    // `pending` for the next turn boundary.
+    let mut session = Session::with_tools_injecting(
+        vec![Scripted::text("ok.")],
+        vec![model_delivery("fake/model-2", None)],
+        Vec::new(),
+    );
+    {
+        let looped = session.looped.take().unwrap().switcher(
+            prepare,
+            r#loop::Switchable {
+                chosen: None,
+                web_search: None,
+            },
+        );
+        session.looped = Some(looped);
+    }
+    arm(&mut session, MINUTE, Some(2));
+    let start = session.clock.now();
+    session.inbox.send(delivery("hi")).unwrap();
+    assert_eq!(
+        session.turn(),
+        Some(contract::events::TurnOutcome::Completed)
+    );
+    let first_lines = session.lines();
+    assert_eq!(
+        first_lines
+            .iter()
+            .map(|line| line.kind.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    // The next turn applies the pending switch and takes the queued prompt
+    // immediately, without parking idle before its first request.
+    session.inbox.send(delivery("again")).unwrap();
+    assert_eq!(
+        session.turn(),
+        Some(contract::events::TurnOutcome::Completed)
+    );
+    let second_lines = session.lines();
+    assert_eq!(
+        second_lines
+            .iter()
+            .map(|line| line.kind.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "model_changed",
+            "preamble_built",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    let finished = spawn_run(&mut session);
+    let first = start + Duration::from_secs(270);
+    parked(&session.clock, first, "the new cache's first refresh");
+    advance_to(&session, first);
+    let second = first + Duration::from_secs(270);
+    parked(&session.clock, second, "the second counts from the first");
+    advance_to(&session, second);
+    let exit = start + Duration::from_secs(600) + MINUTE;
+    parked(&session.clock, exit, "idle counts from the second cap");
+    advance_to(&session, exit);
+    ended(&finished);
+    // One step on each provider, then two refreshes of the second step,
+    // capped at one token.
+    assert_eq!(session.requests().len(), 1);
+    let requests = next.requests();
+    assert_eq!(requests.len(), 3);
+    assert_eq!(requests[0].max_output_tokens, None);
+    assert_eq!(requests[1], capped(&requests[0]));
+    assert_eq!(requests[2], capped(&requests[0]));
+    let after = after_turns(&session);
+    assert_eq!(
+        after.iter().map(|l| l.kind.as_str()).collect::<Vec<_>>(),
+        vec!["usage_recorded", "usage_recorded"],
+        "two refreshes and nothing else after the last turn"
+    );
+    let lines = log::read(&session.dir).unwrap();
+    let changed: Vec<&contract::Envelope> =
+        lines.iter().filter(|l| l.kind == "model_changed").collect();
+    assert_eq!(changed.len(), 1);
+    assert_eq!(changed[0].payload["after"]["model"], "fake/model-2");
+    let count = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::clone(&count);
+    let refresh_lines = session.events_until("two cache refreshes", move |line| {
+        line.kind == "usage_recorded" && seen.fetch_add(1, Ordering::SeqCst) == 1
+    });
+    let mut stream = first_lines;
+    stream.extend(second_lines);
+    stream.extend(refresh_lines);
+    assert_kinds(
+        &stream,
+        &[
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "model_changed",
+            "preamble_built",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "usage_recorded",
+            "usage_recorded",
+        ],
     );
 }

@@ -242,6 +242,7 @@ fn built(command: &str) -> bool {
             | "tools"
             | "commands"
             | "history"
+            | "model"
             | "close"
             | "shell"
             | "job_stop"
@@ -325,6 +326,10 @@ fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
         Command::Cancel => cancel(conn, id),
         Command::Shell(args) => shell(conn, id, &args, name),
         Command::Close(args) => crate::close::run(conn, id, args.now),
+        Command::Model(args) => {
+            let ack = inbox_ack(conn, id);
+            conn.gate.deliver(Delivery::Model(args, ack));
+        }
         Command::Handoff(args) => {
             let ack = inbox_ack(conn, id.clone());
             conn.gate.deliver(Delivery::Handoff(id, args, ack));
@@ -340,7 +345,6 @@ fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
         Command::Command(args) => crate::run_command::run(conn, id, &args),
         Command::Message(_)
         | Command::Reload
-        | Command::Model(_)
         | Command::Credential(_)
         | Command::Name(_)
         | Command::Rewind(_) => unknown(conn, id, name),

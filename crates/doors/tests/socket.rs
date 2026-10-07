@@ -26,7 +26,7 @@ use contract::events::{
     LoadedExtension, Notice, PreambleBuilt, PreambleReason, QueuedMessage, SentTool, SessionState,
     SessionStatus, SteeringQueue, ToolInfo, ToolSource, ToolState, TurnStarted, UsageRecorded,
 };
-use contract::inbox::{Delivery, Message};
+use contract::inbox::{Delivery, Message, Rejection};
 use contract::jobs::{Foreground, Jobs, Opening, Stop};
 use contract::provider::ToolDefinition;
 use contract::shapes::{ContentPart, Failure, Origin, Process, Sender, Tokens, Usage};
@@ -177,6 +177,10 @@ fn seqs(lines: &[Value]) -> Vec<u64> {
         .iter()
         .filter_map(|line| line["seq"].as_u64())
         .collect()
+}
+
+fn kinds(lines: &[Value]) -> Vec<&str> {
+    lines.iter().map(kind).collect()
 }
 
 fn send(client: &Client, line: &str) {
@@ -333,6 +337,10 @@ fn take(inbox: &Receiver<Delivery>) -> String {
             ack.0(Ok(None));
             format!("handoff {} {:?}", id.0, args.instructions)
         }
+        Delivery::Model(args, ack) => {
+            ack.0(Ok(None));
+            format!("model {}", args.model)
+        }
         Delivery::Close(ack) => {
             ack.0(Ok(None));
             "close".to_owned()
@@ -445,7 +453,6 @@ fn subscribe_is_first_and_unknown_or_unfit_commands_are_rejected() {
             for name in [
                 "message",
                 "reload",
-                "model",
                 "credential",
                 "name",
                 "rewind",
@@ -1119,6 +1126,156 @@ fn inbox_commands_are_answered_only_on_the_connection_that_sent_them() {
             let file = fs::read_to_string(dir.join("events.jsonl")).unwrap();
             assert!(file.contains("step_started"));
             assert!(!file.contains("command_accepted"));
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn model_arrives_as_delivery_with_its_args_and_its_rejection_stays_put() {
+    let opened = Opened::open(vec![]);
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let sender = Client::connect(&socket).unwrap();
+            let other = Client::connect(&socket).unwrap();
+            let mut own = vec![subscribe(&sender, "c_a", "full")];
+            let mut other_stream = vec![subscribe(&other, "c_b", "full")];
+            send(
+                &sender,
+                r#"{"id":"c_m1","command":"model","args":{"model":"fake/n","thinking":"high"}}"#,
+            );
+            match inbox
+                .recv_timeout(DEADLINE)
+                .expect("the model is delivered")
+            {
+                Delivery::Model(args, ack) => {
+                    assert_eq!(args.model, "fake/n");
+                    assert_eq!(args.thinking.as_deref(), Some("high"));
+                    ack.0(Ok(None));
+                }
+                Delivery::Prompt(..)
+                | Delivery::Steer(..)
+                | Delivery::SteerDrop(..)
+                | Delivery::Handoff(..)
+                | Delivery::Reply(..)
+                | Delivery::Close(_)
+                | Delivery::Job(_)
+                | Delivery::JobLine(_)
+                | Delivery::ExtensionExec(_)
+                | Delivery::ExtensionLog(_)
+                | Delivery::Cancelled => panic!("the model arrives as a model"),
+            }
+            let accepted_lines = until(&sender, |line| command_id(line) == Some("c_m1"));
+            assert_eq!(kind(accepted_lines.last().unwrap()), "command_accepted");
+            own.extend(accepted_lines);
+            send(
+                &sender,
+                r#"{"id":"c_m2","command":"model","args":{"model":"fake/nope"}}"#,
+            );
+            match inbox
+                .recv_timeout(DEADLINE)
+                .expect("the second model is delivered")
+            {
+                Delivery::Model(args, ack) => {
+                    assert_eq!(args.model, "fake/nope");
+                    ack.0(Err(Rejection {
+                        code: ErrorCode::InvalidArguments,
+                        message: "no such model".into(),
+                    }));
+                }
+                Delivery::Prompt(..)
+                | Delivery::Steer(..)
+                | Delivery::SteerDrop(..)
+                | Delivery::Handoff(..)
+                | Delivery::Reply(..)
+                | Delivery::Close(_)
+                | Delivery::Job(_)
+                | Delivery::JobLine(_)
+                | Delivery::ExtensionExec(_)
+                | Delivery::ExtensionLog(_)
+                | Delivery::Cancelled => panic!("the model arrives as a model"),
+            }
+            let rejected_lines = until(&sender, |line| command_id(line) == Some("c_m2"));
+            assert_eq!(
+                rejection(rejected_lines.last().unwrap()),
+                ("invalid_arguments", "no such model")
+            );
+            own.extend(rejected_lines);
+            // The other connection sees neither acknowledgement: both stay
+            // on the connection that sent them.
+            send(&other, r#"{"id":"c_tools","command":"tools"}"#);
+            let seen = until(&other, |line| command_id(line) == Some("c_tools"));
+            assert!(
+                seen.iter()
+                    .all(|line| !matches!(command_id(line), Some("c_m1" | "c_m2"))),
+                "the other connection sees no model acknowledgement"
+            );
+            assert_eq!(kind(seen.last().unwrap()), "command_accepted");
+            other_stream.extend(seen);
+            assert_eq!(
+                kinds(&own),
+                [
+                    "command_accepted",
+                    "clients",
+                    "clients",
+                    "command_accepted",
+                    "command_rejected"
+                ]
+            );
+            assert_eq!(
+                kinds(&other_stream),
+                ["command_accepted", "clients", "command_accepted"]
+            );
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn model_without_args_is_unfit_and_before_subscribe_is_not_subscribed() {
+    let opened = Opened::open(vec![]);
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let client = Client::connect(&socket).unwrap();
+            let mut stream = Vec::new();
+            send(
+                &client,
+                r#"{"id":"c_early","command":"model","args":{"model":"fake/n"}}"#,
+            );
+            let early = next(&client);
+            assert_eq!(rejection(&early), ("not_subscribed", NOT_SUBSCRIBED));
+            stream.push(early);
+            stream.push(subscribe(&client, "c_sub", "full"));
+            send(&client, r#"{"id":"c_bare","command":"model"}"#);
+            let bare_lines = until(&client, |line| command_id(line) == Some("c_bare"));
+            assert_eq!(
+                rejection(bare_lines.last().unwrap()),
+                ("invalid_arguments", UNFIT)
+            );
+            stream.extend(bare_lines);
+            send(&client, r#"{"id":"c_empty","command":"model","args":{}}"#);
+            let empty_lines = until(&client, |line| command_id(line) == Some("c_empty"));
+            assert_eq!(
+                rejection(empty_lines.last().unwrap()),
+                ("invalid_arguments", UNFIT)
+            );
+            stream.extend(empty_lines);
+            assert_eq!(
+                kinds(&stream),
+                [
+                    "command_rejected",
+                    "command_accepted",
+                    "clients",
+                    "command_rejected",
+                    "command_rejected"
+                ]
+            );
             Ok(())
         })
         .unwrap();

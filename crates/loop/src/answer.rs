@@ -142,6 +142,7 @@ impl Loop {
             | Delivery::Steer(..)
             | Delivery::SteerDrop(..)
             | Delivery::Handoff(..)
+            | Delivery::Model(..)
             | Delivery::Job(_)
             | Delivery::JobLine(_)
             | Delivery::ExtensionExec(_)
