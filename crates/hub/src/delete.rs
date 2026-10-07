@@ -34,7 +34,7 @@ pub(crate) fn delete(hub: &Hub, args: &Map<String, Value>) -> Result<Option<Valu
     let parsed = parse(args).ok_or_else(invalid)?;
     let session = parsed.session;
     let cascade = parsed.cascade;
-    let _ = parsed.expect;
+    let expect = parsed.expect;
     // No resume starts a process for a session while it is deleted.
     let _gate = hub
         .resume_gate
@@ -64,6 +64,11 @@ pub(crate) fn delete(hub: &Hub, args: &Map<String, Value>) -> Result<Option<Valu
             .into_iter()
             .filter_map(|id| session_dir(hub, &id).map(|dir| (id, dir))),
     );
+    if cascade && let Some(expect) = &expect {
+        let set_ids: BTreeSet<&SessionId> = set.iter().map(|(id, _)| id).collect();
+        let wanted: BTreeSet<&SessionId> = expect.iter().collect();
+        confirm(&set_ids, &wanted)?;
+    }
     // Held until every removal ends.
     let mut locks = Vec::with_capacity(set.len());
     for (id, dir) in &set {
@@ -135,6 +140,24 @@ fn parse(args: &Map<String, Value>) -> Option<DeleteArgs> {
         cascade,
         expect,
     })
+}
+
+/// The set the hub would remove matches the confirmed set, or the delete
+/// is refused naming the set it would remove now. Takes no lock and
+/// removes nothing.
+fn confirm(set_ids: &BTreeSet<&SessionId>, expect: &BTreeSet<&SessionId>) -> Result<(), Refusal> {
+    if set_ids == expect {
+        return Ok(());
+    }
+    let mut names: Vec<String> = set_ids.iter().map(|id| format!("`{}`", id.0)).collect();
+    names.sort();
+    Err((
+        ErrorCode::StaleRequest,
+        format!(
+            "The sessions this delete would remove are now {}. Nothing was deleted.",
+            names.join(", ")
+        ),
+    ))
 }
 
 /// `session`'s directory: a real directory, never a link, holding its log.
