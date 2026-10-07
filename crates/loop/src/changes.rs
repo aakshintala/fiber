@@ -168,8 +168,9 @@ impl State {
         // Each started call's declared paths, until its completion: only a
         // call that ran and completed touched its directories, as live.
         let mut running: BTreeMap<ActionId, Vec<String>> = BTreeMap::new();
-        // The current context's resolved declared paths under the
-        // workspace, of unknown kind until the resume stats each once.
+        // The current context's resolved declared paths, of unknown kind
+        // until the resume stats each once (`reached` skips any outside
+        // the workspace).
         let mut declared = BTreeSet::new();
         for line in lines.iter().filter(|l| l.is_durable()) {
             let Some(event) = Event::from_envelope(line).map_err(Error::Unreadable)? else {
@@ -207,12 +208,7 @@ impl State {
             if let (Event::ToolCallCompleted(_), Some(action)) = (&event, &line.action_id)
                 && let Some(paths) = running.remove(action)
             {
-                let resolved = resolve(&workspace, &paths);
-                declared.extend(
-                    resolved
-                        .into_iter()
-                        .filter(|path| path.starts_with(&workspace)),
-                );
+                declared.extend(resolve(&workspace, &paths));
             }
             if let Event::DateChanged(changed) = &event {
                 state.date = changed.date.clone();
