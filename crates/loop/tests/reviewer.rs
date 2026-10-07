@@ -667,7 +667,7 @@ fn with_no_reviewer_every_reviewed_call_goes_to_a_person_with_one_notice() {
     assert_eq!(resolved.len(), 2);
     for line in &resolved {
         assert_eq!(line.payload["decision"], "deny");
-        assert_eq!(line.payload["decided_by"], "reviewer");
+        assert_eq!(line.payload["decided_by"], "no_reviewer");
         assert_eq!(line.payload.get("reviewer"), None);
         assert_eq!(
             line.payload["reason"],
@@ -686,7 +686,7 @@ fn with_no_reviewer_every_reviewed_call_goes_to_a_person_with_one_notice() {
 /// no reviewer request was sent, so no model reference or stage exists to
 /// write, whatever the failure's code.
 #[test]
-fn a_reviewer_that_could_not_be_set_up_denies_with_no_reviewer_object() {
+fn a_reviewer_that_could_not_be_set_up_denies_as_no_reviewer() {
     let tool = shell(None, None);
     let mut session = Session::with_tools(
         vec![
@@ -716,7 +716,7 @@ fn a_reviewer_that_could_not_be_set_up_denies_with_no_reviewer_object() {
     );
     let resolved = line(&lines, "permission_resolved");
     assert_eq!(resolved.payload["decision"], "deny");
-    assert_eq!(resolved.payload["decided_by"], "reviewer");
+    assert_eq!(resolved.payload["decided_by"], "no_reviewer");
     assert_eq!(
         resolved.payload["reason"],
         "No key for the reviewer's provider."
@@ -1706,6 +1706,97 @@ fn close_taken_during_a_failed_review_names_the_failed_stage() {
         assert_eq!(done.payload["reason"], "reviewer");
     }
     assert_eq!(reviewer.requests().len(), 2);
+    assert!(tool.ran().is_empty());
+}
+
+/// `close` taken while a `no_model` escalation waits denies as `no_reviewer`:
+/// the closed request carries it, and the later call, denied with no request
+/// raised, carries it too. No reviewer request is ever sent.
+#[test]
+fn close_taken_during_a_no_model_escalation_denies_as_no_reviewer() {
+    let tool = shell(None, None);
+    let mut session = Session::with_tools(
+        vec![
+            calls_reply("", &[("shell", paris()), ("shell", paris())]),
+            Scripted::text("Done."),
+        ],
+        None,
+        vec![tool.clone() as Arc<dyn Tool>],
+    );
+    let closer = on_request(&session, {
+        let inbox = session.inbox.clone();
+        move |_| {
+            inbox.send(Delivery::Close(ignore())).unwrap();
+        }
+    });
+    session.inbox.send(delivery("go")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    let lines = session.lines();
+    closer.join().unwrap();
+    // One `notice` before the first `permission_requested`, then two
+    // `permission_resolved`, with no reviewer `usage_recorded`: no reviewer
+    // request is ever sent.
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "notice",
+            "permission_requested",
+            "permission_resolved",
+            "permission_resolved",
+            "tool_call_completed",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    let requested: Vec<&Envelope> = lines
+        .iter()
+        .filter(|l| l.kind == "permission_requested")
+        .collect();
+    assert_eq!(requested.len(), 1);
+    assert_eq!(
+        requested[0].payload["escalation"],
+        json!({
+            "cause": "reviewer_failed",
+            "error": {
+                "code": "no_model",
+                "message": "No reviewer model is set, so every reviewed call goes to a person. Set reviewer.model."
+            },
+        })
+    );
+    let resolved: Vec<&Envelope> = lines
+        .iter()
+        .filter(|l| l.kind == "permission_resolved")
+        .collect();
+    assert_eq!(resolved.len(), 2);
+    assert_eq!(
+        resolved[0].payload["request_id"],
+        requested[0].payload["request_id"]
+    );
+    assert_eq!(resolved[0].payload["decided_by"], "no_reviewer");
+    assert_eq!(resolved[0].payload.get("reviewer"), None);
+    assert_eq!(resolved[1].payload.get("request_id"), None);
+    assert_eq!(resolved[1].payload["decided_by"], "no_reviewer");
+    assert_eq!(resolved[1].payload.get("reviewer"), None);
     assert!(tool.ran().is_empty());
 }
 

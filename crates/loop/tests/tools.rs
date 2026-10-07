@@ -361,7 +361,7 @@ fn a_write_inside_the_workspace_runs_and_one_under_git_or_outside_does_not() {
     let names = ["inside", "git", "fiber", "outside", "shell", "pure"];
     let calls: Vec<(&str, Value)> = names.iter().map(|n| (*n, paris())).collect();
     // No reviewer is configured, so the reviewed calls escalate `no_model`,
-    // and no person can answer them: each ends a reviewer deny.
+    // and no person can answer them: each ends a `no_reviewer` deny.
     let mut session = Session::with_tools(
         vec![calls_reply("", &calls), Scripted::text("Done.")],
         None,

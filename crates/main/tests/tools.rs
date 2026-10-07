@@ -845,8 +845,9 @@ fn a_grep_that_follows_a_link_below_its_operand_into_the_credentials_is_reviewed
         .iter()
         .find(|line| line["kind"] == "permission_resolved")
         .unwrap();
-    assert_eq!(resolved["payload"]["decided_by"], "reviewer");
+    assert_eq!(resolved["payload"]["decided_by"], "no_reviewer");
     assert_eq!(resolved["payload"]["decision"], "deny");
+    assert!(resolved["payload"].get("reviewer").is_none());
     assert_eq!(completed_call(&run)["payload"]["status"], "denied");
     for (index, request) in server.requests().iter().enumerate() {
         assert_no_marker(&format!("request {index}"), &request.body);
@@ -1772,8 +1773,9 @@ fn a_web_fetch_with_no_rule_is_judged_at_step_7() {
         .iter()
         .find(|line| line["kind"] == "permission_resolved")
         .unwrap();
-    assert_eq!(resolved["payload"]["decided_by"], "reviewer");
+    assert_eq!(resolved["payload"]["decided_by"], "no_reviewer");
     assert_eq!(resolved["payload"]["decision"], "deny");
+    assert!(resolved["payload"].get("reviewer").is_none());
     assert_eq!(completed_call(&run)["payload"]["status"], "denied");
     assert!(site.requests().is_empty(), "a denied call sends nothing");
 }
