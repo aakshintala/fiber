@@ -32,15 +32,28 @@ pub(crate) const STALE_REPLY: &str = "That request is no longer pending.";
 /// A `reply`'s keys do not fit the pending request.
 pub(crate) const UNFIT_REPLY: &str = "That answer does not fit the pending request.";
 
-/// What the idle drain collected. A prompt is accepted only while `pieces`
-/// holds no message, so when `prompt` is set the prompt is the first
-/// message.
+/// What the idle drain collected. Every prompt waiting joins the turn as a
+/// message, in arrival order (`docs/loop.md`, "Starting a turn").
 pub(crate) struct TurnInput {
     /// The turn's input, in arrival order: messages and job notices.
     pub(crate) pieces: Vec<Queued>,
-    /// Set when the first message is a prompt, accepted once `turn_started`
-    /// is written. A steer was already accepted when taken.
-    pub(crate) prompt: Option<Ack>,
+    /// Each prompt's acknowledgement, in arrival order, called once
+    /// `turn_started` is written. A steer was already accepted when taken.
+    pub(crate) prompts: Vec<Ack>,
+    /// The index in `pieces` of each prompt's message, so a `steer_drop`
+    /// never removes one.
+    pub(crate) prompt_at: Vec<usize>,
+}
+
+impl TurnInput {
+    /// An input that holds `pieces` and no prompt.
+    pub(crate) fn of(pieces: Vec<Queued>) -> Self {
+        Self {
+            pieces,
+            prompts: Vec::new(),
+            prompt_at: Vec::new(),
+        }
+    }
 }
 
 /// What an approval wait should do with a delivery it took.
@@ -159,10 +172,7 @@ impl Loop {
         let deadline = self.idle_deadline();
         self.start_unattended();
         loop {
-            let mut input = TurnInput {
-                pieces: Vec::new(),
-                prompt: None,
-            };
+            let mut input = TurnInput::of(Vec::new());
             // Deliveries held aside across the finishing turn go first, in
             // arrival order, ahead of the channel: the caller's prompt waits
             // behind that turn instead of being rejected `busy`. When they
@@ -229,10 +239,7 @@ impl Loop {
         }
         self.queued
             .retain(|piece| !matches!(piece, Queued::Steer(_)));
-        let mut input = TurnInput {
-            pieces: self.queued.drain(..).collect(),
-            prompt: None,
-        };
+        let mut input = TurnInput::of(self.queued.drain(..).collect());
         for delivery in std::mem::take(&mut self.deferred) {
             self.admit_idle(delivery, &mut input)?;
         }
@@ -378,12 +385,11 @@ impl Loop {
             Delivery::Prompt(message, ack) => {
                 if self.closing {
                     reject(ack, ErrorCode::Closing, CLOSING);
-                } else if has_message(input) {
-                    reject(ack, ErrorCode::Busy, BUSY);
                 } else {
                     self.attended();
+                    input.prompt_at.push(input.pieces.len());
                     input.pieces.push(Queued::Steer(expanded(self, message)));
-                    input.prompt = Some(ack);
+                    input.prompts.push(ack);
                 }
             }
             Delivery::Steer(message, ack) => {
@@ -552,21 +558,31 @@ fn has_message(input: &TurnInput) -> bool {
         .any(|piece| matches!(piece, Queued::Steer(_)))
 }
 
-/// Removes the unapplied steer `id` names. The prompt, when present, is the
-/// first message and is not a steer, so it is skipped.
+/// Removes the unapplied steer `id` names. A prompt's message is not a
+/// steer, wherever it sits, so it is skipped.
 fn drop_piece(input: &mut TurnInput, id: &CommandId) -> bool {
-    let mut prompt = input.prompt.is_some();
-    input
-        .pieces
-        .iter()
-        .position(|piece| match piece {
-            Queued::Steer(message) => {
-                !std::mem::take(&mut prompt) && message.sender.command_id.as_ref() == Some(id)
-            }
-            Queued::Job(_) | Queued::Line(_) | Queued::Handoff(..) | Queued::Pending(..) => false,
-        })
-        .map(|index| input.pieces.remove(index))
-        .is_some()
+    let found = input.pieces.iter().enumerate().position(|(index, piece)| {
+        matches!(piece, Queued::Steer(message) if message.sender.command_id.as_ref() == Some(id))
+            && !input.prompt_at.contains(&index)
+    });
+    let Some(index) = found else {
+        return false;
+    };
+    input.pieces.remove(index);
+    shift_past(&mut input.prompt_at, index);
+    true
+}
+
+/// Moves each prompt index past the removed piece at `removed` down by one.
+// `removed` is a steer's index, never a prompt's, so a mutant of `>` to `>=`
+// changes nothing; the shift itself is tested through `drop_piece`.
+#[cfg_attr(false, mutants::skip)]
+fn shift_past(prompt_at: &mut [usize], removed: usize) {
+    for at in prompt_at {
+        if *at > removed {
+            *at -= 1;
+        }
+    }
 }
 
 /// Removes the unapplied steer `id` names from `queued`.

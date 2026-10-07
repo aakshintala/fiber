@@ -554,24 +554,98 @@ fn a_prompt_mid_turn_is_busy_and_starts_nothing() {
     );
 }
 
+/// The text of each message in the first `turn_started`'s input, in order.
+fn input_texts(lines: &[Envelope]) -> Vec<String> {
+    let started = lines
+        .iter()
+        .find(|line| line.kind == "turn_started")
+        .unwrap();
+    started.payload["input"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["content"][0]["text"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+/// Each prompt was accepted, and only once `turn_started` was written.
+fn accepted_after_turn_started(answers: &[mpsc::Receiver<(Answer, bool)>]) {
+    for rx in answers {
+        let (answer, saw) = rx.try_recv().expect("the prompt was answered");
+        assert_eq!(answer, accepted());
+        assert!(saw, "a prompt is accepted once turn_started is written");
+    }
+}
+
 #[test]
-fn two_prompts_waiting_while_idle_start_one_turn_and_the_second_is_busy() {
+fn two_prompts_waiting_while_idle_join_one_turn() {
     let mut session = Session::new(vec![Scripted::text("Hi.")], None);
     let (first, first_answers) = watched_prompt("one", &session.dir);
-    let (second_ack, second_answers) = capture();
+    let (second, second_answers) = watched_prompt("two", &session.dir);
     session.inbox.send(first).unwrap();
-    session
-        .inbox
-        .send(Delivery::Prompt(message("two"), second_ack))
-        .unwrap();
+    session.inbox.send(second).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
-    let (answer, saw) = first_answers.try_recv().unwrap();
-    assert_eq!(answer, accepted());
-    assert!(saw);
-    assert_eq!(take(&second_answers), rejected(ErrorCode::Busy, BUSY));
+    accepted_after_turn_started(&[first_answers, second_answers]);
     let lines = session.lines();
     assert_eq!(kinds(&lines), plain());
-    assert_eq!(lines[3].payload["input"].as_array().unwrap().len(), 1);
+    assert_eq!(input_texts(&lines), ["one", "two"]);
+}
+
+#[test]
+fn three_prompts_sent_together_start_one_turn_in_arrival_order() {
+    let mut session = Session::new(vec![Scripted::text("Hi.")], None);
+    let mut answers = Vec::new();
+    for text in ["one", "two", "three"] {
+        let (prompt, rx) = watched_prompt(text, &session.dir);
+        session.inbox.send(prompt).unwrap();
+        answers.push(rx);
+    }
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    accepted_after_turn_started(&answers);
+    let lines = session.lines();
+    assert_eq!(kinds(&lines), plain());
+    assert_eq!(input_texts(&lines), ["one", "two", "three"]);
+}
+
+#[test]
+fn a_prompt_after_a_steer_while_idle_joins_its_turn() {
+    let mut session = Session::new(vec![Scripted::text("Hi.")], None);
+    let (steer_ack, steer_answers) = capture();
+    let (prompt, prompt_answers) = watched_prompt("go", &session.dir);
+    session.inbox.send(steer_with("more", steer_ack)).unwrap();
+    session.inbox.send(prompt).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    assert_eq!(take(&steer_answers), accepted());
+    accepted_after_turn_started(&[prompt_answers]);
+    let lines = session.lines();
+    assert_eq!(kinds(&lines), plain());
+    assert_eq!(input_texts(&lines), ["more", "go"]);
+}
+
+#[test]
+fn a_drop_while_idle_removes_a_steer_between_prompts_and_never_a_prompt() {
+    let mut session = Session::new(vec![Scripted::text("Hi.")], None);
+    let (first, first_answers) = watched_prompt("one", &session.dir);
+    let (steer_ack, _steer_answers) = capture();
+    let (second, second_answers) = watched_prompt("two", &session.dir);
+    let (steer_drop_ack, steer_drop_answers) = capture();
+    let (prompt_drop_ack, prompt_drop_answers) = capture();
+    session.inbox.send(first).unwrap();
+    session.inbox.send(steer_with("s1", steer_ack)).unwrap();
+    session.inbox.send(second).unwrap();
+    session.inbox.send(drop_of("s1", steer_drop_ack)).unwrap();
+    // The second prompt now sits where the steer was; it is still a prompt.
+    session.inbox.send(drop_of("two", prompt_drop_ack)).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    assert_eq!(take(&steer_drop_answers), accepted());
+    assert_eq!(
+        take(&prompt_drop_answers),
+        rejected(ErrorCode::StaleRequest, STALE_STEER)
+    );
+    accepted_after_turn_started(&[first_answers, second_answers]);
+    let lines = session.lines();
+    assert_eq!(kinds(&lines), plain());
+    assert_eq!(input_texts(&lines), ["one", "two"]);
 }
 
 #[test]
