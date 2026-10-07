@@ -693,3 +693,88 @@ fn a_late_usage_line_moves_only_its_turns_closing_rows() {
     assert_eq!(layout(&app), layout(&fresh));
     assert_ne!(layout(&app).1, before.1);
 }
+
+#[test]
+fn close_keeps_the_open_page_as_a_closed_one() {
+    let mut pages = Pages::new(80);
+    pages.close();
+    // The open page closed, and a new open page stands behind it.
+    assert!(pages.part(0).is_some());
+    assert!(pages.part(1).is_some());
+    assert_eq!(pages.resident(), 2);
+}
+
+/// Whether each resident group holding a ledger is open, one per group.
+fn ledgers_open(pages: &Pages) -> Vec<bool> {
+    let mut open = Vec::new();
+    for at in 0..pages.index().pages().len() {
+        if let Some(part) = pages.part(at) {
+            open.extend(
+                part.turns
+                    .iter()
+                    .flat_map(|card| card.groups())
+                    .filter(|group| group.has_ledger())
+                    .map(|group| group.open),
+            );
+        }
+    }
+    open
+}
+
+#[test]
+fn toggling_ledgers_twice_closes_them_again() {
+    let mut stream = Stream::new(false);
+    stream.turn(0, 3);
+    let mut pages = Pages::new(80);
+    for line in &stream.lines {
+        pages.apply(line);
+    }
+    let open = ledgers_open(&pages);
+    assert!(!open.is_empty(), "no ledger to toggle");
+    assert!(open.iter().all(|open| !open));
+    pages.toggle_ledgers();
+    assert!(ledgers_open(&pages).iter().all(|open| *open));
+    // Every ledger stood open: closing them all shuts every one.
+    pages.toggle_ledgers();
+    assert!(ledgers_open(&pages).iter().all(|open| !open));
+}
+
+#[test]
+fn shown_starts_at_the_first_page_drawing_a_row() {
+    let lines = session(6, false);
+    let mut app = app(80, 20);
+    open(&mut app, &lines);
+    let starts = app.pages().index().starts();
+    let at = starts
+        .iter()
+        .enumerate()
+        .skip(1)
+        .position(|(at, _)| {
+            app.pages()
+                .index()
+                .pages()
+                .get(at)
+                .is_some_and(|page| page.rows > 0)
+        })
+        .map(|offset| offset + 1)
+        .expect("a second page drawing rows");
+    let top = starts.get(at).copied().expect("a second page start");
+    // The page before ends exactly at the top: it draws no row from there.
+    let (first, shown) = app.shown(top, 5);
+    assert_eq!(first, top);
+    assert!(!shown.is_empty());
+}
+
+#[test]
+fn resident_counts_every_held_page() {
+    let lines = session(2, false);
+    let mut pages = Pages::new(80);
+    for line in &lines {
+        pages.apply(line);
+    }
+    // Live pages are never dropped, so the open page stands beside more
+    // than one closed one: neither zero nor one matches this count.
+    let total = pages.index().pages().len();
+    assert!(total > 2, "{total}");
+    assert_eq!(pages.resident(), total);
+}
