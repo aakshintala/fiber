@@ -77,7 +77,24 @@ impl App {
                 Some(Effect::None)
             }
             Key::Enter => Some(self.open_focused(id)),
-            Key::Char('y') | Key::CtrlG => Some(Effect::None),
+            Key::Char('y') => Some(match self.item_text(id) {
+                Some(text) => {
+                    self.copied = true;
+                    Effect::Copy(text)
+                }
+                None => Effect::None,
+            }),
+            Key::CtrlG => Some(if let TargetId::Token(number) = id {
+                self.open_token(number)
+            } else {
+                match self.item_text(id) {
+                    Some(text) => Effect::Editor {
+                        target: crate::editor::Target::Item,
+                        text,
+                    },
+                    None => Effect::None,
+                }
+            }),
             Key::Tab => {
                 self.next_area();
                 Some(Effect::None)
@@ -188,6 +205,40 @@ impl App {
             self.focus = None;
         }
         effect
+    }
+
+    /// The text y copies and Ctrl+G opens: a conversation line's rows, a
+    /// code block's code, a paste token's text, a notice's whole text, a
+    /// steering row's text; None for a control.
+    fn item_text(&self, id: TargetId) -> Option<String> {
+        match id {
+            TargetId::Line(target) => self.line_text(target),
+            TargetId::Token(number) => self.draft.token_text(number).map(str::to_owned),
+            TargetId::Notice(id) => self.notices.text(id).map(str::to_owned),
+            TargetId::Steering(at) => self.steering.text(at).map(str::to_owned),
+            TargetId::Badge
+            | TargetId::NewBelow
+            | TargetId::DropSteering(_)
+            | TargetId::DismissNotice(_)
+            | TargetId::MoreNotices => None,
+        }
+    }
+
+    /// The rows carrying conversation line `target`: a code block's code
+    /// for its `copy` cells, else each row's text with trailing spaces
+    /// trimmed, joined by `\n`; None when no row carries it.
+    fn line_text(&self, target: super::Target) -> Option<String> {
+        if matches!(target, super::Target::Copy { .. }) {
+            return super::copy::copy_target(&self.turns, target, self.width).map(|copy| copy.code);
+        }
+        let rows: Vec<String> = self
+            .rows()
+            .into_iter()
+            .filter(|(_, own)| *own == Some(target))
+            .map(|(line, _)| line.to_string())
+            .map(|text| text.trim_end().to_owned())
+            .collect();
+        (!rows.is_empty()).then(|| rows.join("\n"))
     }
 
     /// Scrolls so line `line` of [`Self::lines`] shows: the least scroll

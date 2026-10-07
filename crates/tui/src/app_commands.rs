@@ -630,6 +630,7 @@ impl App {
             (Err(notice), _) => self.notices.push(notice),
             (Ok(text), Target::Token(number)) => self.draft.set_token(number, &text),
             (Ok(text), Target::Draft) => self.draft.set(&text),
+            (Ok(_), Target::Item) => {}
         }
         self.overlays.selected = 0;
         self.edited();

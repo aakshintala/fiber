@@ -171,6 +171,11 @@ impl Steering {
         self.rows.get(at).and_then(|row| row.command_id.clone())
     }
 
+    /// The text of the queued row at `at`.
+    pub(crate) fn text(&self, at: usize) -> Option<&str> {
+        self.rows.get(at).map(|row| row.text.as_str())
+    }
+
     /// One line per row at `width`, oldest first: "↳ <text>", the selected
     /// row "▸ <text>", each cut to the width; a selectable row one cell
     /// shorter, leaving its last column for the ✕ the view draws.

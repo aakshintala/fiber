@@ -815,3 +815,176 @@ fn reveal_past_the_last_line_changes_nothing() {
     app.reveal(len);
     assert_eq!(app.top(), Some(0));
 }
+
+#[test]
+fn y_copies_the_focused_line_and_shows_copied() {
+    let mut app = groups(1, 60, 24);
+    key(&mut app, Key::BackTab);
+    let text = screen(&app)
+        .lines()
+        .find(|row| row.contains("Read 1 file"))
+        .expect("the group row")
+        .to_owned();
+    assert_eq!(key(&mut app, Key::Char('y')), Effect::Copy(text));
+    assert!(app.copied());
+    key(&mut app, Key::Char('a'));
+    assert!(!app.copied());
+}
+
+/// An app whose draft holds one 12-line paste token.
+fn pasted() -> App {
+    let mut app = attached(60, 24);
+    let text = (1..=12)
+        .map(|n| format!("line {n}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    app.on_edit(Edit::Paste(text));
+    frame(&mut app);
+    key(&mut app, Key::BackTab);
+    assert_eq!(app.focused(), Some(TargetId::Token(1)));
+    app
+}
+
+#[test]
+fn y_on_a_paste_token_copies_its_text() {
+    let mut app = pasted();
+    let text = (1..=12)
+        .map(|n| format!("line {n}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_eq!(key(&mut app, Key::Char('y')), Effect::Copy(text));
+}
+
+#[test]
+fn y_on_a_notice_or_a_steering_row_copies_its_text() {
+    let mut app = attached(60, 24);
+    app.notices.push("Saved.".to_owned());
+    app.on_line(steering_queue(&[("fix it", Some("c_1"))]));
+    let targets = vec![
+        Hit {
+            id: TargetId::Notice(0),
+            rect: Rect::new(10, 0, 20, 1),
+        },
+        Hit {
+            id: TargetId::Steering(0),
+            rect: Rect::new(0, 5, 10, 1),
+        },
+    ];
+    app.drawn(&targets);
+    app.on_key(Key::BackTab, now());
+    app.drawn(&targets);
+    assert_eq!(app.focused(), Some(TargetId::Steering(0)));
+    assert_eq!(
+        app.on_key(Key::Char('y'), now()),
+        Effect::Copy("fix it".to_owned())
+    );
+    app.drawn(&targets);
+    app.on_key(Key::Up, now());
+    app.drawn(&targets);
+    assert_eq!(app.focused(), Some(TargetId::Notice(0)));
+    assert_eq!(
+        app.on_key(Key::Char('y'), now()),
+        Effect::Copy("Saved.".to_owned())
+    );
+}
+
+#[test]
+fn y_and_ctrl_g_on_a_control_do_nothing() {
+    for id in [
+        TargetId::Badge,
+        TargetId::NewBelow,
+        TargetId::DismissNotice(0),
+        TargetId::DropSteering(0),
+        TargetId::MoreNotices,
+    ] {
+        let mut app = attached(60, 24);
+        let target = Hit {
+            id,
+            rect: Rect::new(0, 5, 10, 1),
+        };
+        app.drawn(&[target]);
+        app.on_key(Key::BackTab, now());
+        app.drawn(&[target]);
+        assert_eq!(app.focused(), Some(id), "{id:?} focuses");
+        assert_eq!(app.on_key(Key::Char('y'), now()), Effect::None);
+        assert_eq!(app.on_key(Key::CtrlG, now()), Effect::None);
+        assert!(!app.copied());
+    }
+}
+
+#[test]
+fn ctrl_g_opens_the_focused_item_read_only() {
+    let mut app = groups(1, 60, 24);
+    key(&mut app, Key::BackTab);
+    let text = screen(&app)
+        .lines()
+        .find(|row| row.contains("Read 1 file"))
+        .expect("the group row")
+        .to_owned();
+    assert_eq!(
+        app.on_key(Key::CtrlG, now()),
+        Effect::Editor {
+            target: crate::editor::Target::Item,
+            text,
+        }
+    );
+    let lines = app.lines();
+    app.editor_returned(crate::editor::Target::Item, Ok("changed".to_owned()));
+    assert_eq!(app.input().expand(), "");
+    assert_eq!(app.lines(), lines);
+    app.editor_returned(
+        crate::editor::Target::Item,
+        Err(crate::editor::NO_EDITOR.to_owned()),
+    );
+    assert_eq!(app.notice(), Some(crate::editor::NO_EDITOR));
+}
+
+#[test]
+fn ctrl_g_on_a_focused_paste_token_edits_the_token() {
+    let mut app = pasted();
+    let text = (1..=12)
+        .map(|n| format!("line {n}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_eq!(
+        app.on_key(Key::CtrlG, now()),
+        Effect::Editor {
+            target: crate::editor::Target::Token(1),
+            text,
+        }
+    );
+}
+
+#[test]
+fn y_on_a_code_blocks_copy_copies_its_code() {
+    let mut app = attached(60, 24);
+    let input = serde_json::json!({"input": [{"type": "message", "source": "driver",
+        "content": [{"type": "text", "text": "go"}]}]});
+    app.on_line(envelope("turn_started", input, None));
+    let code = "```rust\nlet a = 1;\n```";
+    app.on_line(envelope(
+        "assistant_message_delta",
+        serde_json::json!({"text": code}),
+        Some("m_1"),
+    ));
+    app.on_line(envelope(
+        "text_completed",
+        serde_json::json!({"text": code}),
+        Some("m_1"),
+    ));
+    app.on_line(envelope(
+        "turn_completed",
+        serde_json::json!({"outcome": "completed"}),
+        None,
+    ));
+    frame(&mut app);
+    key(&mut app, Key::BackTab);
+    let copy = app
+        .focused()
+        .expect("the code block's copy stop is the newest item");
+    assert!(matches!(copy, TargetId::Line(Target::Copy { .. })));
+    let clicked = app.on_click(copy);
+    key(&mut app, Key::BackTab);
+    assert_eq!(app.on_key(Key::Char('y'), now()), clicked);
+    assert!(matches!(clicked, Effect::Copy(_)));
+}

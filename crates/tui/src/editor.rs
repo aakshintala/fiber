@@ -25,6 +25,9 @@ pub(crate) enum Target {
     Draft,
     /// The paste token with this number.
     Token(usize),
+    /// A focused conversation item, read only: what the editor returns
+    /// is dropped.
+    Item,
 }
 
 /// The editor command: `$VISUAL` when set and not empty, else `$EDITOR`
