@@ -80,6 +80,20 @@ pub(crate) fn pipe(
         })
 }
 
+/// Copies `text`: OSC 52 to `tty`, then `command` on its own thread. A
+/// failed write or a missing or failing command is dropped: the other route
+/// may still have copied.
+pub(crate) fn copy(tty: Option<&std::fs::File>, command: Option<&[String]>, text: String) {
+    if let Some(mut out) = tty {
+        out.write_all(&osc52(&text))
+            .and_then(|()| out.flush())
+            .unwrap_or(());
+    }
+    if let Some(argv) = command {
+        drop(pipe(argv.to_vec(), text));
+    }
+}
+
 #[cfg(test)]
 #[path = "clipboard_tests.rs"]
 mod tests;

@@ -8,8 +8,8 @@
 mod app;
 mod approvals;
 mod bindings;
-mod editor;
 mod clipboard;
+mod editor;
 mod files;
 mod format;
 mod highlight;
@@ -26,7 +26,7 @@ mod turn;
 mod view;
 
 use std::fs::File;
-use std::io::{self, PipeReader, PipeWriter, Write};
+use std::io::{self, PipeReader, PipeWriter};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
@@ -447,7 +447,9 @@ impl<B: Backend> Loop<B> {
                     };
                     match effect {
                         Effect::None => {}
-                        Effect::Copy(text) => self.copy(text),
+                        Effect::Copy(text) => {
+                            clipboard::copy(self.tty.as_ref(), self.copy_command.as_deref(), text);
+                        }
                         Effect::Send(lines) => self.send(&lines),
                         Effect::Quit => return Some(0),
                         Effect::ListFiles => self.list_files(),
@@ -594,21 +596,6 @@ impl<B: Backend> Loop<B> {
         };
         self.app.set_size(width, height);
         self.screen.resize(width, height).err().map(|_| 1)
-    }
-
-    /// Copies `text`: OSC 52 to the tty, then the system clipboard command
-    /// on its own thread. A failed write or a missing or failing command is
-    /// dropped: the other route may still have copied.
-    fn copy(&mut self, text: String) {
-        if let Some(tty) = &self.tty {
-            let mut out: &File = tty;
-            out.write_all(&clipboard::osc52(&text))
-                .and_then(|()| out.flush())
-                .unwrap_or(());
-        }
-        if let Some(argv) = self.copy_command.clone() {
-            drop(clipboard::pipe(argv, text));
-        }
     }
 
     /// Shuts the hub stream down both ways and drops it. The reader thread,

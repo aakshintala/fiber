@@ -32,10 +32,10 @@ mod steering;
 
 #[path = "app_commands.rs"]
 mod commands;
-#[path = "history.rs"]
-mod history;
 #[path = "copy.rs"]
 mod copy;
+#[path = "history.rs"]
+mod history;
 #[path = "app_mouse.rs"]
 mod mouse;
 

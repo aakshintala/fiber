@@ -7,7 +7,7 @@ mod table;
 
 use std::cell::RefCell;
 use std::ops::Range;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 use ratatui::style::{Modifier, Style};
@@ -52,7 +52,7 @@ impl Rendered {
 pub(crate) struct Reply {
     text: String,
     id: usize,
-    cache: RefCell<Option<(u16, Rc<Rendered>)>>,
+    cache: RefCell<Option<(u16, Arc<Rendered>)>>,
 }
 
 impl Reply {
@@ -84,15 +84,15 @@ impl Reply {
 
     /// The text rendered at `width`, from the cache when it was rendered at
     /// that width.
-    pub(crate) fn rendered(&self, width: u16) -> Rc<Rendered> {
+    pub(crate) fn rendered(&self, width: u16) -> Arc<Rendered> {
         let mut cached = self.cache.borrow_mut();
         if let Some((at, rendered)) = &*cached
             && *at == width
         {
-            return Rc::clone(rendered);
+            return Arc::clone(rendered);
         }
-        let rendered = Rc::new(render(&self.text, width));
-        *cached = Some((width, Rc::clone(&rendered)));
+        let rendered = Arc::new(render(&self.text, width));
+        *cached = Some((width, Arc::clone(&rendered)));
         rendered
     }
 
