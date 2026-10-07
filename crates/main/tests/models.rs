@@ -13,7 +13,7 @@
 )]
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
@@ -33,6 +33,16 @@ const REAP_DEADLINE: Duration = Duration::from_secs(10);
 /// A temporary root holding Fiber home and the workspace, removed on drop.
 struct Setup {
     root: fakes::TempDir,
+    /// `<CARGO_TARGET_TMPDIR>/<root's name>`, holding the `fiber` link.
+    bin: PathBuf,
+}
+
+impl Drop for Setup {
+    fn drop(&mut self) {
+        match fs::remove_dir_all(&self.bin) {
+            Ok(()) | Err(_) => {}
+        }
+    }
 }
 
 impl Setup {
@@ -42,21 +52,22 @@ impl Setup {
         fs::create_dir_all(root.path().join("w")).unwrap();
         // A hard link, not a copy: the bytes and inode are the built
         // binary's, so nothing new is executed (`docs/testing.md`, "Waits
-        // and timeouts"), but the path is this test's own.
-        let link = root.path().join("fiber");
-        if let Err(err) = fs::hard_link(env!("CARGO_BIN_EXE_fiber"), &link) {
-            panic!(
-                "hard-linking `fiber` into {} (the temporary directory must share \
-                 a filesystem with the target directory): {err}",
-                link.display()
-            );
+        // and timeouts"), but the path is this test's own. It lives in
+        // Cargo's per-target temporary directory, which is on the target
+        // directory's filesystem, in a directory named after the root.
+        let name = root.path().file_name().unwrap();
+        let bin = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
+        fs::create_dir(&bin).unwrap();
+        let exe = bin.join("fiber");
+        if let Err(err) = fs::hard_link(env!("CARGO_BIN_EXE_fiber"), &exe) {
+            panic!("hard-linking `fiber` to {}: {err}", exe.display());
         }
-        Self { root }
+        Self { root, bin }
     }
 
     /// This test's own path to the built `fiber`.
     fn exe(&self) -> PathBuf {
-        self.root.path().join("fiber")
+        self.bin.join("fiber")
     }
 
     /// The refresh child's command line: this test's `fiber` re-run as
