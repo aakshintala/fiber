@@ -183,29 +183,28 @@ pub(super) fn render(
         logo::draw(buf, at, placed.logo, &screen.version);
     } else {
         // The logo is `⌇ fiber <version>`: the ⌇ and the name in the accent
-        // colour, the version dim.
+        // colour, the version dim. The logo row always draws: the pad
+        // keeps it inside the area.
         let name = format!("{} fiber ", screen.glyph);
         let at = placed.x.saturating_add(
             placed.width.saturating_sub(super::to_u16(
                 width(&name).saturating_add(width(&screen.version)),
             )) / 2,
         );
-        if placed.logo < area.bottom() {
-            let (end, _) = buf.set_stringn(
-                at,
-                placed.logo,
-                &name,
-                usize::from(area.width),
-                style(Role::Accent),
-            );
-            buf.set_stringn(
-                end,
-                placed.logo,
-                &screen.version,
-                usize::from(area.width),
-                Style::new().add_modifier(Modifier::DIM),
-            );
-        }
+        let (end, _) = buf.set_stringn(
+            at,
+            placed.logo,
+            &name,
+            usize::from(area.width),
+            style(Role::Accent),
+        );
+        buf.set_stringn(
+            end,
+            placed.logo,
+            &screen.version,
+            usize::from(area.width),
+            Style::new().add_modifier(Modifier::DIM),
+        );
     }
     // The blocker lines sit above the box, wrapped at its width.
     let mut blocker_y = placed
@@ -265,7 +264,7 @@ pub(super) fn render(
     );
     let mut chip_x = placed.x;
     for (at, (spot, text)) in screen.chips.iter().enumerate() {
-        if at > 0 {
+        if at != 0 {
             chip_x = chip_x.saturating_add(2);
         }
         let wide = super::to_u16(width(text));
@@ -351,8 +350,9 @@ pub(super) fn render(
             break;
         }
         // A readable row ends in a ✕ in its last column: stopping a
-        // live session, deleting an exited one.
-        if *has_x && placed.width > 0 {
+        // live session, deleting an exited one. The box fills the
+        // width, so there is always a last column.
+        if *has_x {
             let body = usize::from(placed.width.saturating_sub(1));
             let wide = super::to_u16(body);
             put(
@@ -365,9 +365,7 @@ pub(super) fn render(
                 Style::default(),
             );
             let cross = placed.x.saturating_add(wide);
-            if row_y < area.bottom() {
-                buf.set_stringn(cross, row_y, "✕", 1, Style::default());
-            }
+            buf.set_stringn(cross, row_y, "✕", 1, Style::default());
             if wide > 0 {
                 targets.push(Target {
                     id: TargetId::Home(Spot::Entry(*key)),

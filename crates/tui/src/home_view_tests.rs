@@ -888,3 +888,244 @@ fn quit_prompt_over_a_session() {
     ask_quit(&mut app);
     insta::assert_snapshot!("quit_prompt_over_a_session", screen(&app, 80, 24));
 }
+
+#[test]
+fn a_wide_screen_centres_the_box() {
+    // The box is 100 columns wide on a 120-column screen: ten columns
+    // of pad on each side.
+    let app = home(120, 24);
+    let area = Rect::new(0, 0, 120, 24);
+    let mut buf = Buffer::empty(area);
+    let targets = render(&app, area, &mut buf, None);
+    let workspace = targets
+        .iter()
+        .find(|target| target.id == crate::mouse::TargetId::Home(Spot::Workspace))
+        .unwrap_or_else(|| panic!("a workspace chip target"));
+    assert_eq!(workspace.rect.x, 10);
+}
+
+#[test]
+fn the_chips_join_with_two_spaces_from_the_box_edge() {
+    let app = home(80, 24);
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let targets = render(&app, area, &mut buf, None);
+    // The workspace chip opens the picker from the box's first column.
+    let workspace = targets
+        .iter()
+        .find(|target| target.id == crate::mouse::TargetId::Home(Spot::Workspace))
+        .unwrap_or_else(|| panic!("a workspace chip target"));
+    assert_eq!(workspace.rect.x, 0);
+    let drawn = screen(&app, 80, 24);
+    assert!(
+        drawn.lines().any(|row| row.contains(
+            "[w]  [no model]  [thinking: default]  enter starts a session"
+        )),
+        "the chips join with two spaces"
+    );
+}
+
+#[test]
+fn the_toggle_does_not_draw_on_the_foot_row() {
+    // At ten rows the list has no room past the box: the toggle shows
+    // in state, but draws nothing, and the foot hint keeps its row.
+    let mut app = git_home(80, 10);
+    app.on_line(hello());
+    app.on_line(status("s_aaaaaaaaaaaaaaaa", "here", idle()));
+    app.on_line(away_waiting());
+    assert!(app.home_screen().and_then(|screen| screen.toggle).is_some());
+    let area = Rect::new(0, 0, 80, 10);
+    let mut buf = Buffer::empty(area);
+    let targets = render(&app, area, &mut buf, None);
+    assert!(
+        targets
+            .iter()
+            .all(|target| target.id != crate::mouse::TargetId::Home(Spot::Toggle)),
+        "no toggle target on the foot row"
+    );
+    assert!(screen(&app, 80, 10).contains("↓ the session list"));
+}
+
+#[test]
+fn a_row_at_width_one_has_no_entry_target() {
+    let mut app = home(1, 24);
+    app.on_line(hello());
+    app.on_line(status("s_aaaaaaaaaaaaaaaa", "fix the parser", live()));
+    let area = Rect::new(0, 0, 1, 24);
+    let mut buf = Buffer::empty(area);
+    let targets = render(&app, area, &mut buf, None);
+    // No columns for the line: only the ✕ draws, with no entry target.
+    assert!(
+        targets
+            .iter()
+            .all(|target| !matches!(target.id, crate::mouse::TargetId::Home(Spot::Entry(_)))),
+        "no entry target at width one"
+    );
+    assert!(
+        targets
+            .iter()
+            .any(|target| matches!(target.id, crate::mouse::TargetId::Home(Spot::Stop(_)))),
+        "the cross still draws"
+    );
+}
+
+#[test]
+fn only_the_selected_picker_row_is_reversed() {
+    use ratatui::style::Modifier;
+
+    let mut app = home(80, 24);
+    app.on_line(hello());
+    app.on_line(status_in("s_aaaaaaaaaaaaaaaa", "first", "/alpha"));
+    app.on_line(status_in("s_bbbbbbbbbbbbbbbb", "second", "/beta"));
+    app.on_click(crate::mouse::TargetId::Home(Spot::Workspace));
+    assert_eq!(
+        app.home_screen()
+            .and_then(|screen| screen.picker.map(|(_, selected)| selected)),
+        Some(0)
+    );
+    let row = |app: &App, entry: &str| {
+        let area = Rect::new(0, 0, 80, 24);
+        let mut buf = Buffer::empty(area);
+        render(app, area, &mut buf, None);
+        let drawn = screen(app, 80, 24);
+        let y = drawn
+            .lines()
+            .position(|line| line.starts_with(entry))
+            .and_then(|row| u16::try_from(row).ok())
+            .unwrap_or_else(|| panic!("{entry} draws"));
+        buf[(0, y)].modifier.contains(Modifier::REVERSED)
+    };
+    // The launch directory starts selected; moving down reverses the
+    // next row instead.
+    assert!(row(&app, "/w"));
+    assert!(!row(&app, "/alpha"));
+    let now = fakes::clock::FakeClock::new().now();
+    app.on_key(Key::Down, now);
+    assert!(!row(&app, "/w"));
+    assert!(row(&app, "/alpha"));
+    assert!(!row(&app, "/beta"));
+}
+
+#[test]
+fn only_the_selected_completion_is_reversed() {
+    use ratatui::style::Modifier;
+
+    let mut app = home(80, 24);
+    type_draft(&mut app, "/");
+    let completions = app.completions().unwrap_or_else(|| panic!("completions"));
+    assert_eq!(completions.selected, Some(0));
+    assert!(completions.lines.len() > 1);
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    render(&app, area, &mut buf, None);
+    let drawn = screen(&app, 80, 24);
+    let at = |line: &str| {
+        drawn
+            .lines()
+            .position(|row| row == line)
+            .and_then(|row| u16::try_from(row).ok())
+            .unwrap_or_else(|| panic!("{line} draws"))
+    };
+    let first = at(&completions.lines[0]);
+    let second = at(&completions.lines[1]);
+    assert!(buf[(0, first)].modifier.contains(Modifier::REVERSED));
+    assert!(!buf[(0, second)].modifier.contains(Modifier::REVERSED));
+}
+
+#[test]
+fn the_focused_row_is_reversed_and_others_are_not() {
+    use ratatui::style::Modifier;
+
+    let mut app = home(80, 24);
+    app.on_line(hello());
+    app.on_line(status("s_aaaaaaaaaaaaaaaa", "first", live()));
+    app.on_line(status("s_bbbbbbbbbbbbbbbb", "second", idle()));
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let targets = render(&app, area, &mut buf, None);
+    app.drawn(&targets);
+    app.on_key(Key::Down, fakes::clock::FakeClock::new().now());
+    let mut buf = Buffer::empty(area);
+    render(&app, area, &mut buf, None);
+    let drawn = screen(&app, 80, 24);
+    let at = |name: &str| {
+        drawn
+            .lines()
+            .position(|row| row.contains(name))
+            .and_then(|row| u16::try_from(row).ok())
+            .unwrap_or_else(|| panic!("{name} draws"))
+    };
+    assert!(buf[(0, at("first"))].modifier.contains(Modifier::REVERSED));
+    assert!(!buf[(0, at("second"))].modifier.contains(Modifier::REVERSED));
+}
+
+#[test]
+fn the_hovered_row_is_tinted_and_others_are_not() {
+    use ratatui::style::Color;
+
+    let mut app = home(80, 24);
+    app.on_line(hello());
+    app.on_line(status("s_aaaaaaaaaaaaaaaa", "first", live()));
+    app.on_line(status("s_bbbbbbbbbbbbbbbb", "second", idle()));
+    let area = Rect::new(0, 0, 80, 24);
+    let drawn = screen(&app, 80, 24);
+    let at = |name: &str| {
+        drawn
+            .lines()
+            .position(|row| row.contains(name))
+            .and_then(|row| u16::try_from(row).ok())
+            .unwrap_or_else(|| panic!("{name} draws"))
+    };
+    let mut buf = Buffer::empty(area);
+    render(&app, area, &mut buf, Some((0, at("second"))));
+    assert_eq!(buf[(0, at("second"))].bg, Color::Indexed(238));
+    assert_eq!(buf[(0, at("first"))].bg, Color::Reset);
+}
+
+#[test]
+fn the_paste_token_has_an_exact_target() {
+    let mut app = home(80, 24);
+    let pasted: Vec<String> = (1..=312).map(|n| format!("line {n}")).collect();
+    app.on_edit(crate::keys::Edit::Paste(pasted.join("\n")));
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let targets = render(&app, area, &mut buf, None);
+    // "> [Pasted text #1 · 312 lines]" on the draft's first row: the pad
+    // is three rows, then the four-row logo and one blank row, the ▄
+    // edge and the draft.
+    let tokens: Vec<ratatui::layout::Rect> = targets
+        .iter()
+        .filter(|target| matches!(target.id, crate::mouse::TargetId::Token(_)))
+        .map(|target| target.rect)
+        .collect();
+    assert_eq!(tokens, vec![Rect::new(2, 9, 28, 1)]);
+}
+
+#[test]
+fn no_token_target_draws_past_the_visible_rows() {
+    // Twenty paste tokens, one per row, with the cursor moved up
+    // eleven pieces: the draft scrolls, and the token one row past the
+    // visible rows draws no target.
+    let mut app = home(80, 24);
+    for n in 0..20 {
+        if n > 0 {
+            app.on_edit(crate::keys::Edit::ShiftEnter);
+        }
+        let pasted: Vec<String> = (1..=11).map(|n| format!("line {n}")).collect();
+        app.on_edit(crate::keys::Edit::Paste(pasted.join("\n")));
+    }
+    for _ in 0..21 {
+        app.on_edit(crate::keys::Edit::Left);
+    }
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let targets = render(&app, area, &mut buf, None);
+    // Eight visible token rows, each with its target; the ninth token
+    // row, one past them on the chip row, has none.
+    let tokens: Vec<ratatui::layout::Rect> = targets
+        .iter()
+        .filter(|target| matches!(target.id, crate::mouse::TargetId::Token(_)))
+        .map(|target| target.rect)
+        .collect();
+    assert_eq!(tokens.len(), 8);
+}
