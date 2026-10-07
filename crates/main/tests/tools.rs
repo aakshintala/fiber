@@ -28,6 +28,9 @@ const DEADLINE: Duration = Duration::from_secs(20);
 /// How long a process group may take to empty after `fiber` exits.
 const GROUP_DEADLINE: Duration = Duration::from_secs(5);
 
+/// How long `mkfifo`, one short-lived process, may take.
+const MKFIFO: Duration = Duration::from_secs(5);
+
 /// The request's tool order: the loop keys tools by name, so this is name
 /// order, whatever order `main` pushes them in.
 const TOOL_NAMES: [&str; 7] = [
@@ -185,10 +188,14 @@ impl Setup {
     }
 
     /// Runs `fiber` as [`Setup::run`] does, reading stdout as it is
-    /// written, and calls `act` once the lines so far satisfy `when`. Each
-    /// line, and the exit after the last, is waited for within
-    /// [`DEADLINE`].
-    fn run_then(&self, args: &[&str], when: impl Fn(&[Value]) -> bool, act: impl FnOnce()) -> Run {
+    /// written, and calls `act` once the lines so far satisfy `when`: two
+    /// waits within [`DEADLINE`]: for the lines `when` needs, then for the exit.
+    fn run_then(
+        &self,
+        args: &[&str],
+        when: impl Fn(&[Value]) -> bool + Send + 'static,
+        act: impl FnOnce(),
+    ) -> Run {
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
         command
             .args(args)
@@ -206,14 +213,6 @@ impl Setup {
         let guard = KillGroup(group);
         let stdout = child.stdout.take().unwrap();
         let mut stderr = child.stderr.take().unwrap();
-        let (line_tx, lines_rx) = mpsc::channel();
-        thread::spawn(move || {
-            for line in std::io::BufRead::lines(std::io::BufReader::new(stdout)) {
-                if line_tx.send(line.unwrap()).is_err() {
-                    return;
-                }
-            }
-        });
         let (err_tx, err_rx) = mpsc::channel();
         thread::spawn(move || {
             let mut text = String::new();
@@ -224,49 +223,73 @@ impl Setup {
                 Ok(()) | Err(_) => {}
             }
         });
-        let mut text = String::new();
-        let mut lines = Vec::new();
-        let mut act = Some(act);
-        loop {
-            match lines_rx.recv_timeout(DEADLINE) {
-                Ok(line) if is_status(&line) => {}
-                Ok(line) => {
-                    text.push_str(&line);
-                    text.push('\n');
-                    lines.push(serde_json::from_str(&line).unwrap_or(Value::Null));
-                    if when(&lines)
-                        && let Some(act) = act.take()
-                    {
-                        act();
+        let text = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+        let text_collector = std::sync::Arc::clone(&text);
+        let (matched_tx, matched) = mpsc::channel();
+        let (finished_tx, finished) = mpsc::channel();
+        thread::spawn(move || {
+            let mut lines = Vec::new();
+            let mut sent = false;
+            for line in std::io::BufRead::lines(std::io::BufReader::new(stdout)) {
+                let line = line.unwrap();
+                if is_status(&line) {
+                    continue;
+                }
+                text_collector.lock().unwrap().push_str(&line);
+                text_collector.lock().unwrap().push('\n');
+                lines.push(serde_json::from_str(&line).unwrap_or(Value::Null));
+                if !sent && when(&lines) {
+                    sent = true;
+                    if matched_tx.send(()).is_err() {
+                        return;
                     }
                 }
-                Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                Err(mpsc::RecvTimeoutError::Timeout) => {
-                    fakes::kill_group(group, "KILL").unwrap();
-                    panic!(
-                        "waited {DEADLINE:?} for a line from `fiber {}`; so far: {text}",
-                        args.join(" ")
-                    );
-                }
+            }
+            let status = child.wait().unwrap();
+            let stderr = err_rx.recv().unwrap_or_default();
+            let stdout = text_collector.lock().unwrap().clone();
+            match finished_tx.send((status, stdout, lines, stderr)) {
+                Ok(()) | Err(_) => {}
+            }
+        });
+        match matched.recv_timeout(DEADLINE) {
+            Ok(()) => act(),
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                panic!(
+                    "`fiber {}` exited before the lines run_then waits for",
+                    args.join(" ")
+                );
+            }
+            Err(_) => {
+                fakes::kill_group(group, "KILL").unwrap();
+                panic!(
+                    "waited {DEADLINE:?} for `fiber {}` to write the lines run_then waits for; so far: {}",
+                    args.join(" "),
+                    text.lock().unwrap()
+                );
             }
         }
-        let (done, finished) = mpsc::channel();
-        thread::spawn(move || done.send(child.wait()).unwrap());
-        let status = finished
-            .recv_timeout(DEADLINE)
-            .expect("fiber exited after closing stdout")
-            .unwrap();
+        let (status, stdout, lines, stderr) = match finished.recv_timeout(DEADLINE) {
+            Ok(done) => done,
+            Err(_) => {
+                fakes::kill_group(group, "KILL").unwrap();
+                panic!(
+                    "waited {DEADLINE:?} for `fiber {}` to exit after the act",
+                    args.join(" ")
+                );
+            }
+        };
         assert!(
             fakes::group_empties(group, GROUP_DEADLINE),
             "`fiber` left a process in its group behind"
         );
         std::mem::forget(guard);
-        watchdog.stand_down(DEADLINE);
+        watchdog.stand_down(GROUP_DEADLINE);
         Run {
             code: status.code(),
-            stdout: text,
+            stdout,
             lines,
-            stderr: err_rx.recv_timeout(DEADLINE).unwrap_or_default(),
+            stderr,
         }
     }
 }
@@ -1276,12 +1299,24 @@ fn handoff_configuration_reaches_a_resumed_session() {
 fn a_background_shell_job_is_waited_for_before_ask_exits() {
     let setup = Setup::new();
     let ready = setup.workspace().join("ready");
-    // The job runs until the test creates `ready`: past the receipt, the
+    let fifo = ready.clone();
+    let made = fakes::within("mkfifo to make the ready FIFO", MKFIFO, move || {
+        Command::new("mkfifo").arg(&fifo).status()
+    });
+    assert!(made.unwrap().success(), "mkfifo {}", ready.display());
+    // Held read-write, the FIFO always has a writer: neither this open nor
+    // the job's blocks, and the job's `read` waits for the line `act` writes.
+    let release = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&ready)
+        .unwrap();
+    // The job waits for a line on the FIFO: past the receipt, the
     // final reply and the ending notice. One plain command, so a standing
     // rule can match it.
     fs::write(
         setup.workspace().join("wait.sh"),
-        "until [ -e ready ]; do sleep 0.01; done\necho done\n",
+        "read -r _ < ready\necho done\n",
     )
     .unwrap();
     let command = "sh wait.sh";
@@ -1319,7 +1354,7 @@ fn a_background_shell_job_is_waited_for_before_ask_exits() {
                         .any(|line| line["kind"] == "turn_completed")
                 })
         },
-        || fs::write(&ready, "").unwrap(),
+        || std::io::Write::write_all(&mut &release, b"\n").unwrap(),
     );
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
@@ -1395,12 +1430,24 @@ fn a_background_shell_job_is_waited_for_before_ask_exits() {
 fn a_monitors_lines_reach_the_log_before_its_end_and_ask_exits() {
     let setup = Setup::new();
     let ready = setup.workspace().join("ready");
-    // The monitor prints once the test creates `ready`: past the receipt,
+    let fifo = ready.clone();
+    let made = fakes::within("mkfifo to make the ready FIFO", MKFIFO, move || {
+        Command::new("mkfifo").arg(&fifo).status()
+    });
+    assert!(made.unwrap().success(), "mkfifo {}", ready.display());
+    // Held read-write, the FIFO always has a writer: neither this open nor
+    // the job's blocks, and the job's `read` waits for the line `act` writes.
+    let release = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&ready)
+        .unwrap();
+    // The monitor prints once the test writes a line: past the receipt,
     // the final reply and the ending notice. Both lines go out in one
     // write, so they are one batch.
     fs::write(
         setup.workspace().join("watch.sh"),
-        "until [ -e ready ]; do sleep 0.01; done\nprintf 'one\\ntwo\\n'\n",
+        "read -r _ < ready\nprintf 'one\\ntwo\\n'\n",
     )
     .unwrap();
     // How many turns the lines and the end take depends on when they
@@ -1441,7 +1488,7 @@ fn a_monitors_lines_reach_the_log_before_its_end_and_ask_exits() {
                         .any(|line| line["kind"] == "turn_completed")
                 })
         },
-        || fs::write(&ready, "").unwrap(),
+        || std::io::Write::write_all(&mut &release, b"\n").unwrap(),
     );
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
