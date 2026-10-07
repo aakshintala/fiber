@@ -1208,3 +1208,32 @@ fn leave_out_invalid_drops_a_model_whose_default_is_not_among_its_levels() {
         notices[0].message
     );
 }
+
+#[test]
+fn leave_out_invalid_drops_a_model_that_declares_no_context_window() {
+    let list = json!([
+        {"id": "bare", "protocol": "anthropic-messages",
+         "base_url": "http://127.0.0.1:1/v1"},
+        {"id": "zero", "protocol": "anthropic-messages",
+         "base_url": "http://127.0.0.1:1/v1", "context_window": 0},
+        {"id": "ok", "protocol": "anthropic-messages",
+         "base_url": "http://127.0.0.1:1/v1", "context_window": 200000}
+    ]);
+    let mut models: Vec<ModelData> = serde_json::from_value(list).unwrap();
+    let notices = leave_out_invalid("acme", "acme", &mut models);
+    assert_eq!(
+        models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+        ["ok"]
+    );
+    assert_eq!(notices.len(), 2);
+    for (notice, id) in notices.iter().zip(["bare", "zero"]) {
+        assert_eq!(notice.code, ErrorCode::ModelInvalid);
+        assert_eq!(notice.extension.as_deref(), Some("acme"));
+        assert!(
+            notice.message.contains(&format!("acme/{id}"))
+                && notice.message.contains("context_window"),
+            "{}",
+            notice.message
+        );
+    }
+}
