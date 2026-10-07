@@ -385,7 +385,7 @@ impl Loop {
 
     /// A reviewer failure: counted and escalated. Never an allow. `reviewer`
     /// names the model and the stage that failed; `None` when the reviewer
-    /// could not be set up, so no reviewer request was sent.
+    /// could not be set up, and the denial is then `no_reviewer`.
     fn review_failure(
         &mut self,
         under: &UnderReview<'_>,
@@ -566,9 +566,11 @@ impl Loop {
         Ok(Err(self.cancelled_before_ran()))
     }
 
-    /// Denies the call as the reviewer, with no `permission_requested`: no
-    /// answer is possible. Past the session limit, the turn ends `failed`
-    /// with code `blocked` once the step's calls complete.
+    /// Denies the call with no `permission_requested`: no answer is
+    /// possible. With a reviewer it is the reviewer's block; with none, none
+    /// could be set up, and the denial is `no_reviewer`. Past the session
+    /// limit, the turn ends `failed` with code `blocked` once the step's
+    /// calls complete.
     fn reviewer_deny(
         &mut self,
         id: &ActionId,
@@ -577,11 +579,16 @@ impl Loop {
         reason: String,
         reviewer: Option<ReviewerRef>,
     ) -> Result<Box<ToolCallCompleted>, Error> {
+        let decided_by = if reviewer.is_some() {
+            DecidedBy::Reviewer
+        } else {
+            DecidedBy::NoReviewer
+        };
         self.append(
             &Event::PermissionResolved(resolved(
                 request_id,
                 Decision::Deny,
-                DecidedBy::Reviewer,
+                decided_by,
                 Some(reason.clone()),
                 reviewer,
             )),

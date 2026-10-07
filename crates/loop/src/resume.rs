@@ -149,17 +149,16 @@ pub fn resumed(dir: &Path) -> Result<Resumed, Error> {
             if let Some(grant) = &resolved.grant {
                 grants.push(grant.clone());
             }
-            // A model's block: the spending-budget denial is
-            // `decided_by: budget`, and a reviewer that could not be set
-            // up writes no `reviewer` object; neither counts. Escalated
-            // blocks a person answered are not distinguished in the log.
-            // debt: undercounts session blocks that a person answered, a
-            // denial written when the inbox closed while a request waited,
-            // or a reviewer that could not be set up caused; fixed when
-            // the log records blocks.
+            // A model's block, a reviewer failure and a denial with no
+            // reviewer set up each count, as they do live. The
+            // spending-budget denial is `decided_by: budget` and does not.
+            // debt: undercounts session blocks whose escalation a person
+            // answered or a cancel ended; fixed when the log records blocks.
             if resolved.decision == Decision::Deny
-                && resolved.decided_by == DecidedBy::Reviewer
-                && resolved.reviewer.is_some()
+                && matches!(
+                    resolved.decided_by,
+                    DecidedBy::Reviewer | DecidedBy::NoReviewer
+                )
             {
                 session_blocks += 1;
             }
