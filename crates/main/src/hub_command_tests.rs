@@ -320,21 +320,26 @@ fn stub_binary(root: &fakes::TempDir, marker: &str) -> PathBuf {
 /// The failure a started session reports once it has exited.
 fn exit_of(started: Box<dyn hub::Started>) -> Failure {
     let (done_tx, done_rx) = mpsc::channel();
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
     thread::Builder::new()
         .name("hub-test-exit".to_owned())
-        .spawn(move || {
-            loop {
-                if let Some(failure) = started.exited() {
-                    done_tx.send(failure).unwrap_or(());
-                    return;
+        .spawn({
+            let stop = Arc::clone(&stop);
+            move || {
+                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    if let Some(failure) = started.exited() {
+                        done_tx.send(failure).unwrap_or(());
+                        return;
+                    }
+                    thread::yield_now();
                 }
-                thread::yield_now();
             }
         })
         .unwrap();
-    done_rx
-        .recv_timeout(DRAIN_DEADLINE)
-        .expect("the session exits before its deadline")
+    let exit = done_rx.recv_timeout(DRAIN_DEADLINE);
+    // The poll thread ends with the wait, whichever way the wait ended.
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    exit.expect("the session exits before its deadline")
 }
 
 #[test]

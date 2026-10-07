@@ -93,7 +93,7 @@ fn fail(failure: Failure) -> i32 {
     doors::exit_code(&failure)
 }
 
-/// Starts the internal session command: `<current_exe> session --id <id>
+/// Starts the internal session command: `<exe> session --id <id>
 /// --workspace <workspace> [--model <model>]`, never `--prompt`, or with
 /// `--resume` for a session the log holds. Whoever starts a session
 /// generates its id and passes it on that command's line, so the starter
