@@ -212,10 +212,6 @@ impl<B: Backend> Backend for TtySized<B> {
         self.inner.draw(content)
     }
 
-    fn append_lines(&mut self, n: u16) -> Result<(), Self::Error> {
-        self.inner.append_lines(n)
-    }
-
     fn hide_cursor(&mut self) -> Result<(), Self::Error> {
         self.inner.hide_cursor()
     }
