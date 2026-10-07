@@ -32,7 +32,7 @@ impl Setup {
         );
         fs::write(repo.join("scripts/fmt.sh"), "cargo fmt\n").unwrap();
         fs::write(
-            repo.join(".fiber/config/github.com-aakshintala-fiber-extensions-hooks.json"),
+            repo.join(".fiber/config/hooks.json"),
             r#"{"hooks": {"fmt": {"point": "after_tool", "command": "scripts/fmt.sh"}}}"#,
         )
         .unwrap();

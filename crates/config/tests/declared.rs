@@ -14,7 +14,7 @@ use serde_json::json;
 const LISTED: &str =
     r#"{"repository_extensions": [{"path": "tools/a", "required": true}, {"path": "tools/b"}]}"#;
 
-const HOOKS_FILE: &str = "config/github.com-aakshintala-fiber-extensions-hooks.json";
+const HOOKS_FILE: &str = "config/hooks.json";
 
 #[test]
 fn a_repository_lists_extensions_with_no_notice() {
