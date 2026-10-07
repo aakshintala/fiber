@@ -21,7 +21,7 @@ use config::{Secret, store_secret};
 use contract::ErrorCode;
 use contract::clock::Clock;
 use contract::signing::{SignRequest, Signer};
-use extensions::{Error, LuaExtension, LuaProvider, REFRESH_BEFORE};
+use extensions::{CredentialPair, Error, LuaExtension, LuaProvider, REFRESH_BEFORE};
 use fakes::clock::FakeClock;
 use fakes::{ProviderServer, Response, fingerprint};
 use serde_json::json;
@@ -36,6 +36,14 @@ fn within<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
     std::thread::spawn(move || tx.send(f()));
     rx.recv_timeout(WAIT)
         .unwrap_or_else(|_| panic!("the call did not return within {WAIT:?}"))
+}
+
+/// The default-label pair for `provider`.
+fn pair(provider: &str) -> CredentialPair {
+    CredentialPair {
+        credential: provider.to_owned(),
+        label: "default".to_owned(),
+    }
 }
 
 /// The fixture's provider, with its server's address and key stored as
@@ -166,7 +174,12 @@ fn a_token_far_from_expiry_is_reused() {
     let provider = fixture(&setup, &server);
     for _ in 0..3 {
         let provider = Arc::clone(&provider);
-        assert_eq!(within(move || provider.token()).unwrap().expose(), "t1");
+        assert_eq!(
+            within(move || provider.token(&pair(provider.name())))
+                .unwrap()
+                .expose(),
+            "t1"
+        );
     }
     assert_eq!(server.requests().len(), 1);
     let request = &server.requests()[0];
@@ -191,7 +204,12 @@ fn a_token_within_five_minutes_of_expiry_is_refreshed_off_the_request_path() {
     let clock = FakeClock::new();
     let provider = fixture_on(&setup, &server, clock.clone());
     let first = Arc::clone(&provider);
-    assert_eq!(within(move || first.token()).unwrap().expose(), "t1");
+    assert_eq!(
+        within(move || first.token(&pair(first.name())))
+            .unwrap()
+            .expose(),
+        "t1"
+    );
     assert_eq!(server.requests().len(), 1);
     // Into the refresh window, still short of expiry.
     clock.advance(
@@ -200,7 +218,12 @@ fn a_token_within_five_minutes_of_expiry_is_refreshed_off_the_request_path() {
             .unwrap(),
     );
     let second = Arc::clone(&provider);
-    assert_eq!(within(move || second.token()).unwrap().expose(), "t1");
+    assert_eq!(
+        within(move || second.token(&pair(second.name())))
+            .unwrap()
+            .expose(),
+        "t1"
+    );
     assert!(
         server.await_requests(2, WAIT),
         "waited for the refresh request"
@@ -208,7 +231,7 @@ fn a_token_within_five_minutes_of_expiry_is_refreshed_off_the_request_path() {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         loop {
-            match provider.token() {
+            match provider.token(&pair(provider.name())) {
                 Ok(secret) if secret.expose() == "t2" => {
                     match tx.send(()) {
                         Ok(()) | Err(mpsc::SendError(())) => {}
@@ -229,7 +252,7 @@ fn an_expired_token_just_returned_is_an_error() {
     let setup = Setup::new();
     let server = ProviderServer::start([token("t1", Duration::ZERO)]).unwrap();
     let provider = fixture(&setup, &server);
-    let err = within(move || provider.token()).unwrap_err();
+    let err = within(move || provider.token(&pair(provider.name()))).unwrap_err();
     assert!(
         matches!(
             &err,
@@ -251,7 +274,7 @@ fn a_credential_with_no_usable_expiry_is_an_error() {
         let setup = Setup::new();
         let server = ProviderServer::start([Response::status(200, body)]).unwrap();
         let provider = fixture(&setup, &server);
-        let err = within(move || provider.token()).unwrap_err();
+        let err = within(move || provider.token(&pair(provider.name()))).unwrap_err();
         assert!(
             matches!(
                 &err,
@@ -269,7 +292,7 @@ fn a_credential_with_no_token_is_credential_failed() {
     let setup = Setup::new();
     let server = ProviderServer::start([Response::status(200, r#"{"expires_at": 1}"#)]).unwrap();
     let provider = fixture(&setup, &server);
-    let err = within(move || provider.token()).unwrap_err();
+    let err = within(move || provider.token(&pair(provider.name()))).unwrap_err();
     assert_eq!(err.code(), ErrorCode::CredentialFailed);
     let Error::Credential(inner) = &err else {
         panic!("{err:?}")
@@ -444,7 +467,7 @@ fn a_function_the_provider_never_registered_is_credential_failed() {
     ));
     let provider = LuaProvider::new(Arc::clone(&extension), "p");
     let tokens = Arc::clone(&provider);
-    let err = within(move || tokens.token()).unwrap_err();
+    let err = within(move || tokens.token(&pair(tokens.name()))).unwrap_err();
     assert!(
         matches!(
             &err,
@@ -608,7 +631,7 @@ fn the_token_rides_before_what_sign_returns_and_sign_sees_it() {
     );
     let signer = within({
         let provider = Arc::clone(&provider);
-        move || provider.signer()
+        move || provider.signer(pair(provider.name()))
     })
     .unwrap()
     .unwrap();
@@ -631,7 +654,7 @@ fn without_sign_only_the_token_is_sent() {
     let provider = script_provider(&setup, Some(TOKEN), None);
     let signer = within({
         let provider = Arc::clone(&provider);
-        move || provider.signer()
+        move || provider.signer(pair(provider.name()))
     })
     .unwrap()
     .unwrap();
@@ -647,7 +670,7 @@ fn without_credential_only_what_sign_returns_is_sent() {
     let provider = script_provider(&setup, None, Some("{ [\"x-s\"] = \"v\" }"));
     let signer = within({
         let provider = Arc::clone(&provider);
-        move || provider.signer()
+        move || provider.signer(pair(provider.name()))
     })
     .unwrap()
     .unwrap();
@@ -672,7 +695,7 @@ fn without_credential_or_sign_there_is_no_signer() {
     assert!(
         within({
             let provider = Arc::clone(&provider);
-            move || provider.signer()
+            move || provider.signer(pair(provider.name()))
         })
         .unwrap()
         .is_none()
@@ -715,7 +738,7 @@ fn sign_wins_over_the_token_header_whatever_its_case() {
     );
     let signer = within({
         let provider = Arc::clone(&provider);
-        move || provider.signer()
+        move || provider.signer(pair(provider.name()))
     })
     .unwrap()
     .unwrap();
@@ -735,7 +758,7 @@ fn signer_credentials_returns_the_cached_token_even_when_sign_replaces_authoriza
     );
     let signer = within({
         let provider = Arc::clone(&provider);
-        move || provider.signer()
+        move || provider.signer(pair(provider.name()))
     })
     .unwrap()
     .unwrap();
@@ -764,7 +787,7 @@ fn signer_credentials_is_empty_without_credential() {
     let provider = script_provider(&setup, None, Some("{ [\"x-s\"] = \"v\" }"));
     let signer = within({
         let provider = Arc::clone(&provider);
-        move || provider.signer()
+        move || provider.signer(pair(provider.name()))
     })
     .unwrap()
     .unwrap();
@@ -781,7 +804,7 @@ fn a_credential_error_at_send_time_is_credential_failed() {
     let provider = script_provider(&setup, Some("{}"), Some("{}"));
     let signer = within({
         let provider = Arc::clone(&provider);
-        move || provider.signer()
+        move || provider.signer(pair(provider.name()))
     })
     .unwrap()
     .unwrap();
@@ -831,7 +854,7 @@ fn refresh_provider(setup: &Setup, url: &str) -> Arc<LuaProvider> {
 fn sign_error(provider: &Arc<LuaProvider>) -> contract::signing::Error {
     let signer = within({
         let provider = Arc::clone(provider);
-        move || provider.signer()
+        move || provider.signer(pair(provider.name()))
     })
     .unwrap()
     .unwrap();
@@ -951,7 +974,7 @@ fn a_credential_error_is_its_own_first_line_with_its_code() {
     );
     let signer = within({
         let provider = Arc::clone(&provider);
-        move || provider.signer()
+        move || provider.signer(pair(provider.name()))
     })
     .unwrap()
     .unwrap();

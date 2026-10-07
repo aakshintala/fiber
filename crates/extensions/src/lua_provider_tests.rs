@@ -9,7 +9,7 @@ use contract::signing::{SignRequest, Signer};
 use fakes::clock::FakeClock;
 
 use crate::{
-    LuaExtension,
+    CredentialPair, LuaExtension,
     lua_provider::{LuaProvider, LuaSigner},
 };
 
@@ -44,7 +44,13 @@ fn credentials_is_empty_for_a_signer_without_credentials_even_with_a_cached_toke
     let extension = Arc::new(LuaExtension::new("ext", dir, home, FakeClock::new()));
     let provider = LuaProvider::new(extension, "p");
 
-    let with_credential = provider.signer().unwrap().unwrap();
+    let with_credential = provider
+        .signer(CredentialPair {
+            credential: "p".to_owned(),
+            label: "default".to_owned(),
+        })
+        .unwrap()
+        .unwrap();
     let url = "http://127.0.0.1:1/v1/responses".to_owned();
     let headers = within({
         let signer = Arc::clone(&with_credential);
@@ -67,6 +73,10 @@ fn credentials_is_empty_for_a_signer_without_credentials_even_with_a_cached_toke
     // the cached provider with a signer whose credential flag is false.
     let without_credential = LuaSigner {
         provider,
+        pair: CredentialPair {
+            credential: "p".to_owned(),
+            label: "default".to_owned(),
+        },
         credential: false,
         sign: false,
     };

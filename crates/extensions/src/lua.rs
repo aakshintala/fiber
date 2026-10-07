@@ -18,10 +18,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use contract::clock::Clock;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::oauth::{Browser, SystemBrowser};
-use crate::{Error, host};
+use crate::{CredentialPair, Error, host};
 
 /// Each Lua extension's default memory cap (`docs/extensions.md`, "Loading,
 /// and cost when nothing is loaded"). Past it, an allocation is a Lua error in
@@ -422,7 +422,9 @@ impl LuaExtension {
 
     /// Runs `function` (`models`, `quota`, `credential` or `sign`) of the
     /// provider `provider` registered, passing `arg`, and returns what it
-    /// returned, as JSON.
+    /// returned, as JSON. These calls carry no credential pair: only
+    /// `credential()` refreshes a stored credential
+    /// (`docs/model-routing.md`, "Keys, tokens and OAuth").
     pub(crate) fn provider_call(
         &self,
         provider: &str,
@@ -433,8 +435,29 @@ impl LuaExtension {
             Target::Provider {
                 name: provider.to_owned(),
                 function,
+                credential: None,
             },
             arg,
+        )
+    }
+
+    /// Runs `credential` of the provider `provider` for `pair`, passing the
+    /// session's label and the stored credential's name, and returns what it
+    /// returned, as JSON (`docs/model-routing.md`, "Keys, tokens and
+    /// OAuth"). The only call whose target carries a credential pair, so
+    /// the only one `host.oauth.refresh` refreshes.
+    pub(crate) fn provider_credential(
+        &self,
+        provider: &str,
+        pair: &CredentialPair,
+    ) -> Result<Value, Error> {
+        self.call(
+            Target::Provider {
+                name: provider.to_owned(),
+                function: "credential",
+                credential: Some(pair.clone()),
+            },
+            json!({"label": pair.label, "credential": pair.credential}),
         )
     }
 
@@ -521,6 +544,10 @@ enum Target {
         name: String,
         /// `models`, `quota`, `credential` or `sign`.
         function: &'static str,
+        /// The stored credential and label the call is for: `Some` only
+        /// for `credential`, whose `host.oauth.refresh` locks and reads
+        /// exactly this pair's file.
+        credential: Option<CredentialPair>,
     },
     /// A hook `fiber.hook` registered.
     Hook {
@@ -543,7 +570,7 @@ impl std::fmt::Display for Target {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Command(name) => f.write_str(name),
-            Self::Provider { name, function } => write!(f, "{name}.{function}"),
+            Self::Provider { name, function, .. } => write!(f, "{name}.{function}"),
             Self::Hook { point, .. } => f.write_str(point),
             Self::Timer { id } => write!(f, "timer {id}"),
         }

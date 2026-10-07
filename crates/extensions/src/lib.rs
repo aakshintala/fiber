@@ -36,7 +36,7 @@ pub use host::exec::kill_every_group;
 pub use install::Provenance;
 pub use installed::{Damaged, Installed, Listing, Removal, list, removal};
 pub use lua::{LuaExtension, MEMORY_CAP};
-pub use lua_provider::{LuaProvider, REFRESH_BEFORE};
+pub use lua_provider::{CredentialPair, LuaProvider, REFRESH_BEFORE};
 pub use manage::{Item, Plan, Request, plan};
 pub use oauth::{Browser, SystemBrowser};
 pub use prepare::platform;

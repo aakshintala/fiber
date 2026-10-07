@@ -48,6 +48,10 @@ pub(super) struct Vm {
 }
 
 /// One step of a callback: it returned, or it suspended on a host call.
+#[allow(
+    clippy::large_enum_variant,
+    reason = "a suspend carries the call's target, which names its credential pair; boxing would allocate on every host call"
+)]
 pub(super) enum Step {
     Done(Value),
     Suspend {
@@ -163,7 +167,7 @@ impl Vm {
                 .and_then(|table| {
                     table.map_or(Ok(None), |table| table.get::<Option<Function>>("run"))
                 }),
-            Target::Provider { name, function } => self
+            Target::Provider { name, function, .. } => self
                 .providers
                 .get::<Option<Table>>(name.as_str())
                 .and_then(|table| {

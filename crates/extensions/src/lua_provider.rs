@@ -5,6 +5,7 @@
 //! function on the request path, which sees the body's SHA-256 and never the
 //! body.
 
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -21,12 +22,40 @@ use crate::{Error, LuaExtension};
 /// How long before its expiry a token is refreshed.
 pub const REFRESH_BEFORE: Duration = Duration::from_secs(5 * 60);
 
+/// One stored credential: `credentials/<credential>/<label>` in Fiber home.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct CredentialPair {
+    /// The stored credential's name: the provider's shared credential name
+    /// when its data names one, and the provider's own name otherwise.
+    pub credential: String,
+    /// The session's credential label.
+    pub label: String,
+}
+
+impl CredentialPair {
+    /// The pair for `data` under `label`: `credential` is
+    /// `data.credential_name`, else `data.name` (`docs/model-routing.md`,
+    /// "Credentials").
+    pub fn for_provider(data: &ProviderData, label: impl Into<String>) -> Self {
+        Self {
+            credential: data
+                .credential_name
+                .clone()
+                .unwrap_or_else(|| data.name.clone()),
+            label: label.into(),
+        }
+    }
+}
+
 /// One provider a Lua extension registered with `fiber.provider`.
 pub struct LuaProvider {
     extension: Arc<LuaExtension>,
     name: String,
     models: Mutex<Option<Vec<ModelData>>>,
-    token: Mutex<TokenState>,
+    /// One entry per stored credential and label, so a label switch gets
+    /// that label's token, never the previous one (`docs/model-routing.md`,
+    /// "Keys, tokens and OAuth").
+    token: Mutex<BTreeMap<CredentialPair, TokenState>>,
 }
 
 #[derive(Default)]
@@ -70,7 +99,10 @@ impl LuaProvider {
 
     /// Signs this provider's requests: `None` when it registered neither
     /// `credential` nor `sign`.
-    pub fn signer(self: &Arc<Self>) -> Result<Option<Arc<dyn Signer>>, Error> {
+    pub fn signer(
+        self: &Arc<Self>,
+        pair: CredentialPair,
+    ) -> Result<Option<Arc<dyn Signer>>, Error> {
         let functions = self.functions()?;
         let credential = functions.iter().any(|f| f == "credential");
         let sign = functions.iter().any(|f| f == "sign");
@@ -79,6 +111,7 @@ impl LuaProvider {
         }
         Ok(Some(Arc::new(LuaSigner {
             provider: Arc::clone(self),
+            pair,
             credential,
             sign,
         })))
@@ -202,37 +235,43 @@ impl LuaProvider {
     // inside the window tries again; nothing reports the failure until the
     // token expires. Report a failed refresh as a notice if tokens are seen
     // expiring mid-session.
-    pub fn token(self: &Arc<Self>) -> Result<Secret, Error> {
-        let mut state = lock(&self.token);
-        if let Some((token, expires)) = &state.current
+    pub fn token(self: &Arc<Self>, pair: &CredentialPair) -> Result<Secret, Error> {
+        let mut tokens = lock(&self.token);
+        let entry = tokens.entry(pair.clone()).or_default();
+        if let Some((token, expires)) = &entry.current
             && let Ok(left) = expires.duration_since(self.extension.clock().wall())
             && !left.is_zero()
         {
             let token = token.clone();
             let due = left <= REFRESH_BEFORE;
-            if due && !state.refreshing {
-                state.refreshing = true;
+            if due && !entry.refreshing {
+                entry.refreshing = true;
                 let this = Arc::clone(self);
+                let pair = pair.clone();
                 thread::spawn(move || {
-                    let fresh = this.fetch_token();
-                    let mut state = lock(&this.token);
-                    state.refreshing = false;
+                    let fresh = this.fetch_token(&pair);
+                    let mut tokens = lock(&this.token);
+                    let entry = tokens.entry(pair).or_default();
+                    entry.refreshing = false;
                     if let Ok(fresh) = fresh {
-                        state.current = Some(fresh);
+                        entry.current = Some(fresh);
                     }
                 });
             }
             return Ok(token);
         }
-        let fresh = self.fetch_token()?;
+        let fresh = self.fetch_token(pair)?;
         let token = fresh.0.clone();
-        state.current = Some(fresh);
+        entry.current = Some(fresh);
         Ok(token)
     }
 
     /// The token `token()` returns; a failure as the signing seam carries it.
-    pub fn credential_token(self: &Arc<Self>) -> Result<Secret, signing::Error> {
-        self.token().map_err(|e| {
+    pub fn credential_token(
+        self: &Arc<Self>,
+        pair: &CredentialPair,
+    ) -> Result<Secret, signing::Error> {
+        self.token(pair).map_err(|e| {
             let message = detail(&e);
             if matches!(e, Error::Unattended { .. }) {
                 signing::Error::Unattended { message }
@@ -248,18 +287,18 @@ impl LuaProvider {
     /// The token `credential()` last returned, without fetching or
     /// refreshing when there is none. What `LuaSigner::credentials`
     /// redacts after `sign()` replaced the `authorization` header.
-    pub fn cached_token(&self) -> Option<Secret> {
+    pub fn cached_token(&self, pair: &CredentialPair) -> Option<Secret> {
         lock(&self.token)
-            .current
-            .as_ref()
+            .get(pair)
+            .and_then(|entry| entry.current.as_ref())
             .map(|(token, _)| token.clone())
     }
 
-    /// Calls `credential()`, which returns `{ token, expires_at }`, the
-    /// expiry in seconds since the Unix epoch.
-    fn fetch_token(&self) -> Result<(Secret, SystemTime), Error> {
+    /// Calls `credential()` for `pair`, which returns `{ token, expires_at }`,
+    /// the expiry in seconds since the Unix epoch.
+    fn fetch_token(&self, pair: &CredentialPair) -> Result<(Secret, SystemTime), Error> {
         let inner: Result<(Secret, SystemTime), Error> = (|| {
-            let returned = self.call("credential", Value::Null)?;
+            let returned = self.extension.provider_credential(&self.name, pair)?;
             let token = returned
                 .get("token")
                 .and_then(Value::as_str)
@@ -362,6 +401,7 @@ impl Signer for LuaProvider {
 /// what `sign()` returns, which wins when it names `authorization` itself.
 struct LuaSigner {
     provider: Arc<LuaProvider>,
+    pair: CredentialPair,
     credential: bool,
     sign: bool,
 }
@@ -370,7 +410,7 @@ impl Signer for LuaSigner {
     fn sign(&self, request: &SignRequest<'_>) -> Result<Vec<(String, String)>, signing::Error> {
         let mut headers = Vec::new();
         if self.credential {
-            let token = self.provider.credential_token()?;
+            let token = self.provider.credential_token(&self.pair)?;
             headers.push((
                 "authorization".to_owned(),
                 format!("Bearer {}", token.expose()),
@@ -404,7 +444,7 @@ impl Signer for LuaSigner {
         if !self.credential {
             return Vec::new();
         }
-        self.provider.cached_token().into_iter().collect()
+        self.provider.cached_token(&self.pair).into_iter().collect()
     }
 }
 
