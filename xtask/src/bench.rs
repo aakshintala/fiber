@@ -17,7 +17,7 @@ const RUNS: usize = 5;
 /// The idle window on a pull request, in seconds ("Measuring").
 const MIN_IDLE_SECS: u64 = 10;
 /// The threads every idle headless session runs with no client.
-const SESSION_THREADS: u64 = 4;
+const SESSION_THREADS: u64 = 5;
 /// The threads each client adds: its reader and its writer.
 const THREADS_PER_CLIENT: u64 = 2;
 
@@ -57,7 +57,7 @@ const MEASURED: &[(&str, Check)] = &[
     (
         "Threads, idle headless session",
         Check::Exact {
-            pin: "4, plus 2 per client, plus 1 for `fiber ask`'s printer, plus 1 per Lua extension in use",
+            pin: "5, plus 2 per client, plus 1 for `fiber ask`'s printer, plus 1 per Lua extension in use",
             rule: Rule::Threads("session_threads"),
         },
     ),
@@ -284,10 +284,10 @@ fn exact(rule: Rule, head: Option<&Results>) -> (Vec<String>, String) {
         for (i, run) in runs.iter().enumerate() {
             for entry in *run {
                 let checked = match rule {
-                    Rule::IdleSwitches(_) => idle_thread(entry, id).map(|(tid, v, n)| {
+                    Rule::IdleSwitches(_) => idle_thread(entry, id).map(|(thread, v, n)| {
                         switches += v + n;
                         (v != 0 || n != 0).then(|| {
-                            format!("thread {tid}: {v} voluntary, {n} involuntary switches")
+                            format!("thread {thread}: {v} voluntary, {n} involuntary switches")
                         })
                     }),
                     Rule::Threads(_) => thread_count(entry, id).map(|(clients, threads)| {
@@ -314,9 +314,21 @@ fn exact(rule: Rule, head: Option<&Results>) -> (Vec<String>, String) {
     (failures, observed.join(", "))
 }
 
-fn idle_thread(entry: &Value, id: &str) -> Result<(u64, u64, u64), String> {
+/// The thread as `tid` or `tid (name)`, and its voluntary and involuntary
+/// switches. `name` is optional: older result files carry only `tid`.
+fn idle_thread(entry: &Value, id: &str) -> Result<(String, u64, u64), String> {
+    let tid = field(entry, id, "tid")?;
+    let thread = match entry.get("name") {
+        None => tid.to_string(),
+        Some(name) => {
+            let name = name
+                .as_str()
+                .ok_or_else(|| format!("{id}: {entry} has a name that is not a string"))?;
+            format!("{tid} ({name})")
+        }
+    };
     Ok((
-        field(entry, id, "tid")?,
+        thread,
         field(entry, id, "voluntary")?,
         field(entry, id, "involuntary")?,
     ))

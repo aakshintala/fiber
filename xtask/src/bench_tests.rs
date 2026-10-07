@@ -11,7 +11,7 @@ const DOC: &str = concat!(
     "| Session, busy or resumed | 24 MiB peak RSS | Linux x86_64 | from components |\n",
     "| `web_fetch` converting a 10 MiB HTML page, the download cap | within the busy session's 24 MiB peak RSS | Linux x86_64 | from components |\n",
     "| Idle CPU, session and terminal | zero context switches in the idle window, on every thread | Linux x86_64 | exact |\n",
-    "| Threads, idle headless session | 4, plus 2 per client, plus 1 for `fiber ask`'s printer, plus 1 per Lua extension in use | Linux x86_64 | exact |\n",
+    "| Threads, idle headless session | 5, plus 2 per client, plus 1 for `fiber ask`'s printer, plus 1 per Lua extension in use | Linux x86_64 | exact |\n",
     "| fsyncs | 2 per model request, 2 per tool call | Linux x86_64 | exact |\n",
     "| Log bytes, 429-call turn | the turn's content plus 1 KiB per tool call | Linux x86_64 | exact |\n",
     "| Session start, the internal session command to its first line, no hub | 20 ms | Linux x86_64 | picked |\n",
@@ -47,7 +47,7 @@ fn head() -> Value {
             "terminal_idle_rss_kib": [7920, 7916, 7924, 7920, 7918],
             "session_idle_switches": [quiet_run(), quiet_run(), quiet_run(), quiet_run(), quiet_run()],
             "terminal_idle_switches": [quiet_run(), quiet_run(), quiet_run(), quiet_run(), quiet_run()],
-            "session_threads": [threads_run(4, 6), threads_run(4, 6), threads_run(4, 6), threads_run(4, 6), threads_run(4, 6)],
+            "session_threads": [threads_run(5, 7), threads_run(5, 7), threads_run(5, 7), threads_run(5, 7), threads_run(5, 7)],
             "session_start_ms": [6.1, 5.9, 6.0, 6.3, 6.0],
             "terminal_first_frame_ms": [18.2, 17.9, 18.0, 18.4, 18.1]
         },
@@ -249,7 +249,7 @@ fn a_run_count_other_than_five_fails() {
     let short = with_metric(
         head(),
         "session_threads",
-        json!([threads_run(4, 6), threads_run(4, 6)]),
+        json!([threads_run(5, 7), threads_run(5, 7)]),
     );
     assert!(has(&failures_of(&short), "session_threads"));
     let short = with_metric(head(), "terminal_idle_switches", json!([quiet_run()]));
@@ -263,9 +263,9 @@ fn a_run_count_other_than_five_fails() {
 }
 
 #[test]
-fn threads_hold_four_plus_two_per_client_on_every_run() {
-    for (zero, one) in [(4, 5), (4, 7), (5, 6), (3, 6)] {
-        let mut runs = vec![threads_run(4, 6); 4];
+fn threads_hold_five_plus_two_per_client_on_every_run() {
+    for (zero, one) in [(5, 6), (5, 8), (4, 7), (6, 7)] {
+        let mut runs = vec![threads_run(5, 7); 4];
         runs.push(threads_run(zero, one));
         let results = with_metric(head(), "session_threads", json!(runs));
         assert!(
@@ -277,7 +277,7 @@ fn threads_hold_four_plus_two_per_client_on_every_run() {
 
 #[test]
 fn a_run_with_no_threads_recorded_fails() {
-    let mut runs = vec![threads_run(4, 6); 4];
+    let mut runs = vec![threads_run(5, 7); 4];
     runs.push(json!([]));
     let results = with_metric(head(), "session_threads", json!(runs));
     assert!(has(&failures_of(&results), "session_threads"));
@@ -416,4 +416,87 @@ fn events_parse() {
     assert_eq!(Event::parse("pull_request"), Ok(Event::PullRequest));
     assert_eq!(Event::parse("push"), Ok(Event::Push));
     assert!(Event::parse("workflow_dispatch").is_err());
+}
+
+#[test]
+fn a_thread_name_is_optional_and_named_in_the_failure() {
+    let mut runs = vec![quiet_run(); 4];
+    runs.push(json!([
+        {"tid": 4101, "name": "loop", "voluntary": 0, "involuntary": 0},
+        {"tid": 4102, "name": "status", "voluntary": 2, "involuntary": 0}
+    ]));
+    let failures = failures_of(&with_metric(head(), "session_idle_switches", json!(runs)));
+    assert!(
+        has(&failures, "thread 4102 (status): 2 voluntary"),
+        "{failures:?}"
+    );
+    assert!(!has(&failures, "4101"), "{failures:?}");
+
+    let named = json!([{"tid": 4101, "name": "loop", "voluntary": 0, "involuntary": 0}]);
+    let results = with_metric(head(), "terminal_idle_switches", json!(vec![named; 5]));
+    assert_eq!(failures_of(&results), Vec::<String>::new());
+
+    let bad = json!([{"tid": 4101, "name": 7, "voluntary": 0, "involuntary": 0}]);
+    let results = with_metric(head(), "terminal_idle_switches", json!(vec![bad; 5]));
+    assert!(has(&failures_of(&results), "name"));
+}
+
+/// The comment line of the row whose budget starts with `budget`.
+fn row<'a>(comment: &'a str, budget: &str) -> &'a str {
+    comment
+        .lines()
+        .find(|l| l.starts_with(&format!("| {budget}")))
+        .unwrap_or_else(|| panic!("no {budget} row in:\n{comment}"))
+}
+
+#[test]
+fn the_head_column_sums_switches_and_shows_the_first_run_of_threads() {
+    let mut runs = vec![quiet_run(); 4];
+    runs.push(json!([
+        {"tid": 4101, "voluntary": 4, "involuntary": 1},
+        {"tid": 4102, "voluntary": 0, "involuntary": 1}
+    ]));
+    let out = judge(
+        &with_metric(head(), "session_idle_switches", json!(runs)),
+        Some(&base()),
+        Event::PullRequest,
+    );
+    let idle = row(&out.comment, "Idle CPU");
+    assert!(idle.contains("session_idle_switches: 6 switches"), "{idle}");
+    assert!(
+        idle.contains("terminal_idle_switches: 0 switches"),
+        "{idle}"
+    );
+
+    let threads = row(&out.comment, "Threads");
+    assert!(
+        threads.contains("| 5 at 0 clients, 7 at 1 clients |"),
+        "{threads}"
+    );
+}
+
+#[test]
+fn a_failing_row_says_fail_and_the_failures_are_listed() {
+    let passing = judge(&head(), Some(&base()), Event::PullRequest).comment;
+    assert!(row(&passing, "Session, idle").ends_with("| pass |"));
+    assert!(!passing.contains("### Failures"), "{passing}");
+
+    let over = with_metric(head(), "session_idle_rss_kib", json!(vec![12289; 5]));
+    let failing = judge(&over, Some(&base()), Event::PullRequest).comment;
+    assert!(
+        row(&failing, "Session, idle").ends_with("| fail |"),
+        "{failing}"
+    );
+    assert!(
+        row(&failing, "Terminal, idle").ends_with("| pass |"),
+        "{failing}"
+    );
+    let listed = failing
+        .split("### Failures")
+        .nth(1)
+        .unwrap_or_else(|| panic!("no failures section in:\n{failing}"));
+    assert!(
+        listed.contains("- Session, idle, headless: median 12289 KiB"),
+        "{failing}"
+    );
 }
