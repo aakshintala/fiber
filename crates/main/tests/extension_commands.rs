@@ -724,3 +724,112 @@ fn host_drive_prompt_from_a_command_carries_the_extension_sender() {
     let (status, _out, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
 }
+
+/// A finished `function_call` for `name` with `arguments`.
+fn function_call(call_id: &str, name: &str, arguments: &Value) -> Value {
+    json!({"type": "response.output_item.done", "item": {
+        "type": "function_call",
+        "id": format!("fc_{call_id}"),
+        "call_id": call_id,
+        "name": name,
+        "arguments": arguments.to_string()
+    }})
+}
+
+#[test]
+fn host_drive_steer_from_a_command_carries_the_extension_sender() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "call_1",
+            "shell",
+            &json!({"command": "echo hi"}),
+        )]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    // A standing ask holds the turn on an approval. A loop waiting on a
+    // reply takes each delivery as it arrives, so the steer is taken, and
+    // `steering_queue` written, while the turn is still running: no held
+    // provider response races the steer against the turn's end.
+    fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n",
+            json!({"decision": "ask", "tool": "shell", "prefix": "echo hi"})
+        ),
+    )
+    .unwrap();
+    setup.lua(
+        "worker",
+        "fiber.command(\"nudge\", { timeout = 8000, run = function() host.drive(\"steer\", { content = {{ type = \"text\", text = \"use the other file\" }} }) end })\n",
+    );
+    let id = doors::mint("s_");
+    let mut running = setup.start_session(&id, &[]);
+    let client = running.connect(&setup.socket(&id));
+    running.wait_for("extensions_loaded");
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    send(
+        &client,
+        r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"run it"}]}}"#,
+    );
+    let asked = until(&client, "permission_requested", |line| {
+        line["kind"] == "permission_requested"
+    });
+    let request_id = asked.last().unwrap()["payload"]["request_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    // A command is allowed during a turn; its `host.drive` steers that turn.
+    send(
+        &client,
+        r#"{"id":"c_1","command":"command","args":{"name":"nudge"}}"#,
+    );
+    let queued = until(&client, "the steer queued", |line| {
+        line["kind"] == "steering_queue"
+            && line["payload"]["messages"]
+                .as_array()
+                .is_some_and(|messages| !messages.is_empty())
+    });
+    assert!(
+        queued.iter().any(|line| {
+            line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_1"
+        }),
+        "the extension command was admitted: {queued:?}"
+    );
+    // The steer is queued before the reply is sent, so it is applied at
+    // the step boundary after the allowed call.
+    send(
+        &client,
+        &format!(
+            r#"{{"id":"c_reply","command":"reply","args":{{"request_id":"{request_id}","decision":"allow"}}}}"#
+        ),
+    );
+    let applied = until(&client, "steering_applied", |line| {
+        line["kind"] == "steering_applied"
+    });
+    // The applied message carries `source: extension`, the extension's name
+    // and a `command_id`: a rejection would have raised instead of steering.
+    let line = applied.last().unwrap();
+    assert_eq!(line["payload"]["source"], "extension");
+    assert_eq!(line["payload"]["extension"], "fiber.test/worker");
+    assert!(
+        line["payload"]["command_id"]
+            .as_str()
+            .is_some_and(|id| id.starts_with("c_")),
+        "{line}"
+    );
+    assert_eq!(line["payload"]["content"][0]["text"], "use the other file");
+    let _done = until(&client, "turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let _tail = until_close(&client);
+    drop(client);
+    let (status, _out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+}
