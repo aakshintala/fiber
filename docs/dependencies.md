@@ -319,7 +319,6 @@ dependency.
 | Crate or tool | Kind | Used for |
 |---|---|---|
 | insta | dev-dependency | whole-screen and value snapshots (`docs/testing.md`) |
-| proptest | dev-dependency | property tests that shrink and replay a failing case by seed |
 | cargo-nextest | tool | running tests, one process each |
 | cargo-mutants | tool | the mutation check on every pull request |
 | cargo-deny | tool | licences, advisories and crate sources |
