@@ -20,6 +20,7 @@ use contract::{ActionId, GenerationId, ProviderCallId};
 use serde_json::{Map, Value, json};
 
 use crate::http::{self, Cancel};
+use crate::redact::Secrets;
 use crate::{Endpoint, Error, sse, strict};
 
 /// One model reached over `openai-responses`.
@@ -77,6 +78,7 @@ impl Responses {
             signer: endpoint.signer.clone(),
             direct: endpoint.direct,
             cancel: Arc::default(),
+            secrets: endpoint.secrets(),
         }
     }
 }
@@ -100,11 +102,13 @@ pub struct Call {
     signer: Option<Arc<dyn contract::signing::Signer>>,
     direct: bool,
     cancel: Arc<Cancel>,
+    secrets: Secrets,
 }
 
 impl Call {
     /// Sends the request and returns the reply's bytes, unread.
     pub fn open(&self) -> Result<impl Read + use<>, Error> {
+        let mut secrets = self.secrets.clone();
         http::post_signed(
             &self.url,
             &self.headers,
@@ -112,6 +116,7 @@ impl Call {
             self.signer.as_deref(),
             self.direct,
             &self.cancel,
+            &mut secrets,
         )
         .map(|(body, _)| body)
     }
@@ -119,6 +124,7 @@ impl Call {
 
 impl ModelCall for Call {
     fn run(&self, sink: &mut dyn FnMut(Delta)) -> Result<Reply, CallError> {
+        let mut secrets = self.secrets.clone();
         let (reply, should_retry) = match http::post_signed(
             &self.url,
             &self.headers,
@@ -126,6 +132,7 @@ impl ModelCall for Call {
             self.signer.as_deref(),
             self.direct,
             &self.cancel,
+            &mut secrets,
         ) {
             Ok((stream, should_retry)) => (decode(BufReader::new(stream), sink), should_retry),
             Err(e) => {
@@ -138,7 +145,7 @@ impl ModelCall for Call {
             return Err(CallError::Cancelled);
         }
         reply.map_err(|e| CallError::Failed {
-            failure: e.failure(&self.provider),
+            failure: e.failure(&self.provider, &secrets),
             should_retry,
         })
     }

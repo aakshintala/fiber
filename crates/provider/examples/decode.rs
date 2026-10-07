@@ -106,7 +106,7 @@ fn show(bytes: &[u8]) {
         }
         Err(e) => println!(
             "assistant_message_completed {}",
-            json!({"outcome": "failed", "error": e.failure("recording")})
+            json!({"outcome": "failed", "error": e.failure("recording", &provider::redact::Secrets::default())})
         ),
     }
 }

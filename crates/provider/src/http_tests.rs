@@ -109,6 +109,7 @@ fn a_signer_is_asked_on_every_send_and_its_headers_are_sent() {
             b"{\"a\":1}",
             Some(&signer),
             &std::sync::Arc::default(),
+            &mut crate::redact::Secrets::default(),
             None,
         );
         assert!(sent.is_ok());
@@ -132,6 +133,7 @@ fn a_request_that_cannot_be_signed_is_never_sent() {
         b"",
         Some(&Refuses),
         &std::sync::Arc::default(),
+        &mut crate::redact::Secrets::default(),
         None,
     );
     let Err(err) = sent.map(|_| ()) else {
@@ -163,6 +165,7 @@ fn unusable_signed_headers_are_never_sent() {
             b"",
             Some(signer),
             &std::sync::Arc::default(),
+            &mut crate::redact::Secrets::default(),
             None,
         );
         let Err(err) = sent.map(|_| ()) else {
@@ -216,6 +219,7 @@ fn retry_after_is_kept_only_when_finite_and_non_negative() {
             b"{}",
             None,
             &std::sync::Arc::default(),
+            &mut crate::redact::Secrets::default(),
             None,
         ) else {
             panic!("a 429 with retry-after: {header} was not a status failure");
@@ -241,7 +245,16 @@ fn cancelling_a_call_mid_stream_closes_the_socket_without_a_proxy() {
     thread::spawn(move || {
         // An explicit direct connection, so the test holds without a proxy
         // whatever the developer's shell names: `post` would read it.
-        let result = super::post_with(&url, &[], b"{}", None, &worker, None).map(|_| ());
+        let result = super::post_with(
+            &url,
+            &[],
+            b"{}",
+            None,
+            &worker,
+            &mut crate::redact::Secrets::default(),
+            None,
+        )
+        .map(|_| ());
         match done.send(result) {
             Ok(()) | Err(_) => {}
         }
@@ -294,6 +307,7 @@ fn a_call_with_a_proxy_value_tunnels_through_the_proxy() {
         b"{}",
         None,
         &std::sync::Arc::default(),
+        &mut crate::redact::Secrets::default(),
         Some(proxy_through(&proxy)),
     )
     .unwrap();
@@ -325,6 +339,7 @@ fn a_call_past_no_proxy_bypasses_the_proxy() {
         b"{}",
         None,
         &std::sync::Arc::default(),
+        &mut crate::redact::Secrets::default(),
         Some(bypass),
     )
     .unwrap();
@@ -364,6 +379,7 @@ fn tls_runs_end_to_end_inside_the_tunnel() {
             b"{}",
             None,
             &std::sync::Arc::default(),
+            &mut crate::redact::Secrets::default(),
             Some(through),
         )
         .map(|_| ());
@@ -404,7 +420,16 @@ fn cancelling_a_call_mid_stream_through_the_proxy_closes_the_tunnel() {
     let worker = std::sync::Arc::clone(&cancel);
     let through = proxy_through(&proxy);
     thread::spawn(move || {
-        let result = super::post_with(&url, &[], b"{}", None, &worker, Some(through)).map(|_| ());
+        let result = super::post_with(
+            &url,
+            &[],
+            b"{}",
+            None,
+            &worker,
+            &mut crate::redact::Secrets::default(),
+            Some(through),
+        )
+        .map(|_| ());
         match done.send(result) {
             Ok(()) | Err(_) => {}
         }
@@ -443,6 +468,7 @@ fn a_call_cancelled_before_it_starts_never_connects_to_the_proxy() {
         b"{}",
         None,
         &cancel,
+        &mut crate::redact::Secrets::default(),
         Some(proxy_through(&proxy)),
     )
     .map(|_| ());
@@ -493,6 +519,7 @@ fn a_proxy_that_refuses_connect_fails_the_call() {
         b"{}",
         None,
         &std::sync::Arc::default(),
+        &mut crate::redact::Secrets::default(),
         Some(denied),
     )
     .map(|_| ());
@@ -524,6 +551,7 @@ fn proxy_child_main() {
         None,
         direct,
         &std::sync::Arc::default(),
+        &mut crate::redact::Secrets::default(),
     )
     .unwrap();
     let mut text = String::new();
@@ -593,4 +621,55 @@ fn a_direct_call_ignores_the_proxy_environment() {
         "nothing went through the proxy"
     );
     assert_eq!(server.requests().len(), 1);
+}
+
+/// Signs with an `authorization` scheme and a second header.
+struct TwoHeaders;
+
+impl contract::signing::Signer for TwoHeaders {
+    fn sign(
+        &self,
+        _: &contract::signing::SignRequest<'_>,
+    ) -> Result<Vec<(String, String)>, contract::signing::Error> {
+        Ok(vec![
+            ("authorization".to_owned(), "Bearer tok-1".to_owned()),
+            ("x-sig".to_owned(), "s-1".to_owned()),
+        ])
+    }
+}
+
+#[test]
+fn signed_header_values_join_the_secrets() {
+    let server = fakes::ProviderServer::start([fakes::Response::status(200, "{}")]).unwrap();
+    let mut secrets = crate::redact::Secrets::default();
+    let sent = super::post_with(
+        &format!("{}/v1", server.url()),
+        &[],
+        b"{}",
+        Some(&TwoHeaders),
+        &std::sync::Arc::default(),
+        &mut secrets,
+        None,
+    );
+    assert!(sent.is_ok());
+    assert_eq!(secrets.redact("Bearer tok-1"), "[redacted]");
+    assert_eq!(secrets.redact("tok-1"), "[redacted]");
+    assert_eq!(secrets.redact("s-1"), "[redacted]");
+}
+
+#[test]
+fn a_signer_that_fails_adds_nothing() {
+    let server = fakes::ProviderServer::start([fakes::Response::status(200, "{}")]).unwrap();
+    let mut secrets = crate::redact::Secrets::default();
+    let sent = super::post_with(
+        &format!("{}/v1", server.url()),
+        &[],
+        b"{}",
+        Some(&Refuses),
+        &std::sync::Arc::default(),
+        &mut secrets,
+        None,
+    );
+    assert!(sent.is_err());
+    assert_eq!(secrets.redact("Bearer tok-1"), "Bearer tok-1");
 }

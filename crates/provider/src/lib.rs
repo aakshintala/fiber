@@ -30,6 +30,8 @@ use contract::Secret;
 use contract::signing::Signer;
 use serde_json::{Map, Value};
 
+use crate::redact::Secrets;
+
 /// One model of one provider, as its provider data declares it
 /// (`docs/model-routing.md`, "What a provider extension declares").
 #[derive(Clone, Default)]
@@ -80,6 +82,17 @@ impl Endpoint {
     /// model's when both are set (`docs/errors.md`, "Output tokens").
     pub fn output_limit(&self, request: Option<u64>) -> Option<u64> {
         request.into_iter().chain(self.max_output_tokens).min()
+    }
+
+    /// The secrets to redact from a logged failure: the raw key's value,
+    /// cloned; empty when the endpoint holds no key. Header values the
+    /// signer supplies join per attempt in `http`.
+    pub fn secrets(&self) -> Secrets {
+        let mut secrets = Secrets::default();
+        if let Some(key) = &self.key {
+            secrets.add(key.clone());
+        }
+        secrets
     }
 }
 
