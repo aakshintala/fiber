@@ -734,3 +734,44 @@ fn a_signal_reports_only_this_process_usage() {
 
     assert_eq!(exited["usage"]["tokens"]["output"], 5);
 }
+
+impl Session {
+    /// Appends `line` to the log as raw text, past the writer.
+    fn raw(&self, line: &str) {
+        use std::io::Write as _;
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(self.dir.join("events.jsonl"))
+            .unwrap();
+        writeln!(file, "{line}").unwrap();
+    }
+}
+
+#[test]
+fn an_unreadable_payload_fails_the_exit_log_corrupt() {
+    // The fold reads one line at a time; the line that does not read as its
+    // kind ends it, and the exit reports it.
+    let session = Session::new();
+    session.append(&turn_started(), None);
+    session.raw(&format!(
+        r#"{{"kind":"turn_completed","session_id":"s_1","ts":1,"schema_version":{},"turn_id":"t_1","seq":1,"payload":{{"outcome":7}}}}"#,
+        contract::SCHEMA_VERSION
+    ));
+
+    let (code, payload) = session.exit(Ok(()));
+
+    assert_eq!(code, 1);
+    assert_eq!(payload["error"]["code"], "log_corrupt");
+}
+
+#[test]
+fn a_line_that_is_not_an_envelope_fails_the_exit_log_corrupt() {
+    let session = Session::new();
+    session.append(&turn_started(), None);
+    session.raw("not an envelope");
+
+    let exited = fiber_exited(&session.log, &session.dir, Ok(()), true, None).unwrap();
+
+    assert_eq!(exited.code, 1);
+    assert_eq!(exited.error.map(|error| error.code), Some(ErrorCode::LogCorrupt));
+}
