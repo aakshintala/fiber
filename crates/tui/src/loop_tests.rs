@@ -573,3 +573,36 @@ fn paging_up_ends_at_the_top() {
         .unwrap_or_else(|error| panic!("waited {DEADLINE:?} for the paging jig: {error}"));
     assert!(report.is_ok(), "{report:?}");
 }
+
+#[test]
+fn the_paging_report_names_the_furthest_jump_row() {
+    let report = super::measure_paging(&events(&session()), 60, 12, fakes::clock::FakeClock::new())
+        .unwrap_or_else(|error| panic!("{error}"));
+    let total: usize = report
+        .lines()
+        .find_map(|line| line.strip_prefix("rows: "))
+        .and_then(|rows| rows.parse().ok())
+        .unwrap_or_else(|| panic!("no rows in {report}"));
+    // "slowest jump frame: 0.00 ms, of 20 to row 297": the jumps spread
+    // across the session, so the furthest is total * (jumps - 1) / jumps.
+    // `%` or `*` for `/` lands within a screen or past the session.
+    let jump = report
+        .lines()
+        .find(|line| line.starts_with("slowest jump frame: "))
+        .unwrap_or_else(|| panic!("no jump line in {report}"));
+    let after = jump
+        .split_once(", of ")
+        .map(|(_, rest)| rest)
+        .unwrap_or_else(|| panic!("no jump count in {report}"));
+    let (count, row) = after
+        .split_once(" to row ")
+        .unwrap_or_else(|| panic!("no jump row in {report}"));
+    let (count, row): (usize, usize) = (
+        count
+            .parse()
+            .unwrap_or_else(|error| panic!("{error} in {report}")),
+        row.parse()
+            .unwrap_or_else(|error| panic!("{error} in {report}")),
+    );
+    assert_eq!(row, total.saturating_mul(count - 1) / count, "{report}");
+}

@@ -329,8 +329,12 @@ pub fn measure_paging(
     }
     let total = paging.app.scroll().1;
     let mut slowest_jump = Duration::ZERO;
+    // The furthest row jumped to: the jump targets reach the report, so
+    // the spread across the session is pinned, not just its timing.
+    let mut jumped = 0usize;
     for at in 0..JUMPS {
-        paging.app.jump(total.saturating_mul(at) / JUMPS);
+        jumped = total.saturating_mul(at) / JUMPS;
+        paging.app.jump(jumped);
         slowest_jump = slowest_jump.max(paging.frame()?.0);
     }
     let mut slowest_width = Duration::ZERO;
@@ -353,7 +357,7 @@ pub fn measure_paging(
         "lines: {}\nturns: {turns}\ncalls: {calls}\npages: {pages_before}\nrows: {total}\n\
          open pass and first frame: {:.2} ms\n\
          slowest frame that loaded pages: {:.2} ms, of {loads} paging up\n\
-         slowest jump frame: {:.2} ms, of {JUMPS}\n\
+         slowest jump frame: {:.2} ms, of {JUMPS} to row {jumped}\n\
          slowest re-count at a new width: {:.2} ms\n\
          slowest append frame: {:.2} ms, of {appended}; pages while appending: {} to {}, \
          most resident {}\n",
