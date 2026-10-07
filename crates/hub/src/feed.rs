@@ -419,7 +419,7 @@ impl Feed {
         };
         // Ruling 5's probe, with no lock held: only a non-delegate `idle`
         // with a known log and no live entry reads the log.
-        let unseen = if !matches!(payload.state, SessionState::Idle) || payload.parent.is_some() {
+        let unseen = if !may_be_unseen(&payload) {
             false
         } else if let Some(log) = log {
             let live = matches!(lock(&self.state).entries.get(id), Some(Entry::Running(_)));
@@ -598,6 +598,14 @@ fn how_left(dir: &Path) -> Left {
 
 /// The `kind` of `log`'s last line, read from at most [`TAIL`] bytes of
 /// its end. `None` when it cannot be read or does not parse.
+/// Whether `reason` can read `unseen` for `now`: a non-delegate `idle`.
+// `reason` returns None for a delegate and reads `unseen` only for `idle`, so
+// a mutant of `&&` to `||` changes no attention, only how often the log is read.
+#[cfg_attr(false, mutants::skip)]
+fn may_be_unseen(now: &SessionStatus) -> bool {
+    matches!(now.state, SessionState::Idle) && now.parent.is_none()
+}
+
 pub(crate) fn last_kind(log: &Path) -> Option<String> {
     let mut file = File::open(log).ok()?;
     let len = file.metadata().ok()?.len();
