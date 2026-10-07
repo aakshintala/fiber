@@ -1,5 +1,5 @@
 //! The commands that run no session: `fiber config`, `fiber login`,
-//! `fiber logout`, `fiber approve`, `fiber sessions export`,
+//! `fiber logout`, `fiber approve`, `fiber sessions`, `fiber sessions export`,
 //! `fiber sessions delete`, `fiber sessions prune`, `fiber models`,
 //! `fiber extension install`, `fiber extension update`,
 //! `fiber extension remove` and `fiber extension list`
@@ -21,6 +21,8 @@ mod login;
 mod models;
 mod prune;
 mod sessions;
+mod sessions_list;
+mod table;
 
 pub use approve::approve;
 pub use config::{config_get, config_set};
@@ -29,6 +31,7 @@ pub use login::{LogoutTarget, run_login, run_logout};
 pub use models::{models, refresh_model_lists};
 pub use prune::{PruneArgs, prune};
 pub use sessions::{delete, export};
+pub use sessions_list::list as sessions_list;
 
 /// What `fiber logout` says when it is given no provider.
 pub const LOGOUT_SHAPE: &str =

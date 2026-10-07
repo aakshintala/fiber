@@ -19,6 +19,7 @@ use contract::shapes::Failure;
 use extensions::{Providers, SessionExtensions};
 use serde::Serialize;
 
+use crate::table::pad;
 use crate::{fail, failed, project_of};
 
 /// Starts the detached refresh of stale model lists: the running binary
@@ -101,15 +102,15 @@ fn missing() -> String {
 /// with its two-character mark, the columns are left-aligned and padded to
 /// their widest cell, and trailing spaces are trimmed.
 fn text_lines(rows: &[Row]) -> Vec<String> {
-    let mut table: Vec<[String; 4]> = Vec::with_capacity(rows.len() + 1);
-    table.push([
+    let mut table: Vec<Vec<String>> = Vec::with_capacity(rows.len() + 1);
+    table.push(vec![
         "model".to_owned(),
         "context".to_owned(),
         "in $/M".to_owned(),
         "out $/M".to_owned(),
     ]);
     for row in rows {
-        table.push([
+        table.push(vec![
             row.reference.clone(),
             row.context
                 .map(|tokens| tokens.to_string())
@@ -122,37 +123,18 @@ fn text_lines(rows: &[Row]) -> Vec<String> {
                 .unwrap_or_else(missing),
         ]);
     }
-    let mut widths = [0_usize; 4];
-    for cells in &table {
-        for (index, cell) in cells.iter().enumerate() {
-            if let Some(width) = widths.get_mut(index) {
-                *width = (*width).max(cell.chars().count());
-            }
-        }
-    }
-    let mut lines = Vec::with_capacity(table.len());
-    for (index, cells) in table.iter().enumerate() {
-        let mark = if index == 0 {
-            "  "
-        } else if rows.get(index - 1).is_some_and(|row| row.default) {
-            "* "
-        } else {
-            "  "
-        };
-        let mut line = String::from(mark);
-        for (index, cell) in cells.iter().enumerate() {
-            if index > 0 {
-                line.push_str("  ");
-            }
-            let width = widths.get(index).copied().unwrap_or(0);
-            line.push_str(&format!("{cell:<width$}"));
-        }
-        while line.ends_with(' ') {
-            line.pop();
-        }
-        lines.push(line);
-    }
-    lines
+    pad(&table)
+        .into_iter()
+        .enumerate()
+        .map(|(index, line)| {
+            let mark = if index > 0 && rows.get(index - 1).is_some_and(|row| row.default) {
+                "* "
+            } else {
+                "  "
+            };
+            format!("{mark}{line}")
+        })
+        .collect()
 }
 
 /// Lists the installed providers' models in `home`, marking the configured

@@ -313,3 +313,12 @@ pub fn project(launch: &Path) -> PathBuf {
     };
     identity.canonicalize().unwrap_or(identity)
 }
+
+/// Whether the project `identity`, from [`project`] on `launch`, is a git
+/// repository's: it differs from `launch` itself, symlinks resolved.
+pub fn in_repository(launch: &Path, identity: &Path) -> bool {
+    let launch = launch
+        .canonicalize()
+        .unwrap_or_else(|_| launch.to_path_buf());
+    identity != launch
+}
