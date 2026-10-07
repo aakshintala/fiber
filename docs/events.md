@@ -219,8 +219,9 @@ lines. They are output, never a source.
 ### `questions`
 
 An array of `ask_user` questions as the model called them: `header`,
-`question`, `options` (each a `label` and an optional `description`) and an
-optional `multiSelect` (`docs/tools.md`, "The call").
+`question`, optional `options` (absent on a free-text question; each a `label`
+and an optional `description`) and an optional `multiSelect` (`docs/tools.md`,
+"The call").
 
 ### Where a message came from
 
@@ -251,8 +252,10 @@ Exactly one of `outer_action_id` and `command_id` is present.
 ## Kinds
 
 Fiber's loop emits the kinds below. MCP elicitation and `ask_user` add no kind
-of their own: both raise interactions ("Interactions") that every driver
-answers with `reply`.
+of their own. MCP elicitation, and `ask_user` in a session a person drives,
+raise interactions ("Interactions") that every driver answers with `reply`. In
+a session a program drives, `ask_user` ends the turn with `questions` on
+`turn_completed`.
 
 Each kind's table lists the keys of its `payload`. The envelope's fields,
 `turn_id` and `action_id` included, are never repeated in it.
@@ -724,8 +727,8 @@ for its kind, and no others.
 
 These carry every interaction except approval, which keeps
 `permission_requested` and `permission_resolved` because `docs/permissions.md`
-fixes their payloads. `ask_user` raises one `form` per call
-(`docs/tools.md`, "Asking the person"). MCP elicitation raises one interaction
+fixes their payloads. In a session a person drives, `ask_user` raises one
+`form` per call (`docs/tools.md`, "Asking the person"). MCP elicitation raises one interaction
 per field (`docs/mcp.md`, "Elicitation, sampling and roots"). They are durable
 for the reasons approvals are, and a reply naming a request that is no longer
 pending is rejected in the same way. An offer of a repository's code has its

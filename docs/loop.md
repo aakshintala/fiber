@@ -118,7 +118,8 @@ to stop at the same place.
 
 A turn ends in one of three ways:
 
-- Completed. The model replied without calling a tool.
+- Completed. The model replied without calling a tool, or a call returned
+  `control.questions` (`docs/tools.md`, "What a result carries").
 - Failed, for a cause `docs/errors.md`, "What ends a turn", lists.
 - Interrupted ("Interrupt").
 

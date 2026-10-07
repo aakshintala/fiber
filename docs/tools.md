@@ -48,7 +48,9 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
   that cannot take them in a tool result, is the provider module's job, not the
   tool's. It never rewrites a schema to fit strict mode. A tool is sent with `strict:
   true` only when its schema fits the vendor's strict subset, as every
-  built-in tool's does (`docs/model-routing.md`, "Protocols and providers").
+  built-in tool's does except a tool whose section says it is sent with
+  `strict: false` (`ask_user`, `name_session`) (`docs/model-routing.md`,
+  "Protocols and providers").
 
 ## Before a call runs
 
