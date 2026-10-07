@@ -34,7 +34,8 @@ const OUTCOME_UNKNOWN: &str = "Its outcome is unknown: it may have run.";
 /// The conversation `lines` render, for a session whose model reference is
 /// `model`. Lines of kinds this build does not know are skipped.
 pub fn rebuild(lines: &[Envelope], model: &str) -> Result<Vec<Input>, Error> {
-    let (mut conversation, _, mut held, _) = rebuild_and_sent(lines, model, &HashSet::new())?;
+    let (mut conversation, _, mut held, _) =
+        rebuild_and_sent(lines, model, &HashSet::new(), Carry::default())?;
     conversation.append(&mut held);
     Ok(conversation)
 }
@@ -64,14 +65,20 @@ pub(crate) type Rebuilt = (Vec<Input>, Option<usize>, Vec<Input>, Carry);
 /// length is read after the line renders, so the fixed results its flush
 /// just added count. The third part is the job notices still waiting
 /// behind calls whose results the log does not hold yet: the `open` batch
-/// a resume finishes, which releases them after its results.
+/// a resume finishes, which releases them after its results. `seed` is the
+/// render state before the first line: the default for a whole log, and
+/// the jobs running and the session log's path at a resume window's start.
 pub(crate) fn rebuild_and_sent(
     lines: &[Envelope],
     model: &str,
     open: &HashSet<ActionId>,
+    seed: Carry,
 ) -> Result<Rebuilt, Error> {
     let completed = completed_actions(lines)?;
-    let mut rendered = Rendered::default();
+    let mut rendered = Rendered {
+        carry: seed,
+        ..Rendered::default()
+    };
     let mut sent = None;
     for line in lines.iter().filter(|l| l.is_durable()) {
         if let Some(event) = Event::from_envelope(line).map_err(Error::Unreadable)? {

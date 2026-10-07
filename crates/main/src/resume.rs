@@ -47,7 +47,7 @@ pub(crate) fn ask_resume(
     // session it attaches to, as the TUI does.
     crate::crash::attach(&id);
     let dir = sessions.join(&id.0);
-    // `Log::open` takes the lock first; the lines below are read under it.
+    // `Log::open` takes the lock first; the log is folded under it.
     // A held lock means a live session: attach to it instead of opening a
     // second writer (`docs/invocation.md`, "Processes"). Its failure
     // already names the holder, which attach takes as its refusal.
@@ -61,11 +61,7 @@ pub(crate) fn ask_resume(
         }
         Err(e) => return ask_failed(failed(e.code(), e)),
     };
-    let lines = match log::read(&dir) {
-        Ok(lines) => lines,
-        Err(e) => return ask_failed(failed(e.code(), e)),
-    };
-    let folded = match r#loop::resumed(&lines) {
+    let folded = match r#loop::resumed(&dir) {
         Ok(folded) => folded,
         Err(e) => return ask_failed(failed(e.code(), e)),
     };
@@ -131,7 +127,7 @@ pub(crate) fn ask_resume(
         Err(e) => return ask_failed(e),
     };
     let forget = Arc::clone(&session_servers.forget);
-    let permissions = crate::ask_permissions(&home, &project, folded.workspace, &clock);
+    let permissions = crate::ask_permissions(&home, &project, folded.workspace.clone(), &clock);
     let session = match Session::resume(&home, &dir, &log, clock, infos, Box::new(io::stdout())) {
         Ok(session) => session,
         Err(e) => {
@@ -168,7 +164,7 @@ pub(crate) fn ask_resume(
             crate::finish(
                 Loop::resume(
                     Arc::clone(&log),
-                    &lines,
+                    folded,
                     provider,
                     model,
                     prompt_inputs,

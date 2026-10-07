@@ -17,7 +17,7 @@ use contract::inbox::{JobNotice, Message};
 use contract::jobs::Jobs;
 use contract::provider::Input;
 use contract::shapes::{ContentPart, Failure, Origin, Sender};
-use contract::{CommandId, Envelope, ErrorCode, JobId, TurnId};
+use contract::{CommandId, ErrorCode, JobId, TurnId};
 
 use crate::prompt::{body, fill};
 use crate::{Error, Loop};
@@ -279,16 +279,16 @@ impl Loop {
         Ok(steered)
     }
 
-    /// Writes one `job_completed` per job `lines` started and never ended,
-    /// in start order, unless a `rewound` handed the job on: the process
-    /// that ran it died with the one that wrote the log. Nothing touches a
+    /// Writes `orphans`, one `job_completed` per job the log started and
+    /// never ended, in start order ([`Orphans`]): the process that ran it
+    /// died with the one that wrote the log. Nothing touches a
     /// process (`docs/events.md`, "Resume"). A suspended turn's batch is
     /// still open, and a message there would separate its calls from their
     /// results, so those notices join the conversation once
     /// [`Loop::finish_suspended`] has written the batch's results, where
     /// `rebuild` renders them too.
-    pub(crate) fn mark_orphans(&mut self, lines: &[Envelope]) -> Result<(), Error> {
-        for completed in orphans(lines)? {
+    pub(crate) fn mark_orphans(&mut self, orphans: Vec<JobCompleted>) -> Result<(), Error> {
+        for completed in orphans {
             if self.suspended.is_some() {
                 let event = Event::JobCompleted(completed.clone());
                 self.log.append(&event, None, None)?;
@@ -327,37 +327,50 @@ fn name_job(input: &mut Vec<InputItem>, id: &JobId) {
     }
 }
 
-/// The jobs `lines` started with no `job_completed` and no `rewound` naming
-/// them, in start order, each as its `orphaned` completion.
-fn orphans(lines: &[Envelope]) -> Result<Vec<JobCompleted>, Error> {
-    let mut started: Vec<JobId> = Vec::new();
-    let mut settled: HashSet<JobId> = HashSet::new();
-    for line in lines.iter().filter(|line| line.is_durable()) {
-        let event = Event::from_envelope(line).map_err(Error::Unreadable)?;
-        if let Some(Event::JobStarted(job)) = event {
-            started.push(job.job_id);
-        } else if let Some(Event::JobCompleted(job)) = event {
-            settled.insert(job.job_id);
-        } else if let Some(Event::Rewound(rewound)) = event {
-            settled.extend(rewound.jobs);
+/// The jobs a log started with no `job_completed` and no `rewound` naming
+/// them, folded one line at a time.
+#[derive(Default)]
+pub(crate) struct Orphans {
+    started: Vec<JobId>,
+    settled: HashSet<JobId>,
+}
+
+impl Orphans {
+    /// Folds one durable line's event.
+    pub(crate) fn fold(&mut self, event: &Event) {
+        if let Event::JobStarted(job) = event {
+            self.started.push(job.job_id.clone());
+        } else if let Event::JobCompleted(job) = event {
+            self.settled.insert(job.job_id.clone());
+        } else if let Event::Rewound(rewound) = event {
+            self.settled.extend(rewound.jobs.iter().cloned());
         }
     }
-    Ok(started
-        .into_iter()
-        .filter(|id| settled.insert(id.clone()))
-        .map(|job_id| JobCompleted {
-            job_id,
-            status: Outcome::Failed,
-            error: Some(Failure {
-                code: ErrorCode::Orphaned,
-                message: ORPHANED.to_owned(),
-                retry_after: None,
-                provider: None,
-            }),
-            process: None,
-            output_tail: None,
-        })
-        .collect())
+
+    /// The jobs started and never settled, in start order, each once, as
+    /// its `orphaned` completion.
+    pub(crate) fn finish(self) -> Vec<JobCompleted> {
+        let Self {
+            started,
+            mut settled,
+        } = self;
+        started
+            .into_iter()
+            .filter(|id| settled.insert(id.clone()))
+            .map(|job_id| JobCompleted {
+                job_id,
+                status: Outcome::Failed,
+                error: Some(Failure {
+                    code: ErrorCode::Orphaned,
+                    message: ORPHANED.to_owned(),
+                    retry_after: None,
+                    provider: None,
+                }),
+                process: None,
+                output_tail: None,
+            })
+            .collect()
+    }
 }
 
 /// What a notice about running jobs tells the model, naming `job_ids`: the

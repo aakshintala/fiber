@@ -1286,6 +1286,105 @@ fn a_suspended_approval_is_refused_then_the_prompt_runs_next() {
     assert_eq!(&log[before..], &run.durable());
 }
 
+#[test]
+fn a_turn_suspended_after_a_completed_handoff_re_raises_its_approval() {
+    // `main`'s order: open, the pass, `fiber_started` and the extension
+    // lines, then the resume, whose window ends where the pass ended.
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello(), hello()]).unwrap();
+    setup.provider(&server);
+    let opening = |os: &str| {
+        Event::OpeningMessage(contract::events::OpeningMessage {
+            environment: contract::events::Environment {
+                date: "2023-11-14".into(),
+                os: os.into(),
+                arch: "test-arch".into(),
+                shell: "/bin/sh".into(),
+                workspace: "/w".into(),
+                git: None,
+                session_log: "/log/events.jsonl".into(),
+            },
+            instruction_files: Vec::new(),
+            extension_sections: Vec::new(),
+            skills: Vec::new(),
+        })
+    };
+    let text = |text: &str| {
+        Event::TextCompleted(contract::events::TextCompleted {
+            text: text.into(),
+            provider_item: None,
+        })
+    };
+    hand_built(
+        &setup,
+        "s_hand1",
+        vec![
+            (opening("old-os"), Some(t()), None),
+            (turn_started("early words"), Some(t()), None),
+            (msg_started(), Some(t()), Some(a("a_0"))),
+            (text("early answer"), Some(t()), Some(a("a_0"))),
+            (turn_started("two"), Some(t()), None),
+            (
+                Event::HandoffStarted(contract::events::HandoffStarted {
+                    trigger: contract::events::HandoffTrigger::Auto,
+                }),
+                Some(t()),
+                None,
+            ),
+            (msg_started(), Some(t()), Some(a("a_note"))),
+            (text("the handoff note"), Some(t()), Some(a("a_note"))),
+            (
+                Event::HandoffCompleted(contract::events::HandoffCompleted {
+                    outcome: contract::events::Outcome::Completed,
+                    error: None,
+                    note: Some(contract::events::Note::Actions {
+                        note: vec![a("a_note")],
+                    }),
+                    tokens_before: 1000,
+                    instructions: None,
+                }),
+                Some(t()),
+                None,
+            ),
+            (opening("new-os"), Some(t()), None),
+            (turn_started("three"), Some(t()), None),
+            (msg_started(), Some(t()), Some(a("a_5"))),
+            (requested("search"), Some(t()), Some(a("a_1"))),
+            (ask_request("r_9"), Some(t()), Some(a("a_1"))),
+            (fiber_start(), None, None),
+            (fiber_exit(Some("r_9")), None, None),
+        ],
+    );
+
+    let run = setup.fiber(&["ask", "--resume", "s_hand1", "next"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let kinds = run.kinds();
+    // The context's opening message is in the window: none is written.
+    assert!(!kinds.contains(&"opening_message"), "{kinds:?}");
+    let raised = run
+        .lines
+        .iter()
+        .find(|l| l["kind"] == "permission_requested")
+        .unwrap();
+    assert_eq!(raised["payload"]["request_id"], "r_9");
+    assert_eq!(raised["action_id"], "a_1");
+    let resolved = run
+        .lines
+        .iter()
+        .find(|l| l["kind"] == "permission_resolved")
+        .unwrap();
+    assert_eq!(resolved["payload"]["request_id"], "r_9");
+
+    // The finishing turn's request is the context after the handoff.
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2);
+    let body = String::from_utf8_lossy(&requests[0].body);
+    assert!(body.contains("the handoff note"), "{body}");
+    assert!(body.contains("three"), "{body}");
+    assert!(!body.contains("early words"), "{body}");
+    assert!(!body.contains("early answer"), "{body}");
+}
+
 /// Appends `line` to the session log in `dir` as raw JSON, past the writer:
 /// an envelope that reads with a payload that need not read as its kind.
 fn append_raw(dir: &Path, line: &contract::Envelope) {

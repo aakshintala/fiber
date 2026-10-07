@@ -5,12 +5,12 @@
 
 use std::path::Path;
 
+use contract::RequestId;
 use contract::events::{
     Event, ExtensionsLoaded, FiberExited, FiberStarted, FinalMessage, LoadedExtension,
     McpServerFailed, MessageOutcome, Notice, TurnOutcome,
 };
 use contract::shapes::{Failure, Question};
-use contract::{Envelope, RequestId};
 use log::Log;
 
 use crate::Error;
@@ -89,9 +89,9 @@ pub fn fiber_exited(
     one_turn: bool,
     signal: Option<i32>,
 ) -> Result<Exited, Error> {
-    let folded = log::read(dir)
+    let folded = log::lines(dir)
         .map_err(Error::from)
-        .and_then(|lines| fold(&lines, signal.is_some()).map_err(Error::Unreadable));
+        .and_then(|lines| fold(lines, signal.is_some()));
     let (fold, unread) = match folded {
         Ok(fold) => (fold, None),
         Err(e) => (Fold::default(), Some(e)),
@@ -134,9 +134,13 @@ struct Fold {
     suspended_on: Option<RequestId>,
 }
 
-/// Folds `lines`. With `keep_open`, the requests raised before the latest
-/// `fiber_started` and still unresolved stay open across it.
-fn fold(lines: &[Envelope], keep_open: bool) -> Result<Fold, serde_json::Error> {
+/// Folds `lines`, one at a time. With `keep_open`, the requests raised
+/// before the latest `fiber_started` and still unresolved stay open across
+/// it. A line whose payload does not read contributes nothing; the first
+/// such line after the latest `fiber_started` fails the fold with its
+/// error, and one before it belongs to an earlier process and does not. A
+/// line that is not an envelope ends the fold with its error.
+fn fold(lines: log::Lines, keep_open: bool) -> Result<Fold, Error> {
     let mut fold = Fold::default();
     // Text parts of the open assistant message, joined in log order.
     // Every message takes them: messages never interleave, and a failed
@@ -145,14 +149,24 @@ fn fold(lines: &[Envelope], keep_open: bool) -> Result<Fold, serde_json::Error> 
     // Requests this process raised and has not resolved, oldest first.
     // `suspended_on` is the latest (`docs/events.md`, `fiber_exited`).
     let mut open = Vec::new();
+    // The first payload since the latest `fiber_started` that did not read.
+    let mut unread = None;
     for line in lines {
-        let event = Event::from_envelope(line)?;
+        let line = line?;
+        let event = match Event::from_envelope(&line) {
+            Ok(event) => event,
+            Err(e) => {
+                unread.get_or_insert(Error::Unreadable(e));
+                continue;
+            }
+        };
         // Each process reports its own lines only: the fold restarts at
         // the latest `fiber_started` (`docs/events.md`, `fiber_exited`:
         // `usage` is "this process's model calls for the session").
         if matches!(&event, Some(Event::FiberStarted(_))) {
             fold = Fold::default();
             text.clear();
+            unread = None;
             if !keep_open {
                 open.clear();
             }
@@ -194,6 +208,9 @@ fn fold(lines: &[Envelope], keep_open: bool) -> Result<Fold, serde_json::Error> 
         } else if let Some(Event::UsageRecorded(call)) = &event {
             fold.ledger.record(call);
         }
+    }
+    if let Some(e) = unread {
+        return Err(e);
     }
     fold.suspended_on = open.last().cloned();
     Ok(fold)
