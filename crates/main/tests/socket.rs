@@ -510,10 +510,35 @@ fn session_status_carries_the_project_and_counts_full_connections() {
         &summary,
         r#"{"id":"c_sum","command":"subscribe","args":{"level":"summary"}}"#,
     );
-    let held = until(&summary, "a streaming session_status", |line| {
-        line["kind"] == "session_status" && line["payload"]["state"] == "streaming"
-    });
-    let streaming = held.last().unwrap();
+    // A summary subscriber is sent the latest `session_status` and then the
+    // latest `extensions_loaded` on subscribe (`docs/events.md`,
+    // `extensions_loaded`); live lines follow. The replayed status may be
+    // older than streaming, so the sync waits for both the replay and a
+    // streaming status: anything left over would spill into the windows
+    // below.
+    let mut replayed = false;
+    let mut streaming_seen = false;
+    let held = until(
+        &summary,
+        "the extensions replay and a streaming session_status",
+        |line| {
+            replayed |= line["kind"] == "extensions_loaded";
+            streaming_seen |=
+                line["kind"] == "session_status" && line["payload"]["state"] == "streaming";
+            replayed && streaming_seen
+        },
+    );
+    // The replay carries exactly one `extensions_loaded`, seq 2.
+    let replay: Vec<&Value> = held
+        .iter()
+        .filter(|line| line["kind"] == "extensions_loaded")
+        .collect();
+    assert_eq!(replay.len(), 1, "one replayed extensions_loaded: {held:?}");
+    assert_eq!(replay[0]["seq"], 2);
+    let streaming = held
+        .iter()
+        .rfind(|line| line["kind"] == "session_status" && line["payload"]["state"] == "streaming")
+        .unwrap();
     let projects: Vec<_> = fs::read_dir(setup.home().join("projects"))
         .unwrap()
         .collect::<Result<_, _>>()
@@ -575,8 +600,15 @@ fn session_status_carries_the_project_and_counts_full_connections() {
     let one = until(&summary, "a session_status with one client", |line| {
         line["kind"] == "session_status" && line["payload"]["clients"] == 1
     });
-    assert!(
-        one.iter().all(|line| line["kind"] == "session_status"),
+    // Nothing else reaches a summary client between the sync and the
+    // count: the complete, ordered kinds.
+    let one_kinds: Vec<&str> = one
+        .iter()
+        .map(|line| line["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        one_kinds,
+        ["session_status"],
         "only statuses on the summary client: {one:?}"
     );
     let latest = one.last().unwrap();
@@ -587,8 +619,14 @@ fn session_status_carries_the_project_and_counts_full_connections() {
     let none = until(&summary, "a session_status with no clients", |line| {
         line["kind"] == "session_status" && line["payload"]["clients"] == 0
     });
-    assert!(
-        none.iter().all(|line| line["kind"] == "session_status"),
+    // Nothing else reaches a summary client on detach either.
+    let none_kinds: Vec<&str> = none
+        .iter()
+        .map(|line| line["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        none_kinds,
+        ["session_status"],
         "only statuses on the summary client: {none:?}"
     );
     assert_eq!(none.last().unwrap()["payload"]["since"], since);
