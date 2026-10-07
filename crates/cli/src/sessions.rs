@@ -106,11 +106,11 @@ pub fn delete(
 
 /// How `delete` confirms: `yes` skips the question; otherwise it is asked
 /// on `err` and read from `input`, which only a `terminal` may answer.
-struct Ask<'a> {
-    yes: bool,
-    terminal: bool,
-    input: &'a mut dyn BufRead,
-    err: &'a mut dyn Write,
+pub(crate) struct Ask<'a> {
+    pub(crate) yes: bool,
+    pub(crate) terminal: bool,
+    pub(crate) input: &'a mut dyn BufRead,
+    pub(crate) err: &'a mut dyn Write,
 }
 
 /// Resolves `selector` in the current directory's project, lists what the
@@ -154,15 +154,17 @@ fn delete_run(
     }
     let (stream, _) =
         connect().map_err(|e| failed(ErrorCode::IoFailed, format!("the hub: {e}")))?;
-    send_delete(stream, &id, cascade)?;
+    let mut read = BufReader::new(stream);
+    send_delete(&mut read, DELETE_ID, &id, cascade)?;
     print_ids(out, &listed)
 }
 
 /// Sends `delete` for `id` and reads until its answer, skipping every
 /// other line. An end before the answer is `io_failed`; a rejection is a
 /// failure with its code and message.
-fn send_delete(
-    stream: std::os::unix::net::UnixStream,
+pub(crate) fn send_delete(
+    read: &mut BufReader<std::os::unix::net::UnixStream>,
+    command_id: &str,
     id: &SessionId,
     cascade: bool,
 ) -> Result<(), Failure> {
@@ -171,11 +173,10 @@ fn send_delete(
     if cascade {
         args.insert("cascade".to_owned(), Value::Bool(true));
     }
-    let mut line = json!({"id": DELETE_ID, "command": "delete", "args": args}).to_string();
+    let mut line = json!({"id": command_id, "command": "delete", "args": args}).to_string();
     line.push('\n');
     let lost = |e: io::Error| failed(ErrorCode::IoFailed, format!("the hub: {e}"));
-    (&stream).write_all(line.as_bytes()).map_err(lost)?;
-    let mut read = BufReader::new(stream);
+    read.get_mut().write_all(line.as_bytes()).map_err(lost)?;
     let mut buf = String::new();
     loop {
         buf.clear();
@@ -189,7 +190,7 @@ fn send_delete(
             continue;
         };
         let field = |key: &str| answer.payload.get(key).and_then(Value::as_str);
-        if field("command_id") != Some(DELETE_ID) {
+        if field("command_id") != Some(command_id) {
             continue;
         }
         match answer.kind.as_str() {
