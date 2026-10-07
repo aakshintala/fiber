@@ -348,7 +348,7 @@ fn a_live_and_a_replayed_session_draw_the_same() {
 #[test]
 fn pages_are_cut_inside_turns() {
     let lines = session(2, false);
-    let mut pages = Pages::new(80);
+    let mut pages = Pages::new(20);
     for line in &lines {
         pages.apply(line);
     }
@@ -696,7 +696,7 @@ fn a_late_usage_line_moves_only_its_turns_closing_rows() {
 
 #[test]
 fn close_keeps_the_open_page_as_a_closed_one() {
-    let mut pages = Pages::new(80);
+    let mut pages = Pages::new(20);
     pages.close();
     // The open page closed, and a new open page stands behind it.
     assert!(pages.part(0).is_some());
@@ -725,7 +725,7 @@ fn ledgers_open(pages: &Pages) -> Vec<bool> {
 fn toggling_ledgers_twice_closes_them_again() {
     let mut stream = Stream::new(false);
     stream.turn(0, 3);
-    let mut pages = Pages::new(80);
+    let mut pages = Pages::new(20);
     for line in &stream.lines {
         pages.apply(line);
     }
@@ -768,7 +768,7 @@ fn shown_starts_at_the_first_page_drawing_a_row() {
 #[test]
 fn resident_counts_every_held_page() {
     let lines = session(2, false);
-    let mut pages = Pages::new(80);
+    let mut pages = Pages::new(20);
     for line in &lines {
         pages.apply(line);
     }
@@ -864,4 +864,147 @@ fn a_call_request_that_folds_nothing_folds_to_nothing() {
         &envelope("tool_call_requested", Some("a_c"), json!({})),
     );
     assert!(matches!(folded, Folded::Nothing), "{folded:?}");
+}
+
+#[test]
+fn only_a_changed_or_cut_line_counts_its_page_again() {
+    // A line that changes a card counts its page...
+    let mut pages = Pages::new(80);
+    let input = json!({"input": [{"type": "message", "source": "driver",
+        "content": [{"type": "text", "text": "hi"}]}]});
+    let started = pages.apply(&envelope("turn_started", None, input));
+    assert!(started.changed);
+    assert_eq!(pages.recounts, 1);
+    // ...a step that changes nothing does not...
+    let stepped = pages.apply(&envelope("step_started", None, json!({})));
+    assert!(!stepped.changed);
+    assert_eq!(pages.recounts, 1);
+    // ...nor does a usage line for the running turn.
+    let mut stream = Stream::new(false);
+    stream.usage("g0", 100, json!({}));
+    let used = pages.apply(&stream.lines[0]);
+    assert!(used.changed);
+    assert_eq!(pages.recounts, 1);
+}
+
+#[test]
+fn a_step_cutting_a_page_counts_it() {
+    // Replies past a page of lines fill the open page, so the next step
+    // starts one: the step changes no card, and only the cut counts it.
+    let mut stream = Stream::new(false);
+    stream.durable(
+        "turn_started",
+        None,
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "hi"}]}]}),
+    );
+    for step in 0..70 {
+        stream.text(&format!("a_m{step}"), "hello");
+    }
+    stream.durable("step_started", None, json!({}));
+    let mut pages = Pages::new(80);
+    let last = stream.lines.len() - 1;
+    for line in &stream.lines[..last] {
+        pages.apply(line);
+    }
+    let before = pages.recounts;
+    let stepped = pages.apply(&stream.lines[last]);
+    assert!(!stepped.changed);
+    assert_eq!(pages.recounts - before, 1);
+}
+
+#[test]
+fn the_open_page_caches_only_its_lines_too_wide_for_one_row() {
+    use std::collections::HashMap;
+    let lines = session(2, false);
+    let mut pages = Pages::new(20);
+    for line in &lines {
+        pages.apply(line);
+    }
+    assert!(!pages.wrapped.is_empty());
+    // Exactly the open page's lines wider than the screen are cached, with
+    // the rows drawing them takes.
+    let width = 20u16;
+    let at = pages.closed.len();
+    let part = pages.part(at).expect("open page");
+    let mut out = Vec::new();
+    pages.draw(at, part, &mut out);
+    let mut expected = HashMap::new();
+    for (line, _) in &out {
+        if line.width() > usize::from(width) {
+            expected.insert(line.to_string(), crate::view::rows(line.clone(), width));
+        }
+    }
+    assert!(!expected.is_empty());
+    assert_eq!(pages.wrapped, expected);
+    // The boundary: a line exactly as wide as the screen draws in one row
+    // itself, so it is never cached.
+    assert!(
+        out.iter()
+            .any(|(line, _)| line.width() == usize::from(width))
+    );
+    for (line, _) in &out {
+        if line.width() == usize::from(width) {
+            assert!(!pages.wrapped.contains_key(&line.to_string()));
+        }
+    }
+    // A closed page counts straight from its cards and leaves the cache
+    // it does not own alone.
+    let before = pages.wrapped.clone();
+    assert!(pages.part(0).is_some());
+    pages.count(0);
+    assert_eq!(pages.wrapped, before);
+}
+
+#[test]
+fn shell_output_draws_only_on_its_own_page_after_its_own_turn() {
+    let mut pages = Pages::new(80);
+    pages.shells.push((0, 0, "here".to_owned()));
+    pages.shells.push((1, 0, "other page".to_owned()));
+    pages.shells.push((0, 1, "later turn".to_owned()));
+    let part = pages.part(0).expect("open page");
+    let mut out = Vec::new();
+    pages.draw(0, part, &mut out);
+    let texts: Vec<String> = out.iter().map(|(line, _)| line.to_string()).collect();
+    assert_eq!(texts, vec!["here".to_owned()]);
+}
+
+#[test]
+fn set_opens_an_aside_only_past_the_turns() {
+    // No turn holds the target, so only the page's asides can answer:
+    // without the negation the aside below never opens.
+    let mut page = part();
+    page.fold.asides.push((
+        0,
+        crate::turn::crash::Aside::Orphans {
+            id: 7,
+            jobs: vec![("job".to_owned(), "lost".to_owned())],
+            open: false,
+        },
+    ));
+    super::set(&mut page, &Target::Orphans(7), true);
+    assert!(
+        page.fold.asides.iter().any(|(_, aside)| matches!(
+            aside,
+            crate::turn::crash::Aside::Orphans { open: true, .. }
+        ))
+    );
+    // Another line's target changes nothing.
+    super::set(&mut page, &Target::Orphans(8), false);
+    assert!(
+        page.fold.asides.iter().any(|(_, aside)| matches!(
+            aside,
+            crate::turn::crash::Aside::Orphans { open: true, .. }
+        ))
+    );
+}
+
+#[test]
+fn toggling_ledgers_clears_only_group_overrides() {
+    let mut pages = Pages::new(80);
+    pages.overrides.insert(Target::Group(1), true);
+    pages.overrides.insert(Target::Thought(2), false);
+    pages.toggle_ledgers();
+    assert!(!pages.overrides.contains_key(&Target::Group(1)));
+    assert!(pages.overrides.contains_key(&Target::Thought(2)));
 }

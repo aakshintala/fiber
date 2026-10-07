@@ -157,6 +157,10 @@ pub(crate) struct Pages {
     /// The rows of the open page's lines too wide for one row, by text, so
     /// counting it again after each line wraps only what changed.
     wrapped: HashMap<String, usize>,
+    /// How many pages were counted again (tests only: whether a line
+    /// re-counted its page).
+    #[cfg(test)]
+    pub(crate) recounts: usize,
 }
 
 impl Pages {
@@ -183,6 +187,8 @@ impl Pages {
             failed: BTreeSet::new(),
             width,
             wrapped: HashMap::new(),
+            #[cfg(test)]
+            recounts: 0,
         }
     }
 
@@ -726,6 +732,10 @@ impl Pages {
         }
         if open {
             self.wrapped = wrapped;
+        }
+        #[cfg(test)]
+        {
+            self.recounts = self.recounts.saturating_add(1);
         }
         self.index.set_rows(at, rows);
     }
