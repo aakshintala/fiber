@@ -1,0 +1,142 @@
+//! The terminal in a pseudo-terminal, as `crates/main/tests/terminal.rs`
+//! runs it: bare `fiber` with standard input, output and error on the
+//! terminal side at 60x12, `TERM=xterm-256color`, and one reader thread
+//! appending what it draws.
+
+use std::ffi::OsStr;
+use std::fs;
+use std::io::{Read, Write};
+use std::os::unix::ffi::OsStrExt;
+use std::path::PathBuf;
+use std::process::Stdio;
+use std::sync::{Arc, Mutex, mpsc};
+use std::thread;
+use std::time::Instant;
+
+use contract::clock::Clock;
+use rustix::pty;
+
+use crate::home::Home;
+use crate::run::{Proc, left};
+
+/// The terminal under test and what it has drawn.
+pub(crate) struct Terminal {
+    pub(crate) proc: Proc,
+    main: fs::File,
+    output: Arc<Mutex<Vec<u8>>>,
+    /// One wake per chunk appended.
+    wakes: mpsc::Receiver<()>,
+}
+
+fn err(what: &str) -> impl Fn(rustix::io::Errno) -> String + '_ {
+    move |errno| format!("{what}: {errno}")
+}
+
+impl Terminal {
+    /// Starts the copy of `fiber` in `home`'s workspace on a new pty.
+    pub(crate) fn spawn(
+        home: &Home,
+        path: Option<&OsStr>,
+        clock: &dyn Clock,
+    ) -> Result<Self, String> {
+        let main = pty::openpt(pty::OpenptFlags::RDWR | pty::OpenptFlags::NOCTTY)
+            .map_err(err("opening a pty"))?;
+        // Not inherited: a hub the terminal starts would hold the master open.
+        rustix::io::fcntl_setfd(&main, rustix::io::FdFlags::CLOEXEC)
+            .map_err(err("marking the pty close-on-exec"))?;
+        pty::grantpt(&main).map_err(err("granting the pty"))?;
+        pty::unlockpt(&main).map_err(err("unlocking the pty"))?;
+        let name = pty::ptsname(&main, Vec::new()).map_err(err("naming the pty"))?;
+        let name = PathBuf::from(OsStr::from_bytes(name.as_bytes()));
+        let terminal = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&name)
+            .map_err(|e| format!("opening {}: {e}", name.display()))?;
+        rustix::termios::tcsetwinsize(
+            &terminal,
+            rustix::termios::Winsize {
+                ws_col: 60,
+                ws_row: 12,
+                ws_xpixel: 0,
+                ws_ypixel: 0,
+            },
+        )
+        .map_err(err("sizing the pty"))?;
+        let side = || {
+            terminal
+                .try_clone()
+                .map(Stdio::from)
+                .map_err(|e| format!("cloning the pty: {e}"))
+        };
+        let mut command = crate::run::command(home.fiber(), home.root(), &home.home(), path);
+        command
+            .current_dir(home.workspace())
+            .env("TERM", "xterm-256color")
+            .stdin(side()?)
+            .stdout(side()?)
+            .stderr(side()?);
+        let proc = Proc::spawn(&mut command, clock)?;
+        drop(command);
+        drop(terminal);
+        let main = fs::File::from(main);
+        let mut reader = main
+            .try_clone()
+            .map_err(|e| format!("cloning the pty master: {e}"))?;
+        let output = Arc::new(Mutex::new(Vec::new()));
+        let appended = Arc::clone(&output);
+        let (tx, wakes) = mpsc::channel();
+        thread::spawn(move || {
+            let mut buf = [0u8; 4096];
+            while let Ok(n @ 1..) = reader.read(&mut buf) {
+                let Some(chunk) = buf.get(..n) else { break };
+                match appended.lock() {
+                    Ok(mut output) => output.extend_from_slice(chunk),
+                    Err(_) => break,
+                }
+                if tx.send(()).is_err() {
+                    break;
+                }
+            }
+        });
+        Ok(Self {
+            proc,
+            main,
+            output,
+            wakes,
+        })
+    }
+
+    fn holds(&self, needle: &[u8]) -> bool {
+        self.output
+            .lock()
+            .map(|output| output.windows(needle.len()).any(|window| window == needle))
+            .unwrap_or(false)
+    }
+
+    /// Waits until `until` for the output to hold `needle`.
+    pub(crate) fn wait_for(
+        &self,
+        clock: &dyn Clock,
+        until: Instant,
+        needle: &str,
+    ) -> Result<(), String> {
+        let what = format!("{needle:?} on the terminal");
+        while !self.holds(needle.as_bytes()) {
+            match self.wakes.recv_timeout(left(clock, until, &what)?) {
+                Ok(()) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    return Err(format!("the terminal closed before {what}"));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Types `bytes` into the terminal.
+    pub(crate) fn write(&mut self, bytes: &[u8]) -> Result<(), String> {
+        self.main
+            .write_all(bytes)
+            .map_err(|e| format!("typing into the terminal: {e}"))
+    }
+}
