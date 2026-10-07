@@ -1030,6 +1030,15 @@ fn buffer(app: &App, width: u16, height: u16) -> Buffer {
     buf
 }
 
+/// Clicks the target drawn at `col`, `row` of `app` at `width` by
+/// `height`, if any.
+fn click(app: &mut App, width: u16, height: u16, col: u16, row: u16) {
+    let (_, targets) = pointed(app, width, height, None);
+    if let Some(target) = crate::mouse::hit(&targets, col, row) {
+        app.on_click(target);
+    }
+}
+
 /// A reply in markdown, as one model streams it.
 const MARKDOWN: &str = "# Plan\n\n- read the **file**\n- write it\n\n```rust\nfn main() {\n    let x = 1;\n}\n```\n\n| step | ms |\n|---|---|\n| parse | 12 |\n| draw | 3 |";
 
@@ -1170,6 +1179,7 @@ fn ledger_rows_are_targets_over_their_rows() {
             Target::Thought(_) => 't',
             Target::Call(_) => 'c',
             Target::Login | Target::Note(_) | Target::Orphans(_) => 'o',
+            Target::Copy { .. } => 'y',
         })
         .collect();
     assert_eq!(kinds, vec!['g', 't', 'c', 'c', 'c']);
@@ -1455,7 +1465,7 @@ fn copied_shows_on_the_conversations_top_row_until_the_next_key() {
         .position(|line| line.contains("rust"))
         .and_then(|at| u16::try_from(at).ok())
         .unwrap_or_default();
-    app.on_click(27, header);
+    click(&mut app, 30, 10, 27, header);
     let buf = buffer(&app, 30, 10);
     insta::assert_snapshot!("copied", text(&buf));
     assert_eq!(
@@ -1475,7 +1485,7 @@ fn copied_needs_a_conversation_row_to_show_on() {
             .nth(7)
             .is_some_and(|row| row.starts_with("rust"))
     );
-    app.on_click(27, 7);
+    click(&mut app, 30, 10, 27, 7);
     assert!(app.copied());
     app.set_size(30, 1);
     assert_eq!(text(&buffer(&app, 30, 1)), ">\n");

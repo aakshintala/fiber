@@ -1,6 +1,8 @@
-//! What a click on the conversation reaches: each line's target, and a
-//! code block's `copy` cells, which copy its code and show "Copied" until
-//! the next key or click (`docs/tui.md`, "Look", "Selection and copy").
+//! The conversation's click targets, and a code block's `copy` cells,
+//! which copy its code and show "Copied" until the next key or click on a
+//! target (`docs/tui.md`, "Look", "Selection and copy").
+
+use std::ops::Range;
 
 use super::{App, Effect, Target};
 
@@ -15,13 +17,16 @@ impl App {
             .collect()
     }
 
-    /// A left click at a 0-based cell: on a code block's `copy` it copies
-    /// the code and shows "Copied", which any click first clears.
-    #[cfg_attr(not(test), expect(dead_code, reason = "#995's mouse events call it"))]
-    pub(crate) fn on_click(&mut self, col: u16, row: u16) -> Effect {
-        let code = crate::view::target_at(self, self.width, usize::from(row))
-            .and_then(|target| crate::turn::copy_target(&self.turns, target, self.width))
-            .filter(|copy| copy.cols.contains(&col));
+    /// The columns of the `copy` cells `target` covers on its line, when
+    /// it is a code block's copy target.
+    pub(crate) fn copy_cells(&self, target: Target) -> Option<Range<u16>> {
+        crate::turn::copy_target(&self.turns, target, self.width).map(|copy| copy.cols)
+    }
+
+    /// A click on a code block's `copy`: copies its code and shows
+    /// "Copied".
+    pub(super) fn copy(&mut self, target: Target) -> Effect {
+        let code = crate::turn::copy_target(&self.turns, target, self.width);
         self.copied = code.is_some();
         code.map_or(Effect::None, |copy| Effect::Copy(copy.code))
     }

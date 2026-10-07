@@ -52,11 +52,20 @@ fn with_reply(width: u16, height: u16, text: &str) -> App {
 fn row_of(app: &App, width: u16, height: u16, needle: &str) -> Option<u16> {
     let area = ratatui::layout::Rect::new(0, 0, width, height);
     let mut buf = ratatui::buffer::Buffer::empty(area);
-    crate::view::render(app, area, &mut buf);
+    crate::view::render(app, area, &mut buf, None);
     crate::view::text(&buf)
         .lines()
         .position(|line| line.contains(needle))
         .and_then(|at| u16::try_from(at).ok())
+}
+
+/// A click at a 0-based cell of the app drawn at its size: the target
+/// drawn there, if any, clicked.
+fn click(app: &mut App, col: u16, row: u16) -> Effect {
+    let area = ratatui::layout::Rect::new(0, 0, app.width, app.height);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let targets = crate::view::render(app, area, &mut buf, None);
+    crate::mouse::hit(&targets, col, row).map_or(Effect::None, |target| app.on_click(target))
 }
 
 const TWO_BLOCKS: &str = "```rust\nlet a = 1;\n```\n\ntext\n\n```sh\necho b\n```";
@@ -67,17 +76,22 @@ fn a_click_on_copy_copies_that_blocks_code_and_shows_copied() {
     let first = row_of(&app, 30, 12, "rust").expect("first header");
     let second = row_of(&app, 30, 12, "sh  ").expect("second header");
     assert_eq!(
-        app.on_click(26, first),
+        click(&mut app, 26, first),
         Effect::Copy("let a = 1;".to_owned())
     );
     assert!(app.copied());
-    assert_eq!(app.on_click(29, second), Effect::Copy("echo b".to_owned()));
+    assert_eq!(
+        click(&mut app, 29, second),
+        Effect::Copy("echo b".to_owned())
+    );
     // The cells left of `copy` and the rows around it copy nothing, and a
-    // click clears "Copied".
+    // click on another target clears "Copied".
     for (col, row) in [(25, first), (0, first), (26, first + 1), (26, first - 1)] {
-        assert_eq!(app.on_click(col, row), Effect::None, "{col},{row}");
-        assert!(!app.copied());
+        assert_eq!(click(&mut app, col, row), Effect::None, "{col},{row}");
     }
+    assert!(app.copied());
+    app.on_click(crate::mouse::TargetId::NewBelow);
+    assert!(!app.copied());
 }
 
 #[test]
@@ -85,11 +99,11 @@ fn any_key_clears_copied() {
     let now = fakes::clock::FakeClock::new().now();
     let mut app = with_reply(30, 12, TWO_BLOCKS);
     let first = row_of(&app, 30, 12, "rust").expect("first header");
-    app.on_click(27, first);
+    click(&mut app, 27, first);
     assert!(app.copied());
     app.on_key(Key::Char('x'), now);
     assert!(!app.copied());
-    app.on_click(27, first);
+    click(&mut app, 27, first);
     app.on_key(Key::CtrlC, now);
     assert!(!app.copied());
 }
@@ -107,10 +121,10 @@ fn a_click_maps_through_the_rows_while_scrolled_up() {
     }
     let header = row_of(&app, 30, 8, "rust").expect("header");
     assert_eq!(
-        app.on_click(27, header),
+        click(&mut app, 27, header),
         Effect::Copy("let a = 1;".to_owned())
     );
-    assert_eq!(app.on_click(27, header + 1), Effect::None);
+    assert_eq!(click(&mut app, 27, header + 1), Effect::None);
 }
 
 #[test]
@@ -124,20 +138,20 @@ fn the_overlay_row_hides_a_copy_target_under_it() {
     assert_eq!(app.conversation_height(), 7);
     app.on_key(Key::PageUp, now);
     assert_eq!(row_of(&app, 30, 8, "rust"), Some(6));
-    assert_eq!(app.on_click(27, 6), Effect::Copy(code.to_owned()));
+    assert_eq!(click(&mut app, 27, 6), Effect::Copy(code.to_owned()));
     app.on_line(turn_started("more"));
     assert!(app.has_new());
     assert_eq!(row_of(&app, 30, 8, "rust"), None);
-    assert_eq!(app.on_click(27, 6), Effect::None);
+    assert_eq!(click(&mut app, 27, 6), Effect::None);
 }
 
 #[test]
 fn a_click_below_the_conversation_or_on_a_plain_line_copies_nothing() {
     let mut app = with_reply(30, 12, TWO_BLOCKS);
     let prompt = row_of(&app, 30, 12, " hi").expect("prompt");
-    assert_eq!(app.on_click(27, prompt), Effect::None);
-    assert_eq!(app.on_click(27, 11), Effect::None);
-    assert_eq!(app.on_click(27, 200), Effect::None);
+    assert_eq!(click(&mut app, 27, prompt), Effect::None);
+    assert_eq!(click(&mut app, 27, 11), Effect::None);
+    assert_eq!(click(&mut app, 27, 200), Effect::None);
 }
 
 #[test]
@@ -145,9 +159,9 @@ fn a_resize_moves_the_copy_target_with_the_new_width() {
     let mut app = with_reply(30, 12, TWO_BLOCKS);
     app.set_size(20, 12);
     let first = row_of(&app, 20, 12, "rust").expect("first header");
-    assert_eq!(app.on_click(26, first), Effect::None);
+    assert_eq!(click(&mut app, 26, first), Effect::None);
     assert_eq!(
-        app.on_click(16, first),
+        click(&mut app, 16, first),
         Effect::Copy("let a = 1;".to_owned())
     );
 }
@@ -164,11 +178,11 @@ fn a_click_maps_past_a_prompt_that_wraps() {
     let header = row_of(&app, 30, 12, "rust").expect("header");
     assert_eq!(header, 9);
     assert_eq!(
-        app.on_click(27, header),
+        click(&mut app, 27, header),
         Effect::Copy("let a = 1;".to_owned())
     );
-    assert_eq!(app.on_click(27, header - 1), Effect::None);
-    assert_eq!(app.on_click(27, header + 1), Effect::None);
+    assert_eq!(click(&mut app, 27, header - 1), Effect::None);
+    assert_eq!(click(&mut app, 27, header + 1), Effect::None);
 }
 
 #[test]
@@ -176,9 +190,9 @@ fn a_click_on_the_blank_rows_above_a_short_conversation_copies_nothing() {
     let mut app = with_reply(30, 12, "```rust\nlet a = 1;\n```");
     let header = row_of(&app, 30, 12, "rust").expect("header");
     assert!(row_of(&app, 30, 12, " hi").is_some_and(|prompt| prompt > 0));
-    assert_eq!(app.on_click(27, 0), Effect::None);
+    assert_eq!(click(&mut app, 27, 0), Effect::None);
     assert_eq!(
-        app.on_click(27, header),
+        click(&mut app, 27, header),
         Effect::Copy("let a = 1;".to_owned())
     );
 }
@@ -192,5 +206,8 @@ fn a_click_copies_from_the_reply_it_lands_on() {
         Some("a_2"),
     ));
     let second = row_of(&app, 30, 14, "sh  ").expect("second reply's header");
-    assert_eq!(app.on_click(29, second), Effect::Copy("echo b".to_owned()));
+    assert_eq!(
+        click(&mut app, 29, second),
+        Effect::Copy("echo b".to_owned())
+    );
 }

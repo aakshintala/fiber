@@ -1227,12 +1227,30 @@ fn a_copy_writes_osc_52_and_pipes_the_code_to_the_command() {
         .position(|line| line.ends_with("copy"))
         .and_then(|row| u16::try_from(row).ok())
         .unwrap_or_else(|| panic!("no copy target on\n{shown}"));
-    // #995 turns mouse reports into clicks; the app's effect is what the
-    // loop copies.
-    let crate::app::Effect::Copy(code) = lp.app.on_click(57, row) else {
-        panic!("no copy at row {row} on\n{shown}");
+    // SGR reports are 1-based. A wheel, a right click, hover, a left click
+    // off `copy` and a press on `copy` released elsewhere copy nothing.
+    let at = |button: u8, col: u16, row: u16, end: char| {
+        Input::Bytes(format!("\x1b[<{button};{};{}{end}", col + 1, row + 1).into_bytes())
     };
-    lp.copy(code);
+    feed(
+        &mut lp,
+        vec![
+            at(64, 57, row, 'M'),
+            at(2, 57, row, 'M'),
+            at(2, 57, row, 'm'),
+            at(35, 57, row, 'M'),
+            at(0, 10, row, 'M'),
+            at(0, 10, row, 'm'),
+            at(0, 57, row, 'M'),
+            at(0, 57, row + 1, 'm'),
+        ],
+    );
+    assert!(
+        !lp.app.copied(),
+        "a report other than a click on copy copied"
+    );
+    feed(&mut lp, vec![at(0, 57, row, 'M'), at(0, 57, row, 'm')]);
+    assert!(lp.app.copied());
     let osc = b"\x1b]52;c;bGV0IGEgPSAxOw==\x07";
     assert_eq!(read_exact(&pair.main, osc.len(), "the OSC 52 bytes"), osc);
     ready.wait(DEADLINE);

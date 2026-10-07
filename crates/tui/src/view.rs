@@ -321,10 +321,16 @@ fn conversation_rows(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<
         paragraph(line).scroll((to_u16(skip), 0)).render(rect, buf);
         if let Some((_, open)) = opens.next_if(|(index, _)| *index == at) {
             let height = rect.height.min(last.saturating_sub(rect.y));
+            // A code block's copy target is its `copy` cells, not the line.
+            let cells = app.copy_cells(open).map_or(rect, |cols| Rect {
+                x: area.x.saturating_add(cols.start),
+                width: cols.end.saturating_sub(cols.start),
+                ..rect
+            });
             if height > 0 {
                 targets.push(Target {
                     id: TargetId::Line(open),
-                    rect: Rect { height, ..rect },
+                    rect: Rect { height, ..cells },
                 });
             }
         }
