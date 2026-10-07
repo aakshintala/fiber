@@ -197,10 +197,18 @@ An item is private, or `pub(crate)`, unless another crate uses it. rustc's
 
 ## Size
 
-CI fails a source file over 800 lines. Unit tests live in their own file, a
-`tests.rs` or `<name>_tests.rs` included with `#[cfg(test)] mod tests;`, so a
-file's length is its code. A test file, named `tests.rs` or ending in `_tests.rs` or under a crate's `tests/` directory, has no cap. 800 is
-picked rather than measured.
+A source file over 800 lines is a smell: a god file is forming, and its
+logic belongs in deeper modules split at real boundaries. `cargo xtask
+line-cap` lists every such file and never fails. The pull request whose
+change takes a file over 800 lines files a ticket labelled `split` for it.
+The split separates what the file owns into modules with their own
+interfaces; a `#[path]` child module or a trim to get under the line is not a
+split. 800 is picked rather than measured.
+
+Unit tests live in their own file, a `tests.rs` or `<name>_tests.rs`
+included with `#[cfg(test)] mod tests;`, so a file's length is its code. A
+test file, named `tests.rs` or ending in `_tests.rs` or under a crate's
+`tests/` directory, is never counted.
 
 ## Comments
 
