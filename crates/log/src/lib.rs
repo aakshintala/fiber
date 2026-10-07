@@ -13,6 +13,7 @@ mod offsets;
 mod rate;
 mod read;
 mod resolve;
+mod scan;
 mod weak_emit;
 mod write;
 
@@ -26,6 +27,9 @@ pub use export::export;
 pub use rate::Rate;
 pub use read::{Injector, Lines, Watcher, lines, read};
 pub use resolve::resolve;
+pub use scan::{
+    Hold, SessionLock, Started, last_ts, remaining, session_bytes, started_sessions, try_hold,
+};
 pub use weak_emit::WeakEmit;
 pub use write::Log;
 
