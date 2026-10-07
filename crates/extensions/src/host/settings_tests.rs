@@ -315,3 +315,45 @@ fn two_sequential_sets_both_land() {
         .unwrap();
     assert_eq!(merged, Some(serde_json::json!(2)));
 }
+
+/// The failure a prelude `pcall` of `code` catches: its code and message.
+fn pcall_of(lua: &Lua, code: &str) -> (String, String) {
+    let clock = fakes::clock::FakeClock::new();
+    let deadline = crate::lua::Deadline::new(clock);
+    let dir = fakes::TempDir::new("fiber-settings-prelude");
+    crate::lua::install_prelude(&lua, &deadline, dir.path().to_path_buf(), crate::MEMORY_CAP)
+        .unwrap();
+    let (ok, err): (bool, LuaValue) = lua
+        .load(&format!("return pcall(function() {code} end)"))
+        .eval()
+        .unwrap();
+    assert!(!ok, "{code} unexpectedly succeeded");
+    let LuaValue::Table(failed) = err else {
+        panic!("{code} raised no failure table");
+    };
+    (failed.get("code").unwrap(), failed.get("message").unwrap())
+}
+
+#[test]
+fn a_set_over_an_invalid_file_is_config_invalid() {
+    let setup = Setup::new();
+    let config = setup.load(&[]);
+    let lua = setup.lua(Some(setup.session(config, &[])));
+    // Another session left invalid JSON on disk after this one loaded.
+    setup.write(&setup.config_file("machine"), "{invalid");
+    let (code, message) = pcall_of(&lua, "host.config.set(\"a\", 1, \"machine\")");
+    assert_eq!(code, "config_invalid");
+    assert!(message.starts_with("host.config.set: "), "{message}");
+}
+
+#[test]
+fn a_set_where_no_file_can_be_written_is_io_failed() {
+    let setup = Setup::new();
+    let config = setup.load(&[]);
+    let lua = setup.lua(Some(setup.session(config, &[])));
+    // A file where the settings directory goes leaves no file to write.
+    setup.write(&setup.home().join("config"), "in the way");
+    let (code, message) = pcall_of(&lua, "host.config.set(\"a\", 1, \"machine\")");
+    assert_eq!(code, "io_failed");
+    assert!(message.starts_with("host.config.set: "), "{message}");
+}

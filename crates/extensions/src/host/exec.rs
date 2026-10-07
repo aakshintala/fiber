@@ -50,10 +50,14 @@ pub(crate) struct Ran {
     pub timed_out: bool,
 }
 
-/// A run that failed: the message Lua raises, and how the run ended when
-/// it started (a spawn failure never ran, so there is nothing to log).
+/// A run that failed: its code and message, which `host.exec` raises as
+/// `{ code, message }`, and how the run ended when it started (a spawn
+/// failure never ran, so there is nothing to log).
 #[derive(Debug)]
 pub(crate) struct ExecError {
+    /// The failure's code: `not_found` when the program or `cwd` does not
+    /// exist, `too_large` past the memory cap, else `io_failed`.
+    pub code: contract::ErrorCode,
     /// What `host.exec` raises.
     pub message: String,
     /// How the run ended, when it started.
@@ -134,7 +138,15 @@ pub(crate) fn run(
     let mut child = match spawn(&mut cmd) {
         Ok(child) => child,
         Err(source) => {
+            // `NotFound` names a missing program or working directory;
+            // anything else kept the program from starting.
+            let code = if source.kind() == std::io::ErrorKind::NotFound {
+                contract::ErrorCode::NotFound
+            } else {
+                contract::ErrorCode::IoFailed
+            };
             return Err(ExecError {
+                code,
                 message: format!("host.exec: {}: {source}", req.program),
                 ran: None,
             });
@@ -329,6 +341,7 @@ fn supervise(
             finished(pgid, seen_empty);
             if capped {
                 return Err(ExecError {
+                    code: contract::ErrorCode::TooLarge,
                     message: format!(
                         "host.exec: {}: output passed the extension's memory cap of {} bytes",
                         req.program, req.cap
@@ -377,6 +390,7 @@ fn abort_startup(
     }
     .map(|ran| completed(ran, status));
     ExecError {
+        code: contract::ErrorCode::IoFailed,
         message: format!("host.exec: {}: {source}", req.program),
         ran,
     }

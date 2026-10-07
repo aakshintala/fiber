@@ -83,7 +83,7 @@ end
 /// code that made it"). Refused in the entry script before it yields, like
 /// `host.oauth.callback`.
 const EXEC: &str = r#"
-local host, tag, in_entry = ...
+local host, tag, in_entry, failure = ...
 function host.exec(program, args, opts)
   if in_entry() then
     error("host.exec: not available while init.lua runs", 2)
@@ -108,8 +108,8 @@ function host.exec(program, args, opts)
   if cwd ~= nil and type(cwd) ~= "string" then
     error("host.exec: `cwd` must be a string", 2)
   end
-  local result, err = coroutine.yield(tag, "exec", { program = program, args = args, cwd = cwd })
-  if result == nil then error(err, 0) end
+  local result, code, message = coroutine.yield(tag, "exec", { program = program, args = args, cwd = cwd })
+  if result == nil then error(failure(code, message), 0) end
   return result
 end
 "#;
@@ -144,7 +144,11 @@ pub(crate) fn install(
         lua.create_function(move |_, name: String| {
             config::read_secret(&secret_home, &name)
                 .map(|secret| secret.map(|s| s.expose().trim().to_owned()))
-                .map_err(mlua::Error::external)
+                // The failure's code is the registry's own: an unreadable
+                // file is `io_failed`, a name that is not one file name
+                // `invalid_arguments`. Uncaught, the callback fails as it
+                // does today; `pcall` catches the table.
+                .map_err(|source| failure::fail(source.code(), source.to_string()))
         })?,
     )?;
     fs::install(
@@ -253,8 +257,8 @@ pub(crate) enum Request {
 /// The answer to a [`Request`]. A failure is its code and the message Lua raises.
 pub(crate) enum Reply {
     Http(Result<(u16, Vec<u8>), (contract::ErrorCode, String)>),
-    /// How a `host.exec` run ended, or the text `host.exec` raises.
-    Exec(Result<exec::Ran, String>),
+    /// How a `host.exec` run ended, or the code and message `host.exec` raises.
+    Exec(Result<exec::Ran, (contract::ErrorCode, String)>),
     /// The query parameters of the one request the callback served.
     Query(Result<Vec<(String, String)>, String>),
     Lock(Result<CredentialLock, String>),
@@ -412,15 +416,13 @@ pub(crate) fn resume_values(
             LuaValue::Integer(i64::from(status)),
             LuaValue::String(lua.create_string(bytes)?),
         ])),
-        Reply::Http(Err(failed_with)) => failed(failed_with),
-        // Tasks 2-3 migrate these halves to `(nil, code, message)`; until
+        Reply::Http(Err(failed_with)) | Reply::Exec(Err(failed_with)) => failed(failed_with),
+        // Task 3 migrates these halves to `(nil, code, message)`; until
         // then their failures stay `(nil, message)` as their halves read.
-        Reply::Query(Err(message)) | Reply::Lock(Err(message)) | Reply::Exec(Err(message)) => {
-            Ok(MultiValue::from_vec(vec![
-                LuaValue::Nil,
-                LuaValue::String(lua.create_string(message)?),
-            ]))
-        }
+        Reply::Query(Err(message)) | Reply::Lock(Err(message)) => Ok(MultiValue::from_vec(vec![
+            LuaValue::Nil,
+            LuaValue::String(lua.create_string(message)?),
+        ])),
         Reply::Query(Ok(pairs)) => {
             let table = lua.create_table()?;
             for (key, value) in pairs {

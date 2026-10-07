@@ -355,7 +355,7 @@ fn settle(
                     }
                     deliver(match outcome {
                         Ok(ran) => Reply::Exec(Ok(ran)),
-                        Err(failed) => Reply::Exec(Err(failed.message)),
+                        Err(failed) => Reply::Exec(Err((failed.code, failed.message))),
                     });
                 });
             if let Err(source) = spawned {

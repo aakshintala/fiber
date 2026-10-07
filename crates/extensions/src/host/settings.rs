@@ -8,7 +8,7 @@ use std::rc::Rc;
 use config::{Config, ConfigError, Scope};
 use mlua::{Lua, LuaString, Table, Value as LuaValue};
 
-use super::{to_json, to_lua};
+use super::{failure, to_json, to_lua};
 
 /// What `host.config` reads and writes: the extension's name, the settings
 /// keys a repository may set, and its own clone of the session's
@@ -126,12 +126,17 @@ fn key_text(op: &str, key: &LuaString) -> Result<String, mlua::Error> {
 }
 
 /// A failure of `extension_setting` or `set_extension_setting`: an
-/// unparseable key names the key, anything else names its file.
+/// unparseable key, or one the layer may not take, is an error in the
+/// calling code; anything the files did is the failure the call raises,
+/// under the registry's own code.
 fn key_error(op: &str, key: &str, err: ConfigError) -> mlua::Error {
     if matches!(err, ConfigError::Override { .. }) {
         runtime(format!("host.config.{op}: `{key}` is not a dotted key"))
-    } else {
+    } else if matches!(err, ConfigError::Refused { .. }) {
         runtime(format!("host.config.{op}: {err}"))
+    } else {
+        let code = err.code();
+        failure::fail(code, format!("host.config.{op}: {err}"))
     }
 }
 

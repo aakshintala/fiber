@@ -190,6 +190,7 @@ fn a_missing_program_is_the_spawn_error() {
         .recv_timeout(DEADLINE)
         .expect("waited {DEADLINE:?} for the missing run")
         .expect_err("a missing program never runs");
+    assert_eq!(err.code, contract::ErrorCode::NotFound);
     assert!(
         err.message
             .starts_with("host.exec: fiber-definitely-missing-xyz: "),
@@ -213,6 +214,7 @@ fn output_past_the_cap_stops_the_run_with_the_cap_error() {
         .recv_timeout(DEADLINE)
         .expect("waited {DEADLINE:?} for the capped run")
         .expect_err("output past the cap never returns");
+    assert_eq!(err.code, contract::ErrorCode::TooLarge);
     assert_eq!(
         err.message,
         format!("host.exec: sh: output passed the extension's memory cap of {cap} bytes")
@@ -619,6 +621,7 @@ fn a_startup_abort_kills_only_after_the_800_ms_grace() {
         .recv_timeout(DEADLINE)
         .expect("waited {DEADLINE:?} for the aborted run");
     assert_eq!(err.message, "host.exec: sh: no reader thread");
+    assert_eq!(err.code, contract::ErrorCode::IoFailed);
     let ran = err.ran.expect("a started run is logged");
     assert_eq!(ran.signal.as_deref(), Some("SIGKILL"));
     assert!(
@@ -695,4 +698,26 @@ fn a_snapshot_with_no_end_takes_the_final_wait_status_and_keeps_its_own() {
     );
     let unknown = super::completed(snapshot(None, None), None);
     assert_eq!((unknown.exit_code, unknown.signal), (None, None));
+}
+
+#[test]
+fn a_missing_working_directory_is_not_found() {
+    let (_dir, cwd) = dir("fiber-exec-missing-cwd");
+    let clock = FakeClock::new();
+    let (_cancel, done) = spawn(
+        request("sh", &["-c", "exit 0"], cwd.join("gone"), CAP),
+        Arc::clone(&clock),
+        None,
+    );
+    let err = done
+        .recv_timeout(DEADLINE)
+        .expect("waited {DEADLINE:?} for the missing-cwd run")
+        .expect_err("a missing working directory never runs");
+    assert_eq!(err.code, contract::ErrorCode::NotFound);
+    assert!(
+        err.message.starts_with("host.exec: sh: "),
+        "the spawn error names the program: {}",
+        err.message
+    );
+    assert!(err.ran.is_none(), "a spawn failure never ran");
 }

@@ -15,7 +15,7 @@ use std::sync::{Condvar, Mutex};
 use contract::files::PathLock;
 use mlua::{Lua, LuaString, Table, Value as LuaValue};
 
-use super::Session;
+use super::{Session, failure};
 
 /// Installs `host.fs` and `host.data_dir` on `host`. `session` is the
 /// extension's session: its project names `projects/<key>/` in Fiber home
@@ -55,7 +55,7 @@ pub(crate) fn install(
         table.set(
             "read",
             lua.create_function(move |lua, path: LuaString| {
-                let data = fs.read(&path.as_bytes()).map_err(runtime)?;
+                let data = fs.read(&path.as_bytes()).map_err(raise)?;
                 lua.create_string(data)
             })?,
         )?;
@@ -67,7 +67,7 @@ pub(crate) fn install(
             lua.create_function(
                 move |_, (path, data, opts): (LuaString, LuaString, Option<Table>)| {
                     fs.write(&path.as_bytes(), &data.as_bytes(), lock(opts)?)
-                        .map_err(runtime)
+                        .map_err(raise)
                 },
             )?,
         )?;
@@ -77,7 +77,7 @@ pub(crate) fn install(
         table.set(
             "list",
             lua.create_function(move |lua, path: LuaString| {
-                let names = fs.list(&path.as_bytes()).map_err(runtime)?;
+                let names = fs.list(&path.as_bytes()).map_err(raise)?;
                 let out = lua.create_table()?;
                 for (i, name) in names.iter().enumerate() {
                     out.raw_set(i + 1, lua.create_string(name)?)?;
@@ -91,7 +91,7 @@ pub(crate) fn install(
         table.set(
             "stat",
             lua.create_function(move |lua, path: LuaString| {
-                let found = fs.stat(&path.as_bytes()).map_err(runtime)?;
+                let found = fs.stat(&path.as_bytes()).map_err(raise)?;
                 let Some(found) = found else {
                     return Ok(LuaValue::Nil);
                 };
@@ -108,7 +108,7 @@ pub(crate) fn install(
         table.set(
             "mkdir",
             lua.create_function(move |_, (path, opts): (LuaString, Option<Table>)| {
-                fs.mkdir(&path.as_bytes(), lock(opts)?).map_err(runtime)
+                fs.mkdir(&path.as_bytes(), lock(opts)?).map_err(raise)
             })?,
         )?;
     }
@@ -117,7 +117,7 @@ pub(crate) fn install(
         table.set(
             "remove",
             lua.create_function(move |_, (path, opts): (LuaString, Option<Table>)| {
-                fs.remove(&path.as_bytes(), lock(opts)?).map_err(runtime)
+                fs.remove(&path.as_bytes(), lock(opts)?).map_err(raise)
             })?,
         )?;
     }
@@ -128,7 +128,7 @@ pub(crate) fn install(
             lua.create_function(
                 move |_, (from, to, opts): (LuaString, LuaString, Option<Table>)| {
                     fs.rename(&from.as_bytes(), &to.as_bytes(), lock(opts)?)
-                        .map_err(runtime)
+                        .map_err(raise)
                 },
             )?,
         )?;
@@ -156,6 +156,14 @@ pub(crate) fn install(
 
 fn runtime(message: String) -> mlua::Error {
     mlua::Error::RuntimeError(message)
+}
+
+/// A filesystem failure: its code and the message `host.fs` raises.
+type Failed = (contract::ErrorCode, String);
+
+/// Raises a filesystem failure for `pcall` to catch as a table.
+fn raise((code, message): Failed) -> mlua::Error {
+    failure::fail(code, message)
 }
 
 /// The `lock` option of a mutating call: absent or missing is no lock.
@@ -193,7 +201,7 @@ impl Fs {
         self.workspace.join(Path::new(OsStr::from_bytes(raw)))
     }
 
-    fn read(&self, raw: &[u8]) -> Result<Vec<u8>, String> {
+    fn read(&self, raw: &[u8]) -> Result<Vec<u8>, Failed> {
         let path = self.absolute(raw);
         let cap = u64::try_from(self.memory_cap).unwrap_or(u64::MAX);
         // Refuse past the cap before allocating: the bytes would land in
@@ -213,14 +221,14 @@ impl Fs {
         Ok(data)
     }
 
-    fn write(&self, raw: &[u8], data: &[u8], with_lock: bool) -> Result<(), String> {
+    fn write(&self, raw: &[u8], data: &[u8], with_lock: bool) -> Result<(), Failed> {
         let path = self.absolute(raw);
         self.ensure_data_dir("write", &path)?;
         let mut op = || fs::write(&path, data).map_err(|err| fail("write", &path, err));
         self.locked(vec![path.clone()], with_lock, &mut op)
     }
 
-    fn list(&self, raw: &[u8]) -> Result<Vec<Vec<u8>>, String> {
+    fn list(&self, raw: &[u8]) -> Result<Vec<Vec<u8>>, Failed> {
         let path = self.absolute(raw);
         let entries = fs::read_dir(&path).map_err(|err| fail("list", &path, err))?;
         let mut names = Vec::new();
@@ -232,7 +240,7 @@ impl Fs {
         Ok(names)
     }
 
-    fn stat(&self, raw: &[u8]) -> Result<Option<Stat>, String> {
+    fn stat(&self, raw: &[u8]) -> Result<Option<Stat>, Failed> {
         let path = self.absolute(raw);
         let meta = match fs::symlink_metadata(&path) {
             Ok(meta) => meta,
@@ -262,14 +270,14 @@ impl Fs {
         }))
     }
 
-    fn mkdir(&self, raw: &[u8], with_lock: bool) -> Result<(), String> {
+    fn mkdir(&self, raw: &[u8], with_lock: bool) -> Result<(), Failed> {
         let path = self.absolute(raw);
         self.ensure_data_dir("mkdir", &path)?;
         let mut op = || fs::create_dir_all(&path).map_err(|err| fail("mkdir", &path, err));
         self.locked(vec![path.clone()], with_lock, &mut op)
     }
 
-    fn remove(&self, raw: &[u8], with_lock: bool) -> Result<(), String> {
+    fn remove(&self, raw: &[u8], with_lock: bool) -> Result<(), Failed> {
         let path = self.absolute(raw);
         let mut op = || {
             let is_dir = fs::symlink_metadata(&path)
@@ -284,15 +292,18 @@ impl Fs {
         self.locked(vec![path.clone()], with_lock, &mut op)
     }
 
-    fn rename(&self, from_raw: &[u8], to_raw: &[u8], with_lock: bool) -> Result<(), String> {
+    fn rename(&self, from_raw: &[u8], to_raw: &[u8], with_lock: bool) -> Result<(), Failed> {
         let from = self.absolute(from_raw);
         let to = self.absolute(to_raw);
         let mut op = || {
             fs::rename(&from, &to).map_err(|err| {
-                format!(
-                    "host.fs.rename: {} -> {}: {err}",
-                    from.display(),
-                    to.display()
+                (
+                    code_of(&err),
+                    format!(
+                        "host.fs.rename: {} -> {}: {err}",
+                        from.display(),
+                        to.display()
+                    ),
                 )
             })
         };
@@ -313,7 +324,7 @@ impl Fs {
     /// Creates this extension's own data directory, and the `data/` above
     /// it, when `target` lies inside it and it is missing. A path anywhere
     /// else gets no directory created.
-    fn ensure_data_dir(&self, op: &str, target: &Path) -> Result<(), String> {
+    fn ensure_data_dir(&self, op: &str, target: &Path) -> Result<(), Failed> {
         let normal = lexical(target);
         for dir in [&self.machine_dir, &self.project_dir].into_iter().flatten() {
             if normal.starts_with(dir) && !dir.exists() {
@@ -331,8 +342,8 @@ impl Fs {
         &self,
         paths: Vec<PathBuf>,
         want: bool,
-        op: &mut dyn FnMut() -> Result<(), String>,
-    ) -> Result<(), String> {
+        op: &mut dyn FnMut() -> Result<(), Failed>,
+    ) -> Result<(), Failed> {
         match (want, self.locks.clone()) {
             (true, Some(locks)) => {
                 let mut out = None;
@@ -349,16 +360,33 @@ impl Fs {
     }
 }
 
-fn fail(op: &str, path: &Path, err: impl std::fmt::Display) -> String {
-    format!("host.fs.{op}: {}: {err}", path.display())
+fn fail(op: &str, path: &Path, err: std::io::Error) -> Failed {
+    let code = code_of(&err);
+    (code, format!("host.fs.{op}: {}: {err}", path.display()))
+}
+
+/// The failure's code: a missing path is `not_found`, a directory, device
+/// or other kind the call cannot handle `unsupported_file`, and any other
+/// filesystem failure `io_failed`.
+fn code_of(err: &std::io::Error) -> contract::ErrorCode {
+    use contract::ErrorCode::{IoFailed, NotFound, UnsupportedFile};
+    use std::io::ErrorKind::{IsADirectory, NotADirectory, NotFound as Missing};
+    match err.kind() {
+        Missing => NotFound,
+        IsADirectory | NotADirectory => UnsupportedFile,
+        _ => IoFailed,
+    }
 }
 
 /// A file `read` refuses past the extension's memory cap: the call, the
 /// path and the cap, without allocating the file's contents.
-fn too_big(op: &str, path: &Path, cap: usize) -> String {
-    format!(
-        "host.fs.{op}: {}: larger than the extension's memory cap of {cap} bytes",
-        path.display()
+fn too_big(op: &str, path: &Path, cap: usize) -> Failed {
+    (
+        contract::ErrorCode::TooLarge,
+        format!(
+            "host.fs.{op}: {}: larger than the extension's memory cap of {cap} bytes",
+            path.display()
+        ),
     )
 }
 

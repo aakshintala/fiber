@@ -992,3 +992,64 @@ fn a_host_http_with_no_url_stays_a_string_error() {
     assert_eq!(shape, "false:string");
     assert!(message.contains("`url` must be a string"), "{message}");
 }
+
+/// An extension whose commands fail `host.exec` and `host.fs` caught and uncaught.
+fn failing_extension(setup: &Setup) -> Arc<LuaExtension> {
+    let dir = setup.root().join("extensions").join("failing");
+    write(
+        &dir.join("init.lua"),
+        r#"
+fiber.command("run", { timeout = 60000, run = function()
+  local ok, err = pcall(host.exec, "fiber-definitely-missing-xyz", {})
+  if ok then return "ok" end
+  return err.code .. "\n" .. err.message
+end })
+fiber.command("run_raw", { timeout = 60000, run = function()
+  return tostring(host.exec("fiber-definitely-missing-xyz", {}))
+end })
+fiber.command("read", { timeout = 60000, run = function()
+  local ok, err = pcall(host.fs.read, "fiber-definitely-missing-fs.md")
+  if ok then return "ok" end
+  return err.code .. "\n" .. err.message
+end })
+fiber.command("read_raw", { timeout = 60000, run = function()
+  return tostring(host.fs.read("fiber-definitely-missing-fs.md"))
+end })
+"#,
+    );
+    extension("failing", dir, setup.home(), FakeClock::new())
+}
+
+#[test]
+fn a_failed_host_exec_raises_code_and_message_that_pcall_catches() {
+    let setup = Setup::new();
+    let ext = failing_extension(&setup);
+    let caught = call(&ext, "run", "").unwrap();
+    let (code, message) = caught.split_once('\n').unwrap();
+    assert_eq!(code, "not_found");
+    assert!(message.starts_with("host.exec: "), "{message}");
+    let Error::Lua {
+        message: uncaught, ..
+    } = &call(&ext, "run_raw", "").unwrap_err()
+    else {
+        panic!("an uncaught host.exec failure is the callback's Lua error")
+    };
+    assert_eq!(uncaught, message);
+}
+
+#[test]
+fn a_failed_host_fs_raises_code_and_message_that_pcall_catches() {
+    let setup = Setup::new();
+    let ext = failing_extension(&setup);
+    let caught = call(&ext, "read", "").unwrap();
+    let (code, message) = caught.split_once('\n').unwrap();
+    assert_eq!(code, "not_found");
+    assert!(message.starts_with("host.fs.read: "), "{message}");
+    let Error::Lua {
+        message: uncaught, ..
+    } = &call(&ext, "read_raw", "").unwrap_err()
+    else {
+        panic!("an uncaught host.fs failure is the callback's Lua error")
+    };
+    assert_eq!(uncaught, message);
+}

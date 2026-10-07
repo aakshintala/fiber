@@ -1,13 +1,17 @@
 use super::*;
 
 fn lua() -> Lua {
+    lua_in(PathBuf::from("/nonexistent-fiber-home"))
+}
+
+fn lua_in(home: PathBuf) -> Lua {
     let lua = Lua::new();
     let hub = crate::lua::Hub::new(fakes::clock::FakeClock::new());
     let failures = failure::install(&lua).unwrap();
     install(
         &lua,
         HostContext {
-            home: PathBuf::from("/nonexistent-fiber-home"),
+            home,
             workspace: PathBuf::from("/nonexistent-workspace"),
             extension: "fiber.test/x".to_owned(),
             session: None,
@@ -19,6 +23,17 @@ fn lua() -> Lua {
         failures.failure,
     )
     .unwrap();
+    lua
+}
+
+/// Lua with the prelude installed, so `pcall` catches a failure as its table.
+fn lua_prelude(home: PathBuf) -> Lua {
+    let lua = lua_in(home);
+    let clock = fakes::clock::FakeClock::new();
+    let deadline = crate::lua::Deadline::new(clock);
+    let dir = fakes::TempDir::new("fiber-host-prelude");
+    crate::lua::install_prelude(&lua, &deadline, dir.path().to_path_buf(), crate::MEMORY_CAP)
+        .unwrap();
     lua
 }
 
@@ -273,4 +288,40 @@ fn a_silent_server_past_the_backstop_is_timeout() {
     .unwrap_err();
     assert_eq!(code, contract::ErrorCode::Timeout, "{message}");
     assert!(message.starts_with("host.http: "), "{message}");
+}
+
+/// The failure a prelude `pcall` of `code` catches: its code and message.
+fn pcall_of(lua: &Lua, code: &str) -> (String, String) {
+    let (ok, err): (bool, LuaValue) = lua
+        .load(&format!("return pcall(function() {code} end)"))
+        .eval()
+        .unwrap();
+    assert!(!ok, "{code} unexpectedly succeeded");
+    let LuaValue::Table(failed) = err else {
+        panic!("{code} raised no failure table");
+    };
+    (failed.get("code").unwrap(), failed.get("message").unwrap())
+}
+
+#[test]
+fn a_secret_with_a_bad_name_is_invalid_arguments() {
+    let lua = lua_prelude(PathBuf::from("/nonexistent-fiber-home"));
+    let (code, message) = pcall_of(&lua, "return host.secret('a/b')");
+    assert_eq!(code, "invalid_arguments");
+    assert!(message.contains("not a secret's name"), "{message}");
+}
+
+#[test]
+fn an_unreadable_secret_is_io_failed() {
+    use std::os::unix::fs::PermissionsExt;
+    let home = fakes::TempDir::new("fiber-host-secret");
+    let home = home.path().to_path_buf();
+    config::store_secret(&home, "token", &config::Secret::new("s3cr3t".to_owned())).unwrap();
+    let path = home.join("credentials").join("token");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let lua = lua_prelude(home);
+    let (code, message) = pcall_of(&lua, "return host.secret('token')");
+    assert_eq!(code, "io_failed");
+    assert!(message.contains("token"), "{message}");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
 }

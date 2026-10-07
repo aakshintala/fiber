@@ -651,10 +651,11 @@ fn a_read_past_the_memory_cap_names_the_call_the_path_and_the_cap() {
     fs::write(setup.workspace().join("small.txt"), "12345678").unwrap();
     assert_eq!(fs.read(b"small.txt").unwrap(), b"12345678");
     fs::write(setup.workspace().join("big.txt"), "123456789").unwrap();
-    let err = fs.read(b"big.txt").unwrap_err();
-    assert!(err.contains("host.fs.read"), "{err}");
-    assert!(err.contains("big.txt"), "{err}");
-    assert!(err.contains(&format!("{CAP} bytes")), "{err}");
+    let (code, message) = fs.read(b"big.txt").unwrap_err();
+    assert_eq!(code, contract::ErrorCode::TooLarge);
+    assert!(message.contains("host.fs.read"), "{message}");
+    assert!(message.contains("big.txt"), "{message}");
+    assert!(message.contains(&format!("{CAP} bytes")), "{message}");
 }
 
 #[test]
@@ -696,4 +697,67 @@ fn stat_through_a_regular_file_raises_rather_than_returning_nil() {
     let error = fails(&lua, r#"return host.fs.stat("plain/inner")"#);
     assert!(error.contains("host.fs.stat"), "{error}");
     assert!(error.contains("plain/inner"), "{error}");
+}
+
+/// The failure a `pcall` of `code` catches: its code and message. The
+/// prelude's `pcall` runs the call in a coroutine of its own, so a failure
+/// the host raises comes back as its table.
+fn pcall_of(lua: &Lua, code: &str) -> (String, String) {
+    let (ok, err): (bool, LuaValue) = lua
+        .load(&format!("return pcall(function() {code} end)"))
+        .eval()
+        .unwrap();
+    assert!(!ok, "{code} unexpectedly succeeded");
+    let LuaValue::Table(failed) = err else {
+        panic!("{code} raised no failure table");
+    };
+    (failed.get("code").unwrap(), failed.get("message").unwrap())
+}
+
+#[test]
+fn every_failure_carries_its_code_for_pcall() {
+    let setup = Setup::new();
+    let lua = setup.lua();
+    let clock = fakes::clock::FakeClock::new();
+    let deadline = crate::lua::Deadline::new(clock);
+    let dir = fakes::TempDir::new("fiber-fs-prelude");
+    crate::lua::install_prelude(&lua, &deadline, dir.path().to_path_buf(), crate::MEMORY_CAP)
+        .unwrap();
+    lua.load("host.fs.write(\"f.md\", \"x\")").exec().unwrap();
+    lua.load("host.fs.mkdir(\"dir\")").exec().unwrap();
+    lua.load("host.fs.write(\"dir/child.md\", \"x\")")
+        .exec()
+        .unwrap();
+    for (code, lua_code, starts) in [
+        (
+            "return host.fs.read(\"missing.md\")",
+            "not_found",
+            "host.fs.read",
+        ),
+        (
+            "host.fs.write(\"no/parent/x.md\", \"x\")",
+            "not_found",
+            "host.fs.write",
+        ),
+        (
+            "host.fs.rename(\"gone.md\", \"there.md\")",
+            "not_found",
+            "host.fs.rename",
+        ),
+        (
+            "return host.fs.list(\"f.md\")",
+            "unsupported_file",
+            "host.fs.list",
+        ),
+        (
+            "host.fs.mkdir(\"f.md/kid\")",
+            "unsupported_file",
+            "host.fs.mkdir",
+        ),
+        ("host.fs.remove(\"dir\")", "io_failed", "host.fs.remove"),
+    ] {
+        let (name, message) = pcall_of(&lua, code);
+        assert_eq!(name, lua_code, "{code}");
+        assert!(message.starts_with(starts), "{code}: {message}");
+    }
 }
