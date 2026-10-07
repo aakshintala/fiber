@@ -178,9 +178,13 @@ fn reviewer_for(
 
 /// The typed model against the switch registry and the naming list: an
 /// exact `provider/model` resolves as at startup, while a bare id counts
-/// every provider that names it, configured or not, loaded or not. Every
-/// failure but the credential sentence is the resolution's own message as
-/// `invalid_arguments`.
+/// every provider that names it, configured or not, loaded or not. A bare
+/// id tries the full typed id first, so a literal id ending in a thinking
+/// level matches before the suffix strips (`docs/model-routing.md`,
+/// "Naming a model": the exact match comes first, since OpenRouter ids
+/// contain colons); only when nothing names the full id does the stripped
+/// id count. Every failure but the credential sentence is the resolution's
+/// own message as `invalid_arguments`.
 /// debt: only the session's and the reviewer's providers switch; any
 /// other installed provider is the credential sentence (#1094). #1094
 /// lifts it after #649 merges.
@@ -199,11 +203,12 @@ fn resolve<'a>(
             Err(error) => Err(invalid(error.to_string())),
         };
     }
-    let mut matches: Vec<String> = naming
-        .iter()
-        .filter(|(_, id)| id == rest)
-        .map(|(provider, id)| format!("{provider}/{id}"))
-        .collect();
+    if typed != rest
+        && let Some(prepared) = resolve_literal(registry, naming, in_map, typed)
+    {
+        return prepared;
+    }
+    let mut matches = named(naming, rest);
     match registry.resolve(typed) {
         Ok(model) => {
             let reference = model.reference();
@@ -243,6 +248,72 @@ fn resolve<'a>(
             Err(invalid(error.to_string()))
         }
     }
+}
+
+/// The `provider/model` references the naming list holds for the bare id
+/// `text`.
+fn named(naming: &[(String, String)], text: &str) -> Vec<String> {
+    naming
+        .iter()
+        .filter(|(_, id)| id == text)
+        .map(|(provider, id)| format!("{provider}/{id}"))
+        .collect()
+}
+
+/// A bare id that is also a literal model id ending in a thinking level:
+/// the full typed id against the registry and the naming list, before the
+/// suffix strips. `Some` when the full id names anything: the match, its
+/// ambiguity, or its credential sentence. `None` when nothing names it,
+/// and the stripped id counts instead; a single naming-only match for a
+/// provider in the map falls through too, since the registry past
+/// placeholders names no such literal.
+fn resolve_literal<'a>(
+    registry: &'a Providers,
+    naming: &[(String, String)],
+    in_map: &dyn Fn(&str) -> bool,
+    typed: &str,
+) -> Option<Result<extensions::Model<'a>, Rejection>> {
+    let mut matches = named(naming, typed);
+    match registry.resolve(typed) {
+        // The registry's own exact-first order tries the full id before
+        // the suffix strips, so a model whose id is the full text is a
+        // full-id match; anything else resolved through the suffix.
+        Ok(model) if model.model.id == typed => {
+            let reference = model.reference();
+            if !matches.contains(&reference) {
+                matches.push(reference);
+            }
+            if matches.len() > 1 {
+                return Some(Err(ambiguous(typed, &mut matches)));
+            }
+            if in_map(model.provider.name.as_str()) {
+                return Some(Ok(model));
+            }
+            return Some(Err(limited(model.provider.name.as_str())));
+        }
+        Err(extensions::Error::Ambiguous {
+            id,
+            matches: theirs,
+        }) if id == typed => {
+            for reference in theirs {
+                if !matches.contains(&reference) {
+                    matches.push(reference.clone());
+                }
+            }
+            return Some(Err(ambiguous(typed, &mut matches)));
+        }
+        Ok(_) | Err(_) => {}
+    }
+    if matches.len() > 1 {
+        return Some(Err(ambiguous(typed, &mut matches)));
+    }
+    if let Some(first) = matches.first()
+        && let Some((provider, _)) = first.split_once('/')
+        && !in_map(provider)
+    {
+        return Some(Err(limited(provider)));
+    }
+    None
 }
 
 /// The credential sentence: the credential for `provider` was not read

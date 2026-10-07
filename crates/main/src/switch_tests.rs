@@ -359,6 +359,107 @@ fn a_naming_match_joins_a_resolved_match_in_ambiguity() {
     );
 }
 
+/// Adds extension `lit` naming `n` (low and high, defaulting low) and the
+/// literal `n:high`: a model id ending in a recognised thinking level.
+fn with_literal_provider(fixture: &Fixture) {
+    let lit = fixture.home.join("extensions/lit");
+    std::fs::create_dir_all(lit.join("providers")).unwrap();
+    std::fs::write(
+        lit.join("extension.json"),
+        json!({"name": "lit", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}).to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        lit.join("providers/lit.json"),
+        json!({
+            "name": "lit",
+            "models": [
+                {"id": "n", "protocol": "openai-responses",
+                 "base_url": "http://127.0.0.1:9/v1", "context_window": 1000,
+                 "thinking_levels": ["low", "high"], "thinking_default": "low"},
+                {"id": "n:high", "protocol": "openai-responses",
+                 "base_url": "http://127.0.0.1:9/v1", "context_window": 1000},
+            ],
+        })
+        .to_string(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_literal_id_ending_in_a_thinking_level_matches_before_the_suffix() {
+    let fixture = fixture("fiber-switch-literal");
+    with_literal_provider(&fixture);
+    let config = config(&fixture, &[]);
+    let (providers, _) = Providers::load(&fixture.home).unwrap();
+    let credentials: Credentials = [("lit", keyed("default"))]
+        .into_iter()
+        .map(|(name, entry)| (name.to_owned(), entry))
+        .collect();
+    let naming = vec![
+        ("lit".to_owned(), "n".to_owned()),
+        ("lit".to_owned(), "n:high".to_owned()),
+    ];
+    let switching = Switching::new(providers, &[], naming, config, credentials).unwrap();
+    // `n:high` selects the literal model, with no thinking level: it is
+    // neither `n` with `high` nor ambiguous with it.
+    let made = prepared(&switching, &args("n:high"), None);
+    assert_eq!(made.model.reference, "lit/n:high");
+    assert_eq!(made.thinking, None);
+    // The suffix still applies to `n` itself (`fake/n` shares the bare
+    // id, so the suffix case names `lit/n` exactly).
+    let made = prepared(&switching, &args_thinking("lit/n", "high"), None);
+    assert_eq!(made.model.reference, "lit/n");
+    assert_eq!(made.thinking, Some(ThinkingLevel::High));
+}
+
+#[test]
+fn an_unloaded_literal_id_counts_toward_ambiguity() {
+    let fixture = fixture("fiber-switch-literal-ambiguity");
+    with_literal_provider(&fixture);
+    let config = config(&fixture, &[]);
+    let (providers, _) = Providers::load(&fixture.home).unwrap();
+    let credentials: Credentials = [("lit", keyed("default"))]
+        .into_iter()
+        .map(|(name, entry)| (name.to_owned(), entry))
+        .collect();
+    // The unloaded `lua` names the same literal `n:high`.
+    let naming = vec![
+        ("lit".to_owned(), "n".to_owned()),
+        ("lit".to_owned(), "n:high".to_owned()),
+        ("lua".to_owned(), "n:high".to_owned()),
+    ];
+    let switching = Switching::new(providers, &[], naming, config, credentials).unwrap();
+    let rejection = rejected(&switching, &args("n:high"), None);
+    assert_eq!(rejection.code, ErrorCode::InvalidArguments);
+    assert_eq!(
+        rejection.message,
+        "The model `n:high` is offered by more than one provider: lit/n:high, lua/n:high. \
+         Name one as `provider/model`."
+    );
+}
+
+#[test]
+fn a_literal_only_an_unloaded_provider_names_is_the_credential_sentence() {
+    let fixture = fixture("fiber-switch-literal-unloaded");
+    let config = config(&fixture, &[]);
+    let (providers, _) = Providers::load(&fixture.home).unwrap();
+    let credentials: Credentials = [("fake", keyed("default"))]
+        .into_iter()
+        .map(|(name, entry)| (name.to_owned(), entry))
+        .collect();
+    // Only the unloaded `lua` names the literal `n:high`: `fake/n` takes a
+    // `high` suffix, but the literal matches first.
+    let naming = vec![
+        ("fake".to_owned(), "n".to_owned()),
+        ("lua".to_owned(), "n:high".to_owned()),
+    ];
+    let switching = Switching::new(providers, &[], naming, config, credentials).unwrap();
+    let rejection = rejected(&switching, &args("n:high"), None);
+    assert_eq!(rejection.code, ErrorCode::InvalidArguments);
+    assert_eq!(rejection.message, sentence("lua"));
+}
+
 #[test]
 fn an_unconfigured_model_counts_toward_ambiguity() {
     let fixture = fixture("fiber-switch-unconfigured");
