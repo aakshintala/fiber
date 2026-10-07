@@ -264,6 +264,57 @@ fn an_html_download_that_cannot_be_saved_is_a_tool_error() {
     );
 }
 
+/// A writer that takes `room` bytes, then fails every write.
+struct FillsUp {
+    file: fs::File,
+    room: usize,
+}
+
+impl std::io::Write for FillsUp {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if bytes.len() > self.room {
+            return Err(std::io::Error::other("the disk is full"));
+        }
+        self.room -= bytes.len();
+        self.file.write(bytes)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.file.flush()
+    }
+}
+
+/// Wraps each artifact in a writer that fills up after 1 MiB.
+fn fills_up_after_a_mib(tool: WebFetch) -> WebFetch {
+    tool.with_artifact_writer(Arc::new(|file| {
+        Box::new(FillsUp {
+            file,
+            room: 1 << 20,
+        })
+    }))
+}
+
+/// Whether `artifacts/` holds no file.
+fn no_file_in(rig: &Rig) -> bool {
+    fs::read_dir(rig.artifacts()).map_or(true, |mut entries| entries.next().is_none())
+}
+
+#[test]
+fn an_html_download_whose_write_fails_is_a_tool_error_and_leaves_no_file() {
+    let server = serve([ok("text/html", "<p>x</p>".repeat(2 << 20 >> 3))]);
+    let rig = Rig::new().with(fills_up_after_a_mib);
+    let output = rig.fetch(&server.url());
+    assert_eq!(code(&output), Some(ErrorCode::ToolError));
+    let message = text(&output);
+    let prefix = format!(
+        "could not save the download to {}/w_",
+        rig.artifacts().display()
+    );
+    assert!(message.starts_with(&prefix), "{message}");
+    assert!(message.ends_with(".html: the disk is full.\n"), "{message}");
+    assert!(no_file_in(&rig), "the partial file is removed");
+}
+
 #[test]
 fn xhtml_comes_back_as_markdown() {
     let server = serve([ok("application/xhtml+xml", "<p>x</p>")]);

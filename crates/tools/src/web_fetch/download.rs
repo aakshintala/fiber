@@ -1,9 +1,18 @@
 //! A downloaded page on its way to its result (`docs/tools.md`,
-//! "web_fetch"): converted to markdown piece by piece as it arrives, so no
-//! whole copy of the page is held beside its markdown.
+//! "web_fetch"): saved to `artifacts/` and converted to markdown piece by
+//! piece as it arrives, so no whole copy of the page is held beside its
+//! markdown.
+
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use super::charset::{self, Decoding, PRESCAN};
 use super::markdown::Stream;
+
+/// Wraps an artifact's file in a test's own writer.
+pub(super) type Wrap = Arc<dyn Fn(File) -> Box<dyn Write + Send> + Send + Sync>;
 
 /// The size of the pieces a download is handled in.
 pub(super) const PIECE: usize = 64 * 1024;
@@ -74,3 +83,96 @@ impl Html {
         decoding.push(bytes, last, &mut |text| stream.push(text));
     }
 }
+
+/// A download being saved to `artifacts/`. Its file is removed when it is
+/// dropped unless [`Artifact::keep`] gave its path, so a call that fails,
+/// times out or is stopped leaves nothing behind. Only a file this artifact
+/// created is ever written or removed.
+pub(super) struct Artifact {
+    path: PathBuf,
+    /// The open file, until a failure closes it.
+    file: Option<Box<dyn Write + Send>>,
+    /// Whether the file is this artifact's own and still on disk.
+    created: bool,
+    /// Why the download could not be saved, once it could not.
+    failed: Option<String>,
+}
+
+impl Artifact {
+    /// Creates `<stem>.<extension>` in `dir`, and `dir` if it is missing.
+    /// A failure is recorded for [`Artifact::keep`], never returned.
+    pub(super) fn create(dir: &Path, stem: &str, extension: &str, wrap: Option<&Wrap>) -> Self {
+        let path = dir.join(format!("{stem}.{extension}"));
+        let opened = fs::create_dir_all(dir)
+            .and_then(|()| OpenOptions::new().write(true).create_new(true).open(&path));
+        match opened {
+            Ok(file) => Self {
+                file: Some(match wrap {
+                    Some(wrap) => wrap(file),
+                    None => Box::new(file),
+                }),
+                created: true,
+                failed: None,
+                path,
+            },
+            Err(error) => Self {
+                failed: Some(unsaved(&path, &error)),
+                file: None,
+                created: false,
+                path,
+            },
+        }
+    }
+
+    /// Appends `bytes`. After a failure it writes nothing: the failure is
+    /// recorded and the partial file removed.
+    pub(super) fn write(&mut self, bytes: &[u8]) {
+        let Some(file) = &mut self.file else {
+            return;
+        };
+        if let Err(error) = file.write_all(bytes) {
+            self.failed = Some(unsaved(&self.path, &error));
+            self.file = None;
+            self.remove();
+        }
+    }
+
+    /// The saved file's path, kept on disk, or why it could not be saved.
+    pub(super) fn keep(mut self) -> Result<String, String> {
+        match self.failed.take() {
+            Some(message) => Err(message),
+            None => {
+                self.created = false;
+                Ok(self.path.display().to_string())
+            }
+        }
+    }
+
+    /// Removes the file if it is this artifact's own. A removal that fails
+    /// leaves the file: nothing is left to report it to.
+    fn remove(&mut self) {
+        if self.created {
+            self.created = false;
+            let _removed = fs::remove_file(&self.path);
+        }
+    }
+}
+
+impl Drop for Artifact {
+    fn drop(&mut self) {
+        self.file = None;
+        self.remove();
+    }
+}
+
+/// The message for a download that could not be saved to `path`.
+fn unsaved(path: &Path, error: &io::Error) -> String {
+    format!(
+        "could not save the download to {}: {error}.",
+        path.display()
+    )
+}
+
+#[cfg(test)]
+#[path = "download_tests.rs"]
+mod tests;

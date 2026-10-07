@@ -9,9 +9,8 @@ mod markdown;
 mod target;
 
 use std::collections::hash_map::RandomState;
-use std::fs::{self, OpenOptions};
 use std::hash::BuildHasher;
-use std::io::{self, Read, Write};
+use std::io::{self, Read};
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -27,6 +26,7 @@ use serde_json::{Map, Value, json};
 use ureq::http::Uri;
 
 use crate::files::{failed, string_argument, text_output};
+use download::{Artifact, Wrap};
 use http::{Ended, Get, Head, Hop, Limit, Stop, guarded};
 
 const MISSING: &str = "Give the page's address as `url`.";
@@ -55,6 +55,8 @@ pub struct WebFetch {
     /// `Some` fixes the proxy: tests, so a developer's environment does not
     /// reach them. `None` reads it from the environment on every call.
     proxy: Option<Option<ureq::Proxy>>,
+    /// Wraps each artifact's file: tests only.
+    wrap: Option<Wrap>,
 }
 
 impl WebFetch {
@@ -70,6 +72,7 @@ impl WebFetch {
                     .map(|addresses| addresses.collect())
             }),
             proxy: None,
+            wrap: None,
         }
     }
 
@@ -77,6 +80,13 @@ impl WebFetch {
     #[cfg(test)]
     pub(crate) fn with_resolver(mut self, resolve: Resolve) -> Self {
         self.resolve = resolve;
+        self
+    }
+
+    /// Writes each artifact through `wrap`'s writer around its file.
+    #[cfg(test)]
+    pub(crate) fn with_artifact_writer(mut self, wrap: Wrap) -> Self {
+        self.wrap = Some(wrap);
         self
     }
 
@@ -275,7 +285,7 @@ impl WebFetch {
             head.content_type.as_deref().unwrap_or_default()
         );
         match kind {
-            Kind::Markdown => match self.save(&bytes, "html") {
+            Kind::Markdown => match self.save(&bytes, "html").keep() {
                 Ok(path) => {
                     let mut html = download::Html::new(head.content_type.as_deref());
                     for piece in bytes.chunks(download::PIECE) {
@@ -297,7 +307,7 @@ impl WebFetch {
                 text.insert_str(0, &format!("{first}\n\n"));
                 text_output(text)
             }
-            Kind::Saved(extension) => match self.save(&bytes, extension) {
+            Kind::Saved(extension) => match self.save(&bytes, extension).keep() {
                 Ok(path) => text_output(format!(
                     "{first}\n\nSaved to {path} ({} bytes). Read it with `read`.\n",
                     bytes.len()
@@ -317,24 +327,19 @@ impl WebFetch {
         }
     }
 
-    /// Saves the download under a fresh name in `artifacts/`, as it came.
-    fn save(&self, bytes: &[u8], extension: &str) -> Result<String, String> {
+    /// A new artifact in `artifacts/` under a fresh name.
+    fn artifact(&self, extension: &str) -> Artifact {
         let stem = format!("w_{:016x}", RandomState::new().hash_one(()));
-        let path = self.artifacts.join(format!("{stem}.{extension}"));
-        let saved = fs::create_dir_all(&self.artifacts).and_then(|()| {
-            OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&path)?
-                .write_all(bytes)
-        });
-        match saved {
-            Ok(()) => Ok(path.display().to_string()),
-            Err(error) => Err(format!(
-                "could not save the download to {}: {error}.",
-                path.display()
-            )),
+        Artifact::create(&self.artifacts, &stem, extension, self.wrap.as_ref())
+    }
+
+    /// Saves the download in a new artifact, as it came.
+    fn save(&self, bytes: &[u8], extension: &str) -> Artifact {
+        let mut artifact = self.artifact(extension);
+        for piece in bytes.chunks(download::PIECE) {
+            artifact.write(piece);
         }
+        artifact
     }
 }
 
