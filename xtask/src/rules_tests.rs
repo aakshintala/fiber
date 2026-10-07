@@ -370,7 +370,7 @@ fn a_member_whose_tree_names_an_image_crate_is_reported_once_per_crate() {
         ),
     ];
     assert_eq!(
-        image_leaks(&trees),
+        leaks(&trees, &IMAGE),
         [
             "provider: its normal dependency tree holds fast_image_resize; only the image child links image code",
             "tools: its normal dependency tree holds image; only the image child links image code",
@@ -391,7 +391,7 @@ fn a_clean_tree_passes_and_picture_and_main_are_exempt() {
         ),
         ("main".to_owned(), tree(&["main", "picture", "image"])),
     ];
-    assert!(image_leaks(&trees).is_empty());
+    assert!(leaks(&trees, &IMAGE).is_empty());
 }
 
 #[test]
@@ -400,5 +400,23 @@ fn only_the_crate_name_at_the_start_of_a_line_counts() {
         "tools".to_owned(),
         "tools v0.0.0 (/path/image)\nserde v1 image\n".to_owned(),
     )];
-    assert!(image_leaks(&trees).is_empty());
+    assert!(leaks(&trees, &IMAGE).is_empty());
+}
+
+#[test]
+fn a_member_whose_tree_names_a_tui_crate_is_reported_and_tui_and_main_are_exempt() {
+    let trees = vec![
+        (
+            "hub".to_owned(),
+            tree(&["hub", "crossterm", "ratatui_lookalike"]),
+        ),
+        ("tui".to_owned(), tree(&["tui", "ratatui", "crossterm"])),
+        ("main".to_owned(), tree(&["main", "tui", "ratatui"])),
+    ];
+    assert_eq!(
+        leaks(&trees, &TUI),
+        [
+            "hub: its normal dependency tree holds crossterm; only the terminal links terminal UI code"
+        ]
+    );
 }
