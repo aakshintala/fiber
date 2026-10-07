@@ -134,6 +134,27 @@ fn put(buf: &mut Buffer, area: Rect, x: u16, y: u16, text: &str, max: u16, text_
     );
 }
 
+/// The rows the frame shows the delete question in: the list rows from
+/// the box edge to the foot. Drawing clamps the stored offset to the
+/// wrapped rows past these, and scrolling clamps the stored offset to
+/// the same maximum, so Down past the end holds and one Up steps back
+/// one row.
+fn question_capacity(placed: &Placed) -> usize {
+    usize::from(placed.foot.saturating_sub(placed.edge.saturating_add(1)))
+}
+
+/// The delete question's maximum scroll offset in `area`: its wrapped
+/// rows past the rows the frame shows them in.
+pub(crate) fn max_question_scroll(app: &App, screen: &HomeScreen, area: Rect) -> usize {
+    let Some(question) = screen.question.as_ref() else {
+        return 0;
+    };
+    let placed = layout(app, screen, area);
+    wrap(question, usize::from(placed.width))
+        .len()
+        .saturating_sub(question_capacity(&placed))
+}
+
 /// Draws home's `screen` into `area` of `buf`: the one-row logo, the box
 /// with the completion panel above it, the session list under the box,
 /// and the foot hint on the last row, with the notices top-right.
@@ -271,7 +292,7 @@ pub(super) fn render(
     // row is the last drawn one once it is past the first screenful,
     // and the list draws from the top otherwise.
     let list_top = placed.edge.saturating_add(1);
-    let capacity = usize::from(placed.foot.saturating_sub(list_top));
+    let capacity = question_capacity(&placed);
     let mut row_y = list_top;
     // The delete question wraps over as many rows as needed, naming
     // the session and everything `--cascade` adds, taking priority

@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use ratatui::layout::Rect;
 use serde_json::{Value, json};
 
 use super::{App, Effect, Kind, Link, Phase, mint, session_command};
@@ -16,6 +17,7 @@ use crate::home::{
 use crate::keys::{Edit, Key};
 use crate::link::Line;
 use crate::mouse::{Target, TargetId};
+use crate::view::max_question_scroll;
 use contract::SessionId;
 
 #[path = "app_exit.rs"]
@@ -758,18 +760,25 @@ impl App {
     }
 
     /// Scrolls the delete question one row: Up toward its first rows,
-    /// Down toward its later ones. The frame clamps the offset to the
-    /// wrapped rows past the screen, so scrolling a short question
-    /// changes nothing drawn.
+    /// Down toward its later ones, clamped to the wrapped rows past the
+    /// screen. Scrolling a short question changes nothing drawn, and
+    /// Down past the end holds, so one Up steps back one row.
     fn scroll_question(&mut self, down: bool) {
+        let max = self
+            .home_screen()
+            .map(|screen| {
+                max_question_scroll(self, &screen, Rect::new(0, 0, self.width, self.height))
+            })
+            .unwrap_or(0);
         if let Some(home) = self.home.as_mut()
             && let Some(Prompt::Delete { scroll, .. }) = home.prompt.as_mut()
         {
-            if down {
-                *scroll = scroll.saturating_add(1);
+            let clamped = (*scroll).min(max);
+            *scroll = if down {
+                clamped.saturating_add(1).min(max)
             } else {
-                *scroll = scroll.saturating_sub(1);
-            }
+                clamped.saturating_sub(1)
+            };
         }
     }
 

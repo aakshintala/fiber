@@ -17,6 +17,8 @@ use crate::mouse::{self, Target, TargetId};
 #[path = "home_view.rs"]
 mod home;
 
+pub(crate) use home::max_question_scroll;
+
 /// The overlay shown while scrolled up once new output arrives.
 const NEW_BELOW: &str = "↓ New messages below";
 

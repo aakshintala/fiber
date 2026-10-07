@@ -2703,6 +2703,9 @@ fn ctrl_c_passes_through_the_question() {
 #[test]
 fn up_and_down_scroll_the_delete_question() {
     let mut app = home();
+    // A small screen: the cascade question wraps past what fits, so the
+    // offset scrolls by one row.
+    app.set_size(60, 12);
     exited_row(&mut app, "s_0123456789abcdef", "fix the parser");
     click_stop(&mut app);
     let now = fakes::clock::FakeClock::new().now();
@@ -2722,9 +2725,12 @@ fn up_and_down_scroll_the_delete_question() {
         ))
         .is_empty()
     );
-    // Down scrolls toward the later rows, Up back toward the first,
-    // holding at the top.
+    // Down and Up scroll the wrapped rows past the screen: Down toward
+    // the later rows, holding at the last one, Up back toward the
+    // first, holding at the top.
     assert_eq!(question_scroll(&app), 0);
+    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(question_scroll(&app), 1);
     assert_eq!(app.on_key(Key::Down, now), Effect::None);
     assert_eq!(question_scroll(&app), 1);
     assert_eq!(app.on_key(Key::Up, now), Effect::None);

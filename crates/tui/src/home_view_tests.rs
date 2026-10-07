@@ -820,6 +820,49 @@ fn the_delete_question_scrolls_past_the_screen() {
         "the last id is past the screen again"
     );
 }
+
+#[test]
+fn one_up_after_down_past_the_end_moves_up_one_row() {
+    let mut app = home(80, 14);
+    app.on_line(hello());
+    app.on_line(status("s_0123456789abcdef", "fix the parser", live()));
+    app.on_line(left("s_0123456789abcdef", "exited"));
+    let dependents: Vec<String> = (1..=20u8).map(|n| format!("s_{n:016x}")).collect();
+    ask_cascade(&mut app, "s_0123456789abcdef", &dependents);
+    // Down to the last rows, keeping every distinct frame: each Down
+    // moves the question by one wrapped row until the last rows draw.
+    let now = fakes::clock::FakeClock::new().now();
+    let mut frames = vec![screen(&app, 80, 14)];
+    loop {
+        app.on_key(Key::Down, now);
+        let next = screen(&app, 80, 14);
+        if next == *frames.last().unwrap_or_else(|| panic!("a first frame")) {
+            break;
+        }
+        frames.push(next);
+    }
+    assert!(frames.len() > 2, "the question scrolls past the screen");
+    // Down past the end keeps the last rows drawn...
+    for _ in 0..5 {
+        app.on_key(Key::Down, now);
+    }
+    let end = frames
+        .last()
+        .unwrap_or_else(|| panic!("a last frame"))
+        .clone();
+    assert_eq!(
+        screen(&app, 80, 14),
+        end,
+        "Down past the end keeps the last rows"
+    );
+    // ...so one Up shows the rows one step back.
+    app.on_key(Key::Up, now);
+    assert_eq!(
+        screen(&app, 80, 14),
+        frames[frames.len() - 2],
+        "one Up scrolls the view up by one row"
+    );
+}
 fn ask_quit(app: &mut App) {
     let now = fakes::clock::FakeClock::new().now();
     app.on_key(Key::CtrlC, now);
