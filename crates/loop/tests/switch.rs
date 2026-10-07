@@ -1622,6 +1622,7 @@ fn resume_interleaving_holds_arrival_order() {
         done.send((looped, outcome)).unwrap();
     });
     // Wait for the re-raised request, then send the live switch and the reply.
+    std::thread::sleep(std::time::Duration::from_millis(500));
     let mut watcher = log.watch();
     let request_id = loop {
         let line = watcher
