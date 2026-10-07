@@ -113,7 +113,7 @@ impl SharedWake {
     /// the wait returns at once, clearing it; otherwise the flag is
     /// checked under the same mutex the condvar wait releases, so a bump
     /// that lands before the wait still returns at once, and the flag is
-    /// cleared on waking (`crates/tools/src/shell/command.rs` `park` does
+    /// cleared on waking (`crates/tools/src/shell/drive.rs` `park` does
     /// the same).
     pub(crate) fn park(&self, clock: &dyn Clock, until: Option<Instant>) {
         // Taken before `wait_until`, and held until the condvar wait, so a

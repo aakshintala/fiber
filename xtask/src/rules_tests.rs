@@ -83,7 +83,7 @@ fn signal_sites_ignores_each_pattern_inside_the_allowlist() {
         for (krate, rel) in [
             ("fakes", "src/process_group.rs"),
             ("mcp", "src/registry.rs"),
-            ("tools", "src/shell/command.rs"),
+            ("tools", "src/shell/process_group.rs"),
         ] {
             let files = [file(krate, rel, line.clone())];
             assert_eq!(signal_sites(&files), Vec::<String>::new(), "{pattern}");
