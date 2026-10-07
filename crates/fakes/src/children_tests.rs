@@ -1,13 +1,19 @@
 use std::io::Write;
+use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::process::CommandExt;
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
 use super::{Ready, escapes_group, ignores_sigterm, leaves_descendants};
+use contract::clock::Clock;
+
+use crate::clock::FakeClock;
 use crate::temp_dir::TempDir;
 use crate::watchdog::Watchdog;
+use crate::within;
 use crate::{kill_group, kill_pid};
 
 const DEADLINE: Duration = Duration::from_secs(5);
@@ -172,4 +178,64 @@ fn in_group(pid: u32, group: u32) -> bool {
         .next()
         .and_then(|pgid| pgid.parse().ok())
         == Some(group)
+}
+
+fn mkfifo(path: &Path) {
+    let status = Command::new("mkfifo").arg(path).status().unwrap();
+    assert!(
+        status.success(),
+        "mkfifo {} exited {status}",
+        path.display()
+    );
+}
+
+#[test]
+fn ready_at_reads_an_existing_fifo() {
+    let dir = TempDir::new("fiber-ready-at");
+    let fifo = dir.path().join("made.fifo");
+    mkfifo(&fifo);
+    let clock = FakeClock::new();
+    let end = clock.origin() + DEADLINE;
+    let ready = Ready::at(&fifo, &|| end.saturating_duration_since(clock.now()));
+    assert_eq!(ready.path(), fifo);
+    let child = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(format!("echo $$ > {}", super::quote(&fifo)))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let pid = child.id();
+    assert_eq!(ready.wait(DEADLINE), vec![pid]);
+    wait_child(child);
+}
+
+#[test]
+fn ready_at_zero_fails_naming_the_fifo_without_opening_it() {
+    let dir = TempDir::new("fiber-ready-at-zero");
+    let fifo = dir.path().join("zero.fifo");
+    mkfifo(&fifo);
+    let at = fifo.clone();
+    let failed = std::panic::catch_unwind(|| {
+        within("Ready::at with no time left", DEADLINE, move || {
+            drop(Ready::at(&at, &|| Duration::ZERO));
+        });
+    })
+    .expect_err("Ready::at fails with no time left");
+    let message = failed.downcast_ref::<String>().cloned().unwrap_or_default();
+    assert!(
+        message.contains(&fifo.display().to_string()),
+        "the failure names the fifo: {message}"
+    );
+    // A writer's non-blocking open fails with no reader: nothing opened it.
+    let opened = std::fs::OpenOptions::new()
+        .write(true)
+        .custom_flags(rustix::fs::OFlags::NONBLOCK.bits().cast_signed())
+        .open(&fifo);
+    assert_eq!(
+        opened.map(drop).map_err(|err| err.raw_os_error()),
+        Err(Some(rustix::io::Errno::NXIO.raw_os_error())),
+        "Ready::at opened the fifo with no time left"
+    );
 }
