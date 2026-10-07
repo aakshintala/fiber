@@ -20,7 +20,22 @@ use serde_json::{Map, Value, json};
 
 use super::{Ask, delete, delete_run, export, run};
 
-const FIRST: &str = "{\"seq\":0,\"kind\":\"a\"}\n";
+/// A `session_started` first line for session `id` in `workspace`: a full
+/// envelope, so `resolve` keeps it, in this project's workspace. `from`
+/// continues a session, as a fork does.
+fn started(id: &str, workspace: &Path, from: Option<&str>) -> String {
+    let mut payload = json!({"workspace": workspace,
+        "variables": {"path": "/usr/bin", "names": [], "source": "inherited"}});
+    if let Some(from) = from {
+        payload["forked_from"] = json!({"session_id": from, "seq": 1});
+    }
+    format!(
+        "{}\n",
+        json!({"kind": "session_started", "session_id": id, "ts": 0,
+            "schema_version": 1, "seq": 0, "payload": payload})
+    )
+}
+
 const SECOND: &str = "{\"seq\":1,\"kind\":\"b\"}\n";
 const TORN: &str = "{\"seq\":2,\"kin";
 
@@ -56,11 +71,16 @@ impl Setup {
     }
 
     /// A session directory with two complete lines, a torn tail, one
-    /// artifact and a lock file.
+    /// artifact and a lock file. The first line starts the session in
+    /// this workspace, so `resolve` keeps it.
     fn session(&self, id: &str) {
         let dir = self.sessions().join(id);
         fs::create_dir_all(dir.join("artifacts")).unwrap();
-        fs::write(dir.join("events.jsonl"), format!("{FIRST}{SECOND}{TORN}")).unwrap();
+        fs::write(
+            dir.join("events.jsonl"),
+            format!("{}{SECOND}{TORN}", started(id, &self.workspace(), None)),
+        )
+        .unwrap();
         fs::write(dir.join("artifacts/a_1.txt"), "artifact\n").unwrap();
         fs::write(dir.join("session.lock"), "held").unwrap();
     }
@@ -83,7 +103,11 @@ fn a_unique_prefix_exports_the_complete_lines_and_the_artifact() {
     assert_eq!(out, format!("{}\n", target.display()).into_bytes());
     assert_eq!(
         fs::read(target.join("events.jsonl")).unwrap(),
-        format!("{FIRST}{SECOND}").into_bytes()
+        format!(
+            "{}{SECOND}",
+            started("s_exportaa01", &setup.workspace(), None)
+        )
+        .into_bytes()
     );
     assert_eq!(
         fs::read(target.join("artifacts/a_1.txt")).unwrap(),
@@ -109,7 +133,11 @@ fn an_explicit_relative_path_lands_under_the_workspace() {
     assert_eq!(out, format!("{}\n", target.display()).into_bytes());
     assert_eq!(
         fs::read(target.join("events.jsonl")).unwrap(),
-        format!("{FIRST}{SECOND}").into_bytes()
+        format!(
+            "{}{SECOND}",
+            started("s_exportbb01", &setup.workspace(), None)
+        )
+        .into_bytes()
     );
     assert_eq!(
         fs::read(target.join("artifacts/a_1.txt")).unwrap(),
@@ -196,7 +224,7 @@ fn export_exits_zero_and_writes_the_export() {
     assert_eq!(status.code(), Some(0), "{status:?}");
     assert_eq!(
         fs::read(setup.workspace().join(CHILD_ID).join("events.jsonl")).unwrap(),
-        format!("{FIRST}{SECOND}").into_bytes()
+        format!("{}{SECOND}", started(CHILD_ID, &setup.workspace(), None)).into_bytes()
     );
 }
 
@@ -207,24 +235,16 @@ const FORK: &str = "s_00000000000000b2";
 /// One named deadline for the fake hub's read and the test's receive.
 const HUB_DEADLINE: Duration = Duration::from_secs(10);
 
-/// A `session_started` first line, continuing `from` when given.
-fn started(from: Option<&str>) -> String {
-    let mut payload = json!({"workspace": "/w"});
-    if let Some(from) = from {
-        payload["forked_from"] = json!({"session_id": from, "seq": 1});
-    }
-    format!(
-        "{}\n",
-        json!({"kind": "session_started", "seq": 0, "payload": payload})
-    )
-}
-
 impl Setup {
     /// Session `id` in the workspace's project, continuing `from`.
     fn started(&self, id: &str, from: Option<&str>) {
         let dir = self.sessions().join(id);
         fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("events.jsonl"), started(from)).unwrap();
+        fs::write(
+            dir.join("events.jsonl"),
+            started(id, &self.workspace(), from),
+        )
+        .unwrap();
     }
 }
 

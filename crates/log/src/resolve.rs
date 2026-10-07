@@ -14,7 +14,11 @@ use crate::{EVENTS, Error};
 /// listed in `sessions`, never joined into a path, so nothing outside
 /// `sessions` is read or returned, whatever the selector holds. An empty
 /// selector would prefix every name, so it matches nothing.
-pub fn resolve(sessions: &Path, selector: &str) -> Result<SessionId, Error> {
+pub fn resolve(
+    sessions: &Path,
+    selector: &str,
+    _in_project: &dyn Fn(&str) -> bool,
+) -> Result<SessionId, Error> {
     if selector.is_empty() {
         return Err(Error::NotFound(sessions.to_owned()));
     }

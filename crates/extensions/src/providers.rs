@@ -106,7 +106,7 @@ pub fn leave_out_invalid(
             };
             let message = format!(
                 "The model `{provider}/{}` names {fields} in its `extra_body`, \
-                 {noun} Fiber relies on.",
+                 {noun} Fiber builds itself.",
                 model.id
             );
             notices.push(Notice {

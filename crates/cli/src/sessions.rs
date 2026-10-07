@@ -51,7 +51,11 @@ fn run(
     out: &mut dyn Write,
 ) -> Result<PathBuf, Failure> {
     let (sessions, _) = project_of(home, workspace)?;
-    let id = log::resolve(&sessions, selector).map_err(|e| failed(e.code(), e))?;
+    let project = doors::project(workspace);
+    let id = log::resolve(&sessions, selector, &|started| {
+        doors::project(Path::new(started)) == project
+    })
+    .map_err(|e| failed(e.code(), e))?;
     let target = match path {
         Some(path) => workspace.join(path),
         None => workspace.join(&id.0),
@@ -126,7 +130,11 @@ fn delete_run(
         return Err(usage(DELETE_NOBODY));
     }
     let (sessions, _) = project_of(home, workspace)?;
-    let id = log::resolve(&sessions, selector).map_err(|e| failed(e.code(), e))?;
+    let project = doors::project(workspace);
+    let id = log::resolve(&sessions, selector, &|started| {
+        doors::project(Path::new(started)) == project
+    })
+    .map_err(|e| failed(e.code(), e))?;
     let mut listed = vec![id.clone()];
     if cascade {
         listed.extend(log::dependents(home, &id));

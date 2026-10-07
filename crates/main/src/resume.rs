@@ -42,7 +42,10 @@ pub(crate) fn ask_resume(
         }
     };
     let sessions = log::sessions_dir(&home, &doors::project(&workspace));
-    let id = match log::resolve(&sessions, &selector) {
+    let project = doors::project(&workspace);
+    let id = match log::resolve(&sessions, &selector, &|started| {
+        doors::project(Path::new(started)) == project
+    }) {
         Ok(id) => id,
         Err(e) => return ask_failed(failed(e.code(), e)),
     };
