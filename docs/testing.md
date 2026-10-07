@@ -253,6 +253,7 @@ A crate's first implementation ticket ships the jigs listed for it:
 | `tools` | `call` | Runs one tool call with the given arguments and prints its result. |
 | `tui` | `draw` | Draws an events file at a given width and prints the screen as text. |
 | `loop` | `turn` | Runs one turn against the fake provider and test tools and prints its events. |
+| `extensions` | `pin_check` | Times checking a repository's declared paths against `pinned.json`, cold and warm, in one process. |
 | `doors` | `connect` | Connects to a running session through the hub, or to its socket, and sends the JSON commands typed on stdin, printing what comes back. |
 
 `contract` has no jig: it holds types, not behaviour. A jig not in this table
