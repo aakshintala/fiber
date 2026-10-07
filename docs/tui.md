@@ -890,7 +890,7 @@ pointer moving along one target, wrote 1 frame and 86 bytes in 20,000
 reports, 115 to 120 µs a report; a change of target on every report wrote
 20,000 frames and 1,580,000 bytes, 79 bytes a frame, 271 µs a report; the
 fast sweep wrote 1,332 frames and 358,360 bytes, 129 µs a report. The frames
-and bytes match the macOS run; the times are 1.5 to 1.9 times as long.
+and bytes match the macOS run; the times are 1.4 to 1.9 times as long.
 
 ## Look
 
