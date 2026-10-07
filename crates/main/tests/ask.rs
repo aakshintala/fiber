@@ -351,7 +351,7 @@ fn dropping_the_group_guard_kills_the_group() {
     thread::spawn(move || done.send(child.wait()).unwrap());
     let status = match finished.recv_timeout(deadline.left()) {
         Ok(status) => status.unwrap(),
-        Err(_) => panic!("waited until the deadline for the process group to die"),
+        Err(_) => support::expired(deadline, group, &finished, "the process group to die"),
     };
     assert_eq!(status.signal(), Some(9));
     assert!(!group_alive(deadline, group));
