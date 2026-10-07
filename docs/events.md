@@ -159,7 +159,7 @@ below names a shape from this section by its name.
 | `code` | string | yes | a stable label from `docs/errors.md`, "Registry"; an open set, and an unknown code is a generic failure |
 | `message` | string | yes | Fiber's own sentence, saying what to do when there is a fix |
 | `retry_after` | number | no | on a failed model call, the seconds the provider asked Fiber to wait |
-| `provider` | object | no | on a failed model call: `name` (string), `status` (integer, the HTTP status) and `message` (string, the provider's own message) |
+| `provider` | object | no | on a failed model call, or a Lua provider's `credential()` that failed at startup: `name` (string), `status` (integer, the HTTP status; absent when an extension provider's `credential()` or `sign()` failed) and `message` (string, the provider's own message) |
 
 ### `process`
 
