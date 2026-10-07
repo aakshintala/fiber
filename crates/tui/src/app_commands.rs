@@ -543,8 +543,7 @@ impl App {
             }
             (Phase::Pending { .. }, None) => return Effect::None,
             (Phase::Starting, None) => {
-                let workspace = self.workspace.display().to_string();
-                let args = json!({"workspace": workspace, "content": content});
+                let args = self.start_args(content);
                 let line = json!({"id": id, "command": "start", "args": args});
                 (Kind::Start, line)
             }

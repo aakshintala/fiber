@@ -16,6 +16,7 @@ mod files;
 mod focus;
 mod format;
 mod highlight;
+mod home;
 mod input;
 mod jigs;
 mod keymap;
@@ -37,7 +38,6 @@ use std::fs::File;
 use std::io::{self, PipeReader, PipeWriter};
 use std::ops::RangeInclusive;
 use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
@@ -56,6 +56,8 @@ use crate::app::{App, Effect, mint, session_command};
 use crate::keys::{Button, Event, MouseKind, Parser, Reply};
 use crate::link::Line;
 use crate::mouse::{Pointer, Target};
+
+pub use home::Launch;
 
 pub use jigs::{draw, hover_frames, measure_paging};
 
@@ -92,25 +94,26 @@ pub(crate) enum Input {
     },
 }
 
-/// Runs the terminal on `tty`, starting sessions in `workspace`, whose
-/// project key (`docs/state.md`, "Projects") is `project`. `hover` is
-/// `tui.hover`: with it off, mouse mode 1003 is never sent and nothing is
-/// tinted under the pointer. Returns 0 on quit and 1 when the terminal
-/// cannot be set up or drawn. The terminal is restored on every return.
+/// Runs the terminal on `tty` for `launch`, starting sessions in its
+/// workspace. `hover` is `launch.hover`: with it off, mouse mode 1003 is
+/// never sent and nothing is tinted under the pointer. Returns 0 on quit
+/// and 1 when the terminal cannot be set up or drawn. The terminal is
+/// restored on every return.
 pub fn run(
     tty: File,
-    workspace: PathBuf,
-    project: String,
+    launch: Launch,
     connect: Connect,
     on_attach: OnAttach,
     clock: Arc<dyn Clock>,
-    hover: bool,
 ) -> i32 {
     // SIGWINCH is caught from before the size is read, so no resize is
     // missed; its thread starts after the first frame.
     let signals = Signals::new([SIGWINCH]).ok();
     catch_interrupts();
     let _restore = term::Guard;
+    // Home is always set, so the first frame draws at once: it runs no
+    // child process and reads nothing.
+    let hover = launch.hover;
     let Ok((width, height)) = term::setup(&tty, hover) else {
         return 1;
     };
@@ -120,8 +123,8 @@ pub fn run(
     let Ok(screen) = Screen::new(CrosstermBackend::new(out), width, height) else {
         return 1;
     };
-    let mut app = App::new(workspace);
-    app.set_project(project);
+    let mut app = App::new(launch.workspace.clone());
+    app.set_home(launch);
     app.set_size(width, height);
     let mut terminal = Loop {
         app,

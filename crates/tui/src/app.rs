@@ -41,6 +41,8 @@ pub(crate) mod copy;
 mod focus;
 #[path = "history.rs"]
 mod history;
+#[path = "app_home.rs"]
+mod home;
 #[path = "app_mouse.rs"]
 mod mouse;
 
@@ -158,6 +160,8 @@ pub(crate) enum Target {
 pub(crate) struct App {
     /// The launch directory `start` names.
     workspace: PathBuf,
+    /// Home's state, once `run` sets it; `None` keeps today's screen.
+    home: Option<home::Home>,
     draft: Draft,
     phase: Phase,
     link: Link,
@@ -205,6 +209,7 @@ impl App {
     pub(crate) fn new(workspace: PathBuf) -> Self {
         Self {
             workspace,
+            home: None,
             draft: Draft::default(),
             phase: Phase::Starting,
             link: Link::Waiting,

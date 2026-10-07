@@ -14,6 +14,9 @@ use crate::app::{App, QUIT_HINT};
 use crate::markdown::{Role, style};
 use crate::mouse::{self, Target, TargetId};
 
+#[path = "home_view.rs"]
+mod home;
+
 /// The overlay shown while scrolled up once new output arrives.
 const NEW_BELOW: &str = "↓ New messages below";
 
@@ -75,6 +78,11 @@ pub(crate) fn render(
     buf: &mut Buffer,
     pointer: Option<(u16, u16)>,
 ) -> Vec<Target> {
+    // Home draws while no session is on screen; the conversation draws
+    // once one attaches.
+    if let Some(screen) = app.home_screen() {
+        return home::render(app, &screen, area, buf, pointer);
+    }
     let mut targets = Vec::new();
     let mut bottom = area.bottom();
     if let Some(panel) = app.panel() {
@@ -316,6 +324,9 @@ fn input_box(app: &App, width: u16) -> (Vec<String>, usize, usize, u16) {
 /// box has focus, `None` while navigating or the approval panel is open,
 /// or the cursor's row is off a screen too short for it.
 pub(crate) fn cursor(app: &App, area: Rect) -> Option<Position> {
+    if let Some(screen) = app.home_screen() {
+        return home::cursor(app, &screen, area);
+    }
     if app.panel().is_some() || app.focused().is_some() {
         return None;
     }

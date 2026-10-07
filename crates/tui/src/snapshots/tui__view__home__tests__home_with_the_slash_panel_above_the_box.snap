@@ -1,0 +1,28 @@
+---
+source: crates/tui/src/home_view_tests.rs
+expression: "screen(&app, 80, 24)"
+---
+/name <text>  Names the session.  command
+/reload  Reloads configuration, MCP servers and extensions.  command
+/close  Stops the session on screen.  command
+/quit  Quits.  command           ⌇ fiber 0.0.1
+/approvals  Reopens the waiting approvals and questions.  command
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+> /
+
+
+[w]  enter starts a session
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+
+
+
+
+
+
+
+
+
+
+
+
+           ↓ the session list · F1 the key map · Ctrl+C twice to quit

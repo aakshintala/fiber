@@ -13,6 +13,17 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
+/// The launch description `run` tests start from: `/w`, outside git.
+fn launch() -> super::Launch {
+    super::Launch {
+        workspace: PathBuf::from("/w"),
+        project: "-w".to_owned(),
+        git: false,
+        hover: true,
+        version: "0.0.1".to_owned(),
+    }
+}
+
 /// One named wall-clock deadline for every blocking wait.
 const DEADLINE: Duration = Duration::from_secs(10);
 
@@ -617,12 +628,10 @@ fn run_quits_on_double_ctrl_c_with_the_reader_blocked() {
         .spawn(move || {
             let code = super::run(
                 slave,
-                PathBuf::from("/w"),
-                "-w".to_owned(),
+                launch(),
                 Box::new(move || Ok((hub, hello))),
                 Box::new(|_| {}),
                 clock,
-                true,
             );
             match done.send(code) {
                 Ok(()) | Err(_) => {}
@@ -637,8 +646,9 @@ fn run_quits_on_double_ctrl_c_with_the_reader_blocked() {
         b"\x1b[?1049h\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b[?u\x1b[c";
     let start = read_exact(&pair.main, expected.len(), "the start bytes");
     assert_eq!(start, expected);
-    let frame = read_exact(&pair.main, 10, "the first frame");
-    assert!(frame.contains(&b'>'));
+    // On home the input line is not on the last row: the first frame is
+    // read through the placeholder, whose letters are written together.
+    read_until(&pair.main, b"shortcuts", "the first frame");
     // The slave is in raw mode while running.
     let raw = rustix::termios::tcgetattr(&pair.slave).unwrap_or_else(|err| panic!("attr: {err}"));
     assert!(is_cooked(&before));
@@ -680,12 +690,10 @@ fn run_shows_a_failed_connect_and_still_quits_restored() {
         .spawn(move || {
             let code = super::run(
                 slave,
-                PathBuf::from("/w"),
-                "-w".to_owned(),
+                launch(),
                 Box::new(|| Err(io::Error::other("refused"))),
                 Box::new(|_| {}),
                 fakes::clock::FakeClock::new(),
-                true,
             );
             done.send(code).unwrap_or(());
         })
@@ -728,12 +736,10 @@ fn run_redraws_on_sigwinch_at_the_new_size() {
         .spawn(move || {
             let code = super::run(
                 slave,
-                PathBuf::from("/w"),
-                "-w".to_owned(),
+                launch(),
                 Box::new(|| Err(io::Error::other("refused"))),
                 Box::new(|_| {}),
                 fakes::clock::FakeClock::new(),
-                true,
             );
             done.send(code).unwrap_or(());
         })
@@ -754,11 +760,14 @@ fn run_redraws_on_sigwinch_at_the_new_size() {
     // test's `run`.
     signal_hook::low_level::raise(signal_hook::consts::SIGWINCH)
         .unwrap_or_else(|err| panic!("raise: {err}"));
-    // The input line moves to the new last row: the cursor goes there, and
-    // the next character printed, after any colour change, is its `>`.
+    // The foot hint sits on the new last row, wider than the screen and
+    // cut: the cursor goes to column 1, and the next character printed,
+    // after any colour change, is its `↓`.
     read_until(&pair.main, b"\x1b[10;1H", "the move to row 10");
-    let next = read_until(&pair.main, b">", "the input line on row 10");
-    let between = next.split_last().map_or(&[][..], |(_, rest)| rest);
+    let next = read_until(&pair.main, "↓".as_bytes(), "the foot hint on row 10");
+    let between = next
+        .get(..next.len().saturating_sub("↓".len()))
+        .unwrap_or_default();
     assert!(
         between
             .iter()
