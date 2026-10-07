@@ -317,8 +317,12 @@ fn a_head_start_tag_after_the_head_ended_is_ignored() {
         to_markdown("<head><title>T</title>x<head></p>y"),
         "# T\n\nx\n\ny\n"
     );
-    // A first `head` start tag still opens it.
-    assert_eq!(to_markdown("<html><head><meta></p>x"), "x\n");
+    // A first `head` start tag still opens it, after an `html` start tag
+    // too, and its end tags write nothing; any other start tag before it
+    // began the body, so the end tag then shows.
+    assert_eq!(to_markdown("<head></b>x"), "x\n");
+    assert_eq!(to_markdown("<html><head></b>x"), "x\n");
+    assert_eq!(to_markdown("<meta><head></b>x"), "**x\n");
 }
 
 #[test]
