@@ -102,6 +102,17 @@ pub enum ConfigError {
         /// Why it cannot be used, never a value.
         why: String,
     },
+    /// One file, or `-c`, that sets a key of an extension under both its
+    /// short and its full name (`docs/configuration.md`, "Keys").
+    #[error(
+        "{source_name}: `{key}` is set under both the short and the full name of the extension; keep one."
+    )]
+    DuplicateExtension {
+        /// The file, or `-c` for the command line.
+        source_name: String,
+        /// The dotted key, under the short name.
+        key: String,
+    },
     /// A secret's name that is not one file name.
     #[error("`{name}` is not a secret's name: it must be one file name in credentials/.")]
     SecretName {
@@ -117,7 +128,8 @@ impl ConfigError {
             Self::Json { .. }
             | Self::WrongType { .. }
             | Self::NotPlain { .. }
-            | Self::Shape { .. } => ErrorCode::ConfigInvalid,
+            | Self::Shape { .. }
+            | Self::DuplicateExtension { .. } => ErrorCode::ConfigInvalid,
             Self::CredentialMissing { .. } => ErrorCode::CredentialMissing,
             Self::CredentialFailed { .. } => ErrorCode::CredentialFailed,
             Self::Io { .. } => ErrorCode::IoFailed,

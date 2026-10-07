@@ -27,7 +27,7 @@ use serde_json::{Value, json};
 /// How long one `fiber` run may take.
 const DEADLINE: Duration = Duration::from_secs(20);
 
-const HOOKS_FILE: &str = ".fiber/config/github.com-aakshintala-fiber-extensions-hooks.json";
+const HOOKS_FILE: &str = ".fiber/config/hooks.json";
 
 /// Fiber home and a git repository in a temporary directory, removed on
 /// drop.
