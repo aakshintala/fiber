@@ -626,3 +626,104 @@ fn a_repositorys_file_source_is_not_one_the_credential_reader_reads() {
     let config = setup.load(&[]).unwrap();
     assert_eq!(files(&config, &[]), Vec::<std::path::PathBuf>::new());
 }
+
+fn read_with(
+    config: &Config,
+    provider: &ProviderData,
+    run: config::Runner<'_>,
+) -> Result<config::Read, ConfigError> {
+    config.credential_with(provider, "default", run)
+}
+
+#[test]
+fn the_runner_gets_the_built_command_with_stdin_and_stderr_null() {
+    let setup = Setup::new();
+    let config = setup.load(&[]).unwrap();
+    let seen = std::cell::RefCell::new(Vec::new());
+    let script = "echo noise >&2; if read line; then printf got; else printf eof; fi";
+    let read = read_with(
+        &config,
+        &acme(command(&["sh", "-c", script])),
+        &|command: &mut std::process::Command| {
+            seen.borrow_mut().push((
+                command.get_program().to_owned(),
+                command
+                    .get_args()
+                    .map(ToOwned::to_owned)
+                    .collect::<Vec<_>>(),
+            ));
+            let output = command.output()?;
+            // A null stderr collects nothing; an inherited or piped one would.
+            assert!(output.stderr.is_empty());
+            Ok(output)
+        },
+    )
+    .unwrap();
+    assert_eq!(read.secret.expose(), "eof");
+    assert_eq!(read.file, None);
+    assert_eq!(
+        seen.into_inner(),
+        [("sh".into(), vec!["-c".into(), script.into()])]
+    );
+}
+
+#[test]
+fn the_runners_output_is_read_as_a_command_source() {
+    let setup = Setup::new();
+    let config = setup.load(&[]).unwrap();
+    for (argv, why) in [
+        (&["false", "sk-in-argument"][..], "`false` failed"),
+        (&["printf", "  \n"], "`printf` printed no key"),
+    ] {
+        let err = read_with(
+            &config,
+            &acme(command(argv)),
+            &|command: &mut std::process::Command| command.output(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code(), ErrorCode::CredentialMissing);
+        let message = err.to_string();
+        assert!(message.contains(why), "{message}");
+        assert!(!message.contains("sk-in-argument"), "{message}");
+    }
+    let err = read_with(&config, &acme(command(&["printf", "k"])), &|_| {
+        Err(std::io::Error::other("refused"))
+    })
+    .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("`printf` could not be started: refused")
+    );
+}
+
+#[test]
+fn a_file_source_behind_a_symlink_names_its_canonical_target() {
+    let setup = Setup::new();
+    let config = setup.load(&[]).unwrap();
+    let target = setup.root().join("keys/real");
+    setup.write(&target, "from-target\n");
+    let link = setup.root().join("link");
+    symlink(&target, &link).unwrap();
+    let never = &|_: &mut std::process::Command| -> std::io::Result<std::process::Output> {
+        panic!("no command runs for a file source")
+    };
+    let read = read_with(&config, &acme(Some(CredentialSource::File(link))), never).unwrap();
+    assert_eq!(read.secret.expose(), "from-target");
+    assert_eq!(read.file, Some(std::fs::canonicalize(&target).unwrap()));
+}
+
+#[test]
+fn an_env_or_command_source_names_no_file() {
+    let setup = Setup::new();
+    store_credential(&setup.home(), "stored", "default", &Secret::new("s".into())).unwrap();
+    let config = setup.load(&[]).unwrap();
+    let output = &|command: &mut std::process::Command| command.output();
+    for provider in [
+        acme(Some(CredentialSource::Env("CARGO_MANIFEST_DIR".into()))),
+        acme(command(&["printf", "k"])),
+        shared("stored", "stored", None),
+    ] {
+        let read = read_with(&config, &provider, output).unwrap();
+        assert_eq!(read.file, None, "{}", provider.name);
+    }
+}
