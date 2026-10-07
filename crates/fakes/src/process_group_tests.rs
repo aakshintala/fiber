@@ -9,8 +9,9 @@ use std::thread;
 use std::time::Duration;
 
 use super::{
-    MATCHING_PATTERN_VAR, MATCHING_WATCHDOG_SCRIPT, WATCHDOG_SCRIPT, group_empties, kill_group,
-    kill_matching, kill_pid, matching, pattern,
+    MATCHING_PATTERN_VAR, MATCHING_WATCHDOG_SCRIPT, WATCHDOG_SCRIPT, alive, group_empties,
+    group_lives, kill_group, kill_matching, kill_pid, listed_exit, matching, matching_exits,
+    pattern, pids_exit,
 };
 
 const DEADLINE: Duration = Duration::from_secs(5);
@@ -299,4 +300,199 @@ fn group_empties_keeps_waiting_while_the_group_lives_and_returns_once_it_empties
         Ok(true),
         "waited {DEADLINE:?} for group_empties to see the emptied group"
     );
+}
+
+/// A shell held alive on a stdin pipe the test owns: dropping the pipe ends
+/// it, and the test reaps it.
+fn held() -> Child {
+    Command::new("sh")
+        .args(["-c", "read line"])
+        .process_group(0)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap()
+}
+
+#[test]
+#[should_panic(expected = "refusing")]
+fn alive_refuses_pid_zero() {
+    alive(0);
+}
+
+#[test]
+#[should_panic(expected = "refusing")]
+fn alive_refuses_pid_one() {
+    alive(1);
+}
+
+#[test]
+#[should_panic(expected = "refusing")]
+fn group_probe_refuses_group_zero() {
+    group_lives(0);
+}
+
+#[test]
+#[should_panic(expected = "refusing")]
+fn group_probe_refuses_group_one() {
+    group_lives(1);
+}
+
+#[test]
+fn alive_holds_while_the_process_lives_and_falls_once_it_is_reaped() {
+    let mut child = held();
+    let pid = child.id();
+    assert!(alive(pid), "a live child must read as alive");
+    drop(child.stdin.take().unwrap());
+    reaped(child, "the held child to exit once its stdin closed");
+    assert!(!alive(pid), "a reaped child must not read as alive");
+}
+
+#[test]
+fn group_probe_holds_while_the_group_lives_and_falls_once_it_is_reaped() {
+    let mut child = held();
+    let group = child.id();
+    assert!(group_lives(group), "a live group must read as live");
+    drop(child.stdin.take().unwrap());
+    reaped(child, "the group leader to exit once its stdin closed");
+    assert!(!group_lives(group), "a reaped group must not read as live");
+}
+
+#[test]
+fn pids_exit_waits_for_both_pids() {
+    let mut a = held();
+    let mut b = held();
+    let pa = a.id();
+    let pb = b.id();
+    let stdin_a = a.stdin.take().unwrap();
+    let stdin_b = b.stdin.take().unwrap();
+    let (answered, answer) = mpsc::channel();
+    thread::spawn(move || answered.send(pids_exit(&[pa, pb], DEADLINE)).unwrap());
+    drop(stdin_a);
+    reaped(a, "the first child to exit once its stdin closed");
+    assert!(
+        answer.recv_timeout(Duration::from_millis(200)).is_err(),
+        "pids_exit answered while the second child lived"
+    );
+    drop(stdin_b);
+    reaped(b, "the second child to exit once its stdin closed");
+    assert_eq!(
+        answer.recv_timeout(DEADLINE),
+        Ok(true),
+        "waited {DEADLINE:?} for both pids to exit"
+    );
+}
+
+#[test]
+fn pids_exit_is_false_while_a_pid_lives() {
+    let mut child = held();
+    let pid = child.id();
+    let stdin = child.stdin.take().unwrap();
+    assert!(
+        !pids_exit(&[pid], Duration::from_millis(200)),
+        "a live pid must not read as exited"
+    );
+    drop(stdin);
+    reaped(child, "the held child to exit once its stdin closed");
+}
+
+#[test]
+fn matching_exits_is_true_when_nothing_matches() {
+    let dir = crate::TempDir::new("px");
+    let marker = dir
+        .path()
+        .join("nothing-matches-this-marker")
+        .to_string_lossy()
+        .into_owned();
+    assert!(
+        matching_exits(&marker, DEADLINE),
+        "waited {DEADLINE:?} for nothing to match"
+    );
+}
+
+#[test]
+fn matching_exits_is_false_while_a_match_lives() {
+    let dir = crate::TempDir::new("py");
+    let marker = dir.path().to_string_lossy().into_owned();
+    let child = marked(&marker);
+    let group = child.id();
+    assert!(
+        !matching_exits(&marker, Duration::from_millis(200)),
+        "a live match must not read as exited"
+    );
+    kill_group(group, "KILL").unwrap();
+    reaped(child, "the killed marked shell");
+}
+
+#[test]
+fn matching_exits_waits_for_a_live_match() {
+    let dir = crate::TempDir::new("pz");
+    let marker = dir.path().to_string_lossy().into_owned();
+    let child = marked(&marker);
+    let group = child.id();
+    let marker_text = marker.clone();
+    let (answered, answer) = mpsc::channel();
+    thread::spawn(move || {
+        answered
+            .send(matching_exits(&marker_text, DEADLINE))
+            .unwrap()
+    });
+    assert!(
+        answer.recv_timeout(Duration::from_millis(200)).is_err(),
+        "matching_exits answered while the match lived"
+    );
+    kill_group(group, "KILL").unwrap();
+    reaped(child, "the killed marked shell");
+    assert_eq!(
+        answer.recv_timeout(DEADLINE),
+        Ok(true),
+        "waited {DEADLINE:?} for the match to exit"
+    );
+}
+
+#[test]
+fn listed_exit_is_false_when_the_second_listing_still_matches() {
+    let mut child = held();
+    let pid = child.id();
+    let stdin = child.stdin.take().unwrap();
+    let mut calls = 0;
+    let listed = listed_exit(
+        move || {
+            calls += 1;
+            if calls == 1 {
+                Ok(vec![])
+            } else {
+                Ok(vec![pid])
+            }
+        },
+        DEADLINE,
+    );
+    assert!(
+        !listed,
+        "a second listing that still matches must read as live"
+    );
+    drop(stdin);
+    reaped(child, "the held child to exit once its stdin closed");
+}
+
+#[test]
+fn listed_exit_is_true_when_the_second_listing_is_empty() {
+    let mut child = held();
+    let pid = child.id();
+    drop(child.stdin.take().unwrap());
+    reaped(child, "the held child to exit once its stdin closed");
+    let mut calls = 0;
+    let listed = listed_exit(
+        move || {
+            calls += 1;
+            if calls == 1 {
+                Ok(vec![pid])
+            } else {
+                Ok(vec![])
+            }
+        },
+        DEADLINE,
+    );
+    assert!(listed, "waited {DEADLINE:?} for the listed pid to exit");
 }
