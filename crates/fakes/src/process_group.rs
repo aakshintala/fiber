@@ -4,17 +4,18 @@
 //! of 1 or less is refused before anything runs. The command-line form
 //! refuses an empty match, which reaches every process the user owns.
 //!
-//! The exit probes (`alive`, `group_lives`) and the waits built on them
-//! (`pids_exit`, `matching_exits`) learn through the safe `kill(pid, 0)`
-//! probes, starting no process per pass.
+//! Signals and the exit probes (`alive`, `group_lives`) go through the
+//! kill(2) call itself, starting no process; the waits built on the probes
+//! (`pids_exit`, `matching_exits`) start none per pass. The one child left,
+//! `pgrep`, is waited for under a deadline on the wall clock.
 
-use std::io;
-use std::process::{Command, Stdio};
-use std::sync::mpsc;
+use std::io::{self, Read};
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::{Arc, Mutex, PoisonError, mpsc};
 use std::thread;
 use std::time::Duration;
 
-use rustix::process::Pid;
+use rustix::process::{Pid, Signal};
 
 /// The shell script of a watchdog: `sh -c WATCHDOG_SCRIPT watchdog <group>`.
 /// Reading a line from stdin means the run finished; EOF means the test
@@ -23,27 +24,82 @@ use rustix::process::Pid;
 pub const WATCHDOG_SCRIPT: &str =
     r#"[ "$1" -gt 1 ] || exit 2; read -r line || kill -s KILL -- "-$1""#;
 
-/// Sends `signal` (a name such as `KILL`, or `0` to probe) to process group
-/// `group` and returns whether `kill` succeeded. An error means `kill` could
-/// not be run at all, so a probe must not read it as an empty group.
+/// Sends `signal` (`INT`, `KILL`, `TERM`, `WINCH`, or `0` to probe) to
+/// process group `group` through kill(-group, signal), starting no process,
+/// and returns whether the kernel accepted it. A refused send (no such
+/// group, no permission) is `Ok(false)`.
 ///
 /// # Errors
 ///
-/// When the `kill` command cannot be started.
+/// When `signal` is not one of the names above, or `group` does not fit in
+/// a pid.
 ///
 /// # Panics
 ///
-/// When `group` is 1 or less, before running anything.
+/// When `group` is 1 or less, before anything else.
 pub fn kill_group(group: u32, signal: &str) -> io::Result<bool> {
+    signal_group(group, signal, |id, sig| match sig {
+        Some(sig) => rustix::process::kill_process_group(id, sig),
+        None => rustix::process::test_kill_process_group(id),
+    })
+}
+
+/// [`kill_group`] with the kernel call injected: the refusal of a group of 1
+/// or less comes before the name is read or `deliver` runs.
+fn signal_group(
+    group: u32,
+    signal: &str,
+    deliver: impl FnOnce(Pid, Option<Signal>) -> rustix::io::Result<()>,
+) -> io::Result<bool> {
     assert!(
         group > 1,
         "refusing to signal process group {group}: kill(-1) signals every process the user owns"
     );
-    Command::new("kill")
-        .args([format!("-{signal}"), "--".into(), format!("-{group}")])
-        .stderr(Stdio::null())
-        .status()
-        .map(|status| status.success())
+    send(group, signal, deliver)
+}
+
+/// [`kill_pid`] with the kernel call injected: the refusal of a pid of 1 or
+/// less comes before the name is read or `deliver` runs.
+fn signal_pid(
+    pid: u32,
+    signal: &str,
+    deliver: impl FnOnce(Pid, Option<Signal>) -> rustix::io::Result<()>,
+) -> io::Result<bool> {
+    assert!(
+        pid > 1,
+        "refusing to signal pid {pid}: kill -- 0 signals the caller's own process group"
+    );
+    send(pid, signal, deliver)
+}
+
+/// Reads `signal`'s name and `id`, then delivers; `None` is the probe `0`.
+/// Called only after a refusal of an id of 1 or less.
+fn send(
+    id: u32,
+    signal: &str,
+    deliver: impl FnOnce(Pid, Option<Signal>) -> rustix::io::Result<()>,
+) -> io::Result<bool> {
+    let signal = signal_named(signal)?;
+    let id = i32::try_from(id)
+        .ok()
+        .and_then(Pid::from_raw)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, format!("{id} is not a pid")))?;
+    Ok(deliver(id, signal).is_ok())
+}
+
+/// The signal a name stands for, `None` for the probe `0`.
+fn signal_named(name: &str) -> io::Result<Option<Signal>> {
+    match name {
+        "0" => Ok(None),
+        "INT" => Ok(Some(Signal::INT)),
+        "KILL" => Ok(Some(Signal::KILL)),
+        "TERM" => Ok(Some(Signal::TERM)),
+        "WINCH" => Ok(Some(Signal::WINCH)),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("no signal named {name:?}"),
+        )),
+    }
 }
 
 /// Waits up to `deadline` on the wall clock for process group `group` to
@@ -79,28 +135,25 @@ pub fn group_empties(group: u32, deadline: Duration) -> bool {
     result
 }
 
-/// Sends `signal` (a name such as `KILL`, or `0` to probe) to process `pid`
-/// and returns whether `kill` succeeded. An error means `kill` could not be
-/// run at all, so a probe must not read it as a dead process.
+/// Sends `signal` (`INT`, `KILL`, `TERM`, `WINCH`, or `0` to probe) to
+/// process `pid` through kill(pid, signal), starting no process, and
+/// returns whether the kernel accepted it. A refused send (no such process,
+/// no permission) is `Ok(false)`.
 ///
 /// # Errors
 ///
-/// When the `kill` command cannot be started.
+/// When `signal` is not one of the names above, or `pid` does not fit in a
+/// pid.
 ///
 /// # Panics
 ///
-/// When `pid` is 1 or less, before running anything. `kill -- 0` signals the
+/// When `pid` is 1 or less, before anything else. kill(0) signals the
 /// caller's own process group.
 pub fn kill_pid(pid: u32, signal: &str) -> io::Result<bool> {
-    assert!(
-        pid > 1,
-        "refusing to signal pid {pid}: kill -- 0 signals the caller's own process group"
-    );
-    Command::new("kill")
-        .args([format!("-{signal}"), "--".into(), pid.to_string()])
-        .stderr(Stdio::null())
-        .status()
-        .map(|status| status.success())
+    signal_pid(pid, signal, |id, sig| match sig {
+        Some(sig) => rustix::process::kill_process(id, sig),
+        None => rustix::process::test_kill_process(id),
+    })
 }
 
 /// The variable naming a matching watchdog's pattern: the environment, not
@@ -135,11 +188,16 @@ pub(crate) fn pattern(text: &str) -> String {
     escaped
 }
 
+/// How long [`matching`] waits on the wall clock for `pgrep` to list and
+/// exit. A listing takes milliseconds; the bound only reports a hung one.
+const PGREP_DEADLINE: Duration = Duration::from_secs(5);
+
 /// The pids of the processes whose command line contains `text`.
 ///
 /// # Errors
 ///
-/// When `pgrep` cannot be run or fails.
+/// When `pgrep` cannot be run or fails, or has not exited within
+/// [`PGREP_DEADLINE`] (`TimedOut`; the `pgrep` is killed).
 ///
 /// # Panics
 ///
@@ -151,19 +209,69 @@ pub fn matching(text: &str) -> io::Result<Vec<u32>> {
         !pattern.is_empty(),
         "refusing an empty command-line match: it matches every process the user owns"
     );
-    let output = Command::new("pgrep")
+    let pgrep = Command::new("pgrep")
         .args(["-f", "--", &pattern])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .output()?;
+        .spawn()?;
+    let (status, stdout) = bounded(pgrep, "pgrep", PGREP_DEADLINE)?;
     // 1 is "no process matched".
-    match output.status.code() {
+    match status.code() {
         Some(0 | 1) => {}
-        _ => return Err(io::Error::other(format!("pgrep failed: {}", output.status))),
+        _ => return Err(io::Error::other(format!("pgrep failed: {status}"))),
     }
-    Ok(String::from_utf8_lossy(&output.stdout)
+    Ok(String::from_utf8_lossy(&stdout)
         .split_whitespace()
         .filter_map(|pid| pid.parse().ok())
         .collect())
+}
+
+/// What a bounded child left: its exit status and everything it wrote to
+/// stdout.
+type Finished = (ExitStatus, Vec<u8>);
+
+/// Waits up to `deadline` on the wall clock for `child`, whose stdout is
+/// piped, to close its stdout and exit. A thread reads stdout to its end,
+/// then reaps the child while holding its lock. On a miss the lock is free
+/// unless the reap has begun, so the child killed here is still unreaped
+/// and its pid cannot have gone to another process; the thread then reaps
+/// it. A miss is a `TimedOut` error naming `what`.
+fn bounded(mut child: Child, what: &str, deadline: Duration) -> io::Result<Finished> {
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| io::Error::other(format!("{what} has no piped stdout")))?;
+    let child = Arc::new(Mutex::new(child));
+    let reaping = Arc::clone(&child);
+    let (done, finished) = mpsc::channel::<io::Result<Finished>>();
+    thread::spawn(move || {
+        let mut out = Vec::new();
+        let result = stdout.read_to_end(&mut out).and_then(|_| {
+            let mut child = reaping.lock().unwrap_or_else(PoisonError::into_inner);
+            child.wait().map(|status| (status, out))
+        });
+        match done.send(result) {
+            Ok(()) | Err(_) => {}
+        }
+    });
+    match finished.recv_timeout(deadline) {
+        Ok(result) => result,
+        Err(_) => {
+            // A held lock means the thread is reaping: the child closed its
+            // stdout and is exiting, so nothing is left to kill. The thread
+            // never panics while holding it, so it is never poisoned.
+            if let Ok(mut child) = child.try_lock() {
+                match child.kill() {
+                    Ok(()) | Err(_) => {}
+                }
+            }
+            Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!("{what} did not exit within {deadline:?}"),
+            ))
+        }
+    }
 }
 
 /// Sends SIGKILL to every process whose command line contains `text`, and
@@ -171,7 +279,7 @@ pub fn matching(text: &str) -> io::Result<Vec<u32>> {
 ///
 /// # Errors
 ///
-/// When `pgrep` or `kill` cannot be run.
+/// When `pgrep` cannot be run or misses its deadline ([`matching`]).
 ///
 /// # Panics
 ///
