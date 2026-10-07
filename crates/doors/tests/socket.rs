@@ -348,6 +348,8 @@ fn take(inbox: &Receiver<Delivery>) -> String {
         Delivery::Cancelled => panic!("a wake arrives as a delivery"),
         Delivery::Job(_)
         | Delivery::JobLine(_)
+        | Delivery::Interaction(_)
+        | Delivery::Resolved(..)
         | Delivery::ExtensionExec(_)
         | Delivery::ExtensionLog(_) => {
             panic!("no job runs here")
@@ -1164,6 +1166,8 @@ fn model_arrives_as_delivery_with_its_args_and_its_rejection_stays_put() {
                 | Delivery::Close(_)
                 | Delivery::Job(_)
                 | Delivery::JobLine(_)
+                | Delivery::Interaction(_)
+                | Delivery::Resolved(..)
                 | Delivery::ExtensionExec(_)
                 | Delivery::ExtensionLog(_)
                 | Delivery::Cancelled => panic!("the model arrives as a model"),
@@ -1194,6 +1198,8 @@ fn model_arrives_as_delivery_with_its_args_and_its_rejection_stays_put() {
                 | Delivery::Close(_)
                 | Delivery::Job(_)
                 | Delivery::JobLine(_)
+                | Delivery::Interaction(_)
+                | Delivery::Resolved(..)
                 | Delivery::ExtensionExec(_)
                 | Delivery::ExtensionLog(_)
                 | Delivery::Cancelled => panic!("the model arrives as a model"),

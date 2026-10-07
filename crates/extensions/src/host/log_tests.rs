@@ -54,6 +54,8 @@ fn logged(delivery: Delivery) -> ExtensionLog {
         | Delivery::Close(_)
         | Delivery::Job(_)
         | Delivery::JobLine(_)
+        | Delivery::Interaction(_)
+        | Delivery::Resolved(..)
         | Delivery::Cancelled) => panic!("expected extension_log, got {other:?}"),
     }
 }
@@ -149,6 +151,8 @@ fn a_line_before_deliver_to_keeps_order_with_an_exec_that_ends_after_it() {
         | Delivery::Close(_)
         | Delivery::Job(_)
         | Delivery::JobLine(_)
+        | Delivery::Interaction(_)
+        | Delivery::Resolved(..)
         | Delivery::Cancelled) => panic!("expected extension_exec, got {other:?}"),
     }
 }

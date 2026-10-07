@@ -77,6 +77,12 @@ pub enum Delivery {
     /// A program an extension ran outside a tool call: written as
     /// `extension_exec`, starts nothing.
     ExtensionExec(crate::events::ExtensionExec),
+    /// An extension's `host.ask` question: written at the drain that takes
+    /// it as `interaction_requested`, with no turn and no action.
+    Interaction(crate::events::InteractionRequested),
+    /// An extension ask's answer: written as `interaction_resolved`, then
+    /// the ack is called with `Ok(None)`.
+    Resolved(crate::events::InteractionResolved, Ack),
     /// A line an extension wrote with `host.log`: shown live, recorded in
     /// the diagnostic log, starts nothing.
     ExtensionLog(crate::events::ExtensionLog),

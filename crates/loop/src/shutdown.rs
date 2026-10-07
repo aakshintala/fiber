@@ -79,6 +79,8 @@ impl Loop {
             Delivery::ExtensionExec(exec) => {
                 self.log.append(&Event::ExtensionExec(exec), None, None)?;
             }
+            Delivery::Interaction(requested) => self.record_interaction(requested)?,
+            Delivery::Resolved(resolved, ack) => self.record_resolved(resolved, ack)?,
             Delivery::ExtensionLog(entry) => self.record_extension_log(entry)?,
             Delivery::Prompt(_, ack) | Delivery::Steer(_, ack) | Delivery::Handoff(_, _, ack) => {
                 reject(ack, ErrorCode::Closing, CLOSING);

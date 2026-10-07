@@ -15,7 +15,19 @@ pub trait ExtensionDoor: Send + Sync {
     ) -> Result<Box<dyn FnOnce() + Send>, crate::inbox::Rejection>;
     /// Drops every later emission and delivery from the extensions; called by `Session::quiesce`.
     fn seal(&self);
+    /// Takes `reply` when it answers a pending `host.ask`; hands it back otherwise.
+    fn reply(
+        &self,
+        reply: crate::commands::Reply,
+        ack: crate::inbox::Ack,
+    ) -> Option<(crate::commands::Reply, crate::inbox::Ack)> {
+        Some((reply, ack))
+    }
 }
+
+#[cfg(test)]
+#[path = "extension_tests.rs"]
+mod tests;
 
 /// Sends one driver command from inside the session; `answer` is called once.
 /// (`docs/extensions.md`, "Host calls": `host.drive`.)
