@@ -6,20 +6,17 @@ edit pages with `write` and `edit`.
 
 Where pages live:
 
-- `data/github.com-aakshintala-fiber-extensions-memory/<name>.md`: one page
-  per file; the file name is the page's name. Every page sits in this one
-  flat folder, whichever project wrote it, so a page written in one
-  repository is found from another.
-- `data/github.com-aakshintala-fiber-extensions-memory/index.md`: the machine
-  index. List here what every session should see: notes about the person,
-  and knowledge that helps in any repository.
-- `projects/<key>/data/github.com-aakshintala-fiber-extensions-memory/index.md`:
-  the project index, for the repository you are working in. List here what
-  matters in that repository.
-- `data/github.com-aakshintala-fiber-extensions-memory/sources/`: raw
-  material a page summarises, such as a clipped web page, so the summary can
-  be checked against it. No index lists a source, and a source is never
-  edited after saving it.
+- `data/memory/<name>.md`: one page per file; the file name is the page's
+  name. Every page sits in this one flat folder, whichever project wrote it,
+  so a page written in one repository is found from another.
+- `data/memory/index.md`: the machine index. List here what every session
+  should see: notes about the person, and knowledge that helps in any
+  repository.
+- `projects/<key>/data/memory/index.md`: the project index, for the
+  repository you are working in. List here what matters in that repository.
+- `data/memory/sources/`: raw material a page summarises, such as a clipped
+  web page, so the summary can be checked against it. No index lists a
+  source, and a source is never edited after saving it.
 
 Pages and indexes are plain Markdown:
 
