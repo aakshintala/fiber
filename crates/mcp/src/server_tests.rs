@@ -18,8 +18,9 @@ use super::{CallError, ListedTool, Server, StartError};
 ///
 /// The largest round value that keeps every test's serial deadlines within
 /// half of nextest's 120 s kill: the worst test,
-/// `cancel_ends_the_wait_and_sends_cancelled`, can exhaust five
-/// (5 x 10 s = 50 s <= 60 s). A passing run never waits on it; it only
+/// `kill_every_server_holds_its_pids_unreaped_while_it_signals`, makes six
+/// (start, signal reached, `await_lock`, `await_gone`, killed and reaped:
+/// 6 x 10 s = 60 s). A passing run never waits on it; it only
 /// bounds a hang.
 const WITHIN: Duration = Duration::from_secs(10);
 
@@ -135,6 +136,24 @@ fn gone_call(fake: &FakeClock, server: &Server, timeout: Duration) -> Result<Val
         // on its miss path).
         fake.advance(timeout);
         panic!("the call ends within {WITHIN:?}");
+    })
+}
+
+/// Up to 50 `gone_call` retries until one sees `Gone`, under one [`WITHIN`]:
+/// the reader marks the server gone when EOF arrives, which races the kill.
+fn gone_after_retries(
+    fake: std::sync::Arc<FakeClock>,
+    opened: super::OpenServer,
+) -> Result<Value, CallError> {
+    fakes::within("the server to go away", WITHIN, move || {
+        let mut answer = Err(CallError::Timeout);
+        for _ in 0..50 {
+            answer = gone_call(&fake, &opened.server, Duration::from_secs(1));
+            if answer == Err(CallError::Gone) {
+                break;
+            }
+        }
+        answer
     })
 }
 
@@ -495,13 +514,7 @@ fn a_server_killed_mid_call_is_gone() {
     // A call made after `gone` is already set answers at once without
     // parking, so the clock moves only when `await_parked` proves the
     // caller is waiting on it (`docs/testing.md`, "Waits and timeouts").
-    let mut answer = Err(CallError::Timeout);
-    for _ in 0..50 {
-        answer = gone_call(&setup.fake, &opened.server, Duration::from_secs(1));
-        if answer == Err(CallError::Gone) {
-            break;
-        }
-    }
+    let answer = gone_after_retries(std::sync::Arc::clone(&setup.fake), opened);
     assert_eq!(answer, Err(CallError::Gone));
 }
 
@@ -545,13 +558,7 @@ fn closing_stdin_lets_the_server_exit_on_eof() {
     opened.server.shutdown();
     // As above, `gone` may already be set before a retry's call starts:
     // the clock moves only after `await_parked` proves the wait.
-    let mut answer = Err(CallError::Timeout);
-    for _ in 0..50 {
-        answer = gone_call(&setup.fake, &opened.server, Duration::from_secs(1));
-        if answer == Err(CallError::Gone) {
-            break;
-        }
-    }
+    let answer = gone_after_retries(std::sync::Arc::clone(&setup.fake), opened);
     assert_eq!(answer, Err(CallError::Gone));
 }
 
@@ -740,17 +747,19 @@ fn watch_reap_locks() -> mpsc::Receiver<&'static str> {
     rx
 }
 
-/// Waits, at most [`WITHIN`], until a reap reports it is about to take
+/// Waits, under one [`WITHIN`], until a reap reports it is about to take
 /// `which`.
-fn await_lock(locks: &mpsc::Receiver<&'static str>, which: &str) {
-    loop {
-        let reached = locks
-            .recv_timeout(WITHIN)
-            .unwrap_or_else(|_| panic!("the reap reached the {which} lock within {WITHIN:?}"));
-        if reached == which {
-            return;
+fn await_lock(locks: mpsc::Receiver<&'static str>, which: &'static str) {
+    fakes::within("the reap to reach its lock", WITHIN, move || {
+        loop {
+            let reached = locks
+                .recv_timeout(WITHIN)
+                .unwrap_or_else(|_| panic!("the reap reached the {which} lock within {WITHIN:?}"));
+            if reached == which {
+                return;
+            }
         }
-    }
+    });
 }
 
 /// Pauses the next signaller at [`super::before_signal`]: `entered` hears
@@ -805,7 +814,7 @@ fn kill_every_server_holds_its_pids_unreaped_while_it_signals() {
         drop(opened.server);
         reaped_tx.send(()).expect("collected");
     });
-    await_lock(&locks, "live");
+    await_lock(locks, "live");
     await_gone(&shared);
     assert!(
         fakes::kill_pid(pid, "0").expect("probe"),
@@ -854,7 +863,7 @@ fn stop_holds_the_child_unreaped_while_it_sends_sigterm() {
         reaping.reap();
         reaped_tx.send(()).expect("collected");
     });
-    await_lock(&locks, "child");
+    await_lock(locks, "child");
     assert!(
         fakes::kill_pid(pid, "0").expect("probe"),
         "the server was reaped while stop held it"
