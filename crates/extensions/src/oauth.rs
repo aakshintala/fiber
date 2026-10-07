@@ -531,19 +531,59 @@ fn respond(stream: &mut TcpStream, status: &str) {
 
 /// A query string's parameters, in order, percent-decoded (`+` is a space).
 /// A bare `?` or an empty pair gives nothing; a key without `=` has an empty
-/// value. An invalid `%` escape is an error.
+/// value. An invalid `%` escape is an error. An error names the malformed
+/// parameter's recognised OAuth name, never any query bytes: any other key
+/// gives a generic phrase.
 fn parse_query(query: &str) -> Result<Vec<(String, String)>, String> {
     query
         .split('&')
         .filter(|pair| !pair.is_empty())
         .map(|pair| {
             let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
-            Ok((decode(key)?, decode(value)?))
+            let key = decode(key).map_err(|kind| format!("a parameter name {}", kind.phrase()))?;
+            let value = decode(value).map_err(|kind| {
+                if NAMED.contains(&key.as_str()) {
+                    format!("the `{key}` parameter's value {}", kind.phrase())
+                } else {
+                    format!("a parameter's value {}", kind.phrase())
+                }
+            })?;
+            Ok((key, value))
         })
         .collect()
 }
 
-fn decode(text: &str) -> Result<String, String> {
+/// The recognised OAuth 2.0 callback parameters (RFC 6749, section 4.1.2)
+/// and `iss` (RFC 9207): the only names an error ever repeats.
+const NAMED: &[&str] = &[
+    "code",
+    "state",
+    "error",
+    "error_description",
+    "error_uri",
+    "iss",
+];
+
+/// Why percent-decoding failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DecodeError {
+    /// A `%` escape with no two hex digits after it.
+    Escape,
+    /// Decoded bytes that are not UTF-8.
+    Utf8,
+}
+
+impl DecodeError {
+    /// The phrase an error uses for this failure.
+    fn phrase(&self) -> &'static str {
+        match self {
+            Self::Escape => "has an invalid % escape",
+            Self::Utf8 => "is not UTF-8 once decoded",
+        }
+    }
+}
+
+fn decode(text: &str) -> Result<String, DecodeError> {
     let mut out = Vec::with_capacity(text.len());
     let mut bytes = text.bytes();
     while let Some(byte) = bytes.next() {
@@ -555,13 +595,13 @@ fn decode(text: &str) -> Result<String, String> {
                 let value = high
                     .zip(low)
                     .and_then(|(high, low)| u8::try_from(high * 16 + low).ok())
-                    .ok_or_else(|| format!("`{text}` has an invalid % escape"))?;
+                    .ok_or(DecodeError::Escape)?;
                 out.push(value);
             }
             other => out.push(other),
         }
     }
-    String::from_utf8(out).map_err(|_| format!("`{text}` is not UTF-8 once decoded"))
+    String::from_utf8(out).map_err(|_| DecodeError::Utf8)
 }
 
 /// Waits for the lock on `provider`'s stored credential, polling

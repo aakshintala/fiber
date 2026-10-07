@@ -399,9 +399,22 @@ impl Signer for LuaSigner {
     }
 }
 
-/// The extension's own text in `e`: today the whole failure.
+/// The first line of the extension's own text in `e`: Lua's own text,
+/// what the refresh function raised, or Fiber's own `Display` for a
+/// failure Fiber itself raised. Always one line.
 fn detail(e: &Error) -> String {
-    e.to_string()
+    if let Error::Credential(inner) = e {
+        return detail(inner);
+    }
+    let text = if let Error::Lua { message, .. }
+    | Error::RefreshRejected { message, .. }
+    | Error::RefreshUnreachable { message, .. } = e
+    {
+        message.clone()
+    } else {
+        e.to_string()
+    };
+    text.lines().next().unwrap_or("").to_owned()
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
