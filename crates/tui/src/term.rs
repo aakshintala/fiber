@@ -11,6 +11,9 @@ use rustix::termios::{self, OptionalActions, Termios};
 
 /// Enters the alternate screen.
 const ALTERNATE_SCREEN: &[u8] = b"\x1b[?1049h";
+/// Pushes the window title, so the restore puts the person's back
+/// (`docs/tui.md`, "State glyphs").
+const PUSH_TITLE: &[u8] = b"\x1b[22;2t";
 /// Turns bracketed paste on.
 const BRACKETED_PASTE: &[u8] = b"\x1b[?2004h";
 /// Mouse reporting: presses and releases (1000), drags (1002), in SGR form
@@ -25,9 +28,10 @@ const QUERIES: &[u8] = b"\x1b[?u\x1b[c";
 pub(crate) const KITTY_PUSH: &[u8] = b"\x1b[>1u";
 /// Pops kitty's keyboard flags while still on the alternate screen, turns
 /// bracketed paste off, turns every mouse mode off, whichever were on,
-/// then leaves the alternate screen and shows the cursor.
+/// pops the window title, then leaves the alternate screen and shows the
+/// cursor.
 const RESTORE: &[u8] =
-    b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?1049l\x1b[?25h";
+    b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[23;2t\x1b[?1049l\x1b[?25h";
 
 /// The tty `setup` changed and its modes from before. One terminal per
 /// process: the first `setup` records it.
@@ -35,7 +39,8 @@ static SAVED: OnceLock<(File, Termios)> = OnceLock::new();
 /// Whether the terminal is set up and not yet restored.
 static ACTIVE: AtomicBool = AtomicBool::new(false);
 
-/// Sets `tty` up: raw mode, the alternate screen, bracketed paste, mouse
+/// Sets `tty` up: raw mode, the alternate screen, the window title pushed,
+/// bracketed paste, mouse
 /// reporting (with every motion only when `hover`), then the two queries.
 /// Returns its size in columns and rows.
 pub(crate) fn setup(mut tty: &File, hover: bool) -> io::Result<(u16, u16)> {
@@ -49,6 +54,7 @@ pub(crate) fn setup(mut tty: &File, hover: bool) -> io::Result<(u16, u16)> {
     ACTIVE.store(true, Ordering::SeqCst);
     termios::tcsetattr(tty, OptionalActions::Now, &raw)?;
     tty.write_all(ALTERNATE_SCREEN)?;
+    tty.write_all(PUSH_TITLE)?;
     tty.write_all(BRACKETED_PASTE)?;
     tty.write_all(MOUSE)?;
     if hover {
@@ -66,8 +72,8 @@ pub(crate) fn size(tty: &File) -> io::Result<(u16, u16)> {
 }
 
 /// Restores the terminal `setup` set up, once: pops kitty's keyboard
-/// flags, turns bracketed paste and mouse reporting off, leaves the
-/// alternate screen, shows the cursor and puts the saved modes back. Does
+/// flags, turns bracketed paste and mouse reporting off, pops the window
+/// title, leaves the alternate screen, shows the cursor and puts the saved modes back. Does
 /// nothing
 /// before `setup` or after the first restore.
 pub(crate) fn restore() {
@@ -103,7 +109,7 @@ pub(crate) fn suspend() -> io::Result<()> {
 }
 
 /// Takes the terminal back after [`suspend`]: raw mode, the alternate
-/// screen, bracketed paste and mouse reporting as `setup` turned them on
+/// screen, the title pushed again, bracketed paste and mouse reporting as `setup` turned them on
 /// (every motion only when `hover`), and kitty's flags pushed again when
 /// `kitty` says they were. Fails before `setup`, or when the tty is gone.
 pub(crate) fn resume(kitty: bool, hover: bool) -> io::Result<()> {
@@ -116,6 +122,7 @@ pub(crate) fn resume(kitty: bool, hover: bool) -> io::Result<()> {
     termios::tcsetattr(tty, OptionalActions::Now, &raw)?;
     let mut out: &File = tty;
     out.write_all(ALTERNATE_SCREEN)?;
+    out.write_all(PUSH_TITLE)?;
     out.write_all(BRACKETED_PASTE)?;
     out.write_all(MOUSE)?;
     if hover {

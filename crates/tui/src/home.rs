@@ -661,20 +661,26 @@ pub(crate) fn dependents(message: &str) -> Vec<SessionId> {
     out
 }
 
-/// A row's line: the glyph, the name or the id, the detail, and the
-/// workspace's last path segment outside the launch project, joined by
-/// two spaces with empty parts left out.
-pub(crate) fn line(row: &Row, launch_project: &str) -> String {
+/// A row's state glyph, the one set home's list, the rail and the
+/// terminal title share (`docs/tui.md`, "State glyphs").
+pub(crate) fn glyph(row: &Row) -> &'static str {
     // The working states share one still glyph: a still glyph, not the
     // spinner; upgrade when the working line's timer lands (see #686).
-    let glyph = match (&row.left, &row.state) {
+    match (&row.left, &row.state) {
         (Some(Left::Exited), _) => "○",
         (Some(Left::Crashed), _) => "✗",
         (None, State::Working | State::Retrying | State::Jobs) => "●",
         (None, State::Waiting) => "!",
         (None, State::Idle) => "✓",
         (None, State::Unreadable) => "?",
-    };
+    }
+}
+
+/// A row's line: the glyph, the name or the id, the detail, and the
+/// workspace's last path segment outside the launch project, joined by
+/// two spaces with empty parts left out.
+pub(crate) fn line(row: &Row, launch_project: &str) -> String {
+    let glyph = glyph(row);
     let name = title(row);
     let mut detail = row.note.clone().unwrap_or_default();
     if detail.is_empty() {

@@ -93,16 +93,38 @@ impl Chrome {
     }
 }
 
-/// The header's text: the feed row's name, else the latest
-/// `session_named`, else nothing. Each control character draws as a
-/// space.
-pub(crate) fn header(row: Option<&str>, named: Option<&str>) -> String {
+/// The session's name: the feed row's, else the latest `session_named`,
+/// else nothing.
+fn name<'a>(row: Option<&'a str>, named: Option<&'a str>) -> &'a str {
     row.filter(|name| !name.is_empty())
         .or(named)
         .unwrap_or_default()
+}
+
+/// The header's text: the session's name, each control character drawn
+/// as a space.
+pub(crate) fn header(row: Option<&str>, named: Option<&str>) -> String {
+    name(row, named)
         .chars()
         .map(|ch| if ch.is_control() { ' ' } else { ch })
         .collect()
+}
+
+/// The terminal title: `fiber` with no session attached, else the state
+/// glyph and the session's name before ` · fiber`, each left out when it
+/// is empty. The title's bytes drop control characters.
+pub(crate) fn title(attached: bool, glyph: Option<&str>, name: &str) -> String {
+    if !attached {
+        return "fiber".to_owned();
+    }
+    let parts: Vec<&str> = [glyph.unwrap_or_default(), name]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect();
+    if parts.is_empty() {
+        return "fiber".to_owned();
+    }
+    format!("{} · fiber", parts.join(" "))
 }
 
 impl App {
@@ -116,14 +138,29 @@ impl App {
         self.chrome.column_width(self.screen.width())
     }
 
+    /// The attached session's feed row.
+    fn attached_row(&self) -> Option<&crate::home::Row> {
+        let session = self.session()?;
+        self.home.as_ref()?.sessions.row(session)
+    }
+
     /// The header's text for the attached session.
     pub(crate) fn header(&self) -> String {
-        let row = self.session().and_then(|session| {
-            self.home
-                .as_ref()
-                .and_then(|home| home.sessions.row(session))
-        });
-        header(row.map(|row| row.name.as_str()), self.name())
+        header(
+            self.attached_row().map(|row| row.name.as_str()),
+            self.name(),
+        )
+    }
+
+    /// The terminal title (`docs/tui.md`, "State glyphs"): `fiber` on
+    /// home, the attached session's glyph and name otherwise.
+    pub(crate) fn title(&self) -> String {
+        let row = self.attached_row();
+        title(
+            self.session().is_some(),
+            row.map(crate::home::glyph),
+            name(row.map(|row| row.name.as_str()), self.name()),
+        )
     }
 
     /// Lays the screen out from its size and home's counts and wraps the

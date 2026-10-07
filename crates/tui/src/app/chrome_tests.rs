@@ -320,3 +320,42 @@ fn below_the_floor_an_attached_app_has_no_layout() {
         Some("Fiber needs 40×10 · now 39×40")
     );
 }
+
+#[test]
+fn title_is_fiber_on_home() {
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_home(launch());
+    app.set_size(160, 40);
+    assert_eq!(app.title(), "fiber");
+}
+
+#[test]
+fn title_has_the_glyph_and_name_when_attached() {
+    let mut app = attached(160, 40);
+    app.on_line(status(SESSION, "fix\u{7}the parser"));
+    assert_eq!(app.title(), "✓ fix\u{7}the parser · fiber");
+    // Another session's row is not the title's.
+    app.on_line(status("s_bbbbbbbbbbbbbbbb", "other"));
+    assert_eq!(app.title(), "✓ fix\u{7}the parser · fiber");
+}
+
+#[test]
+fn title_without_a_row_has_no_glyph() {
+    let mut app = attached(160, 40);
+    assert_eq!(app.title(), "fiber");
+    app.on_line(session_line(
+        SESSION,
+        "session_named",
+        serde_json::json!({"name": "named", "by": "person"}),
+    ));
+    assert_eq!(app.title(), "named · fiber");
+}
+
+#[test]
+fn title_parts_are_left_out_when_empty() {
+    use super::title;
+    assert_eq!(title(false, Some("✓"), "n"), "fiber");
+    assert_eq!(title(true, None, ""), "fiber");
+    assert_eq!(title(true, Some("!"), ""), "! · fiber");
+    assert_eq!(title(true, Some("!"), "n"), "! n · fiber");
+}
