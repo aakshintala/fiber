@@ -410,7 +410,15 @@ fn a_client_dropped_during_an_unwind_keeps_the_first_panic() {
     let listener = UnixListener::bind(&path).unwrap();
     let client = Client::connect(&path).unwrap();
     let _server = accept_within(&listener);
+    // The reader signals past its stop check, so the drop below lands
+    // while it is blocked in `read`: without the wait the drop could set
+    // `stop` first and the reader would exit cleanly without the fix.
+    let (blocked, is_blocked) = mpsc::channel();
+    client.notify_when_blocked(blocked);
     client.slow(false);
+    is_blocked
+        .recv_timeout(DEADLINE)
+        .expect("the reader to block in read");
     // Without its shutdown stream, `Drop` cannot wake the reader, which
     // stays blocked in `read` and would miss `READER_STOP`.
     let wake = super::lock(&client.shutdown).take().unwrap();
