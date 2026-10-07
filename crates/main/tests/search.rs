@@ -9,35 +9,34 @@
     reason = "test helpers; a failure is the test's"
 )]
 
+mod support;
+
 use std::fs;
 use std::io::Write;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, Output, Stdio};
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc};
 use std::thread;
-use std::time::Duration;
 
 use contract::shapes::ContentPart;
 use contract::tool::Tool;
 use fakes::clock::FakeClock;
 use fakes::{CancelToken, Watchdog};
 use serde_json::{Map, Value};
-
-/// How long one `fiber` run may take.
-const DEADLINE: Duration = Duration::from_secs(20);
-
-/// How long a process group may take to empty after `fiber` exits.
-const GROUP_DEADLINE: Duration = Duration::from_secs(5);
+use support::Deadline;
 
 /// A temporary workspace, removed on drop.
 struct Setup {
     root: fakes::TempDir,
+    deadline: Deadline,
 }
 
 impl Setup {
     fn new() -> Self {
+        let deadline = Deadline::start();
         let setup = Self {
+            deadline,
             root: fakes::TempDir::new("fa"),
         };
         fs::create_dir_all(setup.workspace()).unwrap();
@@ -55,7 +54,7 @@ impl Setup {
     }
 
     /// Runs `fiber` with `args` in the workspace, `stdin` piped in, waiting
-    /// under [`DEADLINE`] in its own process group with a watchdog beside
+    /// under the test's [`Deadline`] in its own process group with a watchdog beside
     /// it, and asserts that nothing it started is left behind.
     fn fiber(&self, args: &[&str], stdin: Option<&str>) -> Run {
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
@@ -71,34 +70,33 @@ impl Setup {
         let (mut child, watchdog) = spawn_watched(&mut command);
         let group = child.id();
         let guard = KillGroup(group);
+        // The write runs on a thread, so a child that never reads it is
+        // bounded by the exit wait; the pipe closes once written.
         if let Some(mut pipe) = child.stdin.take()
             && let Some(text) = stdin
         {
-            pipe.write_all(text.as_bytes()).unwrap();
+            let text = text.to_owned();
+            thread::spawn(move || match pipe.write_all(text.as_bytes()) {
+                Ok(()) | Err(_) => {}
+            });
         }
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-        let output = match finished.recv_timeout(DEADLINE) {
+        let output = match finished.recv_timeout(self.deadline.left()) {
             Ok(output) => output.unwrap(),
-            Err(_) => {
-                fakes::kill_group(group, "KILL").unwrap();
-                let reaped = finished.recv_timeout(DEADLINE).is_ok();
-                assert!(
-                    fakes::group_empties(group, GROUP_DEADLINE),
-                    "`fiber` left a process in its group behind"
-                );
-                panic!(
-                    "waited {DEADLINE:?} for `fiber {}` to exit (reaped after the kill: {reaped})",
-                    args.join(" ")
-                );
-            }
+            Err(_) => support::expired(
+                self.deadline,
+                group,
+                &finished,
+                &format!("`fiber {}` to exit", args.join(" ")),
+            ),
         };
         assert!(
-            fakes::group_empties(group, GROUP_DEADLINE),
+            fakes::group_empties(group, self.deadline.left()),
             "`fiber` left a process in its group behind"
         );
         std::mem::forget(guard);
-        watchdog.stand_down(DEADLINE);
+        watchdog.stand_down(self.deadline.cleanup());
         Run::from(output)
     }
 }
@@ -119,9 +117,16 @@ struct KillGroup(u32);
 
 impl Drop for KillGroup {
     fn drop(&mut self) {
-        match fakes::kill_group(self.0, "KILL") {
-            Ok(_) | Err(_) => {}
-        }
+        support::kill_group_detached(self.0, "KILL");
+    }
+}
+
+/// Cancels its token on drop, without waiting.
+struct CancelOnDrop(CancelToken);
+
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        self.0.cancel();
     }
 }
 
@@ -231,14 +236,24 @@ fn shell_functions_reach_the_built_binary() {
     setup.write("target/needle.txt", "needle\n");
     setup.write("kept_needle.txt", "needle\n");
     let fiber = PathBuf::from(env!("CARGO_BIN_EXE_fiber"));
-    let shell = tools::Shell::new(setup.workspace(), FakeClock::new()).with_search(fiber);
+    let shell = Arc::new(tools::Shell::new(setup.workspace(), FakeClock::new()).with_search(fiber));
+    let token = CancelToken::new();
+    // The fake clock never advances, so the shell's own timeout never
+    // fires: each run is bounded by the test's deadline instead, and a
+    // timeout's unwind cancels the command, which stops its group.
+    let _cancel = CancelOnDrop(token.clone());
     let run = |command: &str| {
-        let mut arguments = Map::new();
-        arguments.insert("command".into(), Value::String(command.into()));
-        shell.run(
-            &arguments,
-            &CancelToken::new(),
-            &fakes::emit::Recorder::default(),
+        let shell = Arc::clone(&shell);
+        let token = token.clone();
+        let command = command.to_owned();
+        support::bounded(
+            setup.deadline,
+            &format!("the shell run of {command}"),
+            move || {
+                let mut arguments = Map::new();
+                arguments.insert("command".into(), Value::String(command));
+                shell.run(&arguments, &token, &fakes::emit::Recorder::default())
+            },
         )
     };
     let text = |output: &contract::tool::Output| match output.content.first() {

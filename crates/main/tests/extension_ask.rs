@@ -13,6 +13,7 @@
 )]
 
 mod extension_harness;
+mod support;
 
 use std::fs;
 use std::process::ExitStatus;
@@ -22,9 +23,7 @@ use fakes::Client;
 use fakes::ProviderServer;
 use fakes::Watchdog;
 use serde_json::{Value, json};
-
-/// How long one socket line may take.
-const DEADLINE: std::time::Duration = std::time::Duration::from_secs(20);
+use support::{Deadline, group_alive};
 
 /// An `openai-responses` function call for `shell`.
 fn function_call(call_id: &str, name: &str, arguments: &Value) -> Value {
@@ -37,28 +36,34 @@ fn function_call(call_id: &str, name: &str, arguments: &Value) -> Value {
     }})
 }
 
-fn subscribe(client: &Client) {
+fn subscribe(deadline: Deadline, client: &Client) {
     client
-        .send(r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#)
+        .send_by(
+            r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+            &|| deadline.left(),
+        )
         .unwrap();
 }
 
-fn commanded(client: &Client, id: &str, name: &str) {
+fn commanded(deadline: Deadline, client: &Client, id: &str, name: &str) {
     client
-        .send(&format!(
-            r#"{{"id":"{id}","command":"command","args":{{"name":"{name}"}}}}"#
-        ))
+        .send_by(
+            &format!(r#"{{"id":"{id}","command":"command","args":{{"name":"{name}"}}}}"#),
+            &|| deadline.left(),
+        )
         .unwrap();
     client
-        .recv_until(DEADLINE, |line| {
+        .recv_until(deadline.left(), |line| {
             line["kind"] == "command_accepted" && line["payload"]["command_id"] == id
         })
         .expect("the command was admitted");
 }
 
-fn requested(client: &Client) -> Value {
+fn requested(deadline: Deadline, client: &Client) -> Value {
     client
-        .recv_until(DEADLINE, |line| line["kind"] == "interaction_requested")
+        .recv_until(deadline.left(), |line| {
+            line["kind"] == "interaction_requested"
+        })
         .expect("the question arrives")
 }
 
@@ -77,33 +82,35 @@ fn a_command_raising_a_form_resolves_through_reply() {
     let mut running = setup.start_session(&id, &[]);
     let client = running.connect_client(&setup.socket(&id));
     running.wait_for("extensions_loaded");
-    subscribe(&client);
-    commanded(&client, "c_1", "askform");
-    let asked = requested(&client);
+    subscribe(setup.deadline, &client);
+    commanded(setup.deadline, &client, "c_1", "askform");
+    let asked = requested(setup.deadline, &client);
     assert_eq!(asked["payload"]["extension"], "fiber.test/worker");
     assert_eq!(asked["payload"]["fields"].as_array().unwrap().len(), 2);
     let request_id = asked["payload"]["request_id"].as_str().unwrap().to_owned();
     client
-        .send(&format!(
+        .send_by(&format!(
             r#"{{"id":"c_reply","command":"reply","args":{{"request_id":"{request_id}","answers":[{{"labels":["a"]}},{{"skipped":true}}],"note":"hi"}}}}"#
-        ))
+        ), &|| setup.deadline.left())
         .unwrap();
     // `command_accepted` comes only after the client has read the
     // resolution carrying those answers.
     let resolved = client
-        .recv_until(DEADLINE, |line| line["kind"] == "interaction_resolved")
+        .recv_until(setup.deadline.left(), |line| {
+            line["kind"] == "interaction_resolved"
+        })
         .expect("the resolution arrives");
     assert_eq!(resolved["payload"]["request_id"], request_id);
     assert_eq!(resolved["payload"]["by"], "person");
     assert_eq!(resolved["payload"]["answers"][0]["labels"], json!(["a"]));
     assert_eq!(resolved["payload"]["note"], "hi");
     client
-        .recv_until(DEADLINE, |line| {
+        .recv_until(setup.deadline.left(), |line| {
             line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_reply"
         })
         .expect("the reply was accepted");
     let ui = client
-        .recv_until(DEADLINE, |line| {
+        .recv_until(setup.deadline.left(), |line| {
             line["kind"] == "extension_ui" && line["payload"]["extension"] == "fiber.test/worker"
         })
         .expect("the answer reaches host.status");
@@ -111,7 +118,9 @@ fn a_command_raising_a_form_resolves_through_reply() {
     assert_eq!(status["answers"][0]["labels"], json!(["a"]));
     assert_eq!(status["note"], "hi");
     client
-        .send(r#"{"id":"c_close","command":"close"}"#)
+        .send_by(r#"{"id":"c_close","command":"close"}"#, &|| {
+            setup.deadline.left()
+        })
         .unwrap();
     drop(client);
     let (status, out, stderr) = running.wait();
@@ -133,18 +142,18 @@ fn an_unfit_reply_is_rejected_then_a_fitting_one_resolves_and_a_second_is_stale(
     let mut running = setup.start_session(&id, &[]);
     let client = running.connect_client(&setup.socket(&id));
     running.wait_for("extensions_loaded");
-    subscribe(&client);
-    commanded(&client, "c_1", "askform");
-    let asked = requested(&client);
+    subscribe(setup.deadline, &client);
+    commanded(setup.deadline, &client, "c_1", "askform");
+    let asked = requested(setup.deadline, &client);
     let request_id = asked["payload"]["request_id"].as_str().unwrap().to_owned();
     // Another kind's answer keys do not fit a `form`.
     client
-        .send(&format!(
+        .send_by(&format!(
             r#"{{"id":"c_2","command":"reply","args":{{"request_id":"{request_id}","confirmed":true}}}}"#
-        ))
+        ), &|| setup.deadline.left())
         .unwrap();
     let rejected = client
-        .recv_until(DEADLINE, |line| {
+        .recv_until(setup.deadline.left(), |line| {
             line["kind"] == "command_rejected" && line["payload"]["command_id"] == "c_2"
         })
         .expect("the unfit reply is rejected");
@@ -152,40 +161,45 @@ fn an_unfit_reply_is_rejected_then_a_fitting_one_resolves_and_a_second_is_stale(
     // The request stays pending: nothing resolves it yet.
     assert!(
         client
-            .recv_until(std::time::Duration::from_secs(2), |line| {
-                line["kind"] == "interaction_resolved"
-            })
+            .recv_until(
+                std::time::Duration::from_secs(2).min(setup.deadline.left()),
+                |line| { line["kind"] == "interaction_resolved" }
+            )
             .is_none(),
         "the request stays pending after an unfit reply"
     );
     client
-        .send(&format!(
+        .send_by(&format!(
             r#"{{"id":"c_3","command":"reply","args":{{"request_id":"{request_id}","answers":[{{"labels":["b"]}},{{"labels":["x"]}}]}}}}"#
-        ))
+        ), &|| setup.deadline.left())
         .unwrap();
     let resolved = client
-        .recv_until(DEADLINE, |line| line["kind"] == "interaction_resolved")
+        .recv_until(setup.deadline.left(), |line| {
+            line["kind"] == "interaction_resolved"
+        })
         .expect("the fitting reply resolves");
     assert_eq!(resolved["payload"]["request_id"], request_id);
     client
-        .recv_until(DEADLINE, |line| {
+        .recv_until(setup.deadline.left(), |line| {
             line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_3"
         })
         .expect("the fitting reply was accepted");
     // The request is resolved: one more reply is stale.
     client
-        .send(&format!(
+        .send_by(&format!(
             r#"{{"id":"c_4","command":"reply","args":{{"request_id":"{request_id}","answers":[{{"labels":["b"]}},{{"labels":["x"]}}]}}}}"#
-        ))
+        ), &|| setup.deadline.left())
         .unwrap();
     let stale = client
-        .recv_until(DEADLINE, |line| {
+        .recv_until(setup.deadline.left(), |line| {
             line["kind"] == "command_rejected" && line["payload"]["command_id"] == "c_4"
         })
         .expect("the second reply is rejected");
     assert_eq!(stale["payload"]["code"], "stale_request");
     client
-        .send(r#"{"id":"c_close","command":"close"}"#)
+        .send_by(r#"{"id":"c_close","command":"close"}"#, &|| {
+            setup.deadline.left()
+        })
         .unwrap();
     drop(client);
     let (status, _, stderr) = running.wait();
@@ -194,8 +208,9 @@ fn an_unfit_reply_is_rejected_then_a_fitting_one_resolves_and_a_second_is_stale(
 
 /// Runs `fiber ask` with `args` to completion and returns its exit status,
 /// stdout lines and stderr. `fiber` runs in its own process group under a
-/// watchdog, and the group is reaped and checked empty under [`DEADLINE`],
-/// including after a timeout (`docs/testing.md`, "Running tests").
+/// watchdog, and the group is reaped and checked empty under the test's
+/// [`Deadline`], including after a timeout (`docs/testing.md`, "Running
+/// tests").
 fn run_ask(setup: &Setup, args: &[&str]) -> (ExitStatus, Vec<Value>, String) {
     let mut command = setup.fiber(args);
     command.current_dir(setup.workspace());
@@ -204,28 +219,18 @@ fn run_ask(setup: &Setup, args: &[&str]) -> (ExitStatus, Vec<Value>, String) {
     let guard = KillGroup(group);
     let (done, finished) = std::sync::mpsc::channel();
     std::thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-    let output = match finished.recv_timeout(DEADLINE) {
+    let output = match finished.recv_timeout(setup.deadline.left()) {
         Ok(output) => output.unwrap(),
-        Err(_) => {
-            fakes::kill_group(group, "KILL").unwrap();
-            // Reaps the killed child, so the check below sees the group
-            // as the kill left it.
-            let reaped = finished.recv_timeout(DEADLINE).is_ok();
-            assert!(
-                !group_alive(group),
-                "`fiber` left a process in its group behind"
-            );
-            panic!("waited {DEADLINE:?} for fiber ask to exit (reaped after the kill: {reaped})");
-        }
+        Err(_) => support::expired(setup.deadline, group, &finished, "fiber ask to exit"),
     };
     assert!(
-        !group_alive(group),
+        !group_alive(setup.deadline, group),
         "`fiber` left a process in its group behind"
     );
     // The group is empty. Skip the drop, which would kill it again,
     // and tell the watchdog to exit without signalling.
     std::mem::forget(guard);
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(setup.deadline.cleanup());
     let status = output.status;
     let stderr = String::from_utf8(output.stderr).unwrap();
     let out = String::from_utf8(output.stdout)
@@ -256,15 +261,8 @@ struct KillGroup(u32);
 
 impl Drop for KillGroup {
     fn drop(&mut self) {
-        match fakes::kill_group(self.0, "KILL") {
-            Ok(_) | Err(_) => {}
-        }
+        support::kill_group_detached(self.0, "KILL");
     }
-}
-
-/// Whether any process remains in process group `group`.
-fn group_alive(group: u32) -> bool {
-    fakes::kill_group(group, "0").unwrap()
 }
 
 #[test]
@@ -323,15 +321,17 @@ fn close_while_an_ask_is_pending_declines_it_by_fiber() {
     let mut running = setup.start_session(&id, &[]);
     let client = running.connect_client(&setup.socket(&id));
     running.wait_for("extensions_loaded");
-    subscribe(&client);
-    commanded(&client, "c_1", "slowask");
-    let asked = requested(&client);
+    subscribe(setup.deadline, &client);
+    commanded(setup.deadline, &client, "c_1", "slowask");
+    let asked = requested(setup.deadline, &client);
     let request_id = asked["payload"]["request_id"].as_str().unwrap().to_owned();
     client
-        .send(r#"{"id":"c_close","command":"close"}"#)
+        .send_by(r#"{"id":"c_close","command":"close"}"#, &|| {
+            setup.deadline.left()
+        })
         .unwrap();
     let exited = client
-        .recv_until(DEADLINE, |line| line["kind"] == "fiber_exited")
+        .recv_until(setup.deadline.left(), |line| line["kind"] == "fiber_exited")
         .expect("the session exits");
     assert!(exited.get("suspended_on").is_none());
     drop(client);
@@ -381,17 +381,19 @@ fn a_resumed_interactive_session_answers_a_host_ask() {
     let mut running = setup.start_session(&id, &["--resume"]);
     let client = running.connect_client(&setup.socket(&id));
     running.wait_for("extensions_loaded");
-    subscribe(&client);
-    commanded(&client, "c_1", "slowask");
-    let asked = requested(&client);
+    subscribe(setup.deadline, &client);
+    commanded(setup.deadline, &client, "c_1", "slowask");
+    let asked = requested(setup.deadline, &client);
     let request_id = asked["payload"]["request_id"].as_str().unwrap().to_owned();
     client
-        .send(&format!(
+        .send_by(&format!(
             r#"{{"id":"c_reply","command":"reply","args":{{"request_id":"{request_id}","confirmed":true}}}}"#
-        ))
+        ), &|| setup.deadline.left())
         .unwrap();
     let resolved = client
-        .recv_until(DEADLINE, |line| line["kind"] == "interaction_resolved")
+        .recv_until(setup.deadline.left(), |line| {
+            line["kind"] == "interaction_resolved"
+        })
         .expect("the answer resolves");
     assert_eq!(resolved["payload"]["request_id"], request_id);
     assert_eq!(resolved["payload"]["by"], "person");
@@ -400,16 +402,18 @@ fn a_resumed_interactive_session_answers_a_host_ask() {
         "the resumed ask was answered, not declined: {resolved}"
     );
     client
-        .recv_until(DEADLINE, |line| {
+        .recv_until(setup.deadline.left(), |line| {
             line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_reply"
         })
         .expect("the reply was accepted");
     let ui = client
-        .recv_until(DEADLINE, |line| line["kind"] == "extension_ui")
+        .recv_until(setup.deadline.left(), |line| line["kind"] == "extension_ui")
         .expect("the answer reaches the command");
     assert_eq!(ui["payload"]["status"], "true");
     client
-        .send(r#"{"id":"c_close","command":"close"}"#)
+        .send_by(r#"{"id":"c_close","command":"close"}"#, &|| {
+            setup.deadline.left()
+        })
         .unwrap();
     drop(client);
     let (status, _, stderr) = running.wait();

@@ -13,6 +13,7 @@
 )]
 
 mod extension_harness;
+mod support;
 
 use std::fs;
 
@@ -187,7 +188,7 @@ fn replacing_a_builtin_without_replaces_unloads_with_extension_failed() {
     // The load notices are written after `extensions_loaded`; wait for both.
     let mut started = Vec::new();
     loop {
-        let line = match running.lines.recv_timeout(DEADLINE) {
+        let line = match running.lines.recv_timeout(setup.deadline.left()) {
             Ok(line) => line,
             Err(_) => panic!("waited for extensions_loaded and its notices on stdout"),
         };
@@ -241,7 +242,7 @@ fn a_command_parked_past_close_writes_no_line_after_fiber_exited() {
     let setup = Setup::new();
     let server = ProviderServer::start([]).unwrap();
     setup.provider(&server);
-    let (url, _accepted) = hold_server();
+    let (url, accepted, _release) = hold_server(setup.deadline);
     setup.lua(
         "worker",
         &format!(
@@ -263,6 +264,17 @@ fn a_command_parked_past_close_writes_no_line_after_fiber_exited() {
     until(&client, "command_accepted", |line| {
         line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_1"
     });
+    // The close goes only once `host.http` is held, so the command is
+    // parked when the session closes.
+    match accepted.recv_timeout(setup.deadline.left()) {
+        Ok(()) => {}
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            panic!("waited until the deadline for host.http to reach the held server")
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            panic!("the held server ended before host.http reached it")
+        }
+    }
     send(&client, r#"{"id":"c_close","command":"close"}"#);
     let tail = until_close(&client);
     drop(client);
@@ -334,7 +346,7 @@ fn host_drive_prompt_from_a_command_carries_the_extension_sender() {
         "{message}"
     );
     assert!(
-        server.await_requests(1, DEADLINE),
+        server.await_requests(1, setup.deadline.left()),
         "the extension-driven turn requested its provider response"
     );
     send(&client, r#"{"id":"c_close","command":"close"}"#);

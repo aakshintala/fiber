@@ -11,6 +11,8 @@
     reason = "test helpers; a failure is the test's"
 )]
 
+mod support;
+
 use std::fs;
 use std::io::Write;
 use std::os::unix::fs::symlink;
@@ -19,13 +21,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
 
 use fakes::Watchdog;
 use serde_json::{Value, json};
-
-/// How long one `fiber` run may take.
-const DEADLINE: Duration = Duration::from_secs(20);
+use support::Deadline;
 
 const HOOKS_FILE: &str = ".fiber/config/hooks.json";
 
@@ -33,11 +32,14 @@ const HOOKS_FILE: &str = ".fiber/config/hooks.json";
 /// drop.
 struct Setup {
     root: fakes::TempDir,
+    deadline: Deadline,
 }
 
 impl Setup {
     fn new() -> Self {
+        let deadline = Deadline::start();
         let setup = Self {
+            deadline,
             root: fakes::TempDir::new("fiber-approve"),
         };
         fs::create_dir_all(setup.home()).unwrap();
@@ -53,12 +55,15 @@ impl Setup {
     fn repository(&self, name: &str) -> PathBuf {
         let repo = self.root.path().join(name);
         fs::create_dir_all(&repo).unwrap();
-        let status = Command::new("git")
-            .args(["init", "-q"])
+        let mut git = Command::new("git");
+        git.args(["init", "-q"])
             .arg(&repo)
-            .status()
-            .unwrap();
-        assert!(status.success());
+            .process_group(0)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let out = support::run_to_exit(self.deadline, "git init", git);
+        assert!(out.status.success(), "git init: {out:?}");
         repo
     }
 
@@ -105,22 +110,20 @@ impl Setup {
             .stderr(Stdio::piped());
         let (mut child, watchdog) = spawn_watched(&mut command);
         let group = child.id();
+        // The write runs on a thread, so a child that never reads it is
+        // bounded by the exit wait; the pipe closes once written.
         let mut stdin = child.stdin.take().unwrap();
-        stdin.write_all(input.unwrap_or("").as_bytes()).unwrap();
-        drop(stdin);
+        let input = input.unwrap_or("").to_owned();
+        thread::spawn(move || match stdin.write_all(input.as_bytes()) {
+            Ok(()) | Err(_) => {}
+        });
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-        let output = match finished.recv_timeout(DEADLINE) {
+        let output = match finished.recv_timeout(self.deadline.left()) {
             Ok(output) => output.unwrap(),
-            Err(_) => {
-                fakes::kill_group(group, "KILL").unwrap();
-                let reaped = finished.recv_timeout(DEADLINE).is_ok();
-                panic!(
-                    "waited {DEADLINE:?} for `fiber approve` to exit (reaped after the kill: {reaped})"
-                );
-            }
+            Err(_) => support::expired(self.deadline, group, &finished, "`fiber approve` to exit"),
         };
-        watchdog.stand_down(DEADLINE);
+        watchdog.stand_down(self.deadline.cleanup());
         Run {
             code: output.status.code(),
             stdout: String::from_utf8(output.stdout).unwrap(),
@@ -503,7 +506,10 @@ fn an_install_step_runs_at_the_pinned_path_and_an_unfinished_copy_is_rebuilt() {
     );
     // The script the step left reads the payload through the recorded
     // directory, so it only works when the step ran where the copy stayed.
-    assert_eq!(script_output(&dir.join("run.sh")), "payload\n");
+    assert_eq!(
+        script_output(setup.deadline, &dir.join("run.sh")),
+        "payload\n"
+    );
     // A kill before the `.ready` marker and the approval: the next approve
     // clears the unfinished copy and builds it again.
     let hash = dir.file_name().unwrap().to_string_lossy().into_owned();
@@ -522,7 +528,7 @@ fn an_install_step_runs_at_the_pinned_path_and_an_unfinished_copy_is_rebuilt() {
 
 /// What the script the install step left prints, run with a deadline in its
 /// own process group, so a hung script fails naming what it waited for.
-fn script_output(script: &Path) -> String {
+fn script_output(deadline: Deadline, script: &Path) -> String {
     let mut command = Command::new("sh");
     command
         .arg(script)
@@ -533,18 +539,16 @@ fn script_output(script: &Path) -> String {
     let group = child.id();
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-    let output = match finished.recv_timeout(DEADLINE) {
+    let output = match finished.recv_timeout(deadline.left()) {
         Ok(output) => output.unwrap(),
-        Err(_) => {
-            fakes::kill_group(group, "KILL").unwrap();
-            let reaped = finished.recv_timeout(DEADLINE).is_ok();
-            panic!(
-                "waited {DEADLINE:?} for `{}` to exit (reaped after the kill: {reaped})",
-                script.display()
-            );
-        }
+        Err(_) => support::expired(
+            deadline,
+            group,
+            &finished,
+            &format!("`{}` to exit", script.display()),
+        ),
     };
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(deadline.cleanup());
     assert!(output.status.success(), "{output:?}");
     String::from_utf8(output.stdout).unwrap()
 }

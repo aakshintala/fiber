@@ -10,19 +10,18 @@
     reason = "test helpers; a failure is the test's"
 )]
 
+mod support;
+
 use std::fs;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
 
 use fakes::Watchdog;
 use serde_json::json;
-
-/// How long one `fiber` run may take.
-const DEADLINE: Duration = Duration::from_secs(20);
+use support::Deadline;
 
 /// The damaged extension's full name and directory.
 const BROKEN: &str = "github.com/aakshintala/fiber/providers/opencode";
@@ -35,11 +34,14 @@ const SKIP: &str = "fiber: `opencode` is damaged, so its dependency minimums are
 /// A temporary root holding Fiber home and the extension sources.
 struct Setup {
     root: fakes::TempDir,
+    deadline: Deadline,
 }
 
 impl Setup {
     fn new() -> Self {
+        let deadline = Deadline::start();
         let setup = Self {
+            deadline,
             root: fakes::TempDir::new("fiber-ext-damaged"),
         };
         fs::create_dir_all(setup.home()).unwrap();
@@ -97,18 +99,16 @@ impl Setup {
         let group = child.id();
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-        let output = match finished.recv_timeout(DEADLINE) {
+        let output = match finished.recv_timeout(self.deadline.left()) {
             Ok(output) => output.unwrap(),
-            Err(_) => {
-                fakes::kill_group(group, "KILL").unwrap();
-                let reaped = finished.recv_timeout(DEADLINE).is_ok();
-                panic!(
-                    "waited {DEADLINE:?} for `fiber extension {}` to exit (reaped after the kill: {reaped})",
-                    args.join(" ")
-                );
-            }
+            Err(_) => support::expired(
+                self.deadline,
+                group,
+                &finished,
+                &format!("`fiber extension {}` to exit", args.join(" ")),
+            ),
         };
-        watchdog.stand_down(DEADLINE);
+        watchdog.stand_down(self.deadline.cleanup());
         Run {
             code: output.status.code(),
             stdout: String::from_utf8(output.stdout).unwrap(),

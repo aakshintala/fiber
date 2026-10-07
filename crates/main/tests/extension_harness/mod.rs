@@ -7,7 +7,7 @@
     reason = "test helpers; a failure is the test's"
 )]
 use std::fs;
-use std::io::{BufRead, BufReader, ErrorKind, Write};
+use std::io::{BufRead, BufReader, ErrorKind};
 use std::net::TcpListener;
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
@@ -15,24 +15,23 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::{Mutex, mpsc};
 use std::thread;
-use std::time::Duration;
 
+use crate::support::{Deadline, group_alive};
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
 
-/// How long one `fiber` run, or one socket line, may take.
-pub(crate) const DEADLINE: Duration = Duration::from_secs(20);
-
 pub(crate) struct Setup {
     pub(crate) root: fakes::TempDir,
+    pub(crate) deadline: Deadline,
 }
 
 impl Setup {
     pub(crate) fn new() -> Self {
+        let deadline = Deadline::start();
         let root = fakes::TempDir::new("fm");
         fs::create_dir_all(root.path().join("h")).unwrap();
         fs::create_dir_all(root.path().join("w")).unwrap();
-        Self { root }
+        Self { deadline, root }
     }
 
     pub(crate) fn home(&self) -> PathBuf {
@@ -160,6 +159,7 @@ impl Setup {
             lines,
             stderr: stderr_rx,
             first: Vec::new(),
+            deadline: self.deadline,
         }
     }
 }
@@ -169,17 +169,11 @@ pub(crate) fn write_json(file: &Path, value: &Value) {
     fs::write(file, value.to_string()).unwrap();
 }
 
-pub(crate) fn group_alive(group: u32) -> bool {
-    fakes::kill_group(group, "0").unwrap()
-}
-
 pub(crate) struct KillGroup(u32);
 
 impl Drop for KillGroup {
     fn drop(&mut self) {
-        match fakes::kill_group(self.0, "KILL") {
-            Ok(_) | Err(_) => {}
-        }
+        crate::support::kill_group_detached(self.0, "KILL");
     }
 }
 
@@ -191,26 +185,34 @@ pub(crate) struct Running {
     pub(crate) lines: mpsc::Receiver<String>,
     pub(crate) stderr: mpsc::Receiver<String>,
     pub(crate) first: Vec<String>,
+    pub(crate) deadline: Deadline,
 }
 
 impl Running {
     pub(crate) fn connect(&mut self, socket: &Path) -> Socket {
         let line = self.first_line();
         self.first.push(line);
-        Socket::connect(socket).expect("the session's socket accepted before the deadline")
+        Socket::connect(self.deadline, socket)
+            .expect("the session's socket accepted before the deadline")
     }
 
     pub(crate) fn connect_client(&mut self, socket: &Path) -> fakes::Client {
         let line = self.first_line();
         self.first.push(line);
-        fakes::Client::connect(socket).expect("the session's socket accepted before the deadline")
+        let target = socket.to_owned();
+        crate::support::bounded(
+            self.deadline,
+            &format!("a connection to {}", socket.display()),
+            move || fakes::Client::connect(&target),
+        )
+        .expect("the session's socket accepted before the deadline")
     }
 
     fn first_line(&mut self) -> String {
-        match self.lines.recv_timeout(DEADLINE) {
+        match self.lines.recv_timeout(self.deadline.left()) {
             Ok(line) => line,
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                panic!("waited {DEADLINE:?} for the session's first stdout line")
+                panic!("waited until the deadline for the session's first stdout line")
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 panic!("the session exited before its first stdout line")
@@ -220,10 +222,10 @@ impl Running {
 
     pub(crate) fn wait_for(&mut self, kind: &str) {
         loop {
-            let line = match self.lines.recv_timeout(DEADLINE) {
+            let line = match self.lines.recv_timeout(self.deadline.left()) {
                 Ok(line) => line,
                 Err(mpsc::RecvTimeoutError::Timeout) => {
-                    panic!("waited {DEADLINE:?} for {kind} on the session's stdout")
+                    panic!("waited until the deadline for {kind} on the session's stdout")
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
                     panic!("the session's stdout closed before {kind}")
@@ -250,10 +252,10 @@ impl Running {
     fn wait_raw(mut self) -> (ExitStatus, Vec<String>, String) {
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(self.child.wait()).unwrap());
-        let status = match finished.recv_timeout(DEADLINE) {
+        let status = match finished.recv_timeout(self.deadline.left()) {
             Ok(status) => status.unwrap(),
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                panic!("waited {DEADLINE:?} for the session to exit")
+                crate::support::expired(self.deadline, self.group, &finished, "the session to exit")
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 panic!("the session wait thread ended before it exited")
@@ -263,54 +265,72 @@ impl Running {
         while let Ok(line) = self.lines.try_recv() {
             lines.push(line);
         }
-        let stderr = self.stderr.recv_timeout(DEADLINE).unwrap_or_default();
+        let stderr = match self.stderr.recv_timeout(self.deadline.left()) {
+            Ok(text) => text,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                panic!("waited until the deadline for the session's stderr")
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                panic!("the stderr reader ended without its text")
+            }
+        };
         assert!(
-            !group_alive(self.group),
+            !group_alive(self.deadline, self.group),
             "`fiber` left a process in its group behind"
         );
         std::mem::forget(self.guard);
-        self.watchdog.stand_down(DEADLINE);
+        self.watchdog.stand_down(self.deadline.cleanup());
         (status, lines, stderr)
     }
 }
 
+/// A client on a session's socket. Every read and write takes what remains
+/// of the test's [`Deadline`].
 pub(crate) struct Socket {
     write: Mutex<UnixStream>,
     read: Mutex<BufReader<UnixStream>>,
+    deadline: Deadline,
 }
 
 impl Socket {
-    pub(crate) fn connect(path: &Path) -> std::io::Result<Self> {
-        let write = UnixStream::connect(path)?;
+    /// Connects to `path` on a thread bounded by the deadline.
+    pub(crate) fn connect(deadline: Deadline, path: &Path) -> std::io::Result<Self> {
+        let target = path.to_owned();
+        let write = crate::support::bounded(
+            deadline,
+            &format!("a connection to {}", path.display()),
+            move || UnixStream::connect(target),
+        )?;
         let read = write.try_clone()?;
-        read.set_read_timeout(Some(DEADLINE))?;
         Ok(Self {
             write: Mutex::new(write),
             read: Mutex::new(BufReader::new(read)),
+            deadline,
         })
     }
 
     fn send(&self, line: &str) {
-        let mut write = self.write.lock().unwrap();
-        write.write_all(line.as_bytes()).unwrap();
+        let mut bytes = line.as_bytes().to_vec();
         if !line.ends_with('\n') {
-            write.write_all(b"\n").unwrap();
+            bytes.push(b'\n');
         }
-        write.flush().unwrap();
+        let mut write = self.write.lock().unwrap();
+        if let Err(error) =
+            crate::support::write_line(&mut write, self.deadline, &bytes, "sending a line")
+        {
+            panic!("writing the session socket: {error}");
+        }
     }
 
     fn next(&self, what: &str, got: &[Value]) -> Option<Value> {
-        let mut buf = String::new();
-        match self.read.lock().unwrap().read_line(&mut buf) {
-            Ok(0) => None,
-            Ok(_) => {
+        match crate::support::read_line(&mut self.read.lock().unwrap(), self.deadline, what) {
+            Ok(None) => None,
+            Ok(Some(buf)) => {
                 let line = buf.trim_end_matches(&['\r', '\n'][..]).to_owned();
                 Some(serde_json::from_str(&line).unwrap_or(Value::String(line)))
             }
-            Err(error)
-                if error.kind() == ErrorKind::TimedOut || error.kind() == ErrorKind::WouldBlock =>
-            {
-                panic!("waited {DEADLINE:?} for {what}; got {got:?}")
+            Err(error) if error.kind() == ErrorKind::TimedOut => {
+                panic!("waited until the deadline for {what}; got {got:?}")
             }
             Err(error) => {
                 panic!("reading the session socket while waiting for {what}: {error}")
@@ -393,29 +413,47 @@ pub(crate) fn hello() -> Response {
     ])
 }
 
+/// [`hold_server`]'s URL, the receiver told once the request head is read,
+/// and the sender whose drop releases the held connection.
+pub(crate) type Held = (String, mpsc::Receiver<()>, mpsc::Sender<()>);
+
 /// Holds one HTTP connection open (head read, body never sent), so a
-/// `host.http` against it stays parked.
-pub(crate) fn hold_server() -> (String, mpsc::Receiver<()>) {
+/// `host.http` against it stays parked. Each header read takes what remains
+/// of `deadline`; the connection is held until the returned sender drops or
+/// the cleanup deadline passes. The caller receives the accepted signal
+/// with the deadline, which bounds the accept.
+pub(crate) fn hold_server(deadline: Deadline) -> Held {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}/", listener.local_addr().unwrap());
     let (accepted_tx, accepted_rx) = mpsc::channel();
+    let (release, release_rx) = mpsc::channel::<()>();
     thread::spawn(move || {
-        let mut sock = listener.accept().unwrap().0;
+        let Ok((mut sock, _)) = listener.accept() else {
+            return;
+        };
         let mut buf = [0; 1];
         let mut seen = Vec::new();
         loop {
             use std::io::Read;
+            // A zero timeout is refused, so a deadline that passes between
+            // these two reads also stops here.
+            if deadline.left().is_zero() || sock.set_read_timeout(Some(deadline.left())).is_err() {
+                return;
+            }
             match sock.read(&mut buf) {
-                Ok(0) | Err(_) => break,
+                Ok(0) | Err(_) => return,
                 Ok(_) => seen.push(buf[0]),
             }
             if seen.ends_with(b"\r\n\r\n") {
                 break;
             }
         }
-        let _ = accepted_tx.send(()).ok();
-        let (_block_tx, block_rx) = mpsc::channel::<()>();
-        let _ = block_rx.recv_timeout(Duration::from_secs(25)).ok();
+        match accepted_tx.send(()) {
+            Ok(()) | Err(mpsc::SendError(())) => {}
+        }
+        match release_rx.recv_timeout(deadline.cleanup()) {
+            Ok(()) | Err(_) => {}
+        }
     });
-    (url, accepted_rx)
+    (url, accepted_rx, release)
 }

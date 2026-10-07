@@ -54,7 +54,7 @@ fn an_unconfigured_model_exits_model_unconfigured_naming_the_setting() {
                         "base_url": "https://{workspace}/v1", "context_window": 1000}],
         }),
     );
-    let output = run_to_exit("fiber ask", setup.fiber(&["ask", "hi"]));
+    let output = run_to_exit(setup.deadline, "fiber ask", setup.fiber(&["ask", "hi"]));
     let message = assert_pre_session(&output, 1, "model_unconfigured");
     assert_eq!(
         message,
@@ -84,7 +84,7 @@ fn a_host_value_that_is_not_a_host_never_reaches_the_provider() {
         &setup.home().join("config/fake.json"),
         &json!({"workspace": "127.0.0.1@evil.example/x"}),
     );
-    let output = run_to_exit("fiber ask", setup.fiber(&["ask", "hi"]));
+    let output = run_to_exit(setup.deadline, "fiber ask", setup.fiber(&["ask", "hi"]));
     let message = assert_pre_session(&output, 1, "model_unconfigured");
     assert_eq!(
         message,

@@ -12,22 +12,18 @@
     reason = "test helpers; a failure is the test's"
 )]
 
+mod support;
+
 use std::fs;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
 
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
-
-/// How long one `fiber` run may take.
-const DEADLINE: Duration = Duration::from_secs(20);
-
-/// How long a process group may take to empty after `fiber` exits.
-const GROUP_DEADLINE: Duration = Duration::from_secs(5);
+use support::Deadline;
 
 /// The fixture extension's name.
 const FIXTURE: &str = "fiber.test/notes";
@@ -37,14 +33,16 @@ const FIXTURE: &str = "fiber.test/notes";
 /// macOS.
 struct Setup {
     root: fakes::TempDir,
+    deadline: Deadline,
 }
 
 impl Setup {
     fn new() -> Self {
+        let deadline = Deadline::start();
         let root = fakes::TempDir::new("fh");
         fs::create_dir_all(root.path().join("h")).unwrap();
         fs::create_dir_all(root.path().join("w")).unwrap();
-        Self { root }
+        Self { deadline, root }
     }
 
     fn home(&self) -> PathBuf {
@@ -142,8 +140,8 @@ impl Setup {
         write(&self.home().join("config.json"), &config.to_string());
     }
 
-    /// Runs `fiber` in its own process group, waits for it under
-    /// [`DEADLINE`], and asserts that nothing it started is left in the
+    /// Runs `fiber` in its own process group, waits for it under the
+    /// test's [`Deadline`], and asserts that nothing it started is left in the
     /// group. A watchdog beside it kills that group if this process dies
     /// first.
     fn run(&self, args: &[&str]) -> Run {
@@ -164,23 +162,21 @@ impl Setup {
         let guard = KillGroup(group);
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-        let output = match finished.recv_timeout(DEADLINE) {
+        let output = match finished.recv_timeout(self.deadline.left()) {
             Ok(output) => output.unwrap(),
-            Err(_) => {
-                fakes::kill_group(group, "KILL").unwrap();
-                let reaped = finished.recv_timeout(DEADLINE).is_ok();
-                panic!(
-                    "waited {DEADLINE:?} for `fiber {}` to exit (reaped after the kill: {reaped})",
-                    args.join(" ")
-                );
-            }
+            Err(_) => support::expired(
+                self.deadline,
+                group,
+                &finished,
+                &format!("`fiber {}` to exit", args.join(" ")),
+            ),
         };
         assert!(
-            fakes::group_empties(group, GROUP_DEADLINE),
+            fakes::group_empties(group, self.deadline.left()),
             "`fiber` left a process in its group behind"
         );
         std::mem::forget(guard);
-        watchdog.stand_down(DEADLINE);
+        watchdog.stand_down(self.deadline.cleanup());
         Run::from(output)
     }
 
@@ -221,9 +217,7 @@ struct KillGroup(u32);
 
 impl Drop for KillGroup {
     fn drop(&mut self) {
-        match fakes::kill_group(self.0, "KILL") {
-            Ok(_) | Err(_) => {}
-        }
+        support::kill_group_detached(self.0, "KILL");
     }
 }
 

@@ -11,6 +11,8 @@
     reason = "test helpers; a failure is the test's; a live test prints its outcome"
 )]
 
+mod support;
+
 use std::ffi::OsStr;
 use std::fs;
 use std::io::{BufRead, Write};
@@ -26,12 +28,10 @@ use std::time::Duration;
 use fakes::{ProviderServer, Request, Response, Watchdog, fingerprint};
 use rustix::pty;
 use serde_json::{Value, json};
+use support::{Deadline, group_alive};
 
 #[path = "../../provider/tests/support/probes.rs"]
 mod probes;
-
-/// How long one `fiber` run may take.
-const DEADLINE: Duration = Duration::from_secs(20);
 
 /// Set on the re-exec of [`sleep_stands_in_for_fiber`]. Unset, that test
 /// returns without spawning anything.
@@ -42,14 +42,19 @@ const WATCHDOG_STAND_IN_ENV: &str = "FIBER_WATCHDOG_STAND_IN";
 /// macOS.
 struct Setup {
     root: fakes::TempDir,
+    deadline: Deadline,
 }
 
 impl Setup {
     fn new() -> Self {
+        Self::within(Deadline::start())
+    }
+
+    fn within(deadline: Deadline) -> Self {
         let root = fakes::TempDir::new("fa");
         fs::create_dir_all(root.path().join("h")).unwrap();
         fs::create_dir_all(root.path().join("w")).unwrap();
-        Self { root }
+        Self { deadline, root }
     }
 
     fn home(&self) -> PathBuf {
@@ -179,15 +184,18 @@ impl Setup {
     /// [`Self::fiber_typing`] with extra environment variables.
     fn fiber_typing_env(&self, args: &[&str], typed: &str, env: &[(&str, &str)]) -> Run {
         let terminal = Terminal::open();
-        fs::File::from(terminal.main.try_clone().unwrap())
-            .write_all(typed.as_bytes())
-            .unwrap();
+        let mut main = fs::File::from(terminal.main.try_clone().unwrap());
+        let typed = typed.to_owned();
+        support::bounded(self.deadline, "typing on the terminal", move || {
+            main.write_all(typed.as_bytes())
+        })
+        .unwrap();
         let home = self.home();
         self.run(home.to_str().unwrap(), args, terminal.stdin(), None, env)
     }
 
-    /// Runs `fiber` in its own process group, waits for it under
-    /// [`DEADLINE`], and asserts that nothing it started is left in the
+    /// Runs `fiber` in its own process group, waits for it under the test's
+    /// [`Deadline`], and asserts that nothing it started is left in the
     /// group, after a timeout too (`docs/testing.md`, "Running tests").
     /// A watchdog beside it kills that group if this process dies first.
     fn run(
@@ -214,39 +222,35 @@ impl Setup {
         let (mut child, watchdog) = spawn_watched(&mut command);
         let group = child.id();
         let guard = KillGroup(group);
-        // Taking the pipe closes it once written.
+        // Taking the pipe closes it once written. The write runs on a
+        // thread, so a child that never reads it is bounded by the exit wait.
         if let Some(mut pipe) = child.stdin.take()
             && let Some(text) = text
         {
-            pipe.write_all(text.as_bytes()).unwrap();
+            let text = text.to_owned();
+            thread::spawn(move || match pipe.write_all(text.as_bytes()) {
+                Ok(()) | Err(_) => {}
+            });
         }
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-        let output = match finished.recv_timeout(DEADLINE) {
+        let output = match finished.recv_timeout(self.deadline.left()) {
             Ok(output) => output.unwrap(),
-            Err(_) => {
-                fakes::kill_group(group, "KILL").unwrap();
-                // Reaps the killed child, so the check below sees the group
-                // as the kill left it.
-                let reaped = finished.recv_timeout(DEADLINE).is_ok();
-                assert!(
-                    !group_alive(group),
-                    "`fiber` left a process in its group behind"
-                );
-                panic!(
-                    "waited {DEADLINE:?} for `fiber {}` to exit (reaped after the kill: {reaped})",
-                    args.join(" ")
-                );
-            }
+            Err(_) => support::expired(
+                self.deadline,
+                group,
+                &finished,
+                &format!("`fiber {}` to exit", args.join(" ")),
+            ),
         };
         assert!(
-            !group_alive(group),
+            !group_alive(self.deadline, group),
             "`fiber` left a process in its group behind"
         );
         // The group is empty. Skip the drop, which would kill it again,
         // and tell the watchdog to exit without signalling.
         std::mem::forget(guard);
-        watchdog.stand_down(DEADLINE);
+        watchdog.stand_down(self.deadline.cleanup());
         Run::from(output)
     }
 
@@ -275,11 +279,6 @@ fn assert_fingerprint(request: &Request, header: &str, value: &str) {
 fn write(file: &Path, value: &Value) {
     fs::create_dir_all(file.parent().unwrap()).unwrap();
     fs::write(file, value.to_string()).unwrap();
-}
-
-/// Whether any process remains in process group `group`.
-fn group_alive(group: u32) -> bool {
-    fakes::kill_group(group, "0").unwrap()
 }
 
 /// A pseudo-terminal, opened through rustix's safe calls. The main side
@@ -332,14 +331,13 @@ impl Drop for KillGroup {
     fn drop(&mut self) {
         // A panic between spawn and reap still kills the group. Failure
         // here is ignored: the process may already be gone.
-        match fakes::kill_group(self.0, "KILL") {
-            Ok(_) | Err(_) => {}
-        }
+        support::kill_group_detached(self.0, "KILL");
     }
 }
 
 #[test]
 fn dropping_the_group_guard_kills_the_group() {
+    let deadline = Deadline::start();
     let mut child = Command::new("sleep")
         .arg("30")
         .process_group(0)
@@ -351,12 +349,12 @@ fn dropping_the_group_guard_kills_the_group() {
     // reaped, so the group is checked after `wait`.
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait()).unwrap());
-    let status = match finished.recv_timeout(DEADLINE) {
+    let status = match finished.recv_timeout(deadline.left()) {
         Ok(status) => status.unwrap(),
-        Err(_) => panic!("waited {DEADLINE:?} for the process group to die"),
+        Err(_) => support::expired(deadline, group, &finished, "the process group to die"),
     };
     assert_eq!(status.signal(), Some(9));
-    assert!(!group_alive(group));
+    assert!(!group_alive(deadline, group));
 }
 
 /// Run by [`a_killed_test_kills_the_stand_in_group`]: `sleep` through
@@ -382,6 +380,7 @@ fn sleep_stands_in_for_fiber() {
 /// group is gone (`docs/testing.md`, "Running tests").
 #[test]
 fn a_killed_test_kills_the_stand_in_group() {
+    let deadline = Deadline::start();
     let mut helper = Command::new(std::env::current_exe().unwrap())
         .args(["--exact", "sleep_stands_in_for_fiber", "--nocapture"])
         .env(WATCHDOG_STAND_IN_ENV, "1")
@@ -406,10 +405,10 @@ fn a_killed_test_kills_the_stand_in_group() {
         }
         send_group(&tx, None);
     });
-    let group = match rx.recv_timeout(DEADLINE) {
+    let group = match rx.recv_timeout(deadline.left()) {
         Ok(Some(group)) => group,
         Ok(None) => panic!("the stand-in exited before printing its group"),
-        Err(_) => panic!("waited {DEADLINE:?} for the stand-in to print its group"),
+        Err(_) => panic!("waited until the deadline for the stand-in to print its group"),
     };
     // Dropping this kills the group if the test fails before the watchdog does.
     let _guard = KillGroup(group);
@@ -420,15 +419,15 @@ fn a_killed_test_kills_the_stand_in_group() {
     thread::spawn(move || match done.send(helper.wait()) {
         Ok(()) | Err(mpsc::SendError(_)) => {}
     });
-    let status = match finished.recv_timeout(DEADLINE) {
+    let status = match finished.recv_timeout(deadline.left()) {
         Ok(status) => status.unwrap(),
-        Err(_) => panic!("waited {DEADLINE:?} for the killed test process to exit"),
+        Err(_) => panic!("waited until the deadline for the killed test process to exit"),
     };
     assert_eq!(status.signal(), Some(9));
-    match rx.recv_timeout(DEADLINE) {
+    match rx.recv_timeout(deadline.left()) {
         Ok(None) => {}
         Ok(Some(_)) | Err(_) => {
-            panic!("waited {DEADLINE:?} for stand-in group {group} to die")
+            panic!("waited until the deadline for stand-in group {group} to die")
         }
     }
 }
@@ -1438,7 +1437,7 @@ fn extension_update_all_skips_unrequested_dependencies() {
     let gh = Github::new(&setup);
     gh.release("v0.1.0");
     gh.release_needs_muse("v1.0.0", "v0.1.0");
-    let muse_v1 = git(&gh.repo, &["rev-parse", "v0.1.0^{commit}"]);
+    let muse_v1 = git(setup.deadline, &gh.repo, &["rev-parse", "v0.1.0^{commit}"]);
     let run = setup.fiber_with_env(&["extension", "install", NEEDS_MUSE], &gh.env());
     assert_eq!(run.code, Some(0), "{}", run.stderr);
     let listed = setup.fiber_with_env(&["extension", "list"], &[]);
@@ -1520,16 +1519,21 @@ fn old_extension_command_names_are_unknown() {
     }
 }
 
-/// Runs the system `git` in `dir`.
-fn git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+/// Runs the system `git` in `dir`, in its own process group, to its exit
+/// under the test's [`Deadline`].
+fn git(deadline: Deadline, dir: &Path, args: &[&str]) -> String {
+    let mut command = Command::new("git");
+    command
         .args(["-c", "user.name=t", "-c", "user.email=t@t"])
         .args(["-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"])
         .args(["-c", "init.defaultBranch=main"])
         .args(args)
         .current_dir(dir)
-        .output()
-        .unwrap();
+        .process_group(0)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let out = support::run_to_exit(deadline, &format!("git {args:?}"), command);
     assert!(out.status.success(), "git {args:?}: {out:?}");
     String::from_utf8(out.stdout).unwrap().trim().to_owned()
 }
@@ -1540,6 +1544,7 @@ fn git(dir: &Path, args: &[&str]) -> String {
 /// so the shipped binary needs no test switch.
 struct Github {
     repo: PathBuf,
+    deadline: Deadline,
     key: String,
     value: String,
 }
@@ -1549,9 +1554,10 @@ impl Github {
         let base = setup.root.path().join("gh");
         let repo = base.join("aakshintala/fiber");
         fs::create_dir_all(&repo).unwrap();
-        git(&repo, &["init", "--quiet"]);
+        git(setup.deadline, &repo, &["init", "--quiet"]);
         Self {
             repo,
+            deadline: setup.deadline,
             key: format!("url.file://{}/.insteadOf", base.display()),
             value: "https://github.com/".into(),
         }
@@ -1573,9 +1579,9 @@ impl Github {
             fs::copy(package("muse").join(file), dir.join(file)).unwrap();
         }
         fs::write(dir.join("NOTES.md"), format!("notes for {tag}\n")).unwrap();
-        git(&self.repo, &["add", "."]);
-        git(&self.repo, &["commit", "--quiet", "-m", tag]);
-        git(&self.repo, &["tag", tag]);
+        git(self.deadline, &self.repo, &["add", "."]);
+        git(self.deadline, &self.repo, &["commit", "--quiet", "-m", tag]);
+        git(self.deadline, &self.repo, &["tag", tag]);
     }
 
     /// Commits `providers/needs-muse`, which depends on [`MUSE`] at `muse_min`.
@@ -1588,9 +1594,9 @@ impl Github {
         fs::write(dir.join("extension.json"), manifest).unwrap();
         fs::write(dir.join("providers/.gitkeep"), "").unwrap();
         fs::write(dir.join("NOTES.md"), format!("needs-muse {tag}\n")).unwrap();
-        git(&self.repo, &["add", "."]);
-        git(&self.repo, &["commit", "--quiet", "-m", tag]);
-        git(&self.repo, &["tag", tag]);
+        git(self.deadline, &self.repo, &["add", "."]);
+        git(self.deadline, &self.repo, &["commit", "--quiet", "-m", tag]);
+        git(self.deadline, &self.repo, &["tag", tag]);
     }
 }
 
@@ -1602,7 +1608,7 @@ fn install_by_short_name_fetches_from_git_headless_and_list_shows_the_commit() {
     let setup = Setup::new();
     let gh = Github::new(&setup);
     gh.release("v0.1.0");
-    let commit = git(&gh.repo, &["rev-parse", "v0.1.0^{commit}"]);
+    let commit = git(setup.deadline, &gh.repo, &["rev-parse", "v0.1.0^{commit}"]);
     let run = setup.fiber_with_env(&["extension", "install", "muse"], &gh.env());
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert_eq!(run.stderr, format!("fiber: installed {MUSE}\n"));
@@ -2725,11 +2731,12 @@ fn install_takes_one_name_or_path() {
 /// file in `var` (`docs/testing.md`, "Live calls and evals"). Prints the
 /// event kinds and the final text.
 fn live(var: &str, package_name: &str, provider: &str, model: &str, key_env: &str) {
+    let deadline = Deadline::start();
     let Some(key_file) = std::env::var_os(var) else {
         return;
     };
     let key = fs::read_to_string(key_file).unwrap();
-    let setup = Setup::new();
+    let setup = Setup::within(deadline);
     install(&setup, &package(package_name));
 
     let model = format!("{provider}/{model}");
@@ -3089,7 +3096,7 @@ fn a_cached_list_serves_the_model_while_the_refresh_runs_in_the_background() {
     assert_eq!(exited["exit_code"], 0);
     assert_eq!(exited["text"], "Hello.");
     assert!(
-        server.await_requests(3, DEADLINE),
+        server.await_requests(3, setup.deadline.left()),
         "waited for the refresh, the token and the model request"
     );
     let mut paths: Vec<String> = server
@@ -3168,7 +3175,7 @@ fn a_lua_provider_without_credential_uses_the_stored_key() {
     assert_eq!(run.kinds(), HELLO_KINDS);
     assert_eq!(run.last()["payload"]["text"], "Hello.");
     assert!(
-        server.await_requests(1, DEADLINE),
+        server.await_requests(1, setup.deadline.left()),
         "waited for the model request"
     );
     let requests = server.requests();

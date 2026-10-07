@@ -70,11 +70,12 @@ fn delete(setup: &Setup, args: &[&str]) -> std::process::Output {
     all.extend_from_slice(args);
     let mut command = setup.fiber(&all);
     command.current_dir(setup.workspace());
-    run_to_exit("fiber sessions delete", command)
+    run_to_exit(setup.deadline, "fiber sessions delete", command)
 }
 
-/// Waits under [`DEADLINE`] until `socket` is gone, naming `what`.
-fn until_absent(socket: &Path, what: &str) {
+/// Waits under the test's [`Deadline`] until `socket` is gone, naming
+/// `what`.
+fn until_absent(deadline: Deadline, socket: &Path, what: &str) {
     let socket = socket.to_owned();
     let (done, reached) = mpsc::channel();
     thread::spawn(move || {
@@ -84,8 +85,8 @@ fn until_absent(socket: &Path, what: &str) {
         done.send(()).unwrap_or(());
     });
     assert!(
-        reached.recv_timeout(DEADLINE).is_ok(),
-        "waited {DEADLINE:?} for {what}"
+        reached.recv_timeout(deadline.left()).is_ok(),
+        "waited until the deadline for {what}"
     );
 }
 
@@ -115,7 +116,7 @@ fn yes_starts_a_hub_that_removes_the_session_and_keeps_its_worktree_and_row() {
         "{}",
         setup.hub_log()
     );
-    until_absent(&setup.hub_socket(), "the hub to idle out");
+    until_absent(setup.deadline, &setup.hub_socket(), "the hub to idle out");
 }
 
 #[test]
@@ -131,7 +132,7 @@ fn a_held_session_exits_one_and_stays() {
     assert!(dir.join("events.jsonl").is_file());
     assert_eq!(text(&output.stdout), "");
     drop(lock);
-    until_absent(&setup.hub_socket(), "the hub to idle out");
+    until_absent(setup.deadline, &setup.hub_socket(), "the hub to idle out");
 }
 
 #[test]
@@ -149,7 +150,7 @@ fn dependents_exit_one_naming_the_fork_and_cascade_removes_both() {
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
     assert_eq!(text(&output.stdout), format!("{ROOT}\n{FORK}\n"));
     assert!(!root.exists() && !fork.exists());
-    until_absent(&setup.hub_socket(), "the hub to idle out");
+    until_absent(setup.deadline, &setup.hub_socket(), "the hub to idle out");
 }
 
 #[test]

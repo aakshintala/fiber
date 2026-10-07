@@ -39,6 +39,7 @@ struct Running {
     group: u32,
     stdout: mpsc::Receiver<String>,
     stderr: Arc<Mutex<String>>,
+    deadline: Deadline,
 }
 
 fn start(setup: &Setup, args: &[&str]) -> Running {
@@ -74,14 +75,15 @@ fn start(setup: &Setup, args: &[&str]) -> Running {
         group,
         stdout: stdout_rx,
         stderr: stderr_text,
+        deadline: setup.deadline,
     }
 }
 
-fn first_line(stdout: &mpsc::Receiver<String>) -> Value {
+fn first_line(deadline: Deadline, stdout: &mpsc::Receiver<String>) -> Value {
     serde_json::from_str(
         &stdout
-            .recv_timeout(DEADLINE)
-            .expect("waited for fiber_started"),
+            .recv_timeout(deadline.left())
+            .expect("waited until the deadline for fiber_started"),
     )
     .unwrap()
 }
@@ -100,17 +102,26 @@ fn finish(running: Running) {
         group,
         stdout,
         stderr,
+        deadline,
     } = running;
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait()).unwrap());
-    let status = finished
-        .recv_timeout(DEADLINE)
-        .expect("waited for fiber to exit")
-        .unwrap();
+    let status = match finished.recv_timeout(deadline.left()) {
+        Ok(status) => status.unwrap(),
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            expired(deadline, group, &finished, "fiber to exit")
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            panic!("fiber's wait thread ended before fiber exited")
+        }
+    };
     assert!(status.success(), "stderr: {}", stderr.lock().unwrap());
-    assert!(!group_alive(group), "fiber left a process in its group");
+    assert!(
+        !group_alive(deadline, group),
+        "fiber left a process in its group"
+    );
     drop(stdout);
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(deadline.cleanup());
 }
 
 #[test]
@@ -130,14 +141,14 @@ fn the_tools_command_gives_tokens_after_the_first_request() {
     setup.provider(&server);
     server.hold();
     let running = start(&setup, &["ask", "read the note"]);
-    let started = first_line(&running.stdout);
+    let started = first_line(setup.deadline, &running.stdout);
     let session_id = started["session_id"].as_str().unwrap().to_owned();
     assert!(
-        server.await_requests(1, DEADLINE),
+        server.await_requests(1, setup.deadline.left()),
         "the held response was requested"
     );
 
-    let client = Socket::connect(&setup.session_socket(&session_id));
+    let client = Socket::connect(setup.deadline, &setup.session_socket(&session_id));
     client.send(r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#);
     assert_eq!(
         recv(&client, "the subscribe acknowledgement")["payload"]["command_id"],
@@ -158,7 +169,7 @@ fn the_tools_command_gives_tokens_after_the_first_request() {
 
     server.release_one();
     assert!(
-        server.await_requests(2, DEADLINE),
+        server.await_requests(2, setup.deadline.left()),
         "the tool call sent a second request"
     );
 

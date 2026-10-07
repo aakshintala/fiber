@@ -11,25 +11,18 @@
     reason = "test helpers; a failure is the test's"
 )]
 
+mod support;
+
 use std::fs;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
 
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
-
-/// How long one `fiber` run may take.
-const DEADLINE: Duration = Duration::from_secs(20);
-
-/// How long a process group may take to empty after `fiber` exits.
-const GROUP_DEADLINE: Duration = Duration::from_secs(5);
-
-/// How long `mkfifo`, one short-lived process, may take.
-const MKFIFO: Duration = Duration::from_secs(5);
+use support::Deadline;
 
 /// The request's tool order: the loop keys tools by name, so this is name
 /// order, whatever order `main` pushes them in.
@@ -49,14 +42,19 @@ const TOOL_NAMES: [&str; 8] = [
 /// macOS.
 struct Setup {
     root: fakes::TempDir,
+    deadline: Deadline,
 }
 
 impl Setup {
     fn new() -> Self {
+        Self::within(Deadline::start())
+    }
+
+    fn within(deadline: Deadline) -> Self {
         let root = fakes::TempDir::new("fa");
         fs::create_dir_all(root.path().join("h")).unwrap();
         fs::create_dir_all(root.path().join("w")).unwrap();
-        Self { root }
+        Self { deadline, root }
     }
 
     fn home(&self) -> PathBuf {
@@ -141,8 +139,8 @@ impl Setup {
         );
     }
 
-    /// Runs `fiber` in its own process group, waits for it under
-    /// [`DEADLINE`], and asserts that nothing it started is left in the
+    /// Runs `fiber` in its own process group, waits for it under the test's
+    /// [`Deadline`], and asserts that nothing it started is left in the
     /// group, after a timeout too (`docs/testing.md`, "Running tests").
     /// A watchdog beside it kills that group if this process dies first.
     fn run(&self, args: &[&str]) -> Run {
@@ -164,33 +162,28 @@ impl Setup {
         let guard = KillGroup(group);
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-        let output = match finished.recv_timeout(DEADLINE) {
+        let output = match finished.recv_timeout(self.deadline.left()) {
             Ok(output) => output.unwrap(),
-            Err(_) => {
-                fakes::kill_group(group, "KILL").unwrap();
-                let reaped = finished.recv_timeout(DEADLINE).is_ok();
-                assert!(
-                    fakes::group_empties(group, GROUP_DEADLINE),
-                    "`fiber` left a process in its group behind"
-                );
-                panic!(
-                    "waited {DEADLINE:?} for `fiber {}` to exit (reaped after the kill: {reaped})",
-                    args.join(" ")
-                );
-            }
+            Err(_) => support::expired(
+                self.deadline,
+                group,
+                &finished,
+                &format!("`fiber {}` to exit", args.join(" ")),
+            ),
         };
         assert!(
-            fakes::group_empties(group, GROUP_DEADLINE),
+            fakes::group_empties(group, self.deadline.left()),
             "`fiber` left a process in its group behind"
         );
         std::mem::forget(guard);
-        watchdog.stand_down(DEADLINE);
+        watchdog.stand_down(self.deadline.cleanup());
         Run::from(output)
     }
 
     /// Runs `fiber` as [`Setup::run`] does, reading stdout as it is
     /// written, and calls `act` once the lines so far satisfy `when`: two
-    /// waits within [`DEADLINE`]: for the lines `when` needs, then for the exit.
+    /// waits under the test's [`Deadline`]: for the lines `when` needs, then
+    /// for the exit.
     fn run_then(
         &self,
         args: &[&str],
@@ -253,7 +246,7 @@ impl Setup {
                 Ok(()) | Err(_) => {}
             }
         });
-        match matched.recv_timeout(DEADLINE) {
+        match matched.recv_timeout(self.deadline.left()) {
             Ok(()) => act(),
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 panic!(
@@ -261,31 +254,34 @@ impl Setup {
                     args.join(" ")
                 );
             }
-            Err(_) => {
-                fakes::kill_group(group, "KILL").unwrap();
-                panic!(
-                    "waited {DEADLINE:?} for `fiber {}` to write the lines run_then waits for; so far: {}",
-                    args.join(" "),
-                    text.lock().unwrap()
-                );
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                let so_far = text.lock().unwrap().clone();
+                support::expired(
+                    self.deadline,
+                    group,
+                    &finished,
+                    &format!(
+                        "`fiber {}` to write the lines run_then waits for; so far: {so_far}",
+                        args.join(" ")
+                    ),
+                )
             }
         }
-        let (status, stdout, lines, stderr) = match finished.recv_timeout(DEADLINE) {
+        let (status, stdout, lines, stderr) = match finished.recv_timeout(self.deadline.left()) {
             Ok(done) => done,
-            Err(_) => {
-                fakes::kill_group(group, "KILL").unwrap();
-                panic!(
-                    "waited {DEADLINE:?} for `fiber {}` to exit after the act",
-                    args.join(" ")
-                );
-            }
+            Err(_) => support::expired(
+                self.deadline,
+                group,
+                &finished,
+                &format!("`fiber {}` to exit after the act", args.join(" ")),
+            ),
         };
         assert!(
-            fakes::group_empties(group, GROUP_DEADLINE),
+            fakes::group_empties(group, self.deadline.left()),
             "`fiber` left a process in its group behind"
         );
         std::mem::forget(guard);
-        watchdog.stand_down(GROUP_DEADLINE);
+        watchdog.stand_down(self.deadline.cleanup());
         Run {
             code: status.code(),
             stdout,
@@ -320,10 +316,22 @@ struct KillGroup(u32);
 
 impl Drop for KillGroup {
     fn drop(&mut self) {
-        match fakes::kill_group(self.0, "KILL") {
-            Ok(_) | Err(_) => {}
-        }
+        support::kill_group_detached(self.0, "KILL");
     }
+}
+
+/// Makes the FIFO `path` with `mkfifo`, run to its exit under the test's
+/// [`Deadline`].
+fn mkfifo(setup: &Setup, path: &Path) {
+    let mut command = Command::new("mkfifo");
+    command
+        .arg(path)
+        .process_group(0)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let made = support::run_to_exit(setup.deadline, "mkfifo", command);
+    assert!(made.status.success(), "mkfifo {}: {made:?}", path.display());
 }
 
 /// One finished run: its exit code, stdout's lines, as text and parsed, and
@@ -1042,8 +1050,9 @@ fn an_image_is_stored_logged_by_path_and_sent_inside_the_tool_result_on_every_re
 #[test]
 fn a_model_without_an_image_input_gets_no_image_part_and_the_result_says_so() {
     // No `input` at all, and an `input` that lists only text.
+    let deadline = Deadline::start();
     for input in [None, Some(vec!["text"])] {
-        let setup = Setup::new();
+        let setup = Setup::within(deadline);
         fs::write(setup.workspace().join("pic.png"), PIXEL).unwrap();
         let server = ProviderServer::start([
             anthropic_read("pic.png"),
@@ -1300,11 +1309,7 @@ fn handoff_configuration_reaches_a_resumed_session() {
 fn a_background_shell_job_is_waited_for_before_ask_exits() {
     let setup = Setup::new();
     let ready = setup.workspace().join("ready");
-    let fifo = ready.clone();
-    let made = fakes::within("mkfifo to make the ready FIFO", MKFIFO, move || {
-        Command::new("mkfifo").arg(&fifo).status()
-    });
-    assert!(made.unwrap().success(), "mkfifo {}", ready.display());
+    mkfifo(&setup, &ready);
     // Held read-write, the FIFO always has a writer: neither this open nor
     // the job's blocks, and the job's `read` waits for the line `act` writes.
     let release = fs::OpenOptions::new()
@@ -1315,12 +1320,13 @@ fn a_background_shell_job_is_waited_for_before_ask_exits() {
     // The job waits for a line on the FIFO: past the receipt, the
     // final reply and the ending notice. One plain command, so a standing
     // rule can match it.
-    fs::write(
-        setup.workspace().join("wait.sh"),
-        "read -r _ < ready\necho done\n",
-    )
-    .unwrap();
-    let command = "sh wait.sh";
+    let script = setup.workspace().join("wait.sh");
+    fs::write(&script, "read -r _ < ready\necho done\n").unwrap();
+    // The job runs in its own session and group, outside fiber's: this
+    // guard kills it if the test fails, and if this process dies before
+    // the job opens the FIFO, which then has no writer.
+    let job_guard = Watchdog::matching(script.to_str().unwrap());
+    let command = format!("sh {}", script.display());
     let server = ProviderServer::start([
         stream(&[function_call(
             "call_bg",
@@ -1338,7 +1344,7 @@ fn a_background_shell_job_is_waited_for_before_ask_exits() {
         setup.home().join("rules"),
         format!(
             "{}\n",
-            json!({"decision": "allow", "tool": "shell", "prefix": "sh wait.sh"})
+            json!({"decision": "allow", "tool": "shell", "prefix": command})
         ),
     )
     .unwrap();
@@ -1423,6 +1429,7 @@ fn a_background_shell_job_is_waited_for_before_ask_exits() {
     let completed = &lines[35];
     assert_eq!(completed["payload"]["job_id"], job_id);
     assert_eq!(completed["payload"]["status"], "completed");
+    job_guard.stand_down(setup.deadline.cleanup());
     assert!(completed.get("action_id").is_none_or(Value::is_null));
     assert_eq!(server.requests().len(), 4);
 }
@@ -1431,11 +1438,7 @@ fn a_background_shell_job_is_waited_for_before_ask_exits() {
 fn a_monitors_lines_reach_the_log_before_its_end_and_ask_exits() {
     let setup = Setup::new();
     let ready = setup.workspace().join("ready");
-    let fifo = ready.clone();
-    let made = fakes::within("mkfifo to make the ready FIFO", MKFIFO, move || {
-        Command::new("mkfifo").arg(&fifo).status()
-    });
-    assert!(made.unwrap().success(), "mkfifo {}", ready.display());
+    mkfifo(&setup, &ready);
     // Held read-write, the FIFO always has a writer: neither this open nor
     // the job's blocks, and the job's `read` waits for the line `act` writes.
     let release = fs::OpenOptions::new()
@@ -1446,18 +1449,20 @@ fn a_monitors_lines_reach_the_log_before_its_end_and_ask_exits() {
     // The monitor prints once the test writes a line: past the receipt,
     // the final reply and the ending notice. Both lines go out in one
     // write, so they are one batch.
-    fs::write(
-        setup.workspace().join("watch.sh"),
-        "read -r _ < ready\nprintf 'one\\ntwo\\n'\n",
-    )
-    .unwrap();
+    let script = setup.workspace().join("watch.sh");
+    fs::write(&script, "read -r _ < ready\nprintf 'one\\ntwo\\n'\n").unwrap();
+    // The monitor runs in its own session and group, outside fiber's: this
+    // guard kills it if the test fails, and if this process dies before
+    // the monitor opens the FIFO, which then has no writer.
+    let job_guard = Watchdog::matching(script.to_str().unwrap());
+    let command = format!("sh {}", script.display());
     // How many turns the lines and the end take depends on when they
     // arrive, so every later request is answered with text.
     let server = ProviderServer::start([
         stream(&[function_call(
             "call_monitor",
             "shell",
-            &json!({"command": "sh watch.sh", "monitor": true}),
+            &json!({"command": command, "monitor": true}),
         )]),
         hello(),
         hello(),
@@ -1472,7 +1477,7 @@ fn a_monitors_lines_reach_the_log_before_its_end_and_ask_exits() {
         setup.home().join("rules"),
         format!(
             "{}\n",
-            json!({"decision": "allow", "tool": "shell", "prefix": "sh watch.sh"})
+            json!({"decision": "allow", "tool": "shell", "prefix": command})
         ),
     )
     .unwrap();
@@ -1605,6 +1610,7 @@ fn a_monitors_lines_reach_the_log_before_its_end_and_ask_exits() {
     let completed = &lines[ended_at];
     assert_eq!(completed["payload"]["job_id"], job_id);
     assert_eq!(completed["payload"]["status"], "completed");
+    job_guard.stand_down(setup.deadline.cleanup());
     // The deltas left out above: all of this job's, inside its life, and
     // together exactly what it printed, so a missing or duplicated one fails.
     let all: Vec<&str> = run
