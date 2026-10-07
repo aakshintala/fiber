@@ -60,6 +60,7 @@ pub(super) struct Start {
     pub(super) memory_cap: usize,
     pub(super) browser: Arc<dyn Browser>,
     pub(super) session: Option<crate::host::Session>,
+    pub(super) secrets: Vec<String>,
 }
 
 /// Spawns the extension's thread on the first call.
@@ -76,6 +77,7 @@ pub(super) fn start(extension: &LuaExtension, shared: &mut Shared) -> Result<(),
         memory_cap: extension.memory_cap,
         browser: Arc::clone(&extension.browser),
         session: extension.session.clone(),
+        secrets: extension.secrets.clone(),
     };
     let hub = Arc::clone(&extension.hub);
     thread::Builder::new()

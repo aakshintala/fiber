@@ -60,6 +60,9 @@ pub(crate) struct HostContext {
     pub session: Option<Session>,
     /// The extension's memory cap in bytes, bounding `host.fs.read`.
     pub memory_cap: usize,
+    /// The names its manifest's `secrets` lists: the only ones `host.secret`
+    /// reads.
+    pub secrets: Vec<String>,
 }
 
 /// `host.http` yields this tag, `"http"` and the request table. The
@@ -139,6 +142,7 @@ pub(crate) fn install(
         extension,
         session,
         memory_cap,
+        secrets,
     } = ctx;
     let host = lua.create_table()?;
     let secret_home = home.clone();
@@ -151,6 +155,14 @@ pub(crate) fn install(
         let Ok(name) = name.to_str() else {
             return failure::raw_string(lua, "host.secret: name must be a string".to_owned());
         };
+        // An undeclared name is refused before any file is opened, so a
+        // stored secret the manifest does not list is never read.
+        if !secrets.iter().any(|declared| *declared == *name) {
+            return failure::raw_string(
+                lua,
+                format!("host.secret: `{name}` is not in the manifest's `secrets`"),
+            );
+        }
         match config::read_secret(&secret_home, &name) {
             Ok(secret) => Ok(match secret.map(|s| s.expose().trim().to_owned()) {
                 Some(secret) => {

@@ -89,7 +89,10 @@ fn fixture() -> (Setup, Arc<FakeClock>, Arc<LuaExtension>) {
     let clock = FakeClock::new();
     let dir = setup.root().join("extensions").join("pair");
     write(&dir.join("init.lua"), INIT);
-    let extension = Arc::new(LuaExtension::new("pair", dir, setup.home(), clock.clone()));
+    let extension = Arc::new(
+        LuaExtension::new("pair", dir, setup.home(), clock.clone())
+            .with_secrets(vec!["url".into()]),
+    );
     (setup, clock, extension)
 }
 

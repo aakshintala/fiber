@@ -184,7 +184,8 @@ impl SessionExtensions {
                         config: config.clone(),
                         repo_settings: manifest.repo_settings.clone(),
                         locks: Arc::clone(&locks),
-                    });
+                    })
+                    .with_secrets(manifest.secrets.clone());
                 if let Some(cap) = manifest
                     .memory_mib
                     .and_then(|mib| usize::try_from(mib).ok())

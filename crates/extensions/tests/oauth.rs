@@ -197,19 +197,29 @@ end } })
 fn login(env: &Env) -> Arc<LuaExtension> {
     let dir = env.setup.root().join("extensions").join("login");
     write(&dir.join("init.lua"), LOGIN);
-    Arc::new(LuaExtension::new(
-        "login",
-        dir,
-        env.home(),
-        env.clock.clone(),
-    ))
+    Arc::new(
+        LuaExtension::new("login", dir, env.home(), env.clock.clone())
+            .with_secrets(secrets(LOGIN_SECRETS)),
+    )
 }
 
 /// The `LOGIN` fixture opening URLs with `browser`.
 fn login_with(env: &Env, browser: Arc<dyn Browser>) -> Arc<LuaExtension> {
     let dir = env.setup.root().join("extensions").join("login");
     write(&dir.join("init.lua"), LOGIN);
-    Arc::new(LuaExtension::new("login", dir, env.home(), env.clock.clone()).with_browser(browser))
+    Arc::new(
+        LuaExtension::new("login", dir, env.home(), env.clock.clone())
+            .with_browser(browser)
+            .with_secrets(secrets(LOGIN_SECRETS)),
+    )
+}
+
+/// The secrets `LOGIN` and `CAUGHT` read.
+const LOGIN_SECRETS: &[&str] = &["mode", "url", "port", "dead"];
+
+/// `names` as a manifest's `secrets`.
+fn secrets(names: &[&str]) -> Vec<String> {
+    names.iter().map(|name| (*name).to_owned()).collect()
 }
 
 /// An entry script that opens a login URL before it registers anything.
@@ -267,6 +277,7 @@ impl Env {
         write(&dir.join("init.lua"), init);
         LuaExtension::new(name, dir, self.home(), self.clock.clone())
             .with_browser(Arc::new(Recording::always()))
+            .with_secrets(secrets(&["mode", "url", "dead"]))
     }
 
     fn secret(&self, name: &str, value: &str) {
@@ -950,12 +961,10 @@ fn a_function_the_hook_stops_leaves_the_file_and_frees_the_lock() {
     let dir = env.setup.root().join("extensions/spin");
     write(&dir.join("init.lua"), SPIN);
     let went = go_spin(&dir);
-    let ext = Arc::new(LuaExtension::new(
-        "spin",
-        &dir,
-        env.home(),
-        env.clock.clone(),
-    ));
+    let ext = Arc::new(
+        LuaExtension::new("spin", &dir, env.home(), env.clock.clone())
+            .with_secrets(secrets(&["mode"])),
+    );
     env.secret("mode", "spin");
     env.store(&json!({ "token": "old", "expires_at": WALL + 100 }));
     let before = env.stored().unwrap();
@@ -1279,7 +1288,11 @@ end } })
 fn caught(env: &Env, browser: Arc<dyn Browser>) -> Arc<LuaExtension> {
     let dir = env.setup.root().join("extensions").join("caught");
     write(&dir.join("init.lua"), CAUGHT);
-    Arc::new(LuaExtension::new("caught", dir, env.home(), env.clock.clone()).with_browser(browser))
+    Arc::new(
+        LuaExtension::new("caught", dir, env.home(), env.clock.clone())
+            .with_browser(browser)
+            .with_secrets(secrets(LOGIN_SECRETS)),
+    )
 }
 
 fn caught_token(env: &Env, ext: &Arc<LuaExtension>, server: &OauthServer, mode: &str) -> String {
@@ -1465,7 +1478,8 @@ end } })
     write(&dir.join("init.lua"), INIT);
     let ext = Arc::new(
         LuaExtension::new("interleave", dir, env.home(), env.clock.clone())
-            .with_browser(Arc::new(Recording::never())),
+            .with_browser(Arc::new(Recording::never()))
+            .with_secrets(secrets(&["url", "http"])),
     );
     // A test HTTP server that holds its response until released.
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
