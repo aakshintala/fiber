@@ -259,7 +259,10 @@ thread reading that delegate stops the running delegates at once
 A driver command that writes no durable event is not queued either. The
 thread reading the client's connection handles it at once, even while a
 model response streams: `subscribe`, `history`, `background`, `job_stop`,
-`shell` with `send` false, and `tools`.
+`shell` with `send` false, and `tools`. It answers each of them itself,
+except `shell`, which it starts on a thread of its own (the "one per running
+tool call" row in "The threads") before it reads on, so a `cancel` on the
+same connection reaches it.
 `job_stop` stops the job at once, and its `job_completed` is logged at the
 next step boundary. Every other command waits for the drain.
 
