@@ -491,6 +491,9 @@ impl Loop {
         // before the action complete `cancelled` without running, as an
         // answered request's calls do, and the calls after it are judged
         // and run with it (`docs/loop.md`, "Tool calls that do not run").
+        // Armed with the refusal: the calls after it run cancellably, as
+        // after the re-raise below. A shutdown before it writes nothing
+        // more, so the next resume refuses again.
         if let Some((_, call)) = suspended
             .batch
             .iter()
@@ -504,17 +507,24 @@ impl Loop {
             )
         {
             let text = format!("{why} It did not run.");
-            self.decided(
-                &suspended.action,
-                &turn,
-                crate::completion::resolved(
-                    Some(suspended.request.request_id.clone()),
-                    Decision::Deny,
-                    DecidedBy::CredentialDeny,
-                    Some(why),
-                    None,
-                ),
-            )?;
+            let cancel = Arc::clone(&self.cancel);
+            let refused = cancel.commit(Commit::Arm, || {
+                self.decided(
+                    &suspended.action,
+                    &turn,
+                    crate::completion::resolved(
+                        Some(suspended.request.request_id.clone()),
+                        Decision::Deny,
+                        DecidedBy::CredentialDeny,
+                        Some(why),
+                        None,
+                    ),
+                )
+            });
+            let Some(refused) = refused else {
+                return Ok(None);
+            };
+            refused?;
             let mut decision: Option<Decided> =
                 Some(Err(crate::completion::denied("credentials", text)));
             let mut before = true;

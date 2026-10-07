@@ -2569,6 +2569,63 @@ fn a_resumed_credential_refusal_answers_its_request_and_spares_later_calls() {
 }
 
 #[test]
+fn a_cancel_reaches_a_call_running_after_a_resumed_credential_refusal() {
+    // The credential-refusal branch arms cancellation with the refusal,
+    // as the re-raise does: a later call that is still running sees the
+    // cancel and the turn ends `interrupted` (`docs/loop.md`, "Interrupt").
+    let keys = fakes::TempDir::new("fiber-resume-keys");
+    let key = keys.path().join("openrouter");
+    std::fs::write(&key, "sk-file-secret").unwrap();
+    let denied = Arc::new(support::TestTool::declaring(
+        "read",
+        "sk-file-secret",
+        vec![contract::shapes::Effect::Reads],
+        Some(vec![key.display().to_string()]),
+    ));
+    let mut running = support::TestTool::reads("last", "Paris.");
+    running.script = vec![support::Script::WaitCancel];
+    let running = Arc::new(running);
+    let mut history = History::new(vec![Scripted::text("Hello.")]);
+    history.write(user_turn("one"), None);
+    history.write(message_started(), Some("a_0"));
+    history.write(requested("read"), Some("a_1"));
+    history.write(requested("last"), Some("a_2"));
+    history.write(standing_request("r_9"), Some("a_1"));
+    history.write(fiber_started(), None);
+    history.write(fiber_exited(Some("r_9")), None);
+    history.freeze();
+
+    let cancel = Arc::new(r#loop::TurnCancel::default());
+    let looped = history
+        .resume_headless_with_files(
+            vec![
+                ("builtin".into(), denied.clone() as Arc<dyn Tool>),
+                ("builtin".into(), running.clone() as Arc<dyn Tool>),
+            ],
+            vec![key.clone()],
+        )
+        .cancelled_by(Arc::clone(&cancel));
+    let tap = support::Tap::new(&history.log);
+    let cancelling = Arc::clone(&cancel);
+    std::thread::scope(|scope| {
+        scope.spawn(move || {
+            tap.wait_for("tool_call_started");
+            assert!(
+                cancelling.cancel(),
+                "the refusal armed cancellation for the calls that follow"
+            );
+        });
+        let (_looped, finishing) = history.step(looped);
+        assert_eq!(finishing, Some(contract::events::TurnOutcome::Interrupted));
+    });
+    assert!(
+        running.cancelled.lock().unwrap().contains(&true),
+        "the running call saw the cancel"
+    );
+    assert!(denied.ran().is_empty(), "a denied call never runs");
+}
+
+#[test]
 fn a_three_call_batch_completes_in_request_order() {
     let mut history = History::new(vec![Scripted::text("Hello."), Scripted::text("Second.")]);
     history.write(user_turn("one"), None);
