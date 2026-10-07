@@ -1,15 +1,26 @@
 //! Drawing the terminal: the conversation as plain text, the notice, the
-//! quit hint and the input line (`docs/tui.md`, "Turns").
+//! quit hint, the approval badge, and the input line or the approval panel
+//! in its place (`docs/tui.md`, "Turns", "Approvals and questions").
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Style;
+use ratatui::style::{Color, Style};
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 
 use crate::app::{App, QUIT_HINT};
 
 /// The overlay shown while scrolled up once new output arrives.
 const NEW_BELOW: &str = "↓ New messages below";
+
+/// The approval panel's tint when a standing rule or review asked.
+/// debt: a fixed colour, not a theme role; upgrade when colour roles land
+/// (see #685).
+pub(crate) const APPROVAL_TINT: Style = Style::new().bg(Color::Indexed(17));
+
+/// The approval panel's tint when the reviewer escalated.
+/// debt: a fixed colour, not a theme role; upgrade when colour roles land
+/// (see #685).
+pub(crate) const ALERT_TINT: Style = Style::new().bg(Color::Indexed(52));
 
 /// One plain line, wrapped the way it draws.
 fn paragraph(line: &str) -> Paragraph<'_> {
@@ -22,23 +33,44 @@ pub(crate) fn rows(line: &str, width: u16) -> usize {
 }
 
 /// Draws `app` into `area` of `buf`, from the bottom up: the input line
-/// on the last row, then the quit hint and the notice when shown, and the
-/// conversation in the rows left. A screen too short for them all drops
-/// the notice first, then the hint.
+/// on the last row, or the approval panel in its place, then the badge, the
+/// quit hint and the notice when shown, and the conversation in the rows
+/// left. A screen too short for them all drops the notice first, then the
+/// hint, then the badge. A panel taller than the screen keeps its top.
 pub(crate) fn render(app: &App, area: Rect, buf: &mut Buffer) {
     let width = usize::from(area.width);
     let mut bottom = area.bottom();
+    if let Some(panel) = app.panel() {
+        let height: usize = panel.lines.iter().map(|line| rows(line, area.width)).sum();
+        let top = bottom.saturating_sub(to_u16(height)).max(area.y);
+        let rect = Rect::new(area.x, top, area.width, bottom.saturating_sub(top));
+        let tint = if panel.alert {
+            ALERT_TINT
+        } else {
+            APPROVAL_TINT
+        };
+        buf.set_style(rect, tint);
+        Paragraph::new(panel.lines.join("\n"))
+            .wrap(Wrap { trim: false })
+            .render(rect, buf);
+        bottom = top;
+    }
     let mut put = |text: &str| {
         if let Some(row) = bottom.checked_sub(1).filter(|row| *row >= area.y) {
             buf.set_stringn(area.x, row, text, width, Style::default());
             bottom = row;
         }
     };
-    // The input line keeps the end of a draft wider than the screen.
-    let input = format!("> {}", app.draft());
-    let skip = input.chars().count().saturating_sub(width);
-    let shown: String = input.chars().skip(skip).collect();
-    put(&shown);
+    if app.panel().is_none() {
+        // The input line keeps the end of a draft wider than the screen.
+        let input = format!("> {}", app.draft());
+        let skip = input.chars().count().saturating_sub(width);
+        let shown: String = input.chars().skip(skip).collect();
+        put(&shown);
+    }
+    if let Some(badge) = app.badge() {
+        put(&badge);
+    }
     if app.hint() {
         put(QUIT_HINT);
     }

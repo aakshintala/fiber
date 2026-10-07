@@ -735,3 +735,615 @@ fn command_ids_are_c_and_sixteen_fresh_hex_digits() {
     }
     assert_ne!(first, second);
 }
+
+const S_A: &str = "s_aaaaaaaaaaaaaaaa";
+const S_B: &str = "s_bbbbbbbbbbbbbbbb";
+
+/// A `tool_call_requested` for `action`.
+fn call(session: &str, action: &str, name: &str, arguments: serde_json::Value) -> Line {
+    session_line(
+        session,
+        "tool_call_requested",
+        serde_json::json!({"name": name, "arguments": arguments}),
+        Some(action),
+    )
+}
+
+/// A standing ask by a global rule on `prefix`.
+fn standing_ask(session: &str, action: &str, request: &str, prefix: &str) -> Line {
+    session_line(
+        session,
+        "permission_requested",
+        serde_json::json!({
+            "request_id": request, "effects": ["executes"], "reversible": true,
+            "step": "standing_ask",
+            "standing_rule": {"scope": "global", "prefix": prefix},
+        }),
+        Some(action),
+    )
+}
+
+/// A review request with `extra` keys (`escalation`, `rule`).
+fn review(session: &str, action: &str, request: &str, extra: serde_json::Value) -> Line {
+    let mut payload = serde_json::json!({
+        "request_id": request, "effects": ["executes"], "reversible": true, "step": "review",
+    });
+    if let (Some(into), Some(from)) = (payload.as_object_mut(), extra.as_object()) {
+        into.extend(from.clone());
+    }
+    session_line(session, "permission_requested", payload, Some(action))
+}
+
+/// A review request offering the rule `npm test`.
+fn offering(session: &str, request: &str) -> Line {
+    review(
+        session,
+        "a_9",
+        request,
+        serde_json::json!({"rule": {"subject": "npm test --watch", "prefix": "npm test"}}),
+    )
+}
+
+/// A `permission_resolved` for `request`.
+fn resolved(session: &str, request: &str) -> Line {
+    session_line(
+        session,
+        "permission_resolved",
+        serde_json::json!({"request_id": request, "decision": "deny", "decided_by": "cancel"}),
+        Some("a_1"),
+    )
+}
+
+/// An attached, connected app.
+fn attached(now: std::time::Instant) -> App {
+    let mut app = app();
+    attach(&mut app, now, S_A);
+    app
+}
+
+/// The panel's lines, or none when it is closed.
+fn panel(app: &App) -> Vec<String> {
+    app.panel().map(|panel| panel.lines).unwrap_or_default()
+}
+
+/// The panel's header line.
+fn header(app: &App) -> String {
+    panel(app).first().cloned().unwrap_or_default()
+}
+
+/// Presses `key` `times` times, each doing nothing visible to the hub.
+fn press(app: &mut App, key: Key, times: usize, now: std::time::Instant) {
+    for _ in 0..times {
+        assert_eq!(app.on_key(key.clone(), now), Effect::None);
+    }
+}
+
+/// The reply an Enter sends, with its `id` taken out.
+fn reply(app: &mut App, now: std::time::Instant) -> serde_json::Value {
+    let mut value = parse(&one_line(app.on_key(Key::Enter, now)));
+    let id = value
+        .as_object_mut()
+        .and_then(|line| line.remove("id"))
+        .unwrap_or_default();
+    assert!(id.as_str().is_some_and(|id| id.starts_with("c_")));
+    value
+}
+
+#[test]
+fn a_standing_ask_opens_the_panel_and_enter_allows_once() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = attached(now);
+    app.on_line(call(
+        S_A,
+        "a_1",
+        "shell",
+        serde_json::json!({"command": "echo hi"}),
+    ));
+    app.on_line(standing_ask(S_A, "a_1", "r_1", "echo hi"));
+    assert_eq!(
+        panel(&app),
+        vec![
+            format!("approval · {S_A} · 1 of 1"),
+            "asked by a global rule: echo hi".to_owned(),
+            r#"shell {"command":"echo hi"}"#.to_owned(),
+            "› allow once".to_owned(),
+            "  deny · type to add feedback".to_owned(),
+        ]
+    );
+    assert_eq!(app.panel().map(|panel| panel.alert), Some(false));
+    assert_eq!(
+        reply(&mut app, now),
+        serde_json::json!({"command": "reply", "session_id": S_A,
+            "args": {"request_id": "r_1", "decision": "allow"}})
+    );
+    assert!(app.panel().is_none());
+    assert!(app.badge().is_none());
+}
+
+#[test]
+fn a_request_offering_a_rule_shows_both_remembering_rows() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = attached(now);
+    app.on_line(offering(S_A, "r_1"));
+    assert_eq!(
+        panel(&app),
+        vec![
+            format!("approval · {S_A} · 1 of 1"),
+            "no rule allows this call".to_owned(),
+            "› allow once".to_owned(),
+            "  allow for this session: npm test".to_owned(),
+            "  always allow in this project: npm test".to_owned(),
+            "  deny · type to add feedback".to_owned(),
+        ]
+    );
+}
+
+#[test]
+fn each_choice_sends_its_answer() {
+    let now = fakes::clock::FakeClock::new().now();
+    let cases = [
+        (
+            1,
+            serde_json::json!({"request_id": "r_1", "decision": "allow",
+            "remember": {"scope": "session", "prefix": "npm test"}}),
+        ),
+        (
+            2,
+            serde_json::json!({"request_id": "r_1", "decision": "allow",
+            "remember": {"scope": "project", "prefix": "npm test"}}),
+        ),
+        (
+            3,
+            serde_json::json!({"request_id": "r_1", "decision": "deny"}),
+        ),
+    ];
+    for (downs, args) in cases {
+        let mut app = attached(now);
+        app.on_line(offering(S_A, "r_1"));
+        press(&mut app, Key::Down, downs, now);
+        assert_eq!(
+            reply(&mut app, now),
+            serde_json::json!({"command": "reply", "session_id": S_A, "args": args}),
+            "{downs} down"
+        );
+    }
+}
+
+#[test]
+fn feedback_goes_with_deny_only_when_it_has_text() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = attached(now);
+    app.on_line(offering(S_A, "r_1"));
+    press(&mut app, Key::Char(' '), 3, now);
+    assert_eq!(
+        reply(&mut app, now)["args"],
+        serde_json::json!({"request_id": "r_1", "decision": "deny"})
+    );
+    app.on_line(offering(S_A, "r_2"));
+    for ch in "use pnpmx".chars() {
+        assert_eq!(app.on_key(Key::Char(ch), now), Effect::None);
+    }
+    assert_eq!(app.on_key(Key::Backspace, now), Effect::None);
+    assert_eq!(
+        panel(&app).last().map(String::as_str),
+        Some("› deny · use pnpm")
+    );
+    // The draft is untouched while the panel is open.
+    assert_eq!(app.draft(), "");
+    assert_eq!(
+        reply(&mut app, now)["args"],
+        serde_json::json!({"request_id": "r_2", "decision": "deny", "feedback": "use pnpm"})
+    );
+}
+
+#[test]
+fn typing_or_backspace_moves_the_cursor_to_deny() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = attached(now);
+    app.on_line(offering(S_A, "r_1"));
+    app.on_key(Key::Char('x'), now);
+    assert!(panel(&app).last().is_some_and(|row| row.starts_with('›')));
+    press(&mut app, Key::Up, 3, now);
+    assert_eq!(panel(&app).get(2).map(String::as_str), Some("› allow once"));
+    app.on_key(Key::Backspace, now);
+    assert!(panel(&app).last().is_some_and(|row| row.starts_with('›')));
+    assert_eq!(
+        panel(&app).last().map(String::as_str),
+        Some("› deny · type to add feedback")
+    );
+}
+
+#[test]
+fn up_and_down_stop_at_the_ends() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = attached(now);
+    app.on_line(standing_ask(S_A, "a_1", "r_1", "echo hi"));
+    // A standing ask offers no rule: one Down reaches deny, and more stay.
+    press(&mut app, Key::Down, 5, now);
+    assert_eq!(reply(&mut app, now)["args"]["decision"], "deny");
+    app.on_line(offering(S_A, "r_2"));
+    press(&mut app, Key::Down, 5, now);
+    press(&mut app, Key::Up, 2, now);
+    assert_eq!(reply(&mut app, now)["args"]["remember"]["scope"], "session");
+    app.on_line(offering(S_A, "r_3"));
+    press(&mut app, Key::Down, 1, now);
+    press(&mut app, Key::Up, 5, now);
+    assert_eq!(
+        reply(&mut app, now)["args"],
+        serde_json::json!({"request_id": "r_3", "decision": "allow"})
+    );
+}
+
+#[test]
+fn the_panel_says_why_it_asked_and_tints_an_escalation() {
+    let now = fakes::clock::FakeClock::new().now();
+    let cases = [
+        (
+            serde_json::json!({"escalation": {"cause": "consecutive_blocks", "reason": "rm -rf"}}),
+            "the reviewer escalated: rm -rf",
+        ),
+        (
+            serde_json::json!({"escalation": {"cause": "session_blocks", "reason": "too many"}}),
+            "the reviewer escalated: too many",
+        ),
+        (
+            serde_json::json!({"escalation": {"cause": "reviewer_failed",
+                "error": {"code": "io_failed", "message": "no model"}}}),
+            "the reviewer failed: no model",
+        ),
+    ];
+    for (extra, why) in cases {
+        let mut app = attached(now);
+        app.on_line(review(S_A, "a_1", "r_1", extra));
+        assert_eq!(panel(&app).get(1).map(String::as_str), Some(why));
+        assert_eq!(app.panel().map(|panel| panel.alert), Some(true), "{why}");
+    }
+    let mut app = attached(now);
+    app.on_line(review(S_A, "a_1", "r_1", serde_json::json!({})));
+    assert_eq!(app.panel().map(|panel| panel.alert), Some(false));
+    let mut app = attached(now);
+    app.on_line(session_line(
+        S_A,
+        "permission_requested",
+        serde_json::json!({"request_id": "r_1", "effects": [], "reversible": true,
+            "step": "standing_ask", "standing_rule": {"scope": "project", "prefix": "git push"}}),
+        Some("a_1"),
+    ));
+    assert_eq!(
+        panel(&app).get(1).map(String::as_str),
+        Some("asked by a project rule: git push")
+    );
+}
+
+#[test]
+fn an_irreversible_call_says_so_in_the_header() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = attached(now);
+    app.on_line(session_line(
+        S_A,
+        "permission_requested",
+        serde_json::json!({"request_id": "r_1", "effects": ["executes"], "reversible": false,
+            "step": "review"}),
+        Some("a_1"),
+    ));
+    assert_eq!(
+        header(&app),
+        format!("approval · {S_A} · 1 of 1 · irreversible")
+    );
+}
+
+#[test]
+fn a_raw_string_argument_shows_as_typed() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = attached(now);
+    app.on_line(call(S_A, "a_1", "shell", serde_json::json!("not {json")));
+    app.on_line(standing_ask(S_A, "a_1", "r_1", "echo hi"));
+    assert_eq!(
+        panel(&app).get(2).map(String::as_str),
+        Some("shell not {json")
+    );
+}
+
+#[test]
+fn requests_from_two_sessions_share_one_queue() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = attached(now);
+    app.on_line(call(S_B, "a_1", "read", serde_json::json!({"path": "b"})));
+    app.on_line(standing_ask(S_A, "a_1", "r_1", "one"));
+    app.on_line(standing_ask(S_B, "a_1", "r_1", "two"));
+    app.on_line(standing_ask(S_A, "a_2", "r_2", "three"));
+    // Another session's other lines stay out.
+    app.on_line(turn_started(S_B, "hi"));
+    assert!(app.lines().is_empty());
+    assert_eq!(header(&app), format!("approval · {S_A} · 1 of 3"));
+    assert_eq!(reply(&mut app, now)["session_id"], S_A);
+    assert_eq!(header(&app), format!("approval · {S_B} · 1 of 2"));
+    assert_eq!(
+        panel(&app).get(2).map(String::as_str),
+        Some(r#"read {"path":"b"}"#)
+    );
+    let answer = reply(&mut app, now);
+    assert_eq!(answer["session_id"], S_B);
+    assert_eq!(answer["args"]["request_id"], "r_1");
+    assert_eq!(header(&app), format!("approval · {S_A} · 1 of 1"));
+}
+
+#[test]
+fn a_repeated_request_adds_nothing() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = attached(now);
+    app.on_line(standing_ask(S_A, "a_1", "r_1", "one"));
+    app.on_line(standing_ask(S_A, "a_1", "r_1", "one"));
+    assert_eq!(header(&app), format!("approval · {S_A} · 1 of 1"));
+}
+
+/// An app with three requests, the panel on the first.
+fn three(now: std::time::Instant) -> App {
+    let mut app = attached(now);
+    for n in 1..=3 {
+        app.on_line(standing_ask(
+            S_A,
+            &format!("a_{n}"),
+            &format!("r_{n}"),
+            &format!("p{n}"),
+        ));
+    }
+    app
+}
+
+#[test]
+fn esc_steps_through_the_queue_then_closes() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = three(now);
+    app.on_line(turn_started(S_A, "hi"));
+    assert_eq!(header(&app), format!("approval · {S_A} · 1 of 3"));
+    // Esc never cancels while the panel is open.
+    assert_eq!(app.on_key(Key::Esc, now), Effect::None);
+    assert_eq!(header(&app), format!("approval · {S_A} · 2 of 3"));
+    assert_eq!(app.on_key(Key::Esc, now), Effect::None);
+    assert_eq!(header(&app), format!("approval · {S_A} · 3 of 3"));
+    assert!(app.badge().is_none());
+    assert_eq!(app.on_key(Key::Esc, now), Effect::None);
+    assert!(app.panel().is_none());
+    assert_eq!(
+        app.badge().as_deref(),
+        Some("! 3 waiting · /approvals or ⌥A")
+    );
+    // With the panel closed, Esc cancels a busy turn again.
+    let line = one_line(app.on_key(Key::Esc, now));
+    assert_eq!(parse(&line)["command"], "cancel");
+}
+
+#[test]
+fn a_request_after_one_put_aside_waits_behind_the_badge() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = attached(now);
+    app.on_line(standing_ask(S_A, "a_1", "r_1", "one"));
+    app.on_key(Key::Esc, now);
+    app.on_line(standing_ask(S_A, "a_2", "r_2", "two"));
+    assert!(app.panel().is_none());
+    assert_eq!(
+        app.badge().as_deref(),
+        Some("! 2 waiting · /approvals or ⌥A")
+    );
+    // Once the one put aside resolves, a new request opens at itself.
+    app.on_line(resolved(S_A, "r_1"));
+    app.on_line(resolved(S_A, "r_2"));
+    assert!(app.badge().is_none());
+    app.on_line(standing_ask(S_A, "a_3", "r_3", "three"));
+    assert_eq!(
+        panel(&app).get(1).map(String::as_str),
+        Some("asked by a global rule: three")
+    );
+}
+
+#[test]
+fn a_request_while_the_panel_is_open_joins_the_queue() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = attached(now);
+    app.on_line(standing_ask(S_A, "a_1", "r_1", "one"));
+    app.on_line(standing_ask(S_A, "a_2", "r_2", "two"));
+    assert_eq!(header(&app), format!("approval · {S_A} · 1 of 2"));
+    assert_eq!(
+        panel(&app).get(1).map(String::as_str),
+        Some("asked by a global rule: one")
+    );
+}
+
+#[test]
+fn slash_approvals_reopens_at_the_first_request() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = three(now);
+    for ch in "x".chars() {
+        app.on_key(Key::Char(ch), now);
+    }
+    press(&mut app, Key::Esc, 3, now);
+    assert!(app.panel().is_none());
+    assert_eq!(send(&mut app, "/approvals ", now), Effect::None);
+    assert_eq!(app.draft(), "");
+    assert_eq!(header(&app), format!("approval · {S_A} · 1 of 3"));
+    // Feedback typed for a request stays with it while it waits.
+    assert_eq!(panel(&app).last().map(String::as_str), Some("› deny · x"));
+}
+
+#[test]
+fn slash_approvals_with_nothing_waiting_says_so() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = attached(now);
+    assert_eq!(send(&mut app, "/approvals", now), Effect::None);
+    assert_eq!(app.draft(), "");
+    assert_eq!(app.notice(), Some("No requests waiting."));
+    assert!(app.panel().is_none());
+}
+
+#[test]
+fn alt_a_opens_and_moves_to_the_next_wrapping() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = attached(now);
+    press(&mut app, Key::AltA, 1, now);
+    assert_eq!(app.notice(), Some("No requests waiting."));
+    let mut app = three(now);
+    press(&mut app, Key::Esc, 3, now);
+    press(&mut app, Key::AltA, 1, now);
+    assert_eq!(header(&app), format!("approval · {S_A} · 1 of 3"));
+    press(&mut app, Key::AltA, 1, now);
+    assert_eq!(header(&app), format!("approval · {S_A} · 2 of 3"));
+    press(&mut app, Key::AltA, 2, now);
+    assert_eq!(header(&app), format!("approval · {S_A} · 1 of 3"));
+}
+
+#[test]
+fn up_down_and_alt_a_do_nothing_to_the_draft_when_closed() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = attached(now);
+    app.on_key(Key::Char('a'), now);
+    press(&mut app, Key::Up, 1, now);
+    press(&mut app, Key::Down, 1, now);
+    assert_eq!(app.draft(), "a");
+    assert!(app.panel().is_none());
+}
+
+/// The id of the reply an Enter sends.
+fn reply_id(app: &mut App, now: std::time::Instant) -> String {
+    parse(&one_line(app.on_key(Key::Enter, now)))["id"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned()
+}
+
+#[test]
+fn a_rejected_reply_puts_its_request_back() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = three(now);
+    press(&mut app, Key::AltA, 1, now);
+    let id = reply_id(&mut app, now);
+    assert_eq!(header(&app), format!("approval · {S_A} · 2 of 2"));
+    app.on_line(session_line(
+        S_A,
+        "command_rejected",
+        serde_json::json!({"command_id": id, "code": "stale_request", "message": "gone"}),
+        None,
+    ));
+    assert_eq!(app.notice(), Some("gone"));
+    assert_eq!(header(&app), format!("approval · {S_A} · 3 of 3"));
+    // Back where it was: second in the queue.
+    press(&mut app, Key::AltA, 1, now);
+    assert_eq!(
+        panel(&app).get(1).map(String::as_str),
+        Some("asked by a global rule: p1")
+    );
+    press(&mut app, Key::AltA, 1, now);
+    assert_eq!(
+        panel(&app).get(1).map(String::as_str),
+        Some("asked by a global rule: p2")
+    );
+}
+
+#[test]
+fn a_rejected_reply_reopens_a_closed_panel() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = attached(now);
+    app.on_line(standing_ask(S_A, "a_1", "r_1", "one"));
+    let id = reply_id(&mut app, now);
+    assert!(app.panel().is_none());
+    app.on_line(session_line(
+        S_A,
+        "command_rejected",
+        serde_json::json!({"command_id": id, "code": "stale_request", "message": "gone"}),
+        None,
+    ));
+    assert_eq!(header(&app), format!("approval · {S_A} · 1 of 1"));
+}
+
+#[test]
+fn a_resolved_request_leaves_the_queue() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = three(now);
+    // Requests never seen change nothing.
+    app.on_line(resolved(S_A, "r_9"));
+    app.on_line(resolved(S_B, "r_1"));
+    assert_eq!(header(&app), format!("approval · {S_A} · 1 of 3"));
+    let id = reply_id(&mut app, now);
+    // An answered request resolving leaves the shown one in place.
+    app.on_line(resolved(S_A, "r_1"));
+    assert_eq!(header(&app), format!("approval · {S_A} · 1 of 2"));
+    // A rejection of a reply whose request resolved puts nothing back.
+    app.on_line(session_line(
+        S_A,
+        "command_rejected",
+        serde_json::json!({"command_id": id, "code": "stale_request", "message": "gone"}),
+        None,
+    ));
+    assert_eq!(header(&app), format!("approval · {S_A} · 1 of 2"));
+    // The shown request resolving elsewhere moves the panel on.
+    app.on_line(resolved(S_A, "r_2"));
+    assert_eq!(header(&app), format!("approval · {S_A} · 1 of 1"));
+    app.on_line(resolved(S_A, "r_3"));
+    assert!(app.panel().is_none());
+    assert!(app.badge().is_none());
+}
+
+#[test]
+fn a_reply_with_the_link_down_sends_nothing_and_keeps_the_request() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = attached(now);
+    app.on_line(standing_ask(S_A, "a_1", "r_1", "one"));
+    app.disconnected();
+    assert_eq!(app.on_key(Key::Enter, now), Effect::None);
+    assert_eq!(header(&app), format!("approval · {S_A} · 1 of 1"));
+}
+
+#[test]
+fn a_failed_reply_write_keeps_the_request() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = attached(now);
+    app.on_line(standing_ask(S_A, "a_1", "r_1", "one"));
+    let line = one_line(app.on_key(Key::Enter, now));
+    assert!(app.panel().is_none());
+    app.write_failed(&[line]);
+    assert_eq!(header(&app), format!("approval · {S_A} · 1 of 1"));
+    assert_eq!(app.draft(), "");
+}
+
+#[test]
+fn the_conversation_gives_up_rows_for_the_panel_and_the_badge() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = attached(now);
+    app.set_size(60, 20);
+    assert_eq!(app.conversation_height(), 19);
+    app.on_line(standing_ask(S_A, "a_1", "r_1", "one"));
+    // Header, why, allow once and deny replace the input line.
+    assert_eq!(app.conversation_height(), 16);
+    app.on_line(call(
+        S_A,
+        "a_2",
+        "shell",
+        serde_json::json!("w ".repeat(35)),
+    ));
+    app.on_line(standing_ask(S_A, "a_2", "r_2", "two"));
+    app.on_key(Key::AltA, now);
+    // The call wraps onto two rows.
+    assert_eq!(app.conversation_height(), 14);
+    press(&mut app, Key::Esc, 1, now);
+    assert!(app.panel().is_none());
+    assert_eq!(app.conversation_height(), 18);
+}
+
+#[test]
+fn a_reopened_request_is_no_longer_put_aside() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = attached(now);
+    app.on_line(standing_ask(S_A, "a_1", "r_1", "one"));
+    press(&mut app, Key::Esc, 1, now);
+    press(&mut app, Key::AltA, 1, now);
+    let id = reply_id(&mut app, now);
+    assert!(app.panel().is_none());
+    app.on_line(session_line(
+        S_A,
+        "command_rejected",
+        serde_json::json!({"command_id": id, "code": "stale_request", "message": "gone"}),
+        None,
+    ));
+    // Nothing waits put aside, so the request back opens the panel.
+    assert_eq!(header(&app), format!("approval · {S_A} · 1 of 1"));
+}

@@ -1,0 +1,16 @@
+---
+source: crates/tui/src/view_tests.rs
+expression: shown
+---
+
+
+
+
+› run it
+approval · s_aaaaaaaaaaaaaaaa · 1 of 1
+the reviewer escalated: it blocked three in a row
+shell {"command":"npm test --watch"}
+› allow once
+  allow for this session: npm test
+  always allow in this project: npm test
+  deny · type to add feedback
