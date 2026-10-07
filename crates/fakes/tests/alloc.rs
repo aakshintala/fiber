@@ -122,6 +122,18 @@ fn a_block_made_before_the_scope_and_freed_inside_changes_nothing() {
 }
 
 #[test]
+fn a_block_made_before_the_scope_and_grown_inside_is_not_counted() {
+    let mut before = large();
+    let ((), peak) = large_blocks_during(|| {
+        before.reserve_exact(2 * TWO_MIB);
+        let inside = large();
+        drop(black_box(inside));
+    });
+    drop(before);
+    assert_eq!(peak, 1, "only the block made inside the scope");
+}
+
+#[test]
 fn a_block_made_on_another_thread_and_freed_here_changes_nothing() {
     let (send, receive) = mpsc::channel();
     thread::spawn(move || send.send(large()).unwrap_or(()));
