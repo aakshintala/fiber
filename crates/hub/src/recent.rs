@@ -58,6 +58,14 @@ impl RecentRow {
         self.how == Left::Exited && self.status.as_ref().is_some_and(is_waiting)
     }
 
+    /// Whether the session was a delegate: its status names a parent.
+    /// Delegates are never in the feed, so `recent` skips them too.
+    pub(crate) fn delegate(&self) -> bool {
+        self.status
+            .as_ref()
+            .is_some_and(|status| status.parent.is_some())
+    }
+
     /// Whether the session's directory is still there.
     pub(crate) fn dir_exists(&self, home: &Path) -> bool {
         session_dir(home, &self.project, &self.session_id.0).is_dir()
@@ -111,9 +119,9 @@ pub(crate) enum PageError {
 }
 
 /// One page of exited sessions, newest first, newest row per session
-/// only: rows whose directory is gone and sessions in `running` are
-/// skipped; with `project`, only that key. The page starts after
-/// `before`'s row.
+/// only: delegates' rows, rows whose directory is gone and sessions in
+/// `running` are skipped; with `project`, only that key. The page starts
+/// after `before`'s row.
 pub(crate) fn page(
     home: &Path,
     before: Option<&str>,
@@ -123,6 +131,7 @@ pub(crate) fn page(
     let listed: Vec<RecentRow> = newest_first(read_all(home))
         .into_iter()
         .filter(|row| project.is_none_or(|key| row.project == key))
+        .filter(|row| !row.delegate())
         .filter(|row| row.dir_exists(home))
         .collect();
     let start = match before {
