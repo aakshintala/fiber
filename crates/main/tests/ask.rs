@@ -981,6 +981,7 @@ Usage: fiber <command> [arguments]
 
 Sessions:
   ask [--model <model>] [--resume <id>] [<prompt>] [-]  Run one session of one turn; its events go to stdout
+  sessions [--all] [--json]                             List sessions: id, state, name, what it waits on, spend
   sessions delete [--cascade] [--yes] <id>              Delete a session, and with --cascade the sessions that continue it
   sessions export <id> [<path>]                         Write the session's log and its artifacts to <path>
   sessions prune [--older-than <duration>] [--dry-run]  Delete old sessions, worktrees and diagnostic logs

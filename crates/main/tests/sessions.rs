@@ -1,7 +1,8 @@
-//! Binary-level tests of `fiber sessions export` (`docs/invocation.md`,
-//! "Deleting and pruning"; `docs/testing.md`, "Levels"): the built `fiber`
-//! runs in a temporary workspace with its own `FIBER_HOME`, over
-//! session directories built by hand. Every run carries a wall-clock
+//! Binary-level tests of `fiber sessions` and `fiber sessions export`
+//! (`docs/invocation.md`, "Commands and flags" and "Deleting and pruning";
+//! `docs/testing.md`, "Levels"): the built `fiber` runs in a temporary
+//! workspace with its own `FIBER_HOME`, over session directories built by
+//! hand or sessions a fake provider ran. Every run carries a wall-clock
 //! deadline.
 
 #![allow(
@@ -21,8 +22,8 @@ use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 
-use fakes::Watchdog;
-use serde_json::json;
+use fakes::{ProviderServer, Watchdog};
+use serde_json::{Value, json};
 use support::Deadline;
 
 /// The `session_started` first line of session `id` in `workspace`: a full
@@ -248,4 +249,143 @@ fn sessions_help_and_export_help_print() {
         "{}",
         export_help.stdout
     );
+}
+
+/// A Fiber home with the fake provider answering `replies` turns, and a
+/// hub that idles out soon after its last client leaves, so none lingers
+/// past the test.
+fn listing_setup(replies: usize) -> (support::Setup, ProviderServer) {
+    let setup = support::Setup::new();
+    let server = ProviderServer::start((0..replies).map(|_| support::hello())).unwrap();
+    setup.provider(&server);
+    support::write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "hub": {"idle_exit_ms": 200}}),
+    );
+    (setup, server)
+}
+
+/// Runs `fiber` with `args` in `dir` to its exit, and gives its stdout;
+/// it must exit 0.
+fn fiber_in(setup: &support::Setup, dir: &Path, args: &[&str]) -> String {
+    let mut command = setup.fiber(args);
+    command.current_dir(dir);
+    let output = support::run_to_exit(&format!("fiber {}", args.join(" ")), command);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap()
+}
+
+/// The session id on the first line `fiber ask` printed.
+fn asked(stdout: &str) -> String {
+    let first: Value = serde_json::from_str(stdout.lines().next().unwrap()).unwrap();
+    first["session_id"].as_str().unwrap().to_owned()
+}
+
+/// The ids `fiber sessions --json` printed, checking each line's keys come
+/// in the documented order.
+fn listed_ids(stdout: &str) -> Vec<String> {
+    stdout
+        .lines()
+        .map(|line| {
+            let row: Value = serde_json::from_str(line).unwrap();
+            let id = row["id"].as_str().unwrap().to_owned();
+            let keys = ["id", "state", "name", "waiting", "spend"].map(|key| format!("\"{key}\":"));
+            let at: Vec<usize> = keys
+                .iter()
+                .map(|key| line.find(key.as_str()).unwrap())
+                .collect();
+            assert!(at.is_sorted(), "{line}");
+            assert_eq!(row.as_object().unwrap().len(), 5, "{line}");
+            id
+        })
+        .collect()
+}
+
+/// Waits under the deadline until the hub's socket is gone: it idled out.
+fn until_hub_gone(setup: &support::Setup) {
+    let socket = setup.hub_socket();
+    let (done, gone) = mpsc::channel();
+    thread::spawn(move || {
+        while socket.exists() {
+            thread::yield_now();
+        }
+        done.send(()).unwrap_or(());
+    });
+    let deadline = Deadline::start().left();
+    assert!(
+        gone.recv_timeout(deadline).is_ok(),
+        "waited {deadline:?} for the hub to idle out"
+    );
+}
+
+#[test]
+fn the_list_is_the_repositorys_project_inside_one_and_every_project_outside() {
+    let (setup, _server) = listing_setup(3);
+    let repo = setup.workspace();
+    let init = std::process::Command::new("git")
+        .args(["init", "-q"])
+        .arg(&repo)
+        .status()
+        .unwrap();
+    assert!(init.success());
+    let other = setup.root.path().join("o");
+    fs::create_dir_all(&other).unwrap();
+    let mut mine = vec![
+        asked(&fiber_in(&setup, &repo, &["ask", "one"])),
+        asked(&fiber_in(&setup, &repo, &["ask", "two"])),
+    ];
+    let theirs = asked(&fiber_in(&setup, &other, &["ask", "three"]));
+    let mut inside = listed_ids(&fiber_in(&setup, &repo, &["sessions", "--json"]));
+    inside.sort();
+    mine.sort();
+    assert_eq!(inside, mine);
+    let mut every = mine.clone();
+    every.push(theirs);
+    every.sort();
+    for (dir, args) in [
+        (&repo, &["sessions", "--json", "--all"][..]),
+        (&other, &["sessions", "--json"]),
+    ] {
+        let mut listed = listed_ids(&fiber_in(&setup, dir, args));
+        listed.sort();
+        assert_eq!(listed, every, "{args:?} in {}", dir.display());
+    }
+    let text = fiber_in(&setup, &repo, &["sessions"]);
+    assert!(text.starts_with("id  "), "{text}");
+    assert_eq!(text.lines().count(), 3, "{text}");
+    until_hub_gone(&setup);
+}
+
+#[test]
+fn a_session_the_hub_started_and_left_idle_is_listed_first_as_idle() {
+    let (setup, _server) = listing_setup(2);
+    let exited = asked(&fiber_in(&setup, &setup.workspace(), &["ask", "one"]));
+    let hub = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let (watch, _) = support::connect_hub(&setup, &hub);
+    watch.send(r#"{"id":"c_feed","command":"feed"}"#);
+    let ack = support::recv_reply(&watch, "the feed acknowledgement");
+    assert_eq!(ack["kind"], "command_accepted", "{ack}");
+    let workspace = setup.workspace().to_string_lossy().into_owned();
+    let guard = support::SessionGuard::arm(&workspace);
+    let live = support::start_session(&watch, &workspace, "two");
+    support::until(&watch, "the session's idle status", |line| {
+        line["kind"] == "session_status"
+            && line["session_id"] == live.as_str()
+            && line["payload"]["state"] == "idle"
+    });
+    let stdout = fiber_in(&setup, &setup.workspace(), &["sessions", "--json"]);
+    assert_eq!(listed_ids(&stdout), [live.clone(), exited]);
+    let first: Value = serde_json::from_str(stdout.lines().next().unwrap()).unwrap();
+    assert_eq!(first["state"], "idle", "{stdout}");
+    support::close_session(&support::Socket::connect(&setup.session_socket(&live)));
+    guard.wait_gone();
+    drop(watch);
+    let hub = hub.lock().unwrap().take().expect("the starter ran");
+    hub.kill("TERM");
+    hub.wait();
 }

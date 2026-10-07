@@ -162,18 +162,19 @@ fn run() -> i32 {
             session_command::run(args, clock, fiber)
         }
         cli::Invocation::Run(Some(cli::Commands::Hub(command))) => hub_command::run(command, fiber),
-        cli::Invocation::Run(Some(cli::Commands::Sessions(cmd))) => match cmd {
-            cli::SessionsCommands::Delete { cascade, yes, id } => {
+        cli::Invocation::Run(Some(cli::Commands::Sessions(args))) => match args.command {
+            None => sessions_list(args.all, args.json, clock.as_ref(), fiber),
+            Some(cli::SessionsCommands::Delete { cascade, yes, id }) => {
                 sessions_delete(&id, cascade, yes, clock.as_ref(), fiber)
             }
-            cli::SessionsCommands::Export { id, path } => ::cli::export(&id, path.as_deref()),
-            cli::SessionsCommands::Prune {
+            Some(cli::SessionsCommands::Export { id, path }) => ::cli::export(&id, path.as_deref()),
+            Some(cli::SessionsCommands::Prune {
                 older_than,
                 cascade,
                 dry_run,
                 yes,
                 force,
-            } => sessions_prune(
+            }) => sessions_prune(
                 older_than,
                 cascade,
                 dry_run,
@@ -775,6 +776,21 @@ fn start_hub(exe: Result<PathBuf, String>) -> io::Result<()> {
         .process_group(0)
         .spawn()
         .map(|_| ())
+}
+
+/// `fiber sessions`: the hub it reaches is started when none runs.
+fn sessions_list(
+    all: bool,
+    json: bool,
+    clock: &dyn contract::clock::Clock,
+    fiber: Result<PathBuf, String>,
+) -> i32 {
+    let mut connect = || {
+        let home = config::fiber_home_from_env().map_err(io::Error::other)?;
+        let mut start = || start_hub(fiber.clone());
+        doors::hub::connect(&home, &mut start, clock)
+    };
+    ::cli::sessions_list(all, json, &mut connect)
 }
 
 /// `fiber sessions delete`: the hub it reaches is started when none runs.
