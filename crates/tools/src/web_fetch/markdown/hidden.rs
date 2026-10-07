@@ -61,7 +61,6 @@ const OUT_OF_SVG: [&str; 44] = [
 ];
 
 /// Hidden elements and the HTML head state, independent of markdown output.
-#[derive(Default)]
 pub(super) struct Hidden {
     /// Open `svg`, `noscript` and `template` elements, whose content is
     /// dropped. Each has a depth, its place among them counted from the
@@ -76,6 +75,22 @@ pub(super) struct Hidden {
     noscripts: Vec<usize>,
     templates: Vec<usize>,
     in_head: bool,
+    /// Whether a `head` start tag can still open the head: not once any
+    /// other content, text or `body`/`html`/`br` end tag has begun the body.
+    head_can_open: bool,
+}
+
+impl Default for Hidden {
+    fn default() -> Self {
+        Self {
+            hidden: 0,
+            svgs: Vec::new(),
+            noscripts: Vec::new(),
+            templates: Vec::new(),
+            in_head: false,
+            head_can_open: true,
+        }
+    }
 }
 
 impl Hidden {
@@ -98,12 +113,18 @@ impl Hidden {
         if !IN_HEAD.contains(&name) {
             self.in_head = false;
         }
+        // The HTML standard ignores a `head` start tag once the head has
+        // been opened or any other content has begun.
+        let opens_head = name == "head" && self.head_can_open;
+        if name != "html" {
+            self.head_can_open = false;
+        }
         if breaks_out_of_svg(name, tag) {
             self.close_svg();
         }
         let depth = self.hidden;
         if name == "head" {
-            self.in_head = true;
+            self.in_head |= opens_head;
         } else if let Some(depths) = self.depths(name)
             && !tag.self_closing
         {
@@ -119,6 +140,7 @@ impl Hidden {
         // open `svg` at `</p>` and `</br>`; `</br>` is then a `br`.
         if matches!(name, "head" | "body" | "html" | "br") {
             self.in_head = false;
+            self.head_can_open = false;
         }
         if matches!(name, "p" | "br") {
             self.close_svg();
@@ -133,7 +155,10 @@ impl Hidden {
 
     /// Whether the head is still open after this text token.
     pub(super) fn text_is_in_head(&mut self, text: &str) -> bool {
-        self.in_head &= text.chars().all(|c| c.is_ascii_whitespace());
+        if !text.chars().all(|c| c.is_ascii_whitespace()) {
+            self.in_head = false;
+            self.head_can_open = false;
+        }
         self.in_head
     }
 

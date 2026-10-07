@@ -313,7 +313,10 @@ fn a_head_start_tag_after_the_head_ended_is_ignored() {
     assert_eq!(to_markdown("<b>x<head></b>y"), "**x**y\n");
     assert_eq!(to_markdown("<head></head><p>a<head></p>b"), "a\n\nb\n");
     assert_eq!(to_markdown("<meta><p>a<head></p>b"), "a\n\nb\n");
-    assert_eq!(to_markdown("<head><title>T</title>x<head></p>y"), "# T\n\nxy\n");
+    assert_eq!(
+        to_markdown("<head><title>T</title>x<head></p>y"),
+        "# T\n\nx\n\ny\n"
+    );
     // A first `head` start tag still opens it.
     assert_eq!(to_markdown("<html><head><meta></p>x"), "x\n");
 }
@@ -883,7 +886,7 @@ fn a_slice_of_one_still_advances_past_a_multibyte_char() {
 
 #[test]
 fn whitespace_in_the_head_writes_nothing() {
-    assert_eq!(to_markdown("a<head> <meta>b"), "ab\n");
+    assert_eq!(to_markdown("<head> <meta>b"), "b\n");
 }
 
 #[test]
