@@ -437,6 +437,7 @@ fn timeout_ms(timeout: Duration) -> u64 {
 }
 
 mod declared;
+mod errors;
 mod hub;
 mod schedule;
 mod setup;
