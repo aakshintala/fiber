@@ -76,6 +76,13 @@ pub(crate) struct HomeScreen {
     pub(crate) picker: Option<(Vec<String>, usize)>,
     /// The foot hint, or the quit hint while Ctrl+C is armed.
     pub(crate) foot: String,
+    /// The delete question, unwrapped: it wraps over as many rows as
+    /// needed in the list's place, naming the session and everything
+    /// `--cascade` adds, and scrolls past the screen.
+    pub(crate) question: Option<String>,
+    /// The delete question's scroll offset: Up shows earlier rows,
+    /// Down later ones.
+    pub(crate) question_scroll: usize,
     /// The input box shows its placeholder.
     pub(crate) placeholder: bool,
 }

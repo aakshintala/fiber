@@ -273,7 +273,30 @@ pub(super) fn render(
     let list_top = placed.edge.saturating_add(1);
     let capacity = usize::from(placed.foot.saturating_sub(list_top));
     let mut row_y = list_top;
+    // The delete question wraps over as many rows as needed, naming
+    // the session and everything `--cascade` adds, taking priority
+    // space over the list; Up and Down scroll it past the screen.
+    let mut asked = 0;
+    if let Some(question) = &screen.question {
+        let wrapped = wrap(question, usize::from(placed.width));
+        let max = wrapped.len().saturating_sub(capacity);
+        let scroll = screen.question_scroll.min(max);
+        asked = wrapped.len().saturating_sub(scroll).min(capacity);
+        for (at, row) in wrapped.iter().skip(scroll).take(asked).enumerate() {
+            put(
+                buf,
+                area,
+                placed.x,
+                row_y.saturating_add(super::to_u16(at)),
+                row,
+                placed.width,
+                Style::default(),
+            );
+        }
+        row_y = row_y.saturating_add(super::to_u16(asked));
+    }
     if let Some(toggle) = &screen.toggle
+        && screen.question.is_none()
         && row_y < placed.foot
     {
         put(
@@ -291,7 +314,9 @@ pub(super) fn render(
         });
         row_y = row_y.saturating_add(1);
     }
-    let rows_capacity = capacity.saturating_sub(usize::from(screen.toggle.is_some()));
+    let rows_capacity = capacity.saturating_sub(asked).saturating_sub(usize::from(
+        screen.toggle.is_some() && screen.question.is_none(),
+    ));
     let start = match app.focused() {
         Some(TargetId::Home(Spot::Entry(key) | Spot::Stop(key))) => screen
             .rows

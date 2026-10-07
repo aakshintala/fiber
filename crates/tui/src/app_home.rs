@@ -81,9 +81,11 @@ enum Ask {
 enum Prompt {
     /// Asking to delete `id`: without `expect` the plain question, with
     /// it the cascade question naming the sessions the delete removes.
+    /// `scroll` shows later wrapped rows past the screen.
     Delete {
         id: SessionId,
         expect: Option<Vec<SessionId>>,
+        scroll: usize,
     },
     /// Asking to quit while sessions work: Enter leaves them running,
     /// `c` closes them all now, Esc stays. It stores nothing: the
@@ -178,31 +180,33 @@ impl App {
             .map(|name| name.to_string_lossy().into_owned())
             .filter(|name| !name.is_empty())
             .unwrap_or_else(|| workspace.display().to_string());
-        // The delete question sits on the foot, naming the session and
-        // everything `--cascade` would add.
-        let question = match &home.prompt {
-            Some(Prompt::Delete { id, expect }) => home.sessions.row(id).map(|row| match expect {
-                None => delete_line(row),
-                Some(expect) => cascade_line(
-                    row,
-                    &expect
-                        .iter()
-                        .filter(|session| **session != row.id)
-                        .cloned()
-                        .collect::<Vec<_>>(),
-                ),
-            }),
+        // The delete question wraps over as many rows as needed in
+        // the list's place, naming the session and everything
+        // `--cascade` would add.
+        let (question, question_scroll) = match &home.prompt {
+            Some(Prompt::Delete { id, expect, scroll }) => (
+                home.sessions.row(id).map(|row| match expect {
+                    None => delete_line(row),
+                    Some(expect) => cascade_line(
+                        row,
+                        &expect
+                            .iter()
+                            .filter(|session| **session != row.id)
+                            .cloned()
+                            .collect::<Vec<_>>(),
+                    ),
+                }),
+                *scroll,
+            ),
             // The quit question draws through the hint below, recomputed
             // every frame.
-            Some(Prompt::Quit) | None => None,
+            Some(Prompt::Quit) | None => (None, 0),
         };
-        let foot = question.unwrap_or_else(|| {
-            if self.hint() {
-                self.hint_text()
-            } else {
-                "↓ the session list · F1 the key map · Ctrl+C twice to quit".to_owned()
-            }
-        });
+        let foot = if self.hint() {
+            self.hint_text()
+        } else {
+            "↓ the session list · F1 the key map · Ctrl+C twice to quit".to_owned()
+        };
         Some(HomeScreen {
             version: home.launch.version.clone(),
             // A remote client has no launch directory; the picker it would
@@ -252,6 +256,8 @@ impl App {
                     .then(|| toggle_line(waiting, home.sessions.show_all()))
             },
             foot,
+            question,
+            question_scroll,
             // Until the first prompt, the placeholder says "/? for
             // shortcuts"; no session exists before Enter, so opening the
             // terminal, glancing at home and leaving creates nothing.
@@ -548,8 +554,9 @@ impl App {
             return None;
         }
         // The delete question takes every key first: Enter deletes, Esc
-        // keeps the session, Ctrl+C passes through to quit, and anything
-        // else is swallowed.
+        // keeps the session, Up and Down scroll its wrapped rows past
+        // the screen, Ctrl+C passes through to quit, and anything else
+        // is swallowed.
         if self.home.as_ref().is_some_and(|home| home.prompt.is_some()) {
             match key {
                 Key::Enter => return Some(self.send_delete()),
@@ -557,11 +564,17 @@ impl App {
                     self.close_prompt();
                     return Some(Effect::None);
                 }
+                Key::Up => {
+                    self.scroll_question(false);
+                    return Some(Effect::None);
+                }
+                Key::Down => {
+                    self.scroll_question(true);
+                    return Some(Effect::None);
+                }
                 Key::CtrlC => return None,
                 Key::Char(_)
                 | Key::Backspace
-                | Key::Up
-                | Key::Down
                 | Key::PageUp
                 | Key::PageDown
                 | Key::End
@@ -725,7 +738,11 @@ impl App {
             .and_then(|home| home.sessions.by_key(key))
             .map(|row| row.id.clone());
         if let (Some(home), Some(id)) = (self.home.as_mut(), id) {
-            home.prompt = Some(Prompt::Delete { id, expect: None });
+            home.prompt = Some(Prompt::Delete {
+                id,
+                expect: None,
+                scroll: 0,
+            });
         }
     }
 
@@ -733,6 +750,22 @@ impl App {
     fn close_prompt(&mut self) {
         if let Some(home) = self.home.as_mut() {
             home.prompt = None;
+        }
+    }
+
+    /// Scrolls the delete question one row: Up toward its first rows,
+    /// Down toward its later ones. The frame clamps the offset to the
+    /// wrapped rows past the screen, so scrolling a short question
+    /// changes nothing drawn.
+    fn scroll_question(&mut self, down: bool) {
+        if let Some(home) = self.home.as_mut()
+            && let Some(Prompt::Delete { scroll, .. }) = home.prompt.as_mut()
+        {
+            if down {
+                *scroll = scroll.saturating_add(1);
+            } else {
+                *scroll = scroll.saturating_sub(1);
+            }
         }
     }
 
@@ -787,7 +820,7 @@ impl App {
     /// down nothing goes out and the question stays.
     fn send_delete(&mut self) -> Effect {
         let ask = self.home.as_ref().and_then(|home| match &home.prompt {
-            Some(Prompt::Delete { id, expect }) => Some((id.clone(), expect.clone())),
+            Some(Prompt::Delete { id, expect, .. }) => Some((id.clone(), expect.clone())),
             Some(Prompt::Quit) | None => None,
         });
         let Some((id, expect)) = ask else {
@@ -871,6 +904,7 @@ impl App {
                             home.prompt = Some(Prompt::Delete {
                                 id,
                                 expect: Some(expect),
+                                scroll: 0,
                             });
                         }
                         return Vec::new();

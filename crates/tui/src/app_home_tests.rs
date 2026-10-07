@@ -2425,6 +2425,21 @@ fn foot(app: &App) -> String {
         .unwrap_or_default()
 }
 
+/// The delete question home draws, unwrapped.
+fn question(app: &App) -> String {
+    app.home_screen()
+        .and_then(|screen| screen.question)
+        .unwrap_or_default()
+}
+
+/// The delete question's scroll offset: Up shows earlier rows, Down
+/// later ones.
+fn question_scroll(app: &App) -> usize {
+    app.home_screen()
+        .map(|screen| screen.question_scroll)
+        .unwrap_or_default()
+}
+
 /// Clicks the first row's ✕, with the parsed lines going out.
 fn stop(app: &mut App) -> Vec<Value> {
     let key = keys(app)[0];
@@ -2550,7 +2565,7 @@ fn x_on_an_exited_row_asks_to_delete() {
     exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
     assert_eq!(click_stop(&mut app), Effect::None);
     assert_eq!(
-        foot(&app),
+        question(&app),
         "Delete old work (s_aaaaaaaaaaaaaaaa)? It cannot be undone · enter delete · esc keep"
     );
 }
@@ -2564,7 +2579,7 @@ fn backspace_on_a_focused_exited_row_asks() {
     assert_eq!(app.on_key(Key::Down, now), Effect::None);
     assert_eq!(app.on_key(Key::Backspace, now), Effect::None);
     assert_eq!(
-        foot(&app),
+        question(&app),
         "Delete old work (s_aaaaaaaaaaaaaaaa)? It cannot be undone · enter delete · esc keep"
     );
 }
@@ -2582,7 +2597,7 @@ fn delete_on_a_focused_crashed_row_asks() {
     assert_eq!(app.on_key(Key::Down, now), Effect::None);
     assert_eq!(app.on_edit(crate::keys::Edit::Delete), Effect::None);
     assert_eq!(
-        foot(&app),
+        question(&app),
         "Delete dead work (s_aaaaaaaaaaaaaaaa)? It cannot be undone · enter delete · esc keep"
     );
 }
@@ -2655,7 +2670,7 @@ fn other_keys_do_nothing_in_the_question() {
     assert_eq!(app.on_key(Key::Char('x'), now), Effect::None);
     assert!(app.input().expand().is_empty());
     assert_eq!(
-        foot(&app),
+        question(&app),
         "Delete old work (s_aaaaaaaaaaaaaaaa)? It cannot be undone · enter delete · esc keep"
     );
 }
@@ -2668,6 +2683,40 @@ fn ctrl_c_passes_through_the_question() {
     let now = fakes::clock::FakeClock::new().now();
     assert_eq!(app.on_key(Key::CtrlC, now), Effect::None);
     assert!(app.hint());
+}
+
+#[test]
+fn up_and_down_scroll_the_delete_question() {
+    let mut app = home();
+    exited_row(&mut app, "s_0123456789abcdef", "fix the parser");
+    click_stop(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+        panic!("Enter deletes");
+    };
+    let delete = commands(lines)[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("delete id"))
+        .to_owned();
+    assert!(
+        app.on_line(hub_refused(
+            &delete,
+            "session_has_dependents",
+            "Session `s_0123456789abcdef` has sessions that continue it: \
+            `s_1111111111111111`, `s_2222222222222222`. `--cascade` deletes them too."
+        ))
+        .is_empty()
+    );
+    // Down scrolls toward the later rows, Up back toward the first,
+    // holding at the top.
+    assert_eq!(question_scroll(&app), 0);
+    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(question_scroll(&app), 1);
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
+    assert_eq!(question_scroll(&app), 0);
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
+    assert_eq!(question_scroll(&app), 0);
+    assert!(!question(&app).is_empty(), "the question stays open");
 }
 
 #[test]
@@ -2721,7 +2770,7 @@ fn dependents_ask_again_naming_them_and_enter_sends_cascade_with_expect() {
             .is_empty()
     );
     assert_eq!(
-        foot(&app),
+        question(&app),
         "Delete fix the parser (s_0123456789abcdef) and 2 sessions that continue it: \
         s_1111111111111111, s_2222222222222222? It cannot be undone · enter delete all · esc keep"
     );
@@ -2769,7 +2818,7 @@ fn a_stale_cascade_asks_again_with_the_new_set() {
     );
     // One other session reads singular.
     assert_eq!(
-        foot(&app),
+        question(&app),
         "Delete fix the parser (s_0123456789abcdef) and 1 session that continues it: \
         s_1111111111111111? It cannot be undone · enter delete all · esc keep"
     );
@@ -2787,7 +2836,7 @@ fn a_stale_cascade_asks_again_with_the_new_set() {
             .is_empty()
     );
     assert_eq!(
-        foot(&app),
+        question(&app),
         "Delete fix the parser (s_0123456789abcdef) and 2 sessions that continue it: \
         s_1111111111111111, s_3333333333333333? It cannot be undone · enter delete all · esc keep"
     );
@@ -2943,7 +2992,7 @@ fn enter_with_the_link_down_keeps_the_question() {
     let now = fakes::clock::FakeClock::new().now();
     assert_eq!(app.on_key(Key::Enter, now), Effect::None);
     assert_eq!(
-        foot(&app),
+        question(&app),
         "Delete old work (s_aaaaaaaaaaaaaaaa)? It cannot be undone · enter delete · esc keep"
     );
 }
@@ -2986,7 +3035,7 @@ fn delete_edit_in_the_question_does_nothing() {
     click_stop(&mut app);
     assert_eq!(app.on_edit(crate::keys::Edit::Delete), Effect::None);
     assert_eq!(
-        foot(&app),
+        question(&app),
         "Delete old work (s_aaaaaaaaaaaaaaaa)? It cannot be undone · enter delete · esc keep"
     );
 }

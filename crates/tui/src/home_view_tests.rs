@@ -683,7 +683,83 @@ fn home_cascade_question() {
     insta::assert_snapshot!("home_cascade_question", screen(&app, 80, 24));
 }
 
-/// Opens the quit question: Ctrl+C twice while a session works.
+/// Opens the cascade question naming `dependents`: the plain delete
+/// goes out, and the hub refuses naming them all.
+fn ask_cascade(app: &mut App, root: &str, dependents: &[String]) {
+    stop_first(app);
+    let now = fakes::clock::FakeClock::new().now();
+    let crate::app::Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+        panic!("Enter deletes");
+    };
+    let delete: serde_json::Value =
+        serde_json::from_str(lines.first().unwrap_or_else(|| panic!("a delete line")))
+            .unwrap_or_else(|err| panic!("{err}"));
+    let id = delete["id"].as_str().unwrap_or_else(|| panic!("delete id"));
+    let names: Vec<String> = dependents
+        .iter()
+        .map(|session| format!("`{session}`"))
+        .collect();
+    app.on_line(refused(
+        id,
+        "session_has_dependents",
+        &format!(
+            "Session `{root}` has sessions that continue it: {}. \
+            `--cascade` deletes them too.",
+            names.join(", ")
+        ),
+    ));
+}
+
+#[test]
+fn home_cascade_question_with_many_dependents_wraps_every_id() {
+    let mut app = home(80, 24);
+    app.on_line(hello());
+    app.on_line(status("s_0123456789abcdef", "fix the parser", live()));
+    app.on_line(left("s_0123456789abcdef", "exited"));
+    let dependents: Vec<String> = (1..=8u8).map(|n| format!("s_{n:016x}")).collect();
+    ask_cascade(&mut app, "s_0123456789abcdef", &dependents);
+    let drawn = screen(&app, 80, 24);
+    // The question wraps over as many rows as needed, naming every id
+    // the delete adds: none is cut to one line.
+    for session in std::iter::once(&"s_0123456789abcdef".to_owned()).chain(&dependents) {
+        assert!(drawn.contains(session.as_str()), "{session} is drawn");
+    }
+    insta::assert_snapshot!("home_cascade_question_wrapped", drawn);
+}
+
+#[test]
+fn the_delete_question_scrolls_past_the_screen() {
+    let mut app = home(80, 14);
+    app.on_line(hello());
+    app.on_line(status("s_0123456789abcdef", "fix the parser", live()));
+    app.on_line(left("s_0123456789abcdef", "exited"));
+    let dependents: Vec<String> = (1..=20u8).map(|n| format!("s_{n:016x}")).collect();
+    ask_cascade(&mut app, "s_0123456789abcdef", &dependents);
+    // More wrapped rows than fit: the first id draws, the last does not.
+    let first = screen(&app, 80, 14);
+    assert!(first.contains("s_0000000000000001"), "the first id draws");
+    assert!(
+        !first.contains("s_0000000000000014"),
+        "the last id is past the screen"
+    );
+    // Down scrolls until every id can be seen before Enter.
+    let now = fakes::clock::FakeClock::new().now();
+    for _ in 0..20 {
+        app.on_key(Key::Down, now);
+    }
+    let last = screen(&app, 80, 14);
+    assert!(last.contains("s_0000000000000014"), "the last id draws");
+    // Up scrolls back to the first rows.
+    for _ in 0..20 {
+        app.on_key(Key::Up, now);
+    }
+    let back = screen(&app, 80, 14);
+    assert!(back.contains("s_0000000000000001"), "the first id draws");
+    assert!(
+        !back.contains("s_0000000000000014"),
+        "the last id is past the screen again"
+    );
+}
 fn ask_quit(app: &mut App) {
     let now = fakes::clock::FakeClock::new().now();
     app.on_key(Key::CtrlC, now);
