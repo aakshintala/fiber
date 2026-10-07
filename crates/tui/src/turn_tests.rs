@@ -946,3 +946,42 @@ fn an_empty_prompt_draws_no_bubble() {
     end(&mut app, "completed", 0);
     assert_eq!(texts(&app), vec!["▣ completed"]);
 }
+
+#[test]
+fn a_streaming_call_with_no_text_yet_shows_its_name_alone() {
+    let mut app = app();
+    start(&mut app, "go", 0);
+    feed(
+        &mut app,
+        "tool_call_arguments_delta",
+        Some("a_m"),
+        0,
+        json!({"index": 0, "name": "read", "text": ""}),
+    );
+    assert_eq!(texts(&app).get(1).map(String::as_str), Some("• read"));
+}
+
+#[test]
+fn ctrl_o_closes_when_every_ledger_is_open_whatever_thinking_groups_say() {
+    let mut app = app();
+    start(&mut app, "go", 0);
+    step(&mut app, 0);
+    think(&mut app, "a_t", "hm", 0, 0);
+    text(&mut app, "a_m", "Zero.", 0);
+    call(&mut app, "a_1", "read", json!({"path": "a.rs"}), 0);
+    text(&mut app, "a_m", "One.", 0);
+    call(&mut app, "a_2", "read", json!({"path": "b.rs"}), 0);
+    text(&mut app, "a_m", "Two.", 0);
+    let groups: Vec<Target> = app
+        .targets()
+        .into_iter()
+        .filter_map(|(_, target)| matches!(target, Target::Group(_)).then_some(target))
+        .collect();
+    for group in groups {
+        app.open(group);
+    }
+    assert!(texts(&app).contains(&"  1 read b.rs".to_owned()));
+    ctrl_o(&mut app);
+    assert!(!texts(&app).contains(&"  1 read a.rs".to_owned()));
+    assert!(!texts(&app).contains(&"  1 read b.rs".to_owned()));
+}

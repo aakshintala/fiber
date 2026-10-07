@@ -1,6 +1,6 @@
 //! Tests for a card's figures.
 
-use super::{Kinds, count, duration, first_heading, latest_heading, money, tokens, wrap};
+use super::{Kinds, count, duration, first_heading, latest_heading, money, seconds, tokens, wrap};
 
 #[test]
 fn durations_truncate_to_whole_seconds_at_each_threshold() {
@@ -195,4 +195,10 @@ fn wrapping_breaks_at_spaces_and_inside_long_words() {
     // A wide character takes two columns.
     assert_eq!(wrap("世界世界", 4), vec!["世界", "世界"]);
     assert_eq!(wrap("x", 0), vec!["x"]);
+}
+
+#[test]
+fn a_span_under_a_second_is_left_out() {
+    assert_eq!(seconds(999), None);
+    assert_eq!(seconds(1000).as_deref(), Some("1s"));
 }
