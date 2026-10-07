@@ -1298,8 +1298,21 @@ fn a_shell_that_exits_with_members_moves_and_names_them() {
     assert!(body.contains("sleep ("), "{body}");
     assert!(body.contains("moved to the background"), "{body}");
     assert!(group_alive(pgid));
+    let timeout_at = running.start + Duration::from_millis(600_000);
+    let mark = running
+        .clock
+        .mark_parked(timeout_at, DEADLINE)
+        .expect("the moved job did not park at its timeout");
+    // A later park at the timeout means another group check found sleep
+    // alive and the job waits on.
     assert!(
-        jobs.ended(Duration::from_secs(1)).is_none(),
+        running
+            .clock
+            .await_parked_since(&mark, Some(timeout_at), DEADLINE),
+        "the job did not wait again while sleep was in the group"
+    );
+    assert!(
+        jobs.ended(Duration::ZERO).is_none(),
         "the job ended while sleep was still in the group"
     );
     assert!(kill_group(pgid, "KILL").unwrap());
@@ -1417,8 +1430,21 @@ fn stopping_a_job_cancels_it_and_a_turn_cancel_does_not() {
         "the job did not park"
     );
     cancel.cancel();
+    // Marked after the cancel, then woken: a later park at the timeout ran a
+    // whole pass after the turn cancel and did not stop.
+    let mark = running
+        .clock
+        .mark_parked(timeout_at, DEADLINE)
+        .expect("the job left its timeout park");
+    running.clock.advance(Duration::ZERO);
     assert!(
-        jobs.ended(Duration::from_secs(1)).is_none(),
+        running
+            .clock
+            .await_parked_since(&mark, Some(timeout_at), DEADLINE),
+        "the job did not wait again after the turn cancel"
+    );
+    assert!(
+        jobs.ended(Duration::ZERO).is_none(),
         "the turn cancel stopped the job"
     );
     assert!(group_alive(pgid));
