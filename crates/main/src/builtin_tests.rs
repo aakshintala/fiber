@@ -446,6 +446,7 @@ fn hosted_is_what_builtin_registers_for_web_search() {
     let (tools, infos, _driver, _forget, _images) = super::builtin(
         root.path().join("fiber-stub"),
         root.path(),
+        root.path(),
         &root.path().join("artifacts"),
         &clock,
         &jobs,
