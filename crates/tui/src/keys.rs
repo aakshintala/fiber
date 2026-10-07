@@ -1,5 +1,5 @@
-//! The byte parser: terminal bytes to keys and detection replies
-//! (`docs/tui.md`, "Keys").
+//! The byte parser: terminal bytes to keys, mouse reports and detection
+//! replies (`docs/tui.md`, "Keys", "Mouse and hover").
 
 /// One key this slice handles.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,13 +75,49 @@ pub(crate) enum Reply {
     DeviceAttributes,
 }
 
-/// One parsed event: a key or a detection reply.
+/// A mouse button.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Button {
+    Left,
+    Middle,
+    Right,
+}
+
+/// What a mouse report says happened.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MouseKind {
+    /// A button went down.
+    Press(Button),
+    /// A button went up; SGR may not say which.
+    Release,
+    /// The pointer moved with no button held.
+    Motion,
+    /// The pointer moved with a button held.
+    Drag(Button),
+    /// The wheel turned up.
+    WheelUp,
+    /// The wheel turned down.
+    WheelDown,
+}
+
+/// One SGR mouse report (`CSI < Cb ; Cx ; Cy M` or `m`), at a 0-based
+/// cell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Mouse {
+    pub(crate) kind: MouseKind,
+    pub(crate) col: u16,
+    pub(crate) row: u16,
+}
+
+/// One parsed event: a key, a mouse report or a detection reply.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Event {
     /// A key.
     Key(Key),
     /// A key that edits the draft.
     Edit(Edit),
+    /// A mouse report.
+    Mouse(Mouse),
     /// A detection reply.
     Reply(Reply),
 }
@@ -274,6 +310,11 @@ fn parse_csi(buf: &[u8]) -> Step {
             [b'1', b'1'] => vec![Event::Key(Key::F1)],
             _ => Vec::new(),
         },
+        b'M' | b'm' if params.first() == Some(&b'<') => {
+            let params = params.get(1..).unwrap_or_default();
+            sgr_mouse(params, final_byte == b'm')
+                .map_or_else(Vec::new, |mouse| vec![Event::Mouse(mouse)])
+        }
         0x46 if params.is_empty() => vec![Event::Key(Key::End)],
         0x41 if params.is_empty() => vec![Event::Key(Key::Up)],
         0x42 if params.is_empty() => vec![Event::Key(Key::Down)],
@@ -283,6 +324,50 @@ fn parse_csi(buf: &[u8]) -> Step {
         _ => Vec::new(),
     };
     Some((events, end.saturating_add(1)))
+}
+
+/// The SGR mouse report with parameters `Cb;Cx;Cy` (after the `<`), its
+/// final byte `m` when `release`. `None` for a malformed report: a
+/// parameter that is not all digits, not three parameters, a coordinate
+/// of 0 or above `u16::MAX`, a press of no button, a horizontal wheel or
+/// a button above 7.
+fn sgr_mouse(params: &[u8], release: bool) -> Option<Mouse> {
+    let mut fields = params.split(|byte| *byte == b';').map(|field| {
+        if field.is_empty() || !field.iter().all(u8::is_ascii_digit) {
+            return None;
+        }
+        std::str::from_utf8(field).ok()?.parse::<u32>().ok()
+    });
+    let cb = fields.next()??;
+    let col = u16::try_from(fields.next()??).ok()?.checked_sub(1)?;
+    let row = u16::try_from(fields.next()??).ok()?.checked_sub(1)?;
+    if fields.next().is_some() {
+        return None;
+    }
+    // Shift, Alt and Ctrl are bits 4, 8 and 16 (0b1_1100); they are ignored.
+    let cb = cb & !0b1_1100;
+    let button = match cb & 3 {
+        0 => Some(Button::Left),
+        1 => Some(Button::Middle),
+        2 => Some(Button::Right),
+        _ => None,
+    };
+    let kind = if cb >= 128 {
+        return None;
+    } else if cb & 64 != 0 {
+        match cb & 3 {
+            0 => MouseKind::WheelUp,
+            1 => MouseKind::WheelDown,
+            _ => return None,
+        }
+    } else if cb & 32 != 0 {
+        button.map_or(MouseKind::Motion, MouseKind::Drag)
+    } else if release {
+        MouseKind::Release
+    } else {
+        MouseKind::Press(button?)
+    };
+    Some(Mouse { kind, col, row })
 }
 
 /// Parses `ESC O` at the start of `buf`.

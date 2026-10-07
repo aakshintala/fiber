@@ -1,0 +1,4 @@
+{"kind":"turn_started","session_id":"s_aaaaaaaaaaaaaaaa","ts":0,"schema_version":1,"seq":1,"payload":{"input":[{"type":"message","source":"driver","content":[{"type":"text","text":"Run the tests and tell me what fails."}]}]}}
+{"kind":"assistant_message_delta","session_id":"s_aaaaaaaaaaaaaaaa","ts":0,"schema_version":1,"action_id":"a_1","payload":{"text":"I will run the test suite first, then read the failures one at a time. The suite takes a minute on this machine, so I will ask before running it."}}
+{"kind":"tool_call_requested","session_id":"s_aaaaaaaaaaaaaaaa","ts":0,"schema_version":1,"action_id":"a_2","payload":{"name":"shell","arguments":{"command":"npm test"}}}
+{"kind":"permission_requested","session_id":"s_aaaaaaaaaaaaaaaa","ts":0,"schema_version":1,"action_id":"a_2","payload":{"request_id":"r_1","effects":["executes"],"reversible":true,"step":"standing_ask","standing_rule":{"scope":"global","prefix":"npm test"}}}
