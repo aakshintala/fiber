@@ -66,12 +66,12 @@ a 20-thousand-token one fit the same ceiling.
 | Terminal to its first frame, attaching | 50 ms plus 10 ms per MiB of session log | Linux x86_64 | picked |
 | Listing 1,000 sessions in one project, warm cache | 50 ms | Linux x86_64 | picked |
 | `session_list`, waiting for every running session's status | 2 s for the whole call | Linux x86_64 | picked |
-| `paging` jig, its session at scale 1 and 160 by 48 | 21,224 KiB peak RSS | Linux x86_64 | picked |
-| `paging` jig, open pass and first frame | 616 ms | Linux x86_64 | picked |
-| `paging` jig, slowest frame that loaded pages | 3 ms | Linux x86_64 | picked |
-| `paging` jig, slowest jump frame | 6 ms | Linux x86_64 | picked |
-| `paging` jig, slowest re-count at a new width | 48 ms | Linux x86_64 | picked |
-| `paging` jig, slowest append frame | 4 ms | Linux x86_64 | picked |
+| `paging` jig, its session at scale 1 and 160 by 48 | 17,592 KiB peak RSS | Linux x86_64 | measured |
+| `paging` jig, open pass and first frame | 1,347 ms | Linux x86_64 | measured |
+| `paging` jig, slowest frame that loaded pages | 7 ms | Linux x86_64 | measured |
+| `paging` jig, slowest jump frame | 11 ms | Linux x86_64 | measured |
+| `paging` jig, slowest re-count at a new width | 123 ms | Linux x86_64 | measured |
+| `paging` jig, slowest append frame | 3 ms | Linux x86_64 | measured |
 
 Basis says where a number came from:
 
