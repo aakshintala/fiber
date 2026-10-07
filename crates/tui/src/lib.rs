@@ -13,6 +13,11 @@ mod format;
 mod keymap;
 mod keys;
 mod link;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "the app reads pages from the next commit")
+)]
+mod pages;
 mod slash;
 mod term;
 mod turn;
