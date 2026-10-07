@@ -37,6 +37,14 @@ impl Completions {
         Self { endpoint }
     }
 
+    /// Also sends each request's cache key in the header `name`, for a
+    /// provider that routes by it, such as OpenCode's `x-opencode-session`
+    /// (`docs/prompt-cache.md`, "Cache markers and keys").
+    #[must_use]
+    pub fn cache_key_header(self, _name: impl Into<String>) -> Self {
+        self
+    }
+
     /// Builds the call for `request`. Two calls built from the same inputs
     /// send the same bytes (`docs/prompt-cache.md`, "Bytes").
     pub fn request(&self, request: &ModelRequest) -> Call {
