@@ -4,6 +4,7 @@
 #![allow(clippy::unwrap_used, reason = "test code; a failure is the test's")]
 
 use std::fs;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
@@ -164,6 +165,40 @@ const CHILD: &str = "FIBER_CLI_TEST_CHILD";
 /// How long the child may run before the test kills it and fails.
 const CHILD_DEADLINE: Duration = Duration::from_secs(60);
 
+/// How long a killed child may take to be reaped.
+const REAP_DEADLINE: Duration = Duration::from_secs(10);
+
+/// Waits for `child`, the leader of its own process group, at most
+/// `deadline`, and returns what it wrote. A watchdog on that group kills
+/// it if the test process dies first, so a hung or broken run leaves
+/// nothing behind. On expiry the test kills the group, checks within
+/// [`REAP_DEADLINE`] that the child was reaped as killed, and fails naming
+/// `what`.
+fn reap_group_leader(
+    child: std::process::Child,
+    deadline: Duration,
+    what: &str,
+) -> std::process::Output {
+    use std::os::unix::process::ExitStatusExt;
+    let group = child.id();
+    let watchdog = fakes::Watchdog::group(group);
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || done.send(child.wait_with_output()));
+    let Ok(received) = finished.recv_timeout(deadline) else {
+        fakes::kill_group(group, "KILL").unwrap();
+        let killed = finished
+            .recv_timeout(REAP_DEADLINE)
+            .map(|output| output.map(|output| output.status.signal()));
+        assert!(
+            matches!(killed, Ok(Ok(Some(9)))),
+            "{what} was not reaped as killed within {REAP_DEADLINE:?}: {killed:?}"
+        );
+        panic!("waited {deadline:?} for {what} to exit");
+    };
+    watchdog.stand_down(REAP_DEADLINE);
+    received.unwrap()
+}
+
 /// Spawns this test binary filtered to `test`, with `FIBER_HOME` and the
 /// working directory set, and waits for it under a deadline.
 fn spawn_child(name: &str, test: &str, setup: &Setup) -> std::process::Output {
@@ -180,16 +215,14 @@ fn spawn_child(name: &str, test: &str, setup: &Setup) -> std::process::Output {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .process_group(0)
         .spawn()
         .unwrap();
-    let pid = child.id();
-    let (tx, rx) = mpsc::channel();
-    thread::spawn(move || tx.send(child.wait_with_output().unwrap()));
-    let Ok(output) = rx.recv_timeout(CHILD_DEADLINE) else {
-        fakes::kill_pid(pid, "KILL").unwrap();
-        panic!("waited {CHILD_DEADLINE:?} for the config child to exit");
-    };
-    output
+    reap_group_leader(
+        child,
+        CHILD_DEADLINE,
+        &format!("the config child for {test}"),
+    )
 }
 
 fn child_name() -> String {
@@ -427,4 +460,54 @@ fn distance_ranks_a_shared_prefix_closer_than_a_single_letter() {
     assert_eq!(super::distance("abc", "ab"), 1);
     assert_eq!(super::distance("abc", "a"), 2);
     assert!(super::distance("abc", "ab") < super::distance("abc", "a"));
+}
+
+/// As [`install`], with model `m` at `https://{workspace}/v1` naming
+/// `FIBER_TEST_1128_UNSET_HOST` when the setting is unset.
+fn install_placeholder(home: &Path, extension: &str, name: &str) {
+    let dir = home.join("extensions").join(extension);
+    fs::create_dir_all(dir.join("providers")).unwrap();
+    fs::write(
+        dir.join("extension.json"),
+        json!({"name": extension, "version": "v0.0.0", "fiber": "0.0.0", "api": 1}).to_string(),
+    )
+    .unwrap();
+    fs::write(
+        dir.join("providers").join(format!("{name}.json")),
+        json!({
+            "name": name,
+            "placeholders": {"workspace": {"env": "FIBER_TEST_1128_UNSET_HOST"}},
+            "models": [{"id": "m", "protocol": "openai-responses",
+                        "base_url": "https://{workspace}/v1"}],
+        })
+        .to_string(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn config_set_of_an_unconfigured_model_warns_and_exits_zero() {
+    // Runs in a child with a Fiber home holding an unconfigured model, so
+    // the exit code is `config_set`'s own and the warning lands on the
+    // child's stderr. The parent checks the code, the line and the write:
+    // a code alone would not catch a `set` that returns 0 without warning.
+    if std::env::var_os(CHILD).is_some() {
+        std::process::exit(super::config_set(Layer::Global, "model", "acme/m"));
+    }
+    let setup = Setup::new();
+    install_placeholder(&setup.home(), "acme", "acme");
+    let output = spawn_child(
+        &child_name(),
+        "config_set_of_an_unconfigured_model_warns_and_exits_zero",
+        &setup,
+    );
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    let line = "fiber: The model `acme/m` needs the setting `workspace` for its base URL, \
+                which has no value, and `FIBER_TEST_1128_UNSET_HOST` has none either.";
+    assert_eq!(stderr.matches(line).count(), 1, "{stderr:?}");
+    let written: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(setup.home().join("config.json")).unwrap())
+            .unwrap();
+    assert_eq!(written, json!({"model": "acme/m"}));
 }

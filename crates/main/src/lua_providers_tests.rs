@@ -66,10 +66,10 @@ fn an_unconfigured_model_is_left_out_and_a_setting_fills_it() {
         Arc::new(PathLocks::new()),
     );
     add_lua(&extensions, &mut providers, &config).unwrap();
-    assert!(matches!(
-        providers.resolve("acme/m").unwrap_err(),
-        extensions::Error::UnknownModel { .. }
-    ));
+    assert_eq!(
+        providers.resolve("acme/m").unwrap_err().code(),
+        ErrorCode::ModelUnconfigured
+    );
 
     let config = load_config(
         &home,

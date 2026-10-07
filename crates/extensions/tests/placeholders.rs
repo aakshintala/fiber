@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use common::{Setup, install, manifest, write};
 use config::{Config, ProjectKey, Sources, write_model_cache};
 use contract::ErrorCode;
+use contract::events::Notice;
 use extensions::Providers;
 use serde_json::{Value, json};
 
@@ -103,10 +104,10 @@ fn a_model_with_no_value_is_left_out_with_a_notice() {
     let notices = providers
         .fill_placeholders(&cfg, &|name| env.get(name).cloned())
         .unwrap();
-    assert!(matches!(
-        providers.resolve("acme/m").unwrap_err(),
-        extensions::Error::UnknownModel { .. }
-    ));
+    assert_eq!(
+        providers.resolve("acme/m").unwrap_err().code(),
+        ErrorCode::ModelUnconfigured
+    );
     assert_eq!(notices.len(), 1);
     assert_eq!(notices[0].code, ErrorCode::ModelUnconfigured);
     assert_eq!(notices[0].extension.as_deref(), Some("acme"));
@@ -199,10 +200,10 @@ fn the_environment_is_read_only_for_a_declared_name() {
     let notices = providers
         .fill_placeholders(&cfg, &|_name| Some("adb-3.example".to_owned()))
         .unwrap();
-    assert!(matches!(
-        providers.resolve("acme/m").unwrap_err(),
-        extensions::Error::UnknownModel { .. }
-    ));
+    assert_eq!(
+        providers.resolve("acme/m").unwrap_err().code(),
+        ErrorCode::ModelUnconfigured
+    );
     assert_eq!(notices.len(), 1);
     assert_eq!(
         notices[0].message,
@@ -232,10 +233,10 @@ fn the_repository_never_supplies_the_host() {
     let notices = providers
         .fill_placeholders(&cfg, &|name| env.get(name).cloned())
         .unwrap();
-    assert!(matches!(
-        providers.resolve("acme/m").unwrap_err(),
-        extensions::Error::UnknownModel { .. }
-    ));
+    assert_eq!(
+        providers.resolve("acme/m").unwrap_err().code(),
+        ErrorCode::ModelUnconfigured
+    );
     assert_eq!(notices.len(), 1);
     assert_eq!(notices[0].code, ErrorCode::ModelUnconfigured);
 }
@@ -503,5 +504,318 @@ fn kept_models_stay_and_notices_come_in_order() {
         notices[1].message.contains("`b/m`"),
         "{}",
         notices[1].message
+    );
+}
+
+/// Installs `acme` with model `m` at `base_url` and fills it: `setting` is
+/// the `workspace` setting when present, `env` the process environment.
+fn fill_with(
+    setting: Option<&str>,
+    env: &[(&str, &str)],
+    placeholders: Value,
+    base_url: &str,
+) -> (Providers, Vec<Notice>) {
+    let setup = Setup::new();
+    let data = provider_with("acme", json!([model("m", base_url)]), placeholders);
+    let source = setup.source("acme", &manifest("acme"), &[data]);
+    install(&setup.home(), &source, "0.1.0").unwrap();
+    if let Some(value) = setting {
+        write(
+            &setup.home().join("config/acme.json"),
+            &json!({"workspace": value}).to_string(),
+        );
+    }
+    let cfg = config(&setup, &[]);
+    let (mut providers, _) = Providers::load(&setup.home()).unwrap();
+    let map = env_of(env);
+    let notices = providers
+        .fill_placeholders(&cfg, &|name| map.get(name).cloned())
+        .unwrap();
+    (providers, notices)
+}
+
+/// `value` as the `workspace` setting leaves the model out with the
+/// setting-source "not a host" notice, and resolving names it the same way.
+fn assert_not_a_host(value: &str) {
+    let setup = Setup::new();
+    install_template(&setup);
+    write(
+        &setup.home().join("config/acme.json"),
+        &json!({"workspace": value}).to_string(),
+    );
+    let cfg = config(&setup, &[]);
+    let (mut providers, _) = Providers::load(&setup.home()).unwrap();
+    let env = env_of(&[]);
+    let notices = providers
+        .fill_placeholders(&cfg, &|name| env.get(name).cloned())
+        .unwrap();
+    assert_eq!(notices.len(), 1, "{value:?}");
+    let notice = notices.first().unwrap();
+    assert_eq!(notice.code, ErrorCode::ModelUnconfigured);
+    assert_eq!(notice.extension.as_deref(), Some("acme"));
+    assert_eq!(
+        notice.message,
+        "The model `acme/m` needs the setting `workspace` for its base URL, \
+         whose value is not a host."
+    );
+    assert!(!notice.message.contains(value), "{value:?}");
+    let err = providers.resolve("acme/m").unwrap_err();
+    assert_eq!(err.code(), ErrorCode::ModelUnconfigured);
+    assert_eq!(err.to_string(), notice.message);
+}
+
+#[test]
+fn an_https_host_with_a_trailing_slash_fills_the_url() {
+    let (providers, notices) = fill_with(
+        None,
+        &[("DATABRICKS_HOST", "https://adb-1.azuredatabricks.net/")],
+        json!({"workspace": {"env": "DATABRICKS_HOST"}}),
+        "https://{workspace}/ai-gateway/anthropic",
+    );
+    assert!(notices.is_empty(), "{notices:?}");
+    assert_eq!(
+        providers.resolve("acme/m").unwrap().model.base_url,
+        "https://adb-1.azuredatabricks.net/ai-gateway/anthropic"
+    );
+    let (providers, notices) = fill_with(
+        Some("adb-1.example:8443"),
+        &[],
+        json!({"workspace": {}}),
+        "https://{workspace}/v1",
+    );
+    assert!(notices.is_empty(), "{notices:?}");
+    assert_eq!(
+        providers.resolve("acme/m").unwrap().model.base_url,
+        "https://adb-1.example:8443/v1"
+    );
+}
+
+#[test]
+fn a_value_with_a_path_is_not_a_host() {
+    for value in [
+        "adb-1.example/x",
+        "https://adb-1.example/v1/",
+        "adb-1.example//",
+    ] {
+        assert_not_a_host(value);
+    }
+}
+
+#[test]
+fn a_value_with_an_at_sign_is_not_a_host() {
+    for value in ["user@adb-1.example", "https://user:pw@adb-1.example"] {
+        assert_not_a_host(value);
+    }
+}
+
+#[test]
+fn a_value_with_a_question_mark_is_not_a_host() {
+    assert_not_a_host("adb-1.example?x=1");
+}
+
+#[test]
+fn a_value_with_a_hash_is_not_a_host() {
+    assert_not_a_host("adb-1.example#x");
+}
+
+#[test]
+fn a_value_with_whitespace_is_not_a_host() {
+    for value in [
+        "adb-1.example ",
+        " adb-1.example",
+        "adb-1\t.example",
+        "adb-1.example\n",
+    ] {
+        assert_not_a_host(value);
+    }
+}
+
+#[test]
+fn a_value_with_another_scheme_is_not_a_host() {
+    for value in [
+        "http://adb-1.example",
+        "HTTPS://adb-1.example",
+        "ftp://adb-1.example",
+        "https://https://adb-1.example",
+    ] {
+        assert_not_a_host(value);
+    }
+}
+
+#[test]
+fn an_environment_value_that_is_not_a_host_names_the_variable() {
+    let (providers, notices) = fill_with(
+        None,
+        &[("ACME_HOST", "evil@x")],
+        json!({"workspace": {"env": "ACME_HOST"}}),
+        "https://{workspace}/v1",
+    );
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0].code, ErrorCode::ModelUnconfigured);
+    assert_eq!(
+        notices[0].message,
+        "The model `acme/m` needs the setting `workspace` for its base URL, \
+         which has no value, and the value of `ACME_HOST` is not a host."
+    );
+    assert!(!notices[0].message.contains("evil@x"));
+    let err = providers.resolve("acme/m").unwrap_err();
+    assert_eq!(err.code(), ErrorCode::ModelUnconfigured);
+    assert_eq!(err.to_string(), notices[0].message);
+}
+
+#[test]
+fn a_setting_that_is_not_a_host_is_not_replaced_by_the_environment() {
+    let (providers, notices) = fill_with(
+        Some("a/b"),
+        &[("ACME_HOST", "adb-2.example")],
+        json!({"workspace": {"env": "ACME_HOST"}}),
+        "https://{workspace}/v1",
+    );
+    assert_eq!(notices.len(), 1);
+    assert_eq!(
+        notices[0].message,
+        "The model `acme/m` needs the setting `workspace` for its base URL, \
+         whose value is not a host."
+    );
+    assert_eq!(
+        providers.resolve("acme/m").unwrap_err().code(),
+        ErrorCode::ModelUnconfigured
+    );
+}
+
+#[test]
+fn choosing_an_unconfigured_model_is_model_unconfigured() {
+    let setup = Setup::new();
+    install_template(&setup);
+    let flag = config(&setup, &["model=acme/m"]);
+    let (mut providers, _) = Providers::load(&setup.home()).unwrap();
+    let env = env_of(&[]);
+    let notices = providers
+        .fill_placeholders(&flag, &|name| env.get(name).cloned())
+        .unwrap();
+    assert_eq!(notices.len(), 1);
+    for typed in ["acme/m", "acme/m:high", "m"] {
+        let err = providers.resolve(typed).unwrap_err();
+        assert_eq!(err.code(), ErrorCode::ModelUnconfigured, "{typed}");
+        assert_eq!(err.to_string(), notices[0].message, "{typed}");
+    }
+    let err = providers.choose(None, &flag).unwrap_err();
+    assert_eq!(err.code(), ErrorCode::ModelUnconfigured);
+    assert_eq!(err.to_string(), notices[0].message);
+}
+
+#[test]
+fn a_bare_id_in_a_configured_and_an_unconfigured_provider_is_ambiguous() {
+    let setup = Setup::new();
+    let data = provider_with("a", json!([model("m", "http://127.0.0.1:1/v1")]), json!({}));
+    let source = setup.source("a", &manifest("a"), &[data]);
+    install(&setup.home(), &source, "0.1.0").unwrap();
+    let data = provider_with(
+        "b",
+        json!([model("m", "https://{workspace}/v1")]),
+        json!({"workspace": {}}),
+    );
+    let source = setup.source("b", &manifest("b"), &[data]);
+    install(&setup.home(), &source, "0.1.0").unwrap();
+    let cfg = config(&setup, &[]);
+    let (mut providers, _) = Providers::load(&setup.home()).unwrap();
+    let env = env_of(&[]);
+    providers
+        .fill_placeholders(&cfg, &|name| env.get(name).cloned())
+        .unwrap();
+    let err = providers.resolve("m").unwrap_err();
+    assert_eq!(err.code(), ErrorCode::ModelAmbiguous);
+    let text = err.to_string();
+    assert!(text.contains("a/m"), "{text}");
+    assert!(text.contains("b/m"), "{text}");
+    assert!(
+        text.find("a/m").unwrap() < text.find("b/m").unwrap(),
+        "{text}"
+    );
+    assert!(providers.resolve("a/m").is_ok());
+    assert_eq!(
+        providers.resolve("b/m").unwrap_err().code(),
+        ErrorCode::ModelUnconfigured
+    );
+}
+
+#[test]
+fn each_unconfigured_model_keeps_its_own_message() {
+    let setup = Setup::new();
+    let data = provider_with(
+        "acme",
+        json!([
+            model("m", "https://{workspace}/v1"),
+            model("n", "https://{region}/v1"),
+        ]),
+        json!({"workspace": {}, "region": {}}),
+    );
+    let source = setup.source("acme", &manifest("acme"), &[data]);
+    install(&setup.home(), &source, "0.1.0").unwrap();
+    let cfg = config(&setup, &[]);
+    let (mut providers, _) = Providers::load(&setup.home()).unwrap();
+    let env = env_of(&[]);
+    let notices = providers
+        .fill_placeholders(&cfg, &|name| env.get(name).cloned())
+        .unwrap();
+    assert_eq!(notices.len(), 2);
+    let err = providers.resolve("acme/n").unwrap_err();
+    assert_eq!(err.code(), ErrorCode::ModelUnconfigured);
+    assert!(err.to_string().contains("`acme/n`"), "{err}");
+    assert!(err.to_string().contains("`region`"), "{err}");
+    let err = providers.resolve("n").unwrap_err();
+    assert_eq!(err.code(), ErrorCode::ModelUnconfigured);
+    assert!(err.to_string().contains("`acme/n`"), "{err}");
+    let err = providers.resolve("acme/m").unwrap_err();
+    assert_eq!(err.code(), ErrorCode::ModelUnconfigured);
+    assert!(err.to_string().contains("`workspace`"), "{err}");
+}
+
+#[test]
+fn the_first_bad_placeholder_in_template_order_is_reported() {
+    let setup = Setup::new();
+    let data = provider_with(
+        "acme",
+        json!([model("m", "https://{a}.{b}/v1")]),
+        json!({"a": {}, "b": {}}),
+    );
+    let source = setup.source("acme", &manifest("acme"), &[data]);
+    install(&setup.home(), &source, "0.1.0").unwrap();
+    write(&setup.home().join("config/acme.json"), r#"{"a":"x/y"}"#);
+    let cfg = config(&setup, &[]);
+    let (mut providers, _) = Providers::load(&setup.home()).unwrap();
+    let env = env_of(&[]);
+    let notices = providers
+        .fill_placeholders(&cfg, &|name| env.get(name).cloned())
+        .unwrap();
+    assert_eq!(notices.len(), 1);
+    assert!(notices[0].message.contains("`a`"), "{}", notices[0].message);
+    assert!(
+        notices[0].message.contains("is not a host"),
+        "{}",
+        notices[0].message
+    );
+
+    let setup = Setup::new();
+    let data = provider_with(
+        "acme",
+        json!([model("m", "https://{a}.{b}/v1")]),
+        json!({"a": {}, "b": {}}),
+    );
+    let source = setup.source("acme", &manifest("acme"), &[data]);
+    install(&setup.home(), &source, "0.1.0").unwrap();
+    write(&setup.home().join("config/acme.json"), r#"{"b":"x/y"}"#);
+    let cfg = config(&setup, &[]);
+    let (mut providers, _) = Providers::load(&setup.home()).unwrap();
+    let env = env_of(&[]);
+    let notices = providers
+        .fill_placeholders(&cfg, &|name| env.get(name).cloned())
+        .unwrap();
+    assert_eq!(notices.len(), 1);
+    assert!(notices[0].message.contains("`a`"), "{}", notices[0].message);
+    assert!(
+        notices[0].message.contains("has no value"),
+        "{}",
+        notices[0].message
     );
 }
