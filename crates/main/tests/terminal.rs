@@ -146,9 +146,7 @@ struct KillGroup(u32);
 
 impl Drop for KillGroup {
     fn drop(&mut self) {
-        match support::kill_group_detached(self.0, "KILL") {
-            Ok(_) | Err(_) => {}
-        }
+        support::kill_group_detached(self.0, "KILL");
     }
 }
 
@@ -170,6 +168,7 @@ struct Run {
     output: Arc<Mutex<Vec<u8>>>,
     /// Where the last `read_until` match ended.
     seen: usize,
+    deadline: Deadline,
 }
 
 impl Run {
@@ -222,13 +221,20 @@ impl Run {
             wakes: Arc::new(Mutex::new(rx)),
             output,
             seen: 0,
+            deadline: setup.deadline,
         }
     }
 
-    /// Types bytes into the terminal.
+    /// Types bytes into the terminal, on a thread bounded by the test's
+    /// [`Deadline`].
     fn write(&mut self, bytes: &[u8]) {
-        self.main.write_all(bytes).unwrap();
-        self.main.flush().unwrap();
+        let mut main = self.main.try_clone().unwrap();
+        let bytes = bytes.to_vec();
+        support::bounded(self.deadline, "typing on the terminal", move || {
+            main.write_all(&bytes)?;
+            main.flush()
+        })
+        .unwrap();
     }
 
     /// The output so far.
@@ -281,17 +287,7 @@ impl Run {
         thread::spawn(move || done.send(self.child.wait_with_output()).unwrap());
         let output = match finished.recv_timeout(self.deadline.left()) {
             Ok(output) => output.unwrap(),
-            Err(_) => {
-                support::kill_group(self.deadline, group, "KILL").unwrap();
-                let reaped = finished.recv_timeout(self.deadline.cleanup()).is_ok();
-                assert!(
-                    fakes::group_empties(group, self.deadline.cleanup()),
-                    "`fiber` left a process in its group behind"
-                );
-                panic!(
-                    "waited until the deadline for `fiber` to exit (reaped after the kill: {reaped})"
-                );
-            }
+            Err(_) => support::expired(self.deadline, group, &finished, "`fiber` to exit"),
         };
         assert!(
             fakes::group_empties(group, self.deadline.left()),
@@ -299,14 +295,19 @@ impl Run {
         );
         std::mem::forget(guard);
         self.watchdog.stand_down(self.deadline.cleanup());
-        until_socket(&self.hub_socket, false, "the hub to idle out");
+        until_socket(
+            self.deadline,
+            &self.hub_socket,
+            false,
+            "the hub to idle out",
+        );
         output
     }
 }
 
-/// Waits under [`DEADLINE`] until `socket` exists or not, as `present`
-/// says, naming `what` on expiry.
-fn until_socket(socket: &Path, present: bool, what: &str) {
+/// Waits under the test's [`Deadline`] until `socket` exists or not, as
+/// `present` says, naming `what` on expiry.
+fn until_socket(deadline: Deadline, socket: &Path, present: bool, what: &str) {
     let socket = socket.to_owned();
     let (done, reached) = mpsc::channel();
     thread::spawn(move || {
@@ -470,7 +471,7 @@ fn resize_redraws_the_input_line_on_the_new_last_row() {
     assert!(!contains(fresh, "\x1b[12;1H"));
     // The hub `fiber` started is up before the quit, so `wait` sees it
     // idle out rather than start after the home is gone.
-    until_socket(&run.hub_socket, true, "the hub to start");
+    until_socket(setup.deadline, &run.hub_socket, true, "the hub to start");
     run.write(b"\x03\x03");
     let output = run.wait();
     assert_eq!(output.status.code(), Some(0));
@@ -478,19 +479,21 @@ fn resize_redraws_the_input_line_on_the_new_last_row() {
 
 #[test]
 fn without_a_tty_bare_fiber_names_ask() {
-    assert_names_ask(Stdio::piped(), "standard input and output");
+    let deadline = Deadline::start();
+    assert_names_ask(deadline, Stdio::piped(), "standard input and output");
 }
 
 #[test]
 fn a_tty_on_standard_input_alone_is_not_enough() {
+    let deadline = Deadline::start();
     let terminal = Terminal::open();
-    assert_names_ask(terminal.stdin(), "standard output");
+    assert_names_ask(deadline, terminal.stdin(), "standard output");
 }
 
 /// Runs bare `fiber` with `stdin` and standard output and error piped:
 /// with no tty on `missing`, it exits 2 naming `fiber ask`.
-fn assert_names_ask(stdin: Stdio, missing: &str) {
-    let setup = Setup::new();
+fn assert_names_ask(deadline: Deadline, stdin: Stdio, missing: &str) {
+    let setup = Setup::within(deadline);
     let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
     command
         .current_dir(setup.workspace())
@@ -506,12 +509,15 @@ fn assert_names_ask(stdin: Stdio, missing: &str) {
     let guard = KillGroup(group);
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-    let output = finished
-        .recv_timeout(setup.deadline.left())
-        .unwrap_or_else(|_| {
-            panic!("waited until the deadline for `fiber` to exit, no tty on {missing}")
-        })
-        .unwrap();
+    let output = match finished.recv_timeout(setup.deadline.left()) {
+        Ok(output) => output.unwrap(),
+        Err(_) => support::expired(
+            setup.deadline,
+            group,
+            &finished,
+            &format!("`fiber` to exit, no tty on {missing}"),
+        ),
+    };
     assert!(
         fakes::group_empties(group, setup.deadline.left()),
         "waited until the deadline for the process group to empty"

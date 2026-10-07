@@ -94,14 +94,12 @@ impl Setup {
         thread::spawn(move || done.send(child.wait_with_output()).unwrap());
         let output = match finished.recv_timeout(self.deadline.left()) {
             Ok(output) => output.unwrap(),
-            Err(_) => {
-                support::kill_group(self.deadline, group, "KILL").unwrap();
-                let reaped = finished.recv_timeout(self.deadline.cleanup()).is_ok();
-                panic!(
-                    "waited until the deadline for `fiber extension {}` to exit (reaped after the kill: {reaped})",
-                    args.join(" ")
-                );
-            }
+            Err(_) => support::expired(
+                self.deadline,
+                group,
+                &finished,
+                &format!("`fiber extension {}` to exit", args.join(" ")),
+            ),
         };
         watchdog.stand_down(self.deadline.cleanup());
         Run {
@@ -142,13 +140,13 @@ fn assert_step_at_final_path(setup: &Setup, payload: &str) {
         fs::read_to_string(dir.join("where")).unwrap(),
         format!("{}\n", canonical.display())
     );
-    let out = script_output(&dir.join("run.sh"));
+    let out = script_output(setup.deadline, &dir.join("run.sh"));
     assert_eq!(out, payload);
 }
 
 /// What the script the install step left prints, run with a deadline in its
 /// own process group, so a hung script fails naming what it waited for.
-fn script_output(script: &Path) -> String {
+fn script_output(deadline: Deadline, script: &Path) -> String {
     let mut command = Command::new("sh");
     command
         .arg(script)
@@ -161,14 +159,12 @@ fn script_output(script: &Path) -> String {
     thread::spawn(move || done.send(child.wait_with_output()).unwrap());
     let output = match finished.recv_timeout(deadline.left()) {
         Ok(output) => output.unwrap(),
-        Err(_) => {
-            support::kill_group(deadline, group, "KILL").unwrap();
-            let reaped = finished.recv_timeout(deadline.cleanup()).is_ok();
-            panic!(
-                "waited until the deadline for `{}` to exit (reaped after the kill: {reaped})",
-                script.display()
-            );
-        }
+        Err(_) => support::expired(
+            deadline,
+            group,
+            &finished,
+            &format!("`{}` to exit", script.display()),
+        ),
     };
     watchdog.stand_down(deadline.cleanup());
     assert!(output.status.success(), "{output:?}");

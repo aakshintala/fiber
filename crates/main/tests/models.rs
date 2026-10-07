@@ -21,7 +21,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use std::os::unix::process::{CommandExt, ExitStatusExt};
+use std::os::unix::process::CommandExt;
 
 use fakes::Watchdog;
 use serde_json::{Value, json};
@@ -115,7 +115,8 @@ impl Setup {
         );
     }
 
-    /// Runs `fiber` with `args` and waits for it under [`DEADLINE`].
+    /// Runs `fiber` with `args` and waits for it under the test's
+    /// [`Deadline`].
     fn fiber(&self, args: &[&str]) -> Run {
         let mut command = Command::new(self.exe());
         command
@@ -135,25 +136,12 @@ impl Setup {
         thread::spawn(move || done.send(child.wait_with_output()).unwrap());
         let output = match finished.recv_timeout(self.deadline.left()) {
             Ok(output) => output.unwrap(),
-            Err(_) => {
-                support::kill_group(self.deadline, group, "KILL").unwrap();
-                let killed = finished
-                    .recv_timeout(self.deadline.cleanup())
-                    .map(|output| output.map(|output| output.status.signal()));
-                assert!(
-                    matches!(killed, Ok(Ok(Some(9)))),
-                    "`fiber {}` was not reaped as killed before the cleanup deadline: {killed:?}",
-                    args.join(" ")
-                );
-                assert!(
-                    !group_alive(self.deadline, group),
-                    "`fiber` left a process behind"
-                );
-                panic!(
-                    "waited until the deadline for `fiber {}` to exit",
-                    args.join(" ")
-                );
-            }
+            Err(_) => support::expired(
+                self.deadline,
+                group,
+                &finished,
+                &format!("`fiber {}` to exit", args.join(" ")),
+            ),
         };
         assert!(
             !group_alive(self.deadline, group),
@@ -195,13 +183,9 @@ struct KillGroup(u32);
 
 impl Drop for KillGroup {
     fn drop(&mut self) {
-        match support::kill_group_detached(self.0, "KILL") {
-            Ok(_) | Err(_) => {}
-        }
+        support::kill_group_detached(self.0, "KILL");
     }
 }
-
-/// Whether any process remains in process group `group`.
 
 #[test]
 fn models_lists_the_installed_models_as_text() {
@@ -301,26 +285,12 @@ fn models_runs_a_lua_providers_models_with_no_cached_copy() {
     assert!(run.stdout.contains("fixture/m1"), "stdout: {}", run.stdout);
 }
 
-/// Waits until the cache file's bytes differ from `old`, in slices of
-/// 100 ms up to [`DEADLINE`]: the detached refresh child rewrites it.
-fn await_refreshed(file: &std::path::Path, old: &[u8]) {
-    let (_tx, rx) = mpsc::channel::<()>();
-    let slices = DEADLINE.as_millis() / 100;
-    for _ in 0..slices {
-        match std::fs::read(file) {
-            Ok(now) if now != old => return,
-            _ => {}
-        }
-        let _waited = rx.recv_timeout(Duration::from_millis(100));
-    }
-    panic!("waited until the deadline for the cached model list to refresh");
-}
-
-/// Waits until this test's refresh child is gone, up to [`DEADLINE`]: the
-/// detached child exits after it rewrites the cache, and a rewritten cache
-/// alone never proves it did. On expiry it kills the child and its group,
-/// checks they are gone within [`REAP_DEADLINE`], and fails.
-fn await_refresh_exit(pattern: &str) {
+/// Waits until this test's refresh child is gone, under the test's
+/// [`Deadline`]: the detached child exits after it rewrites the cache, and
+/// a rewritten cache alone never proves it did. On expiry it kills the
+/// child and its group, checks they are gone before the cleanup deadline,
+/// and fails.
+fn await_refresh_exit(deadline: Deadline, pattern: &str) {
     if fakes::matching_exits(pattern, deadline.left()) {
         return;
     }
@@ -394,8 +364,13 @@ fn models_prints_a_stale_list_at_once_and_it_is_fresh_on_the_next_run() {
     );
 
     // The first run returns without waiting: the list is fresh on the
-    // next run, once the detached child rewrites the cache.
-    await_refreshed(&file, &old);
+    // next run, once the detached child has rewritten the cache and exited.
+    await_refresh_exit(setup.deadline, &setup.refresh_pattern());
+    assert!(
+        std::fs::read(&file).unwrap() != old,
+        "the refresh child exited without rewriting {}",
+        file.display()
+    );
     let second = setup.fiber(&["models"]);
     assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
     assert_eq!(second.stderr, "");
@@ -413,6 +388,6 @@ fn models_prints_a_stale_list_at_once_and_it_is_fresh_on_the_next_run() {
     // for it under the deadline, then stand its watchdog down. Dropping
     // the guard without an exit would kill it instead of checking it,
     // and a timeout above drops it, so no run leaves one behind.
-    await_refresh_exit(&setup.refresh_pattern());
+    await_refresh_exit(setup.deadline, &setup.refresh_pattern());
     refresh_guard.stand_down(setup.deadline.cleanup());
 }

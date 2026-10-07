@@ -84,8 +84,8 @@ impl Setup {
         );
     }
 
-    /// Runs `fiber ask hi` in its own process group, waits for it under
-    /// [`DEADLINE`], and asserts that nothing it started is left in the
+    /// Runs `fiber ask hi` in its own process group, waits for it under the
+    /// test's [`Deadline`], and asserts that nothing it started is left in the
     /// group (`docs/testing.md`, "Running tests").
     fn ask(&self) -> Run {
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
@@ -129,8 +129,6 @@ fn write_file(file: &std::path::Path, value: &Value) {
     fs::write(file, value.to_string()).unwrap();
 }
 
-/// Whether any process remains in process group `group`.
-
 /// Spawns `command` in a new process group beside a watchdog that kills the
 /// group if this process dies first.
 fn spawn_watched(command: &mut Command) -> (Child, Watchdog) {
@@ -147,9 +145,7 @@ struct KillGroup(u32);
 
 impl Drop for KillGroup {
     fn drop(&mut self) {
-        match support::kill_group_detached(self.0, "KILL") {
-            Ok(_) | Err(_) => {}
-        }
+        support::kill_group_detached(self.0, "KILL");
     }
 }
 
@@ -353,13 +349,14 @@ const RETRIED_HELLO_KINDS: [&str; 18] = [
 /// retries, runs `fiber ask hi` against `[failure, success]`, and asserts
 /// the ask succeeds after exactly one retry.
 fn succeeds_after_one_retry(
+    deadline: Deadline,
     protocol: &str,
     failure: Response,
     success: Response,
     code: &str,
     attempts: u64,
 ) {
-    let setup = Setup::new();
+    let setup = Setup::within(deadline);
     let server = ProviderServer::start([failure, success]).unwrap();
     setup.provider(&server, protocol, attempts);
     let run = setup.ask();
@@ -400,6 +397,7 @@ fn a_429_asking_for_2_seconds_over_the_cap_records_retry_after_ms_2000() {
 #[test]
 fn a_429_with_retry_after_0_then_a_reply_succeeds() {
     succeeds_after_one_retry(
+        Deadline::start(),
         "openai-responses",
         Response::status(429, "{}").header("retry-after", "0"),
         responses_hello(),
@@ -410,8 +408,10 @@ fn a_429_with_retry_after_0_then_a_reply_succeeds() {
 
 #[test]
 fn server_errors_timeouts_and_conflicts_are_retried() {
+    let deadline = Deadline::start();
     for status in [500, 503, 529, 408, 409] {
         succeeds_after_one_retry(
+            deadline,
             "openai-responses",
             Response::status(status, "{}"),
             responses_hello(),
@@ -440,6 +440,7 @@ fn a_dropped_connection_is_retried() {
 
 #[test]
 fn a_stream_cut_short_is_retried_on_every_protocol() {
+    let deadline = Deadline::start();
     // Each cut stream emits one fragment before it ends: the failed attempt
     // is one `assistant_message_delta`, then the retry answers `Hello.`.
     // Only `openai-responses` answers in two fragments, so only it has a
@@ -476,7 +477,7 @@ fn a_stream_cut_short_is_retried_on_every_protocol() {
             None,
         ),
     ] {
-        let setup = Setup::new();
+        let setup = Setup::within(deadline);
         let server = ProviderServer::start([Response::stream(cut.body), hello]).unwrap();
         setup.provider(&server, protocol, 3);
         let run = setup.ask();
@@ -537,6 +538,7 @@ fn a_stream_cut_short_is_retried_on_every_protocol() {
 #[test]
 fn x_should_retry_true_retries_a_400() {
     succeeds_after_one_retry(
+        Deadline::start(),
         "openai-responses",
         Response::status(400, "{}").header("x-should-retry", "true"),
         responses_hello(),
@@ -561,8 +563,8 @@ const FAILED_AT_ONCE_KINDS: [&str; 11] = [
 ];
 
 /// A failure that is never retried fails the ask with one request only.
-fn fails_at_once(failure: Response, code: &str) {
-    let setup = Setup::new();
+fn fails_at_once(deadline: Deadline, failure: Response, code: &str) {
+    let setup = Setup::within(deadline);
     let server = ProviderServer::start([failure]).unwrap();
     setup.provider(&server, "openai-responses", 3);
     let run = setup.ask();
@@ -575,9 +577,15 @@ fn fails_at_once(failure: Response, code: &str) {
 
 #[test]
 fn a_400_a_401_and_false_on_a_503_fail_at_once() {
-    fails_at_once(Response::status(400, "{}"), "invalid_request");
-    fails_at_once(Response::status(401, "{}"), "authentication_failed");
+    let deadline = Deadline::start();
+    fails_at_once(deadline, Response::status(400, "{}"), "invalid_request");
     fails_at_once(
+        deadline,
+        Response::status(401, "{}"),
+        "authentication_failed",
+    );
+    fails_at_once(
+        deadline,
         Response::status(503, "{}").header("x-should-retry", "false"),
         "provider_unavailable",
     );

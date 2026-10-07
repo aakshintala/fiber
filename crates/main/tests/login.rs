@@ -123,18 +123,12 @@ impl Setup {
         thread::spawn(move || done.send(child.wait_with_output()).unwrap());
         let output = match finished.recv_timeout(self.deadline.left()) {
             Ok(output) => output.unwrap(),
-            Err(_) => {
-                support::kill_group(self.deadline, group, "KILL").unwrap();
-                let reaped = finished.recv_timeout(self.deadline.cleanup()).is_ok();
-                assert!(
-                    !group_alive(self.deadline, group),
-                    "`fiber` left a process behind"
-                );
-                panic!(
-                    "waited until the deadline for `fiber {}` to exit (reaped after the kill: {reaped})",
-                    args.join(" ")
-                );
-            }
+            Err(_) => support::expired(
+                self.deadline,
+                group,
+                &finished,
+                &format!("`fiber {}` to exit", args.join(" ")),
+            ),
         };
         assert!(
             !group_alive(self.deadline, group),
@@ -160,12 +154,13 @@ impl Setup {
         let (child, watchdog) = spawn_watched(&mut command);
         let group = child.id();
         OnTerminal {
-            screen: Screen::new(&terminal),
+            screen: Screen::new(&terminal, self.deadline),
             terminal,
             child: Some(child),
             guard: Some(KillGroup(group)),
             watchdog: Some(watchdog),
             group,
+            deadline: self.deadline,
         }
     }
 
@@ -182,12 +177,13 @@ impl Setup {
         let group = child.id();
         feed(&mut child, input);
         OnTerminal {
-            screen: Screen::new(&terminal),
+            screen: Screen::new(&terminal, self.deadline),
             terminal,
             child: Some(child),
             guard: Some(KillGroup(group)),
             watchdog: Some(watchdog),
             group,
+            deadline: self.deadline,
         }
     }
 
@@ -229,17 +225,20 @@ fn spawn_watched(command: &mut Command) -> (Child, Watchdog) {
     (child, watchdog)
 }
 
-/// Writes `input` to the child's stdin and closes it. `fiber` may refuse a
-/// run before it reads stdin and exit, so a closed pipe is not a failure
-/// here: the run's own exit code and message are what the test asserts.
+/// Writes `input` to the child's stdin on a thread and closes it, so a
+/// child that never reads it is bounded by the run's exit wait. `fiber` may
+/// refuse a run before it reads stdin and exit, so a closed pipe is not a
+/// failure here: the run's own exit code and message are what the test
+/// asserts.
 fn feed(child: &mut Child, input: &str) {
     // Taking the pipe closes it once written.
     let mut pipe = child.stdin.take().unwrap();
-    match pipe.write_all(input.as_bytes()) {
+    let input = input.to_owned();
+    thread::spawn(move || match pipe.write_all(input.as_bytes()) {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {}
         Err(e) => panic!("writing to the stdin of `fiber`: {e}"),
-    }
+    });
 }
 
 /// Kills process group `group` on drop. After the child is reaped and the
@@ -250,13 +249,9 @@ impl Drop for KillGroup {
     fn drop(&mut self) {
         // A panic between spawn and reap still kills the group. Failure
         // here is ignored: the process may already be gone.
-        match support::kill_group_detached(self.0, "KILL") {
-            Ok(_) | Err(_) => {}
-        }
+        support::kill_group_detached(self.0, "KILL");
     }
 }
-
-/// Whether any process remains in process group `group`.
 
 /// A pseudo-terminal, opened through rustix's safe calls.
 struct Terminal {
@@ -291,7 +286,7 @@ impl Terminal {
     /// Waits until the terminal stops echoing, which is when `fiber` has
     /// begun reading the key. A thread polls the flag, so the wait has a
     /// deadline without this test reading a clock.
-    fn wait_for_echo_off(&self) {
+    fn wait_for_echo_off(&self, deadline: Deadline) {
         let terminal = self.terminal.try_clone().unwrap();
         let stop = Arc::new(AtomicBool::new(false));
         let stopped = Arc::clone(&stop);
@@ -325,10 +320,11 @@ struct Screen {
     chunks: Receiver<Option<String>>,
     typed: fs::File,
     seen: String,
+    deadline: Deadline,
 }
 
 impl Screen {
-    fn new(terminal: &Terminal) -> Self {
+    fn new(terminal: &Terminal, deadline: Deadline) -> Self {
         let mut reader = fs::File::from(terminal.main.try_clone().unwrap());
         let (send, chunks) = mpsc::channel();
         thread::spawn(move || {
@@ -350,6 +346,7 @@ impl Screen {
             chunks,
             typed: fs::File::from(terminal.main.try_clone().unwrap()),
             seen: String::new(),
+            deadline,
         }
     }
 
@@ -378,8 +375,14 @@ impl Screen {
         self.seen[mark..].to_owned()
     }
 
+    /// Types `text` on a thread bounded by the test's [`Deadline`].
     fn type_text(&mut self, text: &str) {
-        self.typed.write_all(text.as_bytes()).unwrap();
+        let mut typed = self.typed.try_clone().unwrap();
+        let text = text.to_owned();
+        support::bounded(self.deadline, "typing on the terminal", move || {
+            typed.write_all(text.as_bytes())
+        })
+        .unwrap();
     }
 }
 
@@ -391,28 +394,19 @@ struct OnTerminal {
     guard: Option<KillGroup>,
     watchdog: Option<Watchdog>,
     group: u32,
+    deadline: Deadline,
 }
 
 impl OnTerminal {
-    /// Waits for `fiber` to exit under [`DEADLINE`], and asserts that nothing
-    /// it started is left in its group, after a timeout too.
+    /// Waits for `fiber` to exit under the test's [`Deadline`], and asserts
+    /// that nothing it started is left in its group, after a timeout too.
     fn finish(&mut self) -> ExitStatus {
         let mut child = self.child.take().unwrap();
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(child.wait()).unwrap());
         let status = match finished.recv_timeout(self.deadline.left()) {
             Ok(status) => status.unwrap(),
-            Err(_) => {
-                support::kill_group(self.deadline, self.group, "KILL").unwrap();
-                let reaped = finished.recv_timeout(self.deadline.cleanup()).is_ok();
-                assert!(
-                    !group_alive(self.deadline, self.group),
-                    "`fiber` left a process behind"
-                );
-                panic!(
-                    "waited until the deadline for `fiber` to exit (reaped after the kill: {reaped})"
-                );
-            }
+            Err(_) => support::expired(self.deadline, self.group, &finished, "`fiber` to exit"),
         };
         assert!(
             !group_alive(self.deadline, self.group),
@@ -645,7 +639,7 @@ fn end_of_input_at_the_key_prompt_restores_echo_and_stores_nothing() {
     setup.provider("acme", None, None);
     let mut run = setup.on_terminal(&["login", "acme"]);
     run.screen.wait_for("Key for acme: ");
-    run.terminal.wait_for_echo_off();
+    run.terminal.wait_for_echo_off(setup.deadline);
     // End of input is the terminal's own character, typed with echo off.
     run.screen.type_text("\u{4}");
     run.screen.wait_for("No key was given");
@@ -661,7 +655,7 @@ fn an_interrupt_at_the_key_prompt_restores_echo_and_ends_the_login() {
     setup.provider("acme", None, None);
     let mut run = setup.on_terminal(&["login", "acme"]);
     run.screen.wait_for("Key for acme: ");
-    run.terminal.wait_for_echo_off();
+    run.terminal.wait_for_echo_off(setup.deadline);
     // The guarded helper: it refuses a group of 1 or less.
     assert!(support::kill_group(setup.deadline, run.group, "INT").unwrap());
     let status = run.finish();
