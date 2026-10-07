@@ -170,7 +170,7 @@ fn durable_and_ephemeral_events_say_so() {
 /// One payload per kind, or more where the doc makes keys exclusive, with
 /// every key the doc lists for it.
 fn samples() -> Vec<(&'static str, Value)> {
-    let error = json!({"code": "timeout", "message": "m", "retry_after": 1.5,
+    let error = json!({"code": "timeout", "message": "m", "retry_after_ms": 1500,
         "provider": {"name": "p", "status": 429, "message": "slow down"}});
     let process = json!({"exit_code": 1, "signal": "SIGKILL", "timed_out": false});
     let content = json!([{"type": "text", "text": "t"},
@@ -297,7 +297,7 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("assistant_message_delta", json!({"text": "Hel"})),
         (
             "assistant_message_completed",
-            json!({"outcome": "failed", "error": error, "attempt": 2}),
+            json!({"outcome": "failed", "error": error}),
         ),
         (
             "text_completed",
@@ -608,6 +608,14 @@ fn samples() -> Vec<(&'static str, Value)> {
         (
             "jobs_pending_notified",
             json!({"job_ids": ["j"], "reason": "ending"}),
+        ),
+        (
+            "command_accepted",
+            json!({"command_id": "c", "result": {"session_id": "s2"}}),
+        ),
+        (
+            "command_accepted",
+            json!({"command_id": "c", "result": {"clients": 2, "fiber_version": "0.0.0", "running": true}}),
         ),
         (
             "command_accepted",

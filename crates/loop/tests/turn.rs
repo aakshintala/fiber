@@ -546,7 +546,7 @@ fn a_failed_model_call_fails_the_turn_with_its_code() {
     );
     let call = &lines[6].payload;
     assert_eq!(call["outcome"], "failed");
-    assert_eq!(call["attempt"], 1);
+    assert!(call.get("attempt").is_none());
     assert_eq!(call["error"]["code"], "invalid_request");
     assert_eq!(lines[7].payload["outcome"], "failed");
     assert_eq!(lines[7].payload["error"], call["error"]);
