@@ -2,9 +2,10 @@
 //! resumes them, and relays every client connection to a session's socket.
 //! It holds no session.
 //!
-//! [`serve`] listens on `run/hub`, answers `start`, `status`, `feed`,
-//! `dismiss` and `recent`, and relays session commands to
-//! `run/<session_id>` (`docs/invocation.md`, "What the hub speaks"). It exits once no client has been connected for
+//! [`serve`] listens on `run/hub`, answers `start`, `status`,
+//! `prompt_history`, `feed`, `dismiss` and `recent`, and relays session
+//! commands to `run/<session_id>` (`docs/invocation.md`, "What the hub
+//! speaks"). It exits once no client has been connected for
 //! `hub.idle_exit_ms` (`docs/configuration.md`).
 
 mod connection;
