@@ -654,6 +654,16 @@ impl History {
     }
 
     fn resume(&mut self, tools: Vec<(String, Arc<dyn Tool>)>) -> Loop {
+        self.resume_with_files(tools, Vec::new())
+    }
+
+    /// As [`History::resume`], with `files` as the configured `file`
+    /// credential sources (`docs/permissions.md`, "Credentials").
+    fn resume_with_files(
+        &mut self,
+        tools: Vec<(String, Arc<dyn Tool>)>,
+        files: Vec<std::path::PathBuf>,
+    ) -> Loop {
         Loop::resume(
             Arc::clone(&self.log),
             r#loop::resumed(&self.dir).unwrap(),
@@ -665,7 +675,7 @@ impl History {
             r#loop::Permissions {
                 workspace: self.workspace.clone(),
                 credentials: self.credentials.clone(),
-                credential_files: Vec::new(),
+                credential_files: files,
                 rules: self.rules.clone(),
             },
         )
@@ -1722,15 +1732,27 @@ impl History {
     /// Resumes with `tools` as an unattended session answers: no person
     /// can answer an approval.
     fn resume_headless(&mut self, tools: Vec<(String, Arc<dyn Tool>)>) -> Loop {
-        let provider = Arc::clone(&self.provider) as Arc<dyn Provider>;
-        self.resume_headless_on(provider, tools)
+        self.resume_headless_with_files(tools, Vec::new())
     }
 
-    /// As [`History::resume_headless`], its model calls reaching `provider`.
-    fn resume_headless_on(
+    /// As [`History::resume_headless`], with `files` as the configured
+    /// `file` credential sources (`docs/permissions.md`, "Credentials").
+    fn resume_headless_with_files(
+        &mut self,
+        tools: Vec<(String, Arc<dyn Tool>)>,
+        files: Vec<std::path::PathBuf>,
+    ) -> Loop {
+        let provider = Arc::clone(&self.provider) as Arc<dyn Provider>;
+        self.resume_headless_on_with_files(provider, tools, files)
+    }
+
+    /// As [`History::resume_headless_with_files`], its model calls reaching
+    /// `provider`.
+    fn resume_headless_on_with_files(
         &mut self,
         provider: Arc<dyn Provider>,
         tools: Vec<(String, Arc<dyn Tool>)>,
+        files: Vec<std::path::PathBuf>,
     ) -> Loop {
         Loop::resume(
             Arc::clone(&self.log),
@@ -1743,12 +1765,21 @@ impl History {
             r#loop::Permissions {
                 workspace: self.workspace.clone(),
                 credentials: self.credentials.clone(),
-                credential_files: Vec::new(),
+                credential_files: files,
                 rules: self.rules.clone(),
             },
         )
         .unwrap()
         .answerable(false)
+    }
+
+    /// As [`History::resume_headless`], its model calls reaching `provider`.
+    fn resume_headless_on(
+        &mut self,
+        provider: Arc<dyn Provider>,
+        tools: Vec<(String, Arc<dyn Tool>)>,
+    ) -> Loop {
+        self.resume_headless_on_with_files(provider, tools, Vec::new())
     }
 
     /// Runs one turn on its own thread, returning the loop for the next
@@ -2371,6 +2402,70 @@ fn a_suspended_turn_is_refused_then_the_prompt_runs_next() {
         matches!(second.last().unwrap(), Input::User { text } if text == "two"),
         "{second:?}"
     );
+}
+
+#[test]
+fn a_suspended_call_touching_a_configured_credential_file_is_refused_without_asking() {
+    // The call was suspended on a standing ask before its path became a
+    // configured `file` credential source. The resume refuses it through
+    // the credential deny before it runs, without asking again: no
+    // `permission_requested` is raised.
+    let keys = fakes::TempDir::new("fiber-resume-keys");
+    let key = keys.path().join("openrouter");
+    std::fs::write(&key, "sk-file-secret").unwrap();
+    let tool = Arc::new(support::TestTool::declaring(
+        "read",
+        "sk-file-secret",
+        vec![contract::shapes::Effect::Reads],
+        Some(vec![key.display().to_string()]),
+    ));
+    let mut history = History::new(vec![Scripted::text("Hello.")]);
+    history.write(user_turn("one"), None);
+    history.write(message_started(), Some("a_0"));
+    history.write(requested("read"), Some("a_1"));
+    history.write(standing_request("r_9"), Some("a_1"));
+    history.write(fiber_started(), None);
+    history.write(fiber_exited(Some("r_9")), None);
+    history.freeze();
+
+    let looped = history.resume_headless_with_files(
+        vec![("builtin".into(), tool.clone() as Arc<dyn Tool>)],
+        vec![key.clone()],
+    );
+    let (looped, finishing) = history.step(looped);
+    assert_eq!(finishing, Some(contract::events::TurnOutcome::Completed));
+    let _ = looped;
+
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "opening_message",
+            "permission_resolved",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    let new = history.new_lines();
+    assert_eq!(new[2].payload["decision"], "deny");
+    assert_eq!(new[2].payload["decided_by"], "credential_deny");
+    assert_eq!(
+        new[2].payload["reason"],
+        "The call touches a configured credential file."
+    );
+    assert_eq!(new[2].payload.get("request_id"), None);
+    assert_eq!(new[3].payload["status"], "denied");
+    assert_eq!(new[3].payload["reason"], "credentials");
+    assert!(
+        !new.iter().any(|l| l.kind == "tool_call_started"),
+        "a denied call never starts"
+    );
+    assert!(tool.ran().is_empty(), "a denied call never runs");
 }
 
 #[test]

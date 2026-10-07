@@ -482,6 +482,46 @@ impl Loop {
         self.ensure_preamble()?;
         self.cut_off = false;
         let turn = suspended.turn.clone();
+        // The credential deny applies to every call, including one
+        // suspended before its path became a configured credential file:
+        // it is refused without asking, as `judge` refuses it before any
+        // ask. A call that cannot be checked waits for its answer as ever.
+        if let Some((_, call)) = suspended
+            .batch
+            .iter()
+            .find(|(id, _)| *id == suspended.action)
+            && let Ok((_, _, effects)) = self.checked(call)
+            && let Some(why) = crate::permission::credential_why(
+                &effects.declared,
+                &self.workspace,
+                &self.credentials,
+                &self.credential_files,
+            )
+        {
+            let text = format!("{why} It did not run.");
+            self.decided(
+                &suspended.action,
+                &turn,
+                crate::completion::resolved(
+                    None,
+                    Decision::Deny,
+                    DecidedBy::CredentialDeny,
+                    Some(why),
+                    None,
+                ),
+            )?;
+            for (id, _) in &suspended.batch {
+                let completed = if *id == suspended.action {
+                    crate::completion::denied("credentials", text.clone())
+                } else {
+                    self.cancelled_before_ran()
+                };
+                self.append(&Event::ToolCallCompleted(*completed), &turn, Some(id))?;
+            }
+            // Orphan notices the resume logged behind the open batch.
+            self.conversation.append(&mut self.held);
+            return self.run_steps(&turn);
+        }
         // Armed with the re-raise: a shutdown before it leaves the request
         // pending, so the next resume raises it again (`docs/invocation.md`,
         // "Shutdown"). Once raised, a headless request's answer is the
