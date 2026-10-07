@@ -983,6 +983,30 @@ fn resumed_state_restores_a_declared_directory_removed_before_the_resume() {
 }
 
 #[test]
+fn resumed_state_does_not_check_a_declared_file_that_became_a_directory() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    write(&workspace.join("sub/x.txt"), "data\n");
+    let workspace = canon(&workspace);
+    let fake = clock();
+    let message = opening::collect(&inputs(&home, &fake), &workspace).message;
+    let lines = vec![
+        envelope("opening_message", &Event::OpeningMessage(message)),
+        started("a_1", Some(&["sub/x.txt"])),
+        finished("a_1"),
+    ];
+    let mut state = State::resumed(&lines, &workspace, &inputs(&home, &fake)).unwrap();
+    assert!(state.take_queued().is_empty());
+    // A declared file that becomes a directory after the resume: the
+    // turn-start check sends nothing, as live, until a call touches it.
+    std::fs::remove_file(workspace.join("sub/x.txt")).unwrap();
+    write(&workspace.join("sub/x.txt/AGENTS.md"), "Late rules.\n");
+    let out = state.check(&*fake);
+    assert!(out.files.is_empty());
+    assert!(out.notices.is_empty());
+}
+
+#[test]
 fn resumed_state_checks_a_declared_file_without_a_notice() {
     let (home, _held) = root();
     let workspace = home.join("workspace");
