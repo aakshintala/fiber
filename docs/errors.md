@@ -313,7 +313,8 @@ Notices, for a failure outside any action:
 
 Driver command rejections (`malformed`, `not_subscribed`, `busy`, `stale_request`, `not_step_boundary`,
 `session_held`, `delegate_session`, `summary_failed`, `invalid_arguments`,
-`unknown_command`, `closing`, `duplicate_command`, `session_not_found`)
+`unknown_command`, `closing`, `duplicate_command`, `session_not_found`,
+`message_refused`, `hook_failed`)
 are `docs/invocation.md`, "Driver commands".
 
 ## Not settled here

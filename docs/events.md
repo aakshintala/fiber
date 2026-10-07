@@ -319,7 +319,6 @@ the envelope's `ts`.
 | Key | Type | Required | Meaning |
 |---|---|---|---|
 | `workspace` | string | yes | the workspace root |
-| `worktree` | object | no | when the session runs in a worktree Fiber created for it: `path` and `branch` (strings) (`docs/invocation.md`, "Isolation") |
 | `variables` | object | yes | the environment variables the session runs commands with, without their values: `path` (string, the `PATH`), `names` (array of strings, the other variables' names, sorted) and `source`, `login_shell` when the hub's login-shell capture succeeded, or `inherited` when it failed or for a session `fiber ask` started; a delegate carries its parent's (`docs/invocation.md`, "A session's environment") |
 | `parent` | object | no | for a delegate: `session_id`, its parent session, and `delegate_id`, the delegate's `job_id` there (`docs/delegates.md`) |
 | `forked_from` | object | no | for a fork or a rewind: `session_id` and `seq`, the point it continues from (`docs/delegates.md`, "Forks"; "Rewind" below) |
@@ -617,7 +616,6 @@ Durable. The call's outcome.
 | `changes` | array | no | on a call that changed files, one object per file: `path` (string) and `added` and `removed` (integers, lines) |
 | `control` | object | no | instructions to the loop: `handoff` (string), a handoff note (`docs/handoff.md`); `questions` (`questions`); `name` (string), a session name (`docs/tools.md`, "What a result carries") |
 | `changed_by` | `changed_by` | no | when an `after_tool` hook rewrote the result |
-| `loaded` | array of strings | no | on `tool_search`, the names of the tools it loaded (`docs/tools.md`, "Tool search") |
 | `provider_item` | any JSON | no | on a call the provider ran, its result block exactly as it arrived, sent back unchanged only to the model that produced it (`docs/tools.md`, "Hosted by the provider"); absent on a call Fiber runs |
 
 A failed model call is an assistant message that completed with a failed
@@ -634,9 +632,8 @@ which tool ran (`docs/tools.md`, "What a result carries").
 
 A line whose content a hook changed carries `changed_by`. It appears on
 `tool_call_started` for rewritten arguments, on `tool_call_completed` for a
-rewritten result, on a `turn_started` message and `steering_applied` for
-a rewritten message, and on `job_line`, `delegate_finished` and
-`job_completed` for a rewritten job delivery. The line holds what the hook returned; the original is
+rewritten result, and on a `turn_started` message and `steering_applied` for
+a rewritten message. The line holds what the hook returned; the original is
 never logged (`docs/extensions.md`, "Hooks").
 
 A call stopped by Fiber or the user is `cancelled`, not a signal failure. An
@@ -1188,7 +1185,6 @@ Durable. What a monitor delivered to the model.
 | `job_id` | string | yes | the monitor's job |
 | `lines` | string | yes | the batch of lines delivered, cut as `docs/tools.md`, "Background jobs", says |
 | `suppressed` | integer | no | deliveries suppressed since the last one, when any were |
-| `changed_by` | `changed_by` | no | when an `after_tool` hook rewrote the lines |
 
 #### `delegate_finished`
 
@@ -1202,7 +1198,6 @@ Durable. Written just before `job_completed`.
 | `questions` | `questions` | no | when the delegate's turn ended on `ask_user` |
 | `usage` | `usage` | yes | the run's totals |
 | `worktree` | object | no | when isolated: `path` and `branch` (strings) and `dirty` (boolean) |
-| `changed_by` | `changed_by` | no | when an `after_tool` hook rewrote the final message |
 
 #### `job_completed`
 
@@ -1215,8 +1210,6 @@ Durable.
 | `error` | `error` | no | on `failed` |
 | `process` | `process` | no | for a job that ran a process |
 | `output_tail` | string | no | for a failed job, the tail of its output, capped |
-| `content` | content parts | no | when an `after_tool` hook replaced the completion notice: the notice the model was sent, which a resume re-sends |
-| `changed_by` | `changed_by` | no | with `content` |
 
 #### `jobs_pending_notified`
 

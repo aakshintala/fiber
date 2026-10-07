@@ -155,7 +155,7 @@ curl -fsSL https://github.com/aakshintala/fiber/releases/latest/download/install
    each extension at the release's version and the commit the binary was built
    from.
 
-The script lives in the repository at `scripts/install.sh`. It reads only
+The script is `install.sh` in the repository's `scripts/` directory. It reads only
 `FIBER_INSTALL_DIR` and `FIBER_VERSION`; the binary reads `FIBER_HOME`.
 
 `FIBER_VERSION=0.3.0` installs that version instead of the newest, with that

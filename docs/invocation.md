@@ -386,10 +386,12 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 Rejection codes: `malformed`, `invalid_arguments`, `unknown_command`,
 `not_subscribed`, `busy`, `stale_request`, `not_step_boundary`,
 `session_held`, `delegate_session`, `summary_failed`, `closing`,
-`duplicate_command`, `session_not_found`, `message_refused` (a
-`before_message` hook refused the prompt or steer; the message gives its
-reason and extension) and `hook_failed` (a `blocking` `before_message` hook
-failed). A `fiber ask` whose first prompt is refused this way exits 1.
+`duplicate_command`, `session_not_found`, `message_refused`, `hook_failed`.
+
+A prompt or steer that a hook refuses is rejected `message_refused`, with the
+hook's reason and extension in the message. One whose blocking hook failed is
+rejected `hook_failed`. A `fiber ask` whose first
+prompt is rejected either way exits 1.
 
 **`reply` answers every interaction that asks something, not just approvals.**
 `docs/architecture.md` fixes the set: "Fiber ships one closed, versioned set
@@ -843,7 +845,7 @@ websocket for everything it does.
 | `delete` | `session` (string), `cascade` (boolean, optional) | Deletes an exited session ("Deleting and pruning"). |
 | `prompt_history` | `project` (string), `before` (integer, optional) | Answers with a page of the project's prompt history, newest first (`docs/state.md`). |
 | `read_file` | `session` (string), `path` (string) | Answers with one file from the session's `artifacts/` ("A session's files"). |
-| `status` | none | Answers with `running`, `fiber_version` and `clients` (`docs/events.md`, "Command results"). |
+| `status` | none | Answers with `running`, `fiber_version` and `clients` (`docs/events.md`, "`command_accepted`"). |
 | `refresh` | none | Rebuilds the hub's environment, as `fiber hub refresh` does. |
 | `pairing_code` | `device` (string) | Answers with a new pairing code for that device, as `fiber hub pair` prints. |
 | `devices` | none | Answers with the paired devices. |
