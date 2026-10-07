@@ -21,7 +21,7 @@ use contract::clock::Wake;
 use contract::events::Event;
 use contract::session_search::{Found, Label};
 use contract::tool::Cancel;
-use contract::{Envelope, SessionId};
+use contract::{ActionId, Envelope, SessionId};
 use fakes::clock::FakeClock;
 use fakes::{CancelToken, TempDir};
 use serde_json::{Value, json};
@@ -66,6 +66,15 @@ impl Fixture {
     fn add(&self, log: &Log, kind: &str, payload: Value) -> u64 {
         self.clock.advance(Duration::from_secs(1));
         let line = log.append(&event(kind, payload), None, None).unwrap();
+        line.seq.unwrap().0
+    }
+
+    /// Writes one event for the tool call `action`, returning its seq.
+    fn add_action(&self, log: &Log, kind: &str, payload: Value, action: &str) -> u64 {
+        self.clock.advance(Duration::from_secs(1));
+        let line = log
+            .append(&event(kind, payload), None, Some(ActionId(action.into())))
+            .unwrap();
         line.seq.unwrap().0
     }
 
@@ -221,6 +230,72 @@ fn each_label_gives_a_hit_with_its_line_seq_and_time() {
     assert_eq!(first.session_id, SessionId("s_1".into()));
     assert_eq!(first.log, fx.dir("s_1").join("events.jsonl"));
     assert_eq!(found.hits[1].ts, ORIGIN_MS + 1_000);
+}
+
+#[test]
+fn a_session_search_call_gives_no_hit_while_another_tools_does() {
+    let fx = Fixture::new();
+    let log = fx.log("s_1");
+    let dir = fx.dir("s_1");
+    // The tool's own call: its arguments, its rewritten arguments, its
+    // output and its artifact all hold the query, and none gives a hit.
+    artifact(&dir, "self_1.txt", b"full output: NEEDLE exhausted\n");
+    fx.add_action(
+        &log,
+        "tool_call_requested",
+        json!({"name": "session_search", "arguments": {"text": "find the needle"}}),
+        "a_1",
+    );
+    fx.add_action(
+        &log,
+        "tool_call_started",
+        json!({"effects": ["reads"], "reversible": true, "arguments": {"text": "needle again"}}),
+        "a_1",
+    );
+    fx.add_action(
+        &log,
+        "tool_call_completed",
+        completed("needle results", Some("artifacts/self_1.txt")),
+        "a_1",
+    );
+    // An earlier call for another query: its arguments do not hold this
+    // query, so only the raw pass's tool-name literal selects its request
+    // line, yet its output still gives no hit.
+    fx.add_action(
+        &log,
+        "tool_call_requested",
+        json!({"name": "session_search", "arguments": {"text": "older search"}}),
+        "a_2",
+    );
+    fx.add_action(
+        &log,
+        "tool_call_completed",
+        completed("a needle from before", None),
+        "a_2",
+    );
+    // Another tool's call with the same text still hits.
+    let input = fx.add_action(
+        &log,
+        "tool_call_requested",
+        requested(json!({"command": "grep needle"})),
+        "a_9",
+    );
+    let output = fx.add_action(
+        &log,
+        "tool_call_completed",
+        completed("found NEEDLE", None),
+        "a_9",
+    );
+    let found = run("needle", &dir);
+    assert_eq!(
+        hits(&found),
+        [
+            (Label::ToolInput, input, "grep needle".into(), None),
+            (Label::ToolOutput, output, "found NEEDLE".into(), None),
+        ]
+    );
+    assert_eq!(found.total, 2);
+    assert!(found.problems.is_empty(), "{:?}", found.problems);
 }
 
 #[test]

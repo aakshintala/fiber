@@ -16,6 +16,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use common::event;
+use contract::ActionId;
 use contract::SessionId;
 use contract::session_search::{Label, Query, Scan};
 use fakes::clock::FakeClock;
@@ -126,4 +127,88 @@ fn a_search_finds_a_message_an_input_and_an_artifact_of_its_own_project() {
         scan.scope(false),
         PathBuf::from(format!("{}/projects/{key}/", home.path().display()))
     );
+}
+
+#[test]
+fn a_search_never_returns_session_search_own_calls_or_results() {
+    let home = fakes::TempDir::new("log-search-self");
+    let clock = FakeClock::new();
+    let sessions = sessions_dir(home.path(), Path::new("/proj"));
+    let log = Log::create(&sessions, SessionId("s_mixed".into()), clock.clone()).unwrap();
+    log.append(
+        &event(
+            "session_started",
+            json!({"workspace": "/proj", "variables": {"path": "/bin", "names": [], "source": "inherited"}}),
+        ),
+        None,
+        None,
+    )
+    .unwrap();
+    clock.advance(Duration::from_secs(1));
+    // The tool's own call: its arguments, its output and its artifact all
+    // hold the query, and none gives a hit.
+    log.append(
+        &event(
+            "tool_call_requested",
+            json!({"name": "session_search", "arguments": {"text": "retry budget"}}),
+        ),
+        None,
+        Some(ActionId("a_1".into())),
+    )
+    .unwrap();
+    clock.advance(Duration::from_secs(1));
+    let dir = sessions.join("s_mixed");
+    fs::write(
+        dir.join("artifacts").join("self_1.txt"),
+        "full output: RETRY BUDGET exhausted\n",
+    )
+    .unwrap();
+    log.append(
+        &event(
+            "tool_call_completed",
+            json!({"status": "completed", "content": [{"type": "text", "text": "retry budget results"}], "artifact": "artifacts/self_1.txt"}),
+        ),
+        None,
+        Some(ActionId("a_1".into())),
+    )
+    .unwrap();
+    clock.advance(Duration::from_secs(1));
+    // Another tool's call with the same text still hits.
+    log.append(
+        &event(
+            "tool_call_requested",
+            json!({"name": "shell", "arguments": {"command": "grep -n \"retry budget\""}}),
+        ),
+        None,
+        Some(ActionId("a_2".into())),
+    )
+    .unwrap();
+    clock.advance(Duration::from_secs(1));
+    log.append(
+        &event(
+            "tool_call_completed",
+            json!({"status": "completed", "content": [{"type": "text", "text": "found retry budget"}]}),
+        ),
+        None,
+        Some(ActionId("a_2".into())),
+    )
+    .unwrap();
+    drop(log);
+    let scan = SessionScan::new(home.path(), Path::new("/proj"), identity());
+    let found = search(&scan, "retry budget", false);
+    let rows: Vec<(Label, u64, &str)> = found
+        .hits
+        .iter()
+        .map(|hit| (hit.label, hit.seq.0, hit.snippet.as_str()))
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            (Label::ToolInput, 3, "grep -n \"retry budget\""),
+            (Label::ToolOutput, 4, "found retry budget"),
+        ]
+    );
+    assert_eq!(found.total, 2);
+    assert!(found.hits.iter().all(|hit| hit.artifact.is_none()));
+    assert!(found.problems.is_empty(), "{:?}", found.problems);
 }

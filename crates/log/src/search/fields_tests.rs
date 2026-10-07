@@ -123,6 +123,34 @@ fn each_searched_kind_gives_its_strings_under_its_label() {
 }
 
 #[test]
+fn a_request_for_session_search_is_the_tools_own_call() {
+    let own = json!({"name": "session_search", "arguments": {"text": "q"}});
+    assert!(self_request(
+        "tool_call_requested",
+        own.as_object().unwrap()
+    ));
+    // Another tool, a request without a name, and lines that carry no
+    // name: none marks a call.
+    for (kind, payload) in [
+        (
+            "tool_call_requested",
+            json!({"name": "shell", "arguments": "x"}),
+        ),
+        ("tool_call_requested", json!({"arguments": "x"})),
+        (
+            "tool_call_started",
+            json!({"effects": ["reads"], "arguments": {"text": "q"}}),
+        ),
+        (
+            "tool_call_completed",
+            json!({"status": "completed", "content": []}),
+        ),
+    ] {
+        assert!(!self_request(kind, payload.as_object().unwrap()), "{kind}");
+    }
+}
+
+#[test]
 fn a_key_equal_to_the_query_is_not_searched() {
     let payload = json!({"arguments": {"needle": 5}});
     assert_eq!(got("tool_call_requested", &payload), want(&[]));

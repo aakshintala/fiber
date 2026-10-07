@@ -52,6 +52,18 @@ pub(super) fn names<'a>(kind: &str, payload: &'a Map<String, Value>) -> Option<&
     payload.get(field).and_then(Value::as_str)
 }
 
+/// The tool whose own calls a search never returns: a search finds earlier
+/// work, never the call running it (`docs/tools.md`, "Searching past
+/// sessions").
+pub(super) const SELF_TOOL: &str = "session_search";
+
+/// Whether `kind`'s line requests the tool itself: a `tool_call_requested`
+/// naming [`SELF_TOOL`]. Only a request names the tool; the call's later
+/// lines carry its id, never its name.
+pub(super) fn self_request(kind: &str, payload: &Map<String, Value>) -> bool {
+    kind == "tool_call_requested" && payload.get("name").and_then(Value::as_str) == Some(SELF_TOOL)
+}
+
 /// `value` under `label` when it is a string.
 fn push<'a>(out: &mut Vec<(Label, &'a str)>, label: Label, value: Option<&'a Value>) {
     if let Some(text) = value.and_then(Value::as_str) {

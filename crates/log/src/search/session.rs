@@ -4,6 +4,7 @@
 //! session, and the lines that name a matched artifact; decoding the line
 //! decides every hit.
 
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::{self, Read, Seek};
 use std::path::{Path, PathBuf};
@@ -52,11 +53,15 @@ pub(super) fn search(text: &Text, session: &Session<'_>, cancel: &dyn Cancel, ou
         return;
     };
     let path = session.dir.join(EVENTS);
-    let names: Vec<String> = matched
+    let mut extra: Vec<String> = matched
         .iter()
         .map(|m| escaped(&format!("{ARTIFACTS}/{}", m.name)))
         .collect();
-    let raw = match text.raw(&names) {
+    // Every request for the tool itself is selected, so the pass learns
+    // each `session_search` call's id before its later lines even when
+    // its arguments do not hold the query.
+    extra.push(fields::SELF_TOOL.to_owned());
+    let raw = match text.raw(&extra) {
         Ok(raw) => raw,
         Err(error) => return out.problem(format!("Could not read: {}: {error}", path.display())),
     };
@@ -71,6 +76,7 @@ pub(super) fn search(text: &Text, session: &Session<'_>, cancel: &dyn Cancel, ou
         matched: &mut matched,
         cancel,
         out,
+        excluded: HashSet::new(),
         named: None,
         first_prompt: None,
     };
@@ -123,9 +129,9 @@ fn artifacts(
         }
     };
     // A name that is not UTF-8 cannot be named by a line, so it never
-    // gives a hit.
+    // gives a hit. An entry that cannot be read is a problem.
     let mut names: Vec<String> = entries
-        .flatten()
+        .filter_map(|next| super::entry(&path, next, out))
         .filter_map(|entry| entry.file_name().into_string().ok())
         .collect();
     names.sort();
@@ -252,6 +258,9 @@ struct Lines<'a, 'b> {
     cancel: &'a dyn Cancel,
     /// Where hits and problems go.
     out: &'b mut Collect,
+    /// The call ids of this log's `session_search` calls, seen on their
+    /// request lines. No line of such a call gives a hit.
+    excluded: HashSet<String>,
     /// The latest `session_named`'s name; `None` when it was cleared.
     named: Option<String>,
     /// The first turn's first message, once the first turn was read.
@@ -301,6 +310,24 @@ impl Lines<'_, '_> {
                 self.first_prompt = Some(first_prompt(payload));
             }
             _ => {}
+        }
+        // A search never returns `session_search`'s own calls or their
+        // results (`docs/tools.md`, "Searching past sessions"): a request
+        // for the tool itself marks its call, and no line of a marked call
+        // gives a hit or names an artifact. A completed line never precedes
+        // its request, so one pass in file order marks every call in time.
+        if fields::self_request(kind, payload) {
+            if let Some(id) = &line.action_id {
+                self.excluded.insert(id.0.clone());
+            }
+            return;
+        }
+        if line
+            .action_id
+            .as_ref()
+            .is_some_and(|id| self.excluded.contains(&id.0))
+        {
+            return;
         }
         // One hit per label: the first of its strings that holds the query.
         let mut snippets = Snippets::default();

@@ -9,7 +9,7 @@ mod text;
 
 use std::cmp::{Ordering, Reverse};
 use std::collections::{BinaryHeap, HashMap};
-use std::fs::File;
+use std::fs::{DirEntry, File};
 use std::io::{self, BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
@@ -235,7 +235,10 @@ impl Walk<'_> {
     fn list(&mut self, path: &Path) -> Option<Vec<PathBuf>> {
         match std::fs::read_dir(path) {
             Ok(entries) => {
-                let mut paths: Vec<PathBuf> = entries.flatten().map(|entry| entry.path()).collect();
+                let mut paths: Vec<PathBuf> = entries
+                    .filter_map(|next| entry(path, next, self.out))
+                    .map(|entry| entry.path())
+                    .collect();
                 paths.sort();
                 Some(paths)
             }
@@ -256,6 +259,19 @@ impl Walk<'_> {
     /// Lists `path` as a link, which the search does not follow.
     fn link(&mut self, path: &Path) {
         self.out.problem(format!("{} is a link", path.display()));
+    }
+}
+
+/// One entry of the `read_dir` of `dir`: the entry, or `None` when the
+/// entry cannot be read, which is listed as a discovery problem. Both
+/// directory listings route through here, so one test covers them.
+pub(super) fn entry(dir: &Path, next: io::Result<DirEntry>, out: &mut Collect) -> Option<DirEntry> {
+    match next {
+        Ok(entry) => Some(entry),
+        Err(error) => {
+            out.problem(format!("Could not read: {}: {error}", dir.display()));
+            None
+        }
     }
 }
 

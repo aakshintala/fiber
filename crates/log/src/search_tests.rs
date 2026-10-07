@@ -433,6 +433,30 @@ fn a_cancel_after_an_artifact_match_and_before_its_nul_admits_no_hit() {
 }
 
 #[test]
+fn an_entry_that_cannot_be_read_is_a_problem() {
+    // An entry read error cannot be provoked portably through `read_dir`
+    // (a mode on the parent fails the listing itself), so the shared
+    // per-entry handling is tested with an error value directly. Both
+    // directory listings route through it.
+    let mut out = Collect::new(10);
+    let dir = Path::new("/projects/-a/sessions");
+    let error = std::io::Error::other("boom");
+    assert!(entry(dir, Err(error), &mut out).is_none());
+    assert_eq!(
+        out.problems,
+        ["Could not read: /projects/-a/sessions: boom"]
+    );
+    // An entry that reads passes through untouched.
+    let home = Home::new();
+    fs::write(home.path().join("f"), "").unwrap();
+    let mut entries = fs::read_dir(home.path()).unwrap();
+    let next = entries.next().unwrap();
+    let path = next.as_ref().unwrap().path();
+    assert_eq!(entry(dir, next, &mut out).map(|e| e.path()), Some(path));
+    assert_eq!(out.problems.len(), 1);
+}
+
+#[test]
 fn unlistable_sessions_and_unopenable_logs_are_problems() {
     assert_ne!(
         effective_uid(),
