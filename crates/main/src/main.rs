@@ -162,6 +162,7 @@ fn run() -> i32 {
             args.json,
             clock,
             Arc::new(tools::PathLocks::new()),
+            fiber,
         ),
         cli::Invocation::Run(Some(cli::Commands::RefreshModelLists { providers })) => {
             ::cli::refresh_model_lists(&providers, clock, Arc::new(tools::PathLocks::new()));

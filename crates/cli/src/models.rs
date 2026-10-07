@@ -7,7 +7,7 @@
 //! serve after.
 
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
@@ -23,9 +23,10 @@ use crate::{fail, failed, project_of};
 
 /// Starts the detached refresh of stale model lists: the running binary
 /// re-run as its hidden refresh child: its own process group, nothing on
-/// any pipe, never waited on. `exe` is the binary to re-run: the real call
-/// passes `current_exe()`, a test passes its stub. The caller drops the
-/// returned child: dropping it neither waits on nor kills it.
+/// any pipe, never waited on. `exe` is the binary to re-run: the path the
+/// caller recorded once at startup (`docs/releasing.md`), a test passes
+/// its stub. The caller drops the returned child: dropping it neither
+/// waits on nor kills it.
 fn spawn_refresh(exe: &Path, providers: Vec<String>) -> io::Result<std::process::Child> {
     let mut command = std::process::Command::new(exe);
     command.arg("refresh-model-lists").args(&providers);
@@ -263,6 +264,7 @@ pub fn models(
     json: bool,
     clock: Arc<dyn Clock>,
     locks: Arc<dyn PathLock>,
+    exe: Result<PathBuf, String>,
 ) -> i32 {
     let ran = config::fiber_home_from_env()
         .map_err(|e| failed(e.code(), e))
@@ -279,10 +281,9 @@ pub fn models(
                 &|config: &Config| {
                     SessionExtensions::load(&home, config, Arc::clone(&clock), Arc::clone(&locks))
                 },
-                &|providers| {
-                    std::env::current_exe()
-                        .and_then(|exe| spawn_refresh(&exe, providers))
-                        .map(drop)
+                &|providers| match &exe {
+                    Ok(path) => spawn_refresh(path, providers).map(drop),
+                    Err(message) => Err(io::Error::other(message.clone())),
                 },
                 clock.as_ref(),
             )
