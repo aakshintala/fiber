@@ -184,6 +184,24 @@ pub(super) fn render(
         placed.width,
         BOX_EDGE,
     );
+    // The session list draws under the box, down to the row above the
+    // foot, scrolling past the screen.
+    let mut row_y = placed.edge.saturating_add(1);
+    for (_key, text, _has_x) in &screen.rows {
+        if row_y >= placed.foot {
+            break;
+        }
+        put(
+            buf,
+            area,
+            placed.x,
+            row_y,
+            text,
+            placed.width,
+            Style::default(),
+        );
+        row_y = row_y.saturating_add(1);
+    }
     if let Some(completions) = app.completions() {
         let mut bottom = placed.box_top;
         for (at, line) in completions.lines.iter().enumerate().rev() {

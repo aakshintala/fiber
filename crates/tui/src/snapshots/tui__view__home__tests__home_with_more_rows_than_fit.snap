@@ -1,0 +1,28 @@
+---
+source: crates/tui/src/home_view_tests.rs
+expression: "screen(&app, 80, 24)"
+---
+
+
+
+                                 ⌇ fiber 0.0.1
+
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+> /? for shortcuts
+
+
+[w]  enter starts a session
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+✓  fix the parser
+✓  fix the parser
+✓  fix the parser
+✓  fix the parser
+✓  fix the parser
+✓  fix the parser
+✓  fix the parser
+✓  fix the parser
+✓  fix the parser
+✓  fix the parser
+✓  fix the parser
+✓  fix the parser
+           ↓ the session list · F1 the key map · Ctrl+C twice to quit

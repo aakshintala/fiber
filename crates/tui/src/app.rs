@@ -307,10 +307,14 @@ impl App {
 
     /// Folds one line from the hub, returning command lines to send.
     pub(crate) fn on_line(&mut self, line: Line) -> Vec<String> {
-        let lines = match line {
-            Line::Hub(hub) => self.on_hub(&hub),
-            Line::Session(envelope) => self.on_session(&envelope),
+        let mut lines = match self.home_line(&line) {
+            Some(consumed) => consumed,
+            None => match line {
+                Line::Hub(hub) => self.on_hub(&hub),
+                Line::Session(envelope) => self.on_session(&envelope),
+            },
         };
+        lines.extend(self.home_outgoing());
         self.settle();
         lines
     }
@@ -394,7 +398,7 @@ impl App {
     }
 
     /// The session's name, if it has one.
-    #[cfg_attr(not(test), expect(dead_code, reason = "#668 and #669 draw it"))]
+    #[cfg_attr(not(test), expect(dead_code, reason = "#669 draws it"))]
     pub(crate) fn name(&self) -> Option<&str> {
         self.name.as_deref()
     }
