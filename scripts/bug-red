@@ -7,6 +7,9 @@
 # changed between the merge base and the pull request's head.
 #
 # Usage: scripts/bug-red BASE [HEAD]
+# A pull request that changes only docs passes at once, with a message
+# saying so: the doc was wrong and the code was right, so no test can show
+# the bug.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
@@ -17,6 +20,20 @@ if ! git cat-file -e "$prhead^{commit}" 2>/dev/null; then
   exit 1
 fi
 merge_base=$(git merge-base "$base" "$prhead")
+# A docs-only diff has no code for a test to show the bug, so the check
+# passes before the one-commit check. Only exit 0 means docs-only; exit 1
+# falls through, and any other xtask failure fails the script.
+set +e
+# shellcheck disable=SC2046
+cargo xtask docs-only $(git diff --name-only --no-renames "$merge_base" "$prhead") >/dev/null
+docs_only_status=$?
+set -e
+if [ "$docs_only_status" -eq 0 ]; then
+  echo "bug-red: ok, the pull request changes only docs, so it has no code for a test to show the bug"
+  exit 0
+elif [ "$docs_only_status" -ne 1 ]; then
+  exit "$docs_only_status"
+fi
 red=$(git rev-list --reverse --topo-order --no-merges "$merge_base..$prhead" | sed -n '1p')
 if [ -z "$red" ] || [ "$red" = "$prhead" ]; then
   echo "bug-red: the pull request has one commit; push the reproducing test and the fix as separate commits, the test first"

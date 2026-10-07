@@ -295,6 +295,9 @@ the reproducing test and any new signature or test seam it needs, without the
 fix (`docs/workflow.md`, "The pull request"). CI runs the new and changed
 tests at the red commit and at the head. The red commit must build, at least
 one of those tests must fail there, and all of them must pass at the head.
+A pull request whose every changed file is a docs file, as "Selection"
+defines it, passes the check with a message saying so: the doc was wrong and
+the code was right, so no test can show the bug.
 
 Diff-scoped mutation testing has two known limits. It cannot see a change in
 one place leaving other code under-tested. A pull request that changes only

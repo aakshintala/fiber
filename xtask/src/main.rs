@@ -19,6 +19,8 @@
 //!   only one, or with several the first one labelled `bug`, else the first
 //! - `bug-filter FILE...`: the nextest filter and packages for the test files among FILE,
 //!   as tab-separated lines
+//! - `docs-only FILE...`: whether every file is a docs file, as `docs-only: yes` or
+//!   `docs-only: no`
 //! - `line-cap`, `unsafe-table`, `signal-sites`, `compiled-in`, `dependency-list`, `image-isolation`, `check-docs`: the checks
 
 #![allow(
@@ -168,6 +170,15 @@ fn run(args: &[String]) -> Result<bool, String> {
                 println!("package\t{package}");
             }
             Ok(true)
+        }
+        "docs-only" => {
+            let files: Vec<String> = rest.to_vec();
+            let failures = if select::docs_only(&files) {
+                Vec::new()
+            } else {
+                vec!["no".to_owned()]
+            };
+            report("docs-only", &failures, "yes")
         }
         "line-cap" => report(
             "line-cap",
