@@ -46,6 +46,8 @@ pub(crate) struct Hub {
 pub(super) enum Window {
     Selected,
     Flushing,
+    Emitting,
+    EmitFlushing,
 }
 
 #[cfg(test)]
@@ -199,7 +201,11 @@ impl Hub {
 
     /// Sets the ephemeral emitter `host.status`, `host.widget` and `host.emit`
     /// write through, flushing what was buffered before it in call order.
-    /// A later emitter replaces the last, as `set_inbox` does.
+    /// A later emitter replaces the last, as `set_inbox` does. Holds the hub
+    /// lock through the flush, so `seal` cannot return between the choice
+    /// and the last write: `fiber_exited` follows every flushed line. The
+    /// emitter is the log, which takes only its own lock and never calls
+    /// back into the hub, so the order hub-then-log never reverses.
     pub(crate) fn set_emit(&self, emit: std::sync::Arc<dyn contract::emit::Emit>) {
         let mut shared = self.lock();
         if shared.disposed || shared.sealed {
@@ -207,31 +213,37 @@ impl Hub {
         }
         shared.emitter = Some(emit.clone());
         let buffered = std::mem::take(&mut shared.emit_buffer);
-        drop(shared);
+        #[cfg(test)]
+        self.at_window(Window::EmitFlushing);
         for event in buffered {
+            // Ephemeral only, so the log takes its own lock and fans out
+            // without file I/O and never calls back into the hub; held
+            // under the hub lock so a concurrent `seal` cannot interleave.
             emit.emit(&event);
         }
     }
 
     /// Emits an ephemeral `event` through the late-bound emitter, or buffers
     /// it in call order when none arrived yet. After the drop or `seal`,
-    /// it is dropped. Holds the hub lock while choosing, so `seal` under
-    /// the same lock drops every later emission; emitting itself runs
-    /// outside the lock.
+    /// it is dropped. Holds the hub lock through the emission, so `seal`
+    /// under the same lock drops every later emission and `fiber_exited`
+    /// follows every emitted line. The emitter is the log, which takes only
+    /// its own lock and never calls back into the hub, so the order
+    /// hub-then-log never reverses.
     pub(crate) fn emit(&self, event: contract::events::Event) {
-        let emitter = {
-            let mut shared = self.lock();
-            if shared.disposed || shared.sealed {
-                return;
-            }
-            match shared.emitter.clone() {
-                Some(emitter) => emitter,
-                None => {
-                    shared.emit_buffer.push(event);
-                    return;
-                }
-            }
+        let shared = self.lock();
+        if shared.disposed || shared.sealed {
+            return;
+        }
+        let Some(emitter) = shared.emitter.clone() else {
+            drop(shared);
+            self.lock().emit_buffer.push(event);
+            return;
         };
+        #[cfg(test)]
+        self.at_window(Window::Emitting);
+        // Held under the hub lock so a concurrent `seal` cannot slip in
+        // between the choice and the write; `shared` drops after.
         emitter.emit(&event);
     }
 

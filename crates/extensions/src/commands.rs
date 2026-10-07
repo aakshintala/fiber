@@ -94,8 +94,11 @@ impl SessionCommands {
             }
         }
         // A rename that lands on another final name of the same extension is
-        // ignored, and both keep their registered names.
-        {
+        // ignored, and both keep their registered names. Reverting one
+        // rename can create another collision (`a`->`b` and `b`->`c`
+        // reverts `b` onto `a`'s new name), so repeat until final names are
+        // unique per source.
+        loop {
             let mut by_source_final: BTreeMap<(usize, String), Vec<usize>> = BTreeMap::new();
             for (idx, p) in proposed.iter().enumerate() {
                 by_source_final
@@ -132,6 +135,9 @@ impl SessionCommands {
                     }
                 }
             }
+            if revert.is_empty() {
+                break;
+            }
             for idx in revert {
                 if let Some(p) = proposed.get_mut(idx) {
                     p.final_name.clone_from(&p.registered);
@@ -162,56 +168,38 @@ impl SessionCommands {
         }
         let ext_name = |idx: usize| sources.get(idx).map(|s| s.extension.as_str());
         // Cross-extension conflicts: none of them gets the name.
-        {
-            let mut by_final: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-            for p in &proposed {
-                let Some(ext) = ext_name(p.source) else {
-                    continue;
-                };
-                if unloaded.contains(ext) {
-                    continue;
-                }
-                by_final
-                    .entry(p.final_name.clone())
-                    .or_default()
-                    .insert(ext.to_owned());
-            }
-            for (final_name, owners) in &by_final {
-                if owners.len() > 1 {
-                    let mut sorted: Vec<&String> = owners.iter().collect();
-                    sorted.sort();
-                    let named: Vec<String> = sorted.iter().map(|e| e.to_string()).collect();
-                    notices.push(Notice {
-                        code: ErrorCode::CommandConflict,
-                        message: format!(
-                            "Two extensions register the command `{final_name}`: {}. Neither gets it; rename one under extensions.\"<name>\".commands.",
-                            named.join(" and ")
-                        ),
-                        extension: None,
-                    });
-                }
-            }
-        }
-        let conflicted: BTreeSet<String> = {
-            let mut by_final: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-            for p in &proposed {
-                let Some(ext) = ext_name(p.source) else {
-                    continue;
-                };
-                if unloaded.contains(ext) {
-                    continue;
-                }
-                by_final
-                    .entry(p.final_name.clone())
-                    .or_default()
-                    .insert(ext.to_owned());
+        let mut by_final: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        for p in &proposed {
+            let Some(ext) = ext_name(p.source) else {
+                continue;
+            };
+            if unloaded.contains(ext) {
+                continue;
             }
             by_final
-                .into_iter()
-                .filter(|(_, owners)| owners.len() > 1)
-                .map(|(name, _)| name)
-                .collect()
-        };
+                .entry(p.final_name.clone())
+                .or_default()
+                .insert(ext.to_owned());
+        }
+        for (final_name, owners) in &by_final {
+            if owners.len() > 1 {
+                // `BTreeSet` iterates in order, so no sort.
+                let named: Vec<&str> = owners.iter().map(String::as_str).collect();
+                notices.push(Notice {
+                    code: ErrorCode::CommandConflict,
+                    message: format!(
+                        "Two extensions register the command `{final_name}`: {}. Neither gets it; rename one under extensions.\"<name>\".commands.",
+                        named.join(" and ")
+                    ),
+                    extension: None,
+                });
+            }
+        }
+        let conflicted: BTreeSet<String> = by_final
+            .into_iter()
+            .filter(|(_, owners)| owners.len() > 1)
+            .map(|(name, _)| name)
+            .collect();
         let mut admitted: BTreeMap<String, Admitted> = BTreeMap::new();
         for p in proposed {
             let Some(src) = sources.get(p.source) else {
@@ -259,8 +247,8 @@ impl SessionCommands {
     /// final name, the description, no `argument_hint`, and the extension's
     /// name as the tag.
     pub(crate) fn list(&self) -> Vec<CommandInfo> {
-        let mut out: Vec<CommandInfo> = self
-            .admitted
+        // `admitted` is a `BTreeMap`, so iteration is already by name.
+        self.admitted
             .iter()
             .map(|(name, cmd)| CommandInfo {
                 name: name.clone(),
@@ -268,9 +256,7 @@ impl SessionCommands {
                 argument_hint: None,
                 tag: cmd.extension.clone(),
             })
-            .collect();
-        out.sort_by(|a, b| a.name.cmp(&b.name));
-        out
+            .collect()
     }
 
     /// Admits `name` with `text`. The queued call's text is `text`.

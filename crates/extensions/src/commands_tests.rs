@@ -275,6 +275,50 @@ fn a_rename_onto_the_same_extensions_other_command_is_ignored() {
 }
 
 #[test]
+fn a_rollback_that_collides_again_reverts_until_names_are_unique() {
+    // Commands `a`, `b`, `c` with renames `a`->`b` and `b`->`c`: reverting
+    // `b` after its collision with `c` leaves `a` and `b` both named `b`,
+    // which a single pass would silently discard one of at admission.
+    let root = fakes::TempDir::new("fiber-commands-cascade");
+    let home = root.path().join("home");
+    fs::create_dir_all(&home).unwrap();
+    let init = command("a", "A") + &command("b", "B") + &command("c", "C");
+    let (_h, dir) = write_ext(root.path(), "a", &init);
+    let all = sources(
+        &home,
+        &[(
+            "fiber.test/a",
+            &dir,
+            vec![
+                ("a".into(), "A".into()),
+                ("b".into(), "B".into()),
+                ("c".into(), "C".into()),
+            ],
+            vec![],
+        )],
+    );
+    let config = config_with(
+        &home,
+        &[
+            r#"extensions."fiber.test/a".commands."a"="b""#,
+            r#"extensions."fiber.test/a".commands."b"="c""#,
+        ],
+    );
+    let built = SessionCommands::build(&all, &config);
+    let list = built.list();
+    assert_eq!(list.len(), 3, "no command is silently discarded: {list:?}");
+    assert_eq!(list[0].name, "a");
+    assert_eq!(list[1].name, "b");
+    assert_eq!(list[2].name, "c");
+    let notices = built.notices();
+    assert_eq!(notices.len(), 2, "one notice per collision: {notices:?}");
+    for notice in &notices {
+        assert_eq!(notice.code, ErrorCode::ExtensionFailed);
+        assert_eq!(notice.extension.as_deref(), Some("fiber.test/a"));
+    }
+}
+
+#[test]
 fn a_builtin_name_without_replaces_unloads_with_a_notice_naming_it() {
     let root = fakes::TempDir::new("fiber-commands-replaces");
     let home = root.path().join("home");
@@ -482,29 +526,59 @@ fn a_failing_run_gives_one_extension_failed_notice_naming_the_extension() {
 }
 
 #[test]
-fn a_run_returning_a_table_is_not_an_error() {
-    // `run`'s return value is ignored: a table is not an error, so no
-    // `extension_failed` notice follows it.
-    let home = Home::new();
-    home.install(
-        "a",
-        "fiber.command(\"tab\", { timeout = 5000, run = function() return { a = 1 } end })\n",
-    );
-    let session = home.load(&[]);
-    let recorder = Arc::new(Recorder::default());
-    session.emit_to(recorder.clone() as Arc<dyn contract::emit::Emit>);
-    let door: &dyn ExtensionDoor = &*session;
-    let release = door.command("tab", "").expect("admitted");
-    release();
-    // Give the waiter a chance to fail it, then assert silence. The run
-    // itself returns at once, so 500 ms of quiet proves no failure notice.
-    let (_, rx) = mpsc::channel::<()>();
-    let _ = rx.recv_timeout(Duration::from_millis(500)).ok();
-    assert!(
-        recorder.events.lock().unwrap().is_empty(),
-        "a table return is not an error"
-    );
-    drop(session);
+fn run_return_values_are_ignored() {
+    // `run`'s return value is ignored: a table, boolean, function or nil is
+    // not an error, so waiting the admitted call returns `Ok("")` and no
+    // `extension_failed` notice follows it. The test thread is the waiter:
+    // `wait` returning, under `WAIT`, is the callback-and-waiter completion
+    // signal, before asserting silence. (The door's waiter emits only on
+    // `Err`, as `a_failing_run...` shows, so `Ok` here means no notice.)
+    for (tag, expr) in [
+        ("table", "{ a = 1 }"),
+        ("boolean", "true"),
+        ("function", "function() end"),
+        ("nil", "nil"),
+    ] {
+        let root = fakes::TempDir::new(&format!("fiber-commands-return-{tag}"));
+        let home = root.path().join("home");
+        fs::create_dir_all(&home).unwrap();
+        let init = format!(
+            "fiber.command(\"cmd\", {{ timeout = 5000, run = function() return {expr} end }})\n"
+        );
+        let (_h, dir) = write_ext(root.path(), "a", &init);
+        let all = sources(
+            &home,
+            &[(
+                "fiber.test/a",
+                &dir,
+                vec![("cmd".into(), "".into())],
+                vec![],
+            )],
+        );
+        let recorder = Arc::new(Recorder::default());
+        for src in &all {
+            src.lua
+                .set_emit(Arc::clone(&recorder) as Arc<dyn contract::emit::Emit>);
+        }
+        let built = SessionCommands::build(&all, &config_with(&home, &[]));
+        let admitted = built.admit_with("cmd", "").expect("admitted");
+        admitted.queued().release();
+        let queued = std::sync::Arc::clone(admitted.queued());
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let _sent = tx.send(queued.wait());
+        });
+        let result = rx.recv_timeout(WAIT).expect("waited for the run to end");
+        assert_eq!(
+            result.unwrap(),
+            serde_json::Value::String(String::new()),
+            "a {tag} return is ignored"
+        );
+        assert!(
+            recorder.events.lock().unwrap().is_empty(),
+            "a {tag} return emits no notice"
+        );
+    }
 }
 
 #[test]

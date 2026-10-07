@@ -268,9 +268,11 @@ impl Vm {
             // A command reports through `host.status`, `host.widget`, `host.ask`
             // or `host.emit`; its return value is ignored. A string is kept,
             // anything else is `""`, so existing callers keep their returns.
+            // The conversion never fails: a table, boolean or function is
+            // `""`, never a failure notice for a successful command.
             Target::Command(_) => Ok(Value::String(
                 Option::<String>::from_lua(value, &self.lua)
-                    .map_err(fail)?
+                    .unwrap_or_default()
                     .unwrap_or_default(),
             )),
             Target::Provider { .. } | Target::Hook { .. } | Target::Timer { .. } => {

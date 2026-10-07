@@ -2113,14 +2113,6 @@ impl contract::extension::ExtensionDoor for FakeDoor {
     }
 
     fn seal(&self) {}
-
-    fn reply(
-        &self,
-        reply: contract::commands::Reply,
-        ack: contract::inbox::Ack,
-    ) -> Option<(contract::commands::Reply, contract::inbox::Ack)> {
-        Some((reply, ack))
-    }
 }
 
 struct HeldDoor {
@@ -2149,14 +2141,6 @@ impl contract::extension::ExtensionDoor for HeldDoor {
     }
 
     fn seal(&self) {}
-
-    fn reply(
-        &self,
-        reply: contract::commands::Reply,
-        ack: contract::inbox::Ack,
-    ) -> Option<(contract::commands::Reply, contract::inbox::Ack)> {
-        Some((reply, ack))
-    }
 }
 
 #[test]
@@ -2303,13 +2287,6 @@ fn quiesce_seals_the_door() {
         }
         fn seal(&self) {
             self.sealed.store(true, Ordering::SeqCst);
-        }
-        fn reply(
-            &self,
-            reply: contract::commands::Reply,
-            ack: contract::inbox::Ack,
-        ) -> Option<(contract::commands::Reply, contract::inbox::Ack)> {
-            Some((reply, ack))
         }
     }
     let opened = Opened::open(vec![]);

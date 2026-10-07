@@ -902,6 +902,35 @@ fn lua_providers_lists_each_registered_provider_in_provider_name_order() {
 }
 
 #[test]
+fn a_command_conflict_is_one_notice() {
+    // The probe build settles notices from metadata and the real build
+    // settles the same final names for admission; publishing both would
+    // record the conflict twice.
+    fn registers(name: &str) -> String {
+        format!(
+            "fiber.command(\"sync\", {{ timeout = 1000, description = \"{name}\", run = function(text) return text end }})\n"
+        )
+    }
+    let home = Home::new();
+    home.install("a", Some(&registers("A")));
+    home.install("b", Some(&registers("B")));
+    let session = home.load(&[]);
+    assert!(session.commands().is_empty(), "neither gets the name");
+    let conflicts: Vec<_> = session
+        .notices()
+        .into_iter()
+        .filter(|notice| notice.code == ErrorCode::CommandConflict)
+        .collect();
+    assert_eq!(conflicts.len(), 1, "one conflict notice, not two");
+    assert!(
+        conflicts[0].message.contains("`sync`"),
+        "{}",
+        conflicts[0].message
+    );
+    assert_eq!(session.notices().len(), 1);
+}
+
+#[test]
 fn a_refreshed_provider_the_session_does_not_use_is_unloaded() {
     let home = Home::new();
     home.install("used", Some(&registering("used")));

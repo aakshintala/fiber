@@ -308,9 +308,11 @@ impl SessionExtensions {
             }
         }
         session.commands = SessionCommands::build(&real_sources, config);
-        // The probe's notices were already recorded; the real build agrees on
-        // final names, so keep only its admission table. Re-record notices
-        // only if they differ (they cannot: same metadata and config).
+        // The probe's notices are already recorded above, from the same
+        // metadata and config, so the real build keeps only its admission
+        // table: [`SessionExtensions::notices`] publishes the probe's, never
+        // the real build's, or every rename and conflict notice would appear
+        // twice.
         for idx in kept {
             let Some(s) = started.get(idx) else {
                 continue;
@@ -460,11 +462,12 @@ impl SessionExtensions {
     }
 
     /// What loading raised: an entry script that failed, a hook that did
-    /// not register.
+    /// not register, and the command renames, conflicts and `replaces`
+    /// check. Command notices come from the probe build at load alone; the
+    /// real build settles the same final names and keeps only its admission
+    /// table, so publishing both would duplicate every one.
     pub fn notices(&self) -> Vec<Notice> {
-        let mut out = self.notices.clone();
-        out.extend(self.commands.notices());
-        out
+        self.notices.clone()
     }
 
     /// The extension entries of the `commands` answer, sorted by name.
@@ -745,15 +748,6 @@ impl contract::extension::ExtensionDoor for SessionExtensions {
         for extension in &self.lua {
             extension.seal();
         }
-    }
-
-    fn reply(
-        &self,
-        reply: contract::commands::Reply,
-        ack: contract::inbox::Ack,
-    ) -> Option<(contract::commands::Reply, contract::inbox::Ack)> {
-        // Part 4 owns `host.ask` replies; hand every reply back for the loop.
-        Some((reply, ack))
     }
 }
 

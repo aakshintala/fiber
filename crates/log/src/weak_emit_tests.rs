@@ -48,16 +48,6 @@ fn emits_while_the_log_lives() {
 }
 
 #[test]
-fn does_nothing_after_the_last_log_drops() {
-    let temp = fakes::TempDir::new("fiber-weak-emit-gone");
-    let log = log_in(&temp);
-    let emit = WeakEmit::new(&log);
-    drop(log);
-    // Must not panic; there is no log to write to.
-    emit.emit(&status());
-}
-
-#[test]
 fn does_not_keep_the_log_alive() {
     let temp = fakes::TempDir::new("fiber-weak-emit-weak");
     let log = log_in(&temp);

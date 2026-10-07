@@ -1,6 +1,8 @@
 //! `send` against `set_inbox`: buffered deliveries flush in order,
 //! and a `deliver_to` racing a delivery's end strands nothing
-//! (`docs/extensions.md`, "Host calls"). `cancel_timer` twice.
+//! (`docs/extensions.md`, "Host calls"). `cancel_timer` twice. `emit`
+//! and the `set_emit` flush hold the hub lock past `seal`, so no extension
+//! line follows `fiber_exited`.
 
 #![allow(
     clippy::unwrap_used,
@@ -11,7 +13,8 @@
 use std::sync::TryLockError;
 use std::sync::mpsc;
 
-use contract::events::ExtensionExec;
+use contract::emit::Emit;
+use contract::events::{Event, ExtensionExec, ExtensionUi, Ui};
 use fakes::clock::FakeClock;
 
 use super::*;
@@ -268,4 +271,152 @@ fn a_delivery_after_seal_is_dropped() {
     hub.send(Delivery::ExtensionExec(exec("late")));
     assert!(received(&rx).is_none(), "nothing arrives after the seal");
     assert!(hub.lock().buffer.is_empty());
+}
+
+fn status(text: &str) -> Event {
+    Event::ExtensionUi(ExtensionUi {
+        extension: "ext".to_owned(),
+        ui: Ui::Status {
+            status: text.to_owned(),
+        },
+    })
+}
+
+/// An emitter that blocks inside `emit` until the test releases it, so a
+/// racing `seal` must wait for the in-flight emission when the hub lock is
+/// held through the write.
+struct BlockingEmit {
+    entered: mpsc::Sender<()>,
+    release: std::sync::Mutex<mpsc::Receiver<()>>,
+    recorded: std::sync::Mutex<Vec<Event>>,
+}
+
+impl Emit for BlockingEmit {
+    fn emit(&self, event: &Event) {
+        let _entered = self.entered.send(());
+        let _released = self.release.lock().unwrap().recv_timeout(WAIT).ok();
+        self.recorded.lock().unwrap().push(event.clone());
+    }
+}
+
+/// An emission holds the hub lock through the write, so `seal` cannot slip
+/// between the choice and the write: `fiber_exited` follows the emitted
+/// line. The worker blocks inside the emitter holding the lock; the seal
+/// spawned at the pause point must still be waiting when the worker gets
+/// there. Dropped early, the seal returns first and the later emission is
+/// still written after it.
+#[test]
+fn an_emission_holds_the_lock_past_seal() {
+    let hub = Hub::new(FakeClock::new());
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let emit = Arc::new(BlockingEmit {
+        entered: entered_tx,
+        release: std::sync::Mutex::new(release_rx),
+        recorded: std::sync::Mutex::new(Vec::new()),
+    });
+    hub.set_emit(Arc::clone(&emit) as Arc<dyn Emit>);
+    let other = Arc::clone(&hub);
+    let (sealed_tx, sealed_rx) = mpsc::channel();
+    hub.pause_at_windows(Arc::new(move |hub, at| {
+        if at != Window::Emitting {
+            return;
+        }
+        assert!(locked(hub), "the emission holds the hub lock past seal");
+        let (other, sealed_tx) = (Arc::clone(&other), sealed_tx.clone());
+        std::thread::spawn(move || {
+            other.seal();
+            let _sealed = sealed_tx.send(());
+        });
+    }));
+    let event = status("syncing");
+    let (done_tx, done_rx) = mpsc::channel();
+    let worker = Arc::clone(&hub);
+    std::thread::spawn(move || {
+        worker.emit(event);
+        let _done = done_tx.send(());
+    });
+    entered_rx
+        .recv_timeout(WAIT)
+        .expect("waited for the emission to reach the emitter");
+    assert!(
+        sealed_rx.recv_timeout(Duration::from_millis(200)).is_err(),
+        "seal waited for the in-flight emission"
+    );
+    let _released = release_tx.send(());
+    done_rx
+        .recv_timeout(WAIT)
+        .expect("waited for the emission to finish");
+    sealed_rx
+        .recv_timeout(WAIT)
+        .expect("waited for the seal to return after the emission");
+    assert_eq!(emit.recorded.lock().unwrap().len(), 1);
+    hub.emit(status("late"));
+    assert_eq!(
+        emit.recorded.lock().unwrap().len(),
+        1,
+        "nothing is emitted after the seal"
+    );
+}
+
+/// The `set_emit` flush holds the hub lock through the last write, so a
+/// `seal` racing it cannot return before the buffered lines are written:
+/// `fiber_exited` follows every flushed line.
+#[test]
+fn a_buffered_flush_holds_the_lock_past_seal() {
+    let hub = Hub::new(FakeClock::new());
+    hub.emit(status("early"));
+    assert_eq!(hub.lock().emit_buffer.len(), 1);
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let emit = Arc::new(BlockingEmit {
+        entered: entered_tx,
+        release: std::sync::Mutex::new(release_rx),
+        recorded: std::sync::Mutex::new(Vec::new()),
+    });
+    let other = Arc::clone(&hub);
+    let (sealed_tx, sealed_rx) = mpsc::channel();
+    hub.pause_at_windows(Arc::new(move |hub, at| {
+        if at != Window::EmitFlushing {
+            return;
+        }
+        assert!(locked(hub), "the flush holds the hub lock past seal");
+        let (other, sealed_tx) = (Arc::clone(&other), sealed_tx.clone());
+        std::thread::spawn(move || {
+            other.seal();
+            let _sealed = sealed_tx.send(());
+        });
+    }));
+    let (done_tx, done_rx) = mpsc::channel();
+    let worker = Arc::clone(&hub);
+    let emit_for_worker = Arc::clone(&emit);
+    std::thread::spawn(move || {
+        worker.set_emit(emit_for_worker as Arc<dyn Emit>);
+        let _done = done_tx.send(());
+    });
+    entered_rx
+        .recv_timeout(WAIT)
+        .expect("waited for the flush to reach the emitter");
+    assert!(
+        sealed_rx.recv_timeout(Duration::from_millis(200)).is_err(),
+        "seal waited for the in-flight flush"
+    );
+    let _released = release_tx.send(());
+    done_rx
+        .recv_timeout(WAIT)
+        .expect("waited for the flush to finish");
+    sealed_rx
+        .recv_timeout(WAIT)
+        .expect("waited for the seal to return after the flush");
+    assert_eq!(
+        emit.recorded.lock().unwrap().len(),
+        1,
+        "the buffered line was flushed before the seal"
+    );
+    hub.emit(status("late"));
+    assert_eq!(
+        emit.recorded.lock().unwrap().len(),
+        1,
+        "nothing is emitted after the seal"
+    );
 }
