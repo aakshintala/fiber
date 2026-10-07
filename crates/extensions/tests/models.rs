@@ -323,7 +323,7 @@ fn reserved_case(protocol: &str, reserved: &[&str]) {
             notice.message,
             format!(
                 "The model `acme/bad-{field}` names `{field}` in its `extra_body`, \
-                 a field Fiber builds itself."
+                 a field Fiber relies on."
             )
         );
     }
@@ -340,6 +340,7 @@ fn anthropic_reserved_extra_body_fields_leave_the_model_out() {
             "tools",
             "tool_choice",
             "stream",
+            "cache_control",
         ],
     );
 }
@@ -429,7 +430,7 @@ fn a_model_with_two_reserved_fields_and_an_unread_search_gets_two_notices() {
     assert!(
         messages.contains(
             &"The model `acme/bad` names `system`, `tools` in its `extra_body`, \
-               fields Fiber builds itself."
+               fields Fiber relies on."
         ),
         "{messages:?}"
     );
@@ -524,7 +525,7 @@ fn leave_out_invalid_filters_a_model_list_like_models_returns() {
     assert_eq!(notices[0].extension.as_deref(), Some("acme"));
     assert_eq!(
         notices[0].message,
-        "The model `acme/bad` names `tools` in its `extra_body`, a field Fiber builds itself."
+        "The model `acme/bad` names `tools` in its `extra_body`, a field Fiber relies on."
     );
 }
 
@@ -688,7 +689,7 @@ fn add_lua_leaves_out_an_invalid_model_with_a_notice() {
     assert_eq!(notices[0].extension.as_deref(), Some("acme-ext"));
     assert_eq!(
         notices[0].message,
-        "The model `acme/bad` names `tools` in its `extra_body`, a field Fiber builds itself."
+        "The model `acme/bad` names `tools` in its `extra_body`, a field Fiber relies on."
     );
 }
 
