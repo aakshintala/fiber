@@ -235,9 +235,9 @@ nowhere else; a hook that fails in a session, for example, is a `notice` or
 `hook_failed` there (`docs/extensions.md`, "When a hook fails"). Nothing in
 `logs/` holds a credential or token, prompt or model text, a tool's arguments
 or a configuration value, with one exception: an `extension_log` line is the
-extension's own text, and Fiber records it as given. A failed hook is named with its code, never its
-content. There is one level of detail; a level that records requests, their
-paths, statuses and timings, is not built.
+extension's own text, and Fiber records it as given. A failed hook is named
+with its code, never its content. There is one level of detail; a level that
+records requests, their paths, statuses and timings, is not built.
 
 **Bounds.** `logs/hub.log` is renamed to `logs/hub.log.1` when it passes
 10 MiB, replacing any older one; its single writer makes the rename safe.

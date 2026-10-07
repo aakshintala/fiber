@@ -515,6 +515,41 @@ fn an_extension_log_taken_while_settling_is_written_and_never_saved() {
     assert!(diag.ends_with("\"message\":\"fiber.test/notes: hello\"}\n"));
 }
 
+/// An `extension_log` delivered after `run` has returned is dropped:
+/// nothing reads the inbox past the settle, so it reaches neither the
+/// watchers nor the diagnostic log. (`run` returning is where the
+/// process writes `fiber_exited`, the last line, after which no status
+/// follows.)
+#[test]
+fn an_extension_log_delivered_after_run_returns_is_dropped() {
+    let (jobs, _stops) = Listed::new(&[]);
+    let world = World::new(jobs);
+    world.cancel.shutdown(143);
+    let (finished, inbox, held) = world.spawn_run();
+    ran(&finished);
+    // The inbox has no reader left: the delivery goes nowhere, whether
+    // the channel still accepts it or is already disconnected.
+    let _dropped = inbox.send(Delivery::ExtensionLog(ExtensionLog {
+        extension: "fiber.test/notes".into(),
+        message: "late".into(),
+    }));
+    assert!(
+        !held.kinds().contains(&"extension_log".to_owned()),
+        "extension_log after run returns is never saved"
+    );
+    let diag = held
+        .dir
+        .parent()
+        .unwrap()
+        .join("logs")
+        .join("session-s_test.log");
+    let text = std::fs::read_to_string(&diag).unwrap_or_default();
+    assert!(
+        !text.contains("extension_log"),
+        "extension_log after run returns writes no diagnostic line"
+    );
+}
+
 /// An allow of `pending`, answered on the returned receiver.
 fn allow(pending: &contract::RequestId) -> (Delivery, Receiver<Result<(), Rejection>>) {
     let (ack, answer) = answered();
