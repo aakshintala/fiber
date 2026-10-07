@@ -61,6 +61,25 @@ pub(crate) fn cache_lifetime(config: &Config, model: &str) -> CacheLifetime {
     }
 }
 
+/// How many cache lifetimes after the last turn an idle session keeps its
+/// prompt cache warm: `cache.warm_cap` when `cache.warm_idle` is set, else
+/// `None`, which never warms (`docs/prompt-cache.md`, "Warming while idle").
+/// A missing cap is the default, 2 lifetimes; the config crate refuses 12
+/// or more.
+pub(crate) fn warm(config: &Config) -> Option<u32> {
+    let on = config
+        .get("cache.warm_idle", None)
+        .is_some_and(|(value, _)| value == true);
+    if !on {
+        return None;
+    }
+    let cap = config
+        .get("cache.warm_cap", None)
+        .and_then(|(value, _)| value.as_u64())
+        .unwrap_or(2);
+    Some(u32::try_from(cap).unwrap_or(u32::MAX))
+}
+
 /// How a failed model call is retried, from configuration with the
 /// documented defaults (`docs/configuration.md`). `attempts` is clamped
 /// to `u32`, so a huge configured count never overflows the loop.
@@ -139,3 +158,7 @@ mod cache_lifetime_tests;
 #[cfg(test)]
 #[path = "thinking_tests.rs"]
 mod thinking_tests;
+
+#[cfg(test)]
+#[path = "warm_tests.rs"]
+mod warm_tests;

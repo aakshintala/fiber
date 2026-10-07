@@ -764,6 +764,11 @@ impl Loop {
         // A refused request leaves the previous request's end in place, so a
         // later request still marks the cache where that request ended.
         self.sent = Some(self.conversation.len());
+        // Stamped once per step: a retry's backoff only delays the real
+        // send, so a refresh counted from here comes early, never late.
+        if self.warm.is_some() {
+            self.last_request = Some((request.clone(), self.log.clock().now()));
+        }
         self.attempt(&request, turn)
     }
 

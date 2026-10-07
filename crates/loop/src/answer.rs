@@ -43,11 +43,12 @@ impl Loop {
         loop {
             let delivery = match self.take_held_answer(&request_id) {
                 Some(delivery) => delivery,
-                None => match self.recv_until(deadline, false) {
+                None => match self.recv_until(deadline, false, None) {
                     InboxRecv::Delivery(delivery) => delivery,
-                    // Without `check` the wait never ends unattended; the
+                    // Without `check` or a refresh instant the wait never
+                    // ends unattended or to warm; the
                     // arm keeps the match total.
-                    InboxRecv::Idle | InboxRecv::Unattended => {
+                    InboxRecv::Idle | InboxRecv::Unattended | InboxRecv::Warm => {
                         self.idle_left = true;
                         return Ok(Asked::Idle);
                     }

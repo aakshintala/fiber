@@ -776,6 +776,30 @@ impl Session {
         )
     }
 
+    /// As [`Session::with_cache_lifetime`], reaching the scripted provider
+    /// through what `wrap` makes of it and the session's clock.
+    pub(crate) fn wrapped(
+        script: Vec<Scripted>,
+        lifetime: CacheLifetime,
+        wrap: impl FnOnce(Arc<ScriptedProvider>, Arc<FakeClock>) -> Arc<dyn Provider>,
+    ) -> Self {
+        let scripted = Arc::new(ScriptedProvider::new(script));
+        let clock = FakeClock::new();
+        let provider = wrap(Arc::clone(&scripted), Arc::clone(&clock));
+        Self::assemble_with(
+            provider,
+            Vec::new(),
+            Vec::new(),
+            unpriced(),
+            scripted,
+            Arc::new(TurnCancel::default()),
+            (clock, 0),
+            Vec::new(),
+            lifetime,
+            None,
+        )
+    }
+
     /// As [`Session::with_tools`], reaching `model`. `during` is sent, in
     /// order, when the first model call is made.
     pub(crate) fn open(

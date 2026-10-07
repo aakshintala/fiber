@@ -79,6 +79,7 @@ pub(crate) fn new_session(
         retry,
         handoff,
         idle,
+        warm,
         home,
         project,
         workspace,
@@ -167,6 +168,7 @@ pub(crate) fn new_session(
                 }),
                 budget,
                 idle,
+                warm,
                 // Only one-turn `fiber ask` runs with no client: the
                 // session command serves clients that may answer
                 // (`docs/permissions.md`, "Headless").
