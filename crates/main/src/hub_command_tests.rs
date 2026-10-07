@@ -161,7 +161,25 @@ fn configure_reads_the_idle_exit() {
     .unwrap();
     assert_eq!(
         configure(&home, Ok(workspace)).unwrap(),
-        Duration::from_millis(200)
+        hub::Settings {
+            idle_exit: Duration::from_millis(200),
+            level: log::diag::Level::Info,
+        }
+    );
+}
+
+#[test]
+fn configure_reads_a_global_debug_level() {
+    let root = fakes::TempDir::new("hcfg");
+    let (home, workspace) = home_and_workspace(&root);
+    std::fs::write(
+        home.join("config.json"),
+        r#"{"diagnostics": {"level": "debug"}}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        configure(&home, Ok(workspace)).unwrap().level,
+        log::diag::Level::Debug
     );
 }
 

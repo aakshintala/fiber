@@ -8,6 +8,7 @@
 //! (`docs/architecture.md`, "The call rules").
 
 mod dependents;
+pub mod diag;
 mod export;
 mod offsets;
 mod rate;

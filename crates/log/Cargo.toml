@@ -10,6 +10,10 @@ contract = { path = "../contract" }
 serde_json.workspace = true
 thiserror.workspace = true
 
+# The peak physical footprint for a `peak_memory` line (docs/dependencies.md).
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 fakes = { path = "../fakes" }
 proptest.workspace = true

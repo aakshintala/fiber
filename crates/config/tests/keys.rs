@@ -617,6 +617,7 @@ fn with_no_files_the_configuration_is_the_built_in_defaults() {
         config.merged(None),
         json!({
             "cache": {"lifetime": "1h", "warm_cap": 2, "warm_idle": false},
+            "diagnostics": {"level": "info"},
             "handoff": {"enabled": true, "nudge": true, "tokens": 400000, "window_fraction": 0.7},
             "model_lists": {"refresh_after": "24h"},
             "quota": {"notice_at": 80},
@@ -789,4 +790,98 @@ fn warming_is_off_by_default_with_a_cap_of_two_lifetimes() {
         config.get("cache.warm_cap", None),
         Some((json!(2), Source::Default))
     );
+}
+
+#[test]
+fn diagnostics_level_defaults_to_info_and_the_global_file_sets_debug() {
+    let setup = Setup::new();
+    let config = setup.load(&[]).unwrap();
+    assert_eq!(
+        config.get("diagnostics.level", None),
+        Some((json!("info"), Source::Default))
+    );
+    assert!(!config::diagnostics_debug(&config));
+    setup.write(&setup.global(), r#"{"diagnostics": {"level": "debug"}}"#);
+    let config = setup.load(&[]).unwrap();
+    assert!(config.notices().is_empty(), "{:?}", config.notices());
+    assert_eq!(
+        config.get("diagnostics.level", None),
+        Some((json!("debug"), Source::Global(setup.global())))
+    );
+    assert!(config::diagnostics_debug(&config));
+    setup.write(&setup.global(), r#"{"diagnostics": {"level": "info"}}"#);
+    assert!(!config::diagnostics_debug(&setup.load(&[]).unwrap()));
+}
+
+#[test]
+fn a_repository_s_diagnostics_level_is_ignored_with_a_notice() {
+    let setup = Setup::new();
+    setup.write(
+        &setup.repository(),
+        r#"{"diagnostics": {"level": "debug"}}"#,
+    );
+    let config = setup.load(&[]).unwrap();
+    let [notice] = config.notices() else {
+        panic!("{:?}", config.notices());
+    };
+    assert_eq!(notice.code, ErrorCode::ConfigKeyIgnored);
+    assert_eq!(
+        notice.message,
+        format!(
+            "{}: ignored `diagnostics.level`, which a repository may not set.",
+            setup.repository().display()
+        )
+    );
+    assert!(!config::diagnostics_debug(&config));
+}
+
+#[test]
+fn a_project_file_or_run_flag_diagnostics_level_is_ignored_as_global_only() {
+    let setup = Setup::new();
+    setup.write(&setup.project(), r#"{"diagnostics": {"level": "debug"}}"#);
+    let config = setup.load(&["diagnostics.level=debug"]).unwrap();
+    let messages: Vec<_> = config.notices().iter().map(|n| n.message.clone()).collect();
+    assert_eq!(
+        messages,
+        [
+            format!(
+                "{}: ignored `diagnostics.level`, which only Fiber home's `config.json` may set.",
+                setup.project().display()
+            ),
+            "-c: ignored `diagnostics.level`, which only Fiber home's `config.json` may set."
+                .to_owned(),
+        ]
+    );
+    assert!(
+        config
+            .notices()
+            .iter()
+            .all(|n| n.code == ErrorCode::ConfigKeyIgnored)
+    );
+    assert_eq!(
+        config.get("diagnostics.level", None),
+        Some((json!("info"), Source::Default))
+    );
+    assert!(!config::diagnostics_debug(&config));
+}
+
+#[test]
+fn a_global_diagnostics_level_that_is_not_info_or_debug_is_config_invalid() {
+    for bad in [json!("verbose"), json!(true)] {
+        let setup = Setup::new();
+        setup.write(
+            &setup.global(),
+            &nest(&["diagnostics", "level"], bad.clone()).to_string(),
+        );
+        let e = setup.load(&[]).unwrap_err();
+        assert_eq!(e.code(), ErrorCode::ConfigInvalid, "{bad}");
+        assert_eq!(
+            e.to_string(),
+            format!(
+                "{}: `diagnostics.level` must be one of \"info\", \"debug\".",
+                setup.global().display()
+            ),
+            "{bad}"
+        );
+    }
 }

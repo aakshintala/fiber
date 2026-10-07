@@ -289,6 +289,40 @@ fn an_idle_hub_exits_on_its_own() {
     let status = hub.wait();
     assert_eq!(status.code(), Some(0));
     assert!(!setup.hub_socket().exists());
+    let lines = hub_log(&setup);
+    assert!(
+        lines.iter().all(|line| line["level"] != "debug"),
+        "{lines:?}"
+    );
+}
+
+#[test]
+fn a_debug_hub_writes_peak_memory_just_before_it_stops() {
+    let setup = Setup::new();
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"diagnostics": {"level": "debug"}, "hub": {"idle_exit_ms": 200}}),
+    );
+    let hub = HubProc::spawn(&setup);
+    assert_eq!(hub.wait().code(), Some(0));
+    let lines = hub_log(&setup);
+    let [.., peak, stopped] = lines.as_slice() else {
+        panic!("fewer than two lines: {lines:?}");
+    };
+    assert_eq!(stopped["code"], "hub_stopped", "{lines:?}");
+    assert_eq!(peak["code"], "peak_memory", "{lines:?}");
+    assert_eq!(peak["level"], "debug");
+    assert_eq!(peak["process"], "hub");
+    assert!(peak["data"]["peak_kib"].as_u64().unwrap() > 0, "{peak}");
+}
+
+/// The parsed lines of the hub's diagnostic log.
+fn hub_log(setup: &Setup) -> Vec<Value> {
+    fs::read_to_string(setup.home().join("logs").join("hub.log"))
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
 }
 
 #[test]

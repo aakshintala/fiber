@@ -43,6 +43,15 @@ use crate::listen::Held;
 pub use crate::error::StartError;
 pub use crate::recent::{Left, RecentRow, append};
 
+/// What the hub reads from the configuration when it starts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Settings {
+    /// `hub.idle_exit_ms`.
+    pub idle_exit: Duration,
+    /// `diagnostics.level`, read once: a changed value reaches the next hub.
+    pub level: log::diag::Level,
+}
+
 /// Starts a session the hub was asked for, or resumes one a relayed command
 /// names: runs the internal session command in `workspace` with `id`, so
 /// the starter knows the id before the process runs and nothing is read
@@ -76,7 +85,7 @@ pub trait Started: Send {
 /// `doors::signal_code` does.
 ///
 /// The hub takes the `run/` lock, opens `logs/hub.log`, then calls
-/// `configure` for `hub.idle_exit_ms` and binds `run/hub`. A hub that loses
+/// `configure` for its [`Settings`] and binds `run/hub`. A hub that loses
 /// the lock returns `Ok(0)` having written nothing and never calls
 /// `configure`; a failure to take the lock is returned unlogged, since only
 /// the lock's holder writes `hub.log`. Every later failure is written to
@@ -84,7 +93,7 @@ pub trait Started: Send {
 /// held, and returned for the caller to print.
 pub fn serve(
     home: &Path,
-    configure: impl FnOnce() -> Result<Duration, Failure>,
+    configure: impl FnOnce() -> Result<Settings, Failure>,
     fiber_version: &str,
     starter: Arc<dyn Starter>,
     clock: Arc<dyn Clock>,
@@ -93,7 +102,7 @@ pub fn serve(
         return Ok(0);
     };
     let diag = Diag::open(home, Arc::clone(&clock));
-    let (bound, idle_exit) = match configure_and_bind(&lock, home, configure) {
+    let (bound, settings) = match configure_and_bind(&lock, home, configure) {
         Ok(Some(bound)) => bound,
         Ok(None) => return Ok(0),
         Err(error) => {
@@ -102,26 +111,27 @@ pub fn serve(
         }
     };
     let held = Held::new(lock, bound);
+    let diag = diag.with_level(settings.level);
     let hub = Arc::new(Hub::new(home, fiber_version, starter, clock, diag));
     hub.diag.info("hub_started", "The hub started.");
     let got = Arc::new(AtomicI32::new(0));
     arm(&got, hub.waker());
     hub.feed.start();
-    let exit = idle::run(&hub, &held, idle_exit, &got);
+    let exit = idle::run(&hub, &held, settings.idle_exit, &got);
     hub.feed.stop();
     held.stop();
     Ok(exit.code())
 }
 
 /// Reads the configuration through `configure`, then binds `run/hub` for
-/// the holder of `lock`, with `hub.idle_exit_ms`.
+/// the holder of `lock`, with the hub's settings.
 fn configure_and_bind(
     lock: &listen::Lock,
     home: &Path,
-    configure: impl FnOnce() -> Result<Duration, Failure>,
-) -> Result<Option<(listen::Bound, Duration)>, StartError> {
-    let idle_exit = configure().map_err(StartError::Configure)?;
-    Ok(listen::bind(lock, home)?.map(|bound| (bound, idle_exit)))
+    configure: impl FnOnce() -> Result<Settings, Failure>,
+) -> Result<Option<(listen::Bound, Settings)>, StartError> {
+    let settings = configure().map_err(StartError::Configure)?;
+    Ok(listen::bind(lock, home)?.map(|bound| (bound, settings)))
 }
 
 /// Arms SIGTERM, SIGINT and SIGHUP to end the hub through `got`, waking the

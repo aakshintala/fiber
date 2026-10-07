@@ -518,6 +518,46 @@ fn set_with_a_person_only_key_at_the_repository_layer_is_refused_and_writes_noth
 }
 
 #[test]
+fn set_of_diagnostics_level_outside_the_global_layer_is_refused() {
+    for (layer, why) in [
+        (Layer::Project, "only Fiber home's `config.json` may set it"),
+        (Layer::Repository, "a repository may not set it"),
+    ] {
+        let setup = Setup::new();
+        let e = set(
+            &setup.home(),
+            &setup.workspace(),
+            &key(),
+            layer,
+            "diagnostics.level",
+            json!("debug"),
+        )
+        .unwrap_err();
+        assert_eq!(e.code(), ErrorCode::Usage, "{layer:?}");
+        assert!(
+            e.to_string().contains("`diagnostics.level`"),
+            "{layer:?}: {e}"
+        );
+        assert!(e.to_string().contains(why), "{layer:?}: {e}");
+        assert!(!setup.project().exists(), "{layer:?}");
+        assert!(!setup.repository().exists(), "{layer:?}");
+    }
+    let setup = Setup::new();
+    set(
+        &setup.home(),
+        &setup.workspace(),
+        &key(),
+        Layer::Global,
+        "diagnostics.level",
+        json!("debug"),
+    )
+    .unwrap();
+    let written: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(setup.global()).unwrap()).unwrap();
+    assert_eq!(written, json!({"diagnostics": {"level": "debug"}}));
+}
+
+#[test]
 fn set_of_a_repository_only_key_outside_the_repository_layer_is_refused() {
     for layer in [Layer::Global, Layer::Project] {
         let setup = Setup::new();

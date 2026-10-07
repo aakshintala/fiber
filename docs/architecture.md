@@ -47,7 +47,7 @@ ephemeral event where it is display-only.
 | Module | Job |
 |---|---|
 | `contract` | The vocabulary every other module speaks: what an event looks like, what a command looks like, and what a tool, a provider and a hook must each be able to do. It contains no behaviour at all. |
-| `log` | Owns the session directory. The only thing that opens `events.jsonl`, holds the lock, mints `seq` and decides fsync order. Also hands events to whoever is watching. |
+| `log` | Owns the session directory. The only thing that opens `events.jsonl`, holds the lock, mints `seq` and decides fsync order. Also hands events to whoever is watching, and writes the diagnostic files in `logs/`. |
 | `loop` | Runs turns and steps (`docs/loop.md`). The only thing that decides what happens next. |
 | `provider` | Talks to model APIs: wire formats, credentials, streaming. Reached only through the provider seam. |
 | `tools` | Runs the built-in tools that act on the workspace and the session: shell, file edits, search, web fetch, `ask_user`, session messaging and `tool_search`. Reached only through the tool seam. |

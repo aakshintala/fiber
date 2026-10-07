@@ -178,6 +178,7 @@ the code and the list disagree.
 | Crate | File | Why |
 |---|---|---|
 | `tools` | `crates/tools/src/shell/spawn.rs` | `pre_exec` calls `setsid`, and for a `tty` command the `TIOCSCTTY` ioctl on fd 0, between fork and exec |
+| `log` | `crates/log/src/diag/memory.rs` | on macOS, `proc_pid_rusage` reads the peak physical footprint for a `peak_memory` line |
 
 `unsafe` inside dependencies is `docs/dependencies.md`'s.
 

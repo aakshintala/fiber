@@ -1,22 +1,23 @@
 //! The hub's diagnostic log at `logs/hub.log` (`docs/state.md`, "Diagnostic
 //! logs"): one JSON object per line, rotated past 10 MiB, pruned at start.
 //!
-//! Each line is `ts`, `level` (`error`, `warn` or `info`), `process`
-//! (`hub`), `session_id` when one is known, `code` and `message`, in that
-//! order. For a failure, `code` is its code from `docs/errors.md`. For one
-//! of the hub's operations it is the operation's name. Nothing in `logs/`
+//! Each line is `ts`, `level` (`error`, `warn`, `info` or `debug`),
+//! `process` (`hub`), `session_id` when one is known, `code` and `message`,
+//! in that order, and `data` on a `debug` line. For a failure, `code` is its
+//! code from `docs/errors.md`. For one of the hub's operations it is the
+//! operation's name. Nothing in `logs/`
 //! holds a credential or token, prompt or model text, a tool's arguments or
 //! a configuration value. A log write failure never stops the hub.
 
 use std::fs::{self, DirBuilder};
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use contract::SessionId;
-use contract::clock::{Clock, wall_ms};
-use serde::Serialize;
+use contract::clock::Clock;
+use log::diag::{Level, Process, Severity};
 
 /// Past this size `hub.log` is renamed to `hub.log.1` before the next write
 /// (`docs/state.md`, "Bounds").
@@ -30,18 +31,17 @@ const PRUNE_AFTER: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 /// (`docs/state.md`, "Bounds").
 const PRUNE_KEEP: usize = 100;
 
-/// The hub's diagnostic log. One writer, as a session log has: a single
-/// lock serializes rotation and append, so concurrent connections never
-/// lose records to two rotations.
+/// The hub's diagnostic log, over the shared writer: one lock serializes
+/// rotation and append, so concurrent connections never lose records to two
+/// rotations.
 pub(crate) struct Diag {
-    log: PathBuf,
-    clock: Arc<dyn Clock>,
-    lock: Mutex<()>,
+    log: log::diag::Diag,
 }
 
 impl Diag {
     /// Opens the log in `home`: creates `logs/` mode 0700, prunes `logs/`
-    /// and `crashes/`, before the caller writes `hub_started`.
+    /// and `crashes/`, before the caller writes `hub_started`. The level is
+    /// `info` until [`Diag::with_level`].
     pub(crate) fn open(home: &Path, clock: Arc<dyn Clock>) -> Self {
         let logs = home.join("logs");
         DirBuilder::new()
@@ -52,89 +52,64 @@ impl Diag {
         prune(&logs, clock.wall());
         prune(&home.join("crashes"), clock.wall());
         Self {
-            log: logs.join("hub.log"),
-            clock,
-            lock: Mutex::new(()),
+            log: log::diag::Diag::new(home, Process::Hub, Level::Info, clock).rotating(ROTATE_AT),
+        }
+    }
+
+    /// Sets the level the configuration names, before the hub shares the log.
+    pub(crate) fn with_level(self, level: Level) -> Self {
+        Self {
+            log: self.log.with_level(level),
+        }
+    }
+
+    /// Reads the peak memory with `read` instead of the process's own,
+    /// before the hub shares the log. Tests use it for a deterministic
+    /// `peak_memory` value.
+    #[cfg(test)]
+    pub(crate) fn with_peak(self, read: fn() -> Option<u64>) -> Self {
+        Self {
+            log: self.log.with_peak(read),
+        }
+    }
+
+    /// Runs `between` between the stop lines' two appends, telling it
+    /// whether the log's lock is still held, before the hub shares the
+    /// log. Test-only: it forces the race the pair closes.
+    #[cfg(test)]
+    pub(crate) fn with_between(self, between: Arc<dyn Fn(bool) + Send + Sync>) -> Self {
+        Self {
+            log: self.log.with_between(between),
         }
     }
 
     /// Writes an `info` line for one of the hub's operations.
     pub(crate) fn info(&self, code: &str, message: &str) {
-        self.write("info", None, code, message);
+        self.log.line(Severity::Info, None, code, message);
     }
 
     /// Writes an `error` line for a failure with no session to hold it,
     /// such as a startup error: `code` is its code from `docs/errors.md`.
     pub(crate) fn error(&self, code: &str, message: &str) {
-        self.write("error", None, code, message);
+        self.log.line(Severity::Error, None, code, message);
     }
 
     /// Writes an `info` line naming the session, such as `session_started`.
     pub(crate) fn info_session(&self, session: &SessionId, code: &str, message: &str) {
-        self.write("info", Some(session), code, message);
+        self.log.line(Severity::Info, Some(session), code, message);
     }
 
     /// Writes a `warn` line naming the session it concerns.
     pub(crate) fn warn_session(&self, session: &SessionId, code: &str, message: &str) {
-        self.write("warn", Some(session), code, message);
+        self.log.line(Severity::Warn, Some(session), code, message);
     }
 
-    fn write(&self, level: &str, session: Option<&SessionId>, code: &str, message: &str) {
-        // A log write failure never stops the hub. Rotation and append hold
-        // one lock: two rotations cannot swap the retained log away.
-        let _guard = lock(&self.lock);
-        rotate(&self.log);
-        let line = Line {
-            ts: wall_ms(self.clock.wall()),
-            level,
-            process: "hub",
-            session_id: session,
-            code,
-            message,
-        };
-        let mut bytes = serde_json::to_vec(&line).unwrap_or_default();
-        bytes.push(b'\n');
-        append(&self.log, &bytes);
+    /// Writes `peak_memory` at the debug level immediately followed by
+    /// `hub_stopped`, under one lock: a departing client's
+    /// `client_disconnected` line cannot come between the pair.
+    pub(crate) fn stopped(&self, message: &str) {
+        self.log.peak_memory_then_info("hub_stopped", message);
     }
-}
-
-/// One diagnostic line. The fields serialize in the order `docs/state.md`
-/// lists them, and `session_id` is absent when none is known, never `null`.
-#[derive(Debug, Serialize)]
-struct Line<'a> {
-    ts: u64,
-    level: &'a str,
-    process: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    session_id: Option<&'a SessionId>,
-    code: &'a str,
-    message: &'a str,
-}
-
-/// Renames a `hub.log` over 10 MiB to `hub.log.1`, replacing any older one.
-fn rotate(log: &Path) {
-    let over = fs::metadata(log).is_ok_and(|meta| meta.len() > ROTATE_AT);
-    if !over {
-        return;
-    }
-    let mut previous = log.as_os_str().to_owned();
-    previous.push(".1");
-    fs::rename(log, Path::new(&previous)).unwrap_or(());
-}
-
-fn lock<'a, T>(mutex: &'a Mutex<T>) -> MutexGuard<'a, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
-fn append(log: &Path, bytes: &[u8]) {
-    use std::fs::OpenOptions;
-    use std::io::Write;
-    OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log)
-        .and_then(|mut file| file.write_all(bytes))
-        .unwrap_or(());
 }
 
 /// Deletes the files in `dir` older than 30 days, then all but its newest
