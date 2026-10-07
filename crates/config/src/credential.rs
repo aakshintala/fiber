@@ -6,7 +6,10 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::io::ErrorKind;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
+
+use serde_json::{Map, Value};
 
 use crate::Config;
 use crate::error::ConfigError;
@@ -53,15 +56,10 @@ impl Config {
             });
         }
         let merged = self.merged(None);
-        let configured = merged
-            .get("providers")
-            .and_then(|p| p.get(name))
-            .and_then(|p| p.get("credentials"))
-            .and_then(serde_json::Value::as_object);
+        let configured = configured(&merged, name);
         let from_config = configured
             .and_then(|labels| labels.get(label))
-            .map(|v| serde_json::from_value::<CredentialSource>(v.clone()))
-            .and_then(Result::ok);
+            .and_then(source);
         let own = (label == DEFAULT_LABEL)
             .then(|| provider.credential.clone())
             .flatten();
@@ -110,6 +108,54 @@ impl Config {
             ))
         })
     }
+}
+
+impl Config {
+    /// The path of every `file` credential source configuration declares,
+    /// as written: each `providers."<name>".credentials."<label>"` that
+    /// [`Config::credential`] would read, and each of `providers`' own
+    /// sources. Each appears once. The credential deny protects them
+    /// (`docs/permissions.md`, "Credentials").
+    pub fn credential_files<'a>(
+        &self,
+        providers: impl IntoIterator<Item = &'a ProviderData>,
+    ) -> Vec<PathBuf> {
+        let merged = self.merged(None);
+        let names = merged
+            .get("providers")
+            .and_then(Value::as_object)
+            .into_iter()
+            .flat_map(Map::keys);
+        let labelled = names
+            .filter_map(|name| configured(&merged, name))
+            .flat_map(Map::values)
+            .filter_map(source);
+        let own = providers.into_iter().filter_map(|p| p.credential.clone());
+        let files: BTreeSet<PathBuf> = labelled
+            .chain(own)
+            .filter_map(|source| match source {
+                // An empty path names no file and is never read.
+                CredentialSource::File(file) => (!file.as_os_str().is_empty()).then_some(file),
+                CredentialSource::Env(_) | CredentialSource::Command(_) => None,
+            })
+            .collect();
+        files.into_iter().collect()
+    }
+}
+
+/// The labels `providers."<name>".credentials` configures in `merged`.
+fn configured<'a>(merged: &'a Value, name: &str) -> Option<&'a Map<String, Value>> {
+    merged
+        .get("providers")
+        .and_then(|p| p.get(name))
+        .and_then(|p| p.get("credentials"))
+        .and_then(Value::as_object)
+}
+
+/// The source a configured label's `value` declares; `None` when it is
+/// not one.
+fn source(value: &Value) -> Option<CredentialSource> {
+    serde_json::from_value(value.clone()).ok()
 }
 
 /// The value with surrounding whitespace removed, `None` when that leaves
