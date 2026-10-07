@@ -282,6 +282,17 @@ fn hits_rank_by_class_then_newer_then_session_then_seq() {
 }
 
 #[test]
+fn ranked_equality_matches_its_ordering_key() {
+    let equal = Ranked(hit(Label::Message, 5, "s_a", 4));
+    let same_key = Ranked(hit(Label::Message, 5, "s_a", 4));
+    let different_key = Ranked(hit(Label::Message, 5, "s_a", 3));
+    assert!(equal.eq(&same_key));
+    assert!(!equal.eq(&different_key));
+    assert_eq!(equal.cmp(&same_key), Ordering::Equal);
+    assert_ne!(equal.cmp(&different_key), Ordering::Equal);
+}
+
+#[test]
 fn the_limit_keeps_the_best_and_counts_every_hit() {
     let home = Home::new();
     home.session("-a", "s_1", "/a/one", &["needle 1", "needle 2", "needle 3"]);
@@ -357,6 +368,61 @@ fn a_missing_projects_directory_finds_nothing() {
     let scan = home.scanner("/a/one");
     assert_eq!(find(&scan, "needle", true), Found::default());
     assert_eq!(find(&scan, "needle", false), Found::default());
+}
+
+#[test]
+fn an_unreadable_project_parent_is_a_problem_but_a_missing_project_is_silent() {
+    assert_ne!(
+        effective_uid(),
+        0,
+        "this test must run as a non-root user: root bypasses file modes"
+    );
+    let home = Home::new();
+    home.session("-a", "s_1", "/a/one", &["needle"]);
+    let project = home.path().join("projects").join("-a");
+    let sessions = project.join("sessions");
+    let scan = home.scanner("/a/one");
+
+    set_mode(&project, 0o000);
+    let found = find(&scan, "needle", false);
+    set_mode(&project, 0o755);
+
+    assert!(found.hits.is_empty());
+    assert_eq!(found.problems.len(), 1, "{:?}", found.problems);
+    assert!(
+        found.problems[0].starts_with(&format!("Could not read: {}: ", sessions.display())),
+        "{:?}",
+        found.problems
+    );
+
+    fs::remove_dir_all(&project).unwrap();
+    assert_eq!(find(&scan, "needle", false), Found::default());
+}
+
+#[test]
+fn an_unreadable_session_log_metadata_is_a_problem_and_a_missing_log_is_silent() {
+    assert_ne!(
+        effective_uid(),
+        0,
+        "this test must run as a non-root user: root bypasses file modes"
+    );
+    let home = Home::new();
+    let locked = home.session("-a", "s_locked", "/a/one", &["needle"]);
+    let missing = home.sessions("-a").join("s_missing");
+    fs::create_dir_all(&missing).unwrap();
+
+    set_mode(&locked, 0o000);
+    let found = find(&home.scanner("/a/one"), "needle", false);
+    set_mode(&locked, 0o755);
+
+    let events = locked.join(EVENTS);
+    assert!(found.hits.is_empty());
+    assert_eq!(found.problems.len(), 1, "{:?}", found.problems);
+    assert!(
+        found.problems[0].starts_with(&format!("Could not read: {}: ", events.display())),
+        "{:?}",
+        found.problems
+    );
 }
 
 #[test]

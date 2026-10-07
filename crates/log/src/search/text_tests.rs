@@ -92,6 +92,13 @@ fn the_decoded_matcher_folds_non_ascii_case() {
 }
 
 #[test]
+fn matcher_errors_keep_the_search_reason() {
+    let error = RegexMatcherBuilder::new().build("(").unwrap_err();
+    let expected = format!("cannot search for this text: {error}");
+    assert_eq!(reason(error), expected);
+}
+
+#[test]
 fn a_query_with_a_newline_searches_artifacts_across_lines() {
     let text = Text::new("one\ntwo").unwrap();
     assert!(text.multi_line());

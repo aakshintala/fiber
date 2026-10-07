@@ -11,7 +11,7 @@
 
 use std::fs::{self, File, OpenOptions};
 use std::io::Write as _;
-use std::os::unix::fs::symlink;
+use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Weak};
@@ -527,6 +527,88 @@ fn a_linked_artifacts_directory_gives_no_hit_and_a_problem() {
     assert_eq!(
         found.problems,
         [format!("{} is a link", dir.join("artifacts").display())]
+    );
+}
+
+#[test]
+fn an_unreadable_artifacts_directory_is_a_problem_and_log_search_continues() {
+    let fx = Fixture::new();
+    let log = fx.log("s_1");
+    let seq = fx.add(&log, "text_completed", json!({"text": "needle in the log"}));
+    let dir = fx.dir("s_1");
+    let artifacts = dir.join("artifacts");
+    assert_ne!(
+        fs::metadata(&dir).unwrap().uid(),
+        0,
+        "this test must run as a non-root user: root bypasses file modes"
+    );
+
+    let text = Text::new("needle").unwrap();
+    let log_file = File::open(dir.join(EVENTS)).unwrap();
+    let id = SessionId("s_1".into());
+    let session = Session {
+        id: &id,
+        dir: &dir,
+        log: &log_file,
+    };
+    let cancel = CancelToken::new();
+    let mut out = Collect::new(100);
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o000)).unwrap();
+    search(&text, &session, &cancel, &mut out);
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let found = out.found();
+    assert_eq!(
+        hits(&found),
+        [(Label::Message, seq, "needle in the log".into(), None)]
+    );
+    assert_eq!(found.problems.len(), 1, "{:?}", found.problems);
+    assert!(
+        found.problems[0].starts_with(&format!("Could not read: {}: ", artifacts.display())),
+        "{:?}",
+        found.problems
+    );
+}
+
+#[test]
+fn an_unreadable_later_artifact_keeps_an_earlier_hit_when_not_cancelled() {
+    let fx = Fixture::new();
+    let log = fx.log("s_1");
+    let dir = fx.dir("s_1");
+    let earlier = artifact(&dir, "a.txt", b"needle in the readable artifact\n");
+    let unreadable = artifact(&dir, "b.txt", b"needle in the unreadable artifact\n");
+    let seq = fx.add(
+        &log,
+        "tool_call_completed",
+        completed("cut", Some("artifacts/a.txt")),
+    );
+    assert_ne!(
+        fs::metadata(&dir).unwrap().uid(),
+        0,
+        "this test must run as a non-root user: root bypasses file modes"
+    );
+
+    fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o000)).unwrap();
+    let cancel = CancelToken::new();
+    assert!(!cancel.is_cancelled());
+    let found = run_with("needle", &dir, &cancel);
+    assert!(!cancel.is_cancelled());
+    fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o644)).unwrap();
+
+    assert_eq!(
+        hits(&found),
+        [(
+            Label::ToolOutput,
+            seq,
+            "needle in the readable artifact".into(),
+            Some(earlier),
+        )]
+    );
+    assert_eq!(found.problems.len(), 1, "{:?}", found.problems);
+    assert!(
+        found.problems[0].starts_with(&format!("Could not read: {}: ", unreadable.display())),
+        "{:?}",
+        found.problems
     );
 }
 
