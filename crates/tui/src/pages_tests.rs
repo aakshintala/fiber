@@ -1,13 +1,21 @@
 //! Tests for the page index: the cut rule, seq ranges and the window.
 
+use contract::{ActionId, Seq};
+
 use super::{Cut, Index, PAGE_LINES, Page};
 
-/// Feeds `kinds` with consecutive seqs from `seq`, each with `action`,
-/// returning the next seq and every cut that was not `Cut::None`.
+/// Pushes one line, shown on a card or not.
+fn push(index: &mut Index, seq: u64, kind: &str, action: Option<&str>, shown: bool) -> Cut {
+    let action = action.map(|id| ActionId(id.to_owned()));
+    index.push(Seq(seq), kind, action.as_ref(), shown)
+}
+
+/// Feeds `kinds` with consecutive seqs from `seq`, each with `action` and
+/// shown, returning every cut that was not `Cut::None`.
 fn feed(index: &mut Index, seq: &mut u64, lines: &[(&str, Option<&str>)]) -> Vec<(u64, Cut)> {
     let mut cuts = Vec::new();
     for (kind, action) in lines {
-        let cut = index.push(*seq, kind, *action);
+        let cut = push(index, *seq, kind, *action, true);
         if cut != Cut::None {
             cuts.push((*seq, cut));
         }
@@ -19,8 +27,18 @@ fn feed(index: &mut Index, seq: &mut u64, lines: &[(&str, Option<&str>)]) -> Vec
 /// `count` lines that never cut: usage records.
 fn filler(index: &mut Index, seq: &mut u64, count: usize) {
     for _ in 0..count {
-        assert_eq!(index.push(*seq, "usage_recorded", None), Cut::None);
+        assert_eq!(push(index, *seq, "usage_recorded", None, true), Cut::None);
         *seq += 1;
+    }
+}
+
+/// A page from `first` to `last` holding `lines`, no rows counted.
+fn page(first: u64, last: u64, lines: usize) -> Page {
+    Page {
+        first_seq: Seq(first),
+        last_seq: Seq(last),
+        lines,
+        rows: 0,
     }
 }
 
@@ -62,20 +80,7 @@ fn a_step_that_opens_with_text_cuts_at_its_step_started() {
     assert_eq!(cuts, vec![(at, Cut::Candidate), (at + 2, Cut::AtCandidate)]);
     assert_eq!(
         index.pages(),
-        &[
-            Page {
-                first_seq: 0,
-                last_seq: at - 1,
-                lines: PAGE_LINES,
-                rows: 0
-            },
-            Page {
-                first_seq: at,
-                last_seq: at + 3,
-                lines: 4,
-                rows: 0
-            },
-        ]
+        &[page(0, at - 1, PAGE_LINES), page(at, at + 3, 4)]
     );
 }
 
@@ -117,9 +122,9 @@ fn reasoning_before_text_moves_with_the_step() {
     assert_eq!(cuts, vec![(at, Cut::Candidate), (at + 4, Cut::AtCandidate)]);
     let pages = index.pages();
     assert_eq!(pages.len(), 2);
-    assert_eq!(pages[0].last_seq, at - 1);
+    assert_eq!(pages[0].last_seq, Seq(at - 1));
     assert_eq!(pages[0].lines, PAGE_LINES);
-    assert_eq!(pages[1].first_seq, at);
+    assert_eq!(pages[1].first_seq, Seq(at));
     assert_eq!(pages[1].lines, 5);
 }
 
@@ -148,7 +153,35 @@ fn never_while_a_call_is_in_flight() {
 }
 
 #[test]
-fn a_turn_boundary_clears_calls_left_in_flight() {
+fn a_call_completed_after_its_turn_ends_blocks_the_next_turns_cut() {
+    let mut index = Index::default();
+    let mut seq = 0;
+    // The call's completion follows its turn's end.
+    feed(
+        &mut index,
+        &mut seq,
+        &[
+            ("turn_started", None),
+            ("tool_call_requested", Some("a_late")),
+            ("turn_completed", None),
+        ],
+    );
+    filler(&mut index, &mut seq, PAGE_LINES);
+    assert!(feed(&mut index, &mut seq, &[("turn_started", None)]).is_empty());
+    assert!(feed(&mut index, &mut seq, TEXT_STEP).is_empty());
+    feed(
+        &mut index,
+        &mut seq,
+        &[("tool_call_completed", Some("a_late"))],
+    );
+    // Completed: the next step that opens with text cuts.
+    let at = seq;
+    let cuts = feed(&mut index, &mut seq, TEXT_STEP);
+    assert_eq!(cuts, vec![(at, Cut::Candidate), (at + 2, Cut::AtCandidate)]);
+}
+
+#[test]
+fn a_call_two_turns_old_no_longer_blocks() {
     let mut index = Index::default();
     let mut seq = 0;
     // A cancelled turn leaves its call unmatched.
@@ -162,6 +195,116 @@ fn a_turn_boundary_clears_calls_left_in_flight() {
         ],
     );
     filler(&mut index, &mut seq, PAGE_LINES);
+    // The next turn keeps it: its completion may yet come.
+    assert!(feed(&mut index, &mut seq, &[("turn_started", None)]).is_empty());
+    feed(&mut index, &mut seq, &[("turn_completed", None)]);
+    // The turn after drops it.
+    let at = seq;
+    assert_eq!(
+        feed(&mut index, &mut seq, &[("turn_started", None)]),
+        vec![(at, Cut::Here)]
+    );
+}
+
+#[test]
+fn reasoning_in_flight_blocks_a_cut() {
+    let mut index = Index::default();
+    let mut seq = 0;
+    feed(
+        &mut index,
+        &mut seq,
+        &[
+            ("turn_started", None),
+            ("reasoning_started", Some("a_r")),
+        ],
+    );
+    filler(&mut index, &mut seq, PAGE_LINES);
+    assert!(feed(&mut index, &mut seq, TEXT_STEP).is_empty());
+    assert!(feed(&mut index, &mut seq, &[("turn_started", None)]).is_empty());
+    // Completed within the next turn: that turn's next text step cuts.
+    feed(&mut index, &mut seq, &[("reasoning_completed", Some("a_r"))]);
+    let at = seq;
+    let cuts = feed(&mut index, &mut seq, TEXT_STEP);
+    assert_eq!(cuts, vec![(at, Cut::Candidate), (at + 2, Cut::AtCandidate)]);
+}
+
+#[test]
+fn an_open_permission_blocks_a_cut() {
+    let mut index = Index::default();
+    let mut seq = 0;
+    // The call completes; its permission request is still open.
+    feed(
+        &mut index,
+        &mut seq,
+        &[
+            ("turn_started", None),
+            ("tool_call_requested", Some("a_p")),
+            ("permission_requested", Some("a_p")),
+            ("tool_call_completed", Some("a_p")),
+        ],
+    );
+    filler(&mut index, &mut seq, PAGE_LINES);
+    assert!(feed(&mut index, &mut seq, TEXT_STEP).is_empty());
+    feed(&mut index, &mut seq, &[("permission_resolved", Some("a_p"))]);
+    let at = seq;
+    let cuts = feed(&mut index, &mut seq, TEXT_STEP);
+    assert_eq!(cuts, vec![(at, Cut::Candidate), (at + 2, Cut::AtCandidate)]);
+}
+
+#[test]
+fn reasoning_that_joins_an_open_group_discards_the_candidate() {
+    let mut index = Index::default();
+    let mut seq = 0;
+    feed(&mut index, &mut seq, &[("turn_started", None)]);
+    filler(&mut index, &mut seq, PAGE_LINES);
+    // The tool step leaves its group open; the next step thinks first, and
+    // the thinking joins that group.
+    feed(&mut index, &mut seq, TOOL_STEP);
+    let at = seq;
+    let cuts = feed(
+        &mut index,
+        &mut seq,
+        &[
+            ("step_started", None),
+            ("assistant_message_started", Some("a_m2")),
+            ("reasoning_started", Some("a_r2")),
+            ("reasoning_completed", Some("a_r2")),
+            ("text_completed", Some("a_m2")),
+        ],
+    );
+    assert_eq!(cuts, vec![(at, Cut::Candidate)]);
+    assert_eq!(index.pages().len(), 1);
+    // The text closed the group: the next step that opens with text cuts.
+    let at = seq;
+    let cuts = feed(&mut index, &mut seq, TEXT_STEP);
+    assert_eq!(cuts, vec![(at, Cut::Candidate), (at + 2, Cut::AtCandidate)]);
+}
+
+#[test]
+fn text_shown_on_no_card_confirms_nothing() {
+    let mut index = Index::default();
+    let mut seq = 0;
+    feed(&mut index, &mut seq, &[("turn_started", None)]);
+    feed(&mut index, &mut seq, TOOL_STEP);
+    filler(&mut index, &mut seq, PAGE_LINES);
+    let at = seq;
+    assert_eq!(
+        push(&mut index, at, "step_started", None, false),
+        Cut::Candidate
+    );
+    // An empty part shows nothing, so the open group goes on.
+    assert_eq!(
+        push(&mut index, at + 1, "text_completed", Some("a_m"), false),
+        Cut::None
+    );
+    assert_eq!(
+        push(&mut index, at + 2, "tool_call_requested", Some("a_t2"), true),
+        Cut::None
+    );
+    assert_eq!(index.pages().len(), 1);
+    seq = at + 3;
+    feed(&mut index, &mut seq, &[("tool_call_completed", Some("a_t2"))]);
+    // A step whose text shows cuts.
     let at = seq;
     let cuts = feed(&mut index, &mut seq, TEXT_STEP);
     assert_eq!(cuts, vec![(at, Cut::Candidate), (at + 2, Cut::AtCandidate)]);
@@ -185,20 +328,16 @@ fn turn_started_cuts_at_once() {
     let pages = index.pages();
     assert_eq!(pages.len(), 2);
     assert_eq!(pages[0].lines, PAGE_LINES + 2);
-    assert_eq!(pages[1].first_seq, at);
+    assert_eq!(pages[1].first_seq, Seq(at));
     assert_eq!(pages[1].lines, 1);
-    // Even with a call in flight.
+    // Never with a call in flight.
     feed(
         &mut index,
         &mut seq,
         &[("tool_call_requested", Some("a_x"))],
     );
     filler(&mut index, &mut seq, PAGE_LINES);
-    let at = seq;
-    assert_eq!(
-        feed(&mut index, &mut seq, &[("turn_started", None)]),
-        vec![(at, Cut::Here)]
-    );
+    assert!(feed(&mut index, &mut seq, &[("turn_started", None)]).is_empty());
 }
 
 #[test]
@@ -226,8 +365,8 @@ fn a_later_step_replaces_an_empty_candidate() {
     let at = seq;
     let cuts = feed(&mut index, &mut seq, TEXT_STEP);
     assert_eq!(cuts, vec![(at, Cut::Candidate), (at + 2, Cut::AtCandidate)]);
-    assert_eq!(index.pages()[0].last_seq, at - 1);
-    assert_eq!(index.pages()[1].first_seq, at);
+    assert_eq!(index.pages()[0].last_seq, Seq(at - 1));
+    assert_eq!(index.pages()[1].first_seq, Seq(at));
 }
 
 #[test]
@@ -252,13 +391,13 @@ fn pages_cover_every_line_once_and_contiguously() {
     }
     let pages = index.pages();
     assert!(pages.len() > 5);
-    assert_eq!(pages.first().map(|page| page.first_seq), Some(first));
-    assert_eq!(pages.last().map(|page| page.last_seq), Some(seq - 1));
+    assert_eq!(pages.first().map(|page| page.first_seq), Some(Seq(first)));
+    assert_eq!(pages.last().map(|page| page.last_seq), Some(Seq(seq - 1)));
     for pair in pages.windows(2) {
-        assert_eq!(pair[0].last_seq + 1, pair[1].first_seq);
+        assert_eq!(pair[0].last_seq.0 + 1, pair[1].first_seq.0);
     }
     for page in pages {
-        let span = usize::try_from(page.last_seq - page.first_seq + 1).unwrap_or(0);
+        let span = usize::try_from(page.last_seq.0 - page.first_seq.0 + 1).unwrap_or(0);
         assert_eq!(page.lines, span);
     }
     let total: usize = pages.iter().map(|page| page.lines).sum();
@@ -277,10 +416,10 @@ fn the_page_holding_a_seq_is_found() {
     filler(&mut index, &mut seq, PAGE_LINES);
     feed(&mut index, &mut seq, &[("turn_started", None)]);
     let boundary = PAGE_LINES as u64;
-    assert_eq!(index.page_of(0), Some(0));
-    assert_eq!(index.page_of(boundary - 1), Some(0));
-    assert_eq!(index.page_of(boundary), Some(1));
-    assert_eq!(index.page_of(boundary + 1), None);
+    assert_eq!(index.page_of(Seq(0)), Some(0));
+    assert_eq!(index.page_of(Seq(boundary - 1)), Some(0));
+    assert_eq!(index.page_of(Seq(boundary)), Some(1));
+    assert_eq!(index.page_of(Seq(boundary + 1)), None);
 }
 
 /// An index of pages with these row counts.
@@ -290,7 +429,7 @@ fn with_rows(rows: &[usize]) -> Index {
     for (at, count) in rows.iter().enumerate() {
         if at > 0 {
             filler(&mut index, &mut seq, PAGE_LINES);
-            assert_eq!(index.push(seq, "turn_started", None), Cut::Here);
+            assert_eq!(push(&mut index, seq, "turn_started", None, true), Cut::Here);
             seq += 1;
         }
         index.set_rows(at, *count);

@@ -2,24 +2,37 @@
 //! page index that cuts the session's durable lines into pages, counts
 //! their rows and finds the window of pages kept on screen.
 
-use std::collections::HashSet;
+use std::collections::BTreeMap;
 use std::ops::Range;
+
+use contract::{ActionId, Seq};
 
 /// About how many durable lines a page holds before it may be cut.
 pub(crate) const PAGE_LINES: usize = 64;
 
 /// One page: a contiguous run of durable lines by `seq`, and the rows they
 /// draw at the current width. A page with no lines yet has no seq range.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Page {
     /// The first line's `seq`.
-    pub(crate) first_seq: u64,
+    pub(crate) first_seq: Seq,
     /// The last line's `seq`.
-    pub(crate) last_seq: u64,
+    pub(crate) last_seq: Seq,
     /// How many durable lines it holds.
     pub(crate) lines: usize,
     /// How many rows it draws.
     pub(crate) rows: usize,
+}
+
+impl Default for Page {
+    fn default() -> Self {
+        Self {
+            first_seq: Seq(0),
+            last_seq: Seq(0),
+            lines: 0,
+            rows: 0,
+        }
+    }
 }
 
 /// What one durable line did to the pages.
@@ -41,8 +54,19 @@ pub(crate) enum Cut {
 /// before it.
 #[derive(Debug, Clone, Copy)]
 struct Candidate {
-    seq: u64,
+    seq: Seq,
     held: usize,
+}
+
+/// An action whose completion folds back into the item it started.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Flight {
+    /// `tool_call_requested` until `tool_call_completed`.
+    Call,
+    /// `reasoning_started` until `reasoning_completed`.
+    Reasoning,
+    /// `permission_requested` until `permission_resolved`.
+    Permission,
 }
 
 /// The page index. Pages are contiguous in `seq` and never overlap; every
@@ -50,8 +74,13 @@ struct Candidate {
 #[derive(Debug)]
 pub(crate) struct Index {
     pages: Vec<Page>,
-    /// Tool calls requested and not yet completed, by action id.
-    in_flight: HashSet<String>,
+    /// Actions in flight, with the turn each began in.
+    in_flight: BTreeMap<(Flight, ActionId), u64>,
+    /// How many turns have started.
+    turns: u64,
+    /// Whether a tool group is open: a call or thinking shown since the
+    /// last text.
+    group: bool,
     candidate: Option<Candidate>,
 }
 
@@ -59,37 +88,56 @@ impl Default for Index {
     fn default() -> Self {
         Self {
             pages: vec![Page::default()],
-            in_flight: HashSet::new(),
+            in_flight: BTreeMap::new(),
+            turns: 0,
+            group: false,
             candidate: None,
         }
     }
 }
 
 impl Index {
-    /// Adds the durable line `seq` of `kind`, cutting a page where the rule
-    /// allows: at a `step_started` once the open page holds
-    /// [`PAGE_LINES`] lines and no tool call is in flight, confirmed when
-    /// the step's first content is text (`text_completed`) and discarded
-    /// when it is a tool call, which continues the open tool group; and at
-    /// a `turn_started` once the open page holds [`PAGE_LINES`] lines.
-    /// `assistant_message_started` opens every model call, a tool call's
-    /// too, so it is not content.
-    pub(crate) fn push(&mut self, seq: u64, kind: &str, action: Option<&str>) -> Cut {
+    /// Adds the durable line `seq` of `kind`, `shown` when it changed a
+    /// card, cutting a page where the rule allows while nothing is in
+    /// flight: at a `step_started` once the open page holds [`PAGE_LINES`]
+    /// lines, confirmed when the step's first content is text shown
+    /// (`text_completed`), and discarded when it is a tool call or thinking
+    /// that joins an open tool group; and at a `turn_started` once the open
+    /// page holds [`PAGE_LINES`] lines. `assistant_message_started` opens
+    /// every model call, a tool call's too, so it is not content.
+    ///
+    /// In flight is every action whose completion folds back into an
+    /// earlier item, kept across turn ends because completions may follow
+    /// them, so every line that changes an item lies on the item's page.
+    /// One begun two turns back is dropped: a cancelled or crashed call
+    /// never completes.
+    pub(crate) fn push(
+        &mut self,
+        seq: Seq,
+        kind: &str,
+        action: Option<&ActionId>,
+        shown: bool,
+    ) -> Cut {
         let held = self.held();
         let mut cut = Cut::None;
+        let begin = |flight: Flight, index: &mut Self| {
+            if let Some(action) = action {
+                index.in_flight.insert((flight, action.clone()), index.turns);
+            }
+        };
         match kind {
             "turn_started" => {
-                self.in_flight.clear();
+                self.turns = self.turns.saturating_add(1);
+                let keep = self.turns.saturating_sub(1);
+                self.in_flight.retain(|_, turn| *turn >= keep);
                 self.candidate = None;
-                if held >= PAGE_LINES {
+                self.group = false;
+                if held >= PAGE_LINES && self.in_flight.is_empty() {
                     self.pages.push(Page::default());
                     cut = Cut::Here;
                 }
             }
-            "turn_completed" => {
-                self.in_flight.clear();
-                self.candidate = None;
-            }
+            "turn_completed" => self.candidate = None,
             "step_started" => {
                 self.candidate = None;
                 if held >= PAGE_LINES && self.in_flight.is_empty() {
@@ -99,16 +147,29 @@ impl Index {
             }
             "tool_call_requested" => {
                 self.candidate = None;
+                self.group |= shown;
+                begin(Flight::Call, self);
+            }
+            "reasoning_started" => {
+                if self.group {
+                    self.candidate = None;
+                }
+                self.group |= shown;
+                begin(Flight::Reasoning, self);
+            }
+            "permission_requested" => begin(Flight::Permission, self),
+            "tool_call_completed" | "reasoning_completed" | "permission_resolved" => {
+                let flight = match kind {
+                    "tool_call_completed" => Flight::Call,
+                    "reasoning_completed" => Flight::Reasoning,
+                    _ => Flight::Permission,
+                };
                 if let Some(action) = action {
-                    self.in_flight.insert(action.to_owned());
+                    self.in_flight.remove(&(flight, action.clone()));
                 }
             }
-            "tool_call_completed" => {
-                if let Some(action) = action {
-                    self.in_flight.remove(action);
-                }
-            }
-            "text_completed" => {
+            "text_completed" if shown => {
+                self.group = false;
                 if let Some(candidate) = self.candidate.take() {
                     self.split(candidate);
                     cut = Cut::AtCandidate;
@@ -134,7 +195,7 @@ impl Index {
         let moved = open.lines.saturating_sub(candidate.held);
         let last_seq = open.last_seq;
         open.lines = candidate.held;
-        open.last_seq = candidate.seq.saturating_sub(1);
+        open.last_seq = Seq(candidate.seq.0.saturating_sub(1));
         self.pages.push(Page {
             first_seq: candidate.seq,
             last_seq,
@@ -156,7 +217,7 @@ impl Index {
     }
 
     /// The page holding `seq`, if any does.
-    pub(crate) fn page_of(&self, seq: u64) -> Option<usize> {
+    pub(crate) fn page_of(&self, seq: Seq) -> Option<usize> {
         let at = self.pages.partition_point(|page| page.last_seq < seq);
         self.pages
             .get(at)
