@@ -1,8 +1,8 @@
 //! Owns the render state a handoff reads and the restart conversation.
 
+use contract::ActionId;
 use contract::events::{ContextNudged, Event, HandoffCompleted, Note};
 use contract::provider::Input;
-use contract::ActionId;
 
 use crate::prompt::{body, fill};
 
