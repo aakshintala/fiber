@@ -1512,6 +1512,31 @@ fn the_stopper_after_the_inbox_is_gone_still_cancels_later_shells() {
 }
 
 #[test]
+fn abandon_unregisters_a_driver_shell_that_never_ran() {
+    let opened = open();
+    opened.session.shell(Arc::new(HeldShell {
+        entered: Mutex::new(None),
+        cancelled: Mutex::new(None),
+        release: Mutex::new(None),
+    }));
+    let gate = Arc::clone(&opened.session.gate);
+    let command = contract::commands::Shell {
+        command: "true".to_owned(),
+        send: false,
+    };
+    let Ok(running) = crate::shell::start(&gate, &command) else {
+        panic!("the driver shell passed its checks");
+    };
+    assert_eq!(super::lock(&gate.shells).running.len(), 1);
+    running.abandon(&gate);
+    assert!(
+        super::lock(&gate.shells).running.is_empty(),
+        "close would wait for a shell that never runs"
+    );
+    close_within(opened.session, opened.log);
+}
+
+#[test]
 fn quiesce_cancels_a_running_driver_shell_and_waits_for_it() {
     let running = running_shell(|_, _| {});
     let session = running.opened.session;
