@@ -524,7 +524,7 @@ fn a_failed_model_call_fails_the_turn_with_its_code() {
     let failure = Failure {
         code: ErrorCode::InvalidRequest,
         message: "The provider rejected the request.".into(),
-        retry_after: None,
+        retry_after_ms: None,
         provider: None,
     };
     let mut session = Session::new(vec![Scripted::failed(failure)], None);
@@ -1040,7 +1040,7 @@ fn a_steer_arriving_during_a_failed_reply_starts_the_next_turn() {
     let failure = Failure {
         code: ErrorCode::InvalidRequest,
         message: "The provider rejected the request.".into(),
-        retry_after: None,
+        retry_after_ms: None,
         provider: None,
     };
     let mut session = Session::new(

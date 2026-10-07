@@ -96,7 +96,7 @@ fn failure(code: ErrorCode, message: &str) -> Failure {
     Failure {
         code,
         message: message.into(),
-        retry_after: None,
+        retry_after_ms: None,
         provider: None,
     }
 }
@@ -130,7 +130,6 @@ fn message() -> Event {
     Event::AssistantMessageCompleted(AssistantMessageCompleted {
         outcome: MessageOutcome::Completed,
         error: None,
-        attempt: None,
     })
 }
 

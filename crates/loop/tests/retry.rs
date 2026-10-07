@@ -23,13 +23,16 @@ use contract::shapes::Failure;
 use fakes::Scripted;
 use r#loop::Retry;
 
-use support::{DEADLINE, Session, TestTool, assert_no_stored_attempt, assert_scheduled_attempts, attempt_numbers, delivery, kinds};
+use support::{
+    DEADLINE, Session, TestTool, assert_no_stored_attempt, assert_scheduled_attempts,
+    attempt_numbers, delivery, kinds,
+};
 
 fn failed(code: ErrorCode) -> Scripted {
     Scripted::failed(Failure {
         code,
         message: "The call failed.".into(),
-        retry_after: None,
+        retry_after_ms: None,
         provider: None,
     })
 }
@@ -41,7 +44,7 @@ fn header_failed(code: ErrorCode, should_retry: Option<bool>) -> Scripted {
             failure: Failure {
                 code,
                 message: "The call failed.".into(),
-                retry_after: None,
+                retry_after_ms: None,
                 provider: None,
             },
             should_retry,
@@ -49,14 +52,14 @@ fn header_failed(code: ErrorCode, should_retry: Option<bool>) -> Scripted {
     }
 }
 
-fn waited(code: ErrorCode, retry_after: f64) -> Scripted {
+fn waited(code: ErrorCode, retry_after_ms: u64) -> Scripted {
     Scripted {
         deltas: Vec::new(),
         end: Err(CallError::Failed {
             failure: Failure {
                 code,
                 message: "The call failed.".into(),
-                retry_after: Some(retry_after),
+                retry_after_ms: Some(retry_after_ms),
                 provider: None,
             },
             should_retry: None,
@@ -414,7 +417,7 @@ fn x_should_retry_true_retries_an_invalid_request() {
 fn an_asked_wait_within_the_cap_waits_the_larger() {
     let mut session = Session::new(
         vec![
-            waited(ErrorCode::RateLimited, 30.0),
+            waited(ErrorCode::RateLimited, 30_000),
             Scripted::text("Recovered."),
         ],
         None,
@@ -459,7 +462,7 @@ fn an_asked_wait_within_the_cap_waits_the_larger() {
 
 #[test]
 fn an_asked_wait_over_the_cap_fails_at_once_as_rate_limited() {
-    let mut session = Session::new(vec![waited(ErrorCode::RateLimited, 90.0)], None);
+    let mut session = Session::new(vec![waited(ErrorCode::RateLimited, 90_000)], None);
     session.inbox.send(delivery("hi")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Failed));
     let lines = session.lines();
@@ -505,7 +508,7 @@ fn a_failed_stream_drops_its_partial_text_and_tool_calls() {
                     failure: Failure {
                         code: ErrorCode::StreamIncomplete,
                         message: "The stream ended early.".into(),
-                        retry_after: None,
+                        retry_after_ms: None,
                         provider: None,
                     },
                     should_retry: None,

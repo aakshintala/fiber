@@ -28,8 +28,8 @@ use r#loop::{HandoffSettings, Retry, rebuild};
 use serde_json::json;
 
 use support::{
-    DEADLINE, MODEL, Session, TestTool, assert_no_stored_attempt, attempt_numbers, calls_reply, delivery, handoff, ignore, kinds,
-    reasoning_reply, tool_call_reply, with_tokens,
+    DEADLINE, MODEL, Session, TestTool, assert_no_stored_attempt, attempt_numbers, calls_reply,
+    delivery, handoff, ignore, kinds, reasoning_reply, tool_call_reply, with_tokens,
 };
 
 /// The trigger in these tests.
@@ -85,7 +85,7 @@ fn failed(code: ErrorCode) -> Scripted {
     Scripted::failed(Failure {
         code,
         message: "The call failed.".into(),
-        retry_after: None,
+        retry_after_ms: None,
         provider: None,
     })
 }

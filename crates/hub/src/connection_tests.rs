@@ -228,10 +228,8 @@ fn status_answers_running_version_and_clients() {
         result,
         json!({"running": true, "fiber_version": "0.0.0", "clients": 1})
     );
-    let reread: contract::events::CommandAccepted = serde_json::from_value(
-        json!({"command_id": "c_1", "result": result}),
-    )
-    .unwrap();
+    let reread: contract::events::CommandAccepted =
+        serde_json::from_value(json!({"command_id": "c_1", "result": result})).unwrap();
     assert_eq!(
         reread.result,
         Some(contract::events::CommandResult::Status {
@@ -331,10 +329,8 @@ fn start_answers_with_the_session_id() {
     let session = result.get("session_id").unwrap().as_str().unwrap();
     assert!(session.starts_with("s_"));
     assert!(temp.dir.join("run").join(session).exists());
-    let reread: contract::events::CommandAccepted = serde_json::from_value(
-        json!({"command_id": "c_1", "result": result}),
-    )
-    .unwrap();
+    let reread: contract::events::CommandAccepted =
+        serde_json::from_value(json!({"command_id": "c_1", "result": result})).unwrap();
     let Some(contract::events::CommandResult::Start { ref session_id }) = reread.result else {
         panic!("not a start");
     };

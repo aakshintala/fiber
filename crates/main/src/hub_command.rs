@@ -80,7 +80,7 @@ fn failure(code: ErrorCode, message: String) -> Failure {
     Failure {
         code,
         message,
-        retry_after: None,
+        retry_after_ms: None,
         provider: None,
     }
 }
@@ -209,7 +209,7 @@ impl hub::Started for Spawned {
         Some(state.failure.clone().unwrap_or_else(|| Failure {
             code: ErrorCode::IoFailed,
             message: format!("Session {} exited without a verdict.", self.id.0),
-            retry_after: None,
+            retry_after_ms: None,
             provider: None,
         }))
     }
@@ -252,7 +252,7 @@ fn fiber_exited_error(line: &str) -> Option<Failure> {
     Some(Failure {
         code,
         message,
-        retry_after: None,
+        retry_after_ms: None,
         provider: None,
     })
 }

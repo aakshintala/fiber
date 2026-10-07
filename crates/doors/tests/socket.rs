@@ -1980,7 +1980,7 @@ fn shell_without_a_process_is_invalid_arguments() {
             error: Some(Failure {
                 code: ErrorCode::InvalidArguments,
                 message: "Give one command.".to_owned(),
-                retry_after: None,
+                retry_after_ms: None,
                 provider: None,
             }),
             ..Output::default()

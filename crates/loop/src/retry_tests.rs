@@ -12,16 +12,16 @@ fn failure(code: ErrorCode) -> Failure {
     Failure {
         code,
         message: "The call failed.".to_owned(),
-        retry_after: None,
+        retry_after_ms: None,
         provider: None,
     }
 }
 
-fn failed_after(code: ErrorCode, retry_after: Option<f64>) -> Failure {
+fn failed_after(code: ErrorCode, retry_after_ms: Option<u64>) -> Failure {
     Failure {
         code,
         message: "The call failed.".to_owned(),
-        retry_after,
+        retry_after_ms,
         provider: None,
     }
 }
@@ -81,7 +81,7 @@ fn each_never_retried_code_fails_unchanged() {
     ] {
         let failed = fail_code(retry.decide(&failure(code.clone()), None, 0));
         assert_eq!(failed.code, code, "{code:?} fails");
-        assert_eq!(failed.retry_after, None);
+        assert_eq!(failed.retry_after_ms, None);
     }
 }
 
@@ -163,12 +163,12 @@ fn the_cap_clamps_the_doubling() {
 fn an_asked_wait_within_the_cap_waits_the_larger() {
     let retry = Retry::default();
     assert_eq!(
-        retry_ms(retry.decide(&failed_after(ErrorCode::RateLimited, Some(5.0)), None, 0)),
+        retry_ms(retry.decide(&failed_after(ErrorCode::RateLimited, Some(5000)), None, 0)),
         5000,
         "5s asked beats the 2s backoff"
     );
     assert_eq!(
-        retry_ms(retry.decide(&failed_after(ErrorCode::RateLimited, Some(1.0)), None, 0)),
+        retry_ms(retry.decide(&failed_after(ErrorCode::RateLimited, Some(1000)), None, 0)),
         2000,
         "the 2s backoff beats 1s asked"
     );
@@ -182,26 +182,29 @@ fn an_asked_wait_over_the_cap_fails_at_once_as_rate_limited() {
         ErrorCode::ProviderUnavailable,
         ErrorCode::ConnectionFailed,
     ] {
-        let failed = fail_code(retry.decide(&failed_after(code, Some(61.0)), None, 0));
+        let failed = fail_code(retry.decide(&failed_after(code, Some(61_000)), None, 0));
         assert_eq!(failed.code, ErrorCode::RateLimited);
-        assert_eq!(failed.retry_after, Some(61.0));
+        assert_eq!(failed.retry_after_ms, Some(61_000));
     }
 }
 
 #[test]
 fn an_over_cap_wait_keeps_a_never_retried_code() {
     let retry = Retry::default();
-    let failed =
-        fail_code(retry.decide(&failed_after(ErrorCode::QuotaExceeded, Some(61.0)), None, 0));
+    let failed = fail_code(retry.decide(
+        &failed_after(ErrorCode::QuotaExceeded, Some(61_000)),
+        None,
+        0,
+    ));
     assert_eq!(failed.code, ErrorCode::QuotaExceeded);
-    assert_eq!(failed.retry_after, Some(61.0));
+    assert_eq!(failed.retry_after_ms, Some(61_000));
 }
 
 #[test]
 fn an_asked_wait_exactly_at_the_cap_retries() {
     let retry = Retry::default();
     assert_eq!(
-        retry_ms(retry.decide(&failed_after(ErrorCode::RateLimited, Some(60.0)), None, 0)),
+        retry_ms(retry.decide(&failed_after(ErrorCode::RateLimited, Some(60_000)), None, 0)),
         60_000
     );
 }
@@ -238,13 +241,46 @@ fn huge_values_do_not_overflow() {
 }
 
 #[test]
-fn an_unusable_asked_wait_is_absent() {
-    let retry = Retry::default();
-    for asked in [f64::NAN, f64::INFINITY, -1.0] {
-        assert_eq!(
-            retry_ms(retry.decide(&failed_after(ErrorCode::RateLimited, Some(asked)), None, 0)),
-            2000,
-            "asked {asked} is absent, so the backoff applies"
-        );
+fn a_saturated_asked_wait_fails_at_once_whatever_the_cap() {
+    for max in [Duration::from_millis(u64::MAX), Retry::default().max] {
+        let retry = Retry {
+            max,
+            ..Retry::default()
+        };
+        let failed = fail_code(retry.decide(
+            &failed_after(ErrorCode::RateLimited, Some(u64::MAX)),
+            None,
+            0,
+        ));
+        assert_eq!(failed.code, ErrorCode::RateLimited);
+        assert_eq!(failed.retry_after_ms, Some(u64::MAX));
     }
+    let retry = Retry {
+        max: Duration::from_millis(u64::MAX),
+        ..Retry::default()
+    };
+    assert_eq!(
+        retry_ms(retry.decide(
+            &failed_after(ErrorCode::RateLimited, Some(u64::MAX - 1)),
+            None,
+            0
+        )),
+        u64::MAX - 1,
+        "only the saturated value counts as over every cap"
+    );
+}
+
+#[test]
+fn a_43_ms_cap_retries_43_ms_and_fails_44_ms() {
+    let retry = Retry {
+        max: Duration::from_millis(43),
+        ..Retry::default()
+    };
+    assert_eq!(
+        retry_ms(retry.decide(&failed_after(ErrorCode::RateLimited, Some(43)), None, 0)),
+        43
+    );
+    let failed = fail_code(retry.decide(&failed_after(ErrorCode::RateLimited, Some(44)), None, 0));
+    assert_eq!(failed.code, ErrorCode::RateLimited);
+    assert_eq!(failed.retry_after_ms, Some(44));
 }

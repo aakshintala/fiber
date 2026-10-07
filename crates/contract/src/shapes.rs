@@ -15,9 +15,10 @@ pub struct Failure {
     pub code: ErrorCode,
     /// Fiber's own sentence, saying what to do when there is a fix.
     pub message: String,
-    /// On a failed model call, the seconds the provider asked Fiber to wait.
+    /// On a failed model call, the wait the provider asked for, in
+    /// milliseconds, rounded up.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub retry_after: Option<f64>,
+    pub retry_after_ms: Option<u64>,
     /// On a failed model call, what the provider itself said.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<ProviderFailure>,

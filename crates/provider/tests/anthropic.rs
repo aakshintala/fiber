@@ -1008,7 +1008,7 @@ fn a_status_other_than_2xx_fails_with_its_code_and_the_providers_words() {
          with, or log in again with `fiber login anthropic`."
     );
     assert_eq!(failures[0].code, ErrorCode::RateLimited);
-    assert_eq!(failures[0].retry_after, Some(7.0));
+    assert_eq!(failures[0].retry_after_ms, Some(7000));
     assert_eq!(failures[0].provider.as_ref().unwrap().message, "Slow down.");
     assert_eq!(failures[1].code, ErrorCode::InvalidRequest);
     assert_eq!(failures[2].code, ErrorCode::AuthenticationFailed);

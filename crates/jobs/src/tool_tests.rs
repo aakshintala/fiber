@@ -330,7 +330,7 @@ fn a_job_that_already_ended_is_returned_at_once_and_claimed_once() {
         error: Some(Failure {
             code: ErrorCode::NonzeroExit,
             message: "Exit code 1.".into(),
-            retry_after: None,
+            retry_after_ms: None,
             provider: None,
         }),
         process: Some(Process {
@@ -410,7 +410,7 @@ fn final_text_adds_a_newline_only_when_the_piece_has_none() {
         error: Some(Failure {
             code: ErrorCode::ToolError,
             message: "Stopped.\n".into(),
-            retry_after: None,
+            retry_after_ms: None,
             provider: None,
         }),
         process: Some(Process {

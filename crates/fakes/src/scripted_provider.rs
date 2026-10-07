@@ -116,7 +116,7 @@ impl Provider for ScriptedProvider {
                 Scripted::failed(Failure {
                     code: ErrorCode::Other("script_exhausted".into()),
                     message: "The scripted provider has no reply left.".into(),
-                    retry_after: None,
+                    retry_after_ms: None,
                     provider: None,
                 })
             });

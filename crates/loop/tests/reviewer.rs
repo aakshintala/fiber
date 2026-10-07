@@ -525,7 +525,7 @@ fn a_failed_reviewer_call_escalates_with_its_failure() {
     let reviewer = session.reviewer(vec![Scripted::failed(Failure {
         code: ErrorCode::Timeout,
         message: "the reviewer timed out".into(),
-        retry_after: None,
+        retry_after_ms: None,
         provider: None,
     })]);
     let answered = on_request(&session, {
@@ -1131,13 +1131,13 @@ fn headless_failures_count_toward_the_block_budget() {
             Scripted::failed(Failure {
                 code: ErrorCode::Timeout,
                 message: "the reviewer timed out".into(),
-                retry_after: None,
+                retry_after_ms: None,
                 provider: None,
             }),
             Scripted::failed(Failure {
                 code: ErrorCode::Timeout,
                 message: "the reviewer timed out".into(),
-                retry_after: None,
+                retry_after_ms: None,
                 provider: None,
             }),
         ],
@@ -1272,7 +1272,7 @@ fn failures_without_an_answer_count_toward_the_consecutive_limit() {
         Scripted::failed(Failure {
             code: ErrorCode::Timeout,
             message: "the reviewer timed out".into(),
-            retry_after: None,
+            retry_after_ms: None,
             provider: None,
         })
     };

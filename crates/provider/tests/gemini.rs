@@ -971,8 +971,11 @@ fn a_failed_status_reads_retry_after_or_retry_info_and_the_providers_words() {
             other => panic!("{other:?}"),
         })
         .collect();
-    let retry: Vec<Option<f64>> = failures.iter().map(|f| f.retry_after).collect();
-    assert_eq!(retry, [Some(37.0), Some(1.5), Some(7.0), None, None, None]);
+    let retry: Vec<Option<u64>> = failures.iter().map(|f| f.retry_after_ms).collect();
+    assert_eq!(
+        retry,
+        [Some(37000), Some(1500), Some(7000), None, None, None]
+    );
     let codes: Vec<ErrorCode> = failures.iter().map(|f| f.code.clone()).collect();
     assert_eq!(
         codes,

@@ -682,7 +682,7 @@ fn failure(code: ErrorCode, message: String) -> Failure {
     Failure {
         code,
         message,
-        retry_after: None,
+        retry_after_ms: None,
         provider: None,
     }
 }

@@ -30,7 +30,7 @@ fn a_configure_failure_keeps_its_code_and_message() {
     let error = StartError::Configure(Failure {
         code: ErrorCode::ConfigInvalid,
         message: "config.json is not valid JSON.".to_owned(),
-        retry_after: None,
+        retry_after_ms: None,
         provider: None,
     });
     assert_eq!(error.code(), ErrorCode::ConfigInvalid);

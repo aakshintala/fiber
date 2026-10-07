@@ -357,7 +357,7 @@ pub(crate) fn failed(
         error: Failure {
             code: ErrorCode::McpServerUnavailable,
             message,
-            retry_after: None,
+            retry_after_ms: None,
             provider: None,
         },
     }

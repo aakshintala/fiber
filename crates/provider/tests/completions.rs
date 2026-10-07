@@ -839,7 +839,7 @@ fn a_status_other_than_2xx_fails_with_its_code_and_the_providers_words() {
             ErrorCode::RateLimited,
         ]
     );
-    assert_eq!(failures[3].retry_after, Some(7.0));
+    assert_eq!(failures[3].retry_after_ms, Some(7000));
 }
 
 #[test]

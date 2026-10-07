@@ -244,7 +244,7 @@ impl TestTool {
         tool.output.error = Some(Failure {
             code,
             message: "It broke.".into(),
-            retry_after: None,
+            retry_after_ms: None,
             provider: None,
         });
         tool
@@ -1297,7 +1297,10 @@ pub(crate) fn attempt_numbers(lines: &[Envelope]) -> Vec<u32> {
 
 /// Asserts no `assistant_message_completed` stores an `attempt` key.
 pub(crate) fn assert_no_stored_attempt(lines: &[Envelope]) {
-    for line in lines.iter().filter(|l| l.kind == "assistant_message_completed") {
+    for line in lines
+        .iter()
+        .filter(|l| l.kind == "assistant_message_completed")
+    {
         assert!(
             line.payload.get("attempt").is_none(),
             "a failed call stores no attempt: {}",

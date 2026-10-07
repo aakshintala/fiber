@@ -3330,7 +3330,7 @@ fn handoff_done(outcome: contract::events::Outcome, note: &[&str]) -> Event {
         error: failed.then(|| contract::shapes::Failure {
             code: contract::ErrorCode::RateLimited,
             message: "slow down".into(),
-            retry_after: None,
+            retry_after_ms: None,
             provider: None,
         }),
         note: (!note.is_empty()).then(|| contract::events::Note::Actions {

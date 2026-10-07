@@ -59,7 +59,7 @@ fn failure() -> JobCompleted {
         error: Some(Failure {
             code: ErrorCode::Indeterminate,
             message: "The job ended without a result.".into(),
-            retry_after: None,
+            retry_after_ms: None,
             provider: None,
         }),
         process: None,

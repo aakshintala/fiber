@@ -139,7 +139,7 @@ pub(crate) fn thinking(
                 message: format!(
                     "The thinking level `{level}` is not one model `{reference}` takes: it {takes}.",
                 ),
-                retry_after: None,
+                retry_after_ms: None,
                 provider: None,
             })
         }

@@ -424,7 +424,7 @@ impl Loop {
             reviewer: Err(Failure {
                 code: ErrorCode::NoModel,
                 message: NO_MODEL_MESSAGE.to_owned(),
-                retry_after: None,
+                retry_after_ms: None,
                 provider: None,
             }),
             limits: BlockLimits::default(),

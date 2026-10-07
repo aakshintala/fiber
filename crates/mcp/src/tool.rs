@@ -182,7 +182,7 @@ fn answer(server: &str, tool: &str, result: &Value) -> Output {
             error: Some(Failure {
                 code: ErrorCode::ToolError,
                 message,
-                retry_after: None,
+                retry_after_ms: None,
                 provider: None,
             }),
             ..Output::default()
@@ -216,7 +216,7 @@ fn failed(code: ErrorCode, message: String) -> Output {
         error: Some(Failure {
             code,
             message,
-            retry_after: None,
+            retry_after_ms: None,
             provider: None,
         }),
         ..Output::default()

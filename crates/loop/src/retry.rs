@@ -88,8 +88,8 @@ impl Retry {
         if retries >= self.attempts {
             return Decision::Fail(failure.clone());
         }
-        if let Some(asked) = asked_wait(failure.retry_after)
-            && asked > self.max.as_secs_f64()
+        if let Some(ms) = failure.retry_after_ms
+            && (ms == u64::MAX || Duration::from_millis(ms) > self.max)
         {
             // A wait longer than the cap fails at once as `rate_limited`,
             // so a person or a caller can decide. Whatever the original
@@ -99,8 +99,8 @@ impl Retry {
             return Decision::Fail(over);
         }
         let backoff = self.backoff(retries);
-        match asked_wait(failure.retry_after) {
-            Some(asked) => Decision::Retry(backoff.max(wait_duration(asked))),
+        match failure.retry_after_ms {
+            Some(ms) => Decision::Retry(backoff.max(Duration::from_millis(ms))),
             None => Decision::Retry(backoff),
         }
     }
@@ -112,23 +112,6 @@ impl Retry {
             .saturating_mul(1u32.checked_shl(retries).unwrap_or(u32::MAX))
             .min(self.max)
     }
-}
-
-/// The asked wait in seconds, when it parses to a finite, non-negative
-/// number; anything else is absent.
-fn asked_wait(retry_after: Option<f64>) -> Option<f64> {
-    retry_after.filter(|asked| asked.is_finite() && *asked >= 0.0)
-}
-
-/// An asked wait in seconds as a `Duration`, rounded up to whole
-/// milliseconds.
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    reason = "asked is finite and non-negative, clamped to u64::MAX milliseconds"
-)]
-fn wait_duration(asked: f64) -> Duration {
-    Duration::from_millis((asked * 1000.0).ceil().clamp(0.0, u64::MAX as f64) as u64)
 }
 
 /// How the model calls of one request ended.
@@ -212,7 +195,6 @@ impl crate::Loop {
                         &Event::AssistantMessageCompleted(AssistantMessageCompleted {
                             outcome: MessageOutcome::Failed,
                             error: Some(error.clone()),
-                            attempt: Some(attempt),
                         }),
                         turn,
                         Some(&message),

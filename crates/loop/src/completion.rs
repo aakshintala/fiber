@@ -60,7 +60,7 @@ pub(crate) fn failed(code: ErrorCode, message: String) -> ToolCallCompleted {
             Some(Failure {
                 code,
                 message,
-                retry_after: None,
+                retry_after_ms: None,
                 provider: None,
             }),
         )
