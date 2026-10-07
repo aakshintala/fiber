@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use config::{Config, ModelData, ProviderData};
+use config::{Config, ConfigError, ModelData, ProviderData};
 use contract::ErrorCode;
 use contract::events::Notice;
 use serde_json::Value;
@@ -342,10 +342,67 @@ impl Providers {
     /// settings file that cannot be read is `Error::Config`.
     pub fn fill_placeholders(
         &mut self,
-        _config: &Config,
-        _env: &dyn Fn(&str) -> Option<String>,
+        config: &Config,
+        env: &dyn Fn(&str) -> Option<String>,
     ) -> Result<Vec<Notice>, Error> {
-        Ok(Vec::new())
+        let mut notices = Vec::new();
+        let names: Vec<String> = self.by_name.keys().cloned().collect();
+        for provider_name in names {
+            let extension = self
+                .extension_of
+                .get(&provider_name)
+                .cloned()
+                .unwrap_or_else(|| provider_name.clone());
+            let placeholders = self
+                .by_name
+                .get(&provider_name)
+                .map(|data| data.placeholders.clone())
+                .unwrap_or_default();
+            if let Some(data) = self.by_name.get_mut(&provider_name) {
+                let mut kept = Vec::new();
+                for mut model in data.models.drain(..) {
+                    let template = model.base_url.clone();
+                    let lookup = |name: &str| -> Result<Option<Value>, ConfigError> {
+                        match config.extension_setting(&extension, &[], name)? {
+                            Some(Value::String(value)) if !value.is_empty() => {
+                                Ok(Some(Value::String(value)))
+                            }
+                            _ => {
+                                if let Some(variable) = placeholders
+                                    .get(name)
+                                    .and_then(|placeholder| placeholder.env.as_deref())
+                                    && let Some(value) = env(variable)
+                                    && !value.is_empty()
+                                {
+                                    return Ok(Some(Value::String(value)));
+                                }
+                                Ok(None)
+                            }
+                        }
+                    };
+                    match placeholders::fill(&template, &lookup)? {
+                        placeholders::Filled::Url(url) => {
+                            model.base_url = url;
+                            kept.push(model);
+                        }
+                        placeholders::Filled::Missing(name) => {
+                            let variable = placeholders
+                                .get(&name)
+                                .and_then(|placeholder| placeholder.env.as_deref());
+                            notices.push(placeholders::unconfigured(
+                                &provider_name,
+                                &model.id,
+                                &extension,
+                                &name,
+                                variable,
+                            ));
+                        }
+                    }
+                }
+                data.models = kept;
+            }
+        }
+        Ok(notices)
     }
 
     /// The installed data of `name`: the data file's, else one naming only

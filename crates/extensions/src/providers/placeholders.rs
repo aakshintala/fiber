@@ -10,10 +10,6 @@ use contract::events::Notice;
 mod tests;
 
 /// A `base_url` filled, or the name of its first placeholder with no value.
-#[allow(
-    dead_code,
-    reason = "wired in Task 2; the red commit holds only the signature"
-)]
 #[derive(Debug, PartialEq)]
 pub(super) enum Filled {
     /// The template with every placeholder replaced.
@@ -22,25 +18,55 @@ pub(super) enum Filled {
     Missing(String),
 }
 
+/// Whether `c` may appear in a placeholder's name.
+fn is_name_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_' || c == '-'
+}
+
 /// `template` with each `{name}` replaced by `lookup(name)`; a lookup that
 /// finds no usable value stops at that name.
-#[allow(
-    dead_code,
-    reason = "wired in Task 2; the red commit holds only the signature"
-)]
 pub(super) fn fill(
     template: &str,
-    _lookup: &dyn Fn(&str) -> Result<Option<serde_json::Value>, ConfigError>,
+    lookup: &dyn Fn(&str) -> Result<Option<serde_json::Value>, ConfigError>,
 ) -> Result<Filled, ConfigError> {
-    Ok(Filled::Url(template.to_owned()))
+    let mut out = String::with_capacity(template.len());
+    let mut chars = template.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '{' {
+            out.push(c);
+            continue;
+        }
+        let mut name = String::new();
+        while let Some(&d) = chars.peek() {
+            if is_name_char(d) {
+                name.push(d);
+                chars.next();
+            } else {
+                break;
+            }
+        }
+        if name.is_empty() {
+            out.push('{');
+            continue;
+        }
+        if !chars.peek().is_some_and(|d| *d == '}') {
+            out.push('{');
+            out.push_str(&name);
+            continue;
+        }
+        chars.next();
+        match lookup(&name)? {
+            Some(serde_json::Value::String(value)) if !value.is_empty() => {
+                out.push_str(&value);
+            }
+            _ => return Ok(Filled::Missing(name)),
+        }
+    }
+    Ok(Filled::Url(out))
 }
 
 /// The `model_unconfigured` notice for model `id` of `provider`, whose
 /// placeholder `name` has no value.
-#[allow(
-    dead_code,
-    reason = "wired in Task 2; the red commit holds only the signature"
-)]
 pub(super) fn unconfigured(
     provider: &str,
     id: &str,
