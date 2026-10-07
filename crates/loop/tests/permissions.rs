@@ -173,6 +173,45 @@ fn a_call_touching_the_credentials_is_refused_and_never_runs() {
     assert!(tool.ran().is_empty(), "a denied call never runs");
 }
 
+#[test]
+fn a_read_of_a_configured_credential_file_is_refused_and_never_runs() {
+    // A configured `file` source outside the workspace and outside Fiber
+    // home: only its own entry protects it.
+    let keys = support::TempDir::new();
+    let key = keys.0.join("openrouter");
+    std::fs::write(&key, "sk-file-secret").unwrap();
+    let tool = Arc::new(TestTool::declaring(
+        "read",
+        "sk-file-secret",
+        vec![Effect::Reads],
+        Some(vec![key.display().to_string()]),
+    ));
+    let mut session = Session::with_credential_files(
+        vec![
+            calls_reply("", &[("read", paris())]),
+            Scripted::text("Done."),
+        ],
+        vec![tool.clone() as Arc<dyn Tool>],
+        vec![key.clone()],
+    );
+    let lines = go(&mut session);
+    let resolved = line(&lines, "permission_resolved");
+    assert_eq!(resolved.payload["decision"], "deny");
+    assert_eq!(resolved.payload["decided_by"], "credential_deny");
+    assert_eq!(
+        resolved.payload["reason"],
+        "The call touches a configured credential file."
+    );
+    let done = completed(&lines)[0];
+    assert_eq!(done.payload["status"], "denied");
+    assert_eq!(done.payload["reason"], "credentials");
+    assert!(
+        !kinds(&lines).contains(&"tool_call_started"),
+        "a denied call never starts"
+    );
+    assert!(tool.ran().is_empty(), "a denied call never runs");
+}
+
 /// Runs one read-only call of `subject` declaring `paths` (relative to the
 /// workspace, which sits in Fiber home beside `credentials/`), and asserts
 /// the credential deny refused it before it ran.

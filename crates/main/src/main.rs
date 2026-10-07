@@ -273,6 +273,7 @@ fn ask_permissions(
     r#loop::Permissions {
         workspace,
         credentials: home.join("credentials"),
+        credential_files: Vec::new(),
         rules: Arc::new(config::RulesFiles::new(
             home.to_path_buf(),
             project.clone(),

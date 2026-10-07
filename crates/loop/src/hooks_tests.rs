@@ -306,6 +306,7 @@ fn run_with(
         crate::Permissions {
             workspace: workspace.display().to_string(),
             credentials: home.path().join("credentials"),
+            credential_files: Vec::new(),
             rules: Arc::new(NoRules),
         },
     )

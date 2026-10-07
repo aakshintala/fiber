@@ -3,13 +3,29 @@
 //! of a person's answer. No I/O and no log writes; `calls.rs` reads the rules
 //! once per call, writes the decision lines and waits for a reply.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use contract::commands::{RememberScope, ReplyAnswer};
 use contract::events::{DecidedBy, Decision, Grant, RuleOffer, RuleScope, StandingRule};
 use contract::rules::{RuleDecision, RulesError, StandingRules};
 use contract::shapes::{DeclaredEffects, Effect};
 use contract::tool::Effects;
+
+/// What a session's calls are judged against (`docs/permissions.md`, "The
+/// order a call is judged in").
+pub struct Permissions {
+    /// The workspace, as `session_started` records it; fast paths resolve
+    /// against it.
+    pub workspace: String,
+    /// Fiber home's `credentials/` directory.
+    pub credentials: PathBuf,
+    /// The path of every configured `file` credential source, absolute
+    /// (`docs/permissions.md`, "Credentials").
+    pub credential_files: Vec<PathBuf>,
+    /// The standing rules.
+    pub rules: Arc<dyn contract::rules::Rules>,
+}
 
 /// What steps 1 to 6 say about one call.
 pub(crate) enum Verdict {

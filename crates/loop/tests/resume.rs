@@ -665,6 +665,7 @@ impl History {
             r#loop::Permissions {
                 workspace: self.workspace.clone(),
                 credentials: self.credentials.clone(),
+                credential_files: Vec::new(),
                 rules: self.rules.clone(),
             },
         )
@@ -1008,6 +1009,7 @@ fn reviewer_denies_from_before_the_resume_count_toward_the_session_limit() {
         r#loop::Permissions {
             workspace: history.workspace.clone(),
             credentials: history.credentials.clone(),
+            credential_files: Vec::new(),
             rules: history.rules.clone(),
         },
     )
@@ -1110,6 +1112,7 @@ fn non_reviewer_denies_from_before_the_resume_do_not_count() {
         r#loop::Permissions {
             workspace: history.workspace.clone(),
             credentials: history.credentials.clone(),
+            credential_files: Vec::new(),
             rules: history.rules.clone(),
         },
     )
@@ -1200,6 +1203,7 @@ fn the_reviewers_first_request_contains_the_earlier_tool_calls() {
         r#loop::Permissions {
             workspace: history.workspace.clone(),
             credentials: history.credentials.clone(),
+            credential_files: Vec::new(),
             rules: history.rules.clone(),
         },
     )
@@ -1566,6 +1570,7 @@ fn resume_fails_log_corrupt_on_an_unreadable_line_in_its_window() {
         r#loop::Permissions {
             workspace: root.path().display().to_string(),
             credentials: root.path().to_path_buf(),
+            credential_files: Vec::new(),
             rules: Arc::new(support::FakeRules::empty()),
         },
     ) {
@@ -1738,6 +1743,7 @@ impl History {
             r#loop::Permissions {
                 workspace: self.workspace.clone(),
                 credentials: self.credentials.clone(),
+                credential_files: Vec::new(),
                 rules: self.rules.clone(),
             },
         )
@@ -3891,6 +3897,7 @@ fn a_turn_suspended_after_a_handoff_re_raises_its_request_past_lines_written_aft
         r#loop::Permissions {
             workspace: history.workspace.clone(),
             credentials: history.credentials.clone(),
+            credential_files: Vec::new(),
             rules: history.rules.clone(),
         },
     )

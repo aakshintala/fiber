@@ -60,6 +60,7 @@ mod warm;
 pub use cancel::TurnCancel;
 pub use conversation::rebuild;
 pub use handoff::HandoffSettings;
+pub use permission::Permissions;
 pub use process::{Exited, extensions_loaded, fiber_exited, fiber_started, mcp_servers_started};
 pub use prompt::PromptInputs;
 pub use resume::{Resumed, resumed};
@@ -101,18 +102,6 @@ pub struct Model {
     /// Whether a subscription login serves it. Its calls are logged with
     /// `subscription`, and `budget.usd` never counts them.
     pub subscription: bool,
-}
-
-/// What a session's calls are judged against (`docs/permissions.md`, "The
-/// order a call is judged in").
-pub struct Permissions {
-    /// The workspace, as `session_started` records it; fast paths resolve
-    /// against it.
-    pub workspace: String,
-    /// Fiber home's `credentials/` directory.
-    pub credentials: PathBuf,
-    /// The standing rules.
-    pub rules: Arc<dyn contract::rules::Rules>,
 }
 
 /// One session's loop.

@@ -187,6 +187,7 @@ fn a_resumed_session_writes_one_status_for_its_history() {
         r#loop::Permissions {
             workspace: session.workspace.display().to_string(),
             credentials: session.credentials.clone(),
+            credential_files: Vec::new(),
             rules: session.rules.clone(),
         },
     )

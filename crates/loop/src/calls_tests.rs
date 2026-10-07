@@ -397,6 +397,7 @@ fn start(rules: Arc<FakeRules>) -> (Loop, fakes::TempDir, PathBuf, PathBuf) {
         crate::Permissions {
             workspace: workspace.display().to_string(),
             credentials: credentials.clone(),
+            credential_files: Vec::new(),
             rules,
         },
     )
@@ -802,6 +803,7 @@ fn run_turn(
         crate::Permissions {
             workspace: workspace.display().to_string(),
             credentials,
+            credential_files: Vec::new(),
             rules,
         },
     )
