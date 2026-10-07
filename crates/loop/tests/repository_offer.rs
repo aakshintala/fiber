@@ -757,3 +757,641 @@ fn the_failure_names_each_required_item_and_how_to_approve() {
         "The repository requires the MCP server `db` and the hook `fmt`, which nobody approved, and nobody could be asked. Run `fiber approve` in the repository to approve them."
     );
 }
+
+// Resume: a pending offer is raised again, the session's skips hold, and an
+// approval suspended in an earlier process survives an offer's exit.
+
+use contract::events::{
+    AskStep, Empty, InputItem, PermissionRequested, RepositoryCodeOffered, RepositoryCodeResolved,
+    RuleScope, SessionStarted, StandingRule, ToolCallRequested, TurnStarted, Variables,
+    VariablesSource,
+};
+use contract::shapes::{ContentPart, DeclaredEffects, Effect, Origin, Sender};
+use contract::{ActionId, CommandId, SessionId, TurnId};
+use fakes::ScriptedProvider;
+use log::Log;
+use r#loop::Loop;
+
+/// A session log with earlier processes, resumed by each [`History::resume`].
+struct History {
+    root: fakes::TempDir,
+    dir: std::path::PathBuf,
+    log: Arc<Log>,
+    workspace: String,
+    credentials: std::path::PathBuf,
+    clock: Arc<fakes::clock::FakeClock>,
+    provider: Arc<ScriptedProvider>,
+}
+
+impl History {
+    fn new(script: Vec<Scripted>) -> Self {
+        let root = fakes::TempDir::new("fiber-offer-resume");
+        let workspace = root.path().join("w");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let credentials = root.path().join("credentials");
+        std::fs::create_dir_all(&credentials).unwrap();
+        let clock = fakes::clock::FakeClock::new();
+        let log = Arc::new(
+            Log::create(
+                root.path(),
+                SessionId("s_1".into()),
+                Arc::clone(&clock) as Arc<dyn Clock>,
+            )
+            .unwrap(),
+        );
+        let history = Self {
+            dir: root.path().join("s_1"),
+            root,
+            log,
+            workspace: workspace.display().to_string(),
+            credentials,
+            clock,
+            provider: Arc::new(ScriptedProvider::new(script)),
+        };
+        history.write(
+            &Event::SessionStarted(SessionStarted {
+                workspace: history.workspace.clone(),
+                variables: Variables {
+                    path: String::new(),
+                    names: Vec::new(),
+                    source: VariablesSource::Inherited,
+                },
+                parent: None,
+                forked_from: None,
+                rewind: None,
+            }),
+            None,
+            None,
+        );
+        history
+    }
+
+    fn write(&self, event: &Event, turn: Option<&str>, action: Option<&str>) {
+        self.log
+            .append(
+                event,
+                turn.map(|t| TurnId(t.into())),
+                action.map(|a| ActionId(a.into())),
+            )
+            .unwrap();
+    }
+
+    /// A process starts.
+    fn start_process(&self, resumed: bool) {
+        r#loop::fiber_started(&self.log, "0.0.0", resumed).unwrap();
+    }
+
+    /// The process exits as `main` ends one, after `ran`.
+    fn exit_process(&self, ran: Result<(), Failure>) -> Value {
+        r#loop::fiber_exited(&self.log, &self.dir, ran, false, None).unwrap();
+        let exited = log::read(&self.dir)
+            .unwrap()
+            .into_iter()
+            .rfind(|line| line.kind == "fiber_exited")
+            .unwrap();
+        Value::Object(exited.payload)
+    }
+
+    fn clients(&self, count: u32) {
+        self.write(&Event::Clients(Clients { count }), None, None);
+    }
+
+    /// A resumed loop reading `code`, and its inbox.
+    fn resume(&self, code: &Arc<Fake>, answerable: bool) -> (Loop, mpsc::Sender<Delivery>) {
+        // The fold reads the log as the last process left it, then this
+        // process starts, as `main` does.
+        let folded = r#loop::resumed(&self.dir).unwrap();
+        self.start_process(true);
+        let (tx, rx) = mpsc::channel();
+        let prompt_clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+        let looped = Loop::resume(
+            Arc::clone(&self.log),
+            folded,
+            Arc::clone(&self.provider) as Arc<dyn contract::provider::Provider>,
+            r#loop::Model {
+                reference: support::MODEL.into(),
+                cost: None,
+                subscription: false,
+            },
+            r#loop::PromptInputs::new(
+                self.root.path().to_path_buf(),
+                "/bin/sh".into(),
+                self.dir.join("events.jsonl").display().to_string(),
+                prompt_clock,
+                fakes::CONTEXT_WINDOW,
+            ),
+            rx,
+            Vec::new(),
+            r#loop::Permissions {
+                workspace: self.workspace.clone(),
+                credentials: self.credentials.clone(),
+                credential_files: Vec::new(),
+                rules: Arc::new(support::FakeRules::empty()),
+            },
+        )
+        .unwrap()
+        .repository_code(Arc::clone(code) as Arc<dyn RepositoryCode>)
+        .answerable(answerable);
+        (looped, tx)
+    }
+
+    fn lines(&self) -> Vec<Envelope> {
+        log::read(&self.dir).unwrap()
+    }
+
+    fn of(&self, kind: &str) -> Vec<Envelope> {
+        self.lines()
+            .into_iter()
+            .filter(|line| line.kind == kind)
+            .collect()
+    }
+
+    /// An earlier process that exited while its offer `request` of `items`
+    /// waited.
+    fn exited_on_offer(&self, request: &str, items: &[Unapproved]) {
+        self.start_process(false);
+        self.write(&offered_event(request, items), None, None);
+        let exited = self.exit_process(Ok(()));
+        assert_eq!(exited["suspended_on"], request);
+    }
+
+    /// An earlier process that exited with its turn `t_1` suspended on the
+    /// standing ask `r_9` for the call `a_1`.
+    fn exited_on_approval(&self) {
+        self.start_process(false);
+        self.write(
+            &Event::TurnStarted(TurnStarted {
+                input: vec![InputItem::Message {
+                    content: vec![ContentPart::Text { text: "one".into() }],
+                    sender: Sender {
+                        origin: Origin::Driver,
+                        command_id: Some(CommandId("c_one".into())),
+                    },
+                    changed_by: None,
+                }],
+            }),
+            Some("t_1"),
+            None,
+        );
+        self.write(
+            &Event::AssistantMessageStarted(Empty {}),
+            Some("t_1"),
+            Some("a_0"),
+        );
+        self.write(
+            &Event::ToolCallRequested(ToolCallRequested {
+                name: "read".into(),
+                arguments: serde_json::json!({}),
+                provider_id: None,
+                repair: None,
+                ran_by: None,
+                provider_item: None,
+            }),
+            Some("t_1"),
+            Some("a_1"),
+        );
+        self.write(&standing_ask(), Some("t_1"), Some("a_1"));
+        let exited = self.exit_process(Ok(()));
+        assert_eq!(exited["suspended_on"], "r_9");
+    }
+}
+
+fn offered_event(request: &str, items: &[Unapproved]) -> Event {
+    Event::RepositoryCodeOffered(RepositoryCodeOffered {
+        request_id: RequestId(request.into()),
+        items: items.iter().map(|u| u.offered.clone()).collect(),
+    })
+}
+
+fn resolved_event(request: &str, decisions: &[OfferDecision]) -> Event {
+    Event::RepositoryCodeResolved(RepositoryCodeResolved {
+        request_id: RequestId(request.into()),
+        decisions: decisions.to_vec(),
+    })
+}
+
+fn standing_ask() -> Event {
+    Event::PermissionRequested(PermissionRequested {
+        request_id: RequestId("r_9".into()),
+        declared: DeclaredEffects {
+            effects: vec![Effect::Executes],
+            reversible: true,
+            paths: None,
+        },
+        step: AskStep::StandingAsk {
+            standing_rule: StandingRule {
+                scope: RuleScope::Project,
+                prefix: "run tests".into(),
+            },
+        },
+    })
+}
+
+fn run_on(looped: Loop) -> mpsc::Receiver<Result<(), r#loop::Error>> {
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || {
+        let result = looped.run();
+        done.send(result).unwrap();
+    });
+    finished
+}
+
+fn reply_on(
+    inbox: &mpsc::Sender<Delivery>,
+    request: &str,
+    answer: ReplyAnswer,
+) -> mpsc::Receiver<Answer> {
+    let (ack, rx) = probe();
+    inbox
+        .send(Delivery::Reply(
+            Reply {
+                request_id: RequestId(request.into()),
+                answer,
+            },
+            ack,
+        ))
+        .unwrap();
+    rx
+}
+
+fn deny() -> ReplyAnswer {
+    ReplyAnswer::Approval {
+        decision: Decision::Deny,
+        feedback: None,
+        remember: None,
+    }
+}
+
+fn finished_ok(finished: &mpsc::Receiver<Result<(), r#loop::Error>>) {
+    ended(finished).unwrap();
+}
+
+#[test]
+fn a_pending_offer_is_raised_again_before_any_prompt_when_a_client_is_attached() {
+    let items = [server("a"), server("b")];
+    let code = Fake::new(items.to_vec());
+    let history = History::new(vec![Scripted::text("Hello.")]);
+    history.exited_on_offer("r_old", &items);
+    history.clients(1);
+    let watcher = history.log.watch();
+    let (looped, inbox) = history.resume(&code, true);
+    let finished = run_on(looped);
+
+    let (watcher, lines) = until_kind(watcher, "repository_code_offered");
+    let again = lines.last().unwrap();
+    assert_eq!(again.payload["request_id"], "r_old");
+    assert_eq!(again.payload["items"], offered_items(&items));
+    let reply = reply_on(&inbox, "r_old", decisions(&[Approve, Skip]));
+    assert!(answered(&reply).is_ok());
+    let (_, _) = until_kind(watcher, "repository_code_resolved");
+    inbox.send(Delivery::Close(ignore())).unwrap();
+    finished_ok(&finished);
+    // No suspended turn: nothing was raised or run but the offer.
+    assert!(history.of("permission_requested").is_empty());
+    assert!(history.of("turn_started").is_empty());
+    assert_eq!(history.of("repository_code_offered").len(), 2);
+
+    // Resolved after a re-raise, it is not raised by a later resume.
+    history.exit_process(Ok(()));
+    code.list.lock().unwrap().clear();
+    let watcher = history.log.watch();
+    let (looped, inbox) = history.resume(&code, true);
+    let finished = run_on(looped);
+    inbox.send(delivery("go")).unwrap();
+    let (_, _) = until_kind(watcher, "turn_completed");
+    inbox.send(Delivery::Close(ignore())).unwrap();
+    finished_ok(&finished);
+    assert_eq!(history.of("repository_code_offered").len(), 2);
+}
+
+#[test]
+fn a_pending_offer_is_not_raised_again_with_nobody_to_answer() {
+    let items = [server("a")];
+    let code = Fake::new(items.to_vec());
+    let history = History::new(vec![Scripted::text("Hello.")]);
+    history.exited_on_offer("r_old", &items);
+    history.clients(1);
+    let mut all = history.log.watch();
+    let (looped, inbox) = history.resume(&code, false);
+    let finished = run_on(looped);
+    inbox.send(delivery("go")).unwrap();
+    inbox.send(Delivery::Close(ignore())).unwrap();
+    finished_ok(&finished);
+    assert_eq!(history.of("repository_code_offered").len(), 1);
+    assert!(history.of("repository_code_resolved").is_empty());
+    assert_eq!(notices(&drain(&mut all)), [skipped("a", "MCP server")]);
+    assert_eq!(history.of("turn_completed").len(), 1);
+}
+
+#[test]
+fn a_skip_from_an_earlier_process_holds_for_the_same_content_only() {
+    for (hash, offered) in [("h_a", false), ("h_a2", true)] {
+        let mut now = server("a");
+        now.offered.hash = hash.into();
+        let code = Fake::new(vec![now]);
+        let history = History::new(vec![Scripted::text("Hello.")]);
+        history.start_process(false);
+        history.write(&offered_event("r_1", &[server("a")]), None, None);
+        history.write(&resolved_event("r_1", &[Skip]), None, None);
+        history.exit_process(Ok(()));
+        history.clients(1);
+        let watcher = history.log.watch();
+        let (looped, inbox) = history.resume(&code, true);
+        let finished = run_on(looped);
+        inbox.send(delivery("go")).unwrap();
+        let watcher = if offered {
+            let (watcher, lines) = until_kind(watcher, "repository_code_offered");
+            let again = lines.last().unwrap();
+            assert_eq!(again.payload["items"][0]["hash"], "h_a2");
+            let reply = reply_on(&inbox, request_of(again).0.as_str(), decisions(&[Skip]));
+            assert!(answered(&reply).is_ok());
+            watcher
+        } else {
+            watcher
+        };
+        let (_, _) = until_kind(watcher, "turn_completed");
+        inbox.send(Delivery::Close(ignore())).unwrap();
+        finished_ok(&finished);
+        let expected = if offered { 2 } else { 1 };
+        assert_eq!(
+            history.of("repository_code_offered").len(),
+            expected,
+            "{hash}"
+        );
+    }
+}
+
+#[test]
+fn content_changed_under_a_pending_offer_is_offered_fresh_after_it_resolves() {
+    let items = [server("a"), server("b")];
+    let code = Fake::new(items.to_vec());
+    code.obsolete.lock().unwrap().push("b".into());
+    let history = History::new(vec![Scripted::text("Hello.")]);
+    history.exited_on_offer("r_old", &items);
+    history.clients(1);
+    let watcher = history.log.watch();
+    let (looped, inbox) = history.resume(&code, true);
+    let finished = run_on(looped);
+    let (watcher, _) = until_kind(watcher, "repository_code_offered");
+    let reply = reply_on(&inbox, "r_old", decisions(&[Approve, Approve]));
+    assert!(answered(&reply).is_ok());
+    let (watcher, lines) = until_kind(watcher, "repository_code_offered");
+    let fresh = lines.last().unwrap();
+    assert_ne!(fresh.payload["request_id"], "r_old");
+    let names: Vec<&Value> = fresh.payload["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| &i["name"])
+        .collect();
+    assert_eq!(names, ["b"]);
+    assert_eq!(fresh.payload["items"][0]["hash"], "h_b-new");
+    let reply = reply_on(&inbox, request_of(fresh).0.as_str(), decisions(&[Approve]));
+    assert!(answered(&reply).is_ok());
+    let (_, _) = until_kind(watcher, "repository_code_resolved");
+    inbox.send(Delivery::Close(ignore())).unwrap();
+    finished_ok(&finished);
+}
+
+#[test]
+fn an_offer_already_resolved_is_not_raised_again() {
+    let code = Fake::new(Vec::new());
+    let history = History::new(vec![Scripted::text("Hello.")]);
+    history.start_process(false);
+    history.write(&offered_event("r_1", &[server("a")]), None, None);
+    history.write(&resolved_event("r_1", &[Approve]), None, None);
+    history.exit_process(Ok(()));
+    history.clients(1);
+    let watcher = history.log.watch();
+    let (looped, inbox) = history.resume(&code, true);
+    let finished = run_on(looped);
+    inbox.send(delivery("go")).unwrap();
+    let (_, _) = until_kind(watcher, "turn_completed");
+    inbox.send(Delivery::Close(ignore())).unwrap();
+    finished_ok(&finished);
+    assert_eq!(history.of("repository_code_offered").len(), 1);
+}
+
+#[test]
+fn an_offer_comes_before_a_suspended_approval_and_both_are_answered_in_order() {
+    let code = Fake::new(vec![server("a")]);
+    let history = History::new(vec![Scripted::text("Done.")]);
+    history.exited_on_approval();
+    history.clients(1);
+    let watcher = history.log.watch();
+    let (looped, inbox) = history.resume(&code, true);
+    let finished = run_on(looped);
+    let (watcher, lines) = until_kind(watcher, "repository_code_offered");
+    assert!(!lines.iter().any(|l| l.kind == "permission_requested"));
+    let offer = request_of(lines.last().unwrap());
+    let reply = reply_on(&inbox, offer.0.as_str(), decisions(&[Approve]));
+    assert!(answered(&reply).is_ok());
+    let (watcher, lines) = until_kind(watcher, "permission_requested");
+    assert_eq!(lines.last().unwrap().payload["request_id"], "r_9");
+    let reply = reply_on(&inbox, "r_9", deny());
+    assert!(answered(&reply).is_ok());
+    let (_, _) = until_kind(watcher, "turn_completed");
+    inbox.send(Delivery::Close(ignore())).unwrap();
+    finished_ok(&finished);
+    let resolved = history.of("permission_resolved");
+    assert_eq!(resolved.len(), 1);
+    assert_eq!(resolved[0].payload["decided_by"], "person");
+}
+
+#[test]
+fn an_approvals_reply_sent_while_the_offer_waits_answers_it_after() {
+    let code = Fake::new(vec![server("a")]);
+    let history = History::new(vec![Scripted::text("Done.")]);
+    history.exited_on_approval();
+    history.clients(1);
+    let watcher = history.log.watch();
+    let (looped, inbox) = history.resume(&code, true);
+    let finished = run_on(looped);
+    let (watcher, lines) = until_kind(watcher, "repository_code_offered");
+    let offer = request_of(lines.last().unwrap());
+    let approval = reply_on(&inbox, "r_9", deny());
+    let reply = reply_on(&inbox, offer.0.as_str(), decisions(&[Approve]));
+    assert!(answered(&reply).is_ok());
+    let (_, _) = until_kind(watcher, "turn_completed");
+    assert!(
+        answered(&approval).is_ok(),
+        "the held reply answers the approval"
+    );
+    inbox.send(Delivery::Close(ignore())).unwrap();
+    finished_ok(&finished);
+    let resolved = history.of("permission_resolved");
+    assert_eq!(resolved.len(), 1);
+    assert_eq!(resolved[0].payload["request_id"], "r_9");
+    assert_eq!(resolved[0].payload["decided_by"], "person");
+}
+
+#[test]
+fn an_idle_exit_on_the_offer_keeps_the_suspended_approval_for_the_next_resume() {
+    let code = Fake::new(vec![server("a")]);
+    let history = History::new(vec![Scripted::text("Done.")]);
+    history.exited_on_approval();
+    history.clients(1);
+    let delay = Duration::from_secs(60);
+    let watcher = history.log.watch();
+    let (looped, inbox) = history.resume(&code, true);
+    let finished = run_on(looped.idle_exit(Some(delay)));
+    let (_, lines) = until_kind(watcher, "repository_code_offered");
+    let offer = request_of(lines.last().unwrap());
+    let deadline = history.clock.now() + delay;
+    assert!(
+        history.clock.await_parked(deadline, DEADLINE),
+        "the offer waits"
+    );
+    history.clock.advance(delay);
+    inbox.send(Delivery::Cancelled).unwrap();
+    finished_ok(&finished);
+    let raised = history.of("permission_requested");
+    assert_eq!(raised.len(), 2, "the approval is written again");
+    assert_eq!(raised[1].payload["request_id"], "r_9");
+    assert_eq!(raised[1].turn_id, Some(TurnId("t_1".into())));
+    assert_eq!(raised[1].action_id, Some(ActionId("a_1".into())));
+    let exited = history.exit_process(Ok(()));
+    assert_eq!(exited["suspended_on"], "r_9");
+
+    // The next resume raises the offer again, then the approval.
+    let watcher = history.log.watch();
+    let (looped, inbox) = history.resume(&code, true);
+    let finished = run_on(looped);
+    let (watcher, lines) = until_kind(watcher, "repository_code_offered");
+    assert_eq!(request_of(lines.last().unwrap()), offer);
+    let reply = reply_on(&inbox, offer.0.as_str(), decisions(&[Approve]));
+    assert!(answered(&reply).is_ok());
+    let (watcher, _) = until_kind(watcher, "permission_requested");
+    let reply = reply_on(&inbox, "r_9", deny());
+    assert!(answered(&reply).is_ok());
+    let (_, lines) = until_kind(watcher, "turn_completed");
+    assert_eq!(lines.last().unwrap().turn_id, Some(TurnId("t_1".into())));
+    inbox.send(Delivery::Close(ignore())).unwrap();
+    finished_ok(&finished);
+}
+
+#[test]
+fn a_failed_offer_step_keeps_the_suspended_approval_and_a_repaired_resume_finishes_the_turn() {
+    // A gather failure with a person to answer, and a required item with
+    // nobody to ask.
+    for answerable in [true, false] {
+        let code = if answerable {
+            let code = Fake::new(Vec::new());
+            *code.gather_fails.lock().unwrap() = Some(failure(
+                ErrorCode::ConfigInvalid,
+                "`repository_extensions` path `/abs` is absolute.",
+            ));
+            code
+        } else {
+            Fake::new(vec![item(OfferedKind::McpServer, "db", true)])
+        };
+        let history = History::new(vec![Scripted::text("Done.")]);
+        history.exited_on_approval();
+        history.clients(1);
+        let (looped, inbox) = history.resume(&code, answerable);
+        let error = ended(&run_on(looped)).expect_err("the step fails the run");
+        let expected = if answerable {
+            ErrorCode::ConfigInvalid
+        } else {
+            ErrorCode::McpServerUnapproved
+        };
+        assert_eq!(error.code(), expected);
+        drop(inbox);
+        let raised = history.of("permission_requested");
+        assert_eq!(raised.len(), 2, "the approval is written again");
+        let exited = history.exit_process(Err(failure(error.code(), &error.to_string())));
+        assert_eq!(exited["suspended_on"], "r_9");
+
+        // Repaired: nothing is left to offer.
+        let repaired = Fake::new(Vec::new());
+        let watcher = history.log.watch();
+        let (looped, inbox) = history.resume(&repaired, answerable);
+        let finished = run_on(looped);
+        let watcher = if answerable {
+            let (watcher, _) = until_kind(watcher, "permission_requested");
+            let reply = reply_on(&inbox, "r_9", deny());
+            assert!(answered(&reply).is_ok());
+            watcher
+        } else {
+            watcher
+        };
+        let (_, lines) = until_kind(watcher, "turn_completed");
+        assert_eq!(lines.last().unwrap().turn_id, Some(TurnId("t_1".into())));
+        inbox.send(Delivery::Close(ignore())).unwrap();
+        finished_ok(&finished);
+    }
+}
+
+#[test]
+fn a_pending_offer_waits_for_a_client_at_the_prompt() {
+    let items = [server("a")];
+    let code = Fake::new(items.to_vec());
+    let history = History::new(vec![Scripted::text("Hello."), Scripted::text("Again.")]);
+    history.exited_on_offer("r_old", &items);
+    let delay = Duration::from_secs(60);
+
+    // No client: nothing raised, a reply naming the folded offer is stale,
+    // and the prompt takes the no-answer path.
+    let mut all = history.log.watch();
+    let (looped, inbox) = history.resume(&code, true);
+    let finished = run_on(looped);
+    let stale = reply_on(&inbox, "r_old", decisions(&[Approve]));
+    let (code_of, _) = rejection(&stale);
+    assert_eq!(code_of, ErrorCode::StaleRequest);
+    inbox.send(delivery("go")).unwrap();
+    inbox.send(Delivery::Close(ignore())).unwrap();
+    finished_ok(&finished);
+    assert_eq!(history.of("repository_code_offered").len(), 1);
+    assert_eq!(notices(&drain(&mut all)), [skipped("a", "MCP server")]);
+    history.exit_process(Ok(()));
+
+    // A client attached after the loop started and before the prompt sees
+    // the same offer raised again at the prompt.
+    let watcher = history.log.watch();
+    let (looped, inbox) = history.resume(&code, true);
+    let finished = run_on(looped.idle_exit(Some(delay)));
+    assert!(
+        history
+            .clock
+            .await_parked(history.clock.now() + delay, DEADLINE),
+        "the resumed loop waits for a prompt"
+    );
+    assert_eq!(history.of("repository_code_offered").len(), 1);
+    history.clients(1);
+    inbox.send(delivery("two")).unwrap();
+    let (watcher, lines) = until_kind(watcher, "repository_code_offered");
+    assert_eq!(lines.last().unwrap().payload["request_id"], "r_old");
+    let reply = reply_on(&inbox, "r_old", decisions(&[Approve]));
+    assert!(answered(&reply).is_ok());
+    let (_, _) = until_kind(watcher, "turn_completed");
+    inbox.send(Delivery::Close(ignore())).unwrap();
+    finished_ok(&finished);
+}
+
+#[test]
+fn an_idle_exit_on_a_raised_again_offer_leaves_it_for_the_next_resume() {
+    let items = [server("a")];
+    let code = Fake::new(items.to_vec());
+    let history = History::new(Vec::new());
+    history.exited_on_offer("r_old", &items);
+    history.clients(1);
+    let delay = Duration::from_secs(60);
+    for _ in 0..2 {
+        let watcher = history.log.watch();
+        let (looped, inbox) = history.resume(&code, true);
+        let finished = run_on(looped.idle_exit(Some(delay)));
+        let (_, lines) = until_kind(watcher, "repository_code_offered");
+        assert_eq!(lines.last().unwrap().payload["request_id"], "r_old");
+        let deadline = history.clock.now() + delay;
+        assert!(
+            history.clock.await_parked(deadline, DEADLINE),
+            "the offer waits"
+        );
+        history.clock.advance(delay);
+        inbox.send(Delivery::Cancelled).unwrap();
+        finished_ok(&finished);
+        assert!(history.of("repository_code_resolved").is_empty());
+        let exited = history.exit_process(Ok(()));
+        assert_eq!(exited["suspended_on"], "r_old");
+    }
+}

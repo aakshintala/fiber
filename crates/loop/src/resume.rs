@@ -244,7 +244,8 @@ pub(crate) struct Suspended {
 /// whose action is in the suspended batch. Anything else resumes as a
 /// cut-short turn. Only approvals re-raise: no tool raises an
 /// `interaction_requested` yet, so a `suspended_on` naming one resumes as
-/// cut short.
+/// cut short. A `suspended_on` naming a repository offer resumes no turn:
+/// the offer is raised again by the offer step.
 // debt: re-raises approvals only; an interaction_requested joins when a tool raises one (ask_user, docs/tools.md "Asking the person").
 pub(crate) fn suspended(lines: &[Envelope]) -> Result<Option<Suspended>, Error> {
     let Some(last) = lines.last() else {
@@ -492,6 +493,16 @@ impl Loop {
 }
 
 impl Loop {
+    /// Writes the suspended approval's `permission_requested` again, under
+    /// its turn and action, as its re-raise does.
+    fn keep_suspended(&mut self, suspended: &Suspended) -> Result<(), Error> {
+        self.append(
+            &Event::PermissionRequested(suspended.request.clone()),
+            &suspended.turn,
+            Some(&suspended.action),
+        )
+    }
+
     /// Finishes a turn cut short on a pending approval, then runs the
     /// prompt as the next turn (`docs/invocation.md`, "Lifecycle"): the
     /// request is raised again under the same `request_id` and answered,
@@ -513,6 +524,14 @@ impl Loop {
         suspended: Suspended,
     ) -> Result<Option<TurnOutcome>, Error> {
         self.deferred.extend(self.inbox.try_iter());
+        // The repository's offer resolves before the first request. A
+        // process that ends on it writes the suspended approval again, so it
+        // exits naming the approval and the next resume finishes the turn.
+        let offered = self.offer(Some(&suspended.request.request_id));
+        if !matches!(offered, Ok(true)) {
+            self.keep_suspended(&suspended)?;
+            return offered.map(|_| None);
+        }
         self.ensure_preamble()?;
         self.cut_off = false;
         let turn = suspended.turn.clone();
