@@ -311,10 +311,14 @@ fn a_lock_whose_file_cannot_be_written_is_io_failed() {
     let credentials = dir.path().join("credentials");
     std::fs::create_dir(&credentials).unwrap();
     std::fs::set_permissions(&credentials, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let pair = crate::CredentialPair {
+        credential: "acme".to_owned(),
+        label: "default".to_owned(),
+    };
     let (code, message) = failed(delivered(|deliver| {
         // The directories check passes; the spawned wait fails writing
         // the lock file and delivers the failure.
-        let _waiting = lock(dir.path(), "acme", deliver);
+        let _waiting = lock(dir.path(), &pair, deliver);
     }));
     assert_eq!(code, contract::ErrorCode::IoFailed);
     assert!(message.starts_with("host.oauth.refresh: "), "{message}");
@@ -328,7 +332,7 @@ fn a_lock_whose_file_cannot_be_written_is_io_failed() {
 fn a_credential_file_that_cannot_be_read_or_written_is_io_failed() {
     use std::os::unix::fs::PermissionsExt;
     let dir = fakes::TempDir::new("fiber-oauth-held");
-    let file = CredentialFile::new(dir.path(), "acme", LABEL).unwrap();
+    let file = CredentialFile::new(dir.path(), "acme", "default").unwrap();
     {
         let lock = file.try_lock().unwrap().unwrap();
         lock.write(&serde_json::json!({ "token": "old", "expires_at": 1 }))
@@ -399,7 +403,7 @@ fn a_malformed_or_symlinked_credential_is_io_failed_through_held() {
         code.to_str().unwrap().to_owned()
     };
     let dir = fakes::TempDir::new("fiber-oauth-held-shape");
-    let file = CredentialFile::new(dir.path(), "acme", LABEL).unwrap();
+    let file = CredentialFile::new(dir.path(), "acme", "default").unwrap();
     {
         let lock = file.try_lock().unwrap().unwrap();
         lock.write(&serde_json::json!({ "token": "old", "expires_at": 1 }))
@@ -478,7 +482,7 @@ fn unattended_oauth_calls_raise_tables_to_coroutine_resume() {
 fn refresh_passes_the_original_failure_table_through_unchanged() {
     let lua = unattended_oauth_lua();
     let dir = fakes::TempDir::new("fiber-oauth-table-identity");
-    let lock = CredentialFile::new(dir.path(), "acme", LABEL)
+    let lock = CredentialFile::new(dir.path(), "acme", "default")
         .unwrap()
         .try_lock()
         .unwrap()
@@ -510,7 +514,7 @@ fn refresh_passes_the_original_failure_table_through_unchanged() {
 fn a_refresh_function_raising_a_string_reaches_coroutine_resume_as_credential_failed() {
     let lua = unattended_oauth_lua();
     let dir = fakes::TempDir::new("fiber-oauth-string-refresh");
-    let lock = CredentialFile::new(dir.path(), "acme", LABEL)
+    let lock = CredentialFile::new(dir.path(), "acme", "default")
         .unwrap()
         .try_lock()
         .unwrap()
@@ -540,7 +544,7 @@ fn a_refresh_function_raising_a_string_reaches_coroutine_resume_as_credential_fa
 #[test]
 fn a_held_write_with_no_usable_credential_is_a_string() {
     let dir = fakes::TempDir::new("fiber-oauth-held-string");
-    let file = CredentialFile::new(dir.path(), "acme", LABEL).unwrap();
+    let file = CredentialFile::new(dir.path(), "acme", "default").unwrap();
     let lock = file.try_lock().unwrap().unwrap();
     let held = Held::new(lock, fakes::clock::FakeClock::new());
     let lua = Lua::new();
@@ -563,7 +567,7 @@ fn a_held_write_with_no_usable_credential_is_a_string() {
 #[test]
 fn a_held_read_after_release_is_a_string() {
     let dir = fakes::TempDir::new("fiber-oauth-held-released");
-    let file = CredentialFile::new(dir.path(), "acme", LABEL).unwrap();
+    let file = CredentialFile::new(dir.path(), "acme", "default").unwrap();
     let lock = file.try_lock().unwrap().unwrap();
     let held = Held::new(lock, fakes::clock::FakeClock::new());
     let lua = Lua::new();

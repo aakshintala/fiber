@@ -388,9 +388,9 @@ fn settle(
                     function,
                     credential: None,
                 } => {
-                    deliver(Reply::Lock(Err(format!(
+                    deliver(Reply::Lock(Err(crate::host::LockError::Arg(format!(
                         "host.oauth.refresh: {name}.{function} has no credential to refresh; only credential() refreshes"
-                    ))));
+                    )))));
                     None
                 }
                 Target::Command(_) => {
