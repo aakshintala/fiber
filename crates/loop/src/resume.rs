@@ -77,6 +77,8 @@ pub struct Resumed {
     pub(crate) reviewed: Vec<Reviewed>,
     /// The jobs started and never ended, each as its `orphaned` completion.
     pub(crate) orphans: Vec<JobCompleted>,
+    /// The repository's offers: the session's skips and the pending offer.
+    pub(crate) offers: crate::offer::Folded,
 }
 
 /// The kinds the pass reads a payload of. Every other line's envelope is
@@ -96,6 +98,8 @@ const FOLDED: &[&str] = &[
     "opening_message",
     "handoff_completed",
     "reviewer_kept",
+    "repository_code_offered",
+    "repository_code_resolved",
 ];
 
 /// Folds the log in the session directory `dir` in one pass, one line at a
@@ -116,6 +120,7 @@ pub fn resumed(dir: &Path) -> Result<Resumed, Error> {
     // (`docs/permissions.md`, "At a handoff").
     let mut reviewed = Vec::new();
     let mut orphans = crate::jobs::Orphans::default();
+    let mut offers = crate::offer::Folded::default();
     // The jobs running and the session log's path as of the line read.
     let mut running = Carry::default();
     // Each turn's latest `turn_started` since the last completed handoff,
@@ -134,6 +139,7 @@ pub fn resumed(dir: &Path) -> Result<Resumed, Error> {
         };
         render_reviewed(&mut reviewed, &event, line.action_id.as_ref(), line.seq);
         orphans.fold(&event);
+        offers.fold(&event);
         running.fold_jobs(&event);
         if let Event::SessionStarted(started) = &event
             && first.is_none()
@@ -212,6 +218,7 @@ pub fn resumed(dir: &Path) -> Result<Resumed, Error> {
         session_blocks,
         reviewed,
         orphans: orphans.finish(),
+        offers,
     })
 }
 
@@ -350,6 +357,7 @@ impl Loop {
             reviewed,
             orphans,
             thinking,
+            offers,
             ..
         } = resumed;
         let lines = log.range(
@@ -456,6 +464,7 @@ impl Loop {
             turn_blocked: None,
             workspace_label: permissions.workspace,
             answerable: true,
+            repository: crate::offer::State::resumed(offers),
             opened,
             changes,
             cut_off: false,

@@ -44,6 +44,7 @@ mod hosted;
 mod inbox;
 mod jobs;
 mod late_cost;
+mod offer;
 mod opening;
 mod permission;
 mod process;
@@ -178,6 +179,8 @@ pub struct Loop {
     workspace_label: String,
     /// Whether a person can answer an approval; `false` for `fiber ask`.
     answerable: bool,
+    /// The offer of the repository's code before the first request.
+    repository: offer::State,
     /// Whether the opening message was already written: a resume over a
     /// log holding one writes none, the conversation rebuild renders it
     /// from the log.
@@ -326,6 +329,7 @@ impl Loop {
             turn_blocked: None,
             workspace_label: permissions.workspace,
             answerable: true,
+            repository: offer::State::default(),
             opened: false,
             changes,
             cut_off: false,
