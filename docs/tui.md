@@ -1285,9 +1285,9 @@ server's or an extension's `tools.enabled` and `tools.disabled`.
   and the span shape that kept selection, copy and search working.
 - [research/tui-prototype/CHECK.md](../research/tui-prototype/CHECK.md): the
   checks run by eye in Ghostty.
-- Branch `prototype-692-rail`: the rail's prototype, never merged. The owner
-  compared a list, cards and tabs, then card heights, in Ghostty, and chose
-  the cards above (#692).
+- [research/tui-prototype/README.md](../research/tui-prototype/README.md),
+  "The rail (#692)": the rail's prototype. The owner compared a list, cards
+  and tabs, then card heights, in Ghostty, and chose the cards above (#692).
 
 ## Related
 
