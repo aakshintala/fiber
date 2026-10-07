@@ -795,7 +795,7 @@ fn a_credential_error_at_send_time_is_credential_failed() {
         })
     })
     .unwrap_err();
-    let contract::signing::Error::Credential { code, message } = &err else {
+    let contract::signing::Error::Credential { code, message, .. } = &err else {
         panic!("{err:?}")
     };
     assert_eq!(*code, ErrorCode::CredentialFailed);
@@ -852,7 +852,7 @@ fn a_rejected_refresh_at_send_time_keeps_authentication_failed() {
     let setup = Setup::new();
     let server = fakes::OauthServer::start(vec![fakes::OauthReply::raw(400, "{}")]);
     let provider = refresh_provider(&setup, &server.url());
-    let contract::signing::Error::Credential { code, message } = &sign_error(&provider) else {
+    let contract::signing::Error::Credential { code, message, .. } = &sign_error(&provider) else {
         panic!("expected a credential error")
     };
     assert_eq!(*code, ErrorCode::AuthenticationFailed);
@@ -870,11 +870,31 @@ fn an_unreachable_refresh_at_send_time_keeps_connection_failed() {
         .unwrap()
         .port();
     let provider = refresh_provider(&setup, &format!("http://127.0.0.1:{port}"));
-    let contract::signing::Error::Credential { code, message } = &sign_error(&provider) else {
+    let contract::signing::Error::Credential { code, message, .. } = &sign_error(&provider) else {
         panic!("expected a credential error")
     };
     assert_eq!(*code, ErrorCode::ConnectionFailed);
     assert!(!message.starts_with('`'), "{message}");
+}
+
+#[test]
+fn an_unattended_login_at_send_time_marks_the_credential() {
+    let setup = Setup::new();
+    // Nobody is attached: the default browser never is, so `host.oauth.open`
+    // raises Unattended out of `credential()`.
+    let provider = script_provider(
+        &setup,
+        Some(
+            "(function() host.oauth.open(\"https://auth.example/\") return { token = \"t\", \
+             expires_at = 1700003600 } end)()",
+        ),
+        None,
+    );
+    let contract::signing::Error::Unattended { message } = &sign_error(&provider) else {
+        panic!("expected an unattended login")
+    };
+    assert!(message.contains("host.oauth.open"), "{message}");
+    assert!(!message.contains('\n'), "{message}");
 }
 
 #[test]
@@ -945,7 +965,7 @@ fn a_credential_error_is_its_own_first_line_with_its_code() {
         })
     })
     .unwrap_err();
-    let contract::signing::Error::Credential { code, message } = &err else {
+    let contract::signing::Error::Credential { code, message, .. } = &err else {
         panic!("{err:?}")
     };
     assert_eq!(*code, ErrorCode::CredentialFailed);

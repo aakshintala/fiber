@@ -232,9 +232,16 @@ impl LuaProvider {
 
     /// The token `token()` returns; a failure as the signing seam carries it.
     pub fn credential_token(self: &Arc<Self>) -> Result<Secret, signing::Error> {
-        self.token().map_err(|e| signing::Error::Credential {
-            code: e.code(),
-            message: detail(&e),
+        self.token().map_err(|e| {
+            let message = detail(&e);
+            if matches!(e, Error::Unattended { .. }) {
+                signing::Error::Unattended { message }
+            } else {
+                signing::Error::Credential {
+                    code: e.code(),
+                    message,
+                }
+            }
         })
     }
 

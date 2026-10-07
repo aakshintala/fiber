@@ -23,6 +23,12 @@ pub enum Error {
         /// The first line of the credential failure's own text.
         message: String,
     },
+    /// A login the credential needed a person for, and nobody was attached; it reports `authentication_failed`. `message` is the first line of the failure's own text.
+    #[error("{message}")]
+    Unattended {
+        /// The first line of the failure's own text.
+        message: String,
+    },
 }
 
 /// Adds a signature to each request a provider sends.
