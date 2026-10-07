@@ -60,8 +60,8 @@ pub(crate) struct Gate {
     /// What the `commands` command answers with, set by
     /// [`Session::commands`]; empty until then.
     commands: Mutex<Vec<CommandInfo>>,
-    /// The id of every command this process accepted, across connections,
-    /// so a repeat is rejected `duplicate_command` (`docs/invocation.md`).
+    /// The id of every command this process accepted or is running, across
+    /// connections, so a repeat is rejected `duplicate_command` (`docs/invocation.md`).
     accepted: Mutex<HashSet<String>>,
     inbox: Mutex<Option<Sender<Delivery>>>,
     /// What the `cancel` command asks: whether a turn is running. Stored
@@ -294,14 +294,15 @@ impl Session {
 }
 
 impl Gate {
-    /// Whether a command with `id` was accepted before.
-    pub(crate) fn was_accepted(&self, id: &CommandId) -> bool {
-        lock(&self.accepted).contains(&id.0)
+    /// Claims `id` before its command is dispatched. False when an earlier
+    /// command holds it, running or accepted.
+    pub(crate) fn reserve(&self, id: &CommandId) -> bool {
+        lock(&self.accepted).insert(id.0.clone())
     }
 
-    /// Remembers `id` as accepted for the life of the process.
-    pub(crate) fn remember(&self, id: &CommandId) {
-        lock(&self.accepted).insert(id.0.clone());
+    /// Frees `id` once its command is rejected, so a client may retry it.
+    pub(crate) fn release(&self, id: &CommandId) {
+        lock(&self.accepted).remove(&id.0);
     }
 
     #[cfg(test)]

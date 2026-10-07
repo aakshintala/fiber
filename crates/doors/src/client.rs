@@ -156,6 +156,10 @@ fn on_line(bytes: &[u8], conn: &mut Conn) {
             return;
         }
     };
+    if !conn.gate.reserve(&line.id) {
+        reject(conn, Some(line.id), ErrorCode::DuplicateCommand, DUPLICATE);
+        return;
+    }
     if !conn.subscribed && line.command != "subscribe" {
         reject(
             conn,
@@ -180,15 +184,6 @@ fn on_line(bytes: &[u8], conn: &mut Conn) {
             return;
         }
     };
-    if conn.gate.was_accepted(&parsed.id) {
-        reject(
-            conn,
-            Some(parsed.id),
-            ErrorCode::DuplicateCommand,
-            DUPLICATE,
-        );
-        return;
-    }
     dispatch(conn, parsed, &line.command);
 }
 
@@ -530,7 +525,6 @@ fn history(
 }
 
 fn accept(conn: &mut Conn, id: CommandId, result: Option<CommandResult>) {
-    conn.gate.remember(&id);
     send(
         conn,
         Event::CommandAccepted(CommandAccepted {
@@ -540,7 +534,15 @@ fn accept(conn: &mut Conn, id: CommandId, result: Option<CommandResult>) {
     );
 }
 
+/// A rejection frees the id for a retry, except one that never reserved it:
+/// `malformed` (the line's id may belong to an accepted command) and
+/// `duplicate_command` (the id is the earlier command's).
 fn reject(conn: &mut Conn, id: Option<CommandId>, code: ErrorCode, message: &str) {
+    if let Some(id) = &id
+        && !matches!(code, ErrorCode::Malformed | ErrorCode::DuplicateCommand)
+    {
+        conn.gate.release(id);
+    }
     send(
         conn,
         Event::CommandRejected(CommandRejected {
@@ -581,18 +583,18 @@ fn inbox_ack(conn: &Conn, id: CommandId) -> Ack {
     let gate = Arc::clone(&conn.gate);
     guard(move |result| {
         let event = match result {
-            Ok(result) => {
-                gate.remember(&id);
-                Event::CommandAccepted(CommandAccepted {
-                    command_id: id,
-                    result,
+            Ok(result) => Event::CommandAccepted(CommandAccepted {
+                command_id: id,
+                result,
+            }),
+            Err(rejection) => {
+                gate.release(&id);
+                Event::CommandRejected(CommandRejected {
+                    command_id: Some(id),
+                    code: rejection.code,
+                    message: rejection.message,
                 })
             }
-            Err(rejection) => Event::CommandRejected(CommandRejected {
-                command_id: Some(id),
-                code: rejection.code,
-                message: rejection.message,
-            }),
         };
         injector.push_kept(session::envelope(
             &gate.session_id,

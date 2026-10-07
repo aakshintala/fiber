@@ -2051,3 +2051,76 @@ fn a_rejected_command_id_may_be_sent_again() {
         .unwrap();
     close_within(opened.session, opened.log);
 }
+
+#[test]
+fn a_repeated_subscribe_id_is_a_duplicate_not_an_invalid_argument() {
+    reset();
+    let opened = open();
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .serve(None, Arc::new(|| false), move |_inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "summary");
+            let _ack = answer_of(&client, "c_sub");
+            subscribe(&client, "c_sub", "summary");
+            let repeat = answer_of(&client, "c_sub");
+            assert_eq!(repeat["payload"]["code"], "duplicate_command");
+            Ok(())
+        })
+        .unwrap();
+    close_within(opened.session, opened.log);
+}
+
+#[test]
+fn a_prompt_id_sent_again_while_the_first_is_unanswered_is_not_applied_twice() {
+    reset();
+    let opened = open();
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .serve(None, Arc::new(|| false), move |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "summary");
+            let _ack = answer_of(&client, "c_sub");
+            send_text(&client, "c_1", "prompt", "one");
+            let held = next_prompt(&inbox);
+            send_text(&client, "c_1", "prompt", "one");
+            let repeat = answer_of(&client, "c_1");
+            assert_eq!(repeat["payload"]["code"], "duplicate_command");
+            assert!(inbox.try_recv().is_err(), "the repeat was not dispatched");
+            (held.0)(Ok(None));
+            assert_eq!(answer_of(&client, "c_1")["kind"], "command_accepted");
+            Ok(())
+        })
+        .unwrap();
+    close_within(opened.session, opened.log);
+}
+
+#[test]
+fn a_malformed_line_does_not_free_an_accepted_id() {
+    reset();
+    let opened = open();
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .serve(None, Arc::new(|| false), move |_inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "summary");
+            let _ack = answer_of(&client, "c_sub");
+            send_bare(&client, "c_t", "tools");
+            assert_eq!(answer_of(&client, "c_t")["kind"], "command_accepted");
+            client
+                .send(r#"{"id":"c_t","command":"tools","bogus":1}"#)
+                .unwrap();
+            assert_eq!(answer_of(&client, "c_t")["payload"]["code"], "malformed");
+            send_bare(&client, "c_t", "tools");
+            assert_eq!(
+                answer_of(&client, "c_t")["payload"]["code"],
+                "duplicate_command"
+            );
+            Ok(())
+        })
+        .unwrap();
+    close_within(opened.session, opened.log);
+}
