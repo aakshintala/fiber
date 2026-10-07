@@ -13,8 +13,11 @@ use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
 
+use contract::GenerationId;
 use contract::events::{CacheLifetime, TextDelta};
-use contract::provider::{CallError, Delta, Input, ModelCall, ModelRequest, Provider, Reply};
+use contract::provider::{
+    CallError, CallUsage, Delta, Input, InputSize, ModelCall, ModelRequest, Provider, Reply,
+};
 use contract::shapes::Tokens;
 use fakes::{ProviderServer, Response};
 use provider::Endpoint;
@@ -74,6 +77,10 @@ fn assert_input_size(usage: &contract::provider::CallUsage, server: &ProviderSer
     assert!(!usage.input_size.media);
 }
 
+fn named(id: &str) -> Option<GenerationId> {
+    Some(GenerationId(id.into()))
+}
+
 fn tokens(input: u64, cache_read: u64, output: u64) -> Tokens {
     Tokens {
         input,
@@ -119,13 +126,10 @@ fn anthropic_failed_after_usage_carries_what_it_saw() {
     ))
     .call(&request());
     let (result, _) = run(call);
-    let Err(CallError::Failed {
-        usage: Some(usage), ..
-    }) = result
-    else {
+    let Err(CallError::Failed { usage, .. }) = result else {
         panic!("{result:?}");
     };
-    assert_eq!(usage.generation_id.0, "msg_1");
+    assert_eq!(usage.generation_id, named("msg_1"));
     assert_eq!(usage.tokens, tokens(7, 0, 2));
     assert_eq!(usage.web_searches, None);
     assert_input_size(&usage, &server);
@@ -144,13 +148,10 @@ fn anthropic_closed_early_after_its_generation_carries_zero_counts() {
     ))
     .call(&request());
     let (result, _) = run(call);
-    let Err(CallError::Failed {
-        usage: Some(usage), ..
-    }) = result
-    else {
+    let Err(CallError::Failed { usage, .. }) = result else {
         panic!("{result:?}");
     };
-    assert_eq!(usage.generation_id.0, "msg_1");
+    assert_eq!(usage.generation_id, named("msg_1"));
     assert_eq!(usage.tokens, tokens(0, 0, 0));
     assert_input_size(&usage, &server);
 }
@@ -194,42 +195,13 @@ fn anthropic_cancelled_after_usage_carries_what_it_saw() {
     assert_eq!(delta, Delta::Text(TextDelta { text: "Hel".into() }));
     call.cancel();
     let result = finished.recv_timeout(DEADLINE).expect("run returned");
-    let Err(CallError::Cancelled { usage: Some(usage) }) = result else {
+    let Err(CallError::Cancelled { usage }) = result else {
         panic!("{result:?}");
     };
-    assert_eq!(usage.generation_id.0, "msg_1");
+    assert_eq!(usage.generation_id, named("msg_1"));
     assert_eq!(usage.tokens, tokens(7, 0, 2));
     assert_eq!(usage.web_searches, None);
     assert_input_size(&usage, &server);
-}
-
-#[test]
-fn anthropic_failed_before_any_generation_carries_nothing() {
-    let server = ProviderServer::start([Response::status(500, "boom")]).unwrap();
-    let call = provider::anthropic_messages::Messages::new(endpoint(
-        "anthropic",
-        "claude-sonnet-5-5",
-        &server,
-    ))
-    .call(&request());
-    let (result, _) = run(call);
-    let Err(CallError::Failed { usage: None, .. }) = result else {
-        panic!("{result:?}");
-    };
-    let server = ProviderServer::start([Response::stream(anthropic_stream(&[
-        json!({"type": "error", "error": {"type": "invalid_request_error", "message": "bad"}}),
-    ]))])
-    .unwrap();
-    let call = provider::anthropic_messages::Messages::new(endpoint(
-        "anthropic",
-        "claude-sonnet-5-5",
-        &server,
-    ))
-    .call(&request());
-    let (result, _) = run(call);
-    let Err(CallError::Failed { usage: None, .. }) = result else {
-        panic!("{result:?}");
-    };
 }
 
 // Responses.
@@ -268,13 +240,10 @@ fn responses_failed_after_usage_carries_what_it_saw() {
     let call = provider::openai_responses::Responses::new(endpoint("openai", "gpt-5", &server))
         .call(&request());
     let (result, _) = run(call);
-    let Err(CallError::Failed {
-        usage: Some(usage), ..
-    }) = result
-    else {
+    let Err(CallError::Failed { usage, .. }) = result else {
         panic!("{result:?}");
     };
-    assert_eq!(usage.generation_id.0, "resp_1");
+    assert_eq!(usage.generation_id, named("resp_1"));
     assert_eq!(usage.tokens, tokens(6, 4, 3));
     assert_input_size(&usage, &server);
 }
@@ -288,13 +257,10 @@ fn responses_closed_early_after_its_generation_carries_zero_counts() {
     let call = provider::openai_responses::Responses::new(endpoint("openai", "gpt-5", &server))
         .call(&request());
     let (result, _) = run(call);
-    let Err(CallError::Failed {
-        usage: Some(usage), ..
-    }) = result
-    else {
+    let Err(CallError::Failed { usage, .. }) = result else {
         panic!("{result:?}");
     };
-    assert_eq!(usage.generation_id.0, "resp_1");
+    assert_eq!(usage.generation_id, named("resp_1"));
     assert_eq!(usage.tokens, tokens(0, 0, 0));
     assert_input_size(&usage, &server);
 }
@@ -323,34 +289,13 @@ fn responses_cancelled_after_its_generation_carries_zero_counts() {
     assert_eq!(delta, Delta::Text(TextDelta { text: "Hel".into() }));
     call.cancel();
     let result = finished.recv_timeout(DEADLINE).expect("run returned");
-    let Err(CallError::Cancelled { usage: Some(usage) }) = result else {
+    let Err(CallError::Cancelled { usage }) = result else {
         panic!("{result:?}");
     };
-    assert_eq!(usage.generation_id.0, "resp_1");
+    assert_eq!(usage.generation_id, named("resp_1"));
     assert_eq!(usage.tokens, tokens(0, 0, 0));
     assert_eq!(usage.web_searches, None);
     assert_input_size(&usage, &server);
-}
-
-#[test]
-fn responses_failed_before_any_generation_carries_nothing() {
-    let server = ProviderServer::start([Response::status(500, "boom")]).unwrap();
-    let call = provider::openai_responses::Responses::new(endpoint("openai", "gpt-5", &server))
-        .call(&request());
-    let (result, _) = run(call);
-    let Err(CallError::Failed { usage: None, .. }) = result else {
-        panic!("{result:?}");
-    };
-    let server = ProviderServer::start([Response::stream(responses_stream(&[
-        json!({"type": "error", "code": "server_error", "message": "boom"}),
-    ]))])
-    .unwrap();
-    let call = provider::openai_responses::Responses::new(endpoint("openai", "gpt-5", &server))
-        .call(&request());
-    let (result, _) = run(call);
-    let Err(CallError::Failed { usage: None, .. }) = result else {
-        panic!("{result:?}");
-    };
 }
 
 // Completions.
@@ -389,13 +334,10 @@ fn completions_failed_after_usage_carries_what_it_saw() {
     let call = provider::openai_completions::Completions::new(endpoint("openai", "gpt-5", &server))
         .call(&request());
     let (result, _) = run(call);
-    let Err(CallError::Failed {
-        usage: Some(usage), ..
-    }) = result
-    else {
+    let Err(CallError::Failed { usage, .. }) = result else {
         panic!("{result:?}");
     };
-    assert_eq!(usage.generation_id.0, "gen-1");
+    assert_eq!(usage.generation_id, named("gen-1"));
     assert_eq!(usage.tokens, tokens(6, 4, 3));
     assert_input_size(&usage, &server);
 }
@@ -422,13 +364,10 @@ fn completions_failed_after_cache_write_carries_it_under_the_hour_lifetime() {
     let call = provider::openai_completions::Completions::new(endpoint("openai", "gpt-5", &server))
         .call(&request);
     let (result, _) = run(call);
-    let Err(CallError::Failed {
-        usage: Some(usage), ..
-    }) = result
-    else {
+    let Err(CallError::Failed { usage, .. }) = result else {
         panic!("{result:?}");
     };
-    assert_eq!(usage.generation_id.0, "gen-1");
+    assert_eq!(usage.generation_id, named("gen-1"));
     assert_eq!(
         usage.tokens,
         Tokens {
@@ -449,13 +388,10 @@ fn completions_closed_early_after_its_generation_carries_zero_counts() {
     let call = provider::openai_completions::Completions::new(endpoint("openai", "gpt-5", &server))
         .call(&request());
     let (result, _) = run(call);
-    let Err(CallError::Failed {
-        usage: Some(usage), ..
-    }) = result
-    else {
+    let Err(CallError::Failed { usage, .. }) = result else {
         panic!("{result:?}");
     };
-    assert_eq!(usage.generation_id.0, "gen-1");
+    assert_eq!(usage.generation_id, named("gen-1"));
     assert_eq!(usage.tokens, tokens(0, 0, 0));
     assert_input_size(&usage, &server);
 }
@@ -485,36 +421,13 @@ fn completions_cancelled_after_usage_carries_what_it_saw() {
     assert_eq!(delta, Delta::Text(TextDelta { text: "Hel".into() }));
     call.cancel();
     let result = finished.recv_timeout(DEADLINE).expect("run returned");
-    let Err(CallError::Cancelled { usage: Some(usage) }) = result else {
+    let Err(CallError::Cancelled { usage }) = result else {
         panic!("{result:?}");
     };
-    assert_eq!(usage.generation_id.0, "gen-1");
+    assert_eq!(usage.generation_id, named("gen-1"));
     assert_eq!(usage.tokens, tokens(6, 4, 3));
     assert_eq!(usage.web_searches, None);
     assert_input_size(&usage, &server);
-}
-
-#[test]
-fn completions_failed_before_any_generation_carries_nothing() {
-    let server = ProviderServer::start([Response::status(500, "boom")]).unwrap();
-    let call = provider::openai_completions::Completions::new(endpoint("openai", "gpt-5", &server))
-        .call(&request());
-    let (result, _) = run(call);
-    let Err(CallError::Failed { usage: None, .. }) = result else {
-        panic!("{result:?}");
-    };
-    let body = format!(
-        "data: {}\n\ndata: [DONE]\n\n",
-        json!({"error": {"message": "boom", "code": "server_error"}})
-    )
-    .into_bytes();
-    let server = ProviderServer::start([Response::stream(body)]).unwrap();
-    let call = provider::openai_completions::Completions::new(endpoint("openai", "gpt-5", &server))
-        .call(&request());
-    let (result, _) = run(call);
-    let Err(CallError::Failed { usage: None, .. }) = result else {
-        panic!("{result:?}");
-    };
 }
 
 // Gemini.
@@ -551,13 +464,10 @@ fn gemini_failed_after_usage_carries_what_it_saw() {
     let call = provider::google_generative_ai::Gemini::new(endpoint("google", "gemini-3", &server))
         .call(&request());
     let (result, _) = run(call);
-    let Err(CallError::Failed {
-        usage: Some(usage), ..
-    }) = result
-    else {
+    let Err(CallError::Failed { usage, .. }) = result else {
         panic!("{result:?}");
     };
-    assert_eq!(usage.generation_id.0, "r1");
+    assert_eq!(usage.generation_id, named("r1"));
     assert_eq!(usage.tokens, tokens(10, 0, 3));
     assert_input_size(&usage, &server);
 }
@@ -570,13 +480,10 @@ fn gemini_closed_early_after_its_generation_carries_zero_counts() {
     let call = provider::google_generative_ai::Gemini::new(endpoint("google", "gemini-3", &server))
         .call(&request());
     let (result, _) = run(call);
-    let Err(CallError::Failed {
-        usage: Some(usage), ..
-    }) = result
-    else {
+    let Err(CallError::Failed { usage, .. }) = result else {
         panic!("{result:?}");
     };
-    assert_eq!(usage.generation_id.0, "r1");
+    assert_eq!(usage.generation_id, named("r1"));
     assert_eq!(usage.tokens, tokens(0, 0, 0));
     assert_input_size(&usage, &server);
 }
@@ -602,34 +509,13 @@ fn gemini_cancelled_after_usage_carries_what_it_saw() {
     assert_eq!(delta, Delta::Text(TextDelta { text: "Hel".into() }));
     call.cancel();
     let result = finished.recv_timeout(DEADLINE).expect("run returned");
-    let Err(CallError::Cancelled { usage: Some(usage) }) = result else {
+    let Err(CallError::Cancelled { usage }) = result else {
         panic!("{result:?}");
     };
-    assert_eq!(usage.generation_id.0, "r1");
+    assert_eq!(usage.generation_id, named("r1"));
     assert_eq!(usage.tokens, tokens(10, 0, 3));
     assert_eq!(usage.web_searches, None);
     assert_input_size(&usage, &server);
-}
-
-#[test]
-fn gemini_failed_before_any_generation_carries_nothing() {
-    let server = ProviderServer::start([Response::status(500, "boom")]).unwrap();
-    let call = provider::google_generative_ai::Gemini::new(endpoint("google", "gemini-3", &server))
-        .call(&request());
-    let (result, _) = run(call);
-    let Err(CallError::Failed { usage: None, .. }) = result else {
-        panic!("{result:?}");
-    };
-    let server = ProviderServer::start([Response::stream(gemini_stream(&[
-        json!({"error": {"message": "boom", "status": "INVALID_ARGUMENT"}}),
-    ]))])
-    .unwrap();
-    let call = provider::google_generative_ai::Gemini::new(endpoint("google", "gemini-3", &server))
-        .call(&request());
-    let (result, _) = run(call);
-    let Err(CallError::Failed { usage: None, .. }) = result else {
-        panic!("{result:?}");
-    };
 }
 
 #[test]
@@ -644,14 +530,220 @@ fn gemini_an_unrepresentable_output_count_is_zero_and_keeps_the_rest() {
     let call = provider::google_generative_ai::Gemini::new(endpoint("google", "gemini-3", &server))
         .call(&request());
     let (result, _) = run(call);
-    let Err(CallError::Failed {
-        usage: Some(usage), ..
-    }) = result
-    else {
+    let Err(CallError::Failed { usage, .. }) = result else {
         panic!("{result:?}");
     };
     assert_eq!(usage.tokens.input, 30);
     assert_eq!(usage.tokens.cache_read, 20);
     assert_eq!(usage.tokens.output, 0);
     assert_input_size(&usage, &server);
+}
+
+// Every protocol.
+
+/// A call on one protocol against `server`.
+type Calling = fn(&ProviderServer) -> Box<dyn ModelCall>;
+
+/// Each protocol, its call, and a stream whose first event is an error.
+fn protocols() -> [(&'static str, Calling, Vec<u8>); 4] {
+    [
+        (
+            "anthropic",
+            |server| {
+                provider::anthropic_messages::Messages::new(endpoint(
+                    "anthropic",
+                    "claude-sonnet-5-5",
+                    server,
+                ))
+                .call(&request())
+            },
+            anthropic_stream(&[
+                json!({"type": "error", "error": {"type": "invalid_request_error", "message": "bad"}}),
+            ]),
+        ),
+        (
+            "responses",
+            |server| {
+                provider::openai_responses::Responses::new(endpoint("openai", "gpt-5", server))
+                    .call(&request())
+            },
+            responses_stream(&[
+                json!({"type": "error", "code": "server_error", "message": "boom"}),
+            ]),
+        ),
+        (
+            "completions",
+            |server| {
+                provider::openai_completions::Completions::new(endpoint("openai", "gpt-5", server))
+                    .call(&request())
+            },
+            format!(
+                "data: {}\n\ndata: [DONE]\n\n",
+                json!({"error": {"message": "boom", "code": "server_error"}})
+            )
+            .into_bytes(),
+        ),
+        (
+            "gemini",
+            |server| {
+                provider::google_generative_ai::Gemini::new(endpoint("google", "gemini-3", server))
+                    .call(&request())
+            },
+            gemini_stream(&[json!({"error": {"message": "boom", "status": "INVALID_ARGUMENT"}})]),
+        ),
+    ]
+}
+
+/// What a call that saw no generation and no usage carries: the body it
+/// sent, and nothing else.
+fn unnamed(server: &ProviderServer) -> CallUsage {
+    CallUsage::unnamed(InputSize {
+        bytes: body_len(server),
+        media: false,
+    })
+}
+
+#[test]
+fn an_http_error_carries_an_unnamed_usage_on_every_protocol() {
+    for (protocol, call, _) in protocols() {
+        let server = ProviderServer::start([Response::status(500, "boom")]).unwrap();
+        let (result, _) = run(call(&server));
+        let Err(CallError::Failed { usage, .. }) = result else {
+            panic!("{protocol}: {result:?}");
+        };
+        assert_eq!(*usage, unnamed(&server), "{protocol}");
+    }
+}
+
+#[test]
+fn an_error_before_any_generation_carries_an_unnamed_usage_on_every_protocol() {
+    for (protocol, call, stream) in protocols() {
+        let server = ProviderServer::start([Response::stream(stream)]).unwrap();
+        let (result, _) = run(call(&server));
+        let Err(CallError::Failed { usage, .. }) = result else {
+            panic!("{protocol}: {result:?}");
+        };
+        assert_eq!(*usage, unnamed(&server), "{protocol}");
+    }
+}
+
+#[test]
+fn a_call_cancelled_before_its_generation_carries_an_unnamed_usage_on_every_protocol() {
+    for (protocol, call, _) in protocols() {
+        let server =
+            ProviderServer::start([Response::stall(200, b": keep-alive\n\n".to_vec(), 1024)
+                .header("content-type", "text/event-stream")])
+            .unwrap();
+        let call: Arc<dyn ModelCall> = Arc::from(call(&server));
+        let (done, finished) = mpsc::channel();
+        let runner = Arc::clone(&call);
+        thread::spawn(move || done.send(runner.run(&mut |_| {})).unwrap());
+        assert!(server.await_partial(1, DEADLINE), "{protocol}");
+        call.cancel();
+        let result = finished.recv_timeout(DEADLINE).expect("run returned");
+        let Err(CallError::Cancelled { usage }) = result else {
+            panic!("{protocol}: {result:?}");
+        };
+        assert_eq!(*usage, unnamed(&server), "{protocol}");
+    }
+}
+
+#[test]
+fn completions_cut_before_any_id_carries_the_tokens_it_saw() {
+    let chunk = json!({"object": "chat.completion.chunk",
+        "choices": [{"index": 0, "delta": {"content": "Hi"}, "finish_reason": null}],
+        "usage": {"prompt_tokens": 7, "completion_tokens": 2}});
+    let server =
+        ProviderServer::start([Response::stream(format!("data: {chunk}\n\n").into_bytes())])
+            .unwrap();
+    let call = provider::openai_completions::Completions::new(endpoint("openai", "gpt-5", &server))
+        .call(&request());
+    let (result, _) = run(call);
+    let Err(CallError::Failed { usage, .. }) = result else {
+        panic!("{result:?}");
+    };
+    assert_eq!(usage.generation_id, None);
+    assert_eq!(usage.tokens, tokens(7, 0, 2));
+    assert_input_size(&usage, &server);
+}
+
+#[test]
+fn gemini_cut_before_any_id_carries_the_tokens_it_saw() {
+    let chunk = json!({"candidates": [{"content": {"role": "model",
+        "parts": [{"text": "Hi"}]}, "index": 0}],
+        "usageMetadata": {"promptTokenCount": 7, "candidatesTokenCount": 2}});
+    let server = ProviderServer::start([Response::stream(gemini_stream(&[chunk]))]).unwrap();
+    let call = provider::google_generative_ai::Gemini::new(endpoint("google", "gemini-3", &server))
+        .call(&request());
+    let (result, _) = run(call);
+    let Err(CallError::Failed { usage, .. }) = result else {
+        panic!("{result:?}");
+    };
+    assert_eq!(usage.generation_id, None);
+    assert_eq!(usage.tokens, tokens(7, 0, 2));
+    assert_input_size(&usage, &server);
+}
+
+#[test]
+fn completions_completed_without_an_id_names_no_generation() {
+    let chunk = json!({"object": "chat.completion.chunk",
+        "choices": [{"index": 0, "delta": {"content": "Hi"}, "finish_reason": "stop"}]});
+    let body = format!("data: {chunk}\n\ndata: [DONE]\n\n").into_bytes();
+    let server = ProviderServer::start([Response::stream(body)]).unwrap();
+    let call = provider::openai_completions::Completions::new(endpoint("openai", "gpt-5", &server))
+        .call(&request());
+    let (result, _) = run(call);
+    let reply = result.unwrap();
+    assert_eq!(reply.text(), "Hi");
+    assert_eq!(reply.generation_id, None);
+}
+
+#[test]
+fn gemini_completed_without_an_id_names_no_generation() {
+    let chunk = json!({"candidates": [{"content": {"role": "model",
+        "parts": [{"text": "Hi"}]}, "index": 0, "finishReason": "STOP"}],
+        "usageMetadata": {"promptTokenCount": 7, "candidatesTokenCount": 2}});
+    let server = ProviderServer::start([Response::stream(gemini_stream(&[chunk]))]).unwrap();
+    let call = provider::google_generative_ai::Gemini::new(endpoint("google", "gemini-3", &server))
+        .call(&request());
+    let (result, _) = run(call);
+    let reply = result.unwrap();
+    assert_eq!(reply.text(), "Hi");
+    assert_eq!(reply.generation_id, None);
+}
+
+#[test]
+fn responses_keeps_the_id_it_saw_first_whatever_the_terminal_says() {
+    for terminal in [json!({}), json!({"id": "resp_other"})] {
+        let mut response = json!({"status": "completed", "usage": responses_usage()});
+        response
+            .as_object_mut()
+            .unwrap()
+            .extend(terminal.as_object().unwrap().clone());
+        let server = ProviderServer::start([Response::stream(responses_stream(&[
+            responses_created("resp_1"),
+            json!({"type": "response.completed", "response": response}),
+        ]))])
+        .unwrap();
+        let call = provider::openai_responses::Responses::new(endpoint("openai", "gpt-5", &server))
+            .call(&request());
+        let (result, _) = run(call);
+        let reply = result.unwrap();
+        assert_eq!(reply.generation_id, named("resp_1"), "{terminal}");
+        assert_eq!(reply.tokens, tokens(6, 4, 3), "{terminal}");
+    }
+}
+
+#[test]
+fn responses_named_only_by_its_terminal_takes_that_id() {
+    let server = ProviderServer::start([Response::stream(responses_stream(&[
+        json!({"type": "response.created", "response": {"status": "in_progress"}}),
+        json!({"type": "response.completed", "response": {
+            "id": "resp_9", "status": "completed", "usage": responses_usage()}}),
+    ]))])
+    .unwrap();
+    let call = provider::openai_responses::Responses::new(endpoint("openai", "gpt-5", &server))
+        .call(&request());
+    let (result, _) = run(call);
+    assert_eq!(result.unwrap().generation_id, named("resp_9"));
 }

@@ -158,7 +158,7 @@ fn priced(text: &str, generation: &str, cost: f64) -> Scripted {
 fn unpriced(text: &str, generation: &str) -> Scripted {
     let mut scripted = Scripted::text(text);
     if let Ok(reply) = &mut scripted.end {
-        reply.generation_id = GenerationId(generation.into());
+        reply.generation_id = Some(GenerationId(generation.into()));
     }
     scripted
 }
@@ -551,6 +551,32 @@ fn a_call_whose_generation_was_never_named_is_never_looked_up() {
     let lines = next_turn(&mut session);
     assert_eq!(usage_lines(&lines).len(), 1);
     assert_eq!(usage_lines(&lines)[0].payload["generation_id"], "gen_2");
+    settle(&session.clock, start + AFTER);
+    assert_eq!(seen.calls(), ["gen_2"]);
+}
+
+#[test]
+fn a_completed_reply_the_provider_never_named_is_never_looked_up() {
+    let mut unnamed = Scripted::text("First.");
+    if let Ok(reply) = &mut unnamed.end {
+        reply.generation_id = None;
+    }
+    let (mut session, seen) = looked(
+        vec![unnamed, failed_after("gen_2")],
+        CacheLifetime::OneHour,
+        Some(0.5),
+        no_hook,
+    );
+    let (first, first_lines) = first_turn(&mut session);
+    assert_eq!(kinds(&first_lines), COMPLETED_FIRST_KINDS);
+    let minted = first.payload["generation_id"].as_str().unwrap().to_owned();
+    assert!(minted.starts_with("fiber-"), "{minted}");
+    assert!(
+        session.clock.parked().is_empty(),
+        "no lookup waits, so no worker started"
+    );
+    let start = session.clock.now();
+    next_turn(&mut session);
     settle(&session.clock, start + AFTER);
     assert_eq!(seen.calls(), ["gen_2"]);
 }

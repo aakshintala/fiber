@@ -6,7 +6,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, mpsc};
 use std::time::Duration;
 
-use contract::provider::{CallError, Delta, ModelCall, ModelRequest, Provider, Reply};
+use contract::provider::{
+    CallError, CallUsage, Delta, InputSize, ModelCall, ModelRequest, Provider, Reply,
+};
 
 use crate::reply;
 
@@ -96,7 +98,9 @@ impl ModelCall for BlockingCall {
         // A call the cancel never reached is a missed signal, not a
         // cancellation: it must not report `Cancelled` after its timeout.
         assert!(got.is_ok(), "timed out waiting for the call's cancel");
-        Err(CallError::Cancelled { usage: None })
+        Err(CallError::Cancelled {
+            usage: Box::new(CallUsage::unnamed(InputSize::default())),
+        })
     }
 
     fn cancel(&self) {

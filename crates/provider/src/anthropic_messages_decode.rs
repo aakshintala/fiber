@@ -10,10 +10,11 @@ use contract::events::{
 };
 use contract::provider::{CallUsage, Delta, Finish, HostedCall, InputSize, Reply, ReplyAction};
 use contract::shapes::{ContentPart, Failure, Tokens};
-use contract::{ErrorCode, GenerationId, ProviderCallId};
+use contract::{ErrorCode, ProviderCallId};
 use serde_json::{Map, Value, json};
 
 use crate::Error;
+use crate::unfinished::named;
 
 /// Reads a reply stream, passing each fragment to `sink` as it arrives, and
 /// returns the reply once `message_stop` arrives. A stream that fails keeps
@@ -41,13 +42,13 @@ pub(crate) fn decode_tracked(
         Ok(end.is_some())
     });
     if let Err(error) = read {
-        return Err((error, reply.partial()));
+        return Err((error, Some(reply.partial())));
     }
     match end {
         Some(reply) => Ok(reply),
         None => Err((
             Error::StreamIncomplete("it ended before message_stop".into()),
-            reply.partial(),
+            Some(reply.partial()),
         )),
     }
 }
@@ -100,18 +101,15 @@ struct Decoder {
 }
 
 impl Decoder {
-    /// What the stream had seen: the generation and its usage once
-    /// `message_start` named them, else none.
-    fn partial(&self) -> Option<CallUsage> {
-        if self.id.is_empty() {
-            return None;
-        }
-        Some(CallUsage {
-            generation_id: GenerationId(self.id.clone()),
+    /// What the stream had seen: the generation once `message_start` named
+    /// it, and the usage so far.
+    fn partial(&self) -> CallUsage {
+        CallUsage {
+            generation_id: named(self.id.clone()),
             tokens: tokens(&Value::Object(self.usage.clone())),
             web_searches: web_searches(&self.usage),
             input_size: InputSize::default(),
-        })
+        }
     }
 
     /// Takes one event; returns the reply once `message_stop` arrives.
@@ -361,7 +359,7 @@ impl Decoder {
         Ok(Reply {
             actions: std::mem::take(&mut self.actions),
             finish,
-            generation_id: GenerationId(std::mem::take(&mut self.id)),
+            generation_id: named(std::mem::take(&mut self.id)),
             tokens: tokens(&Value::Object(std::mem::take(&mut self.usage))),
             web_searches: searches,
             cost: None,

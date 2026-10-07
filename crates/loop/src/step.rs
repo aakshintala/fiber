@@ -200,7 +200,7 @@ impl Loop {
             model.subscription,
         );
         let lookup = self.provider.cost_lookup();
-        self.write_usage(recorded, reply.cost, lookup, Some(turn), Some(message))?;
+        self.write_usage(recorded, lookup, Some(turn), Some(message))?;
         self.append(
             &Event::AssistantMessageCompleted(AssistantMessageCompleted {
                 outcome: MessageOutcome::Completed,

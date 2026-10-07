@@ -471,7 +471,7 @@ fn a_failed_selection_keeps_every_earlier_person_message() {
         Scripted::text("allow"),
     ]);
     let lines = run_flow(&mut session);
-    // The whole flow in order: the failed selection writes no usage, then the fallback line and notice.
+    // The whole flow in order: the failed selection's usage, then the fallback line and notice.
     assert_eq!(
         kinds(&lines),
         [
@@ -518,6 +518,7 @@ fn a_failed_selection_keeps_every_earlier_person_message() {
             "assistant_message_completed",
             "handoff_completed",
             "opening_message",
+            "usage_recorded",
             "reviewer_kept",
             "notice",
             "turn_completed",
@@ -1004,6 +1005,7 @@ fn the_oldest_kept_messages_drop_past_the_reviewers_window() {
             "assistant_message_completed",
             "handoff_completed",
             "opening_message",
+            "usage_recorded",
             "reviewer_kept",
             "notice",
             "turn_completed",

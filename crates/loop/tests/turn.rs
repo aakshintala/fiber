@@ -575,16 +575,17 @@ fn a_failed_model_call_fails_the_turn_with_its_code() {
             "turn_started",
             "step_started",
             "assistant_message_started",
+            "usage_recorded",
             "assistant_message_completed",
             "turn_completed",
         ]
     );
-    let call = &lines[6].payload;
+    let call = &lines[7].payload;
     assert_eq!(call["outcome"], "failed");
     assert!(call.get("attempt").is_none());
     assert_eq!(call["error"]["code"], "invalid_request");
-    assert_eq!(lines[7].payload["outcome"], "failed");
-    assert_eq!(lines[7].payload["error"], call["error"]);
+    assert_eq!(lines[8].payload["outcome"], "failed");
+    assert_eq!(lines[8].payload["error"], call["error"]);
     // A failed call sends nothing to the model.
     assert_eq!(
         rebuild(&log::read(&session.dir).unwrap(), MODEL).unwrap()[1..],
@@ -814,7 +815,7 @@ fn per_token(subscription: bool) -> r#loop::Model {
 fn reply_of(text: &str, id: &str, input: u64) -> Scripted {
     let mut scripted = Scripted::text(text);
     let reply = scripted.end.as_mut().unwrap();
-    reply.generation_id = contract::GenerationId(id.into());
+    reply.generation_id = Some(contract::GenerationId(id.into()));
     reply.tokens.input = input;
     reply.tokens.output = 0;
     scripted
@@ -823,7 +824,7 @@ fn reply_of(text: &str, id: &str, input: u64) -> Scripted {
 fn tool_of(id: &str, input: u64) -> Scripted {
     let mut scripted = tool_call_reply("", &["get_weather"]);
     let reply = scripted.end.as_mut().unwrap();
-    reply.generation_id = contract::GenerationId(id.into());
+    reply.generation_id = Some(contract::GenerationId(id.into()));
     reply.tokens.input = input;
     reply.tokens.output = 0;
     scripted
@@ -1094,6 +1095,7 @@ fn a_steer_arriving_during_a_failed_reply_starts_the_next_turn() {
             "turn_started",
             "step_started",
             "assistant_message_started",
+            "usage_recorded",
             "assistant_message_completed",
             "turn_completed",
         ]

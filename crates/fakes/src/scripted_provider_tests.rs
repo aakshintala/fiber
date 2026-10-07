@@ -1,5 +1,6 @@
 use contract::events::TextDelta;
-use contract::provider::{CallError, Delta, ModelRequest, Provider};
+use contract::provider::{CallError, CallUsage, Delta, InputSize, ModelRequest, Provider};
+use contract::shapes::Failure;
 use contract::{ErrorCode, events::CacheLifetime};
 
 use super::{Scripted, ScriptedProvider, reply};
@@ -74,9 +75,61 @@ fn a_cancelled_call_returns_cancelled_and_streams_nothing() {
     let mut deltas = Vec::new();
     assert_eq!(
         call.run(&mut |d| deltas.push(d)),
-        Err(CallError::Cancelled { usage: None })
+        Err(CallError::Cancelled {
+            usage: Box::new(unnamed_1000())
+        })
     );
     assert!(deltas.is_empty());
+}
+
+/// What a scripted call that ended before any generation carries.
+fn unnamed_1000() -> CallUsage {
+    CallUsage::unnamed(InputSize {
+        bytes: 1000,
+        media: false,
+    })
+}
+
+#[test]
+fn a_call_failed_before_any_generation_carries_an_unnamed_usage() {
+    let provider = ScriptedProvider::new([Scripted::failed(Failure {
+        code: ErrorCode::Timeout,
+        message: "slow".into(),
+        retry_after_ms: None,
+        provider: None,
+    })]);
+    let end = provider.call(&request("r")).run(&mut |_| {});
+    let Err(error) = end else {
+        panic!("{end:?}");
+    };
+    assert_eq!(error.usage(), &unnamed_1000());
+}
+
+#[test]
+fn a_call_cancelled_mid_stream_carries_an_unnamed_usage() {
+    let provider = ScriptedProvider::new([Scripted::text("Hello")]);
+    let call = provider.call(&request("r"));
+    let mut deltas = Vec::new();
+    let end = call.run(&mut |d| {
+        deltas.push(d);
+        call.cancel();
+    });
+    assert_eq!(deltas.len(), 1);
+    assert_eq!(
+        end,
+        Err(CallError::Cancelled {
+            usage: Box::new(unnamed_1000())
+        })
+    );
+}
+
+#[test]
+fn an_unnamed_usage_has_no_generation_and_call_usage_s_counts() {
+    let unnamed = super::unnamed_usage();
+    assert_eq!(unnamed.generation_id, None);
+    assert_eq!(unnamed.tokens.input, 10);
+    assert_eq!(unnamed.tokens.output, 3);
+    assert_eq!(unnamed.input_size.bytes, 1000);
 }
 
 #[test]
@@ -86,7 +139,9 @@ fn a_call_runs_once() {
     assert!(call.run(&mut |_| {}).is_ok());
     assert_eq!(
         call.run(&mut |_| {}),
-        Err(CallError::Cancelled { usage: None })
+        Err(CallError::Cancelled {
+            usage: Box::new(unnamed_1000())
+        })
     );
 }
 
@@ -100,7 +155,7 @@ fn a_cancelled_call_keeps_a_scripted_cancelled_end_and_drops_any_other() {
     assert_eq!(
         call.run(&mut |_| {}),
         Err(CallError::Cancelled {
-            usage: Some(Box::new(usage))
+            usage: Box::new(usage)
         })
     );
     let provider = ScriptedProvider::new([Scripted::text("Hello")]);
@@ -108,6 +163,8 @@ fn a_cancelled_call_keeps_a_scripted_cancelled_end_and_drops_any_other() {
     call.cancel();
     assert_eq!(
         call.run(&mut |_| {}),
-        Err(CallError::Cancelled { usage: None })
+        Err(CallError::Cancelled {
+            usage: Box::new(unnamed_1000())
+        })
     );
 }

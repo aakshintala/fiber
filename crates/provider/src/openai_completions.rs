@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader};
 use std::sync::Arc;
 
+use contract::ProviderCallId;
 use contract::events::{
     CacheLifetime, ReasoningCompleted, TextCompleted, TextDelta, ToolCallArgumentsDelta,
     ToolCallRequested,
@@ -18,12 +19,12 @@ use contract::provider::{
     ReplyAction, ToolDefinition,
 };
 use contract::shapes::Tokens;
-use contract::{GenerationId, ProviderCallId};
 use serde_json::{Map, Value, json};
 
 use crate::http::{self, Cancel};
 use crate::openai_completions_messages::messages;
 use crate::redact::Secrets;
+use crate::unfinished::named;
 use crate::{Endpoint, Error, sse};
 
 /// One model reached over `openai-completions`.
@@ -275,16 +276,18 @@ pub(crate) fn decode_tracked(
         Ok(false)
     });
     if let Err(error) = read {
-        return Err((error, reply.partial()));
+        return Err((error, Some(reply.partial())));
     }
     if !done {
         return Err((
             Error::StreamIncomplete("it ended before [DONE]".into()),
-            reply.partial(),
+            Some(reply.partial()),
         ));
     }
     let partial = reply.partial();
-    reply.finish(lifetime).map_err(|error| (error, partial))
+    reply
+        .finish(lifetime)
+        .map_err(|error| (error, Some(partial)))
 }
 
 /// One tool call as it streams in.
@@ -320,19 +323,16 @@ struct Decoder {
 }
 
 impl Decoder {
-    /// What the stream had seen: the generation and its usage once a chunk
-    /// named them, else none.
-    fn partial(&self) -> Option<CallUsage> {
-        if self.id.is_empty() {
-            return None;
-        }
+    /// What the stream had seen: the generation once a chunk named it, and
+    /// the usage so far.
+    fn partial(&self) -> CallUsage {
         let lifetime = self.lifetime.unwrap_or(CacheLifetime::FiveMinutes);
-        Some(CallUsage {
-            generation_id: GenerationId(self.id.clone()),
+        CallUsage {
+            generation_id: named(self.id.clone()),
             tokens: tokens(&self.usage, &lifetime),
             web_searches: None,
             input_size: InputSize::default(),
-        })
+        }
     }
 
     /// Takes one chunk.
@@ -564,7 +564,7 @@ impl Decoder {
         Ok(Reply {
             actions,
             finish,
-            generation_id: GenerationId(self.id),
+            generation_id: named(self.id),
             tokens: tokens(&self.usage, lifetime),
             web_searches: None,
             cost: cost(&self.usage),

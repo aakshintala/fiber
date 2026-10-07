@@ -34,7 +34,7 @@ pub use process_group::{
 };
 pub use provider_server::{ProviderServer, Request, Response, fingerprint};
 pub use rerun::{rerun, rerun_within};
-pub use scripted_provider::{Scripted, ScriptedProvider, call_usage, reply};
+pub use scripted_provider::{Scripted, ScriptedProvider, call_usage, reply, unnamed_usage};
 pub use temp_dir::TempDir;
 pub use watchdog::Watchdog;
 pub use within::within;

@@ -18,7 +18,7 @@ use contract::events::{Decision, Event, TurnOutcome, UsageRecorded};
 use contract::inbox::Delivery;
 use contract::shapes::{Effect, Failure};
 use contract::{Envelope, ErrorCode, RequestId, SessionId};
-use fakes::{Scripted, call_usage};
+use fakes::{Scripted, call_usage, unnamed_usage};
 use serde_json::{Value, json};
 
 use support::{
@@ -356,9 +356,10 @@ fn a_failed_review_after_its_generation_writes_its_usage() {
     assert_eq!(tool.ran().len(), 1);
 }
 
-/// A call that fails before its provider names a generation.
+/// A call that fails before its provider names a generation, having seen
+/// 10 input and 3 output tokens.
 fn unnamed_failure() -> Scripted {
-    Scripted::failed(failure())
+    Scripted::failed_after(failure(), unnamed_usage())
 }
 
 /// One turn of `session`, and its one `usage_recorded` payload.
@@ -399,7 +400,37 @@ fn a_delegate_s_unnamed_call_copied_into_its_parent_is_counted_once() {
     let all = log::read(&parent.dir).unwrap();
     let exited = all.last().unwrap();
     assert_eq!(exited.kind, "fiber_exited");
+    // The parent's call and the delegate's, each once.
     let usage = &exited.payload["usage"]["tokens"];
-    assert_eq!(usage["input"], own.tokens.input + copy.tokens.input);
-    assert_eq!(usage["output"], own.tokens.output + copy.tokens.output);
+    assert_eq!(usage["input"], 20);
+    assert_eq!(usage["output"], 6);
+}
+
+#[test]
+fn a_call_failed_before_its_generation_records_the_tokens_it_saw() {
+    let mut session = Session::new(vec![unnamed_failure()], None);
+    let recorded = only_record(&mut session);
+    assert_eq!(recorded.tokens.input, 10);
+    assert_eq!(recorded.tokens.output, 3);
+    assert_eq!(recorded.input_bytes, 1000);
+    assert_eq!(recorded.cost, None);
+}
+
+#[test]
+fn a_minted_record_s_cost_is_null_on_a_priced_model() {
+    let model = r#loop::Model {
+        reference: support::MODEL.into(),
+        cost: Some(contract::provider::Cost {
+            input: 1.0,
+            output: 2.0,
+            cache_read: None,
+            cache_write: None,
+            tiers: Vec::new(),
+        }),
+        subscription: false,
+    };
+    let mut session = Session::open(vec![unnamed_failure()], Vec::new(), Vec::new(), model);
+    let recorded = only_record(&mut session);
+    assert_eq!(recorded.tokens.input, 10);
+    assert_eq!(recorded.cost, None);
 }
