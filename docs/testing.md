@@ -79,7 +79,10 @@ comparing. Behaviour that depends on time, such as a monitor's deadline or a
 retry's backoff, is tested at crate level under an injected clock. No test
 sleeps on the wall clock (`docs/tools.md`, "Background jobs"), except `main`'s
 test of the real clock's own `sleep`: it sleeps 1 ms and asserts the clock
-advanced at least that much.
+advanced at least that much. The rule binds a test's own waits. Fiber's own
+bounded retry, such as `doors::hub::connect` retrying the hub's socket on the
+injected clock, runs on the real clock when a binary-level test drives it
+against a real process.
 
 ### Screens
 
