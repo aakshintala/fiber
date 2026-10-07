@@ -809,3 +809,114 @@ fn the_check_and_the_repair_agree() {
         }
     }
 }
+
+/// Each row: the schema of `x`, its value, and the lines the check gives.
+fn rows(table: &[(Value, Value, &[&str])]) {
+    for (property, value, expected) in table {
+        let schema = object(json!({"x": property}));
+        let (errors, _) = within(&schema, &json!({"x": value}));
+        assert_eq!(&errors, expected, "{property} with {value}");
+    }
+}
+
+#[test]
+fn max_length_counts_characters_on_strings_only() {
+    let twelve = json!({"type": "string", "maxLength": 12});
+    let untyped = json!({"maxLength": 2});
+    rows(&[
+        (twelve.clone(), json!("abcdefghijkl"), &[]),
+        (
+            twelve.clone(),
+            json!("abcdefghijklm"),
+            &["`/x`: must be at most 12 characters"],
+        ),
+        // Twelve characters, 24 bytes.
+        (twelve.clone(), json!("éééééééééééé"), &[]),
+        (
+            twelve.clone(),
+            json!("ééééééééééééé"),
+            &["`/x`: must be at most 12 characters"],
+        ),
+        (
+            twelve,
+            json!(1_234_567_890_123_u64),
+            &["`/x`: expected string, got a number"],
+        ),
+        (untyped.clone(), json!(12_345), &[]),
+        (untyped, json!([1, 2, 3]), &[]),
+    ]);
+}
+
+#[test]
+fn item_counts_bound_arrays_only() {
+    let two_to_four = json!({"type": "array", "minItems": 2, "maxItems": 4});
+    let at_least_one = json!({"type": "array", "minItems": 1});
+    let untyped = json!({"minItems": 2, "maxItems": 2});
+    rows(&[
+        (
+            two_to_four.clone(),
+            json!([1]),
+            &["`/x`: must have at least 2 items"],
+        ),
+        (two_to_four.clone(), json!([1, 2]), &[]),
+        (two_to_four.clone(), json!([1, 2, 3, 4]), &[]),
+        (
+            two_to_four.clone(),
+            json!([1, 2, 3, 4, 5]),
+            &["`/x`: must have at most 4 items"],
+        ),
+        (
+            two_to_four,
+            json!({"a": 1}),
+            &["`/x`: expected array, got an object"],
+        ),
+        (
+            at_least_one.clone(),
+            json!([]),
+            &["`/x`: must have at least 1 items"],
+        ),
+        (at_least_one, json!([0]), &[]),
+        (untyped.clone(), json!("abc"), &[]),
+        (untyped.clone(), json!({"a": 1, "b": 2, "c": 3}), &[]),
+        (untyped, json!([1, 2]), &[]),
+    ]);
+}
+
+#[test]
+fn nested_limits_name_their_places() {
+    let option = json!({
+        "type": "object",
+        "properties": {"label": {"type": "string"}},
+        "required": ["label"]
+    });
+    let question = json!({
+        "type": "object",
+        "properties": {
+            "header": {"type": "string", "maxLength": 12},
+            "options": {"type": "array", "minItems": 2, "maxItems": 4, "items": option}
+        }
+    });
+    let schema = object(json!({
+        "questions": {"type": "array", "minItems": 1, "maxItems": 4, "items": question}
+    }));
+    let arguments = json!({"questions": [
+        {"header": "ok", "options": [{"label": "a"}]},
+        {"header": "thirteen char"}
+    ]});
+    let (errors, _) = within(&schema, &arguments);
+    assert_eq!(
+        errors,
+        [
+            "`/questions/0/options`: must have at least 2 items",
+            "`/questions/1/header`: must be at most 12 characters",
+        ]
+    );
+}
+
+#[test]
+fn json_in_a_string_that_breaks_an_item_count_is_not_kept() {
+    let schema = object(json!({"l": {"type": "array", "maxItems": 2}}));
+    assert_eq!(repair(&schema, &json!({"l": "[1, 2, 3]"})), None);
+    let made = repair(&schema, &json!({"l": "[1, 2]"})).unwrap();
+    assert_eq!(made.repaired["l"], json!([1, 2]));
+}
