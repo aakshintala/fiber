@@ -101,8 +101,10 @@ fn refused_why(segments: &[String], source: &Source) -> &'static str {
         Some(found) if !found.repo && matches!(source, Source::Repository(_)) => {
             "a repository may not set it"
         }
-        Some(found) if found.global_only => "only Fiber home's `config.json` may set it",
-        Some(_) => "only a repository's own file may set it",
+        Some(found) => match found.scope {
+            keys::Scope::GlobalOnly => "only Fiber home's `config.json` may set it",
+            keys::Scope::Any | keys::Scope::RepoOnly => "only a repository's own file may set it",
+        },
     }
 }
 

@@ -97,18 +97,27 @@ impl Kind {
     }
 }
 
+/// Which layers may set a key ("What a repository may set"). One value,
+/// so a key can never be both repository-only and global-only.
+#[derive(Clone, Copy)]
+pub(crate) enum Scope {
+    /// Any layer may set it.
+    Any,
+    /// Only a repository's own file may set it: any other layer's value is
+    /// ignored with a notice.
+    RepoOnly,
+    /// Only Fiber home's `config.json` may set it: any other layer's value
+    /// is ignored with a notice.
+    GlobalOnly,
+}
+
 /// One row of "Keys". `*` in a path stands for one name, such as a role's.
 pub(crate) struct Key {
     path: &'static str,
     pub(crate) kind: Kind,
     /// Whether a repository may set it ("What a repository may set").
     pub(crate) repo: bool,
-    /// Whether only a repository's file may set it: any other layer's value
-    /// is ignored with a notice.
-    pub(crate) repo_only: bool,
-    /// Whether only Fiber home's `config.json` may set it: any other layer's
-    /// value is ignored with a notice.
-    pub(crate) global_only: bool,
+    pub(crate) scope: Scope,
     /// The built-in default, as JSON text.
     pub(crate) default: Option<&'static str>,
 }
@@ -118,8 +127,7 @@ const fn key(path: &'static str, kind: Kind, repo: bool, default: Option<&'stati
         path,
         kind,
         repo,
-        repo_only: false,
-        global_only: false,
+        scope: Scope::Any,
         default,
     }
 }
@@ -130,8 +138,7 @@ const fn repo_only(path: &'static str, kind: Kind) -> Key {
         path,
         kind,
         repo: true,
-        repo_only: true,
-        global_only: false,
+        scope: Scope::RepoOnly,
         default: None,
     }
 }
@@ -142,8 +149,7 @@ const fn global_only(path: &'static str, kind: Kind, default: Option<&'static st
         path,
         kind,
         repo: false,
-        repo_only: false,
-        global_only: true,
+        scope: Scope::GlobalOnly,
         default,
     }
 }
@@ -311,14 +317,22 @@ fn walk(
         if let Some(key) = leaf(path) {
             if matches!(source, Source::Repository(_)) && !key.repo {
                 notices.push(ignored(path, "a repository may not set"));
-            } else if key.repo_only && !matches!(source, Source::Repository(_)) {
-                notices.push(ignored(path, "only a repository's own file may set"));
-            } else if key.global_only && !matches!(source, Source::Global(_)) {
-                notices.push(ignored(path, "only Fiber home's `config.json` may set"));
-            } else if key.kind.accepts(&value) {
-                kept.insert(name, value);
             } else {
-                return Err(wrong(path, key.kind.expected()));
+                match key.scope {
+                    Scope::RepoOnly if !matches!(source, Source::Repository(_)) => {
+                        notices.push(ignored(path, "only a repository's own file may set"));
+                    }
+                    Scope::GlobalOnly if !matches!(source, Source::Global(_)) => {
+                        notices.push(ignored(path, "only Fiber home's `config.json` may set"));
+                    }
+                    Scope::Any | Scope::RepoOnly | Scope::GlobalOnly => {
+                        if key.kind.accepts(&value) {
+                            kept.insert(name, value);
+                        } else {
+                            return Err(wrong(path, key.kind.expected()));
+                        }
+                    }
+                }
             }
         } else if interior(path) {
             let Value::Object(inner) = value else {
