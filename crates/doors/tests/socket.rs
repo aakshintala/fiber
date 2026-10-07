@@ -1569,20 +1569,15 @@ fn shell_exit_zero_stays_on_the_sending_connection() {
                     let id = format!("c_cancel_{attempt}");
                     send(&client, &format!(r#"{{"id":"{id}","command":"cancel"}}"#));
                     let line = response(&client, &id);
-                    let accepted = kind(&line) == "command_accepted";
-                    if tx.send(line).is_err() || !accepted {
+                    if kind(&line) != "command_accepted" {
+                        drop(tx.send(line));
                         return;
                     }
                 }
             });
-            let rejected = loop {
-                let line = rx
-                    .recv_timeout(DEADLINE)
-                    .expect("the finished shell left the running list");
-                if kind(&line) != "command_accepted" {
-                    break line;
-                }
-            };
+            let rejected = rx
+                .recv_timeout(DEADLINE)
+                .expect("the finished shell left the running list");
             assert_eq!(
                 rejection(&rejected),
                 ("stale_request", "No turn is running.")
