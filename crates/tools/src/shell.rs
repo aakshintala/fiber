@@ -20,8 +20,11 @@ use serde_json::{Map, Value, json};
 #[path = "shell/background.rs"]
 mod background;
 
-#[path = "shell/command.rs"]
 mod command;
+mod drive;
+mod moved;
+mod process_group;
+mod spawn;
 
 #[path = "shell/groups.rs"]
 mod groups;

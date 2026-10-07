@@ -10,13 +10,15 @@ use fakes::Recorder;
 use fakes::clock::FakeClock;
 
 use super::super::background::{Step, running_step, wait_deadline};
+use super::super::drive::{
+    Phase, Run, already_woken, exit_code_of, finish, park, poll_while_occupied,
+};
+use super::super::moved::Moved;
 use super::super::output::{
     Inner, OUTPUT_CAP, Shared, bump, complete_prefix, lock, note_eof, read_output, stream_output,
 };
-use super::{
-    MovePolicy, MoveReason, Moved, Phase, Run, StopKind, already_woken, exit_code_of, finish,
-    group_alive, park, poll_while_occupied, refused_group, suppress_term,
-};
+use super::super::process_group::{group_alive, refused_group, suppress_term};
+use super::{MovePolicy, MoveReason, StopKind};
 
 #[test]
 fn a_moved_sequence_wakes_without_a_cancel() {
