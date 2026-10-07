@@ -25,7 +25,7 @@ use serde_json::{Value, json};
 use super::*;
 use crate::connection::serve_connection;
 use crate::diag::Diag;
-use crate::fake::{FakeStarter, failure};
+use crate::fake::{FakeStarter, Handshake, failure};
 use crate::start::START_DEADLINE;
 
 /// One named deadline per wait: a resume answers before it.
@@ -184,6 +184,23 @@ fn a_running_session_is_attached_to_without_a_resume() {
     assert!(resumed(&hub).is_ok());
     assert!(starter.resumed().is_empty());
     assert!(!temp.hub_log().contains("session_resumed"));
+}
+
+#[test]
+fn a_trusted_resume_returns_an_accepting_socket_past_fiber_exited_at_once() {
+    let temp = Temp::new();
+    temp.recorded();
+    temp.append("fiber_exited");
+    let run = temp.dir.join("run");
+    fs::create_dir_all(&run).unwrap();
+    let _running = UnixListener::bind(run.join(SID)).unwrap();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    // `resume` passes trusted=true: the accepting socket is the answer,
+    // even while the log ends in `fiber_exited`.
+    assert!(resumed(&hub).is_ok());
+    assert!(starter.resumed().is_empty());
+    assert_eq!(temp.clock.now(), temp.clock.origin());
 }
 
 #[test]
@@ -594,6 +611,31 @@ fn closing_before_fiber_exited_is_passed_on() {
     assert_eq!(line["payload"]["code"], "closing");
     assert_eq!(line["payload"]["message"], "The session is closing.");
     assert!(starter.resumed().is_empty());
+}
+
+#[test]
+fn a_rejection_that_is_not_closing_after_fiber_exited_is_passed_on() {
+    let temp = Temp::new();
+    temp.recorded();
+    temp.append("fiber_exited");
+    let starter = FakeStarter::with_handshake(
+        &temp.dir,
+        Handshake {
+            accept: false,
+            code: "prompt_rejected".to_owned(),
+            message: "The prompt was rejected.".to_owned(),
+        },
+    );
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    client.send("c_1", "prompt");
+    let line = client.next("the rejection");
+    assert_eq!(line["kind"], "command_rejected", "{line}");
+    assert_eq!(line["payload"]["command_id"], "c_1");
+    assert_eq!(line["payload"]["code"], "prompt_rejected");
+    assert_eq!(line["payload"]["message"], "The prompt was rejected.");
+    // Passed on, not routed again: one resume, the first connection's.
+    assert_eq!(starter.resumed().len(), 1);
 }
 
 #[test]
