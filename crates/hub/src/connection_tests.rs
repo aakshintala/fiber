@@ -681,3 +681,122 @@ fn start_with_null_content_is_invalid_arguments() {
     let (code, _, _) = rejected(&client.next("the rejection"));
     assert_eq!(code, "invalid_arguments");
 }
+
+/// Seeds `temp`'s `recent.jsonl` with session `id` crashed, its directory
+/// made, and starts the hub's feed.
+fn crashed_feed(temp: &Temp, hub: &Arc<Hub>, id: &str) {
+    fs::create_dir_all(crate::recent::session_dir(&temp.dir, "p", id)).unwrap();
+    let row: crate::RecentRow = serde_json::from_value(json!({
+        "session_id": id, "ts": 3, "project": "p", "workspace": "/w", "name": "n",
+        "how": "crashed", "status": crate::fake::status("n", "/w", "idle", None),
+    }))
+    .unwrap();
+    crate::append(&temp.dir, &row).unwrap();
+    hub.feed.start();
+}
+
+/// Waits under [`DEADLINE`] until the feed holds `n` subscribers.
+fn until_subscribers(hub: &Arc<Hub>, n: usize, what: &str) {
+    let (done_tx, done_rx) = mpsc::channel();
+    let hub = Arc::clone(hub);
+    thread::spawn(move || {
+        while hub.feed.subscribers() != n {
+            std::thread::yield_now();
+        }
+        done_tx.send(()).unwrap_or(());
+    });
+    done_rx
+        .recv_timeout(DEADLINE)
+        .unwrap_or_else(|_| panic!("the feed holds {n} subscribers {what}"));
+}
+
+#[test]
+fn feed_is_accepted_then_sends_the_snapshot_and_leaves_with_the_client() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    let id = "s_00000000000000c1";
+    crashed_feed(&temp, &hub, id);
+    let mut client = Client::connect(&hub);
+    client.hello();
+    client.send(&command("c_0", "feed", json!({"x": 1})));
+    let (code, echoed, _) = rejected(&client.next("the rejection"));
+    assert_eq!(code, "invalid_arguments");
+    assert_eq!(echoed.as_deref(), Some("c_0"));
+    for round in ["c_1", "c_2"] {
+        client.send(&command(round, "feed", json!({})));
+        let ack = client.next("the acknowledgement");
+        accepted(&ack);
+        assert_eq!(ack.get("payload"), Some(&json!({"command_id": round})));
+        let status = client.next("the crashed status");
+        assert_eq!(status.get("kind"), Some(&json!("session_status")));
+        assert_eq!(status.get("session_id"), Some(&json!(id)));
+        let left = client.next("its session_left");
+        assert_eq!(left.get("kind"), Some(&json!("session_left")));
+        assert_eq!(
+            left.get("payload"),
+            Some(&json!({"session_id": id, "how": "crashed"}))
+        );
+        // A second `feed` replaces the first subscription.
+        until_subscribers(&hub, 1, "on this connection");
+    }
+    drop(client);
+    until_subscribers(&hub, 0, "after the client left");
+    hub.feed.stop();
+}
+
+#[test]
+fn dismiss_over_the_wire_drops_a_crashed_session_for_every_client() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    let id = "s_00000000000000c1";
+    crashed_feed(&temp, &hub, id);
+    let mut client = Client::connect(&hub);
+    client.hello();
+    client.send(&command("c_1", "dismiss", json!({"session": 5})));
+    let (code, _, _) = rejected(&client.next("the bad dismiss"));
+    assert_eq!(code, "invalid_arguments");
+    client.send(&command("c_2", "dismiss", json!({"session": id})));
+    let ack = client.next("the dismissal");
+    accepted(&ack);
+    assert_eq!(ack.get("payload"), Some(&json!({"command_id": "c_2"})));
+    client.send(&command("c_3", "dismiss", json!({"session": id})));
+    let (code, echoed, _) = rejected(&client.next("the second dismissal"));
+    assert_eq!(code, "stale_request");
+    assert_eq!(echoed.as_deref(), Some("c_3"));
+    // A fresh feed is sent nothing for it: its acknowledgement, then the
+    // answer to the next command.
+    client.send(&command("c_4", "feed", json!({})));
+    accepted(&client.next("the feed acknowledgement"));
+    client.send(&command("c_5", "status", json!({})));
+    let (echoed, _) = accepted(&client.next("the status answer"));
+    assert_eq!(echoed, "c_5");
+    hub.feed.stop();
+}
+
+#[test]
+fn recent_over_the_wire_answers_a_page() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    let id = "s_00000000000000c1";
+    crashed_feed(&temp, &hub, id);
+    let mut client = Client::connect(&hub);
+    client.hello();
+    client.send(&command("c_1", "recent", json!({"project": "p"})));
+    let (echoed, result) = accepted(&client.next("the page"));
+    assert_eq!(echoed, "c_1");
+    let sessions = result.get("sessions").unwrap().as_array().unwrap();
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(
+        sessions.first().unwrap().get("session_id"),
+        Some(&json!(id))
+    );
+    client.send(&command(
+        "c_2",
+        "recent",
+        json!({"before": "s_0000000000000999"}),
+    ));
+    let (code, echoed, _) = rejected(&client.next("the unknown before"));
+    assert_eq!(code, "invalid_arguments");
+    assert_eq!(echoed.as_deref(), Some("c_2"));
+    hub.feed.stop();
+}
