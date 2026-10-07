@@ -764,7 +764,7 @@ pub(crate) struct Session {
     /// The inbox sender the loop's inbox wake reaches, once
     /// [`Session::inbox_woken`] wired one. The wake holds it weakly, so
     /// dropping this and `inbox` closes the inbox.
-    pub(crate) woken: Option<Arc<Mutex<Sender<Delivery>>>>,
+    pub(crate) woken: Option<Arc<Sender<Delivery>>>,
     _home: TempDir,
 }
 
@@ -1184,7 +1184,7 @@ impl Session {
     /// `Delivery::Cancelled` in the inbox through a sender it holds only
     /// weakly.
     pub(crate) fn inbox_woken(mut self) -> Self {
-        let sender = Arc::new(Mutex::new(self.inbox.clone()));
+        let sender = Arc::new(self.inbox.clone());
         let wake = Arc::new(InboxWake(Arc::downgrade(&sender)));
         self.woken = Some(sender);
         self.looped = self.looped.take().map(|looped| looped.inbox_wake(wake));
@@ -1357,12 +1357,12 @@ impl Session {
 
 /// The loop's inbox wake in a test: a weak sender, so it never keeps the
 /// inbox open.
-struct InboxWake(std::sync::Weak<Mutex<Sender<Delivery>>>);
+struct InboxWake(std::sync::Weak<Sender<Delivery>>);
 
 impl Wake for InboxWake {
     fn wake(&self) {
         if let Some(sender) = self.0.upgrade() {
-            let _sent = sender.lock().unwrap().send(Delivery::Cancelled);
+            let _sent = sender.send(Delivery::Cancelled);
         }
     }
 }

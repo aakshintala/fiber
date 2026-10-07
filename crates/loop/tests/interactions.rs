@@ -624,29 +624,24 @@ fn a_cancel_while_pending_declines_it_before_the_call_completes() {
 #[test]
 fn a_shutdown_while_pending_declines_it_before_the_call_completes() {
     let (lines, _) = stopped_while_pending(|session| session.cancel.shutdown(143));
-    let kinds = kinds(&lines);
-    let resolved = kinds
-        .iter()
-        .position(|kind| *kind == "interaction_resolved")
-        .expect("Fiber resolves it");
-    let completed = kinds
-        .iter()
-        .position(|kind| *kind == "tool_call_completed")
-        .expect("the call completes");
-    assert!(resolved < completed, "{kinds:?}");
-    assert_eq!(
-        &kinds[..OPENING.len() + 3],
-        [
+    assert_kinds(
+        &lines,
+        &[
             OPENING,
             &[
                 "tool_call_started",
                 "interaction_requested",
                 "interaction_resolved",
-            ]
-        ]
-        .concat()
+                "tool_call_completed",
+                "turn_completed",
+            ],
+        ],
     );
     declined_by_fiber(of_kind(&lines, "interaction_resolved")[0]);
+    assert_eq!(
+        of_kind(&lines, "tool_call_completed")[0].payload["status"],
+        "cancelled"
+    );
 }
 
 #[test]
