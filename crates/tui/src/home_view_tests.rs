@@ -1102,6 +1102,32 @@ fn the_paste_token_has_an_exact_target() {
 }
 
 #[test]
+fn a_token_on_the_first_hidden_row_has_no_target() {
+    let mut app = home(80, 24);
+    for n in 0..9 {
+        if n > 0 {
+            app.on_edit(crate::keys::Edit::ShiftEnter);
+        }
+        let pasted: Vec<String> = (1..=11).map(|line| format!("line {line}")).collect();
+        app.on_edit(crate::keys::Edit::Paste(pasted.join("\n")));
+    }
+    // Keep the cursor on the first token. The eight-row draft window then
+    // ends just before token nine, whose row is still inside the screen.
+    for _ in 0..16 {
+        app.on_edit(crate::keys::Edit::Left);
+    }
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let targets = render(&app, area, &mut buf, None);
+    let tokens: Vec<ratatui::layout::Rect> = targets
+        .iter()
+        .filter(|target| matches!(target.id, crate::mouse::TargetId::Token(_)))
+        .map(|target| target.rect)
+        .collect();
+    assert_eq!(tokens.len(), 8);
+}
+
+#[test]
 fn no_token_target_draws_past_the_visible_rows() {
     // Twenty paste tokens, one per row, with the cursor moved up
     // eleven pieces: the draft scrolls, and the token one row past the

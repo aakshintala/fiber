@@ -254,6 +254,25 @@ fn remove_drops_only_the_named_row() {
 }
 
 #[test]
+fn removing_a_feed_row_keeps_the_others_in_order() {
+    let mut sessions = Sessions::default();
+    for session in [
+        "s_aaaaaaaaaaaaaaaa",
+        "s_bbbbbbbbbbbbbbbb",
+        "s_cccccccccccccccc",
+    ] {
+        sessions.status(from_status(&envelope(session, json!({"state": "idle"}))));
+    }
+    sessions.remove(&SessionId("s_bbbbbbbbbbbbbbbb".to_owned()));
+    let ids: Vec<String> = sessions
+        .shown(PROJECT, false)
+        .iter()
+        .map(|row| row.id.0.clone())
+        .collect();
+    assert_eq!(ids, ["s_aaaaaaaaaaaaaaaa", "s_cccccccccccccccc"]);
+}
+
+#[test]
 fn spend_adds_cost_and_subscription_cost() {
     let mut spending = payload(json!({"state": "streaming"}));
     spending["spend"] = json!({"tokens": {"input": 1, "cache_read": 0,
