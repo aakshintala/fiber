@@ -163,6 +163,26 @@ fn a_compiled_in_crate_prompt_runs_that_crate() {
 }
 
 #[test]
+fn a_manifest_under_research_runs_the_docs_job_alone() {
+    for path in [
+        "research/tui-prototype/Cargo.toml",
+        "research/tui-prototype/Cargo.lock",
+    ] {
+        let selection = classify(&strings(&[path]), &members());
+        assert_eq!(selection, Selection::Docs, "{path}");
+        assert_eq!(selection.mode(), "docs");
+    }
+    let everything: Vec<String> = members().keys().cloned().collect();
+    assert_eq!(
+        classify(
+            &strings(&["research/tui-prototype/Cargo.toml", "Cargo.toml"]),
+            &members()
+        ),
+        Selection::All(everything)
+    );
+}
+
+#[test]
 fn scripts_check_alone_runs_everything() {
     let everything: Vec<String> = members().keys().cloned().collect();
     let selection = classify(&strings(&["scripts/check"]), &members());

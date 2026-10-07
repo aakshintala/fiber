@@ -55,7 +55,9 @@ A pull request runs only what its diff can affect.
   package readers, below, even when it is Markdown.
 - A diff that changes `Cargo.lock`, any `Cargo.toml`, `rust-toolchain.toml`,
   anything under `.github/` or `scripts/`, `clippy.toml`, `deny.toml`,
-  `.cargo/config.toml` or `.config/nextest.toml` runs everything.
+  `.cargo/config.toml` or `.config/nextest.toml` runs everything. These
+  files are matched outside `research/`, which is not part of the
+  workspace: a manifest there is a docs file.
 - A file a crate compiles in runs that crate alone, not the crates that
   depend on it. This covers Markdown anywhere, and any file outside the
   crate. A change to `docs/events.md`, `docs/errors.md`,
