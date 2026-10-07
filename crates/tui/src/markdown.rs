@@ -153,7 +153,6 @@ pub(crate) fn render(text: &str, width: u16) -> Rendered {
     for event in Parser::new_ext(text, options) {
         writer.event(event);
     }
-    writer.flush();
     writer.out
 }
 
@@ -247,7 +246,6 @@ impl Writer {
                 });
             }
             Tag::Item => {
-                self.flush();
                 if let Some(list) = self.lists.last_mut() {
                     let marker = match &mut list.next {
                         Some(next) => {
@@ -266,13 +264,13 @@ impl Writer {
                 self.block();
                 self.table = Some(table::Table::new(aligns));
             }
-            Tag::TableCell => self.inline.clear(),
             Tag::Emphasis => self.emphasis = self.emphasis.saturating_add(1),
             Tag::Strong => self.strong = self.strong.saturating_add(1),
             Tag::Strikethrough => self.strike = self.strike.saturating_add(1),
             Tag::Link { .. } => self.link = self.link.saturating_add(1),
             Tag::TableHead
             | Tag::TableRow
+            | Tag::TableCell
             | Tag::Image { .. }
             | Tag::FootnoteDefinition(_)
             | Tag::DefinitionList

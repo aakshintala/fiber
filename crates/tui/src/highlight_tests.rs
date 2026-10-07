@@ -309,3 +309,60 @@ fn html_tags_attributes_strings_entities_and_comments() {
         ]
     );
 }
+
+#[test]
+fn more_heads_markers_and_edges() {
+    let lines = runs("diff", "diff --git a b\nindex 1..2\n");
+    assert_eq!(lines[0][0].0, Role::Keyword);
+    assert_eq!(lines[1][0].0, Role::Keyword);
+    let lines = runs("markdown", "* a\n+ b\n2) c\n~~~\n`open");
+    assert_eq!(lines[0][0], (Role::Operator, "*".to_owned()));
+    assert_eq!(lines[1][0], (Role::Operator, "+".to_owned()));
+    assert_eq!(lines[2][0], (Role::Operator, "2)".to_owned()));
+    assert_eq!(lines[3], vec![(Role::Comment, "~~~".to_owned())]);
+    assert_eq!(lines[4], vec![(Role::String, "`open".to_owned())]);
+    assert_eq!(
+        runs("md", "2x y")[0],
+        vec![(Role::CodeText, "2x y".to_owned())]
+    );
+}
+
+#[test]
+fn preprocessor_lines_start_after_a_newline_or_indent() {
+    assert_eq!(
+        role_of("c", "x;\n#define Y 1", "#define"),
+        Some(Role::Keyword)
+    );
+    assert_eq!(role_of("c", "  #if X", "#if"), Some(Role::Keyword));
+}
+
+#[test]
+fn a_sigil_variable_ends_at_its_word() {
+    assert_eq!(role_of("bash", "$A b", "$A"), Some(Role::Constant));
+}
+
+#[test]
+fn one_capital_is_a_type_and_underscores_with_digits_are_plain() {
+    assert_eq!(role_of("rust", "X", "X"), Some(Role::Type));
+    assert_eq!(
+        runs("rust", "_1 x")[0],
+        vec![(Role::CodeText, "_1 x".to_owned())]
+    );
+}
+
+#[test]
+fn a_rust_string_runs_across_lines() {
+    let lines = runs("rust", "\"a\nb\" x");
+    assert_eq!(lines[1][0], (Role::String, "b\"".to_owned()));
+}
+
+#[test]
+fn html_self_closing_tags_bare_ampersands_and_unclosed_comments() {
+    assert_eq!(role_of("html", "<br/>", "/>"), Some(Role::Operator));
+    assert_eq!(role_of("html", "a & b", "&"), Some(Role::Constant));
+    assert_eq!(
+        runs("html", "<!-- open"),
+        vec![vec![(Role::Comment, "<!-- open".to_owned())]]
+    );
+    assert_eq!(role_of("html", "<a b='c'>", "'c'"), Some(Role::String));
+}

@@ -297,6 +297,12 @@ each of three languages peaks 6,832 KiB over an empty program (macOS arm64
 footprint, October 6, 2026). tree-sitter-highlight with the same grammar
 crates compiles the same parse tables.
 
+The lexer's tables are static data, so a reply with no code loads nothing for
+it. Through the `draw` jig, a reply with one code block in each of Rust,
+Python and JavaScript draws in 1.9 ms and peaks at 1,632 KiB of footprint,
+against 1.6 ms and 1,344 KiB for the same reply without the blocks: the whole
+process, macOS arm64, October 6, 2026.
+
 The shell tool's recogniser splits a command on `&&`, `||`, `;` and `|` and
 reads each part as plain words. Anything it cannot read plainly makes the
 call declare `executes`, as `docs/tools.md` requires. A recogniser that fails

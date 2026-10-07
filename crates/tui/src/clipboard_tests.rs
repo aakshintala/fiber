@@ -112,3 +112,9 @@ fn a_missing_command_is_an_error_on_its_thread() {
     let handle = pipe(Vec::new(), "x".to_owned()).unwrap_or_else(|err| panic!("pipe: {err}"));
     assert!(reap(handle).is_err());
 }
+
+#[test]
+fn on_path_finds_a_program_in_a_path_directory() {
+    assert!(super::on_path("sh"));
+    assert!(!super::on_path("fiber-no-such-clipboard-program"));
+}

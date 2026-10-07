@@ -358,3 +358,62 @@ fn wide_characters_wrap_by_cells() {
 fn hard_breaks_end_lines() {
     assert_eq!(texts("one  \ntwo", 40), vec!["one", "two"]);
 }
+
+#[test]
+fn a_loose_list_has_no_blank_lines_and_its_second_paragraph_hangs() {
+    assert_eq!(
+        texts("- a\n\n  more\n- b\n\nafter", 40),
+        vec!["• a", "  more", "• b", "", "after"]
+    );
+}
+
+#[test]
+fn an_empty_item_shows_its_marker() {
+    assert_eq!(texts("-\n- b", 40), vec!["• ", "• b"]);
+}
+
+#[test]
+fn a_wide_number_marker_hangs_by_its_width() {
+    assert_eq!(texts("10. alpha beta", 10), vec!["10. alpha", "    beta"]);
+}
+
+#[test]
+fn a_block_after_a_blank_gets_one_blank() {
+    assert_eq!(texts("a\n\n> b", 40), vec!["a", "", "│ b"]);
+}
+
+#[test]
+fn an_items_text_ends_before_a_block_inside_it() {
+    assert_eq!(texts("- a\n  > q", 20), vec!["• a", "│   q"]);
+    assert_eq!(texts("- a\n  ***", 6), vec!["• a", "──────"]);
+    let lines = texts("- a\n  ```\n  x\n  ```", 12);
+    assert_eq!(lines[0], "• a");
+    assert_eq!(lines[1], "        copy");
+    let lines = texts("- a\n  | x | y |\n  |---|---|\n  | 1 | 2 |", 20);
+    assert_eq!(lines[0], "• a");
+    assert_eq!(lines[1], "x  y");
+}
+
+#[test]
+fn a_soft_break_is_a_space() {
+    assert_eq!(texts("one\ntwo", 40), vec!["one two"]);
+}
+
+#[test]
+fn the_label_is_the_info_strings_first_word() {
+    assert_eq!(texts("```rust,ignore\nx\n```", 14)[0], "rust      copy");
+    assert_eq!(texts("```py title\nx\n```", 14)[0], "py        copy");
+}
+
+#[test]
+fn a_tie_for_widest_shrinks_the_first_column() {
+    let lines = texts("| aaaaaaaa | bbbbbbbb |\n|---|---|\n| x | y |", 17);
+    assert_eq!(lines[0], "aaaaaaa  bbbbbbbb");
+    assert_eq!(lines[1], "a                ");
+}
+
+#[test]
+fn a_tab_in_prose_is_a_space_and_a_quote_ends() {
+    assert_eq!(texts("a\tb", 40), vec!["a b"]);
+    assert_eq!(texts("> b\n\nc", 40), vec!["│ b", "", "c"]);
+}

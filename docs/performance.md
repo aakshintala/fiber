@@ -47,7 +47,7 @@ a 20-thousand-token one fit the same ceiling.
 | Budget | Ceiling | Gated on | Basis |
 |---|---|---|---|
 | Session, idle, headless | 12 MiB peak RSS | Linux x86_64 | picked |
-| Terminal, idle | 8 MiB peak RSS | Linux x86_64 | from components |
+| Terminal, idle | 8.8 MiB peak RSS | Linux x86_64 | from components |
 | Session, busy or resumed | 24 MiB peak RSS | Linux x86_64 | from components |
 | `web_fetch` converting a 10 MiB HTML page, the download cap | within the busy session's 24 MiB peak RSS | Linux x86_64 | from components |
 | Idle CPU, session and terminal | zero context switches in the idle window, on every thread | Linux x86_64 | exact |
@@ -63,7 +63,10 @@ a 20-thousand-token one fit the same ceiling.
 Basis says where a number came from:
 
 - **From components** is the sum of measured parts, times two. Idle terminal: ratatui's two screen buffers and
-  crossterm, with room for the visible part of the transcript. Admitting a
+  crossterm, with room for the visible part of the transcript, then 856 KiB,
+  twice pulldown-cmark's 428 KiB on Linux x86_64, for rendering replies as
+  markdown (`docs/dependencies.md`, "Runtime dependencies"). The terminal's
+  syntax highlighting is its own code and admits no crate. Admitting a
   crate for the terminal raises its ceiling by twice the crate's measured cost
   in the same pull request; its idle CPU and first
   frame budgets do not move. Busy session: a
