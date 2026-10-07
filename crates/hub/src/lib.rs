@@ -17,6 +17,7 @@ mod listen;
 mod prompt_history;
 mod relay;
 mod resume;
+mod recent;
 mod start;
 
 use std::io;
@@ -35,6 +36,7 @@ use crate::diag::Diag;
 use crate::listen::Held;
 
 pub use crate::error::StartError;
+pub use crate::recent::{Left, RecentRow, append};
 
 /// Starts a session the hub was asked for, or resumes one a relayed command
 /// names: runs the internal session command in `workspace` with `id`, so

@@ -47,10 +47,10 @@ use std::time::Duration;
 
 use config::{Config, Layer, Sources};
 use connect::connect;
+use contract::ErrorCode;
 use contract::inbox::Delivery;
 use contract::provider::Provider;
 use contract::shapes::Failure;
-use contract::{ErrorCode, SessionId};
 use doors::{Session, failure};
 use extensions::Providers;
 use log::Log;
@@ -238,25 +238,8 @@ fn ask(
     };
     match resume {
         Some(selector) => resume::ask_resume(selector, model, prompt, clock, &signals),
-        None => ask_new(model, prompt, clock, &signals),
+        None => session_command::ask_new(model, prompt, clock, &signals),
     }
-}
-
-/// `fiber ask` on a new session.
-fn ask_new(
-    model: Option<String>,
-    prompt: String,
-    clock: Arc<dyn contract::clock::Clock>,
-    signals: &doors::Signals,
-) -> i32 {
-    session_command::new_session(
-        SessionId(doors::mint("s_")),
-        model,
-        Some(prompt),
-        true,
-        clock,
-        signals,
-    )
 }
 
 /// What an `ask` loop judges with: the workspace the session keeps, the
