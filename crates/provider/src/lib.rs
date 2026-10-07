@@ -21,6 +21,7 @@ pub mod openai_responses;
 pub mod redact;
 mod sse;
 mod strict;
+mod unfinished;
 
 pub use error::Error;
 

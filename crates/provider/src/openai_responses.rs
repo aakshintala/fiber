@@ -12,8 +12,8 @@ use contract::events::{
     ReasoningCompleted, TextCompleted, TextDelta, ToolCallArgumentsDelta, ToolCallRequested,
 };
 use contract::provider::{
-    CallError, Delta, Finish, Input, InputSize, ModelCall, ModelRequest, Provider, Reply,
-    ReplyAction, ToolDefinition,
+    CallError, CallUsage, Delta, Finish, Input, InputSize, ModelCall, ModelRequest, Provider,
+    Reply, ReplyAction, ToolDefinition,
 };
 use contract::shapes::Tokens;
 use contract::{ActionId, GenerationId, ProviderCallId};
@@ -128,7 +128,7 @@ impl Call {
 impl ModelCall for Call {
     fn run(&self, sink: &mut dyn FnMut(Delta)) -> Result<Reply, CallError> {
         let mut secrets = self.secrets.clone();
-        let (reply, should_retry) = match http::post_signed(
+        let (decoded, should_retry) = match http::post_signed(
             &self.url,
             &self.headers,
             &self.body,
@@ -137,26 +137,32 @@ impl ModelCall for Call {
             &self.cancel,
             &mut secrets,
         ) {
-            Ok((stream, should_retry)) => (decode(BufReader::new(stream), sink), should_retry),
+            Ok((stream, should_retry)) => {
+                (decode_tracked(BufReader::new(stream), sink), should_retry)
+            }
             Err(e) => {
                 let should_retry = e.should_retry();
-                (Err(e), should_retry)
+                (Err((e, None)), should_retry)
             }
         };
         // Whatever a cancelled call returns, the cancel ended it.
         if self.cancel.is_cancelled() {
-            return Err(CallError::Cancelled { usage: None });
+            return Err(CallError::Cancelled {
+                usage: crate::unfinished::carried(&decoded, self.input_size),
+            });
         }
-        reply
-            .map(|reply| Reply {
-                input_size: self.input_size,
-                ..reply
-            })
-            .map_err(|e| CallError::Failed {
-                failure: e.failure(&self.provider, &secrets),
+        let usage = crate::unfinished::carried(&decoded, self.input_size);
+        match decoded {
+            Ok(mut reply) => {
+                reply.input_size = self.input_size;
+                Ok(reply)
+            }
+            Err((error, _)) => Err(CallError::Failed {
+                failure: error.failure(&self.provider, &secrets),
                 should_retry,
-                usage: None,
-            })
+                usage,
+            }),
+        }
     }
 
     fn cancel(&self) {
@@ -356,15 +362,37 @@ fn arguments_text(arguments: &Value) -> String {
 /// returns the reply once its terminal event arrives. A stream that fails
 /// keeps nothing it streamed, finished tool calls included.
 pub fn decode(stream: impl BufRead, sink: &mut dyn FnMut(Delta)) -> Result<Reply, Error> {
+    decode_tracked(stream, sink).map_err(|(error, _)| error)
+}
+
+/// As [`decode`], also carrying what the stream had seen when it failed:
+/// the generation and its usage once a response event named them, else none.
+#[allow(
+    clippy::result_large_err,
+    reason = "the decode carries its partial alongside the error for the call's usage"
+)]
+pub(crate) fn decode_tracked(
+    stream: impl BufRead,
+    sink: &mut dyn FnMut(Delta),
+) -> Result<Reply, (Error, Option<CallUsage>)> {
     let mut reply = Decoder::default();
     let mut end = None;
-    sse::read(stream, |data| {
+    let read = sse::read(stream, |data| {
         let event: Value = serde_json::from_str(data)
             .map_err(|e| Error::StreamIncomplete(format!("an event is not JSON ({e})")))?;
         end = reply.event(&event, sink)?;
         Ok(end.is_some())
-    })?;
-    end.ok_or_else(|| Error::StreamIncomplete("it ended before its terminal event".into()))
+    });
+    if let Err(error) = read {
+        return Err((error, reply.partial()));
+    }
+    match end {
+        Some(reply) => Ok(reply),
+        None => Err((
+            Error::StreamIncomplete("it ended before its terminal event".into()),
+            reply.partial(),
+        )),
+    }
 }
 
 /// What a reply has produced so far.
@@ -375,9 +403,39 @@ struct Decoder {
     actions: Vec<ReplyAction>,
     /// Each tool call's index within the message and its name, by item id.
     calls: BTreeMap<String, (u32, Option<String>)>,
+    /// The response's id, from `response.created` on.
+    id: String,
+    /// The response's last usage, from `response.created` on.
+    usage: Value,
 }
 
 impl Decoder {
+    /// What the stream had seen: the generation and its usage once a
+    /// response event named them, else none.
+    fn partial(&self) -> Option<CallUsage> {
+        if self.id.is_empty() {
+            return None;
+        }
+        Some(CallUsage {
+            generation_id: GenerationId(self.id.clone()),
+            tokens: tokens(&self.usage),
+            web_searches: None,
+            input_size: InputSize::default(),
+        })
+    }
+
+    /// Records the response's id and usage, from `response.created` on.
+    fn note(&mut self, response: &Value) {
+        if let Some(id) = response.get("id").and_then(Value::as_str)
+            && !id.is_empty()
+        {
+            id.clone_into(&mut self.id);
+        }
+        if response.get("usage").is_some() {
+            self.usage = response["usage"].clone();
+        }
+    }
+
     /// Takes one event; returns the reply when it was the terminal one.
     fn event(
         &mut self,
@@ -411,7 +469,11 @@ impl Decoder {
                 }));
             }
             "response.output_item.done" => self.done(&event["item"]),
+            "response.created" | "response.in_progress" => {
+                self.note(&event["response"]);
+            }
             "response.completed" | "response.incomplete" | "response.failed" => {
+                self.note(&event["response"]);
                 return self.finish(&event["response"]).map(Some);
             }
             "error" => {

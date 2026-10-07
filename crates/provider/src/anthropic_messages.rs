@@ -18,6 +18,7 @@ use contract::provider::{
 use serde_json::{Map, Value, json};
 
 pub use crate::anthropic_messages_decode::decode;
+use crate::anthropic_messages_decode::decode_tracked;
 use crate::http::{self, Cancel};
 use crate::redact::Secrets;
 use crate::{Endpoint, Error, strict};
@@ -128,7 +129,7 @@ impl Call {
 impl ModelCall for Call {
     fn run(&self, sink: &mut dyn FnMut(Delta)) -> Result<Reply, CallError> {
         let mut secrets = self.secrets.clone();
-        let (reply, should_retry) = match http::post_signed(
+        let (decoded, should_retry) = match http::post_signed(
             &self.url,
             &self.headers,
             &self.body,
@@ -137,26 +138,32 @@ impl ModelCall for Call {
             &self.cancel,
             &mut secrets,
         ) {
-            Ok((stream, should_retry)) => (decode(BufReader::new(stream), sink), should_retry),
+            Ok((stream, should_retry)) => {
+                (decode_tracked(BufReader::new(stream), sink), should_retry)
+            }
             Err(e) => {
                 let should_retry = e.should_retry();
-                (Err(e), should_retry)
+                (Err((e, None)), should_retry)
             }
         };
         // Whatever a cancelled call returns, the cancel ended it.
         if self.cancel.is_cancelled() {
-            return Err(CallError::Cancelled { usage: None });
+            return Err(CallError::Cancelled {
+                usage: crate::unfinished::carried(&decoded, self.input_size),
+            });
         }
-        reply
-            .map(|reply| Reply {
-                input_size: self.input_size,
-                ..reply
-            })
-            .map_err(|e| CallError::Failed {
-                failure: e.failure(&self.provider, &secrets),
+        let usage = crate::unfinished::carried(&decoded, self.input_size);
+        match decoded {
+            Ok(mut reply) => {
+                reply.input_size = self.input_size;
+                Ok(reply)
+            }
+            Err((error, _)) => Err(CallError::Failed {
+                failure: error.failure(&self.provider, &secrets),
                 should_retry,
-                usage: None,
-            })
+                usage,
+            }),
+        }
     }
 
     fn cancel(&self) {
