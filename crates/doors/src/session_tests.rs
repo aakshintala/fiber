@@ -1724,6 +1724,17 @@ fn after_quiesce_a_client_leaving_writes_no_clients_line() {
     let opened = open();
     let socket = opened.socket.clone();
     let gate = Arc::clone(&opened.session.gate);
+    // The watcher blocks without a deadline, so its lines cross a channel
+    // and the reads below carry the deadline.
+    let mut watcher = opened.log.watch();
+    let (forward, lines) = mpsc::channel();
+    thread::spawn(move || {
+        while let Ok(Some(line)) = watcher.recv() {
+            if forward.send(line).is_err() {
+                return;
+            }
+        }
+    });
     let mut connected = None;
     let first = socket.clone();
     opened
@@ -1736,17 +1747,17 @@ fn after_quiesce_a_client_leaving_writes_no_clients_line() {
             Ok(())
         })
         .unwrap();
-    // The watcher blocks without a deadline, so its lines cross a channel
-    // and the read below carries the deadline.
-    let mut watcher = opened.log.watch();
-    let (forward, lines) = mpsc::channel();
-    thread::spawn(move || {
-        while let Ok(Some(line)) = watcher.recv() {
-            if forward.send(line).is_err() {
-                return;
-            }
+    // The ack precedes the connection's own `clients` line, so the test
+    // reads that line before quiesce: one still unwritten would be taken
+    // for a line that followed quiesce.
+    loop {
+        let line = lines
+            .recv_timeout(DEADLINE)
+            .expect("the joining client's clients line arrives");
+        if line.kind == "clients" {
+            break;
         }
-    });
+    }
     opened.session.quiesce();
     drop(connected);
     wait_idle(&gate);
