@@ -311,6 +311,8 @@ fn a_head_never_closed_ends_at_a_tag_that_cannot_be_in_it() {
     assert_eq!(to_markdown("<head><svg></svg>x"), "x\n");
     assert_eq!(to_markdown("<head></html>x"), "x\n");
     assert_eq!(to_markdown("<head></br>x"), "x\n");
+    // A visible tag alone ends it, with no text after it.
+    assert_eq!(to_markdown("<head><hr>"), "---\n");
 }
 
 #[test]
