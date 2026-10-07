@@ -6,10 +6,8 @@ use std::time::Duration;
 
 use super::*;
 
-/// How long a client read waits for the server's bytes before the test fails.
 const READ_WITHIN: Duration = Duration::from_secs(2);
 
-/// How long a status read waits for the server's reply before the test fails.
 const STATUS_WITHIN: Duration = Duration::from_secs(5);
 
 fn decode(bytes: &[u8]) -> (Result<(), Malformed>, Vec<u8>, String) {
