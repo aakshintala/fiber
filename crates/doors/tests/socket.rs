@@ -1561,17 +1561,28 @@ fn shell_exit_zero_stays_on_the_sending_connection() {
                 "the other client sees the shell answer"
             );
             // The shell answers before it leaves the running list, so a
-            // `cancel` right after the answer may still be accepted. Each
-            // attempt waits on its own answer (DEADLINE) and the shell
-            // leaves the list within a few of them.
-            let rejected = (0..CANCEL_ATTEMPTS)
-                .map(|attempt| {
+            // `cancel` right after the answer may still be accepted. The
+            // retries run on a thread so the whole wait has one deadline.
+            let (tx, rx) = mpsc::channel();
+            thread::spawn(move || {
+                for attempt in 0.. {
                     let id = format!("c_cancel_{attempt}");
                     send(&client, &format!(r#"{{"id":"{id}","command":"cancel"}}"#));
-                    response(&client, &id)
-                })
-                .find(|line| kind(line) != "command_accepted")
-                .expect("the finished shell left the running list");
+                    let line = response(&client, &id);
+                    let accepted = kind(&line) == "command_accepted";
+                    if tx.send(line).is_err() || !accepted {
+                        return;
+                    }
+                }
+            });
+            let rejected = loop {
+                let line = rx
+                    .recv_timeout(DEADLINE)
+                    .expect("the finished shell left the running list");
+                if kind(&line) != "command_accepted" {
+                    break line;
+                }
+            };
             assert_eq!(
                 rejection(&rejected),
                 ("stale_request", "No turn is running.")
@@ -1582,9 +1593,6 @@ fn shell_exit_zero_stays_on_the_sending_connection() {
         .unwrap();
     opened.close();
 }
-
-/// Round trips a `cancel` may take to see the finished shell gone.
-const CANCEL_ATTEMPTS: usize = 10_000;
 
 #[test]
 fn shell_nonzero_exit_is_accepted() {
