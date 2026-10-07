@@ -1649,3 +1649,34 @@ fn no_cross_without_conversation_rows() {
         "no cross on a screen with no conversation rows"
     );
 }
+
+#[test]
+fn a_turn_spanning_drawn_lines_sums_their_heights() {
+    use crate::mouse::TargetId;
+    let mut app = empty();
+    tool_turn(&mut app);
+    let (_, targets) = pointed(&mut app, WIDTH, HEIGHT, None);
+    let turn = targets
+        .iter()
+        .find(|target| target.id == TargetId::Turn(0))
+        .expect("turn 0 is drawn");
+    assert_eq!(turn.rect, Rect::new(0, 5, WIDTH, 6));
+}
+
+#[test]
+fn a_turn_past_the_last_row_is_clipped_to_it() {
+    use crate::mouse::TargetId;
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = empty();
+    tool_turn(&mut app);
+    app.set_size(WIDTH, 4);
+    app.on_key(Key::PageUp, now);
+    app.on_line(turn_started(S_A, "next"));
+    assert!(app.has_new());
+    let (_, targets) = pointed(&mut app, WIDTH, 3, None);
+    let turn = targets
+        .iter()
+        .find(|target| target.id == TargetId::Turn(0))
+        .expect("turn 0 is drawn");
+    assert_eq!(turn.rect, Rect::new(0, 0, WIDTH, 1));
+}

@@ -1,6 +1,6 @@
 //! Tests for navigate mode's focus order: areas, regions and stops.
 
-use super::{Area, Regions, area_of, next_area, order};
+use super::{Area, Regions, area_of, next_area, order, positions};
 use crate::app::Target;
 use crate::mouse::{Target as Hit, TargetId};
 use ratatui::layout::Rect;
@@ -195,4 +195,13 @@ fn the_area_of_a_target_not_drawn_is_none() {
         area_of(&targets, &regions, TargetId::MoreNotices),
         Some(Area::Panel)
     );
+}
+
+#[test]
+fn an_id_with_equal_tops_keeps_its_first_rect() {
+    let id = TargetId::Badge;
+    let first = Rect::new(4, 5, 10, 2);
+    let second = Rect::new(4, 5, 3, 1);
+    let targets = vec![Hit { id, rect: first }, Hit { id, rect: second }];
+    assert_eq!(positions(&targets), vec![(id, first)]);
 }
