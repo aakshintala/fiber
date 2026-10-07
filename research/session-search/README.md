@@ -92,10 +92,28 @@ What the macOS rows show:
 
 ## Results: Linux, cold and warm
 
-Not yet run. A Linux machine runs `bash research/session-search/run.sh` and
-records here: `uname -a`, the CPU, the file system, whether `fincore`
-confirmed eviction, and the rows it appended to `results.tsv`. Until then
-there are no Linux figures, and `docs/tools.md` cites none.
+GitHub's `ubuntu-24.04` runner (2026-10-07): Linux 6.17.0-1022-azure x86_64,
+AMD EPYC 7763, 4 vCPUs, ext4 on `/dev/root`, one thread for the scan. A
+temporary workflow ran `bash research/session-search/run.sh` there; its rows
+are in `results.tsv` (platform `Linux x86_64`). Cold runs evict each file with
+`dd iflag=nocache` before the scan. `fincore` is not installed on the runner,
+so eviction is unconfirmed (`resident_bytes` reads `unconfirmed`); the cold
+medians are 1.6 to 3.0 times the warm ones, which an unevicted cache would not
+give. Medians of five runs, in seconds:
+
+| Logs | Artifacts | Query | Warm | Cold |
+|---|---|---|---|---|
+| 304 MiB | 187 MiB | many hits | 1.49 | 3.79 |
+| 304 MiB | 187 MiB | no hits | 1.09 | 3.30 |
+| 1,308 MiB | 808 MiB | many hits | 6.43 | 16.2 |
+| 1,308 MiB | 808 MiB | no hits | 4.66 | 14.0 |
+| 4,011 MiB | 2,476 MiB | many hits | 19.8 | 49.2 |
+| 4,011 MiB | 2,476 MiB | no hits | 14.4 | 44.0 |
+| 1,304 MiB | none | many hits | 3.93 | 6.71 |
+| 1,304 MiB | none | no hits | 4.27 | 6.95 |
+
+A shared runner's timings vary more than a laptop's; read them as the order
+of magnitude.
 
 ## Reproducing
 
