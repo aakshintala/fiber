@@ -83,7 +83,7 @@ pub(crate) fn connect(
             return Err(failure(
                 ErrorCode::ProtocolUnsupported,
                 format!(
-                    "The model `{}` speaks a protocol this Fiber does not speak yet.",
+                    "The model `{}` speaks a protocol this Fiber does not speak yet; pick another model.",
                     model.reference()
                 ),
             ));
