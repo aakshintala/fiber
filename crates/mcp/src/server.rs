@@ -2,130 +2,34 @@
 //! pipe, requests answered by id, and a stop that closes stdin, waits a
 //! grace on the clock, then kills and reaps (`docs/mcp.md`, "Starting
 //! servers"); a signal during startup stops every start through
-//! [`stop_every_start`]. Time comes only from the injected
+//! [`crate::registry::stop_every_start`]. Time comes only from the injected
 //! [`contract::clock::Clock`]; no process group is ever signalled: only a
 //! server's own process, by pid.
 
 use std::collections::BTreeMap;
-use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak, mpsc};
+use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use contract::clock::{Clock, Wake};
 use contract::tool::Cancel;
-use rustix::process::{Pid, Signal};
+use rustix::process::Signal;
 use serde_json::Value;
 
 use crate::effects::Hints;
-use crate::rpc::{
-    Incoming, Outcome, decode_line, encode_error, encode_notification, encode_request,
-    encode_result,
-};
+use crate::registry::{LIVE, Stopping, before_lock, before_signal, lock, signal};
+use crate::rpc::{Outcome, encode_notification, encode_request};
+use crate::wait::{CancelBridge, NoCancel, Shared, park};
 
 /// The protocol version Fiber speaks (`docs/mcp.md` has no number; the
 /// current draft does).
 const PROTOCOL_VERSION: &str = "2025-06-18";
 
-/// A stdout line past this long ends the reader, and the server counts as
-/// gone: a flood cannot grow memory without bound.
-const MAX_LINE: usize = 4 * 1024 * 1024;
-
 /// The grace between closing stdin and killing the child: the shell's
 /// `GRACE` (`crates/tools/src/shell/command.rs`).
 const GRACE: Duration = Duration::from_millis(800);
-
-/// Every server child's pid, from its spawn until its reap: what
-/// [`kill_every_server`] reaches.
-static LIVE: Mutex<Vec<u32>> = Mutex::new(Vec::new());
-
-/// Stops every server still starting, and every start after it: the flag is
-/// sticky for the life of the process. It sets the flag and wakes the parked
-/// handshakes; the stop and reap run on each start's own thread. Idempotent.
-pub fn stop_every_start() {
-    *lock(&STOPPED) = true;
-    // Dropped before any wake: a wake takes the shared lock.
-    let waiting = std::mem::take(&mut *lock(&WAITING));
-    for waker in waiting {
-        if let Some(waker) = waker.upgrade() {
-            waker.wake();
-        }
-    }
-}
-
-static STOPPED: Mutex<bool> = Mutex::new(false);
-static WAITING: Mutex<Vec<Weak<dyn Wake>>> = Mutex::new(Vec::new());
-
-/// The handshake's cancel, fired by [`stop_every_start`].
-struct Stopping;
-
-impl Cancel for Stopping {
-    fn is_cancelled(&self) -> bool {
-        *lock(&STOPPED)
-    }
-
-    fn subscribe(&self, waker: Weak<dyn Wake>) {
-        let mut waiting = lock(&WAITING);
-        // A finished start drops its bridge and leaves a dead entry: pruned
-        // here, so the list holds only the starts still running.
-        waiting.retain(|listed| listed.upgrade().is_some());
-        waiting.push(waker);
-    }
-}
-
-/// Sends SIGKILL to every server child not yet reaped, at once
-/// (`docs/invocation.md`, "Shutdown": the bound). A pid of 1 or less is
-/// never signalled.
-pub fn kill_every_server() {
-    // Held while `kill` runs: a reap unlists its pid under this lock before
-    // it waits, so every pid signalled here is still unreaped and cannot
-    // have been reused.
-    let live = lock(&LIVE);
-    before_signal();
-    signal(&live, Signal::KILL);
-}
-
-/// Runs while a signaller holds the lock that keeps its pids unreaped, just
-/// before `kill`: the seam a test pauses on to force a reap against it.
-#[cfg(test)]
-fn before_signal() {
-    tests::before_signal();
-}
-
-#[cfg(not(test))]
-fn before_signal() {}
-
-/// Runs as a reap is about to take `which` lock (`child` or `live`): the
-/// seam a test waits on to know the reap contends before it asserts.
-#[cfg(test)]
-fn before_lock(which: &'static str) {
-    tests::before_lock(which);
-}
-
-#[cfg(not(test))]
-fn before_lock(_which: &'static str) {}
-
-/// Sends `signal` to each of `pids`, leaving out every id [`refused`]
-/// names.
-fn signal(pids: &[u32], signal: Signal) {
-    for pid in pids.iter().filter(|pid| !refused(**pid)) {
-        if let Some(pid) = i32::try_from(*pid).ok().and_then(Pid::from_raw) {
-            // A server already gone refuses the signal; its reap still runs.
-            match rustix::process::kill_process(pid, signal) {
-                Ok(()) | Err(_) => {}
-            }
-        }
-    }
-}
-
-/// A pid of 1 or less is never a server's: `kill(-1)` reaches every
-/// process the user owns, and `kill(0)` this process's own group. Tested
-/// as a function, so a mutant of it signals nothing.
-fn refused(pid: u32) -> bool {
-    pid <= 1
-}
 
 /// One tool the server lists: its name, description, schema and hints, as
 /// [`crate::tool`] declares them.
@@ -241,13 +145,13 @@ impl Server {
         let stdout = child.stdout.take();
         let shared = Arc::new(Shared::default());
         let (writer, incoming) = mpsc::channel();
-        thread::spawn(move || write_stdin(stdin, incoming));
+        thread::spawn(move || crate::pipes::write_stdin(stdin, incoming));
         let writer = Arc::new(writer);
         let reading = Arc::clone(&shared);
         let answering = Arc::downgrade(&writer);
         thread::spawn(move || {
             if let Some(stdout) = stdout {
-                read_stdout(stdout, &reading, &answering);
+                crate::pipes::read_stdout(stdout, &reading, &answering);
             } else {
                 reading.gone();
             }
@@ -555,239 +459,6 @@ impl Inner {
     }
 }
 
-/// What a wait loop sees, read under the shared lock after subscribing, so
-/// a response that lands between the subscribe and the read is still
-/// visible.
-struct View {
-    response: Option<Outcome>,
-    gone: bool,
-    cancelled: bool,
-    seq: u64,
-}
-
-#[derive(Default)]
-struct SharedState {
-    seq: u64,
-    next_id: u64,
-    pending: BTreeMap<u64, Option<Outcome>>,
-    gone: bool,
-}
-
-#[derive(Default)]
-struct Shared {
-    inner: Mutex<SharedState>,
-    cv: Condvar,
-}
-
-impl Wake for Shared {
-    fn wake(&self) {
-        // The sequence moves under the same lock as the wait, so a clock
-        // advance that lands before the condvar wait is still visible when
-        // the waiter checks.
-        let mut guard = lock(&self.inner);
-        guard.seq = guard.seq.wrapping_add(1);
-        drop(guard);
-        self.cv.notify_all();
-    }
-}
-
-impl Shared {
-    /// The next request id. Ids start at 1 and are never reused: a `u64`
-    /// counter a session cannot exhaust.
-    fn next_id(&self) -> u64 {
-        let mut state = lock(&self.inner);
-        state.next_id += 1;
-        state.next_id
-    }
-
-    fn insert(&self, id: u64) {
-        lock(&self.inner).pending.insert(id, None);
-    }
-
-    fn remove(&self, id: u64) {
-        lock(&self.inner).pending.remove(&id);
-    }
-
-    fn view(&self, id: u64, cancel: &dyn Cancel) -> View {
-        let state = lock(&self.inner);
-        View {
-            response: state.pending.get(&id).and_then(|slot| slot.clone()),
-            gone: state.gone,
-            cancelled: cancel.is_cancelled(),
-            seq: state.seq,
-        }
-    }
-
-    /// Delivers `response` to its id's slot, or discards it when the slot
-    /// is gone: a late response to a timed-out id never misroutes.
-    fn deliver(&self, id: u64, outcome: Outcome) {
-        let mut state = lock(&self.inner);
-        if let Some(slot) = state.pending.get_mut(&id) {
-            *slot = Some(outcome);
-            state.seq = state.seq.wrapping_add(1);
-            drop(state);
-            self.cv.notify_all();
-        }
-    }
-
-    /// Marks the server gone and wakes every waiter.
-    fn gone(&self) {
-        let mut state = lock(&self.inner);
-        state.gone = true;
-        state.seq = state.seq.wrapping_add(1);
-        drop(state);
-        self.cv.notify_all();
-    }
-}
-
-fn lock<T>(state: &Mutex<T>) -> MutexGuard<'_, T> {
-    state.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
-/// Writes request lines to stdin. A write that never finishes blocks only
-/// this thread: the waiting call still times out or cancels on the clock.
-/// The thread ends when the sender is dropped, closing stdin.
-fn write_stdin(stdin: Option<ChildStdin>, incoming: mpsc::Receiver<Vec<u8>>) {
-    let Some(mut stdin) = stdin else {
-        return;
-    };
-    for mut line in incoming {
-        line.push(b'\n');
-        if stdin.write_all(&line).is_err() {
-            return;
-        }
-    }
-}
-
-/// Reads response lines and routes them: responses to their id's slot,
-/// `ping` answered `{}`, any other server method answered `-32601`. A line
-/// that is not a JSON object is ignored. Past [`MAX_LINE`] bytes on one
-/// line, or EOF, the server counts as gone.
-fn read_stdout(stdout: ChildStdout, shared: &Shared, writer: &Weak<mpsc::Sender<Vec<u8>>>) {
-    let mut reader = BufReader::new(stdout);
-    loop {
-        match read_line(&mut reader) {
-            ReadLine::Line(line) => match decode_line(&line) {
-                Incoming::Response(response) => {
-                    shared.deliver(response.id, response.outcome);
-                }
-                Incoming::ServerRequest(request) => {
-                    let answer = match request.method.as_str() {
-                        "ping" => encode_result(&request.id, &serde_json::json!({})),
-                        _ => encode_error(&request.id, -32601, "Method not found"),
-                    };
-                    if let Some(writer) = writer.upgrade() {
-                        match writer.send(answer.into_bytes()) {
-                            Ok(()) | Err(_) => {}
-                        }
-                    }
-                }
-                Incoming::Ignored => {}
-            },
-            ReadLine::Eof | ReadLine::TooLong => {
-                shared.gone();
-                return;
-            }
-        }
-    }
-}
-
-enum ReadLine {
-    Line(String),
-    Eof,
-    TooLong,
-}
-
-/// Reads one newline-delimited line, capped at [`MAX_LINE`] bytes: past the
-/// cap the line is abandoned and the reader ends.
-fn read_line(reader: &mut impl BufRead) -> ReadLine {
-    let mut buf = Vec::new();
-    match reader
-        .by_ref()
-        .take(MAX_LINE as u64 + 1)
-        .read_until(b'\n', &mut buf)
-    {
-        Ok(0) => ReadLine::Eof,
-        Ok(_) if buf.ends_with(b"\n") => {
-            buf.pop();
-            ReadLine::Line(String::from_utf8_lossy(&buf).into_owned())
-        }
-        Ok(_) if buf.len() > MAX_LINE => ReadLine::TooLong,
-        Ok(_) => ReadLine::Line(String::from_utf8_lossy(&buf).into_owned()),
-        Err(_) if buf.is_empty() => ReadLine::Eof,
-        Err(_) => ReadLine::Line(String::from_utf8_lossy(&buf).into_owned()),
-    }
-}
-
-/// True when the waiter stops waiting: a response landed (`seq` moved) or
-/// the call was cancelled. A pure function of its inputs so a test pins all
-/// four combinations without parking a thread.
-fn should_stop(seq: u64, seen: u64, cancelled: bool) -> bool {
-    seq != seen || cancelled
-}
-
-/// Blocks until woken or `until` passes on the clock, releasing every lock
-/// first: the response lands under the shared lock, so joining ahead of
-/// that release would deadlock.
-fn park(clock: &dyn Clock, shared: &Shared, cancel: &dyn Cancel, until: Instant, seen: u64) {
-    // Taken before `wait_until`, and held until the condvar wait, so a wake
-    // blocks on this lock instead of notifying nobody.
-    let mut slot = Some(lock(&shared.inner));
-    clock.wait_until(Some(until), &mut |bound| {
-        let Some(guard) = slot.take() else {
-            return;
-        };
-        if should_stop(guard.seq, seen, cancel.is_cancelled()) {
-            slot = Some(guard);
-            return;
-        }
-        slot = Some(match bound {
-            Some(bound) => {
-                shared
-                    .cv
-                    .wait_timeout(guard, bound)
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .0
-            }
-            None => shared
-                .cv
-                .wait(guard)
-                .unwrap_or_else(PoisonError::into_inner),
-        });
-    });
-}
-
-/// The call's cancel reaches the wait through this bridge. It holds the
-/// shared state weakly and is dropped when the wait ends, so a fired cancel
-/// wakes only the waits still running.
-struct CancelBridge(Weak<Shared>);
-
-impl CancelBridge {
-    fn arm(shared: &Arc<Shared>) -> Arc<Self> {
-        Arc::new(Self(Arc::downgrade(shared)))
-    }
-}
-
-impl Wake for CancelBridge {
-    fn wake(&self) {
-        if let Some(shared) = self.0.upgrade() {
-            shared.wake();
-        }
-    }
-}
-
-/// A cancel that never fires, for `initialize` and `tools/list`: the
-/// startup deadline, not a person, ends those waits.
-struct NoCancel;
-
-impl Cancel for NoCancel {
-    fn is_cancelled(&self) -> bool {
-        false
-    }
-
-    fn subscribe(&self, _waker: Weak<dyn Wake>) {}
-}
-
 #[cfg(test)]
 #[path = "server_tests.rs"]
-mod tests;
+pub(crate) mod tests;

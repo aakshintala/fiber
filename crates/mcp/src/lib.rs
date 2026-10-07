@@ -7,14 +7,17 @@
 mod cache;
 mod effects;
 mod name;
+mod pipes;
+mod registry;
 mod rpc;
 mod server;
 mod slot;
 mod start;
 mod tool;
+mod wait;
 
 pub use effects::Hints;
-pub use server::{kill_every_server, stop_every_start};
+pub use registry::{kill_every_server, stop_every_start};
 pub use start::{
     DEFAULT_CALL_TIMEOUT, DEFAULT_STARTUP_TIMEOUT, ServerSpec, Servers, Started, start,
 };

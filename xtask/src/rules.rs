@@ -196,7 +196,7 @@ pub(crate) fn unsafe_mismatches(
 const SIGNAL_ALLOWLIST: &[&str] = &[
     "crates/extensions/src/host/exec.rs",
     "crates/fakes/src/process_group.rs",
-    "crates/mcp/src/server.rs",
+    "crates/mcp/src/registry.rs",
     "crates/tools/src/shell/command.rs",
 ];
 
