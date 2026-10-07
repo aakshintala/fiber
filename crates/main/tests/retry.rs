@@ -442,17 +442,38 @@ fn a_stream_cut_short_is_retried_on_every_protocol() {
     // Each cut stream emits one fragment before it ends: the failed attempt
     // is one `assistant_message_delta`, then the retry answers `Hello.`.
     // Only `openai-responses` answers in two fragments, so only it has a
-    // second delta after its `retry_scheduled`.
-    for (protocol, cut, hello, retried_deltas) in [
-        ("openai-responses", responses_cut(), responses_hello(), 2),
-        ("anthropic-messages", anthropic_cut(), anthropic_hello(), 1),
+    // second delta after its `retry_scheduled`. A cut that named its
+    // generation writes its zero-count `usage_recorded` before it fails
+    // (`docs/events.md`, "Usage and notices").
+    for (protocol, cut, hello, retried_deltas, cut_usage) in [
+        (
+            "openai-responses",
+            responses_cut(),
+            responses_hello(),
+            2,
+            None,
+        ),
+        (
+            "anthropic-messages",
+            anthropic_cut(),
+            anthropic_hello(),
+            1,
+            Some("msg_1"),
+        ),
         (
             "openai-completions",
             completions_cut(),
             completions_hello(),
             1,
+            Some("gen-1"),
         ),
-        ("google-generative-ai", gemini_cut(), gemini_hello(), 1),
+        (
+            "google-generative-ai",
+            gemini_cut(),
+            gemini_hello(),
+            1,
+            None,
+        ),
     ] {
         let setup = Setup::new();
         let server = ProviderServer::start([Response::stream(cut.body), hello]).unwrap();
@@ -468,10 +489,15 @@ fn a_stream_cut_short_is_retried_on_every_protocol() {
             "step_started",
             "assistant_message_started",
             "assistant_message_delta",
+        ];
+        if cut_usage.is_some() {
+            expected.push("usage_recorded");
+        }
+        expected.extend([
             "assistant_message_completed",
             "retry_scheduled",
             "assistant_message_started",
-        ];
+        ]);
         expected.extend(std::iter::repeat_n(
             "assistant_message_delta",
             retried_deltas,
@@ -487,6 +513,23 @@ fn a_stream_cut_short_is_retried_on_every_protocol() {
         assert_eq!(run.kinds(), expected, "{protocol}");
         assert_eq!(run.retried(), ["stream_incomplete"], "{protocol}");
         assert_eq!(server.requests().len(), 2, "{protocol}");
+        if let Some(generation) = cut_usage {
+            let usages: Vec<&Value> = run
+                .lines
+                .iter()
+                .filter(|l| l["kind"] == "usage_recorded")
+                .collect();
+            assert_eq!(usages.len(), 2, "{protocol}");
+            assert_eq!(usages[0]["payload"]["generation_id"], generation);
+            assert_eq!(usages[0]["payload"]["tokens"]["input"], 0);
+            assert_eq!(usages[0]["payload"]["tokens"]["cache_read"], 0);
+            assert_eq!(usages[0]["payload"]["tokens"]["output"], 0);
+            assert_eq!(
+                usages[0]["payload"]["input_bytes"].as_u64().unwrap(),
+                u64::try_from(server.requests()[0].body.len()).unwrap(),
+                "{protocol}"
+            );
+        }
     }
 }
 
