@@ -130,7 +130,12 @@ fn code_outside_every_crate_runs_no_crate() {
 
 #[test]
 fn a_compiled_in_doc_runs_its_crate_alone() {
-    for path in ["docs/events.md", "docs/errors.md", "docs/invocation.md"] {
+    for path in [
+        "docs/events.md",
+        "docs/errors.md",
+        "docs/invocation.md",
+        "docs/tui.md",
+    ] {
         let selection = classify(&strings(&[path]), &members());
         assert_eq!(
             selection,

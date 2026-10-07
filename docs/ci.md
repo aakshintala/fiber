@@ -58,9 +58,9 @@ A pull request runs only what its diff can affect.
   `.cargo/config.toml` or `.config/nextest.toml` runs everything.
 - A file a crate compiles in runs that crate alone, not the crates that
   depend on it. This covers Markdown anywhere, and any file outside the
-  crate. A change to `docs/events.md`, `docs/errors.md` or
-  `docs/invocation.md` runs `contract`, whose tests check the code against
-  them. A change to a built-in skill under `docs/skills/` runs `loop`, whose
+  crate. A change to `docs/events.md`, `docs/errors.md`,
+  `docs/invocation.md` or `docs/tui.md` runs `contract`, whose tests check
+  the code against them. A change to a built-in skill under `docs/skills/` runs `loop`, whose
   tests check it parses. The selector lists these files. The gate fails when
   the list and the source disagree, or when an include's argument is not a
   string literal.
