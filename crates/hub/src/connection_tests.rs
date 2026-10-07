@@ -724,9 +724,9 @@ fn feed_is_accepted_then_sends_the_snapshot_and_leaves_with_the_client() {
     assert_eq!(echoed.as_deref(), Some("c_0"));
     for round in ["c_1", "c_2"] {
         client.send(&command(round, "feed", json!({})));
-        let (echoed, result) = accepted(&client.next("the acknowledgement"));
-        assert_eq!(echoed, round);
-        assert_eq!(result, json!({}));
+        let ack = client.next("the acknowledgement");
+        accepted(&ack);
+        assert_eq!(ack.get("payload"), Some(&json!({"command_id": round})));
         let status = client.next("the crashed status");
         assert_eq!(status.get("kind"), Some(&json!("session_status")));
         assert_eq!(status.get("session_id"), Some(&json!(id)));
@@ -756,9 +756,9 @@ fn dismiss_over_the_wire_drops_a_crashed_session_for_every_client() {
     let (code, _, _) = rejected(&client.next("the bad dismiss"));
     assert_eq!(code, "invalid_arguments");
     client.send(&command("c_2", "dismiss", json!({"session": id})));
-    let (echoed, result) = accepted(&client.next("the dismissal"));
-    assert_eq!(echoed, "c_2");
-    assert_eq!(result, json!({}));
+    let ack = client.next("the dismissal");
+    accepted(&ack);
+    assert_eq!(ack.get("payload"), Some(&json!({"command_id": "c_2"})));
     client.send(&command("c_3", "dismiss", json!({"session": id})));
     let (code, echoed, _) = rejected(&client.next("the second dismissal"));
     assert_eq!(code, "stale_request");

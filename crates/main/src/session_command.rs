@@ -47,23 +47,6 @@ pub(crate) fn run(args: cli::SessionArgs, clock: Arc<dyn contract::clock::Clock>
     )
 }
 
-/// `fiber ask` on a new session.
-pub(crate) fn ask_new(
-    model: Option<String>,
-    prompt: String,
-    clock: Arc<dyn contract::clock::Clock>,
-    signals: &doors::Signals,
-) -> i32 {
-    new_session(
-        SessionId(doors::mint("s_")),
-        model,
-        Some(prompt),
-        true,
-        clock,
-        signals,
-    )
-}
-
 /// One function builds and runs every new session (`docs/invocation.md`,
 /// "Processes"): `fiber ask` and the internal session command differ
 /// only in the id's source (minted vs `--id`), the workspace (the current

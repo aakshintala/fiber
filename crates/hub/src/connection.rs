@@ -22,7 +22,7 @@ use serde_json::{Map, Value};
 
 use crate::Starter;
 use crate::diag::Diag;
-use crate::feed::{Feed, Refusal};
+use crate::feed::{Feed, answer, on_feed};
 use crate::relay::Relays;
 use crate::start::{self, Outcome};
 
@@ -498,33 +498,6 @@ fn on_status(
     );
 }
 
-/// `feed`: accepted, then this connection's subscription, replacing any
-/// earlier one, so the snapshot follows the acknowledgement.
-fn on_feed(
-    id: &CommandId,
-    args: &Map<String, Value>,
-    hub: &Arc<Hub>,
-    writer: &Arc<Mutex<UnixStream>>,
-    fed: &mut Option<u64>,
-) {
-    if !args.is_empty() {
-        answer(writer, hub, id, Err(crate::feed::invalid()));
-        return;
-    }
-    accept_result(writer, hub, id, Value::Object(Map::new()));
-    if let Some(earlier) = fed.take() {
-        hub.feed.unsubscribe(earlier);
-    }
-    *fed = hub.feed.subscribe(Arc::clone(writer));
-}
-
-fn answer(writer: &Arc<Mutex<UnixStream>>, hub: &Hub, id: &CommandId, got: Result<Value, Refusal>) {
-    match got {
-        Ok(result) => accept_result(writer, hub, id, result),
-        Err((code, message)) => reject(writer, hub, Some(id), &code, &message),
-    }
-}
-
 /// `start`'s `args`: `workspace` (required string), `model` (optional
 /// string), `content` (optional, passed through as JSON). A wrong,
 /// missing or extra key, or an explicit `null`, is `None`.
@@ -547,7 +520,12 @@ fn start_args(args: &Map<String, Value>) -> Option<(&str, Option<&str>, Option<&
     Some((workspace, model, args.get("content")))
 }
 
-fn accept_result(writer: &Arc<Mutex<UnixStream>>, hub: &Hub, id: &CommandId, result: Value) {
+pub(crate) fn accept_result(
+    writer: &Arc<Mutex<UnixStream>>,
+    hub: &Hub,
+    id: &CommandId,
+    result: Value,
+) {
     let mut payload = Map::new();
     payload.insert("command_id".to_owned(), Value::String(id.0.clone()));
     payload.insert("result".to_owned(), result);
@@ -573,7 +551,12 @@ pub(crate) fn reject(
     send(writer, hub, "command_rejected", payload);
 }
 
-fn send(writer: &Arc<Mutex<UnixStream>>, hub: &Hub, kind: &str, payload: Map<String, Value>) {
+pub(crate) fn send(
+    writer: &Arc<Mutex<UnixStream>>,
+    hub: &Hub,
+    kind: &str,
+    payload: Map<String, Value>,
+) {
     let line = HubLine {
         kind: kind.to_owned(),
         ts: crate::diag::wall_ms(hub.clock.wall()),

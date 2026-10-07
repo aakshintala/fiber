@@ -521,10 +521,7 @@ fn dismiss_drops_only_a_crashed_session() {
     };
     stale(&seeded, &waiting);
     stale(&feed, &id(7));
-    assert_eq!(
-        feed.dismiss(&args(json!({ "session": crashed }))),
-        Ok(json!({}))
-    );
+    assert_eq!(feed.dismiss(&args(json!({ "session": crashed }))), Ok(None));
     assert_eq!(entry_of(&feed, &crashed), None);
     stale(&feed, &crashed);
     seeded.stop();
@@ -552,7 +549,7 @@ fn dismiss_and_recent_refuse_arguments_that_do_not_fit() {
         let (code, _) = feed.recent(&args(bad.clone())).unwrap_err();
         assert_eq!(code, ErrorCode::InvalidArguments, "{bad}");
     }
-    assert_eq!(feed.recent(&Map::new()), Ok(json!({"sessions": []})));
+    assert_eq!(feed.recent(&Map::new()), Ok(Some(json!({"sessions": []}))));
 }
 
 #[test]
@@ -569,8 +566,8 @@ fn recent_answers_a_page_without_running_sessions() {
     let mut sub = Sub::new(&feed);
     start(&feed, &clock);
     assert_eq!(sub.raw("the running status"), line);
-    let ids = |page: Value| -> Vec<String> {
-        page["sessions"]
+    let ids = |page: Option<Value>| -> Vec<String> {
+        page.unwrap()["sessions"]
             .as_array()
             .unwrap()
             .iter()

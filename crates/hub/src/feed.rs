@@ -28,9 +28,10 @@ use std::time::Duration;
 
 use contract::clock::{Clock, Wake};
 use contract::events::SessionStatus;
-use contract::{Envelope, ErrorCode, HubLine, SCHEMA_VERSION, SessionId};
+use contract::{CommandId, Envelope, ErrorCode, HubLine, SCHEMA_VERSION, SessionId};
 use serde_json::{Map, Value};
 
+use crate::connection::{Hub, accept_result, reject, send as send_line};
 use crate::recent::{self, Left, PageError, RecentRow};
 use crate::relay::valid_session_id;
 
@@ -227,7 +228,7 @@ impl Feed {
     }
 
     /// `dismiss`: drops a crashed session from the feed.
-    pub(crate) fn dismiss(&self, args: &Map<String, Value>) -> Result<Value, Refusal> {
+    pub(crate) fn dismiss(&self, args: &Map<String, Value>) -> Result<Option<Value>, Refusal> {
         let session = match (args.len(), args.get("session")) {
             (1, Some(Value::String(session))) => session,
             _ => return Err(invalid()),
@@ -238,7 +239,7 @@ impl Feed {
             Some(Entry::Left(_, Left::Crashed))
         ) {
             state.entries.remove(session);
-            Ok(Value::Object(Map::new()))
+            Ok(None)
         } else {
             Err((
                 ErrorCode::StaleRequest,
@@ -248,7 +249,7 @@ impl Feed {
     }
 
     /// `recent`: a page of exited sessions, newest first.
-    pub(crate) fn recent(&self, args: &Map<String, Value>) -> Result<Value, Refusal> {
+    pub(crate) fn recent(&self, args: &Map<String, Value>) -> Result<Option<Value>, Refusal> {
         let text = |key: &str| match args.get(key) {
             None => Ok(None),
             Some(Value::String(value)) => Ok(Some(value.as_str())),
@@ -266,7 +267,7 @@ impl Feed {
             .map(|(id, _)| id.clone())
             .collect();
         match recent::page(&self.home, before, project, &running) {
-            Ok(rows) => Ok(serde_json::json!({ "sessions": rows })),
+            Ok(rows) => Ok(Some(serde_json::json!({ "sessions": rows }))),
             Err(PageError::UnknownBefore) => Err((
                 ErrorCode::InvalidArguments,
                 "`before` names no session in the list.".to_owned(),
@@ -504,6 +505,44 @@ impl Feed {
 
     fn socket(&self, id: &str) -> PathBuf {
         self.home.join("run").join(id)
+    }
+}
+
+/// `feed`: accepted, then this connection's subscription, replacing any
+/// earlier one, so the snapshot follows the acknowledgement.
+pub(crate) fn on_feed(
+    id: &CommandId,
+    args: &Map<String, Value>,
+    hub: &Arc<Hub>,
+    writer: &Arc<Mutex<UnixStream>>,
+    fed: &mut Option<u64>,
+) {
+    if !args.is_empty() {
+        answer(writer, hub, id, Err(invalid()));
+        return;
+    }
+    answer(writer, hub, id, Ok(None));
+    if let Some(earlier) = fed.take() {
+        hub.feed.unsubscribe(earlier);
+    }
+    *fed = hub.feed.subscribe(Arc::clone(writer));
+}
+
+/// Acknowledges a feed command: `command_accepted`, with `result` only
+/// when the command has one (`docs/events.md`, "`command_accepted`").
+pub(crate) fn answer(
+    writer: &Arc<Mutex<UnixStream>>,
+    hub: &Hub,
+    id: &CommandId,
+    got: Result<Option<Value>, Refusal>,
+) {
+    match got {
+        Ok(Some(result)) => accept_result(writer, hub, id, result),
+        Ok(None) => {
+            let payload = Map::from_iter([("command_id".to_owned(), Value::String(id.0.clone()))]);
+            send_line(writer, hub, "command_accepted", payload);
+        }
+        Err((code, message)) => reject(writer, hub, Some(id), &code, &message),
     }
 }
 
