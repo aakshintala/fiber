@@ -361,6 +361,13 @@ impl Feed {
     /// Subscribes `summary` to session `id` and follows it on a thread. A
     /// connect that fails is not a crash: the next scan tries again.
     fn follow(self: &Arc<Self>, id: String) {
+        // Where the log ended before connecting: any earlier run's exit
+        // line is already before that point, and the followed run's
+        // `fiber_exited` or `rewound`, if it writes one, comes after.
+        let found = recent::find(&self.home, &id).map(|(project, dir)| {
+            let from = fs::metadata(dir.join("events.jsonl")).map_or(0, |meta| meta.len());
+            (project, dir, from)
+        });
         let Ok(stream) = UnixStream::connect(self.socket(&id)) else {
             return;
         };
@@ -370,7 +377,6 @@ impl Feed {
         if (&stream).write_all(SUBSCRIBE).is_err() {
             return;
         }
-        let found = recent::find(&self.home, &id);
         let mut state = lock(&self.state);
         // Only the scanner adds to `tracked`, so the scan's check still
         // holds here.
@@ -389,7 +395,7 @@ impl Feed {
     }
 
     /// Reads session `id`'s summary lines until its socket closes.
-    fn read_session(&self, id: &str, stream: UnixStream, found: Option<(String, PathBuf)>) {
+    fn read_session(&self, id: &str, stream: UnixStream, found: Option<(String, PathBuf, u64)>) {
         let mut read = BufReader::new(stream);
         let mut buf = Vec::new();
         loop {
@@ -432,19 +438,19 @@ impl Feed {
     /// Session `id`'s socket closed: decides how it left, tells every
     /// subscriber, and appends a crashed session's row. A session whose
     /// directory is gone was never prompted: it exited, leaving nothing.
-    fn on_left(&self, id: &str, found: Option<(String, PathBuf)>) {
-        let how = match found
+    fn on_left(&self, id: &str, found: Option<(String, PathBuf, u64)>) {
+        let how = found
             .as_ref()
-            .filter(|(_, dir)| dir.is_dir())
-            .map(|(_, dir)| how_left(dir))
-        {
-            // Resumed already: the log's last line is the new run's, and
-            // the socket accepts again. This run did not die.
-            Some(Left::Crashed) if UnixStream::connect(self.socket(id)).is_ok() => {
-                Some(Left::Exited)
-            }
-            how => how,
-        };
+            .filter(|(_, dir, _)| dir.is_dir())
+            .map(|(_, dir, from)| match how_left(dir) {
+                // Resumed already: the log's last line is the new run's,
+                // and this run's exit line is past where it was followed
+                // from. A socket that accepts is no sign: a killed
+                // process's listener can outlive its summary connection.
+                Left::Crashed if closed_since(&dir.join("events.jsonl"), *from) => Left::Exited,
+                Left::Crashed => Left::Crashed,
+                Left::Exited => Left::Exited,
+            });
         // The row is written before `session_left` is sent, so a client
         // that sees the crash finds it in `recent`. `tracked` still holds
         // the session meanwhile, so no scan connects to it again.
@@ -458,7 +464,7 @@ impl Feed {
                 .get(id)
                 .map(|(Entry::Running(status) | Entry::Left(status, _))| status.payload.clone())
         };
-        if let (Some(Left::Crashed), Some((project, _))) = (how, &found) {
+        if let (Some(Left::Crashed), Some((project, _, _))) = (how, &found) {
             self.append_crashed(id, project, status.as_ref());
         }
         let mut state = lock(&self.state);
@@ -585,6 +591,26 @@ fn last_kind(log: &Path) -> Option<String> {
     if lines.next().is_none() && from > 0 {
         return None;
     }
+    kind_of(line)
+}
+
+/// Whether `log` holds a `fiber_exited` or `rewound` line from byte `from`
+/// on.
+fn closed_since(log: &Path, from: u64) -> bool {
+    let Ok(mut file) = File::open(log) else {
+        return false;
+    };
+    if file.seek(SeekFrom::Start(from)).is_err() {
+        return false;
+    }
+    BufReader::new(file)
+        .split(b'\n')
+        .map_while(Result::ok)
+        .any(|line| matches!(kind_of(&line).as_deref(), Some("fiber_exited" | "rewound")))
+}
+
+/// The `kind` of one log line. `None` when it does not parse.
+fn kind_of(line: &[u8]) -> Option<String> {
     let value: Value = serde_json::from_slice(line).ok()?;
     value.get("kind")?.as_str().map(str::to_owned)
 }
