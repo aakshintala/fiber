@@ -4,7 +4,7 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 
@@ -34,7 +34,8 @@ pub(crate) fn rows(line: Line<'_>, width: u16) -> usize {
 }
 
 /// Draws `app` into `area` of `buf`, from the bottom up: the input line
-/// on the last row, or the approval panel in its place, then the badge, the
+/// on the last row with a completion panel above it, or the approval panel
+/// in their place, then the badge, the
 /// quit hint and the notice when shown, and the conversation in the rows
 /// left. A screen too short for them all drops the notice first, then the
 /// hint, then the badge. A panel taller than the screen keeps its top.
@@ -60,30 +61,43 @@ pub(crate) fn render(app: &App, area: Rect, buf: &mut Buffer) {
             .render(rect, buf);
         bottom = top;
     }
-    let mut put = |text: &str| {
-        if let Some(row) = bottom.checked_sub(1).filter(|row| *row >= area.y) {
-            buf.set_stringn(area.x, row, text, width, Style::default());
-            bottom = row;
-        }
-    };
     if app.panel().is_none() {
         // The input line keeps the end of a draft wider than the screen.
         let input = format!("> {}", app.draft());
         let skip = input.chars().count().saturating_sub(width);
         let shown: String = input.chars().skip(skip).collect();
-        put(&shown);
+        put(buf, area, &mut bottom, &shown, Style::default());
+        if let Some(completions) = app.completions() {
+            for (at, line) in completions.lines.iter().enumerate().rev() {
+                let style = if completions.selected == Some(at) {
+                    Style::new().add_modifier(Modifier::REVERSED)
+                } else {
+                    Style::default()
+                };
+                put(buf, area, &mut bottom, line, style);
+            }
+        }
     }
     if let Some(badge) = app.badge() {
-        put(&badge);
+        put(buf, area, &mut bottom, &badge, Style::default());
     }
     if app.hint() {
-        put(QUIT_HINT);
+        put(buf, area, &mut bottom, QUIT_HINT, Style::default());
     }
     if let Some(notice) = app.notice() {
-        put(notice);
+        put(buf, area, &mut bottom, notice, Style::default());
     }
     let rows = bottom.saturating_sub(area.y);
     conversation_rows(app, Rect::new(area.x, area.y, area.width, rows), buf);
+}
+
+/// Puts `text` on the row above `bottom` and moves `bottom` up to it;
+/// nothing once `bottom` reaches the top of `area`.
+fn put(buf: &mut Buffer, area: Rect, bottom: &mut u16, text: &str, style: Style) {
+    if let Some(row) = bottom.checked_sub(1).filter(|row| *row >= area.y) {
+        buf.set_stringn(area.x, row, text, usize::from(area.width), style);
+        *bottom = row;
+    }
 }
 
 /// Draws the conversation's visible rows, bottom-aligned while it is

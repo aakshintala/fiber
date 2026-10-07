@@ -8,8 +8,8 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use contract::events::{
-    CommandAccepted, CommandRejected, InputItem, SteeringApplied, TurnCompleted, TurnStarted,
-    UsageRecorded,
+    CommandAccepted, CommandRejected, InputItem, OpeningMessage, SteeringApplied, TurnCompleted,
+    TurnStarted, UsageRecorded,
 };
 use contract::shapes::ContentPart;
 use contract::{Envelope, HubLine, SessionId};
@@ -18,7 +18,11 @@ use serde_json::{Map, Value, json};
 use crate::approvals::{self, Panel, PanelKey, Queue};
 use crate::keys::Key;
 use crate::link::Line;
+use crate::slash;
 use crate::turn::{Fold, Row, Turn};
+
+#[path = "app_commands.rs"]
+mod commands;
 
 /// A line's payload as `$kind`; `None` when it does not parse, and the
 /// line is skipped.
@@ -34,9 +38,6 @@ pub(crate) const QUIT_WINDOW: Duration = Duration::from_secs(1);
 
 /// What the quit hint says.
 pub(crate) const QUIT_HINT: &str = "Press Ctrl+C again to quit";
-
-/// The draft that reopens the waiting queue.
-const APPROVALS: &str = "/approvals";
 
 /// What the terminal is attached to.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,6 +77,8 @@ enum Kind {
     Steer,
     Cancel,
     Reply,
+    /// A built-in command such as `handoff`, `reload` or `close`.
+    Command,
 }
 
 /// The hub connection, as the terminal sees it.
@@ -129,6 +132,12 @@ pub(crate) struct App {
     kitty: bool,
     /// Approval requests from every session.
     queue: Queue,
+    /// The `/` list: built-in commands, then the attached session's skills.
+    slash_rows: Vec<slash::Row>,
+    /// Esc closed the `/` panel for this draft.
+    slash_closed: bool,
+    /// The selected row of the open completion panel.
+    selected: usize,
 }
 
 impl App {
@@ -151,6 +160,9 @@ impl App {
             armed_at: None,
             kitty: false,
             queue: Queue::default(),
+            slash_rows: slash::rows(&[]),
+            slash_closed: false,
+            selected: 0,
         }
     }
 
@@ -165,6 +177,14 @@ impl App {
 
     /// Handles one key at `now`, read from the injected clock.
     pub(crate) fn on_key(&mut self, key: Key, now: Instant) -> Effect {
+        let effect = self.route_key(key, now);
+        self.edited();
+        effect
+    }
+
+    /// Hands one key to what is on top: the approval panel, a
+    /// completion panel, then the input box.
+    fn route_key(&mut self, key: Key, now: Instant) -> Effect {
         if key == Key::CtrlC {
             return self.on_ctrl_c(now);
         }
@@ -174,15 +194,12 @@ impl App {
             Some(PanelKey::Answer) => return self.answer(),
             None => {}
         }
+        if let Some(effect) = self.completion_key(&key) {
+            return effect;
+        }
         match key {
-            Key::Char(ch) => {
-                self.draft.push(ch);
-                Effect::None
-            }
-            Key::Backspace => {
-                self.draft.pop();
-                Effect::None
-            }
+            Key::Char(ch) => self.type_char(ch),
+            Key::Backspace => self.backspace(),
             Key::Enter => self.on_enter(),
             Key::Esc => self.on_esc(),
             Key::PageUp => {
@@ -314,13 +331,23 @@ impl App {
     /// panel in its place, the badge, the hint and the notice. None on a
     /// screen too short for them.
     pub(crate) fn conversation_height(&self) -> usize {
-        let input = self.panel().map_or(1, |panel| {
-            panel
-                .lines
-                .iter()
-                .map(|line| crate::view::rows(ratatui::text::Line::raw(line.as_str()), self.width))
-                .sum()
-        });
+        let input = self.panel().map_or_else(
+            || {
+                1usize.saturating_add(
+                    self.completions()
+                        .map_or(0, |completions| completions.lines.len()),
+                )
+            },
+            |panel| {
+                panel
+                    .lines
+                    .iter()
+                    .map(|line| {
+                        crate::view::rows(ratatui::text::Line::raw(line.as_str()), self.width)
+                    })
+                    .sum()
+            },
+        );
         let below = input
             + usize::from(self.badge().is_some())
             + usize::from(self.hint())
@@ -418,9 +445,8 @@ impl App {
     /// Enter sends the draft: `start` with no session, `prompt` when idle,
     /// `steer` during a turn.
     fn on_enter(&mut self) -> Effect {
-        if self.draft.trim() == APPROVALS {
-            self.draft.clear();
-            return self.open_first();
+        if let Some(effect) = self.built_in() {
+            return effect;
         }
         // A command sent after the connection is lost goes nowhere, so the
         // draft stays.
@@ -547,7 +573,7 @@ impl App {
             Some((Kind::Cancel, _)) => {
                 self.pending.remove(id);
             }
-            Some((Kind::Start | Kind::Prompt | Kind::Steer | Kind::Reply, _)) => {
+            Some((Kind::Start | Kind::Prompt | Kind::Steer | Kind::Reply | Kind::Command, _)) => {
                 self.notice = Some(message);
                 self.fail(id);
             }
@@ -617,6 +643,12 @@ impl App {
                     && let Some(id) = rejected.command_id
                 {
                     self.rejected(&id.0, rejected.message);
+                }
+                false
+            }
+            "opening_message" => {
+                if let Some(opening) = read!(envelope, OpeningMessage) {
+                    self.slash_rows = slash::rows(&opening.skills);
                 }
                 false
             }

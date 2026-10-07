@@ -710,3 +710,13 @@ fn styles_reach_the_screen() {
     assert_ne!(cell(WIDTH - 1, bubble).bg, reset);
     assert_eq!(cell(0, bubble).bg, reset);
 }
+
+#[test]
+fn slash_panel() {
+    let mut app = empty();
+    let now = fakes::clock::FakeClock::new().now();
+    for ch in "/h".chars() {
+        app.on_key(Key::Char(ch), now);
+    }
+    insta::assert_snapshot!("slash_panel", sized(&mut app, 80, 24));
+}
