@@ -964,3 +964,23 @@ fn a_subscribe_through_the_hub_to_an_exited_delegate_is_refused() {
     assert_eq!(line["payload"]["message"], DELEGATE_REFUSED);
     assert!(starter.resumed().is_empty());
 }
+
+#[test]
+fn a_command_for_an_exiting_delegate_is_refused_at_once() {
+    let temp = Temp::new();
+    temp.delegate_log(parent());
+    temp.append("fiber_exited");
+    let _dying = closing_session(&temp);
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    client.send("c_1", "reply");
+    // No shutdown wait: the refusal comes before any poll on the clock.
+    let line = client.next("the rejection");
+    assert_eq!(line["kind"], "command_rejected", "{line}");
+    assert_eq!(line["payload"]["code"], "session_not_found");
+    assert_eq!(line["payload"]["command_id"], "c_1");
+    assert_eq!(line["payload"]["message"], DELEGATE_REFUSED);
+    assert_eq!(temp.clock.now(), temp.clock.origin());
+    assert!(starter.resumed().is_empty());
+}

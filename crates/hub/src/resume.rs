@@ -14,7 +14,8 @@
 //! A delegate, a session whose `session_started` names a `parent`, is never
 //! resumed through the hub: it resumes only through its parent
 //! (`docs/delegates.md`, "Talking to a delegate"). A command for one that
-//! is not running is refused `session_not_found`.
+//! is not running is refused `session_not_found`, at once when its process
+//! is still shutting down. A running delegate is attached to as any session.
 
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -68,6 +69,14 @@ pub(crate) fn exited(home: &Path, session: &SessionId) -> bool {
     find_log(home, session).is_some_and(|log| ends_exited(&log))
 }
 
+/// Whether `session`'s log is a delegate's. A log whose first line cannot
+/// be read is not.
+fn is_delegate(home: &Path, session: &SessionId) -> bool {
+    find_log(home, session)
+        .and_then(|log| recorded(&log))
+        .is_some_and(|recorded| recorded.delegate)
+}
+
 fn ends_exited(log: &Path) -> bool {
     last_kind(log).as_deref() == Some("fiber_exited")
 }
@@ -119,6 +128,11 @@ fn attempt(hub: &Hub, session: &SessionId, socket: &Path, trusted: bool) -> Step
     if let Ok(stream) = UnixStream::connect(socket) {
         if trusted || !exited(&hub.home, session) {
             return Step::Done(Ok(stream));
+        }
+        // A delegate is never resumed, so its exiting process is not
+        // waited out.
+        if is_delegate(&hub.home, session) {
+            return Step::Done(Err(delegate_refused()));
         }
         // The exiting process still answers on its socket.
         return Step::Wait(None);
