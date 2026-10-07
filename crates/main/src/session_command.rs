@@ -167,7 +167,8 @@ pub(crate) fn new_session(
     };
     let cancel = Arc::new(r#loop::TurnCancel::default());
     // A signal while armed: nothing was written, so nothing more is.
-    if let Some(code) = shutdown::start(signals, &cancel, &session, jobs.clone()) {
+    let reads = switching.reads();
+    if let Some(code) = shutdown::start(signals, &cancel, &session, jobs.clone(), reads) {
         session_servers.servers.stop();
         close(session, log, &home, &dir, &workspace, &*clock);
         return code;

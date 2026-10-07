@@ -1,10 +1,11 @@
 //! Switching the session's model or thinking level at the next turn
 //! boundary (`docs/prompt-cache.md`, "Switching model").
 //!
-//! Preparation reads nothing and runs nothing: `main`'s closure composes
-//! the same calls `parts_in` makes for the startup model, and every
-//! cross-command rule lives here in `loop` (`docs/architecture.md`, "The
-//! call rules").
+//! `main`'s closure composes the same calls `parts_in` makes for the
+//! startup model. It may read the new model's credential, or start its Lua
+//! provider, on a thread of its own; the loop waits for it, and shutdown
+//! ends that wait (`docs/configuration.md`, "Secrets"). Every cross-command
+//! rule lives here in `loop` (`docs/architecture.md`, "The call rules").
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -20,8 +21,6 @@ use crate::{Error, Loop};
 /// What a prepared switch carries: everything applying it replaces.
 pub struct Prepared {
     /// The new model's provider.
-    /// debt: only the session's and the reviewer's providers (#1094);
-    /// #1094 lifts it after #649 merges.
     pub provider: Arc<dyn contract::provider::Provider>,
     /// The new model, and how its calls are priced.
     pub model: crate::Model,
@@ -30,8 +29,6 @@ pub struct Prepared {
     /// The session's explicit choice after this switch.
     pub chosen: Option<ThinkingLevel>,
     /// The credential label every request uses.
-    /// debt: only a credential read at startup; no command runs for a
-    /// switch (#1094). #1094 lifts it after #649 merges.
     pub credential: Option<String>,
     /// The prompt-cache lifetime.
     pub cache_lifetime: contract::events::CacheLifetime,

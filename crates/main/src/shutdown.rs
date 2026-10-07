@@ -1,8 +1,8 @@
 //! What a signal does to a `fiber ask` session process (`docs/invocation.md`,
 //! "Shutdown"): the callbacks the signals thread runs, wired to the turn's
-//! cancel, the session's jobs, the door side, every command's process group
-//! and every MCP server. A `close` with `now` takes the same path with exit
-//! code 0, through the hook wired here.
+//! cancel, the session's jobs, the door side, a switch's credential read,
+//! every command's process group and every MCP server. A `close` with `now`
+//! takes the same path with exit code 0, through the hook wired here.
 
 use std::sync::Arc;
 
@@ -26,14 +26,16 @@ pub(crate) fn arm(signals: &Signals) {
 
 /// Starts the session just before its first line: the code of a signal
 /// that came while armed, or `None` with the shutdown wired. A shutdown
-/// cancels the turn for good, wakes the loop, and stops every job; a second
-/// SIGTERM or SIGINT kills every command group at once. With `None`, a
+/// cancels the turn for good, ends a switch's credential read and kills its
+/// command, wakes the loop, and stops every job; a second SIGTERM or SIGINT
+/// kills every command group at once. With `None`, a
 /// `close` with `now` starts the same shutdown with exit code 0.
 pub(crate) fn start(
     signals: &Arc<Signals>,
     cancel: &Arc<TurnCancel>,
     session: &Session,
     jobs: Arc<dyn Jobs>,
+    reads: Arc<crate::switch::Reads>,
 ) -> Option<i32> {
     let turn = Arc::clone(cancel);
     let stopper = session.stopper();
@@ -41,6 +43,7 @@ pub(crate) fn start(
         Box::new(move |code| {
             // The code first: the loop reads it once the stopper wakes it.
             turn.shutdown(code);
+            reads.cancel();
             stopper();
             for id in jobs.running() {
                 jobs.stop(&id);

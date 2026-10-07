@@ -487,14 +487,14 @@ fn parts_in(
     // and docs/extensions.md, "The extension API version"; fixed by #382.
     // Notices from configuration and loading are dropped.
     let (mut providers, _notices) = Providers::load(&home).map_err(|e| failed(e.code(), e))?;
-    // The registry as `Switching::new` fills it for a switch: before any
-    // `add_lua`.
-    let snapshot = providers.clone();
     let locks = Arc::new(tools::PathLocks::new());
     let session_locks: Arc<dyn contract::files::PathLock> = locks.clone();
     let mut extensions =
         extensions::SessionExtensions::load(&home, &config, Arc::clone(&clock), session_locks);
     let naming = lua_providers::add_lua(&extensions, &mut providers, &config)?;
+    let owners = (extensions.lua_providers().iter())
+        .map(|(extension, lua)| (lua.name().to_owned(), extension.clone()))
+        .collect();
     // Every `file` credential source configuration declares, after the Lua
     // providers are added so their sources are protected too: a relative
     // path joins the workspace the reader reads it from, an absolute one
@@ -519,9 +519,8 @@ fn parts_in(
     })?;
     let session_credential = (key.clone(), signer.clone());
     let provider = connect(model, key, signer, lua)?;
-    // The credentials read at startup, frozen into `Switching` once the
-    // reviewer is chosen: the session's entry first, so a reviewer on the
-    // session's provider reuses its key and signer.
+    // The credentials read at startup, seeding `Switching`'s keys: the
+    // session's entry first, so a reviewer on its provider reuses them.
     let mut credentials: switch::Credentials = BTreeMap::new();
     credentials.insert(
         model.provider.name.clone(),
@@ -546,10 +545,9 @@ fn parts_in(
     };
     // Every refreshed provider the session does not use is unloaded once
     // its list is written: only the session's and the reviewer's stay
-    // loaded (`docs/model-routing.md`, "Model discovery"). `providers` is
-    // a local, so dropping it unloads the rest; the session's and the
-    // reviewer's signers hold their own Arcs.
-    {
+    // loaded, held by `Switching` (`docs/model-routing.md`, "Model
+    // discovery"). The switch registry is `providers` holding no Lua handle.
+    let loaded: Vec<_> = {
         let mut keep = vec![model.provider.name.as_str()];
         if let Some(name) = reviewer
             .as_ref()
@@ -559,7 +557,12 @@ fn parts_in(
             keep.push(name);
         }
         extensions.retain_lua_providers(&keep);
-    }
+        (extensions.lua_providers().iter())
+            .map(|(_, lua)| (lua.name().to_owned(), Arc::clone(lua)))
+            .collect()
+    };
+    extensions.retain_lua_providers(&[]);
+    let extensions = Arc::new(extensions);
     let limits = settings::block_limits(&config);
     let retry = settings::retry_policy(&config);
     let handoff = handoff::handoff_settings(&config, &model.reference());
@@ -575,16 +578,20 @@ fn parts_in(
         &mut startup_notices,
     )
     .map_err(|e| failed(e.code, e.message))?;
-    // The switch preparation over the load clone: every retained Lua
-    // provider with a model cache, the naming list, and the credentials
-    // read above.
+    let loader = switch::Loader {
+        extensions: Arc::clone(&extensions),
+        clock: Arc::clone(&clock),
+        locks: locks.clone(),
+        owners,
+    };
     let switching = switch::Switching::new(
-        snapshot,
-        extensions.lua_providers(),
+        providers.clone(),
         naming,
         config.clone(),
         credentials,
-    )?;
+        loaded,
+        loader,
+    );
     // The extensions loaded above, started before the model was chosen:
     // choosing a Lua provider's model waits on them.
     // The session log's path is set by the caller, which mints the session
@@ -633,7 +640,7 @@ fn parts_in(
         caps: settings::result_caps(&config),
         credential_files,
         locks,
-        extensions: Arc::new(extensions),
+        extensions,
         mcp,
         switching,
         // The startup model's `:level` suffix, if any: a resumed session
@@ -671,8 +678,8 @@ fn reviewer_reference(config: &Config, session: &extensions::Model<'_>) -> Resul
 /// session's own model. `credential` reads the startup map first, then the
 /// provider's configured label, so a reviewer on the session's own provider
 /// reuses the session's key and signer, and a `command` credential runs once
-/// per process; a switch passes a map-only lookup, which never reads a
-/// source (`docs/model-routing.md`, "Keys, tokens and OAuth").
+/// per process; a switch passes the access its read returned
+/// (`docs/model-routing.md`, "Keys, tokens and OAuth").
 fn choose_reviewer(
     providers: &Providers,
     config: &Config,

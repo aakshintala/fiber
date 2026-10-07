@@ -1,6 +1,7 @@
-//! `prepare` on a `Switching` built from fixture data
-//! (`docs/model-routing.md`, "Naming a model" and "Thinking"): the naming
-//! list is plain strings, so an unloaded Lua provider needs no VM.
+//! `prepare` on a `Switching` built as `parts_in` builds it
+//! (`docs/model-routing.md`, "Naming a model" and "Thinking"), reading a
+//! credential or starting a Lua provider the switch needs
+//! (`docs/configuration.md`, "Secrets").
 
 #![allow(
     clippy::unwrap_used,
@@ -9,25 +10,59 @@
     reason = "test code; a failure is the test's"
 )]
 
-use std::sync::Arc;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Weak};
+use std::time::Duration;
 
 use config::{Config, ProjectKey, Sources};
 use contract::commands::ModelArgs;
 use contract::{ErrorCode, ThinkingLevel};
-use extensions::Providers;
+use extensions::{LuaProvider, Providers};
 use serde_json::json;
 
-use super::{Credentials, Door, Switching, hosted_stands, prepare, resolve, sentence};
+use super::{Credentials, Door, Loader, Switching, hosted_stands, prepare};
+
+/// The deadline of each preparation: one may start a Lua provider or run a
+/// credential command.
+const DEADLINE: Duration = Duration::from_secs(20);
 
 /// The fixture home, workspace and config: `fake` with `m`, `n` (low and
 /// high, defaulting low, with an addendum) and `r`; `claude` with the
-/// hosted-search model `w`; `other` with `m` behind a `command`
-/// credential; `bed` with a bedrock model.
+/// hosted-search model `w`; `other` with `m` and `m2` behind a `command`
+/// credential that appends a line to `marker`; `bad` with `m` behind a
+/// `command` that appends to `bad_marker` and fails; `filed` with `m`
+/// behind the `file` source `key_file`, absent at first; `bed` with a
+/// bedrock model behind the `command` source `other` uses.
 struct Fixture {
-    _root: fakes::TempDir,
-    home: std::path::PathBuf,
-    workspace: std::path::PathBuf,
-    marker: std::path::PathBuf,
+    root: fakes::TempDir,
+    home: PathBuf,
+    workspace: PathBuf,
+    marker: PathBuf,
+    bad_marker: PathBuf,
+    key_file: PathBuf,
+}
+
+/// The lines `marker` holds: one per credential command run.
+fn runs(marker: &Path) -> usize {
+    std::fs::read_to_string(marker).map_or(0, |text| text.lines().count())
+}
+
+/// `sh -c <script>` as a credential source's argv.
+fn sh(script: &str) -> serde_json::Value {
+    json!(["sh", "-c", script])
+}
+
+/// Writes the data-only extension `name` whose provider data is `data`.
+fn data_extension(home: &Path, name: &str, data: &serde_json::Value) {
+    let dir = home.join("extensions").join(name);
+    std::fs::create_dir_all(dir.join("providers")).unwrap();
+    std::fs::write(
+        dir.join("extension.json"),
+        json!({"name": name, "version": "v0.0.0", "fiber": "0.0.0", "api": 1}).to_string(),
+    )
+    .unwrap();
+    std::fs::write(dir.join(format!("providers/{name}.json")), data.to_string()).unwrap();
 }
 
 fn fixture(name: &str) -> Fixture {
@@ -37,6 +72,8 @@ fn fixture(name: &str) -> Fixture {
     std::fs::create_dir_all(&home).unwrap();
     std::fs::create_dir_all(&workspace).unwrap();
     let marker = root.path().join("credential-ran");
+    let bad_marker = root.path().join("bad-ran");
+    let key_file = root.path().join("keys/filed");
     let fake = home.join("extensions/fake");
     std::fs::create_dir_all(fake.join("providers")).unwrap();
     std::fs::write(
@@ -94,10 +131,15 @@ fn fixture(name: &str) -> Fixture {
         other.join("providers/other.json"),
         json!({
             "name": "other",
-            "credential": {"command": ["touch", marker.to_str().unwrap()]},
+            "credential": {"command": sh(&format!(
+                "echo x >> '{}'; echo other-key", marker.display()
+            ))},
             "models": [
                 {"id": "m", "protocol": "openai-responses",
                  "base_url": "http://127.0.0.1:9/v1", "context_window": 1000},
+                {"id": "m2", "protocol": "openai-responses",
+                 "base_url": "http://127.0.0.1:9/v1", "context_window": 1000,
+                 "thinking_levels": ["low"], "thinking_default": "low"},
             ],
         })
         .to_string(),
@@ -114,6 +156,9 @@ fn fixture(name: &str) -> Fixture {
         bed.join("providers/bed.json"),
         json!({
             "name": "bed",
+            "credential": {"command": sh(&format!(
+                "echo x >> '{}'; echo bed-key", marker.display()
+            ))},
             "models": [
                 {"id": "bk", "protocol": "bedrock-converse",
                  "base_url": "http://127.0.0.1:9/v1", "context_window": 1000},
@@ -122,11 +167,35 @@ fn fixture(name: &str) -> Fixture {
         .to_string(),
     )
     .unwrap();
+    data_extension(
+        &home,
+        "bad",
+        &json!({
+            "name": "bad",
+            "credential": {"command": sh(&format!(
+                "echo x >> '{}'; exit 1", bad_marker.display()
+            ))},
+            "models": [{"id": "bm", "protocol": "openai-responses",
+                        "base_url": "http://127.0.0.1:9/v1", "context_window": 1000}],
+        }),
+    );
+    data_extension(
+        &home,
+        "filed",
+        &json!({
+            "name": "filed",
+            "credential": {"file": key_file},
+            "models": [{"id": "fm", "protocol": "openai-responses",
+                        "base_url": "http://127.0.0.1:9/v1", "context_window": 1000}],
+        }),
+    );
     Fixture {
-        _root: root,
+        root,
         home,
         workspace,
         marker,
+        bad_marker,
+        key_file,
     }
 }
 
@@ -147,26 +216,109 @@ fn keyed(label: &str) -> (String, crate::lua_providers::KeyAndSigner) {
     )
 }
 
+/// The startup credential map holding each of `names` under `default`.
+fn startup(names: &[&str]) -> Credentials {
+    names
+        .iter()
+        .map(|name| ((*name).to_owned(), keyed("default")))
+        .collect()
+}
+
 /// The `Switching` over the fixture with `overrides` and the credential
-/// map holding `fake` and `claude` under `default`, through the same calls
-/// `parts_in` makes: the load clone, the naming list from `add_lua`, and
-/// `Switching::new`.
-fn switching(fixture: &Fixture, overrides: &[&str]) -> Switching {
-    let config = config(fixture, overrides);
-    let (mut providers, _) = Providers::load(&fixture.home).unwrap();
-    let snapshot = providers.clone();
-    let extensions = extensions::SessionExtensions::load(
+/// map holding `fake` and `claude` under `default`, as `parts_in` builds
+/// it.
+fn switching(fixture: &Fixture, overrides: &[&str]) -> Arc<Switching> {
+    assembled(
         &fixture.home,
+        config(fixture, overrides),
+        startup(&["fake", "claude"]),
+        &[],
+    )
+}
+
+/// `Switching` as `parts_in` builds it over `home`: the registry after
+/// `add_lua`, every Lua provider's extension, and `keep`'s Lua providers
+/// loaded, `SessionExtensions` holding none.
+fn assembled(
+    home: &Path,
+    config: Config,
+    credentials: Credentials,
+    keep: &[&str],
+) -> Arc<Switching> {
+    let (mut providers, _) = Providers::load(home).unwrap();
+    let mut extensions = extensions::SessionExtensions::load(
+        home,
         &config,
         fakes::clock::FakeClock::new(),
         Arc::new(tools::PathLocks::new()),
     );
     let naming = crate::lua_providers::add_lua(&extensions, &mut providers, &config).unwrap();
-    let credentials: Credentials = [("fake", keyed("default")), ("claude", keyed("default"))]
-        .into_iter()
-        .map(|(name, entry)| (name.to_owned(), entry))
+    let owners = (extensions.lua_providers().iter())
+        .map(|(extension, lua)| (lua.name().to_owned(), extension.clone()))
         .collect();
-    Switching::new(snapshot, &[], naming, config, credentials).unwrap()
+    extensions.retain_lua_providers(keep);
+    let loaded = (extensions.lua_providers().iter())
+        .map(|(_, lua)| (lua.name().to_owned(), Arc::clone(lua)))
+        .collect();
+    extensions.retain_lua_providers(&[]);
+    Arc::new(Switching::new(
+        providers,
+        naming,
+        config,
+        credentials,
+        loaded,
+        loader(Arc::new(extensions), owners),
+    ))
+}
+
+fn loader(
+    extensions: Arc<extensions::SessionExtensions>,
+    owners: BTreeMap<String, String>,
+) -> Loader {
+    Loader {
+        extensions,
+        clock: fakes::clock::FakeClock::new(),
+        locks: Arc::new(tools::PathLocks::new()),
+        owners,
+    }
+}
+
+/// `Switching` over a registry and naming list a test made by hand, with
+/// placeholders filled as `add_lua` fills them and no Lua provider.
+fn over(
+    home: &Path,
+    mut providers: Providers,
+    naming: Vec<(String, String)>,
+    config: Config,
+    credentials: Credentials,
+) -> Arc<Switching> {
+    let _notices = providers
+        .fill_placeholders(&config, &|name| std::env::var(name).ok())
+        .unwrap();
+    let extensions = extensions::SessionExtensions::load(
+        home,
+        &config,
+        fakes::clock::FakeClock::new(),
+        Arc::new(tools::PathLocks::new()),
+    );
+    Arc::new(Switching::new(
+        providers,
+        naming,
+        config,
+        credentials,
+        Vec::new(),
+        loader(Arc::new(extensions), BTreeMap::new()),
+    ))
+}
+
+/// The provider names `switching` holds a key for.
+fn keys(switching: &Switching) -> Vec<String> {
+    switching.keys.lock().unwrap().keys().cloned().collect()
+}
+
+/// The provider names `switching` holds loaded.
+fn loaded(switching: &Switching) -> Vec<String> {
+    switching.loaded.lock().unwrap().keys().cloned().collect()
 }
 
 fn args(model: &str) -> ModelArgs {
@@ -213,14 +365,26 @@ fn declared_type(hosted: &r#loop::Hosted) -> Option<Option<String>> {
     }
 }
 
+/// `prepare` on its own thread under [`DEADLINE`].
+fn bounded(
+    switching: &Arc<Switching>,
+    args: &ModelArgs,
+    chosen: Option<ThinkingLevel>,
+) -> Result<r#loop::Prepared, contract::inbox::Rejection> {
+    let (switching, args) = (Arc::clone(switching), args.clone());
+    fakes::within("the preparation", DEADLINE, move || {
+        prepare(&switching, &quiet(), &args, chosen)
+    })
+}
+
 /// A prepared switch: `prepare` succeeds, and `Prepared` is no `Debug`, so
 /// no `unwrap`.
 fn prepared(
-    switching: &Switching,
+    switching: &Arc<Switching>,
     args: &ModelArgs,
     chosen: Option<ThinkingLevel>,
 ) -> r#loop::Prepared {
-    match prepare(switching, &quiet(), args, chosen) {
+    match bounded(switching, args, chosen) {
         Ok(prepared) => prepared,
         Err(rejection) => panic!("the switch rejected: {}", rejection.message),
     }
@@ -229,11 +393,11 @@ fn prepared(
 /// A rejected switch: `prepare` fails, and `Prepared` is no `Debug`, so no
 /// `unwrap_err`.
 fn rejected(
-    switching: &Switching,
+    switching: &Arc<Switching>,
     args: &ModelArgs,
     chosen: Option<ThinkingLevel>,
 ) -> contract::inbox::Rejection {
-    match prepare(switching, &quiet(), args, chosen) {
+    match bounded(switching, args, chosen) {
         Ok(_) => panic!("the switch prepared"),
         Err(rejection) => rejection,
     }
@@ -269,13 +433,148 @@ fn the_session_and_reviewers_providers_resolve_with_the_maps_label() {
     assert_eq!(reviewer.model.reference, "fake/r");
 }
 
+/// A provider outside the startup map reads its `command` source when the
+/// switch is prepared, once per process: a second switch to it runs
+/// nothing.
 #[test]
-fn another_installed_provider_is_the_credential_sentence() {
+fn another_installed_provider_reads_its_command_once() {
     let fixture = fixture("fiber-switch-outside");
     let switching = switching(&fixture, &[]);
-    let rejection = rejected(&switching, &args("other/m"), None);
-    assert_eq!(rejection.code, ErrorCode::InvalidArguments);
-    assert_eq!(rejection.message, sentence("other"));
+    let made = prepared(&switching, &args("other/m"), None);
+    assert_eq!(made.model.reference, "other/m");
+    assert_eq!(made.credential, Some("default".to_owned()));
+    assert!(made.credential_files.is_empty());
+    assert_eq!(runs(&fixture.marker), 1);
+    assert!(keys(&switching).contains(&"other".to_owned()));
+    prepared(&switching, &args("other/m"), None);
+    assert_eq!(
+        runs(&fixture.marker),
+        1,
+        "a key read once is not read again"
+    );
+}
+
+/// A failed read rejects with the credential's own code, names the
+/// command by its program alone, and caches nothing: the next switch reads
+/// again.
+#[test]
+fn a_failing_command_rejects_with_its_code_and_caches_nothing() {
+    let fixture = fixture("fiber-switch-bad");
+    let switching = switching(&fixture, &[]);
+    let rejection = rejected(&switching, &args("bad/bm"), None);
+    assert_eq!(rejection.code, ErrorCode::CredentialMissing);
+    assert!(rejection.message.contains("`sh`"), "{}", rejection.message);
+    assert!(
+        !rejection.message.contains("exit 1"),
+        "{}",
+        rejection.message
+    );
+    assert_eq!(runs(&fixture.bad_marker), 1);
+    assert!(!keys(&switching).contains(&"bad".to_owned()));
+    rejected(&switching, &args("bad/bm"), None);
+    assert_eq!(runs(&fixture.bad_marker), 2, "a failed read is read again");
+}
+
+/// A missing `file` source rejects `credential_missing`; once the file
+/// exists the switch reads it, and names the file it read for the deny. A
+/// key read before adds no file.
+#[test]
+fn a_missing_file_rejects_until_the_file_exists() {
+    let fixture = fixture("fiber-switch-file");
+    let switching = switching(&fixture, &[]);
+    let rejection = rejected(&switching, &args("filed/fm"), None);
+    assert_eq!(rejection.code, ErrorCode::CredentialMissing);
+    assert!(
+        rejection.message.contains("does not exist"),
+        "{}",
+        rejection.message
+    );
+    assert!(!keys(&switching).contains(&"filed".to_owned()));
+    std::fs::create_dir_all(fixture.key_file.parent().unwrap()).unwrap();
+    std::fs::write(&fixture.key_file, "sk-filed").unwrap();
+    let made = prepared(&switching, &args("filed/fm"), None);
+    assert_eq!(
+        made.credential_files,
+        vec![fixture.key_file.canonicalize().unwrap()]
+    );
+    let again = prepared(&switching, &args("filed/fm"), None);
+    assert!(
+        again.credential_files.is_empty(),
+        "a cached key reads no file"
+    );
+}
+
+/// A `file` source behind a symlink names the link's target: the file
+/// whose bytes were read.
+#[test]
+fn a_file_behind_a_symlink_names_its_target() {
+    let fixture = fixture("fiber-switch-file-link");
+    let target = fixture.root.path().join("keys/target");
+    std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+    std::fs::write(&target, "sk-target").unwrap();
+    std::os::unix::fs::symlink(&target, &fixture.key_file).unwrap();
+    let switching = switching(&fixture, &[]);
+    let made = prepared(&switching, &args("filed/fm"), None);
+    assert_eq!(made.credential_files, vec![target.canonicalize().unwrap()]);
+}
+
+/// Every check that can reject runs before the read: an unsupported
+/// level, an unparseable one, an unknown model, a protocol this Fiber does
+/// not speak, and the new model being the reviewer's. None runs the
+/// `command`, and none caches a key.
+#[test]
+fn every_rejection_comes_before_the_read() {
+    let fixture = fixture("fiber-switch-pre-read");
+    let switching = switching(&fixture, &["reviewer.model=other/m"]);
+    let cases = [
+        (args_thinking("other/m2", "high"), "unsupported level"),
+        (args_thinking("other/m", "sideways"), "unparseable level"),
+        (args("other/x"), "unknown model"),
+        (args("bed/bk"), "bedrock-converse"),
+        (args("other/m"), "the reviewer's model"),
+    ];
+    for (asked, case) in &cases {
+        let rejection = rejected(&switching, asked, None);
+        assert_eq!(rejection.code, ErrorCode::InvalidArguments, "{case}");
+    }
+    let collision = rejected(&switching, &args("other/m"), None);
+    assert_eq!(
+        collision.message,
+        "`other/m` is this session's reviewer model; set `reviewer.model` to another model first."
+    );
+    assert_eq!(runs(&fixture.marker), 0, "no read ran");
+    assert_eq!(
+        keys(&switching),
+        vec!["claude".to_owned(), "fake".to_owned()]
+    );
+}
+
+/// A reviewer on the new session provider reuses the session's read: the
+/// `command` runs once.
+#[test]
+fn a_reviewer_on_the_new_provider_runs_no_second_read() {
+    let fixture = fixture("fiber-switch-reviewer-same");
+    let switching = switching(&fixture, &["reviewer.model=other/m2"]);
+    let made = prepared(&switching, &args("other/m"), None);
+    let reviewer = made.reviewer.expect("the reviewer resolved");
+    assert_eq!(reviewer.model.reference, "other/m2");
+    assert_eq!(runs(&fixture.marker), 1);
+}
+
+/// The startup provider's key is in the map, so a switch back to it runs
+/// nothing.
+#[test]
+fn the_startup_providers_command_does_not_run_again() {
+    let fixture = fixture("fiber-switch-startup");
+    let switching = assembled(
+        &fixture.home,
+        config(&fixture, &[]),
+        startup(&["fake", "claude", "other"]),
+        &[],
+    );
+    let made = prepared(&switching, &args("other/m"), None);
+    assert_eq!(made.model.reference, "other/m");
+    assert_eq!(runs(&fixture.marker), 0);
 }
 
 #[test]
@@ -327,7 +626,7 @@ fn the_naming_list_counts_an_unloaded_lua_provider() {
         ("fake".to_owned(), "m".to_owned()),
         ("lua".to_owned(), "m".to_owned()),
     ];
-    let switching = Switching::new(providers, &[], naming, config, credentials).unwrap();
+    let switching = over(&fixture.home, providers, naming, config, credentials);
     let rejection = rejected(&switching, &args("m"), None);
     assert_eq!(rejection.code, ErrorCode::InvalidArguments);
     assert!(
@@ -336,9 +635,10 @@ fn the_naming_list_counts_an_unloaded_lua_provider() {
         rejection.message
     );
     assert!(rejection.message.contains("lua/m"), "{}", rejection.message);
-    let limited = rejected(&switching, &args("lua/m"), None);
-    assert_eq!(limited.code, ErrorCode::InvalidArguments);
-    assert_eq!(limited.message, sentence("lua"));
+    // A provider the registry does not hold is an unknown model.
+    let unknown = rejected(&switching, &args("lua/m"), None);
+    assert_eq!(unknown.code, ErrorCode::InvalidArguments);
+    assert!(unknown.message.contains("lua"), "{}", unknown.message);
     // An exact reference is never ambiguous.
     assert_eq!(
         prepared(&switching, &args("fake/m"), None).model.reference,
@@ -355,20 +655,16 @@ fn the_naming_list_counts_an_unloaded_lua_provider() {
 }
 
 #[test]
-fn a_bare_id_only_an_unloaded_provider_has_is_the_credential_sentence() {
+fn a_bare_id_only_the_naming_list_names_is_invalid_arguments() {
     let fixture = fixture("fiber-switch-bare-unloaded");
     let config = config(&fixture, &[]);
     let (providers, _) = Providers::load(&fixture.home).unwrap();
-    let credentials: Credentials = [("fake", keyed("default"))]
-        .into_iter()
-        .map(|(name, entry)| (name.to_owned(), entry))
-        .collect();
-    // Only the unloaded `lua` names `rm`.
+    // Only `lua`, which the registry does not hold, names `rm`.
     let naming = vec![("lua".to_owned(), "rm".to_owned())];
-    let switching = Switching::new(providers, &[], naming, config, credentials).unwrap();
+    let switching = over(&fixture.home, providers, naming, config, startup(&["fake"]));
     let rejection = rejected(&switching, &args("rm"), None);
     assert_eq!(rejection.code, ErrorCode::InvalidArguments);
-    assert_eq!(rejection.message, sentence("lua"));
+    assert!(rejection.message.contains("rm"), "{}", rejection.message);
 }
 
 #[test]
@@ -386,7 +682,7 @@ fn a_naming_match_joins_a_resolved_match_in_ambiguity() {
         ("fake".to_owned(), "n".to_owned()),
         ("lua".to_owned(), "n".to_owned()),
     ];
-    let switching = Switching::new(providers, &[], naming, config, credentials).unwrap();
+    let switching = over(&fixture.home, providers, naming, config, credentials);
     let rejection = rejected(&switching, &args("n"), None);
     assert_eq!(rejection.code, ErrorCode::InvalidArguments);
     assert_eq!(
@@ -437,7 +733,7 @@ fn a_literal_id_ending_in_a_thinking_level_matches_before_the_suffix() {
         ("lit".to_owned(), "n".to_owned()),
         ("lit".to_owned(), "n:high".to_owned()),
     ];
-    let switching = Switching::new(providers, &[], naming, config, credentials).unwrap();
+    let switching = over(&fixture.home, providers, naming, config, credentials);
     // `n:high` selects the literal model, with no thinking level: it is
     // neither `n` with `high` nor ambiguous with it.
     let made = prepared(&switching, &args("n:high"), None);
@@ -466,7 +762,7 @@ fn an_unloaded_literal_id_counts_toward_ambiguity() {
         ("lit".to_owned(), "n:high".to_owned()),
         ("lua".to_owned(), "n:high".to_owned()),
     ];
-    let switching = Switching::new(providers, &[], naming, config, credentials).unwrap();
+    let switching = over(&fixture.home, providers, naming, config, credentials);
     let rejection = rejected(&switching, &args("n:high"), None);
     assert_eq!(rejection.code, ErrorCode::InvalidArguments);
     assert_eq!(
@@ -477,24 +773,20 @@ fn an_unloaded_literal_id_counts_toward_ambiguity() {
 }
 
 #[test]
-fn a_literal_only_an_unloaded_provider_names_is_the_credential_sentence() {
+fn a_literal_only_the_naming_list_names_falls_back_to_the_suffix() {
     let fixture = fixture("fiber-switch-literal-unloaded");
     let config = config(&fixture, &[]);
     let (providers, _) = Providers::load(&fixture.home).unwrap();
-    let credentials: Credentials = [("fake", keyed("default"))]
-        .into_iter()
-        .map(|(name, entry)| (name.to_owned(), entry))
-        .collect();
-    // Only the unloaded `lua` names the literal `n:high`: `fake/n` takes a
-    // `high` suffix, but the literal matches first.
+    // Only `lua`, which the registry does not hold, names the literal
+    // `n:high`, so `fake/n` takes the `high` suffix.
     let naming = vec![
         ("fake".to_owned(), "n".to_owned()),
         ("lua".to_owned(), "n:high".to_owned()),
     ];
-    let switching = Switching::new(providers, &[], naming, config, credentials).unwrap();
-    let rejection = rejected(&switching, &args("n:high"), None);
-    assert_eq!(rejection.code, ErrorCode::InvalidArguments);
-    assert_eq!(rejection.message, sentence("lua"));
+    let switching = over(&fixture.home, providers, naming, config, startup(&["fake"]));
+    let made = prepared(&switching, &args("n:high"), None);
+    assert_eq!(made.model.reference, "fake/n");
+    assert_eq!(made.thinking, Some(ThinkingLevel::High));
 }
 
 #[test]
@@ -533,14 +825,13 @@ fn an_unconfigured_literal_id_beats_stripped_id_ambiguity() {
         ("lit".to_owned(), "n".to_owned()),
         ("lit".to_owned(), "n:high".to_owned()),
     ];
-    let switching = Switching::new(
+    let switching = over(
+        &fixture.home,
         providers.clone(),
-        &[],
         naming.clone(),
         config.clone(),
         credentials.clone(),
-    )
-    .unwrap();
+    );
     let rejection = rejected(&switching, &args("n:high"), None);
     assert_eq!(rejection.code, ErrorCode::InvalidArguments);
     assert_eq!(
@@ -551,7 +842,7 @@ fn an_unconfigured_literal_id_beats_stripped_id_ambiguity() {
     // The exact unconfigured literal also wins when it is the only full-ID
     // naming match; no stripped-id entry is needed to preserve its error.
     let naming = vec![("lit".to_owned(), "n:high".to_owned())];
-    let switching = Switching::new(providers, &[], naming, config, credentials).unwrap();
+    let switching = over(&fixture.home, providers, naming, config, credentials);
     let rejection = rejected(&switching, &args("n:high"), None);
     assert_eq!(
         rejection.message,
@@ -598,7 +889,7 @@ fn an_unconfigured_model_counts_toward_ambiguity() {
         .into_iter()
         .map(|(name, entry)| (name.to_owned(), entry))
         .collect();
-    let switching = Switching::new(snapshot, &[], naming, config, credentials).unwrap();
+    let switching = over(&fixture.home, snapshot, naming, config, credentials);
     // Configured `fake/m` and unconfigured `acme/m` make the bare `m`
     // ambiguous.
     let rejection = rejected(&switching, &args("m"), None);
@@ -663,8 +954,7 @@ fn a_chosen_unsupported_level_is_invalid_arguments() {
 fn an_unparseable_args_thinking_rejects_before_any_lookup() {
     let fixture = fixture("fiber-switch-bad-thinking");
     let switching = switching(&fixture, &[]);
-    // `other/m` would be the credential sentence; the thinking level
-    // rejects first.
+    // `other/m` would run its `command`; the thinking level rejects first.
     let rejection = rejected(&switching, &args_thinking("other/m", "sideways"), None);
     assert_eq!(rejection.code, ErrorCode::InvalidArguments);
     assert!(
@@ -672,6 +962,7 @@ fn an_unparseable_args_thinking_rejects_before_any_lookup() {
         "{}",
         rejection.message
     );
+    assert_eq!(runs(&fixture.marker), 0);
 }
 
 #[test]
@@ -684,7 +975,7 @@ fn a_bedrock_model_is_rejected() {
         .map(|(name, entry)| (name.to_owned(), entry))
         .collect();
     let naming = vec![("bed".to_owned(), "bk".to_owned())];
-    let switching = Switching::new(providers, &[], naming, config, credentials).unwrap();
+    let switching = over(&fixture.home, providers, naming, config, credentials);
     let rejection = rejected(&switching, &args("bed/bk"), None);
     assert_eq!(rejection.code, ErrorCode::InvalidArguments);
     assert!(
@@ -704,26 +995,41 @@ fn the_reviewer_is_rechosen_for_the_new_provider() {
     assert_eq!(reviewer.context_window, 1000);
 }
 
+/// A reviewer on another provider is read in the same job as the session's
+/// provider, and its key is kept.
 #[test]
-fn a_reviewer_outside_the_map_is_the_credential_sentence_and_the_switch_stands() {
+fn a_reviewer_on_another_provider_is_read_in_the_same_job() {
     let fixture = fixture("fiber-switch-reviewer-outside");
     let switching = switching(&fixture, &["reviewer.model=other/m"]);
     let made = prepared(&switching, &args("fake/n"), None);
     assert_eq!(made.model.reference, "fake/n");
+    let reviewer = made.reviewer.expect("the reviewer resolved");
+    assert_eq!(reviewer.model.reference, "other/m");
+    assert_eq!(runs(&fixture.marker), 1);
+    assert!(keys(&switching).contains(&"other".to_owned()));
+}
+
+/// A reviewer whose read fails is the loop's to escalate: the switch
+/// stands, and the reviewer's provider keeps no key.
+#[test]
+fn a_reviewer_whose_read_fails_leaves_the_switch_standing() {
+    let fixture = fixture("fiber-switch-reviewer-bad");
+    let switching = switching(&fixture, &["reviewer.model=bad/bm"]);
+    let made = prepared(&switching, &args("fake/n"), None);
+    assert_eq!(made.model.reference, "fake/n");
     let failure = reviewer_failed(made.reviewer);
-    assert_eq!(failure.code, ErrorCode::InvalidArguments);
-    assert_eq!(failure.message, sentence("other"));
+    assert_eq!(failure.code, ErrorCode::CredentialMissing);
+    assert!(!keys(&switching).contains(&"bad".to_owned()));
 }
 
 #[test]
-fn a_reviewer_on_an_unloaded_lua_provider_is_the_credential_sentence() {
+fn a_reviewer_naming_no_installed_model_fails_and_the_switch_stands() {
     let fixture = fixture("fiber-switch-reviewer-lua");
     let switching = switching(&fixture, &["reviewer.model=lua/rm"]);
     let made = prepared(&switching, &args("fake/n"), None);
     assert_eq!(made.model.reference, "fake/n");
     let failure = reviewer_failed(made.reviewer);
-    assert_eq!(failure.code, ErrorCode::InvalidArguments);
-    assert_eq!(failure.message, sentence("lua"));
+    assert!(failure.message.contains("lua"), "{}", failure.message);
 }
 
 #[test]
@@ -783,24 +1089,13 @@ fn a_data_file_written_after_the_snapshot_does_not_resolve() {
     );
 }
 
-#[test]
-fn preparing_reads_no_credential_source() {
-    let fixture = fixture("fiber-switch-no-read");
-    let switching = switching(&fixture, &[]);
-    let rejection = rejected(&switching, &args("other/m"), None);
-    assert_eq!(rejection.code, ErrorCode::InvalidArguments);
-    assert!(
-        !fixture.marker.exists(),
-        "the `command` credential never ran"
-    );
-}
-
-/// A retained Lua provider with a model cache resolves its cached models
-/// without any listing request; negating the cache guard would skip it.
-#[test]
-fn a_retained_lua_provider_with_a_cache_resolves_without_a_listing_request() {
-    let server = fakes::ProviderServer::start([]).unwrap();
-    let root = fakes::TempDir::new("fiber-switch-lua-cache");
+/// The fixture Lua extension installed in a new home whose `fixture.url`
+/// is `server`, with `cache` as `fixture`'s cached model list when given.
+fn lua_fixture_home(
+    root: &fakes::TempDir,
+    server: &fakes::ProviderServer,
+    cache: Option<serde_json::Value>,
+) -> (PathBuf, Config) {
     let home = root.path().join("home");
     let workspace = root.path().join("workspace");
     std::fs::create_dir_all(&workspace).unwrap();
@@ -816,13 +1111,9 @@ fn a_retained_lua_provider_with_a_cache_resolves_without_a_listing_request() {
     .unwrap();
     config::store_secret(&home, "fixture.url", &config::Secret::new(server.url())).unwrap();
     config::store_secret(&home, "fixture.api_key", &config::Secret::new("k1".into())).unwrap();
-    config::write_model_cache(
-        &home,
-        "fixture",
-        &json!([{"id": "cached", "protocol": "openai-responses",
-                 "base_url": format!("{}/v1", server.url()), "context_window": 1000}]),
-    )
-    .unwrap();
+    if let Some(cache) = cache {
+        config::write_model_cache(&home, "fixture", &cache).unwrap();
+    }
     let config = Config::load(Sources {
         home: home.clone(),
         workspace,
@@ -830,28 +1121,32 @@ fn a_retained_lua_provider_with_a_cache_resolves_without_a_listing_request() {
         overrides: Vec::new(),
     })
     .unwrap();
-    let (mut providers, _) = Providers::load(&home).unwrap();
-    let snapshot = providers.clone();
-    let mut extensions = extensions::SessionExtensions::load(
-        &home,
-        &config,
-        fakes::clock::FakeClock::new(),
-        Arc::new(tools::PathLocks::new()),
-    );
-    let naming = crate::lua_providers::add_lua(&extensions, &mut providers, &config).unwrap();
-    extensions.retain_lua_providers(&["fixture"]);
-    let credentials: Credentials = [("fixture", ("default".to_owned(), (None, None)))]
-        .into_iter()
-        .map(|(name, entry)| (name.to_owned(), entry))
-        .collect();
-    let switching = Switching::new(
-        snapshot,
-        extensions.lua_providers(),
-        naming,
-        config,
-        credentials,
+    (home, config)
+}
+
+/// A retained Lua provider with a model cache resolves its cached models
+/// with no listing request: the switch registry is the startup one.
+#[test]
+fn a_retained_lua_provider_with_a_cache_resolves_without_a_listing_request() {
+    let server = fakes::ProviderServer::start_routed(
+        [(
+            "/token",
+            fakes::Response::status(
+                200,
+                json!({"access_token": "tok", "expires_at": 4_102_444_800_u64}).to_string(),
+            ),
+        )],
+        fakes::Response::status(500, "no"),
     )
     .unwrap();
+    let root = fakes::TempDir::new("fiber-switch-lua-cache");
+    let cached = json!([{"id": "cached", "protocol": "openai-responses",
+                         "base_url": format!("{}/v1", server.url()), "context_window": 1000}]);
+    let (home, config) = lua_fixture_home(&root, &server, Some(cached));
+    let credentials: Credentials = [("fixture".to_owned(), ("default".to_owned(), (None, None)))]
+        .into_iter()
+        .collect();
+    let switching = assembled(&home, config, credentials, &["fixture"]);
     let made = prepared(&switching, &args("fixture/cached"), None);
     assert_eq!(made.model.reference, "fixture/cached");
     assert!(
@@ -864,70 +1159,23 @@ fn a_retained_lua_provider_with_a_cache_resolves_without_a_listing_request() {
     );
 }
 
-/// A retained Lua provider with no cache that registers `credential` does
-/// not resolve, and the clone loads no listing; removing the guard would
-/// retry discovery over a listing request. Discovery fails here (the server
-/// answers 500 past its empty script), so no cache is written and the
-/// naming list never holds the provider.
+/// A Lua provider whose discovery failed at startup lists no models, so a
+/// switch to one of its ids is an unknown model, and no listing runs again.
 #[test]
 fn a_retained_lua_provider_without_a_cache_does_not_resolve() {
     let server = fakes::ProviderServer::start([]).unwrap();
     let root = fakes::TempDir::new("fiber-switch-lua-live");
-    let home = root.path().join("home");
-    let workspace = root.path().join("workspace");
-    std::fs::create_dir_all(&workspace).unwrap();
-    extensions::plan(
-        &home,
-        &extensions::Request::Path(fakes::lua_fixture()),
-        "0.1.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
-    config::store_secret(&home, "fixture.url", &config::Secret::new(server.url())).unwrap();
-    config::store_secret(&home, "fixture.api_key", &config::Secret::new("k1".into())).unwrap();
-    let config = Config::load(Sources {
-        home: home.clone(),
-        workspace,
-        project: ProjectKey::new("test").unwrap(),
-        overrides: Vec::new(),
-    })
-    .unwrap();
-    let (mut providers, _) = Providers::load(&home).unwrap();
-    let snapshot = providers.clone();
-    let mut extensions = extensions::SessionExtensions::load(
-        &home,
-        &config,
-        fakes::clock::FakeClock::new(),
-        Arc::new(tools::PathLocks::new()),
-    );
-    // Discovery runs here, for the naming list, and fails; the clone must
-    // not run it again.
-    let naming = crate::lua_providers::add_lua(&extensions, &mut providers, &config).unwrap();
-    assert!(
-        !naming.iter().any(|(provider, _)| provider == "fixture"),
-        "failed discovery names nothing: {naming:?}"
-    );
+    let (home, config) = lua_fixture_home(&root, &server, None);
+    let credentials: Credentials = [("fixture".to_owned(), ("default".to_owned(), (None, None)))]
+        .into_iter()
+        .collect();
+    // Discovery runs here, for the naming list, and fails.
+    let switching = assembled(&home, config, credentials, &["fixture"]);
     let listed = server
         .requests()
         .iter()
         .filter(|request| request.path == "/v1/models")
         .count();
-    extensions.retain_lua_providers(&["fixture"]);
-    let credentials: Credentials = [("fixture", ("default".to_owned(), (None, None)))]
-        .into_iter()
-        .map(|(name, entry)| (name.to_owned(), entry))
-        .collect();
-    let switching = Switching::new(
-        snapshot,
-        extensions.lua_providers(),
-        naming,
-        config,
-        credentials,
-    )
-    .unwrap();
     let rejection = rejected(&switching, &args("fixture/live"), None);
     assert_eq!(rejection.code, ErrorCode::InvalidArguments);
     assert_eq!(
@@ -937,7 +1185,7 @@ fn a_retained_lua_provider_without_a_cache_does_not_resolve() {
             .filter(|request| request.path == "/v1/models")
             .count(),
         listed,
-        "the clone loaded no listing"
+        "no listing ran again"
     );
 }
 
@@ -950,26 +1198,6 @@ fn a_bare_id_one_provider_names_resolves() {
     let switching = switching(&fixture, &[]);
     let made = prepared(&switching, &args("r"), None);
     assert_eq!(made.model.reference, "fake/r");
-}
-
-/// A qualified reference outside the credential map rejects in `resolve`
-/// itself; always taking the first match arm would return it as `Ok`, and
-/// only `prepare`'s second refusal would hide the miss.
-#[test]
-fn a_typed_reference_outside_the_map_rejects_at_resolve() {
-    let fixture = fixture("fiber-switch-resolve-outside");
-    let (providers, _) = Providers::load(&fixture.home).unwrap();
-    let in_map = |name: &str| name == "fake" || name == "claude";
-    let error = match resolve(&providers, &[], &in_map, "other/m") {
-        Ok(_) => panic!("the typed reference resolved"),
-        Err(error) => error,
-    };
-    assert_eq!(error.code, ErrorCode::InvalidArguments);
-    assert_eq!(
-        error.message,
-        "The credential for `other` was not read when this session started; \
-         start a session with `--model <ref>`."
-    );
 }
 
 /// A `:<level>` id no literal names reports the stripped id's ambiguity,
@@ -1030,7 +1258,7 @@ fn two_registry_literals_sharing_one_id_are_ambiguous_on_the_full_id() {
         .collect();
     // The naming list holds only one of the two literals.
     let naming = vec![("lit1".to_owned(), "n:high".to_owned())];
-    let switching = Switching::new(providers, &[], naming, config, credentials).unwrap();
+    let switching = over(&fixture.home, providers, naming, config, credentials);
     let rejection = rejected(&switching, &args("n:high"), None);
     assert_eq!(rejection.code, ErrorCode::InvalidArguments);
     assert_eq!(
@@ -1040,28 +1268,13 @@ fn two_registry_literals_sharing_one_id_are_ambiguous_on_the_full_id() {
     );
 }
 
-/// The credential sentence is literal text: comparing against `sentence`
-/// itself would pass even when the function returns nothing or anything.
-#[test]
-fn the_credential_sentence_is_literal() {
-    assert_eq!(
-        sentence("other"),
-        "The credential for `other` was not read when this session started; \
-         start a session with `--model <ref>`."
-    );
-}
-
-/// A retained Lua provider that registers only `cost` keeps its handle in
-/// the clone, so a switch to one of its data file's models carries its
-/// lookup; without the `models` guard the clone would hold no handle.
-#[test]
-fn a_switch_to_a_retained_cost_only_provider_carries_its_lookup() {
-    let root = fakes::TempDir::new("fiber-switch-lua-cost");
+/// The OpenRouter package installed in a new home: a Lua provider that
+/// registers only `cost`, beside its data file's models.
+fn openrouter_home(root: &fakes::TempDir) -> (PathBuf, Config) {
     let home = root.path().join("home");
     let workspace = root.path().join("workspace");
     std::fs::create_dir_all(&workspace).unwrap();
-    let package =
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../providers/openrouter");
+    let package = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../providers/openrouter");
     extensions::plan(
         &home,
         &extensions::Request::Path(package),
@@ -1079,32 +1292,58 @@ fn a_switch_to_a_retained_cost_only_provider_carries_its_lookup() {
         overrides: Vec::new(),
     })
     .unwrap();
-    let (mut providers, _) = Providers::load(&home).unwrap();
-    let snapshot = providers.clone();
-    let mut extensions = extensions::SessionExtensions::load(
+    (home, config)
+}
+
+const OPENROUTER_MODEL: &str = "openrouter/z-ai/glm-5.3-flash";
+
+/// A switch to a cost-only Lua provider carries its lookup, whether the
+/// session holds it loaded or the switch starts it.
+#[test]
+fn a_switch_to_a_cost_only_provider_carries_its_lookup() {
+    for keep in [&["openrouter"] as &[&str], &[]] {
+        let root = fakes::TempDir::new("fiber-switch-lua-cost");
+        let (home, config) = openrouter_home(&root);
+        let switching = assembled(&home, config, startup(&["openrouter"]), keep);
+        assert_eq!(loaded(&switching).len(), keep.len());
+        let made = prepared(&switching, &args(OPENROUTER_MODEL), None);
+        assert_eq!(made.model.reference, OPENROUTER_MODEL);
+        assert!(made.provider.cost_lookup().is_some(), "{keep:?}");
+    }
+}
+
+/// An owed cost lookup keeps the provider switched away from alive until
+/// the last one is released, though `Switching` no longer holds it.
+#[test]
+fn an_owed_cost_lookup_holds_the_old_provider_until_released() {
+    let root = fakes::TempDir::new("fiber-switch-lua-owed");
+    let (home, config) = openrouter_home(&root);
+    data_extension(
         &home,
-        &config,
-        fakes::clock::FakeClock::new(),
-        Arc::new(tools::PathLocks::new()),
+        "fake",
+        &json!({"name": "fake", "models": [{"id": "m", "protocol": "openai-responses",
+            "base_url": "http://127.0.0.1:9/v1", "context_window": 1000}]}),
     );
-    let naming = crate::lua_providers::add_lua(&extensions, &mut providers, &config).unwrap();
-    extensions.retain_lua_providers(&["openrouter"]);
-    assert_eq!(extensions.lua_providers().len(), 1);
-    let credentials: Credentials = [("openrouter", keyed("default"))]
-        .into_iter()
-        .map(|(name, entry)| (name.to_owned(), entry))
-        .collect();
-    let switching = Switching::new(
-        snapshot,
-        extensions.lua_providers(),
-        naming,
+    let switching = assembled(
+        &home,
         config,
-        credentials,
-    )
-    .unwrap();
-    let made = prepared(&switching, &args("openrouter/z-ai/glm-5.3-flash"), None);
-    assert_eq!(made.model.reference, "openrouter/z-ai/glm-5.3-flash");
-    assert!(made.provider.cost_lookup().is_some());
+        startup(&["openrouter", "fake"]),
+        &["openrouter"],
+    );
+    let old = Arc::downgrade(&switching.loaded.lock().unwrap()["openrouter"]);
+    let started = prepared(&switching, &args(OPENROUTER_MODEL), None);
+    // Two calls owed a lookup, as two generations' pending costs.
+    let first = started.provider.cost_lookup().expect("a lookup");
+    let second = started.provider.cost_lookup().expect("a lookup");
+    drop(started);
+    let away = prepared(&switching, &args("fake/m"), None);
+    (away.applied.expect("applying unloads"))();
+    assert!(loaded(&switching).is_empty());
+    assert!(old.upgrade().is_some(), "the owed lookups hold it");
+    drop(first);
+    assert!(old.upgrade().is_some(), "one lookup still holds it");
+    drop(second);
+    assert!(old.upgrade().is_none(), "unloaded once both are released");
 }
 
 #[test]
@@ -1156,7 +1395,7 @@ fn a_standing_web_search_is_kept_and_nothing_is_published() {
             panic!("the switch rejected");
         };
         assert!(matches!(made.web_search, r#loop::Hosted::Keep), "{model}");
-        assert!(made.applied.is_none(), "{model}");
+        (made.applied.expect("applying keeps the loaded set"))();
         assert!(declared.lock().unwrap().is_empty(), "{model}");
     }
 }
@@ -1175,4 +1414,189 @@ fn only_a_web_search_from_another_registrant_stands() {
         ("builtin".to_owned(), hosted()),
         ("search-ext".to_owned(), hosted()),
     ]));
+}
+
+/// Installs the Lua extension `fiber.test/luax` registering provider `lp`,
+/// whose data file names `lm` and whose `credential()` returns `tok-lp`.
+/// Its entry script appends `x` to `counter` each time a VM runs it, after
+/// erroring when `flag` exists.
+fn lua_extension(fixture: &Fixture, counter: &Path, flag: &Path) {
+    let src = fixture.root.path().join("src/luax");
+    std::fs::create_dir_all(src.join("providers")).unwrap();
+    std::fs::write(
+        src.join("extension.json"),
+        json!({"name": "fiber.test/luax", "version": "v1.2.3", "fiber": "0.1.0", "api": 1})
+            .to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        src.join("init.lua"),
+        format!(
+            "local failing = pcall(host.fs.read, \"{flag}\")\n\
+             if failing then error(\"broken\") end\n\
+             local ok, seen = pcall(host.fs.read, \"{counter}\")\n\
+             if not ok or seen == nil then seen = \"\" end\n\
+             host.fs.write(\"{counter}\", seen .. \"x\")\n\
+             fiber.provider(\"lp\", {{ credential = {{ timeout = 1000,\n\
+               run = function() return {{ token = \"tok-lp\", expires_at = 4102444800 }} end }} }})\n",
+            flag = flag.display(),
+            counter = counter.display(),
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        src.join("providers/lp.json"),
+        json!({"name": "lp", "models": [{"id": "lm", "protocol": "openai-responses",
+            "base_url": "http://127.0.0.1:9/v1", "context_window": 1000}]})
+        .to_string(),
+    )
+    .unwrap();
+    extensions::plan(
+        &fixture.home,
+        &extensions::Request::Path(src),
+        "0.1.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+}
+
+/// The fixture with `fiber.test/luax` installed: its counter and flag.
+fn lua_fixture(name: &str) -> (Fixture, PathBuf, PathBuf) {
+    let fixture = fixture(name);
+    let counter = fixture.root.path().join("vm-runs");
+    let flag = fixture.root.path().join("vm-fails");
+    lua_extension(&fixture, &counter, &flag);
+    (fixture, counter, flag)
+}
+
+fn vm_runs(counter: &Path) -> usize {
+    std::fs::read_to_string(counter).map_or(0, |text| text.len())
+}
+
+/// A Lua-only provider the session unloaded at start is started for the
+/// switch: a bare id only it names resolves, its token is read, and once
+/// the switch applies it stays loaded, so a second switch starts no VM.
+#[test]
+fn an_unloaded_lua_provider_is_started_for_the_switch_once() {
+    let (fixture, counter, _) = lua_fixture("fiber-switch-lua-start");
+    let switching = switching(&fixture, &[]);
+    assert_eq!(vm_runs(&counter), 1, "startup ran the entry script");
+    assert!(loaded(&switching).is_empty());
+    let made = prepared(&switching, &args("lm"), None);
+    assert_eq!(made.model.reference, "lp/lm");
+    assert_eq!(vm_runs(&counter), 2, "the switch started one VM");
+    assert!(loaded(&switching).is_empty(), "loaded only when it applies");
+    assert_eq!(
+        switching
+            .keys
+            .lock()
+            .unwrap()
+            .get("lp")
+            .map(|(_, key)| key.is_none()),
+        Some(true),
+        "`credential()` supplies the token, so no key is kept"
+    );
+    (made.applied.expect("applying keeps it"))();
+    assert_eq!(loaded(&switching), vec!["lp".to_owned()]);
+    prepared(&switching, &args("lp/lm"), None);
+    assert_eq!(vm_runs(&counter), 2, "a loaded provider starts no VM");
+}
+
+/// Applying a switch away from a Lua provider unloads it, unless the
+/// reviewer uses it.
+#[test]
+fn applying_a_switch_unloads_the_old_provider_unless_the_reviewer_uses_it() {
+    for (overrides, kept) in [
+        (&[] as &[&str], false),
+        (&["reviewer.model=lp/lm"] as &[&str], true),
+    ] {
+        let (fixture, _, _) = lua_fixture("fiber-switch-lua-unload");
+        let mut credentials = startup(&["fake", "claude"]);
+        credentials.insert("lp".to_owned(), ("default".to_owned(), (None, None)));
+        let switching = assembled(
+            &fixture.home,
+            config(&fixture, overrides),
+            credentials,
+            &["lp"],
+        );
+        let old: Weak<LuaProvider> = Arc::downgrade(&switching.loaded.lock().unwrap()["lp"]);
+        let made = prepared(&switching, &args("fake/m"), None);
+        (made.applied.expect("applying keeps the set"))();
+        assert_eq!(!loaded(&switching).is_empty(), kept, "{overrides:?}");
+        drop(made.reviewer);
+        assert_eq!(old.upgrade().is_some(), kept, "{overrides:?}");
+    }
+}
+
+/// A reviewer on a Lua provider the session does not hold is started in
+/// the read job, and stays loaded once the switch applies.
+#[test]
+fn a_reviewer_on_an_unloaded_lua_provider_is_started_on_demand() {
+    let (fixture, counter, _) = lua_fixture("fiber-switch-lua-reviewer");
+    let switching = switching(&fixture, &["reviewer.model=lp/lm"]);
+    let made = prepared(&switching, &args("fake/m"), None);
+    assert_eq!(made.model.reference, "fake/m");
+    let reviewer = made.reviewer.as_ref().expect("the reviewer resolved");
+    assert_eq!(reviewer.model.reference, "lp/lm");
+    assert_eq!(vm_runs(&counter), 2);
+    (made.applied.expect("applying keeps it"))();
+    assert_eq!(loaded(&switching), vec!["lp".to_owned()]);
+}
+
+/// A reviewer whose Lua provider fails to start is the loop's to escalate,
+/// with `extension_failed`; the switch stands.
+#[test]
+fn a_reviewer_whose_provider_fails_to_start_leaves_the_switch_standing() {
+    let (fixture, _, flag) = lua_fixture("fiber-switch-lua-broken");
+    let switching = switching(&fixture, &["reviewer.model=lp/lm"]);
+    std::fs::write(&flag, "").unwrap();
+    let made = prepared(&switching, &args("fake/m"), None);
+    assert_eq!(made.model.reference, "fake/m");
+    let failure = reviewer_failed(made.reviewer);
+    assert_eq!(failure.code, ErrorCode::ExtensionFailed);
+    assert!(!keys(&switching).contains(&"lp".to_owned()));
+}
+
+/// Shutdown during a read rejects the switch `closing` and caches nothing.
+#[test]
+fn a_cancelled_read_rejects_closing_and_caches_nothing() {
+    let fixture = fixture("fiber-switch-cancelled");
+    let switching = switching(&fixture, &[]);
+    switching.reads().cancel();
+    let rejection = rejected(&switching, &args("other/m"), None);
+    assert_eq!(rejection.code, ErrorCode::Closing);
+    assert_eq!(rejection.message, "The session is shutting down.");
+    assert_eq!(runs(&fixture.marker), 0);
+    assert!(!keys(&switching).contains(&"other".to_owned()));
+}
+
+/// A provider read at startup keeps the label it was read under, such as
+/// a resumed session's recorded one, rather than the configured label.
+#[test]
+fn a_key_read_before_keeps_its_label() {
+    let fixture = fixture("fiber-switch-label");
+    let credentials: Credentials = [("fake".to_owned(), keyed("recorded"))]
+        .into_iter()
+        .collect();
+    let switching = assembled(&fixture.home, config(&fixture, &[]), credentials, &[]);
+    let made = prepared(&switching, &args("fake/n"), None);
+    assert_eq!(made.credential, Some("recorded".to_owned()));
+}
+
+/// The `file` source a reviewer's read reads joins the deny too.
+#[test]
+fn a_reviewers_file_source_joins_the_credential_files() {
+    let fixture = fixture("fiber-switch-reviewer-file");
+    std::fs::create_dir_all(fixture.key_file.parent().unwrap()).unwrap();
+    std::fs::write(&fixture.key_file, "sk-filed").unwrap();
+    let switching = switching(&fixture, &["reviewer.model=filed/fm"]);
+    let made = prepared(&switching, &args("fake/n"), None);
+    assert!(made.reviewer.is_ok());
+    assert_eq!(
+        made.credential_files,
+        vec![fixture.key_file.canonicalize().unwrap()]
+    );
 }

@@ -244,7 +244,8 @@ fn resumed_session(
     };
     let cancel = Arc::new(r#loop::TurnCancel::default());
     // A signal while armed: the log stays as it was.
-    if let Some(code) = crate::shutdown::start(signals, &cancel, &session, jobs.clone()) {
+    let reads = switching.reads();
+    if let Some(code) = crate::shutdown::start(signals, &cancel, &session, jobs.clone(), reads) {
         session_servers.servers.stop();
         close(session, log, &home, dir, &workspace, &*clock);
         return code;
