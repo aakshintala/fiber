@@ -371,7 +371,20 @@ fn settle(
         }
         Request::Lock => {
             let cancel = match &target {
-                Target::Provider { name, .. } => oauth::lock(home, name, &deliver),
+                Target::Provider {
+                    credential: Some(pair),
+                    ..
+                } => oauth::lock(home, pair, &deliver),
+                Target::Provider {
+                    name,
+                    function,
+                    credential: None,
+                } => {
+                    deliver(Reply::Lock(Err(format!(
+                        "host.oauth.refresh: {name}.{function} has no credential to refresh; only credential() refreshes"
+                    ))));
+                    None
+                }
                 Target::Command(_) => {
                     deliver(Reply::Lock(Err(
                         "host.oauth.refresh: a command has no provider credential to refresh"

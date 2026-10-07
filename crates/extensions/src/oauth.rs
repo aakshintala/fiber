@@ -30,11 +30,7 @@ use ring::rand::{SecureRandom, SystemRandom};
 use serde_json::Value;
 
 use crate::host::{self, Reply};
-use crate::lua_provider::REFRESH_BEFORE;
-
-/// The label a provider's stored credential has until `fiber login --as`
-/// names others.
-const LABEL: &str = "default";
+use crate::lua_provider::{CredentialPair, REFRESH_BEFORE};
 
 /// How often an off-thread wait looks at its cancel receiver.
 const POLL: Duration = Duration::from_millis(20);
@@ -629,15 +625,16 @@ fn decode(text: &str) -> Result<String, &'static str> {
     String::from_utf8(out).map_err(|_| "is not UTF-8 once decoded")
 }
 
-/// Waits for the lock on `provider`'s stored credential, polling
-/// [`CredentialFile::try_lock`], and delivers it. The returned sender is the
-/// cancel handle. None when no wait started, in which case the error is
-/// already delivered.
-pub(crate) fn lock(home: &Path, provider: &str, deliver: &Deliver) -> Option<Sender<()>> {
+/// Waits for the lock on the stored credential
+/// `credentials/<credential>/<label>` for the pair the call was made for,
+/// polling [`CredentialFile::try_lock`], and delivers it. The returned
+/// sender is the cancel handle. None when no wait started, in which case
+/// the error is already delivered.
+pub(crate) fn lock(home: &Path, pair: &CredentialPair, deliver: &Deliver) -> Option<Sender<()>> {
     let fail = |why: &dyn std::fmt::Display| {
         deliver(Reply::Lock(Err(format!("host.oauth.refresh: {why}"))));
     };
-    let file = match CredentialFile::new(home, provider, LABEL) {
+    let file = match CredentialFile::new(home, &pair.credential, &pair.label) {
         Ok(file) => file,
         Err(e) => {
             fail(&e);

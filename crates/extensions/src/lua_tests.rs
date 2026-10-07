@@ -494,6 +494,7 @@ fn a_command_queued_behind_a_parked_command_does_not_start() {
             Target::Provider {
                 name: "p".to_owned(),
                 function: "sign",
+                credential: None,
             },
             Value::Null,
             asked,
@@ -867,6 +868,7 @@ fn a_hook_queued_behind_a_parked_command_does_not_start() {
             Target::Provider {
                 name: "p".to_owned(),
                 function: "sign",
+                credential: None,
             },
             Value::Null,
             asked,
@@ -953,6 +955,7 @@ fn a_command_queued_behind_a_parked_hook_does_not_start() {
             Target::Provider {
                 name: "p".to_owned(),
                 function: "sign",
+                credential: None,
             },
             Value::Null,
             asked,
@@ -1033,6 +1036,7 @@ fn a_held_command_blocks_the_stream_until_released() {
             Target::Provider {
                 name: "p".to_owned(),
                 function: "sign",
+                credential: None,
             },
             Value::Null,
             asked,

@@ -30,7 +30,7 @@ impl CallbackTimeouts {
     pub(super) fn timeout(&self, target: &Target) -> Option<Duration> {
         match target {
             Target::Command(name) => self.commands.get(name).map(|c| c.timeout),
-            Target::Provider { name, function } => self
+            Target::Provider { name, function, .. } => self
                 .providers
                 .get(name)
                 .and_then(|fns| fns.get(*function))
