@@ -389,6 +389,35 @@ pub struct RunCommand {
     pub text: Option<String>,
 }
 
+/// The built-in commands are the terminal's (`docs/tui.md`, "Slash commands"):
+/// the names of that table, which the extension command check reads.
+pub const BUILT_IN_COMMANDS: &[&str] = &[
+    "home",
+    "new",
+    "resume",
+    "model",
+    "thinking",
+    "credential",
+    "scoped-models",
+    "context",
+    "usage",
+    "tools",
+    "rules",
+    "settings",
+    "keys",
+    "skills",
+    "rewind",
+    "handoff",
+    "name",
+    "login",
+    "approvals",
+    "reload",
+    "close",
+    "quit",
+    "?",
+    "help",
+];
+
 #[cfg(test)]
 #[path = "commands_tests.rs"]
 mod tests;

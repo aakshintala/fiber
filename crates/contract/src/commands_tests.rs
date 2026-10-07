@@ -344,3 +344,42 @@ fn a_key_not_in_the_command_line_is_refused() {
     assert!(parse(r#"{"id":"c","command":"cancel","extra":1}"#).is_err());
     assert!(parse(r#"{"id":"c","command":"cancel","session_id":"s_1"}"#).is_err());
 }
+
+/// `BUILT_IN_COMMANDS` names the commands in `docs/tui.md`'s "Slash commands" table.
+#[test]
+fn built_in_commands_match_the_tui_doc_table() {
+    let doc = include_str!("../../../docs/tui.md");
+    let table = doc.split("### Slash commands").nth(1).unwrap();
+    let mut names = Vec::new();
+    for line in table.lines().skip_while(|l| !l.starts_with("| `")) {
+        if !line.starts_with("| `") {
+            break;
+        }
+        let cell = line.split('|').nth(1).unwrap_or("");
+        for part in cell.split(",") {
+            let part = part.trim().trim_matches('`');
+            // `/handoff [instructions]`, `/?`.
+            let name = part
+                .trim_start_matches('/')
+                .split_whitespace()
+                .next()
+                .unwrap_or("");
+            if !name.is_empty() {
+                names.push(name.to_owned());
+            }
+        }
+    }
+    let listed: Vec<&str> = BUILT_IN_COMMANDS.to_vec();
+    for name in &names {
+        assert!(
+            listed.contains(&name.as_str()),
+            "`{name}` from docs/tui.md not in BUILT_IN_COMMANDS"
+        );
+    }
+    for name in listed {
+        assert!(
+            names.iter().any(|n| n == name),
+            "`{name}` in BUILT_IN_COMMANDS not in docs/tui.md"
+        );
+    }
+}
