@@ -23,33 +23,36 @@ use crate::turn::Row;
 pub(crate) struct Crash {
     /// The last `fiber_exited` carried `suspended_on`.
     suspended: bool,
-    /// Each job's description, by job id.
+    /// Descriptions for jobs that may still complete, by job id.
     jobs: HashMap<String, String>,
     /// The orphaned-jobs line since the latest `fiber_started`.
     orphans: Option<usize>,
 }
 
 impl Fold {
-    /// The scalars a page seed keeps from the live fold: the next target
-    /// id, the ledger default, the handoff trigger and whether the process
-    /// suspended. Rendered asides and job descriptions stay only in the
-    /// resident pages that drew them.
-    pub(crate) fn seed_scalars(&self) -> (usize, bool, Option<u64>, bool) {
+    /// The continuation state a page seed keeps: scalars, and descriptions
+    /// for jobs still open at the boundary. Rendered asides stay in resident
+    /// pages and are folded again from that page's lines on reload.
+    pub(crate) fn seed_continuation(
+        &self,
+    ) -> (usize, bool, Option<u64>, bool, HashMap<String, String>) {
         (
             self.next,
             self.ledgers,
             self.trigger_at,
             self.crash.suspended,
+            self.crash.jobs.clone(),
         )
     }
 
-    /// A page's starting fold from its seed's scalars, with no rendered
-    /// text: the reload folds the page's own lines into it.
+    /// A page's starting fold from its seed's continuation state, with no
+    /// rendered text: the reload folds the page's own lines into it.
     pub(crate) fn seeded(
         next: usize,
         ledgers: bool,
         trigger_at: Option<u64>,
         suspended: bool,
+        jobs: HashMap<String, String>,
     ) -> Self {
         Self {
             next,
@@ -57,6 +60,7 @@ impl Fold {
             trigger_at,
             crash: Crash {
                 suspended,
+                jobs,
                 ..Crash::default()
             },
             ..Self::default()
@@ -195,17 +199,15 @@ pub(crate) fn fold(turns: &mut [Turn], fold: &mut Fold, envelope: &Envelope) -> 
             }
             false
         }
-        "job_completed" => read!(envelope, JobCompleted).is_some_and(|done| {
+        "job_completed" => {
+            let Some(done) = read!(envelope, JobCompleted) else {
+                return false;
+            };
+            let name = fold.crash.jobs.remove(&done.job_id.0);
             let Some(error) = done.error.filter(|error| error.code == ErrorCode::Orphaned) else {
                 return false;
             };
-            let name = fold
-                .crash
-                .jobs
-                .get(&done.job_id.0)
-                .cloned()
-                .unwrap_or(done.job_id.0);
-            let job = (name, error.message);
+            let job = (name.unwrap_or(done.job_id.0), error.message);
             if let Some(jobs) = fold.crash.orphans.and_then(|id| orphans(turns, fold, id)) {
                 jobs.push(job);
             } else {
@@ -219,7 +221,7 @@ pub(crate) fn fold(turns: &mut [Turn], fold: &mut Fold, envelope: &Envelope) -> 
                 place(turns, fold, aside);
             }
             true
-        }),
+        }
         _ => false,
     }
 }

@@ -16,9 +16,9 @@ use crate::format::{self, Spend};
 use crate::pages::{Cut, Index};
 use crate::turn::{Fold, Row, Turn};
 
-/// Where folding a page begins: its turn and step, and the live fold's
-/// scalar continuation state. Rendered asides and job descriptions stay
-/// only in resident pages, so a dropped page keeps no history text here.
+/// Where folding a page begins: its turn and step, the live fold's scalar
+/// continuation state, and descriptions only for jobs still open at the
+/// boundary. Rendered asides stay in resident pages, not in the seed.
 #[derive(Debug, Clone, Default)]
 struct Seed {
     /// The summary of the page's first card.
@@ -37,6 +37,8 @@ struct Seed {
     trigger_at: Option<u64>,
     /// The last `fiber_exited` carried `suspended_on`.
     suspended: bool,
+    /// Descriptions of jobs still open at this page boundary.
+    jobs: HashMap<String, String>,
     /// The live durations of the page's groups, in order: a reload folds
     /// the page's durable lines only, without the ephemeral lines that
     /// timed them.
@@ -47,7 +49,7 @@ impl Seed {
     /// The seed a page opening on `open`'s cards starts from: its turn and
     /// step, and the fold's continuation state.
     fn live(first: usize, step: Option<u64>, open: &Part) -> Self {
-        let (next, ledgers, trigger_at, suspended) = open.fold.seed_scalars();
+        let (next, ledgers, trigger_at, suspended, jobs) = open.fold.seed_continuation();
         Self {
             first,
             step,
@@ -56,6 +58,7 @@ impl Seed {
             ledgers,
             trigger_at,
             suspended,
+            jobs,
             spans: Vec::new(),
         }
     }
@@ -76,7 +79,13 @@ impl Part {
         Self {
             first: seed.first,
             turns: seed.step.map(Turn::part).into_iter().collect(),
-            fold: Fold::seeded(seed.next, seed.ledgers, seed.trigger_at, seed.suspended),
+            fold: Fold::seeded(
+                seed.next,
+                seed.ledgers,
+                seed.trigger_at,
+                seed.suspended,
+                seed.jobs,
+            ),
             aside_start: 0,
         }
     }
