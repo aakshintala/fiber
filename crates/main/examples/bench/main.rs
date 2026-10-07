@@ -19,6 +19,7 @@ mod home;
 mod idle;
 mod linux;
 mod pty;
+mod resume;
 mod run;
 
 use std::collections::BTreeMap;
@@ -109,6 +110,7 @@ fn bench(args: &Args) -> Value {
             let repeated = idle::WORKLOADS
                 .iter()
                 .chain(&busy::WORKLOADS)
+                .chain(&resume::WORKLOADS)
                 .map(|workload| (workload, args.runs));
             let once = busy::ONCE.iter().map(|workload| (workload, 1));
             let selected = repeated
