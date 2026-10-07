@@ -1,7 +1,10 @@
 //! Binary-level tests of `fiber models` (`docs/testing.md`, "Levels";
 //! `docs/invocation.md`, "Commands and flags"): the built `fiber` runs in
 //! its own process group with its own `FIBER_HOME` holding one data
-//! provider. Every run carries a wall-clock deadline.
+//! provider. Every run carries a wall-clock deadline. Each test runs
+//! `fiber` through a hard link in its own temporary root, so a child it
+//! re-runs from `current_exe()` carries that unique path on its command
+//! line and no other test run's process ever matches it.
 
 #![allow(
     clippy::unwrap_used,
@@ -16,13 +19,16 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use std::os::unix::process::CommandExt;
+use std::os::unix::process::{CommandExt, ExitStatusExt};
 
 use fakes::Watchdog;
 use serde_json::{Value, json};
 
 /// How long one `fiber` run may take.
 const DEADLINE: Duration = Duration::from_secs(20);
+
+/// How long a killed process may take to be reaped or to disappear.
+const REAP_DEADLINE: Duration = Duration::from_secs(10);
 
 /// A temporary root holding Fiber home and the workspace, removed on drop.
 struct Setup {
@@ -34,7 +40,30 @@ impl Setup {
         let root = fakes::TempDir::new("fm");
         fs::create_dir_all(root.path().join("h")).unwrap();
         fs::create_dir_all(root.path().join("w")).unwrap();
+        // A hard link, not a copy: the bytes and inode are the built
+        // binary's, so nothing new is executed (`docs/testing.md`, "Waits
+        // and timeouts"), but the path is this test's own.
+        let link = root.path().join("fiber");
+        if let Err(err) = fs::hard_link(env!("CARGO_BIN_EXE_fiber"), &link) {
+            panic!(
+                "hard-linking `fiber` into {} (the temporary directory must share \
+                 a filesystem with the target directory): {err}",
+                link.display()
+            );
+        }
         Self { root }
+    }
+
+    /// This test's own path to the built `fiber`.
+    fn exe(&self) -> PathBuf {
+        self.root.path().join("fiber")
+    }
+
+    /// The refresh child's command line: this test's `fiber` re-run as
+    /// `refresh-model-lists`. The path is unique to this test, so no other
+    /// test run's process, and no stub with the same arguments, matches.
+    fn refresh_pattern(&self) -> String {
+        format!("{} refresh-model-lists", self.exe().display())
     }
 
     fn home(&self) -> PathBuf {
@@ -74,7 +103,7 @@ impl Setup {
 
     /// Runs `fiber` with `args` and waits for it under [`DEADLINE`].
     fn fiber(&self, args: &[&str]) -> Run {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
+        let mut command = Command::new(self.exe());
         command
             .args(args)
             .current_dir(self.root.path().join("w"))
@@ -94,12 +123,16 @@ impl Setup {
             Ok(output) => output.unwrap(),
             Err(_) => {
                 fakes::kill_group(group, "KILL").unwrap();
-                let reaped = finished.recv_timeout(DEADLINE).is_ok();
-                assert!(!group_alive(group), "`fiber` left a process behind");
-                panic!(
-                    "waited {DEADLINE:?} for `fiber {}` to exit (reaped after the kill: {reaped})",
+                let killed = finished
+                    .recv_timeout(REAP_DEADLINE)
+                    .map(|output| output.map(|output| output.status.signal()));
+                assert!(
+                    matches!(killed, Ok(Ok(Some(9)))),
+                    "`fiber {}` was not reaped as killed within {REAP_DEADLINE:?}: {killed:?}",
                     args.join(" ")
                 );
+                assert!(!group_alive(group), "`fiber` left a process behind");
+                panic!("waited {DEADLINE:?} for `fiber {}` to exit", args.join(" "));
             }
         };
         assert!(!group_alive(group), "`fiber` left a process behind");
@@ -263,33 +296,43 @@ fn await_refreshed(file: &std::path::Path, old: &[u8]) {
     panic!("waited {DEADLINE:?} for the cached model list to refresh");
 }
 
-/// The refresh child's command line: the built `fiber` re-run as
-/// `refresh-model-lists`. Scoped to this binary, so the stub in `cli`'s
-/// spawn test (a shell script with the same arguments) never matches.
-fn refresh_pattern() -> String {
-    format!("{} refresh-model-lists", env!("CARGO_BIN_EXE_fiber"))
-}
-
-/// Waits until no refresh child of this binary remains, in slices of
-/// 100 ms up to [`DEADLINE`]: the detached refresh child exits after it
-/// rewrites the cache, and a rewritten cache alone never proves it did.
-fn await_refresh_exit() {
+/// Whether a process whose command line contains `pattern` remains, in
+/// slices of 100 ms up to `within`: true once none does.
+fn gone_within(pattern: &str, within: Duration) -> bool {
     let (_tx, rx) = mpsc::channel::<()>();
-    let slices = DEADLINE.as_millis() / 100;
-    for _ in 0..slices {
-        match fakes::matching(&refresh_pattern()) {
-            Ok(matched) if matched.is_empty() => return,
+    let slices = within.as_millis() / 100;
+    for _ in 0..=slices {
+        match fakes::matching(pattern) {
+            Ok(matched) if matched.is_empty() => return true,
             _ => {}
         }
         let _waited = rx.recv_timeout(Duration::from_millis(100));
     }
+    false
+}
+
+/// Waits until this test's refresh child is gone, up to [`DEADLINE`]: the
+/// detached child exits after it rewrites the cache, and a rewritten cache
+/// alone never proves it did. On expiry it kills the child and its group,
+/// checks they are gone within [`REAP_DEADLINE`], and fails.
+fn await_refresh_exit(pattern: &str) {
+    if gone_within(pattern, DEADLINE) {
+        return;
+    }
+    fakes::kill_matching(pattern).unwrap();
+    assert!(
+        gone_within(pattern, REAP_DEADLINE),
+        "the refresh child outlived SIGKILL by {REAP_DEADLINE:?}"
+    );
     panic!("waited {DEADLINE:?} for the refresh child to exit");
 }
 
 #[test]
 fn models_prints_a_stale_list_at_once_and_it_is_fresh_on_the_next_run() {
-    let refresh_guard = Watchdog::matching(&refresh_pattern());
     let setup = Setup::new();
+    // Declared after `setup`, so it drops first: a failing run kills this
+    // test's refresh child before its directory is removed.
+    let refresh_guard = Watchdog::matching(&setup.refresh_pattern());
     let server = fakes::ProviderServer::start([fakes::Response::status(
         200,
         json!({"data": [{"id": "m1", "context_length": 1000}]}).to_string(),
@@ -365,6 +408,6 @@ fn models_prints_a_stale_list_at_once_and_it_is_fresh_on_the_next_run() {
     // for it under the deadline, then stand its watchdog down. Dropping
     // the guard without an exit would kill it instead of checking it,
     // and a timeout above drops it, so no run leaves one behind.
-    await_refresh_exit();
+    await_refresh_exit(&setup.refresh_pattern());
     refresh_guard.stand_down(DEADLINE);
 }

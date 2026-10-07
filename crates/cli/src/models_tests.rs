@@ -420,6 +420,40 @@ const CHILD: &str = "FIBER_CLI_TEST_CHILD";
 /// How long the child may run before the test kills it and fails.
 const CHILD_DEADLINE: Duration = Duration::from_secs(60);
 
+/// How long a killed child may take to be reaped.
+const REAP_DEADLINE: Duration = Duration::from_secs(10);
+
+/// Waits for `child`, the leader of its own process group, at most
+/// `deadline`, and returns its exit status. A watchdog on that group kills
+/// it if the test process dies first, so a hung or broken run leaves
+/// nothing behind. On expiry the test kills the group, checks within
+/// [`REAP_DEADLINE`] that the child was reaped as killed, and fails
+/// naming `what`.
+fn reap_group_leader(
+    mut child: std::process::Child,
+    deadline: Duration,
+    what: &str,
+) -> std::process::ExitStatus {
+    use std::os::unix::process::ExitStatusExt;
+    let group = child.id();
+    let watchdog = fakes::Watchdog::group(group);
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || done.send(child.wait()));
+    if let Ok(status) = finished.recv_timeout(deadline) {
+        watchdog.stand_down(REAP_DEADLINE);
+        return status.unwrap();
+    }
+    fakes::kill_group(group, "KILL").unwrap();
+    let killed = finished
+        .recv_timeout(REAP_DEADLINE)
+        .map(|status| status.map(|status| status.signal()));
+    assert!(
+        matches!(killed, Ok(Ok(Some(9)))),
+        "{what} was not reaped as killed within {REAP_DEADLINE:?}: {killed:?}"
+    );
+    panic!("waited {deadline:?} for {what} to exit");
+}
+
 #[test]
 fn models_exits_zero_and_prints_the_row() {
     // Runs in a child with a Fiber home holding one provider, so the exit
@@ -799,16 +833,12 @@ fn spawn_refresh_runs_the_stub_with_the_refresh_arguments() {
     )
     .unwrap();
     std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let mut child = super::spawn_refresh(&stub, vec!["acme".to_owned()]).unwrap();
+    let child = super::spawn_refresh(&stub, vec!["acme".to_owned()]).unwrap();
     // The stub writes its arguments and exits, so its exit is the proof it
     // ran; waiting on it fails fast where polling the record would not.
-    let pid = child.id();
-    let (done, finished) = mpsc::channel();
-    thread::spawn(move || done.send(child.wait().unwrap()));
-    let Ok(status) = finished.recv_timeout(SPAWN_DEADLINE) else {
-        fakes::kill_pid(pid, "KILL").unwrap();
-        panic!("waited {SPAWN_DEADLINE:?} for the refresh child to exit");
-    };
+    // `spawn_refresh` puts it in its own process group, so its pid names
+    // that group and nothing another test started.
+    let status = reap_group_leader(child, SPAWN_DEADLINE, "the refresh stub");
     assert!(status.success(), "{status}");
     let args = std::fs::read_to_string(&record).unwrap();
     assert!(
@@ -862,6 +892,7 @@ fn the_refresh_entry_refreshes_a_stale_list() {
 
 #[test]
 fn the_hidden_refresh_child_refreshes_a_stale_list() {
+    use std::os::unix::process::CommandExt;
     // The public entry, run in a child whose `FIBER_HOME` and directory
     // hold a stale Lua provider: the cache holds the new list after it
     // exits. A body replaced with `()` leaves the old list.
@@ -883,7 +914,10 @@ fn the_hidden_refresh_child_refreshes_a_stale_list() {
         fakes::clock::FakeClock::new().wall(),
     );
     let name = module_path!().split_once("::").unwrap().1;
-    let mut child = Command::new(std::env::current_exe().unwrap())
+    // Its own process group, so its pid names the group the watchdog and
+    // the kill reach, and nothing another test started.
+    let child = Command::new(std::env::current_exe().unwrap())
+        .process_group(0)
         .args([
             "--exact",
             &format!("{name}::the_hidden_refresh_child_refreshes_a_stale_list"),
@@ -898,13 +932,7 @@ fn the_hidden_refresh_child_refreshes_a_stale_list() {
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
-    let pid = child.id();
-    let (tx, rx) = mpsc::channel();
-    thread::spawn(move || tx.send(child.wait().unwrap()));
-    let Ok(status) = rx.recv_timeout(CHILD_DEADLINE) else {
-        fakes::kill_pid(pid, "KILL").unwrap();
-        panic!("waited {CHILD_DEADLINE:?} for the refresh child to exit");
-    };
+    let status = reap_group_leader(child, CHILD_DEADLINE, "the refresh child");
     assert!(status.success(), "{status}");
     let refreshed: Vec<config::ModelData> = config::read_model_cache(&setup.home(), "stale")
         .unwrap()
