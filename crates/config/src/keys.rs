@@ -106,6 +106,9 @@ pub(crate) struct Key {
     /// Whether only a repository's file may set it: any other layer's value
     /// is ignored with a notice.
     pub(crate) repo_only: bool,
+    /// Whether only Fiber home's `config.json` may set it: any other layer's
+    /// value is ignored with a notice.
+    pub(crate) global_only: bool,
     /// The built-in default, as JSON text.
     pub(crate) default: Option<&'static str>,
 }
@@ -116,6 +119,7 @@ const fn key(path: &'static str, kind: Kind, repo: bool, default: Option<&'stati
         kind,
         repo,
         repo_only: false,
+        global_only: false,
         default,
     }
 }
@@ -127,7 +131,20 @@ const fn repo_only(path: &'static str, kind: Kind) -> Key {
         kind,
         repo: true,
         repo_only: true,
+        global_only: false,
         default: None,
+    }
+}
+
+/// A key only Fiber home's `config.json` may set.
+const fn global_only(path: &'static str, kind: Kind, default: Option<&'static str>) -> Key {
+    Key {
+        path,
+        kind,
+        repo: false,
+        repo_only: false,
+        global_only: true,
+        default,
     }
 }
 
@@ -140,6 +157,7 @@ const YES: bool = true;
 const NO: bool = false;
 const LIFETIMES: &[&str] = &["5m", "1h"];
 const LEVELS: &[&str] = &["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+const DIAGNOSTIC_LEVELS: &[&str] = &["info", "debug"];
 
 pub(crate) const KEYS: &[Key] = &[
     key(
@@ -215,6 +233,11 @@ pub(crate) const KEYS: &[Key] = &[
     key("tui.hover", Bool, NO, Some("true")),
     key("tui.inline_images", Bool, NO, Some("true")),
     key("tui.logo_glyph", OneOf(&["⌇", "≈"]), NO, Some("\"⌇\"")),
+    global_only(
+        "diagnostics.level",
+        OneOf(DIAGNOSTIC_LEVELS),
+        Some(r#""info""#),
+    ),
 ];
 
 /// The segments of a key's path; each `*` matches any one name.
@@ -290,6 +313,8 @@ fn walk(
                 notices.push(ignored(path, "a repository may not set"));
             } else if key.repo_only && !matches!(source, Source::Repository(_)) {
                 notices.push(ignored(path, "only a repository's own file may set"));
+            } else if key.global_only && !matches!(source, Source::Global(_)) {
+                notices.push(ignored(path, "only Fiber home's `config.json` may set"));
             } else if key.kind.accepts(&value) {
                 kept.insert(name, value);
             } else {
@@ -317,6 +342,15 @@ pub fn refresh_after(config: &crate::Config) -> Duration {
         .get("model_lists.refresh_after", None)
         .and_then(|(value, _)| value.as_str().and_then(parse_duration))
         .unwrap_or(Duration::from_secs(86_400))
+}
+
+/// Whether the diagnostic logs record at the `debug` level
+/// (`docs/configuration.md`, `diagnostics.level`). Only Fiber home's
+/// `config.json` may set it, so any other layer's value never reaches here.
+pub fn diagnostics_debug(config: &crate::Config) -> bool {
+    config
+        .get("diagnostics.level", None)
+        .is_some_and(|(value, _)| value == "debug")
 }
 
 /// Reads a duration string such as `"7d"`: a whole number of 1 or more and a

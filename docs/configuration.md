@@ -138,6 +138,7 @@ same key. A file that sets one key under both spellings is `config_invalid`.
 | `skills.disabled` | `[]` | no | Names of skills switched off: left out of the listing, refused by the `skill` tool and not expanded by `/name`. The project's list and the global list both apply. The terminal's `/skills` view writes it (`docs/system-prompt.md`, "Skills"). |
 | `web_search.backend` | the one installed | no | The search backend `web_search` uses when more than one is installed (`docs/tools.md`, "Web fetch and web search"). |
 | `shell.read_only."<command>".flags` | none | no | Adds a command to the shell classifier's read-only list, with the flags it may take and stay read-only, such as `["--json", "-p"]` (`docs/tools.md`, "Search", "Other command-line tools"). |
+| `diagnostics.level` | `"info"` | no | How much the diagnostic logs record: `"info"` or `"debug"` (`docs/state.md`, "Diagnostic logs", says what each level writes). Only Fiber home's `config.json` sets it; a project's file or `-c` is ignored with a `notice`. A process reads it when it starts. |
 | `budget.usd` | none | no | The most a session may spend, in US dollars billed per token, its delegates included; unset means no limit (`docs/loop.md`, "Spending budget"). |
 | `quota.notice_at` | 80 | yes | The percent used of a quota window at which the model gets a notice (`docs/tools.md`, "Provider quota"). |
 | `mcp.servers."<name>"` | none | yes, with approval | An MCP server ("MCP servers"). |

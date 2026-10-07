@@ -84,7 +84,7 @@ pub fn set(
         return Err(ConfigError::Refused {
             key: key.into(),
             file,
-            why: refused_why(&segments),
+            why: refused_why(&segments, &source),
         });
     }
     update(&file, &segments, value, false).map(|_| ())
@@ -93,11 +93,15 @@ pub fn set(
 /// Why `set` refused `key`: the notice `keys::check` pushed, read back off
 /// the table, since `keys` names no reason of its own. Only called with a
 /// notice in hand, so a known key that is not repository-settable was
-/// written to a repository, and any other known key is repository-only.
-fn refused_why(segments: &[String]) -> &'static str {
+/// written to a repository, a global-only key was written to another layer,
+/// and any other known key is repository-only.
+fn refused_why(segments: &[String], source: &Source) -> &'static str {
     match keys::leaf(segments) {
         None => "this Fiber does not know it",
-        Some(found) if !found.repo => "a repository may not set it",
+        Some(found) if !found.repo && matches!(source, Source::Repository(_)) => {
+            "a repository may not set it"
+        }
+        Some(found) if found.global_only => "only Fiber home's `config.json` may set it",
         Some(_) => "only a repository's own file may set it",
     }
 }
