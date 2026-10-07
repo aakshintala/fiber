@@ -2,6 +2,7 @@
 //! "Fakes" and "Values that change every run").
 
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
+use std::thread::ThreadId;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use contract::clock::{Clock, Wake};
@@ -12,15 +13,23 @@ const WALL_EPOCH: Duration = Duration::from_secs(1_700_000_000);
 
 struct Parked {
     id: u64,
+    thread: ThreadId,
     until: Option<Instant>,
 }
 
 struct State {
     offset: Duration,
     parked: Vec<Parked>,
+    /// Park ids are one per park; wrapping needs 2^64 parks, which a test
+    /// process cannot reach, so a later park's id compares greater with `>`.
     next_id: u64,
     wakers: Vec<Weak<dyn Wake>>,
 }
+
+/// Which thread held which park at the instant of an advance, from
+/// [`FakeClock::advance_marked`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Mark(Vec<(ThreadId, u64)>);
 
 /// A clock a test drives. `Arc<FakeClock>` coerces to `Arc<dyn Clock>`.
 /// [`FakeClock::new`] reads the process clock once, as an arbitrary origin
@@ -63,18 +72,33 @@ impl FakeClock {
     /// Moves `now()` and `wall()` forward by `d`, then wakes every live
     /// subscriber. The clock's lock is released before any [`Wake::wake`].
     pub fn advance(&self, d: Duration) {
-        let wakers = {
+        self.advance_marked(d);
+    }
+
+    /// [`FakeClock::advance`], returning which thread held which park when
+    /// `now()` moved. The snapshot is taken under the lock that moves it.
+    pub fn advance_marked(&self, d: Duration) -> Mark {
+        let (mark, wakers) = {
             let mut state = lock(&self.state);
             state.offset = state.offset.saturating_add(d);
-            state
+            let mark = Mark(
+                state
+                    .parked
+                    .iter()
+                    .map(|parked| (parked.thread, parked.id))
+                    .collect(),
+            );
+            let wakers = state
                 .wakers
                 .iter()
                 .filter_map(Weak::upgrade)
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>();
+            (mark, wakers)
         };
         for waker in wakers {
             waker.wake();
         }
+        mark
     }
 
     /// The `until` of each thread now inside [`Clock::wait_until`].
@@ -106,6 +130,33 @@ impl FakeClock {
             .unwrap_or_else(PoisonError::into_inner);
         parked_count(&guard, until) >= count
     }
+
+    /// Waits, at most `within` of real time, until a thread that was parked
+    /// at `mark` is parked again, in a later park, with this `until`
+    /// (`None`: no deadline). True once it is; false at the deadline.
+    pub fn await_parked_since(
+        &self,
+        mark: &Mark,
+        until: Option<Instant>,
+        within: Duration,
+    ) -> bool {
+        let state = lock(&self.state);
+        let (guard, _) = self
+            .parked_cv
+            .wait_timeout_while(state, within, |state| !parked_since(state, mark, until))
+            .unwrap_or_else(PoisonError::into_inner);
+        parked_since(&guard, mark, until)
+    }
+
+    /// [`FakeClock::await_parked`] for a park with no deadline.
+    pub fn await_parked_unbounded(&self, within: Duration) -> bool {
+        let state = lock(&self.state);
+        let (guard, _) = self
+            .parked_cv
+            .wait_timeout_while(state, within, |state| !parked_unbounded(state))
+            .unwrap_or_else(PoisonError::into_inner);
+        parked_unbounded(&guard)
+    }
 }
 
 impl Clock for FakeClock {
@@ -134,7 +185,8 @@ impl Clock for FakeClock {
             } else {
                 let id = state.next_id;
                 state.next_id = state.next_id.wrapping_add(1);
-                state.parked.push(Parked { id, until });
+                let thread = std::thread::current().id();
+                state.parked.push(Parked { id, thread, until });
                 self.parked_cv.notify_all();
                 Some(id)
             }
@@ -178,6 +230,20 @@ fn parked_count(state: &State, until: Instant) -> usize {
         .iter()
         .filter(|parked| parked.until == Some(until))
         .count()
+}
+
+fn parked_since(state: &State, mark: &Mark, until: Option<Instant>) -> bool {
+    state.parked.iter().any(|parked| {
+        parked.until == until
+            && mark
+                .0
+                .iter()
+                .any(|(thread, id0)| *thread == parked.thread && parked.id > *id0)
+    })
+}
+
+fn parked_unbounded(state: &State) -> bool {
+    state.parked.iter().any(|parked| parked.until.is_none())
 }
 
 fn lock(state: &Mutex<State>) -> MutexGuard<'_, State> {
