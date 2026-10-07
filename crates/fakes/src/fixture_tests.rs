@@ -102,3 +102,67 @@ fn the_mcp_fixture_points_at_server_sh() {
     );
     assert!(path.is_file(), "missing fixture: {}", path.display());
 }
+
+/// Runs the MCP fixture over `dir`, feeding it `lines` and closing stdin.
+fn fixture(dir: &Path, lines: &[&str]) -> Output {
+    use std::io::Write;
+    let mut child = Command::new(mcp_fixture())
+        .arg(dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    for line in lines {
+        // A server that already exited refuses the write; the output shows it.
+        match writeln!(stdin, "{line}") {
+            Ok(()) | Err(_) => {}
+        }
+    }
+    drop(stdin);
+    waited(child)
+}
+
+const CALL: &str =
+    r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"arguments":{},"name":"t"}}"#;
+const PING: &str = r#"{"jsonrpc":"2.0","id":2,"method":"ping"}"#;
+
+#[test]
+fn the_mcp_fixture_exits_unanswered_on_an_exit_result() {
+    let dir = TempDir::new("fiber-fixture-exit");
+    std::fs::write(dir.path().join("call-t.json"), "exit").unwrap();
+    let output = fixture(dir.path(), &[CALL, PING]);
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), "");
+    let log = std::fs::read_to_string(dir.path().join("requests.log")).unwrap();
+    assert_eq!(log, format!("{CALL}\n"), "nothing is read after the exit");
+}
+
+#[test]
+fn the_mcp_fixture_notifies_a_list_change_before_answering() {
+    let dir = TempDir::new("fiber-fixture-notify");
+    std::fs::write(dir.path().join("call-t.json"), r#"{"content":[]}"#).unwrap();
+    std::fs::write(dir.path().join("notify-t"), "").unwrap();
+    let output = fixture(dir.path(), &[CALL]);
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/tools/list_changed\"}\n\
+         {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"content\":[]}}\n",
+    );
+}
+
+#[test]
+fn the_mcp_fixture_fails_its_start_on_a_fail_start_file() {
+    let dir = TempDir::new("fiber-fixture-fail-start");
+    std::fs::write(dir.path().join("fail-start"), "").unwrap();
+    let output = fixture(dir.path(), &[PING]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), "");
+    assert!(dir.path().join("pid.txt").exists(), "the server did spawn");
+    assert!(
+        !dir.path().join("requests.log").exists(),
+        "nothing is read before the exit",
+    );
+}

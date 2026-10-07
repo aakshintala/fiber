@@ -1190,3 +1190,26 @@ fn a_start_after_stop_every_start_spawns_nothing() {
         "nothing spawned after the stop"
     );
 }
+
+#[test]
+fn is_gone_turns_true_once_the_server_exits() {
+    let setup = Setup::tools(&json!([{"name": "hang"}]));
+    let opened = setup.start(Duration::from_secs(5));
+    assert!(!opened.server.is_gone(), "a running server is not gone");
+    fakes::kill_pid(setup.pid(), "KILL").expect("the server dies");
+    let (_held, probe) = mpsc::channel::<()>();
+    for _ in 0..POLLS {
+        if opened.server.is_gone() {
+            return;
+        }
+        match probe.recv_timeout(POLL) {
+            Ok(()) | Err(_) => {}
+        }
+    }
+    panic!("waited {WITHIN:?} for the killed server to be gone");
+}
+
+#[test]
+fn a_server_with_no_connection_is_gone() {
+    assert!(Server { inner: None }.is_gone());
+}

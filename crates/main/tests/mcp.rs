@@ -1061,7 +1061,9 @@ fn a_cached_server_that_fails_on_the_call_fails_the_call() {
         .unwrap();
     assert_eq!(failed["payload"]["server"], "fx");
     assert_eq!(failed["payload"]["reason"], "start_failed");
-    assert_eq!(failed["payload"]["will_restart"], false);
+    // A failed start on the call is the server's one death: the next call
+    // would restart it.
+    assert_eq!(failed["payload"]["will_restart"], true);
     assert_eq!(failed["payload"]["error"]["code"], "mcp_server_unavailable");
     let completed = run
         .lines
@@ -1130,4 +1132,245 @@ fn a_call_to_a_tool_the_server_removed_fails_with_mcp_tool_removed() {
         .map(|tool| tool["name"].as_str().unwrap())
         .collect();
     assert_eq!(names, ["echo"]);
+}
+
+/// A reads-only, offline fixture tool named `name`: its calls take the
+/// permission fast path.
+fn quiet_tool(name: &str) -> Value {
+    json!({"name": name, "annotations": {"readOnlyHint": true, "openWorldHint": false}})
+}
+
+/// One reply per call, in order, each calling `mcp__fx__<name>`, then
+/// [`hello`].
+fn replies(names: &[&str]) -> Vec<Response> {
+    let mut replies: Vec<Response> = names
+        .iter()
+        .enumerate()
+        .map(|(index, name)| {
+            stream(&[function_call(
+                &format!("call_{index}"),
+                &format!("mcp__fx__{name}"),
+                &json!({}),
+            )])
+        })
+        .collect();
+    replies.push(hello());
+    replies
+}
+
+impl Run {
+    /// Each call's lines, in call order: the lines under the action of
+    /// each `tool_call_completed` after its start, ending with that
+    /// completion.
+    fn calls(&self) -> Vec<Vec<&Value>> {
+        self.lines
+            .iter()
+            .filter(|line| line["kind"] == "tool_call_completed")
+            .map(|completed| {
+                self.lines
+                    .iter()
+                    .filter(|line| {
+                        line["action_id"] == completed["action_id"]
+                            && line["kind"] != "tool_call_requested"
+                            && line["kind"] != "tool_call_started"
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+}
+
+/// One call's lines as words: each server line's kind, with its reason and
+/// `will_restart` for a failure, then the completion's status and code.
+fn call_words(lines: &[&Value]) -> Vec<String> {
+    lines
+        .iter()
+        .map(|line| match line["kind"].as_str().unwrap() {
+            "mcp_server_failed" => {
+                assert_eq!(line["payload"]["server"], "fx");
+                assert_eq!(line["payload"]["error"]["code"], "mcp_server_unavailable");
+                format!(
+                    "failed {} {}",
+                    line["payload"]["reason"].as_str().unwrap(),
+                    line["payload"]["will_restart"]
+                )
+            }
+            "mcp_server_ready" => {
+                assert_eq!(line["payload"]["server"], "fx");
+                "ready".to_owned()
+            }
+            "tool_call_completed" => match line["payload"]["error"]["code"].as_str() {
+                Some(code) => format!("{} {code}", line["payload"]["status"].as_str().unwrap()),
+                None => line["payload"]["status"].as_str().unwrap().to_owned(),
+            },
+            other => other.to_owned(),
+        })
+        .collect()
+}
+
+/// The event kinds of a turn whose replies call one reads-only tool each,
+/// then [`hello`]: each call's server lines, from `servers`, fall between
+/// its `tool_call_started` and its `tool_call_completed`.
+fn call_kinds(servers: &[&[&'static str]]) -> Vec<&'static str> {
+    let read = read_kinds();
+    let start = read
+        .iter()
+        .position(|kind| *kind == "step_started")
+        .unwrap();
+    let completed = read
+        .iter()
+        .position(|kind| *kind == "tool_call_completed")
+        .unwrap();
+    let mut kinds = read[..start].to_vec();
+    for lines in servers {
+        kinds.extend_from_slice(&read[start..completed]);
+        kinds.extend_from_slice(lines);
+        kinds.push("tool_call_completed");
+    }
+    kinds.extend_from_slice(&read[completed + 1..]);
+    kinds
+}
+
+fn words(run: &Run) -> Vec<Vec<String>> {
+    run.calls().iter().map(|lines| call_words(lines)).collect()
+}
+
+fn die_and_echo(setup: &Setup) -> PathBuf {
+    setup.fixture(
+        &json!([quiet_tool("die"), quiet_tool("echo")]),
+        &[
+            ("call-die.json", "exit"),
+            (
+                "call-echo.json",
+                r#"{"content":[{"type":"text","text":"hi"}]}"#,
+            ),
+        ],
+    )
+}
+
+#[test]
+fn a_server_that_dies_mid_session_restarts_on_the_next_call() {
+    let setup = Setup::new();
+    let dir = die_and_echo(&setup);
+    let server = ProviderServer::start(replies(&["die", "echo"])).unwrap();
+    setup.provider(&server);
+    configure_fx(&setup, &dir, Value::Null);
+
+    let run = setup.run(&["ask", "die then echo"]);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        call_kinds(&[&["mcp_server_failed"], &["mcp_server_ready"]]),
+    );
+    assert_eq!(
+        words(&run),
+        [
+            vec!["failed died true", "failed mcp_server_unavailable"],
+            vec!["ready", "completed"],
+        ],
+    );
+    let failed = run
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "mcp_server_failed")
+        .unwrap();
+    assert_eq!(
+        failed["payload"]["error"]["message"],
+        "The MCP server `fx` exited; Fiber restarts it on the next call."
+    );
+}
+
+#[test]
+fn a_server_that_dies_twice_stays_dead_with_its_tools_declared() {
+    let setup = Setup::new();
+    let dir = die_and_echo(&setup);
+    let server = ProviderServer::start(replies(&["die", "echo", "die", "echo"])).unwrap();
+    setup.provider(&server);
+    configure_fx(&setup, &dir, Value::Null);
+
+    let run = setup.run(&["ask", "die twice"]);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        call_kinds(&[
+            &["mcp_server_failed"],
+            &["mcp_server_ready"],
+            &["mcp_server_failed"],
+            &[],
+        ]),
+    );
+    assert_eq!(
+        words(&run),
+        [
+            vec!["failed died true", "failed mcp_server_unavailable"],
+            vec!["ready", "completed"],
+            vec!["failed died false", "failed mcp_server_unavailable"],
+            vec!["failed mcp_server_unavailable"],
+        ],
+    );
+    // The dead server's tools stay declared on every request, so the
+    // prompt cache holds.
+    let requests = server.requests();
+    assert_eq!(requests.len(), 5);
+    for request in &requests {
+        let names = tool_names(&request.body);
+        assert!(names.contains(&"mcp__fx__die".to_owned()), "{names:?}");
+        assert!(names.contains(&"mcp__fx__echo".to_owned()), "{names:?}");
+    }
+}
+
+#[test]
+fn a_list_changed_notice_changes_nothing_until_the_next_session() {
+    let setup = Setup::new();
+    let dir = setup.fixture(
+        &json!([quiet_tool("echo"), quiet_tool("notify")]),
+        &[(
+            "call-notify.json",
+            r#"{"content":[{"type":"text","text":"noted"}]}"#,
+        )],
+    );
+    let mut script = vec![hello()];
+    script.extend(replies(&["notify"]));
+    let server = ProviderServer::start(script).unwrap();
+    setup.provider(&server);
+    configure_fx(&setup, &dir, Value::Null);
+
+    // The first session caches `echo` and `notify`.
+    let first = setup.run(&["ask", "hi"]);
+    assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
+    assert_eq!(first.kinds(), hello_kinds(&[]));
+    // The server gains a tool, and says so during the next call.
+    fs::write(
+        dir.join("tools.json"),
+        json!([
+            quiet_tool("echo"),
+            quiet_tool("notify"),
+            quiet_tool("extra")
+        ])
+        .to_string(),
+    )
+    .unwrap();
+    fs::write(dir.join("notify-notify"), "").unwrap();
+    fs::remove_file(dir.join("requests.log")).unwrap();
+
+    let run = setup.run(&["ask", "notify"]);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    // The call completed, so the notice sent before its answer was read.
+    assert_eq!(run.kinds(), read_kinds());
+    assert_eq!(words(&run), [vec!["completed"]]);
+    let log = fs::read_to_string(dir.join("requests.log")).unwrap();
+    assert_eq!(
+        log.matches(r#""method":"tools/list""#).count(),
+        1,
+        "the notice fetched no list: {log}",
+    );
+    let requests = server.requests();
+    assert_eq!(requests.len(), 3);
+    let declared = tool_names(&requests[1].body);
+    assert!(declared.contains(&"mcp__fx__notify".to_owned()));
+    assert!(!declared.contains(&"mcp__fx__extra".to_owned()));
+    assert_eq!(tool_names(&requests[2].body), declared);
 }

@@ -19,14 +19,15 @@ use contract::clock::Wake;
 use contract::commands::{Remember, RememberScope, ReplyAnswer};
 use contract::emit::Emit;
 use contract::events::{
-    DecidedBy, Decision, Grant, JobCompleted, JobStarted, McpServerFailed, Outcome, RuleOffer,
-    ServerFailure, TextDelta, ToolCallArgumentsDelta, ToolCallRequested, ToolReplaced, TurnOutcome,
+    DecidedBy, Decision, Grant, JobCompleted, JobStarted, McpServerFailed, McpServerReady, Outcome,
+    RuleOffer, ServerFailure, TextDelta, ToolCallArgumentsDelta, ToolCallRequested, ToolReplaced,
+    TurnOutcome,
 };
 use contract::inbox::{Ack, Delivery, Message};
 use contract::provider::{Delta, Input, ModelRequest, Provider, ReplyAction, ToolDefinition};
 use contract::rules::{Rules, RulesError, StandingRules};
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Failure, Origin, Process, Sender};
-use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
+use contract::tool::{Cancel, Effects, EffectsError, Output, ServerRecord, Tool};
 use contract::{ActionId, CommandId, Envelope, ErrorCode, JobId};
 use serde_json::{Map, Value, json};
 
@@ -632,6 +633,8 @@ impl Wake for Nudge {
 /// A call that returns `jobs` only after the turn cancels it.
 struct Hold {
     jobs: Vec<contract::jobs::JobRecord>,
+    /// The error the call returns once cancelled, if any.
+    error: Option<Failure>,
     started: Arc<(Mutex<bool>, Condvar)>,
 }
 
@@ -665,6 +668,7 @@ impl Tool for Hold {
             content: vec![ContentPart::Text {
                 text: "ok\n".into(),
             }],
+            error: self.error.clone(),
             jobs: self.jobs.clone(),
             ..Output::default()
         }
@@ -1112,6 +1116,7 @@ fn a_cancelled_call_still_writes_its_job_lines() {
     let ran = run_turn(
         vec![Arc::new(Hold {
             jobs: vec![started_line(id), failed_line(id)],
+            error: None,
             started,
         })],
         vec![
@@ -1145,11 +1150,12 @@ fn a_cancelled_call_still_writes_its_job_lines() {
     assert_job_triplet(&ran.lines, id, "cancelled");
 }
 
-/// A call whose server failed to start on this call: failed, carrying the
-/// `mcp_server_failed` the loop writes.
+/// A call whose server failed to start, or died and came back, on this
+/// call: carrying the server lines the loop writes, failed with `error`.
 struct Broken {
     name: &'static str,
-    failed: McpServerFailed,
+    error: Option<Failure>,
+    servers: Vec<ServerRecord>,
 }
 
 impl Tool for Broken {
@@ -1172,8 +1178,8 @@ impl Tool for Broken {
             content: vec![ContentPart::Text {
                 text: "unavailable\n".into(),
             }],
-            error: Some(self.failed.error.clone()),
-            server_failed: Some(self.failed.clone()),
+            error: self.error.clone(),
+            servers: self.servers.clone(),
             ..Output::default()
         }
     }
@@ -1195,7 +1201,8 @@ fn a_calls_server_failed_is_written_under_its_action_before_its_completion() {
     let ran = run_turn(
         vec![Arc::new(Broken {
             name: "breaker",
-            failed: failed.clone(),
+            error: Some(failed.error.clone()),
+            servers: vec![ServerRecord::Failed(failed.clone())],
         })],
         vec![
             calls("Checking.", &["breaker"]),
@@ -1245,4 +1252,149 @@ fn a_calls_server_failed_is_written_under_its_action_before_its_completion() {
     assert_eq!(pair[0].payload["error"]["code"], "mcp_server_unavailable");
     assert_eq!(pair[1].payload["status"], "failed");
     assert_eq!(pair[1].payload["error"]["code"], "mcp_server_unavailable");
+}
+
+#[test]
+fn a_calls_server_lines_are_written_in_order_under_its_action() {
+    let failed = McpServerFailed {
+        server: "fx".into(),
+        reason: ServerFailure::Died,
+        will_restart: true,
+        error: Failure {
+            code: ErrorCode::McpServerUnavailable,
+            message: "The MCP server `fx` exited; Fiber restarts it on the next call.".into(),
+            retry_after: None,
+            provider: None,
+        },
+    };
+    let ran = run_turn(
+        vec![Arc::new(Broken {
+            name: "breaker",
+            error: None,
+            servers: vec![
+                ServerRecord::Failed(failed),
+                ServerRecord::Ready(McpServerReady {
+                    server: "fx".into(),
+                }),
+            ],
+        })],
+        vec![
+            calls("Checking.", &["breaker"]),
+            fakes::Scripted::text("Done."),
+        ],
+        Arc::new(crate::TurnCancel::default()),
+    );
+    assert_eq!(ran.outcome, Some(TurnOutcome::Completed));
+    assert_eq!(
+        kinds(&ran.lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "mcp_server_failed",
+            "mcp_server_ready",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    let lines = durable(&ran.lines);
+    let index = lines
+        .iter()
+        .position(|line| line.kind == "mcp_server_failed")
+        .unwrap_or_else(|| panic!("no mcp_server_failed"));
+    let three = &lines[index..index + 3];
+    assert_eq!(
+        three
+            .iter()
+            .map(|line| line.kind.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "mcp_server_failed",
+            "mcp_server_ready",
+            "tool_call_completed"
+        ],
+    );
+    let action = three[0].action_id.clone().unwrap();
+    assert!(action.0.starts_with("a_"), "{}", action.0);
+    assert_eq!(three[1].action_id.as_ref(), Some(&action));
+    assert_eq!(three[2].action_id.as_ref(), Some(&action));
+    assert_eq!(three[0].payload["reason"], "died");
+    assert_eq!(three[0].payload["will_restart"], true);
+    assert_eq!(three[1].payload["server"], "fx");
+    assert_eq!(three[2].payload["status"], "completed");
+}
+
+#[test]
+fn a_call_that_returns_an_error_after_its_turn_is_cancelled_ends_failed() {
+    let started = Arc::new((Mutex::new(false), Condvar::new()));
+    let watch = Arc::clone(&started);
+    let cancel = Arc::new(crate::TurnCancel::default());
+    let cancel_watch = Arc::clone(&cancel);
+    let watcher = thread::spawn(move || {
+        let (lock, cv) = &*watch;
+        let guard = lock.lock().unwrap();
+        let (guard, timeout) = cv
+            .wait_timeout_while(guard, TURN_DEADLINE, |started| !*started)
+            .unwrap();
+        assert!(!timeout.timed_out() && *guard, "the call did not start");
+        drop(guard);
+        assert!(cancel_watch.cancel());
+    });
+    let ran = run_turn(
+        vec![Arc::new(Hold {
+            jobs: Vec::new(),
+            error: Some(Failure {
+                code: ErrorCode::McpCancelRequested,
+                message: "The call to `echo` on the MCP server `fx` was cancelled; the server may still act on it.".into(),
+                retry_after: None,
+                provider: None,
+            }),
+            started,
+        })],
+        vec![
+            calls("Checking.", &["jobber"]),
+            fakes::Scripted::text("Done."),
+        ],
+        cancel,
+    );
+    watcher.join().unwrap();
+    assert_eq!(ran.outcome, Some(TurnOutcome::Interrupted));
+    assert_eq!(
+        kinds(&ran.lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "turn_completed",
+        ]
+    );
+    let lines = durable(&ran.lines);
+    let completed = lines
+        .iter()
+        .find(|line| line.kind == "tool_call_completed")
+        .unwrap_or_else(|| panic!("no tool_call_completed"));
+    assert_eq!(completed.payload["status"], "failed");
+    assert_eq!(completed.payload["error"]["code"], "mcp_cancel_requested");
 }

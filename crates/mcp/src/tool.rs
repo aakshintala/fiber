@@ -11,7 +11,7 @@ use contract::ErrorCode;
 use contract::emit::Emit;
 use contract::provider::ToolDefinition;
 use contract::shapes::{ContentPart, Failure};
-use contract::tool::{Cancel, Effects, Output, Tool};
+use contract::tool::{Cancel, Effects, Output, ServerRecord, Tool};
 use serde_json::{Map, Value};
 
 use crate::effects::Hints;
@@ -97,34 +97,51 @@ impl Tool for McpTool {
             );
         };
         match slot.run(&self.call.tool) {
-            Run::Removed => failed(
-                ErrorCode::McpToolRemoved,
-                slot::removed(&self.call.server, &self.call.tool),
-            ),
+            Run::Removed(servers) => Output {
+                servers,
+                ..failed(
+                    ErrorCode::McpToolRemoved,
+                    slot::removed(&self.call.server, &self.call.tool),
+                )
+            },
             Run::Failed(failed) => Output {
                 error: Some(failed.error),
-                server_failed: failed.record,
+                servers: failed.records,
                 ..Output::default()
             },
-            Run::Call(server) => match server.call(
-                &self.call.tool,
-                &Value::Object(arguments.clone()),
-                self.call.timeout,
-                cancel,
-            ) {
-                Ok(result) => answer(&self.call.server, &self.call.tool, &result),
-                Err(CallError::Timeout) => failed(ErrorCode::Timeout, timed_out(&self.call)),
-                Err(CallError::Cancelled) => {
-                    failed(ErrorCode::McpCancelRequested, cancelled(&self.call))
-                }
-                Err(CallError::Gone) => failed(
-                    ErrorCode::McpServerUnavailable,
-                    slot::unavailable(&self.call.server),
-                ),
-                Err(CallError::JsonRpc { code: _, message }) => {
-                    failed(ErrorCode::ToolError, message)
-                }
-            },
+            Run::Call(server, mut servers) => {
+                let mut output = match server.call(
+                    &self.call.tool,
+                    &Value::Object(arguments.clone()),
+                    self.call.timeout,
+                    cancel,
+                ) {
+                    Ok(result) => answer(&self.call.server, &self.call.tool, &result),
+                    Err(CallError::Timeout) => failed(ErrorCode::Timeout, timed_out(&self.call)),
+                    Err(CallError::Cancelled) => {
+                        failed(ErrorCode::McpCancelRequested, cancelled(&self.call))
+                    }
+                    // The call is never replayed: the next call restarts
+                    // the server, if a restart is left.
+                    Err(CallError::Gone) => match slot.died(&server) {
+                        Some(record) => {
+                            let output =
+                                failed(record.error.code.clone(), record.error.message.clone());
+                            servers.push(ServerRecord::Failed(record));
+                            output
+                        }
+                        None => failed(
+                            ErrorCode::McpServerUnavailable,
+                            slot::unavailable(&self.call.server),
+                        ),
+                    },
+                    Err(CallError::JsonRpc { code: _, message }) => {
+                        failed(ErrorCode::ToolError, message)
+                    }
+                };
+                output.servers = servers;
+                output
+            }
         }
     }
 }

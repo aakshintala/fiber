@@ -75,7 +75,7 @@ pub struct Started {
 /// The servers: running ones and ones declared from the cache that start on
 /// their first call.
 pub struct Servers {
-    slots: Vec<Arc<Slot>>,
+    pub(crate) slots: Vec<Arc<Slot>>,
 }
 
 impl Servers {
@@ -254,7 +254,7 @@ pub(crate) fn open(
         clock,
         version,
         open.server,
-        tools.clone(),
+        entries,
     );
     let link: Weak<Slot> = Arc::downgrade(&slot);
     let declared = declare(&spec, &tools, &link);
