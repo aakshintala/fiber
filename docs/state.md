@@ -18,7 +18,7 @@ Default `~/.fiber` on macOS and Linux; `FIBER_HOME` relocates all of it.
     SYSTEM.md, APPEND_SYSTEM.md   this project's system prompt files
     config.json                   this project's configuration
     config/<extension>.json       an extension's settings for this project
-    worktrees/<id>/               one git worktree per delegate that asked for one
+    worktrees/<id>/               one git worktree per session that asked for one
     approvals/<content-hash>      one file per extension or hook approval or never
     data/<extension>/             an extension's data for this project
   extensions/<name>/              installed extensions, one directory each
@@ -204,8 +204,8 @@ for, such as a startup error, happen before anyone would think to turn a log
 on. Each process writes its own file, so every file has one writer, as a
 session log does: the hub writes `logs/hub.log`, and any other process that
 has something to record writes `logs/<kind>-<id>.log`, where `<kind>` is
-`session`, `ask` or `tui` and `<id>` its session id, or its process id when it
-has none.
+`session`, `ask` or `tui` and `<id>` its session id once its session log
+exists, or its process id until then.
 
 Each line is one JSON object: `ts`, `level` (`error`, `warn` or `info`),
 `process` (`hub`, `session`, `ask` or `tui`), `session_id` when one is known,
@@ -307,7 +307,7 @@ One writer per session via `session.lock` is `docs/events.md`.
 
 There is no layout version marker. The first change to this layout adds a
 file `layout` at the top of Fiber home containing `2`; a missing file means
-layout 1. `fiber update` changes only the Fiber binary and `extensions/`;
+layout 1. `fiber update` changes only the Fiber binary, `extensions/` and `docs/`;
 it never touches sessions, config, rules, approvals, pinned copies, credentials
 or extension data. It replaces the binary by renaming a new file over it, so a running
 session keeps the file it launched from. How the binary is fetched and

@@ -88,8 +88,8 @@ it. A hook can never approve a call (`docs/extensions.md`, "Hooks").
 7. Otherwise **reviewed** by the reviewer.
 
 A call whose effects function returns `always_reviewed` skips steps 4 to 6
-and is reviewed (`docs/tools.md`, "What a tool declares"). The delegate tools
-return it on every call ([Delegates](#delegates)). The loop reads the
+and is reviewed (`docs/tools.md`, "What a tool declares"). `delegate_spawn`,
+`delegate_fork` and `delegate_message` return it on every call ([Delegates](#delegates)). The loop reads the
 declaration and never names a tool.
 
 The credential deny and a standing deny are both evaluated before everything
@@ -147,7 +147,9 @@ Fiber refuses every tool call whose declared paths touch the credential
 directory in [Fiber home](state.md) (`credentials/`). This is a built-in
 deny: it is not a standing rule, no person or extension can remove it, and
 it applies to every call. It covers every effect — a read, a
-write, anything — not only reads.
+write, anything — not only reads. It refuses, the same way, every tool call
+whose declared paths touch the resolved path of a configured `file`
+credential source.
 
 Fiber does not confine tools ([Confinement](#confinement)), so without this
 deny an agent's file read could retrieve the stored tokens. The macOS Keychain is not an
@@ -425,7 +427,8 @@ With no answer possible, escalation is a block and the run continues under
 the rule above until it exhausts the block budget. The turn then completes
 `failed` with code `blocked`, so a headless caller learns the task needed
 permissions it was not given. No answer is possible in a
-session started by `fiber ask`, and in a session that has been sent `close`.
+session started by `fiber ask`, in a delegate, and in a session that has been
+sent `close`.
 Anywhere else, a person may come back: after `session.idle_exit_ms` the session
 exits on the pending escalation and raises it again when resumed
 (`docs/invocation.md`, "Lifecycle").

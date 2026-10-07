@@ -61,10 +61,12 @@ registering an existing name replaces it, and the replacement is recorded in the
 session log. An extension can replace any MCP tool, or `mcp_resources`, by
 registering its name.
 
-The tool set is fixed at the session's first request. A resumed session lists
-its servers' tools again and fixes its tool set at its own first request. Tools
+The tool set is fixed when the preamble is built (`docs/tools.md`, "Which
+tools the model sees"). A resumed session declares its servers' tools from
+their cached lists, as any session does at start ("Starting servers"). Tools
 are sorted by name, with every schema's keys sorted (`docs/prompt-cache.md`,
-"Bytes"), and only [reload](#reload) changes the set. Changing tool definitions
+"Bytes"). The set changes only when a preamble is built: at start, on a model
+switch, and on [reload](#reload). Changing tool definitions
 mid-session misses the whole prompt cache.
 
 ### Deferred tools
@@ -267,11 +269,11 @@ Fiber asks each field in turn:
 
 When no answer is possible, Fiber declines, which is a response MCP defines.
 That is the same case as an escalation's block (`docs/permissions.md`,
-"Headless"): a session started by `fiber ask`, or one that has been sent
-`close`. Otherwise a pending elicitation waits for a client within the call's
+"Headless"): a session started by `fiber ask`, a delegate, or one that has
+been sent `close`. Otherwise a pending elicitation waits for a client within the call's
 timeout ("Calls"); an elicitation does not extend it. An elicitation in a
-delegate reaches a person the way the delegate's escalations do
-(`docs/permissions.md`, "Delegates").
+delegate is declined, because a delegate never waits on a person
+(`docs/delegates.md`, "Lifetime").
 
 On stdio, an elicitation carries nothing that links it to the call that raised
 it: the MCP TypeScript SDK 1.29.0 passes `relatedRequestId` to its transport
@@ -323,7 +325,9 @@ The `mcp_*` codes are listed with every other code in `docs/errors.md`.
 
 Each server has:
 
-- a command, arguments and environment, for a stdio server
+- a command, arguments and environment, for a stdio server; a secret goes in
+  the environment as `{ "secret": "<name>" }` (`docs/configuration.md`,
+  "Keys")
 - a URL, for a remote server
 - `required`
 - a startup deadline

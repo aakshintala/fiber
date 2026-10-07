@@ -229,8 +229,7 @@ final message, any questions, usage totals and worktree state. Their keys are
   already approved that content, and is otherwise skipped, or fails the
   delegate when marked `required` (`docs/extensions.md`, "Code a repository
   ships").
-- Stopping a Fiber delegate is a signal to its process group, as for any job
-  (`docs/tools.md`, "Shell").
+- How a stopped Fiber delegate is ended is the stop rule above.
 - If a parent's process dies without a shutdown, each Fiber delegate sees
   end of file on its lifeline and shuts down. The parent's log marks each job
   `orphaned` on resume (`docs/tools.md`, "Background jobs"), because the

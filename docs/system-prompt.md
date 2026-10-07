@@ -43,7 +43,8 @@ Built from these parts, in this order, joined by a blank line:
 5. The person's `APPEND_SYSTEM.md`.
 
 The same inputs give the same bytes. Every part is read at a preamble build and
-at no other time.
+at no other time, except extension texts, which are read when extensions load:
+at start, resume and `reload`.
 
 ### The person's files
 
@@ -110,9 +111,11 @@ The tool set is fixed per build, so the guidelines are too.
 
 ### Unattended sessions
 
-In a session started by `fiber ask`, nobody can answer a question. There the
+In a session started by `fiber ask`, nobody answers during the run. There the
 session section adds a line telling the model to work through to the end on its
-own judgment and to state its assumptions in its final reply. A session a
+own judgment, to state its assumptions in its final reply, and to ask with
+`ask_user` only when it cannot go on without an answer, because asking ends
+the run and the caller answers by resuming. A session a
 person or a driver can answer carries no such line. When a `fiber ask` session
 is later resumed in the terminal, the preamble is rebuilt without it.
 
@@ -400,7 +403,7 @@ extra.
 
 ## The texts
 
-Every text Fiber sends the model is a Markdown file in the `loop` crate,
+Every text Fiber sends the model is a Markdown file in the `loop` or `tools` crate,
 compiled into the binary:
 
 | File | Holds |

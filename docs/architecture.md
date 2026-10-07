@@ -52,13 +52,15 @@ ephemeral event where it is display-only.
 | `provider` | Talks to model APIs: wire formats, credentials, streaming. Reached only through the provider seam. |
 | `tools` | Runs the built-in tools that act on the workspace and the session: shell, file edits, search, web fetch, `ask_user`, session messaging and `tool_search`. Reached only through the tool seam. |
 | `mcp` | The MCP client: both transports, OAuth, the cached tool lists and `mcp_resources` (`docs/mcp.md`), and `fiber mcp serve`. Reached only through the tool seam. |
-| `jobs` | Background jobs and delegates: starting, watching and stopping them, the runner for delegates on another harness, and their worktrees (`docs/delegates.md`). Reached only through the tool seam. |
+| `jobs` | Background jobs and delegates: starting, watching and stopping them, the runner for delegates on another harness, and their worktrees, through `worktree` (`docs/delegates.md`). Reached only through the tool seam. |
+| `net` | The TLS configuration every HTTPS call uses: the platform verifier, or on Linux, when the system store has no certificates, Mozilla's roots compiled in through ureq (`docs/dependencies.md`). |
+| `worktree` | Creates and removes the git worktrees sessions and delegates run in, by running the `git` program (`docs/invocation.md`, "Isolation"). |
 | `extensions` | Loads extension code, hosts the runtime, and wires what extensions register into the three seams. |
 | `tui` | Draws the terminal, in its own process, as a client of the hub. Watches events, sends commands, knows nothing else. |
 | `config` | Reads the configuration files in [Fiber home](state.md) and the repository's `.fiber/` ([Configuration](configuration.md)). Answers questions; never asks any. |
 | `hub` | Lists, starts and resumes sessions and relays every client connection to a session's socket, over its local socket and, when installed with a port, a websocket on `127.0.0.1` that authenticates each device by token (`docs/invocation.md`, "The hub"). Holds no session and no push credential; does no TLS. |
 | `doors` | `fiber ask` (argv or stdin in, JSON lines out), and the internal session command that it, the hub and a parent run. Which doors exist and what a driver may send is `docs/invocation.md`; this page only fixes that none has a privilege the TUI lacks. |
-| `picture` | The image child (`docs/invocation.md`, "Processes"): decodes, refuses, fits and re-encodes one image under the limits in `docs/model-routing.md`, "Image limits". Only `main` depends on it, so no session process links image code. |
+| `picture` | The image child (`docs/invocation.md`, "Processes"): decodes, refuses, fits and re-encodes one image under the limits in `docs/model-routing.md`, "Image limits". Only `main` depends on it, so no session process runs image code. |
 | `cli` | Every command that does not run a session: `login`, `logout`, `approve`, `sessions export` and `models` today, and later `sessions delete/search/prune`, `config get/set`, `upgrade` and `hub pair` as they are built. `main` dispatches to it. |
 | `main` | The composition root. Parses argv, builds everything once, picks a door. No feature logic. |
 
@@ -84,13 +86,22 @@ depends on `contract`, `log` and the three seams, and never on `tui`, `doors`
 or `main`. `tui`, `hub` and `doors` depend on `contract` and on `log`'s reading
 side, and never on `loop`, `provider`, `tools`, `mcp`, `jobs` or
 `extensions`. `cli` depends on `contract`, `log`, `config`, `doors` and
-`extensions`, and never on `loop`. `main` depends on
+`extensions`, and never on `loop`. `worktree` depends only on `contract`, and
+`jobs`, `doors` and `cli` may depend on it. `net` depends only on `contract`
+and ureq's TLS stack, and `provider`, `tools` and `extensions` may depend on it,
+so `hub` and `tui` still do no TLS. `main` depends on
 everything, and nothing depends on `main`.
 
 `fakes` holds the shared fakes that tests and jigs run against
 (`docs/testing.md`, "Fakes" and "Jigs"). It is not a module. It depends only
 on `contract`. Any crate may take it as a test-only dependency, none takes it
 as a normal one, and no release binary contains it.
+
+When a module needs code that sits in a module it may not call, `contract`
+defines a trait and `main` injects the implementation: `Sessions`, the socket
+client in `doors` that `tools` uses for the session tools, and `Images`, the
+image child's driver in `tools` that `doors` and `mcp` use for pasted and MCP
+images.
 
 1. Calls point one way. If A may call B, B may never call A. B answers, or it
    emits an event and A picks it up.

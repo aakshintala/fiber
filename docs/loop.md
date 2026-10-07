@@ -55,8 +55,10 @@ A step is one round-trip to the model. Each step does this, in order:
 A reply with no tool call ends the step without a next one ("Ending a turn").
 
 While the loop waits for a person's `reply` to an approval, it reads its inbox
-for that reply. Other commands and job notices that arrive meanwhile wait for
-the next step boundary. A `cancel` ends the turn ("Interrupt").
+for that reply. Inbox commands (`steer`, `steer_drop`, `handoff`, `close`, a
+second `reply`) and job notices that arrive meanwhile wait for the next step
+boundary. Commands answered during a turn, such as `job_stop`, `shell`,
+`tools` and `history`, are answered at once (`docs/invocation.md`). A `cancel` ends the turn ("Interrupt").
 
 ## Tool calls that do not run
 
@@ -110,9 +112,7 @@ to stop at the same place.
 A turn ends in one of three ways:
 
 - Completed. The model replied without calling a tool.
-- Failed. A step's model call failed after its retries, a reply was cut off
-  twice in a row, or a hook failed (`docs/extensions.md`, "When a hook
-  fails").
+- Failed, for a cause `docs/errors.md`, "What ends a turn", lists.
 - Interrupted ("Interrupt").
 
 Before a reply with no tool call completes the turn, the loop drains its inbox
