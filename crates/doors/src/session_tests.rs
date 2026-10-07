@@ -707,22 +707,21 @@ fn a_published_reader_is_shut_down_before_it_is_joined() {
     let opened = open();
     let gate = Arc::clone(&opened.session.gate);
     let (peer, mut stream) = UnixStream::pair().unwrap();
-    let peer = Arc::new(Mutex::new(Some(peer)));
+    let peer = Mutex::new(Some(peer));
     let shut = Arc::new(AtomicBool::new(false));
     let reader = thread::spawn(move || {
         let mut buf = [0u8; 1];
-        match stream.read(&mut buf) {
-            Ok(_) | Err(_) => {}
-        }
+        let ended = stream.read(&mut buf);
+        drop(ended);
     });
     // The shutdown ends the reader by EOF, so it works whether the reader
     // has reached `read` yet or not.
-    let (flag, held) = (Arc::clone(&shut), Arc::clone(&peer));
+    let flag = Arc::clone(&shut);
     let id = gate.push_reader(
         reader,
         Box::new(move || {
             flag.store(true, Ordering::SeqCst);
-            drop(lock(&held).take());
+            drop(lock(&peer).take());
         }),
     );
     let (done_tx, done_rx) = mpsc::channel();
