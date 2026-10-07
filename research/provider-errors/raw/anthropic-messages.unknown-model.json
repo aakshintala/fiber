@@ -1,0 +1,27 @@
+{
+ "case": "anthropic-messages.unknown-model",
+ "url": "https://api.anthropic.com/v1/messages",
+ "stream": false,
+ "request_bytes": 105,
+ "status": 404,
+ "headers": {
+  "Date": "Wed, 07 Oct 2026 08:38:00 GMT",
+  "Content-Type": "application/json",
+  "Transfer-Encoding": "chunked",
+  "Connection": "close",
+  "x-should-retry": "false",
+  "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+  "request-id": "[redacted]",
+  "traceresponse": "00-7432d2523e74a3c4f288bc05cf7d2052-7d110290fa1d7dec-01",
+  "anthropic-organization-id": "03e90c57-2efd-4dd1-9873-d568825d6873",
+  "anthropic-workspace-id": "wrkspc_01XUwm67w4FfZcUNgFkDoF8L",
+  "vary": "Accept-Encoding",
+  "Server": "cloudflare",
+  "X-Robots-Tag": "none",
+  "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+  "cf-cache-status": "DYNAMIC",
+  "CF-RAY": "[redacted]"
+ },
+ "body": "{\"type\":\"error\",\"error\":{\"type\":\"not_found_error\",\"message\":\"model: claude-no-such-model\"},\"request_id\":\"[redacted]\"}",
+ "seconds": 0.436
+}

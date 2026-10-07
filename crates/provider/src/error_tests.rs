@@ -84,22 +84,64 @@ fn a_recorded_unknown_model_is_model_not_found() {
         "retry-signals/raw/gemini.unknown-model.json",
         "retry-signals/raw/openrouter.unknown-model.json",
         "provider-errors/raw/or-completions-haiku.unknown-model.json",
+        "provider-errors/raw/muse-completions.unknown-model.json",
+        "provider-errors/raw/muse-responses.unknown-model.json",
+        "provider-errors/raw/muse-messages.unknown-model.json",
+        "provider-errors/raw/anthropic-messages.unknown-model.json",
     ] {
         assert_eq!(recorded(path).code(), ErrorCode::ModelNotFound, "{path}");
     }
 }
 
 #[test]
+fn a_recorded_wrong_path_is_invalid_request() {
+    for path in [
+        "provider-errors/raw/anthropic-messages.wrong-path.json",
+        "provider-errors/raw/openai-completions.wrong-path.json",
+        "provider-errors/raw/or-completions.wrong-path.json",
+        "retry-signals/raw/anthropic.wrong-path.json",
+        "retry-signals/raw/muse.wrong-path.json",
+    ] {
+        assert_eq!(recorded(path).code(), ErrorCode::InvalidRequest, "{path}");
+    }
+}
+
+#[test]
 fn only_the_unknown_model_shapes_are_model_not_found() {
-    assert_eq!(status(404, "{}", None), ErrorCode::ModelNotFound);
+    assert_eq!(status(404, "{}", None), ErrorCode::InvalidRequest);
+    assert_eq!(status(404, "", None), ErrorCode::InvalidRequest);
+    assert_eq!(
+        status(
+            404,
+            r#"{"error":{"type":"not_found_error","message":"Not found"}}"#,
+            None
+        ),
+        ErrorCode::InvalidRequest,
+    );
+    assert_eq!(
+        status(
+            404,
+            r#"{"error":{"type":"not_found_error","message":"model: x"}}"#,
+            None
+        ),
+        ErrorCode::ModelNotFound,
+    );
     assert_eq!(status(400, "{}", None), ErrorCode::InvalidRequest);
     assert_eq!(
         status(400, r#"{"error":{"code":"model_not_found"}}"#, None),
         ErrorCode::ModelNotFound,
     );
     assert_eq!(
-        status(400, r#"{"error":{"type":"not_found_error"}}"#, None),
+        status(
+            400,
+            r#"{"error":{"type":"not_found_error","message":"Model not found"}}"#,
+            None
+        ),
         ErrorCode::ModelNotFound,
+    );
+    assert_eq!(
+        status(400, r#"{"error":{"type":"not_found_error"}}"#, None),
+        ErrorCode::InvalidRequest,
     );
     assert_eq!(
         status(
