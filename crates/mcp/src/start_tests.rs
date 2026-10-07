@@ -281,7 +281,9 @@ fn a_server_that_misses_its_deadline_is_left_out() {
             "the start waits on the startup deadline",
         );
         setup.fake.advance(DEFAULT_STARTUP_TIMEOUT);
-        let started = result.recv_timeout(WITHIN).expect("the start ends");
+        let started = result
+            .recv_timeout(WITHIN)
+            .unwrap_or_else(|_| panic!("the failed start ends within {WITHIN:?}"));
         assert!(started.tools.is_empty());
         assert_eq!(started.failed.len(), 1);
         assert_eq!(started.failed[0].reason, ServerFailure::Deadline);
@@ -366,7 +368,7 @@ fn servers_stop_at_once() {
     });
     let started = started
         .recv_timeout(WITHIN)
-        .expect("both servers start within 5s");
+        .unwrap_or_else(|_| panic!("both servers start within {WITHIN:?}"));
     assert_eq!(started.failed.len(), 0);
     let grace = setups[0].fake.now() + Duration::from_millis(800);
     let (done, stopped) = std::sync::mpsc::channel();
@@ -380,7 +382,9 @@ fn servers_stop_at_once() {
         "both stops wait on the grace at once"
     );
     setups[0].fake.advance(Duration::from_millis(800));
-    stopped.recv_timeout(WITHIN).expect("the stop returned");
+    stopped
+        .recv_timeout(WITHIN)
+        .unwrap_or_else(|_| panic!("the stop returned within {WITHIN:?}"));
 }
 
 fn stop_within(servers: super::Servers) {
@@ -531,7 +535,9 @@ fn a_required_server_that_misses_its_deadline_yields_required_failed() {
         "the start waits on the startup deadline",
     );
     setup.fake.advance(DEFAULT_STARTUP_TIMEOUT);
-    let started = result.recv_timeout(WITHIN).expect("the start ends");
+    let started = result
+        .recv_timeout(WITHIN)
+        .unwrap_or_else(|_| panic!("the required start ends within {WITHIN:?}"));
     assert!(started.tools.is_empty());
     assert!(started.failed.is_empty());
     let failure = started.required_failed.as_ref().expect("required_failed");

@@ -62,13 +62,15 @@ fn open_tunnel_on(port: u16, target: &str) -> TcpStream {
     let mut status = String::new();
     reader
         .read_line(&mut status)
-        .expect("the proxy's CONNECT reply");
+        .unwrap_or_else(|e| panic!("the proxy's CONNECT reply within {REPLY_WITHIN:?}: {e}"));
     assert!(
         status.starts_with("HTTP/1.1 200"),
         "the CONNECT reply: {status:?}"
     );
     let mut blank = String::new();
-    reader.read_line(&mut blank).unwrap();
+    reader.read_line(&mut blank).unwrap_or_else(|e| {
+        panic!("the proxy's blank line after the CONNECT reply within {REPLY_WITHIN:?}: {e}")
+    });
     reader.into_inner()
 }
 
@@ -90,13 +92,15 @@ fn a_connect_tunnel_copies_both_ways_and_records_its_target() {
     let mut status = String::new();
     reader
         .read_line(&mut status)
-        .expect("the proxy's CONNECT reply");
+        .unwrap_or_else(|e| panic!("the proxy's CONNECT reply within {REPLY_WITHIN:?}: {e}"));
     assert!(
         status.starts_with("HTTP/1.1 200"),
         "the CONNECT reply: {status:?}"
     );
     let mut blank = String::new();
-    reader.read_line(&mut blank).unwrap();
+    reader.read_line(&mut blank).unwrap_or_else(|e| {
+        panic!("the proxy's blank line after the CONNECT reply within {REPLY_WITHIN:?}: {e}")
+    });
     assert!(blank.trim().is_empty(), "the reply ends in a blank line");
 
     assert!(
@@ -111,7 +115,7 @@ fn a_connect_tunnel_copies_both_ways_and_records_its_target() {
     let mut heard = [0; 4];
     client
         .read_exact(&mut heard)
-        .expect("the echo through the tunnel");
+        .unwrap_or_else(|e| panic!("the echo through the tunnel within {REPLY_WITHIN:?}: {e}"));
     assert_eq!(&heard, b"ping");
 
     drop(client);
@@ -136,7 +140,7 @@ fn a_request_that_is_not_connect_gets_405_and_records_nothing() {
     let mut status = String::new();
     reader
         .read_line(&mut status)
-        .expect("the proxy's 405 reply");
+        .unwrap_or_else(|e| panic!("the proxy's 405 reply within {REPLY_WITHIN:?}: {e}"));
     assert!(
         status.starts_with("HTTP/1.1 405"),
         "a non-CONNECT reply: {status:?}"
@@ -144,7 +148,7 @@ fn a_request_that_is_not_connect_gets_405_and_records_nothing() {
     let mut rest = Vec::new();
     assert!(
         reader.read_to_end(&mut rest).is_ok(),
-        "the proxy closes after a 405"
+        "the proxy closes after a 405 within {REPLY_WITHIN:?}"
     );
     assert!(proxy.connects().is_empty());
 }
@@ -168,7 +172,9 @@ fn await_connects_pins_its_boundary_and_deadline() {
         let mut second = open_tunnel_on(port, &arriving);
         second.write_all(b"ping").unwrap();
         let mut heard = [0; 4];
-        second.read_exact(&mut heard).unwrap();
+        second.read_exact(&mut heard).unwrap_or_else(|e| {
+            panic!("the echo through the second tunnel within {REPLY_WITHIN:?}: {e}")
+        });
         assert_eq!(&heard, b"ping");
     });
     assert!(
@@ -198,12 +204,14 @@ fn await_connects_pins_its_boundary_and_deadline() {
         assert_eq!(
             finished.recv_timeout(QUICK),
             Ok(true),
-            "a met count returns before the deadline"
+            "a met count returns before the deadline within {QUICK:?}"
         );
     });
     first.write_all(b"ping").unwrap();
     let mut heard = [0; 4];
-    first.read_exact(&mut heard).unwrap();
+    first.read_exact(&mut heard).unwrap_or_else(|e| {
+        panic!("the echo through the first tunnel within {REPLY_WITHIN:?}: {e}")
+    });
     assert_eq!(&heard, b"ping");
     drop(first);
     arrived.join().unwrap();
@@ -227,7 +235,9 @@ fn await_closed_pins_its_deadline() {
     let mut client = open_tunnel_on(proxy.port(), &target);
     client.write_all(b"ping").unwrap();
     let mut heard = [0; 4];
-    client.read_exact(&mut heard).unwrap();
+    client
+        .read_exact(&mut heard)
+        .unwrap_or_else(|e| panic!("the echo through the tunnel within {REPLY_WITHIN:?}: {e}"));
     assert_eq!(&heard, b"ping");
     drop(client);
     assert!(
@@ -248,7 +258,7 @@ fn await_closed_pins_its_deadline() {
         assert_eq!(
             finished.recv_timeout(QUICK),
             Ok(true),
-            "a met count returns before the deadline"
+            "a met closed count returns before the deadline within {QUICK:?}"
         );
     });
     echo.join().unwrap();

@@ -684,7 +684,7 @@ fn poll_repeats_at_the_interval_until_the_token() {
     for step in [5, 10] {
         assert!(
             env.clock.await_parked(wake(&env, step), WAIT),
-            "no wake at {step}"
+            "the poll never parked for its {step}-second wake within {WAIT:?}"
         );
         env.clock.advance(Duration::from_secs(5));
     }
@@ -710,10 +710,16 @@ fn poll_slow_down_adds_five_seconds() {
         OauthReply::token("at", "rt", 3600),
     ]);
     let rx = start(&ext, "poll", &server.url());
-    assert!(env.clock.await_parked(wake(&env, 10), WAIT));
+    assert!(
+        env.clock.await_parked(wake(&env, 10), WAIT),
+        "the slowed poll never parked for its 10-second wake within {WAIT:?}"
+    );
     env.clock.advance(Duration::from_secs(5));
     // Still waiting on the instant 10 s out.
-    assert!(env.clock.await_parked(wake(&env, 10), WAIT));
+    assert!(
+        env.clock.await_parked(wake(&env, 10), WAIT),
+        "the slowed poll left its 10-second wake early within {WAIT:?}"
+    );
     assert_eq!(server.request_count(), 1);
     env.clock.advance(Duration::from_secs(5));
     let token: Value = serde_json::from_str(&finish(&rx).unwrap()).unwrap();
@@ -745,7 +751,10 @@ fn poll_that_times_out_while_sleeping_is_a_timeout() {
     let ext = env.extension();
     let server = device_server(vec![OauthReply::pending(), OauthReply::pending()]);
     let rx = start(&ext, "poll", &server.url());
-    assert!(env.clock.await_parked(wake(&env, 5), WAIT));
+    assert!(
+        env.clock.await_parked(wake(&env, 5), WAIT),
+        "the poll never parked for its 5-second sleep within {WAIT:?}"
+    );
     env.clock.advance(TIMEOUT);
     assert!(matches!(finish(&rx), Err(Error::Timeout { .. })));
     assert_eq!(server.request_count(), 1);
@@ -926,7 +935,10 @@ fn a_function_the_hook_stops_leaves_the_file_and_frees_the_lock() {
     let asked = env.clock.now();
     let rx = start_token(&provider);
     finish(&went);
-    assert!(env.clock.await_parked(asked + TIMEOUT + GRACE, WAIT));
+    assert!(
+        env.clock.await_parked(asked + TIMEOUT + GRACE, WAIT),
+        "the token call never waited past its deadline while the spin held the lock within {WAIT:?}"
+    );
     env.clock.advance(TIMEOUT);
     let error = finish(&rx).unwrap_err();
     assert!(matches!(&error, Error::Credential(inner) if matches!(**inner, Error::Timeout { .. })));
@@ -1035,7 +1047,10 @@ fn a_refresh_that_times_out_in_its_function_leaves_the_file_and_frees_the_lock()
         hang.await_requests(1, WAIT),
         "the refresh never reached the endpoint"
     );
-    assert!(env.clock.await_parked(deadline, WAIT));
+    assert!(
+        env.clock.await_parked(deadline, WAIT),
+        "the refresh never parked on its timeout while on the wire within {WAIT:?}"
+    );
     env.clock.advance(TIMEOUT);
     let error = finish(&rx).unwrap_err();
     assert!(matches!(&error, Error::Credential(inner) if matches!(**inner, Error::Timeout { .. })));
@@ -1125,7 +1140,10 @@ fn a_person_who_detaches_between_polls_stops_the_next_poll() {
     ]);
     let provider = env.provider(&ext, &server, "poll");
     let rx = start_token(&provider);
-    assert!(env.clock.await_parked(wake(&env, 5), WAIT));
+    assert!(
+        env.clock.await_parked(wake(&env, 5), WAIT),
+        "the poll never parked for its 5-second sleep within {WAIT:?}"
+    );
     env.clock.advance(Duration::from_secs(5));
     let error = finish(&rx).unwrap_err();
     assert_eq!(error.code(), ErrorCode::AuthenticationFailed, "{error}");

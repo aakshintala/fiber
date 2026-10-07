@@ -6,6 +6,10 @@ use std::time::Duration;
 
 use super::*;
 
+const READ_WITHIN: Duration = Duration::from_secs(2);
+
+const STATUS_WITHIN: Duration = Duration::from_secs(5);
+
 fn decode(bytes: &[u8]) -> (Result<(), Malformed>, Vec<u8>, String) {
     let mut reader = Cursor::new(bytes.to_vec());
     let mut body = Vec::new();
@@ -65,9 +69,7 @@ fn a_dropped_connection_records_the_request_and_answers_nothing() {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
         let mut stream = TcpStream::connect(addr).unwrap();
-        stream
-            .set_read_timeout(Some(Duration::from_secs(2)))
-            .unwrap();
+        stream.set_read_timeout(Some(READ_WITHIN)).unwrap();
         stream
             .write_all(b"POST /v1 HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\n\r\n")
             .unwrap();
@@ -82,8 +84,11 @@ fn a_dropped_connection_records_the_request_and_answers_nothing() {
     );
     let (read, body) = rx
         .recv_timeout(Duration::from_secs(2))
-        .expect("the dropped connection ends the read");
-    assert!(read.is_ok(), "the read ends, it does not fail");
+        .unwrap_or_else(|_| panic!("the dropped connection ends the read within {READ_WITHIN:?}"));
+    assert!(
+        read.is_ok(),
+        "the dropped connection ends the read without failing within {READ_WITHIN:?}"
+    );
     assert!(body.is_empty(), "no response follows the request");
     assert_eq!(server.requests().len(), 1);
 }
@@ -100,7 +105,9 @@ fn hold_records_the_request_and_sends_the_body_only_after_release() {
             .write_all(b"POST /v1 HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\n\r\n")
             .unwrap();
         let mut body = Vec::new();
-        stream.read_to_end(&mut body).unwrap();
+        stream.read_to_end(&mut body).unwrap_or_else(|e| {
+            panic!("the held body arrives after release within {READ_WITHIN:?}: {e}")
+        });
         tx.send(body).unwrap();
     });
 
@@ -116,7 +123,7 @@ fn hold_records_the_request_and_sends_the_body_only_after_release() {
     server.release();
     let body = rx
         .recv_timeout(Duration::from_secs(2))
-        .expect("release sends the body");
+        .unwrap_or_else(|_| panic!("release sends the held body within {READ_WITHIN:?}"));
     assert!(body.ends_with(b"hello"));
 }
 
@@ -135,18 +142,23 @@ fn release_one_sends_one_held_response_and_keeps_holding_the_rest() {
                 .write_all(b"GET /v1 HTTP/1.1\r\nHost: localhost\r\n\r\n")
                 .unwrap();
             let mut body = Vec::new();
-            stream.read_to_end(&mut body).unwrap();
+            stream.read_to_end(&mut body).unwrap_or_else(|e| {
+                panic!("the released body arrives within {READ_WITHIN:?}: {e}")
+            });
             tx.send((name, body)).unwrap();
         });
         // One request at a time, so the script's order is known.
         assert!(server.await_requests(if name == "a" { 1 } else { 2 }, Duration::from_secs(2)));
     }
-    assert!(rx.recv_timeout(Duration::from_millis(200)).is_err());
+    assert!(
+        rx.recv_timeout(Duration::from_millis(200)).is_err(),
+        "the second body is still held"
+    );
 
     server.release_one();
-    let (first, body) = rx
-        .recv_timeout(Duration::from_secs(2))
-        .expect("one response is sent");
+    let (first, body) = rx.recv_timeout(Duration::from_secs(2)).unwrap_or_else(|_| {
+        panic!("one held response arrives after release_one within {READ_WITHIN:?}")
+    });
     assert!(body.ends_with(b"one") || body.ends_with(b"two"), "{first}");
     assert!(
         rx.recv_timeout(Duration::from_millis(200)).is_err(),
@@ -155,7 +167,7 @@ fn release_one_sends_one_held_response_and_keeps_holding_the_rest() {
 
     server.release_one();
     rx.recv_timeout(Duration::from_secs(2))
-        .expect("the second release sends the other");
+        .unwrap_or_else(|_| panic!("the second release sends the other within {READ_WITHIN:?}"));
 }
 
 #[test]
@@ -169,14 +181,14 @@ fn a_release_one_before_the_request_lets_it_through() {
 /// The status line's code of a bodiless GET answered by `server`.
 fn get_status(server: &ProviderServer) -> String {
     let mut stream = TcpStream::connect(server.addr).unwrap();
-    stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
-        .unwrap();
+    stream.set_read_timeout(Some(STATUS_WITHIN)).unwrap();
     stream
         .write_all(b"GET /v1 HTTP/1.1\r\nHost: localhost\r\n\r\n")
         .unwrap();
     let mut text = String::new();
-    stream.read_to_string(&mut text).unwrap();
+    stream
+        .read_to_string(&mut text)
+        .unwrap_or_else(|e| panic!("the status reply arrives within {STATUS_WITHIN:?}: {e}"));
     text.split(' ').nth(1).unwrap().to_owned()
 }
 
@@ -193,12 +205,12 @@ fn a_request_past_the_script_gets_the_fallback_or_the_default_500() {
 
 fn get_status_of(server: &ProviderServer, target: &str) -> String {
     let mut stream = TcpStream::connect(server.addr).unwrap();
-    stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
-        .unwrap();
+    stream.set_read_timeout(Some(STATUS_WITHIN)).unwrap();
     write!(stream, "GET {target} HTTP/1.1\r\nHost: localhost\r\n\r\n").unwrap();
     let mut text = String::new();
-    stream.read_to_string(&mut text).unwrap();
+    stream.read_to_string(&mut text).unwrap_or_else(|e| {
+        panic!("the routed status reply arrives within {STATUS_WITHIN:?}: {e}")
+    });
     text.split(' ').nth(1).unwrap().to_owned()
 }
 
@@ -244,21 +256,23 @@ fn a_stall_sends_its_head_and_prefix_then_holds_until_the_client_closes() {
     ])
     .unwrap();
     let mut stream = TcpStream::connect(server.addr).unwrap();
-    stream
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .unwrap();
+    stream.set_read_timeout(Some(READ_WITHIN)).unwrap();
     stream
         .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
         .unwrap();
     let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
     let mut status = String::new();
-    reader.read_line(&mut status).unwrap();
+    reader
+        .read_line(&mut status)
+        .unwrap_or_else(|e| panic!("the stall's status line arrives within {READ_WITHIN:?}: {e}"));
     assert!(status.starts_with("HTTP/1.1 200"), "{status}");
     let mut content_length = String::new();
     let mut content_type = String::new();
     loop {
         let mut line = String::new();
-        reader.read_line(&mut line).unwrap();
+        reader.read_line(&mut line).unwrap_or_else(|e| {
+            panic!("the stall's header line arrives within {READ_WITHIN:?}: {e}")
+        });
         let line = line.trim_end_matches(['\r', '\n']).to_owned();
         if line.is_empty() {
             break;
@@ -273,7 +287,9 @@ fn a_stall_sends_its_head_and_prefix_then_holds_until_the_client_closes() {
     assert_eq!(content_length, "100");
     assert_eq!(content_type, "text/plain");
     let mut prefix = vec![0u8; 7];
-    reader.read_exact(&mut prefix).unwrap();
+    reader
+        .read_exact(&mut prefix)
+        .unwrap_or_else(|e| panic!("the stall's body prefix arrives within {READ_WITHIN:?}: {e}"));
     assert_eq!(prefix, b"partial");
     assert!(
         server.await_partial(1, Duration::from_secs(2)),
@@ -303,15 +319,15 @@ fn a_scripted_content_length_past_the_body_without_stall_is_sent_and_closed() {
     }])
     .unwrap();
     let mut stream = TcpStream::connect(server.addr).unwrap();
-    stream
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .unwrap();
+    stream.set_read_timeout(Some(READ_WITHIN)).unwrap();
     stream
         .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
         .unwrap();
     let mut text = String::new();
     // The server closes after the body: the read ends rather than timing out.
-    stream.read_to_string(&mut text).unwrap();
+    stream.read_to_string(&mut text).unwrap_or_else(|e| {
+        panic!("the short body arrives before the close within {READ_WITHIN:?}: {e}")
+    });
     assert!(text.ends_with("ok"), "{text}");
     assert!(!server.await_partial(1, Duration::from_millis(200)));
     assert!(!server.await_closed(1, Duration::from_millis(200)));
@@ -329,9 +345,7 @@ fn await_partial_needs_every_counted_partial() {
     use std::io::BufRead;
     let server = ProviderServer::start([Response::stall(200, b"partial".to_vec(), 100)]).unwrap();
     let mut stream = TcpStream::connect(server.addr).unwrap();
-    stream
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .unwrap();
+    stream.set_read_timeout(Some(READ_WITHIN)).unwrap();
     stream
         .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
         .unwrap();
@@ -340,7 +354,9 @@ fn await_partial_needs_every_counted_partial() {
     let mut head = String::new();
     loop {
         let mut line = String::new();
-        reader.read_line(&mut line).unwrap();
+        reader
+            .read_line(&mut line)
+            .unwrap_or_else(|e| panic!("the head line arrives within {READ_WITHIN:?}: {e}"));
         head.push_str(&line);
         if line.trim_end_matches(['\r', '\n']).is_empty() {
             break;
@@ -348,7 +364,9 @@ fn await_partial_needs_every_counted_partial() {
     }
     assert!(head.starts_with("HTTP/1.1 200"), "{head}");
     let mut prefix = vec![0u8; 7];
-    reader.read_exact(&mut prefix).unwrap();
+    reader
+        .read_exact(&mut prefix)
+        .unwrap_or_else(|e| panic!("the stall's body prefix arrives within {READ_WITHIN:?}: {e}"));
     assert_eq!(prefix, b"partial");
     assert!(
         server.await_partial(1, Duration::from_secs(2)),
