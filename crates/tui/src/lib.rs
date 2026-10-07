@@ -35,7 +35,7 @@ mod window;
 
 use std::collections::VecDeque;
 use std::fs::File;
-use std::io::{self, PipeReader, PipeWriter};
+use std::io::{self, PipeReader, PipeWriter, Write};
 use std::ops::RangeInclusive;
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::AtomicBool;
@@ -110,7 +110,7 @@ pub fn run(
     // missed; its thread starts after the first frame.
     let signals = Signals::new([SIGWINCH]).ok();
     catch_interrupts();
-    let _restore = term::Guard;
+    let restore = term::Guard;
     // Home is always set, so the first frame draws at once: it runs no
     // child process and reads nothing.
     let hover = launch.hover;
@@ -161,9 +161,19 @@ pub fn run(
         spawn_resize(signals, tx);
     }
     let code = terminal.run(&rx);
+    // One resume line per live session: collected first, then the hub
+    // hangs up, the terminal is restored, and the lines print in cooked
+    // mode, each ending in a newline.
+    let lines = terminal.app.exit_lines();
     // Ends the hub reader thread; the input and resize threads stay
     // blocked and end with the process.
     terminal.hang_up();
+    drop(restore);
+    if let Some(mut tty) = terminal.tty.take() {
+        for line in &lines {
+            writeln!(tty, "{line}").unwrap_or(());
+        }
+    }
     code
 }
 

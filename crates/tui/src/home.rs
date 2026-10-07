@@ -565,6 +565,13 @@ pub(crate) fn quit_line(working: usize, elsewhere: usize) -> String {
     format!("{sessions}{elsewhere} · enter leave them running · c close all · esc stay")
 }
 
+/// A resume line on exit: the session's id and the command resuming
+/// it. The terminal is restored first, and one line prints per live
+/// session.
+pub(crate) fn exit_line(id: &SessionId) -> String {
+    format!("{}  fiber resume {}", id.0, id.0)
+}
+
 /// The delete question on the foot: the session and that deleting is
 /// permanent. Deleting through the hub is permanent, so the terminal
 /// asks first, naming the session.

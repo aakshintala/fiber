@@ -604,3 +604,62 @@ fn an_unsent_close_keeps_its_session_out_of_closing() {
         .unwrap_or_default();
     assert_eq!(closing, ["s_bbbbbbbbbbbbbbbb"]);
 }
+
+#[test]
+fn exit_lines_name_each_live_session() {
+    let mut app = home();
+    linked(&mut app);
+    working(&mut app, "s_aaaaaaaaaaaaaaaa");
+    working(&mut app, "s_bbbbbbbbbbbbbbbb");
+    assert_eq!(
+        app.exit_lines(),
+        [
+            "s_aaaaaaaaaaaaaaaa  fiber resume s_aaaaaaaaaaaaaaaa",
+            "s_bbbbbbbbbbbbbbbb  fiber resume s_bbbbbbbbbbbbbbbb",
+        ]
+    );
+}
+
+#[test]
+fn closing_sessions_get_no_line() {
+    let mut app = home();
+    linked(&mut app);
+    working(&mut app, "s_aaaaaaaaaaaaaaaa");
+    working(&mut app, "s_bbbbbbbbbbbbbbbb");
+    assert_eq!(ctrl_c(&mut app), Effect::None);
+    let clock = fakes::clock::FakeClock::new();
+    let Effect::Exit(_) = app.on_key(Key::Char('c'), clock.now()) else {
+        panic!("`c` closes all");
+    };
+    assert!(app.exit_lines().is_empty());
+}
+
+#[test]
+fn left_rows_get_no_line() {
+    let mut app = home();
+    linked(&mut app);
+    working(&mut app, "s_aaaaaaaaaaaaaaaa");
+    working(&mut app, "s_bbbbbbbbbbbbbbbb");
+    app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited"));
+    assert_eq!(
+        app.exit_lines(),
+        ["s_bbbbbbbbbbbbbbbb  fiber resume s_bbbbbbbbbbbbbbbb"]
+    );
+}
+
+#[test]
+fn the_attached_session_gets_a_line_without_the_feed() {
+    let mut app = home();
+    linked(&mut app);
+    app.attach(SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    assert_eq!(
+        app.exit_lines(),
+        ["s_aaaaaaaaaaaaaaaa  fiber resume s_aaaaaaaaaaaaaaaa"]
+    );
+}
+
+#[test]
+fn no_home_no_lines() {
+    let app = App::new(PathBuf::from("/w"));
+    assert!(app.exit_lines().is_empty());
+}

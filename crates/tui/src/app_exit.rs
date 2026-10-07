@@ -120,6 +120,32 @@ impl App {
         working
     }
 
+    /// One resume line per live session whose stop was not sent: every
+    /// live feed row outside `closing`, in list order, and the attached
+    /// session when it has no row and is not closing. Empty without
+    /// home. `run` writes them after restoring the terminal.
+    pub(crate) fn exit_lines(&self) -> Vec<String> {
+        let Some(home) = self.home.as_ref() else {
+            return Vec::new();
+        };
+        let mut lines: Vec<String> = home
+            .sessions
+            .live()
+            .iter()
+            .filter(|row| !home.closing.iter().any(|(session, _)| *session == row.id))
+            .map(|row| crate::home::exit_line(&row.id))
+            .collect();
+        // The attached session without a feed row is still live: without
+        // one it never left, and a row would have listed it.
+        if let Phase::Attached { session, .. } = &self.phase
+            && home.sessions.row(session).is_none()
+            && !home.closing.iter().any(|(closed, _)| closed == session)
+        {
+            lines.push(crate::home::exit_line(session));
+        }
+        lines
+    }
+
     /// Of `working`, how many are also open elsewhere: a session's
     /// `clients` on its status, less this connection's own `full`
     /// connection to it when it holds one. A session with no row, the
