@@ -547,6 +547,10 @@ that ticket's resolution holds the rationale and the rejected alternatives.
 - It declares `executes` whenever it finds something it cannot read
   plainly: command substitution (`$( )` or backticks), process
   substitution, a redirect, or anything else outside the list.
+- A part with a path under `/proc/`, resolved against `workdir`, is not
+  read-only, so the call is reviewed: `/proc/<pid>/environ` holds the
+  process's environment, a key from an `env` source among it
+  (`docs/configuration.md`, "Secrets").
 - Flags matter because read-only-looking commands have writing or
   executing flags: `git diff --output=<file>` writes a file,
   `rg --pre <cmd>` and `find -exec` run programs, `find -delete` deletes,

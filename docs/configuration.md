@@ -281,6 +281,8 @@ A command runs once per process, and is named by its program alone in every
 message, because its arguments may hold a key. A repository can never set this, because a
 command runs a program and a changed source sends the key elsewhere. A
 credential stored under the same label comes first.
+A key from an `env` source stays in Fiber's environment, so it is visible to
+every command the session runs.
 
 Providers in one package that share a key read one stored credential: each
 names the stored directory in its provider data (`credential_name`, defaulting
