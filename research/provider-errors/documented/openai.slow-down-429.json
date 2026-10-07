@@ -1,0 +1,8 @@
+{
+  "case": "openai.slow-down-429",
+  "source": "https://developers.openai.com/api/docs/guides/error-codes",
+  "status": 429,
+  "headers": {},
+  "body": "{\"error\":{\"type\":\"rate_limit_error\",\"code\":\"slow_down\",\"message\":\"Rate limit reached for requests. Please slow down and try again.\",\"param\":null}}",
+  "note": "Not mapped: a rate limit; the docs say to follow Retry-After. Stays rate_limited."
+}

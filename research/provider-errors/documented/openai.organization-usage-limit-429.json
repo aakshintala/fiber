@@ -1,0 +1,8 @@
+{
+  "case": "openai.organization-usage-limit-429",
+  "source": "https://developers.openai.com/api/docs/guides/error-codes",
+  "status": 429,
+  "headers": {},
+  "body": "{\"error\":{\"type\":\"insufficient_quota\",\"code\":\"organization_usage_limit_exceeded\",\"message\":\"The documented organization_usage_limit_exceeded error: retrying will not restore API access.\",\"param\":null}}",
+  "note": "Code organization_usage_limit_exceeded is documented; type insufficient_quota and the message are illustrative."
+}

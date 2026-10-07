@@ -1,0 +1,8 @@
+{
+  "case": "gemini.rate-limit-exceeded-429",
+  "source": "https://github.com/googleapis/googleapis/blob/master/google/api/error_reason.proto",
+  "status": 429,
+  "headers": {},
+  "body": "{\"error\":{\"code\":429,\"message\":\"Quota exceeded for requests per minute.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.ErrorInfo\",\"reason\":\"RATE_LIMIT_EXCEEDED\",\"domain\":\"googleapis.com\",\"metadata\":{}}]}}",
+  "note": "Not mapped: error_reason.proto defines RATE_LIMIT_EXCEEDED as a rate quota. Stays rate_limited."
+}

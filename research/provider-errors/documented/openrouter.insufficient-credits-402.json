@@ -1,0 +1,8 @@
+{
+  "case": "openrouter.insufficient-credits-402",
+  "source": "https://openrouter.ai/docs/api/reference/errors-and-debugging",
+  "status": 402,
+  "headers": {},
+  "body": "{\"error\":{\"code\":402,\"message\":\"Your account or API key has insufficient credits.\",\"metadata\":{\"error_type\":\"payment_required\"}}}",
+  "note": "Message and metadata.error_type payment_required are documented; envelope shape follows the docs' error reference."
+}
