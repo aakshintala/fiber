@@ -25,6 +25,8 @@ use crate::host::Session;
 use crate::lua::{DeclaredHooks, HookPhase, LuaExtension};
 use crate::{API, Error, LuaProvider};
 
+mod door;
+
 /// The one hook point this session calls.
 const AFTER_TOOL: &str = "after_tool";
 
@@ -715,46 +717,6 @@ fn notice(code: ErrorCode, message: String, extension: Option<&str>) -> Notice {
         code,
         message,
         extension: extension.map(str::to_owned),
-    }
-}
-
-impl contract::extension::ExtensionDoor for SessionExtensions {
-    fn command(
-        &self,
-        name: &str,
-        text: &str,
-    ) -> Result<Box<dyn FnOnce() + Send>, contract::inbox::Rejection> {
-        let admitted = self.commands.admit_with(name, text)?;
-        let queued = std::sync::Arc::clone(admitted.queued());
-        let lua = std::sync::Arc::clone(admitted.lua());
-        let extension = admitted.extension().to_owned();
-        let command = name.to_owned();
-        // One waiter thread per admitted command waits for the call's end;
-        // an `Err` gives a `notice` naming the extension through the
-        // extension's late-bound emitter.
-        std::thread::Builder::new()
-            .name(format!("command {name}"))
-            .spawn(move || {
-                if let Err(e) = queued.wait() {
-                    lua.emit(contract::events::Event::Notice(notice(
-                        ErrorCode::ExtensionFailed,
-                        format!("Command `{command}` failed: {e}"),
-                        Some(&extension),
-                    )));
-                }
-            })
-            .map_err(|e| contract::inbox::Rejection {
-                code: ErrorCode::IoFailed,
-                message: format!("cannot start a thread: {e}"),
-            })?;
-        let release_queued = std::sync::Arc::clone(admitted.queued());
-        Ok(Box::new(move || release_queued.release()))
-    }
-
-    fn seal(&self) {
-        for extension in &self.lua {
-            extension.seal();
-        }
     }
 }
 

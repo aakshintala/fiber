@@ -23,7 +23,7 @@ use crate::host::{self, Reply, Request, exec};
 use crate::oauth::{self, Browser, Deliver};
 
 use super::hub::{Hub, Job, Phase, Progress, Shared, not_registered, timed_out};
-use super::{GRACE, LOAD_TIMEOUT, LuaExtension, Step, Target, Vm, expired};
+use super::{GRACE, LOAD_TIMEOUT, LuaExtension, Step, Target, Vm, asks, expired};
 
 /// A callback suspended on a host call. Its deadline keeps running.
 struct Parked {
@@ -37,6 +37,9 @@ struct Parked {
     /// Dropped with the callback: an off-thread wait that polls the other end
     /// stops, which frees its port or stops its contending for a lock.
     _cancel: Option<Sender<()>>,
+    /// The `host.ask` question this callback waits on, if any: plain data,
+    /// removed from the registry by whoever answers it first.
+    ask: Option<contract::RequestId>,
 }
 
 /// What the thread does next, outside the lock.
@@ -107,8 +110,11 @@ pub(super) fn serve(hub: Arc<Hub>, start: Start) {
                 Some(vm)
             }
             Err(e) => {
-                shared.stop(e);
-                None
+                let unsent = shared.stop(e);
+                drop(shared);
+                drop(unsent);
+                hub.notify();
+                return;
             }
         };
         hub.notify();
@@ -172,6 +178,10 @@ fn next(name: &str, hub: &Hub, parked: &mut Vec<Parked>) -> Option<Work> {
         }
         if let Some(pos) = parked.iter().position(|p| expired(p.deadline, now)) {
             let p = parked.swap_remove(pos);
+            // An ask whose callback timed out is declined by `fiber`,
+            // whatever the target, before the timer and non-timer
+            // branches below.
+            let unsent = p.ask.as_ref().and_then(|request| shared.decline(request));
             if let Target::Timer { id: timer_id } = p.target {
                 // A firing past its timeout ends; an `every` keeps firing.
                 shared.calls.remove(&p.id);
@@ -182,6 +192,8 @@ fn next(name: &str, hub: &Hub, parked: &mut Vec<Parked>) -> Option<Work> {
             hub.notify();
             // The coroutine goes with `p`; the VM frees what it held.
             drop(p);
+            drop(shared);
+            drop(unsent);
             return Some(Work::Collect);
         }
         let due = shared.replies.pop().map(|(id, reply)| (id, Some(reply)));
@@ -312,6 +324,49 @@ fn settle(
         Arc::new(move |reply| hub.deliver(id, reply))
     };
     let (cancel, wake) = match request {
+        Request::Ask(interaction) => {
+            let mut shared = hub.lock();
+            if !shared.answerable || shared.sealed || shared.disposed {
+                // nobody_to_answer_returns_declined_at_once: as headless
+                // approvals write no request.
+                drop(shared);
+                deliver(host::Reply::Ask(contract::events::Answer::Declined {
+                    declined: contract::shapes::True,
+                }));
+            } else {
+                let request_id = asks::mint();
+                let requested = contract::events::InteractionRequested {
+                    request_id: request_id.clone(),
+                    interaction,
+                    action_ids: None,
+                    extension: Some(name.to_owned()),
+                };
+                let unsent = shared.raise(id, requested);
+                // Parked before anything can answer: the answer resumes
+                // only from the loop's ack, after the drain.
+                parked.push(Parked {
+                    id,
+                    thread,
+                    target: target.clone(),
+                    deadline,
+                    timeout,
+                    wake: None,
+                    _cancel: None,
+                    ask: Some(request_id),
+                });
+                if let Some(progress) = shared.calls.get_mut(&id) {
+                    *progress = Progress::Started {
+                        deadline,
+                        parked: true,
+                    };
+                }
+                hub.notify();
+                drop(shared);
+                drop(unsent);
+                return;
+            }
+            (None, None)
+        }
         Request::Drive(request) => {
             match hub.driver() {
                 Some(driver) => {
@@ -331,6 +386,7 @@ fn settle(
                         timeout,
                         wake: None,
                         _cancel: None,
+                        ask: None,
                     });
                     if let Some(progress) = hub.lock().calls.get_mut(&id) {
                         *progress = Progress::Started {
@@ -493,6 +549,7 @@ fn settle(
         timeout,
         wake,
         _cancel: cancel,
+        ask: None,
     });
     if let Some(progress) = hub.lock().calls.get_mut(&id) {
         *progress = Progress::Started {

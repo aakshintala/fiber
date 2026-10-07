@@ -15,6 +15,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
+use contract::RequestId;
 use contract::clock::{Clock, Wake};
 use contract::inbox::Delivery;
 use serde_json::Value;
@@ -22,6 +23,7 @@ use serde_json::Value;
 use crate::Error;
 use crate::host::Reply;
 
+use super::asks::PendingAsk;
 use super::{ENTRY, GRACE, Target, expired};
 
 pub(super) use super::declared::CallbackTimeouts;
@@ -182,21 +184,46 @@ impl Hub {
     /// `deliver_to` is sent, never stranded: an `mpsc` send never blocks,
     /// so sending under the lock is safe.
     pub(crate) fn set_inbox(&self, inbox: std::sync::mpsc::Sender<Delivery>) {
-        let mut shared = self.lock();
-        if shared.disposed {
-            return;
-        }
-        shared.inbox = Some(inbox.clone());
-        let buffered = std::mem::take(&mut shared.buffer);
-        #[cfg(test)]
-        self.at_window(Window::Flushing);
-        for delivery in buffered {
-            // `send` on an `mpsc` Sender never blocks; held under the hub
-            // lock so a concurrent `send` cannot interleave.
-            if inbox.send(delivery).is_err() {
+        // Whatever is not sent is moved out and dropped only after the
+        // lock is released: a dropped `Resolved` answers its driver,
+        // which may re-enter this hub.
+        let unsent: Vec<Delivery> = {
+            let mut shared = self.lock();
+            if shared.disposed {
                 return;
             }
-        }
+            if shared.sealed {
+                // set_inbox_on_a_sealed_hub_sends_nothing: the buffer is
+                // moved out, never flushed, so no extension line follows
+                // `fiber_exited`.
+                std::mem::take(&mut shared.buffer)
+            } else {
+                shared.inbox = Some(inbox.clone());
+                let buffered = std::mem::take(&mut shared.buffer);
+                #[cfg(test)]
+                self.at_window(Window::Flushing);
+                let mut unsent = Vec::new();
+                let mut failed = false;
+                for delivery in buffered {
+                    // `send` on an `mpsc` Sender never blocks; held under
+                    // the hub lock so sender choice, buffering and
+                    // flushing serialize.
+                    if !failed {
+                        match inbox.send(delivery) {
+                            Ok(()) => continue,
+                            Err(failed_send) => {
+                                failed = true;
+                                unsent.push(failed_send.0);
+                                continue;
+                            }
+                        }
+                    }
+                    unsent.push(delivery);
+                }
+                unsent
+            }
+        };
+        drop(unsent);
     }
 
     /// Sets the ephemeral emitter `host.status`, `host.widget` and `host.emit`
@@ -287,12 +314,16 @@ impl Hub {
     /// Records the extension's drop under the same lock that routes
     /// deliveries: anything routed after this is dropped.
     pub(crate) fn dispose(&self, name: &str) {
-        let mut shared = self.lock();
-        shared.disposed = true;
-        if !matches!(shared.phase, Phase::Stopped(_)) {
-            shared.stop(stopped(name));
-        }
-        drop(shared);
+        let unsent = {
+            let mut shared = self.lock();
+            shared.disposed = true;
+            if !matches!(shared.phase, Phase::Stopped(_)) {
+                shared.stop(stopped(name))
+            } else {
+                Vec::new()
+            }
+        };
+        drop(unsent);
         self.notify();
     }
 
@@ -364,22 +395,15 @@ impl Hub {
     /// call order when no sender arrived yet. One routed after the drop
     /// or after `seal` is dropped instead; routing holds one lock, so nothing is stranded.
     pub(crate) fn send(&self, delivery: Delivery) {
-        let mut shared = self.lock();
-        if shared.disposed || shared.sealed {
-            return;
-        }
-        let inbox = shared.inbox.clone();
-        #[cfg(test)]
-        self.at_window(Window::Selected);
-        if let Some(inbox) = inbox {
-            // `send` on an `mpsc` Sender never blocks; held under the hub
-            // lock so sender choice, buffering and flushing serialize.
-            match inbox.send(delivery) {
-                Ok(()) | Err(_) => {}
-            }
-        } else {
-            shared.buffer.push(delivery);
-        }
+        let unsent = {
+            let mut shared = self.lock();
+            #[cfg(test)]
+            self.at_window(Window::Selected);
+            shared.route(delivery)
+        };
+        // Dropped only after the lock is released: a dropped `Resolved`
+        // answers its driver, which may re-enter this hub.
+        drop(unsent);
     }
 }
 
@@ -395,6 +419,11 @@ pub(crate) struct Shared {
     /// Every hook's timeout once the entry script returns, when
     /// configuration overrides them.
     pub(super) hook_timeout: Option<Duration>,
+    /// The open `host.ask` questions, by request id.
+    pub(super) asks: HashMap<RequestId, PendingAsk>,
+    /// Whether a client can answer a `host.ask`: set by the session, false
+    /// until it is. An ask with no answerer returns declined at once.
+    pub(super) answerable: bool,
     /// The loop's inbox for the extension's deliveries, set by `deliver_to`.
     pub(super) inbox: Option<std::sync::mpsc::Sender<Delivery>>,
     /// Deliveries that ended before any inbox, in call order, sent on the
@@ -595,8 +624,10 @@ impl Shared {
 
     /// Whether registration is done, still running, or has stopped the
     /// extension. A waiter that finds the entry script past its grace
-    /// abandons it.
-    pub(super) fn gate(&mut self, name: &str, now: Instant) -> Gate<'_> {
+    /// abandons it. Returns what stopping declined, for the caller to drop
+    /// once the hub lock is released; empty unless this call abandoned.
+    pub(super) fn gate(&mut self, name: &str, now: Instant) -> (Gate<'_>, Vec<Delivery>) {
+        let mut unsent = Vec::new();
         if let Phase::Registering { abandon_at } = self.phase
             && expired(abandon_at, now)
         {
@@ -604,22 +635,25 @@ impl Shared {
             // process exits, and a credential lock its VM holds with it; Rust
             // cannot stop a thread. Cap abandoned VMs per session if leaked
             // threads or locks show (docs/performance.md).
-            self.stop(Error::Abandoned {
+            unsent = self.stop(Error::Abandoned {
                 extension: name.to_owned(),
                 callback: ENTRY.to_owned(),
             });
         }
-        match &self.phase {
+        let gate = match &self.phase {
             // A caller starts the thread before it waits, so no thread is
             // coming: failing beats waiting forever.
             Phase::Idle => Gate::Stopped(stopped(name)),
             Phase::Registering { abandon_at } => Gate::Wait(*abandon_at),
             Phase::Ready(timeouts) => Gate::Ready(timeouts),
             Phase::Stopped(e) => Gate::Stopped(again(name, e)),
-        }
+        };
+        (gate, unsent)
     }
 
     /// Judges the call `id` against the phase and its own progress.
+    /// Returns what stopping declined, for the caller to drop once the hub
+    /// lock is released; empty unless this call abandoned the extension.
     pub(super) fn judge(
         &mut self,
         name: &str,
@@ -627,33 +661,37 @@ impl Shared {
         target: &Target,
         asked: Instant,
         now: Instant,
-    ) -> Next {
+    ) -> (Next, Vec<Delivery>) {
         // Stopped is final for every waiter, one holding a result included.
         if let Phase::Stopped(e) = &self.phase {
             let e = again(name, e);
             self.forget(id);
-            return Next::Return(Err(e));
+            return (Next::Return(Err(e)), Vec::new());
         }
         if !matches!(
             self.calls.get(&id),
             Some(Progress::Queued | Progress::Started { .. })
         ) {
-            return Next::Return(match self.calls.remove(&id) {
-                Some(Progress::Done(result)) => result,
-                _ => Err(stopped(name)),
-            });
+            return (
+                Next::Return(match self.calls.remove(&id) {
+                    Some(Progress::Done(result)) => result,
+                    _ => Err(stopped(name)),
+                }),
+                Vec::new(),
+            );
         }
-        let declared = match self.gate(name, now) {
+        let (gate, mut unsent) = self.gate(name, now);
+        let declared = match gate {
             Gate::Ready(timeouts) => timeouts.timeout(target),
-            Gate::Wait(until) => return Next::Sleep(until),
+            Gate::Wait(until) => return (Next::Sleep(until), unsent),
             Gate::Stopped(e) => {
                 self.forget(id);
-                return Next::Return(Err(e));
+                return (Next::Return(Err(e)), unsent);
             }
         };
         let Some(timeout) = declared else {
             self.forget(id);
-            return Next::Return(Err(not_registered(name, target)));
+            return (Next::Return(Err(not_registered(name, target))), unsent);
         };
         let (until, running) = match self.calls.get(&id) {
             Some(Progress::Started { deadline, parked }) => {
@@ -662,22 +700,25 @@ impl Shared {
             _ => (asked.checked_add(timeout), false),
         };
         if !expired(until, now) {
-            return Next::Sleep(until);
+            return (Next::Sleep(until), unsent);
         }
         self.forget(id);
         if !running {
             // Queued or parked, not on the thread: failing it leaves the VM up.
-            return Next::Return(Err(timed_out(name, target, timeout)));
+            return (Next::Return(Err(timed_out(name, target, timeout))), unsent);
         }
         // debt: the abandoned thread is leaked, still running, until the
         // process exits, and a credential lock its VM holds with it; Rust
         // cannot stop a thread. Cap abandoned VMs per session if leaked
         // threads or locks show (docs/performance.md).
-        self.stop(stopped(name));
-        Next::Return(Err(Error::Abandoned {
-            extension: name.to_owned(),
-            callback: target.to_string(),
-        }))
+        unsent = self.stop(stopped(name));
+        (
+            Next::Return(Err(Error::Abandoned {
+                extension: name.to_owned(),
+                callback: target.to_string(),
+            })),
+            unsent,
+        )
     }
 
     /// Records `result` for the call `id`, if its caller still waits.
@@ -688,10 +729,20 @@ impl Shared {
     }
 
     /// Stops the extension with `e`. The replies no thread will take are
-    /// dropped, which releases a credential lock in one.
-    pub(super) fn stop(&mut self, e: Error) {
+    /// dropped, which releases a credential lock in one. Every held ask is
+    /// declined by `fiber`, routed in the same critical section; returns
+    /// what could not be sent, for the caller to drop after the hub lock
+    /// is released.
+    pub(super) fn stop(&mut self, e: Error) -> Vec<Delivery> {
         self.phase = Phase::Stopped(e);
         self.replies.clear();
+        // stop_declines_every_held_ask: one `Resolved` per held ask.
+        let held: Vec<RequestId> = self.asks.keys().cloned().collect();
+        let mut unsent = Vec::new();
+        for request in &held {
+            unsent.extend(self.decline(request));
+        }
+        unsent
     }
 
     /// Drops the call `id`: its caller has stopped waiting.

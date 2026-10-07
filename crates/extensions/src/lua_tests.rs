@@ -9,6 +9,7 @@ use fakes::clock::FakeClock;
 
 use super::hub::Progress;
 use super::*;
+use contract::inbox::Delivery;
 
 /// Wall-clock bound on a wait for the VM, a server, or a thread.
 const WAIT: Duration = Duration::from_secs(5);
@@ -83,8 +84,8 @@ fn ready(commands: &[(&str, u64)]) -> Shared {
     in_phase(Phase::Ready(timeouts))
 }
 
-fn returned(next: Next) -> Result<Value, Error> {
-    match next {
+fn returned(next: (Next, Vec<Delivery>)) -> Result<Value, Error> {
+    match next.0 {
         Next::Return(result) => result,
         Next::Sleep(until) => panic!("slept until {until:?}"),
     }
@@ -107,7 +108,7 @@ fn a_call_waiting_on_registration_sleeps_until_the_entry_scripts_grace_ends() {
     let abandon_at = asked.checked_add(Duration::from_secs(5));
     let mut shared = in_phase(Phase::Registering { abandon_at });
     let id = shared.push(command("x"), Value::Null, asked);
-    let Next::Sleep(until) = shared.judge("ext", id, &command("x"), asked, asked) else {
+    let (Next::Sleep(until), _) = shared.judge("ext", id, &command("x"), asked, asked) else {
         panic!("a waiter returned during registration")
     };
     assert_eq!(until, abandon_at);
@@ -155,7 +156,7 @@ fn a_queued_call_past_its_own_timeout_times_out_and_the_vm_stays() {
         shared.queue.iter().map(|job| job.id).collect::<Vec<_>>(),
         [slow]
     );
-    let Next::Sleep(until) = shared.judge("ext", slow, &command("slow"), asked, at) else {
+    let (Next::Sleep(until), _) = shared.judge("ext", slow, &command("slow"), asked, at) else {
         panic!("slow returned")
     };
     assert_eq!(until, Some(asked + Duration::from_secs(10)));
@@ -219,7 +220,7 @@ fn a_running_call_past_its_grace_abandons_the_vm() {
             parked: false,
         },
     );
-    let Next::Sleep(until) = shared.judge("ext", id, &command("spin"), asked, at) else {
+    let (Next::Sleep(until), _) = shared.judge("ext", id, &command("spin"), asked, at) else {
         panic!("returned inside its grace")
     };
     assert_eq!(until, Some(inside + GRACE));

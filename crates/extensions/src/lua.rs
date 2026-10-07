@@ -357,13 +357,20 @@ impl LuaExtension {
         // only listed names, so an unregistered name is refused here.
         loop {
             let now = self.hub.clock().now();
-            let registered = match shared.gate(&self.name, now) {
+            // `unsent` is empty unless this call abandoned the extension,
+            // which ends in `Stopped` below: stopping declines nothing on
+            // any other arm.
+            let (gate, unsent) = shared.gate(&self.name, now);
+            let registered = match gate {
                 Gate::Ready(timeouts) => timeouts.commands.contains_key(name),
                 Gate::Stopped(e) => {
                     self.hub.notify();
+                    drop(shared);
+                    drop(unsent);
                     return Err(e);
                 }
                 Gate::Wait(until) => {
+                    drop(unsent);
                     shared = self.hub.wait(shared, until);
                     continue;
                 }
@@ -399,6 +406,21 @@ impl LuaExtension {
         self.hub.set_driver(drive);
     }
 
+    /// Sets whether a client can answer this extension's `host.ask`.
+    pub(crate) fn set_answerable(&self, yes: bool) {
+        self.hub.lock().answerable = yes;
+    }
+
+    /// Answers a driver's `reply` from the ask it names, if this extension
+    /// holds it; hands the reply back otherwise.
+    pub(crate) fn answer(
+        &self,
+        reply: contract::commands::Reply,
+        ack: contract::inbox::Ack,
+    ) -> Option<(contract::commands::Reply, contract::inbox::Ack)> {
+        self.hub.answer(reply, ack)
+    }
+
     /// Emits an ephemeral event through the late-bound emitter.
     pub(crate) fn emit(&self, event: contract::events::Event) {
         self.hub.emit(event);
@@ -407,6 +429,13 @@ impl LuaExtension {
     /// Drops every later emission and delivery from this extension.
     pub(crate) fn seal(&self) {
         self.hub.seal();
+    }
+
+    /// Records the extension's drop: anything routed after this is dropped.
+    /// Test tooling: production drops the extension instead.
+    #[cfg(test)]
+    pub(crate) fn dispose(&self) {
+        self.hub.dispose(&self.name);
     }
 
     /// Every hook the entry script registered, and why each one it tried
@@ -441,15 +470,20 @@ impl LuaExtension {
         self.start(&mut shared)?;
         loop {
             let now = self.hub.clock().now();
-            let until = match shared.gate(&self.name, now) {
+            // As above: `unsent` is empty unless this call abandoned.
+            let (gate, unsent) = shared.gate(&self.name, now);
+            let until = match gate {
                 Gate::Ready(timeouts) => return Ok(read(timeouts)),
                 Gate::Stopped(e) => {
                     // This may be the waiter that abandoned registration.
                     self.hub.notify();
+                    drop(shared);
+                    drop(unsent);
                     return Err(e);
                 }
                 Gate::Wait(until) => until,
             };
+            drop(unsent);
             shared = self.hub.wait(shared, until);
         }
     }
@@ -508,14 +542,20 @@ impl LuaExtension {
         self.hub.notify();
         loop {
             // Under the hub lock, so a clock move cannot land between the
-            // judgement and the park.
+            // judgement and the park. `unsent` is empty unless this call
+            // abandoned the extension, which returns.
             let now = self.hub.clock().now();
             match shared.judge(&self.name, id, &target, asked, now) {
-                Next::Return(result) => {
+                (Next::Return(result), unsent) => {
                     self.hub.notify();
+                    drop(shared);
+                    drop(unsent);
                     return result;
                 }
-                Next::Sleep(until) => shared = self.hub.wait(shared, until),
+                (Next::Sleep(until), unsent) => {
+                    drop(unsent);
+                    shared = self.hub.wait(shared, until);
+                }
             }
         }
     }
@@ -557,11 +597,16 @@ impl Queued {
         loop {
             let now = self.hub.clock().now();
             match shared.judge(&self.name, self.id, &self.target, self.asked, now) {
-                Next::Return(result) => {
+                (Next::Return(result), unsent) => {
                     self.hub.notify();
+                    drop(shared);
+                    drop(unsent);
                     return result;
                 }
-                Next::Sleep(until) => shared = self.hub.wait(shared, until),
+                (Next::Sleep(until), unsent) => {
+                    drop(unsent);
+                    shared = self.hub.wait(shared, until);
+                }
             }
         }
     }
@@ -619,6 +664,7 @@ fn timeout_ms(timeout: Duration) -> u64 {
     u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX)
 }
 
+pub(crate) mod asks;
 mod declared;
 mod errors;
 mod hub;
