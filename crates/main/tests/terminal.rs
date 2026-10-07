@@ -374,11 +374,16 @@ fn typing_a_prompt_sees_the_answer_and_cancels_a_turn() {
     run.read_until("Working");
     run.write(b"\x1b");
     run.read_until("interrupted");
-    run.write(b"\x03\x03");
+    run.write(b"\x03\x03\r");
+    // The turn just ended, so its idle status may still be on its way: the
+    // quit either exits at once or asks first (`docs/tui.md`, "Quit"). The
+    // Enter goes out with the Ctrl+C bytes, so it is processed after them:
+    // it leaves working sessions running, and when the terminal already
+    // exited it is never read.
     // After the last frame the output holds the alternate-screen leave and
-    // the cursor shown.
-    run.read_until("\x1b[?1049l");
+    // the cursor shown, then one resume line per live session ("On exit").
     run.read_until("\x1b[?25h");
+    run.read_until("fiber resume");
     let output = run.wait();
     assert_eq!(output.status.code(), Some(0));
 }
@@ -427,8 +432,11 @@ fn a_standing_ask_opens_the_approval_panel_and_allow_once_runs_the_call() {
     run.write(b"\r");
     run.read_until("Hello.");
     run.read_until("completed");
-    run.write(b"\x03\x03");
-    run.read_until("\x1b[?1049l");
+    // As above: the turn just ended, so quitting either exits at once or
+    // asks first. The Enter leaves the session running, and exiting prints
+    // its resume line ("Quit", "On exit").
+    run.write(b"\x03\x03\r");
+    run.read_until("fiber resume");
     let output = run.wait();
     assert_eq!(output.status.code(), Some(0));
     // The model got the call's output, not a denial.
