@@ -48,7 +48,6 @@ impl Signer for Refuses {
         Err(contract::signing::Error::Credential {
             code: self.code.clone(),
             message: "the token refresh was rejected".into(),
-            unattended: false,
         })
     }
 }
@@ -235,7 +234,6 @@ fn a_credential_error_displays_its_message_alone() {
     let error = contract::signing::Error::Credential {
         code: ErrorCode::AuthenticationFailed,
         message: "the token refresh was rejected".into(),
-        unattended: false,
     };
     assert_eq!(error.to_string(), "the token refresh was rejected");
 }
@@ -285,7 +283,6 @@ fn a_failed_credential_or_sign_keeps_its_text_apart_from_fiber_s_sentence() {
             SignError::Credential {
                 code: ErrorCode::CredentialFailed,
                 message: "init.lua:3: boom".into(),
-                unattended: false,
             },
             ErrorCode::CredentialFailed,
             "acme's credential() failed. Run `fiber login acme`.",
@@ -296,7 +293,6 @@ fn a_failed_credential_or_sign_keeps_its_text_apart_from_fiber_s_sentence() {
             SignError::Credential {
                 code: ErrorCode::QuotaExceeded,
                 message: "init.lua:3: boom".into(),
-                unattended: false,
             },
             ErrorCode::QuotaExceeded,
             "acme's credential() failed. Run `fiber login acme`.",
@@ -307,7 +303,6 @@ fn a_failed_credential_or_sign_keeps_its_text_apart_from_fiber_s_sentence() {
             SignError::Credential {
                 code: ErrorCode::AuthenticationFailed,
                 message: "init.lua:3: boom".into(),
-                unattended: false,
             },
             ErrorCode::AuthenticationFailed,
             "acme's credential() failed: the token endpoint rejected the refresh. Run `fiber login \
@@ -316,10 +311,8 @@ fn a_failed_credential_or_sign_keeps_its_text_apart_from_fiber_s_sentence() {
         ),
         (
             "unattended login",
-            SignError::Credential {
-                code: ErrorCode::AuthenticationFailed,
+            SignError::Unattended {
                 message: "init.lua:3: boom".into(),
-                unattended: true,
             },
             ErrorCode::AuthenticationFailed,
             "acme's credential() failed: logging in needs a person, and nobody is attached. Run \
@@ -331,7 +324,6 @@ fn a_failed_credential_or_sign_keeps_its_text_apart_from_fiber_s_sentence() {
             SignError::Credential {
                 code: ErrorCode::ConnectionFailed,
                 message: "init.lua:3: boom".into(),
-                unattended: false,
             },
             ErrorCode::ConnectionFailed,
             "acme's credential() failed: the token endpoint could not be reached.",

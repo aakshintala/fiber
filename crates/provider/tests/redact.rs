@@ -508,7 +508,6 @@ impl Signer for EchoKey {
         Err(contract::signing::Error::Credential {
             code: ErrorCode::CredentialFailed,
             message: "bad sk-key".into(),
-            unattended: false,
         })
     }
 }
