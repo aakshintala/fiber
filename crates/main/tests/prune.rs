@@ -14,6 +14,7 @@
 mod support;
 
 use std::fs::{self, File};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
@@ -103,8 +104,9 @@ fn prune(setup: &Setup, args: &[&str]) -> std::process::Output {
     run_to_exit(setup.deadline, "fiber sessions prune", command)
 }
 
-/// Waits under [`DEADLINE`] until `socket` is gone, naming `what`.
-fn until_absent(socket: &Path, what: &str) {
+/// Waits under the test's [`Deadline`] until `socket` is gone, naming
+/// `what`.
+fn until_absent(deadline: Deadline, socket: &Path, what: &str) {
     let socket = socket.to_owned();
     let (done, reached) = mpsc::channel();
     thread::spawn(move || {
@@ -203,7 +205,7 @@ fn yes_starts_a_hub_removes_the_old_and_keeps_the_young() {
         "{}",
         setup.hub_log()
     );
-    until_absent(&setup.hub_socket(), "the hub to idle out");
+    until_absent(setup.deadline, &setup.hub_socket(), "the hub to idle out");
 }
 
 #[test]
@@ -221,7 +223,7 @@ fn a_young_fork_blocks_then_cascade_removes_both() {
     let output = prune(&setup, &["--cascade", "--yes", "--older-than", "30d"]);
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
     assert!(!root.exists() && !fork.exists());
-    until_absent(&setup.hub_socket(), "the hub to idle out");
+    until_absent(setup.deadline, &setup.hub_socket(), "the hub to idle out");
 }
 
 #[test]
@@ -278,29 +280,50 @@ fn without_yes_and_without_a_terminal_it_is_usage_and_removes_nothing() {
     );
 }
 
-/// Runs `git` with `args` in `dir`, as the worktree tests do.
-fn git(dir: &Path, args: &[&str]) {
-    let status = Command::new("git")
+/// A `git` command in its own process group, stdin null and output piped,
+/// for [`run_to_exit`].
+fn git_command() -> Command {
+    let mut command = Command::new("git");
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0);
+    command
+}
+
+/// Runs `git` with `args` in `dir`, as the worktree tests do, under the
+/// test's [`Deadline`].
+fn git(deadline: Deadline, dir: &Path, args: &[&str]) {
+    let mut command = git_command();
+    command
         .args(["-c", "user.name=t", "-c", "user.email=t@t"])
         .args(["-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"])
         .args(["-c", "init.defaultBranch=main"])
         .args(args)
-        .current_dir(dir)
-        .stdin(Stdio::null())
-        .status()
-        .unwrap();
-    assert!(status.success(), "git {args:?} in {}", dir.display());
+        .current_dir(dir);
+    let output = run_to_exit(deadline, "git", command);
+    assert!(
+        output.status.success(),
+        "git {args:?} in {}: {}",
+        dir.display(),
+        text(&output.stderr)
+    );
 }
 
 /// Makes the workspace a git repository with one commit: `file.txt` and a
 /// `.gitignore` matching `local.secret`.
 fn repo(setup: &Setup) {
     let workspace = setup.workspace();
-    git(&workspace, &["init", "--quiet"]);
+    git(setup.deadline, &workspace, &["init", "--quiet"]);
     fs::write(workspace.join("file.txt"), "x").unwrap();
     fs::write(workspace.join(".gitignore"), "local.secret\n").unwrap();
-    git(&workspace, &["add", "."]);
-    git(&workspace, &["commit", "--quiet", "-m", "first"]);
+    git(setup.deadline, &workspace, &["add", "."]);
+    git(
+        setup.deadline,
+        &workspace,
+        &["commit", "--quiet", "-m", "first"],
+    );
 }
 
 /// A kept worktree `id` on branch `fiber/<id>` under the project's
@@ -311,6 +334,7 @@ fn kept(setup: &Setup, id: &str) -> PathBuf {
     let branch = format!("fiber/{id}");
     let target = path.to_string_lossy().into_owned();
     git(
+        setup.deadline,
         setup.workspace().as_path(),
         &["worktree", "add", "-b", &branch, &target],
     );
@@ -319,20 +343,16 @@ fn kept(setup: &Setup, id: &str) -> PathBuf {
 
 /// Whether `refs/heads/fiber/<id>` still exists in the workspace.
 fn branch_exists(setup: &Setup, id: &str) -> bool {
-    Command::new("git")
-        .arg("-C")
-        .arg(setup.workspace())
-        .args([
-            "rev-parse",
-            "--verify",
-            "--quiet",
-            &format!("refs/heads/fiber/{id}"),
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
+    let mut command = git_command();
+    command.arg("-C").arg(setup.workspace()).args([
+        "rev-parse",
+        "--verify",
+        "--quiet",
+        &format!("refs/heads/fiber/{id}"),
+    ]);
+    run_to_exit(setup.deadline, "git rev-parse", command)
+        .status
+        .success()
 }
 
 /// A session `id` whose workspace is `workspace`: its log and an unheld
@@ -408,8 +428,8 @@ fn a_unique_commit_worktree_is_skipped_naming_it() {
     repo(&setup);
     let wt = kept(&setup, "s_00000000000000e4");
     fs::write(wt.join("more.txt"), "y").unwrap();
-    git(&wt, &["add", "."]);
-    git(&wt, &["commit", "--quiet", "-m", "second"]);
+    git(setup.deadline, &wt, &["add", "."]);
+    git(setup.deadline, &wt, &["commit", "--quiet", "-m", "second"]);
     let output = prune(&setup, &["--yes"]);
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
     let out = text(&output.stdout);

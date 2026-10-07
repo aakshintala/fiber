@@ -15,6 +15,7 @@
 mod support;
 
 use std::fs;
+use std::os::unix::process::CommandExt;
 
 use std::path::Path;
 use std::sync::{Arc, Mutex, mpsc};
@@ -147,24 +148,28 @@ fn prompts_sent_through_the_hub_page_back_newest_first_and_ask_adds_none() {
 }
 
 /// One side of a two-thread meeting with a deadline: each side waits
-/// [`DEADLINE`] for the other, and the other failing ends the wait at once.
+/// under the test's [`Deadline`] for the other, and the other failing ends
+/// the wait at once.
 struct Meet {
     arrived: mpsc::Sender<()>,
     other: mpsc::Receiver<()>,
+    deadline: Deadline,
 }
 
 impl Meet {
-    fn pair() -> (Self, Self) {
+    fn pair(deadline: Deadline) -> (Self, Self) {
         let (a_tx, a_rx) = mpsc::channel();
         let (b_tx, b_rx) = mpsc::channel();
         (
             Self {
                 arrived: a_tx,
                 other: b_rx,
+                deadline,
             },
             Self {
                 arrived: b_tx,
                 other: a_rx,
+                deadline,
             },
         )
     }
@@ -189,7 +194,7 @@ impl Meet {
 #[test]
 fn two_racing_clients_share_one_hub() {
     let setup = Setup::new();
-    let (mine, theirs) = Meet::pair();
+    let (mine, theirs) = Meet::pair(setup.deadline);
     let setup = &setup;
     thread::scope(|scope| {
         let first = scope.spawn(move || {
@@ -367,7 +372,17 @@ fn a_session_stuck_in_setup_is_killed_by_its_guard() {
     // An MCP server that never answers holds the session in setup, before
     // its log and lock exist. Its command line carries a marker.
     let marker = format!("{workspace}/blocked-mcp");
-    let ready = fakes::children::Ready::new(setup.root.path());
+    let fifo = setup.root.path().join("ready.fifo");
+    let mut mkfifo = std::process::Command::new("mkfifo");
+    mkfifo
+        .arg(&fifo)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .process_group(0);
+    let made = run_to_exit(setup.deadline, "mkfifo", mkfifo);
+    assert!(made.status.success(), "{made:?}");
+    let ready = fakes::children::Ready::at(&fifo, &|| setup.deadline.left());
     let ready_path = ready.path().to_string_lossy().into_owned();
     write_json(
         &setup.home().join("config.json"),
