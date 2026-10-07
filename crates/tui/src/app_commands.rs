@@ -553,7 +553,7 @@ impl App {
             }
             (Phase::Pending { .. }, None) => return Effect::None,
             (Phase::Starting, None) => {
-                let args = self.start_args(content);
+                let args = self.start_args();
                 let line = json!({"id": id, "command": "start", "args": args});
                 (Kind::Start, line)
             }
@@ -586,6 +586,17 @@ impl App {
             self.held.push(line);
             Effect::None
         }
+    }
+
+    /// The first prompt of a session `start` made, carrying `text`, sent
+    /// after its `subscribe` so the session counts this terminal before
+    /// the prompt. A rejection returns the text to an empty draft.
+    pub(super) fn first_prompt(&mut self, session: &SessionId, text: String) -> String {
+        let id = mint();
+        let args = json!({ "content": [{"type": "text", "text": text}] });
+        let line = session_command(&id, "prompt", session, Some(args)).to_string();
+        self.pending.insert(id, (Kind::Prompt, text));
+        line
     }
 
     /// Esc with nothing open interrupts the turn: `cancel`, only when busy.

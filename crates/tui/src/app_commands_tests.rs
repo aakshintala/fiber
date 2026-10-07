@@ -806,3 +806,93 @@ fn editing_keys_do_nothing_while_the_key_map_is_open() {
     key(&mut app, '!');
     assert_eq!(app.draft(), "ab!");
 }
+
+/// A hub line of `kind` with `payload`.
+fn hub_line(kind: &str, payload: Value) -> Line {
+    Line::Hub(contract::HubLine {
+        kind: kind.to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: payload.as_object().cloned().unwrap_or_default(),
+    })
+}
+
+/// Sends `hi` with no session and accepts the `start` for [`SESSION`],
+/// returning the lines the acceptance sends, parsed.
+fn start_accepted(app: &mut App) -> Vec<Value> {
+    let lines = sent(enter(app, "hi"));
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "start");
+    let accepted = hub_line(
+        "command_accepted",
+        json!({"command_id": lines[0]["id"], "result": {"session_id": SESSION}}),
+    );
+    app.on_line(accepted)
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_default())
+        .collect()
+}
+
+#[test]
+fn start_carries_no_content() {
+    let mut app = App::new(PathBuf::from("/w"));
+    // Held before `hub_hello`, sent after it.
+    assert_eq!(enter(&mut app, "hi"), Effect::None);
+    let hello = hub_line("hub_hello", json!({}));
+    let lines: Vec<Value> = app
+        .on_line(hello)
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_default())
+        .collect();
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "start");
+    assert_eq!(lines[0]["args"], json!({"workspace": "/w"}));
+}
+
+#[test]
+fn an_accepted_start_subscribes_then_prompts() {
+    let mut app = connected();
+    let lines = start_accepted(&mut app);
+    let commands: Vec<&Value> = lines.iter().map(|line| &line["command"]).collect();
+    assert_eq!(
+        commands,
+        [&json!("subscribe"), &json!("commands"), &json!("prompt")]
+    );
+    assert_eq!(lines[0]["args"]["level"], "full");
+    assert_eq!(lines[2]["session_id"], SESSION);
+    assert_eq!(
+        lines[2]["args"],
+        json!({"content": [{"type": "text", "text": "hi"}]})
+    );
+    assert_eq!(
+        app.session().map(|session| session.0.as_str()),
+        Some(SESSION)
+    );
+}
+
+#[test]
+fn a_rejected_first_prompt_returns_its_text() {
+    let mut app = connected();
+    let lines = start_accepted(&mut app);
+    let rejected = session_line(
+        "command_rejected",
+        json!({"command_id": lines[2]["id"], "code": "busy", "message": "Busy."}),
+    );
+    assert!(app.on_line(rejected).is_empty());
+    assert_eq!(app.notice(), Some("Busy."));
+    assert_eq!(app.draft(), "hi");
+}
+
+#[test]
+fn a_rejected_start_still_returns_its_text() {
+    let mut app = connected();
+    let lines = sent(enter(&mut app, "hi"));
+    let rejected = hub_line(
+        "command_rejected",
+        json!({"command_id": lines[0]["id"], "code": "invalid_arguments", "message": "No."}),
+    );
+    assert!(app.on_line(rejected).is_empty());
+    assert_eq!(app.notice(), Some("No."));
+    assert_eq!(app.draft(), "hi");
+    assert_eq!(app.session(), None);
+}

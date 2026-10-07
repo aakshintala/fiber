@@ -88,11 +88,13 @@ fn started(app: &mut App, now: std::time::Instant) -> String {
 }
 
 /// Accepts `start` for `session`, returning the subscribe line. The
-/// `commands` line sent beside it is checked and dropped.
+/// `commands` line and the first `prompt` sent after it are checked and
+/// dropped.
 fn accept_start(app: &mut App, command_id: &str, session: &str) -> String {
     let mut lines = accept_start_lines(app, command_id, session);
-    assert_eq!(lines.len(), 2);
+    assert_eq!(lines.len(), 3);
     assert_eq!(parse(&lines[1])["command"], "commands");
+    assert_eq!(parse(&lines[2])["command"], "prompt");
     lines.swap_remove(0)
 }
 
@@ -298,7 +300,7 @@ fn enter_before_connect_holds_start_until_hub_hello() {
     assert_eq!(lines.len(), 1);
     let value = parse(&lines[0]);
     assert_eq!(value["command"], "start");
-    assert_eq!(value["args"]["content"][0]["text"], "hi");
+    assert!(value["args"].get("content").is_none());
 }
 
 #[test]
@@ -854,9 +856,10 @@ fn attaching_sends_subscribe_then_commands() {
     let start = started(&mut app, now);
     let lines = accept_start_lines(&mut app, &start, S_A);
     let commands: Vec<serde_json::Value> = lines.iter().map(|line| parse(line)).collect();
-    assert_eq!(commands.len(), 2);
+    assert_eq!(commands.len(), 3);
     assert_eq!(commands[0]["command"], "subscribe");
     assert_eq!(commands[1]["command"], "commands");
+    assert_eq!(commands[2]["command"], "prompt");
     assert_ne!(commands[0]["id"], commands[1]["id"]);
 }
 

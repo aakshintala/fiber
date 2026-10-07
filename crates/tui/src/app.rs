@@ -573,7 +573,7 @@ impl App {
                     .and_then(Value::as_str)
                     .map(|id| SessionId(id.to_owned()));
                 match (self.pending.remove(&id), session) {
-                    (Some((Kind::Start, _)), Some(session)) => self.started(session),
+                    (Some((Kind::Start, text)), Some(session)) => self.started(session, text),
                     _ => Vec::new(),
                 }
             }
@@ -590,13 +590,15 @@ impl App {
         }
     }
 
-    /// `start` was accepted: attach with a `full` connection, and ask for
-    /// the session's `/` commands. A started session is the attached one.
-    fn started(&mut self, session: SessionId) -> Vec<String> {
+    /// `start` was accepted: attach with a `full` connection, ask for the
+    /// session's `/` commands, then send `text` as its first prompt. A
+    /// started session is the attached one.
+    fn started(&mut self, session: SessionId, text: String) -> Vec<String> {
         self.attach(session.clone());
         vec![
             self.subscribe(&session, Level::Full),
             self.ask_commands(&session),
+            self.first_prompt(&session, text),
         ]
     }
 

@@ -1265,11 +1265,10 @@ impl App {
         Vec::new()
     }
 
-    /// The `start` args for `content`: the picked workspace on home,
-    /// else the launch workspace, and the launch directory as today.
-    /// Sending one hides the placeholder and clears the blocker lines
-    /// until the run ends.
-    pub(super) fn start_args(&mut self, content: Value) -> Value {
+    /// The `start` args: the picked workspace on home, else the launch
+    /// workspace, and the launch directory as today. Sending one hides the
+    /// placeholder and clears the blocker lines until the run ends.
+    pub(super) fn start_args(&mut self) -> Value {
         match &mut self.home {
             Some(home) => {
                 home.prompted = true;
@@ -1278,15 +1277,9 @@ impl App {
                     .chosen
                     .clone()
                     .unwrap_or_else(|| home.launch.workspace.display().to_string());
-                json!({
-                    "workspace": workspace,
-                    "content": content,
-                })
+                json!({ "workspace": workspace })
             }
-            None => json!({
-                "workspace": self.workspace.display().to_string(),
-                "content": content,
-            }),
+            None => json!({ "workspace": self.workspace.display().to_string() }),
         }
     }
 }
