@@ -28,6 +28,9 @@ pub(crate) enum TargetId {
     DismissNotice(usize),
     /// "+N more" under the notices: lists them all.
     MoreNotices,
+    /// A turn, by its index: a focus stop that clicks and hover pass
+    /// over.
+    Turn(usize),
     /// The open overlay's ✕: closes it.
     CloseOverlay,
 }
@@ -39,11 +42,13 @@ pub(crate) struct Target {
     pub(crate) rect: Rect,
 }
 
-/// The target drawn last whose cells hold `col`, `row`.
+/// The target drawn last whose cells hold `col`, `row`, passing over a
+/// turn: turns are focus stops, never click targets.
 pub(crate) fn under(targets: &[Target], col: u16, row: u16) -> Option<&Target> {
     targets
         .iter()
         .rev()
+        .filter(|target| !matches!(target.id, TargetId::Turn(_)))
         .find(|target| target.rect.contains(Position::new(col, row)))
 }
 

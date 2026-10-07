@@ -541,3 +541,68 @@ fn a_click_on_a_steering_rows_cross_drops_it_and_its_text_still_selects() {
     feed(&mut lp, vec![click(3, 9)]);
     assert_eq!(lp.app.input().expand(), "and test it");
 }
+
+#[test]
+fn hover_never_tints_a_turn() {
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+    let mut app = crate::app::App::new(std::path::PathBuf::from("/w"));
+    app.set_size(60, 12);
+    app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    app.on_line(Line::Session(contract::Envelope {
+        kind: "turn_started".to_owned(),
+        session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: serde_json::json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "go"}]}]})
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    }));
+    app.on_line(Line::Session(contract::Envelope {
+        kind: "assistant_message_delta".to_owned(),
+        session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: Some(contract::ActionId("m_1".to_owned())),
+        seq: None,
+        payload: serde_json::json!({"text": "hello"})
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+    }));
+    let area = Rect::new(0, 0, 60, 12);
+    let mut plain = Buffer::empty(area);
+    crate::view::render(&app, area, &mut plain, None);
+    let row = crate::view::text(&plain)
+        .lines()
+        .position(|line| line.contains("hello"))
+        .and_then(|at| u16::try_from(at).ok())
+        .expect("the reply row");
+    // The pointer sits on the turn's stop, which hover passes over: no
+    // cell takes the hover tint.
+    let mut buf = Buffer::empty(area);
+    crate::view::render(&app, area, &mut buf, Some((3, row)));
+    let tint = crate::view::HOVER_TINT.bg.unwrap_or_default();
+    for y in 0..12 {
+        for x in 0..60 {
+            let cell = buf.cell((x, y)).expect("a cell");
+            assert!(cell.bg != tint, "cell {x},{y} has no hover tint");
+        }
+    }
+    // The `hover` jig's frames write what they wrote before turns were
+    // stops, byte for byte.
+    let events = include_str!("../examples/hover.jsonl");
+    let bytes = crate::hover_frames(events, 60, 12, &[(3, 10), (4, 10), (3, 0), (3, 0)])
+        .unwrap_or_else(|error| panic!("hover_frames: {error}"));
+    assert_eq!(bytes.len(), 4);
+    assert!(bytes[0] > 0);
+    assert_eq!(bytes[1], 0);
+    assert!(bytes[2] > 0);
+    assert_eq!(bytes[3], 0);
+}

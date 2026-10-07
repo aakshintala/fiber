@@ -712,7 +712,7 @@ Shift+Tab moves focus to the newest item in the conversation.
 - Esc returns focus to the input box, keeping the draft.
 
 The focus order is not defined screen by screen. It is every click target on
-screen, the same targets hover highlights, from top to bottom and left to
+screen, the same targets hover highlights, and each turn, from top to bottom and left to
 right. Every mouse target, an extension widget's included, is therefore a
 focus stop with no extra work, and nothing the mouse can reach is out of the
 keyboard's reach.

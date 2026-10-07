@@ -75,6 +75,7 @@ fn focus_that_loses_its_target_returns_in_the_same_frame() {
     inputs.push(keys(b"\x1b[5~"));
     inputs.extend(reply("m_99", "fresh"));
     inputs.push(keys(b"\x1b[Z"));
+    inputs.push(keys(b"\x1b[B"));
     inputs.push(keys(b"\r"));
     feed(&mut lp, inputs);
     assert_eq!(lp.app.focused(), None);

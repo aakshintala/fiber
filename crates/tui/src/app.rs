@@ -456,7 +456,14 @@ impl App {
     /// The turns' cards, each aside after the turns there were when it
     /// came.
     fn rows(&self) -> Vec<Row> {
+        self.rows_and_turns().0
+    }
+
+    /// The rows with each turn's range of row indices: the rows its
+    /// `turn.rows(..)` pushed.
+    fn rows_and_turns(&self) -> (Vec<Row>, Vec<(usize, std::ops::Range<usize>)>) {
         let mut out = Vec::new();
+        let mut turns = Vec::new();
         let mut asides = self.fold.asides.iter().peekable();
         for at in 0..=self.turns.len() {
             while let Some((_, aside)) = asides.next_if(|(after, _)| *after <= at) {
@@ -464,10 +471,17 @@ impl App {
             }
             self.shells.rows(at, &mut out);
             if let Some(turn) = self.turns.get(at) {
+                let start = out.len();
                 turn.rows(self.width, &mut out);
+                turns.push((at, start..out.len()));
             }
         }
-        out
+        (out, turns)
+    }
+
+    /// Each turn's index with its range of row indices in [`Self::lines`].
+    pub(crate) fn turn_lines(&self) -> Vec<(usize, std::ops::Range<usize>)> {
+        self.rows_and_turns().1
     }
 
     /// `toggle_ledgers`: closes every ledger when all are open, else opens

@@ -149,3 +149,22 @@ fn every_report_moves_the_pointer_only_with_hover() {
         Some(TargetId::Badge)
     );
 }
+
+#[test]
+fn under_passes_over_a_turn() {
+    let targets = vec![
+        Target {
+            id: TargetId::Turn(0),
+            rect: Rect::new(0, 0, 60, 5),
+        },
+        Target {
+            id: TargetId::Line(crate::app::Target::Group(0)),
+            rect: Rect::new(0, 2, 60, 1),
+        },
+    ];
+    assert_eq!(hit(&targets, 3, 1), None);
+    assert_eq!(
+        hit(&targets, 3, 2),
+        Some(TargetId::Line(crate::app::Target::Group(0)))
+    );
+}

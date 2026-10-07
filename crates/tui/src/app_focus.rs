@@ -124,15 +124,24 @@ impl App {
     }
 
     /// The conversation's items in order, each with the index of its first
-    /// line in [`Self::lines`]: each line target once, at its first line.
+    /// line in [`Self::lines`]: each turn at its first line, each line
+    /// target once at its first line, a turn before a line target on the
+    /// same line.
     fn items(&self) -> Vec<(usize, TargetId)> {
-        let mut out = Vec::new();
+        let mut out: Vec<(usize, TargetId)> = self
+            .turn_lines()
+            .into_iter()
+            .map(|(at, range)| (range.start, TargetId::Turn(at)))
+            .collect();
         for (line, target) in self.targets() {
             let id = TargetId::Line(target);
             if !out.iter().any(|(_, seen)| *seen == id) {
                 out.push((line, id));
             }
         }
+        // The sort is stable, so a turn stays before a line target on the
+        // same line.
+        out.sort_by_key(|(line, _)| *line);
         out
     }
 
@@ -226,6 +235,7 @@ impl App {
             TargetId::Token(number) => self.draft.token_text(number).map(str::to_owned),
             TargetId::Notice(id) => self.notices.text(id).map(str::to_owned),
             TargetId::Steering(at) => self.steering.text(at).map(str::to_owned),
+            TargetId::Turn(at) => self.turn_text(at),
             TargetId::Badge
             | TargetId::NewBelow
             | TargetId::DropSteering(_)
@@ -248,6 +258,30 @@ impl App {
             .filter(|(_, own)| *own == Some(target))
             .map(|(line, _)| line.to_string())
             .map(|text| text.trim_end().to_owned())
+            .collect();
+        (!rows.is_empty()).then(|| rows.join("\n"))
+    }
+
+    /// Turn `at`'s rows with no target of their own: the prompt bubble, a
+    /// right-aligned row, trimmed at both ends, every other row trimmed
+    /// at the end, joined by `\n`; None when that leaves nothing.
+    fn turn_text(&self, at: usize) -> Option<String> {
+        let (_, range) = self
+            .turn_lines()
+            .into_iter()
+            .find(|(seen, _)| *seen == at)?;
+        let rows: Vec<String> = self
+            .rows()
+            .into_iter()
+            .enumerate()
+            .filter(|(line, (_, own))| range.contains(line) && own.is_none())
+            .map(|(_, (line, _))| {
+                if line.alignment == Some(ratatui::layout::Alignment::Right) {
+                    line.to_string().trim().to_owned()
+                } else {
+                    line.to_string().trim_end().to_owned()
+                }
+            })
             .collect();
         (!rows.is_empty()).then(|| rows.join("\n"))
     }

@@ -255,7 +255,13 @@ fn j_and_down_step_on_k_and_up_step_back_and_the_ends_hold() {
     assert_eq!(app.focused(), ids.get(1).copied());
     key(&mut app, Key::Char('k'));
     assert_eq!(app.focused(), ids.first().copied());
+    // Each turn is a stop before its own group lines: up from the
+    // first group reaches its turn, and the turn holds at the top.
     key(&mut app, Key::Up);
+    assert_eq!(app.focused(), Some(TargetId::Turn(0)));
+    key(&mut app, Key::Up);
+    assert_eq!(app.focused(), Some(TargetId::Turn(0)));
+    key(&mut app, Key::Down);
     assert_eq!(app.focused(), ids.first().copied());
     key(&mut app, Key::Down);
     assert_eq!(app.focused(), ids.get(1).copied());
@@ -285,6 +291,11 @@ fn stepping_up_past_the_top_scrolls_the_item_above_onto_the_top_row() {
     assert_eq!(app.focused(), Some(first));
     assert_eq!(rect_of(&stops, first).y, 0);
     assert!(app.top().is_some());
+    // One more Up reaches the turn, with its first row on row 0.
+    key(&mut app, Key::Up);
+    let stops = frame(&mut app);
+    assert_eq!(app.focused(), Some(TargetId::Turn(0)));
+    assert_eq!(rect_of(&stops, TargetId::Turn(0)).y, 0);
 }
 
 #[test]
@@ -373,42 +384,42 @@ fn a_notice_beside_the_items_is_a_stop_between_them() {
     app.notices.push("Saved.".to_owned());
     frame(&mut app);
     key(&mut app, Key::BackTab);
-    // Up to the item on row 0, through whatever stops the walk passes.
+    // Up to the turn, whose stop is clipped to row 0 and drawn before
+    // the line on row 0.
     for _ in 0..60 {
-        let stops = frame(&mut app);
-        let focused = app.focused().expect("focus");
-        if matches!(focused, TargetId::Line(_)) && rect_of(&stops, focused).y == 0 {
+        if app.focused() == Some(TargetId::Turn(0)) {
             break;
         }
         key(&mut app, Key::Up);
     }
-    let stops = frame(&mut app);
-    let focused = app.focused().expect("focus");
-    assert!(
-        matches!(focused, TargetId::Line(_)) && rect_of(&stops, focused).y == 0,
-        "the walk ends on the item on row 0, not {focused:?}"
-    );
+    assert_eq!(app.focused(), Some(TargetId::Turn(0)));
     let items = app.items();
     let at = items
         .iter()
-        .position(|(_, item)| *item == focused)
-        .expect("the row 0 stop is an item");
+        .position(|(_, item)| *item == TargetId::Turn(0))
+        .expect("the turn is an item");
     let (_, after) = items
         .get(at.saturating_add(1))
         .copied()
         .expect("a next item");
+    let (_, after_next) = items
+        .get(at.saturating_add(2))
+        .copied()
+        .expect("the item after that");
+    // Down from the turn walks the row's stops: the line, the notice,
+    // its cross, then the next line.
+    key(&mut app, Key::Down);
+    assert_eq!(app.focused(), Some(after));
+    assert!(matches!(after, TargetId::Line(_)));
     key(&mut app, Key::Down);
     assert_eq!(app.focused(), Some(TargetId::Notice(0)));
     key(&mut app, Key::Down);
     assert_eq!(app.focused(), Some(TargetId::DismissNotice(0)));
     key(&mut app, Key::Down);
     let stops = frame(&mut app);
-    assert_eq!(app.focused(), Some(after));
-    assert!(
-        matches!(after, TargetId::Line(_)),
-        "after the notice stops comes the next item, not {after:?}"
-    );
-    assert!(stops.iter().any(|target| target.id == after));
+    assert_eq!(app.focused(), Some(after_next));
+    assert!(matches!(after_next, TargetId::Line(_)));
+    assert!(stops.iter().any(|target| target.id == after_next));
 }
 
 #[test]
@@ -483,7 +494,11 @@ fn enter_on_new_messages_below_follows_and_focus_returns() {
     ));
     let stops = frame(&mut app);
     assert!(stops.iter().any(|target| target.id == TargetId::NewBelow));
+    // The replies-only turn is itself an item; below it in focus order
+    // comes "New messages below".
     key(&mut app, Key::BackTab);
+    assert_eq!(app.focused(), Some(TargetId::Turn(0)));
+    key(&mut app, Key::Down);
     assert_eq!(app.focused(), Some(TargetId::NewBelow));
     assert_eq!(key(&mut app, Key::Enter), Effect::None);
     assert_eq!(app.top(), None);
@@ -737,7 +752,8 @@ fn a_wrapped_item_is_revealed_whole() {
     let ids = group_ids(&app);
     key(&mut app, Key::BackTab);
     assert_eq!(app.focused(), ids.last().copied());
-    while app.focused() != ids.first().copied() {
+    let first = app.items().first().copied().expect("an item");
+    while app.focused() != Some(first.1) {
         let before = app.top();
         key(&mut app, Key::Up);
         if app.top() != before {
@@ -766,15 +782,15 @@ fn a_taller_item_is_revealed_from_its_top() {
     let mut app = groups(8, 12, 2);
     assert_eq!(app.conversation_height(), 1);
     key(&mut app, Key::BackTab);
-    while app.focused() != group_ids(&app).first().copied() {
+    let first = app.items().first().copied().expect("an item");
+    while app.focused() != Some(first.1) {
         key(&mut app, Key::Up);
     }
     let stops = frame(&mut app);
-    let first = group_ids(&app).first().copied().expect("a group");
-    assert_eq!(app.focused(), Some(first));
-    assert_eq!(rect_of(&stops, first).y, 0);
+    assert_eq!(app.focused(), Some(TargetId::Turn(0)));
+    assert_eq!(rect_of(&stops, TargetId::Turn(0)).y, 0);
     assert_eq!(
-        rect_of(&stops, first).height as usize,
+        rect_of(&stops, TargetId::Turn(0)).height as usize,
         app.conversation_height()
     );
 }
@@ -1012,4 +1028,184 @@ fn the_overlay_cross_closes_the_notice_overlay() {
     assert!(app.notice_overlay().is_some());
     app.on_click(TargetId::CloseOverlay);
     assert_eq!(app.notice_overlay(), None);
+}
+
+/// A turn with prompt "go", reply "one", one read group and reply
+/// "two", closed.
+fn replied_turn() -> App {
+    let mut app = attached(60, 24);
+    let input = serde_json::json!({"input": [{"type": "message", "source": "driver",
+        "content": [{"type": "text", "text": "go"}]}]});
+    app.on_line(envelope("turn_started", input, None));
+    for (action, text) in [("m_1", "one"), ("m_2", "two")] {
+        app.on_line(envelope(
+            "assistant_message_delta",
+            serde_json::json!({"text": text}),
+            Some(action),
+        ));
+        app.on_line(envelope(
+            "text_completed",
+            serde_json::json!({"text": text}),
+            Some(action),
+        ));
+        if action == "m_1" {
+            app.on_line(envelope(
+                "tool_call_requested",
+                serde_json::json!({"name": "read", "arguments": {"path": "src/1.rs"}}),
+                Some("a_1"),
+            ));
+            app.on_line(envelope(
+                "tool_call_completed",
+                serde_json::json!({"status": "completed",
+                    "content": [{"type": "text", "text": "ok"}]}),
+                Some("a_1"),
+            ));
+        }
+    }
+    app.on_line(envelope(
+        "turn_completed",
+        serde_json::json!({"outcome": "completed"}),
+        None,
+    ));
+    app
+}
+
+/// Focuses turn `at` from the newest item: one Up per item above it.
+fn focus_turn(app: &mut App, at: usize) {
+    key(app, Key::BackTab);
+    for _ in 0..16 {
+        if app.focused() == Some(TargetId::Turn(at)) {
+            return;
+        }
+        key(app, Key::Up);
+    }
+    panic!("never focused turn {at}");
+}
+
+#[test]
+fn a_turn_is_a_stop_before_its_own_group_lines() {
+    let mut app = groups(1, 60, 24);
+    let input = serde_json::json!({"input": [{"type": "message", "source": "driver",
+        "content": [{"type": "text", "text": "go"}]}]});
+    app.on_line(envelope("turn_started", input, None));
+    app.on_line(envelope(
+        "tool_call_requested",
+        serde_json::json!({"name": "read", "arguments": {"path": "src/2.rs"}}),
+        Some("a_2"),
+    ));
+    app.on_line(envelope(
+        "tool_call_completed",
+        serde_json::json!({"status": "completed",
+            "content": [{"type": "text", "text": "ok"}]}),
+        Some("a_2"),
+    ));
+    app.on_line(envelope(
+        "assistant_message_delta",
+        serde_json::json!({"text": "reply 2"}),
+        Some("m_2"),
+    ));
+    app.on_line(envelope(
+        "text_completed",
+        serde_json::json!({"text": "reply 2"}),
+        Some("m_2"),
+    ));
+    app.on_line(envelope(
+        "turn_completed",
+        serde_json::json!({"outcome": "completed"}),
+        None,
+    ));
+    assert_eq!(app.targets().len(), 2);
+    let stops = frame(&mut app);
+    let ids = group_ids(&app);
+    assert_eq!(
+        crate::focus::order(&stops, &app.regions, crate::focus::Area::Conversation),
+        vec![
+            TargetId::Turn(0),
+            ids.first().copied().expect("a group"),
+            TargetId::Turn(1),
+            ids.get(1).copied().expect("a group"),
+        ]
+    );
+}
+
+#[test]
+fn y_on_a_turn_copies_its_prompt_and_replies() {
+    let mut app = replied_turn();
+    focus_turn(&mut app, 0);
+    // The rows with no target of their own: the prompt, the replies
+    // and the closing line; the group's own row is its line's text.
+    assert_eq!(
+        key(&mut app, Key::Char('y')),
+        Effect::Copy("go\none\ntwo\n▣ completed · 1 call".to_owned())
+    );
+}
+
+#[test]
+fn stepping_up_from_a_turns_first_group_reaches_the_turn_then_the_turn_before() {
+    let mut app = groups(1, 60, 6);
+    let input = serde_json::json!({"input": [{"type": "message", "source": "driver",
+        "content": [{"type": "text", "text": "go"}]}]});
+    app.on_line(envelope("turn_started", input, None));
+    app.on_line(envelope(
+        "tool_call_requested",
+        serde_json::json!({"name": "read", "arguments": {"path": "src/2.rs"}}),
+        Some("a_2"),
+    ));
+    app.on_line(envelope(
+        "tool_call_completed",
+        serde_json::json!({"status": "completed",
+            "content": [{"type": "text", "text": "ok"}]}),
+        Some("a_2"),
+    ));
+    app.on_line(envelope(
+        "assistant_message_delta",
+        serde_json::json!({"text": "reply 2"}),
+        Some("m_2"),
+    ));
+    app.on_line(envelope(
+        "text_completed",
+        serde_json::json!({"text": "reply 2"}),
+        Some("m_2"),
+    ));
+    app.on_line(envelope(
+        "turn_completed",
+        serde_json::json!({"outcome": "completed"}),
+        None,
+    ));
+    assert_eq!(app.targets().len(), 2);
+    let ids = group_ids(&app);
+    key(&mut app, Key::BackTab);
+    assert_eq!(app.focused(), ids.get(1).copied());
+    key(&mut app, Key::Up);
+    assert_eq!(app.focused(), Some(TargetId::Turn(1)));
+    key(&mut app, Key::Up);
+    assert_eq!(app.focused(), ids.first().copied());
+    assert!(app.top().is_some(), "scrolling reached the first group");
+    key(&mut app, Key::Up);
+    assert_eq!(app.focused(), Some(TargetId::Turn(0)));
+}
+
+#[test]
+fn enter_on_a_turn_does_nothing() {
+    let mut app = replied_turn();
+    let lines = app.lines();
+    focus_turn(&mut app, 0);
+    assert_eq!(key(&mut app, Key::Enter), Effect::None);
+    assert_eq!(app.lines(), lines);
+}
+
+#[test]
+fn the_notice_overlay_hides_the_turn_stops() {
+    let mut app = groups(2, 60, 24);
+    app.notices.push("All.".to_owned());
+    app.open_notice(0);
+    let stops = frame(&mut app);
+    assert!(
+        stops
+            .iter()
+            .all(|target| !matches!(target.id, TargetId::Turn(_) | TargetId::Line(_))),
+        "no conversation stop shows under the overlay"
+    );
+    key(&mut app, Key::BackTab);
+    assert_eq!(app.focused(), None);
 }

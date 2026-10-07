@@ -231,7 +231,12 @@ fn overlay_cross(buf: &mut Buffer, area: Rect, targets: &mut Vec<Target>) {
 fn notices(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
     let mut y = area.y;
     if let Some(texts) = app.notice_overlay() {
-        targets.retain(|target| !matches!(target.id, TargetId::Line(_) | TargetId::NewBelow));
+        targets.retain(|target| {
+            !matches!(
+                target.id,
+                TargetId::Line(_) | TargetId::NewBelow | TargetId::Turn(_)
+            )
+        });
         let rows: Vec<String> = texts
             .iter()
             .flat_map(|text| crate::format::wrap(text, usize::from(area.width)))
@@ -337,6 +342,45 @@ fn conversation_rows(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<
     let mut start = 0usize;
     let overlay = app.has_new() && area.height > 0;
     let last = area.bottom().saturating_sub(u16::from(overlay));
+    // Each line's cells on screen: its y and how many of its rows show,
+    // the same counts the loop below draws.
+    let mut layout: Vec<(u16, u16)> = Vec::with_capacity(lines.len());
+    {
+        let (mut y, mut start) = (y, start);
+        for rows in &heights {
+            let next = start.saturating_add(*rows);
+            let count = next.min(end).saturating_sub(start.max(top));
+            layout.push((y, to_u16(count)));
+            y = y.saturating_add(to_u16(count));
+            start = next;
+        }
+    }
+    // A turn's stop spans the rows its lines draw on screen, full width
+    // and clipped like the line targets. Turns come before lines, so a
+    // turn's stop sorts before a group line on its first row.
+    for (at, range) in app.turn_lines() {
+        let mut rect: Option<Rect> = None;
+        for (line, (line_y, count)) in layout.iter().enumerate() {
+            if range.contains(&line) && *count > 0 {
+                rect = Some(match rect {
+                    Some(before) => Rect {
+                        height: before.height.saturating_add(*count),
+                        ..before
+                    },
+                    None => Rect::new(area.x, *line_y, area.width, *count),
+                });
+            }
+        }
+        if let Some(rect) = rect {
+            let height = rect.height.min(last.saturating_sub(rect.y));
+            if height > 0 {
+                targets.push(Target {
+                    id: TargetId::Turn(at),
+                    rect: Rect { height, ..rect },
+                });
+            }
+        }
+    }
     let mut opens = app.targets().into_iter().peekable();
     // A line wholly above `top` or below `end` shows no rows.
     for (at, (line, rows)) in lines.into_iter().zip(heights).enumerate() {

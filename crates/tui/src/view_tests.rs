@@ -1105,7 +1105,12 @@ fn the_badge_is_a_target_over_the_cells_it_drew() {
         id: TargetId::Badge,
         rect: Rect::new(0, 10, 30, 1),
     };
-    assert_eq!(targets, vec![badge]);
+    // The open turn's prompt is a stop on the row above the badge.
+    let turn = Target {
+        id: TargetId::Turn(0),
+        rect: Rect::new(0, 9, 40, 1),
+    };
+    assert_eq!(targets, vec![badge, turn]);
     // Narrower than its text, it takes the whole row.
     let (_, targets) = pointed(&mut app, 20, 12, None);
     assert_eq!(targets.first().map(|target| target.rect.width), Some(20));
@@ -1179,6 +1184,7 @@ fn lines(targets: &[crate::mouse::Target]) -> Vec<(crate::app::Target, Rect)> {
             | crate::mouse::TargetId::Notice(_)
             | crate::mouse::TargetId::DismissNotice(_)
             | crate::mouse::TargetId::CloseOverlay
+            | crate::mouse::TargetId::Turn(_)
             | crate::mouse::TargetId::MoreNotices => None,
         })
         .collect()

@@ -49,6 +49,7 @@ impl App {
                 Effect::None
             }
             TargetId::Token(number) => self.open_token(number),
+            TargetId::Turn(_) => Effect::None,
         };
         self.settle();
         effect
