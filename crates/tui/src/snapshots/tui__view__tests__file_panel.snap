@@ -1,0 +1,28 @@
+---
+source: crates/tui/src/view_tests.rs
+expression: "screen_at(&mut app, 80, 24)"
+---
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+src/main.rs
+crates/tui/src/main.rs
+> look at @ma

@@ -1286,9 +1286,7 @@ fn install_in_a_terminal_shows_the_providers_and_their_urls_and_asks() {
     let setup = Setup::new();
     let opencode = package("opencode");
     let path = opencode.to_str().unwrap();
-    let installed = setup
-        .home()
-        .join("extensions/github.com-aakshintala-fiber-providers-opencode");
+    let installed = setup.home().join("extensions/opencode");
 
     let declined = setup.fiber_typing(&["extension", "install", path], "n\n");
     assert_eq!(declined.code, Some(1), "stderr: {}", declined.stderr);
@@ -1565,7 +1563,7 @@ fn install_by_short_name_fetches_from_git_headless_and_list_shows_the_commit() {
     assert!(
         setup
             .home()
-            .join("extensions/github.com-aakshintala-fiber-providers-muse/providers/muse.json")
+            .join("extensions/muse/providers/muse.json")
             .is_file()
     );
 }
@@ -1575,9 +1573,7 @@ fn install_by_name_in_a_terminal_shows_the_version_asks_and_can_show_the_source(
     let setup = Setup::new();
     let gh = Github::new(&setup);
     gh.release("v0.1.0");
-    let installed = setup
-        .home()
-        .join("extensions/github.com-aakshintala-fiber-providers-muse");
+    let installed = setup.home().join("extensions/muse");
     let declined = setup.fiber_typing_env(&["extension", "install", "muse"], "n\n", &gh.env());
     assert_eq!(declined.code, Some(1), "stderr: {}", declined.stderr);
     assert!(
@@ -1623,12 +1619,8 @@ fn remove_in_a_terminal_lists_the_data_and_asks_and_headless_goes_ahead() {
             .code,
         Some(0)
     );
-    let data = setup
-        .home()
-        .join("data/github.com-aakshintala-fiber-providers-muse");
-    let settings = setup
-        .home()
-        .join("config/github.com-aakshintala-fiber-providers-muse.json");
+    let data = setup.home().join("data/muse");
+    let settings = setup.home().join("config/muse.json");
     fs::create_dir_all(&data).unwrap();
     fs::create_dir_all(settings.parent().unwrap()).unwrap();
     fs::write(data.join("index"), "x").unwrap();

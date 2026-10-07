@@ -221,6 +221,9 @@ What is recorded:
   that passes its bound (`docs/invocation.md`, "Shutdown"), and a background
   refresh, such as a quota or model list, that fails while no session is
   running.
+- **An extension's `host.log` lines:** each is a line in the session's file
+  with `process` `session`, `code` `extension_log`, the extension's name and
+  the message as the extension wrote it.
 - **The hub's operations:** `hub_started` and `hub_stopped`;
   `client_connected`, `client_disconnected` and `client_unauthenticated`;
   `device_paired` and `device_revoked`, naming the device and the client that
@@ -231,9 +234,10 @@ An event inside a running session is recorded in that session's log and
 nowhere else; a hook that fails in a session, for example, is a `notice` or
 `hook_failed` there (`docs/extensions.md`, "When a hook fails"). Nothing in
 `logs/` holds a credential or token, prompt or model text, a tool's arguments
-or a configuration value. A failed hook is named with its code, never its
-content. There is one level of detail; a level that records requests, their
-paths, statuses and timings, is not built.
+or a configuration value, with one exception: an `extension_log` line is the
+extension's own text, and Fiber records it as given. A failed hook is named
+with its code, never its content. There is one level of detail; a level that
+records requests, their paths, statuses and timings, is not built.
 
 **Bounds.** `logs/hub.log` is renamed to `logs/hub.log.1` when it passes
 10 MiB, replacing any older one; its single writer makes the rename safe.
@@ -274,14 +278,16 @@ other file in `credentials/` (`docs/permissions.md`, "Credentials").
 
 **Recently exited sessions.** `recent.jsonl` at the top of Fiber home: one
 JSON line per session that exited, appended by the session itself as it
-exits, with its id, workspace, name and what it stopped on. A session whose
+exits. Its keys are `session_id`, `ts`, `project` (the project's key), `workspace`,
+`name`, `how` and `status`, the session's last `session_status`, which says
+what it stopped on and carries `parent` for a delegate. A session whose
 process died cannot append, so the hub appends its row when it sees the
 crash (`docs/invocation.md`, "The hub"). A session
 appends whether or not a hub is running, and nothing rewrites it, so an
 append is never lost to a rewrite. Deleting a session leaves its row, and
 every reader skips a row whose session directory is gone. The hub reads its tail at start and keeps
-the newest 100. It grows by about 200 bytes per exited session: 10,000
-sessions is about 2 MB. It is a derived index, rebuildable from the logs, and never the
+the newest 100. It grows by about 400 to 600 bytes per exited session: 10,000
+sessions is about 5 MB. It is a derived index, rebuildable from the logs, and never the
 truth ([ADR 0001](adr/0001-session-log-is-the-only-state-of-record.md)).
 
 **Prompt history.** Per project, `history.jsonl`: one JSON line per prompt,

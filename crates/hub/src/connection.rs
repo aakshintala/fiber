@@ -1,5 +1,6 @@
 //! One client connection: `hub_hello` first, hub-command dispatch for
-//! `start` and `status`, and the relay to session sockets.
+//! `start`, `status`, `prompt_history`, `feed`, `dismiss` and `recent`, and
+//! the relay to session sockets.
 //!
 //! A command with a `session_id` is for that session: the relay passes it
 //! to the session's socket (`crate::relay`). A command without one is for
@@ -21,6 +22,7 @@ use serde_json::{Map, Value};
 
 use crate::Starter;
 use crate::diag::Diag;
+use crate::feed::{Feed, answer, on_feed};
 use crate::relay::Relays;
 use crate::start::{self, Outcome};
 
@@ -36,6 +38,8 @@ pub(crate) struct Hub {
     /// The injected clock, for `ts`, `start`'s deadline and the idle wait.
     pub(crate) clock: Arc<dyn Clock>,
     pub(crate) diag: Diag,
+    /// The feed `feed`, `dismiss` and `recent` answer from.
+    pub(crate) feed: Arc<Feed>,
     next_client: AtomicU64,
     /// The open connections and the idle timer, under one lock.
     conns: Mutex<Conns>,
@@ -83,12 +87,14 @@ impl Hub {
         let wake: Arc<dyn Wake> = wake;
         clock.subscribe(Arc::downgrade(&wake));
         let zero_since = Some(clock.now());
+        let feed = Arc::new(Feed::new(home, Arc::clone(&clock)));
         Self {
             home: home.to_path_buf(),
             fiber_version: fiber_version.to_owned(),
             starter,
             clock,
             diag,
+            feed,
             next_client: AtomicU64::new(0),
             conns: Mutex::new(Conns {
                 open: Vec::new(),
@@ -317,14 +323,18 @@ pub(crate) fn serve_counted(stream: UnixStream, hub: Arc<Hub>, n: u64) {
     let relays: Arc<Mutex<Relays>> = Arc::new(Mutex::new(Relays::default()));
     let mut read = BufReader::new(stream);
     let mut buf = Vec::new();
+    let mut fed = None;
     loop {
         buf.clear();
         match read.read_until(b'\n', &mut buf) {
             Ok(0) | Err(_) => break,
             Ok(_) => {
-                on_command(&buf, &hub, &writer, &relays);
+                on_command(&buf, &hub, &writer, &relays, &mut fed);
             }
         }
+    }
+    if let Some(fed) = fed {
+        hub.feed.unsubscribe(fed);
     }
     lock(&relays).close_all();
     disconnect(&hub, n);
@@ -343,6 +353,7 @@ fn on_command(
     hub: &Arc<Hub>,
     writer: &Arc<Mutex<UnixStream>>,
     relays: &Arc<Mutex<Relays>>,
+    fed: &mut Option<u64>,
 ) {
     let line = match classify(bytes) {
         Ok(line) => line,
@@ -368,6 +379,9 @@ fn on_command(
             Ok(result) => accept_result(writer, hub, &line.id, result),
             Err((code, message)) => reject(writer, hub, Some(&line.id), &code, message),
         },
+        "feed" => on_feed(&line.id, &line.args, hub, writer, fed),
+        "dismiss" => answer(writer, hub, &line.id, hub.feed.dismiss(&line.args)),
+        "recent" => answer(writer, hub, &line.id, hub.feed.recent(&line.args)),
         command => {
             let message = format!("`{command}` is not a hub command.");
             reject(
@@ -506,7 +520,12 @@ fn start_args(args: &Map<String, Value>) -> Option<(&str, Option<&str>, Option<&
     Some((workspace, model, args.get("content")))
 }
 
-fn accept_result(writer: &Arc<Mutex<UnixStream>>, hub: &Hub, id: &CommandId, result: Value) {
+pub(crate) fn accept_result(
+    writer: &Arc<Mutex<UnixStream>>,
+    hub: &Hub,
+    id: &CommandId,
+    result: Value,
+) {
     let mut payload = Map::new();
     payload.insert("command_id".to_owned(), Value::String(id.0.clone()));
     payload.insert("result".to_owned(), result);
@@ -532,7 +551,12 @@ pub(crate) fn reject(
     send(writer, hub, "command_rejected", payload);
 }
 
-fn send(writer: &Arc<Mutex<UnixStream>>, hub: &Hub, kind: &str, payload: Map<String, Value>) {
+pub(crate) fn send(
+    writer: &Arc<Mutex<UnixStream>>,
+    hub: &Hub,
+    kind: &str,
+    payload: Map<String, Value>,
+) {
     let line = HubLine {
         kind: kind.to_owned(),
         ts: crate::diag::wall_ms(hub.clock.wall()),

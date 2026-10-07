@@ -1,10 +1,11 @@
-//! Drawing the terminal: the conversation as plain text, the notice, the
+//! Drawing the terminal: the conversation's styled lines, the notice, the
 //! quit hint, the approval badge, and the input line or the approval panel
 //! in its place (`docs/tui.md`, "Turns", "Approvals and questions").
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Style};
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::Line;
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 
 use crate::app::{App, QUIT_HINT};
@@ -22,26 +23,32 @@ pub(crate) const APPROVAL_TINT: Style = Style::new().bg(Color::Indexed(17));
 /// (see #685).
 pub(crate) const ALERT_TINT: Style = Style::new().bg(Color::Indexed(52));
 
-/// One plain line, wrapped the way it draws.
-fn paragraph(line: &str) -> Paragraph<'_> {
+/// One line, wrapped the way it draws.
+fn paragraph(line: Line<'_>) -> Paragraph<'_> {
     Paragraph::new(line).wrap(Wrap { trim: false })
 }
 
 /// How many rows `line` takes at `width`.
-pub(crate) fn rows(line: &str, width: u16) -> usize {
+pub(crate) fn rows(line: Line<'_>, width: u16) -> usize {
     paragraph(line).line_count(width).max(1)
 }
 
 /// Draws `app` into `area` of `buf`, from the bottom up: the input line
-/// on the last row, or the approval panel in its place, then the badge, the
-/// quit hint and the notice when shown, and the conversation in the rows
-/// left. A screen too short for them all drops the notice first, then the
-/// hint, then the badge. A panel taller than the screen keeps its top.
+/// on the last row with a completion panel above it, or the approval panel
+/// in their place, then the badge, the quit hint and the notice when
+/// shown, and the conversation in the rows left, or the key map over them
+/// while it is open. A screen too short for them all drops the notice
+/// first, then the hint, then the badge. A panel taller than the screen
+/// keeps its top.
 pub(crate) fn render(app: &App, area: Rect, buf: &mut Buffer) {
     let width = usize::from(area.width);
     let mut bottom = area.bottom();
     if let Some(panel) = app.panel() {
-        let height: usize = panel.lines.iter().map(|line| rows(line, area.width)).sum();
+        let height: usize = panel
+            .lines
+            .iter()
+            .map(|line| rows(Line::raw(line.as_str()), area.width))
+            .sum();
         let top = bottom.saturating_sub(to_u16(height)).max(area.y);
         let rect = Rect::new(area.x, top, area.width, bottom.saturating_sub(top));
         let tint = if panel.alert {
@@ -55,37 +62,60 @@ pub(crate) fn render(app: &App, area: Rect, buf: &mut Buffer) {
             .render(rect, buf);
         bottom = top;
     }
-    let mut put = |text: &str| {
-        if let Some(row) = bottom.checked_sub(1).filter(|row| *row >= area.y) {
-            buf.set_stringn(area.x, row, text, width, Style::default());
-            bottom = row;
-        }
-    };
     if app.panel().is_none() {
         // The input line keeps the end of a draft wider than the screen.
         let input = format!("> {}", app.draft());
         let skip = input.chars().count().saturating_sub(width);
         let shown: String = input.chars().skip(skip).collect();
-        put(&shown);
+        put(buf, area, &mut bottom, &shown, Style::default());
+        if let Some(completions) = app.completions() {
+            for (at, line) in completions.lines.iter().enumerate().rev() {
+                let style = if completions.selected == Some(at) {
+                    Style::new().add_modifier(Modifier::REVERSED)
+                } else {
+                    Style::default()
+                };
+                put(buf, area, &mut bottom, line, style);
+            }
+        }
     }
     if let Some(badge) = app.badge() {
-        put(&badge);
+        put(buf, area, &mut bottom, &badge, Style::default());
     }
     if app.hint() {
-        put(QUIT_HINT);
+        put(buf, area, &mut bottom, QUIT_HINT, Style::default());
     }
     if let Some(notice) = app.notice() {
-        put(notice);
+        put(buf, area, &mut bottom, notice, Style::default());
     }
     let rows = bottom.saturating_sub(area.y);
-    conversation_rows(app, Rect::new(area.x, area.y, area.width, rows), buf);
+    let conversation = Rect::new(area.x, area.y, area.width, rows);
+    match app.keymap_top() {
+        Some(top) => Paragraph::new(crate::keymap::lines().join("\n"))
+            .wrap(Wrap { trim: false })
+            .scroll((to_u16(top), 0))
+            .render(conversation, buf),
+        None => conversation_rows(app, conversation, buf),
+    }
+}
+
+/// Puts `text` on the row above `bottom` and moves `bottom` up to it;
+/// nothing once `bottom` reaches the top of `area`.
+fn put(buf: &mut Buffer, area: Rect, bottom: &mut u16, text: &str, style: Style) {
+    if let Some(row) = bottom.checked_sub(1).filter(|row| *row >= area.y) {
+        buf.set_stringn(area.x, row, text, usize::from(area.width), style);
+        *bottom = row;
+    }
 }
 
 /// Draws the conversation's visible rows, bottom-aligned while it is
 /// shorter than its area.
 fn conversation_rows(app: &App, area: Rect, buf: &mut Buffer) {
     let lines = app.lines();
-    let heights: Vec<usize> = lines.iter().map(|line| rows(line, area.width)).collect();
+    let heights: Vec<usize> = lines
+        .iter()
+        .map(|line| rows(line.clone(), area.width))
+        .collect();
     let total: usize = heights.iter().sum();
     let height = usize::from(area.height);
     let bottom_top = total.saturating_sub(height);
@@ -95,7 +125,7 @@ fn conversation_rows(app: &App, area: Rect, buf: &mut Buffer) {
     let mut y = area.y.saturating_add(to_u16(height.saturating_sub(shown)));
     let mut start = 0usize;
     // A line wholly above `top` or below `end` shows no rows.
-    for (line, rows) in lines.iter().zip(heights) {
+    for (line, rows) in lines.into_iter().zip(heights) {
         let next = start.saturating_add(rows);
         let skip = top.saturating_sub(start);
         let count = next.min(end).saturating_sub(start.max(top));
