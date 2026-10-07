@@ -9,6 +9,8 @@ pub mod children;
 mod client;
 pub mod clock;
 mod connect_proxy;
+#[cfg(target_os = "macos")]
+mod crash_ports;
 pub mod emit;
 pub mod jobs;
 mod oauth_server;

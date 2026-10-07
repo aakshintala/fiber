@@ -83,3 +83,30 @@ fn rerun_within_kills_a_child_that_outlives_the_callers_bound() {
         "the panic names the caller's bound and the reaped child: {message}"
     );
 }
+
+/// A re-run child drops the crash exception port that ReportCrash listens on.
+#[cfg(target_os = "macos")]
+#[test]
+#[allow(
+    clippy::print_stdout,
+    reason = "the parent test reads this line from the child's output"
+)]
+fn a_rerun_child_has_no_crash_exception_port() {
+    const TEST: &str = "rerun::tests::a_rerun_child_has_no_crash_exception_port";
+    if std::env::var_os(CHILD).is_some() {
+        println!("crash ports: {}", crate::crash_ports::probe::handlers());
+        return;
+    }
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command
+        .args(["--exact", TEST, "--nocapture"])
+        .env(CHILD, "1");
+    crate::crash_ports::probe::inherit_a_live_port(&mut command);
+    crate::crash_ports::silence(&mut command);
+    let output = command.output().unwrap();
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("crash ports: 0"),
+        "the child still has a crash exception port:\n{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}

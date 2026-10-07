@@ -66,6 +66,8 @@ pub fn rerun_within(test: &str, env: &[(&str, &str)], within: Duration) -> Outpu
     }
     command.envs(env.iter().copied());
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    #[cfg(target_os = "macos")]
+    crate::crash_ports::silence(&mut command);
     let child = match command.spawn() {
         Ok(child) => child,
         Err(err) => panic!("`{test}` failed to start: {err}"),
