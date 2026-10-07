@@ -15,6 +15,15 @@ use crate::slash::{self, SHOWN};
 /// attached.
 const NO_SESSION: &str = "No session on screen.";
 
+/// The `@` panel's state.
+#[derive(Debug)]
+pub(super) struct FilePanel {
+    /// The byte offset of the `@` in the draft.
+    anchor: usize,
+    /// The latest search result: matching paths, or why there are none.
+    result: Option<Result<Vec<String>, String>>,
+}
+
 /// The open completion panel's rows as drawn, and which is selected.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Completions {
@@ -35,7 +44,11 @@ impl App {
             let rows = slash::filter(&self.slash_rows, self.slash_query());
             (rows.into_iter().map(slash::Row::line).collect(), true)
         } else {
-            return None;
+            match self.files.as_ref().and_then(|panel| panel.result.as_ref()) {
+                Some(Ok(paths)) => (paths.clone(), true),
+                Some(Err(error)) => (vec![format!("No files: {error}")], false),
+                None => return None,
+            }
         };
         if all.is_empty() {
             return None;
@@ -67,6 +80,49 @@ impl App {
             .collect()
     }
 
+    /// The paths the `@` panel offers, in order.
+    fn file_paths(&self) -> &[String] {
+        match self.files.as_ref().and_then(|panel| panel.result.as_ref()) {
+            Some(Ok(paths)) => paths,
+            Some(Err(_)) | None => &[],
+        }
+    }
+
+    /// The `@` panel's query: the text after its `@`.
+    fn file_query(&self) -> Option<&str> {
+        let anchor = self.files.as_ref()?.anchor;
+        self.draft.get(anchor.saturating_add(1)..)
+    }
+
+    /// Whether the `@` panel is open.
+    pub(crate) fn files_open(&self) -> bool {
+        self.files.is_some()
+    }
+
+    /// The launch directory, which the `@` panel lists.
+    pub(crate) fn workspace(&self) -> &std::path::Path {
+        &self.workspace
+    }
+
+    /// The current search generation.
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// A search result tagged `generation`: shown when it is the current
+    /// generation and the `@` panel is open; otherwise it is stale and
+    /// changes nothing.
+    pub(crate) fn on_files(&mut self, generation: u64, result: Result<Vec<String>, String>) {
+        if generation != self.generation {
+            return;
+        }
+        if let Some(panel) = &mut self.files {
+            let len = result.as_ref().map_or(0, Vec::len);
+            self.selected = self.selected.min(len.saturating_sub(1));
+            panel.result = Some(result);
+        }
+    }
+
     /// Keeps the panels in step with the draft after every key: the `/`
     /// panel may open again once the draft no longer starts with `/`, and
     /// the `@` panel closes once its `@` is gone or the query holds
@@ -75,20 +131,57 @@ impl App {
         if !self.draft.starts_with('/') {
             self.slash_closed = false;
         }
+        if let Some(panel) = &self.files {
+            let open = self
+                .draft
+                .get(panel.anchor..)
+                .is_some_and(|rest| rest.starts_with('@') && !rest.contains(char::is_whitespace));
+            if !open {
+                self.files = None;
+            }
+        }
     }
 
-    /// Types one character into the draft.
+    /// Types one character into the draft. An `@` at the draft's start or
+    /// after whitespace opens the `@` panel.
     pub(super) fn type_char(&mut self, ch: char) -> Effect {
+        let opens = ch == '@'
+            && self
+                .draft
+                .chars()
+                .next_back()
+                .is_none_or(char::is_whitespace);
         self.draft.push(ch);
         self.selected = 0;
-        Effect::None
+        if opens {
+            self.files = Some(FilePanel {
+                anchor: self.draft.len().saturating_sub(1),
+                result: None,
+            });
+            self.generation = self.generation.saturating_add(1);
+            return Effect::ListFiles;
+        }
+        self.query_changed()
     }
 
     /// Deletes the draft's last character.
     pub(super) fn backspace(&mut self) -> Effect {
         self.draft.pop();
         self.selected = 0;
-        Effect::None
+        self.query_changed()
+    }
+
+    /// After an edit: a new search while the `@` panel stays open.
+    fn query_changed(&mut self) -> Effect {
+        self.edited();
+        let Some(query) = self.file_query().map(str::to_owned) else {
+            return Effect::None;
+        };
+        self.generation = self.generation.saturating_add(1);
+        Effect::Search {
+            generation: self.generation,
+            query,
+        }
     }
 
     /// A key for the open completion panel; `None` when no panel is open
@@ -96,6 +189,8 @@ impl App {
     pub(super) fn completion_key(&mut self, key: &Key) -> Option<Effect> {
         let names = if self.slash_open() {
             self.slash_names()
+        } else if self.files.is_some() {
+            self.file_paths().to_vec()
         } else {
             return None;
         };
@@ -108,10 +203,18 @@ impl App {
                     .saturating_add(1)
                     .min(names.len().saturating_sub(1));
             }
-            Key::Esc => self.slash_closed = true,
+            Key::Esc => {
+                if self.files.take().is_none() {
+                    self.slash_closed = true;
+                }
+            }
             Key::Tab | Key::Enter => {
                 let chosen = chosen?;
-                if *key == Key::Tab {
+                if let Some(panel) = self.files.take() {
+                    self.draft.truncate(panel.anchor);
+                    self.draft.push_str(&chosen);
+                    self.draft.push(' ');
+                } else if *key == Key::Tab {
                     self.draft = format!("/{chosen} ");
                 } else {
                     self.draft = format!("/{chosen}");

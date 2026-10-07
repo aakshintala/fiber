@@ -729,3 +729,15 @@ fn key_map() {
     insta::assert_snapshot!("key_map_80x24", sized(&mut app, 80, 24));
     insta::assert_snapshot!("key_map_40x12", sized(&mut app, 40, 12));
 }
+
+#[test]
+fn file_panel() {
+    let mut app = empty();
+    let now = fakes::clock::FakeClock::new().now();
+    for ch in "look at @ma".chars() {
+        app.on_key(Key::Char(ch), now);
+    }
+    let found = ["src/main.rs", "crates/tui/src/main.rs"].map(str::to_owned);
+    app.on_files(app.generation(), Ok(found.to_vec()));
+    insta::assert_snapshot!("file_panel", sized(&mut app, 80, 24));
+}

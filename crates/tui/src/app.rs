@@ -24,6 +24,8 @@ use crate::turn::{Fold, Row, Turn};
 #[path = "app_commands.rs"]
 mod commands;
 
+use commands::FilePanel;
+
 /// A line's payload as `$kind`; `None` when it does not parse, and the
 /// line is skipped.
 macro_rules! read {
@@ -67,6 +69,16 @@ pub(crate) enum Effect {
     Send(Vec<String>),
     /// Quit the terminal.
     Quit,
+    /// Start the `@` panel's search worker on a listing of the workspace's
+    /// files, searching for an empty query at the current generation.
+    ListFiles,
+    /// Search the listed files for `query`, the text after the `@`.
+    Search {
+        /// The generation the result is tagged with.
+        generation: u64,
+        /// The query.
+        query: String,
+    },
 }
 
 /// Which command the terminal sent and waits on.
@@ -138,6 +150,11 @@ pub(crate) struct App {
     slash_closed: bool,
     /// The selected row of the open completion panel.
     selected: usize,
+    /// The `@` panel, while open.
+    files: Option<FilePanel>,
+    /// Bumped when the `@` panel opens and on every query change, never
+    /// reset; a search result tagged with another is stale.
+    generation: u64,
     /// The key map overlay's top row, while it is open.
     keymap: Option<usize>,
 }
@@ -165,6 +182,8 @@ impl App {
             slash_rows: slash::rows(&[]),
             slash_closed: false,
             selected: 0,
+            files: None,
+            generation: 0,
             keymap: None,
         }
     }

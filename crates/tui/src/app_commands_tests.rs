@@ -55,7 +55,7 @@ fn sent(effect: Effect) -> Vec<Value> {
             .iter()
             .map(|line| serde_json::from_str(line).unwrap_or_default())
             .collect(),
-        Effect::None | Effect::Quit => Vec::new(),
+        Effect::None | Effect::Quit | Effect::ListFiles | Effect::Search { .. } => Vec::new(),
     }
 }
 
@@ -514,4 +514,165 @@ fn the_key_map_scrolls_and_takes_every_key_but_ctrl_c() {
     app.on_key(Key::CtrlC, now());
     assert!(app.hint());
     assert_eq!(app.keymap_top(), last);
+}
+
+/// Types `text`, whatever each key does.
+fn type_any(app: &mut App, text: &str) {
+    for ch in text.chars() {
+        app.on_key(Key::Char(ch), now());
+    }
+}
+
+/// Types one character, returning its effect.
+fn key(app: &mut App, ch: char) -> Effect {
+    app.on_key(Key::Char(ch), now())
+}
+
+fn paths(list: &[&str]) -> Result<Vec<String>, String> {
+    Ok(list.iter().map(|path| (*path).to_owned()).collect())
+}
+
+#[test]
+fn at_opens_the_file_panel_and_each_keystroke_searches_anew() {
+    let mut app = connected();
+    assert_eq!(key(&mut app, '@'), Effect::ListFiles);
+    assert!(app.files_open());
+    let opened = app.generation();
+    assert_eq!(
+        key(&mut app, 's'),
+        Effect::Search {
+            generation: opened + 1,
+            query: "s".to_owned()
+        }
+    );
+    assert_eq!(
+        key(&mut app, 'r'),
+        Effect::Search {
+            generation: opened + 2,
+            query: "sr".to_owned()
+        }
+    );
+    assert_eq!(
+        app.on_key(Key::Backspace, now()),
+        Effect::Search {
+            generation: opened + 3,
+            query: "s".to_owned()
+        }
+    );
+    // A superseded result changes nothing; the current one shows.
+    app.on_files(opened + 2, paths(&["old.rs"]));
+    assert_eq!(app.completions(), None);
+    app.on_files(opened + 3, paths(&["src/a.rs", "src/b.rs"]));
+    assert_eq!(shown(&app), ["src/a.rs", "src/b.rs"]);
+    app.on_key(Key::Down, now());
+    assert_eq!(selected(&app).as_deref(), Some("src/b.rs"));
+    // Tab puts the path in place of `@s`, with a space, and closes.
+    assert_eq!(app.on_key(Key::Tab, now()), Effect::None);
+    assert_eq!(app.draft(), "src/b.rs ");
+    assert!(!app.files_open());
+}
+
+#[test]
+fn enter_chooses_a_file_mid_draft_without_sending() {
+    let mut app = attached();
+    type_text(&mut app, "look at ");
+    assert_eq!(key(&mut app, '@'), Effect::ListFiles);
+    key(&mut app, 'm');
+    app.on_files(app.generation(), paths(&["main.rs"]));
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(app.draft(), "look at main.rs ");
+    // The next Enter sends the draft.
+    let lines = sent(app.on_key(Key::Enter, now()));
+    assert_eq!(lines[0]["args"]["content"][0]["text"], "look at main.rs ");
+}
+
+#[test]
+fn only_an_at_at_the_start_or_after_whitespace_opens_the_panel() {
+    let mut app = connected();
+    type_text(&mut app, "me@x");
+    assert!(!app.files_open());
+    // An `@` inside an open panel's query is part of the query.
+    app.on_key(Key::CtrlC, now());
+    key(&mut app, '@');
+    assert_eq!(
+        key(&mut app, '@'),
+        Effect::Search {
+            generation: app.generation(),
+            query: "@".to_owned()
+        }
+    );
+    // A second panel opens only after whitespace closes the first.
+    assert_eq!(key(&mut app, ' '), Effect::None);
+    assert!(!app.files_open());
+    assert_eq!(key(&mut app, '@'), Effect::ListFiles);
+    assert_eq!(app.on_key(Key::Tab, now()), Effect::None);
+    assert_eq!(app.draft(), "@@ @");
+}
+
+#[test]
+fn esc_and_backspace_past_the_at_close_the_panel() {
+    let mut app = connected();
+    type_any(&mut app, "x @ab");
+    app.on_files(app.generation(), paths(&["ab.rs"]));
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert_eq!(app.draft(), "x @ab");
+    assert!(!app.files_open());
+    // Typing on does not reopen it.
+    assert_eq!(key(&mut app, 'c'), Effect::None);
+    assert!(!app.files_open());
+    let mut app = connected();
+    type_any(&mut app, "x @a");
+    app.on_key(Key::Backspace, now());
+    assert!(app.files_open());
+    assert_eq!(app.on_key(Key::Backspace, now()), Effect::None);
+    assert_eq!(app.draft(), "x ");
+    assert!(!app.files_open());
+}
+
+#[test]
+fn a_result_after_close_or_reopen_is_dropped() {
+    let mut app = connected();
+    key(&mut app, '@');
+    let first = app.generation();
+    app.on_key(Key::Esc, now());
+    app.on_files(first, paths(&["late.rs"]));
+    assert_eq!(app.completions(), None);
+    // Reopened: the generation moved on, never back.
+    app.on_key(Key::CtrlC, now());
+    assert_eq!(key(&mut app, '@'), Effect::ListFiles);
+    assert!(app.generation() > first);
+    app.on_files(first, paths(&["late.rs"]));
+    assert_eq!(app.completions(), None);
+    app.on_files(app.generation(), paths(&["new.rs"]));
+    assert_eq!(shown(&app), ["new.rs"]);
+}
+
+#[test]
+fn a_failed_listing_is_one_row_that_cannot_be_chosen() {
+    let mut app = connected();
+    key(&mut app, '@');
+    app.on_files(
+        app.generation(),
+        Err("fatal: not a git repository".to_owned()),
+    );
+    let completions = app.completions();
+    assert_eq!(
+        completions.as_ref().map(|c| c.lines.clone()),
+        Some(vec!["No files: fatal: not a git repository".to_owned()])
+    );
+    assert_eq!(completions.and_then(|c| c.selected), None);
+    assert_eq!(app.on_key(Key::Tab, now()), Effect::None);
+    assert_eq!(app.draft(), "@");
+}
+
+#[test]
+fn a_shorter_result_clamps_the_selection() {
+    let mut app = connected();
+    key(&mut app, '@');
+    app.on_files(app.generation(), paths(&["a", "b", "c"]));
+    app.on_key(Key::Down, now());
+    app.on_key(Key::Down, now());
+    assert_eq!(selected(&app).as_deref(), Some("c"));
+    app.on_files(app.generation(), paths(&["a", "b"]));
+    assert_eq!(selected(&app).as_deref(), Some("b"));
 }
