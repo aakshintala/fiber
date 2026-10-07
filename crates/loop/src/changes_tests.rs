@@ -1031,8 +1031,12 @@ fn resumed_state_skips_calls_that_touched_nothing_it_counts() {
         finished("a_3"),
         finished("a_4"),
     ];
-    let state = State::resumed(&lines, &workspace, &inputs(&home, &fake)).unwrap();
+    let mut state = State::resumed(&lines, &workspace, &inputs(&home, &fake)).unwrap();
     assert!(!state.dirs.contains(&elsewhere));
+    // Not even once it holds a candidate: the next check sends nothing.
+    write(&elsewhere.join("AGENTS.md"), "Outside rules.\n");
+    assert!(state.check(&*fake).files.is_empty());
+    std::fs::remove_file(elsewhere.join("AGENTS.md")).unwrap();
     let files = resumed_then_created(&lines, &home, &workspace, &fake);
     assert!(files.is_empty());
 }

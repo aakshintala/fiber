@@ -217,12 +217,14 @@ impl State {
             {
                 let resolved = resolve(&workspace, &paths);
                 touched.extend(reached(&workspace, &resolved));
-                // Each path itself, whatever it is today: a directory the
-                // call declared may be gone now and made again later.
+                // Each path under the workspace, whatever it is today: a
+                // directory the call declared may be gone now and made
+                // again later. The workspace itself is in the repo chain,
+                // so the difference below drops it.
                 declared.extend(
                     resolved
                         .into_iter()
-                        .filter(|path| path != &workspace && path.strip_prefix(&workspace).is_ok()),
+                        .filter(|path| path.starts_with(&workspace)),
                 );
             }
             if let Event::DateChanged(changed) = &event {
