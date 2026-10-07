@@ -1674,8 +1674,12 @@ fn a_steered_image_is_applied_and_sent_on_the_next_request() {
     let setup = Setup::new();
     // The first reply runs `sleep 5`, so the turn stays open seconds
     // after the prompt: the steer, pasted behind it, is delivered and
-    // applied at the step boundary, inside the turn. A standing rule
-    // allows the command without asking.
+    // applied at the step boundary, inside the turn. The reply is held
+    // until a `tools` answer proves the steer - image and all - is
+    // stored and queued, so the image is in the inbox before the
+    // sleeping call's step ends: the test forces the order instead of
+    // racing the 5 s sleep. A standing rule allows the command without
+    // asking.
     let server = ProviderServer::start([
         stream(&[function_call(
             "call_1",
@@ -1685,6 +1689,7 @@ fn a_steered_image_is_applied_and_sent_on_the_next_request() {
         hello(),
     ])
     .unwrap();
+    server.hold();
     setup.provider_with_images(&server);
     fs::write(
         setup.home().join("rules"),
@@ -1718,8 +1723,17 @@ fn a_steered_image_is_applied_and_sent_on_the_next_request() {
             "{{\"id\":\"c_steer\",\"command\":\"steer\",\"args\":{{\"content\":[{{\"type\":\"image\",\"data\":\"{PIXEL_BASE64}\",\"mime_type\":\"image/png\"}}]}}}}"
         ),
     );
-    // The turn stays open on the sleeping call while the reader stores
-    // the image and the loop takes the steer off the inbox.
+    // The turn stays open on the held reply while the reader stores
+    // the image and queues the steer. `tools` is answered on the reader
+    // thread, in line order, so its answer proves the steer - image and
+    // all - was processed and queued before the release lets the reply
+    // through: the test forces the order instead of racing the 5 s
+    // sleep. (Waiting for the steer's own acceptance here would
+    // deadlock: the loop answers it at the next step boundary, which
+    // needs the held reply.)
+    send(&client, r#"{"id":"c_tools","command":"tools"}"#);
+    let _queued = answer(&client, "c_tools");
+    server.release();
     let accepted = answer(&client, "c_steer");
     assert_eq!(accepted["kind"], "command_accepted", "{accepted}");
 

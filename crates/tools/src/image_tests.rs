@@ -626,10 +626,10 @@ fn process_cancel_stops_a_stalled_child_while_the_write_is_blocked() {
     let dir = workspace();
     // A child that records its pid and then sleeps without reading
     // stdin, while 4 MiB is passed, so the write blocks on a full pipe.
+    let ready = fakes::children::Ready::new(dir.path());
     let fiber = stub(
         dir.path(),
-        r#"echo $$ > "$(dirname "$0")/pid"
-exec sleep 3600"#,
+        &format!("echo $$ > '{}'\nexec sleep 3600", ready.path().display()),
     );
     let bytes = vec![b'x'; 4 * 1024 * 1024];
     let cancel = CancelToken::new();
@@ -641,18 +641,7 @@ exec sleep 3600"#,
         let child = ImageChild::new(fiber_path, root.join("artifacts"));
         drop(done_tx.send(child.process(&bytes, &call_cancel)));
     });
-    let pid: u32 = loop {
-        if let Ok(text) = fs::read_to_string(dir.path().join("pid"))
-            && let Ok(pid) = text.trim().parse()
-        {
-            break pid;
-        }
-        #[allow(
-            clippy::disallowed_methods,
-            reason = "the wait is for a pid file, which no clock signals"
-        )]
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    };
+    let pid = ready.wait(PROCESS_LIMIT).first().copied().unwrap();
     cancel.cancel();
     let result = done_rx
         .recv_timeout(PROCESS_LIMIT)
@@ -676,13 +665,30 @@ exec sleep 3600"#,
     assert!(!no_such, "the child {pid} was not reaped");
 }
 
-fn bad_file_for(label: &str, stem: &str) -> String {
+fn bad_body_for(label: &str) -> String {
+    // Each body builds its filename from this invocation's `$4`, the stem
+    // the call minted, so a rejection names the shape, not a stale stem.
     match label {
-        "../outside.png" | "other.png" => label.to_owned(),
-        "sub/stem.png" => format!("sub/{stem}.png"),
-        "stem.png.x" => format!("{stem}.png.x"),
-        "stem." => format!("{stem}."),
-        "stem" => stem.to_owned(),
+        "../outside.png" => {
+            r#"printf '{"file":"../outside.png","mime_type":"image/png","width":1,"height":1}\n'"#
+                .to_owned()
+        }
+        "other.png" => {
+            r#"printf '{"file":"other.png","mime_type":"image/png","width":1,"height":1}\n'"#
+                .to_owned()
+        }
+        "sub/stem.png" => {
+            r#"printf '{"file":"sub/%s.png","mime_type":"image/png","width":1,"height":1}\n' "$4""#
+                .to_owned()
+        }
+        "stem.png.x" => {
+            r#"printf '{"file":"%s.png.x","mime_type":"image/png","width":1,"height":1}\n' "$4""#
+                .to_owned()
+        }
+        "stem." => r#"printf '{"file":"%s.","mime_type":"image/png","width":1,"height":1}\n' "$4""#
+            .to_owned(),
+        "stem" => r#"printf '{"file":"%s","mime_type":"image/png","width":1,"height":1}\n' "$4""#
+            .to_owned(),
         _ => panic!("a bad file case: {label}"),
     }
 }
@@ -699,25 +705,7 @@ fn process_bad_file_names_are_failed_and_read_calls_them_tool_error() {
         "stem",
     ];
     for label in labels {
-        // Probe the stem the child will see by printing `$4` first.
-        let probe = stub(
-            dir.path(),
-            r#"printf '{"file":"%s.png","mime_type":"image/png","width":1,"height":1}\n' "$4""#,
-        );
-        let probed = process_with(dir.path(), &probe, b"bytes", &CancelToken::new()).unwrap();
-        let stem = probed
-            .path
-            .strip_prefix("artifacts/")
-            .unwrap()
-            .strip_suffix(".png")
-            .unwrap();
-        let file = bad_file_for(label, stem);
-        let fiber = stub(
-            dir.path(),
-            &format!(
-                "printf '{{\"file\":\"{file}\",\"mime_type\":\"image/png\",\"width\":1,\"height\":1}}\n'"
-            ),
-        );
+        let fiber = stub(dir.path(), &bad_body_for(label));
         let Err(ImageError::Failed(failure)) =
             process_with(dir.path(), &fiber, b"bytes", &CancelToken::new())
         else {
@@ -735,8 +723,7 @@ fn process_bad_file_names_are_failed_and_read_calls_them_tool_error() {
             message(&output)
         );
     }
-    for stem_ext in [("png", true), ("jpg", true)] {
-        let (ext, _) = stem_ext;
+    for ext in ["png", "jpg"] {
         let fiber = stub(
             dir.path(),
             &format!(

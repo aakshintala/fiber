@@ -74,10 +74,6 @@ fn image(data: &str) -> SentPart {
     }
 }
 
-fn code(message: &(ErrorCode, String)) -> ErrorCode {
-    message.0.clone()
-}
-
 #[test]
 fn text_only_passes_through_without_calling_the_child() {
     let fake = Fake::returning(vec![]);
@@ -234,12 +230,4 @@ fn the_child_sees_whether_the_session_is_closing() {
     cancel.cancel();
     content(vec![image("YQ==")], Some(&closing), &cancel).unwrap();
     assert!(closing.saw_cancelled(0));
-}
-
-#[test]
-fn error_code_helper_names_the_code() {
-    assert_eq!(
-        code(&(ErrorCode::Closing, String::new())),
-        ErrorCode::Closing
-    );
 }

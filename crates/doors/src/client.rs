@@ -485,6 +485,9 @@ fn deliver_message(conn: &mut Conn, id: CommandId, content: Vec<ContentPart>, pr
     }
 }
 
+/// The durable lines `args` asks for, at most [`HISTORY`] of them, read and
+/// parsed from the log's offset table by `seq`: a line outside the window
+/// is never read.
 fn history(
     log: &log::Log,
     args: &contract::commands::HistoryArgs,
