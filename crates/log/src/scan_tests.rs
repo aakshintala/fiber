@@ -188,6 +188,49 @@ fn the_backward_step_is_64_kib() {
 }
 
 #[test]
+fn last_complete_line_handles_offsets_at_step_boundaries() {
+    let step = usize::try_from(super::STEP).unwrap();
+    let mut cases = vec![
+        ("one-byte-line", b"x\n".to_vec(), Some(b"x".to_vec())),
+        (
+            "two-lines",
+            b"first\nsecond\n".to_vec(),
+            Some(b"second".to_vec()),
+        ),
+        (
+            "one-byte-torn-tail",
+            b"first\nlast\nx".to_vec(),
+            Some(b"last".to_vec()),
+        ),
+        (
+            "first-line-without-earlier-newline",
+            b"first\n".to_vec(),
+            Some(b"first".to_vec()),
+        ),
+        ("no-newline", b"one line".to_vec(), None),
+    ];
+    for (name, length) in [
+        ("step-minus-one", step - 1),
+        ("step", step),
+        ("step-plus-one", step + 1),
+    ] {
+        let line = vec![b'x'; length];
+        let mut contents = line.clone();
+        contents.push(b'\n');
+        cases.push((name, contents, Some(line)));
+    }
+
+    let home = fakes::TempDir::new("log-scan-offsets");
+    for (name, contents, expected) in cases {
+        let path = home.path().join(name);
+        fs::write(&path, &contents).unwrap();
+        let file = File::open(path).unwrap();
+        let len = u64::try_from(contents.len()).unwrap();
+        assert_eq!(super::last_complete_line(file, len), expected, "{name}");
+    }
+}
+
+#[test]
 fn last_ts_skips_a_torn_tail_longer_than_one_step() {
     // 70 000 torn bytes after the last newline: the first 64 KiB step
     // back holds no newline, so only the loop finds the last line.

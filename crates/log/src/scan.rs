@@ -112,66 +112,38 @@ const STEP: u64 = 64 * 1024;
 /// newline: read backwards in [`STEP`] steps, the offset strictly
 /// decreasing on every step, stopping at 0.
 fn last_complete_line(mut file: File, len: u64) -> Option<Vec<u8>> {
-    let mut start = len;
-    let mut buf: Vec<u8> = Vec::new();
-    let mut end_abs: Option<u64> = None;
-    loop {
-        let step = STEP.min(start);
-        if step == 0 {
-            break;
-        }
-        let next = start - step;
-        file.seek(SeekFrom::Start(next)).ok()?;
-        let Ok(n) = usize::try_from(step) else {
-            return None;
-        };
-        let mut chunk = vec![0_u8; n];
+    let mut offset = len;
+    let mut line_end = None;
+    let mut bounds = None;
+
+    'scan: while offset > 0 {
+        let step = STEP.min(offset);
+        let start = offset - step;
+        file.seek(SeekFrom::Start(start)).ok()?;
+        let size = usize::try_from(step).ok()?;
+        let mut chunk = vec![0_u8; size];
         file.read_exact(&mut chunk).ok()?;
-        let mut grown = chunk;
-        grown.append(&mut buf);
-        buf = grown;
-        start = next;
-        if end_abs.is_none() {
-            match buf.iter().rposition(|b| *b == b'\n') {
-                Some(pos) => {
-                    let Ok(pos) = u64::try_from(pos) else {
-                        return None;
-                    };
-                    end_abs = Some(start + pos + 1);
-                }
-                None => {
-                    if start == 0 {
-                        return None;
-                    }
-                    continue;
-                }
+
+        for (index, byte) in chunk.iter().enumerate().rev() {
+            if *byte != b'\n' {
+                continue;
             }
-        }
-        let Some(end) = end_abs else {
-            continue;
-        };
-        let end_rel = usize::try_from(end - start)
-            .unwrap_or(usize::MAX)
-            .min(buf.len());
-        if end_rel == 0 {
-            return None;
-        }
-        let search = buf.get(..end_rel - 1)?;
-        match search.iter().rposition(|b| *b == b'\n') {
-            Some(prev) => {
-                return buf.get(prev + 1..end_rel - 1).map(<[u8]>::to_vec);
+            let newline = start + u64::try_from(index).ok()?;
+            if let Some(end) = line_end {
+                bounds = Some((newline + 1, end));
+                break 'scan;
             }
-            None => {
-                if start == 0 {
-                    return buf.get(..end_rel - 1).map(<[u8]>::to_vec);
-                }
-            }
+            line_end = Some(newline);
         }
-        if start == 0 {
-            break;
-        }
+        offset = start;
     }
-    None
+
+    let (start, end) = bounds.or_else(|| line_end.map(|end| (0, end)))?;
+    let size = usize::try_from(end - start).ok()?;
+    file.seek(SeekFrom::Start(start)).ok()?;
+    let mut line = vec![0_u8; size];
+    file.read_exact(&mut line).ok()?;
+    Some(line)
 }
 
 /// The logical bytes under `dir`: the sum of `symlink_metadata().len()`
