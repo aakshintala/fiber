@@ -862,7 +862,7 @@ websocket for everything it does.
 | `dismiss` | `session` (string) | Drops a crashed session from the feed, for every client; its log stays, and it can still be resumed from `recent`. Rejected `stale_request` unless the session is crashed. |
 | `recent` | `before` (string, optional), `project` (string, optional) | Answers with a page of exited sessions from `recent.jsonl`, newest first, skipping delegates, whose row's `status` carries `parent` (`docs/state.md`). `project` is the project's key, the name of its `projects/<key>/` directory. |
 | `start` | `workspace` (string), `model` (string, optional), `overrides` (array of strings, optional), `worktree` (boolean, optional), `content` (optional) | Starts a session in the workspace, any absolute path, and answers with its `session_id`. Each of `overrides` is a `key=value` passed to the session as `-c` ("Commands and flags"). With `worktree` true, the session runs in a new worktree of the workspace ("Isolation"). With `content`, its first prompt. |
-| `delete` | `session` (string), `cascade` (boolean, optional) | Deletes an exited session ("Deleting and pruning"). |
+| `delete` | `session` (string), `cascade` (boolean, optional), `expect` (array of strings, optional) | Deletes an exited session ("Deleting and pruning"). With `cascade`, `expect` is the sessions the person confirmed; the delete is rejected `stale_request` when the sessions it would remove differ. |
 | `prompt_history` | `project` (string), `before` (integer, optional) | Answers with a page of the project's prompt history, newest first (`docs/state.md`). `project` is the project's key, as for `recent`. |
 | `read_file` | `session` (string), `path` (string) | Answers with one file from the session's `artifacts/` ("A session's files"). |
 | `status` | none | Answers with `running`, `fiber_version` and `clients` (`docs/events.md`, "`command_accepted`"). |
@@ -1052,6 +1052,7 @@ session:
   "Rewind"). `--cascade` deletes them too, and whatever points at them; it is
   refused if any of them is held. Finding them reads the first line of each
   session log, as listing does.
+- **When `expect` is supplied, a cascade removes only the sessions the person confirmed.** A client sends them in `delete`'s `expect` ("The hub"): the session and everything `--cascade` adds. When the sessions the hub would remove differ, such as a fork made while the question was open, the delete is rejected `stale_request`, the message names the sessions it would remove now, and nothing is deleted. `fiber sessions delete` and pruning send no `expect`.
 - **Delete is permanent.** It removes the session's directory: its log and its
   artifacts together. There is no trash. The terminal asks first, naming the
   session and everything `--cascade` adds. On the command line `--yes`
