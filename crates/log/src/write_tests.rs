@@ -5,7 +5,7 @@ use std::time::Duration;
 use super::*;
 use contract::ErrorCode;
 use contract::events::{
-    Empty, Event, ExtensionsLoaded, FiberStarted, LoadedExtension, Notice, SessionState,
+    Clients, Empty, Event, ExtensionsLoaded, FiberStarted, LoadedExtension, Notice, SessionState,
     SessionStatus, TextDelta,
 };
 use contract::shapes::{Tokens, Usage};
@@ -248,6 +248,10 @@ fn status(name: &str) -> Event {
     })
 }
 
+fn clients(count: u32) -> Event {
+    Event::Clients(Clients { count })
+}
+
 fn extensions(name: &str) -> Event {
     Event::ExtensionsLoaded(ExtensionsLoaded {
         extensions: vec![LoadedExtension {
@@ -270,13 +274,17 @@ fn latest_is_the_newest_line_of_each_kind_with_no_watcher() {
     )
     .unwrap();
     let mut last_status = None;
+    let mut last_clients = None;
     for n in 0..1_100 {
         log.append(&notice(&n.to_string()), None, None).unwrap();
         last_status = Some(log.append(&status(&format!("s{n}")), None, None).unwrap());
+        let count = u32::try_from(n).unwrap_or(u32::MAX);
+        last_clients = Some(log.append(&clients(count), None, None).unwrap());
     }
     log.append(&step(), None, None).unwrap();
     let last_extensions = log.append(&extensions("last"), None, None).unwrap();
     assert_eq!(log.latest("session_status").as_ref(), last_status.as_ref());
+    assert_eq!(log.latest("clients").as_ref(), last_clients.as_ref());
     assert_eq!(
         log.latest("extensions_loaded").as_ref(),
         Some(&last_extensions)
@@ -295,6 +303,7 @@ fn latest_is_the_newest_line_of_each_kind_with_no_watcher() {
         Some(&last_extensions)
     );
     assert!(reopened.latest("session_status").is_none());
+    assert!(reopened.latest("clients").is_none());
 }
 
 /// Reopening folds the whole log in one pass: across more lines than a

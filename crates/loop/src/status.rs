@@ -6,7 +6,7 @@
 //! from every site, once, in order.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Weak};
 use std::thread::{Builder, JoinHandle};
@@ -42,12 +42,16 @@ pub(crate) type Running = Box<dyn Fn() -> Vec<JobId> + Send>;
 /// Reads the workspace's branch: `None` outside a git repository.
 pub(crate) type Branch = Box<dyn Fn() -> Option<Git> + Send>;
 
+/// Reads the `full` connections attached now.
+pub(crate) type Count = Box<dyn Fn() -> u32 + Send>;
+
 /// The fold of the session's lines into one [`SessionStatus`].
 pub(crate) struct Fold {
     name: Option<String>,
     /// The first prompt, once the first `turn_started` was seen.
     first_prompt: Option<String>,
     workspace: String,
+    project: String,
     parent: Option<SessionId>,
     model: String,
     window: Option<u64>,
@@ -67,26 +71,31 @@ pub(crate) struct Fold {
     /// The jobs running at the latest read.
     running: Vec<JobId>,
     git: Option<Git>,
+    clients: u32,
     since: Option<u64>,
     /// Whether history is folded: from then on `running` and `git` are read.
     live: bool,
     read_running: Running,
     read_git: Branch,
+    read_clients: Count,
 }
 
 impl Fold {
     /// A fold that knows only what the loop was built with.
     pub(crate) fn new(
+        project: String,
         workspace: String,
         model: String,
         window: Option<u64>,
         read_running: Running,
         read_git: Branch,
+        read_clients: Count,
     ) -> Self {
         let ledger = Ledger::default();
         Self {
             name: None,
             first_prompt: None,
+            project,
             workspace,
             parent: None,
             model,
@@ -102,10 +111,12 @@ impl Fold {
             delegates: BTreeSet::new(),
             running: Vec::new(),
             git: None,
+            clients: 0,
             since: None,
             live: false,
             read_running,
             read_git,
+            read_clients,
         }
     }
 
@@ -115,12 +126,14 @@ impl Fold {
         self.live = true;
         self.running = (self.read_running)();
         self.git = (self.read_git)();
+        self.clients = (self.read_clients)();
     }
 
     /// Folds `line`. True when a field of the status changed.
     pub(crate) fn observe(&mut self, line: &Envelope) -> bool {
-        // An ephemeral line is a delta, apart from the retry notice.
-        if !line.is_durable() && line.kind != "retry_scheduled" {
+        // An ephemeral line is a delta, apart from the retry notice and the
+        // connection count.
+        if !line.is_durable() && line.kind != "retry_scheduled" && line.kind != "clients" {
             return false;
         }
         // A line that does not read is skipped: the fold never panics.
@@ -130,6 +143,9 @@ impl Fold {
         let before = self.status();
         let key = self.key();
         self.apply(&event, line);
+        if self.live {
+            self.clients = (self.read_clients)();
+        }
         if self.since.is_none() || self.key() != key {
             self.since = Some(line.ts);
         }
@@ -357,7 +373,7 @@ impl Fold {
                 .or_else(|| self.first_prompt.clone())
                 .unwrap_or_default(),
             workspace: self.workspace.clone(),
-            project: String::new(),
+            project: self.project.clone(),
             parent: self.parent.clone(),
             model: self.model.clone(),
             state: self.state(),
@@ -371,7 +387,7 @@ impl Fold {
             spend: self.spend.clone(),
             delegates: u32::try_from(self.delegates.len()).unwrap_or(u32::MAX),
             jobs: u32::try_from(jobs).unwrap_or(u32::MAX),
-            clients: 0,
+            clients: self.clients,
         }
     }
 }
@@ -449,12 +465,16 @@ fn control(kind: &str) -> Envelope {
 pub(crate) fn spawn(looped: &Loop) -> Option<Status> {
     let jobs = looped.ending.jobs.clone();
     let workspace = looped.workspace.clone();
+    let project = project_of(looped.log.dir());
+    let weak = Arc::downgrade(&looped.log);
     let fold = Fold::new(
+        project,
         looped.workspace_label.clone(),
         looped.model.reference.clone(),
         looped.prompt.context_window,
         Box::new(move || jobs.as_ref().map(|jobs| jobs.running()).unwrap_or_default()),
         Box::new(move || branch(&workspace)),
+        Box::new(move || clients_of(&weak)),
     );
     start(&looped.log, fold)
 }
@@ -550,6 +570,31 @@ impl Observer {
         log.emit(&Event::SessionStatus(status.clone()));
         self.last = Some(status);
         true
+    }
+}
+
+/// The project key a session directory sits under: the name of its
+/// grandparent (`projects/<key>/sessions/<id>`); `""` when it has none.
+fn project_of(dir: &Path) -> String {
+    dir.parent()
+        .and_then(|sessions| sessions.parent())
+        .and_then(|project| project.file_name())
+        .map(|key| key.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+/// The `count` of the log's latest `clients` line; 0 when there is none,
+/// it does not read as `clients`, or the log is gone.
+fn clients_of(log: &Weak<Log>) -> u32 {
+    let Some(log) = log.upgrade() else {
+        return 0;
+    };
+    let Some(line) = log.latest("clients") else {
+        return 0;
+    };
+    match Event::from_envelope(&line) {
+        Ok(Some(Event::Clients(clients))) => clients.count,
+        Ok(_) | Err(_) => 0,
     }
 }
 
