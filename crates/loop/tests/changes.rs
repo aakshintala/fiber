@@ -220,7 +220,7 @@ fn a_new_instruction_file_is_created_at_the_next_turn_start() {
     assert_eq!(requests.len(), 2);
     assert!(
         requests[1].conversation.iter().any(
-            |input| matches!(input, Input::User { text } if text.contains("a new instruction file appeared"))
+            |input| matches!(input, Input::User { text , ..} if text.contains("a new instruction file appeared"))
         ),
         "{:?}",
         requests[1].conversation
@@ -255,10 +255,9 @@ fn a_changed_file_sends_a_diff_then_a_deletion() {
     assert_eq!(lines[0].payload["content"], new);
     let requests = session.requests();
     assert!(
-        requests[1]
-            .conversation
-            .iter()
-            .any(|input| matches!(input, Input::User { text } if text.contains("Apply this diff"))),
+        requests[1].conversation.iter().any(
+            |input| matches!(input, Input::User { text , ..} if text.contains("Apply this diff"))
+        ),
         "{:?}",
         requests[1].conversation
     );
@@ -529,10 +528,9 @@ fn an_outside_edit_to_a_section_file_sends_a_diff_at_the_next_turn() {
     assert_eq!(lines[0].payload["content"], new);
     let requests = session.requests();
     assert!(
-        requests[1]
-            .conversation
-            .iter()
-            .any(|input| matches!(input, Input::User { text } if text.contains("Apply this diff"))),
+        requests[1].conversation.iter().any(
+            |input| matches!(input, Input::User { text , ..} if text.contains("Apply this diff"))
+        ),
         "{:?}",
         requests[1].conversation
     );
@@ -588,7 +586,7 @@ fn an_outside_creation_of_a_section_file_sends_its_full_text() {
     let requests = session.requests();
     assert!(
         requests[1].conversation.iter().any(
-            |input| matches!(input, Input::User { text } if text.contains("a new file appeared in the fiber.test/notes extension's section"))
+            |input| matches!(input, Input::User { text , ..} if text.contains("a new file appeared in the fiber.test/notes extension's section"))
         ),
         "{:?}",
         requests[1].conversation
@@ -1098,7 +1096,7 @@ fn a_subdirectory_file_is_queued_for_the_next_step() {
     assert_eq!(requests.len(), 2);
     assert!(
         requests[1].conversation.iter().any(
-            |input| matches!(input, Input::User { text } if text.contains("has its own instruction file"))
+            |input| matches!(input, Input::User { text , ..} if text.contains("has its own instruction file"))
         ),
         "{:?}",
         requests[1].conversation
@@ -1123,7 +1121,7 @@ fn a_later_date_appends_one_line() {
     let requests = session.requests();
     assert!(
         requests[1].conversation.iter().any(
-            |input| matches!(input, Input::User { text } if text.contains("the date is now 2023-11-15"))
+            |input| matches!(input, Input::User { text , ..} if text.contains("the date is now 2023-11-15"))
         ),
         "{:?}",
         requests[1].conversation
@@ -1293,10 +1291,9 @@ fn a_resume_detects_an_outside_change_with_a_diff() {
     let requests = session.provider.requests();
     assert_eq!(requests.len(), 2);
     assert!(
-        requests[1]
-            .conversation
-            .iter()
-            .any(|input| matches!(input, Input::User { text } if text.contains("Apply this diff"))),
+        requests[1].conversation.iter().any(
+            |input| matches!(input, Input::User { text , ..} if text.contains("Apply this diff"))
+        ),
         "{:?}",
         requests[1].conversation
     );

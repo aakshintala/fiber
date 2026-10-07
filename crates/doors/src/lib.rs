@@ -10,6 +10,7 @@
 mod attach;
 mod client;
 pub mod hub;
+mod pasted;
 mod prompt_history;
 mod run_command;
 mod session;

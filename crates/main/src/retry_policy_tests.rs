@@ -42,6 +42,10 @@ fn empty_servers() -> crate::mcp_servers::SessionServers {
         failed: Vec::new(),
         servers: started.servers,
         forget: std::sync::Arc::new(|| {}),
+        images: std::sync::Arc::new(tools::ImageChild::new(
+            std::path::PathBuf::new(),
+            std::path::PathBuf::new(),
+        )),
     }
 }
 

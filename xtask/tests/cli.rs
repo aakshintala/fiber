@@ -275,13 +275,14 @@ fn ticket_reads_the_body_on_stdin() {
     );
 }
 
+/// A `gh` that runs `script` through `/bin/sh`: `fakes::script` links `bin/gh`
+/// to a checked-in trampoline, so no test executes a file it wrote
+/// (docs/testing.md, "Waits and timeouts").
 #[cfg(unix)]
 fn fake_gh(dir: &TestDir, script: &str) -> String {
-    dir.write("bin/gh", script);
-    let path = dir.path().join("bin/gh");
-    let mut permissions = std::fs::metadata(&path).unwrap().permissions();
-    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
-    std::fs::set_permissions(&path, permissions).unwrap();
+    let bin = dir.path().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    fakes::script(&bin, "gh", script);
     format!(
         "{}:{}",
         dir.path().join("bin").display(),

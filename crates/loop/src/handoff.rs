@@ -86,7 +86,7 @@ pub(crate) fn context_tokens(tokens: &Tokens) -> u64 {
 /// tool call is its name plus its arguments' JSON.
 pub(crate) fn estimate(input: &Input) -> u64 {
     let bytes = match input {
-        Input::User { text }
+        Input::User { text, .. }
         | Input::Assistant { text, .. }
         | Input::Reasoning { text, .. }
         | Input::ToolResult { text, .. } => text.len(),

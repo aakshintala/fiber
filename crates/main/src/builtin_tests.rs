@@ -33,7 +33,7 @@ fn the_driver_shell_runs_echo() {
         Arc::clone(&clock),
         Arc::new(fakes::Recorder::default()),
     );
-    let (_tools, _infos, driver, _forget) = super::builtin(
+    let (_tools, _infos, driver, _forget, _images) = super::builtin(
         root.path().join("fiber-stub"),
         root.path(),
         &root.path().join("artifacts"),
@@ -77,7 +77,7 @@ fn read_is_wired_to_the_image_child() {
         Arc::clone(&clock),
         Arc::new(fakes::Recorder::default()),
     );
-    let (tools, _infos, _driver, _forget) = super::builtin(
+    let (tools, _infos, _driver, _forget, _images) = super::builtin(
         fiber,
         root.path(),
         &root.path().join("artifacts"),
@@ -118,7 +118,7 @@ fn the_forget_callback_clears_what_the_file_tools_have_seen() {
         Arc::clone(&clock),
         Arc::new(fakes::Recorder::default()),
     );
-    let (tools, _infos, _driver, forget) = super::builtin(
+    let (tools, _infos, _driver, forget, _images) = super::builtin(
         root.path().join("fiber-stub"),
         root.path(),
         &root.path().join("artifacts"),
@@ -164,7 +164,7 @@ fn without_the_forget_callback_the_same_write_goes_through() {
         Arc::clone(&clock),
         Arc::new(fakes::Recorder::default()),
     );
-    let (tools, _infos, _driver, _forget) = super::builtin(
+    let (tools, _infos, _driver, _forget, _images) = super::builtin(
         root.path().join("fiber-stub"),
         root.path(),
         &root.path().join("artifacts"),
@@ -210,7 +210,7 @@ fn builtin_registers_the_tools_in_name_order_then_jobs() {
         Arc::clone(&clock),
         Arc::new(fakes::Recorder::default()),
     );
-    let (tools, infos, _driver, _forget) = super::builtin(
+    let (tools, infos, _driver, _forget, _images) = super::builtin(
         root.path().join("fiber-stub"),
         root.path(),
         &root.path().join("artifacts"),
@@ -266,7 +266,7 @@ fn the_model_shell_is_non_interactive() {
         Arc::clone(&clock),
         Arc::new(fakes::Recorder::default()),
     );
-    let (tools, _infos, _driver, _forget) = super::builtin(
+    let (tools, _infos, _driver, _forget, _images) = super::builtin(
         root.path().join("fiber-stub"),
         root.path(),
         &root.path().join("artifacts"),
@@ -304,7 +304,7 @@ fn registered_with(web_search: Option<&str>) -> (Vec<(String, Option<String>)>, 
         Arc::clone(&clock),
         Arc::new(fakes::Recorder::default()),
     );
-    let (tools, infos, _driver, _forget) = super::builtin(
+    let (tools, infos, _driver, _forget, _images) = super::builtin(
         root.path().join("fiber-stub"),
         root.path(),
         &root.path().join("artifacts"),

@@ -15,6 +15,7 @@ pub mod extension;
 pub mod files;
 pub mod hook;
 mod ids;
+pub mod images;
 pub mod inbox;
 pub mod jobs;
 mod pre_session;

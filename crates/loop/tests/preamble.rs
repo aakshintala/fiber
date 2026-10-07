@@ -66,7 +66,7 @@ fn a_new_session_builds_the_preamble_before_its_first_turn() {
     assert_eq!(opening.payload["skills"], Value::Array(vec![]));
     let first = &requests[0].conversation[0];
     assert!(
-        matches!(first, contract::provider::Input::User { text } if text.starts_with("This message is from Fiber")),
+        matches!(first, contract::provider::Input::User { text , ..} if text.starts_with("This message is from Fiber")),
         "{first:?}"
     );
 }
@@ -96,7 +96,7 @@ fn a_workspace_skill_is_logged_in_the_opening_message_listing() {
         }])
     );
     let requests = session.requests();
-    let contract::provider::Input::User { text } = &requests[0].conversation[0] else {
+    let contract::provider::Input::User { text, .. } = &requests[0].conversation[0] else {
         panic!("{:?}", requests[0].conversation[0]);
     };
     assert!(
@@ -289,7 +289,7 @@ fn opening_text(session: &Session) -> String {
     let [request] = requests.as_slice() else {
         panic!("one request, got {}", requests.len());
     };
-    let [contract::provider::Input::User { text }, ..] = request.conversation.as_slice() else {
+    let [contract::provider::Input::User { text, .. }, ..] = request.conversation.as_slice() else {
         panic!("{:?}", request.conversation);
     };
     text.clone()

@@ -125,6 +125,7 @@ pub(crate) fn render_reviewed(
                     action: Some(action.clone()),
                     input: Input::User {
                         text: format!("Tool call: {rendered}"),
+                        images: Vec::new(),
                     },
                 });
             }
@@ -171,6 +172,7 @@ fn person(content: &[ContentPart]) -> Reviewed {
         action: None,
         input: Input::User {
             text: format!("The person: {}", crate::conversation::text(content)),
+            images: Vec::new(),
         },
     }
 }
@@ -547,13 +549,16 @@ impl Loop {
         let workspace = self.workspace_label.clone();
         conversation.push(Input::User {
             text: format!("Declared effects: {declared}\nWorkspace root: {workspace}"),
+            images: Vec::new(),
         });
         conversation.push(Input::User {
             text: stage.to_owned(),
+            images: Vec::new(),
         });
         if let Some(note) = note {
             conversation.push(Input::User {
                 text: note.to_owned(),
+                images: Vec::new(),
             });
         }
         (conversation, previous)

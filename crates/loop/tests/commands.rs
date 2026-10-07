@@ -468,7 +468,7 @@ fn a_slash_prompt_runs_the_skill_with_the_rest_as_its_arguments() {
         .flat_map(|request| request.conversation.clone())
         .rev()
         .find_map(|input| match input {
-            Input::User { text } => Some(text),
+            Input::User { text, .. } => Some(text),
             Input::Assistant { .. }
             | Input::Reasoning { .. }
             | Input::ToolCall { .. }

@@ -168,7 +168,7 @@ fn paired_turns(turns: usize) -> Vec<Scripted> {
 
 fn user_text(input: &Input) -> &str {
     match input {
-        Input::User { text } => text,
+        Input::User { text, .. } => text,
         Input::Assistant { .. }
         | Input::Reasoning { .. }
         | Input::ToolCall { .. }

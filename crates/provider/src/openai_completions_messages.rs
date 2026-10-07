@@ -71,9 +71,11 @@ pub(crate) fn messages(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value
     let mut last_tool = None;
     for (index, input) in request.conversation.iter().enumerate() {
         match input {
-            Input::User { text } => {
+            Input::User { text, images } => {
                 flush_images(&mut out, &mut ends, &mut pending, last_tool);
-                out.push(message(json!({"role": "user", "content": text})));
+                let prepared =
+                    crate::images::prepare(text, images, &request.session_dir, endpoint.text_only);
+                out.push(message(user_content(prepared)));
             }
             // The flag is ignored: Chat Completions defines no error field
             // on a tool message (`ChatCompletionRequestToolMessage`: `role,
@@ -223,6 +225,25 @@ fn mark(message: &mut Map<String, Value>, lifetime: &CacheLifetime) {
 /// so `previous_end` lands where the previous request's last marker was,
 /// including when a dropped input sits between the result and the flush.
 /// Nothing is pushed when the run held no image.
+/// A user message's content: the plain text when no image is sent,
+/// otherwise an array holding one `text` part, when the text is
+/// non-empty, then one `image_url` part per image.
+fn user_content(prepared: crate::images::Prepared) -> Value {
+    if prepared.images.is_empty() {
+        return json!({"role": "user", "content": prepared.text});
+    }
+    let mut parts = Vec::new();
+    if !prepared.text.is_empty() {
+        parts.push(json!({"type": "text", "text": prepared.text}));
+    }
+    for image in &prepared.images {
+        parts.push(
+            json!({"type": "image_url", "image_url": {"url": crate::images::data_url(image)}}),
+        );
+    }
+    json!({"role": "user", "content": parts})
+}
+
 fn flush_images(
     out: &mut Vec<Map<String, Value>>,
     ends: &mut [usize],

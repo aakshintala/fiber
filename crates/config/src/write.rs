@@ -295,6 +295,26 @@ fn make_parent(file: &Path) -> Result<(), ConfigError> {
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
+// Pause point between creating the temporary file and renaming it over the
+// destination (`docs/testing.md`, "Waits and timeouts"): the
+// credential-mode test installs a hook to hold the writer there, so the race
+// between the temporary file being visible and the rename happens on every
+// run instead of being waited for. Test-only; non-test builds never call it.
+#[cfg(test)]
+thread_local! {
+    static BEFORE_RENAME: std::cell::RefCell<Option<Box<dyn Fn()>>> =
+        std::cell::RefCell::new(None);
+}
+
+/// Installs the pause-point hook run between creating the temporary file and
+/// renaming it (`docs/testing.md`, "Waits and timeouts"), on the current
+/// thread. The credential-mode test uses it to hold the writer with the
+/// temporary file visible, so the race happens on every run.
+#[cfg(test)]
+pub(crate) fn before_rename(hook: impl Fn() + 'static) {
+    BEFORE_RENAME.with(|cell| *cell.borrow_mut() = Some(Box::new(hook)));
+}
+
 /// Writes `bytes` to a temporary file created with `mode` beside `file`,
 /// syncs it, and renames it over `file`, so a reader sees the old file or the
 /// new one, never half.
@@ -314,7 +334,15 @@ pub(crate) fn write_atomic(file: &Path, bytes: &[u8], mode: u32) -> Result<(), C
     let dir = file.parent().unwrap_or(Path::new("."));
     // Syncing the directory makes the rename itself survive a crash.
     let written = write_synced(&tmp, bytes, mode)
-        .and_then(|()| fs::rename(&tmp, file))
+        .and_then(|()| {
+            #[cfg(test)]
+            BEFORE_RENAME.with(|cell| {
+                if let Some(hook) = cell.borrow().as_ref() {
+                    hook();
+                }
+            });
+            fs::rename(&tmp, file)
+        })
         .and_then(|()| File::open(dir)?.sync_all());
     if written.is_err() {
         fs::remove_file(&tmp).unwrap_or(());

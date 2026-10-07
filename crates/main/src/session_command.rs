@@ -147,6 +147,7 @@ pub(crate) fn new_session(
     };
     session.shell(driver);
     session.jobs(jobs.clone());
+    session.images(Arc::clone(&session_servers.images));
     session.hooks(Arc::clone(&extensions) as Arc<dyn contract::hook::Hooks>);
     session.extensions(Arc::clone(&extensions) as Arc<dyn contract::extension::ExtensionDoor>);
     extensions.emit_to(Arc::new(log::WeakEmit::new(&log)));

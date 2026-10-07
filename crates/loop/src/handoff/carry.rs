@@ -78,7 +78,10 @@ impl Carry {
                 .collect::<Vec<_>>()
                 .join("\n\n"),
         };
-        conversation.push(Input::User { text: note });
+        conversation.push(Input::User {
+            text: note,
+            images: Vec::new(),
+        });
         if !self.jobs.is_empty() {
             let listed: Vec<String> = self
                 .jobs
@@ -90,6 +93,7 @@ impl Carry {
                     &body(crate::conversation::MESSAGES_MD, "handoff-jobs"),
                     &[("jobs", listed.join("\n").as_str())],
                 ),
+                images: Vec::new(),
             });
         }
         // The model had not seen the other calls of a step a tool ended: they

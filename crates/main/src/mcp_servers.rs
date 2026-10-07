@@ -62,6 +62,8 @@ pub(crate) struct SessionServers {
     pub servers: mcp::Servers,
     /// Run on every completed handoff: clears what the file tools have seen.
     pub forget: Arc<dyn Fn() + Send + Sync>,
+    /// The image child's driver, which pasted images are processed through.
+    pub images: Arc<dyn contract::images::Images>,
 }
 
 /// The tools one session registers: the built-ins, every MCP server's
@@ -95,7 +97,7 @@ pub(crate) fn session_tools(
     Failure,
 > {
     let fiber = fiber.map_err(|message| crate::failed(ErrorCode::IoFailed, message))?;
-    let (mut tools, mut infos, driver, forget) =
+    let (mut tools, mut infos, driver, forget, images) =
         crate::builtin::builtin(fiber, workspace, artifacts, clock, jobs, locks, web_search)?;
     // Every spec starts with the session, except a cached non-required
     // one, which is declared from its cache and starts on its first call;
@@ -125,6 +127,7 @@ pub(crate) fn session_tools(
         failed: started.failed,
         servers: started.servers,
         forget,
+        images,
     };
     Ok((tools, infos, driver, servers))
 }

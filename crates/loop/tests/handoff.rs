@@ -161,12 +161,15 @@ fn of_kind<'a>(lines: &'a [Envelope], kind: &str) -> Vec<&'a Envelope> {
 }
 
 fn user(text: &str) -> Input {
-    Input::User { text: text.into() }
+    Input::User {
+        text: text.into(),
+        images: Vec::new(),
+    }
 }
 
 fn text_of(input: &Input) -> &str {
     match input {
-        Input::User { text } | Input::Assistant { text, .. } => text,
+        Input::User { text, .. } | Input::Assistant { text, .. } => text,
         other @ (Input::Reasoning { .. } | Input::ToolCall { .. } | Input::ToolResult { .. }) => {
             panic!("not a message: {other:?}")
         }
@@ -174,7 +177,7 @@ fn text_of(input: &Input) -> &str {
 }
 
 fn is_opening(input: &Input) -> bool {
-    matches!(input, Input::User { text } if text.starts_with("This message is from Fiber"))
+    matches!(input, Input::User { text , ..} if text.starts_with("This message is from Fiber"))
 }
 
 #[test]

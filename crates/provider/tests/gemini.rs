@@ -102,6 +102,7 @@ fn request() -> ModelRequest {
         max_output_tokens: None,
         conversation: vec![Input::User {
             text: "What is the weather in Paris? Use the tool.".into(),
+            images: Vec::new(),
         }],
         session_dir: std::path::PathBuf::new(),
     }
@@ -1210,6 +1211,7 @@ fn a_signed_reply_does_not_eat_the_same_words_in_a_later_reply() {
     let mut conversation = after(&earlier.unwrap(), REFERENCE);
     conversation.push(Input::User {
         text: "Say it again.".into(),
+        images: Vec::new(),
     });
     let later = later.unwrap();
     conversation.push(Input::Assistant {
@@ -1388,6 +1390,7 @@ fn a_bare_call_signature_parks_before_user_content_and_not_on_a_later_call() {
         },
         Input::User {
             text: "And tomorrow?".into(),
+            images: Vec::new(),
         },
         Input::ToolCall {
             action_id: ActionId("a_later".into()),
@@ -1617,6 +1620,7 @@ fn a_foreign_call_and_result_go_as_text_while_the_models_own_stay_native() {
     let conversation = vec![
         Input::User {
             text: "What is in a.txt?".into(),
+            images: Vec::new(),
         },
         Input::Reasoning {
             model: "other/model".into(),
@@ -1829,4 +1833,96 @@ fn thinking_levels_map_to_geminis_thinking_config() {
         sent_body(&server, 3)["generationConfig"]["thinkingConfig"],
         json!({"includeThoughts": true, "thinkingLevel": "XHIGH"})
     );
+}
+
+/// A conversation whose one user message carries `images`.
+fn user_conversation(text: &str, images: Vec<contract::provider::ImageRef>) -> Vec<Input> {
+    vec![Input::User {
+        text: text.into(),
+        images,
+    }]
+}
+
+fn user_contents(server: &ProviderServer) -> Value {
+    sent_body(server, 0)["contents"].clone()
+}
+
+#[test]
+fn a_users_image_is_sent_as_inline_data_parts_after_the_text() {
+    let session = fakes::TempDir::new("fiber-gemini-user-image");
+    std::fs::create_dir(session.path().join("artifacts")).unwrap();
+    std::fs::write(session.path().join("artifacts/i_1.png"), b"abcd").unwrap();
+    let request = ModelRequest {
+        conversation: user_conversation("look", vec![png_ref("artifacts/i_1.png")]),
+        session_dir: session.path().to_path_buf(),
+        ..request()
+    };
+    let server = ProviderServer::start([completed_reply(), completed_reply()]).unwrap();
+    let gemini = Gemini::new(endpoint(&server));
+    for _ in 0..2 {
+        run(Box::new(gemini.request(&request))).0.unwrap();
+    }
+    let bodies: Vec<Vec<u8>> = server.requests().into_iter().map(|r| r.body).collect();
+    assert_eq!(bodies[0], bodies[1], "a resume sends the same bytes");
+    assert_eq!(
+        user_contents(&server),
+        json!([{"role": "user", "parts": [
+            {"text": "look"},
+            {"inlineData": {"mimeType": "image/png", "data": "YWJjZA=="}},
+        ]}])
+    );
+}
+
+#[test]
+fn a_users_empty_text_sends_no_text_part() {
+    let session = fakes::TempDir::new("fiber-gemini-user-image");
+    std::fs::create_dir(session.path().join("artifacts")).unwrap();
+    std::fs::write(session.path().join("artifacts/i_1.png"), b"abcd").unwrap();
+    let request = ModelRequest {
+        conversation: user_conversation("", vec![png_ref("artifacts/i_1.png")]),
+        session_dir: session.path().to_path_buf(),
+        ..request()
+    };
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    run(Box::new(Gemini::new(endpoint(&server)).request(&request)))
+        .0
+        .unwrap();
+    assert_eq!(
+        user_contents(&server),
+        json!([{"role": "user", "parts": [
+            {"inlineData": {"mimeType": "image/png", "data": "YWJjZA=="}},
+        ]}])
+    );
+}
+
+#[test]
+fn a_users_image_is_left_out_for_a_text_only_model() {
+    let session = fakes::TempDir::new("fiber-gemini-user-image");
+    std::fs::create_dir(session.path().join("artifacts")).unwrap();
+    std::fs::write(session.path().join("artifacts/i_1.png"), b"abcd").unwrap();
+    let request = ModelRequest {
+        conversation: user_conversation("look", vec![png_ref("artifacts/i_1.png")]),
+        session_dir: session.path().to_path_buf(),
+        ..request()
+    };
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let endpoint = Endpoint {
+        text_only: true,
+        ..endpoint(&server)
+    };
+    run(Box::new(Gemini::new(endpoint).request(&request)))
+        .0
+        .unwrap();
+    assert_eq!(
+        user_contents(&server),
+        json!([{"role": "user", "parts": [
+            {"text": "look\n[Image artifacts/i_1.png left out: this model does not take images.]"},
+        ]}])
+    );
+}
+
+#[test]
+fn a_user_without_images_keeps_its_text_part_even_when_empty() {
+    let (contents, _) = sent_contents(user_conversation("", Vec::new()));
+    assert_eq!(contents, json!([{"role": "user", "parts": [{"text": ""}]}]));
 }
