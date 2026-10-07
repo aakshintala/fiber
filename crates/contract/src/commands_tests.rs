@@ -86,6 +86,7 @@ fn samples() -> Vec<Value> {
         json!({"id": "c", "command": "background"}),
         json!({"id": "c", "command": "reload"}),
         json!({"id": "c", "command": "tools"}),
+        json!({"id": "c", "command": "commands"}),
         json!({"id": "c", "command": "history", "args": {"from_seq": 0, "to_seq": 10}}),
         json!({"id": "c", "command": "history", "args": {"from_seq": 0}}),
         json!({"id": "c", "command": "model",
@@ -204,6 +205,23 @@ fn reload_reads_an_empty_args_as_a_missing_one() {
 #[test]
 fn tools_reads_an_empty_args_as_a_missing_one() {
     empty_args_read_as_missing("tools", Command::Tools);
+}
+
+#[test]
+fn commands_reads_an_empty_args_as_a_missing_one() {
+    empty_args_read_as_missing("commands", Command::Commands);
+}
+
+#[test]
+fn commands_writes_without_args() {
+    let line = CommandLine {
+        id: CommandId("c_1".into()),
+        command: Command::Commands,
+    };
+    assert_eq!(
+        serde_json::to_string(&line).unwrap(),
+        r#"{"id":"c_1","command":"commands"}"#
+    );
 }
 
 #[test]

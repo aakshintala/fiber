@@ -86,8 +86,17 @@ fn started(app: &mut App, now: std::time::Instant) -> String {
         .to_owned()
 }
 
-/// Accepts `start` for `session`, returning the subscribe line.
+/// Accepts `start` for `session`, returning the subscribe line. The
+/// `commands` line sent beside it is checked and dropped.
 fn accept_start(app: &mut App, command_id: &str, session: &str) -> String {
+    let mut lines = accept_start_lines(app, command_id, session);
+    assert_eq!(lines.len(), 2);
+    assert_eq!(parse(&lines[1])["command"], "commands");
+    lines.swap_remove(0)
+}
+
+/// Accepts `start` for `session`, returning every line the app sends.
+fn accept_start_lines(app: &mut App, command_id: &str, session: &str) -> Vec<String> {
     let hello = contract::HubLine {
         kind: "command_accepted".to_owned(),
         ts: 0,
@@ -100,9 +109,7 @@ fn accept_start(app: &mut App, command_id: &str, session: &str) -> String {
         .cloned()
         .unwrap_or_default(),
     };
-    let lines = app.on_line(Line::Hub(hello));
-    assert_eq!(lines.len(), 1);
-    lines.into_iter().next().unwrap_or_default()
+    app.on_line(Line::Hub(hello))
 }
 
 /// Attaches the app to `session`.
@@ -779,6 +786,30 @@ fn command_ids_are_c_and_sixteen_fresh_hex_digits() {
 
 const S_A: &str = "s_aaaaaaaaaaaaaaaa";
 
+/// The `/` panel's rows for `query`, typed into an empty draft and then
+/// cleared.
+fn slash_rows(app: &mut App, query: &str, now: std::time::Instant) -> Vec<String> {
+    for ch in format!("/{query}").chars() {
+        app.on_key(Key::Char(ch), now);
+    }
+    let rows = app
+        .completions()
+        .map(|completions| completions.lines)
+        .unwrap_or_default();
+    app.on_key(Key::CtrlC, now);
+    rows
+}
+
+/// A session `command_accepted` for `id` answering `commands` with `rows`.
+fn commands_answer(id: &str, rows: serde_json::Value) -> Line {
+    session_line(
+        S_A,
+        "command_accepted",
+        serde_json::json!({"command_id": id, "result": {"commands": rows}}),
+        None,
+    )
+}
+
 /// A `steering_queue` line for `session`: each row its text and its
 /// `steer` id, `None` for Fiber's own message.
 fn steering_queue(session: &str, rows: &[(&str, Option<&str>)]) -> Line {
@@ -801,6 +832,135 @@ fn steering_queue(session: &str, rows: &[(&str, Option<&str>)]) -> Line {
         serde_json::json!({ "messages": messages }),
         None,
     )
+}
+
+/// Attaches through `start` and returns the `commands` line's id.
+fn attached_asking(app: &mut App, now: std::time::Instant) -> String {
+    let start = started(app, now);
+    let lines = accept_start_lines(app, &start, S_A);
+    let commands = parse(&lines[1]);
+    assert_eq!(commands["session_id"], S_A);
+    assert!(commands.get("args").is_none());
+    commands["id"].as_str().unwrap_or_default().to_owned()
+}
+
+#[test]
+fn attaching_sends_subscribe_then_commands() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    let start = started(&mut app, now);
+    let lines = accept_start_lines(&mut app, &start, S_A);
+    let commands: Vec<serde_json::Value> = lines.iter().map(|line| parse(line)).collect();
+    assert_eq!(commands.len(), 2);
+    assert_eq!(commands[0]["command"], "subscribe");
+    assert_eq!(commands[1]["command"], "commands");
+    assert_ne!(commands[0]["id"], commands[1]["id"]);
+}
+
+#[test]
+fn the_commands_answer_fills_the_list_with_hints_and_tags() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    let id = attached_asking(&mut app, now);
+    // Until the answer arrives, the built-ins only.
+    assert!(slash_rows(&mut app, "rev", now).is_empty());
+    let answer = commands_answer(
+        &id,
+        serde_json::json!([
+            {"name": "review", "description": "Review a diff.", "argument_hint": "[base]",
+             "tag": "template"},
+            {"name": "tdd", "description": "Test first.", "tag": "skill"},
+            {"name": "reload", "description": "Not the built-in.", "tag": "skill"}]),
+    );
+    assert!(app.on_line(answer).is_empty());
+    assert_eq!(
+        slash_rows(&mut app, "rev", now),
+        ["/review [base]  Review a diff.  template"]
+    );
+    assert_eq!(
+        slash_rows(&mut app, "td", now),
+        ["/tdd  Test first.  skill"]
+    );
+    assert_eq!(
+        slash_rows(&mut app, "relo", now),
+        ["/reload  Reloads configuration, MCP servers and extensions.  command"]
+    );
+}
+
+#[test]
+fn reloaded_asks_again_and_only_the_latest_answer_fills_the_list() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    let first = attached_asking(&mut app, now);
+    let reloaded = session_line(
+        S_A,
+        "reloaded",
+        serde_json::json!({"servers": {"kept": [], "restarted": [], "started": [],
+            "stopped": []}, "extensions": []}),
+        None,
+    );
+    let lines = app.on_line(reloaded);
+    assert_eq!(lines.len(), 1);
+    let again = parse(&lines[0]);
+    assert_eq!(again["command"], "commands");
+    assert_eq!(again["session_id"], S_A);
+    let second = again["id"].as_str().unwrap_or_default().to_owned();
+    assert_ne!(first, second);
+    let row = |name: &str| serde_json::json!([{"name": name, "description": "d", "tag": "skill"}]);
+    // The older answer arrives after the reload: ignored.
+    assert!(
+        app.on_line(commands_answer(&first, row("older")))
+            .is_empty()
+    );
+    assert!(slash_rows(&mut app, "older", now).is_empty());
+    assert!(
+        app.on_line(commands_answer(&second, row("latest")))
+            .is_empty()
+    );
+    assert_eq!(slash_rows(&mut app, "latest", now), ["/latest  d  skill"]);
+    // Its answer is used once: a repeat of the first id still changes nothing.
+    assert!(
+        app.on_line(commands_answer(&first, row("older")))
+            .is_empty()
+    );
+    assert_eq!(slash_rows(&mut app, "latest", now), ["/latest  d  skill"]);
+}
+
+#[test]
+fn the_opening_messages_skills_no_longer_feed_the_list() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    attached_asking(&mut app, now);
+    let opening = session_line(
+        S_A,
+        "opening_message",
+        serde_json::json!({
+            "environment": {"date": "2026-10-06", "os": "macos", "arch": "aarch64",
+                "shell": "zsh", "workspace": "/w", "session_log": "/l"},
+            "instruction_files": [],
+            "skills": [{"name": "tdd", "description": "d", "path": "/s/tdd/SKILL.md",
+                "source": "repository"}],
+        }),
+        None,
+    );
+    assert!(app.on_line(opening).is_empty());
+    assert!(slash_rows(&mut app, "td", now).is_empty());
+}
+
+#[test]
+fn a_commands_answer_from_another_session_is_ignored() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    let id = attached_asking(&mut app, now);
+    let mut answer = commands_answer(
+        &id,
+        serde_json::json!([{"name": "tdd", "description": "d", "tag": "skill"}]),
+    );
+    if let Line::Session(envelope) = &mut answer {
+        envelope.session_id = contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned());
+    }
+    assert!(app.on_line(answer).is_empty());
+    assert!(slash_rows(&mut app, "td", now).is_empty());
 }
 
 /// Every line an effect sends, parsed.
