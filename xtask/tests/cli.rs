@@ -275,15 +275,14 @@ fn ticket_reads_the_body_on_stdin() {
     );
 }
 
-/// A `gh` that runs `script` through `/bin/sh`. `bin/gh` links to a checked-in
-/// trampoline and the written body is `bin/gh.sh`, so no test executes a file
-/// it wrote (docs/testing.md, "Waits and timeouts").
+/// A `gh` that runs `script` through `/bin/sh`: `fakes::script` links `bin/gh`
+/// to a checked-in trampoline, so no test executes a file it wrote
+/// (docs/testing.md, "Waits and timeouts").
 #[cfg(unix)]
 fn fake_gh(dir: &TestDir, script: &str) -> String {
-    dir.write("bin/gh.sh", script);
-    let trampoline =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/trampoline.sh");
-    std::os::unix::fs::symlink(trampoline, dir.path().join("bin/gh")).unwrap();
+    let bin = dir.path().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    fakes::script(&bin, "gh", script);
     format!(
         "{}:{}",
         dir.path().join("bin").display(),

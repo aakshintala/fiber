@@ -10,5 +10,8 @@ serde_json.workspace = true
 proc-macro2.workspace = true
 pulldown-cmark.workspace = true
 
+[dev-dependencies]
+fakes = { path = "../crates/fakes" }
+
 [lints]
 workspace = true
