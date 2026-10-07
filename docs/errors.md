@@ -250,7 +250,7 @@ Every code Fiber emits. "Where" names the lines that carry it.
 | `not_found` | tool call, hub command | the path `read` or `edit` names does not exist, or `read_file` names no file (`docs/invocation.md`, "A session's files") |
 | `orphaned` | job | the process that ran the job died |
 | `output_cap` | job | a job's output file passed 5 GB |
-| `output_truncated` | tool call, turn | a reply was cut off by the output-token limit, so its calls did not run |
+| `output_truncated` | tool call, turn, handoff | a reply was cut off by the output-token limit, so its calls did not run |
 | `pairing_failed` | hub connection | a pairing code was wrong, already used or more than 10 minutes old (`docs/invocation.md`, "Remote clients") |
 | `path_changed` | tool call | a symbolic link changed between the permission decision and the read or write |
 | `protocol_unsupported` | exit | the model's protocol is one this Fiber does not speak yet; pick another model |
@@ -278,7 +278,7 @@ Every code Fiber emits. "Where" names the lines that carry it.
 | `unknown_stop_reason` | model call, turn | the reply ended with a stop or finish reason Fiber does not map |
 | `unknown_tool` | tool call | the model named a tool that does not exist |
 | `unreachable` | tool call | `session_message` named an id no running session has |
-| `unreadable_reply` | permission request | a model replied, but not in the format Fiber asked for, such as a reviewer verdict that could not be read on the second ask (`docs/permissions.md`, "What happens on a block") |
+| `unreadable_reply` | permission request, handoff | a model replied, but not in the format Fiber asked for, such as a reviewer verdict that could not be read on the second ask (`docs/permissions.md`, "What happens on a block") |
 | `unsupported_file` | tool call | a file tool was given a directory, device or file it cannot handle |
 | `usage` | exit | the invocation or its environment is wrong; exits 2 |
 | `version_conflict` | exit | an install needs two majors of one dependency, no tag meets a minimum, or the versions cannot be settled; pick compatible versions. Not retried automatically (`docs/extensions.md`, "Versions") |
