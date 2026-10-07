@@ -19,12 +19,13 @@ use crate::approvals::{self, Panel, PanelKey, Queue};
 use crate::input::Draft;
 use crate::keys::Key;
 use crate::link::Line;
-use crate::mouse::TargetId;
 use crate::shell;
 use crate::turn::{Fold, Row, Turn};
 
 #[path = "app_commands.rs"]
 mod commands;
+#[path = "app_mouse.rs"]
+mod mouse;
 
 /// A line's payload as `$kind`; `None` when it does not parse, and the
 /// line is skipped.
@@ -230,29 +231,6 @@ impl App {
             }
             Key::AltA => self.open_first(),
         }
-    }
-
-    /// Handles a click on `target` (`docs/tui.md`, "Bindings"): the badge
-    /// reopens the approval queue, "↓ New messages below" jumps to the end,
-    /// a conversation line opens or closes what it names.
-    pub(crate) fn on_click(&mut self, target: TargetId) -> Effect {
-        match target {
-            TargetId::Badge => self.open_first(),
-            TargetId::Line(line) => {
-                self.open(line);
-                Effect::None
-            }
-            TargetId::NewBelow => {
-                self.follow();
-                Effect::None
-            }
-        }
-    }
-
-    /// Puts the request the panel shows aside, as Esc does, so it waits on
-    /// the badge. The `hover` jig's way to a badge from an events file.
-    pub(crate) fn put_aside(&mut self) {
-        self.queue.on_key(&Key::Esc);
     }
 
     /// Folds one line from the hub, returning command lines to send.
