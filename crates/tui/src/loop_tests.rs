@@ -149,6 +149,7 @@ fn opened() -> (
         hover: true,
         var: Box::new(|_| None),
         copy_command: None,
+        title: crate::osc::Title::default(),
     };
     let (tx, rx) = mpsc::channel();
     (lp, theirs, tx, rx)

@@ -91,7 +91,7 @@ pub(crate) fn builtin(
     // when the session's preamble is built (`docs/tools.md`, "Hosted by the
     // provider").
     if let Some(kind) = web_search {
-        built.push(registered(tools::HostedSearch::new(kind.to_owned()))?);
+        built.push(hosted(kind)?);
     }
     let mut pairs = Vec::new();
     let mut infos = Vec::new();
@@ -101,6 +101,12 @@ pub(crate) fn builtin(
     }
     let forget: Arc<dyn Fn() + Send + Sync> = Arc::new(move || files.forget());
     Ok((pairs, infos, driver, forget, images))
+}
+
+/// The provider's hosted search of type `kind`, and what the `tools`
+/// command answers for it (`docs/tools.md`, "Hosted by the provider").
+pub(crate) fn hosted(kind: &str) -> Result<(Arc<dyn Tool>, ToolInfo), Failure> {
+    registered(tools::HostedSearch::new(kind.to_owned()))
 }
 
 /// One tool and what the `tools` command answers for it.

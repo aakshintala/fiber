@@ -376,7 +376,7 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 | `history` | Answers, in its `command_accepted`, with the session's durable lines from `from_seq` to `to_seq` inclusive, or to the latest when `to_seq` is absent, at most 256 lines; a client pages for more. This is how every client pages history, the local terminal included: no client reads a session's log from disk (`docs/tui.md`, "History and paging"). Rejected `invalid_arguments` when `from_seq` is past the latest line. |
 | `tools` | Answers with every declared tool: its source, whether it is full, deferred or loaded, and its approximate size (`docs/tools.md`, "Seeing the tools"). |
 | `commands` | Answers with every `/name` the session runs: each skill and prompt template that discovery keeps and `skills.disabled` does not switch off (`docs/system-prompt.md`, "Skills"), and each extension's command (`docs/extensions.md`, "Commands and screens"). Each entry is a name, a one-line description, the skill's `argument-hint` when it has one, and a tag: `skill`, `template`, or the extension's name. The list is fixed when the session starts, and again when it reloads. A client's `/` list reads it (`docs/tui.md`, "Slash commands"). |
-| `model` | Switches model or thinking level at the next turn boundary. Takes a model reference and an optional thinking level. The switch rebuilds the prompt cache, and the terminal says so with the rebuild's size first (`docs/prompt-cache.md`, "Switching model"). Rejected `invalid_arguments` for an unknown model. |
+| `model` | Switches model or thinking level at the next turn boundary. Takes a model reference and an optional thinking level. The switch rebuilds the prompt cache, and the terminal says so with the rebuild's size first (`docs/prompt-cache.md`, "Switching model"). Rejected `invalid_arguments` for an unknown model, and with the credential's own code, such as `credential_missing`, when the new model's credential cannot be read (`docs/model-routing.md`, "When a credential is missing or fails"). |
 | `credential` | Switches the session's credential label at the next turn boundary (`docs/model-routing.md`, "Which credential a session uses"). The switch rebuilds the prompt cache, as a model switch does. It changes this session only; the terminal's `/credential` also saves the label. Rejected `invalid_arguments` for a label the provider does not have. |
 | `name` | Sets the session's name, which pins it against the model's `name_session`. Takes the text; empty text clears the person's name and unpins it. Written as `session_named`. |
 | `handoff` | Starts a handoff: the model's context restarts from a note the model writes (`docs/handoff.md`). Takes optional instructions saying what the next stretch of work focuses on. During a turn it applies at the next step boundary, as a steering message does; between turns it is a turn of its own whose input is the command. |
@@ -388,7 +388,8 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 Rejection codes: `malformed`, `invalid_arguments`, `unknown_command`,
 `not_subscribed`, `busy`, `stale_request`, `not_step_boundary`,
 `session_held`, `delegate_session`, `summary_failed`, `closing`,
-`duplicate_command`, `session_not_found`, `message_refused`, `hook_failed`.
+`duplicate_command`, `session_not_found`, `message_refused`, `hook_failed`,
+`io_failed`.
 
 A prompt or steer that a hook refuses is rejected `message_refused`, with the
 hook's reason and extension in the message. One whose blocking hook failed is
@@ -671,8 +672,8 @@ rationale and the rejected layouts are
   session keeps the binary it started with through `fiber update`. A client
   reads the session's `schema_version` from `fiber_started`; an additive
   difference is fine (`docs/events.md`, "Versioning"), and on a breaking one
-  the client says which version the session runs and declines, so the person
-  can close it or let it exit.
+  the client says which version the session runs and declines with
+  `session_held`, so the person can close it or let it exit.
 
 The socket is the only path into a running session. The terminal, a parent
 session, a GUI and a phone through the hub are the same kind of client, as map
@@ -724,6 +725,8 @@ and a repeat does nothing. A SIGTERM or SIGINT after it is a second signal.
   with code `mcp_cancel_requested`, as on a cancelled turn (`docs/mcp.md`,
   "Calls"); a pending elicitation goes with its call. Then each stdio
   server's stdin is closed and it gets SIGTERM, then SIGKILL 800 ms later.
+- A credential command a `model` switch is reading gets SIGKILL, and the
+  switch is rejected `closing`.
 - No model request is made, no ending notice is given, and no hook runs.
   Because no `after_tool` hook runs to redact it, a call cancelled by shutdown
   completes with no content and no artifact.
@@ -876,6 +879,7 @@ websocket for everything it does.
 | `feed` | none | Subscribes the connection to the feed: the latest `session_status` of every running or waiting top-level session, and every change after it, then a `session_left` line (`docs/events.md`) when one ends. Crashed sessions not yet dismissed come first: each one's last `session_status`, then its `session_left`. |
 | `dismiss` | `session` (string) | Drops a crashed session from the feed, for every client; its log stays, and it can still be resumed from `recent`. Rejected `stale_request` unless the session is crashed. |
 | `recent` | `before` (string, optional), `project` (string, optional) | Answers with a page of exited sessions from `recent.jsonl`, newest first, skipping delegates, whose row's `status` carries `parent` (`docs/state.md`). `project` is the project's key, the name of its `projects/<key>/` directory. |
+| `sessions` | `project` (string, optional) | Answers once with the latest `session_status` of every running top-level session and the `recent.jsonl` row of every exited one, newest first, delegates skipped, each session once. `project` keeps only that project's sessions, as for `recent`. A hub that has just started answers once it has read `run/` and each session it found there has sent its `session_status` or closed; a session that stays silent holds it for at most one rescan past the read. A session started since the hub last read `run/` can be missing, as it is from the feed. |
 | `start` | `workspace` (string), `model` (string, optional), `overrides` (array of strings, optional), `worktree` (boolean, optional), `content` (optional) | Starts a session in the workspace, any absolute path, and answers with its `session_id`. Each of `overrides` is a `key=value` passed to the session as `-c` ("Commands and flags"). With `worktree` true, the session runs in a new worktree of the workspace ("Isolation"). With `content`, its first prompt. A client that wants to answer the repository's offer (`docs/extensions.md`, "Code a repository ships") subscribes `full` before the session's first prompt: a session started with `content` takes that prompt before any client subscribes, so it decides with nobody to answer. |
 | `delete` | `session` (string), `cascade` (boolean, optional), `expect` (array of strings, optional) | Deletes an exited session ("Deleting and pruning"). With `cascade`, `expect` is the sessions the person confirmed; the delete is rejected `stale_request` when the sessions it would remove differ. |
 | `prompt_history` | `project` (string), `before` (integer, optional) | Answers with a page of the project's prompt history, newest first (`docs/state.md`). `project` is the project's key, as for `recent`. |

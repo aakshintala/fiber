@@ -1,6 +1,7 @@
-//! Terminal state: the draft, the attach phase, the folded stream and the
-//! approval queue (`docs/tui.md`, "Turns", "Steering", "Quit", "Approvals
-//! and questions").
+//! Terminal state: the draft, the attach phase, the folded stream, the
+//! approval queue and the repository offer (`docs/tui.md`, "Turns",
+//! "Steering", "Quit", "Approvals and questions", "Approving what a
+//! repository ships").
 
 use std::collections::HashMap;
 use std::hash::{BuildHasher, RandomState};
@@ -31,6 +32,7 @@ mod notices;
 #[path = "steering.rs"]
 mod steering;
 
+mod chrome;
 #[path = "app_commands.rs"]
 mod commands;
 #[path = "copy.rs"]
@@ -43,6 +45,7 @@ mod history;
 mod home;
 #[path = "app_mouse.rs"]
 mod mouse;
+mod offer;
 mod screen;
 
 use screen::Screen;
@@ -183,6 +186,8 @@ pub(crate) struct App {
     kitty: bool,
     /// Approval requests from every session.
     queue: Queue,
+    /// The attached session's offer of its repository's code.
+    offer: crate::offer::Offer,
     /// The attached session's steering queue.
     steering: Steering,
     /// The session's name, from the latest `session_named`.
@@ -203,6 +208,8 @@ pub(crate) struct App {
     stops: Vec<crate::mouse::Target>,
     /// Where the panel and the rail are drawn.
     regions: crate::focus::Regions,
+    /// What the person chose to show: the panel's hide.
+    chrome: chrome::Chrome,
 }
 
 impl App {
@@ -221,6 +228,7 @@ impl App {
             armed_at: None,
             kitty: false,
             queue: Queue::default(),
+            offer: crate::offer::Offer::default(),
             steering: Steering::default(),
             name: None,
             overlays: commands::Overlays::default(),
@@ -230,6 +238,7 @@ impl App {
             focus: None,
             stops: Vec::new(),
             regions: crate::focus::Regions::default(),
+            chrome: chrome::Chrome::default(),
         }
     }
 
@@ -260,6 +269,9 @@ impl App {
             Some(PanelKey::Handled) => return Effect::None,
             Some(PanelKey::Answer) => return self.answer(),
             None => {}
+        }
+        if let Some(effect) = self.offer_key(&key) {
+            return effect;
         }
         if let Some(effect) = self.history_key(&key) {
             return effect;
@@ -300,6 +312,8 @@ impl App {
             Key::BackTab if self.completions().is_none() => self.navigate(),
             Key::BackTab => Effect::None,
             Key::AltA => self.open_first(),
+            Key::AltP => self.toggle_panel(),
+            Key::AltR | Key::AltDigit(_) => Effect::None,
             Key::CtrlR => self.open_search(),
             Key::CtrlG => self.open_in_editor(),
             Key::AltUp | Key::AltDown | Key::AltX => self.steering_key(&key),
@@ -399,7 +413,6 @@ impl App {
     }
 
     /// The session's name, if it has one.
-    #[cfg_attr(not(test), expect(dead_code, reason = "#669 draws it"))]
     pub(crate) fn name(&self) -> Option<&str> {
         self.name.as_deref()
     }
@@ -408,7 +421,7 @@ impl App {
     /// the screen and at least one.
     pub(crate) fn input_height(&self) -> usize {
         let cap = usize::from(self.screen.height() / 3).max(1);
-        self.draft.rows(self.screen.width()).len().min(cap)
+        self.draft.rows(self.column_width()).len().min(cap)
     }
 
     /// Whether the quit hint shows: armed by a first Ctrl+C, or asking
@@ -427,20 +440,21 @@ impl App {
         self.screen.top()
     }
 
-    /// The conversation's rows: the screen less the input box or the
-    /// panel in its place, the steering queue, the badge and the hint. None
-    /// on a screen too short for them.
+    /// The conversation's rows: the screen less the header, the input box
+    /// or the panel in its place, the steering queue, the badge and the
+    /// hint. None on a screen too short for them.
     pub(crate) fn conversation_height(&self) -> usize {
         let input = self.panel().map_or(self.input_height(), |panel| {
             panel
                 .lines
                 .iter()
                 .map(|line| {
-                    crate::view::rows(ratatui::text::Line::raw(line.as_str()), self.screen.width())
+                    crate::view::rows(ratatui::text::Line::raw(line.as_str()), self.column_width())
                 })
                 .sum()
         });
-        let below = input
+        let below = self.chrome.header_rows()
+            + input
             + self.completion_rows()
             + self.steering().len()
             + usize::from(self.badge().is_some())
@@ -455,7 +469,7 @@ impl App {
 
     /// The badge line while the panel is closed and requests wait.
     pub(crate) fn badge(&self) -> Option<String> {
-        self.queue.badge()
+        self.queue.badge(usize::from(self.offer.aside()))
     }
 
     /// The resident conversation's lines, before wrapping.
@@ -573,7 +587,7 @@ impl App {
                     .and_then(Value::as_str)
                     .map(|id| SessionId(id.to_owned()));
                 match (self.pending.remove(&id), session) {
-                    (Some((Kind::Start, _)), Some(session)) => self.started(session),
+                    (Some((Kind::Start, text)), Some(session)) => self.started(session, text),
                     _ => Vec::new(),
                 }
             }
@@ -590,13 +604,15 @@ impl App {
         }
     }
 
-    /// `start` was accepted: attach with a `full` connection, and ask for
-    /// the session's `/` commands. A started session is the attached one.
-    fn started(&mut self, session: SessionId) -> Vec<String> {
+    /// `start` was accepted: attach with a `full` connection, ask for the
+    /// session's `/` commands, then send `text` as its first prompt. A
+    /// started session is the attached one.
+    fn started(&mut self, session: SessionId, text: String) -> Vec<String> {
         self.attach(session.clone());
         vec![
             self.subscribe(&session, Level::Full),
             self.ask_commands(&session),
+            self.first_prompt(&session, text),
         ]
     }
 
@@ -638,6 +654,7 @@ impl App {
         }
         if kind == Kind::Reply {
             self.queue.restore(id);
+            self.offer.restore(id);
         }
     }
 
@@ -655,9 +672,15 @@ impl App {
         Effect::Send(vec![line])
     }
 
-    /// `/approvals` and Alt+A with the panel closed: the panel opens at the
-    /// first request waiting, or a notice says none waits.
+    /// `/approvals` and Alt+A with the panel closed: a put-aside offer
+    /// opens again, else the panel opens at the first request waiting, or a
+    /// notice says none waits.
     fn open_first(&mut self) -> Effect {
+        // The offer holds its session before its first request, so it
+        // reopens first.
+        if self.offer.reopen() {
+            return Effect::None;
+        }
         if !self.queue.open_first() {
             self.notices.push("No requests waiting.".to_owned());
         }
@@ -718,6 +741,9 @@ impl App {
                 if let Some(notice) = read!(envelope, Notice) {
                     self.notices.push(notice.message);
                 }
+            }
+            "repository_code_offered" | "repository_code_resolved" => {
+                self.offer.fold(envelope);
             }
             "steering_queue" => {
                 if let Some(queue) = read!(envelope, SteeringQueue) {

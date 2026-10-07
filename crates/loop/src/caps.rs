@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use contract::emit::Emit;
 use contract::provider::ToolDefinition;
-use contract::tool::{Bound, Cancel, Effects, EffectsError, Output, Tool};
+use contract::tool::{Ask, Bound, Cancel, Effects, EffectsError, Output, Tool};
 use serde_json::{Map, Value};
 
 /// Each configured `tools."<name>".max_result_bytes`, by the tool's
@@ -64,6 +64,16 @@ impl Tool for Capped {
 
     fn run(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel, emit: &dyn Emit) -> Output {
         self.inner.run(arguments, cancel, emit)
+    }
+
+    fn run_asking(
+        &self,
+        arguments: &Map<String, Value>,
+        cancel: &dyn Cancel,
+        emit: &dyn Emit,
+        ask: &dyn Ask,
+    ) -> Output {
+        self.inner.run_asking(arguments, cancel, emit, ask)
     }
 
     fn bound(&self) -> Bound {

@@ -223,12 +223,13 @@ impl Queue {
         })
     }
 
-    /// The badge line while the panel is closed and requests wait.
-    pub(crate) fn badge(&self) -> Option<String> {
+    /// The badge line while the panel is closed and requests wait,
+    /// counting `extra` requests held elsewhere with them.
+    pub(crate) fn badge(&self, extra: usize) -> Option<String> {
         if self.shown.is_some() {
             return None;
         }
-        let waiting = self.waiting_indices().count();
+        let waiting = self.waiting_indices().count().saturating_add(extra);
         (waiting > 0).then(|| format!("! {waiting} waiting · /approvals or ⌥A"))
     }
 
@@ -278,7 +279,16 @@ impl Queue {
             // which stands in the input box's place; F1 opens the key map
             // over it.
             Key::Tab | Key::BackTab | Key::CtrlG | Key::CtrlR => {}
-            Key::PageUp | Key::PageDown | Key::End | Key::CtrlC | Key::F1 | Key::CtrlO => {
+            // The layout's keys reach the screen behind the panel.
+            Key::PageUp
+            | Key::PageDown
+            | Key::End
+            | Key::CtrlC
+            | Key::F1
+            | Key::CtrlO
+            | Key::AltP
+            | Key::AltR
+            | Key::AltDigit(_) => {
                 return None;
             }
             // The steering queue's keys do nothing while the panel is open.

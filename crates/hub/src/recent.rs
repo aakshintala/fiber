@@ -121,6 +121,18 @@ pub(crate) enum PageError {
     UnknownBefore,
 }
 
+/// Every exited session, newest first, newest row per session only:
+/// delegates' rows and rows whose directory is gone are skipped; with
+/// `project`, only that key.
+pub(crate) fn listed(home: &Path, project: Option<&str>) -> Vec<RecentRow> {
+    newest_first(read_all(home))
+        .into_iter()
+        .filter(|row| project.is_none_or(|key| row.project == key))
+        .filter(|row| !row.delegate())
+        .filter(|row| row.dir_exists(home))
+        .collect()
+}
+
 /// One page of exited sessions, newest first, newest row per session
 /// only: delegates' rows, rows whose directory is gone and sessions in
 /// `running` are skipped; with `project`, only that key. The page starts
@@ -131,12 +143,7 @@ pub(crate) fn page(
     project: Option<&str>,
     running: &BTreeSet<String>,
 ) -> Result<Vec<RecentRow>, PageError> {
-    let listed: Vec<RecentRow> = newest_first(read_all(home))
-        .into_iter()
-        .filter(|row| project.is_none_or(|key| row.project == key))
-        .filter(|row| !row.delegate())
-        .filter(|row| row.dir_exists(home))
-        .collect();
+    let listed = listed(home, project);
     let start = match before {
         None => 0,
         Some(before) => {

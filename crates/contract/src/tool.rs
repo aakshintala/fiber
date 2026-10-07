@@ -4,12 +4,14 @@
 //! it is.
 
 use std::sync::{Arc, Weak};
+use std::time::Instant;
 
 use serde_json::{Map, Value};
 
+use crate::ActionId;
 use crate::clock::Wake;
 use crate::emit::Emit;
-use crate::events::{Control, FileChange, McpServerFailed, McpServerReady};
+use crate::events::{Answer, Control, FileChange, Interaction, McpServerFailed, McpServerReady};
 use crate::jobs::JobRecord;
 use crate::provider::ToolDefinition;
 use crate::shapes::{ContentPart, DeclaredEffects, Failure, Process};
@@ -25,6 +27,47 @@ pub trait Cancel: Send + Sync {
     /// before the subscription is not replayed: the caller checks
     /// [`Cancel::is_cancelled`] after subscribing.
     fn subscribe(&self, waker: Weak<dyn Wake>);
+}
+
+/// What a running call may ask whoever drives the session
+/// (`docs/events.md`, "Interactions"). The loop writes the
+/// `interaction_requested` and `interaction_resolved` lines; the call only
+/// waits for the answer.
+pub trait Ask: Send + Sync {
+    /// The call's own `action_id`.
+    fn action(&self) -> ActionId;
+
+    /// Raises `asking` under this call and blocks until it is resolved: by a
+    /// `reply`, or by Fiber. Returns [`Answered::NoAnswer`] at once when
+    /// nobody can answer (`docs/permissions.md`, "Headless").
+    fn ask(&self, asking: Asking) -> Answered;
+}
+
+/// A further check on an answer that fits the interaction's kind. A reply
+/// it refuses is rejected `invalid_arguments`, as an unfit one is
+/// (`docs/invocation.md`, "Replying"). A decline never reaches it.
+pub type Check = Box<dyn Fn(&Answer) -> bool + Send + Sync>;
+
+/// One interaction a running call raises.
+pub struct Asking {
+    /// What it asks.
+    pub interaction: Interaction,
+    /// Every call it belongs to, this one included, in the order the line
+    /// lists them; empty means this call only.
+    pub action_ids: Vec<ActionId>,
+    /// When it ends unanswered, on the session's clock; `None` never.
+    pub until: Option<Instant>,
+    /// A check beyond the kind's, if any.
+    pub check: Option<Check>,
+}
+
+/// How an [`Ask::ask`] ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Answered {
+    /// A `reply` that fits, which may be a person's decline.
+    Reply(Answer),
+    /// Nobody answered: none was possible, or Fiber resolved it.
+    NoAnswer,
 }
 
 /// One tool (`docs/tools.md`, "What a tool declares"). Calls in a step run
@@ -43,6 +86,20 @@ pub trait Tool: Send + Sync {
     /// only that event is accepted through it, and it is borrowed for the
     /// call's duration only, so nothing emits after `run` returns.
     fn run(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel, emit: &dyn Emit) -> Output;
+
+    /// Runs the call as [`Tool::run`] does, with `ask` for raising an
+    /// interaction while it runs (`docs/events.md`, "Interactions"). The
+    /// loop calls only this; a tool that never asks keeps the default,
+    /// which runs [`Tool::run`].
+    fn run_asking(
+        &self,
+        arguments: &Map<String, Value>,
+        cancel: &dyn Cancel,
+        emit: &dyn Emit,
+        _ask: &dyn Ask,
+    ) -> Output {
+        self.run(arguments, cancel, emit)
+    }
 
     /// How a long result is cut (`docs/tools.md`, "Bounded results").
     fn bound(&self) -> Bound {

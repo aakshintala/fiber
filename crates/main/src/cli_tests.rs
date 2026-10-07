@@ -7,8 +7,8 @@ use clap::error::ContextValue;
 use crate::completion::Shell;
 
 use super::{
-    Commands, ConfigCommands, ExtensionCommands, HubCommands, Invocation, MENU, SessionsCommands,
-    command, parse_from, usage_sentence, version_line,
+    Commands, ConfigCommands, ExtensionCommands, HubCommands, Invocation, MENU, SessionsArgs,
+    SessionsCommands, command, parse_from, usage_sentence, version_line,
 };
 
 fn menu() -> String {
@@ -247,15 +247,19 @@ fn login_and_logout_take_as_and_logout_takes_all() {
 
 #[test]
 fn sessions_export_takes_an_id_and_an_optional_path() {
-    let Invocation::Run(Some(Commands::Sessions(SessionsCommands::Export { id, path }))) =
-        parse_from(["fiber", "sessions", "export", "s_abc"])
+    let Invocation::Run(Some(Commands::Sessions(SessionsArgs {
+        command: Some(SessionsCommands::Export { id, path }),
+        ..
+    }))) = parse_from(["fiber", "sessions", "export", "s_abc"])
     else {
         panic!("export with an id");
     };
     assert_eq!(id, "s_abc");
     assert_eq!(path, None);
-    let Invocation::Run(Some(Commands::Sessions(SessionsCommands::Export { id, path }))) =
-        parse_from(["fiber", "sessions", "export", "s_abc", "out"])
+    let Invocation::Run(Some(Commands::Sessions(SessionsArgs {
+        command: Some(SessionsCommands::Export { id, path }),
+        ..
+    }))) = parse_from(["fiber", "sessions", "export", "s_abc", "out"])
     else {
         panic!("export with an id and a path");
     };
@@ -271,14 +275,18 @@ fn sessions_export_takes_an_id_and_an_optional_path() {
 
 #[test]
 fn sessions_delete_takes_cascade_yes_and_an_id() {
-    let Invocation::Run(Some(Commands::Sessions(SessionsCommands::Delete { cascade, yes, id }))) =
-        parse_from(["fiber", "sessions", "delete", "s_abc"])
+    let Invocation::Run(Some(Commands::Sessions(SessionsArgs {
+        command: Some(SessionsCommands::Delete { cascade, yes, id }),
+        ..
+    }))) = parse_from(["fiber", "sessions", "delete", "s_abc"])
     else {
         panic!("delete with an id");
     };
     assert_eq!((cascade, yes, id.as_str()), (false, false, "s_abc"));
-    let Invocation::Run(Some(Commands::Sessions(SessionsCommands::Delete { cascade, yes, id }))) =
-        parse_from(["fiber", "sessions", "delete", "--cascade", "--yes", "s_abc"])
+    let Invocation::Run(Some(Commands::Sessions(SessionsArgs {
+        command: Some(SessionsCommands::Delete { cascade, yes, id }),
+        ..
+    }))) = parse_from(["fiber", "sessions", "delete", "--cascade", "--yes", "s_abc"])
     else {
         panic!("delete with both flags");
     };
@@ -293,12 +301,16 @@ fn sessions_delete_takes_cascade_yes_and_an_id() {
 
 #[test]
 fn sessions_prune_takes_older_than_cascade_dry_run_and_yes() {
-    let Invocation::Run(Some(Commands::Sessions(SessionsCommands::Prune {
-        older_than,
-        cascade,
-        dry_run,
-        yes,
-        force,
+    let Invocation::Run(Some(Commands::Sessions(SessionsArgs {
+        command:
+            Some(SessionsCommands::Prune {
+                older_than,
+                cascade,
+                dry_run,
+                yes,
+                force,
+            }),
+        ..
     }))) = parse_from(["fiber", "sessions", "prune"])
     else {
         panic!("bare prune");
@@ -307,12 +319,16 @@ fn sessions_prune_takes_older_than_cascade_dry_run_and_yes() {
         (older_than, cascade, dry_run, yes, force),
         (None, false, false, false, false)
     );
-    let Invocation::Run(Some(Commands::Sessions(SessionsCommands::Prune {
-        older_than,
-        cascade,
-        dry_run,
-        yes,
-        force,
+    let Invocation::Run(Some(Commands::Sessions(SessionsArgs {
+        command:
+            Some(SessionsCommands::Prune {
+                older_than,
+                cascade,
+                dry_run,
+                yes,
+                force,
+            }),
+        ..
     }))) = parse_from([
         "fiber",
         "sessions",
@@ -362,10 +378,49 @@ fn the_menu_lists_sessions_delete_under_sessions() {
 }
 
 #[test]
-fn sessions_alone_is_a_one_line_usage_sentence() {
-    assert_eq!(
-        sentence(&["fiber", "sessions"]),
-        "'fiber sessions' requires a subcommand but one was not provided [subcommands: delete, export, prune]. Run `fiber --help` for usage."
+fn sessions_alone_or_with_its_flags_is_the_list() {
+    for (args, all, json) in [
+        (&["fiber", "sessions"][..], false, false),
+        (&["fiber", "sessions", "--all"], true, false),
+        (&["fiber", "sessions", "--json"], false, true),
+        (&["fiber", "sessions", "--json", "--all"], true, true),
+    ] {
+        let parsed = parse_from(args.iter().copied());
+        let Invocation::Run(Some(Commands::Sessions(SessionsArgs {
+            command: None,
+            all: got_all,
+            json: got_json,
+        }))) = parsed
+        else {
+            panic!("{args:?} is not the list: {parsed:?}");
+        };
+        assert_eq!((got_all, got_json), (all, json), "{args:?}");
+    }
+}
+
+#[test]
+fn a_list_flag_with_a_subcommand_is_a_usage_sentence() {
+    for args in [
+        &["fiber", "sessions", "--all", "delete", "s_1"][..],
+        &["fiber", "sessions", "--json", "export", "s_1"],
+    ] {
+        let said = sentence(args);
+        assert!(said.ends_with("Run `fiber --help` for usage."), "{said}");
+        assert_eq!(said.lines().count(), 1, "{said}");
+    }
+}
+
+#[test]
+fn the_menu_lists_the_sessions_list_under_sessions() {
+    let menu = menu();
+    let sessions = menu
+        .split("\n\n")
+        .find(|group| group.starts_with("Sessions:"))
+        .unwrap();
+    assert!(
+        sessions.lines().any(|l|
+            l == "  sessions [--all] [--json]                             List sessions: id, state, name, what it waits on, spend"),
+        "{sessions}"
     );
 }
 

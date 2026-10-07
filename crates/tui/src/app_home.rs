@@ -27,11 +27,11 @@ mod exit;
 /// this run, which hides the input box's placeholder.
 pub(super) struct Home {
     /// What the terminal knows about where it was launched.
-    launch: Launch,
+    pub(super) launch: Launch,
     /// A `start` went out in this run.
     prompted: bool,
     /// The session list: live rows from the feed, exited rows from `recent`.
-    sessions: Sessions,
+    pub(super) sessions: Sessions,
     /// `feed` and the first `recent` page went out.
     fed: bool,
     /// The `feed` command waiting for its answer.
@@ -548,7 +548,10 @@ impl App {
                 | Key::CtrlC
                 | Key::AltUp
                 | Key::AltDown
-                | Key::AltX => return Some(Effect::None),
+                | Key::AltX
+                | Key::AltP
+                | Key::AltR
+                | Key::AltDigit(_) => return Some(Effect::None),
             }
         }
         if !self.on_home() {
@@ -588,7 +591,10 @@ impl App {
                 | Key::CtrlR
                 | Key::AltUp
                 | Key::AltDown
-                | Key::AltX => return Some(Effect::None),
+                | Key::AltX
+                | Key::AltP
+                | Key::AltR
+                | Key::AltDigit(_) => return Some(Effect::None),
             }
         }
         // The picker takes every key first: moving, choosing and closing
@@ -615,7 +621,10 @@ impl App {
                 | Key::CtrlR
                 | Key::AltUp
                 | Key::AltDown
-                | Key::AltX => {}
+                | Key::AltX
+                | Key::AltP
+                | Key::AltR
+                | Key::AltDigit(_) => {}
             }
             return Some(Effect::None);
         }
@@ -1265,11 +1274,10 @@ impl App {
         Vec::new()
     }
 
-    /// The `start` args for `content`: the picked workspace on home,
-    /// else the launch workspace, and the launch directory as today.
-    /// Sending one hides the placeholder and clears the blocker lines
-    /// until the run ends.
-    pub(super) fn start_args(&mut self, content: Value) -> Value {
+    /// The `start` args: the picked workspace on home, else the launch
+    /// workspace, and the launch directory as today. Sending one hides the
+    /// placeholder and clears the blocker lines until the run ends.
+    pub(super) fn start_args(&mut self) -> Value {
         match &mut self.home {
             Some(home) => {
                 home.prompted = true;
@@ -1278,15 +1286,9 @@ impl App {
                     .chosen
                     .clone()
                     .unwrap_or_else(|| home.launch.workspace.display().to_string());
-                json!({
-                    "workspace": workspace,
-                    "content": content,
-                })
+                json!({ "workspace": workspace })
             }
-            None => json!({
-                "workspace": self.workspace.display().to_string(),
-                "content": content,
-            }),
+            None => json!({ "workspace": self.workspace.display().to_string() }),
         }
     }
 }

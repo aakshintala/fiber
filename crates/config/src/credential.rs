@@ -5,9 +5,9 @@
 
 use std::collections::BTreeSet;
 use std::fs;
-use std::io::ErrorKind;
-use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::io::{self, ErrorKind};
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output, Stdio};
 
 use contract::Secret;
 use serde_json::{Map, Value};
@@ -20,6 +20,22 @@ use crate::secret::{CredentialSource, credential_labels, read_credential};
 /// The label of the source a provider's data declares, and of the key
 /// `fiber login` stores without a label.
 const DEFAULT_LABEL: &str = "default";
+
+/// A key that was read, and the file it was read from.
+#[derive(Debug)]
+pub struct Read {
+    /// The key.
+    pub secret: Secret,
+    /// The canonical path of the `file` source the key was read from;
+    /// `None` for a stored credential, an `env` or a `command` source.
+    pub file: Option<PathBuf>,
+}
+
+/// Runs a credential source's built command and collects its output.
+pub type Runner<'a> = &'a dyn Fn(&mut Command) -> io::Result<Output>;
+
+/// Resolves a `file` source's path to the file that is read.
+type Canonical<'a> = &'a dyn Fn(&Path) -> io::Result<PathBuf>;
 
 impl Config {
     /// The label a session of this provider uses when nothing else names
@@ -44,6 +60,33 @@ impl Config {
     /// provider's own source. A command runs each time this is called; the
     /// caller asks once per process.
     pub fn credential(&self, provider: &ProviderData, label: &str) -> Result<Secret, ConfigError> {
+        self.credential_with(provider, label, &|command: &mut Command| command.output())
+            .map(|read| read.secret)
+    }
+
+    /// As [`Config::credential`], running a `command` source through `run`,
+    /// which gets the built command: program, arguments, stdin and stderr
+    /// null, stdout piped. A `file` source is canonicalised and read through
+    /// its canonical path, which [`Read::file`] names, so the bytes read and
+    /// the path the credential deny protects are the same file
+    /// (`docs/permissions.md`, "Credentials"). When the path cannot be
+    /// canonicalised nothing is read.
+    pub fn credential_with(
+        &self,
+        provider: &ProviderData,
+        label: &str,
+        run: Runner<'_>,
+    ) -> Result<Read, ConfigError> {
+        self.credential_through(provider, label, run, &|file: &Path| fs::canonicalize(file))
+    }
+
+    fn credential_through(
+        &self,
+        provider: &ProviderData,
+        label: &str,
+        run: Runner<'_>,
+        canonical: Canonical<'_>,
+    ) -> Result<Read, ConfigError> {
         let name = &provider.name;
         let stored = provider.credential_name.as_deref().unwrap_or(name);
         let missing = |why: String| ConfigError::CredentialMissing {
@@ -51,10 +94,12 @@ impl Config {
             why,
         };
         if let Some(secret) = read_credential(&self.home, stored, label)? {
-            return usable(secret.expose()).ok_or_else(|| ConfigError::CredentialFailed {
-                provider: name.clone(),
-                why: format!("credentials/{stored}/{label} is empty"),
-            });
+            return usable(secret.expose())
+                .map(|secret| Read { secret, file: None })
+                .ok_or_else(|| ConfigError::CredentialFailed {
+                    provider: name.clone(),
+                    why: format!("credentials/{stored}/{label} is empty"),
+                });
         }
         let merged = self.merged(None);
         let configured = configured(&merged, name);
@@ -82,6 +127,7 @@ impl Config {
                 "nothing is stored in credentials/{stored}/{label}, and no source is configured for it. The labels for `{name}` are: {listed}"
             )));
         };
+        let mut read_from = None;
         let found = match &source {
             CredentialSource::Env(var) => match std::env::var(var) {
                 Ok(value) => {
@@ -89,8 +135,13 @@ impl Config {
                 }
                 Err(_) => Err(format!("the environment variable {var} is not set")),
             },
-            CredentialSource::File(file) => match fs::read_to_string(file) {
-                Ok(value) => usable(&value).ok_or_else(|| format!("{} is empty", file.display())),
+            CredentialSource::File(file) => match canonical(file)
+                .and_then(|real| fs::read_to_string(&real).map(|value| (real, value)))
+            {
+                Ok((real, value)) => {
+                    read_from = Some(real);
+                    usable(&value).ok_or_else(|| format!("{} is empty", file.display()))
+                }
                 Err(e) if e.kind() == ErrorKind::NotFound => {
                     Err(format!("{} does not exist", file.display()))
                 }
@@ -101,13 +152,18 @@ impl Config {
                     });
                 }
             },
-            CredentialSource::Command(argv) => run(argv),
+            CredentialSource::Command(argv) => command(argv, run),
         };
-        found.map_err(|from| {
-            missing(format!(
-                "nothing is stored in credentials/{stored}/{label}, and {from}"
-            ))
-        })
+        found
+            .map(|secret| Read {
+                secret,
+                file: read_from,
+            })
+            .map_err(|from| {
+                missing(format!(
+                    "nothing is stored in credentials/{stored}/{label}, and {from}"
+                ))
+            })
     }
 }
 
@@ -166,22 +222,26 @@ fn usable(value: &str) -> Option<Secret> {
     (!value.is_empty()).then(|| Secret::new(value.into()))
 }
 
-/// What the command prints on stdout when it succeeds, or why it gave no
-/// key. The command is named by its program alone: its arguments may hold a
-/// key.
-fn run(argv: &[String]) -> Result<Secret, String> {
+/// What the command prints on stdout when `run` runs it and it succeeds,
+/// or why it gave no key. The command is named by its program alone: its
+/// arguments may hold a key.
+fn command(argv: &[String], run: Runner<'_>) -> Result<Secret, String> {
     let Some((program, args)) = argv.split_first() else {
         return Err("the configured command is empty".into());
     };
-    let output = Command::new(program)
+    let output = run(Command::new(program)
         .args(args)
         .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .map_err(|e| format!("`{program}` could not be started: {e}"))?;
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null()))
+    .map_err(|e| format!("`{program}` could not be started: {e}"))?;
     if !output.status.success() {
         return Err(format!("`{program}` failed ({})", output.status));
     }
     usable(&String::from_utf8_lossy(&output.stdout))
         .ok_or_else(|| format!("`{program}` printed no key"))
 }
+
+#[cfg(test)]
+#[path = "credential_tests.rs"]
+mod tests;

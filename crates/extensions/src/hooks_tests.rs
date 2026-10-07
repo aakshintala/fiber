@@ -85,14 +85,18 @@ impl Home {
         fs::write(&path, manifest.to_string()).unwrap();
     }
 
-    fn load(&self, overrides: &[&str]) -> Arc<SessionExtensions> {
-        let config = Config::load(Sources {
+    fn config(&self, overrides: &[&str]) -> Config {
+        Config::load(Sources {
             home: self.home(),
             workspace: self.root.path().join("workspace"),
             project: ProjectKey::new("p").unwrap(),
             overrides: overrides.iter().map(|s| (*s).to_owned()).collect(),
         })
-        .unwrap();
+        .unwrap()
+    }
+
+    fn load(&self, overrides: &[&str]) -> Arc<SessionExtensions> {
+        let config = self.config(overrides);
         let home = self.home();
         let locks: Arc<dyn contract::files::PathLock> = Arc::new(FakeLock::new());
         Arc::new(bounded(move || {
@@ -1171,4 +1175,133 @@ fn drive_to_hands_the_driver_to_each_extension() {
         drive.calls.lock().unwrap().clone(),
         [("fiber.test/driver".to_owned(), "tools".to_owned())]
     );
+}
+
+/// An entry script line that appends `x` to `counter` each time it runs.
+fn counting(counter: &std::path::Path) -> String {
+    format!(
+        "local ok, seen = pcall(host.fs.read, \"{0}\")\n\
+         if not ok or seen == nil then seen = \"\" end\n\
+         host.fs.write(\"{0}\", seen .. \"x\")\n",
+        counter.display()
+    )
+}
+
+/// One `fiber.provider` registration of `provider` with a `credential`
+/// function.
+fn crediting(provider: &str) -> String {
+    format!(
+        "fiber.provider(\"{provider}\", {{ credential = {{ timeout = 1000,\n\
+           run = function() return {{ token = \"t\", expires_at = 1893456000 }} end }} }})\n"
+    )
+}
+
+/// `start_provider` on its own thread under [`WAIT`].
+fn start(
+    home: &Home,
+    session: &Arc<SessionExtensions>,
+    extension: &str,
+    provider: &str,
+) -> Result<Arc<crate::LuaProvider>, crate::Error> {
+    let (session, config) = (Arc::clone(session), home.config(&[]));
+    let (extension, provider) = (extension.to_owned(), provider.to_owned());
+    bounded(move || {
+        let started = session.start_provider(
+            &config,
+            FakeClock::new(),
+            Arc::new(FakeLock::new()),
+            &extension,
+            &provider,
+        )?;
+        started.registers("credential").map(|yes| {
+            assert!(yes, "the started provider answers for its functions");
+            started
+        })
+    })
+}
+
+#[test]
+fn start_provider_starts_a_fresh_vm_for_a_provider_only_extension() {
+    let home = Home::new();
+    let counter = home.root.path().join("runs");
+    home.install(
+        "prov",
+        Some(&format!("{}{}", counting(&counter), crediting("p"))),
+    );
+    let mut session = home.load(&[]);
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    assert_eq!(fs::read_to_string(&counter).unwrap(), "x");
+    Arc::get_mut(&mut session)
+        .expect("the test holds the only Arc")
+        .retain_lua_providers(&[]);
+    let started = start(&home, &session, "fiber.test/prov", "p").unwrap();
+    assert_eq!(started.name(), "p");
+    assert_eq!(fs::read_to_string(&counter).unwrap(), "xx", "one fresh run");
+    // A fresh VM registers no hook or command into the session.
+    assert!(!session.has_hooks());
+    assert!(session.commands().is_empty());
+}
+
+#[test]
+fn start_provider_lends_the_vm_an_extension_keeps_for_its_hooks() {
+    let home = Home::new();
+    let counter = home.root.path().join("runs");
+    home.install(
+        "hooked",
+        Some(&format!(
+            "{}{}{}",
+            counting(&counter),
+            tagging("h", "transform"),
+            crediting("hp")
+        )),
+    );
+    let mut session = home.load(&[]);
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    Arc::get_mut(&mut session)
+        .expect("the test holds the only Arc")
+        .retain_lua_providers(&[]);
+    start(&home, &session, "fiber.test/hooked", "hp").unwrap();
+    assert_eq!(fs::read_to_string(&counter).unwrap(), "x", "no second run");
+}
+
+#[test]
+fn start_provider_for_a_provider_the_vm_does_not_register_is_extension_failed() {
+    let home = Home::new();
+    home.install("prov", Some(&crediting("p")));
+    home.install(
+        "hooked",
+        Some(&format!("{}{}", tagging("h", "transform"), crediting("hp"))),
+    );
+    let session = home.load(&[]);
+    for extension in ["fiber.test/prov", "fiber.test/hooked"] {
+        let err = start(&home, &session, extension, "absent").err().unwrap();
+        assert_eq!(err.code(), ErrorCode::ExtensionFailed, "{extension}");
+        assert!(err.to_string().contains("`absent`"), "{err}");
+    }
+    let err = start(&home, &session, "fiber.test/missing", "p")
+        .err()
+        .unwrap();
+    assert_eq!(err.code(), ErrorCode::ExtensionFailed);
+}
+
+#[test]
+fn start_provider_reports_an_entry_script_that_fails() {
+    let home = Home::new();
+    let flag = home.root.path().join("fail");
+    home.install(
+        "prov",
+        Some(&format!(
+            "local ok = pcall(host.fs.read, \"{}\")\nif ok then error(\"broken\") end\n{}",
+            flag.display(),
+            crediting("p")
+        )),
+    );
+    let session = home.load(&[]);
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    fs::write(&flag, "").unwrap();
+    let err = start(&home, &session, "fiber.test/prov", "p")
+        .err()
+        .unwrap();
+    assert_eq!(err.code(), ErrorCode::ExtensionFailed);
+    assert!(err.to_string().contains("broken"), "{err}");
 }

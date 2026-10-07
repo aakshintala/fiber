@@ -257,9 +257,10 @@ jobs:
     needs: select
     if: fromJSON(needs.select.outputs.jobs).release
     runs-on: ubuntu-24.04
-    # No history yet: a generous bound for the release build, the debug
-    # benchmark harness build and the benchmarks (docs/ci.md, "Job time limits").
-    timeout-minutes: 45
+    # The release build, the debug benchmark harness build and the benchmarks
+    # ran in about 5 minutes (docs/ci.md, "Job time limits"): twice that,
+    # rounded up.
+    timeout-minutes: 15
     env:
       BASE: ${{ needs.select.outputs.base }}
       # C code (lua-src, ring) compiles against musl's headers; the Rust linker stays the default.
@@ -314,6 +315,17 @@ jobs:
       # profile; nothing it builds ships.
       - name: Build the benchmark harness
         run: cargo build -p main --example bench
+      # fsyncs are the fdatasync calls strace counts (docs/performance.md,
+      # "Measuring"); a runner without strace fails here.
+      - name: Install strace
+        timeout-minutes: 5
+        run: |
+          if ! command -v strace > /dev/null; then
+            apt_opts=(-o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20)
+            sudo apt-get "${apt_opts[@]}" update
+            sudo apt-get "${apt_opts[@]}" install -y --no-install-recommends strace
+          fi
+          strace -V
       - name: Run the benchmarks
         run: |
           out=$RUNNER_TEMP/bench

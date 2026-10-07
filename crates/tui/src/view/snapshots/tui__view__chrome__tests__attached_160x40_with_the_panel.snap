@@ -1,0 +1,44 @@
+---
+source: crates/tui/src/view/chrome_tests.rs
+expression: text(&buf)
+---
+fix the parser
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                                                                                              ⋮
+                                                                                                                              ⋮
+                                                                                                                              ⋮
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                                                                                        hello
+>

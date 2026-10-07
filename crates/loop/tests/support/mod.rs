@@ -761,6 +761,10 @@ pub(crate) struct Session {
     pub(crate) looped: Option<Loop>,
     /// Cancels the session's running turn, as a driver does.
     pub(crate) cancel: Arc<TurnCancel>,
+    /// The inbox sender the loop's inbox wake reaches, once
+    /// [`Session::inbox_woken`] wired one. The wake holds it weakly, so
+    /// dropping this and `inbox` closes the inbox.
+    pub(crate) woken: Option<Arc<Sender<Delivery>>>,
     _home: TempDir,
 }
 
@@ -1165,6 +1169,7 @@ impl Session {
             lines,
             looped: Some(looped),
             cancel,
+            woken: None,
             _home: home,
         }
     }
@@ -1172,6 +1177,17 @@ impl Session {
     /// Whether a person can answer an approval.
     pub(crate) fn answerable(mut self, yes: bool) -> Self {
         self.looped = self.looped.take().map(|looped| looped.answerable(yes));
+        self
+    }
+
+    /// Wires the loop's inbox wake, as a door does: it puts
+    /// `Delivery::Cancelled` in the inbox through a sender it holds only
+    /// weakly.
+    pub(crate) fn inbox_woken(mut self) -> Self {
+        let sender = Arc::new(self.inbox.clone());
+        let wake = Arc::new(InboxWake(Arc::downgrade(&sender)));
+        self.woken = Some(sender);
+        self.looped = self.looped.take().map(|looped| looped.inbox_wake(wake));
         self
     }
 
@@ -1336,6 +1352,18 @@ impl Session {
             .into_iter()
             .filter(|line| line.kind != "session_status")
             .collect()
+    }
+}
+
+/// The loop's inbox wake in a test: a weak sender, so it never keeps the
+/// inbox open.
+struct InboxWake(std::sync::Weak<Sender<Delivery>>);
+
+impl Wake for InboxWake {
+    fn wake(&self) {
+        if let Some(sender) = self.0.upgrade() {
+            let _sent = sender.send(Delivery::Cancelled);
+        }
     }
 }
 

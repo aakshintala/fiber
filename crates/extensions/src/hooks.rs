@@ -5,10 +5,8 @@
 //! tool set is fixed ("Registering"). A session with none starts no VM.
 
 use std::collections::BTreeMap;
-use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
 
 use config::Config;
 use contract::ErrorCode;
@@ -21,11 +19,11 @@ use serde_json::{Map, Value};
 
 use crate::commands::{CommandSource, SessionCommands};
 use crate::git::short_name;
-use crate::host::Session;
 use crate::lua::{DeclaredHooks, HookPhase, LuaExtension};
 use crate::{API, Error, LuaProvider};
 
 mod door;
+mod start;
 
 /// The one hook point this session calls.
 const AFTER_TOOL: &str = "after_tool";
@@ -171,36 +169,24 @@ impl SessionExtensions {
                 None => None,
             };
             if dir.join(ENTRY).is_file() {
-                let repo: Vec<&str> = manifest.repo_settings.iter().map(String::as_str).collect();
-                match config.extension_settings(&item.name, &repo) {
-                    Ok((_, mut ignored)) => session.notices.append(&mut ignored),
+                let extension = match start::start_vm(
+                    &item.name,
+                    &dir,
+                    home,
+                    config,
+                    &manifest,
+                    Arc::clone(&clock),
+                    Arc::clone(&locks),
+                ) {
+                    Ok((extension, mut ignored)) => {
+                        session.notices.append(&mut ignored);
+                        extension
+                    }
                     Err(e) => {
-                        session.failed(&item.name, &Error::Config(e));
+                        session.failed(&item.name, &e);
                         continue;
                     }
-                }
-                let mut extension = LuaExtension::new(&item.name, &dir, home, Arc::clone(&clock))
-                    .with_session(Session {
-                        config: config.clone(),
-                        repo_settings: manifest.repo_settings.clone(),
-                        locks: Arc::clone(&locks),
-                    })
-                    .with_secrets(manifest.secrets.clone());
-                if let Some(cap) = manifest
-                    .memory_mib
-                    .and_then(|mib| usize::try_from(mib).ok())
-                    .and_then(|mib| mib.checked_mul(1 << 20))
-                    .and_then(NonZeroUsize::new)
-                {
-                    extension = extension.with_memory_cap(cap);
-                }
-                if let Some(ms) = config
-                    .get(&format!("{quoted}.hook_timeout_ms"), None)
-                    .and_then(|(value, _)| value.as_u64())
-                    .filter(|ms| *ms > 0)
-                {
-                    extension.override_hook_timeout(Duration::from_millis(ms));
-                }
+                };
                 let declared = match extension.hooks() {
                     Ok(declared) => declared,
                     Err(e) => {

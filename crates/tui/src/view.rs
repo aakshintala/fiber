@@ -14,8 +14,10 @@ use crate::app::App;
 use crate::markdown::{Role, style};
 use crate::mouse::{self, Target, TargetId};
 
+mod chrome;
 #[path = "home_view.rs"]
 mod home;
+mod offer;
 
 pub(crate) use home::max_question_scroll;
 
@@ -80,11 +82,20 @@ pub(crate) fn render(
     buf: &mut Buffer,
     pointer: Option<(u16, u16)>,
 ) -> Vec<Target> {
-    // Home draws while no session is on screen; the conversation draws
-    // once one attaches.
+    // Below the floor one line shows, home included; home draws while no
+    // session is on screen; the conversation draws in its column once one
+    // attaches.
+    if let Some(line) = app.chrome().floor_line() {
+        chrome::floor(line, area, buf);
+        return Vec::new();
+    }
     if let Some(screen) = app.home_screen() {
         return home::render(app, &screen, area, buf, pointer);
     }
+    let area = match app.chrome().layout() {
+        Some(layout) => chrome::draw(app, &layout, buf),
+        None => area,
+    };
     let mut targets = Vec::new();
     let mut bottom = area.bottom();
     if let Some(panel) = app.panel() {
@@ -167,7 +178,11 @@ pub(crate) fn render(
             overlay_cross(buf, conversation, &mut targets);
         }
         None => {
-            conversation_rows(app, conversation, buf, &mut targets);
+            // The repository offer swaps in for the conversation.
+            match app.offer_rows(conversation.width) {
+                Some((rows, top)) => offer::render(&rows, top, conversation, buf, &mut targets),
+                None => conversation_rows(app, conversation, buf, &mut targets),
+            }
             notices(app, conversation, buf, &mut targets);
         }
     }
@@ -248,7 +263,7 @@ fn notices(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
         targets.retain(|target| {
             !matches!(
                 target.id,
-                TargetId::Line(_) | TargetId::NewBelow | TargetId::Turn(_)
+                TargetId::Line(_) | TargetId::NewBelow | TargetId::Turn(_) | TargetId::Offer(_)
             )
         });
         let rows: Vec<String> = texts
@@ -323,13 +338,21 @@ fn input_box(app: &App, width: u16) -> (Vec<String>, usize, usize, u16) {
 }
 
 /// Where the terminal cursor shows: at the draft's cursor while the input
-/// box has focus, `None` while navigating or the approval panel is open,
-/// or the cursor's row is off a screen too short for it.
+/// box has focus, `None` while navigating, the approval panel or the
+/// repository offer is open, or the cursor's row is off a screen too short
+/// for it.
 pub(crate) fn cursor(app: &App, area: Rect) -> Option<Position> {
+    if app.chrome().floor_line().is_some() {
+        return None;
+    }
     if let Some(screen) = app.home_screen() {
         return home::cursor(app, &screen, area);
     }
-    if app.panel().is_some() || app.focused().is_some() {
+    let area = app
+        .chrome()
+        .layout()
+        .map_or(area, |layout| chrome::body(&layout));
+    if app.panel().is_some() || app.focused().is_some() || app.offer_open() {
         return None;
     }
     let (rows, _, row, col) = input_box(app, area.width);

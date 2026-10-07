@@ -27,6 +27,9 @@ fn home_with_glyph(width: u16, height: u16, glyph: &str) -> App {
         model: None,
         thinking: None,
         logo_glyph: glyph.to_owned(),
+        rail_share: 15.0,
+        panel_share: 21.0,
+        panel_cards: Vec::new(),
     });
     app.set_size(width, height);
     app
@@ -45,6 +48,9 @@ fn git_home(width: u16, height: u16) -> App {
         model: None,
         thinking: None,
         logo_glyph: "⌇".to_owned(),
+        rail_share: 15.0,
+        panel_share: 21.0,
+        panel_cards: Vec::new(),
     });
     app.set_size(width, height);
     app
@@ -56,6 +62,13 @@ fn screen(app: &App, width: u16, height: u16) -> String {
     let mut buf = Buffer::empty(area);
     render(app, area, &mut buf, None);
     text(&buf)
+}
+
+/// Draws home itself into `area`, below the floor too: home's own guards
+/// at widths the floor line covers on screen.
+fn home_only(app: &App, area: Rect, buf: &mut Buffer) -> Vec<crate::mouse::Target> {
+    let screen = app.home_screen().expect("home draws");
+    super::render(app, &screen, area, buf, None)
 }
 
 /// Types `text` into the draft, `\n` as Shift+Enter.
@@ -358,7 +371,10 @@ fn the_four_row_logo_needs_its_height_exactly() {
 
 #[test]
 fn a_screen_narrower_than_the_logo_gets_one_row() {
-    let narrow = screen(&home(20, 24), 20, 24);
+    let area = Rect::new(0, 0, 20, 24);
+    let mut buf = Buffer::empty(area);
+    home_only(&home(20, 24), area, &mut buf);
+    let narrow = text(&buf);
     assert!(!narrow.contains('█'), "no pixel rows without the width");
     assert!(narrow.contains("⌇ fiber 0.0.1"), "the one-row logo");
 }
@@ -387,6 +403,9 @@ fn home_chips() {
         model: Some("test/model".to_owned()),
         thinking: Some("high".to_owned()),
         logo_glyph: "⌇".to_owned(),
+        rail_share: 15.0,
+        panel_share: 21.0,
+        panel_cards: Vec::new(),
     });
     app.set_size(80, 24);
     insta::assert_snapshot!("home_chips", screen(&app, 80, 24));
@@ -976,7 +995,7 @@ fn a_row_at_width_one_has_no_entry_target() {
     app.on_line(status("s_aaaaaaaaaaaaaaaa", "fix the parser", live()));
     let area = Rect::new(0, 0, 1, 24);
     let mut buf = Buffer::empty(area);
-    let targets = render(&app, area, &mut buf, None);
+    let targets = home_only(&app, area, &mut buf);
     // No columns for the line: only the ✕ draws, with no entry target.
     assert!(
         targets
@@ -1190,7 +1209,7 @@ fn a_token_span_starting_at_the_box_edge_has_no_target() {
     app.on_edit(crate::keys::Edit::Paste(pasted.join("\n")));
     let area = Rect::new(0, 0, 2, 24);
     let mut buf = Buffer::empty(area);
-    let targets = render(&app, area, &mut buf, None);
+    let targets = home_only(&app, area, &mut buf);
     let tokens: Vec<ratatui::layout::Rect> = targets
         .iter()
         .filter(|target| matches!(target.id, crate::mouse::TargetId::Token(_)))

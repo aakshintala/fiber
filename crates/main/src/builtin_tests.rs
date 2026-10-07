@@ -434,6 +434,39 @@ fn no_hosted_search_type_registers_no_web_search() {
     assert!(!infos.contains(&"web_search".to_owned()), "{infos:?}");
 }
 
+#[test]
+fn hosted_is_what_builtin_registers_for_web_search() {
+    let root = fakes::TempDir::new("fiber-hosted-alone");
+    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    let jobs = jobs::Registry::new(
+        root.path().join("artifacts"),
+        Arc::clone(&clock),
+        Arc::new(fakes::Recorder::default()),
+    );
+    let (tools, infos, _driver, _forget, _images) = super::builtin(
+        root.path().join("fiber-stub"),
+        root.path(),
+        &root.path().join("artifacts"),
+        &clock,
+        &jobs,
+        &Arc::new(tools::PathLocks::new()),
+        Some("web_search_20250305"),
+    )
+    .unwrap();
+    let (tool, info) = super::hosted("web_search_20250305").unwrap();
+    let registered = tools
+        .iter()
+        .map(|(by, tool)| (by.clone(), tool.definition()))
+        .find(|(_, definition)| definition.name == "web_search")
+        .unwrap();
+    assert_eq!(registered, ("builtin".to_owned(), tool.definition()));
+    let listed = infos.iter().find(|info| info.name == "web_search").unwrap();
+    assert_eq!(
+        serde_json::to_value(listed).unwrap(),
+        serde_json::to_value(&info).unwrap()
+    );
+}
+
 /// The keywords `docs/dependencies.md` ("Tool arguments are checked
 /// against a subset of JSON Schema") lists, plus `description`.
 const SUBSET: &[&str] = &[

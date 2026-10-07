@@ -1,0 +1,9 @@
+---
+source: crates/tui/src/view/chrome_tests.rs
+expression: text(&buf)
+---
+
+
+
+
+  Fiber needs 40×10 · now 32×8

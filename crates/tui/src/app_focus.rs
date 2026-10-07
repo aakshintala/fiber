@@ -35,13 +35,6 @@ impl App {
     }
 
     /// Sets where the panel and the rail are drawn.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "#669 sets them when it draws the panel and the rail"
-        )
-    )]
     pub(crate) fn set_regions(&mut self, regions: Regions) {
         self.regions = regions;
     }
@@ -123,6 +116,9 @@ impl App {
             | Key::AltUp
             | Key::AltDown
             | Key::AltX
+            | Key::AltP
+            | Key::AltR
+            | Key::AltDigit(_)
             | Key::F1 => None,
         }
     }
@@ -243,7 +239,8 @@ impl App {
             | TargetId::DropSteering(_)
             | TargetId::DismissNotice(_)
             | TargetId::MoreNotices
-            | TargetId::CloseOverlay => None,
+            | TargetId::CloseOverlay
+            | TargetId::Offer(_) => None,
         }
     }
 
@@ -255,7 +252,7 @@ impl App {
             return self
                 .screen
                 .pages()
-                .copy_target(target, self.screen.width())
+                .copy_target(target, self.column_width())
                 .map(|copy| copy.code);
         }
         let rows: Vec<String> = self

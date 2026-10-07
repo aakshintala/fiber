@@ -1,15 +1,18 @@
 //! Switching the session's model or thinking level at the next turn
 //! boundary (`docs/prompt-cache.md`, "Switching model").
 //!
-//! Preparation reads nothing and runs nothing: `main`'s closure composes
-//! the same calls `parts_in` makes for the startup model, and every
-//! cross-command rule lives here in `loop` (`docs/architecture.md`, "The
-//! call rules").
+//! `main`'s closure composes the same calls `parts_in` makes for the
+//! startup model. It may read the new model's credential, or start its Lua
+//! provider, on a thread of its own; the loop waits for it, and shutdown
+//! ends that wait (`docs/configuration.md`, "Secrets"). Every cross-command
+//! rule lives here in `loop` (`docs/architecture.md`, "The call rules").
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use contract::events::{Event, ModelSettings, Notice, SwitchSource};
 use contract::inbox::{Ack, Rejection};
+use contract::tool::Tool;
 use contract::{ErrorCode, ThinkingLevel};
 
 use crate::inbox::{CLOSING, accept, reject};
@@ -18,8 +21,6 @@ use crate::{Error, Loop};
 /// What a prepared switch carries: everything applying it replaces.
 pub struct Prepared {
     /// The new model's provider.
-    /// debt: only the session's and the reviewer's providers (#1094);
-    /// #1094 lifts it after #649 merges.
     pub provider: Arc<dyn contract::provider::Provider>,
     /// The new model, and how its calls are priced.
     pub model: crate::Model,
@@ -28,8 +29,6 @@ pub struct Prepared {
     /// The session's explicit choice after this switch.
     pub chosen: Option<ThinkingLevel>,
     /// The credential label every request uses.
-    /// debt: only a credential read at startup; no command runs for a
-    /// switch (#1094). #1094 lifts it after #649 merges.
     pub credential: Option<String>,
     /// The prompt-cache lifetime.
     pub cache_lifetime: contract::events::CacheLifetime,
@@ -41,24 +40,42 @@ pub struct Prepared {
     pub handoff: crate::HandoffSettings,
     /// Who judges step 7's calls under the new model.
     pub reviewer: Result<crate::Reviewer, contract::shapes::Failure>,
-    /// The new model's hosted search type.
-    pub web_search: Option<String>,
+    /// What applying the switch does to the hosted search tool
+    /// (`docs/tools.md`, "Hosted by the provider").
+    pub web_search: Hosted,
     /// A configured thinking level the new model lacks.
     pub notice: Option<Notice>,
+    /// Runs once, when the switch applies; never for a rejected switch or
+    /// one that changes no setting.
+    pub applied: Option<Box<dyn FnOnce() + Send>>,
+    /// Canonical paths of the `file` credential sources this preparation
+    /// read: the loop adds each to its credential deny when `prepare`
+    /// returns (`docs/permissions.md`, "Credentials").
+    pub credential_files: Vec<PathBuf>,
 }
 
-/// What the session started with: the session's own thinking choice and
-/// its hosted search type.
+/// The hosted search tool after a switch applies. The tool set changes
+/// only when the preamble is built, so the switch's rebuild declares it
+/// (`docs/tools.md`, "Which tools the model sees").
+pub enum Hosted {
+    /// The tools stay as they are.
+    Keep,
+    /// Registers the tool by `builtin` under its own name, replacing any
+    /// tool of that name.
+    Declare(Arc<dyn Tool>),
+    /// Removes the tool of this name.
+    Withdraw(String),
+}
+
+/// What the session started with: the session's own thinking choice.
 #[derive(Debug, Clone)]
 pub struct Switchable {
     /// The session's own explicit choice at start.
     pub chosen: Option<ThinkingLevel>,
-    /// The hosted search type the session started with.
-    pub web_search: Option<String>,
 }
 
 /// Prepares a switch without changing any state: resolves the typed
-/// reference, thinking, credential, reviewer and search type from what
+/// reference, thinking, credential, reviewer and hosted search from what
 /// startup built. A rejection leaves nothing changed.
 pub type Prepare = Arc<
     dyn Fn(&contract::commands::ModelArgs, Option<ThinkingLevel>) -> Result<Prepared, Rejection>
@@ -71,8 +88,7 @@ pub const NO_SWITCH: &str = "This session cannot switch model.";
 
 impl Loop {
     /// Prepares switches with `prepare`: what startup composed for a
-    /// second model. `at_start` is the session's own choice and its
-    /// hosted search type at start.
+    /// second model. `at_start` is the session's own choice at start.
     pub fn switcher(mut self, prepare: Prepare, at_start: Switchable) -> Self {
         // A resumed `chosen` stands when the switcher names none: the
         // fold already seeded it from the last `model_changed`.
@@ -99,7 +115,8 @@ impl Loop {
     /// turn waits in `pending` for the next turn boundary. `closing` is
     /// checked before `prepare`, the loop's own checks after it, and the
     /// acknowledgement answers only once the switch is accepted or
-    /// rejected: a rejection changes nothing.
+    /// rejected. A rejection changes nothing but the credential deny, which
+    /// only grows.
     pub(crate) fn take_switch(
         &mut self,
         args: contract::commands::ModelArgs,
@@ -110,7 +127,7 @@ impl Loop {
             reject(ack, ErrorCode::Closing, CLOSING);
             return Ok(());
         }
-        let Some((prepare, switchable)) = self.switcher.as_ref() else {
+        let Some((prepare, _)) = self.switcher.as_ref() else {
             reject(ack, ErrorCode::InvalidArguments, NO_SWITCH);
             return Ok(());
         };
@@ -120,13 +137,19 @@ impl Loop {
             .last()
             .map(|queued| queued.chosen)
             .unwrap_or(self.chosen);
-        let prepared = match prepare(&args, chosen) {
+        let mut prepared = match prepare(&args, chosen) {
             Ok(prepared) => prepared,
             Err(rejection) => {
                 reject(ack, rejection.code, &rejection.message);
                 return Ok(());
             }
         };
+        // The file is denied from the moment it was read: a call later in
+        // this turn, before the switch applies, is refused too.
+        deny_also(
+            &mut self.credential_files,
+            std::mem::take(&mut prepared.credential_files),
+        );
         if let Ok(reviewer) = &prepared.reviewer
             && reviewer.model.reference == prepared.model.reference
         {
@@ -135,21 +158,6 @@ impl Loop {
                 ErrorCode::InvalidArguments,
                 &format!(
                     "`{}` is this session's reviewer model; set `reviewer.model` to another model first.",
-                    prepared.model.reference
-                ),
-            );
-            return Ok(());
-        }
-        // debt: the switch keeps the session's hosted search (#1094);
-        // #1094 lifts it after #649 merges.
-        if let Some(started) = &switchable.web_search
-            && prepared.web_search.as_ref() != Some(started)
-        {
-            reject(
-                ack,
-                ErrorCode::InvalidArguments,
-                &format!(
-                    "`{}` does not host the session's search `{started}`.",
                     prepared.model.reference
                 ),
             );
@@ -218,6 +226,22 @@ impl Loop {
             self.handoff.settings = prepared.handoff;
             self.reviewer = prepared.reviewer;
             self.reviewer_sent = None;
+            match prepared.web_search {
+                Hosted::Keep => {}
+                Hosted::Declare(tool) => {
+                    let definition = tool.definition();
+                    self.tools.insert(
+                        definition.name.clone(),
+                        ("builtin".to_owned(), tool, definition),
+                    );
+                }
+                Hosted::Withdraw(name) => {
+                    self.tools.remove(&name);
+                }
+            }
+            if let Some(applied) = prepared.applied {
+                applied();
+            }
             self.chosen = prepared.chosen;
             self.preamble = None;
             self.preamble_reason = contract::events::PreambleReason::Switch;
@@ -229,3 +253,20 @@ impl Loop {
         Ok(())
     }
 }
+
+/// Adds each of `read` to the credential deny `denied`, unless it is
+/// already there. Each path is the canonical file the credential read
+/// actually read, so it joins as given: resolving it again could follow
+/// a symlink swapped in after the read and protect a file never read
+/// instead. The deny only grows.
+fn deny_also(denied: &mut Vec<PathBuf>, read: Vec<PathBuf>) {
+    for path in read {
+        if !denied.contains(&path) {
+            denied.push(path);
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "switch_tests.rs"]
+mod tests;

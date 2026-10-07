@@ -16,6 +16,7 @@ Usage: fiber <command> [arguments]
 
 Sessions:
   ask [--model <model>] [--resume <id>] [<prompt>] [-]  Run one session of one turn; its events go to stdout
+  sessions [--all] [--json]                             List sessions: id, state, name, what it waits on, spend
   sessions delete [--cascade] [--yes] <id>              Delete a session, and with --cascade the sessions that continue it
   sessions export <id> [<path>]                         Write the session's log and its artifacts to <path>
   sessions prune [--older-than <duration>] [--dry-run]  Delete old sessions, worktrees and diagnostic logs
@@ -89,9 +90,8 @@ struct Cli {
 pub(crate) enum Commands {
     /// Run one session of one turn; its events go to stdout
     Ask(AskArgs),
-    /// Delete a session, or write its log and artifacts to a directory
-    #[command(subcommand, arg_required_else_help = false)]
-    Sessions(SessionsCommands),
+    /// List sessions, or delete, export or prune them
+    Sessions(SessionsArgs),
     /// List the models the installed providers serve
     Models(ModelsArgs),
     /// Manage extensions
@@ -175,6 +175,21 @@ pub(crate) enum Commands {
 pub(crate) enum HubCommands {
     /// Run the hub on its local socket.
     Serve,
+}
+
+/// `fiber sessions`: the list, or one of its subcommands. A flag with a
+/// subcommand is a usage error.
+#[derive(Debug, clap::Args)]
+#[command(args_conflicts_with_subcommands = true)]
+pub(crate) struct SessionsArgs {
+    #[command(subcommand)]
+    pub(crate) command: Option<SessionsCommands>,
+    /// List every project, not only this repository's.
+    #[arg(long)]
+    pub(crate) all: bool,
+    /// Print each session as one JSON object per line.
+    #[arg(long)]
+    pub(crate) json: bool,
 }
 
 #[derive(Debug, Subcommand)]

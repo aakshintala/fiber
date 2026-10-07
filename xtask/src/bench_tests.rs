@@ -13,7 +13,7 @@ const DOC: &str = concat!(
     "| Idle CPU, session and terminal | zero context switches in the idle window, on every thread | Linux x86_64 | exact |\n",
     "| Threads, idle headless session | 5, plus 2 per client, plus 1 per Lua extension in use | Linux x86_64 | exact |\n",
     "| fsyncs | 2 per model request, 2 per tool call | Linux x86_64 | exact |\n",
-    "| Log bytes, 429-call turn | the turn's content plus 1 KiB per tool call | Linux x86_64 | exact |\n",
+    "| Log bytes, 429-call turn | the turn's content plus 2 KiB per tool call | Linux x86_64 | exact |\n",
     "| Session start, the internal session command to its first line, no hub | 20 ms | Linux x86_64 | picked |\n",
     "| Terminal to its first frame, new session | 50 ms | Linux x86_64 | picked |\n",
     "| Terminal to its first frame, attaching | 50 ms plus 10 ms per MiB of session log | Linux x86_64 | picked |\n",
@@ -49,10 +49,24 @@ fn head() -> Value {
             "terminal_idle_switches": [quiet_run(), quiet_run(), quiet_run(), quiet_run(), quiet_run()],
             "session_threads": [threads_run(5, 7), threads_run(5, 7), threads_run(5, 7), threads_run(5, 7), threads_run(5, 7)],
             "session_start_ms": [6.1, 5.9, 6.0, 6.3, 6.0],
-            "terminal_first_frame_ms": [18.2, 17.9, 18.0, 18.4, 18.1]
+            "terminal_first_frame_ms": [18.2, 17.9, 18.0, 18.4, 18.1],
+            "busy_turn_rss_kib": [20480, 20490, 20470, 20485, 20475],
+            "resume_20k_rss_kib": [11000, 11010, 10990, 11005, 10995],
+            "resume_2m_rss_kib": [14000, 14010, 13990, 14005, 13995],
+            "web_fetch_rss_kib": [22000, 22010, 21990, 22005, 21995],
+            "fsyncs": [fsync_run(430, 429, 1718)],
+            "turn_log_bytes": vec![log_run(1_700_000, 1_520_000, 429); 5]
         },
         "failures": []
     })
+}
+
+fn fsync_run(model_requests: u64, tool_calls: u64, fdatasync: u64) -> Value {
+    json!({"model_requests": model_requests, "tool_calls": tool_calls, "fdatasync": fdatasync})
+}
+
+fn log_run(bytes: u64, content: u64, tool_calls: u64) -> Value {
+    json!({"bytes": bytes, "content": content, "tool_calls": tool_calls})
 }
 
 fn base() -> Value {
@@ -135,9 +149,6 @@ fn every_budget_holding_passes_and_the_comment_shows_it() {
 fn rows_not_measured_appear_with_their_ticket() {
     let comment = judge(&head(), Some(&base()), Event::PullRequest).comment;
     for (budget, ticket) in [
-        ("Session, busy or resumed", "Part 2 of #217"),
-        ("fsyncs", "Part 2 of #217"),
-        ("Log bytes, 429-call turn", "Part 2 of #217"),
         ("Terminal to its first frame, attaching", "#410"),
         ("Terminal to its first frame, attaching", "#668"),
         ("Listing 1,000 sessions in one project, warm cache", "#410"),
@@ -499,4 +510,168 @@ fn a_failing_row_says_fail_and_the_failures_are_listed() {
         listed.contains("- Session, idle, headless: median 12289 KiB"),
         "{failing}"
     );
+}
+
+#[test]
+fn every_gated_row_but_three_is_measured() {
+    let comment = judge(&head(), Some(&base()), Event::PullRequest).comment;
+    let not_measured = comment.split("### Not measured").nth(1).unwrap();
+    for budget in [
+        "Session, busy or resumed",
+        "`web_fetch` converting",
+        "fsyncs",
+        "Log bytes",
+    ] {
+        assert!(!not_measured.contains(budget), "{budget}:\n{comment}");
+        assert!(row(&comment, budget).ends_with("| pass |"), "{comment}");
+    }
+}
+
+#[test]
+fn the_busy_ceiling_holds_on_each_of_its_three_workloads() {
+    for id in [
+        "busy_turn_rss_kib",
+        "resume_20k_rss_kib",
+        "resume_2m_rss_kib",
+    ] {
+        let at = with_metric(head(), id, json!(vec![24576; 5]));
+        assert_eq!(failures_of(&at), Vec::<String>::new(), "{id}");
+        let over = with_metric(head(), id, json!(vec![24577; 5]));
+        let failures = failures_of(&over);
+        assert!(
+            has(&failures, "Session, busy or resumed"),
+            "{id}: {failures:?}"
+        );
+        assert!(has(&failures, id), "{id}: {failures:?}");
+
+        let mut missing = head();
+        missing["metrics"].as_object_mut().unwrap().remove(id);
+        assert!(has(&failures_of(&missing), id), "{id}");
+    }
+    let comment = judge(&head(), Some(&base()), Event::PullRequest).comment;
+    let row = row(&comment, "Session, busy");
+    assert!(row.contains("resume_2m_rss_kib: 14000 KiB"), "{row}");
+}
+
+#[test]
+fn web_fetch_is_judged_against_the_busy_rows_ceiling() {
+    let at = with_metric(head(), "web_fetch_rss_kib", json!(vec![24576; 5]));
+    assert_eq!(failures_of(&at), Vec::<String>::new());
+    let over = with_metric(head(), "web_fetch_rss_kib", json!(vec![24577; 5]));
+    assert!(has(&failures_of(&over), "`web_fetch`"));
+
+    // Raising both cells together moves the gate: the number is the busy
+    // row's.
+    let raised = DOC
+        .replace("| 24 MiB peak RSS |", "| 30 MiB peak RSS |")
+        .replace("busy session's 24 MiB", "busy session's 30 MiB");
+    let out = judge_doc(&raised, &over, Some(&base()), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new());
+
+    // A web_fetch cell that names another number than the busy row fails,
+    // and its own number is never the ceiling.
+    let own = doc_with("busy session's 24 MiB", "busy session's 30 MiB");
+    let out = judge_doc(&own, &over, Some(&base()), Event::PullRequest);
+    assert!(has(&out.failures, "`web_fetch`"), "{:?}", out.failures);
+    assert!(has(&out.failures, "24 MiB peak RSS"), "{:?}", out.failures);
+    let busy_only = doc_with("| 24 MiB peak RSS |", "| 30 MiB peak RSS |");
+    let out = judge_doc(&busy_only, &head(), Some(&base()), Event::PullRequest);
+    assert!(has(&out.failures, "`web_fetch`"), "{:?}", out.failures);
+
+    let mut missing = head();
+    missing["metrics"]
+        .as_object_mut()
+        .unwrap()
+        .remove("web_fetch_rss_kib");
+    assert!(has(&failures_of(&missing), "web_fetch_rss_kib"));
+}
+
+#[test]
+fn fsyncs_hold_two_per_model_request_and_two_per_tool_call() {
+    assert_eq!(failures_of(&head()), Vec::<String>::new());
+    for (requests, calls, fdatasync) in [
+        (430, 429, 1719),
+        (430, 429, 1717),
+        // One more request than the formula's count, and one more call.
+        (431, 429, 1718),
+        (430, 430, 1718),
+        // Nothing counted is a broken run, not a pass.
+        (0, 0, 0),
+    ] {
+        let results = with_metric(
+            head(),
+            "fsyncs",
+            json!([fsync_run(requests, calls, fdatasync)]),
+        );
+        assert!(
+            has(&failures_of(&results), "fsyncs"),
+            "{requests}, {calls}, {fdatasync} passed"
+        );
+    }
+    // A single tool call and a single request: 2 + 2.
+    let one = with_metric(head(), "fsyncs", json!([fsync_run(1, 1, 4)]));
+    assert_eq!(failures_of(&one), Vec::<String>::new());
+    let comment = judge(&head(), Some(&base()), Event::PullRequest).comment;
+    let row = row(&comment, "fsyncs");
+    assert!(row.contains("1718 fdatasync"), "{row}");
+}
+
+#[test]
+fn the_fsync_count_is_one_untimed_pass() {
+    for runs in [json!([]), json!(vec![fsync_run(430, 429, 1718); 2])] {
+        let results = with_metric(head(), "fsyncs", runs);
+        assert!(has(&failures_of(&results), "fsyncs"));
+    }
+    let results = with_metric(
+        head(),
+        "fsyncs",
+        json!([{"model_requests": 430, "tool_calls": 429}]),
+    );
+    assert!(has(&failures_of(&results), "fdatasync"));
+}
+
+#[test]
+fn log_bytes_hold_the_content_plus_two_kib_per_tool_call_on_every_run() {
+    let limit = 1_520_000 + 2048 * 429;
+    let at = with_metric(
+        head(),
+        "turn_log_bytes",
+        json!(vec![log_run(limit, 1_520_000, 429); 5]),
+    );
+    assert_eq!(failures_of(&at), Vec::<String>::new());
+    let mut runs = vec![log_run(limit, 1_520_000, 429); 4];
+    runs.push(log_run(limit + 1, 1_520_000, 429));
+    let over = with_metric(head(), "turn_log_bytes", json!(runs));
+    let failures = failures_of(&over);
+    assert!(has(&failures, "Log bytes"), "{failures:?}");
+    assert!(has(&failures, "run 5"), "{failures:?}");
+
+    let short = with_metric(head(), "turn_log_bytes", json!(vec![log_run(10, 1, 1); 4]));
+    assert!(has(&failures_of(&short), "turn_log_bytes"));
+    let comment = judge(&head(), Some(&base()), Event::PullRequest).comment;
+    let row = row(&comment, "Log bytes");
+    assert!(row.contains("1700000 bytes"), "{row}");
+}
+
+#[test]
+fn an_exact_part_2_row_whose_text_changes_fails() {
+    for (from, to) in [
+        (
+            "2 per model request, 2 per tool call",
+            "2 per model request, 3 per tool call",
+        ),
+        ("plus 2 KiB per tool call", "plus 1 KiB per tool call"),
+    ] {
+        let out = judge_doc(
+            &doc_with(from, to),
+            &head(),
+            Some(&base()),
+            Event::PullRequest,
+        );
+        assert!(
+            has(&out.failures, "xtask/src/bench.rs"),
+            "{to}: {:?}",
+            out.failures
+        );
+    }
 }

@@ -4,6 +4,7 @@
 //! session, after asking the person.
 
 use std::io::{self, BufRead, BufReader, IsTerminal, Write};
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 
 use contract::shapes::Failure;
@@ -163,7 +164,7 @@ fn delete_run(
 /// other line. An end before the answer is `io_failed`; a rejection is a
 /// failure with its code and message.
 pub(crate) fn send_delete(
-    read: &mut BufReader<std::os::unix::net::UnixStream>,
+    read: &mut BufReader<UnixStream>,
     command_id: &str,
     id: &SessionId,
     cascade: bool,
@@ -173,7 +174,20 @@ pub(crate) fn send_delete(
     if cascade {
         args.insert("cascade".to_owned(), Value::Bool(true));
     }
-    let mut line = json!({"id": command_id, "command": "delete", "args": args}).to_string();
+    request(read, command_id, "delete", args).map(drop)
+}
+
+/// Sends hub command `command` with `args` as `command_id` and reads until
+/// its answer, skipping every other line: the accepted `result`, `null`
+/// when it has none. An end before the answer is `io_failed`; a rejection
+/// is a failure with its code and message.
+pub(crate) fn request(
+    read: &mut BufReader<UnixStream>,
+    command_id: &str,
+    command: &str,
+    args: serde_json::Map<String, Value>,
+) -> Result<Value, Failure> {
+    let mut line = json!({"id": command_id, "command": command, "args": args}).to_string();
     line.push('\n');
     let lost = |e: io::Error| failed(ErrorCode::IoFailed, format!("the hub: {e}"));
     read.get_mut().write_all(line.as_bytes()).map_err(lost)?;
@@ -183,10 +197,10 @@ pub(crate) fn send_delete(
         if read.read_line(&mut buf).map_err(lost)? == 0 {
             return Err(failed(
                 ErrorCode::IoFailed,
-                "the hub closed the connection before answering `delete`",
+                format!("the hub closed the connection before answering `{command}`"),
             ));
         }
-        let Ok(answer) = serde_json::from_str::<HubLine>(&buf) else {
+        let Ok(mut answer) = serde_json::from_str::<HubLine>(&buf) else {
             continue;
         };
         let field = |key: &str| answer.payload.get(key).and_then(Value::as_str);
@@ -194,12 +208,15 @@ pub(crate) fn send_delete(
             continue;
         }
         match answer.kind.as_str() {
-            "command_accepted" => return Ok(()),
+            "command_accepted" => {
+                return Ok(answer.payload.remove("result").unwrap_or(Value::Null));
+            }
             "command_rejected" => {
                 let code = field("code")
                     .and_then(|code| serde_json::from_value(Value::String(code.to_owned())).ok())
                     .unwrap_or(ErrorCode::IoFailed);
-                let message = field("message").unwrap_or("the hub refused `delete`");
+                let message = field("message")
+                    .map_or_else(|| format!("the hub refused `{command}`"), str::to_owned);
                 return Err(failed(code, message));
             }
             _ => {}

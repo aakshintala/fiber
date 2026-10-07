@@ -125,6 +125,7 @@ pub(crate) fn new_session(
         Err(e) => return ask_failed(e),
     };
     let forget = Arc::clone(&session_servers.forget);
+    let hosted_stands = crate::switch::hosted_stands(&tools);
     let permissions = ask_permissions(
         &home,
         &project,
@@ -160,13 +161,19 @@ pub(crate) fn new_session(
     let mut all_commands = r#loop::commands(&prompt_inputs, &workspace);
     all_commands.extend(extensions.commands());
     session.commands(all_commands);
+    let door = crate::switch::Door {
+        declare: session.declarer(),
+        hosted_stands,
+    };
     let cancel = Arc::new(r#loop::TurnCancel::default());
     // A signal while armed: nothing was written, so nothing more is.
-    if let Some(code) = shutdown::start(signals, &cancel, &session, jobs.clone()) {
+    let reads = switching.reads();
+    if let Some(code) = shutdown::start(signals, &cancel, &session, jobs.clone(), reads) {
         session_servers.servers.stop();
         close(session, log, &home, &dir, &workspace, &*clock);
         return code;
     }
+    let inbox_wake = session.inbox_wake();
     let code = run_turn(
         &session,
         &log,
@@ -195,8 +202,9 @@ pub(crate) fn new_session(
                     Ok(looped
                         .handoff(handoff)
                         .on_handoff(forget)
-                        .switcher(switching.closure(), switchable)
-                        .repository_code(offer))
+                        .switcher(switching.closure(door), switchable)
+                        .repository_code(offer)
+                        .inbox_wake(inbox_wake))
                 }),
                 budget,
                 idle,

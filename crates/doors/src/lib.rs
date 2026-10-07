@@ -31,7 +31,7 @@ use contract::shapes::Failure;
 use contract::{ErrorCode, PreSessionExit};
 
 pub use attach::attach;
-pub use session::Session;
+pub use session::{Declare, Session};
 pub use signals::{Signals, signal_code};
 
 /// A failure with Fiber's own sentence and nothing from a provider.
@@ -312,4 +312,13 @@ pub fn project(launch: &Path) -> PathBuf {
         Ok(_) | Err(_) => launch.to_path_buf(),
     };
     identity.canonicalize().unwrap_or(identity)
+}
+
+/// Whether the project `identity`, from [`project`] on `launch`, is a git
+/// repository's: it differs from `launch` itself, symlinks resolved.
+pub fn in_repository(launch: &Path, identity: &Path) -> bool {
+    let launch = launch
+        .canonicalize()
+        .unwrap_or_else(|_| launch.to_path_buf());
+    identity != launch
 }

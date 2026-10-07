@@ -84,3 +84,54 @@ fn tui_hover_defaults_to_on_and_reads_off() {
     let off = config(dir.path(), &workspace, vec!["tui.hover=false".to_owned()]);
     assert!(!launch(workspace.clone(), &workspace, &off).hover);
 }
+
+#[test]
+fn shares_and_cards_come_from_config_with_defaults() {
+    let dir = fakes::TempDir::new("fiber-launch-shares");
+    let workspace = dir.path().to_path_buf();
+    let plain = config(dir.path(), &workspace, Vec::new());
+    let unset = launch(workspace.clone(), &workspace, &plain);
+    assert_eq!((unset.rail_share, unset.panel_share), (15.0, 21.0));
+    assert_eq!(
+        unset.panel_cards,
+        ["session", "changed_files", "delegates", "jobs", "quota"]
+    );
+    let set_config = config(
+        dir.path(),
+        &workspace,
+        vec![
+            "tui.rail.width=18.5".to_owned(),
+            "tui.panel.width=30".to_owned(),
+            r#"tui.panel.cards=["jobs", "session"]"#.to_owned(),
+        ],
+    );
+    let set = launch(workspace.clone(), &workspace, &set_config);
+    assert_eq!((set.rail_share, set.panel_share), (18.5, 30.0));
+    assert_eq!(set.panel_cards, ["jobs", "session"]);
+}
+
+#[test]
+fn an_out_of_range_share_reads_as_the_default() {
+    let dir = fakes::TempDir::new("fiber-launch-range");
+    let workspace = dir.path().to_path_buf();
+    for (rail, panel, expected) in [
+        ("-1", "101", (15.0, 21.0)),
+        ("0", "100", (0.0, 100.0)),
+        ("100.5", "-0.5", (15.0, 21.0)),
+    ] {
+        let set_config = config(
+            dir.path(),
+            &workspace,
+            vec![
+                format!("tui.rail.width={rail}"),
+                format!("tui.panel.width={panel}"),
+            ],
+        );
+        let set = launch(workspace.clone(), &workspace, &set_config);
+        assert_eq!(
+            (set.rail_share, set.panel_share),
+            expected,
+            "{rail} {panel}"
+        );
+    }
+}

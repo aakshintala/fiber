@@ -46,7 +46,7 @@ ephemeral event where it is display-only.
 
 | Module | Job |
 |---|---|
-| `contract` | The vocabulary every other module speaks: what an event looks like, what a command looks like, and what a tool, a provider and a hook must each be able to do. It contains no behaviour at all. |
+| `contract` | The vocabulary every other module speaks: what an event looks like, what a command looks like, and what a tool, a provider and a hook must each be able to do. It contains no behaviour beyond checking that a value fits the vocabulary. |
 | `log` | Owns the session directory. The only thing that opens `events.jsonl`, holds the lock, mints `seq` and decides fsync order. Also hands events to whoever is watching, and writes the diagnostic files in `logs/`. |
 | `loop` | Runs turns and steps (`docs/loop.md`). The only thing that decides what happens next. |
 | `provider` | Talks to model APIs: wire formats, credentials, streaming. Reached only through the provider seam. |
@@ -61,7 +61,7 @@ ephemeral event where it is display-only.
 | `hub` | Lists, starts and resumes sessions and relays every client connection to a session's socket, over its local socket and, when installed with a port, a websocket on `127.0.0.1` that authenticates each device by token (`docs/invocation.md`, "The hub"). Holds no session and no push credential; does no TLS. |
 | `doors` | `fiber ask` (argv or stdin in, JSON lines out), and the internal session command that it, the hub and a parent run. Which doors exist and what a driver may send is `docs/invocation.md`; this page only fixes that none has a privilege the TUI lacks. |
 | `picture` | The image child (`docs/invocation.md`, "Processes"): decodes, refuses, fits and re-encodes one image under the limits in `docs/model-routing.md`, "Image limits". Only `main` depends on it, so no session process runs image code. |
-| `cli` | Every command that does not run a session: `login`, `logout`, `approve`, `sessions export`, `sessions delete`, `sessions prune`, `models`, `extension install/update/remove/list` and `config get/set` today, and later `sessions search`, `upgrade` and `hub pair` as they are built. `main` dispatches to it. |
+| `cli` | Every command that does not run a session: `login`, `logout`, `approve`, `sessions`, `sessions export`, `sessions delete`, `sessions prune`, `models`, `extension install/update/remove/list` and `config get/set` today, and later `sessions search`, `upgrade` and `hub pair` as they are built. `main` dispatches to it. |
 | `main` | The composition root. Parses argv, builds everything once, picks a door. No feature logic. |
 
 ### Why contract exists
@@ -224,7 +224,7 @@ Fiber uses blocking threads and no async runtime.
 | accept | the session's socket: it accepts each connection and starts that client's two threads | the session |
 | status | `session_status`: it folds the log as it is written into the session's status line (`docs/events.md`) | the session |
 | printer | the session's stdout, as a watcher: the `fiber ask` run's output, and the hub's drain of a hub-started session | the session |
-| one per blocking wait | one wait and nothing else: a command's exit, a web fetch's deadline, one Lua host call's HTTP request, a background refresh, the shutdown bound | the wait |
+| one per blocking wait | one wait and nothing else: a command's exit, a web fetch's deadline, one Lua host call's HTTP request, a background refresh, a switch's credential read, the shutdown bound | the wait |
 
 A client is a reader and a writer on the session's socket, and every client
 is the same code. `fiber ask`'s stdout is not a client: it only receives, so
@@ -257,7 +257,11 @@ and 0.35 ms of CPU over ten seconds on macOS arm64.
 
 Everything that wants the loop's attention between steps sends to one
 queue: a driver's commands and news from a background job. A step waits on
-its own tool calls directly ("Tool calls in a step"). The loop blocks on
+its own tool calls directly ("Tool calls in a step"). While a call waits on
+an interaction it raised, the step also reads the queue, as an approval
+wait does, so the `reply` reaches it: anything else it takes then is
+admitted as at a step boundary, and a steering message still applies at the
+next one (`docs/events.md`, "Interactions"). The loop blocks on
 that queue when it is idle, which is why an idle Fiber costs nothing.
 
 The loop drains the queue **at step boundaries** — between one round-trip to

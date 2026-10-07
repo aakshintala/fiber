@@ -45,14 +45,14 @@ impl App {
     pub(crate) fn copy_cells(&self, target: Target) -> Option<Range<u16>> {
         self.screen
             .pages()
-            .copy_target(target, self.screen.width())
+            .copy_target(target, self.column_width())
             .map(|copy| copy.cols)
     }
 
     /// A click on a code block's `copy`: copies its code and shows
     /// "Copied".
     pub(super) fn copy(&mut self, target: Target) -> Effect {
-        let code = self.screen.pages().copy_target(target, self.screen.width());
+        let code = self.screen.pages().copy_target(target, self.column_width());
         self.copied = code.is_some();
         code.map_or(Effect::None, |copy| Effect::Copy(copy.code))
     }

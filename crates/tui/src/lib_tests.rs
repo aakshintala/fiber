@@ -24,6 +24,9 @@ fn launch() -> super::Launch {
         model: None,
         thinking: None,
         logo_glyph: "⌇".to_owned(),
+        rail_share: 15.0,
+        panel_share: 21.0,
+        panel_cards: Vec::new(),
     }
 }
 
@@ -190,6 +193,7 @@ pub(super) fn new_loop<B: Backend>(
         hover: true,
         var: Box::new(|_| None),
         copy_command: None,
+        title: crate::osc::Title::default(),
     };
     (lp, attached)
 }
@@ -285,8 +289,9 @@ fn the_first_kitty_reply_pushes_the_flags_once() {
         .try_clone()
         .unwrap_or_else(|err| panic!("dup: {err}"));
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), Some(tty));
-    // A second reply pushes nothing more: the next bytes on the tty are
-    // the marker written after it.
+    // A second reply pushes nothing more: after the push and the first
+    // frame's title, the next bytes on the tty are the marker written
+    // after it.
     feed(
         &mut lp,
         vec![
@@ -299,7 +304,12 @@ fn the_first_kitty_reply_pushes_the_flags_once() {
         .unwrap_or_else(|err| panic!("write: {err}"));
     assert_eq!(
         read_until(&pair.main, b"END", "the kitty push"),
-        b"\x1b[>1uEND"
+        [
+            b"\x1b[>1u".to_vec(),
+            crate::osc::title("fiber"),
+            b"END".to_vec()
+        ]
+        .concat()
     );
     assert_eq!(crate::term::KITTY_PUSH, b"\x1b[>1u");
     // Once pushed, Esc is `CSI 27u`: a lone ESC ending a read is held.
@@ -338,7 +348,7 @@ fn the_hub_connection_starts_attaches_and_subscribes() {
     let (reader, start) = command(reader, "the start command");
     assert_eq!(start["command"], "start");
     assert_eq!(start["args"]["workspace"], "/w");
-    assert_eq!(start["args"]["content"][0]["text"], "hi");
+    assert!(start["args"].get("content").is_none());
     let accepted = contract::HubLine {
         kind: "command_accepted".to_owned(),
         ts: 0,
@@ -354,10 +364,16 @@ fn the_hub_connection_starts_attaches_and_subscribes() {
     assert_eq!(seen(), vec!["s_aaaaaaaaaaaaaaaa".to_owned()]);
     feed(&mut lp, vec![Input::Hub(Line::Hub(accepted))]);
     assert_eq!(seen(), vec!["s_aaaaaaaaaaaaaaaa".to_owned()]);
-    let (_, subscribe) = command(reader, "the subscribe command");
+    let (reader, subscribe) = command(reader, "the subscribe command");
     assert_eq!(subscribe["command"], "subscribe");
     assert_eq!(subscribe["session_id"], "s_aaaaaaaaaaaaaaaa");
     assert_eq!(subscribe["args"]["level"], "full");
+    let (reader, asked) = command(reader, "the commands command");
+    assert_eq!(asked["command"], "commands");
+    let (_, prompt) = command(reader, "the first prompt");
+    assert_eq!(prompt["command"], "prompt");
+    assert_eq!(prompt["session_id"], "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(prompt["args"]["content"][0]["text"], "hi");
 }
 
 #[test]
@@ -444,13 +460,14 @@ fn a_schema_mismatch_says_so_and_hangs_up() {
 fn restore_puts_back_what_setup_changed() {
     let pair = open();
     crate::term::setup(&pair.slave, true).unwrap_or_else(|err| panic!("setup: {err}"));
-    let start = "\x1b[?1049h\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b[?u\x1b[c";
+    let start =
+        "\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b[?u\x1b[c";
     assert_eq!(
         read_exact(&pair.main, start.len(), "the start bytes"),
         start.as_bytes()
     );
     super::restore();
-    let end = "\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?1049l\x1b[?25h";
+    let end = "\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[23;2t\x1b[?1049l\x1b[?25h";
     assert_eq!(
         read_exact(&pair.main, end.len(), "the restore bytes"),
         end.as_bytes()
@@ -646,7 +663,7 @@ fn run_quits_on_double_ctrl_c_with_the_reader_blocked() {
     // two queries, then the first frame before anything is written to the
     // master.
     let expected =
-        b"\x1b[?1049h\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b[?u\x1b[c";
+        b"\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b[?u\x1b[c";
     let start = read_exact(&pair.main, expected.len(), "the start bytes");
     assert_eq!(start, expected);
     // On home the input line is not on the last row: the first frame is
@@ -672,7 +689,7 @@ fn run_quits_on_double_ctrl_c_with_the_reader_blocked() {
     assert!(is_cooked(&after));
     // After the last frame the output holds the restore bytes.
     let marker =
-        b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?1049l\x1b[?25h";
+        b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[23;2t\x1b[?1049l\x1b[?25h";
     let tail = read_until(&pair.main, marker, "the restore bytes");
     assert_eq!(
         tail.get(tail.len().saturating_sub(marker.len())..),
@@ -712,7 +729,7 @@ fn run_shows_a_failed_connect_and_still_quits_restored() {
     assert_eq!(code, 0);
     read_until(
         &pair.main,
-        b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?1049l\x1b[?25h",
+        b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[23;2t\x1b[?1049l\x1b[?25h",
         "the restore bytes",
     );
     assert!(is_cooked(
@@ -829,8 +846,9 @@ fn each_approval_choice_goes_to_the_hub_as_a_reply() {
     };
     feed(&mut lp, vec![Input::Hub(Line::Hub(accepted))]);
     let (reader, _) = command(reader, "the subscribe command");
-    let (mut reader, asked) = command(reader, "the commands command");
+    let (reader, asked) = command(reader, "the commands command");
     assert_eq!(asked["command"], "commands");
+    let (mut reader, _) = command(reader, "the first prompt");
     feed(
         &mut lp,
         ["r_1", "r_2", "r_3", "r_4"]
@@ -1001,7 +1019,8 @@ fn a_reader_whose_channel_closed_ends() {
 fn hand_over_gives_the_terminal_and_its_input_to_the_program() {
     let mut pair = open();
     crate::term::setup(&pair.slave, true).unwrap_or_else(|err| panic!("setup: {err}"));
-    let start = "\x1b[?1049h\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b[?u\x1b[c";
+    let start =
+        "\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b[?u\x1b[c";
     read_exact(&pair.main, start.len(), "the start bytes");
     let tty = pair
         .slave
@@ -1022,6 +1041,7 @@ fn hand_over_gives_the_terminal_and_its_input_to_the_program() {
     // The pause inside blocks: the loop runs on a thread, with a deadline.
     let (lp, code, seen) = within("the hand-over", move || {
         let mut seen = None;
+        lp.write_title();
         let code = lp.hand_over(|| {
             let cooked =
                 rustix::termios::tcgetattr(&slave).unwrap_or_else(|err| panic!("attr: {err}"));
@@ -1034,6 +1054,8 @@ fn hand_over_gives_the_terminal_and_its_input_to_the_program() {
             });
             seen = Some((is_cooked(&cooked), line.unwrap_or_default()));
         });
+        // The same title is written again after the program.
+        lp.write_title();
         (lp, code, seen)
     });
     drop(lp);
@@ -1044,17 +1066,17 @@ fn hand_over_gives_the_terminal_and_its_input_to_the_program() {
     ));
     // The terminal was restored, then set up again with hover and kitty's
     // flags.
-    let restore =
-        "\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?1049l\x1b[?25h";
+    let restore = "\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[23;2t\x1b[?1049l\x1b[?25h";
     let echoed = read_until(&pair.main, restore.as_bytes(), "the restore bytes");
     assert!(echoed.ends_with(restore.as_bytes()));
     // In between, the cooked terminal echoed the program's line.
-    let resumed =
-        "typed\r\n\x1b[?1049h\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b[>1u";
+    let resumed = "typed\r\n\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b[>1u";
     assert_eq!(
         read_until(&pair.main, resumed.as_bytes(), "the resume bytes"),
         resumed.as_bytes()
     );
+    let title = crate::osc::title("fiber");
+    assert_eq!(read_exact(&pair.main, title.len(), "the title"), title);
     // The reader runs again.
     pair.main
         .write_all(b"k")
@@ -1269,7 +1291,12 @@ fn a_copy_writes_osc_52_and_pipes_the_code_to_the_command() {
     // A left click off any target, here on blank cells, clears "Copied".
     feed(&mut lp, vec![at(0, 2, 0, 'M'), at(0, 2, 0, 'm')]);
     assert!(!lp.app.copied());
-    let osc = b"\x1b]52;c;bGV0IGEgPSAxOw==\x07";
+    // The first frame's title, then the copy.
+    let osc = [
+        crate::osc::title("fiber"),
+        b"\x1b]52;c;bGV0IGEgPSAxOw==\x07".to_vec(),
+    ]
+    .concat();
     assert_eq!(read_exact(&pair.main, osc.len(), "the OSC 52 bytes"), osc);
     ready.wait(DEADLINE);
     assert_eq!(
@@ -1472,7 +1499,7 @@ fn hub_status(session: &str, state: &str) -> String {
 
 /// The terminal's restore bytes, after its last frame.
 const RESTORE: &[u8] =
-    b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?1049l\x1b[?25h";
+    b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[23;2t\x1b[?1049l\x1b[?25h";
 
 /// Runs the terminal on a pty with `hub` as its hub stream: the pty pair,
 /// and the exit code once it quits.
@@ -1505,7 +1532,7 @@ fn spawn_run(hub: UnixStream) -> (Pair, mpsc::Receiver<i32>) {
 /// Reads the start bytes and the first frame.
 fn first_frame(pair: &Pair) {
     let expected =
-        b"\x1b[?1049h\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b[?u\x1b[c";
+        b"\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b[?u\x1b[c";
     assert_eq!(
         read_exact(&pair.main, expected.len(), "the start bytes"),
         expected
@@ -1628,4 +1655,39 @@ fn run_close_all_with_a_lost_hub_still_prints_the_resume_line() {
         tail.get(tail.len().saturating_sub(line.len())..),
         Some(line.as_slice())
     );
+}
+
+#[test]
+fn run_writes_the_title_once_until_it_changes() {
+    let pair = open();
+    let tty = pair
+        .slave
+        .try_clone()
+        .unwrap_or_else(|err| panic!("dup: {err}"));
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), Some(tty));
+    lp.app.set_home(launch());
+    let (_tx, rx) = mpsc::channel();
+    // Two frames on home, one title; a status for the attached session
+    // renames it, and the same status again writes nothing.
+    assert_eq!(lp.step(Input::Bytes(Vec::new()), &rx), None);
+    assert_eq!(lp.step(Input::Bytes(Vec::new()), &rx), None);
+    lp.app
+        .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    for _ in 0..2 {
+        assert_eq!(
+            lp.step(Input::Hub(live_status("s_aaaaaaaaaaaaaaaa", "idle")), &rx),
+            None
+        );
+    }
+    (&pair.slave)
+        .write_all(b"ENDMARK")
+        .unwrap_or_else(|err| panic!("write: {err}"));
+    let written = read_until(&pair.main, b"ENDMARK", "the mark");
+    let expected = [
+        crate::osc::title("fiber"),
+        crate::osc::title("✓ fix the parser · fiber"),
+        b"ENDMARK".to_vec(),
+    ]
+    .concat();
+    assert_eq!(written, expected);
 }

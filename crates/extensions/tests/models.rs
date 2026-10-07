@@ -1272,3 +1272,25 @@ fn add_lua_for_a_provider_with_only_cost_keeps_its_data_models_and_its_handle() 
     );
     assert!(std::sync::Arc::ptr_eq(providers.lua("acme").unwrap(), &lua));
 }
+
+#[test]
+fn forget_lua_drops_every_handle_and_keeps_the_models() {
+    let setup = Setup::new();
+    let mut providers = Providers::default();
+    write(&setup.home().join("ext/prompts/m.md"), "Lua says hi.\n");
+    let lua = lua_acme(&setup, "ext", &lua_addendum_run("m", "prompts/m.md"));
+    let notices = providers.add_lua("acme-ext", &lua, &config(&setup, &[]));
+    assert!(notices.is_empty(), "{notices:?}");
+    let weak = std::sync::Arc::downgrade(&lua);
+    drop(lua);
+    providers.forget_lua();
+    assert!(providers.lua("acme").is_none());
+    assert!(
+        weak.upgrade().is_none(),
+        "the registry held the last handle"
+    );
+    assert_eq!(providers.names().collect::<Vec<_>>(), ["acme"]);
+    assert_eq!(providers.get("acme").unwrap().name, "acme");
+    let model = providers.resolve("acme/m").unwrap();
+    assert_eq!(providers.addendum(&model), Some("Lua says hi.\n"));
+}

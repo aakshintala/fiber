@@ -1,94 +1,247 @@
 //! A second model for the `model` driver command
 //! (`docs/model-routing.md`, "Naming a model" and "Thinking"): the
-//! stateless preparation `main` composes at startup and hands to
-//! `Loop::switcher`, built from the same calls `parts_in` makes for the
-//! startup model. Preparation reads no credential source, environment
-//! variable or file, and runs no subprocess, Lua function or network
-//! request: a provider whose credential was not read at startup rejects
-//! with the credential sentence, and the switch is rejected.
+//! preparation `main` composes at startup and hands to `Loop::switcher`,
+//! built from the same calls `parts_in` makes for the startup model. Any
+//! installed model is reachable. A credential this process has not read
+//! yet, and a Lua provider the session does not hold loaded, are read and
+//! started on a thread of their own while the loop waits; shutdown ends
+//! that wait (`docs/configuration.md`, "Secrets").
+
+mod read;
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex, PoisonError};
 
-use config::{Config, ProviderData};
+use config::{Config, ProviderData, Secret};
+use contract::clock::Clock;
 use contract::commands::ModelArgs;
+use contract::files::PathLock;
 use contract::inbox::Rejection;
 use contract::shapes::Failure;
 use contract::{ErrorCode, ThinkingLevel};
-use extensions::{LuaProvider, Providers};
+use extensions::{LuaProvider, Providers, SessionExtensions};
 
-use crate::lua_providers::KeyAndSigner;
+pub(crate) use self::read::Reads;
+use crate::lua_providers::{Access, KeyAndSigner};
 
-/// One read credential, by provider name: its label, and its key and
-/// signer.
-/// debt: no credential source is read and no command runs for a switch;
-/// only a credential read at startup switches (#1094). #1094 lifts it
-/// after #649 merges.
+/// The credentials read at startup, by provider name: the label, and the
+/// key and signer.
 pub(crate) type Credentials = BTreeMap<String, (String, KeyAndSigner)>;
 
-/// What preparing a switch reads: the registry as the session's providers
-/// plus every retained Lua provider's cached models, every model every
-/// provider names before placeholders are filled, the configuration, and
-/// the credentials read at startup. Immutable after `new`: the closure
-/// holds it behind an `Arc` and no mutable state.
+/// Each credential this process has read, by provider name: the label and
+/// the key, `None` when a Lua `credential()` supplies the token. A key here
+/// is never read again, so a `command` source runs once per process. No
+/// signer is kept: it holds its Lua provider, which would stay loaded.
+type Keys = BTreeMap<String, (String, Option<Secret>)>;
+
+/// What starts a Lua provider a switch needs and the session does not hold
+/// loaded.
+pub(crate) struct Loader {
+    pub(crate) extensions: Arc<SessionExtensions>,
+    pub(crate) clock: Arc<dyn Clock>,
+    pub(crate) locks: Arc<dyn PathLock>,
+    /// The extension that registered each Lua provider, by provider name.
+    pub(crate) owners: BTreeMap<String, String>,
+}
+
+/// What preparing a switch reads: the whole startup registry, holding no
+/// Lua provider, every model every provider names before placeholders are
+/// filled, the configuration, each key read so far and the Lua providers
+/// loaded now: the session's and its reviewer's.
 pub(crate) struct Switching {
     registry: Providers,
     naming: Vec<(String, String)>,
     config: Config,
-    credentials: Credentials,
+    /// Each configured `tools."<name>".max_result_bytes`, for a hosted
+    /// search the switch declares.
+    caps: r#loop::ResultCaps,
+    keys: Mutex<Keys>,
+    loaded: Mutex<BTreeMap<String, Arc<LuaProvider>>>,
+    loader: Loader,
+    reads: Arc<Reads>,
+}
+
+/// What a switch publishes to the session's door when it applies.
+pub(crate) struct Door {
+    /// Replaces or removes one entry of the `tools` answer.
+    pub(crate) declare: doors::Declare,
+    /// A `web_search` an extension or MCP server registered at start
+    /// replaced the hosted one, and it stands across switches.
+    pub(crate) hosted_stands: bool,
+}
+
+/// Whether a `web_search` registered by anything other than `builtin` is
+/// among `tools`: that one replaced the hosted search at start
+/// (`docs/architecture.md`, "Tool seam").
+pub(crate) fn hosted_stands(tools: &[(String, Arc<dyn contract::tool::Tool>)]) -> bool {
+    tools
+        .iter()
+        .any(|(by, tool)| by != "builtin" && tool.definition().name == "web_search")
 }
 
 impl Switching {
-    /// The registry `clone` is the `Providers::load` clone `parts_in`
-    /// built before any `add_lua`: every retained Lua provider with a
-    /// model cache adds its cached models, and one that registers no
-    /// `models` adds its handle, then placeholders fill as at
-    /// startup, with the same environment reader. No refresh thread
-    /// starts for the clone.
-    /// debt: a Lua provider the session unloaded is not loaded again for
-    /// a switch; only a cache written by startup discovery switches back
-    /// (#1094). #1094 lifts it after #649 merges.
+    /// `registry` is the startup registry after its Lua providers were
+    /// added and placeholders filled; the switch keeps it holding no Lua
+    /// handle. `credentials` are the keys read at startup, and `loaded` the
+    /// Lua providers the session and its reviewer use.
     pub(crate) fn new(
         mut registry: Providers,
-        retained: &[(String, Arc<LuaProvider>)],
         naming: Vec<(String, String)>,
         config: Config,
         credentials: Credentials,
-    ) -> Result<Self, Failure> {
-        for (extension, provider) in retained {
-            // A provider without `models`, such as one with only `cost()`,
-            // only keeps its handle, so a switch to it has its lookup.
-            if provider.has_model_cache() || matches!(provider.registers("models"), Ok(false)) {
-                let _notices = registry.add_lua(extension, provider, &config);
-            }
-        }
-        registry
-            .fill_placeholders(&config, &|name| std::env::var(name).ok())
-            .map_err(|error| crate::failed(error.code(), error))?;
-        Ok(Self {
+        loaded: Vec<(String, Arc<LuaProvider>)>,
+        loader: Loader,
+    ) -> Self {
+        registry.forget_lua();
+        let keys = credentials
+            .into_iter()
+            .map(|(name, (label, (key, _)))| (name, (label, key)))
+            .collect();
+        Self {
             registry,
             naming,
+            caps: crate::settings::result_caps(&config),
             config,
-            credentials,
-        })
+            keys: Mutex::new(keys),
+            loaded: Mutex::new(loaded.into_iter().collect()),
+            loader,
+            reads: Arc::default(),
+        }
     }
 
-    /// The `Loop::switcher` closure: `prepare` over the shared `Switching`.
-    pub(crate) fn closure(self) -> r#loop::Prepare {
+    /// What shutdown cancels: every read a switch has running.
+    pub(crate) fn reads(&self) -> Arc<Reads> {
+        Arc::clone(&self.reads)
+    }
+
+    /// The `Loop::switcher` closure: `prepare` over the shared `Switching`,
+    /// publishing to `door` when a switch applies.
+    pub(crate) fn closure(self, door: Door) -> r#loop::Prepare {
         let shared = Arc::new(self);
-        Arc::new(move |args, chosen| prepare(&shared, args, chosen))
+        Arc::new(move |args, chosen| prepare(&shared, &door, args, chosen))
+    }
+
+    /// Holds exactly `keep` loaded: the Lua providers of the session and the
+    /// reviewer a switch just applied. Any other is unloaded once nothing
+    /// else holds it, such as a cost lookup it still owes
+    /// (`docs/model-routing.md`, "Model discovery").
+    fn keep_loaded(&self, keep: Vec<(String, Arc<LuaProvider>)>) {
+        let dropped = std::mem::replace(
+            &mut *self.loaded.lock().unwrap_or_else(PoisonError::into_inner),
+            keep.into_iter().collect(),
+        );
+        drop(dropped);
+    }
+
+    /// What the read for provider `name` starts from: its label, its key
+    /// when this process already read one, and its Lua provider when it is
+    /// loaded.
+    fn want(&self, name: &str) -> Want {
+        let known = self
+            .keys
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(name)
+            .cloned();
+        let lua = self
+            .loaded
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(name)
+            .cloned();
+        let label = match (&known, self.registry.get(name)) {
+            (Some((label, _)), _) => label.clone(),
+            (None, Some(data)) => self.config.credential_label(data),
+            (None, None) => String::new(),
+        };
+        Want {
+            name: name.to_owned(),
+            label,
+            known: known.map(|(_, key)| key),
+            lua,
+        }
+    }
+
+    /// Reads provider `want.name`'s access on the read thread: starts its Lua
+    /// provider when none is loaded and an extension registered it, then
+    /// reads its key unless one was read before, and builds its signer.
+    /// Writes neither the keys nor the loaded providers.
+    fn read(&self, want: Want) -> Result<Got, Failure> {
+        let data = self.registry.get(&want.name).ok_or_else(|| {
+            doors::failure(
+                ErrorCode::InvalidArguments,
+                format!("No provider `{}` is installed.", want.name),
+            )
+        })?;
+        let lua = match (want.lua, self.loader.owners.get(&want.name)) {
+            (Some(lua), _) => Some(lua),
+            (None, Some(extension)) => Some(
+                self.loader
+                    .extensions
+                    .start_provider(
+                        &self.config,
+                        Arc::clone(&self.loader.clock),
+                        Arc::clone(&self.loader.locks),
+                        extension,
+                        &want.name,
+                    )
+                    .map_err(|e| crate::failed(e.code(), e))?,
+            ),
+            (None, None) => None,
+        };
+        let mut file = None;
+        let read =
+            crate::lua_providers::session_credential(lua.as_ref(), data, &want.label, || {
+                if let Some(Some(key)) = want.known {
+                    return Ok(key);
+                }
+                let run = |command: &mut std::process::Command| self.reads.command(command);
+                let read =
+                    crate::credential::switch_credential(&self.config, data, &want.label, &run)?;
+                file = read.file;
+                Ok(read.secret)
+            })?;
+        Ok(Got {
+            label: want.label,
+            access: Access::new(lua.as_ref(), read),
+            file,
+        })
     }
 }
 
-/// Prepares a switch without changing any state, from the same calls
-/// `parts_in` makes for the startup model: resolving, the credential the
-/// map holds, thinking, connecting, the re-chosen reviewer, the cache
-/// lifetime, the handoff settings and the addendum. A rejection changes
-/// nothing. The reviewer's failure is not a rejection: the loop gets it,
-/// and every reviewed call escalates it (`docs/permissions.md`, "How it
-/// runs").
+/// Where one provider's read for a switch starts.
+struct Want {
+    name: String,
+    label: String,
+    /// The key read before, if any.
+    known: Option<Option<Secret>>,
+    /// Its Lua provider, when loaded.
+    lua: Option<Arc<LuaProvider>>,
+}
+
+/// One provider's access, read for a switch, and the `file` source it read.
+struct Got {
+    label: String,
+    access: Access,
+    file: Option<PathBuf>,
+}
+
+/// What the read job answers: the session provider's access, and the
+/// reviewer's when it is on another provider.
+type Read = Result<(Got, Option<Result<Got, Failure>>), Failure>;
+
+/// Prepares a switch from the same calls `parts_in` makes for the startup
+/// model: resolving, thinking, the reviewer's model, the credential and
+/// Lua provider, connecting, the cache lifetime, the handoff settings, the
+/// addendum and the hosted search. Every check that can reject runs before
+/// the read, so a read's key is cached only for an admitted switch; a
+/// failed read rejects with its own code and caches nothing. The
+/// reviewer's failure is not a rejection: the loop gets it, and every
+/// reviewed call escalates it (`docs/permissions.md`, "How it runs").
 pub(crate) fn prepare(
-    switching: &Switching,
+    switching: &Arc<Switching>,
+    door: &Door,
     args: &ModelArgs,
     chosen: Option<ThinkingLevel>,
 ) -> Result<r#loop::Prepared, Rejection> {
@@ -101,25 +254,10 @@ pub(crate) fn prepare(
         ),
         None => None,
     };
-    let in_map = |name: &str| switching.credentials.contains_key(name);
-    let resolved = resolve(&switching.registry, &switching.naming, &in_map, &args.model)?;
+    let resolved = resolve(&switching.registry, &switching.naming, &args.model)?;
     let reference = resolved.reference();
-    let context_window =
-        crate::settings::context_window(resolved.model, &reference).map_err(|failure| {
-            Rejection {
-                code: ErrorCode::InvalidArguments,
-                message: failure.message,
-            }
-        })?;
-    let Some((label, (key, signer))) = switching
-        .credentials
-        .get(resolved.provider.name.as_str())
-        .cloned()
-    else {
-        // `resolve` already refused a provider outside the map; this is
-        // unreachable, and refuses the same way.
-        return Err(limited(resolved.provider.name.as_str()));
-    };
+    let context_window = crate::settings::context_window(resolved.model, &reference)
+        .map_err(|failure| invalid(failure.message))?;
     let mut notices = Vec::new();
     let thinking = crate::settings::thinking(
         resolved.thinking,
@@ -129,15 +267,103 @@ pub(crate) fn prepare(
         &reference,
         &mut notices,
     )
-    .map_err(|failure| Rejection {
-        code: failure.code,
-        message: failure.message,
-    })?;
-    let lua = switching.registry.lua(&resolved.provider.name);
-    let provider = crate::connect(resolved, key, signer, lua).map_err(|failure| Rejection {
-        code: ErrorCode::InvalidArguments,
-        message: failure.message,
-    })?;
+    .map_err(rejection)?;
+    crate::connect::speaks(resolved.model.protocol, &reference)
+        .map_err(|failure| invalid(failure.message))?;
+    // The reviewer's model, before the read: Fiber never reviews with the
+    // session's own model.
+    let judge = crate::reviewer_reference(&switching.config, &resolved).and_then(|typed| {
+        let model = switching
+            .registry
+            .resolve(&typed)
+            .map_err(|e| crate::failed(e.code(), e))?;
+        Ok((model.reference(), model.provider.name.clone()))
+    });
+    if let Ok((judged, _)) = &judge
+        && *judged == reference
+    {
+        return Err(invalid(format!(
+            "`{reference}` is this session's reviewer model; set `reviewer.model` to another model first."
+        )));
+    }
+    let (web_search, publish) = hosted(switching, door, resolved.model.web_search.as_deref())?;
+    let session = resolved.provider.name.clone();
+    let session_want = switching.want(&session);
+    let judge_want = judge
+        .as_ref()
+        .ok()
+        .filter(|(_, name)| *name != session)
+        .map(|(_, name)| switching.want(name));
+    let shared = Arc::clone(switching);
+    let read: Read = switching
+        .reads
+        .run(move || {
+            let got = shared.read(session_want)?;
+            Ok((got, judge_want.map(|want| shared.read(want))))
+        })
+        .map_err(rejection)?;
+    let (got, judge_got) = read.map_err(rejection)?;
+    {
+        let mut keys = switching
+            .keys
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        keys.entry(session.clone())
+            .or_insert_with(|| (got.label.clone(), got.access.key.clone()));
+        if let Some(Ok(judged)) = &judge_got
+            && let Ok((_, name)) = &judge
+        {
+            keys.entry(name.clone())
+                .or_insert_with(|| (judged.label.clone(), judged.access.key.clone()));
+        }
+    }
+    let provider = crate::connect(
+        resolved,
+        got.access.key.clone(),
+        got.access.signer.clone(),
+        got.access.lua.as_ref(),
+    )
+    .map_err(|failure| invalid(failure.message))?;
+    let mut lookup = |provider: &ProviderData| -> Result<Access, Failure> {
+        match &judge_got {
+            _ if provider.name == session => Ok(got.access.clone()),
+            Some(Ok(judged)) => Ok(judged.access.clone()),
+            Some(Err(failure)) => Err(failure.clone()),
+            None => Err(doors::failure(
+                ErrorCode::InvalidArguments,
+                format!("The credential for `{}` was not read.", provider.name),
+            )),
+        }
+    };
+    let reviewer = crate::choose_reviewer(
+        &switching.registry,
+        &switching.config,
+        &resolved,
+        &mut lookup,
+    );
+    // Loaded after the switch applies: the session's Lua provider, and the
+    // reviewer's when the reviewer stands.
+    let judged = judge_got.and_then(Result::ok);
+    let mut keep: Vec<(String, Arc<LuaProvider>)> = Vec::new();
+    for lua in [Some(&got), judged.as_ref().filter(|_| reviewer.is_ok())]
+        .into_iter()
+        .flatten()
+        .filter_map(|read| read.access.lua.as_ref())
+    {
+        keep.push((lua.name().to_owned(), Arc::clone(lua)));
+    }
+    let credential_files = [Some(&got), judged.as_ref()]
+        .into_iter()
+        .flatten()
+        .filter_map(|read| read.file.clone())
+        .collect();
+    let shared = Arc::clone(switching);
+    let applied: Applied = Box::new(move || {
+        shared.keep_loaded(keep);
+        if let Some(publish) = publish {
+            publish();
+        }
+    });
     Ok(r#loop::Prepared {
         provider,
         model: r#loop::Model {
@@ -149,73 +375,78 @@ pub(crate) fn prepare(
         // The suffix first, then what was asked for now, then the
         // session's choice.
         chosen: resolved.thinking.or(asked).or(chosen),
-        credential: Some(label),
+        credential: Some(got.label),
         cache_lifetime: crate::settings::cache_lifetime(&switching.config, &reference),
         context_window,
         addendum: switching.registry.addendum(&resolved).map(str::to_owned),
         handoff: crate::handoff::handoff_settings(&switching.config, &reference),
-        reviewer: reviewer_for(switching, &resolved),
-        web_search: resolved.model.web_search.clone(),
+        reviewer,
+        web_search,
         // At most one notice: a configured level the model lacks.
         notice: notices.into_iter().next(),
+        applied: Some(applied),
+        credential_files,
     })
 }
 
-/// Who judges step 7's calls under the new `session` model: the
-/// reference `main` would choose at startup, resolved against the switch
-/// registry with the map-only lookup. A `provider/model` reference whose
-/// provider the map does not hold fails before any registry resolution,
-/// so an unloaded Lua-only reviewer is the credential sentence; a bare
-/// id goes through resolution, and its failure stands.
-fn reviewer_for(
+/// What `Prepared.applied` runs when the switch applies.
+type Applied = Box<dyn FnOnce() + Send>;
+
+/// The hosted search after the switch, and what applying it publishes to
+/// the door's `tools` answer: the new model's hosted search when it has
+/// one, else none, unless another registrant's `web_search` stands
+/// (`docs/tools.md`, "Hosted by the provider").
+fn hosted(
     switching: &Switching,
-    session: &extensions::Model<'_>,
-) -> Result<r#loop::Reviewer, Failure> {
-    let reference = crate::reviewer_reference(&switching.config, session)?;
-    if let Some((provider, _)) = reference.split_once('/')
-        && !switching.credentials.contains_key(provider)
-    {
-        return Err(limit_failure(provider));
+    door: &Door,
+    kind: Option<&str>,
+) -> Result<(r#loop::Hosted, Option<Applied>), Rejection> {
+    if door.hosted_stands {
+        return Ok((r#loop::Hosted::Keep, None));
     }
-    let mut lookup = |provider: &ProviderData| -> Result<(String, KeyAndSigner), Failure> {
-        switching
-            .credentials
-            .get(&provider.name)
-            .cloned()
-            .ok_or_else(|| limit_failure(&provider.name))
+    let declare = Arc::clone(&door.declare);
+    let Some(kind) = kind else {
+        let applied = Box::new(move || declare("web_search", None));
+        return Ok((
+            r#loop::Hosted::Withdraw("web_search".to_owned()),
+            Some(applied),
+        ));
     };
-    crate::choose_reviewer(&switching.registry, &switching.config, session, &mut lookup)
+    let (tool, info) = crate::builtin::hosted(kind).map_err(rejection)?;
+    let tool = r#loop::capped(
+        vec![("builtin".to_owned(), Arc::clone(&tool))],
+        &switching.caps,
+    )
+    .pop()
+    .map_or(tool, |(_, capped)| capped);
+    let applied = Box::new(move || {
+        let name = info.name.clone();
+        declare(&name, Some(info));
+    });
+    Ok((r#loop::Hosted::Declare(tool), Some(applied)))
 }
 
 /// The typed model against the switch registry and the naming list: an
 /// exact `provider/model` resolves as at startup, while a bare id counts
-/// every provider that names it, configured or not, loaded or not. A bare
-/// id tries the full typed id first, so a literal id ending in a thinking
-/// level matches before the suffix strips (`docs/model-routing.md`,
-/// "Naming a model": the exact match comes first, since OpenRouter ids
-/// contain colons); only when nothing names the full id does the stripped
-/// id count. Every failure but the credential sentence is the resolution's
-/// own message as `invalid_arguments`.
-/// debt: only the session's and the reviewer's providers switch; any
-/// other installed provider is the credential sentence (#1094). #1094
-/// lifts it after #649 merges.
+/// every provider that names it, configured or not. A bare id tries the
+/// full typed id first, so a literal id ending in a thinking level matches
+/// before the suffix strips (`docs/model-routing.md`, "Naming a model": the
+/// exact match comes first, since OpenRouter ids contain colons); only when
+/// nothing names the full id does the stripped id count. Every failure is
+/// the resolution's own message as `invalid_arguments`.
 fn resolve<'a>(
     registry: &'a Providers,
     naming: &[(String, String)],
-    in_map: &dyn Fn(&str) -> bool,
     typed: &str,
 ) -> Result<extensions::Model<'a>, Rejection> {
     let (rest, _) = Providers::split_thinking(typed);
-    if let Some((provider, _)) = rest.split_once('/') {
-        return match registry.resolve(typed) {
-            Ok(model) if in_map(model.provider.name.as_str()) => Ok(model),
-            Ok(model) => Err(limited(model.provider.name.as_str())),
-            Err(_) if !in_map(provider) => Err(limited(provider)),
-            Err(error) => Err(invalid(error.to_string())),
-        };
+    if rest.contains('/') {
+        return registry
+            .resolve(typed)
+            .map_err(|error| invalid(error.to_string()));
     }
     if typed != rest
-        && let Some(prepared) = resolve_literal(registry, naming, in_map, typed)
+        && let Some(prepared) = resolve_literal(registry, naming, typed)
     {
         return prepared;
     }
@@ -229,11 +460,7 @@ fn resolve<'a>(
             if matches.len() > 1 {
                 return Err(ambiguous(rest, &mut matches));
             }
-            if in_map(model.provider.name.as_str()) {
-                Ok(model)
-            } else {
-                Err(limited(model.provider.name.as_str()))
-            }
+            Ok(model)
         }
         Err(error) => {
             if let extensions::Error::Ambiguous {
@@ -248,13 +475,6 @@ fn resolve<'a>(
             }
             if matches.len() > 1 {
                 return Err(ambiguous(rest, &mut matches));
-            }
-            if matches.len() == 1
-                && let Some(first) = matches.first()
-                && let Some((provider, _)) = first.split_once('/')
-                && !in_map(provider)
-            {
-                return Err(limited(provider));
             }
             Err(invalid(error.to_string()))
         }
@@ -273,15 +493,12 @@ fn named(naming: &[(String, String)], text: &str) -> Vec<String> {
 
 /// A bare id that is also a literal model id ending in a thinking level:
 /// the full typed id against the registry and the naming list, before the
-/// suffix strips. `Some` when the full id names anything: the match, its
-/// ambiguity, or its credential sentence. `None` when nothing names it,
-/// and the stripped id counts instead; a single naming-only match for a
-/// provider in the map falls through too, since the registry past
-/// placeholders names no such literal.
+/// suffix strips. `Some` when the full id names anything: the match or its
+/// ambiguity. `None` when nothing in the registry names it, and the
+/// stripped id counts instead.
 fn resolve_literal<'a>(
     registry: &'a Providers,
     naming: &[(String, String)],
-    in_map: &dyn Fn(&str) -> bool,
     typed: &str,
 ) -> Option<Result<extensions::Model<'a>, Rejection>> {
     let mut matches = named(naming, typed);
@@ -292,14 +509,7 @@ fn resolve_literal<'a>(
         && let Err(extensions::Error::Unconfigured { message }) = registry.resolve(reference)
         && message.starts_with(&format!("The model `{reference}` "))
     {
-        let provider = reference
-            .split_once('/')
-            .map_or(reference.as_str(), |(name, _)| name);
-        return Some(if in_map(provider) {
-            Err(invalid(message))
-        } else {
-            Err(limited(provider))
-        });
+        return Some(Err(invalid(message)));
     }
     match registry.resolve(typed) {
         // The registry's own exact-first order tries the full id before
@@ -313,10 +523,7 @@ fn resolve_literal<'a>(
             if matches.len() > 1 {
                 return Some(Err(ambiguous(typed, &mut matches)));
             }
-            if in_map(model.provider.name.as_str()) {
-                return Some(Ok(model));
-            }
-            return Some(Err(limited(model.provider.name.as_str())));
+            return Some(Ok(model));
         }
         Err(extensions::Error::Ambiguous {
             id,
@@ -334,22 +541,7 @@ fn resolve_literal<'a>(
     if matches.len() > 1 {
         return Some(Err(ambiguous(typed, &mut matches)));
     }
-    if let Some(first) = matches.first()
-        && let Some((provider, _)) = first.split_once('/')
-        && !in_map(provider)
-    {
-        return Some(Err(limited(provider)));
-    }
     None
-}
-
-/// The credential sentence: the credential for `provider` was not read
-/// when this session started.
-fn sentence(provider: &str) -> String {
-    format!(
-        "The credential for `{provider}` was not read when this session started; \
-         start a session with `--model <ref>`."
-    )
 }
 
 /// A rejected switch: the message with code `invalid_arguments`.
@@ -360,19 +552,11 @@ fn invalid(message: String) -> Rejection {
     }
 }
 
-/// A switch refused for its credential: the sentence as a rejection.
-fn limited(provider: &str) -> Rejection {
-    invalid(sentence(provider))
-}
-
-/// A reviewer refused for its credential: the sentence as a failure the
-/// loop escalates.
-fn limit_failure(provider: &str) -> Failure {
-    Failure {
-        code: ErrorCode::InvalidArguments,
-        message: sentence(provider),
-        retry_after_ms: None,
-        provider: None,
+/// A failure as a rejection with its own code.
+fn rejection(failure: Failure) -> Rejection {
+    Rejection {
+        code: failure.code,
+        message: failure.message,
     }
 }
 

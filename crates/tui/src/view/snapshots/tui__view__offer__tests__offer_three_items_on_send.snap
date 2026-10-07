@@ -1,0 +1,20 @@
+---
+source: crates/tui/src/view/offer_tests.rs
+expression: screen
+---
+    runs: /bin/echo
+
+  MCP server b
+     approve  [skip]  never
+    MCP server: b
+    declared in: .fiber/config.json
+    runs: /bin/echo
+
+  MCP server c
+     approve  [skip]  never
+    MCP server: c
+    declared in: .fiber/config.json
+    runs: /bin/echo
+
+› Send · 0 approve, 3 skip, 0 never
+>

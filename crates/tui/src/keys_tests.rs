@@ -637,3 +637,31 @@ fn an_sgr_report_split_across_reads_is_one_event() {
         vec![mouse(MouseKind::Press(Button::Left), 11, 2)]
     );
 }
+
+#[test]
+fn alt_p_r_and_digits_parse_in_legacy_and_kitty_forms() {
+    let mut cases: Vec<(Vec<u8>, Key)> = vec![
+        (b"\x1bp".to_vec(), Key::AltP),
+        (b"\x1b[112;3u".to_vec(), Key::AltP),
+        (b"\x1br".to_vec(), Key::AltR),
+        (b"\x1b[114;3u".to_vec(), Key::AltR),
+    ];
+    for digit in 1..=9u8 {
+        cases.push((vec![0x1b, b'0' + digit], Key::AltDigit(digit)));
+        cases.push((
+            format!("\x1b[{};3u", 48 + u32::from(digit)).into_bytes(),
+            Key::AltDigit(digit),
+        ));
+    }
+    for (bytes, key) in cases {
+        assert_eq!(feed_all(&[&bytes]), vec![Event::Key(key)], "{bytes:?}");
+    }
+}
+
+#[test]
+fn escape_zero_is_still_dropped() {
+    assert_eq!(feed_all(&[b"\x1b0"]), Vec::new());
+    // Kitty's ⌥0 and ⌥: are not digits one to nine.
+    assert_eq!(feed_all(&[b"\x1b[48;3u"]), Vec::new());
+    assert_eq!(feed_all(&[b"\x1b[58;3u"]), Vec::new());
+}

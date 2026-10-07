@@ -115,7 +115,10 @@ and any client can answer it. The terminal shows it in the session's view, as
 a swapped view listing every pending item with what an install shows, a diff
 for an item whose content changed, and three choices for each: approve, skip
 for this session, or never. A package's TUI files are never installed from a
-repository, and the offer says so.
+repository, and the offer says so. Each item starts at skip; ↑ ↓ choose an
+item, ← → its answer, and Send answers them all at once. Esc puts it aside
+behind the approval badge, and ⌥A or `/approvals` reopens it, as for an
+approval.
 
 ### The session list
 

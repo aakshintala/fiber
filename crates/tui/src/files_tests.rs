@@ -237,6 +237,7 @@ fn the_loop_lists_searches_and_drops_the_worker_on_close() {
         hover: true,
         var: Box::new(|_| None),
         copy_command: None,
+        title: crate::osc::Title::default(),
     };
     // No hub: a frame fetches no history, so nothing arrives here.
     let (_hub, idle) = mpsc::channel();

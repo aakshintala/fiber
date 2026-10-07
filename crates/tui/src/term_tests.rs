@@ -8,17 +8,18 @@ use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::Duration;
 
-/// What `setup` writes with hover on: the alternate screen, bracketed
-/// paste, mouse modes 1000, 1002, 1006 and 1003, then the two queries.
+/// What `setup` writes with hover on: the alternate screen, the title
+/// pushed, bracketed paste, mouse modes 1000, 1002, 1006 and 1003, then the two queries.
 const START_HOVER: &[u8] =
-    b"\x1b[?1049h\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b[?u\x1b[c";
+    b"\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b[?u\x1b[c";
 /// What `setup` writes with hover off: no mode 1003.
 const START_NO_HOVER: &[u8] =
-    b"\x1b[?1049h\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?u\x1b[c";
+    b"\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?u\x1b[c";
 /// What `restore` writes: kitty's flags popped, bracketed paste and every
-/// mouse mode off, the alternate screen left, the cursor shown.
+/// mouse mode off, the title popped, the alternate screen left, the
+/// cursor shown.
 const END: &[u8] =
-    b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?1049l\x1b[?25h";
+    b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[23;2t\x1b[?1049l\x1b[?25h";
 
 /// One named wall-clock deadline for every blocking wait.
 const DEADLINE: Duration = Duration::from_secs(10);
@@ -141,7 +142,7 @@ fn size_reads_the_winsize() {
 
 /// What `resume` writes before kitty's push: as `setup` without the
 /// queries.
-const RESUME_NO_HOVER: &[u8] = b"\x1b[?1049h\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h";
+const RESUME_NO_HOVER: &[u8] = b"\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h";
 
 #[test]
 fn suspend_restores_and_resume_sets_up_again_without_hover_or_kitty() {
@@ -205,4 +206,16 @@ fn restore_after_a_suspend_writes_nothing_more() {
 #[test]
 fn resume_before_setup_fails() {
     assert!(super::resume(false, false).is_err());
+}
+
+#[test]
+fn the_restore_bytes_pop_the_title_pushed_on_setup_and_resume() {
+    let pop = b"\x1b[23;2t";
+    let at = super::RESTORE
+        .windows(pop.len())
+        .position(|window| window == pop);
+    assert!(at.is_some(), "the restore pops the title");
+    assert_eq!(super::PUSH_TITLE, b"\x1b[22;2t");
+    assert!(START_HOVER.starts_with(b"\x1b[?1049h\x1b[22;2t"));
+    assert!(RESUME_NO_HOVER.starts_with(b"\x1b[?1049h\x1b[22;2t"));
 }

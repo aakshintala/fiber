@@ -2,9 +2,12 @@
 //! when it is due, and what a write costs. `Instant`s come from the caller;
 //! the pacer never reads a clock.
 
-use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
+use contract::ActionId;
+use contract::clock::Wake;
 use contract::emit::Emit;
 use contract::events::{Event, Progress};
 use contract::tool::Output;
@@ -192,7 +195,7 @@ fn a_details_only_delta_is_held_and_taken_without_text() {
 
 #[test]
 fn take_finished_returns_the_output_with_whatever_is_held() {
-    let stream = Stream::new(Arc::new(SharedWake::default()));
+    let stream = Stream::new(Arc::new(SharedWake::default()), ActionId("a_1".into()));
     assert_eq!(stream.take_finished(), None);
     stream.emit(&Event::ToolCallDelta(Progress {
         text: Some("late".into()),
@@ -215,7 +218,7 @@ fn take_finished_returns_the_output_with_whatever_is_held() {
 
 #[test]
 fn take_flush_returns_the_held_change_only_once_the_call_returns() {
-    let stream = Stream::new(Arc::new(SharedWake::default()));
+    let stream = Stream::new(Arc::new(SharedWake::default()), ActionId("a_2".into()));
     stream.emit(&Event::ToolCallDelta(Progress {
         text: Some("held".into()),
         details: None,
@@ -230,4 +233,84 @@ fn take_flush_returns_the_held_change_only_once_the_call_returns() {
         })
     );
     assert_eq!(stream.take_flush(), None);
+}
+
+/// Wall-clock bound on every wait for a helper thread.
+const DEADLINE: Duration = Duration::from_secs(5);
+
+/// A forward target that counts its wakes.
+#[derive(Default)]
+struct Counting(AtomicUsize);
+
+impl Counting {
+    fn count(&self) -> usize {
+        self.0.load(Ordering::SeqCst)
+    }
+}
+
+impl Wake for Counting {
+    fn wake(&self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+/// Parks `wake` with no deadline on `clock` from a helper thread, which
+/// sends once the park returns.
+fn park_on(wake: &Arc<SharedWake>, clock: &Arc<FakeClock>) -> mpsc::Receiver<()> {
+    let (done, parked) = mpsc::channel();
+    let wake = Arc::clone(wake);
+    let clock = Arc::clone(clock);
+    std::thread::spawn(move || {
+        wake.park(clock.as_ref(), None);
+        let _sent = done.send(());
+    });
+    parked
+}
+
+#[test]
+fn forwarding_passes_on_a_bump_that_landed_before_it_once() {
+    let wake = Arc::new(SharedWake::default());
+    let target = Arc::new(Counting::default());
+    wake.wake();
+    wake.forward(Some(Arc::clone(&target) as Arc<dyn Wake>));
+    assert_eq!(target.count(), 1, "the earlier bump reaches the target");
+    // The bump was passed on, so the flag is clear and a park blocks.
+    assert!(
+        !super::lock(&wake.inner).set,
+        "nothing asks for another pass"
+    );
+    wake.forward(None);
+    let clock = FakeClock::new();
+    let parked = park_on(&wake, &clock);
+    assert!(clock.await_parked_unbounded(DEADLINE), "the park waits");
+    wake.wake();
+    parked
+        .recv_timeout(DEADLINE)
+        .expect("a later bump ends the park");
+}
+
+#[test]
+fn every_bump_while_forwarding_wakes_the_target() {
+    let wake = SharedWake::default();
+    let target = Arc::new(Counting::default());
+    wake.forward(Some(Arc::clone(&target) as Arc<dyn Wake>));
+    assert_eq!(target.count(), 0, "no bump landed before");
+    wake.wake();
+    wake.wake();
+    assert_eq!(target.count(), 2);
+}
+
+#[test]
+fn clearing_the_forward_keeps_the_flag_and_drops_the_target() {
+    let wake = Arc::new(SharedWake::default());
+    let target = Arc::new(Counting::default());
+    wake.forward(Some(Arc::clone(&target) as Arc<dyn Wake>));
+    wake.wake();
+    wake.forward(None);
+    let clock = FakeClock::new();
+    park_on(&wake, &clock)
+        .recv_timeout(DEADLINE)
+        .expect("the bump while forwarding ends the next park at once");
+    wake.wake();
+    assert_eq!(target.count(), 1, "a bump after clearing reaches no target");
 }

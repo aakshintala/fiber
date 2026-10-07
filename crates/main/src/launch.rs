@@ -46,7 +46,29 @@ pub(crate) fn launch(workspace: PathBuf, identity: &Path, config: &Config) -> tu
             .get("tui.logo_glyph", None)
             .and_then(|(value, _)| value.as_str().map(str::to_owned))
             .unwrap_or_else(|| "⌇".to_owned()),
+        rail_share: share(config, "tui.rail.width", 15.0),
+        panel_share: share(config, "tui.panel.width", 21.0),
+        // `tui.panel.cards`, defaulting to the built-in list.
+        panel_cards: config
+            .get("tui.panel.cards", None)
+            .and_then(|(value, _)| serde_json::from_value(value).ok())
+            .unwrap_or_else(|| {
+                ["session", "changed_files", "delegates", "jobs", "quota"]
+                    .map(str::to_owned)
+                    .to_vec()
+            }),
     }
+}
+
+/// A share of the screen's width, in percent, from `key`; `default` when
+/// it is absent or outside 0 to 100. The terminal keeps the columns
+/// between their floor and ceiling whatever the share.
+fn share(config: &Config, key: &str, default: f64) -> f64 {
+    config
+        .get(key, None)
+        .and_then(|(value, _)| value.as_f64())
+        .filter(|share| (0.0..=100.0).contains(share))
+        .unwrap_or(default)
 }
 
 #[cfg(test)]

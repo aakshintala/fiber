@@ -193,6 +193,7 @@ fn reveal_scrolls_up_to_a_row_above_the_top_and_follows_at_the_bottom() {
     let mut screen = screen(6);
     // At 6 columns a thinking block's line wraps to four rows.
     screen.set_size(6, 24);
+    screen.wrap_at(6);
     let total = total(&screen);
     let mut items = screen.pages().focus_items();
     items.sort_by_key(|(row, _, _)| *row);

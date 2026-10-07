@@ -230,6 +230,8 @@ pub(crate) const KEYS: &[Key] = &[
         NO,
         Some(r#"["session", "changed_files", "delegates", "jobs", "quota"]"#),
     ),
+    key("tui.rail.width", Number, NO, Some("15")),
+    key("tui.panel.width", Number, NO, Some("21")),
     key("tui.theme", Str, NO, None),
     key("tui.reduced_motion", Bool, NO, Some("false")),
     key("tui.screen_reader", Bool, NO, None),

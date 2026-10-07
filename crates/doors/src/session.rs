@@ -56,7 +56,9 @@ pub(crate) struct Gate {
     pub(crate) log: Weak<Log>,
     pub(crate) clock: Arc<dyn Clock>,
     pub(crate) session_id: SessionId,
-    pub(crate) tools: Vec<ToolInfo>,
+    /// What the `tools` command answers with; a `model` switch changes it
+    /// through [`Session::declarer`].
+    pub(crate) tools: Mutex<Vec<ToolInfo>>,
     /// What the `commands` command answers with, set by
     /// [`Session::commands`]; empty until then.
     commands: Mutex<Vec<CommandInfo>>,
@@ -106,6 +108,10 @@ pub(crate) struct Gate {
     writers: Condvar,
     conns: Mutex<Conns>,
 }
+
+/// Replaces (`Some`) or removes (`None`) the `tools` answer's entry for a
+/// name: [`Session::declarer`].
+pub type Declare = Arc<dyn Fn(&str, Option<ToolInfo>) + Send + Sync>;
 
 impl Session {
     /// Opens the door side of the session whose directory, just created, is
@@ -253,6 +259,41 @@ impl Session {
         *lock(&self.gate.images) = Some(images);
     }
 
+    /// What changes one entry of the `tools` answer when a `model` switch
+    /// applies (`docs/tools.md`, "Seeing the tools"): `Some` replaces the
+    /// entry named `name`, or adds it before the first entry whose name sorts
+    /// after it; `None` removes it. It holds the gate weakly and does nothing
+    /// once [`Session::close`] has begun.
+    pub fn declarer(&self) -> Declare {
+        let gate = Arc::downgrade(&self.gate);
+        Arc::new(move |name: &str, info: Option<ToolInfo>| {
+            let Some(gate) = gate.upgrade() else {
+                return;
+            };
+            if gate.stopped() {
+                return;
+            }
+            let mut tools = lock(&gate.tools);
+            match (
+                tools.binary_search_by(|tool| tool.name.as_str().cmp(name)),
+                info,
+            ) {
+                (Ok(at), Some(info)) => {
+                    if let Some(entry) = tools.get_mut(at) {
+                        *entry = info;
+                    }
+                }
+                (Ok(at), None) => {
+                    tools.remove(at);
+                }
+                (Err(at), Some(info)) => {
+                    tools.insert(at, info);
+                }
+                (Err(_), None) => {}
+            }
+        })
+    }
+
     /// What `close` with `now` starts; unset, `now` is an ordinary close.
     pub fn close_now(&self, start: Arc<dyn Fn() + Send + Sync>) {
         *lock(&self.gate.close_now) = Some(start);
@@ -268,6 +309,15 @@ impl Session {
             gate.cancel_shells();
             gate.deliver(Delivery::Cancelled);
         })
+    }
+
+    /// The wake a running tool call's interaction reaches the loop through
+    /// (`docs/architecture.md`, "One inbox"): each wake puts
+    /// `Delivery::Cancelled` in the inbox. It holds the gate weakly, so the
+    /// loop never keeps its own inbox open, and after [`Session::close`] it
+    /// wakes nothing.
+    pub fn inbox_wake(&self) -> Arc<dyn Wake> {
+        Arc::new(InboxWake(Arc::downgrade(&self.gate)))
     }
 
     /// Makes `fiber_exited` the last line this process writes: no later
@@ -417,6 +467,17 @@ impl Gate {
     }
 }
 
+/// [`Session::inbox_wake`]'s wake.
+struct InboxWake(Weak<Gate>);
+
+impl Wake for InboxWake {
+    fn wake(&self) {
+        if let Some(gate) = self.0.upgrade() {
+            gate.deliver(Delivery::Cancelled);
+        }
+    }
+}
+
 impl Wake for Gate {
     fn wake(&self) {
         // The lock is taken before the notify, so a waiter that has judged
@@ -451,7 +512,7 @@ fn open_in(
         log: Arc::downgrade(log),
         clock: Arc::clone(&clock),
         session_id,
-        tools,
+        tools: Mutex::new(tools),
         commands: Mutex::new(Vec::new()),
         accepted: Mutex::new(HashSet::new()),
         inbox: Mutex::new(None),

@@ -14,10 +14,12 @@
     reason = "the harness reports usage and errors on stderr"
 )]
 
+mod busy;
 mod home;
 mod idle;
 mod linux;
 mod pty;
+mod resume;
 mod run;
 
 use std::collections::BTreeMap;
@@ -89,8 +91,9 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
     })
 }
 
-/// Runs each selected workload `runs` times. A metric is recorded only when
-/// every run produced it; a run that errs ends its workload and is noted.
+/// Runs each selected workload `runs` times, and each workload that runs
+/// once, once. A metric is recorded only when every run produced it; a run
+/// that errs ends its workload and is noted.
 fn bench(args: &Args) -> Value {
     let clock = run::System;
     let mut failures = Vec::new();
@@ -104,11 +107,17 @@ fn bench(args: &Args) -> Value {
                 idle: Duration::from_secs(args.idle_secs),
                 path: std::env::var_os("PATH"),
             };
-            let selected = idle::WORKLOADS
+            let repeated = idle::WORKLOADS
                 .iter()
-                .filter(|workload| args.only == Only::All || workload.timing);
-            for workload in selected {
-                if let Some(samples) = repeat(&ctx, workload, args.runs, &mut failures) {
+                .chain(&busy::WORKLOADS)
+                .chain(&resume::WORKLOADS)
+                .map(|workload| (workload, args.runs));
+            let once = busy::ONCE.iter().map(|workload| (workload, 1));
+            let selected = repeated
+                .chain(once)
+                .filter(|(workload, _)| args.only == Only::All || workload.timing);
+            for (workload, runs) in selected {
+                if let Some(samples) = repeat(&ctx, workload, runs, &mut failures) {
                     metrics.extend(samples);
                 }
             }
