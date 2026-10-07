@@ -1180,3 +1180,29 @@ fn only_a_line_that_changes_a_card_raises_the_overlay() {
         json!({"outcome": "completed"})
     ));
 }
+
+#[test]
+fn an_interrupt_shows_only_on_the_closing_line_and_its_call_reads_cancelled() {
+    let mut app = app();
+    start(&mut app, "go", 0);
+    step(&mut app, 0);
+    request(&mut app, "a_1", "shell", json!({"command": "sleep 9"}), 0);
+    feed(&mut app, "tool_call_started", Some("a_1"), 0, json!({}));
+    feed(
+        &mut app,
+        "tool_call_completed",
+        Some("a_1"),
+        2_000,
+        json!({"status": "cancelled", "content": []}),
+    );
+    end(&mut app, "interrupted", 3_000);
+    app.open(group(&app));
+    let lines = texts(&app);
+    let mentions: Vec<_> = lines
+        .iter()
+        .filter(|line| line.to_lowercase().contains("interrupt"))
+        .collect();
+    assert_eq!(mentions, ["▣ interrupted · 3s · 1 call"]);
+    assert_eq!(last(&app), "▣ interrupted · 3s · 1 call");
+    assert!(lines.contains(&"  1 shell sleep 9 · cancelled".to_owned()));
+}
