@@ -6,6 +6,10 @@
 //! attached to instead: one resume at a time per hub, and the socket is
 //! tried again first, so two commands for one exited session start one
 //! process.
+//!
+//! A session whose log ends in `fiber_exited` may still be shutting down:
+//! its socket or its lock is waited out for up to [`SHUTDOWN_BOUND`]
+//! before the client gets `session_held`.
 
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -45,6 +49,13 @@ const HELD_POLL: Duration = Duration::from_millis(100);
 /// asked to resume a session whose socket accepts.
 pub(crate) fn resume(hub: &Hub, session: &SessionId) -> Result<UnixStream, Refused> {
     reach(hub, session, true)
+}
+
+/// A connection to a resumed `session` whose log ends in `fiber_exited`
+/// while its process still answers: a socket that accepts while the log
+/// still ends so is the exiting process's, and is waited out.
+pub(crate) fn resume_exited(hub: &Hub, session: &SessionId) -> Result<UnixStream, Refused> {
+    reach(hub, session, false)
 }
 
 /// Whether `session`'s log ends in `fiber_exited`: it has exited, even
