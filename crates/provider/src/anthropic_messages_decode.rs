@@ -8,7 +8,7 @@ use contract::events::{
     CallStatus, ReasoningCompleted, TextCompleted, TextDelta, ToolCallArgumentsDelta,
     ToolCallCompleted, ToolCallRequested,
 };
-use contract::provider::{Delta, Finish, HostedCall, InputSize, Reply, ReplyAction};
+use contract::provider::{CallUsage, Delta, Finish, HostedCall, InputSize, Reply, ReplyAction};
 use contract::shapes::{ContentPart, Failure, Tokens};
 use contract::{ErrorCode, GenerationId, ProviderCallId};
 use serde_json::{Map, Value, json};
@@ -19,15 +19,37 @@ use crate::Error;
 /// returns the reply once `message_stop` arrives. A stream that fails keeps
 /// nothing it streamed, finished tool calls included.
 pub fn decode(stream: impl BufRead, sink: &mut dyn FnMut(Delta)) -> Result<Reply, Error> {
+    decode_tracked(stream, sink).map_err(|(error, _)| error)
+}
+
+/// As [`decode`], also carrying what the stream had seen when it failed:
+/// the generation and its usage once `message_start` named them, else none.
+#[allow(
+    clippy::result_large_err,
+    reason = "the decode carries its partial alongside the error for the call's usage"
+)]
+pub(crate) fn decode_tracked(
+    stream: impl BufRead,
+    sink: &mut dyn FnMut(Delta),
+) -> Result<Reply, (Error, Option<CallUsage>)> {
     let mut reply = Decoder::default();
     let mut end = None;
-    crate::sse::read(stream, |data| {
+    let read = crate::sse::read(stream, |data| {
         let event: Value = serde_json::from_str(data)
             .map_err(|e| Error::StreamIncomplete(format!("an event is not JSON ({e})")))?;
         end = reply.event(&event, sink)?;
         Ok(end.is_some())
-    })?;
-    end.ok_or_else(|| Error::StreamIncomplete("it ended before message_stop".into()))
+    });
+    if let Err(error) = read {
+        return Err((error, reply.partial()));
+    }
+    match end {
+        Some(reply) => Ok(reply),
+        None => Err((
+            Error::StreamIncomplete("it ended before message_stop".into()),
+            reply.partial(),
+        )),
+    }
 }
 
 /// One content block as it streams in.
@@ -78,6 +100,20 @@ struct Decoder {
 }
 
 impl Decoder {
+    /// What the stream had seen: the generation and its usage once
+    /// `message_start` named them, else none.
+    fn partial(&self) -> Option<CallUsage> {
+        if self.id.is_empty() {
+            return None;
+        }
+        Some(CallUsage {
+            generation_id: GenerationId(self.id.clone()),
+            tokens: tokens(&Value::Object(self.usage.clone())),
+            web_searches: web_searches(&self.usage),
+            input_size: InputSize::default(),
+        })
+    }
+
     /// Takes one event; returns the reply once `message_stop` arrives.
     fn event(
         &mut self,
@@ -321,22 +357,26 @@ impl Decoder {
                 ));
             }
         };
-        let web_searches = self
-            .usage
-            .get("server_tool_use")
-            .and_then(|use_| use_.get("web_search_requests"))
-            .and_then(serde_json::Value::as_u64)
-            .filter(|n| *n > 0);
+        let searches = web_searches(&self.usage);
         Ok(Reply {
             actions: std::mem::take(&mut self.actions),
             finish,
             generation_id: GenerationId(std::mem::take(&mut self.id)),
             tokens: tokens(&Value::Object(std::mem::take(&mut self.usage))),
-            web_searches,
+            web_searches: searches,
             cost: None,
             input_size: InputSize::default(),
         })
     }
+}
+
+/// Hosted web searches the usage reports; `None` when it reports none.
+fn web_searches(usage: &Map<String, Value>) -> Option<u64> {
+    usage
+        .get("server_tool_use")
+        .and_then(|use_| use_.get("web_search_requests"))
+        .and_then(serde_json::Value::as_u64)
+        .filter(|n| *n > 0)
 }
 
 /// A tool call's input as the block that opens it carries it: a live stream

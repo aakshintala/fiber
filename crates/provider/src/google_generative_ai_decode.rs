@@ -6,7 +6,7 @@ use std::io::BufRead;
 use contract::events::{
     ReasoningCompleted, TextCompleted, TextDelta, ToolCallArgumentsDelta, ToolCallRequested,
 };
-use contract::provider::{Delta, Finish, InputSize, Reply, ReplyAction};
+use contract::provider::{CallUsage, Delta, Finish, InputSize, Reply, ReplyAction};
 use contract::shapes::Tokens;
 use contract::{GenerationId, ProviderCallId};
 use serde_json::{Value, json};
@@ -19,14 +19,32 @@ use crate::{Error, sse};
 /// returns the reply once the stream ends after a `finishReason`. A stream
 /// that fails keeps nothing it streamed, finished tool calls included.
 pub fn decode(stream: impl BufRead, sink: &mut dyn FnMut(Delta)) -> Result<Reply, Error> {
+    decode_tracked(stream, sink).map_err(|(error, _)| error)
+}
+
+/// As [`decode`], also carrying what the stream had seen when it failed:
+/// the generation and its usage once a chunk named them, else none. A
+/// count the decoder cannot represent is `0`, and only that count.
+#[allow(
+    clippy::result_large_err,
+    reason = "the decode carries its partial alongside the error for the call's usage"
+)]
+pub(crate) fn decode_tracked(
+    stream: impl BufRead,
+    sink: &mut dyn FnMut(Delta),
+) -> Result<Reply, (Error, Option<CallUsage>)> {
     let mut reply = Decoder::default();
-    sse::read(stream, |data| {
+    let read = sse::read(stream, |data| {
         let chunk: Value = serde_json::from_str(data)
             .map_err(|e| Error::StreamIncomplete(format!("an event is not JSON ({e})")))?;
         reply.chunk(&chunk, sink)?;
         Ok(false)
-    })?;
-    reply.finish()
+    });
+    if let Err(error) = read {
+        return Err((error, reply.partial()));
+    }
+    let partial = reply.partial();
+    reply.finish().map_err(|error| (error, partial))
 }
 
 /// Thought text as it streams in, until a part that is not a thought.
@@ -50,6 +68,21 @@ struct Decoder {
 }
 
 impl Decoder {
+    /// What the stream had seen: the generation and its usage once a chunk
+    /// named them, else none. A count the decoder cannot represent is `0`,
+    /// and only that count.
+    fn partial(&self) -> Option<CallUsage> {
+        if self.id.is_empty() {
+            return None;
+        }
+        Some(CallUsage {
+            generation_id: GenerationId(self.id.clone()),
+            tokens: partial_tokens(&self.usage),
+            web_searches: None,
+            input_size: InputSize::default(),
+        })
+    }
+
     /// Takes one `GenerateContentResponse`.
     fn chunk(&mut self, chunk: &Value, sink: &mut dyn FnMut(Delta)) -> Result<(), Error> {
         if let Some(error) = chunk.get("error") {
@@ -309,4 +342,19 @@ fn tokens(usage: &Value) -> Result<Tokens, Error> {
         cache_write: BTreeMap::new(),
         output,
     })
+}
+
+/// `usageMetadata` as a partial's tokens: as [`tokens`], except an
+/// overflowing output is `0` while the readable input and cache stay.
+fn partial_tokens(usage: &Value) -> Tokens {
+    let count = |key: &str| usage.get(key).and_then(Value::as_u64).unwrap_or(0);
+    let cached = count("cachedContentTokenCount");
+    Tokens {
+        input: count("promptTokenCount").saturating_sub(cached),
+        cache_read: cached,
+        cache_write: BTreeMap::new(),
+        output: count("candidatesTokenCount")
+            .checked_add(count("thoughtsTokenCount"))
+            .unwrap_or(0),
+    }
 }

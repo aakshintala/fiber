@@ -173,6 +173,14 @@ impl crate::Loop {
                 Some(&message),
             )?;
             let (reply, reasoning) = self.stream(request, turn, &message)?;
+            // A call that ended without a reply, after the provider named
+            // its generation, writes its usage at once, before anything
+            // else the failure or cancel causes.
+            if let Err(error) = &reply
+                && let Some(usage) = error.usage().cloned()
+            {
+                self.write_unfinished(&usage, turn, &message)?;
+            }
             match reply {
                 Ok(reply) => {
                     return Ok(Attempted::Replied {
@@ -184,6 +192,7 @@ impl crate::Loop {
                 Err(CallError::Failed {
                     failure,
                     should_retry,
+                    ..
                 }) => {
                     let decision = self.retry.decide(&failure, should_retry, retries);
                     let attempt = retries.saturating_add(1);
@@ -231,7 +240,7 @@ impl crate::Loop {
                 }
                 // An interrupted reply has no `assistant_message_completed`
                 // (`docs/architecture.md`, "Cancellation").
-                Err(CallError::Cancelled) => return Ok(Attempted::Interrupted),
+                Err(CallError::Cancelled { .. }) => return Ok(Attempted::Interrupted),
             }
         }
     }

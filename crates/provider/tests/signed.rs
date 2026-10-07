@@ -147,6 +147,7 @@ fn failed(call: Box<dyn ModelCall>) -> (contract::shapes::Failure, Option<bool>)
     let Err(CallError::Failed {
         failure,
         should_retry,
+        ..
     }) = reply
     else {
         panic!("expected a failure");

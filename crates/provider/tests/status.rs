@@ -65,6 +65,7 @@ fn failures(calls: Vec<Box<dyn ModelCall>>) -> Vec<(contract::shapes::Failure, O
                 let Err(CallError::Failed {
                     failure,
                     should_retry,
+                    ..
                 }) = reply
                 else {
                     panic!("expected a failure");

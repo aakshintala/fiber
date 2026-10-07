@@ -5,9 +5,10 @@
 use std::collections::BTreeMap;
 
 use contract::GenerationId;
-use contract::events::UsageRecorded;
-use contract::provider::{Cost, Tier};
+use contract::events::{Event, UsageRecorded};
+use contract::provider::{CallUsage, Cost, Tier};
 use contract::shapes::{Tokens, Usage};
+use contract::{ActionId, TurnId};
 
 /// The call's cost in US dollars (`docs/model-routing.md`, "Cost").
 ///
@@ -63,6 +64,48 @@ pub(crate) fn call_cost(
     tokens: &Tokens,
 ) -> Option<f64> {
     inline.or_else(|| prices.map(|prices| price(prices, tokens)))
+}
+
+/// One `usage_recorded` from what a call reported (`docs/events.md`,
+/// `usage_recorded`). A partial record carries no vendor figure, so its
+/// `cost` is the declared prices applied to its tokens.
+pub(crate) fn recorded(
+    usage: CallUsage,
+    inline_cost: Option<f64>,
+    model: &str,
+    prices: Option<&Cost>,
+    subscription: bool,
+) -> UsageRecorded {
+    UsageRecorded {
+        generation_id: usage.generation_id,
+        model: model.to_owned(),
+        tokens: usage.tokens.clone(),
+        input_bytes: usage.input_size.bytes,
+        input_media: usage.input_size.media.then_some(true),
+        web_searches: usage.web_searches,
+        cost: call_cost(inline_cost, prices, &usage.tokens),
+        subscription: subscription.then_some(true),
+        extension: None,
+        origin_session_id: None,
+    }
+}
+
+impl crate::Loop {
+    /// Writes and ledgers a call's usage that ended without a reply.
+    pub(crate) fn write_unfinished(
+        &mut self,
+        usage: &CallUsage,
+        turn: &TurnId,
+        message: &ActionId,
+    ) -> Result<(), crate::Error> {
+        let model = self.model.reference.clone();
+        let prices = self.model.cost.clone();
+        let subscription = self.model.subscription;
+        let recorded = recorded(usage.clone(), None, &model, prices.as_ref(), subscription);
+        self.append(&Event::UsageRecorded(recorded.clone()), turn, Some(message))?;
+        self.ledger.record(&recorded);
+        Ok(())
+    }
 }
 
 /// The latest `usage_recorded` per `generation_id`. A later line with an id

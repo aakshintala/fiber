@@ -20,7 +20,7 @@ use contract::ErrorCode;
 use contract::events::{TextDelta, ToolCallArgumentsDelta, TurnOutcome};
 use contract::provider::{CallError, Delta};
 use contract::shapes::Failure;
-use fakes::Scripted;
+use fakes::{Scripted, call_usage};
 use r#loop::Retry;
 
 use support::{
@@ -48,6 +48,7 @@ fn header_failed(code: ErrorCode, should_retry: Option<bool>) -> Scripted {
                 provider: None,
             },
             should_retry,
+            usage: None,
         }),
     }
 }
@@ -63,6 +64,7 @@ fn waited(code: ErrorCode, retry_after_ms: u64) -> Scripted {
                 provider: None,
             },
             should_retry: None,
+            usage: None,
         }),
     }
 }
@@ -512,6 +514,7 @@ fn a_failed_stream_drops_its_partial_text_and_tool_calls() {
                         provider: None,
                     },
                     should_retry: None,
+                    usage: None,
                 }),
             },
             Scripted::text("Recovered."),
@@ -705,4 +708,63 @@ fn a_clock_advance_during_the_failing_call_does_not_shorten_the_wait() {
     assert_eq!(scheduled(&lines), [(2, 2000)]);
     assert_scheduled_attempts(&lines);
     assert_eq!(session.provider.requests().len(), 2);
+}
+
+#[test]
+fn a_retried_failure_after_its_generation_writes_one_usage_per_attempt() {
+    let mut session = Session::new(
+        vec![
+            Scripted::failed_after(
+                Failure {
+                    code: ErrorCode::RateLimited,
+                    message: "The call failed.".into(),
+                    retry_after_ms: None,
+                    provider: None,
+                },
+                call_usage("gen_failed"),
+            ),
+            Scripted::text("Recovered."),
+        ],
+        None,
+    )
+    .retry(no_wait());
+    session.inbox.send(delivery("hi")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    let lines = session.lines();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "usage_recorded",
+            "assistant_message_completed",
+            "retry_scheduled",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    let starts: Vec<_> = lines
+        .iter()
+        .filter(|l| l.kind == "assistant_message_started")
+        .collect();
+    let usages: Vec<_> = lines
+        .iter()
+        .filter(|l| l.kind == "usage_recorded")
+        .collect();
+    assert_eq!(usages.len(), 2);
+    assert_eq!(usages[0].payload["generation_id"], "gen_failed");
+    assert_eq!(usages[1].payload["generation_id"], "gen_1");
+    assert_eq!(usages[0].action_id, starts[0].action_id);
+    assert_eq!(usages[1].action_id, starts[1].action_id);
+    assert_scheduled_attempts(&lines);
+    assert_eq!(session.requests().len(), 2);
 }
