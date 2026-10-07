@@ -2239,3 +2239,111 @@ fn slash_resume_focuses_the_toggle_when_it_heads_the_list() {
         Some(crate::mouse::TargetId::Home(Spot::Toggle))
     );
 }
+
+/// The blocker lines home draws above the box.
+fn blockers(app: &App) -> Vec<String> {
+    app.home_screen()
+        .map(|screen| screen.blockers)
+        .unwrap_or_default()
+}
+
+/// Sends `text` as a `start` and answers it with `session`.
+fn start_rejected(app: &mut App, id: &str, message: &str) {
+    assert!(
+        app.on_line(hub_refused(id, "start_failed", message))
+            .is_empty()
+    );
+}
+
+#[test]
+fn a_rejected_start_sets_the_blocker_lines() {
+    let mut app = home();
+    let (_, recent) = linked(&mut app);
+    let Effect::Send(lines) = enter_text(&mut app, "hi") else {
+        panic!("Enter sends the start");
+    };
+    let start: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("start: {err}"));
+    let id = start["id"].as_str().unwrap_or_else(|| panic!("start id"));
+    let message = "No provider key.\nRun fiber login to fix it.";
+    start_rejected(&mut app, id, message);
+    assert_eq!(
+        blockers(&app),
+        ["No provider key.", "Run fiber login to fix it."]
+    );
+    // The refusal stays a notice as today.
+    assert_eq!(app.notice(), Some(message));
+    // Answering `recent` fills the list around the blockers.
+    app.on_line(accepted(
+        &recent,
+        json!({"sessions": [exited("s_aaaaaaaaaaaaaaaa", "old work")]}),
+    ));
+    assert_eq!(
+        blockers(&app),
+        ["No provider key.", "Run fiber login to fix it."]
+    );
+    assert_eq!(rows(&app), ["○  old work"]);
+}
+
+#[test]
+fn a_rejected_prompt_sets_none() {
+    let mut app = home();
+    linked(&mut app);
+    start_session(&mut app, "s_aaaaaaaaaaaaaaaa");
+    let Effect::Send(lines) = enter_text(&mut app, "yo") else {
+        panic!("Enter sends the prompt");
+    };
+    let prompt: Value =
+        serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("prompt: {err}"));
+    let id = prompt["id"].as_str().unwrap_or_else(|| panic!("prompt id"));
+    assert!(
+        app.on_line(hub_refused(id, "invalid_arguments", "bad prompt"))
+            .is_empty()
+    );
+    assert!(
+        app.home
+            .as_ref()
+            .is_some_and(|home| home.blockers.is_empty())
+    );
+}
+
+#[test]
+fn the_next_start_clears_them() {
+    let mut app = home();
+    app.on_line(hello());
+    let Effect::Send(lines) = enter_text(&mut app, "hi") else {
+        panic!("Enter sends the start");
+    };
+    let start: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("start: {err}"));
+    start_rejected(
+        &mut app,
+        start["id"].as_str().unwrap_or_else(|| panic!("start id")),
+        "No provider key.",
+    );
+    assert_eq!(blockers(&app), ["No provider key."]);
+    let Effect::Send(_) = enter_text(&mut app, "again") else {
+        panic!("Enter tries again");
+    };
+    assert!(blockers(&app).is_empty());
+}
+
+#[test]
+fn the_feed_arriving_keeps_them() {
+    let mut app = home();
+    let (feed, recent) = linked(&mut app);
+    let Effect::Send(lines) = enter_text(&mut app, "hi") else {
+        panic!("Enter sends the start");
+    };
+    let start: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("start: {err}"));
+    start_rejected(
+        &mut app,
+        start["id"].as_str().unwrap_or_else(|| panic!("start id")),
+        "No provider key.",
+    );
+    assert!(app.on_line(accepted(&feed, json!({}))).is_empty());
+    app.on_line(status("s_aaaaaaaaaaaaaaaa"));
+    app.on_line(accepted(
+        &recent,
+        json!({"sessions": [exited("s_bbbbbbbbbbbbbbbb", "old work")]}),
+    ));
+    assert_eq!(blockers(&app), ["No provider key."]);
+}

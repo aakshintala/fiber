@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use serde_json::{Value, json};
 
-use super::{App, Effect, Link, Phase, mint, session_command};
+use super::{App, Effect, Kind, Link, Phase, mint, session_command};
 use crate::focus::{Area, order};
 use crate::home::{
     HomeScreen, Launch, Left, Level, Sessions, Spot, Subs, from_status, line, opening, recent_rows,
@@ -44,6 +44,9 @@ pub(super) struct Home {
     outbox: Vec<String>,
     /// `/resume` asks the next frame to focus the list.
     focus_list: bool,
+    /// A rejected `start`'s message, above the box until the next `start`
+    /// goes out.
+    blockers: Vec<String>,
     /// The workspace picked for the next `start`, else the launch one.
     chosen: Option<String>,
     /// The workspace picker above the box: its list, fixed at open, and
@@ -84,6 +87,7 @@ impl App {
             opening: None,
             outbox: Vec::new(),
             focus_list: false,
+            blockers: Vec::new(),
             chosen: None,
             picker: None,
         });
@@ -143,6 +147,7 @@ impl App {
                 .map(|row| (row.key, line(row, &home.launch.project), false))
                 .collect(),
             picker: home.picker.clone(),
+            blockers: home.blockers.clone(),
             // The toggle shows inside git whenever a row hides, or
             // while everything shows.
             toggle: {
@@ -224,6 +229,18 @@ impl App {
                             return Some(self.retry_or_fail(code, message));
                         }
                         return Some(Vec::new());
+                    }
+                    // A rejected `start` is home's blocker text, above the
+                    // box until the next `start` goes out. Reading
+                    // `pending` first, it still reaches the rejection
+                    // below, staying a notice as today.
+                    if !accepted && let Some((Kind::Start, _)) = self.pending.get(id) {
+                        if let Some(message) = hub.payload.get("message").and_then(Value::as_str)
+                            && let Some(home) = self.home.as_mut()
+                        {
+                            home.blockers = message.lines().map(str::to_owned).collect();
+                        }
+                        return None;
                     }
                     let is_feed =
                         self.home.as_ref().and_then(|home| home.feed_id.as_deref()) == Some(id);
@@ -804,11 +821,13 @@ impl App {
 
     /// The `start` args for `content`: the picked workspace on home,
     /// else the launch workspace, and the launch directory as today.
-    /// Sending one hides the placeholder until the run ends.
+    /// Sending one hides the placeholder and clears the blocker lines
+    /// until the run ends.
     pub(super) fn start_args(&mut self, content: Value) -> Value {
         match &mut self.home {
             Some(home) => {
                 home.prompted = true;
+                home.blockers = Vec::new();
                 let workspace = home
                     .chosen
                     .clone()

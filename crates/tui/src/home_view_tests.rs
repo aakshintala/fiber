@@ -357,6 +357,41 @@ fn home_scoped_with_the_toggle() {
 }
 
 #[test]
+fn home_with_blocker_lines() {
+    // A rejected `start` draws its message above the box, wrapped at its
+    // width.
+    let mut app = home(80, 24);
+    app.on_line(hello());
+    type_draft(&mut app, "hi");
+    let now = fakes::clock::FakeClock::new().now();
+    let crate::app::Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+        panic!("Enter sends the start");
+    };
+    let start: serde_json::Value =
+        serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("start: {err}"));
+    let id = start["id"].as_str().unwrap_or_else(|| panic!("start id"));
+    app.on_line(Line::Hub(contract::HubLine {
+        kind: "command_rejected".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: [
+            ("command_id".to_owned(), serde_json::Value::String(id.to_owned())),
+            ("code".to_owned(), serde_json::Value::String("start_failed".to_owned())),
+            (
+                "message".to_owned(),
+                serde_json::Value::String(
+                    "No API key for test/model in this workspace. Run `fiber login` and press Enter to try again, or pick another model.\nA second line stays short."
+                        .to_owned(),
+                ),
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    }));
+    insta::assert_snapshot!("home_with_blocker_lines", screen(&app, 80, 24));
+}
+
+#[test]
 fn home_cursor_hides_while_navigating() {
     let mut app = home(80, 24);
     // Pasted text past the token line count becomes one paste token, a

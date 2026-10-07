@@ -8,7 +8,7 @@ use ratatui::style::{Color, Modifier, Style};
 
 use super::{FOCUS_STYLE, HOVER_TINT};
 use crate::app::App;
-use crate::format::{cut, width};
+use crate::format::{cut, width, wrap};
 use crate::home::{HomeScreen, Spot};
 use crate::markdown::{Role, style};
 use crate::mouse::{self, Target, TargetId};
@@ -50,6 +50,8 @@ struct Placed {
     /// The logo's first row and its rows: four pixel rows, or one.
     logo: u16,
     logo_rows: usize,
+    /// The blocker lines above the box, wrapped at its width.
+    blockers: Vec<String>,
     /// The ▄ edge row.
     box_top: u16,
     /// The first draft row.
@@ -75,16 +77,26 @@ fn layout(app: &App, screen: &HomeScreen, area: Rect) -> Placed {
     let height = draft.len().clamp(MIN_BOX, MAX_BOX);
     // The box is its ▄ edge, the draft rows, the chip row and its ▀ edge.
     let boxed = super::to_u16(height).saturating_add(3);
+    // A rejected `start` draws its message above the box, wrapped at its
+    // width, staying while the list fills.
+    let blockers: Vec<String> = screen
+        .blockers
+        .iter()
+        .flat_map(|line| wrap(line, usize::from(width)))
+        .collect();
     // Four rows need the pad, the four-row logo, one blank row, the
-    // box, three list rows and the foot, and the logo's width.
+    // blocker lines, the box, three list rows and the foot, and the
+    // logo's width.
     let need = pad + 4 + boxed + 3 + 1;
+    let need = need.saturating_add(super::to_u16(blockers.len()));
     let four =
         area.height > need && area.width >= super::to_u16(logo::width_cells(&screen.version));
     let logo_rows = if four { 4 } else { 1 };
     let logo = area.y.saturating_add(pad);
     let box_top = logo
         .saturating_add(super::to_u16(logo_rows))
-        .saturating_add(1);
+        .saturating_add(1)
+        .saturating_add(super::to_u16(blockers.len()));
     let (row, _) = app.input().cursor(width);
     let top = row.saturating_add(1).saturating_sub(height);
     let shown = draft.into_iter().skip(top).take(height).collect();
@@ -97,6 +109,7 @@ fn layout(app: &App, screen: &HomeScreen, area: Rect) -> Placed {
         width,
         logo,
         logo_rows,
+        blockers,
         box_top,
         draft_top,
         shown,
@@ -172,6 +185,23 @@ pub(super) fn render(
                 Style::new().add_modifier(Modifier::DIM),
             );
         }
+    }
+    // The blocker lines sit above the box, wrapped at its width.
+    let mut blocker_y = placed
+        .logo
+        .saturating_add(super::to_u16(placed.logo_rows))
+        .saturating_add(1);
+    for line in &placed.blockers {
+        put(
+            buf,
+            area,
+            placed.x,
+            blocker_y,
+            line,
+            placed.width,
+            Style::default(),
+        );
+        blocker_y = blocker_y.saturating_add(1);
     }
     put(
         buf,

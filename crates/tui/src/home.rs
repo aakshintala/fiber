@@ -65,6 +65,9 @@ pub(crate) struct HomeScreen {
     pub(crate) toggle: Option<String>,
     /// The rows: their keys, their lines, and whether they end in a ✕.
     pub(crate) rows: Vec<(u64, String, bool)>,
+    /// The rejected `start`'s message, above the box until the next
+    /// `start` goes out.
+    pub(crate) blockers: Vec<String>,
     /// The workspace picker above the box: its list, fixed at open, and
     /// the selected index.
     pub(crate) picker: Option<(Vec<String>, usize)>,
