@@ -178,7 +178,8 @@ fn an_eof_retry_does_not_extend_the_total_deadline() {
     let (_dir, home) = home();
     let listener = UnixListener::bind(home.join("run/hub")).unwrap();
     let clock = FakeClock::new();
-    let (eof_done, eof) = mpsc::channel::<()>();
+    let (checked_read, checked) = mpsc::channel::<()>();
+    let (resume, wait_resume) = mpsc::channel::<()>();
     let (second_accepted, second) = mpsc::channel::<()>();
     let (go, wait_go) = mpsc::channel::<()>();
     // First connection trickles one byte, then closes once the test lets
@@ -186,7 +187,6 @@ fn an_eof_retry_does_not_extend_the_total_deadline() {
     thread::spawn(move || {
         let (mut first, _) = listener.accept().unwrap();
         first.write_all(b"{").unwrap();
-        eof_done.send(()).unwrap();
         wait_go.recv_timeout(DEADLINE).unwrap();
         drop(first);
         let (silent, _) = listener.accept().unwrap();
@@ -197,15 +197,31 @@ fn an_eof_retry_does_not_extend_the_total_deadline() {
     let probed_home = home.clone();
     let probed_clock = Arc::clone(&clock);
     thread::spawn(move || {
-        done.send(probe(&probed_home, &*probed_clock, ANSWER, false))
-            .unwrap_or(());
+        let mut reads = 0;
+        let mut before_read = || {
+            reads += 1;
+            if reads == 2 {
+                checked_read.send(()).unwrap_or(());
+                wait_resume.recv_timeout(DEADLINE).unwrap();
+            }
+        };
+        done.send(probe_with(
+            &probed_home,
+            &*probed_clock,
+            ANSWER,
+            false,
+            &mut before_read,
+            &mut || {},
+        ))
+        .unwrap_or(());
     });
-    // The client read the first byte and blocks in its second read; move
-    // the fake clock to just before the deadline, then let the peer close
-    // so the retry starts with only what remains.
-    eof.recv_timeout(DEADLINE).unwrap();
+    // The handshake reader has checked the deadline after consuming the
+    // first byte and is paused before its next read. Advance time, close
+    // that peer, then let the reader observe EOF and retry with 100 ms left.
+    checked.recv_timeout(DEADLINE).unwrap();
     clock.advance(ANSWER.checked_sub(Duration::from_millis(100)).unwrap());
     go.send(()).unwrap();
+    resume.send(()).unwrap();
     second.recv_timeout(DEADLINE).unwrap();
     // The retry's silent peer gets the remaining 100 ms, not a fresh
     // 5 s: the whole probe fails at the one deadline, well within a wall
@@ -228,8 +244,15 @@ fn probe_signalled(
     let clock = Arc::clone(clock);
     thread::spawn(move || {
         let mut before_read = || reads.send(()).unwrap_or(());
-        done.send(probe_with(&home, &*clock, ANSWER, false, &mut before_read))
-            .unwrap_or(());
+        done.send(probe_with(
+            &home,
+            &*clock,
+            ANSWER,
+            false,
+            &mut || {},
+            &mut before_read,
+        ))
+        .unwrap_or(());
     });
     (read, result)
 }

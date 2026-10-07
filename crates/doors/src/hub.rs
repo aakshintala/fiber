@@ -43,19 +43,29 @@ pub fn connect(
 /// [`connect`], with `hub_hello` due by `deadline` on `clock`: the same
 /// absolute deadline bounds both connection attempts and the handshake,
 /// so a peer that closes just before it leaves no fresh deadline for the
-/// retry. Past it the connect fails `TimedOut`.
+/// retry. Past it the connect fails `TimedOut`. `before_read` runs after
+/// each handshake read's deadline check, just before the read.
 pub fn connect_until(
     home: &Path,
     start: &mut dyn FnMut() -> io::Result<()>,
     clock: &dyn Clock,
     deadline: Instant,
+    before_read: &mut dyn FnMut(),
 ) -> io::Result<Hub> {
     let total = deadline.saturating_duration_since(clock.now());
     let mut started = false;
     // EOF before `hub_hello` is the idle-exit race: the whole connect is
     // retried once, with the same deadline.
     for _ in 0..2 {
-        match poll_until(home, &mut started, start, clock, deadline, total) {
+        match poll_until(
+            home,
+            &mut started,
+            start,
+            clock,
+            deadline,
+            total,
+            before_read,
+        ) {
             Ok(hub) => return Ok(hub),
             Err(Poll::Race) => {}
             Err(Poll::Failed(error)) => return Err(error),
@@ -143,12 +153,13 @@ fn poll_until(
     clock: &dyn Clock,
     deadline: Instant,
     total: Duration,
+    before_read: &mut dyn FnMut(),
 ) -> Result<Hub, Poll> {
     let socket = home.join("run").join("hub");
     loop {
         match UnixStream::connect(&socket) {
             Ok(stream) => {
-                return read_hello_until(stream, &socket, deadline, total, clock, &mut || {});
+                return read_hello_until(stream, &socket, deadline, total, clock, before_read);
             }
             Err(error)
                 if matches!(

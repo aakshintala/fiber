@@ -79,7 +79,14 @@ pub(crate) fn probe(
     answer_within: Duration,
     installed: bool,
 ) -> Result<Status, Failure> {
-    probe_with(home, clock, answer_within, installed, &mut || {})
+    probe_with(
+        home,
+        clock,
+        answer_within,
+        installed,
+        &mut || {},
+        &mut || {},
+    )
 }
 
 /// Asks `home`'s hub for its status, all within `answer_within` on `clock`;
@@ -91,6 +98,7 @@ fn probe_with(
     clock: &dyn Clock,
     answer_within: Duration,
     installed: bool,
+    before_hello_read: &mut dyn FnMut(),
     before_read: &mut dyn FnMut(),
 ) -> Result<Status, Failure> {
     let port = port(home)?;
@@ -102,7 +110,7 @@ fn probe_with(
             absent = true;
             Err(io::Error::new(io::ErrorKind::NotFound, "no hub runs"))
         };
-        doors::hub::connect_until(home, &mut start, clock, deadline)
+        doors::hub::connect_until(home, &mut start, clock, deadline, before_hello_read)
     };
     let stream = match connected {
         Ok((stream, _)) => stream,
