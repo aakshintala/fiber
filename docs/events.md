@@ -1273,6 +1273,7 @@ Every driver command is answered with exactly one of these, echoing its id
 | `history` | `lines`, an array of the session's durable lines in the range asked for, each a whole line as the log holds it, in `seq` order |
 | `shell` | `output` (string), `artifact` (string, when cut) and `process` (`process`), as on `shell_command` |
 | `start` | `session_id` (string), the session the hub started, over the hub (`docs/invocation.md`, "The hub") |
+| `recent` | `sessions`, an array of `recent.jsonl` rows, newest first, at most 50, delegates skipped (`docs/state.md`, "What each part holds"), over the hub (`docs/invocation.md`, "The hub") |
 | `prompt_history` | `prompts`, an array of prompt history lines, newest first, each a whole line as `history.jsonl` holds it (`docs/state.md`, "What each part holds"), at most 256; and `before` (integer), the byte offset where the oldest returned line starts, present only when older lines remain, sent back to read the next page, over the hub (`docs/invocation.md`, "The hub") |
 | `status` | `running` (boolean, always true), `fiber_version` (string) and `clients` (integer, the open connections, the asker included), over the hub (`docs/invocation.md`, "The hub") |
 
