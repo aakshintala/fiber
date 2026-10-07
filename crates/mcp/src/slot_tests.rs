@@ -825,9 +825,12 @@ fn a_late_death_of_a_replaced_server_records_nothing() {
     setup.result("echo", HI);
     let started = setup.start(vec![setup.spec("fx")]);
     let slot = Arc::clone(&started.servers.slots[0]);
-    let first = match &*super::lock(&slot.state) {
-        State::Running { server, .. } => Arc::clone(server),
-        _ => panic!("the session started the server"),
+    let first = {
+        let state = super::lock(&slot.state);
+        let State::Running { server, .. } = &*state else {
+            panic!("the session started the server");
+        };
+        Arc::clone(server)
     };
     setup.kill(&started);
     let tool = setup.tool(&started, "mcp__fx__echo");

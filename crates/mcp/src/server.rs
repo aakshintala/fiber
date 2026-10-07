@@ -268,6 +268,8 @@ impl Server {
         // One shutdown on `Err`: every failure path below returns through
         // here, so no arm repeats `shutdown`. `NoCancel` never fires, so
         // `Cancelled` is just another failed start, not a deadline.
+        let not_a_list =
+            || StartError::StartFailed("The server's tool list was not a result.".to_owned());
         let handshake = |server: &Server| -> Result<Vec<Value>, StartError> {
             match server.request(
                 "initialize",
@@ -298,27 +300,15 @@ impl Server {
                 let page = match server.request("tools/list", &params, deadline, &stopping) {
                     Ok(value) => value,
                     Err(CallError::Timeout) => return Err(StartError::Deadline),
-                    Err(_) => {
-                        return Err(StartError::StartFailed(
-                            "The server's tool list was not a result.".to_owned(),
-                        ));
-                    }
+                    Err(_) => return Err(not_a_list()),
                 };
                 let object = match page.as_object() {
                     Some(object) => object,
-                    None => {
-                        return Err(StartError::StartFailed(
-                            "The server's tool list was not a result.".to_owned(),
-                        ));
-                    }
+                    None => return Err(not_a_list()),
                 };
                 match object.get("tools").and_then(Value::as_array) {
                     Some(listed) => tools.extend(listed.iter().cloned()),
-                    None => {
-                        return Err(StartError::StartFailed(
-                            "The server's tool list was not a result.".to_owned(),
-                        ));
-                    }
+                    None => return Err(not_a_list()),
                 }
                 cursor = object
                     .get("nextCursor")
@@ -371,8 +361,7 @@ impl Server {
         )
     }
 
-    /// Whether the server is gone: its output ended, so it exited or its
-    /// reader stopped, or it has no connection at all.
+    /// Whether the server's output ended (it exited), or it has no connection.
     pub(crate) fn is_gone(&self) -> bool {
         self.inner
             .as_ref()
@@ -473,11 +462,7 @@ impl Server {
     fn reap(&self) {
         let child = self.inner.as_ref().and_then(|inner| {
             before_lock("child");
-            inner
-                .child
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .take()
+            lock(&inner.child).take()
         });
         if let Some(mut child) = child {
             // An exited child refuses the kill; the reap below still runs.
