@@ -219,44 +219,91 @@ fn two_concurrent_calls_resolve_by_id_out_of_order() {
     let setup = Setup::tools(&tools);
     setup.result("slow", r#"{"content":[{"type":"text","text":"slow"}]}"#);
     setup.result("fast", r#"{"content":[{"type":"text","text":"fast"}]}"#);
-    write(&setup.dir, "delay-slow", "1");
+    for name in ["held-slow", "release-slow"] {
+        let status = std::process::Command::new("mkfifo")
+            .arg(setup.dir.path().join(name))
+            .status()
+            .expect("mkfifo runs");
+        assert!(status.success(), "mkfifo creates {name}");
+    }
     let opened = setup.start(Duration::from_secs(5));
     let server = std::sync::Arc::new(opened.server);
     let (done, results) = mpsc::channel();
-    for tool in ["slow", "fast"] {
+    {
         let server = std::sync::Arc::clone(&server);
         let done = done.clone();
         thread::spawn(move || {
             let answer = server.call(
-                tool,
+                "slow",
                 &json!({}),
                 Duration::from_secs(30),
                 &fakes::CancelToken::new(),
             );
-            done.send((tool.to_owned(), answer)).expect("collected");
+            done.send(("slow".to_owned(), answer)).expect("collected");
+        });
+    }
+    {
+        let held_path = setup.dir.path().join("held-slow");
+        let (held_done, held) = mpsc::channel();
+        thread::spawn(move || {
+            let content = std::fs::read_to_string(&held_path).expect("held");
+            held_done.send(content).expect("collected");
+        });
+        let ack = held
+            .recv_timeout(WITHIN)
+            .unwrap_or_else(|_| panic!("the fake holds the slow call within {WITHIN:?}"));
+        assert_eq!(
+            ack, "held\n",
+            "the fake holds the slow call before the fast one starts",
+        );
+    }
+    {
+        let server = std::sync::Arc::clone(&server);
+        let done = done.clone();
+        thread::spawn(move || {
+            let answer = server.call(
+                "fast",
+                &json!({}),
+                Duration::from_secs(30),
+                &fakes::CancelToken::new(),
+            );
+            done.send(("fast".to_owned(), answer)).expect("collected");
         });
     }
     drop(done);
-    let mut seen = Vec::new();
-    for _ in 0..2 {
-        let (tool, answer): (String, Result<Value, CallError>) = results
-            .recv_timeout(WITHIN)
-            .unwrap_or_else(|_| panic!("both calls answer within {WITHIN:?}"));
-        seen.push((tool, answer.expect("no call fails")));
-    }
-    seen.sort_by(|left, right| left.0.cmp(&right.0));
+    let first: (String, Result<Value, CallError>) =
+        results.recv_timeout(WITHIN).unwrap_or_else(|_| {
+            panic!("the fast call answers while the slow one is held within {WITHIN:?}")
+        });
     assert_eq!(
-        seen,
-        [
-            (
-                "fast".to_owned(),
-                json!({"content": [{"type": "text", "text": "fast"}]}),
-            ),
-            (
-                "slow".to_owned(),
-                json!({"content": [{"type": "text", "text": "slow"}]}),
-            ),
-        ],
+        (first.0, first.1.expect("no call fails"),),
+        (
+            "fast".to_owned(),
+            json!({"content": [{"type": "text", "text": "fast"}]}),
+        ),
+        "the fast call answers while the slow one is held",
+    );
+    {
+        let release_path = setup.dir.path().join("release-slow");
+        let (released_done, released) = mpsc::channel();
+        thread::spawn(move || {
+            std::fs::write(&release_path, "release\n").expect("release");
+            released_done.send(()).expect("collected");
+        });
+        released
+            .recv_timeout(WITHIN)
+            .unwrap_or_else(|_| panic!("the slow release completes within {WITHIN:?}"));
+    }
+    let second: (String, Result<Value, CallError>) = results
+        .recv_timeout(WITHIN)
+        .unwrap_or_else(|_| panic!("the slow call answers once released within {WITHIN:?}"));
+    assert_eq!(
+        (second.0, second.1.expect("no call fails"),),
+        (
+            "slow".to_owned(),
+            json!({"content": [{"type": "text", "text": "slow"}]}),
+        ),
+        "the slow call answers once released",
     );
 }
 

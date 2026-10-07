@@ -9,8 +9,12 @@
 # `call-<tool>.json` file per tool holding that call's `result` object. A
 # tool whose result file holds exactly `hang` is never answered, and one
 # whose result file holds exactly `exit` makes the server exit without
-# answering. A `delay-<tool>` file holding seconds delays that tool's
-# answer, so two concurrent calls resolve out of order. A `notify-<tool>`
+# answering. If `release-<tool>` is a FIFO, the server holds that tool's
+# answer: in the background subshell, if `held-<tool>` is also a FIFO it
+# first writes one line to it (`printf 'held\n' > "$dir/held-<tool>"`),
+# then blocks on `read -r _ < "$dir/release-<tool>"`, then answers. No
+# sleep, no polling. A tool without a release FIFO answers at once. A
+# `notify-<tool>`
 # file makes the server send `notifications/tools/list_changed` before it
 # answers that tool's call. A `fail-start` file makes the server exit 1
 # before reading anything.
@@ -81,14 +85,10 @@ while IFS= read -r line; do
                     answer '{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}'
                 fi
                 if [ "$(cat "$result")" != "hang" ]; then
-                    delay="0"
-                    if [ -f "$dir/delay-$tool" ]; then
-                        delay="$(cat "$dir/delay-$tool")"
-                    fi
                     body="$(cat "$result")"
-                    # Each call is answered in the background, so a delayed
+                    # Each call is answered in the background, so a held
                     # call does not hold back a fast one behind it.
-                    ( sleep "$delay"; answer "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":$body}" ) &
+                    ( if [ -p "$dir/release-$tool" ]; then if [ -p "$dir/held-$tool" ]; then printf 'held\n' > "$dir/held-$tool"; fi; read -r _ < "$dir/release-$tool"; fi; answer "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":$body}" ) &
                 fi
             elif [ -n "$id" ]; then
                 answer "{\"jsonrpc\":\"2.0\",\"id\":$id,\"error\":{\"code\":-32602,\"message\":\"Unknown tool: $tool\"}}"
