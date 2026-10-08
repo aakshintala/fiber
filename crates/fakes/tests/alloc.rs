@@ -439,3 +439,126 @@ fn a_byte_scope_that_unwinds_is_closed() {
         "the unwound scope must not leak into the next scope"
     );
 }
+
+/// A block is byte-tracked while its size is at least `CHAIN`: exactly
+/// `CHAIN` takes a slot, `CHAIN - 1` does not.
+#[test]
+fn a_block_of_exactly_chain_takes_a_slot_while_chain_minus_one_does_not() {
+    let ((scratch, exact, under), measured) = bytes_during(|| {
+        let scratch = black_box(Vec::<u8>::with_capacity(KIB));
+        let exact = black_box(Vec::<u8>::with_capacity(CHAIN));
+        let under = black_box(Vec::<u8>::with_capacity(CHAIN - 1));
+        assert_eq!(exact.capacity(), CHAIN);
+        assert_eq!(under.capacity(), CHAIN - 1);
+        // The blocks stay alive past the scope, so their slots are
+        // still live when the peaks are read.
+        (scratch, exact, under)
+    });
+    // Every size is a layout size, so the peak is their exact sum.
+    assert_eq!(measured.peak(), KIB + CHAIN + (CHAIN - 1));
+    // The slotted block leaves itself out: scratch plus the unslotted one.
+    assert_eq!(measured.peak_without(exact.as_ptr()), KIB + (CHAIN - 1));
+    // An unslotted address is no slot's: the plain peak.
+    assert_eq!(measured.peak_without(under.as_ptr()), measured.peak());
+    drop((scratch, exact, under));
+}
+
+/// A block grown past `CHAIN` by `realloc` from below takes a slot.
+#[test]
+fn a_block_grown_past_chain_by_realloc_takes_a_slot() {
+    let ((scratch, grown), measured) = bytes_during(|| {
+        let scratch = black_box(Vec::<u8>::with_capacity(KIB));
+        let mut grown = black_box(Vec::<u8>::with_capacity(CHAIN - 1));
+        assert_eq!(grown.capacity(), CHAIN - 1);
+        grown.reserve_exact(CHAIN);
+        assert!(grown.capacity() >= CHAIN, "capacity {}", grown.capacity());
+        (scratch, grown)
+    });
+    assert_eq!(measured.peak(), KIB + grown.capacity());
+    assert!(
+        measured.peak_without(grown.as_ptr()) < measured.peak(),
+        "peak {} without {}",
+        measured.peak(),
+        measured.peak_without(grown.as_ptr())
+    );
+    drop((scratch, grown));
+}
+
+/// A block shrunk below `CHAIN` by `realloc` leaves its slot: neither
+/// its old address nor its new one is a slot's afterwards.
+#[test]
+fn a_block_shrunk_below_chain_leaves_its_slot() {
+    let ((before, after, block), measured) = bytes_during(|| {
+        let scratch = black_box(Vec::<u8>::with_capacity(KIB));
+        let mut block = black_box(Vec::<u8>::with_capacity(CHAIN));
+        block.resize(KIB, 0);
+        let before = block.as_ptr();
+        block.shrink_to(KIB);
+        assert!(block.capacity() < CHAIN, "capacity {}", block.capacity());
+        let after = block.as_ptr();
+        // The block stays alive past the scope: had the shrink kept
+        // its slot, either address would still find it.
+        (before, after, (scratch, block))
+    });
+    assert_eq!(measured.peak_without(before), measured.peak());
+    assert_eq!(measured.peak_without(after), measured.peak());
+    drop(block);
+}
+
+/// Freeing a slotted block empties its slot: its address is no slot's
+/// afterwards, so a later block at the same address takes a fresh slot.
+#[test]
+fn freeing_a_slotted_block_empties_its_slot() {
+    let ((freed, again, kept), measured) = bytes_during(|| {
+        let scratch = black_box(Vec::<u8>::with_capacity(KIB));
+        let block = black_box(Vec::<u8>::with_capacity(CHAIN));
+        let freed = block.as_ptr();
+        drop(block);
+        // A later block, whether or not the allocator hands it the same
+        // address, takes a slot of its own; it stays alive past the
+        // scope so its slot is still live when read. Nothing is freed
+        // after the slotted block, so a retained slot could not hide.
+        let again = black_box(Vec::<u8>::with_capacity(CHAIN));
+        (freed, again.as_ptr(), (again, scratch))
+    });
+    assert_eq!(measured.peak(), KIB + CHAIN);
+    // Both addresses read the earlier era's peak: the freed one because
+    // its slot is gone (or is the later block's fresh slot at a reused
+    // address), the later one's because its slot was seeded with it. A
+    // retained stale slot would read at most the scratch block.
+    assert_eq!(measured.peak_without(freed), KIB + CHAIN);
+    assert_eq!(measured.peak_without(again), KIB + CHAIN);
+    drop(kept);
+}
+
+/// Freeing an unslotted block changes no slot: every slotted block
+/// keeps its peak-without.
+#[test]
+fn freeing_an_unslotted_block_changes_no_slot() {
+    let (slotted, measured) = bytes_during(|| {
+        let slotted = black_box(Vec::<u8>::with_capacity(CHAIN));
+        let addr = slotted.as_ptr();
+        drop(black_box(Vec::<u8>::with_capacity(KIB)));
+        (addr, slotted)
+    });
+    let (slotted, kept) = slotted;
+    assert_eq!(measured.peak(), CHAIN + KIB);
+    assert!(
+        measured.peak_without(slotted) < measured.peak(),
+        "peak {} without {}",
+        measured.peak(),
+        measured.peak_without(slotted)
+    );
+    drop(kept);
+}
+
+/// Empty slots stay out of the peaks: an address that never belonged
+/// to a slotted block reads a peak-without of 0.
+#[test]
+fn empty_slots_stay_out_of_the_peaks() {
+    let ((), measured) = bytes_during(|| {
+        drop(black_box(Vec::<u8>::with_capacity(KIB)));
+    });
+    assert_eq!(measured.peak(), KIB);
+    assert_eq!(measured.peak_without(std::ptr::null()), 0);
+}
