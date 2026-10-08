@@ -181,6 +181,8 @@ is a real child session process, because it is Fiber. The fakes are:
 - a fixture Lua extension that registers a tool, a provider and each hook
 - a scripted foreign harness, standing in for a delegate that is not Fiber
 - a local OAuth token endpoint
+- a refused address, loopback port 1: a connect is reset, and a bind of port 0
+  never draws it, so no concurrent listener can take it
 - a second client on a session's socket, including a slow watcher
 - a counting allocator, which counts the blocks of 1 MiB or more a thread
   holds at once; `fakes` only exports it, and each test binary that

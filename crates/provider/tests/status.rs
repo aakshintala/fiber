@@ -76,19 +76,12 @@ fn failures(calls: Vec<Box<dyn ModelCall>>) -> Vec<(contract::shapes::Failure, O
     })
 }
 
-/// A port nothing listens on: connecting is refused.
-fn closed_port() -> String {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = listener.local_addr().unwrap();
-    drop(listener);
-    format!("http://{addr}/v1")
-}
-
+/// An endpoint whose connection is refused.
 fn refused_endpoint(provider: &str) -> Endpoint {
     Endpoint {
         provider: provider.into(),
         model: "m".into(),
-        base_url: closed_port(),
+        base_url: format!("{}/v1", fakes::refused::url()),
         key: Some(contract::Secret::new("sk-secret".into())),
         direct: true,
         ..Endpoint::default()
