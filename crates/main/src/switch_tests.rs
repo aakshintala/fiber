@@ -2000,6 +2000,32 @@ fn the_current_label_needs_no_source() {
     assert_eq!(rejection.code, ErrorCode::CredentialMissing);
 }
 
+/// The missing-label check reads the provider's selected label at read
+/// time: when another `prepare` for the same provider publishes `selected`
+/// between `want()` and the read, the read answers without a read instead
+/// of rejecting the label it just moved onto.
+#[test]
+fn the_missing_label_check_reads_selected_at_read_time() {
+    let fixture = fixture("fiber-switch-stale-label");
+    let switching = switching(&fixture, &[]);
+    let want = switching.want("other", Some("bogus"));
+    switching
+        .remembered
+        .lock()
+        .unwrap()
+        .selected
+        .insert("other".to_owned(), "bogus".to_owned());
+    let failure = match switching.read(want) {
+        Ok(_) => panic!("the read succeeded"),
+        Err(failure) => failure,
+    };
+    assert!(
+        !failure.message.contains("has no credential label"),
+        "{}",
+        failure.message
+    );
+}
+
 fn fake_data() -> config::ProviderData {
     config::ProviderData {
         name: "fake".into(),
