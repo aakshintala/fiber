@@ -243,7 +243,8 @@ fn lines_holds_the_point_and_nothing_past_it() {
     let kinds: Vec<String> = segments[0]
         .lines(0)
         .unwrap()
-        .map(|line| line.unwrap().kind)
+        .into_iter()
+        .map(|line| line.kind)
         .collect();
     assert_eq!(kinds, ["session_started", "turn_started", "turn_started"]);
 }
@@ -256,10 +257,11 @@ fn lines_from_the_point_holds_one_line_and_past_the_point_holds_none() {
     let at: Vec<u64> = segments[0]
         .lines(2)
         .unwrap()
-        .map(|line| line.unwrap().seq.unwrap().0)
+        .into_iter()
+        .map(|line| line.seq.unwrap().0)
         .collect();
     assert_eq!(at, [2]);
-    assert_eq!(segments[0].lines(3).unwrap().count(), 0);
+    assert!(segments[0].lines(3).unwrap().is_empty());
 }
 
 #[test]
@@ -267,7 +269,7 @@ fn lines_to_the_last_line_holds_the_whole_log() {
     let (_home, dir) = chain_fixture("last");
     let root = dir.parent().unwrap().join("s_aaaaaaaaaaaaaaaa");
     let segments = history(&root).unwrap();
-    assert_eq!(segments[0].lines(0).unwrap().count(), 6);
+    assert_eq!(segments[0].lines(0).unwrap().len(), 6);
 }
 
 #[test]
@@ -349,4 +351,32 @@ fn a_forked_from_that_names_no_point_is_a_pointer() {
     write_log(&sessions, "s_bbbbbbbbbbbbbbbb", &[not_an_object]);
     let error = history(&sessions.join("s_bbbbbbbbbbbbbbbb")).unwrap_err();
     assert!(matches!(error, Error::Pointer { .. }));
+}
+
+#[test]
+fn lines_past_the_point_are_never_parsed() {
+    // Only the window a consumer needs is parsed: a corrupt line past
+    // the point fails nothing.
+    let home = fakes::TempDir::new("log-history-past-point");
+    let sessions = home.path().join("sessions");
+    let dir = sessions.join("s_aaaaaaaaaaaaaaaa");
+    fs::create_dir_all(&dir).unwrap();
+    let mut text = String::new();
+    for line in [
+        started("s_aaaaaaaaaaaaaaaa", 0, None),
+        plain("s_aaaaaaaaaaaaaaaa", 1, "turn_started"),
+    ] {
+        text.push_str(&line.to_string());
+        text.push('\n');
+    }
+    text.push_str("{\"kind\": \"turn_started\", broken\n");
+    fs::write(dir.join(EVENTS), text).unwrap();
+    let segments = history_to(&dir, Seq(1)).unwrap();
+    let kinds: Vec<String> = segments[0]
+        .lines(0)
+        .unwrap()
+        .into_iter()
+        .map(|line| line.kind)
+        .collect();
+    assert_eq!(kinds, ["session_started", "turn_started"]);
 }

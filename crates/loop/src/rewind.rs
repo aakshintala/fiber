@@ -186,7 +186,8 @@ pub fn rewind_note(dir: &Path, point: Seq) -> Result<String, Error> {
                 // wrote is left out.
                 Some(declared) if !declared.is_empty() => {
                     for path in declared {
-                        if !paths_contains(&paths, path) {
+                        // Duplicates are kept once, in first-seen order.
+                        if !paths.iter().any(|held| held == path) {
                             paths.push(path.clone());
                         }
                     }
@@ -199,12 +200,6 @@ pub fn rewind_note(dir: &Path, point: Seq) -> Result<String, Error> {
         }
     }
     Ok(note(&paths, &calls))
-}
-
-/// Whether `paths` already holds `path`: duplicates are kept once, in
-/// first-seen order.
-fn paths_contains(paths: &[String], path: &str) -> bool {
-    paths.iter().any(|held| held == path)
 }
 
 /// The note text over `paths` written and `calls` run after the point.

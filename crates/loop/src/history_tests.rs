@@ -15,11 +15,12 @@ use std::path::{Path, PathBuf};
 use contract::events::{
     CacheLifetime, DecidedBy, Decision, Event, HandoffCompleted, InputItem, ModelChanged,
     ModelSettings, Outcome, PermissionResolved, PreambleBuilt, PreambleReason, SessionStarted,
-    SwitchSource, TurnStarted, UsageRecorded, Variables, VariablesSource,
+    SwitchSource, ToolCallRequested, TurnStarted, UsageRecorded, Variables, VariablesSource,
 };
 use contract::provider::Input;
 use contract::shapes::{ContentPart, Origin, Point, Sender, Tokens};
 use contract::{ActionId, Envelope, GenerationId, SCHEMA_VERSION, Seq, SessionId, TurnId};
+use serde_json::json;
 
 use super::*;
 use crate::resume::resumed;
@@ -477,5 +478,79 @@ fn the_window_reader_starts_mid_chain_at_a_parents_handoff() {
                 images: Vec::new(),
             },
         ]
+    );
+}
+
+#[test]
+fn the_window_reader_leaves_image_shaped_tool_arguments_alone() {
+    // Only the content parts a protocol reads as images are rewritten:
+    // a tool call whose arguments happen to be shaped like an image
+    // replays byte for byte.
+    let shaped = json!({"type": "image", "path": "diagram.png", "mime_type": "image/png"});
+    let call = Event::ToolCallRequested(ToolCallRequested {
+        name: "draw".to_owned(),
+        arguments: shaped.clone(),
+        provider_id: None,
+        repair: None,
+        ran_by: None,
+        provider_item: None,
+    });
+    let (_home, sessions) = sessions("args");
+    write_log(
+        &sessions,
+        A,
+        &[
+            envelope(A, 0, None, None, &started("/w", None)),
+            envelope(A, 1, Some("t_1"), None, &image_turn("artifacts/a.png")),
+            envelope(A, 2, Some("t_1"), Some("a_1"), &call),
+        ],
+    );
+    write_log(
+        &sessions,
+        B,
+        &[
+            envelope(B, 0, None, None, &started("/w", Some((A, 2)))),
+            envelope(B, 1, Some("t_2"), None, &turn()),
+        ],
+    );
+    let folded = resumed(&sessions.join(B)).unwrap();
+    let log = Log::open(
+        &sessions,
+        SessionId(B.to_owned()),
+        fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    let lines = read_window(&log, folded.window, folded.end).unwrap();
+    let requested = lines
+        .iter()
+        .find(|line| line.kind == "tool_call_requested")
+        .unwrap();
+    assert_eq!(requested.payload["arguments"], shaped);
+    let conversation = crate::conversation::rebuild(&lines, "fake/model-1").unwrap();
+    let replayed = conversation
+        .iter()
+        .find_map(|input| match input {
+            Input::ToolCall { call, .. } => Some(call),
+            Input::User { .. }
+            | Input::Assistant { .. }
+            | Input::Reasoning { .. }
+            | Input::ToolResult { .. } => None,
+        })
+        .unwrap();
+    assert_eq!(replayed.arguments, shaped);
+    // A real image part in the same window is still made absolute.
+    let image = lines
+        .iter()
+        .find(|line| line.kind == "turn_started" && line.seq.unwrap().0 == 1)
+        .unwrap();
+    assert_eq!(
+        image.payload["input"][0]["content"][0]["path"],
+        json!(
+            sessions
+                .join(A)
+                .join("artifacts/a.png")
+                .display()
+                .to_string()
+        )
     );
 }

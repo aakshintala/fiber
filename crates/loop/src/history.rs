@@ -81,9 +81,30 @@ pub(crate) fn fold(segments: &[Segment]) -> Result<Resumed, Error> {
     let Some(own) = segments.len().checked_sub(1) else {
         return Err(Error::NoSessionStarted);
     };
+    let mut fold = Fold {
+        workspace: &mut workspace,
+        worktree: &mut worktree,
+        preamble: &mut preamble,
+        model: &mut model,
+        credential: &mut credential,
+        thinking: &mut thinking,
+        ledger: &mut ledger,
+        parent_ledger: &mut parent_ledger,
+        own_segment: false,
+        grants: &mut grants,
+        session_blocks: &mut session_blocks,
+        reviewed: &mut reviewed,
+        orphans: &mut orphans,
+        offers: &mut offers,
+        running: &mut running,
+        starts: &mut starts,
+        window: &mut window,
+        index: 0,
+    };
     for (index, segment) in segments.iter().enumerate() {
-        let own_segment = index == own;
-        if own_segment {
+        fold.own_segment = index == own;
+        fold.index = index;
+        if fold.own_segment {
             for line in log::lines(&segment.dir)? {
                 let line = line?;
                 end += 1;
@@ -96,56 +117,11 @@ pub(crate) fn fold(segments: &[Segment]) -> Result<Resumed, Error> {
                 {
                     continue;
                 }
-                fold_line(
-                    &line,
-                    &mut Fold {
-                        workspace: &mut workspace,
-                        worktree: &mut worktree,
-                        preamble: &mut preamble,
-                        model: &mut model,
-                        credential: &mut credential,
-                        thinking: &mut thinking,
-                        ledger: &mut ledger,
-                        parent_ledger: &mut parent_ledger,
-                        own_segment,
-                        grants: &mut grants,
-                        session_blocks: &mut session_blocks,
-                        reviewed: &mut reviewed,
-                        orphans: &mut orphans,
-                        offers: &mut offers,
-                        running: &mut running,
-                        starts: &mut starts,
-                        window: &mut window,
-                        index,
-                    },
-                )?;
+                fold_line(&line, &mut fold)?;
             }
         } else {
             for line in segment.lines(0)? {
-                let line = line?;
-                fold_line(
-                    &line,
-                    &mut Fold {
-                        workspace: &mut workspace,
-                        worktree: &mut worktree,
-                        preamble: &mut preamble,
-                        model: &mut model,
-                        credential: &mut credential,
-                        thinking: &mut thinking,
-                        ledger: &mut ledger,
-                        parent_ledger: &mut parent_ledger,
-                        own_segment,
-                        grants: &mut grants,
-                        session_blocks: &mut session_blocks,
-                        reviewed: &mut reviewed,
-                        orphans: &mut orphans,
-                        offers: &mut offers,
-                        running: &mut running,
-                        starts: &mut starts,
-                        window: &mut window,
-                        index,
-                    },
-                )?;
+                fold_line(&line, &mut fold)?;
             }
         }
     }
@@ -326,8 +302,7 @@ pub(crate) fn read_window(
             };
             lines.extend(log.range(from, usize::try_from(max).unwrap_or(usize::MAX))?);
         } else {
-            for line in segment.lines(from)? {
-                let mut line = line?;
+            for mut line in segment.lines(from)? {
                 rewrite_images(&mut line, &segment.dir);
                 lines.push(line);
             }
@@ -338,37 +313,53 @@ pub(crate) fn read_window(
 
 /// Makes every image part's `path` in `line` absolute against `dir`: an
 /// image part's path is relative to the session directory that wrote it,
-/// and a request reads it under its own. In memory only; nothing is
-/// written or copied.
+/// and a request reads it under its own. Only the content parts a
+/// protocol reads as images: a person's message, a steering message and
+/// a tool result. Tool-call arguments are never rewritten, even when
+/// they are shaped like an image: the history replays the call byte for
+/// byte. In memory only; nothing is written or copied.
 fn rewrite_images(line: &mut Envelope, dir: &Path) {
-    for value in line.payload.values_mut() {
-        rewrite_value(value, dir);
+    match line.kind.as_str() {
+        "turn_started" => {
+            if let Some(items) = line.payload.get_mut("input").and_then(Value::as_array_mut) {
+                for item in items {
+                    if let Some(content) = item.get_mut("content").and_then(Value::as_array_mut) {
+                        rewrite_parts(content, dir);
+                    }
+                }
+            }
+        }
+        "steering_applied" | "tool_call_completed" => {
+            if let Some(content) = line
+                .payload
+                .get_mut("content")
+                .and_then(Value::as_array_mut)
+            {
+                rewrite_parts(content, dir);
+            }
+        }
+        _ => {}
     }
 }
 
-/// Makes every image part's `path` under `value` absolute against `dir`.
-fn rewrite_value(value: &mut Value, dir: &Path) {
-    match value {
-        Value::Object(map) => {
-            if map.get("type").and_then(Value::as_str) == Some("image")
-                && let Some(path) = map.get("path").and_then(Value::as_str).map(str::to_owned)
-                && std::path::Path::new(&path).is_relative()
-            {
-                map.insert(
-                    "path".to_owned(),
-                    Value::String(dir.join(path).display().to_string()),
-                );
+/// Makes every image part's `path` in `parts` absolute against `dir`.
+fn rewrite_parts(parts: &mut [Value], dir: &Path) {
+    for part in parts {
+        let path = part.as_object().and_then(|map| {
+            if map.get("type").and_then(Value::as_str) != Some("image") {
+                return None;
             }
-            for value in map.values_mut() {
-                rewrite_value(value, dir);
-            }
+            map.get("path")?.as_str().map(str::to_owned)
+        });
+        if let Some(path) = path
+            && std::path::Path::new(&path).is_relative()
+            && let Some(map) = part.as_object_mut()
+        {
+            map.insert(
+                "path".to_owned(),
+                Value::String(dir.join(path).display().to_string()),
+            );
         }
-        Value::Array(items) => {
-            for item in items {
-                rewrite_value(item, dir);
-            }
-        }
-        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
     }
 }
 

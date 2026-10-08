@@ -92,39 +92,69 @@ pub fn history_to(dir: &Path, point: Seq) -> Result<Vec<Segment>, Error> {
 
 impl Segment {
     /// This log's durable lines from `seq` `from` up to `to` inclusive, in
-    /// order. Empty when `from` is past `to`. Fails [`Error::Pointer`]
-    /// when the log ends before `to`: the pointer names a line the log
-    /// does not hold.
-    pub fn lines(&self, from: u64) -> Result<impl Iterator<Item = Result<Envelope, Error>>, Error> {
-        let all = crate::read(&self.dir)?;
+    /// order. Empty when `from` is past `to`. Reads only to `to` and
+    /// stops: lines past the point are never parsed (`docs/events.md`,
+    /// "Resume"). Fails [`Error::Pointer`] when the log ends before
+    /// `to`: the pointer names a line the log does not hold.
+    pub fn lines(&self, from: u64) -> Result<Vec<Envelope>, Error> {
         let end = self.to.as_ref().map_or(u64::MAX, |to| to.0);
         if from > end {
-            return Ok(Vec::new().into_iter());
+            return Ok(Vec::new());
         }
-        if let Some(to) = &self.to {
-            let held = all
-                .iter()
-                .filter_map(|line| line.seq.as_ref().map(|seq| seq.0))
-                .max();
-            // The log ends before `to`: nothing past its last line is in
-            // this session's history.
-            if held.is_none_or(|held| held < to.0) {
-                return Err(Error::Pointer {
-                    path: self.dir.join(EVENTS),
-                    reason: format!("session {} ends before seq {}", self.session_id.0, to.0),
-                });
+        let path = self.dir.join(EVENTS);
+        let file = File::open(&path).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                Error::NotFound(self.dir.clone())
+            } else {
+                io_at(&path)(error)
+            }
+        })?;
+        // A durable log's line `n` carries `seq` `n`: the log holds
+        // durable lines only, and `Log` mints `seq` for each. Past the
+        // point the bytes are never parsed.
+        let mut reader = BufReader::new(file);
+        let mut buf = Vec::new();
+        let mut held = Vec::new();
+        let mut last = None;
+        let mut number = 0u64;
+        loop {
+            buf.clear();
+            let read = reader.read_until(b'\n', &mut buf).map_err(io_at(&path))?;
+            if read == 0 || buf.last() != Some(&b'\n') {
+                break;
+            }
+            if number > end {
+                break;
+            }
+            number += 1;
+            let line: Envelope =
+                serde_json::from_slice(&buf).map_err(|source| Error::Unreadable {
+                    path: path.clone(),
+                    line: usize::try_from(number).unwrap_or(usize::MAX),
+                    source,
+                })?;
+            let Some(seq) = line.seq.as_ref().map(|seq| seq.0) else {
+                continue;
+            };
+            if seq > end {
+                break;
+            }
+            last = Some(seq);
+            if seq >= from {
+                held.push(line);
             }
         }
-        Ok(all
-            .into_iter()
-            .filter(move |line| {
-                line.seq
-                    .as_ref()
-                    .is_some_and(|seq| seq.0 >= from && seq.0 <= end)
-            })
-            .map(Ok)
-            .collect::<Vec<_>>()
-            .into_iter())
+        // The log ends before `to`: nothing past its last line is in
+        // this session's history.
+        if let Some(to) = &self.to
+            && last.is_none_or(|last| last < to.0)
+        {
+            return Err(Error::Pointer {
+                path: self.dir.join(EVENTS),
+                reason: format!("session {} ends before seq {}", self.session_id.0, to.0),
+            });
+        }
+        Ok(held)
     }
 }
 

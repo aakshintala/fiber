@@ -57,7 +57,8 @@ fn two_logs_written_by_log_chain_root_first() {
     let root_kinds: Vec<String> = segments[0]
         .lines(0)
         .unwrap()
-        .map(|line| line.unwrap().kind)
+        .into_iter()
+        .map(|line| line.kind)
         .collect();
     assert_eq!(
         root_kinds,
