@@ -209,6 +209,33 @@ fn a_drag_without_a_press_selects_nothing() {
 }
 
 #[test]
+fn a_middle_or_right_release_after_a_selection_copies_nothing() {
+    let mut app = replied(40, 10, "hello there");
+    let at = find(&app, "hello");
+    assert_eq!(
+        select(&mut app, at, right(at, 4)),
+        Effect::Copy("hello".to_owned())
+    );
+    let span = app.select.span();
+    assert!(span.is_some());
+    // A middle click's release after the finished selection copies
+    // nothing, and the highlight stays.
+    assert_eq!(
+        report(&mut app, MouseKind::Press(Button::Middle), at),
+        Effect::None
+    );
+    assert_eq!(report(&mut app, MouseKind::Release, at), Effect::None);
+    assert_eq!(app.select.span(), span);
+    // So does a right click's.
+    assert_eq!(
+        report(&mut app, MouseKind::Press(Button::Right), at),
+        Effect::None
+    );
+    assert_eq!(report(&mut app, MouseKind::Release, at), Effect::None);
+    assert_eq!(app.select.span(), span);
+}
+
+#[test]
 fn dragging_selects_from_the_press_to_the_pointer() {
     let mut app = replied(40, 10, "hello there");
     let at = find(&app, "hello");
@@ -357,6 +384,66 @@ fn a_backwards_drag_copies_the_same_text() {
     assert_eq!(
         select(&mut app, right(gamma, 2), beta),
         Effect::Copy("beta gam".to_owned())
+    );
+}
+
+/// The screen columns of "a界b" shown on its row: `a` at `base`, `界`
+/// in `base + 1` and `base + 2`, `b` at `base + 3`.
+fn wide(app: &App) -> (u16, u16) {
+    find(app, "a界")
+}
+
+#[test]
+fn a_selection_starting_inside_a_wide_character_copies_it_whole() {
+    let mut app = replied(40, 10, "a界b");
+    let (base, row) = wide(&app);
+    // From the second cell of 界 to b.
+    let from = (base + 2, row);
+    let to = (base + 3, row);
+    assert_eq!(press(&mut app, from), Effect::None);
+    assert_eq!(drag(&mut app, to), Effect::None);
+    assert_eq!(
+        app.selection_cells(app.conversation_area()),
+        [Rect::new(base + 2, row, 2, 1)],
+        "the second cell of 界 and b"
+    );
+    assert_eq!(release(&mut app, to), Effect::Copy("界b".to_owned()));
+}
+
+#[test]
+fn a_selection_ending_inside_a_wide_character_copies_it_whole() {
+    let mut app = replied(40, 10, "a界b");
+    let (base, row) = wide(&app);
+    // Pressed on b, dragged back to the second cell of 界.
+    assert_eq!(
+        select(&mut app, (base + 3, row), (base + 2, row)),
+        Effect::Copy("界b".to_owned())
+    );
+}
+
+#[test]
+fn a_selection_ending_on_a_wide_characters_first_cell_copies_it_whole() {
+    let mut app = replied(40, 10, "a界b");
+    let (base, row) = wide(&app);
+    // From a to the first cell of 界: the highlight meets only half of
+    // 界, the copy is the whole of it.
+    assert_eq!(
+        select(&mut app, (base, row), (base + 1, row)),
+        Effect::Copy("a界".to_owned())
+    );
+}
+
+#[test]
+fn a_selection_inside_a_wide_character_copies_it_whole() {
+    let mut app = replied(40, 10, "a界b");
+    let (base, row) = wide(&app);
+    // Pressed on the second cell of 界, dragged to b and back.
+    assert_eq!(press(&mut app, (base + 2, row)), Effect::None);
+    assert_eq!(drag(&mut app, (base + 3, row)), Effect::None);
+    assert_eq!(drag(&mut app, (base + 2, row)), Effect::None);
+    assert_eq!(
+        release(&mut app, (base + 2, row)),
+        Effect::Copy("界".to_owned())
     );
 }
 

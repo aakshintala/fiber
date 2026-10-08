@@ -62,10 +62,18 @@ impl Selection {
         }
     }
 
-    /// The button came up: the selection's ends, when it dragged; a press
-    /// released without a drag selects nothing.
+    /// The button came up: the selection's ends, when the left button's
+    /// gesture is still held and it dragged; a press released without a
+    /// drag selects nothing, and a release with no gesture held copies
+    /// nothing while the shown selection stays.
     fn release(&mut self) -> Option<(Point, Point)> {
+        // SGR does not say which button came up: only a release ending
+        // the left button's gesture copies.
+        let gesture = self.held;
         self.held = false;
+        if !gesture {
+            return None;
+        }
         self.span()
     }
 
@@ -391,11 +399,17 @@ impl App {
                 let cells = cells::place(line, width)
                     .into_iter()
                     .map(|cell| {
-                        let point = Point {
-                            row: row.saturating_add(usize::from(cell.row)),
-                            col: cell.col,
-                        };
-                        (cell.bytes, from <= point && point <= to)
+                        let grown = row.saturating_add(usize::from(cell.row));
+                        // A grapheme is covered when the selection meets
+                        // its cells [col, col + width): its far edge past
+                        // the selection's start, its near edge before its
+                        // end.
+                        let past_start =
+                            grown != from.row || cell.col.saturating_add(cell.width) > from.col;
+                        let before_end = grown != to.row || cell.col <= to.col;
+                        let covered =
+                            grown >= from.row && grown <= to.row && past_start && before_end;
+                        (cell.bytes, covered)
                     })
                     .collect();
                 placed.push((row, cells));
