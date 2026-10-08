@@ -143,10 +143,14 @@ fn entry_row(entry: &Snippet, width: u16) -> (String, Range<u16>) {
             .find(|&end| extent(lo, end) <= target)
             .unwrap_or(lo);
     } else {
-        loop {
+        // Each pass adds at least one of the row's graphemes or ends the
+        // growth, so the row's length bounds the passes.
+        for _ in 0..cells.len() {
             let mut grew = false;
-            if lo > 0 && extent(lo.saturating_sub(1), hi) <= target {
-                lo = lo.saturating_sub(1);
+            if let Some(prev) = lo.checked_sub(1)
+                && extent(prev, hi) <= target
+            {
+                lo = prev;
                 grew = true;
             }
             if hi < cells.len() && extent(lo, hi.saturating_add(1)) <= target {
