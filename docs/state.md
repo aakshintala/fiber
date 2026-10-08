@@ -37,7 +37,7 @@ Default `~/.fiber` on macOS and Linux; `FIBER_HOME` relocates all of it.
   run/hub                         the hub's local socket
   recent.jsonl                    recently exited sessions, a rebuildable index
   cache/models/<provider>.json    discovered model list
-  cache/mcp/<server>.json         an MCP server's last tool list
+  cache/mcp/<server>.json         an MCP server's last tool and prompt lists
   crashes/<id>-<ms>.txt           one report per panic (docs/code-quality.md)
   logs/hub.log, logs/hub.log.1    the hub's diagnostic log and its previous file
   logs/<kind>-<id>.log            one other process's diagnostic log
@@ -187,8 +187,8 @@ touching `credentials/` is refused
 `rm -rf ~/.fiber/cache` is a documented safe reset. Today it holds each
 provider's discovered model list, one file per provider at
 `cache/models/<provider>.json`, fetched and replaced whole, and each MCP
-server's last tool list at `cache/mcp/<server>.json`, keyed by a hash of the
-server's declaration (`docs/mcp.md`, "Starting servers"). A writer replaces
+server's last tool and prompt lists at `cache/mcp/<server>.json`, keyed by a hash
+of the server's declaration (`docs/mcp.md`, "Starting servers"). A writer replaces
 a file by rename, so two sessions refreshing one list leave one whole file.
 
 **Crash reports.** `crashes/<session_id>-<ms>.txt` holds one panic's

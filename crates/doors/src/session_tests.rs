@@ -2611,3 +2611,65 @@ fn print_ends_at_rewound_while_the_log_is_held() {
         "the last line copied is `rewound`"
     );
 }
+
+#[test]
+fn ask_returns_the_first_prompts_rejection_as_its_failure() {
+    reset();
+    let opened = open();
+    let failure = opened
+        .session
+        .ask("asked".into(), Arc::new(|| false), |inbox| {
+            (next_prompt(&inbox).0)(Err(contract::inbox::Rejection {
+                code: ErrorCode::InvalidArguments,
+                message: "The MCP server `fx`'s prompt `/greet` needs <who>.".into(),
+            }));
+            let Delivery::Close(close) = inbox.recv_timeout(DEADLINE).unwrap() else {
+                panic!("ask queues close after its prompt");
+            };
+            (close.0)(Ok(None));
+            Ok(())
+        })
+        .expect_err("the first prompt's rejection fails the ask");
+    assert_eq!(failure.code, ErrorCode::InvalidArguments);
+    assert_eq!(
+        failure.message,
+        "The MCP server `fx`'s prompt `/greet` needs <who>.",
+    );
+    assert_eq!(failure.retry_after_ms, None);
+    assert_eq!(failure.provider, None);
+    close_within(opened.session, opened.log);
+}
+
+#[test]
+fn ask_whose_first_prompt_is_accepted_returns_what_run_returned() {
+    reset();
+    let opened = open();
+    opened
+        .session
+        .ask("asked".into(), Arc::new(|| false), |inbox| {
+            (next_prompt(&inbox).0)(Ok(None));
+            let Delivery::Close(close) = inbox.recv_timeout(DEADLINE).unwrap() else {
+                panic!("ask queues close after its prompt");
+            };
+            (close.0)(Ok(None));
+            Ok(())
+        })
+        .expect("an accepted first prompt keeps what run returned");
+    close_within(opened.session, opened.log);
+
+    reset();
+    let opened = open();
+    let failure = opened
+        .session
+        .ask("asked".into(), Arc::new(|| false), |inbox| {
+            (next_prompt(&inbox).0)(Ok(None));
+            let Delivery::Close(close) = inbox.recv_timeout(DEADLINE).unwrap() else {
+                panic!("ask queues close after its prompt");
+            };
+            (close.0)(Ok(None));
+            Err(crate::failure(ErrorCode::Busy, "busy"))
+        })
+        .expect_err("run's own failure wins");
+    assert_eq!(failure.code, ErrorCode::Busy);
+    close_within(opened.session, opened.log);
+}

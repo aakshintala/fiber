@@ -53,6 +53,10 @@ impl Setup {
         std::fs::write(self.dir.path().join("tools.json"), tools.to_string()).expect("tools");
     }
 
+    fn prompts(&self, prompts: &Value) {
+        std::fs::write(self.dir.path().join("prompts.json"), prompts.to_string()).expect("prompts");
+    }
+
     fn result(&self, name: &str, body: &str) {
         std::fs::write(self.dir.path().join(format!("call-{name}.json")), body).expect("result");
     }
@@ -609,4 +613,68 @@ fn a_spec_debug_prints_no_env_value() {
     assert!(printed.contains("github"), "{printed}");
     assert!(printed.contains("GITHUB_TOKEN"), "{printed}");
     assert!(!printed.contains(planted), "{printed}");
+}
+
+#[test]
+fn rows_list_each_servers_prompts_tagged_with_its_name_in_server_name_order() {
+    use contract::events::CommandInfo;
+    let first = Setup::new();
+    first.tools(&json!([{"name": "echo"}]));
+    first.prompts(&json!([{
+        "name": "zeta",
+        "description": "Last by server.",
+        "arguments": [{"name": "who", "required": true}, {"name": "tone"}],
+    }]));
+    let second = Setup::new();
+    second.tools(&json!([{"name": "echo"}]));
+    second.prompts(&json!([{ "name": "alpha", "description": "First by server." }]));
+    // Specs passed `zz` then `aa`: rows sort by server name.
+    let started = start_within(
+        vec![first.spec("zz"), second.spec("aa")],
+        first.workspace(),
+        first.clock(),
+    );
+    assert!(started.failed.is_empty());
+    assert_eq!(
+        started.prompts.commands(),
+        [
+            CommandInfo {
+                name: "alpha".to_owned(),
+                description: "First by server.".to_owned(),
+                argument_hint: None,
+                tag: "aa".to_owned(),
+            },
+            CommandInfo {
+                name: "zeta".to_owned(),
+                description: "Last by server.".to_owned(),
+                argument_hint: Some("<who> [tone]".to_owned()),
+                tag: "zz".to_owned(),
+            },
+        ]
+    );
+    started.servers.stop();
+}
+
+#[test]
+fn a_cached_server_gives_rows_without_starting() {
+    let setup = Setup::new();
+    setup.tools(&json!([{"name": "echo"}]));
+    setup.prompts(&json!([{
+        "name": "greet",
+        "description": "Greets someone.",
+        "arguments": [{"name": "who", "required": true}],
+    }]));
+    let first = start_within(vec![setup.spec("fx")], setup.workspace(), setup.clock());
+    assert!(first.failed.is_empty());
+    assert_eq!(first.prompts.commands().len(), 1);
+    stop_within(first.servers);
+    std::fs::remove_file(setup.dir.path().join("pid.txt")).expect("pid.txt");
+    let second = start_within(vec![setup.spec("fx")], setup.workspace(), setup.clock());
+    assert!(second.failed.is_empty());
+    assert_eq!(second.prompts.commands(), first.prompts.commands());
+    assert!(
+        !setup.dir.path().join("pid.txt").exists(),
+        "a cached server's rows come from the cache",
+    );
+    stop_within(second.servers);
 }

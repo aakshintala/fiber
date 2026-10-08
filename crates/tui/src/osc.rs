@@ -1,5 +1,6 @@
 //! Operating system commands the terminal writes beside its frames: the
-//! window title (`docs/tui.md`, "State glyphs", "Naming the session").
+//! window title and the desktop notification (`docs/tui.md`, "State
+//! glyphs", "Naming the session", "Getting the person's attention").
 
 /// The title as last written, so an unchanged one writes nothing.
 #[derive(Debug, Default)]
@@ -26,13 +27,29 @@ impl Title {
     }
 }
 
+/// Every C0 and C1 control character and DEL dropped from `text`, so a
+/// session's name cannot end the sequence or start another.
+pub(crate) fn clean(text: &str) -> String {
+    text.chars().filter(|ch| !ch.is_control()).collect()
+}
+
 /// OSC 2 setting the window title to `text`, with every C0 and C1 control
 /// character and DEL dropped so a session's name cannot end the sequence
 /// or start another.
 pub(crate) fn title(text: &str) -> Vec<u8> {
-    let clean: String = text.chars().filter(|ch| !ch.is_control()).collect();
     let mut out = b"\x1b]2;".to_vec();
-    out.extend_from_slice(clean.as_bytes());
+    out.extend_from_slice(clean(text).as_bytes());
+    out.push(0x07);
+    out
+}
+
+/// OSC 9 sending the desktop notification `text` (`docs/tui.md`,
+/// "Getting the person's attention"), with every C0 and C1 control
+/// character and DEL dropped so a session's name cannot end the sequence
+/// or start another.
+pub(crate) fn notify(text: &str) -> Vec<u8> {
+    let mut out = b"\x1b]9;".to_vec();
+    out.extend_from_slice(clean(text).as_bytes());
     out.push(0x07);
     out
 }
