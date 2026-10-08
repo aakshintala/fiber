@@ -1052,7 +1052,11 @@ git repository a delegate's `isolation: worktree` fails with
 records the worktree on `session_started` (`docs/events.md`). The `worktree`
 module creates and removes worktrees, for delegates, sessions and
 `fiber sessions prune` (`docs/architecture.md`). Fiber runs the `git` program; no
-git library is linked in. A supervisor that wants its own tree still makes it
+git library is linked in. `git worktree add` runs the repository's hooks, so
+a `post-checkout` hook can set up the new tree. Every other git command the
+`worktree` module runs, including those of `fiber sessions prune`, runs with
+the repository's hooks off (`-c core.hooksPath=/dev/null`), so removing a
+worktree can't hang on a hook. A supervisor that wants its own tree still makes it
 and passes the path.
 
 ## Deleting and pruning
