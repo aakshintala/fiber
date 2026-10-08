@@ -74,7 +74,8 @@ pub enum Mode {
 /// back (`docs/invocation.md`, "The hub").
 pub trait Starter: Send + Sync {
     /// Starts the session command for `id` in `workspace`, with `model`
-    /// when the client named one. With `worktree` true, the session runs
+    /// when the client named one, and each of `overrides` passed to the
+    /// session as `-c`, in order. With `worktree` true, the session runs
     /// in a new worktree of the workspace (`docs/invocation.md`,
     /// "Isolation"); the session command creates the worktree itself.
     fn start(
@@ -82,6 +83,7 @@ pub trait Starter: Send + Sync {
         id: &SessionId,
         workspace: &Path,
         model: Option<&str>,
+        overrides: &[&str],
         worktree: bool,
     ) -> io::Result<Box<dyn Started>>;
 

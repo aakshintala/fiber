@@ -197,7 +197,9 @@ fn a_run_flag_that_is_not_key_equals_value_is_a_usage_error() {
         assert_eq!(e.code(), ErrorCode::Usage, "{arg}");
         assert_eq!(
             e.to_string(),
-            format!("`{named}` is not a dotted key and a value, as in `-c handoff.tokens=200000`."),
+            format!(
+                "`{named}` is not a dotted key and a value, as in `-c handoff.tokens=200000`. Run `fiber --help` for usage."
+            ),
             "{arg}"
         );
     }

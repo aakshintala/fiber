@@ -104,6 +104,7 @@ const GRAMMAR: &[(&str, &[&str], &[&str])] = &[
         &[],
         &[
             "--model",
+            "-c",
             "--resume",
             "--credential",
             "--worktree",

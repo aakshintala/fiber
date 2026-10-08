@@ -381,7 +381,7 @@ pub(crate) fn extension_case(
     };
     let result = crate::session_command::new_session(
         contract::SessionId(doors::mint("s_")),
-        Some("scripted/script.json".to_owned()),
+        crate::per_run(Some("scripted/script.json".to_owned()), Vec::new()),
         Some(case.prompt),
         false,
         false,

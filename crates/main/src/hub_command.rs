@@ -131,11 +131,12 @@ impl hub::Starter for SpawnStarter {
         id: &SessionId,
         workspace: &Path,
         model: Option<&str>,
+        overrides: &[&str],
         worktree: bool,
     ) -> std::io::Result<Box<dyn hub::Started>> {
         spawn(
             id,
-            session_command(&self.exe, id, workspace, model, worktree, false, None),
+            start_command(&self.exe, id, workspace, model, overrides, worktree),
         )
     }
 
@@ -157,6 +158,24 @@ impl hub::Starter for SpawnStarter {
             session_command(&self.exe, id, workspace, None, false, false, Some(from)),
         )
     }
+}
+
+/// The session command a `start` spawns: `session_command` with one `-c
+/// <override>` per override, in order. An override is passed unchanged,
+/// as one value of `-c`, so it never becomes another flag.
+fn start_command(
+    exe: &Path,
+    id: &SessionId,
+    workspace: &Path,
+    model: Option<&str>,
+    overrides: &[&str],
+    worktree: bool,
+) -> Command {
+    let mut command = session_command(exe, id, workspace, model, worktree, false, None);
+    for override_text in overrides {
+        command.arg("-c").arg(override_text);
+    }
+    command
 }
 
 /// `exe session --id <id> --workspace <workspace>`, with `--model` when

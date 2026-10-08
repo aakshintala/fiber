@@ -88,9 +88,19 @@ impl Setup {
     /// test's [`Deadline`], and asserts that nothing it started is left in the
     /// group (`docs/testing.md`, "Running tests").
     fn ask(&self) -> Run {
+        self.ask_with(&[])
+    }
+
+    /// Runs `fiber ask <extra...> hi`: `extra` holds flags such as `-c`,
+    /// between `ask` and the prompt.
+    fn ask_with(&self, extra: &[&str]) -> Run {
+        let mut argv = vec!["ask"];
+        argv.extend_from_slice(extra);
+        argv.push("hi");
+        let what = format!("`fiber {}` to exit", argv.join(" "));
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
         command
-            .args(["ask", "hi"])
+            .args(argv)
             .current_dir(self.root.path().join("w"))
             .env_clear()
             .env("PATH", std::env::var_os("PATH").unwrap_or_default())
@@ -108,7 +118,7 @@ impl Setup {
         thread::spawn(move || done.send(child.wait_with_output()).unwrap());
         let output = match finished.recv_timeout(self.deadline.left()) {
             Ok(output) => output.unwrap(),
-            Err(_) => support::expired(self.deadline, group, &finished, "`fiber ask` to exit"),
+            Err(_) => support::expired(self.deadline, group, &finished, &what),
         };
         assert!(
             !group_alive(self.deadline, group),
@@ -558,6 +568,75 @@ fn x_should_retry_true_retries_a_400() {
     );
 }
 
+/// The event kinds of an ask answered in two fragments with no retry.
+const HELLO_KINDS: [&str; 15] = [
+    "session_started",
+    "fiber_started",
+    "extensions_loaded",
+    "preamble_built",
+    "opening_message",
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "assistant_message_delta",
+    "assistant_message_delta",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    "fiber_exited",
+];
+
+/// The event kinds of a cold `ask --resume` that fails its first model
+/// call, then answers after one retry: the resumed process writes no
+/// `session_started`, starting at `fiber_started` (`docs/events.md`,
+/// "Process boundary").
+const RESUMED_RETRIED_KINDS: [&str; 17] = [
+    "fiber_started",
+    "extensions_loaded",
+    "preamble_built",
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "usage_recorded",
+    "assistant_message_completed",
+    "retry_scheduled",
+    "assistant_message_started",
+    "assistant_message_delta",
+    "assistant_message_delta",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    "fiber_exited",
+];
+
+#[test]
+fn a_resumed_run_takes_its_retry_attempts_from_dash_c() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([
+        responses_hello(),
+        Response::status(503, "{}"),
+        responses_hello(),
+    ])
+    .unwrap();
+    setup.provider(&server, "openai-responses", 0);
+    let first = setup.ask();
+    assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
+    assert_eq!(first.kinds(), HELLO_KINDS);
+    let id = first.session_id().to_owned();
+    // The resume starts a process, so `-c` is its per-run layer: without
+    // it attempts 0 would fail the resumed ask at once.
+    let run = setup.ask_with(&["--resume", &id, "-c", "retry.attempts=2"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), RESUMED_RETRIED_KINDS);
+    assert_eq!(run.retried(), ["provider_unavailable"]);
+    let scheduled = run.scheduled();
+    assert_eq!(scheduled.len(), 1);
+    assert_eq!(scheduled[0]["last_attempt"], json!(3));
+    assert_eq!(server.requests().len(), 3);
+}
+
 /// The event kinds of an ask whose model call fails without a retry.
 const FAILED_AT_ONCE_KINDS: [&str; 12] = [
     "session_started",
@@ -665,6 +744,19 @@ fn retry_scheduled_carries_last_attempt_from_configured_attempts() {
             "attempts {attempts}"
         );
     }
+    // A per-run `-c retry.attempts=2` wins over attempts 0 in the file:
+    // without it the ask below would fail at once.
+    let setup = Setup::new();
+    let server = ProviderServer::start([Response::status(503, "{}"), responses_hello()]).unwrap();
+    setup.provider(&server, "openai-responses", 0);
+    let run = setup.ask_with(&["-c", "retry.attempts=2"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), RETRIED_HELLO_KINDS);
+    assert_eq!(run.retried(), ["provider_unavailable"]);
+    assert_eq!(server.requests().len(), 2);
+    let scheduled = run.scheduled();
+    assert_eq!(scheduled.len(), 1);
+    assert_eq!(scheduled[0]["last_attempt"], json!(3));
 }
 
 #[test]

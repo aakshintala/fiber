@@ -59,7 +59,8 @@ pub(crate) struct Held {
 }
 
 /// Runs `start` (`command`) for `workspace`, with `model` and `content`
-/// when the client named them, in a new worktree of the workspace with
+/// when the client named them, each of `overrides` passed to the session
+/// as `-c`, in a new worktree of the workspace with
 /// `worktree` (`docs/invocation.md`, "Isolation"). `workspace` is
 /// absolute and an existing directory; anything else is
 /// `invalid_arguments`. With `content`, the
@@ -70,6 +71,7 @@ pub(crate) fn run(
     command: &CommandId,
     workspace: &str,
     model: Option<&str>,
+    overrides: &[&str],
     worktree: bool,
     content: Option<&Value>,
 ) -> Outcome {
@@ -81,7 +83,10 @@ pub(crate) fn run(
         return invalid("The workspace is not an existing directory.");
     }
     let id = SessionId(mint("s_"));
-    let started = match hub.starter.start(&id, workspace_path, model, worktree) {
+    let started = match hub
+        .starter
+        .start(&id, workspace_path, model, overrides, worktree)
+    {
         Ok(started) => started,
         Err(error) => {
             return io_failed(hub, &id, &format!("{error}."));

@@ -46,7 +46,7 @@ pub(crate) fn run(
     if args.resume {
         return crate::resume::session_resume(
             SessionId(args.id),
-            args.model,
+            crate::per_run(args.model, args.overrides),
             clock,
             &signals,
             fiber,
@@ -75,7 +75,7 @@ pub(crate) fn run(
     }
     new_session(
         SessionId(args.id),
-        args.model,
+        crate::per_run(args.model, args.overrides),
         args.prompt,
         parent.is_some(),
         args.worktree,
@@ -101,7 +101,7 @@ pub(crate) fn run(
 )]
 pub(crate) fn new_session(
     id: SessionId,
-    model: Option<String>,
+    overrides: Vec<String>,
     prompt: Option<String>,
     one_turn: bool,
     worktree: bool,
@@ -115,7 +115,8 @@ pub(crate) fn new_session(
     let host = case_run.as_ref().map(|case| case.host_script());
     if !worktree {
         return match run_new(
-            id, model, prompt, one_turn, None, clock, signals, fiber, host, case_run, parent, None,
+            id, overrides, prompt, one_turn, None, clock, signals, fiber, host, case_run, parent,
+            None,
         ) {
             Ok(code) => code,
             Err(failure) => report(signals, failure),
@@ -156,7 +157,7 @@ pub(crate) fn new_session(
     let worktree = isolation.worktree();
     let result = run_new(
         id,
-        model,
+        overrides,
         prompt,
         one_turn,
         Some(worktree),
@@ -183,7 +184,7 @@ pub(crate) fn new_session(
 )]
 pub(crate) fn run_new(
     id: SessionId,
-    model: Option<String>,
+    overrides: Vec<String>,
     prompt: Option<String>,
     one_turn: bool,
     worktree: Option<Worktree>,
@@ -211,7 +212,7 @@ pub(crate) fn run_new(
                 .as_deref()
                 .and_then(|level| level.parse::<contract::ThinkingLevel>().ok());
             parts_with(
-                None,
+                Vec::new(),
                 folded.model.as_deref(),
                 folded.credential.as_deref(),
                 thinking,
@@ -219,7 +220,7 @@ pub(crate) fn run_new(
                 host,
             )?
         }
-        None => parts_with(model, None, None, None, Arc::clone(&clock), host)?,
+        None => parts_with(overrides, None, None, None, Arc::clone(&clock), host)?,
     };
     crash::attach(&id);
     let dir = parts.sessions.join(&id.0);

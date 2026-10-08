@@ -252,6 +252,7 @@ impl Starter for FakeStarter {
         id: &SessionId,
         _workspace: &Path,
         _model: Option<&str>,
+        _overrides: &[&str],
         worktree: bool,
     ) -> std::io::Result<Box<dyn Started>> {
         lock(&self.started_worktrees).push(worktree);

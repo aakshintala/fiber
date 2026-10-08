@@ -2470,7 +2470,6 @@ fn openrouter_sends_the_cache_key_and_anthropic_markers_for_a_claude_model() {
     assert_eq!(system.last().unwrap()["cache_control"], hour);
     let last = body["messages"].as_array().unwrap();
     assert_eq!(last.last().unwrap()["content"][0]["cache_control"], hour);
-    // A per-session `-c cache.lifetime=5m` run is not covered here; see #414.
 }
 
 /// Runs `fiber ask` for the OpenRouter Claude model against `server`, with
@@ -3608,4 +3607,270 @@ fn a_sign_error_keeps_the_token_out_of_every_line() {
         "{:?}",
         server.requests()
     );
+}
+
+/// Installs a provider `fake` speaking `protocol` at the fake server
+/// with the model ids `ids`, and writes `global` as the global
+/// `config.json`: the `extensions::plan(...).commit()` pattern
+/// [`Setup::provider`] uses, with more than one model.
+fn provider_with(
+    setup: &Setup,
+    server: &ProviderServer,
+    protocol: &str,
+    ids: &[&str],
+    global: &Value,
+) {
+    let source = setup.root.path().join("src");
+    let models: Vec<Value> = ids
+        .iter()
+        .map(|id| {
+            json!({"id": id, "protocol": protocol,
+                   "base_url": format!("{}/v1", server.url()),
+                   "context_window": 100000})
+        })
+        .collect();
+    write(
+        &source.join("extension.json"),
+        &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
+    );
+    write(
+        &source.join("providers/fake.json"),
+        &json!({"name": "fake", "credential": {"env": "FIBER_TEST_FAKE_KEY"},
+                "models": models}),
+    );
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(source),
+        "0.0.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    write(&setup.home().join("config.json"), global);
+}
+
+/// Writes `config` as the per-project `config.json` for the workspace:
+/// `projects/<key>/config.json`, the key the canonical workspace with
+/// every `/` made `-`, as [`Run::session_dir`] builds it.
+fn write_project_config(setup: &Setup, config: &Value) {
+    let workspace = fs::canonicalize(setup.root.path().join("w")).unwrap();
+    let key = workspace.to_string_lossy().replace('/', "-");
+    write(
+        &setup.home().join("projects").join(key).join("config.json"),
+        config,
+    );
+}
+
+/// The one request body the fake server saw: every `-c` run here sends
+/// exactly one.
+fn only_body(server: &ProviderServer) -> Value {
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    serde_json::from_slice(&requests[0].body).unwrap()
+}
+
+#[test]
+fn a_run_flag_model_wins_over_every_file() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello(), hello()]).unwrap();
+    provider_with(
+        &setup,
+        &server,
+        "openai-responses",
+        &["m", "m2"],
+        &json!({"model": "fake/m"}),
+    );
+    write(
+        &setup.root.path().join("w").join(".fiber/config.json"),
+        &json!({"model": "fake/m"}),
+    );
+    write_project_config(&setup, &json!({"model": "fake/m"}));
+
+    let run = setup.fiber(&["ask", "-c", "model=fake/m2", "hi"], None);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
+    assert_eq!(only_body(&server)["model"], "m2");
+
+    // The files are read: with every one naming a model that resolves
+    // nowhere, the run without `-c` fails before any session.
+    write(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/nope"}),
+    );
+    write(
+        &setup.root.path().join("w").join(".fiber/config.json"),
+        &json!({"model": "fake/nope"}),
+    );
+    write_project_config(&setup, &json!({"model": "fake/nope"}));
+    let run = setup.fiber(&["ask", "-c", "model=fake/m2", "hi"], None);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2, "{requests:?}");
+    let body: Value = serde_json::from_slice(&requests[1].body).unwrap();
+    assert_eq!(body["model"], "m2");
+}
+
+#[test]
+fn a_later_run_flag_wins_over_an_earlier_one() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    provider_with(
+        &setup,
+        &server,
+        "openai-responses",
+        &["m", "m2"],
+        &json!({"model": "fake/m"}),
+    );
+
+    let run = setup.fiber(
+        &["ask", "-c", "model=fake/nope", "-c", "model=fake/m2", "hi"],
+        None,
+    );
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
+    assert_eq!(only_body(&server)["model"], "m2");
+}
+
+#[test]
+fn a_run_flag_model_wins_over_the_model_flag() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    provider_with(
+        &setup,
+        &server,
+        "openai-responses",
+        &["m", "m2"],
+        &json!({"model": "fake/m"}),
+    );
+
+    let run = setup.fiber(
+        &["ask", "--model", "fake/nope", "-c", "model=fake/m2", "hi"],
+        None,
+    );
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
+    assert_eq!(only_body(&server)["model"], "m2");
+}
+
+#[test]
+fn a_numeric_run_flag_sets_a_number() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+
+    let run = setup.fiber(&["ask", "-c", "handoff.tokens=200000", "hi"], None);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
+}
+
+#[test]
+fn a_quoted_run_flag_value_is_rejected_as_the_wrong_type() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([]).unwrap();
+    setup.provider(&server);
+
+    let run = setup.fiber(&["ask", "-c", "handoff.tokens=\"200000\"", "hi"], None);
+    assert_pre_session(&run, 1, "config_invalid");
+    let message = run.last()["payload"]["error"]["message"].as_str().unwrap();
+    assert!(message.starts_with("-c: "), "{message}");
+    assert!(message.contains("handoff.tokens"), "{message}");
+    assert!(server.requests().is_empty());
+}
+
+#[test]
+fn a_run_flag_without_an_equals_is_a_usage_error() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([]).unwrap();
+    setup.provider(&server);
+
+    let run = setup.fiber(&["ask", "-c", "nokey", "hi"], None);
+    assert_pre_session(&run, 2, "usage");
+    assert_eq!(
+        run.last()["payload"]["error"]["message"].as_str().unwrap(),
+        "Invalid value 'nokey' for '-c <key>=<value>': expected a dotted key and a value, as in \
+         `-c handoff.tokens=200000`. Run `fiber --help` for usage."
+    );
+    assert!(server.requests().is_empty());
+    assert!(!setup.home().join("projects").exists());
+}
+
+#[test]
+fn a_run_flag_with_no_key_path_is_a_usage_error() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([]).unwrap();
+    setup.provider(&server);
+
+    let run = setup.fiber(&["ask", "-c", "a..b=1", "hi"], None);
+    assert_pre_session(&run, 2, "usage");
+    assert_eq!(
+        run.last()["payload"]["error"]["message"].as_str().unwrap(),
+        "`a..b` is not a dotted key and a value, as in `-c handoff.tokens=200000`. \
+         Run `fiber --help` for usage."
+    );
+    assert!(server.requests().is_empty());
+}
+
+#[test]
+fn ask_help_names_the_run_flag() {
+    let setup = Setup::new();
+    let run = setup.fiber(&["help", "ask"], None);
+    assert_help(&run, "-c <key>=<value>");
+}
+
+/// Every `cache_control` marker in `body`, in document order.
+fn cache_controls(body: &Value) -> Vec<Value> {
+    let mut found = Vec::new();
+    walk(body, &mut found);
+    return found;
+
+    fn walk(value: &Value, found: &mut Vec<Value>) {
+        match value {
+            Value::Object(map) => {
+                for (key, item) in map {
+                    if key == "cache_control" {
+                        found.push(item.clone());
+                    } else {
+                        walk(item, found);
+                    }
+                }
+            }
+            Value::Array(items) => {
+                for item in items {
+                    walk(item, found);
+                }
+            }
+            Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
+        }
+    }
+}
+
+#[test]
+fn a_per_run_cache_lifetime_marks_anthropic_markers_without_ttl() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([anthropic_hello()]).unwrap();
+    provider_with(
+        &setup,
+        &server,
+        "anthropic-messages",
+        &["m"],
+        &json!({"model": "fake/m"}),
+    );
+
+    let run = setup.fiber(&["ask", "-c", "cache.lifetime=5m", "hi"], None);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
+    let built = run
+        .lines
+        .iter()
+        .find(|l| l["kind"] == "preamble_built")
+        .unwrap();
+    assert_eq!(built["payload"]["cache_lifetime"], "5m");
+    let markers = cache_controls(&only_body(&server));
+    assert!(!markers.is_empty(), "a marker is cached");
+    for marker in &markers {
+        assert_eq!(marker, &json!({"type": "ephemeral"}));
+    }
 }

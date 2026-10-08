@@ -111,6 +111,7 @@ fn started_before(
                 &CommandId("c_start".to_owned()),
                 &workspace,
                 model.as_deref(),
+                &[],
                 worktree,
                 content.as_ref(),
             );
@@ -237,6 +238,7 @@ impl crate::Starter for FailStarter {
         _id: &SessionId,
         _workspace: &Path,
         _model: Option<&str>,
+        _overrides: &[&str],
         _worktree: bool,
     ) -> io::Result<Box<dyn crate::Started>> {
         Err(io::Error::other(self.message.clone()))
@@ -403,6 +405,7 @@ fn held(temp: &Temp, starter: FakeStarter, content: &Value) -> (Arc<Hub>, Box<He
                 &CommandId("c_start".to_owned()),
                 &workspace,
                 None,
+                &[],
                 false,
                 Some(&content),
             );
