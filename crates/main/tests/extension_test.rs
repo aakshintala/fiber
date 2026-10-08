@@ -59,8 +59,9 @@ impl Drop for TempRoot {
     }
 }
 
-/// A deliberately long `TMPDIR` under `/tmp`: long enough to overflow the
-/// old runner layout, short enough for the shortened one. Removed on drop.
+/// A `TMPDIR` of about 50 bytes under `/tmp`, the length of macOS's default:
+/// a case's session socket stays inside the 104-byte limit only if the
+/// runner keeps its own directory names short. Removed on drop.
 struct LongRoot(PathBuf);
 
 impl LongRoot {
