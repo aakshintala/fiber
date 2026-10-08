@@ -76,8 +76,9 @@ One archive per target, each with a checksum file beside it:
 
 Each archive holds the `fiber` binary and `THIRD-PARTY-NOTICES`, the notices
 file `docs/dependencies.md` requires. Each checksum file is named after its
-archive with `.sha256` added, and holds that archive's SHA-256. The release
-also carries `install.sh`.
+archive with `.sha256` added. Each checksum file holds the archive's SHA-256
+as 64 hex digits, optionally followed by whitespace and the archive's name, as
+`sha256sum` writes it. The release also carries `install.sh`.
 
 The release also carries `fiber-docs.tar.gz` and its checksum file: the
 repository's `docs/` tree at the release tag, without the documents about
@@ -94,7 +95,9 @@ in the binary embeds an extension (`docs/extensions.md`, "A fresh install").
 At its top level the archive has one directory per extension, named as it is
 installed under `extensions/` in Fiber home (`docs/extensions.md`, "Names"),
 with no install record. The docs archive holds the contents of `docs/` at its
-top level.
+top level. The docs and extensions archives are plain ustar
+(`tar --format=ustar`), holding only files, directories and relative symlinks
+that stay inside their directory.
 
 Archive names carry no version, so
 `https://github.com/aakshintala/fiber/releases/latest/download/<archive>`
@@ -154,6 +157,9 @@ curl -fsSL https://github.com/aakshintala/fiber/releases/latest/download/install
    renaming, as `fiber update` does. It takes the extensions lock, and records
    each extension at the release's version and the commit the binary was built
    from.
+
+The binary unpacks the archives itself and refuses any entry that is not a
+file, a directory or a relative symlink inside its directory.
 
 The script is `install.sh` in the repository's `scripts/` directory. It reads only
 `FIBER_INSTALL_DIR` and `FIBER_VERSION`; the binary reads `FIBER_HOME`.

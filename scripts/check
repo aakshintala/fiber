@@ -77,6 +77,17 @@ if [ "$scope" != platform ]; then
     cargo xtask compiled-in
     cargo xtask image-isolation
     cargo xtask tui-isolation
+    # CI runs this on Linux x86_64 alone (docs/ci.md), where the runner
+    # ships shellcheck, so a missing one fails rather than skips.
+    if [ "$(uname -s)" = Linux ]; then
+      echo "== shellcheck"
+      shellcheck --shell=sh scripts/install.sh \
+        crates/main/tests/install_fixture/fiber \
+        crates/main/tests/install_fixture/bin/uname \
+        crates/main/tests/install_fixture/bin/sysctl
+    else
+      echo "== shellcheck: Linux only (docs/ci.md), not run here"
+    fi
   fi
 fi
 
