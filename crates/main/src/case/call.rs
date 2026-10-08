@@ -32,8 +32,8 @@ pub(crate) fn run_case(case: CallCase, name: String, process_clock: Arc<dyn Cloc
     };
     let host = extensions::HostScript::new(case.host.http, case.host.exec);
     let clock: Arc<dyn Clock> = CaseClock::new();
-    let package = match provider_package(&installed, &call.provider, &home, &clock, &host) {
-        Some(package) => package,
+    let extension = match provider_extension(&installed, &call.provider, &home, &clock, &host) {
+        Some(extension) => extension,
         None => {
             return report(
                 &name,
@@ -44,13 +44,6 @@ pub(crate) fn run_case(case: CallCase, name: String, process_clock: Arc<dyn Cloc
             );
         }
     };
-    let dir = home
-        .join("extensions")
-        .join(config::dir_name(&package.name));
-    let extension = Arc::new(
-        extensions::LuaExtension::new(package.name.clone(), dir, home, Arc::clone(&clock))
-            .with_host_script(Arc::clone(&host)),
-    );
     let provider = extensions::LuaProvider::new(extension, call.provider);
     let key = arg.key.map(Secret::new);
     let result = provider.cost(&arg.generation_id, &arg.base_url, key.as_ref());
@@ -74,33 +67,39 @@ pub(crate) fn run_case(case: CallCase, name: String, process_clock: Arc<dyn Cloc
 /// the provider, else the one that registers it. A package's registered
 /// provider name can differ from its own name, and the case runs inside
 /// the package under test (`docs/testing.md`, "Testing an extension").
-fn provider_package<'a>(
-    installed: &'a [extensions::Installed],
+fn provider_extension(
+    installed: &[extensions::Installed],
     provider: &str,
     home: &Path,
     clock: &Arc<dyn Clock>,
     host: &Arc<extensions::HostScript>,
-) -> Option<&'a extensions::Installed> {
+) -> Option<Arc<extensions::LuaExtension>> {
+    let extension_for = |package: &extensions::Installed| {
+        let dir = home
+            .join("extensions")
+            .join(config::dir_name(&package.name));
+        Arc::new(
+            extensions::LuaExtension::new(
+                package.name.clone(),
+                dir,
+                home.to_path_buf(),
+                Arc::clone(clock),
+            )
+            .with_host_script(Arc::clone(host)),
+        )
+    };
     if let Some(package) = installed
         .iter()
         .find(|package| config::short_name(&package.name) == provider)
     {
-        return Some(package);
+        return Some(extension_for(package));
     }
-    installed.iter().find(|package| {
-        let dir = home
-            .join("extensions")
-            .join(config::dir_name(&package.name));
-        let extension = extensions::LuaExtension::new(
-            package.name.clone(),
-            dir,
-            home.to_path_buf(),
-            Arc::clone(clock),
-        )
-        .with_host_script(Arc::clone(host));
+    installed.iter().find_map(|package| {
+        let extension = extension_for(package);
         extension
             .provider_names()
             .is_ok_and(|names| names.iter().any(|name| name == provider))
+            .then_some(extension)
     })
 }
 

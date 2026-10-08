@@ -436,29 +436,22 @@ end } })"#,
 
 #[test]
 fn a_call_case_finds_the_provider_when_the_package_name_differs() {
-    let server = ProviderServer::start([Response::status(
-        200,
-        r#"{"data":{"total_cost":0.5}}"#.as_bytes(),
-    )])
-    .unwrap();
-    let setup = setup_named(
-        "casefixture",
-        r#"fiber.provider("acme", { cost = { timeout = 5000, run = function(call)
-  local reply = host.http({url = call.base_url .. "/generation?id=" .. call.generation_id,
-                           headers = {authorization = "Bearer " .. call.key}})
-  return json.decode(reply.body).data.total_cost
-end } })"#,
+    let server =
+        ProviderServer::start([Response::status(200, r#"{"live":true}"#.as_bytes())]).unwrap();
+    let lua = format!(
+        r#"local reply = host.http({{url = {:?}}})
+assert(reply.status == 200 and json.decode(reply.body).case == true)
+fiber.provider("acme", {{ cost = {{ timeout = 5000, run = function() return 0.5 end }} }})"#,
+        server.url()
     );
+    let setup = setup_named("casefixture", &lua);
     let value = json!({
         "call": {"provider": "acme", "function": "cost", "arg": {
             "generation_id": "gen-abc", "base_url": server.url(), "key": "secret"
         }},
         "host": {"http": [{
-            "request": {
-                "url": format!("{}/generation?id=gen-abc", server.url()),
-                "headers": {"authorization": "Bearer secret"}
-            },
-            "reply": {"status": 200, "body": "{\"data\":{\"total_cost\":0.5}}"}
+            "request": {"url": server.url()},
+            "reply": {"status": 200, "body": "{\"case\":true}"}
         }]},
         "returns": 0.5
     });
