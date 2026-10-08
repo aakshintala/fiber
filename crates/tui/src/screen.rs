@@ -143,14 +143,13 @@ impl<B: Backend> Screen<B> {
 /// A blank frame on the theme's text and background colours, so text drawn
 /// with no colour of its own takes the theme's (`docs/tui.md`, "Themes").
 fn themed(area: Rect) -> Buffer {
-    let mut cells = Buffer::empty(area);
-    cells.set_style(
-        area,
+    let mut blank = Cell::default();
+    blank.set_style(
         Style::new()
             .fg(Role::Text.color())
             .bg(Role::Background.color()),
     );
-    cells
+    Buffer::filled(area, blank)
 }
 
 /// A backend that reports the size read from the injected tty. ratatui
