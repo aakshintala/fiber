@@ -1453,7 +1453,15 @@ fn fiber_ask_with_a_missing_required_argument_exits_1_without_calling_the_model(
     let run = setup.run(&["ask", "/greet"]);
 
     assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
-    assert_eq!(run.kinds().last(), Some(&"fiber_exited"));
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "fiber_exited",
+        ],
+    );
     let exited = run.lines.last().expect("fiber_exited is last");
     assert_eq!(exited["payload"]["error"]["code"], "invalid_arguments");
     assert!(
@@ -1487,6 +1495,15 @@ fn fiber_ask_whose_prompt_the_server_refuses_exits_1() {
     let run = setup.run(&["ask", "/greet Ada"]);
 
     assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "fiber_exited",
+        ],
+    );
     let exited = run.lines.last().expect("fiber_exited is last");
     assert_eq!(exited["kind"], "fiber_exited");
     assert_eq!(exited["payload"]["error"]["code"], "mcp_prompt_failed");
