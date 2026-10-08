@@ -2427,7 +2427,12 @@ fn a_suspended_turn_is_refused_then_the_prompt_runs_next() {
     assert_eq!(new[2].payload["request_id"], "r_9");
     assert_eq!(new[3].payload["request_id"], "r_9");
     assert_eq!(new[3].payload["decision"], "deny");
-    assert_eq!(new[3].payload["decided_by"], "standing_rule");
+    assert_eq!(new[3].payload["decided_by"], "cancel");
+    assert_eq!(
+        new[3].payload["reason"],
+        "The session was resumed with nobody to answer."
+    );
+    assert!(new[3].payload.get("reviewer").is_none());
     assert_eq!(new[4].payload["status"], "denied");
     // The finished turn's `turn_completed` carries the original turn id,
     // and every line of it does.
@@ -5037,6 +5042,50 @@ fn close_while_waiting_denies_the_re_raised_review_request_by_cancel() {
     assert_eq!(done.len(), 1);
     assert_eq!(done[0].payload["status"], "denied");
     assert_eq!(done[0].payload["reason"], "no_person");
+}
+
+#[test]
+fn a_headless_resume_denies_the_re_raised_review_request_by_cancel() {
+    let mut history = History::new(vec![Scripted::text("Done.")]);
+    history.write(user_turn("one"), None);
+    history.write(message_started(), Some("a_0"));
+    history.write(requested("exec"), Some("a_1"));
+    history.write(review_request("r_9"), Some("a_1"));
+    history.write(fiber_started(), None);
+    history.write(fiber_exited(Some("r_9")), None);
+    history.freeze();
+    let exec = reads("exec");
+    let looped = history.resume_headless(tools_of(&[&exec]));
+    let (_looped, outcome) = history.step(looped);
+
+    assert_eq!(outcome, Some(contract::events::TurnOutcome::Completed));
+    let resolved = new_of(&history, "permission_resolved");
+    assert_eq!(resolved.len(), 1);
+    assert_eq!(resolved[0].payload["request_id"], "r_9");
+    assert_eq!(resolved[0].payload["decision"], "deny");
+    assert_eq!(resolved[0].payload["decided_by"], "cancel");
+    assert_eq!(
+        resolved[0].payload["reason"],
+        "The session was resumed with nobody to answer."
+    );
+    assert!(resolved[0].payload.get("reviewer").is_none());
+    assert!(exec.ran().is_empty());
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "opening_message",
+            "permission_requested",
+            "permission_resolved",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
 }
 
 /// A shutdown that closes the inbox while the re-raised request waits keeps

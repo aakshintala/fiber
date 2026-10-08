@@ -23,11 +23,16 @@ use log::Log;
 
 use crate::calls::{self, Asked, Decided};
 use crate::cancel::Commit;
+use crate::completion::resolved;
 use crate::handoff::Carry;
 use crate::retry::Retry;
 use crate::reviewer::{BlockLimits, NO_MODEL_MESSAGE, Reviewed, render_reviewed};
 use crate::suspend::Pending;
 use crate::{Error, Loop, Model, Permissions, Step};
+
+/// The denial's reason for a request re-raised in a session nobody can
+/// answer (`docs/events.md`, `permission_resolved`).
+const NOBODY_TO_ANSWER: &str = "The session was resumed with nobody to answer.";
 
 /// What a resume folds back in one streaming pass over the log: the
 /// session, the workspace the first `session_started` recorded, the model
@@ -617,8 +622,20 @@ impl Loop {
         if self.answerable {
             return self.answer_suspended(suspended, &request);
         }
-        let denied =
-            self.unanswerable(&suspended.action, &turn, Some(request.request_id.clone()))?;
+        // Nobody decided the re-raised request, review or standing ask: the
+        // resume denies it by `cancel` (`docs/events.md`, `permission_resolved`).
+        self.decided(
+            &suspended.action,
+            &turn,
+            resolved(
+                Some(request.request_id.clone()),
+                Decision::Deny,
+                DecidedBy::Cancel,
+                Some(NOBODY_TO_ANSWER.to_owned()),
+                None,
+            ),
+        )?;
+        let denied = calls::no_person();
         for (id, _) in &suspended.batch {
             let completed = if *id == suspended.action {
                 denied.clone()

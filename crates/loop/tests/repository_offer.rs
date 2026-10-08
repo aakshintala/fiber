@@ -1674,10 +1674,10 @@ fn a_close_sent_before_the_offer_is_raised_again_leaves_nobody_to_answer() {
     let lines = drain(&mut all);
     assert_eq!(notices(&lines), [skipped("a", "MCP server")]);
     assert!(history.of("repository_code_resolved").is_empty());
-    // With nobody to answer, the approval is refused as headless.
+    // With nobody to answer, the approval is denied by cancel.
     let resolved = history.of("permission_resolved");
     assert_eq!(resolved.len(), 1);
-    assert_eq!(resolved[0].payload["decided_by"], "standing_rule");
+    assert_eq!(resolved[0].payload["decided_by"], "cancel");
     assert_eq!(history.of("turn_completed").len(), 1);
     // The complete, ordered durable kinds.
     assert_eq!(
