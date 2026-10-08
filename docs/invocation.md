@@ -507,6 +507,9 @@ first line; in a resumed process it is the process's first line
 full session id or any prefix of one that is unique among the project's
 sessions. `fiber resume` with no id opens home. `fiber ask --resume` with no
 id is a usage error, because `ask` has no list to show.
+`--model` and `-c` on `fiber ask --resume` take effect when the resume starts
+the session's process. A session still running keeps the configuration it
+started with, and they are ignored.
 
 **A session exits when it has been idle for `session.idle_exit_ms`**, 30 minutes
 by default (`docs/configuration.md`), whoever is connected. Idle means no turn
