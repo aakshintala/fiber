@@ -26,7 +26,7 @@ use crate::asking::Fitted;
 use crate::cancel::SignalState;
 use crate::inbox;
 use crate::progress::{SharedWake, Stream};
-use crate::{Error, Loop};
+use crate::{Error, Loop, mint};
 
 /// The calls of a step without a written completion, in request order,
 /// each with its stream while it runs.
@@ -105,11 +105,14 @@ impl Loop {
         for (id, stream) in running(calls) {
             let slot = stream.asking();
             if let Some(asking) = slot.take_raised() {
-                let request = slot.next_request();
+                // A request raised again on resume is already written: the
+                // ask pends under it (`docs/events.md`, "Resume").
+                let again = slot.take_reraise();
+                let request = again.clone().unwrap_or_else(|| RequestId(mint("r_")));
                 if nobody {
-                    // No `interaction_requested`: the resolved line names a
-                    // request never raised (`docs/events.md`,
-                    // "Interactions").
+                    // Unless raised again, no `interaction_requested`: the
+                    // resolved line names a request never raised
+                    // (`docs/events.md`, "Interactions").
                     self.declined(request, turn)?;
                     slot.resolve(Answered::NoAnswer);
                     continue;
@@ -128,7 +131,9 @@ impl Loop {
                     // running its call (`docs/events.md`, "Resume").
                     resumes: asking.suspends,
                 };
-                self.append(&Event::InteractionRequested(requested), turn, None)?;
+                if again.is_none() {
+                    self.append(&Event::InteractionRequested(requested), turn, None)?;
+                }
                 slot.pend(
                     request,
                     asking.interaction,
@@ -212,6 +217,18 @@ impl Loop {
             wake.park(clock.as_ref(), until);
             return Ok(false);
         };
+        // A reply or `close` held aside before a finishing turn raised its
+        // request again is taken first, as if it came now
+        // (`docs/invocation.md`, "Lifecycle").
+        let requests: Vec<RequestId> = running(calls)
+            .filter_map(|(_, stream)| stream.asking().pending().map(|(request, _)| request))
+            .collect();
+        if let Some(held) = requests
+            .iter()
+            .find_map(|request| self.take_held_answer(request))
+        {
+            return self.take_while_asked(held, calls, turn).map(|()| false);
+        }
         wake.forward(Some(target));
         let received = self.receive(until);
         wake.forward(None);
@@ -313,7 +330,7 @@ impl Loop {
     }
 
     /// Writes Fiber's decline of `request`: `by` `fiber`, `declined: true`.
-    fn declined(&mut self, request: RequestId, turn: &TurnId) -> Result<(), Error> {
+    pub(crate) fn declined(&mut self, request: RequestId, turn: &TurnId) -> Result<(), Error> {
         let resolved = InteractionResolved {
             request_id: request,
             by: ResolvedBy::Fiber,

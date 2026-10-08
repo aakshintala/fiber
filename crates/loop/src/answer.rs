@@ -134,7 +134,10 @@ impl Loop {
     /// The first delivery held aside before a finishing turn raised its
     /// request again that answers it: a `reply` naming `request_id`, or
     /// `close`. Everything else stays held, in order, for the next turn.
-    fn take_held_answer(&mut self, request_id: &contract::RequestId) -> Option<Delivery> {
+    pub(crate) fn take_held_answer(
+        &mut self,
+        request_id: &contract::RequestId,
+    ) -> Option<Delivery> {
         let at = self.deferred.iter().position(|held| match held {
             Delivery::Reply(reply, _) => reply.request_id == *request_id,
             Delivery::Close(_) => true,

@@ -266,12 +266,10 @@ fn a_pending_slot_reports_whether_its_ask_suspends() {
 }
 
 #[test]
-fn reraise_binds_the_id_of_the_next_raise_only() {
+fn reraise_binds_the_next_raise_only() {
     let slot = AskSlot::default();
+    assert_eq!(slot.take_reraise(), None, "nothing bound");
     slot.reraise(RequestId("r_7".into()));
-    assert_eq!(slot.next_request(), RequestId("r_7".into()));
-    let minted = slot.next_request();
-    assert_ne!(minted, RequestId("r_7".into()));
-    assert!(minted.0.starts_with("r_"), "{minted:?}");
-    assert_ne!(slot.next_request(), minted, "each raise mints its own");
+    assert_eq!(slot.take_reraise(), Some(RequestId("r_7".into())));
+    assert_eq!(slot.take_reraise(), None, "the raise after mints its own");
 }

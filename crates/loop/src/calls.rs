@@ -226,6 +226,7 @@ impl Loop {
             // joins is left blocked in one.
             let mut release = Release::default();
             let mut suspend = Suspend::default();
+            let mut reraised = false;
             for (id, name, decision) in decided {
                 let state = match decision {
                     Err(completed) => State::Ready(completed),
@@ -257,8 +258,11 @@ impl Loop {
                         let answerable = self.answerable && self.inbox_wake.is_some();
                         let stream =
                             Arc::new(Stream::new(Arc::clone(&wake), id.clone(), answerable));
-                        if let Some(request) = again {
+                        if let Some(request) = again
+                            && answerable
+                        {
                             stream.asking().reraise(request);
+                            reraised = true;
                         }
                         release.add(Arc::clone(&stream));
                         let thread_stream = Arc::clone(&stream);
@@ -284,6 +288,14 @@ impl Loop {
                     }
                 };
                 running.push(Running { id, state });
+            }
+            // A request raised again whose call does not run, or runs with
+            // nobody to answer, is Fiber's to decline before the call
+            // completes (`docs/invocation.md`, "Lifecycle").
+            if let Some((_, request)) = &reraise
+                && !reraised
+            {
+                self.declined(request.clone(), turn)?;
             }
             loop {
                 self.serve_interactions(&unwritten(&running), turn)?;

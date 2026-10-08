@@ -13,7 +13,6 @@ use contract::commands::ReplyAnswer;
 use contract::events::{Answer, Interaction};
 use contract::tool::{Answered, Asking, Check};
 
-use crate::mint;
 use crate::progress::Stream;
 
 /// Where one call's ask stands.
@@ -42,7 +41,7 @@ enum Slot {
 struct Inner {
     slot: Slot,
     closed: bool,
-    /// The id the next raise is written under, bound by
+    /// The request the next raise is, already written, bound by
     /// [`AskSlot::reraise`].
     reraise: Option<RequestId>,
 }
@@ -144,20 +143,17 @@ impl AskSlot {
         }
     }
 
-    /// The next raise is written under `request` instead of a new id: a
+    /// The next raise is `request`, whose line is already written: a
     /// request raised again on resume keeps its `request_id`
     /// (`docs/invocation.md`, "Lifecycle").
     pub(crate) fn reraise(&self, request: RequestId) {
         lock(&self.inner).reraise = Some(request);
     }
 
-    /// The id a raise is written under: the one [`AskSlot::reraise`]
-    /// bound, once, and a new one otherwise.
-    pub(crate) fn next_request(&self) -> RequestId {
-        lock(&self.inner)
-            .reraise
-            .take()
-            .unwrap_or_else(|| RequestId(mint("r_")))
+    /// The request [`AskSlot::reraise`] bound, once: the raise taken next
+    /// is it, and writes no line.
+    pub(crate) fn take_reraise(&self) -> Option<RequestId> {
+        lock(&self.inner).reraise.take()
     }
 
     /// Records the taken ask as pending under `request`, once its line is

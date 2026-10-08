@@ -24,13 +24,14 @@ use std::time::{Duration, Instant};
 use contract::clock::Clock as _;
 use contract::commands::{Reply, ReplyAnswer};
 use contract::emit::Emit;
-use contract::events::{Answer, Control, Interaction, TurnOutcome};
+use contract::events::{Answer, Control, Event, Interaction, TurnOutcome};
 use contract::inbox::{Ack, Delivery};
 use contract::jobs::{Foreground, Jobs, OpenError, Opened, Opening};
+use contract::provider::Input;
 use contract::provider::ToolDefinition;
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Question};
 use contract::tool::{Answered, Ask, Asking, Cancel, Effects, EffectsError, Output, Tool};
-use contract::{Envelope, ErrorCode, JobId, RequestId};
+use contract::{ActionId, Envelope, ErrorCode, JobId, RequestId};
 use fakes::Scripted;
 use fakes::clock::FakeClock;
 use r#loop::{Error, Loop};
@@ -260,6 +261,11 @@ type Finished = mpsc::Receiver<(Loop, Result<Option<TurnOutcome>, Error>)>;
 /// Sends a prompt and runs one turn on its own thread.
 fn start(session: &mut Session) -> Finished {
     session.inbox.send(delivery("go")).unwrap();
+    run_turn(session)
+}
+
+/// Runs one turn on its own thread.
+fn run_turn(session: &mut Session) -> Finished {
     let mut looped = session.looped.take().unwrap();
     let (done, finished) = mpsc::channel();
     thread::spawn(move || {
@@ -283,17 +289,33 @@ fn still_running(finished: &Finished) {
     assert!(finished.try_recv().is_err(), "the turn has not ended");
 }
 
-/// Sends `answer` to `request` and returns how the command was answered.
-fn answer(session: &Session, request: &str, answer: Value) -> contract::inbox::Answer {
+/// An ack that reports how its command was answered.
+fn acked() -> (Ack, mpsc::Receiver<contract::inbox::Answer>) {
     let (tx, rx) = mpsc::channel();
     let ack = Ack(Box::new(move |answered| {
         let _sent = tx.send(answered);
     }));
+    (ack, rx)
+}
+
+/// Sends `answer` to `request`, and returns where its answer arrives.
+fn send_reply(
+    session: &Session,
+    request: &str,
+    answer: Value,
+) -> mpsc::Receiver<contract::inbox::Answer> {
+    let (ack, rx) = acked();
     let reply = Reply {
         request_id: RequestId(request.into()),
         answer: serde_json::from_value::<ReplyAnswer>(answer).unwrap(),
     };
     session.inbox.send(Delivery::Reply(reply, ack)).unwrap();
+    rx
+}
+
+/// Sends `answer` to `request` and returns how the command was answered.
+fn answer(session: &Session, request: &str, answer: Value) -> contract::inbox::Answer {
+    let rx = send_reply(session, request, answer);
     rx.recv_timeout(DEADLINE).expect("the reply is answered")
 }
 
@@ -814,4 +836,407 @@ fn an_ask_that_does_not_suspend_keeps_the_session_past_the_idle_delay() {
         finish(&mut session, &finished),
         Some(TurnOutcome::Completed)
     );
+}
+
+/// Runs a session whose only call is `former`'s form until the idle delay
+/// exits it, and returns it with the form's `interaction_requested`. The
+/// lines through that line are read; the rest are not.
+fn suspended_on_form(former: &Arc<Former>) -> (Session, Envelope) {
+    let mut session = session(&["former"], vec![former.clone()], Some(IDLE));
+    let tap = Tap::new(&session.log);
+    let at = session.clock.now() + IDLE;
+    let finished = start(&mut session);
+    let requested = tap.wait_for("interaction_requested");
+    assert!(session.clock.await_parked(at, DEADLINE), "the step idles");
+    session.clock.advance(IDLE);
+    assert_eq!(finish(&mut session, &finished), None);
+    session.events_until("the form's request", |line| {
+        line.kind == "interaction_requested"
+    });
+    (session, requested)
+}
+
+/// As [`suspended_on_form`], then `fiber_exited` and a resume with
+/// `former`.
+fn resumed_on_form(former: &Arc<Former>) -> (Session, Envelope) {
+    let (mut session, requested) = suspended_on_form(former);
+    exit(&mut session, None);
+    session.resume(vec![former.clone()]);
+    (session, requested)
+}
+
+/// The call that raised `requested`.
+fn action_of(requested: &Envelope) -> String {
+    requested.payload["action_ids"][0]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+/// The finishing turn's lines up to its call's completion: a new process,
+/// and the request raised again.
+const RERAISED: &[&str] = &["fiber_started", "preamble_built", "interaction_requested"];
+
+#[test]
+fn a_reply_held_before_the_resume_answers_the_form_raised_again() {
+    let former = Arc::new(Former::new());
+    let (mut session, requested) = resumed_on_form(&former);
+    let request = request_id(&requested);
+    let replied = send_reply(&session, &request, main_branch());
+    let finished = run_turn(&mut session);
+
+    assert_eq!(
+        finish(&mut session, &finished),
+        Some(TurnOutcome::Completed)
+    );
+    assert_eq!(replied.recv_timeout(DEADLINE).unwrap(), Ok(None));
+    let lines = session.lines();
+    assert_kinds(
+        &lines,
+        &[
+            RERAISED,
+            &["interaction_resolved", "tool_call_completed"],
+            DONE,
+        ],
+    );
+    let raised = of_kind(&lines, "interaction_requested")[0];
+    assert_eq!(raised.payload, requested.payload, "the same request");
+    let resolved = of_kind(&lines, "interaction_resolved")[0];
+    assert_eq!(resolved.payload["by"], "person");
+    assert_eq!(resolved.payload["request_id"], request.as_str());
+    let completed = of_kind(&lines, "tool_call_completed")[0];
+    assert_eq!(completed.payload["status"], "completed");
+    let runs = former.runs();
+    assert_eq!(runs.len(), 2, "the call ran again");
+    assert_eq!(runs[0], runs[1], "with the same arguments");
+}
+
+#[test]
+fn the_rebuilt_conversation_holds_the_form_call_once_then_its_result() {
+    let former = Arc::new(Former::new());
+    let (mut session, requested) = resumed_on_form(&former);
+    let replied = send_reply(&session, &request_id(&requested), main_branch());
+    let finished = run_turn(&mut session);
+    assert_eq!(
+        finish(&mut session, &finished),
+        Some(TurnOutcome::Completed)
+    );
+    assert_eq!(replied.recv_timeout(DEADLINE).unwrap(), Ok(None));
+
+    let action = action_of(&requested);
+    let request = session.requests().pop().unwrap();
+    let calls: Vec<usize> = request
+        .conversation
+        .iter()
+        .enumerate()
+        .filter(|(_, input)| {
+            matches!(input, Input::ToolCall { action_id, .. } if action_id.0 == action)
+        })
+        .map(|(at, _)| at)
+        .collect();
+    assert_eq!(calls.len(), 1, "the call once");
+    match request.conversation.get(calls[0] + 1) {
+        Some(Input::ToolResult {
+            action_id, text, ..
+        }) => {
+            assert_eq!(action_id.0, action);
+            assert_eq!(text, "{\"answers\":[{\"labels\":[\"main\"]}]}");
+        }
+        other => panic!("the call's result follows it, not {other:?}"),
+    }
+}
+
+#[test]
+fn a_reply_after_the_form_is_raised_again_answers_it() {
+    let former = Arc::new(Former::new());
+    let (mut session, requested) = resumed_on_form(&former);
+    let tap = Tap::new(&session.log);
+    let finished = run_turn(&mut session);
+    let raised = tap.wait_for("interaction_requested");
+    assert_eq!(raised.payload, requested.payload);
+    let request = request_id(&raised);
+    assert_eq!(answer(&session, &request, main_branch()), Ok(None));
+
+    assert_eq!(
+        finish(&mut session, &finished),
+        Some(TurnOutcome::Completed)
+    );
+    let lines = session.lines();
+    assert_kinds(
+        &lines,
+        &[
+            RERAISED,
+            &["interaction_resolved", "tool_call_completed"],
+            DONE,
+        ],
+    );
+    assert_eq!(former.runs().len(), 2);
+}
+
+#[test]
+fn the_idle_delay_in_the_finishing_turn_suspends_on_the_same_request() {
+    let former = Arc::new(Former::new());
+    let (mut session, requested) = resumed_on_form(&former);
+    session.looped = session
+        .looped
+        .take()
+        .map(|looped| looped.idle_exit(Some(IDLE)));
+    let tap = Tap::new(&session.log);
+    let at = session.clock.now() + IDLE;
+    let finished = run_turn(&mut session);
+    tap.wait_for("interaction_requested");
+    idle_passes(&session, &tap, &finished, at);
+
+    assert_eq!(finish(&mut session, &finished), None);
+    let lines = exit(&mut session, None);
+    assert_kinds(&lines, &[RERAISED, &["fiber_exited"]]);
+    assert_eq!(
+        of_kind(&lines, "fiber_exited")[0].payload["suspended_on"],
+        request_id(&requested)
+    );
+}
+
+#[test]
+fn a_close_held_before_the_resume_ends_the_finishing_turn_with_the_questions() {
+    let former = Arc::new(Former::new());
+    let (mut session, _) = resumed_on_form(&former);
+    let (ack, closed) = acked();
+    session.inbox.send(Delivery::Close(ack)).unwrap();
+    let finished = run_turn(&mut session);
+
+    assert_eq!(
+        finish(&mut session, &finished),
+        Some(TurnOutcome::Completed)
+    );
+    assert_eq!(closed.recv_timeout(DEADLINE).unwrap(), Ok(None));
+    let lines = session.lines();
+    ends_on_the_questions(&lines);
+}
+
+/// Asserts the finishing turn raised the request again, Fiber declined it,
+/// and the turn ended on the call's questions.
+fn ends_on_the_questions(lines: &[Envelope]) {
+    assert_kinds(
+        lines,
+        &[
+            RERAISED,
+            &[
+                "interaction_resolved",
+                "tool_call_completed",
+                "turn_completed",
+            ],
+        ],
+    );
+    let resolved = of_kind(lines, "interaction_resolved")[0];
+    assert_eq!(resolved.payload["by"], "fiber");
+    assert_eq!(resolved.payload["declined"], true);
+    let completed = of_kind(lines, "tool_call_completed")[0];
+    assert_eq!(completed.payload["status"], "completed");
+    assert_eq!(
+        completed.payload["content"],
+        json!([{"type": "text", "text": SENT}])
+    );
+    let asked = &completed.payload["control"]["questions"];
+    assert_eq!(*asked, questions()["questions"]);
+    let ended = of_kind(lines, "turn_completed")[0];
+    assert_eq!(ended.payload["questions"], *asked);
+}
+
+#[test]
+fn a_headless_resume_declines_the_form_and_runs_its_prompt_next() {
+    let former = Arc::new(Former::new());
+    let (mut session, _) = resumed_on_form(&former);
+    session.looped = session.looped.take().map(|looped| looped.answerable(false));
+    session.inbox.send(delivery("next")).unwrap();
+    let finished = run_turn(&mut session);
+    assert_eq!(
+        finish(&mut session, &finished),
+        Some(TurnOutcome::Completed)
+    );
+    ends_on_the_questions(&session.lines());
+
+    let finished = run_turn(&mut session);
+    assert_eq!(
+        finish(&mut session, &finished),
+        Some(TurnOutcome::Completed)
+    );
+    let lines = session.lines();
+    assert_eq!(kinds(&lines)[0], "turn_started");
+    assert_eq!(kinds(&lines)[1..], *DONE);
+    assert_eq!(former.runs().len(), 2);
+}
+
+#[test]
+fn a_cancel_in_the_finishing_turn_declines_the_form() {
+    let former = Arc::new(Former::new());
+    let (mut session, _) = resumed_on_form(&former);
+    let tap = Tap::new(&session.log);
+    let finished = run_turn(&mut session);
+    tap.wait_for("interaction_requested");
+    assert!(session.cancel.cancel());
+
+    assert_eq!(
+        finish(&mut session, &finished),
+        Some(TurnOutcome::Interrupted)
+    );
+    let lines = session.lines();
+    assert_kinds(
+        &lines,
+        &[
+            RERAISED,
+            &[
+                "interaction_resolved",
+                "tool_call_completed",
+                "turn_completed",
+            ],
+        ],
+    );
+    assert_eq!(
+        of_kind(&lines, "interaction_resolved")[0].payload["by"],
+        "fiber"
+    );
+    assert_eq!(
+        of_kind(&lines, "tool_call_completed")[0].payload["status"],
+        "cancelled"
+    );
+}
+
+/// Appends a line of `kind` with `payload` under the suspended turn.
+fn append(session: &Session, like: &Envelope, kind: &str, payload: Value, action: Option<&str>) {
+    let mut line = like.clone();
+    kind.clone_into(&mut line.kind);
+    line.payload = payload.as_object().unwrap().clone();
+    let event = Event::from_envelope(&line).unwrap().unwrap();
+    let action = action.map(|action| ActionId(action.into()));
+    session
+        .log
+        .append(&event, like.turn_id.clone(), action)
+        .unwrap();
+}
+
+/// Suspends on a form, lets `edit` append lines and name the request
+/// `fiber_exited` names, then resumes and runs a prompt: the session
+/// resumes as cut short, and the form's call never runs again.
+fn resumes_as_cut_short(edit: impl FnOnce(&Session, &Envelope) -> String) {
+    let former = Arc::new(Former::new());
+    let (mut session, requested) = suspended_on_form(&former);
+    let named = edit(&session, &requested);
+    let usage = json!({
+        "tokens": {"input": 0, "cache_read": 0, "cache_write": {}, "output": 0},
+        "cost": 0,
+        "subscription_cost": 0,
+    });
+    let exited = json!({"exit_code": 0, "usage": usage, "suspended_on": named});
+    let mut like = requested.clone();
+    like.turn_id = None;
+    append(&session, &like, "fiber_exited", exited, None);
+    session.events_until("fiber_exited", |line| line.kind == "fiber_exited");
+    session.resume(vec![former.clone()]);
+    session.inbox.send(delivery("next")).unwrap();
+    let finished = run_turn(&mut session);
+
+    assert_eq!(
+        finish(&mut session, &finished),
+        Some(TurnOutcome::Completed)
+    );
+    let lines = session.lines();
+    assert!(
+        of_kind(&lines, "interaction_requested").is_empty(),
+        "nothing is raised again"
+    );
+    assert_eq!(former.runs().len(), 1, "the call never runs again");
+}
+
+/// A copy of `requested` under `id`, changed by `change`, appended.
+fn copied(
+    session: &Session,
+    requested: &Envelope,
+    id: &str,
+    change: impl FnOnce(&mut Value),
+) -> String {
+    let mut payload = Value::Object(requested.payload.clone());
+    payload["request_id"] = json!(id);
+    change(&mut payload);
+    append(session, requested, "interaction_requested", payload, None);
+    id.to_owned()
+}
+
+#[test]
+fn a_request_not_logged_resumes_is_not_raised_again() {
+    resumes_as_cut_short(|session, requested| {
+        copied(session, requested, "r_plain", |payload| {
+            payload.as_object_mut().unwrap().remove("resumes");
+        })
+    });
+}
+
+#[test]
+fn a_request_naming_two_calls_is_not_raised_again() {
+    resumes_as_cut_short(|session, requested| {
+        let action = action_of(requested);
+        copied(session, requested, "r_two", |payload| {
+            payload["action_ids"] = json!([action, "a_other"]);
+        })
+    });
+}
+
+#[test]
+fn a_request_an_extension_raised_is_not_raised_again() {
+    resumes_as_cut_short(|session, requested| {
+        copied(session, requested, "r_ext", |payload| {
+            payload["extension"] = json!("fiber.test/notes");
+        })
+    });
+}
+
+#[test]
+fn a_resolved_request_is_not_raised_again() {
+    resumes_as_cut_short(|session, requested| {
+        let request = request_id(requested);
+        let resolved = json!({"request_id": request, "by": "fiber", "declined": true});
+        append(session, requested, "interaction_resolved", resolved, None);
+        request
+    });
+}
+
+#[test]
+fn a_request_whose_call_completed_is_not_raised_again() {
+    resumes_as_cut_short(|session, requested| {
+        let action = action_of(requested);
+        let completed = json!({"status": "completed", "content": []});
+        append(
+            session,
+            requested,
+            "tool_call_completed",
+            completed,
+            Some(&action),
+        );
+        request_id(requested)
+    });
+}
+
+#[test]
+fn a_request_whose_turn_completed_is_not_raised_again() {
+    resumes_as_cut_short(|session, requested| {
+        let ended = json!({"outcome": "interrupted"});
+        append(session, requested, "turn_completed", ended, None);
+        request_id(requested)
+    });
+}
+
+#[test]
+fn a_request_whose_call_never_started_is_not_raised_again() {
+    resumes_as_cut_short(|session, requested| {
+        let call = json!({"name": "former", "arguments": questions()});
+        append(
+            session,
+            requested,
+            "tool_call_requested",
+            call,
+            Some("a_unstarted"),
+        );
+        copied(session, requested, "r_unstarted", |payload| {
+            payload["action_ids"] = json!(["a_unstarted"]);
+        })
+    });
 }

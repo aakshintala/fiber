@@ -1,9 +1,9 @@
 //! Resuming a session (`docs/events.md`, "Resume"): rebuilding the loop's
 //! state from the log and its configuration, nothing else. A suspended turn
-//! (`fiber_exited` with `suspended_on`) re-raises its pending approval under
-//! the same `request_id`, waits for a person's answer (or refuses it as
-//! headless when no person can answer), finishes the turn, and then runs
-//! the prompt as the next turn.
+//! (`fiber_exited` with `suspended_on`) re-raises its pending approval or
+//! question under the same `request_id`, waits for a person's answer (or
+//! refuses it as headless when no person can answer), finishes the turn,
+//! and then runs the prompt as the next turn.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -26,6 +26,7 @@ use crate::cancel::Commit;
 use crate::handoff::Carry;
 use crate::retry::Retry;
 use crate::reviewer::{BlockLimits, NO_MODEL_MESSAGE, Reviewed, render_reviewed};
+use crate::suspend::Pending;
 use crate::{Error, Loop, Model, Permissions, Step};
 
 /// What a resume folds back in one streaming pass over the log: the
@@ -222,13 +223,14 @@ pub fn resumed(dir: &Path) -> Result<Resumed, Error> {
     })
 }
 
-/// A turn cut short on a pending approval: what the finishing turn writes
-/// back under the same turn id (`docs/invocation.md`, "Lifecycle").
+/// A turn cut short on a pending approval or question: what the finishing
+/// turn writes back under the same turn id (`docs/invocation.md`,
+/// "Lifecycle").
 pub(crate) struct Suspended {
     /// The cut-short turn, which the finishing turn completes.
     pub(crate) turn: TurnId,
     /// The pending request, re-raised with the same `request_id`.
-    pub(crate) request: contract::events::PermissionRequested,
+    pub(crate) pending: Pending,
     /// The call the request was raised for.
     pub(crate) action: ActionId,
     /// The calls with `tool_call_requested` after the log's last
@@ -240,13 +242,13 @@ pub(crate) struct Suspended {
 
 /// The suspended turn `lines` describe, if any: the last line is a
 /// `fiber_exited` with `suspended_on` naming a `permission_requested` that
-/// has no `permission_resolved`, whose turn has no `turn_completed`, and
-/// whose action is in the suspended batch. Anything else resumes as a
-/// cut-short turn. Only approvals re-raise: no tool raises an
-/// `interaction_requested` yet, so a `suspended_on` naming one resumes as
-/// cut short. A `suspended_on` naming a repository offer resumes no turn:
-/// the offer is raised again by the offer step.
-// debt: re-raises approvals only; an interaction_requested joins when a tool raises one (ask_user, docs/tools.md "Asking the person").
+/// has no `permission_resolved`, or an `interaction_requested` a resume may
+/// raise again ([`crate::suspend::interaction_pending`]), whose turn has no
+/// `turn_completed`, and whose action is in the suspended batch. Anything
+/// else resumes as a cut-short turn: an interaction not logged
+/// `resumes: true` is never raised again (`docs/events.md`, "Resume"). A
+/// `suspended_on` naming a repository offer resumes no turn: the offer is
+/// raised again by the offer step.
 pub(crate) fn suspended(lines: &[Envelope]) -> Result<Option<Suspended>, Error> {
     let Some(last) = lines.last() else {
         return Ok(None);
@@ -279,8 +281,12 @@ pub(crate) fn suspended(lines: &[Envelope]) -> Result<Option<Suspended>, Error> 
             return Ok(None);
         }
     }
-    let Some((request, turn, action)) = found else {
-        return Ok(None);
+    let (request, turn, action) = match found {
+        Some((request, turn, action)) => (Pending::Approval(request), turn, action),
+        None => match crate::suspend::interaction_pending(lines, &pending)? {
+            Some((asked, turn, action)) => (Pending::Interaction(asked), turn, action),
+            None => return Ok(None),
+        },
     };
     if lines
         .iter()
@@ -316,7 +322,7 @@ pub(crate) fn suspended(lines: &[Envelope]) -> Result<Option<Suspended>, Error> 
     }
     Ok(Some(Suspended {
         turn,
-        request,
+        pending: request,
         action,
         batch,
     }))
@@ -494,16 +500,6 @@ impl Loop {
 }
 
 impl Loop {
-    /// Writes the suspended approval's `permission_requested` again, under
-    /// its turn and action, as its re-raise does.
-    fn keep_suspended(&mut self, suspended: &Suspended) -> Result<(), Error> {
-        self.append(
-            &Event::PermissionRequested(suspended.request.clone()),
-            &suspended.turn,
-            Some(&suspended.action),
-        )
-    }
-
     /// Finishes a turn cut short on a pending approval, then runs the
     /// prompt as the next turn (`docs/invocation.md`, "Lifecycle"): the
     /// request is raised again under the same `request_id` and answered,
@@ -528,13 +524,16 @@ impl Loop {
         // The repository's offer resolves before the first request. A
         // process that ends on it writes the suspended approval again, so it
         // exits naming the approval and the next resume finishes the turn.
-        let offered = self.offer(Some(&suspended.request.request_id));
+        let offered = self.offer(Some(suspended.pending.request_id()));
         if !matches!(offered, Ok(true)) {
             self.keep_suspended(&suspended)?;
             return offered.map(|_| None);
         }
         self.ensure_preamble()?;
         self.cut_off = false;
+        let Pending::Approval(request) = suspended.pending.clone() else {
+            return self.finish_suspended_form(suspended);
+        };
         let turn = suspended.turn.clone();
         // The credential deny applies to every call, including one
         // suspended before its path became a configured credential file:
@@ -567,7 +566,7 @@ impl Loop {
                     &suspended.action,
                     &turn,
                     crate::completion::resolved(
-                        Some(suspended.request.request_id.clone()),
+                        Some(request.request_id.clone()),
                         Decision::Deny,
                         DecidedBy::CredentialDeny,
                         Some(why),
@@ -595,30 +594,7 @@ impl Loop {
                 calls.push((id, call, already));
             }
             let cancelled = self.run_batch(calls, &turn, None)?;
-            // A later call's approval reached the idle delay: nothing more
-            // is written, as in any step. The turn resumes later, so a
-            // queued switch is dropped.
-            if self.idle_left {
-                self.pending.clear();
-                self.cancel.disarm();
-                return Ok(None);
-            }
-            // Orphan notices the resume logged behind the open batch.
-            self.conversation.append(&mut self.held);
-            // A cancel that ended the batch ends the turn `interrupted` at
-            // the next step's start, as a step's cancel does. A spent
-            // headless block budget ends the turn `failed` `blocked`
-            // before the batch's questions are processed, as a step's
-            // does.
-            if !cancelled {
-                if let Some(blocked) = self.take_blocked_end() {
-                    return self.end_turn(&turn, blocked);
-                }
-                if let Some(completed) = self.after_calls(&turn)? {
-                    return self.end_turn(&turn, completed);
-                }
-            }
-            return self.run_steps(&turn);
+            return self.finish_batch(&turn, cancelled);
         }
         // Armed with the re-raise: a shutdown before it leaves the request
         // pending, so the next resume raises it again (`docs/invocation.md`,
@@ -629,7 +605,7 @@ impl Loop {
         let cancel = Arc::clone(&self.cancel);
         let raised = cancel.commit(Commit::Arm, || {
             self.append(
-                &Event::PermissionRequested(suspended.request.clone()),
+                &Event::PermissionRequested(request.clone()),
                 &turn,
                 Some(&suspended.action),
             )
@@ -639,13 +615,10 @@ impl Loop {
         };
         raised?;
         if self.answerable {
-            return self.answer_suspended(suspended);
+            return self.answer_suspended(suspended, &request);
         }
-        let denied = self.unanswerable(
-            &suspended.action,
-            &turn,
-            Some(suspended.request.request_id.clone()),
-        )?;
+        let denied =
+            self.unanswerable(&suspended.action, &turn, Some(request.request_id.clone()))?;
         for (id, _) in &suspended.batch {
             let completed = if *id == suspended.action {
                 denied.clone()
@@ -664,18 +637,22 @@ impl Loop {
     /// the run phase every step uses. The idle delay passing while waiting
     /// writes nothing more: the session exits suspended on the same
     /// request, and the next resume raises it again.
-    fn answer_suspended(&mut self, suspended: Suspended) -> Result<Option<TurnOutcome>, Error> {
+    fn answer_suspended(
+        &mut self,
+        suspended: Suspended,
+        request: &contract::events::PermissionRequested,
+    ) -> Result<Option<TurnOutcome>, Error> {
         let Suspended {
             turn,
-            request,
             action,
             batch,
+            ..
         } = suspended;
         // `suspended` only returns a batch that holds the action.
         let Some((_, call)) = batch.iter().find(|(id, _)| *id == action) else {
             return self.run_steps(&turn);
         };
-        let decision: Decided = match self.await_answer(&action, &turn, &call.name, &request)? {
+        let decision: Decided = match self.await_answer(&action, &turn, &call.name, request)? {
             // The answer allows the call the request was raised for, as
             // the model asked for it: checked again, it runs.
             Asked::Allow => self
@@ -707,29 +684,7 @@ impl Loop {
             calls.push((id, call, already));
         }
         let cancelled = self.run_batch(calls, &turn, None)?;
-        // A later call's approval reached the idle delay: nothing more is
-        // written, as in any step. The turn resumes later, so a queued
-        // switch is dropped.
-        if self.idle_left {
-            self.pending.clear();
-            self.cancel.disarm();
-            return Ok(None);
-        }
-        // Orphan notices the resume logged behind the open batch.
-        self.conversation.append(&mut self.held);
-        // A cancel that ended the batch ends the turn `interrupted` at the
-        // next step's start, as a step's cancel does. A spent headless
-        // block budget ends the turn `failed` `blocked` before the batch's
-        // questions are processed, as a step's does.
-        if !cancelled {
-            if let Some(blocked) = self.take_blocked_end() {
-                return self.end_turn(&turn, blocked);
-            }
-            if let Some(completed) = self.after_calls(&turn)? {
-                return self.end_turn(&turn, completed);
-            }
-        }
-        self.run_steps(&turn)
+        self.finish_batch(&turn, cancelled)
     }
 
     /// The step loop and the `turn_completed` tail every turn ends with:
@@ -754,7 +709,7 @@ impl Loop {
     }
 
     /// `run_steps`'s tail: the idle check, `disarm_cancel`, `turn_completed`.
-    fn end_turn(
+    pub(crate) fn end_turn(
         &mut self,
         turn: &TurnId,
         mut completed: TurnCompleted,
