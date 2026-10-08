@@ -2,6 +2,7 @@
 //! and the verdict behind the `CI` check.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
 use std::path::Path;
 
 use proc_macro2::{TokenStream, TokenTree};
@@ -328,6 +329,65 @@ pub(crate) fn dependents(touched: BTreeSet<String>, members: &Members) -> BTreeS
 
 pub(crate) fn classify(files: &[String], members: &Members) -> Selection {
     classify_with(files, members, COMPILED_IN, PACKAGE_READERS)
+}
+
+/// First-party packages with direct JSON cases, when the binary-level tests
+/// are selected (`docs/ci.md`, "Selection").
+pub(crate) fn extension_packages(
+    selection: &Selection,
+    root: &Path,
+) -> Result<Vec<String>, String> {
+    if !selection
+        .packages()
+        .iter()
+        .any(|package| package == BINARY_TESTS)
+    {
+        return Ok(Vec::new());
+    }
+
+    let mut packages = BTreeSet::new();
+    for group in ["providers", "extensions"] {
+        let path = root.join(group);
+        let entries = match fs::read_dir(&path) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(format!("{}: {error}", path.display())),
+        };
+        for entry in entries {
+            let entry = entry.map_err(|error| format!("{}: {error}", path.display()))?;
+            if !entry
+                .file_type()
+                .map_err(|error| format!("{}: {error}", entry.path().display()))?
+                .is_dir()
+            {
+                continue;
+            }
+            let package = entry.path();
+            let tests = package.join("tests");
+            let cases = match fs::read_dir(&tests) {
+                Ok(cases) => cases,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(format!("{}: {error}", tests.display())),
+            };
+            let mut has_cases = false;
+            for case in cases {
+                let case = case.map_err(|error| format!("{}: {error}", tests.display()))?;
+                if case
+                    .file_type()
+                    .map_err(|error| format!("{}: {error}", case.path().display()))?
+                    .is_file()
+                    && case.path().extension() == Some(std::ffi::OsStr::new("json"))
+                {
+                    has_cases = true;
+                    break;
+                }
+            }
+            if has_cases {
+                packages.insert(format!("{group}/{}", entry.file_name().to_string_lossy()));
+            }
+        }
+    }
+    Ok(packages.into_iter().collect())
 }
 
 fn classify_with(

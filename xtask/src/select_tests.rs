@@ -1551,3 +1551,68 @@ fn docs_only_fails_for_empty_or_code_lists() {
         assert!(!docs_only(&strings(&files)), "{files:?}");
     }
 }
+
+fn extension_case_repo() -> crate::test_dir::TestDir {
+    let root = crate::test_dir::TestDir::new("extension-packages");
+    root.write("providers/openrouter/tests/cost.json", "{}");
+    root.write("providers/acme/tests/case.json", "{}");
+    root.write("extensions/alpha/tests/case.json", "{}");
+    root.write("providers/no-cases/tests/notes.md", "not a case");
+    root.write("extensions/alpha/tests/nested/ignored.json", "{}");
+    root
+}
+
+fn selection_with_main_for_loop_change() -> Selection {
+    let mut members = package_members();
+    if let Some(main) = members.get_mut("main") {
+        main.deps = vec!["loop".to_owned()];
+    }
+    classify(&strings(&["crates/loop/src/x.rs"]), &members)
+}
+
+#[test]
+fn loop_change_selects_all_direct_case_packages_in_sorted_order() {
+    let root = extension_case_repo();
+    let selection = selection_with_main_for_loop_change();
+    assert!(selection.packages().iter().any(|package| package == "main"));
+    assert_eq!(
+        extension_packages(&selection, root.path()).unwrap(),
+        strings(&["extensions/alpha", "providers/acme", "providers/openrouter"])
+    );
+}
+
+#[test]
+fn a_diff_without_binary_tests_selects_no_extension_packages() {
+    let root = extension_case_repo();
+    let selection = classify(&strings(&["xtask/src/x.rs"]), &package_members());
+    assert!(!selection.packages().iter().any(|package| package == "main"));
+    assert!(
+        extension_packages(&selection, root.path())
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn first_party_package_change_selects_every_package_with_cases() {
+    let root = extension_case_repo();
+    let selection = classify(
+        &strings(&["providers/openrouter/init.lua"]),
+        &package_members(),
+    );
+    assert_eq!(
+        extension_packages(&selection, root.path()).unwrap(),
+        strings(&["extensions/alpha", "providers/acme", "providers/openrouter"])
+    );
+}
+
+#[test]
+fn only_direct_json_files_make_a_case_package() {
+    let root = extension_case_repo();
+    let selection = selection_with_main_for_loop_change();
+    assert!(
+        !extension_packages(&selection, root.path())
+            .unwrap()
+            .contains(&"providers/no-cases".to_owned())
+    );
+}
