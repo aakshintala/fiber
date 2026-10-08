@@ -671,3 +671,73 @@ fn settle_writes_an_interaction_and_its_resolution_then_acks() {
         "both lines are written in order"
     );
 }
+
+fn exec(program: &str) -> contract::events::ExtensionExec {
+    contract::events::ExtensionExec {
+        extension: "fiber.test/notes".into(),
+        program: program.into(),
+        args: vec!["status".into()],
+        cwd: "/w".into(),
+        process: contract::shapes::Process {
+            exit_code: Some(0),
+            signal: None,
+            timed_out: false,
+        },
+    }
+}
+
+#[test]
+fn after_rewound_a_shutdown_writes_nothing_and_refuses_what_waits_closing() {
+    let (jobs, _stops) = Listed::new(&[]);
+    let mut world = World::new(Arc::clone(&jobs) as Arc<dyn Jobs>);
+    world
+        .looped
+        .log
+        .append(
+            &contract::events::Event::Rewound(contract::events::Rewound {
+                new_session_id: SessionId("s_9e2b0000000000b2".into()),
+                seq: contract::Seq(3),
+                from_session_id: None,
+                jobs: Vec::new(),
+            }),
+            None,
+            None,
+        )
+        .unwrap();
+    world.looped.rewound = true;
+    world.cancel.shutdown(143);
+    // Sent before the run starts, so the settling drain takes each one:
+    // nothing is written for any of them.
+    let (tx, refused) = mpsc::channel();
+    let ack = Ack(Box::new(move |answer| {
+        let _sent = tx.send(answer);
+    }));
+    world
+        .inbox
+        .send(Delivery::ExtensionExec(exec("git")))
+        .unwrap();
+    world
+        .inbox
+        .send(Delivery::Interaction(asked("r_1")))
+        .unwrap();
+    world
+        .inbox
+        .send(Delivery::Prompt(message("hello"), ack))
+        .unwrap();
+    let (finished, _inbox, held) = world.spawn_run();
+    let answer = refused
+        .recv_timeout(DEADLINE)
+        .expect("the prompt is refused");
+    match answer {
+        Err(rejection) => {
+            assert_eq!(rejection.code, ErrorCode::Closing);
+            assert_eq!(
+                rejection.message,
+                "The session was rewound and takes no more commands."
+            );
+        }
+        Ok(_) => panic!("the prompt is refused, got {answer:?}"),
+    }
+    ran(&finished);
+    assert_eq!(held.kinds(), ["session_started", "rewound"]);
+}

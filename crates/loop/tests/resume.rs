@@ -3466,6 +3466,7 @@ fn a_job_a_rewind_handed_on_is_not_marked() {
             &Event::Rewound(contract::events::Rewound {
                 new_session_id: SessionId("s_2".into()),
                 seq: contract::Seq(1),
+                from_session_id: None,
                 jobs: vec![contract::JobId("j_a".into())],
             }),
             None,

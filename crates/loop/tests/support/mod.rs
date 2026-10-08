@@ -523,6 +523,23 @@ pub(crate) fn delivery(text: &str) -> Delivery {
     Delivery::Prompt(message(text), ignore())
 }
 
+/// A driver's `rewind` on the loop's inbox, answering on the returned
+/// channel: the answer arrives with one named deadline, never a hang.
+pub(crate) fn rewind(
+    args: contract::commands::RewindArgs,
+) -> (Delivery, mpsc::Receiver<contract::inbox::Answer>) {
+    let (tx, rx) = mpsc::channel();
+    (
+        Delivery::Rewind(
+            args,
+            Ack(Box::new(move |answer| {
+                let _sent = tx.send(answer);
+            })),
+        ),
+        rx,
+    )
+}
+
 /// A driver's steering message on the loop's inbox.
 pub(crate) fn steer(text: &str) -> Delivery {
     Delivery::Steer(message(text), ignore())
@@ -789,6 +806,7 @@ impl Session {
     ) -> Self {
         let scripted = Arc::new(ScriptedProvider::new(script));
         Self::assemble(
+            SessionId("s_test".into()),
             Arc::clone(&scripted) as Arc<dyn Provider>,
             Vec::new(),
             Vec::new(),
@@ -817,6 +835,31 @@ impl Session {
         )
     }
 
+    /// As [`Session::with_tools`], with `id` as the session's id: a
+    /// session id the `rewind` tests continue from through `forked_from`.
+    pub(crate) fn with_tools_and_id(
+        script: Vec<Scripted>,
+        during: Option<Message>,
+        tools: Vec<Arc<dyn Tool>>,
+        id: SessionId,
+    ) -> Self {
+        let scripted = Arc::new(ScriptedProvider::new(script));
+        Self::assemble(
+            id,
+            Arc::clone(&scripted) as Arc<dyn Provider>,
+            during
+                .into_iter()
+                .map(|message| Delivery::Steer(message, ignore()))
+                .collect(),
+            tools,
+            unpriced(),
+            scripted,
+            Arc::new(TurnCancel::default()),
+            Vec::new(),
+            None,
+        )
+    }
+
     /// As [`Session::with_tools`], and the first model call sends `during`.
     pub(crate) fn with_tools_injecting(
         script: Vec<Scripted>,
@@ -835,6 +878,7 @@ impl Session {
     ) -> Self {
         let scripted = Arc::new(ScriptedProvider::new(script));
         Self::assemble_with(
+            SessionId("s_test".into()),
             Arc::clone(&scripted) as Arc<dyn Provider>,
             Vec::new(),
             tools,
@@ -859,6 +903,7 @@ impl Session {
     pub(crate) fn with_cache_lifetime(script: Vec<Scripted>, lifetime: CacheLifetime) -> Self {
         let scripted = Arc::new(ScriptedProvider::new(script));
         Self::assemble_with(
+            SessionId("s_test".into()),
             Arc::clone(&scripted) as Arc<dyn Provider>,
             Vec::new(),
             Vec::new(),
@@ -884,6 +929,7 @@ impl Session {
         let clock = FakeClock::new();
         let provider = wrap(Arc::clone(&scripted), Arc::clone(&clock));
         Self::assemble_with(
+            SessionId("s_test".into()),
             provider,
             Vec::new(),
             Vec::new(),
@@ -920,6 +966,7 @@ impl Session {
     ) -> Self {
         let scripted = Arc::new(ScriptedProvider::new(script));
         Self::assemble(
+            SessionId("s_test".into()),
             Arc::clone(&scripted) as Arc<dyn Provider>,
             during,
             tools,
@@ -964,6 +1011,7 @@ impl Session {
             calls: AtomicUsize::new(0),
         });
         Self::assemble(
+            SessionId("s_test".into()),
             hook,
             Vec::new(),
             Vec::new(),
@@ -991,6 +1039,7 @@ impl Session {
             calls: AtomicUsize::new(0),
         });
         Self::assemble(
+            SessionId("s_test".into()),
             hook,
             Vec::new(),
             tools,
@@ -1009,6 +1058,7 @@ impl Session {
     pub(crate) fn blocking(during: Vec<Delivery>) -> (Self, Arc<BlockingProvider>) {
         let blocking = Arc::new(BlockingProvider::default());
         let session = Self::assemble(
+            SessionId("s_test".into()),
             Arc::clone(&blocking) as Arc<dyn Provider>,
             during,
             Vec::new(),
@@ -1027,6 +1077,7 @@ impl Session {
         reason = "the one assembly takes each session input; tests pass thinking through it"
     )]
     fn assemble(
+        id: SessionId,
         provider: Arc<dyn Provider>,
         during: Vec<Delivery>,
         tools: Vec<Arc<dyn Tool>>,
@@ -1037,6 +1088,7 @@ impl Session {
         thinking: Option<contract::ThinkingLevel>,
     ) -> Self {
         Self::assemble_with(
+            id,
             provider,
             during,
             tools,
@@ -1064,6 +1116,7 @@ impl Session {
             calls: AtomicUsize::new(0),
         });
         Self::assemble_with(
+            SessionId("s_test".into()),
             provider,
             Vec::new(),
             Vec::new(),
@@ -1083,6 +1136,7 @@ impl Session {
     pub(crate) fn windowed(script: Vec<Scripted>, tools: Vec<Arc<dyn Tool>>, window: u64) -> Self {
         let scripted = Arc::new(ScriptedProvider::new(script));
         Self::assemble_with(
+            SessionId("s_test".into()),
             Arc::clone(&scripted) as Arc<dyn Provider>,
             Vec::new(),
             tools,
@@ -1102,6 +1156,7 @@ impl Session {
         reason = "the one assembly takes each session input; tests pass sections through it"
     )]
     fn assemble_with(
+        id: SessionId,
         provider: Arc<dyn Provider>,
         during: Vec<Delivery>,
         tools: Vec<Arc<dyn Tool>>,
@@ -1119,7 +1174,6 @@ impl Session {
         std::fs::create_dir_all(&workspace).unwrap();
         let credentials = home.0.join("credentials");
         std::fs::create_dir_all(&credentials).unwrap();
-        let id = SessionId("s_test".into());
         let log = Arc::new(Log::create(&home.0, id.clone(), clock.clone()).unwrap());
         let lines = Some(log.watch());
         let (inbox, rx) = mpsc::channel();
@@ -1128,7 +1182,7 @@ impl Session {
             during: Mutex::new((!during.is_empty()).then(|| (during, inbox.clone()))),
         };
         let rules = Arc::new(FakeRules::empty());
-        let dir = home.0.join("s_test");
+        let dir = home.0.join(&id.0);
         let session_log = dir.join("events.jsonl").display().to_string();
         let owned: Arc<FakeClock> = Arc::clone(&clock);
         let prompt_clock: Arc<dyn contract::clock::Clock> = owned;

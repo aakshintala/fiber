@@ -122,6 +122,11 @@ pub struct Rewound {
     pub new_session_id: SessionId,
     /// The point.
     pub seq: Seq,
+    /// The session whose log `seq` counts in, when it is not this one: a
+    /// session on this session's `forked_from` chain (`docs/events.md`,
+    /// "Rewind").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_session_id: Option<SessionId>,
     /// The jobs handed to the new session; empty when none.
     pub jobs: Vec<JobId>,
 }

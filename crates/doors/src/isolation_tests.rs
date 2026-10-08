@@ -868,3 +868,138 @@ fn no_message_or_log_line_carries_git_stderr() {
         }
     });
 }
+
+fn rewound(next: &str) -> Event {
+    Event::Rewound(contract::events::Rewound {
+        new_session_id: SessionId(next.into()),
+        seq: contract::Seq(1),
+        from_session_id: None,
+        jobs: Vec::new(),
+    })
+}
+
+fn exited() -> Event {
+    Event::FiberExited(contract::events::FiberExited {
+        exit_code: 0,
+        usage: contract::shapes::Usage {
+            tokens: contract::shapes::Tokens {
+                input: 0,
+                cache_read: 0,
+                cache_write: Default::default(),
+                output: 0,
+            },
+            cost: Some(0.0),
+            subscription_cost: 0.0,
+        },
+        final_message: None,
+        error: None,
+        suspended_on: None,
+        questions: None,
+    })
+}
+
+#[test]
+fn a_rewound_creator_keeps_a_clean_worktree() {
+    fakes::within("a_rewound_creator_keeps_a_clean_worktree", BUDGET, || {
+        let home = fakes::TempDir::new("doors-end-rewound-home");
+        let repo = repo("doors-end-rewound");
+        let key = key_of(repo.path());
+        let id = "s_0123456789abcdef";
+        let isolation = isolate_now(repo.path(), home.path(), id);
+        let path = isolation.path().to_path_buf();
+        // The creator's log ends `rewound`, and its lock is free: `end`
+        // takes it and reads the last line under it.
+        let sessions = home.path().join("projects").join(&key).join("sessions");
+        let holder = held(&sessions, id, path.to_str().unwrap());
+        holder
+            .append(&rewound("s_ffffffffffffffff"), None, None)
+            .unwrap();
+        drop(holder);
+        isolation.end();
+        assert!(exists(&path));
+        assert!(branch_exists(repo.path(), &format!("fiber/{id}")));
+        assert!(!home.path().join("logs").exists(), "no diagnostic line");
+    });
+}
+
+#[test]
+fn a_creator_ending_otherwise_is_removed_as_before() {
+    fakes::within(
+        "a_creator_ending_otherwise_is_removed_as_before",
+        BUDGET,
+        || {
+            let home = fakes::TempDir::new("doors-end-exited-home");
+            let repo = repo("doors-end-exited");
+            let key = key_of(repo.path());
+            let id = "s_0123456789abcdef";
+            let isolation = isolate_now(repo.path(), home.path(), id);
+            let path = isolation.path().to_path_buf();
+            let sessions = home.path().join("projects").join(&key).join("sessions");
+            let holder = held(&sessions, id, path.to_str().unwrap());
+            holder.append(&exited(), None, None).unwrap();
+            drop(holder);
+            isolation.end();
+            assert!(!exists(&path), "the path is gone");
+            assert!(!branch_exists(repo.path(), &format!("fiber/{id}")));
+            assert!(!home.path().join("logs").exists(), "no diagnostic line");
+        },
+    );
+}
+
+#[test]
+fn another_session_ending_rewound_does_not_keep_it() {
+    fakes::within(
+        "another_session_ending_rewound_does_not_keep_it",
+        BUDGET,
+        || {
+            let home = fakes::TempDir::new("doors-end-other-rw-home");
+            let repo = repo("doors-end-other-rw");
+            let key = key_of(repo.path());
+            let id = "s_0123456789abcdef";
+            let isolation = isolate_now(repo.path(), home.path(), id);
+            let path = isolation.path().to_path_buf();
+            let sessions = home.path().join("projects").join(&key).join("sessions");
+            let holder = held(&sessions, id, path.to_str().unwrap());
+            holder.append(&exited(), None, None).unwrap();
+            drop(holder);
+            // Another session in the same worktree ends `rewound`: only
+            // the creator's last line keeps it.
+            let other = held(&sessions, "s_0123456789abcde0", path.to_str().unwrap());
+            other
+                .append(&rewound("s_ffffffffffffffff"), None, None)
+                .unwrap();
+            drop(other);
+            isolation.end();
+            assert!(!exists(&path), "the path is gone");
+            assert!(!branch_exists(repo.path(), &format!("fiber/{id}")));
+        },
+    );
+}
+
+#[test]
+fn a_rewound_creator_keeps_a_broken_worktree_without_a_diagnostic_line() {
+    fakes::within(
+        "a_rewound_creator_keeps_a_broken_worktree_without_a_diagnostic_line",
+        BUDGET,
+        || {
+            let home = fakes::TempDir::new("doors-end-broken-home");
+            let repo = repo("doors-end-broken");
+            let key = key_of(repo.path());
+            let id = "s_0123456789abcdef";
+            let isolation = isolate_now(repo.path(), home.path(), id);
+            let path = isolation.path().to_path_buf();
+            let sessions = home.path().join("projects").join(&key).join("sessions");
+            let holder = held(&sessions, id, path.to_str().unwrap());
+            holder
+                .append(&rewound("s_ffffffffffffffff"), None, None)
+                .unwrap();
+            drop(holder);
+            // No `.git`: no git command could inspect it. Kept with no
+            // line proves none ran after the scan.
+            fs::remove_file(path.join(".git")).unwrap();
+            isolation.end();
+            assert!(exists(&path));
+            assert!(!home.path().join("logs").exists(), "no diagnostic line");
+        },
+    );
+}

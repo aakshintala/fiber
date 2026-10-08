@@ -18,6 +18,8 @@ use crate::conversation::MESSAGES_MD;
 use crate::prompt::{body, fill};
 use crate::{Error, Loop, Model, Permissions, Preamble, PromptInputs, variables};
 
+pub(crate) mod command;
+
 /// What the new session starts from: the point, the note, and the old
 /// session's worktree.
 pub struct Rewound {

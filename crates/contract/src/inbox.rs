@@ -59,6 +59,9 @@ pub enum Delivery {
     SteerDrop(crate::CommandId, Ack),
     /// Switches model or thinking at the next turn boundary.
     Model(crate::commands::ModelArgs, Ack),
+    /// Starts a new session that continues this one from an earlier point
+    /// (`docs/events.md`, "Rewind").
+    Rewind(crate::commands::RewindArgs, Ack),
     /// A person's `handoff`. While a turn runs it is held until the next
     /// step boundary; while the loop is idle it starts a turn of its own
     /// (`docs/handoff.md`, "A person").
