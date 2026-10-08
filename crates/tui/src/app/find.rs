@@ -312,7 +312,7 @@ impl Find {
             let at = self
                 .current
                 .as_ref()
-                .and_then(|current| flat.iter().position(|kept| kept.anchor == current.anchor))
+                .and_then(|current| flat.iter().position(|kept| *kept == current))
                 .map_or(flat.len(), |at| at.saturating_add(1));
             let total = if self.capped {
                 "10000+".to_owned()
@@ -583,14 +583,20 @@ impl App {
             // The placed cells of the rows holding matches, each placed
             // once however many of its chars match.
             let mut placed: HashMap<usize, Vec<crate::cells::Placed>> = HashMap::new();
+            // Which of the page's matches with equal scopes each hit
+            // is, in order: what locates the current match on screen.
+            let mut seen: HashMap<Vec<Target>, usize> = HashMap::new();
             for line in logical::logical(&rows, &texts) {
                 for hit in logical::matches(&line.text, &self.find.query) {
                     let anchor = Anchor::new(at, &line, hit.clone());
+                    let nth = seen.get(&anchor.scopes).copied().unwrap_or(0);
+                    seen.insert(anchor.scopes.clone(), nth.saturating_add(1));
+                    let got = Match { anchor, nth };
                     let current = self
                         .find
                         .current
                         .as_ref()
-                        .is_some_and(|current| current.anchor == anchor);
+                        .is_some_and(|current| *current == got);
                     for (row, byte) in hit_chars(&line, &hit) {
                         let cells = placed.entry(row).or_insert_with(|| {
                             rows.get(row)
@@ -991,6 +997,9 @@ impl App {
         let query = self.find.query.clone();
         let (open_rows, open_texts) = self.screen.pages().page_text_open(at)?;
         let (mut placed, start) = self.placed_for(at)?;
+        // Which of the page's matches with equal scopes each hit is,
+        // in order: what locates the current match on screen.
+        let mut seen: HashMap<Vec<Target>, usize> = HashMap::new();
         for (anchor, row, hidden) in search_shown(
             at,
             &logical::logical(&open_rows, &open_texts),
@@ -998,7 +1007,9 @@ impl App {
             &mut placed,
             start,
         ) {
-            if anchor == current.anchor {
+            let nth = seen.get(&anchor.scopes).copied().unwrap_or(0);
+            seen.insert(anchor.scopes.clone(), nth.saturating_add(1));
+            if *current == (Match { anchor, nth }) {
                 return Some((row, hidden));
             }
         }
@@ -1018,7 +1029,7 @@ impl App {
             .find
             .current
             .as_ref()
-            .and_then(|current| flat.iter().position(|kept| kept.anchor == current.anchor))
+            .and_then(|current| flat.iter().position(|kept| *kept == current))
             .unwrap_or(0);
         let next = if down {
             at.saturating_add(1) % flat.len()

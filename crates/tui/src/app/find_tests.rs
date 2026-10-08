@@ -1809,3 +1809,45 @@ fn a_page_cut_after_the_query_starts_scans_the_new_page() {
     assert_eq!(app.find.total, added);
     assert!(count(&app).ends_with(&format!("of {added}")));
 }
+
+#[test]
+fn identical_lines_walk_one_occurrence_at_a_time() {
+    let mut app = attached(40, 10);
+    let mut log = Vec::new();
+    let mut seq = 0u64;
+    text_turn(
+        &mut log,
+        &mut seq,
+        &mut app,
+        &["echo needle", "echo needle"],
+    );
+    let ranges = search_all(&mut app, &log, "needle");
+    assert!(ranges.is_empty());
+    // Two identical lines anchor alike; only the occurrence index
+    // tells them apart.
+    assert_eq!(app.find.flat().len(), 2);
+    assert_eq!(count(&app), "1 of 2");
+    let current = app.find.current.clone().expect("a current match");
+    let (first_row, _) = app.current_place(&current).expect("a row");
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(count(&app), "2 of 2");
+    let current = app.find.current.clone().expect("a current match");
+    assert_eq!(current.nth, 1);
+    let (second_row, _) = app.current_place(&current).expect("a row");
+    assert_ne!(first_row, second_row);
+    // Wraps past the end.
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(count(&app), "1 of 2");
+    assert_eq!(app.find.current.clone().map(|kept| kept.nth), Some(0));
+    // Only one occurrence is current on screen at a time.
+    let marks = app.find_marks(Rect::new(0, 0, 40, 10));
+    assert!(!marks.is_empty());
+    let mut rows: Vec<u16> = marks
+        .iter()
+        .filter(|(_, current)| *current)
+        .map(|(rect, _)| rect.y)
+        .collect();
+    rows.sort();
+    rows.dedup();
+    assert_eq!(rows.len(), 1);
+}
