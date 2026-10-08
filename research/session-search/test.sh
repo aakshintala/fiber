@@ -55,14 +55,6 @@ exit 0
 BIN_EOF
 chmod +x "$FAKE/target/release/session-search"
 
-run_copy() {
-  if command -v timeout >/dev/null 2>&1; then
-    timeout 120 bash run.sh
-  else
-    bash run.sh
-  fi
-}
-
 check_malformed() {
   want=$1
   err=$2
@@ -83,14 +75,14 @@ check_malformed() {
 
 # The stub scan prints nothing: ms is empty on both platforms.
 status=0
-(cd "$FAKE" && export CORPUS="$FAKE/corpus" PATH="$FAKE/bin:$PATH" && run_copy >run.log 2>run.err) || status=$?
+(cd "$FAKE" && export CORPUS="$FAKE/corpus" PATH="$FAKE/bin:$PATH" && bash run.sh >run.log 2>run.err) || status=$?
 check_malformed "could not read ms" "$FAKE/run.err" "an empty scan timing"
 
 if [ "$(uname -s)" = Linux ]; then
   # The stub scan writes garbage to stderr, which reaches the TIMEFILE
   # through /usr/bin/time -f, so the gnu read sees a non-number.
   status=0
-  (cd "$FAKE" && rm -f results.tsv && export CORPUS="$FAKE/corpus" SCAN_GARBAGE=garbage PATH="$FAKE/bin:$PATH" && run_copy >run2.log 2>run2.err) || status=$?
+  (cd "$FAKE" && rm -f results.tsv && export CORPUS="$FAKE/corpus" SCAN_GARBAGE=garbage PATH="$FAKE/bin:$PATH" && bash run.sh >run2.log 2>run2.err) || status=$?
   check_malformed "could not read peak RSS" "$FAKE/run2.err" "a garbage time read"
 fi
 
