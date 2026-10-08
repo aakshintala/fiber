@@ -197,8 +197,22 @@ fn ask_worktree_from_a_subdirectory_records_the_worktree_root() {
         first["payload"]["worktree"]["path"].as_str().unwrap(),
         workspace
     );
-    // The whole repository was checked out, at its root.
-    assert!(Path::new(workspace).join("file.txt").is_file());
+    // The worktree's root, not the subdirectory launched from: the whole
+    // repository was checked out (as `create`'s own test pins file by
+    // file), and the session sits under the repository's project.
+    assert!(!Path::new(workspace).starts_with(&sub));
+    let home = fs::canonicalize(setup.home()).unwrap();
+    let worktrees = home
+        .join("projects")
+        .join(key_of(&setup.workspace()))
+        .join("worktrees");
+    assert!(Path::new(workspace).starts_with(&worktrees));
+    assert!(
+        home.join("projects")
+            .join(key_of(&setup.workspace()))
+            .join("sessions")
+            .is_dir()
+    );
     // Clean, so the worktree is gone after exit.
     assert!(!Path::new(workspace).exists());
 }

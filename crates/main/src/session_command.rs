@@ -220,7 +220,7 @@ fn run_new(
             return Err(failed(e.code(), e));
         }
     };
-    job_emit.set(Arc::clone(&log) as _);
+    job_emit.set(Arc::new(log::WeakEmit::new(&log)) as _);
     let session = match Session::open(
         &home,
         &dir,
