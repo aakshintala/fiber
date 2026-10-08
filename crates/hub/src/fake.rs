@@ -29,6 +29,17 @@ pub(crate) struct Handshake {
     pub(crate) message: String,
 }
 
+/// Which commands a fake session answers `closing`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Closing {
+    /// None: every command gets its usual answer.
+    Never,
+    /// Every command but `subscribe`, as a session after `close` does.
+    AllButSubscribe,
+    /// Every command, `subscribe` too, as a session whose log is gone does.
+    Every,
+}
+
 /// A fake session starter: it binds the session's socket itself instead of
 /// spawning a process.
 #[derive(Debug, Clone)]
@@ -37,9 +48,8 @@ pub(crate) struct FakeStarter {
     bind: bool,
     exited: Option<Failure>,
     handshake: Arc<Mutex<Option<Handshake>>>,
-    /// Whether the session answers every command but `subscribe` with
-    /// `closing`, as a session after `close` does.
-    closing: bool,
+    /// Which commands the session answers `closing`.
+    closing: Closing,
     /// Whether each `resume` appends `fiber_started` to the session log,
     /// as a resumed process writing its durable start does.
     append_started: bool,
@@ -115,7 +125,15 @@ impl FakeStarter {
     /// `command_rejected` `closing`, as a session after `close` does.
     pub(crate) fn closing(home: &Path) -> Self {
         let mut starter = Self::bind_and_hold(home);
-        starter.closing = true;
+        starter.closing = Closing::AllButSubscribe;
+        starter
+    }
+
+    /// As [`FakeStarter::closing`], and `subscribe` too, as a session
+    /// whose log is gone does.
+    pub(crate) fn closing_every_command(home: &Path) -> Self {
+        let mut starter = Self::bind_and_hold(home);
+        starter.closing = Closing::Every;
         starter
     }
 
@@ -134,7 +152,7 @@ impl FakeStarter {
             bind,
             exited,
             handshake: Arc::new(Mutex::new(handshake)),
-            closing: false,
+            closing: Closing::Never,
             append_started: false,
             received: Arc::new(Received::default()),
             resumed: Arc::new(Mutex::new(Vec::new())),
@@ -294,7 +312,7 @@ fn accept_loop(
     received: &Arc<Received>,
     handshake: &Arc<Mutex<Option<Handshake>>>,
     serving: &Arc<Serving>,
-    closing: bool,
+    closing: Closing,
 ) {
     loop {
         let Ok((stream, _)) = listener.accept() else {
@@ -325,7 +343,7 @@ fn serve_one(
     stream: UnixStream,
     received: &Arc<Received>,
     handshake: &Arc<Mutex<Option<Handshake>>>,
-    closing: bool,
+    closing: Closing,
 ) {
     if stream
         .set_read_timeout(Some(Duration::from_secs(5)))
@@ -347,7 +365,14 @@ fn serve_one(
             Ok(_) => {
                 let text = String::from_utf8_lossy(&buf).into_owned();
                 let command = command_of(&text);
-                if closing && command.as_deref().is_some_and(|name| name != "subscribe") {
+                let closes = match closing {
+                    Closing::Never => false,
+                    Closing::AllButSubscribe => {
+                        command.as_deref().is_some_and(|name| name != "subscribe")
+                    }
+                    Closing::Every => command.is_some(),
+                };
+                if closes {
                     // Answered before it is recorded, so a test that saw it
                     // received knows the answer is sent.
                     write_ack(&mut writer, &text, &closing_reply());
