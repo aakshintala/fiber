@@ -6,7 +6,7 @@ The skills speak in terms of canonical triage roles: three categories and five s
 | ----------------- | ----------------- | -------------------------------------------------- |
 | `bug`             | `bug`             | Something is broken in the product                 |
 | `enhancement`     | `enhancement`     | New feature or improvement                         |
-| `test-only`       | `test-only`       | Defect in test code, such as a flaky test; never also `bug` |
+| `test-only`       | `test-only`       | Defect in test code or CI configuration, such as a flaky test; never also `bug` |
 | `needs-triage`    | `needs-triage`    | Owner needs to evaluate this issue                 |
 | `needs-info`      | `needs-owner`     | Waiting on the owner to decide or supply something |
 | `ready-for-agent` | `ready-for-agent` | Fully specified, ready for an agent                |
