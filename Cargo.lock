@@ -595,6 +595,7 @@ dependencies = [
  "log 0.0.0",
  "serde_json",
  "signal-hook",
+ "worktree",
 ]
 
 [[package]]

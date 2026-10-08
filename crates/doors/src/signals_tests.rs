@@ -390,3 +390,15 @@ fn a_bound_that_cannot_start_its_thread_ends_at_once() {
     assert_eq!(did.try_recv().unwrap(), Did::Bound);
     assert_eq!(did.try_recv().unwrap(), Did::Exit(143));
 }
+
+#[test]
+fn recorded_is_the_armed_signal_s_code() {
+    let clock = FakeClock::new();
+    let (signals, _did) = recorded(&clock);
+    assert_eq!(signals.recorded(), None);
+    let (tx, _rx) = mpsc::channel();
+    arm(&signals, &tx);
+    assert_eq!(signals.recorded(), None);
+    signals.handle(SIGTERM);
+    assert_eq!(signals.recorded(), Some(signal_code(SIGTERM)));
+}
