@@ -212,10 +212,13 @@ impl App {
     }
 
     /// Whether something covers the conversation: the key map, the notice
-    /// overlay or the repository offer's swapped view. A press there
-    /// starts no selection.
+    /// overlay, the repository offer's swapped view or the search results.
+    /// A press there starts no selection.
     pub(crate) fn conversation_covered(&self) -> bool {
-        self.keymap_top().is_some() || self.notice_overlay().is_some() || self.offer_open()
+        self.keymap_top().is_some()
+            || self.notice_overlay().is_some()
+            || self.offer_open()
+            || self.results_open()
     }
 
     /// The cells the selection highlights in `area`, one rect per row, in

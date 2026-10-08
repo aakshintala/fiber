@@ -48,12 +48,13 @@ mod links;
 #[path = "app_mouse.rs"]
 mod mouse;
 mod offer;
+pub(crate) mod results;
 mod screen;
 mod select;
 
 use screen::Screen;
 
-pub(crate) use find::FindBar;
+pub(crate) use find::{FindBar, Snippet};
 
 /// A line's payload as `$kind`; `None` when it does not parse, and the
 /// line is skipped.
@@ -299,6 +300,9 @@ impl App {
             return effect;
         }
         if let Some(effect) = self.history_key(&key) {
+            return effect;
+        }
+        if let Some(effect) = self.results_key(&key) {
             return effect;
         }
         if let Some(effect) = self.find_key(&key) {

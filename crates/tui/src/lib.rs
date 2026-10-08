@@ -32,6 +32,8 @@ mod offer;
 mod opener;
 mod osc;
 mod pages;
+#[cfg(test)]
+mod results_support;
 mod rows;
 mod screen;
 mod shell;
