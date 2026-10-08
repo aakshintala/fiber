@@ -335,3 +335,68 @@ fn await_requests_is_true_when_more_than_the_count_are_recorded() {
     assert!(server.requests().len() > 1);
     assert!(await_requests_within(&server, 1));
 }
+
+fn post_numbered(server: &ProviderServer, count: usize) {
+    for n in 0..count {
+        post(server, "/v1/messages", &[], format!("body-{n}").as_bytes());
+    }
+}
+
+#[test]
+fn only_the_newest_bodies_are_kept_and_older_requests_keep_their_size() {
+    let server = ProviderServer::start_with_fallback([], Response::stream("ok"))
+        .unwrap()
+        .keep_last_bodies(2);
+
+    post_numbered(&server, 4);
+
+    let requests = server.requests();
+    assert_eq!(requests.len(), 4);
+    let kept: Vec<_> = requests.iter().map(|r| r.body.clone()).collect();
+    assert_eq!(
+        kept,
+        [&b""[..], b"", b"body-2", b"body-3"],
+        "bodies of the newest two only"
+    );
+    assert!(requests.iter().all(|r| r.body_len == 6), "{requests:?}");
+    assert_eq!(requests[0].path, "/v1/messages");
+}
+
+#[test]
+fn a_limit_of_zero_keeps_no_bodies() {
+    let server = ProviderServer::start_with_fallback([], Response::stream("ok"))
+        .unwrap()
+        .keep_last_bodies(0);
+
+    post_numbered(&server, 1);
+
+    let requests = server.requests();
+    assert!(requests[0].body.is_empty());
+    assert_eq!(requests[0].body_len, 6);
+}
+
+#[test]
+fn keep_all_bodies_drops_none() {
+    let server = ProviderServer::start_with_fallback([], Response::stream("ok"))
+        .unwrap()
+        .keep_all_bodies();
+
+    post_numbered(&server, 70);
+
+    let requests = server.requests();
+    assert_eq!(requests[0].body, b"body-0");
+    assert_eq!(requests[69].body, b"body-69");
+}
+
+#[test]
+fn by_default_the_newest_64_bodies_are_kept() {
+    let server = ProviderServer::start_with_fallback([], Response::stream("ok")).unwrap();
+
+    post_numbered(&server, 65);
+
+    let requests = server.requests();
+    assert!(requests[0].body.is_empty());
+    assert_eq!(requests[0].body_len, 6);
+    assert_eq!(requests[1].body, b"body-1");
+    assert_eq!(requests[64].body, b"body-64");
+}

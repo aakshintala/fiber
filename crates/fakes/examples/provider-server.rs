@@ -115,6 +115,7 @@ mod tests {
             path: "/v1/messages".to_owned(),
             headers: vec![("x-api-key".to_owned(), "sha256:746b4ad1".to_owned())],
             body: b"{}".to_vec(),
+            body_len: 2,
         };
 
         assert_eq!(
