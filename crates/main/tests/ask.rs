@@ -981,12 +981,12 @@ const MENU: &str = r#"Fiber, a coding agent.
 Usage: fiber <command> [arguments]
 
 Sessions:
-  ask [--model <model>] [--resume <id>] [<prompt>] [-]  Run one session of one turn; its events go to stdout
-  sessions [--all] [--json]                             List sessions: id, state, name, what it waits on, spend
-  sessions delete [--cascade] [--yes] <id>              Delete a session, and with --cascade the sessions that continue it
-  sessions export <id> [<path>]                         Write the session's log and its artifacts to <path>
-  sessions prune [--older-than <duration>] [--dry-run]  Delete old sessions, worktrees and diagnostic logs
-  models [<search>] [--json]                            List the models the installed providers serve
+  ask [--model <model>] [--resume <id>] [--worktree] [<prompt>] [-]  Run one session of one turn; its events go to stdout
+  sessions [--all] [--json]                                          List sessions: id, state, name, what it waits on, spend
+  sessions delete [--cascade] [--yes] <id>                           Delete a session, and with --cascade the sessions that continue it
+  sessions export <id> [<path>]                                      Write the session's log and its artifacts to <path>
+  sessions prune [--older-than <duration>] [--dry-run]               Delete old sessions, worktrees and diagnostic logs
+  models [<search>] [--json]                                         List the models the installed providers serve
 
 Fiber itself:
   approve [--yes]                           Show what this repository ships and approve it

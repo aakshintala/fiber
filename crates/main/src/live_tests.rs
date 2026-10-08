@@ -285,6 +285,7 @@ fn live_reviewer() {
             credential_files: Vec::new(),
             rules: Arc::new(EmptyRules),
         },
+        None,
     )
     .unwrap()
     .answerable(false)

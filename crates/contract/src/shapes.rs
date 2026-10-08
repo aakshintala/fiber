@@ -205,7 +205,7 @@ pub struct Point {
     pub seq: Seq,
 }
 
-/// A git worktree a delegate runs in.
+/// A git worktree Fiber created for a delegate or a session.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Worktree {
     /// Its path.

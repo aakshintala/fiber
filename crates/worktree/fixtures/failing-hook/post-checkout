@@ -1,0 +1,4 @@
+#!/bin/sh
+echo hook-marker-out
+echo hook-marker-err >&2
+exit 1

@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::shapes::{ContentPart, Failure, Point, Process, Question, Sender, Usage};
+use crate::shapes::{ContentPart, Failure, Point, Process, Question, Sender, Usage, Worktree};
 use crate::{ActionId, CommandId, JobId, RequestId, Seq, SessionId};
 
 use super::context::Git;
@@ -66,6 +66,11 @@ pub struct SessionStarted {
     /// For a rewind, what rides after the history.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rewind: Option<Rewind>,
+    /// When the session runs in a worktree Fiber created for it: its path
+    /// and branch. The path is also `workspace` (`docs/invocation.md`,
+    /// "Isolation").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<Worktree>,
 }
 
 /// A session's environment variables, without their values.

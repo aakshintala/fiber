@@ -401,6 +401,7 @@ fn start(rules: Arc<FakeRules>) -> (Loop, fakes::TempDir, PathBuf, PathBuf) {
             credential_files: Vec::new(),
             rules,
         },
+        None,
     )
     .unwrap();
     (looped, home, workspace, credentials)
@@ -809,6 +810,7 @@ fn run_turn(
             credential_files: Vec::new(),
             rules,
         },
+        None,
     )
     .unwrap()
     .cancelled_by(cancel);

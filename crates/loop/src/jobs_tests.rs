@@ -358,6 +358,7 @@ impl World {
                 credential_files: Vec::new(),
                 rules: Arc::new(AskGated),
             },
+            None,
         )
         .unwrap();
         Self {

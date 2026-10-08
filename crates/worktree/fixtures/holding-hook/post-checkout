@@ -1,0 +1,4 @@
+#!/bin/sh
+echo hook-marker-out
+echo "$$ $(ps -o pgid= -p $$)" > "$FIBER_TEST_HOOK_FIFO"
+exec sleep 60

@@ -155,7 +155,15 @@ fn run() -> i32 {
         }
         cli::Invocation::Run(Some(cli::Commands::Ask(args))) => {
             match cli::ask_parts(&args.prompt) {
-                Ok((prompt, dash)) => ask(args.model, args.resume, prompt, dash, clock, fiber),
+                Ok((prompt, dash)) => ask(
+                    args.model,
+                    args.resume,
+                    args.worktree,
+                    prompt,
+                    dash,
+                    clock,
+                    fiber,
+                ),
                 Err(sentence) => ask_failed(usage(sentence)),
             }
         }
@@ -281,6 +289,7 @@ fn fail(e: Failure) -> i32 {
 fn ask(
     model: Option<String>,
     resume: Option<String>,
+    worktree: bool,
     arg: Option<String>,
     dash: bool,
     clock: Arc<dyn contract::clock::Clock>,
@@ -300,7 +309,7 @@ fn ask(
     };
     match resume {
         Some(selector) => resume::ask_resume(selector, model, prompt, clock, &signals, fiber),
-        None => ask_new(model, prompt, clock, &signals, fiber),
+        None => ask_new(model, prompt, worktree, clock, &signals, fiber),
     }
 }
 
@@ -308,6 +317,7 @@ fn ask(
 fn ask_new(
     model: Option<String>,
     prompt: String,
+    worktree: bool,
     clock: Arc<dyn contract::clock::Clock>,
     signals: &Arc<doors::Signals>,
     fiber: Result<PathBuf, String>,
@@ -317,6 +327,7 @@ fn ask_new(
         model,
         Some(prompt),
         true,
+        worktree,
         clock,
         signals,
         fiber,
@@ -430,6 +441,10 @@ fn run_turn(
 }
 
 /// Stops the servers, then fails before any session line.
+/// Stops the servers and prints a startup failure. Only
+/// `retry_policy_tests` still fails this way; new sessions report through
+/// `session_command::report`, after asking about a recorded signal.
+#[cfg(test)]
 fn stop_and_fail(servers: mcp_servers::SessionServers, e: Failure) -> i32 {
     servers.servers.stop();
     ask_failed(e)

@@ -12,6 +12,7 @@ mod client;
 mod close;
 mod drive;
 pub mod hub;
+mod isolation;
 mod pasted;
 mod prompt_history;
 mod reply;
@@ -31,6 +32,7 @@ use contract::shapes::Failure;
 use contract::{ErrorCode, PreSessionExit};
 
 pub use attach::attach;
+pub use isolation::{Isolation, isolate};
 pub use session::{Declare, Session};
 pub use signals::{Signals, signal_code};
 
@@ -295,12 +297,18 @@ pub fn mint(prefix: &str) -> String {
 
 /// The project's identity path (`docs/state.md`, "Projects"): git's shared
 /// directory when `launch` is inside a repository, otherwise `launch`
-/// itself, symlinks resolved.
+/// itself, symlinks resolved. The `GIT_DIR`, `GIT_WORK_TREE`,
+/// `GIT_COMMON_DIR` and `GIT_INDEX_FILE` variables are removed first, so
+/// the caller's environment cannot redirect the discovery.
 pub fn project(launch: &Path) -> PathBuf {
     let common = Command::new("git")
         .arg("-C")
         .arg(launch)
         .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_COMMON_DIR")
+        .env_remove("GIT_INDEX_FILE")
         .stdin(Stdio::null())
         .stderr(Stdio::null())
         .output();

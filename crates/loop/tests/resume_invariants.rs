@@ -142,6 +142,7 @@ impl History {
                     parent: None,
                     forked_from: None,
                     rewind: None,
+                    worktree: None,
                 }),
                 None,
                 None,

@@ -1,0 +1,2 @@
+#!/bin/sh
+echo "$(basename "$0")" >> "$FIBER_TEST_HOOK_LOG"

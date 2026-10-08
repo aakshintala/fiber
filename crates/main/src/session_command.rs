@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use contract::clock::wall_ms;
+use contract::shapes::{Failure, Worktree};
 use contract::{ErrorCode, SessionId};
 use doors::Session;
 use log::Log;
@@ -14,15 +15,17 @@ use r#loop::Loop;
 
 use crate::{
     Parts, ask_failed, ask_permissions, cli, crash, failed, finish, late_emit, mcp_servers,
-    parts_with, run_turn, session_extensions, shutdown, stop_and_fail,
+    parts_with, run_turn, session_extensions, shutdown,
 };
 
 /// The internal session command: one session process bound at
 /// `run/<session_id>` (`docs/invocation.md`, "Processes"). The workspace
 /// is entered before signals are installed or any thread starts, so the
 /// shared path reads it as the current directory exactly as `ask` does.
-/// With `--resume` the workspace is the one the log recorded, and the
-/// session is resumed instead of started. Stdin is never read.
+/// With `--worktree` it moves once more, into the new worktree, after
+/// that: the signals' bound thread reads no relative path. With `--resume`
+/// the workspace is the one the log recorded, and the session is resumed
+/// instead of started. Stdin is never read.
 pub(crate) fn run(
     args: cli::SessionArgs,
     clock: Arc<dyn contract::clock::Clock>,
@@ -53,6 +56,7 @@ pub(crate) fn run(
         args.model,
         args.prompt,
         false,
+        args.worktree,
         clock,
         &signals,
         fiber,
@@ -63,20 +67,98 @@ pub(crate) fn run(
 /// "Processes"): `fiber ask` and the internal session command differ
 /// only in the id's source (minted vs `--id`), the workspace (the current
 /// directory on entry, applied by chdir before the call) and the first
-/// deliveries (prompt plus `close` vs an optional prompt).
+/// deliveries (prompt plus `close` vs an optional prompt). With `worktree`
+/// the session is isolated first: the process arms, the worktree is
+/// created, and the workspace moves into it before the session runs, and
+/// the worktree ends afterwards, however the run went.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "every new session's whole start, built once"
+)]
 pub(crate) fn new_session(
     id: SessionId,
     model: Option<String>,
     prompt: Option<String>,
     one_turn: bool,
+    worktree: bool,
     clock: Arc<dyn contract::clock::Clock>,
     signals: &Arc<doors::Signals>,
     fiber: Result<PathBuf, String>,
 ) -> i32 {
-    let mut parts = match parts_with(model, None, None, None, Arc::clone(&clock)) {
-        Ok(parts) => parts,
-        Err(e) => return ask_failed(e),
+    if !worktree {
+        return match run_new(id, model, prompt, one_turn, None, clock, signals, fiber) {
+            Ok(code) => code,
+            Err(failure) => report(signals, failure),
+        };
+    }
+    // As `parts_with` would: a failure here leaves no session.
+    let home = match config::fiber_home_from_env() {
+        Ok(home) => home,
+        Err(e) => return ask_failed(failed(e.code(), e)),
     };
+    let launch = match std::env::current_dir() {
+        Ok(dir) => dir,
+        Err(e) => {
+            return ask_failed(failed(
+                ErrorCode::IoFailed,
+                format!("the current directory: {e}"),
+            ));
+        }
+    };
+    // Its own reads: the worktree's `git worktree add` runs through them,
+    // so a signal kills git and its hook together.
+    let reads = Arc::new(crate::switch::Reads::default());
+    shutdown::arm_isolating(signals, &reads);
+    let isolation = match doors::isolate(&launch, &home, &id, Arc::clone(&clock), &|command| {
+        reads.command(command)
+    }) {
+        Ok(isolation) => isolation,
+        Err(failure) => return report(signals, failure),
+    };
+    if let Err(e) = std::env::set_current_dir(isolation.path()) {
+        let failure = failed(
+            ErrorCode::IoFailed,
+            format!("{}: {e}", isolation.path().display()),
+        );
+        isolation.end();
+        return report(signals, failure);
+    }
+    let worktree = isolation.worktree();
+    let result = run_new(
+        id,
+        model,
+        prompt,
+        one_turn,
+        Some(worktree),
+        clock,
+        signals,
+        fiber,
+    );
+    isolation.end();
+    match result {
+        Ok(code) => code,
+        Err(failure) => report(signals, failure),
+    }
+}
+
+/// Today's `new_session` body: builds and runs the session, printing no
+/// failure. Every `Err` is reported by [`report`], after the worktree ends
+/// when one was created.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "every new session's whole start, built once"
+)]
+fn run_new(
+    id: SessionId,
+    model: Option<String>,
+    prompt: Option<String>,
+    one_turn: bool,
+    worktree: Option<Worktree>,
+    clock: Arc<dyn contract::clock::Clock>,
+    signals: &Arc<doors::Signals>,
+    fiber: Result<PathBuf, String>,
+) -> Result<i32, Failure> {
+    let mut parts = parts_with(model, None, None, None, Arc::clone(&clock))?;
     crash::attach(&id);
     let dir = parts.sessions.join(&id.0);
     // The session directory's log: the opening message's environment
@@ -110,7 +192,7 @@ pub(crate) fn new_session(
     shutdown::arm(signals);
     // Before the log exists: a failure here, such as not finding the running
     // binary, leaves no session line; every server starts with the session too.
-    let (tools, infos, driver, session_servers) = match mcp_servers::session_tools(
+    let (tools, infos, driver, session_servers) = mcp_servers::session_tools(
         fiber,
         &home,
         &workspace,
@@ -120,10 +202,7 @@ pub(crate) fn new_session(
         &locks,
         mcp.specs,
         web_search.as_deref(),
-    ) {
-        Ok(built) => built,
-        Err(e) => return ask_failed(e),
-    };
+    )?;
     let forget = Arc::clone(&session_servers.forget);
     let hosted_stands = crate::switch::hosted_stands(&tools);
     let permissions = ask_permissions(
@@ -136,9 +215,12 @@ pub(crate) fn new_session(
     let offer = Arc::new(extensions::SessionOffer::new(&home, &project, &workspace));
     let log = match Log::create(&sessions, id, Arc::clone(&clock)) {
         Ok(log) => Arc::new(log),
-        Err(e) => return stop_and_fail(session_servers, failed(e.code(), e)),
+        Err(e) => {
+            session_servers.servers.stop();
+            return Err(failed(e.code(), e));
+        }
     };
-    job_emit.set(Arc::clone(&log) as _);
+    job_emit.set(Arc::new(log::WeakEmit::new(&log)) as _);
     let session = match Session::open(
         &home,
         &dir,
@@ -148,7 +230,10 @@ pub(crate) fn new_session(
         Box::new(io::stdout()),
     ) {
         Ok(session) => session,
-        Err(e) => return stop_and_fail(session_servers, e),
+        Err(e) => {
+            session_servers.servers.stop();
+            return Err(e);
+        }
     };
     session.shell(driver);
     session.jobs(jobs.clone());
@@ -171,7 +256,7 @@ pub(crate) fn new_session(
     if let Some(code) = shutdown::start(signals, &cancel, &session, jobs.clone(), reads) {
         session_servers.servers.stop();
         close(session, log, &home, &dir, &workspace, &*clock);
-        return code;
+        return Ok(code);
     }
     let inbox_wake = session.inbox_wake();
     let code = run_turn(
@@ -193,6 +278,7 @@ pub(crate) fn new_session(
                     inbox,
                     r#loop::capped(tools, &caps),
                     permissions,
+                    worktree,
                 )
                 .and_then(|looped| {
                     r#loop::fiber_started(&log, env!("CARGO_PKG_VERSION"), false)?;
@@ -222,8 +308,19 @@ pub(crate) fn new_session(
     );
     session_servers.servers.stop();
     close(session, log, &home, &dir, &workspace, &*clock);
-    code
+    Ok(code)
 }
+
+/// Prints a startup failure, asking about a recorded signal first: a
+/// signal that arrived before `fiber_started` exits with its code and
+/// writes nothing (`docs/invocation.md`, "Shutdown").
+fn report(signals: &doors::Signals, failure: Failure) -> i32 {
+    signals.recorded().unwrap_or_else(|| ask_failed(failure))
+}
+
+#[cfg(test)]
+#[path = "session_command_tests.rs"]
+mod tests;
 
 /// Ends a session process, however it ran: closes the door side, then
 /// appends the session's `recent.jsonl` row with what it stopped on, its

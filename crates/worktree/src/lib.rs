@@ -1,4 +1,4 @@
-//! Creates and removes the git worktrees sessions and delegates run in, by
+//! Creates, inspects and removes the git worktrees sessions and delegates run in, by
 //! running the `git` program (`docs/architecture.md`).
 
 use std::io;
@@ -7,12 +7,24 @@ use std::process::{Command, Output, Stdio};
 
 use contract::ErrorCode;
 
-/// What can go wrong inspecting or removing a worktree.
+/// What can go wrong inspecting, removing or creating a worktree.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// `git` is not installed.
-    #[error("git is not installed")]
+    #[error("git is not installed.")]
     GitMissing,
+    /// `launch` is not inside a git work tree.
+    #[error("{path} is not in a git repository, so it cannot have a worktree.")]
+    NotARepository {
+        /// The directory that is not in a repository.
+        path: PathBuf,
+    },
+    /// The path, or the branch's ref path, already exists; nothing was touched.
+    #[error("{path} already exists, so Fiber did not make a worktree there.")]
+    Exists {
+        /// The existing path, or the branch's ref path.
+        path: PathBuf,
+    },
     /// A `git` command on a worktree failed.
     #[error("{path}: git {command}: {stderr}")]
     Git {
@@ -38,6 +50,8 @@ impl Error {
     pub fn code(&self) -> ErrorCode {
         match self {
             Self::GitMissing => ErrorCode::Usage,
+            Self::NotARepository { .. } => ErrorCode::Usage,
+            Self::Exists { .. } => ErrorCode::IoFailed,
             Self::Git { .. } => ErrorCode::IoFailed,
             Self::Io { .. } => ErrorCode::IoFailed,
         }
@@ -301,9 +315,20 @@ fn run(program: &str, dir: &Path, path: &Path, args: &[&str]) -> Result<Output, 
         .map_err(|source| spawn_failed(path, source))
 }
 
-/// Runs Git with `core.fsmonitor` off and without the environment that
-/// can redirect reads or removals elsewhere.
+/// Runs Git with `core.fsmonitor` off, without the environment that
+/// can redirect reads or removals elsewhere, and without running the
+/// repository's hooks: only `git worktree add`, built by
+/// [`hooked_command`], runs those (`post-checkout`, which Git LFS
+/// needs).
 fn git_command(program: &str) -> Command {
+    let mut command = hooked_command(program);
+    command.args(["-c", "core.hooksPath=/dev/null"]);
+    command
+}
+
+/// Runs Git with the [`git_command`] scrub but running the repository's
+/// hooks: only `git worktree add` is built this way.
+fn hooked_command(program: &str) -> Command {
     let mut command = Command::new(program);
     command
         .args(["-c", "core.fsmonitor=false"])
@@ -348,3 +373,7 @@ fn spawn_failed(path: &Path, source: io::Error) -> Error {
 #[cfg(test)]
 #[path = "lib_tests.rs"]
 mod tests;
+
+mod create;
+
+pub use create::{Created, commits_beyond, create};
