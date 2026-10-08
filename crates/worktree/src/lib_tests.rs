@@ -329,7 +329,12 @@ fn a_corrupt_index_is_a_ls_files_error() {
     fs::write(Path::new(&admin).join("index"), "garbage").unwrap();
     match ignored(&path).unwrap_err() {
         Error::Git { command, .. } => assert_eq!(command, "ls-files"),
-        Error::GitMissing | Error::Io { .. } => panic!("expected a ls-files error"),
+        Error::GitMissing
+        | Error::Io { .. }
+        | Error::NotARepository { .. }
+        | Error::Exists { .. } => {
+            panic!("expected a ls-files error")
+        }
     }
 }
 
