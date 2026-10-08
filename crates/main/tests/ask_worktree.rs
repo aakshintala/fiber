@@ -99,8 +99,12 @@ fn ask_command(setup: &Setup, cwd: &Path, extra_env: &[(&str, &str)], args: &[&s
 }
 
 /// The project's key for the workspace, naming its sessions and worktrees.
-fn key_of(workspace: &Path) -> String {
-    log::project_key(&doors::project(workspace))
+/// The blocking `git` runs on a thread under the test's one deadline.
+fn key_of(deadline: Deadline, workspace: &Path) -> String {
+    let workspace = workspace.to_owned();
+    support::bounded(deadline, "the project key", move || {
+        log::project_key(&doors::project(&workspace))
+    })
 }
 
 /// The stdout lines parsed as JSON.
@@ -158,7 +162,7 @@ fn ask_worktree_runs_in_a_new_worktree_and_removes_it_clean() {
     let home = fs::canonicalize(setup.home()).unwrap();
     let expected = home
         .join("projects")
-        .join(key_of(&setup.workspace()))
+        .join(key_of(setup.deadline, &setup.workspace()))
         .join("worktrees")
         .join(id);
     assert_eq!(workspace, expected.to_str().unwrap());
@@ -166,7 +170,7 @@ fn ask_worktree_runs_in_a_new_worktree_and_removes_it_clean() {
     // The session directory is under the same project key.
     assert!(
         home.join("projects")
-            .join(key_of(&setup.workspace()))
+            .join(key_of(setup.deadline, &setup.workspace()))
             .join("sessions")
             .join(id)
             .join("events.jsonl")
@@ -211,12 +215,12 @@ fn ask_worktree_from_a_subdirectory_records_the_worktree_root() {
     let home = fs::canonicalize(setup.home()).unwrap();
     let worktrees = home
         .join("projects")
-        .join(key_of(&setup.workspace()))
+        .join(key_of(setup.deadline, &setup.workspace()))
         .join("worktrees");
     assert!(Path::new(workspace).starts_with(&worktrees));
     assert!(
         home.join("projects")
-            .join(key_of(&setup.workspace()))
+            .join(key_of(setup.deadline, &setup.workspace()))
             .join("sessions")
             .is_dir()
     );
@@ -332,7 +336,7 @@ fn a_signal_while_the_post_checkout_hook_runs_stops_it_and_leaves_nothing() {
         fakes::group_empties(hook_group, setup.deadline.left()),
         "the hook's group is gone"
     );
-    let key = key_of(&setup.workspace());
+    let key = key_of(setup.deadline, &setup.workspace());
     let worktrees = setup.home().join("projects").join(&key).join("worktrees");
     let empty = !worktrees.exists() || fs::read_dir(&worktrees).unwrap().count() == 0;
     assert!(empty, "no worktree entry remains");
@@ -394,7 +398,7 @@ fn hook_output_never_reaches_fiber_s_streams() {
         assert!(!stdout.contains(marker), "{marker} reached stdout");
         assert!(!stderr.contains(marker), "{marker} reached stderr");
     }
-    let key = key_of(&setup.workspace());
+    let key = key_of(setup.deadline, &setup.workspace());
     let worktrees = setup.home().join("projects").join(&key).join("worktrees");
     let empty = !worktrees.exists() || fs::read_dir(&worktrees).unwrap().count() == 0;
     assert!(empty, "no worktree remains");
@@ -431,7 +435,7 @@ fn a_startup_failure_after_creating_the_worktree_removes_it() {
     let last = lines.last().expect("a fiber_exited line");
     assert_eq!(last["kind"], "fiber_exited");
     assert_eq!(last["payload"]["error"]["code"], "no_model");
-    let key = key_of(&setup.workspace());
+    let key = key_of(setup.deadline, &setup.workspace());
     let worktrees = setup.home().join("projects").join(&key).join("worktrees");
     let empty = !worktrees.exists() || fs::read_dir(&worktrees).unwrap().count() == 0;
     assert!(empty, "the clean worktree was removed");
