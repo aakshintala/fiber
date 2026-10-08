@@ -8,15 +8,12 @@ use std::sync::Arc;
 use contract::ErrorCode;
 use contract::emit::Emit;
 use contract::provider::ToolDefinition;
-use contract::session_search::{Found, Hit, Label, Query, Scan};
+use contract::session_search::{Found, Hit, LIMIT, Label, Query, Scan};
 use contract::shapes::{DeclaredEffects, Effect};
 use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
 use serde_json::{Map, Value, json};
 
 use crate::files::{failed, string_argument, text_output};
-
-/// The most hits a call returns when it names no `limit`.
-const LIMIT: usize = 20;
 
 /// The most characters of a session's name a hit shows.
 const NAME: usize = 80;

@@ -17,6 +17,7 @@ Usage: fiber <command> [arguments]
 Sessions:
   ask [--model <model>] [--resume <id>] [--worktree] [<prompt>] [-]  Run one session of one turn; its events go to stdout
   sessions [--all] [--json]                                          List sessions: id, state, name, what it waits on, spend
+  sessions search [--all] [--json] <text>                            Search the logs of past and running sessions for the text
   sessions delete [--cascade] [--yes] <id>                           Delete a session, and with --cascade the sessions that continue it
   sessions export <id> [<path>]                                      Write the session's log and its artifacts to <path>
   sessions prune [--older-than <duration>] [--dry-run]               Delete old sessions, worktrees and diagnostic logs
@@ -285,6 +286,18 @@ pub(crate) enum SessionsCommands {
         /// A worktree a running session works in is never removed.
         #[arg(long)]
         force: bool,
+    },
+    /// Search the logs of past and running sessions for the text
+    Search {
+        /// Search every project, not only this repository's.
+        #[arg(long)]
+        all: bool,
+        /// Print each hit as one JSON object per line.
+        #[arg(long)]
+        json: bool,
+        /// The text to find, as a literal.
+        #[arg(value_name = "text", value_parser = clap::builder::NonEmptyStringValueParser::new())]
+        text: String,
     },
 }
 

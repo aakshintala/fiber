@@ -190,6 +190,9 @@ fn run() -> i32 {
                 sessions_delete(&id, cascade, yes, clock.as_ref(), fiber)
             }
             Some(cli::SessionsCommands::Export { id, path }) => ::cli::export(&id, path.as_deref()),
+            Some(cli::SessionsCommands::Search { all, json, text }) => {
+                ::cli::sessions_search(&text, all, json)
+            }
             Some(cli::SessionsCommands::Prune {
                 older_than,
                 cascade,
