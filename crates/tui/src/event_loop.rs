@@ -215,9 +215,12 @@ impl<B: Backend> Loop<B> {
                         Event::Edit(edit) => self.app.on_edit(edit),
                         Event::Mouse(mouse) => {
                             // Every left click, on a target or not, clears
-                            // "Copied"; a click on `copy` sets it again.
+                            // "Copied" and ends a finished attention title
+                            // (`docs/tui.md`, "Getting the person's
+                            // attention"); a click on `copy` sets it again.
                             if mouse.kind == MouseKind::Press(Button::Left) {
                                 self.app.clear_copied();
+                                self.app.attention_seen();
                             }
                             let selected = self.app.on_select(&mouse, self.screen.targets());
                             let clicked =
