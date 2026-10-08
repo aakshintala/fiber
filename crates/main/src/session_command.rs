@@ -246,7 +246,7 @@ pub(crate) fn run_new(
         credential_files,
         extensions,
         locks,
-        mcp,
+        mut mcp,
         switching,
         switchable,
         resolve,
@@ -321,7 +321,15 @@ pub(crate) fn run_new(
     extensions.emit_to(Arc::new(log::WeakEmit::new(&log)));
     extensions.drive_to(session.driver());
     extensions.answerable(!one_turn);
-    let mut all_commands = r#loop::commands(&prompt_inputs, &workspace);
+    session.skills(r#loop::skills(&prompt_inputs, &workspace));
+    // The session's MCP prompt rows, tagged with each server's name:
+    // the `commands` answer lists them beside skills, and `/name` runs
+    // them through the fetch below (`docs/mcp.md`, "Prompts and
+    // resources"). Shadowed prompts join the startup notices.
+    let prompt_rows = session_servers.prompts.commands();
+    let listed = r#loop::commands(&prompt_inputs, &workspace, &prompt_rows);
+    mcp.notices.extend(listed.notices);
+    let mut all_commands = listed.rows;
     all_commands.extend(extensions.commands());
     session.commands(all_commands);
     let door = crate::switch::Door {
@@ -337,6 +345,13 @@ pub(crate) fn run_new(
         return Ok(code);
     }
     let inbox_wake = session.inbox_wake();
+    // The fetch runs a prompt row through its server, starting a lazy
+    // one as a first tool call does (`docs/mcp.md`, "Prompts and
+    // resources"). No logic lives here beyond that call.
+    let fetch_prompts = session_servers.prompts.clone();
+    let fetch: r#loop::FetchPrompt = Arc::new(move |server, prompt, text, cancel| {
+        fetch_prompts.get(server, prompt, text, cancel)
+    });
     let case_driver = case_run.as_ref().and_then(|case| {
         match case.start(session.driver(), Arc::clone(&log), Arc::clone(&cancel)) {
             Ok(driver) => Some(driver),
@@ -403,6 +418,10 @@ pub(crate) fn run_new(
                         .on_handoff(forget)
                         .switcher(switching.closure(door), switchable)
                         .repository_code(offer)
+                        .server_prompts(r#loop::ServerPrompts {
+                            rows: prompt_rows,
+                            fetch,
+                        })
                         .inbox_wake(inbox_wake))
                 }),
                 budget,

@@ -31,8 +31,11 @@ impl App {
     }
 
     /// Handles one stroke at `now`, read from the injected clock: through
-    /// the effective bindings in the context on screen.
+    /// the effective bindings in the context on screen. A stroke ends a
+    /// finished attention title (`docs/tui.md`, "Getting the person's
+    /// attention").
     pub(crate) fn on_press(&mut self, stroke: Stroke, now: Instant) -> Effect {
+        self.attention_seen();
         match self.keys().resolve(&stroke, self.key_context()) {
             Resolved::Key(key) => self.on_key(key, now),
             Resolved::Edit(edit) => self.on_edit(edit),

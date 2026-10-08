@@ -122,6 +122,24 @@ list beside skills, tagged with the server's name, and a person runs one by
 typing its `/name` with arguments. Fiber asks the server for the prompt's text
 and sends it as the person's message (`docs/system-prompt.md`, "Skills").
 
+The words after the name fill the prompt's arguments in the order the server
+lists them, one word each, and the last argument takes the rest of the text.
+An argument with no text is left out. A required one left out rejects the
+prompt `invalid_arguments`, naming what it needs, and the server is not
+asked. For a prompt with no arguments, the text after the name follows the
+prompt's text after a blank line, as for a skill.
+
+Fiber sends the text of every message the server returns, in order, joined by
+a blank line, whatever its role; an embedded text resource counts as text. An
+answer with other content, such as an image or a resource link, or with no
+text, is not sent.
+
+When Fiber cannot get the prompt's text, the `prompt` is rejected
+`mcp_prompt_failed`, naming the cause, and nothing is sent to the model.
+Getting the text waits for the server as a tool call does, under its startup
+deadline and call timeout; no turn is running yet, so `cancel` does not reach
+it, and a shutdown does.
+
 A server's resources are reached through one tool, `mcp_resources`, with two
 actions:
 
@@ -167,13 +185,16 @@ A result goes through the tool contract in `docs/tools.md`:
 
 Settled by [MCP servers start on first call](https://github.com/aakshintala/fiber/issues/257).
 
-**A server starts on the first call to one of its tools.** The model sees its
-tools from the session's first request all the same: they are declared from
-the server's last tool list, cached in Fiber home at
-`cache/mcp/<server>.json` (`docs/state.md`). The cache is keyed by a hash of
+**A server starts on the first call to one of its tools, or the first time a
+person runs one of its prompts.** The model sees its tools from the session's
+first request all the same: they are declared from the server's last tool
+list, cached in Fiber home at `cache/mcp/<server>.json`, with its last prompt
+list (`docs/state.md`). The cache is keyed by a hash of
 the server's declaration: its command, arguments, environment, or URL. The
 first call waits for the server to start and list its tools, up to its startup
-deadline. The deadline is 5 seconds by default, and configuration can change
+deadline. The handshake lists tools only when the server advertises the
+tools capability, and prompts only when it advertises prompts: a server
+advertising only prompts starts with no tools. The deadline is 5 seconds by default, and configuration can change
 it per server.
 
 **Some servers start with the session:**
@@ -183,7 +204,8 @@ it per server.
   with code 1 and error code `mcp_required_server_failed`.
 - a server with no cached list for its current declaration: the first time
   it is used, and after its declaration changes. It starts to get the list,
-  and stays running.
+  and stays running. A cached file without a prompt list counts as no cached
+  list.
 
 The first request to the model waits for these, and a person can type while
 they connect.
@@ -199,7 +221,8 @@ list, its tools are left out for the whole session.
 **When a started server lists different tools from the cached list,** the
 session keeps the tools it declared, because a tool set that changes
 mid-session misses the whole prompt cache. The cache is updated, so the next
-session declares the new list. A call to a declared tool the server no longer
+session declares the new list. The session keeps the prompts it listed at
+start, as it keeps its tools. A call to a declared tool the server no longer
 has fails with `mcp_tool_removed`.
 
 The 5-second deadline:

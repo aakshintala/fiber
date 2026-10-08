@@ -5,7 +5,7 @@
 use std::path::{Path, PathBuf};
 
 use contract::ErrorCode;
-use contract::events::{CommandInfo, Notice, SkillListed, SkillSource};
+use contract::events::{CommandInfo, Notice, SkillInfo, SkillListed, SkillSource};
 use contract::shapes::ContentPart;
 
 use crate::opening::canonical;
@@ -24,15 +24,32 @@ pub(crate) struct Found {
     /// The place it was read from: the canonical directory, or
     /// `extension <name>`.
     pub(crate) place: String,
+    /// The extension's name, exactly for a skill from an extension's
+    /// `skills/` or `prompts/`.
+    pub(crate) extension: Option<String>,
 }
 
 /// What discovery found: one skill per name, and what went wrong.
 pub(crate) struct Discovered {
     /// The first skill found under each name, in discovery order.
     pub(crate) skills: Vec<Found>,
+    /// Every later skill found under a name the winners already hold, in
+    /// discovery order: each is answered beside its winner, never listed
+    /// or expanded (`docs/invocation.md`, "What each command does",
+    /// `skills`).
+    pub(crate) shadowed: Vec<Shadowed>,
     /// `io_failed`, `skill_invalid` and `skill_shadowed`, in discovery
     /// order.
     pub(crate) notices: Vec<Notice>,
+}
+
+/// A skill another skill shadows: the loser, and its winner's `SKILL.md`
+/// path.
+pub(crate) struct Shadowed {
+    /// The skill left out of the listing.
+    pub(crate) found: Found,
+    /// The winner's `SKILL.md` path, as discovery logs it.
+    pub(crate) by: String,
 }
 
 /// One directory holding a directory per skill.
@@ -40,6 +57,9 @@ struct Place {
     dir: PathBuf,
     source: SkillSource,
     label: Option<String>,
+    /// The extension's name, exactly for an extension's `skills/` or
+    /// `prompts/`.
+    extension: Option<String>,
     /// A `prompts/` place: its skills are never listed.
     prompts: bool,
 }
@@ -49,16 +69,19 @@ struct Place {
 /// Fiber home, so any other source wins a name. `top` is the repository's
 /// top level, or the workspace outside git.
 fn places(inputs: &PromptInputs, top: &Path) -> Vec<Place> {
-    let place = |dir: PathBuf, source, label: Option<String>, prompts| Place {
-        dir,
-        source,
-        label,
-        prompts,
-    };
+    let place =
+        |dir: PathBuf, source, label: Option<String>, extension: Option<String>, prompts| Place {
+            dir,
+            source,
+            label,
+            extension,
+            prompts,
+        };
     let mut places = vec![
         place(
             top.join(".fiber/skills"),
             SkillSource::Repository,
+            None,
             None,
             false,
         ),
@@ -66,11 +89,13 @@ fn places(inputs: &PromptInputs, top: &Path) -> Vec<Place> {
             top.join(".agents/skills"),
             SkillSource::Repository,
             None,
+            None,
             false,
         ),
         place(
             inputs.home.join("skills"),
             SkillSource::Personal,
+            None,
             None,
             false,
         ),
@@ -80,6 +105,7 @@ fn places(inputs: &PromptInputs, top: &Path) -> Vec<Place> {
             home.join(".agents/skills"),
             SkillSource::Personal,
             None,
+            None,
             false,
         ));
     }
@@ -87,22 +113,26 @@ fn places(inputs: &PromptInputs, top: &Path) -> Vec<Place> {
     extensions.sort_by(|a, b| a.0.cmp(&b.0));
     for (name, dir) in extensions {
         let label = Some(format!("extension {name}"));
+        let extension = Some(name.clone());
         places.push(place(
             dir.join("skills"),
             SkillSource::Extension,
             label.clone(),
+            extension.clone(),
             false,
         ));
         places.push(place(
             dir.join("prompts"),
             SkillSource::Extension,
             label,
+            extension,
             true,
         ));
     }
     places.push(place(
         inputs.home.join("docs/skills"),
         SkillSource::Builtin,
+        None,
         None,
         false,
     ));
@@ -113,6 +143,7 @@ fn places(inputs: &PromptInputs, top: &Path) -> Vec<Place> {
 /// place whose canonical path an earlier place already had is skipped.
 pub(crate) fn discover(inputs: &PromptInputs, top: &Path) -> Discovered {
     let mut skills: Vec<Found> = Vec::new();
+    let mut shadowed: Vec<Shadowed> = Vec::new();
     let mut notices = Vec::new();
     let mut read: Vec<PathBuf> = Vec::new();
     for place in places(inputs, top) {
@@ -133,18 +164,7 @@ pub(crate) fn discover(inputs: &PromptInputs, top: &Path) -> Discovered {
                 }
             };
             let path = path.display().to_string();
-            if let Some(winner) = skills.iter().find(|found| found.listed.name == header.name) {
-                notices.push(Notice {
-                    code: ErrorCode::SkillShadowed,
-                    message: format!(
-                        "Skill {} at {path} is shadowed by {}, which is used.",
-                        header.name, winner.listed.path
-                    ),
-                    extension: None,
-                });
-                continue;
-            }
-            skills.push(Found {
+            let found = Found {
                 listed: SkillListed {
                     name: header.name,
                     description: header.description,
@@ -154,11 +174,33 @@ pub(crate) fn discover(inputs: &PromptInputs, top: &Path) -> Discovered {
                 model_invocable: header.model_invocable && !place.prompts,
                 argument_hint: header.argument_hint,
                 place: label.clone(),
-            });
+                extension: place.extension.clone(),
+            };
+            if let Some(by) = skills
+                .iter()
+                .find(|kept| kept.listed.name == found.listed.name)
+                .map(|winner| winner.listed.path.clone())
+            {
+                notices.push(Notice {
+                    code: ErrorCode::SkillShadowed,
+                    message: format!(
+                        "Skill {} at {} is shadowed by {}, which is used.",
+                        found.listed.name, found.listed.path, by
+                    ),
+                    extension: None,
+                });
+                shadowed.push(Shadowed { found, by });
+                continue;
+            }
+            skills.push(found);
         }
         read.push(dir);
     }
-    Discovered { skills, notices }
+    Discovered {
+        skills,
+        shadowed,
+        notices,
+    }
 }
 
 /// Each skill's `SKILL.md` path and text in `dir`, in byte order of the
@@ -312,6 +354,64 @@ pub(crate) fn commands(found: &[Found], disabled: &[String]) -> Vec<CommandInfo>
         .collect()
 }
 
+/// The `skills` answer's rows (`docs/invocation.md`, "What each command
+/// does"): every skill discovery read, in discovery order, each winner
+/// followed at once by the skills it shadows. A switched-off name marks
+/// every row under it, the winner and each shadowed skill, and never
+/// promotes one (`docs/system-prompt.md`, "Skills"). Whether the model
+/// may load a skill is its header and place alone, unchanged by the
+/// switch or the shadowing. A skill whose header is invalid is left out,
+/// as discovery leaves it out.
+pub(crate) fn rows(discovered: &Discovered, disabled: &[String]) -> Vec<SkillInfo> {
+    let mut out = Vec::new();
+    for winner in &discovered.skills {
+        let losers: Vec<&Shadowed> = discovered
+            .shadowed
+            .iter()
+            .filter(|shadowed| shadowed.found.listed.name == winner.listed.name)
+            .collect();
+        out.push(info(
+            winner,
+            disabled.contains(&winner.listed.name),
+            losers
+                .iter()
+                .map(|shadowed| shadowed.found.listed.path.clone())
+                .collect(),
+            None,
+        ));
+        for loser in losers {
+            out.push(info(
+                &loser.found,
+                disabled.contains(&loser.found.listed.name),
+                Vec::new(),
+                Some(loser.by.clone()),
+            ));
+        }
+    }
+    out
+}
+
+/// One `skills` row: the skill's name, description, path, source and
+/// header-and-place eligibility, with its switch and shadowing marks.
+fn info(
+    found: &Found,
+    disabled: bool,
+    shadows: Vec<String>,
+    shadowed_by: Option<String>,
+) -> SkillInfo {
+    SkillInfo {
+        name: found.listed.name.clone(),
+        description: found.listed.description.clone(),
+        path: found.listed.path.clone(),
+        source: found.listed.source,
+        extension: found.extension.clone(),
+        model_invocable: found.model_invocable,
+        disabled,
+        shadows,
+        shadowed_by,
+    }
+}
+
 /// One listing line.
 pub(crate) fn entry(skill: &SkillListed) -> String {
     format!("- {}: {} ({})", skill.name, skill.description, skill.path)
@@ -356,3 +456,7 @@ pub(crate) fn size_notice(listed: &[&Found], window: u64) -> Option<Notice> {
 #[cfg(test)]
 #[path = "skills_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "skill_rows_tests.rs"]
+mod rows_tests;

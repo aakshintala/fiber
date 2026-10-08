@@ -953,9 +953,19 @@ SSH.
 When any live session starts waiting on the person, for an approval, a
 question or a finished turn, whether or not it is on screen, the terminal:
 
-- sends an OSC 9 desktop notification where the terminal supports one
-  (Ghostty, iTerm2, kitty, WezTerm), and a bell elsewhere
-- shows the state in the terminal title, such as "! fiber · approval"
+- sends an OSC 9 desktop notification where the terminal supports one, and a
+  bell elsewhere. Support is read once at start: Ghostty, iTerm2, kitty or
+  WezTerm, by `TERM_PROGRAM`, `TERM` or `KITTY_WINDOW_ID`, and no tmux or
+  screen in between (`TMUX` and `STY` unset), since a multiplexer swallows the
+  escape. The text is "Fiber: <name> needs you: <summary>", or
+  "Fiber: <name> finished", with the session's name, or its id when it has
+  none, cut to 60 characters, the summary cut to 120, and control characters
+  dropped.
+- shows the state in the terminal title: "! fiber · approval", "! fiber ·
+  question" or "! fiber · waiting" while that session still waits, and
+  "✓ fiber · finished" after a finished turn until the next key or click. The
+  latest attention wins, and the title goes back to normal once nothing it
+  names applies.
 
 Each can be turned off: `tui.attention.notification`, `tui.attention.bell` and
 `tui.attention.title`.
