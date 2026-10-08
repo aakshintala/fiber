@@ -449,12 +449,12 @@ fn a_tool_call_completes_while_a_command_is_parked_on_an_ask() {
         "waited for the command to ask"
     );
     let quick = Arc::clone(&ext);
-    let ran = on_thread(move || quick.tool_run("quick", json!({})));
+    let ran = on_thread(move || quick.tool_run("quick", json!({}), &fakes::CancelToken::new()));
     assert_eq!(
         ran.recv_timeout(WAIT)
             .expect("the tool call ran while the command waited")
             .unwrap(),
-        json!("quick")
+        Some(json!("quick"))
     );
     assert_eq!(ext.hub.lock().asks.len(), 1, "the command still waits");
 }
@@ -470,7 +470,7 @@ fn a_hook_runs_to_completion_while_a_tool_call_is_parked() {
         )
     ));
     let holding = Arc::clone(&ext);
-    let _held = on_thread(move || holding.tool_run("hold", json!({})));
+    let _held = on_thread(move || holding.tool_run("hold", json!({}), &fakes::CancelToken::new()));
     accepted
         .recv_timeout(WAIT)
         .expect("waited for the tool call to reach the server");
@@ -508,7 +508,7 @@ fn a_spinning_tool_holds_the_extensions_hook_until_its_timeout() {
         clock.clone(),
     ));
     let spinning = Arc::clone(&ext);
-    let spun = on_thread(move || spinning.tool_run("spin", json!({})));
+    let spun = on_thread(move || spinning.tool_run("spin", json!({}), &fakes::CancelToken::new()));
     went.recv_timeout(WAIT)
         .expect("waited for the tool to spin");
     let hooked = Arc::clone(&ext);

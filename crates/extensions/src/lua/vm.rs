@@ -87,7 +87,8 @@ impl Vm {
             session,
             secrets,
         } = start;
-        let deadline = Deadline::new(Arc::clone(&clock));
+        let deadline =
+            Deadline::new(Arc::clone(&clock)).with_interrupt(Arc::clone(&hub.lock().interrupt));
         deadline.restore(*load_by);
         let fail = |message: String| Error::Lua {
             extension: name.to_owned(),

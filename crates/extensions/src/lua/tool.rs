@@ -8,16 +8,21 @@ use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Duration;
+use std::sync::atomic::Ordering;
+use std::time::{Duration, Instant};
 
+use contract::clock::Wake;
+use contract::inbox::Delivery;
 use contract::shapes::{DeclaredEffects, Effect};
+use contract::tool::Cancel;
 use mlua::{Function, Lua, Table, Value as LuaValue};
 use serde_json::Value;
 
 use crate::extension_tools::LuaTool;
 use crate::{Error, host};
 
-use super::{LuaExtension, Target};
+use super::hub::Progress;
+use super::{LuaExtension, Next, Phase, Shared, Target};
 
 /// The longest tool name a provider accepts (`docs/mcp.md`, "Tools and
 /// their names").
@@ -267,10 +272,127 @@ impl LuaExtension {
     }
 
     /// Runs the `run` function of the tool `name` on `args` and returns what
-    /// it returned, under the tool's timeout. It runs in the gaps of the
-    /// extension's ordered stream, as a provider function does.
-    pub(crate) fn tool_run(&self, name: &str, args: Value) -> Result<Value, Error> {
-        self.call(Target::Tool(name.to_owned()), args)
+    /// it returned, under the tool's timeout, or `None` once `cancel`
+    /// stopped it (`docs/tools.md`, "Cancellation"). It runs in the gaps of
+    /// the extension's ordered stream, as a provider function does. A
+    /// cancelled call that has not started never runs; one parked on a host
+    /// call is dropped, and one parked on `host.exec` returns only once the
+    /// run has stopped; one running Lua is stopped by the deadline hook, or
+    /// abandoned with the VM past its grace.
+    pub(crate) fn tool_run(
+        &self,
+        name: &str,
+        args: Value,
+        cancel: &dyn Cancel,
+    ) -> Result<Option<Value>, Error> {
+        let target = Target::Tool(name.to_owned());
+        // When Fiber asks, before it waits for the hub (`docs/extensions.md`).
+        let asked = self.hub.clock().now();
+        // Subscribed before anything is queued, and the signal is read
+        // after, so no cancel is missed.
+        let wake: Arc<dyn Wake> = Arc::clone(&self.hub) as Arc<dyn Wake>;
+        cancel.subscribe(Arc::downgrade(&wake));
+        let mut shared = self.hub.lock();
+        self.start(&mut shared)?;
+        let id = shared.push(target.clone(), args, asked);
+        self.hub.notify();
+        let mut cancelling = false;
+        loop {
+            if !cancelling && cancel.is_cancelled() {
+                cancelling = true;
+                shared.cancel_call(id);
+                self.hub.notify();
+            }
+            let now = self.hub.clock().now();
+            let (judged, unsent) = shared.judge_tool(&self.name, id, &target, asked, now);
+            let returned = match judged {
+                Some(Next::Sleep(until)) => {
+                    drop(unsent);
+                    shared = self.hub.wait(shared, until);
+                    continue;
+                }
+                Some(Next::Return(result)) => result.map(Some),
+                None => Ok(None),
+            };
+            self.hub.notify();
+            drop(shared);
+            drop(unsent);
+            return returned;
+        }
+    }
+}
+
+/// What a tool call's caller does next: as [`Shared::judge`] says, or
+/// `None` once the call was cancelled.
+type Judged = (Option<Next>, Vec<Delivery>);
+
+impl Shared {
+    /// Cancels the call `id`: a queued call is dropped and ends cancelled; a
+    /// started one is marked for the thread, and one running Lua is
+    /// interrupted. One that ended keeps how it ended.
+    pub(super) fn cancel_call(&mut self, id: u64) {
+        match self.calls.get(&id) {
+            Some(Progress::Queued) => {
+                self.queue.retain(|job| job.id != id);
+                self.calls.insert(id, Progress::Cancelled);
+            }
+            Some(Progress::Started { parked, .. }) => {
+                if !*parked {
+                    self.interrupt.store(true, Ordering::SeqCst);
+                }
+                self.cancelled.insert(id);
+            }
+            Some(Progress::Done(_) | Progress::Cancelled) | None => {}
+        }
+    }
+
+    /// Ends the call `id`, if it was cancelled, once its thread work has
+    /// stopped. Returns whether it was.
+    pub(super) fn end_cancelled(&mut self, id: u64) -> bool {
+        if !self.cancelled.remove(&id) {
+            return false;
+        }
+        if let Some(progress) = self.calls.get_mut(&id) {
+            *progress = Progress::Cancelled;
+        }
+        true
+    }
+
+    /// Judges the tool call `id` as [`Shared::judge`] does, except that a
+    /// cancelled call parked on a host call waits for the thread to stop
+    /// it, past its deadline too, and a cancelled call the extension's end
+    /// fails ends cancelled.
+    pub(super) fn judge_tool(
+        &mut self,
+        name: &str,
+        id: u64,
+        target: &Target,
+        asked: Instant,
+        now: Instant,
+    ) -> Judged {
+        let cancelled = self.cancelled.contains(&id);
+        match self.calls.get(&id) {
+            Some(Progress::Cancelled) => {
+                self.calls.remove(&id);
+                return (None, Vec::new());
+            }
+            Some(Progress::Started { parked: true, .. })
+                if cancelled && matches!(self.phase, Phase::Ready(_)) =>
+            {
+                return (Some(Next::Sleep(None)), Vec::new());
+            }
+            _ => {}
+        }
+        match self.judge(name, id, target, asked, now) {
+            // The extension ended under a cancelled call: abandoned with
+            // it, or stopped before the thread dropped it.
+            (Next::Return(Err(_)), unsent)
+                if cancelled && !matches!(self.phase, Phase::Ready(_)) =>
+            {
+                (None, unsent)
+            }
+            (next, unsent) => (Some(next), unsent),
+        }
     }
 }
 

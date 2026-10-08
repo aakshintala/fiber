@@ -811,3 +811,342 @@ fiber.tool("probe", {
         other => panic!("expected the effects function's extension_exec, got {other:?}"),
     }
 }
+
+// Cancellation (`docs/tools.md`, "Cancellation"): a cancelled call returns
+// no content and no error only once it can change nothing more.
+
+/// Runs `tool` with no arguments on its own thread, cancelled by `cancel`.
+fn run_cancellable(tool: &Arc<LuaTool>, cancel: &CancelToken) -> mpsc::Receiver<Output> {
+    let (tx, rx) = mpsc::channel();
+    let tool = Arc::clone(tool);
+    let cancel = cancel.clone();
+    std::thread::spawn(move || {
+        let output = tool.run(&Map::new(), &cancel, &Recorder::default());
+        match tx.send(output) {
+            Ok(()) | Err(mpsc::SendError(_)) => {}
+        }
+    });
+    rx
+}
+
+/// What a cancelled call returns.
+fn cancelled() -> Output {
+    Output::default()
+}
+
+/// Waits `bound` for nothing: a bounded receive on a channel no one sends on.
+fn pause(bound: Duration) {
+    let (_keep, never) = mpsc::channel::<()>();
+    assert!(never.recv_timeout(bound).is_err());
+}
+
+#[test]
+fn a_queued_call_cancelled_before_it_starts_never_runs() {
+    let dir = fakes::TempDir::new("fiber-lua-tools");
+    let clock = FakeClock::new();
+    let ext = extension(
+        dir.path(),
+        "queue",
+        r#"
+local calls = 0
+fiber.tool("spin", {
+  description = "d", input_schema = { type = "object" },
+  effects = { effects = {}, reversible = true }, timeout = 100,
+  run = function() require("go_spin") while true do end end,
+})
+fiber.tool("count", {
+  description = "d", input_schema = { type = "object" },
+  effects = { effects = {}, reversible = true }, timeout = 60000,
+  run = function() calls = calls + 1 return tostring(calls) end,
+})
+"#,
+        clock.clone(),
+    );
+    let went = go_module(dir.path(), "spin");
+    let tools = by_name(&ext);
+    let spinning = run(&tools["spin"], json!({}));
+    went.recv_timeout(WAIT).expect("waited for spin to start");
+    // The thread spins, so this call stays queued.
+    let cancel = CancelToken::new();
+    let queued = run_cancellable(&tools["count"], &cancel);
+    cancel.cancel();
+    assert_eq!(ran(&queued), cancelled());
+    clock.advance(Duration::from_millis(100));
+    assert_eq!(failed(&ran(&spinning)).0, ErrorCode::Timeout);
+    assert_eq!(text(&ran(&run(&tools["count"], json!({})))), "1");
+}
+
+#[test]
+fn a_call_parked_on_a_host_call_is_cancelled_without_the_clock_moving() {
+    let dir = fakes::TempDir::new("fiber-lua-tools");
+    let held = hold("late");
+    let ext = extension(
+        dir.path(),
+        "parked",
+        &format!(
+            r#"
+local calls = 0
+fiber.tool("wait", {{
+  description = "d", input_schema = {{ type = "object" }},
+  effects = {{ effects = {{}}, reversible = true }}, timeout = 60000,
+  run = function()
+    calls = calls + 1
+    if calls == 1 then return host.http({{ url = "{}" }}).body end
+    return "again"
+  end,
+}})
+"#,
+            held.url
+        ),
+        FakeClock::new(),
+    );
+    let tools = by_name(&ext);
+    let cancel = CancelToken::new();
+    let first = run_cancellable(&tools["wait"], &cancel);
+    held.accepted
+        .recv_timeout(WAIT)
+        .expect("waited for the request to reach the server");
+    cancel.cancel();
+    assert_eq!(ran(&first), cancelled());
+    assert_eq!(text(&ran(&run(&tools["wait"], json!({})))), "again");
+}
+
+#[test]
+fn a_call_spinning_in_lua_is_cancelled_before_its_timeout() {
+    let dir = fakes::TempDir::new("fiber-lua-tools");
+    let ext = extension(
+        dir.path(),
+        "spin",
+        r#"
+local calls = 0
+fiber.tool("spin", {
+  description = "d", input_schema = { type = "object" },
+  effects = { effects = {}, reversible = true }, timeout = 60000,
+  run = function()
+    calls = calls + 1
+    if calls == 1 then require("go_spin") while true do end end
+    return "again"
+  end,
+})
+"#,
+        FakeClock::new(),
+    );
+    let went = go_module(dir.path(), "spin");
+    let tools = by_name(&ext);
+    let cancel = CancelToken::new();
+    let first = run_cancellable(&tools["spin"], &cancel);
+    went.recv_timeout(WAIT).expect("waited for spin to start");
+    cancel.cancel();
+    assert_eq!(ran(&first), cancelled());
+    // The interrupt is cleared: the next call runs to its own result.
+    assert_eq!(text(&ran(&run(&tools["spin"], json!({})))), "again");
+}
+
+/// An extension whose tool `exec` runs `script` through `sh`, with the
+/// ready FIFO's path as `$0`, the first time, and returns `again` after.
+fn exec_extension(dir: &Path, script: &str, ready: &Path) -> Arc<LuaExtension> {
+    extension(
+        dir,
+        "exec",
+        &format!(
+            r#"
+local calls = 0
+fiber.tool("exec", {{
+  description = "d", input_schema = {{ type = "object" }},
+  effects = {{ effects = {{ "executes" }}, reversible = false }}, timeout = 60000,
+  run = function()
+    calls = calls + 1
+    if calls == 1 then host.exec("sh", {{ "-c", {script:?}, {ready:?} }}) end
+    return "again"
+  end,
+}})
+"#,
+            ready = ready.display().to_string(),
+        ),
+        FakeClock::new(),
+    )
+}
+
+#[test]
+fn a_call_parked_on_exec_returns_once_its_group_is_empty() {
+    let dir = fakes::TempDir::new("fiber-lua-tools");
+    let ready = fakes::children::Ready::new(dir.path());
+    let ext = exec_extension(dir.path(), r#"echo $$ > "$0"; exec sleep 60"#, ready.path());
+    let tools = by_name(&ext);
+    let cancel = CancelToken::new();
+    let first = run_cancellable(&tools["exec"], &cancel);
+    let group = ready.wait(WAIT)[0];
+    let watchdog = fakes::Watchdog::group(group);
+    cancel.cancel();
+    assert_eq!(ran(&first), cancelled());
+    assert!(
+        !fakes::kill_group(group, "0").unwrap(),
+        "the group is empty when the call returns"
+    );
+    watchdog.stand_down(WAIT);
+    assert_eq!(text(&ran(&run(&tools["exec"], json!({})))), "again");
+}
+
+#[test]
+fn a_cancelled_exec_that_ignores_sigterm_returns_only_after_the_kill() {
+    let dir = fakes::TempDir::new("fiber-lua-tools");
+    let ready = fakes::children::Ready::new(dir.path());
+    let out = dir.path().join("out");
+    let clock = FakeClock::new();
+    let ext = extension(
+        dir.path(),
+        "exec",
+        &format!(
+            r#"
+fiber.tool("exec", {{
+  description = "d", input_schema = {{ type = "object" }},
+  effects = {{ effects = {{ "executes" }}, reversible = false }}, timeout = 500,
+  run = function()
+    host.exec("sh", {{ "-c", {script:?}, {ready:?}, {out:?} }})
+    return "ran"
+  end,
+}})
+"#,
+            script =
+                r#"trap 'echo $$ >> "$0"' TERM; echo $$ > "$0"; while :; do echo x >> "$1"; done"#,
+            ready = ready.path().display().to_string(),
+            out = out.display().to_string(),
+        ),
+        clock.clone(),
+    );
+    let tools = by_name(&ext);
+    let cancel = CancelToken::new();
+    let first = run_cancellable(&tools["exec"], &cancel);
+    let group = ready.wait(WAIT)[0];
+    let watchdog = fakes::Watchdog::group(group);
+    cancel.cancel();
+    // The trap's line: SIGTERM arrived and the group runs on.
+    ready.wait(WAIT);
+    assert!(
+        first.recv_timeout(Duration::from_millis(200)).is_err(),
+        "the call returned while its group still ran"
+    );
+    // Past the SIGKILL 800 ms after the SIGTERM, and past the call's 500 ms
+    // deadline and its grace: a cancelled call waits for its run, not its
+    // deadline.
+    clock.advance(Duration::from_millis(500) + GRACE);
+    assert_eq!(ran(&first), cancelled());
+    assert!(
+        !fakes::kill_group(group, "0").unwrap(),
+        "the group is empty when the call returns"
+    );
+    let len = || std::fs::metadata(&out).unwrap().len();
+    let before = len();
+    pause(Duration::from_millis(100));
+    assert_eq!(len(), before, "nothing writes after the call returned");
+    watchdog.stand_down(WAIT);
+}
+
+#[test]
+fn a_cancelled_call_the_hook_cannot_stop_ends_with_the_vm_abandoned() {
+    let dir = fakes::TempDir::new("fiber-lua-tools");
+    let clock = FakeClock::new();
+    let ext = extension(
+        dir.path(),
+        "stuck",
+        r#"
+fiber.tool("find", {
+  description = "d", input_schema = { type = "object" },
+  effects = { effects = {}, reversible = true }, timeout = 50,
+  run = function()
+    require("go_find")
+    string.find(string.rep("a", 100000), "a*a*a*a*b")
+    host.exec("sh", { "-c", "exit 0" })
+    return "found"
+  end,
+})
+fiber.tool("other", {
+  description = "d", input_schema = { type = "object" },
+  effects = { effects = {}, reversible = true }, timeout = 50,
+  run = function() return "other" end,
+})
+"#,
+        clock.clone(),
+    );
+    let (tx, inbox) = mpsc::channel();
+    ext.deliver_to(tx);
+    let went = go_module(dir.path(), "find");
+    let tools = by_name(&ext);
+    let asked = clock.now();
+    let cancel = CancelToken::new();
+    let first = run_cancellable(&tools["find"], &cancel);
+    went.recv_timeout(WAIT)
+        .expect("waited for the callback to pass its clock check");
+    cancel.cancel();
+    let abandon_at = asked + Duration::from_millis(50) + GRACE;
+    assert!(
+        clock.await_parked(abandon_at, WAIT),
+        "waited for the caller to park at the grace"
+    );
+    clock.advance(Duration::from_millis(50) + GRACE);
+    assert_eq!(ran(&first), cancelled());
+    let later = ran(&run(&tools["other"], json!({})));
+    assert_eq!(
+        failed(&later),
+        (
+            ErrorCode::ToolError,
+            "`fiber.test/stuck` is stopped and takes no more calls.".to_owned()
+        )
+    );
+    assert!(matches!(inbox.try_recv(), Err(mpsc::TryRecvError::Empty)));
+}
+
+#[test]
+fn a_cancelled_parked_call_ends_when_a_stuck_call_abandons_the_vm() {
+    let dir = fakes::TempDir::new("fiber-lua-tools");
+    let clock = FakeClock::new();
+    let held = hold("late");
+    let ext = extension(
+        dir.path(),
+        "stuck",
+        &format!(
+            r#"
+fiber.tool("wait", {{
+  description = "d", input_schema = {{ type = "object" }},
+  effects = {{ effects = {{}}, reversible = true }}, timeout = 60000,
+  run = function() return host.http({{ url = "{}" }}).body end,
+}})
+fiber.tool("find", {{
+  description = "d", input_schema = {{ type = "object" }},
+  effects = {{ effects = {{}}, reversible = true }}, timeout = 50,
+  run = function()
+    require("go_find")
+    string.find(string.rep("a", 100000), "a*a*a*a*b")
+  end,
+}})
+"#,
+            held.url
+        ),
+        clock.clone(),
+    );
+    let went = go_module(dir.path(), "find");
+    let tools = by_name(&ext);
+    let cancel = CancelToken::new();
+    let waiting = run_cancellable(&tools["wait"], &cancel);
+    held.accepted
+        .recv_timeout(WAIT)
+        .expect("waited for the request to reach the server");
+    let asked = clock.now();
+    let stuck = run(&tools["find"], json!({}));
+    went.recv_timeout(WAIT)
+        .expect("waited for the stuck callback to pass its clock check");
+    // The thread is stuck in a C call, so it never drops the parked call.
+    cancel.cancel();
+    assert!(
+        waiting.recv_timeout(Duration::from_millis(200)).is_err(),
+        "the parked call returned before the thread dropped it"
+    );
+    let abandon_at = asked + Duration::from_millis(50) + GRACE;
+    assert!(
+        clock.await_parked(abandon_at, WAIT),
+        "waited for the stuck call's caller to park at the grace"
+    );
+    clock.advance(Duration::from_millis(50) + GRACE);
+    assert_eq!(failed(&ran(&stuck)).0, ErrorCode::ToolError);
+    assert_eq!(ran(&waiting), cancelled());
+}

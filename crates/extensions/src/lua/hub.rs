@@ -11,7 +11,7 @@
 //! running callback is still running a grace period past its own deadline.
 //! Dropping the extension stops it. Stopped is final.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -467,6 +467,12 @@ pub(crate) struct Shared {
     /// Timer ids whose Lua functions the extension's thread still frees.
     pub(crate) timer_cleanup: Vec<u64>,
     next_id: u64,
+    /// Started calls whose caller cancelled them (`docs/tools.md`,
+    /// "Cancellation"), until the thread ends them.
+    pub(super) cancelled: HashSet<u64>,
+    /// Raised into running Lua by the deadline hook while a cancelled call
+    /// runs; set and cleared only under this lock.
+    pub(super) interrupt: Arc<std::sync::atomic::AtomicBool>,
     /// The next timer's id, assigned in set order from 0.
     pub(crate) next_timer: u64,
 }
@@ -512,6 +518,8 @@ pub(super) enum Progress {
         parked: bool,
     },
     Done(Result<Value, Error>),
+    /// Cancelled before it returned: it ran no further.
+    Cancelled,
 }
 
 pub(super) struct Job {
@@ -739,10 +747,16 @@ impl Shared {
         )
     }
 
-    /// Records `result` for the call `id`, if its caller still waits.
+    /// Records `result` for the call `id`, if its caller still waits. A
+    /// cancelled call that failed ends cancelled.
     pub(super) fn finish(&mut self, id: u64, result: Result<Value, Error>) {
+        let stopped = self.cancelled.remove(&id) && result.is_err();
         if let Some(progress) = self.calls.get_mut(&id) {
-            *progress = Progress::Done(result);
+            *progress = if stopped {
+                Progress::Cancelled
+            } else {
+                Progress::Done(result)
+            };
         }
     }
 
@@ -766,6 +780,7 @@ impl Shared {
     /// Drops the call `id`: its caller has stopped waiting.
     fn forget(&mut self, id: u64) {
         self.calls.remove(&id);
+        self.cancelled.remove(&id);
         self.queue.retain(|job| job.id != id);
     }
 }

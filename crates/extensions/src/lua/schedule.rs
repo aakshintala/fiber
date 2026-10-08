@@ -10,6 +10,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::sync::mpsc::Sender;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -40,6 +41,9 @@ struct Parked {
     /// The `host.ask` question this callback waits on, if any: plain data,
     /// removed from the registry by whoever answers it first.
     ask: Option<contract::RequestId>,
+    /// It waits on a `host.exec` run, which a cancel ends only once the run
+    /// has stopped and delivered.
+    exec: bool,
 }
 
 /// What the thread does next, outside the lock.
@@ -173,10 +177,28 @@ pub(super) fn serve(hub: Arc<Hub>, start: Start) {
 /// extension is stopped.
 fn next(name: &str, hub: &Hub, parked: &mut Vec<Parked>) -> Option<Work> {
     let mut shared = hub.lock();
+    // Nothing runs here: an interrupt raised for the callback that just
+    // ended must not stop the next one.
+    shared.interrupt.store(false, Ordering::SeqCst);
     loop {
         let now = hub.clock().now();
         if !matches!(shared.phase, Phase::Ready(_)) {
             return None;
+        }
+        if let Some(pos) = parked.iter().position(|p| shared.cancelled.contains(&p.id)) {
+            // A cancelled callback goes, and its host call with it. A
+            // `host.exec` run is asked to stop when its sender drops, and
+            // the call ends once that run delivers.
+            let p = parked.swap_remove(pos);
+            let unsent = p.ask.as_ref().and_then(|request| shared.decline(request));
+            if !p.exec {
+                shared.end_cancelled(p.id);
+            }
+            hub.notify();
+            drop(p);
+            drop(shared);
+            drop(unsent);
+            return Some(Work::Collect);
         }
         if let Some(pos) = parked.iter().position(|p| expired(p.deadline, now)) {
             let p = parked.swap_remove(pos);
@@ -207,7 +229,11 @@ fn next(name: &str, hub: &Hub, parked: &mut Vec<Parked>) -> Option<Work> {
         });
         if let Some((id, reply)) = due {
             let Some(pos) = parked.iter().position(|p| p.id == id) else {
-                // The callback is gone. Dropping its reply frees a lock in it.
+                // The callback is gone. Dropping its reply frees a lock in
+                // it. A cancelled `host.exec` run ends its call here.
+                if shared.end_cancelled(id) {
+                    hub.notify();
+                }
                 continue;
             };
             let p = parked.swap_remove(pos);
@@ -321,6 +347,15 @@ fn settle(
             request,
         }) => (thread, target, deadline, timeout, request),
     };
+    {
+        let shared = hub.lock();
+        // A stopped extension starts no host work: its callback, even one
+        // still running on an abandoned thread, has no way out but the host.
+        if !matches!(shared.phase, Phase::Ready(_)) {
+            return;
+        }
+    }
+    let exec = matches!(request, Request::Exec(_));
     let deliver: Deliver = {
         let hub = Arc::clone(hub);
         Arc::new(move |reply| hub.deliver(id, reply))
@@ -356,6 +391,7 @@ fn settle(
                     wake: None,
                     _cancel: None,
                     ask: Some(request_id),
+                    exec: false,
                 });
                 if let Some(progress) = shared.calls.get_mut(&id) {
                     *progress = Progress::Started {
@@ -390,6 +426,7 @@ fn settle(
                         wake: None,
                         _cancel: None,
                         ask: None,
+                        exec: false,
                     });
                     if let Some(progress) = hub.lock().calls.get_mut(&id) {
                         *progress = Progress::Started {
@@ -576,6 +613,7 @@ fn settle(
         deadline,
         timeout,
         wake,
+        exec,
         _cancel: cancel,
         ask: None,
     });
