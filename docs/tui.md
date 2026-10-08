@@ -1013,7 +1013,7 @@ fast sweep wrote 1,332 frames and 358,360 bytes, 129 µs a report.
   own 16 colours are never used.
 - **`NO_COLOR`** set and not empty turns colour off: every role is the
   terminal's default colour. Bold, dim, reversed and underline stay, so focus,
-  selection and state words still show. A half-block edge draws as a blank,
+  selection, matches and state words still show. A half-block edge draws as a blank,
   because with no tint there is no surface to edge, and its row stays.
 - **Markdown in replies:** headings in the theme's heading colour; code blocks
   on a darker tint with syntax colours, line numbers, a language label and a

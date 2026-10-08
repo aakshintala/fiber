@@ -11,17 +11,24 @@ use crate::app::{App, FindBar};
 use crate::mouse::{Target, TargetId};
 use crate::theme::Role;
 
-/// The selection's highlight.
-const SELECTION: Style = Style::new().bg(Role::Selection.color());
+/// The selection's highlight: reversed, so it shows with no colour.
+const SELECTION: Style = Style::new()
+    .bg(Role::Selection.color())
+    .add_modifier(Modifier::REVERSED);
 
-/// A match's highlight.
-const MATCH: Style = Style::new().bg(Role::Match.color());
+/// A match's highlight: underlined, so it shows with no colour.
+const MATCH: Style = Style::new()
+    .bg(Role::Match.color())
+    .add_modifier(Modifier::UNDERLINED);
 
 /// The current match's highlight: the brighter match tint, in the full
-/// text colour.
+/// text colour; reversed and bold, so it shows with no colour and apart
+/// from the selection.
 const CURRENT: Style = Style::new()
     .bg(Role::MatchCurrent.color())
-    .fg(Role::Text.color());
+    .fg(Role::Text.color())
+    .add_modifier(Modifier::REVERSED)
+    .add_modifier(Modifier::BOLD);
 
 /// A link's underline: markdown links already draw underlined, and bare
 /// URLs gain it here (`docs/tui.md`, "Links").

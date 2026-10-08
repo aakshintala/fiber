@@ -18,8 +18,10 @@ use crate::theme::Role;
 /// The selected entry's style.
 const SELECTED: Style = Style::new().add_modifier(Modifier::REVERSED);
 
-/// A match's highlight.
-const HIT: Style = Style::new().bg(Role::Match.color());
+/// A match's highlight: underlined, so it shows with no colour.
+const HIT: Style = Style::new()
+    .bg(Role::Match.color())
+    .add_modifier(Modifier::UNDERLINED);
 
 /// Draws `view` into `area`: the header on its first row, then one row
 /// per entry from its top, the selected entry reversed and every match
