@@ -3,11 +3,12 @@
 //! configured for that label, then, for the label `default`, the one the
 //! provider's data declares.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::sync::{Arc, Mutex};
 
 use contract::Secret;
 use serde_json::{Map, Value};
@@ -34,6 +35,33 @@ pub struct Read {
 /// Runs a credential source's built command and collects its output.
 pub type Runner<'a> = &'a dyn Fn(&mut Command) -> io::Result<Output>;
 
+/// The key of each `command` source that has run, by stored credential
+/// name, label and command. A clone of the [`Config`] shares it.
+#[derive(Clone, Default)]
+pub(crate) struct CommandRuns(Arc<Mutex<BTreeMap<RunKey, Secret>>>);
+
+/// The stored credential name, the label and the command's words.
+type RunKey = (String, String, Vec<String>);
+
+/// A command's key, or why it gave none.
+type Ran = Result<Secret, String>;
+
+impl CommandRuns {
+    /// The recorded key for `key`, running `run` and recording its key first
+    /// when there is none. A failure is not recorded, so the next call runs
+    /// the command again. The lock is held across the run, so concurrent
+    /// callers share one run.
+    fn once(&self, key: RunKey, run: impl FnOnce() -> Ran) -> Ran {
+        let mut runs = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(secret) = runs.get(&key) {
+            return Ok(secret.clone());
+        }
+        let secret = run()?;
+        runs.insert(key, secret.clone());
+        Ok(secret)
+    }
+}
+
 /// Resolves a `file` source's path to the file that is read.
 type Canonical<'a> = &'a dyn Fn(&Path) -> io::Result<PathBuf>;
 
@@ -57,8 +85,10 @@ impl Config {
     /// exists but cannot be used, that is the error, and no other source is
     /// tried under the label. Otherwise `providers."<name>".credentials."<label>"`
     /// from the global or per-project layer, and for `default` only, the
-    /// provider's own source. A command runs each time this is called; the
-    /// caller asks once per process.
+    /// provider's own source. A command runs the first time this is called for
+    /// its credential and label, and its key serves every later call on this
+    /// configuration and its clones, so a command that gave a key runs once
+    /// per process. A command that failed runs again on the next call.
     pub fn credential(&self, provider: &ProviderData, label: &str) -> Result<Secret, ConfigError> {
         self.credential_with(provider, label, &|command: &mut Command| command.output())
             .map(|read| read.secret)
@@ -152,7 +182,11 @@ impl Config {
                     });
                 }
             },
-            CredentialSource::Command(argv) => command(argv, run),
+            CredentialSource::Command(argv) => self
+                .commands
+                .once((stored.to_owned(), label.to_owned(), argv.clone()), || {
+                    command(argv, run)
+                }),
         };
         found
             .map(|secret| Read {
