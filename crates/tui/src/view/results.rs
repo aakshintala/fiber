@@ -4,7 +4,7 @@
 
 use std::ops::Range;
 
-use ratatui::buffer::Buffer;
+use ratatui::buffer::{Buffer, CellWidth};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
@@ -103,109 +103,111 @@ fn entry_row(entry: &Snippet, width: u16) -> (String, Range<u16>) {
         text.push(' ');
         text.push_str(after);
     }
+    let cells = drawn(&text);
+    // The graphemes the match covers; a match covering none (an empty
+    // one) anchors at the first grapheme drawn after its start.
+    let overlaps = |cell: &Drawn| cell.bytes.start < hit_end && cell.bytes.end > hit_start;
+    let first = cells.iter().position(overlaps).unwrap_or_else(|| {
+        cells
+            .iter()
+            .position(|cell| cell.bytes.end > hit_start)
+            .unwrap_or(cells.len())
+    });
+    let last = cells
+        .iter()
+        .rposition(overlaps)
+        .map_or(first, |index| index.saturating_add(1));
+    // The column grapheme `index` is drawn from, or the row's drawn
+    // width past its last: columns are contiguous, so the cells drawn
+    // by graphemes `lo..hi` are exactly `edge(hi) - edge(lo)`.
+    let edge = |index: usize| {
+        cells.get(index).map_or_else(
+            || {
+                cells
+                    .last()
+                    .map_or(0, |cell| cell.col.saturating_add(cell.width))
+            },
+            |cell| cell.col,
+        )
+    };
+    let extent = |lo: usize, hi: usize| edge(hi).saturating_sub(edge(lo));
+    // The window holds whole graphemes around the match, grown from it
+    // while their drawn cells fit the view, so the match is always
+    // visible and a row that fits shows whole. A match wider than the
+    // view clips at its edge, so what fits still shows.
     let target = usize::from(width);
-    // Widths never add up (a ZWJ sequence, a lam-alef pair, a wide char
-    // and its neighbours all measure differently together than apart),
-    // so every width below is the width of the whole slice being drawn,
-    // measured by `crate::format::width` (the string-level width ratatui
-    // draws a Span/Line with): traversal and bounds share one measure
-    // and cannot disagree.
-    if crate::format::width(&text) <= target {
-        let start = to_u16(crate::format::width(
-            text.get(..hit_start).unwrap_or_default(),
-        ));
-        let end = to_u16(crate::format::width(
-            text.get(..hit_end).unwrap_or_default(),
-        ));
-        return (text, start.min(end)..end);
+    let (mut lo, mut hi) = (first, last);
+    if extent(lo, hi) > target {
+        hi = (lo..hi)
+            .rev()
+            .find(|&end| extent(lo, end) <= target)
+            .unwrap_or(lo);
+    } else {
+        loop {
+            let mut grew = false;
+            if lo > 0 && extent(lo.saturating_sub(1), hi) <= target {
+                lo = lo.saturating_sub(1);
+                grew = true;
+            }
+            if hi < cells.len() && extent(lo, hi.saturating_add(1)) <= target {
+                hi = hi.saturating_add(1);
+                grew = true;
+            }
+            if !grew {
+                break;
+            }
+        }
     }
-    // The row is wider than the view: the window holds `target` cells
-    // around the match, so the cells around it show the lines around
-    // the match instead of hiding it behind its own context.
-    if target == 0 {
-        return (String::new(), 0..0);
-    }
-    windowed(&text, hit_start, hit_end, target)
+    // An empty window reads backwards (its last grapheme ends at or
+    // before its first starts), which `get` answers with nothing.
+    let shown = match (
+        cells.get(lo),
+        hi.checked_sub(1).and_then(|end| cells.get(end)),
+    ) {
+        (Some(from), Some(to)) => text
+            .get(from.bytes.start..to.bytes.end)
+            .unwrap_or_default()
+            .to_owned(),
+        _ => String::new(),
+    };
+    let start = extent(lo, first.clamp(lo, hi));
+    let end = extent(lo, last.clamp(lo, hi));
+    (shown, to_u16(start)..to_u16(end))
 }
 
-/// The grapheme-aligned slice of `row` around the match's bytes
-/// `hit_start..hit_end`: whole graphemes grown from the hit while the
-/// width of the whole candidate slice fits `target`, so the match stays
-/// visible however long the lines around it are. A grapheme straddling
-/// the edge is dropped, so the row never runs past the view; a match
-/// wider than the view clips at its edge, so what fits still shows
-/// (`docs/tui.md`, "Search").
-fn windowed(row: &str, hit_start: usize, hit_end: usize, target: usize) -> (String, Range<u16>) {
-    // The row's grapheme edges in bytes; every slice below starts and
-    // ends on one, so no width is ever a sum of per-piece widths.
-    let mut edges = vec![0usize];
+/// One grapheme of a row as `Buffer::set_stringn` draws it: its bytes in
+/// the row and the cells it covers, counted from the row's first cell.
+struct Drawn {
+    bytes: Range<usize>,
+    col: usize,
+    width: usize,
+}
+
+/// Where `row`'s graphemes land when [`render`] draws it with
+/// `Buffer::set_stringn`, by that function's own rule: it skips a
+/// grapheme holding a control character or drawing no cells, and draws
+/// every other at the next column, advancing by that grapheme's
+/// `cell_width`. Widths of whole strings never add up the same way (a
+/// lam-alef pair is one cell as a string but two drawn), so no other
+/// measure places a row's graphemes.
+fn drawn(row: &str) -> Vec<Drawn> {
+    let base = row.as_ptr().addr();
+    let mut col = 0usize;
+    let mut out = Vec::new();
     for grapheme in Span::raw(row).styled_graphemes(Style::default()) {
-        let last = edges.last().copied().unwrap_or_default();
-        edges.push(last.saturating_add(grapheme.symbol.len()));
-    }
-    let graphemes = edges.len().saturating_sub(1);
-    // The `at` helper reads an edge that is always there: every index
-    // below comes from the edges themselves.
-    let at = |index: usize| edges.get(index).copied().unwrap_or_default();
-    // `row` between two grapheme edges, the only slicing this window
-    // does.
-    let between = |from: usize, to: usize| row.get(at(from)..at(to)).unwrap_or_default();
-    // The graphemes overlapping the hit; an empty hit anchors at the
-    // grapheme holding its bytes.
-    let mut lo = graphemes;
-    let mut hi = graphemes;
-    for (index, pair) in edges.windows(2).enumerate() {
-        let first = pair.first().copied().unwrap_or_default();
-        let second = pair.get(1).copied().unwrap_or_default();
-        if first < hit_end && second > hit_start {
-            if lo == graphemes {
-                lo = index;
-            }
-            hi = index.saturating_add(1);
+        let width = usize::from(grapheme.symbol.cell_width());
+        if width == 0 {
+            continue;
         }
+        let start = grapheme.symbol.as_ptr().addr().saturating_sub(base);
+        out.push(Drawn {
+            bytes: start..start.saturating_add(grapheme.symbol.len()),
+            col,
+            width,
+        });
+        col = col.saturating_add(width);
     }
-    if lo == graphemes {
-        lo = (0..graphemes)
-            .find(|&index| at(index.saturating_add(1)) > hit_start)
-            .unwrap_or(graphemes);
-        hi = lo;
-    }
-    if lo < hi && crate::format::width(between(lo, hi)) > target {
-        let mut end = lo;
-        while end < hi && crate::format::width(between(lo, end.saturating_add(1))) <= target {
-            end = end.saturating_add(1);
-        }
-        let shown = between(lo, end).to_owned();
-        let end = to_u16(crate::format::width(&shown));
-        return (shown, 0..end);
-    }
-    while lo > 0 || hi < graphemes {
-        let mut grew = false;
-        if lo > 0 && crate::format::width(between(lo.saturating_sub(1), hi)) <= target {
-            lo = lo.saturating_sub(1);
-            grew = true;
-        }
-        if hi < graphemes && crate::format::width(between(lo, hi.saturating_add(1))) <= target {
-            hi = hi.saturating_add(1);
-            grew = true;
-        }
-        if !grew {
-            break;
-        }
-    }
-    let shown = between(lo, hi).to_owned();
-    let from = at(lo);
-    let start = to_u16(crate::format::width(
-        shown
-            .get(..hit_start.clamp(from, at(hi)).saturating_sub(from))
-            .unwrap_or_default(),
-    ));
-    let end = to_u16(crate::format::width(
-        shown
-            .get(..hit_end.clamp(from, at(hi)).saturating_sub(from))
-            .unwrap_or_default(),
-    ));
-    (shown, start.min(end)..end)
+    out
 }
 
 #[cfg(test)]

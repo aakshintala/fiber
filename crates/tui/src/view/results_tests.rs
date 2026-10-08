@@ -106,77 +106,6 @@ fn a_long_row_windows_around_its_match() {
 }
 
 #[test]
-fn joined_emoji_sequences_before_the_match_do_not_hide_it() {
-    let entry = Snippet {
-        before: String::new(),
-        line: format!("{}needle", "\u{1f469}\u{200d}\u{1f4bb}".repeat(100)),
-        at: 300..306,
-        after: String::new(),
-    };
-    let (text, hit) = super::entry_row(&entry, 80);
-    assert_eq!(crate::format::width(&text), 80);
-    assert!(text.contains("needle"), "the match stays visible: {text:?}");
-    assert!(text.ends_with("needle"), "the match is whole: {text:?}");
-    assert_eq!(hit, 74..80);
-}
-
-#[test]
-fn joined_lam_alef_pairs_before_the_match_do_not_hide_it() {
-    // U+0644 U+0627 measures 1 cell together but 2 as separate
-    // graphemes: summing per-grapheme widths puts the match 200 cells
-    // out and hides it.
-    let entry = Snippet {
-        before: String::new(),
-        line: format!("{}needle", "\u{644}\u{627}".repeat(100)),
-        at: 200..206,
-        after: String::new(),
-    };
-    let (text, hit) = super::entry_row(&entry, 80);
-    assert!(crate::format::width(&text) <= 80);
-    assert!(
-        text.ends_with("needle"),
-        "the match stays visible: {text:?}"
-    );
-    let cells = crate::format::width(&text);
-    assert_eq!(hit.start as usize, cells.saturating_sub(6));
-    assert_eq!(hit.end as usize, cells);
-}
-
-#[test]
-fn wide_chars_before_the_match_do_not_hide_it() {
-    let entry = Snippet {
-        before: String::new(),
-        line: format!("{}needle", "\u{3042}".repeat(100)),
-        at: 100..106,
-        after: String::new(),
-    };
-    let (text, hit) = super::entry_row(&entry, 80);
-    assert_eq!(crate::format::width(&text), 80);
-    assert!(
-        text.ends_with("needle"),
-        "the match stays visible: {text:?}"
-    );
-    assert_eq!(hit, 74..80);
-}
-
-#[test]
-fn combining_marks_before_the_match_do_not_hide_it() {
-    let entry = Snippet {
-        before: String::new(),
-        line: format!("{}needle", "e\u{301}".repeat(100)),
-        at: 200..206,
-        after: String::new(),
-    };
-    let (text, hit) = super::entry_row(&entry, 80);
-    assert_eq!(crate::format::width(&text), 80);
-    assert!(
-        text.ends_with("needle"),
-        "the match stays visible: {text:?}"
-    );
-    assert_eq!(hit, 74..80);
-}
-
-#[test]
 fn a_match_exactly_the_views_width_fills_it() {
     // The hit alone is exactly `target`: the window is the hit, which
     // tells `>` from `>=` in the clip guard.
@@ -205,89 +134,6 @@ fn a_wide_char_with_room_to_spare_is_kept() {
     assert_eq!(text, "\u{3042}needle");
     assert!(text.ends_with("needle"), "the match is whole: {text:?}");
     assert_eq!(hit, 2..8);
-}
-
-#[test]
-fn an_empty_match_anchors_the_window_at_its_bytes() {
-    // No grapheme overlaps an empty hit at a boundary: the window still
-    // grows from the grapheme holding its bytes, which tells `==` from
-    // `!=` in the anchor guard.
-    let entry = Snippet {
-        before: String::new(),
-        line: "x".repeat(400),
-        at: 0..0,
-        after: String::new(),
-    };
-    let (text, hit) = super::entry_row(&entry, 80);
-    assert_eq!(text, "x".repeat(80));
-    assert_eq!(hit, 0..0);
-}
-
-#[test]
-fn a_long_preceding_line_never_hides_the_match() {
-    // A 400-character line before the match at width 80: the match
-    // text appears in the row.
-    let entry = Snippet {
-        before: "x".repeat(400),
-        line: "needle here".to_owned(),
-        at: 0..6,
-        after: String::new(),
-    };
-    let (text, hit) = super::entry_row(&entry, 80);
-    assert_eq!(crate::format::width(&text), 80);
-    assert!(text.contains("needle"), "the match stays visible: {text:?}");
-    assert_eq!(&text[hit.start as usize..hit.end as usize], "needle");
-}
-
-#[test]
-fn a_match_at_the_rows_end_clamps_the_window_to_the_row() {
-    let entry = Snippet {
-        before: "x".repeat(400),
-        line: "needle".to_owned(),
-        at: 0..6,
-        after: String::new(),
-    };
-    let (text, hit) = super::entry_row(&entry, 10);
-    assert_eq!(crate::format::width(&text), 10);
-    assert_eq!(&text[hit.start as usize..hit.end as usize], "needle");
-    assert!(
-        text.ends_with("needle"),
-        "the window ends at the row: {text:?}"
-    );
-}
-
-#[test]
-fn a_match_at_the_rows_start_opens_the_window_at_the_row() {
-    let entry = Snippet {
-        before: String::new(),
-        line: format!("needle {}", "x".repeat(400)),
-        at: 0..6,
-        after: String::new(),
-    };
-    let (text, hit) = super::entry_row(&entry, 10);
-    assert!(
-        text.starts_with("needle"),
-        "the window opens at the row: {text:?}"
-    );
-    assert_eq!(&text[hit.start as usize..hit.end as usize], "needle");
-}
-
-#[test]
-fn a_row_exactly_the_views_width_shows_whole() {
-    let entry = Snippet {
-        before: "ab".to_owned(),
-        line: "needle".to_owned(),
-        at: 0..6,
-        after: "cd".to_owned(),
-    };
-    // `ab needle cd` is 12 cells: exactly the width shows it whole.
-    let (text, hit) = super::entry_row(&entry, 12);
-    assert_eq!(text, "ab needle cd");
-    assert_eq!(hit, 3..9);
-    // One cell narrower windows around the match.
-    let (cut, hit) = super::entry_row(&entry, 11);
-    assert_eq!(crate::format::width(&cut), 11);
-    assert_eq!(&cut[hit.start as usize..hit.end as usize], "needle");
 }
 
 #[test]
@@ -353,4 +199,201 @@ fn results_on_an_empty_area_draw_nothing() {
     let mut targets = Vec::new();
     super::render(&view, area, &mut buf, &mut targets);
     assert!(targets.is_empty());
+}
+
+/// The widths every drawn-row test runs at: either side of the
+/// narrowest view a match shows whole in, and of the common terminal.
+const WIDTHS: [u16; 6] = [7, 8, 13, 40, 80, 81];
+
+/// Context pieces whose string width differs from the cells
+/// `Buffer::set_stringn` draws them in, or which it skips: lam-alef, a
+/// ZWJ sequence, a wide char, a combining mark, a mix, a flag and a
+/// control character.
+const PIECES: [&str; 7] = [
+    "\u{644}\u{627}",
+    "\u{1f469}\u{200d}\u{1f4bb}",
+    "\u{3042}",
+    "e\u{301}",
+    "ab\u{3042}\u{644}\u{627}\u{1f469}\u{200d}\u{1f4bb}",
+    "\u{1f1ef}\u{1f1f5}",
+    "a\u{7}b",
+];
+
+/// One entry's row as the results view draws it, read back cell by cell.
+#[derive(Debug)]
+struct Row {
+    /// Every cell's symbol, left to right.
+    text: String,
+    /// The symbols of the cells marked as the match.
+    marked: String,
+    /// The marked cells, which are always one run.
+    hit: std::ops::Range<u16>,
+    /// The cells up to the end of the last grapheme drawn.
+    filled: u16,
+}
+
+/// `entry` drawn as the only result in a view `width` wide, through
+/// [`super::render`] and `Buffer::set_stringn`, as the terminal shows it.
+fn drawn(entry: &Snippet, width: u16) -> Row {
+    use ratatui::buffer::CellWidth;
+    let view = crate::app::results::ResultsView {
+        header: String::new(),
+        entries: vec![entry.clone()],
+        selected: usize::MAX,
+        top: 0,
+    };
+    let area = Rect::new(0, 0, width, 2);
+    let mut buf = Buffer::empty(area);
+    super::render(&view, area, &mut buf, &mut Vec::new());
+    let (mut text, mut marked, mut marks, mut filled) = (String::new(), String::new(), vec![], 0);
+    for x in 0..width {
+        let cell = buf.cell((x, 1)).expect("in the area");
+        text.push_str(cell.symbol());
+        if cell.bg == super::HIT.bg.unwrap_or_default() {
+            marked.push_str(cell.symbol());
+            marks.push(x);
+        }
+        if cell.symbol() != " " {
+            filled = x + cell.symbol().cell_width();
+        }
+    }
+    let hit = marks.first().copied().unwrap_or(0)..marks.last().map_or(0, |&last| last + 1);
+    assert_eq!(
+        marks,
+        hit.clone().collect::<Vec<_>>(),
+        "the match is one run of cells: {text:?}"
+    );
+    Row {
+        text,
+        marked,
+        hit,
+        filled,
+    }
+}
+
+/// A match on a line of 100 `piece`s before it and, when `after`, 100
+/// after it.
+fn among(piece: &str, after: bool) -> Snippet {
+    let context = piece.repeat(100);
+    let start = context.chars().count();
+    let tail = if after { context.as_str() } else { "" };
+    Snippet {
+        before: String::new(),
+        line: format!("{context}needle{tail}"),
+        at: start..start + 6,
+        after: String::new(),
+    }
+}
+
+#[test]
+fn every_kind_of_context_keeps_the_match_drawn_and_marked() {
+    for piece in PIECES {
+        for after in [false, true] {
+            for width in WIDTHS {
+                let row = drawn(&among(piece, after), width);
+                let case = format!("{piece:?} after={after} width={width}: {row:?}");
+                assert!(row.text.contains("needle"), "{case}");
+                // Exactly the match's cells are marked: none of the
+                // context's either side.
+                assert_eq!(row.marked, "needle", "{case}");
+                // The window uses the view: at most one cell is left
+                // where a two-cell grapheme would not fit.
+                assert!(row.filled + 1 >= width, "{case}");
+                if !after {
+                    assert_eq!(row.hit.end, row.filled, "the match ends the row: {case}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn a_match_opening_the_row_is_drawn_at_its_start() {
+    for width in WIDTHS {
+        let entry = Snippet {
+            before: String::new(),
+            line: format!("needle{}", PIECES[4].repeat(100)),
+            at: 0..6,
+            after: String::new(),
+        };
+        let row = drawn(&entry, width);
+        assert_eq!(row.hit, 0..6, "{row:?}");
+        assert!(row.text.starts_with("needle"), "{row:?}");
+        assert!(row.filled + 1 >= width, "{row:?}");
+    }
+}
+
+#[test]
+fn a_match_ending_the_row_is_drawn_at_its_end() {
+    for width in WIDTHS {
+        let entry = Snippet {
+            before: PIECES[4].repeat(100),
+            line: "needle".to_owned(),
+            at: 0..6,
+            after: String::new(),
+        };
+        let row = drawn(&entry, width);
+        assert_eq!(row.marked, "needle", "{row:?}");
+        assert_eq!(row.hit.end, row.filled, "{row:?}");
+        assert!(row.filled + 1 >= width, "{row:?}");
+    }
+}
+
+#[test]
+fn a_match_wider_than_the_view_is_drawn_clipped() {
+    let letters = "abcdefghij".repeat(10);
+    for width in WIDTHS {
+        let entry = Snippet {
+            before: PIECES[4].repeat(100),
+            line: letters.clone(),
+            at: 0..100,
+            after: PIECES[4].repeat(100),
+        };
+        let row = drawn(&entry, width);
+        assert_eq!(row.hit, 0..width, "{row:?}");
+        assert_eq!(row.marked, letters[..usize::from(width)], "{row:?}");
+    }
+    // A wide match clips at its last whole grapheme.
+    let entry = Snippet {
+        before: String::new(),
+        line: "\u{3042}".repeat(50),
+        at: 0..50,
+        after: String::new(),
+    };
+    assert_eq!(drawn(&entry, 7).hit, 0..6);
+    assert_eq!(drawn(&entry, 8).hit, 0..8);
+}
+
+#[test]
+fn a_row_exactly_the_views_width_is_drawn_whole() {
+    let entry = Snippet {
+        before: "ab".to_owned(),
+        line: "needle".to_owned(),
+        at: 0..6,
+        after: "cd".to_owned(),
+    };
+    // `ab needle cd` is 12 cells, the last added on the right: exactly
+    // the width shows it whole.
+    let row = drawn(&entry, 12);
+    assert_eq!(row.text, "ab needle cd");
+    assert_eq!(row.hit, 3..9);
+    // One cell narrower drops that last one.
+    let row = drawn(&entry, 11);
+    assert_eq!(row.text, "ab needle c");
+    assert_eq!(row.hit, 3..9);
+}
+
+#[test]
+fn an_empty_match_anchors_the_window_at_its_bytes() {
+    // The window grows from the grapheme starting at the empty match,
+    // `7`, one cell each side in turn: never from the one before it.
+    let entry = Snippet {
+        before: String::new(),
+        line: "0123456789".repeat(40),
+        at: 7..7,
+        after: String::new(),
+    };
+    let row = drawn(&entry, 4);
+    assert_eq!(row.text, "5678");
+    assert_eq!(row.marked, "");
 }
