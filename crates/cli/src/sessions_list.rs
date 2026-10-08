@@ -5,7 +5,6 @@
 //! outside one, every project.
 
 use std::io::{self, BufReader, Write};
-use std::path::Path;
 
 use contract::ErrorCode;
 use contract::events::{SessionState, SessionStatus, WaitingKind};
@@ -65,8 +64,8 @@ pub fn list(
     let ran = std::env::current_dir()
         .map_err(|e| failed(ErrorCode::IoFailed, format!("the current directory: {e}")))
         .and_then(|workspace| {
-            let identity = doors::project(&workspace);
-            run(&workspace, &identity, all, json, &mut io::stdout(), connect)
+            let project = doors::resolve_project(&workspace);
+            run(&project, all, json, &mut io::stdout(), connect)
         });
     match ran {
         Ok(()) => 0,
@@ -74,21 +73,20 @@ pub fn list(
     }
 }
 
-/// Lists the sessions in `workspace`'s scope, `identity` its project, as
+/// Lists the sessions in `project`'s scope, as
 /// text or JSON Lines on `out`.
 fn run(
-    workspace: &Path,
-    identity: &Path,
+    project: &doors::Project,
     all: bool,
     json: bool,
     out: &mut dyn Write,
     connect: &mut dyn FnMut() -> io::Result<doors::hub::Hub>,
 ) -> Result<(), Failure> {
     let mut args = serde_json::Map::new();
-    if !all && doors::in_repository(workspace, identity) {
+    if !all && project.in_repository {
         args.insert(
             "project".to_owned(),
-            Value::String(log::project_key(identity)),
+            Value::String(log::project_key(&project.path)),
         );
     }
     let (stream, _) =

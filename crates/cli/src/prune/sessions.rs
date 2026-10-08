@@ -125,8 +125,9 @@ pub(crate) fn select(
         .filter(|id| reaches(&children, id, id))
         .cloned()
         .collect();
-    let in_repo = super::in_repository(workspace);
-    let project = doors::project(workspace);
+    let resolved = doors::resolve_project(workspace);
+    let in_repo = resolved.in_repository;
+    let project = resolved.path;
     let sessions_dir = log::sessions_dir(home, &project);
     let mut memo: HashMap<String, bool> = HashMap::new();
     let now_ms = wall_ms(now);
