@@ -588,6 +588,7 @@ fn sized(name: &str, place: &str, bytes: usize) -> Found {
         model_invocable: true,
         argument_hint: None,
         place: place.into(),
+        extension: None,
     }
 }
 
