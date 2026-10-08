@@ -253,6 +253,18 @@ impl Find {
         self.matches.values().flatten().collect()
     }
 
+    /// Pulls pages cut since the query started into the scan order
+    /// behind the pages already in it: a page never scanned scans too
+    /// (`docs/tui.md`, "Search": search covers the whole session
+    /// log).
+    fn sync_order(&mut self, page_count: usize) {
+        for at in 0..page_count {
+            if !self.order.contains(&at) {
+                self.order.push(at);
+            }
+        }
+    }
+
     /// Reconciles the current match with rescanned pages: the equal match
     /// whose `nth` is nearest the old one stays current and keeps a
     /// pending reveal, else the first match after the old key's place in
@@ -691,6 +703,8 @@ impl App {
     /// Scans every resident page whose revision moved, in scan order.
     /// Whether any page scanned.
     fn scan_resident_all(&mut self) -> bool {
+        let count = self.screen.pages().page_count();
+        self.find.sync_order(count);
         let mut rescanned = false;
         for at in self.find.order.clone() {
             let revision = self.screen.pages().index().revision(at);
@@ -760,6 +774,8 @@ impl App {
         if !self.find.open || !self.find.due || self.find.query.is_empty() {
             return;
         }
+        let count = self.screen.pages().page_count();
+        self.find.sync_order(count);
         if !self.find.capped && self.find.fetch.is_none() {
             let mut next = None;
             for at in self.find.order.clone() {

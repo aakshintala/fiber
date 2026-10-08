@@ -1772,3 +1772,40 @@ fn esc_closes_the_notice_overlay_then_the_bar_then_the_selection() {
     assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
     assert!(app.select.span().is_none());
 }
+
+#[test]
+fn a_page_cut_after_the_query_starts_scans_the_new_page() {
+    let mut app = attached(40, 10);
+    let mut log = Vec::new();
+    let mut seq = 0u64;
+    for _ in 0..5 {
+        text_turn(&mut log, &mut seq, &mut app, &["filler"]);
+    }
+    assert_eq!(app.pages().page_count(), 1);
+    let ranges = search_all(&mut app, &log, "cat");
+    assert!(ranges.is_empty(), "one resident page sends nothing");
+    assert_eq!(count(&app), "no matches");
+    // Turns cut a second page after the query started: with no new
+    // query its matches are found and counted.
+    let mut added = 0;
+    while app.pages().page_count() == 1 {
+        text_turn(
+            &mut log,
+            &mut seq,
+            &mut app,
+            &["a cat sat", "filler", "filler", "filler"],
+        );
+        added += 1;
+        assert!(added < 40, "no new page was cut");
+    }
+    assert!(app.pages().part(0).is_some());
+    assert!(app.pages().part(1).is_some());
+    for at in 0..app.pages().page_count() {
+        assert!(
+            app.find.scanned.contains_key(&at),
+            "page {at} never scanned"
+        );
+    }
+    assert_eq!(app.find.total, added);
+    assert!(count(&app).ends_with(&format!("of {added}")));
+}
