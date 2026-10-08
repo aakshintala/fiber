@@ -450,6 +450,7 @@ impl Loop {
             | Delivery::SteerDrop(..)
             | Delivery::Handoff(..)
             | Delivery::Model(..)
+            | Delivery::Credential(..)
             | Delivery::Reply(..)
             | Delivery::Rewind(..)
             | Delivery::Interaction(_)
@@ -519,7 +520,10 @@ impl Loop {
             // A switch admitted while idle applies at once, before the
             // next `turn_started`.
             Delivery::Model(args, ack) => {
-                self.take_switch(args, ack, true)?;
+                self.take_switch(crate::switch::Asked::Model(args), ack, true)?;
+            }
+            Delivery::Credential(args, ack) => {
+                self.take_switch(crate::switch::Asked::Credential(args), ack, true)?;
             }
             // Starts a new session that continues this one from an
             // earlier point, once, while idle (`docs/events.md`,
@@ -611,14 +615,17 @@ impl Loop {
             // boundary. While `deferred` still holds one, a live one
             // waits behind it in arrival order.
             Delivery::Model(args, ack) => {
-                if self
-                    .deferred
-                    .iter()
-                    .any(|held| matches!(held, Delivery::Model(..)))
-                {
+                if self.has_deferred_switch() {
                     self.deferred.push_back(Delivery::Model(args, ack));
                 } else {
-                    self.take_switch(args, ack, false)?;
+                    self.take_switch(crate::switch::Asked::Model(args), ack, false)?;
+                }
+            }
+            Delivery::Credential(args, ack) => {
+                if self.has_deferred_switch() {
+                    self.deferred.push_back(Delivery::Credential(args, ack));
+                } else {
+                    self.take_switch(crate::switch::Asked::Credential(args), ack, false)?;
                 }
             }
             // While a turn runs the session cannot close first: rewind
@@ -648,6 +655,14 @@ impl Loop {
             Delivery::ExtensionLog(entry) => self.record_extension_log(entry)?,
         }
         Ok(())
+    }
+
+    /// Whether `deferred` holds a switch still waiting for the finishing
+    /// turn: a live switch of either kind waits behind it in arrival order.
+    fn has_deferred_switch(&self) -> bool {
+        self.deferred
+            .iter()
+            .any(|held| matches!(held, Delivery::Model(..) | Delivery::Credential(..)))
     }
 
     /// Accepts `close`. No later turn starts, and no later approval can be

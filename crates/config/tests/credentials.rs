@@ -757,3 +757,57 @@ fn within<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
     rx.recv_timeout(std::time::Duration::from_secs(10))
         .unwrap_or_else(|_| panic!("the credential reads did not return in time"))
 }
+
+#[test]
+fn labels_lists_stored_configured_and_declared_labels_once_sorted() {
+    let setup = Setup::new();
+    put(&setup, "acme", "work", "w");
+    put(&setup, "acme", "home", "h");
+    setup.write(
+        &setup.global(),
+        r#"{"providers": {"acme": {"credentials": {"home": {"env": "ACME_KEY"}, "ci": {"env": "CI_KEY"}}}}}"#,
+    );
+    let config = setup.load(&[]).unwrap();
+    // A stored label, a configured label, `default` only when the
+    // provider's data declares a source; each once, sorted
+    // (`docs/model-routing.md`, "Which credential a session uses").
+    assert_eq!(
+        config.labels(&acme(command(&["printf", "d"]))),
+        ["ci", "default", "home", "work"].map(str::to_owned),
+    );
+    assert_eq!(
+        config.labels(&acme(None)),
+        ["ci", "home", "work"].map(str::to_owned),
+    );
+}
+
+#[test]
+fn labels_follows_a_shared_credential_name() {
+    let setup = Setup::new();
+    put(&setup, "shared", "work", "w");
+    put(&setup, "other", "own", "o");
+    let config = setup.load(&[]).unwrap();
+    // A key that is not stored takes its label from the configuration
+    // that points at it (`docs/model-routing.md`, "Credentials").
+    assert_eq!(
+        config.labels(&shared("acme", "shared", None)),
+        ["work"].map(str::to_owned),
+    );
+}
+
+#[test]
+fn labels_of_an_absent_directory_is_what_the_message_lists() {
+    let setup = Setup::new();
+    setup.write(
+        &setup.global(),
+        r#"{"providers": {"acme": {"credentials": {"a-configured": {"env": "X"}}}}}"#,
+    );
+    let config = setup.load(&[]).unwrap();
+    // An unreadable directory lists nothing from it.
+    assert_eq!(
+        config.labels(&acme(None)),
+        ["a-configured"].map(str::to_owned),
+    );
+    let err = config.credential(&acme(None), "personal").unwrap_err();
+    assert!(err.to_string().contains("are: a-configured."), "{err}");
+}

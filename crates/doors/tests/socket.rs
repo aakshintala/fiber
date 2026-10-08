@@ -377,6 +377,10 @@ fn take(inbox: &Receiver<Delivery>) -> String {
             ack.0(Ok(None));
             format!("model {}", args.model)
         }
+        Delivery::Credential(args, ack) => {
+            ack.0(Ok(None));
+            format!("credential {}", args.label)
+        }
         Delivery::Close(ack) => {
             ack.0(Ok(None));
             "close".to_owned()
@@ -495,7 +499,6 @@ fn subscribe_is_first_and_unknown_or_unfit_commands_are_rejected() {
             for name in [
                 "message",
                 "reload",
-                "credential",
                 "name",
             ] {
                 send(
@@ -1208,6 +1211,7 @@ fn model_arrives_as_delivery_with_its_args_and_its_rejection_stays_put() {
                 | Delivery::Steer(..)
                 | Delivery::SteerDrop(..)
                 | Delivery::Handoff(..)
+                | Delivery::Credential(..)
                 | Delivery::Reply(..)
                 | Delivery::Rewind(..)
                 | Delivery::Close(_)
@@ -1241,6 +1245,7 @@ fn model_arrives_as_delivery_with_its_args_and_its_rejection_stays_put() {
                 | Delivery::Steer(..)
                 | Delivery::SteerDrop(..)
                 | Delivery::Handoff(..)
+                | Delivery::Credential(..)
                 | Delivery::Reply(..)
                 | Delivery::Rewind(..)
                 | Delivery::Close(_)
@@ -1299,6 +1304,63 @@ fn model_arrives_as_delivery_with_its_args_and_its_rejection_stays_put() {
 }
 
 #[test]
+fn credential_arrives_as_delivery_and_its_rejection_reaches_the_client() {
+    let opened = Opened::open(vec![]);
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let sender = Client::connect(&socket).unwrap();
+            let mut own = vec![subscribe(&sender, "c_a", "full")];
+            send(
+                &sender,
+                r#"{"id":"c_cred","command":"credential","args":{"label":"work"}}"#,
+            );
+            match inbox
+                .recv_timeout(DEADLINE)
+                .expect("the credential is delivered")
+            {
+                Delivery::Credential(args, ack) => {
+                    assert_eq!(args.label, "work");
+                    ack.0(Err(Rejection {
+                        code: ErrorCode::CredentialMissing,
+                        message: "no such label".into(),
+                    }));
+                }
+                Delivery::Prompt(..)
+                | Delivery::Steer(..)
+                | Delivery::SteerDrop(..)
+                | Delivery::Handoff(..)
+                | Delivery::Model(..)
+                | Delivery::Reply(..)
+                | Delivery::Rewind(..)
+                | Delivery::Close(_)
+                | Delivery::Job(_)
+                | Delivery::JobLine(_)
+                | Delivery::Interaction(_)
+                | Delivery::Resolved(..)
+                | Delivery::ExtensionExec(_)
+                | Delivery::ExtensionLog(_)
+                | Delivery::Cancelled => panic!("the credential arrives as a credential"),
+            }
+            let rejected = until(&sender, |line| command_id(line) == Some("c_cred"));
+            assert_eq!(kind(rejected.last().unwrap()), "command_rejected");
+            assert_eq!(
+                rejection(rejected.last().unwrap()),
+                ("credential_missing", "no such label")
+            );
+            own.extend(rejected);
+            assert_eq!(
+                kinds(&own),
+                ["command_accepted", "clients", "command_rejected"]
+            );
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
 fn rewind_arrives_as_delivery_and_its_answer_reaches_the_client() {
     let opened = Opened::open(vec![]);
     let socket = opened.socket.clone();
@@ -1329,6 +1391,7 @@ fn rewind_arrives_as_delivery_and_its_answer_reaches_the_client() {
                 | Delivery::SteerDrop(..)
                 | Delivery::Handoff(..)
                 | Delivery::Model(..)
+                | Delivery::Credential(..)
                 | Delivery::Reply(..)
                 | Delivery::Close(_)
                 | Delivery::Job(_)
@@ -1365,6 +1428,7 @@ fn rewind_arrives_as_delivery_and_its_answer_reaches_the_client() {
                 | Delivery::SteerDrop(..)
                 | Delivery::Handoff(..)
                 | Delivery::Model(..)
+                | Delivery::Credential(..)
                 | Delivery::Reply(..)
                 | Delivery::Close(_)
                 | Delivery::Job(_)

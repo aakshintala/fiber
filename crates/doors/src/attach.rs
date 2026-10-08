@@ -1,6 +1,8 @@
 //! Attaching to a running session (`docs/invocation.md`, "Processes"): a
 //! `full` subscription folds the log by `seq` first, then streams, and one
-//! `prompt` command starts the turn this process prints. Attach never sends
+//! `prompt` command starts the turn this process prints. With a credential
+//! label, a `credential` command switches it first, at the turn boundary
+//! before the prompt's turn. Attach never sends
 //! `close` and never opens the log: the holder keeps the only writer, and a
 //! disconnect only ends the client.
 
@@ -17,7 +19,10 @@ use crate::{failure, mint};
 /// Sends `prompt` to the session `id` running under `home`, prints the
 /// lines from the `turn_started` carrying this prompt's command id through
 /// that turn's `turn_completed`, and nothing before it, and returns 0 for a
-/// `completed` turn and 1 for any other outcome. A `command_rejected` for
+/// `completed` turn and 1 for any other outcome. With a credential label,
+/// the `credential` command is sent after the subscribe answer and the
+/// prompt only once it is accepted; a rejection is its code and message,
+/// printing nothing, and the prompt is never sent. A `command_rejected` for
 /// the prompt is the rejection's code and message, printing nothing.
 /// `command_accepted` and `command_rejected` lines are never printed: the
 /// prompt's own `command_accepted` arrives after its `turn_started`,
@@ -29,6 +34,7 @@ use crate::{failure, mint};
 pub fn attach(
     home: &Path,
     id: &SessionId,
+    credential: Option<&str>,
     prompt: String,
     out: &mut dyn Write,
     refused: Failure,
@@ -66,6 +72,31 @@ pub fn attach(
     }
 
     let command = mint("c_");
+    if let Some(label) = credential {
+        // The switch applies at the turn boundary before the prompt's
+        // turn, so the prompt runs on the new label. Its answer is awaited
+        // here and printed nowhere (`docs/invocation.md`, "Driver
+        // commands").
+        let switch = mint("c_");
+        send(
+            &mut writer,
+            id,
+            &switch,
+            "credential",
+            serde_json::json!({"label": label}),
+        )?;
+        loop {
+            let Some((_, line)) = next_line(&mut reader) else {
+                return Err(ended(id));
+            };
+            if is_answer(&line, "command_rejected", &switch) {
+                return Err(rejection(&line));
+            }
+            if is_answer(&line, "command_accepted", &switch) {
+                break;
+            }
+        }
+    }
     send(
         &mut writer,
         id,

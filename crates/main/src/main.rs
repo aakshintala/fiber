@@ -163,7 +163,8 @@ fn run() -> i32 {
             match cli::ask_parts(&args.prompt) {
                 Ok((prompt, dash)) => ask(
                     args.model,
-                    args.resume,
+                    args.resume
+                        .map(|id| resume::Resuming::new(id, args.credential)),
                     args.worktree,
                     prompt,
                     dash,
@@ -298,7 +299,7 @@ fn fail(e: Failure) -> i32 {
 /// `fiber ask`: one session, one turn, its events on stdout.
 fn ask(
     model: Option<String>,
-    resume: Option<String>,
+    resume: Option<resume::Resuming>,
     worktree: bool,
     arg: Option<String>,
     dash: bool,
@@ -318,7 +319,7 @@ fn ask(
         Err(e) => return ask_failed(e),
     };
     match resume {
-        Some(selector) => resume::ask_resume(selector, model, prompt, clock, &signals, fiber),
+        Some(resuming) => resume::ask_resume(resuming, model, prompt, clock, &signals, fiber),
         None => ask_new(model, prompt, worktree, clock, &signals, fiber),
     }
 }
@@ -465,8 +466,8 @@ fn stop_and_fail(servers: mcp_servers::SessionServers, e: Failure) -> i32 {
 /// Fiber home, configuration, the chosen model, its credential and its
 /// provider: everything a failure of which leaves no session. `model` is
 /// `--model`. `recorded` is the resumed session's model, from the log's last
-/// `usage_recorded`, and `recorded_credential` its credential label, from
-/// the last `preamble_built`; each beats configuration
+/// `usage_recorded`, and `recorded_credential` its credential label:
+/// `--credential` on a resume, else the recorded one; each beats configuration
 /// (`docs/model-routing.md`, "Choosing the model"). A log with no
 /// `usage_recorded` uses `--model`, then the configured default. A recorded
 /// model or label that no longer resolves fails before any line is written.

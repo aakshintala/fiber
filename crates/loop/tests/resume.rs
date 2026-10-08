@@ -656,28 +656,41 @@ impl History {
     }
 
     fn resume(&mut self, tools: Vec<(String, Arc<dyn Tool>)>) -> Loop {
-        self.resume_with_files(tools, Vec::new())
+        // As `parts_with` does without `--credential`: the session keeps
+        // the recorded label, so a resume that switches nothing writes no
+        // `model_changed` (`docs/model-routing.md`, "Which credential a
+        // session uses").
+        let recorded = r#loop::resumed(&self.dir).unwrap().credential;
+        self.resume_on(
+            tools,
+            recorded.as_deref(),
+            contract::events::CacheLifetime::OneHour,
+        )
     }
 
-    /// As [`History::resume`], with `files` as the configured `file`
-    /// credential sources (`docs/permissions.md`, "Credentials").
-    fn resume_with_files(
+    /// As [`History::resume`], with the session on `credential` with
+    /// `lifetime`: what a resume switching the credential label runs on.
+    fn resume_on(
         &mut self,
         tools: Vec<(String, Arc<dyn Tool>)>,
-        files: Vec<std::path::PathBuf>,
+        credential: Option<&str>,
+        lifetime: contract::events::CacheLifetime,
     ) -> Loop {
+        let mut prompt = self.prompt();
+        prompt.credential = credential.map(str::to_owned);
+        prompt.cache_lifetime = lifetime;
         Loop::resume(
             Arc::clone(&self.log),
             r#loop::resumed(&self.dir).unwrap(),
             Arc::clone(&self.provider) as Arc<dyn contract::provider::Provider>,
             Self::model(),
-            self.prompt(),
+            prompt,
             self.inbox_rx.take().unwrap(),
             tools,
             r#loop::Permissions {
                 workspace: self.workspace.clone(),
                 credentials: self.credentials.clone(),
-                credential_files: files,
+                credential_files: Vec::new(),
                 rules: self.rules.clone(),
             },
         )
@@ -5274,7 +5287,9 @@ fn resumed_thinking_seeds_the_session_choice_for_the_next_switch() {
     let seen = Arc::clone(&recorded);
     let next = Arc::new(ScriptedProvider::new(vec![Scripted::text("New.")]));
     let prepare: r#loop::Prepare = Arc::new(
-        move |args: &contract::commands::ModelArgs, chosen: Option<contract::ThinkingLevel>| {
+        move |args: &contract::commands::ModelArgs,
+              _label: Option<&str>,
+              chosen: Option<contract::ThinkingLevel>| {
             seen.lock().unwrap().push(chosen);
             let thinking = match &args.thinking {
                 Some(level) => Some(level.parse().map_err(|_| contract::inbox::Rejection {
@@ -5343,6 +5358,241 @@ fn resumed_thinking_seeds_the_session_choice_for_the_next_switch() {
             "session_started",
             "preamble_built",
             "model_changed",
+            "model_changed",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+}
+
+/// A `preamble_built` with `credential` and `lifetime`: `preamble` builds
+/// the one-hour one.
+fn preamble_with(credential: Option<&str>, lifetime: contract::events::CacheLifetime) -> Event {
+    Event::PreambleBuilt(contract::events::PreambleBuilt {
+        reason: contract::events::PreambleReason::Start,
+        model: MODEL.into(),
+        context_window: 0,
+        trigger_at: None,
+        thinking: None,
+        tool_choice: "auto".into(),
+        cache_lifetime: lifetime,
+        credential: credential.map(str::to_owned),
+        system_prompt: String::new(),
+        tools: Vec::new(),
+        replaced: Vec::new(),
+    })
+}
+
+#[test]
+fn a_resume_switching_the_label_records_model_changed_before_the_build() {
+    use contract::events::CacheLifetime;
+    let mut history = History::new(vec![Scripted::text("Hello.")]);
+    history.write(
+        preamble_with(Some("work"), CacheLifetime::FiveMinutes),
+        None,
+    );
+    history.freeze();
+
+    let looped = history.resume_on(Vec::new(), Some("home"), CacheLifetime::OneHour);
+    let outcome = history.run(looped, "hi");
+    assert_eq!(outcome, contract::events::TurnOutcome::Completed);
+
+    // The recorded settings are `before`, exactly as the log last had
+    // them; the session's current ones are `after`
+    // (`docs/events.md`, "`model_changed`").
+    let new = history.new_lines();
+    assert_eq!(new[0].kind, "model_changed");
+    assert_eq!(
+        new[0].payload["before"],
+        serde_json::json!({
+            "model": MODEL,
+            "cache_lifetime": "5m",
+            "credential": "work",
+        })
+    );
+    assert_eq!(
+        new[0].payload["after"],
+        serde_json::json!({
+            "model": MODEL,
+            "cache_lifetime": "1h",
+            "credential": "home",
+        })
+    );
+    assert_eq!(new[0].payload["source"], "driver");
+    assert_eq!(new[1].kind, "preamble_built");
+    assert_eq!(new[1].payload["reason"], "resume");
+    assert_eq!(new[1].payload["credential"], "home");
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "model_changed",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+}
+
+#[test]
+fn a_resume_after_a_switch_records_the_switch_after_as_before() {
+    use contract::events::CacheLifetime;
+    let mut history = History::new(vec![Scripted::text("Hello.")]);
+    history.write(preamble(Some("work")), None);
+    history.write(switched("fake/second", None, Some("personal")), None);
+    history.freeze();
+
+    let looped = history.resume_on(Vec::new(), Some("home"), CacheLifetime::OneHour);
+    history.run(looped, "hi");
+
+    let new = history.new_lines();
+    assert_eq!(new[0].kind, "model_changed");
+    assert_eq!(new[0].payload["before"]["model"], "fake/second");
+    assert_eq!(new[0].payload["before"]["credential"], "personal");
+    assert_eq!(new[0].payload["after"]["credential"], "home");
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "model_changed",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+}
+
+#[test]
+fn a_resume_with_the_recorded_label_records_nothing() {
+    let mut history = History::new(vec![Scripted::text("Hello.")]);
+    history.write(preamble(Some("work")), None);
+    history.freeze();
+
+    let looped = history.resume_on(
+        Vec::new(),
+        Some("work"),
+        contract::events::CacheLifetime::OneHour,
+    );
+    history.run(looped, "hi");
+
+    let new = history.new_lines();
+    assert_eq!(new[0].kind, "preamble_built");
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+}
+
+#[test]
+fn a_resume_with_a_label_but_no_recorded_one_records_nothing() {
+    // A valid `preamble_built` without the `credential` field folds to
+    // settings with `credential: None`: no label to switch from.
+    let mut history = History::new(vec![Scripted::text("Hello.")]);
+    history.write(preamble(None), None);
+    history.freeze();
+
+    let looped = history.resume_on(
+        Vec::new(),
+        Some("home"),
+        contract::events::CacheLifetime::OneHour,
+    );
+    history.run(looped, "hi");
+
+    let new = history.new_lines();
+    assert_eq!(new[0].kind, "preamble_built");
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+}
+
+#[test]
+fn a_resume_with_a_label_but_no_recorded_settings_records_nothing() {
+    let mut history = History::new(vec![Scripted::text("Hello.")]);
+    history.freeze();
+
+    let looped = history.resume_on(
+        Vec::new(),
+        Some("home"),
+        contract::events::CacheLifetime::OneHour,
+    );
+    history.run(looped, "hi");
+
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+}
+
+#[test]
+fn a_resume_switching_the_label_marks_orphans_first() {
+    let mut history = History::new(vec![Scripted::text("Hello.")]);
+    history.write(preamble(Some("work")), None);
+    history.write(job_started("j_a"), Some("a_1"));
+    history.freeze();
+
+    let looped = history.resume_on(
+        Vec::new(),
+        Some("home"),
+        contract::events::CacheLifetime::OneHour,
+    );
+    history.run(looped, "hi");
+
+    let new = history.new_lines();
+    assert_eq!(new[0].kind, "job_completed");
+    assert_orphaned(&new[0], "j_a");
+    assert_eq!(new[1].kind, "model_changed");
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "job_completed",
             "model_changed",
             "preamble_built",
             "opening_message",

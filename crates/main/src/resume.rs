@@ -21,8 +21,27 @@ use crate::{ask_failed, failed, run_turn};
 /// session's log, folds what the resume needs, and runs one turn on it. A
 /// held lock attaches instead of opening a second writer; every failure
 /// before `fiber_started` is written leaves the log byte for byte as it was.
+/// `credential` is `--credential`'s label, switching the session to it.
+pub(crate) struct Resuming {
+    /// The session to resume, as typed.
+    pub(crate) selector: String,
+    /// The credential label to switch the session to, if any.
+    pub(crate) credential: Option<String>,
+}
+
+impl Resuming {
+    /// What `fiber ask --resume` resumes: the session and the credential
+    /// label to switch it to.
+    pub(crate) fn new(selector: String, credential: Option<String>) -> Self {
+        Self {
+            selector,
+            credential,
+        }
+    }
+}
+
 pub(crate) fn ask_resume(
-    selector: String,
+    resuming: Resuming,
     model: Option<String>,
     prompt: String,
     clock: Arc<dyn contract::clock::Clock>,
@@ -44,7 +63,7 @@ pub(crate) fn ask_resume(
     };
     let project = doors::project(&workspace);
     let sessions = log::sessions_dir(&home, &project);
-    let id = match log::resolve(&sessions, &selector, &|started| {
+    let id = match log::resolve(&sessions, &resuming.selector, &|started| {
         doors::project(Path::new(started)) == project
     }) {
         Ok(id) => id,
@@ -60,7 +79,14 @@ pub(crate) fn ask_resume(
     let log = match Log::open(&sessions, id.clone(), Arc::clone(&clock)) {
         Ok(log) => Arc::new(log),
         Err(e @ log::Error::Held { .. }) => {
-            return match doors::attach(&home, &id, prompt, &mut io::stdout(), failed(e.code(), e)) {
+            return match doors::attach(
+                &home,
+                &id,
+                resuming.credential.as_deref(),
+                prompt,
+                &mut io::stdout(),
+                failed(e.code(), e),
+            ) {
                 Ok(code) => code,
                 Err(e) => ask_failed(e),
             };
@@ -68,7 +94,17 @@ pub(crate) fn ask_resume(
         Err(e) => return ask_failed(failed(e.code(), e)),
     };
     let dir = sessions.join(&id.0);
-    resumed_session(log, &dir, model, Some(prompt), true, clock, signals, fiber)
+    resumed_session(
+        log,
+        &dir,
+        model,
+        resuming.credential,
+        Some(prompt),
+        true,
+        clock,
+        signals,
+        fiber,
+    )
 }
 
 /// The internal session command with `--resume`: resumes the session `id`
@@ -102,7 +138,7 @@ pub(crate) fn session_resume(
         Err(e) => return ask_failed(failed(e.code(), e)),
     };
     let dir = sessions.join(&id.0);
-    resumed_session(log, &dir, model, None, false, clock, signals, fiber)
+    resumed_session(log, &dir, model, None, None, false, clock, signals, fiber)
 }
 
 /// One function builds and runs every resumed session, as `new_session`
@@ -119,6 +155,7 @@ fn resumed_session(
     log: Arc<Log>,
     dir: &Path,
     model: Option<String>,
+    credential: Option<String>,
     prompt: Option<String>,
     one_turn: bool,
     clock: Arc<dyn contract::clock::Clock>,
@@ -142,7 +179,7 @@ fn resumed_session(
     let parts = match crate::parts_with(
         model,
         folded.model.as_deref(),
-        folded.credential.as_deref(),
+        credential.as_deref().or(folded.credential.as_deref()),
         recorded_thinking,
         Arc::clone(&clock),
         None,

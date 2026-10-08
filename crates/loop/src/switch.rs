@@ -1,5 +1,5 @@
-//! Switching the session's model or thinking level at the next turn
-//! boundary (`docs/prompt-cache.md`, "Switching model").
+//! Switching the session's model, thinking level or credential label at the
+//! next turn boundary (`docs/prompt-cache.md`, "Switching model").
 //!
 //! `main`'s closure composes the same calls `parts_in` makes for the
 //! startup model. It may read the new model's credential, or start its Lua
@@ -10,7 +10,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use contract::events::{Event, ModelSettings, Notice, SwitchSource};
+use contract::events::{Event, ModelChanged, ModelSettings, Notice, SwitchSource};
 use contract::inbox::{Ack, Rejection};
 use contract::tool::Tool;
 use contract::{ErrorCode, ThinkingLevel};
@@ -77,11 +77,27 @@ pub struct Switchable {
 /// Prepares a switch without changing any state: resolves the typed
 /// reference, thinking, credential, reviewer and hosted search from what
 /// startup built. A rejection leaves nothing changed.
+///
+/// `label` is `Some` for a `credential` command: the label to switch to on
+/// `args.model`'s provider. `None` keeps the provider's selected label.
 pub type Prepare = Arc<
-    dyn Fn(&contract::commands::ModelArgs, Option<ThinkingLevel>) -> Result<Prepared, Rejection>
+    dyn Fn(
+            &contract::commands::ModelArgs,
+            Option<&str>,
+            Option<ThinkingLevel>,
+        ) -> Result<Prepared, Rejection>
         + Send
         + Sync,
 >;
+
+/// What a switch command asked for: a `model` command's arguments, or a
+/// `credential` command's label, switched on the model queued before it.
+pub(crate) enum Asked {
+    /// A `model` command's arguments.
+    Model(contract::commands::ModelArgs),
+    /// A `credential` command's label.
+    Credential(contract::commands::CredentialArgs),
+}
 
 /// Why a switch is rejected when no switcher was set.
 pub const NO_SWITCH: &str = "This session cannot switch model.";
@@ -110,19 +126,14 @@ impl Loop {
         }
     }
 
-    /// Admits a `model` command. `idle` is whether the loop is waiting for
-    /// a turn: an idle switch applies at once, a switch admitted during a
+    /// Admits a `model` or `credential` command. `idle` is whether the loop
+    /// is waiting for a turn: an idle switch applies at once, a switch admitted during a
     /// turn waits in `pending` for the next turn boundary. `closing` is
     /// checked before `prepare`, the loop's own checks after it, and the
     /// acknowledgement answers only once the switch is accepted or
     /// rejected. A rejection changes nothing but the credential deny, which
     /// only grows.
-    pub(crate) fn take_switch(
-        &mut self,
-        args: contract::commands::ModelArgs,
-        ack: Ack,
-        idle: bool,
-    ) -> Result<(), Error> {
+    pub(crate) fn take_switch(&mut self, asked: Asked, ack: Ack, idle: bool) -> Result<(), Error> {
         if self.closing {
             reject(ack, ErrorCode::Closing, CLOSING);
             return Ok(());
@@ -132,12 +143,32 @@ impl Loop {
             return Ok(());
         };
         let prepare = Arc::clone(prepare);
+        // A credential command switches the queued model's provider, not
+        // the current one, so a label is checked against the provider it
+        // switches (`docs/model-routing.md`, "Which credential a session uses").
+        let (args, label) = match asked {
+            Asked::Model(args) => (args, None),
+            Asked::Credential(credential) => {
+                let model = self
+                    .pending
+                    .last()
+                    .map(|queued| queued.model.reference.clone())
+                    .unwrap_or_else(|| self.model.reference.clone());
+                (
+                    contract::commands::ModelArgs {
+                        model,
+                        thinking: None,
+                    },
+                    Some(credential.label),
+                )
+            }
+        };
         let chosen = self
             .pending
             .last()
             .map(|queued| queued.chosen)
             .unwrap_or(self.chosen);
-        let mut prepared = match prepare(&args, chosen) {
+        let mut prepared = match prepare(&args, label.as_deref(), chosen) {
             Ok(prepared) => prepared,
             Err(rejection) => {
                 reject(ack, rejection.code, &rejection.message);
@@ -168,6 +199,40 @@ impl Loop {
         if idle {
             self.apply_switches()?;
         }
+        Ok(())
+    }
+
+    /// Called once by `Loop::resume`: writes `model_changed` with `before`
+    /// = `recorded` when `recorded` is `Some`, its `credential` is `Some`,
+    /// and that label differs from the session's label. A rewound loop
+    /// passes `None` and writes nothing (`docs/events.md`,
+    /// "`model_changed`").
+    pub(crate) fn resumed_label(&mut self, recorded: Option<ModelSettings>) -> Result<(), Error> {
+        let Some(recorded) = recorded else {
+            return Ok(());
+        };
+        // A `preamble_built` with no `credential` field folds to settings
+        // with `credential: None`, and records no label to switch from; the
+        // same label as the session's writes nothing either.
+        if recorded.credential.is_none() || recorded.credential == self.prompt.credential {
+            return Ok(());
+        }
+        let after = self.settings();
+        crate::util::write(
+            &self.log,
+            &mut self.conversation,
+            &mut self.reviewed,
+            &self.model.reference,
+            &Event::ModelChanged(ModelChanged {
+                before: recorded,
+                after,
+                source: SwitchSource::Driver,
+            }),
+            None,
+            None,
+            &mut self.changes.had,
+            &mut self.handoff.carry,
+        )?;
         Ok(())
     }
 
