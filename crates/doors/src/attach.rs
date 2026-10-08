@@ -99,7 +99,7 @@ pub fn attach(
 }
 
 /// Sends one command line. A write that fails means the session is gone.
-fn send(
+pub(crate) fn send(
     writer: &mut UnixStream,
     id: &SessionId,
     command: &str,
@@ -127,7 +127,7 @@ fn send(
 /// The next line from the session, with its bytes for printing. A line that
 /// is not JSON is skipped: the session writes JSON, and a stray line must
 /// not end the attach. `None` is a closed connection.
-fn next_line(reader: &mut BufReader<UnixStream>) -> Option<(Vec<u8>, Value)> {
+pub(crate) fn next_line(reader: &mut BufReader<UnixStream>) -> Option<(Vec<u8>, Value)> {
     loop {
         let mut raw = Vec::new();
         match reader.read_until(b'\n', &mut raw) {
@@ -148,7 +148,7 @@ fn kind(line: &Value) -> &str {
 }
 
 /// Whether `line` answers `command` with `kind`.
-fn is_answer(line: &Value, kind: &str, command: &str) -> bool {
+pub(crate) fn is_answer(line: &Value, kind: &str, command: &str) -> bool {
     self::kind(line) == kind
         && line.pointer("/payload/command_id").and_then(Value::as_str) == Some(command)
 }
@@ -188,7 +188,7 @@ fn emit(out: &mut dyn Write, raw: &[u8]) -> Result<(), Failure> {
         })
 }
 
-fn rejection(line: &Value) -> Failure {
+pub(crate) fn rejection(line: &Value) -> Failure {
     let code = line
         .pointer("/payload/code")
         .cloned()
@@ -207,7 +207,7 @@ fn rejection(line: &Value) -> Failure {
 /// the version (`docs/events.md`, "Versioning"), so any other one cannot be
 /// read. Another process does hold the session, so the code stays
 /// `session_held`, and the message names the session's version and this one.
-fn check_version(id: &SessionId, line: &Value) -> Result<(), Failure> {
+pub(crate) fn check_version(id: &SessionId, line: &Value) -> Result<(), Failure> {
     let version = line
         .get("schema_version")
         .and_then(Value::as_u64)

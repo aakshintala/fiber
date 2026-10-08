@@ -389,6 +389,7 @@ pub(crate) fn extension_case(
         &signals,
         fiber,
         Some(Arc::clone(&case_run)),
+        None,
     );
     let failures = case_run
         .verdict()

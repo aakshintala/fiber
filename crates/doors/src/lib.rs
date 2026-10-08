@@ -22,6 +22,7 @@ mod session;
 mod shell;
 mod signals;
 mod socket;
+mod watch;
 
 use std::collections::hash_map::RandomState;
 use std::hash::BuildHasher;
@@ -35,7 +36,8 @@ use contract::{ErrorCode, PreSessionExit};
 pub use attach::attach;
 pub use isolation::{Isolation, isolate};
 pub use session::{Declare, Session};
-pub use signals::{Signals, signal_code};
+pub use signals::{SHUTDOWN_BOUND, Signals, signal_code};
+pub use watch::{Watched, watch};
 
 /// A failure with Fiber's own sentence and nothing from a provider.
 pub fn failure(code: ErrorCode, message: impl Into<String>) -> Failure {

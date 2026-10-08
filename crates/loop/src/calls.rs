@@ -617,6 +617,12 @@ impl Loop {
         for record in jobs {
             let event = match record {
                 contract::jobs::JobRecord::Started(started) => Event::JobStarted(started),
+                contract::jobs::JobRecord::DelegateStarted(started) => {
+                    Event::DelegateStarted(started)
+                }
+                contract::jobs::JobRecord::DelegateFinished(finished) => {
+                    Event::DelegateFinished(crate::delegated::bounded(&self.log, finished))
+                }
                 contract::jobs::JobRecord::Completed(completed) => Event::JobCompleted(completed),
             };
             self.append(&event, turn, Some(id))?;

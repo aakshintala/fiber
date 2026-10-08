@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use contract::clock::wall_ms;
+use contract::events::Parent;
 use contract::shapes::{Failure, Worktree};
 use contract::{ErrorCode, SessionId};
 use doors::Session;
@@ -60,16 +61,29 @@ pub(crate) fn run(
             fiber,
         );
     }
+    // A delegate's stdin is its lifeline: the parent holds the write end
+    // open and never writes to it (`docs/delegates.md`, "Lifetime").
+    let parent = args
+        .parent
+        .zip(args.delegate_id)
+        .map(|(session_id, delegate_id)| Parent {
+            session_id: SessionId(session_id),
+            delegate_id: contract::JobId(delegate_id),
+        });
+    if parent.is_some() {
+        signals.lifeline(Box::new(std::io::stdin()));
+    }
     new_session(
         SessionId(args.id),
         args.model,
         args.prompt,
-        false,
+        parent.is_some(),
         args.worktree,
         clock,
         &signals,
         fiber,
         None,
+        parent,
     )
 }
 
@@ -95,12 +109,14 @@ pub(crate) fn new_session(
     signals: &Arc<doors::Signals>,
     fiber: Result<PathBuf, String>,
     case_run: Option<Arc<crate::case::run::CaseRun>>,
+    parent: Option<Parent>,
 ) -> i32 {
     let clock = case_run.as_ref().map_or(clock, |case| case.session_clock());
     let host = case_run.as_ref().map(|case| case.host_script());
     if !worktree {
         return match run_new(
-            id, model, prompt, one_turn, None, clock, signals, fiber, host, case_run, None,
+            id, model, prompt, one_turn, None, clock, signals, fiber, host, case_run, parent,
+            None,
         ) {
             Ok(code) => code,
             Err(failure) => report(signals, failure),
@@ -150,6 +166,7 @@ pub(crate) fn new_session(
         fiber,
         host,
         case_run,
+        parent,
         None,
     );
     isolation.end();
@@ -176,6 +193,7 @@ pub(crate) fn run_new(
     fiber: Result<PathBuf, String>,
     host: Option<Arc<extensions::HostScript>>,
     case_run: Option<Arc<crate::case::run::CaseRun>>,
+    parent: Option<Parent>,
     rewound: Option<r#loop::Rewound>,
 ) -> Result<i32, Failure> {
     // A rewind's new session runs where the old one did, with the model,
@@ -323,9 +341,10 @@ pub(crate) fn run_new(
         |inbox, cancel| {
             // `Loop::start` writes `session_started`, which `fiber_started`
             // follows (`docs/events.md`); a rewind's start writes the
-            // `session_started` that continues the old log instead.
-            let started = match rewound {
-                Some(start) => Loop::rewound(
+            // `session_started` that continues the old log instead, and a
+            // delegate opens through `Loop::delegate`, naming its parent.
+            let started = match (rewound, parent) {
+                (Some(start), _) => Loop::rewound(
                     Arc::clone(&log),
                     start,
                     provider,
@@ -335,7 +354,17 @@ pub(crate) fn run_new(
                     r#loop::capped(tools, &caps),
                     permissions,
                 ),
-                None => Loop::start(
+                (None, Some(parent)) => Loop::delegate(
+                    Arc::clone(&log),
+                    provider,
+                    model,
+                    prompt_inputs,
+                    inbox,
+                    r#loop::capped(tools, &caps),
+                    permissions,
+                    parent,
+                ),
+                (None, None) => Loop::start(
                     Arc::clone(&log),
                     provider,
                     model,

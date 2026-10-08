@@ -3,7 +3,7 @@
 //! written before `fiber_exited`. No model reads the session again, so
 //! nothing that would only be shown to one is written.
 
-use contract::events::Event;
+use contract::events::{DelegateFinished, Event, JobCompleted};
 use contract::inbox::Delivery;
 use contract::{ErrorCode, JobId};
 
@@ -34,9 +34,8 @@ impl Loop {
         let queued = std::mem::take(&mut self.queued);
         if !self.rewound {
             for piece in queued {
-                if let Queued::Job(completed) = piece {
-                    self.log
-                        .append(&Event::JobCompleted(completed), None, None)?;
+                if let Queued::Job(completed, delegate) = piece {
+                    self.write_job_end(completed, delegate)?;
                 }
             }
         }
@@ -70,6 +69,22 @@ impl Loop {
         }
     }
 
+    /// A job's end: its delegate's final message first, bounded as it is
+    /// written, then `job_completed`.
+    fn write_job_end(
+        &mut self,
+        completed: JobCompleted,
+        delegate: Option<DelegateFinished>,
+    ) -> Result<(), Error> {
+        if let Some(finished) = delegate {
+            let event = Event::DelegateFinished(crate::delegated::bounded(&self.log, finished));
+            self.log.append(&event, None, None)?;
+        }
+        self.log
+            .append(&Event::JobCompleted(completed), None, None)?;
+        Ok(())
+    }
+
     /// One delivery taken while the jobs settle.
     fn settle_one(&mut self, delivery: Delivery) -> Result<(), Error> {
         // After `rewound` nothing is written: every acknowledgement still
@@ -81,9 +96,8 @@ impl Loop {
         }
         match delivery {
             Delivery::Job(notice) => {
-                if let Some(completed) = claimed(notice) {
-                    self.log
-                        .append(&Event::JobCompleted(completed), None, None)?;
+                if let Some((completed, delegate)) = claimed(notice) {
+                    self.write_job_end(completed, delegate)?;
                 }
             }
             // Written like any line still written; unlike a monitor batch,

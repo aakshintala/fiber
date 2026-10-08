@@ -72,6 +72,7 @@ pub(crate) fn session_rewound(
         fiber,
         None,
         None,
+        None,
         Some(r#loop::Rewound {
             from: point,
             note,

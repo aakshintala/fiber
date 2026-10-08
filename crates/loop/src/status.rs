@@ -271,7 +271,15 @@ impl Fold {
                 }
             }
             Event::HandoffCompleted(_) => self.context = None,
-            Event::JobStarted(_) | Event::JobCompleted(_) => self.refresh_running(),
+            Event::JobStarted(_) => self.refresh_running(),
+            // A delegate's end removes it from the status fold, whether
+            // its `delegate_finished` or only its `job_completed` was
+            // seen: an orphaned delegate resumed without its finish would
+            // otherwise stay listed forever.
+            Event::JobCompleted(completed) => {
+                self.delegates.remove(&completed.job_id);
+                self.refresh_running();
+            }
             Event::DelegateStarted(started) => {
                 self.delegates.insert(started.job_id.clone());
             }

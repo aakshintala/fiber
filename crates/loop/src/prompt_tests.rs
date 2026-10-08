@@ -166,8 +166,8 @@ fn opening_md_bytes_are_pinned() {
 fn messages_md_bytes_are_pinned() {
     pinned(
         include_bytes!("../prompt/messages.md"),
-        4113,
-        0xb75d9a13c9680d1b,
+        4282,
+        0x520de3530d8c7d36,
     );
 }
 
@@ -204,6 +204,8 @@ fn messages_md_holds_every_section_the_doc_names() {
         "handoff-jobs",
         "job-line",
         "job-line-suppressed",
+        "delegate-finished",
+        "delegate-questions",
         "extension-section",
         "extension-file",
         "budget-line",

@@ -1397,6 +1397,7 @@ fn a_turn_a_job_started_goes_on_after_a_handoff() {
             output_tail: None,
         },
         claim: contract::inbox::Claim(Box::new(|| true)),
+        delegate: None,
     });
     let mut session = injected(
         handed_after_a_call(),

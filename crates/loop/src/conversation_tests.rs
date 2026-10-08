@@ -11,10 +11,11 @@
 use std::collections::BTreeMap;
 
 use contract::events::{
-    Event, InstructionFile, InstructionReason, InstructionSent, ToolCallRequested,
+    DelegateFinished, Event, InstructionFile, InstructionReason, InstructionSent, JobCompleted,
+    Outcome, ToolCallRequested,
 };
 use contract::provider::Input;
-use contract::{ActionId, Envelope, Seq, SessionId};
+use contract::{ActionId, Envelope, JobId, Seq, SessionId};
 use serde_json::json;
 
 use super::render;
@@ -522,6 +523,144 @@ fn a_job_completed_renders_a_notice_only_without_an_action() {
         );
     }
     assert_eq!(live, rebuilt);
+}
+
+fn completed(id: &str) -> Event {
+    Event::JobCompleted(JobCompleted {
+        job_id: JobId(id.into()),
+        status: Outcome::Completed,
+        error: None,
+        process: None,
+        output_tail: None,
+    })
+}
+
+fn finished(id: &str, text: &str, questions: Option<Vec<contract::shapes::Question>>) -> Event {
+    Event::DelegateFinished(DelegateFinished {
+        job_id: JobId(id.into()),
+        text: text.into(),
+        artifact: None,
+        questions,
+        usage: contract::shapes::Usage {
+            tokens: contract::shapes::Tokens {
+                input: 0,
+                cache_read: 0,
+                cache_write: std::collections::BTreeMap::new(),
+                output: 0,
+            },
+            cost: Some(0.0),
+            subscription_cost: 0.0,
+        },
+        worktree: None,
+    })
+}
+
+fn ask_about(id: &str) -> Vec<contract::shapes::Question> {
+    vec![contract::shapes::Question {
+        header: format!("{id} header"),
+        question: format!("What should {id} do?"),
+        options: Vec::new(),
+        multi_select: None,
+    }]
+}
+
+#[test]
+fn a_delegate_finish_then_its_end_renders_two_messages_in_log_order() {
+    let jobs = Event::TurnStarted(contract::events::TurnStarted {
+        input: vec![contract::events::InputItem::Jobs {
+            job_ids: vec![JobId("j_1".into())],
+        }],
+    });
+    let lines = vec![
+        line("turn_started", &jobs, None),
+        line(
+            "delegate_finished",
+            &finished("j_1", "Done.", Some(ask_about("j_1"))),
+            None,
+        ),
+        line("job_completed", &completed("j_1"), None),
+    ];
+    let rebuilt = super::rebuild(&lines, "fake/model-1").unwrap();
+    assert_eq!(rebuilt.len(), 2);
+    let first = user_text(&rebuilt[0]);
+    assert!(first.contains("Fiber: delegate j_1 finished. Its final message:"));
+    assert!(first.contains("Done."));
+    assert!(first.contains("j_1 header: What should j_1 do?"));
+    assert_eq!(
+        user_text(&rebuilt[1]),
+        "Fiber: background job j_1 ended: completed."
+    );
+    // Live renders the same bytes.
+    let mut live = Vec::new();
+    for (event, action) in [
+        (jobs, None),
+        (finished("j_1", "Done.", Some(ask_about("j_1"))), None),
+        (completed("j_1"), None),
+    ] {
+        render(
+            &mut live,
+            &event,
+            action.as_ref(),
+            "fake/model-1",
+            &mut BTreeMap::new(),
+            &mut crate::handoff::Carry::default(),
+        );
+    }
+    assert_eq!(live, rebuilt);
+}
+
+#[test]
+fn a_delegate_wake_flushes_a_batch_that_never_completes() {
+    // No result ever comes for the call: its fixed result still precedes
+    // the wake, as the live loop sends it.
+    let lines = vec![
+        line("tool_call_requested", &call("a"), Some("a_1")),
+        line("delegate_finished", &finished("j_1", "Done.", None), None),
+        line("job_completed", &completed("j_1"), None),
+    ];
+    let rebuilt = super::rebuild(&lines, "fake/model-1").unwrap();
+    assert_eq!(shape(&rebuilt), ["call a_1", "result a_1", "user", "user"]);
+    assert!(matches!(
+        &rebuilt[1],
+        Input::ToolResult { text, is_error: true, .. } if text.contains("never ran")
+    ));
+    assert!(user_text(&rebuilt[2]).contains("Done."));
+}
+
+#[test]
+fn a_delegate_wake_logged_inside_a_batch_renders_after_its_last_result() {
+    let lines = vec![
+        line("tool_call_requested", &call("a"), Some("a_1")),
+        line("delegate_finished", &finished("j_1", "Done.", None), None),
+        line("job_completed", &completed("j_1"), None),
+        line("tool_call_completed", &result("one"), Some("a_1")),
+    ];
+    let rebuilt = super::rebuild(&lines, "fake/model-1").unwrap();
+    assert_eq!(shape(&rebuilt), ["call a_1", "result a_1", "user", "user"]);
+    assert!(user_text(&rebuilt[2]).contains("Done."));
+    assert!(user_text(&rebuilt[3]).contains("j_1 ended: completed."));
+}
+
+#[test]
+fn a_delegate_finish_under_an_action_renders_nothing() {
+    let jobs = Event::TurnStarted(contract::events::TurnStarted {
+        input: vec![contract::events::InputItem::Jobs {
+            job_ids: vec![JobId("j_2".into())],
+        }],
+    });
+    let lines = vec![
+        line("turn_started", &jobs, None),
+        line(
+            "delegate_finished",
+            &finished("j_1", "Done.", None),
+            Some("a_1"),
+        ),
+        line("job_completed", &orphaned("j_2"), None),
+    ];
+    let rebuilt = super::rebuild(&lines, "fake/model-1").unwrap();
+    // The `jobs` item and the record under an action render nothing.
+    assert_eq!(rebuilt.len(), 1);
+    assert!(user_text(&rebuilt[0]).contains("j_2"));
 }
 
 #[test]

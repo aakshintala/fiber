@@ -18,7 +18,7 @@ use contract::clock::Clock as _;
 use fakes::clock::FakeClock;
 use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
 
-use super::{Action, BOUND, Phase, Signals, decide, decide_close, signal_code};
+use super::{Action, Phase, SHUTDOWN_BOUND, Signals, decide, decide_close, signal_code};
 
 /// How long a test waits on another thread before it fails.
 const DEADLINE: Duration = Duration::from_secs(10);
@@ -148,14 +148,18 @@ fn the_bound_kills_then_exits_only_once_five_seconds_pass() {
     let (signals, did) = recorded(&clock);
     let (tx, calls) = mpsc::channel();
     arm(&signals, &tx);
-    let until = clock.now() + BOUND;
+    let until = clock.now() + SHUTDOWN_BOUND;
     signals.handle(SIGTERM);
     assert_eq!(calls.try_recv().unwrap(), Did::Signal(-1));
     assert!(
         clock.await_parked(until, DEADLINE),
         "the bound waits on the clock"
     );
-    let mark = clock.advance_marked(BOUND.checked_sub(Duration::from_millis(1)).unwrap());
+    let mark = clock.advance_marked(
+        SHUTDOWN_BOUND
+            .checked_sub(Duration::from_millis(1))
+            .unwrap(),
+    );
     assert!(
         clock.await_parked_since(&mark, Some(until), DEADLINE),
         "short of the bound it waits again"
@@ -174,16 +178,151 @@ fn a_started_shutdown_has_the_same_bound() {
     let (tx, calls) = mpsc::channel();
     arm(&signals, &tx);
     assert_eq!(start(&signals, &tx), None);
-    let until = clock.now() + BOUND;
+    let until = clock.now() + SHUTDOWN_BOUND;
     signals.handle(SIGHUP);
     assert_eq!(calls.try_recv().unwrap(), Did::Signal(129));
     assert!(
         clock.await_parked(until, DEADLINE),
         "the bound waits on the clock"
     );
-    clock.advance(BOUND);
+    clock.advance(SHUTDOWN_BOUND);
     assert_eq!(calls.recv_timeout(DEADLINE).unwrap(), Did::Bound);
     assert_eq!(did.recv_timeout(DEADLINE).unwrap(), Did::Exit(129));
+}
+
+/// A reader that fails at once, as a broken lifeline does.
+struct Broken;
+
+impl std::io::Read for Broken {
+    fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+        Err(std::io::Error::other("the parent is gone"))
+    }
+}
+
+/// A lifeline reader that blocks until the test releases it with EOF.
+struct Held {
+    /// Sent on entering `read`, so the test knows the lifeline thread is
+    /// blocked inside it.
+    entered: mpsc::Sender<()>,
+    /// The test sends once to release the read as EOF.
+    release: mpsc::Receiver<()>,
+}
+
+impl std::io::Read for Held {
+    fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+        let _sent = self.entered.send(());
+        match self.release.recv_timeout(DEADLINE) {
+            Ok(()) => Ok(0),
+            Err(_) => Err(std::io::Error::other("the test ended before releasing")),
+        }
+    }
+}
+
+#[test]
+fn a_lifeline_eof_after_start_takes_the_sighup_path() {
+    let clock = FakeClock::new();
+    let (signals, did) = recorded(&clock);
+    let (tx, calls) = mpsc::channel();
+    arm(&signals, &tx);
+    assert_eq!(start(&signals, &tx), None);
+    let until = clock.now() + SHUTDOWN_BOUND;
+    // Bytes the parent writes are ignored; EOF ends the lifeline.
+    signals.lifeline(Box::new(std::io::Cursor::new(b"hello".to_vec())));
+    assert_eq!(
+        calls.recv_timeout(DEADLINE).unwrap(),
+        Did::Signal(129),
+        "EOF after start shuts down with the hangup code"
+    );
+    assert!(
+        clock.await_parked(until, DEADLINE),
+        "the bound waits on the clock"
+    );
+    clock.advance(SHUTDOWN_BOUND);
+    assert_eq!(calls.recv_timeout(DEADLINE).unwrap(), Did::Bound);
+    assert_eq!(did.recv_timeout(DEADLINE).unwrap(), Did::Exit(129));
+}
+
+#[test]
+fn a_blocked_lifeline_triggers_nothing_until_released() {
+    let clock = FakeClock::new();
+    let (signals, did) = recorded(&clock);
+    let (tx, calls) = mpsc::channel();
+    arm(&signals, &tx);
+    assert_eq!(start(&signals, &tx), None);
+    let until = clock.now() + SHUTDOWN_BOUND;
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    signals.lifeline(Box::new(Held {
+        entered: entered_tx,
+        release: release_rx,
+    }));
+    entered_rx
+        .recv_timeout(DEADLINE)
+        .expect("the lifeline blocks reading stdin: a skipped drain never reads");
+    assert!(
+        calls.try_recv().is_err(),
+        "no shutdown while the lifeline is blocked"
+    );
+    assert!(
+        did.try_recv().is_err(),
+        "no exit while the lifeline is blocked"
+    );
+    release_tx.send(()).unwrap();
+    assert_eq!(
+        calls.recv_timeout(DEADLINE).unwrap(),
+        Did::Signal(129),
+        "EOF after the block shuts down with the hangup code"
+    );
+    assert!(
+        clock.await_parked(until, DEADLINE),
+        "the bound waits on the clock"
+    );
+    clock.advance(SHUTDOWN_BOUND);
+    assert_eq!(calls.recv_timeout(DEADLINE).unwrap(), Did::Bound);
+    assert_eq!(did.recv_timeout(DEADLINE).unwrap(), Did::Exit(129));
+}
+
+#[test]
+fn a_lifeline_read_error_takes_the_same_path() {
+    let clock = FakeClock::new();
+    let (signals, _did) = recorded(&clock);
+    let (tx, calls) = mpsc::channel();
+    arm(&signals, &tx);
+    assert_eq!(start(&signals, &tx), None);
+    signals.lifeline(Box::new(Broken));
+    assert_eq!(
+        calls.recv_timeout(DEADLINE).unwrap(),
+        Did::Signal(129),
+        "a read error after start shuts down too"
+    );
+}
+
+#[test]
+fn a_lifeline_eof_while_booting_exits_129_at_once() {
+    let clock = FakeClock::new();
+    let (signals, did) = recorded(&clock);
+    signals.lifeline(Box::new(std::io::Cursor::new(Vec::new())));
+    assert_eq!(
+        did.recv_timeout(DEADLINE).unwrap(),
+        Did::Exit(129),
+        "EOF while booting exits at once, as a real SIGHUP does"
+    );
+}
+
+#[test]
+fn a_lifeline_eof_while_armed_is_recorded_for_start() {
+    let clock = FakeClock::new();
+    let (signals, did) = recorded(&clock);
+    let (tx, calls) = mpsc::channel();
+    arm(&signals, &tx);
+    signals.lifeline(Box::new(std::io::Cursor::new(Vec::new())));
+    assert_eq!(
+        calls.recv_timeout(DEADLINE).unwrap(),
+        Did::Signal(-1),
+        "EOF while armed records the hangup"
+    );
+    assert_eq!(start(&signals, &tx), Some(129));
+    assert!(did.try_recv().is_err(), "nothing exited before the bound");
 }
 
 #[test]
@@ -269,14 +408,14 @@ fn close_now_once_started_shuts_down_with_code_0_and_the_bound_exits_0() {
     let (tx, calls) = mpsc::channel();
     arm(&signals, &tx);
     assert_eq!(start(&signals, &tx), None);
-    let until = clock.now() + BOUND;
+    let until = clock.now() + SHUTDOWN_BOUND;
     signals.close_now();
     assert_eq!(calls.try_recv().unwrap(), Did::Signal(0));
     assert!(
         clock.await_parked(until, DEADLINE),
         "the bound waits on the clock"
     );
-    clock.advance(BOUND);
+    clock.advance(SHUTDOWN_BOUND);
     assert_eq!(calls.recv_timeout(DEADLINE).unwrap(), Did::Bound);
     assert_eq!(did.recv_timeout(DEADLINE).unwrap(), Did::Exit(0));
 }
@@ -288,7 +427,7 @@ fn a_second_close_now_does_nothing_and_a_later_term_kills_the_groups() {
     let (tx, calls) = mpsc::channel();
     arm(&signals, &tx);
     assert_eq!(start(&signals, &tx), None);
-    let until = clock.now() + BOUND;
+    let until = clock.now() + SHUTDOWN_BOUND;
     signals.close_now();
     assert_eq!(calls.try_recv().unwrap(), Did::Signal(0));
     signals.close_now();
@@ -301,7 +440,7 @@ fn a_second_close_now_does_nothing_and_a_later_term_kills_the_groups() {
         clock.await_parked(until, DEADLINE),
         "the bound waits on the clock"
     );
-    clock.advance(BOUND);
+    clock.advance(SHUTDOWN_BOUND);
     assert_eq!(calls.recv_timeout(DEADLINE).unwrap(), Did::Bound);
     assert_eq!(did.recv_timeout(DEADLINE).unwrap(), Did::Exit(0));
     assert!(did.try_recv().is_err(), "no second bound ran");
@@ -319,12 +458,12 @@ fn close_now_after_a_signal_keeps_the_signal_and_its_code() {
     assert_eq!(calls.try_recv().unwrap(), Did::Signal(143));
     signals.close_now();
     assert!(calls.try_recv().is_err(), "close_now keeps the signal");
-    let until = clock.now() + BOUND;
+    let until = clock.now() + SHUTDOWN_BOUND;
     assert!(
         clock.await_parked(until, DEADLINE),
         "the bound waits on the clock"
     );
-    clock.advance(BOUND);
+    clock.advance(SHUTDOWN_BOUND);
     assert_eq!(calls.recv_timeout(DEADLINE).unwrap(), Did::Bound);
     assert_eq!(did.recv_timeout(DEADLINE).unwrap(), Did::Exit(143));
 }

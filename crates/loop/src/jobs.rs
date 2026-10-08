@@ -11,7 +11,8 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use contract::events::{
-    Event, InputItem, JobCompleted, JobLine, JobsPendingNotified, Outcome, PendingReason,
+    DelegateFinished, Event, InputItem, JobCompleted, JobLine, JobsPendingNotified, Outcome,
+    PendingReason,
 };
 use contract::inbox::{JobNotice, Message};
 use contract::jobs::Jobs;
@@ -27,14 +28,18 @@ const ORPHANED: &str = "The process that ran this job died; it may still be runn
 
 /// Something taken from the inbox and not yet written, in arrival order:
 /// a steering message, or a job's end whose claim held.
+#[allow(
+    clippy::large_enum_variant,
+    reason = "a delegate's finish rides its job's queue entry; boxing would allocate on every job end"
+)]
 #[derive(Debug)]
 pub(crate) enum Queued {
     /// Written as `steering_applied`, or as a `message` item when it starts
     /// a turn. Fiber's own ending notice only ever starts a turn.
     Steer(Message),
-    /// Written as `job_completed` with no action; named in a `jobs` item
-    /// when it starts a turn.
-    Job(JobCompleted),
+    /// Written as `delegate_finished` (bounded) then `job_completed`
+    /// with no action; named in a `jobs` item when it starts a turn.
+    Job(JobCompleted, Option<DelegateFinished>),
     /// A monitor's batch: written as `job_line`; named in a `jobs` item when
     /// it starts a turn. No claim applies to it.
     Line(JobLine),
@@ -72,10 +77,11 @@ pub(crate) struct Ending {
     checked: bool,
 }
 
-/// The notice's completion, when its claim holds: no `jobs wait` or `stop`
-/// already returned the job's final state to the model.
-pub(crate) fn claimed(notice: JobNotice) -> Option<JobCompleted> {
-    (notice.claim.0)().then_some(notice.completed)
+/// The notice's completion and its delegate's finish, when its claim
+/// holds: no `jobs wait` or `stop` already returned the job's final state
+/// to the model.
+pub(crate) fn claimed(notice: JobNotice) -> Option<(JobCompleted, Option<DelegateFinished>)> {
+    (notice.claim.0)().then_some((notice.completed, notice.delegate))
 }
 
 impl Loop {
@@ -190,8 +196,8 @@ impl Loop {
     /// A notice taken while a turn runs or an approval waits: queued for
     /// the next step boundary, after anything already queued.
     pub(crate) fn admit_job(&mut self, notice: JobNotice) {
-        if let Some(completed) = claimed(notice) {
-            self.queued.push_back(Queued::Job(completed));
+        if let Some((completed, delegate)) = claimed(notice) {
+            self.queued.push_back(Queued::Job(completed, delegate));
         }
     }
 
@@ -217,9 +223,9 @@ impl Loop {
                     self.queued
                         .push_back(Queued::Handoff(command_id, instructions));
                 }
-                Queued::Job(completed) => {
+                Queued::Job(completed, delegate) => {
                     name_job(&mut input, &completed.job_id);
-                    self.queued.push_back(Queued::Job(completed));
+                    self.queued.push_back(Queued::Job(completed, delegate));
                 }
                 Queued::Line(line) => {
                     name_job(&mut input, &line.job_id);
@@ -249,7 +255,8 @@ impl Loop {
     }
 
     /// Writes everything queued, in arrival order: a steer as
-    /// `steering_applied`, a job's end as `job_completed` with no action.
+    /// `steering_applied`, a delegate's finish as `delegate_finished`
+    /// (bounded) then its end as `job_completed` with no action.
     /// Returns whether a steer was written.
     pub(crate) fn write_queued(&mut self, turn: &TurnId) -> Result<bool, Error> {
         let mut steered = false;
@@ -263,7 +270,15 @@ impl Loop {
                         changed_by: None,
                     })
                 }
-                Queued::Job(completed) => Event::JobCompleted(completed),
+                Queued::Job(completed, delegate) => {
+                    if let Some(finished) = delegate {
+                        let event =
+                            Event::DelegateFinished(crate::delegated::bounded(&self.log, finished));
+                        self.append(&event, turn, None)?;
+                    }
+                    self.append(&Event::JobCompleted(completed), turn, None)?;
+                    continue;
+                }
                 Queued::Line(line) => Event::JobLine(line),
                 // Held for the step's handoff check, which runs it.
                 Queued::Handoff(_, instructions) => {
@@ -409,6 +424,36 @@ pub(crate) fn line_text(line: &JobLine) -> String {
         text.push_str(&fill(
             body(crate::conversation::MESSAGES_MD, "job-line-suppressed").trim_end(),
             &[("suppressed", suppressed.to_string().as_str())],
+        ));
+    }
+    text
+}
+
+/// What a `delegate_finished` with no action tells the model: the
+/// delegate's final message, then its questions when it ended asking.
+/// Read from the line alone, so a resume renders the same bytes.
+pub(crate) fn delegate_text(finished: &DelegateFinished) -> String {
+    let mut text = fill(
+        body(crate::conversation::MESSAGES_MD, "delegate-finished").trim_end(),
+        &[
+            ("job_id", finished.job_id.0.as_str()),
+            ("text", finished.text.as_str()),
+        ],
+    );
+    if let Some(questions) = finished
+        .questions
+        .as_ref()
+        .filter(|asked| !asked.is_empty())
+    {
+        let rendered = questions
+            .iter()
+            .map(|asked| format!("{}: {}", asked.header, asked.question))
+            .collect::<Vec<_>>()
+            .join("\n");
+        text.push('\n');
+        text.push_str(&fill(
+            body(crate::conversation::MESSAGES_MD, "delegate-questions").trim_end(),
+            &[("questions", rendered.as_str())],
         ));
     }
     text
