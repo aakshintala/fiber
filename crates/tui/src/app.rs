@@ -43,6 +43,7 @@ mod focus;
 mod history;
 #[path = "app_home.rs"]
 mod home;
+mod links;
 #[path = "app_mouse.rs"]
 mod mouse;
 mod offer;

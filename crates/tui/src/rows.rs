@@ -3,7 +3,7 @@
 //! unwrapped). Producers push into [`Rows`] as they would into a
 //! `Vec<Row>`; a plain push is a row that starts a line of its own.
 
-use std::ops::Deref;
+use std::ops::{Deref, Range};
 
 use crate::turn::Row;
 
@@ -28,6 +28,9 @@ pub(crate) struct RowText {
     pub(crate) skip: u16,
     /// The whole row is decoration and adds no text: a code block's header.
     pub(crate) decoration: bool,
+    /// The links drawn on the row: each one's cells in the line and its
+    /// destination (`docs/tui.md`, "Links": links are handled on click).
+    pub(crate) links: Vec<(Range<u16>, String)>,
 }
 
 impl RowText {
@@ -37,6 +40,7 @@ impl RowText {
             join: Join::Break,
             skip: 0,
             decoration: false,
+            links: Vec::new(),
         }
     }
 }

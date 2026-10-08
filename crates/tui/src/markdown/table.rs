@@ -2,23 +2,37 @@
 //! apart, numbers right-aligned, and a table wider than the area shrunk
 //! widest column first (`docs/tui.md`, "Look").
 
+use std::ops::Range;
+
 use pulldown_cmark::Alignment;
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 
-use super::{Cell, Role, char_width, spans_of, style, wrap_cells};
+use super::{Cell, Role, char_width, spans_of, style, wrap_joined_indices};
 
 /// Cells between columns.
 const GAP: usize = 2;
 /// A column shrinks no narrower than this.
 const MIN_COLUMN: usize = 6;
 
+/// One table cell: its inline cells and the link ranges in them, as
+/// indices into the cells (`docs/tui.md`, "Links": links are handled on
+/// click).
+type TableCell = (Vec<Cell>, Vec<(Range<usize>, String)>);
+
+/// One laid-out table line and the links drawn on it.
+type TableLine = (Line<'static>, Vec<(Range<u16>, String)>);
+
+/// One wrapped table cell's row: its cells, their indices into the
+/// cell, and the cell's link ranges.
+type WrappedCell<'a> = (Vec<Cell>, Vec<usize>, &'a [(Range<usize>, String)]);
+
 /// A table being gathered: the alignment row, finished rows (the header
 /// first) and the row in progress.
 pub(super) struct Table {
     aligns: Vec<Alignment>,
-    rows: Vec<Vec<Vec<Cell>>>,
-    row: Vec<Vec<Cell>>,
+    rows: Vec<Vec<TableCell>>,
+    row: Vec<TableCell>,
 }
 
 impl Table {
@@ -30,16 +44,17 @@ impl Table {
         }
     }
 
-    pub(super) fn push_cell(&mut self, cell: Vec<Cell>) {
-        self.row.push(cell);
+    pub(super) fn push_cell(&mut self, cell: Vec<Cell>, links: Vec<(Range<usize>, String)>) {
+        self.row.push((cell, links));
     }
 
     pub(super) fn end_row(&mut self) {
         self.rows.push(std::mem::take(&mut self.row));
     }
 
-    /// The table's lines at `width`.
-    pub(super) fn layout(self, width: usize) -> Vec<Line<'static>> {
+    /// The table's lines at `width`, each with the links drawn on it and
+    /// their cells in the line (`docs/tui.md`, "Links").
+    pub(super) fn layout(self, width: usize) -> Vec<TableLine> {
         let count = self
             .rows
             .iter()
@@ -49,7 +64,7 @@ impl Table {
             .unwrap_or_default();
         let mut widths = vec![0usize; count];
         for row in &self.rows {
-            for (column, cell) in widths.iter_mut().zip(row) {
+            for (column, (cell, _)) in widths.iter_mut().zip(row) {
                 *column = (*column).max(cells_width(cell));
             }
         }
@@ -60,7 +75,7 @@ impl Table {
                     .iter()
                     .skip(1)
                     .filter_map(|row| row.get(at))
-                    .map(|cell| cell.iter().map(|(ch, _)| ch).collect::<String>())
+                    .map(|(cell, _)| cell.iter().map(|(ch, _)| ch).collect::<String>())
                     .filter(|text| !text.trim().is_empty())
                     .peekable();
                 body.peek().is_some() && body.all(|text| is_number(&text))
@@ -73,19 +88,27 @@ impl Table {
             .saturating_add(GAP.saturating_mul(count.saturating_sub(1)));
         let mut lines = Vec::new();
         for (at, row) in self.rows.iter().enumerate() {
-            let wrapped: Vec<Vec<Vec<Cell>>> = widths
+            // The wrapped rows with their source indices, per column, so
+            // each cell's link ranges map through its own wrapping.
+            let wrapped: Vec<Vec<WrappedCell<'_>>> = widths
                 .iter()
                 .enumerate()
                 .map(|(column, width)| {
-                    let cell = row.get(column).map_or(&[][..], Vec::as_slice);
-                    let cell: Vec<Cell> = if at == 0 {
+                    let (cell, links) = row
+                        .get(column)
+                        .map(|(cell, links)| (cell.as_slice(), links.as_slice()))
+                        .unwrap_or((&[][..], &[][..]));
+                    let owned: Vec<Cell> = if at == 0 {
                         cell.iter()
                             .map(|&(ch, style)| (ch, style.add_modifier(Modifier::BOLD)))
                             .collect()
                     } else {
                         cell.to_vec()
                     };
-                    wrap_cells(&cell, *width, *width, true)
+                    wrap_joined_indices(&owned, *width, *width, true)
+                        .into_iter()
+                        .map(|(row, _, indices)| (row, indices, links))
+                        .collect()
                 })
                 .collect();
             let height = wrapped
@@ -96,14 +119,18 @@ impl Table {
                 .max(1);
             for line in 0..height {
                 let mut spans = Vec::new();
+                let mut links_out: Vec<(Range<u16>, String)> = Vec::new();
+                let mut col: usize = 0;
                 for (column, width) in widths.iter().enumerate() {
                     if column > 0 {
                         spans.push(Span::raw(" ".repeat(GAP)));
+                        col = col.saturating_add(GAP);
                     }
-                    let piece = wrapped
+                    let (piece, indices, cell_links) = wrapped
                         .get(column)
                         .and_then(|rows| rows.get(line))
-                        .map_or(&[][..], Vec::as_slice);
+                        .map(|(row, indices, links)| (row.as_slice(), indices.as_slice(), *links))
+                        .unwrap_or((&[][..], &[][..], &[][..]));
                     let pad = width.saturating_sub(cells_width(piece));
                     let align = if numeric.get(column).copied().unwrap_or_default() {
                         Alignment::Right
@@ -116,16 +143,49 @@ impl Table {
                         Alignment::Left | Alignment::None => 0,
                     };
                     spans.push(Span::raw(" ".repeat(before)));
+                    col = col.saturating_add(before);
+                    let piece_start = col;
+                    // Each link of this cell that this visual line holds,
+                    // from its first cell to its last one's end.
+                    for (range, url) in cell_links {
+                        let mut first: Option<usize> = None;
+                        let mut last: Option<usize> = None;
+                        for (at, source) in indices.iter().enumerate() {
+                            if range.contains(source) {
+                                first.get_or_insert(at);
+                                last = Some(at);
+                            }
+                        }
+                        if let (Some(first), Some(last)) = (first, last)
+                            && let Some(cells) = piece.get(first..=last)
+                        {
+                            let mut start = piece_start;
+                                for (ch, _) in piece.get(..first).unwrap_or_default() {
+                                start = start.saturating_add(char_width(*ch));
+                            }
+                            let mut end = start;
+                            for (ch, _) in cells {
+                                end = end.saturating_add(char_width(*ch));
+                            }
+                            let start = u16::try_from(start).unwrap_or(u16::MAX);
+                            let end = u16::try_from(end).unwrap_or(u16::MAX);
+                            if start < end {
+                                links_out.push((start..end, url.clone()));
+                            }
+                        }
+                    }
                     spans.extend(spans_of(piece));
+                    col = col.saturating_add(cells_width(piece));
                     spans.push(Span::raw(" ".repeat(pad.saturating_sub(before))));
+                    col = col.saturating_add(pad.saturating_sub(before));
                 }
-                lines.push(Line::from(spans));
+                lines.push((Line::from(spans), links_out));
             }
             if at == 0 {
-                lines.push(Line::from(Span::styled(
-                    "─".repeat(total),
-                    style(Role::Dim),
-                )));
+                lines.push((
+                    Line::from(Span::styled("─".repeat(total), style(Role::Dim))),
+                    Vec::new(),
+                ));
             }
         }
         lines

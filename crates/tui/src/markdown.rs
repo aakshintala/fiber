@@ -144,6 +144,8 @@ pub(crate) fn render(text: &str, width: u16) -> Rendered {
         width,
         out: Rendered::default(),
         inline: Vec::new(),
+        link_stack: Vec::new(),
+        inline_links: Vec::new(),
         heading: false,
         strong: 0,
         emphasis: 0,
@@ -179,6 +181,12 @@ struct Writer {
     out: Rendered,
     /// The block of inline text being gathered.
     inline: Vec<Cell>,
+    /// Open links: each one's start in `inline`, or nothing when its
+    /// destination does not open (`docs/tui.md`, "Links").
+    link_stack: Vec<Option<(usize, String)>>,
+    /// The valid links closed in the gathered inline text, as indices
+    /// into it.
+    inline_links: Vec<(Range<usize>, String)>,
     heading: bool,
     strong: usize,
     emphasis: usize,
@@ -277,7 +285,12 @@ impl Writer {
             Tag::Emphasis => self.emphasis = self.emphasis.saturating_add(1),
             Tag::Strong => self.strong = self.strong.saturating_add(1),
             Tag::Strikethrough => self.strike = self.strike.saturating_add(1),
-            Tag::Link { .. } => self.link = self.link.saturating_add(1),
+            Tag::Link { dest_url, .. } => {
+                let dest = dest_url.into_string();
+                let open = crate::opener::valid(&dest).then_some((self.inline.len(), dest));
+                self.link_stack.push(open);
+                self.link = self.link.saturating_add(1);
+            }
             Tag::TableHead
             | Tag::TableRow
             | Tag::TableCell
@@ -314,8 +327,9 @@ impl Writer {
             }
             TagEnd::TableCell => {
                 let cell = std::mem::take(&mut self.inline);
+                let links = std::mem::take(&mut self.inline_links);
                 if let Some(table) = &mut self.table {
-                    table.push_cell(cell);
+                    table.push_cell(cell, links);
                 }
             }
             TagEnd::TableHead | TagEnd::TableRow => {
@@ -325,15 +339,24 @@ impl Writer {
             }
             TagEnd::Table => {
                 if let Some(table) = self.table.take() {
-                    for line in table.layout(usize::from(self.inner_width())) {
-                        self.put(line, false);
+                    for (line, links) in table.layout(usize::from(self.inner_width())) {
+                        self.put_row(line, Join::Break, 0, false, links);
                     }
                 }
             }
             TagEnd::Emphasis => self.emphasis = self.emphasis.saturating_sub(1),
             TagEnd::Strong => self.strong = self.strong.saturating_sub(1),
             TagEnd::Strikethrough => self.strike = self.strike.saturating_sub(1),
-            TagEnd::Link => self.link = self.link.saturating_sub(1),
+            TagEnd::Link => {
+                if let Some(open) = self.link_stack.pop().flatten() {
+                    let (start, dest) = open;
+                    let end = self.inline.len();
+                    if start < end {
+                        self.inline_links.push((start..end, dest));
+                    }
+                }
+                self.link = self.link.saturating_sub(1);
+            }
             TagEnd::Image
             | TagEnd::FootnoteDefinition
             | TagEnd::DefinitionList
@@ -379,7 +402,7 @@ impl Writer {
     fn block(&mut self) {
         let len = self.out.lines.len();
         if len > 0 && self.lists.is_empty() && self.separator != Some(len) {
-            self.track.row(Join::Break, self.quote_width(), false);
+            self.track.row(Join::Break, self.quote_width(), false, Vec::new());
             self.out.lines.push(Line::from(self.quote_prefix()));
             self.separator = Some(self.out.lines.len());
         }
@@ -406,14 +429,29 @@ impl Writer {
     /// Adds a block's row after the quote bars, which are not text; with
     /// `decoration` none of it is.
     fn put(&mut self, line: Line<'static>, decoration: bool) {
-        self.put_row(line, Join::Break, 0, decoration);
+        self.put_row(line, Join::Break, 0, decoration, Vec::new());
     }
 
     /// Adds a row after the quote bars that joins the row before by `join`
-    /// and whose first `gutter` cells after the bars are not text.
-    fn put_row(&mut self, line: Line<'static>, join: Join, gutter: u16, decoration: bool) {
-        let skip = self.quote_width().saturating_add(gutter);
-        self.track.row(join, skip, decoration);
+    /// and whose first `gutter` cells after the bars are not text. `links`
+    /// are the link cells in `line`, offset past the bars.
+    fn put_row(
+        &mut self,
+        line: Line<'static>,
+        join: Join,
+        gutter: u16,
+        decoration: bool,
+        links: Vec<(Range<u16>, String)>,
+    ) {
+        let bars = self.quote_width();
+        let skip = bars.saturating_add(gutter);
+        let links = links
+            .into_iter()
+            .map(|(range, url)| {
+                (range.start.saturating_add(bars)..range.end.saturating_add(bars), url)
+            })
+            .collect();
+        self.track.row(join, skip, decoration, links);
         let mut spans = self.quote_prefix();
         spans.extend(line.spans);
         self.out.lines.push(Line::from(spans));
@@ -445,21 +483,32 @@ impl Writer {
     /// rows' start after their whole prefix, the hang indent included.
     fn flush(&mut self) {
         if self.inline.is_empty() && self.marker.is_none() {
+            self.inline_links.clear();
             return;
         }
         let cells = std::mem::take(&mut self.inline);
+        let links = std::mem::take(&mut self.inline_links);
         let (first, rest) = self.prefixes();
         let bars = self.quote_width();
         let hang = u16::try_from(rest.iter().map(Span::width).sum::<usize>()).unwrap_or(u16::MAX);
-        let lines = wrap(&cells, usize::from(self.width), &first, &rest, true);
-        if lines.is_empty() {
-            self.track.row(Join::Break, bars, false);
+        let first_width: usize = first.iter().map(Span::width).sum();
+        let rest_width: usize = rest.iter().map(Span::width).sum();
+        let first_room = usize::from(self.width).saturating_sub(first_width).max(1);
+        let rest_room = usize::from(self.width).saturating_sub(rest_width).max(1);
+        let rows = wrap_joined_indices(&cells, first_room, rest_room, true);
+        if rows.is_empty() {
+            self.track.row(Join::Break, bars, false, Vec::new());
             self.out.lines.push(Line::from(first));
+            return;
         }
-        for (at, (line, join)) in lines.into_iter().enumerate() {
+        for (at, (row, join, indices)) in rows.into_iter().enumerate() {
             let skip = if at == 0 { bars } else { hang };
-            self.track.row(join, skip, false);
-            self.out.lines.push(line);
+            let prefix = if at == 0 { first_width } else { rest_width };
+            let row_links = link_cols(&row, &indices, prefix, &links);
+            self.track.row(join, skip, false, row_links);
+            let mut spans = if at == 0 { first.clone() } else { rest.clone() };
+            spans.extend(spans_of(&row));
+            self.out.lines.push(Line::from(spans));
         }
     }
 
@@ -516,7 +565,7 @@ impl Writer {
                 let pad = width.saturating_sub(row.width());
                 row.spans
                     .push(Span::styled(" ".repeat(pad), tinted(Role::CodeText)));
-                self.put_row(row, join, gutter, false);
+                self.put_row(row, join, gutter, false, Vec::new());
             }
         }
     }
@@ -610,6 +659,7 @@ fn wrap(
 
 /// Wraps `cells` into rows: the first `first` cells wide, the others
 /// `rest`. See [`wrap`].
+#[cfg(test)]
 fn wrap_cells(cells: &[Cell], first: usize, rest: usize, words: bool) -> Vec<Vec<Cell>> {
     wrap_joined(cells, first, rest, words)
         .into_iter()
@@ -621,15 +671,32 @@ fn wrap_cells(cells: &[Cell], first: usize, rest: usize, words: bool) -> Vec<Vec
 /// and each after a newline break; one broken inside a word joins with
 /// nothing; one broken where spaces were dropped joins with one space.
 fn wrap_joined(cells: &[Cell], first: usize, rest: usize, words: bool) -> Vec<(Vec<Cell>, Join)> {
-    let mut rows: Vec<(Vec<Cell>, Join)> = Vec::new();
+    wrap_joined_indices(cells, first, rest, words)
+        .into_iter()
+        .map(|(row, join, _)| (row, join))
+        .collect()
+}
+
+/// [`wrap_joined`]' rows, each with the indices into `cells` its cells
+/// came from, so a link range over `cells` maps onto the rows that hold
+/// it (`docs/tui.md`, "Links"). Dropped spaces and newlines are in no
+/// row.
+fn wrap_joined_indices(
+    cells: &[Cell],
+    first: usize,
+    rest: usize,
+    words: bool,
+) -> Vec<(Vec<Cell>, Join, Vec<usize>)> {
+    let mut rows: Vec<(Vec<Cell>, Join, Vec<usize>)> = Vec::new();
     let mut row: Vec<Cell> = Vec::new();
+    let mut indices: Vec<usize> = Vec::new();
     let mut join = Join::Break;
     let mut used = 0usize;
     let mut at = 0usize;
     // Each pass takes at least the cell at `at`, so the loop ends.
     while let Some(&(ch, _)) = cells.get(at) {
         if ch == '\n' {
-            rows.push((std::mem::take(&mut row), join));
+            rows.push((std::mem::take(&mut row), join, std::mem::take(&mut indices)));
             join = Join::Break;
             used = 0;
             at = at.saturating_add(1);
@@ -646,6 +713,7 @@ fn wrap_joined(cells: &[Cell], first: usize, rest: usize, words: bool) -> Vec<(V
             next
         };
         let piece = cells.get(at..end).unwrap_or_default();
+        let start = at;
         at = end;
         let width: usize = piece.iter().map(|(ch, _)| char_width(*ch)).sum();
         let room = if rows.is_empty() { first } else { rest };
@@ -654,8 +722,9 @@ fn wrap_joined(cells: &[Cell], first: usize, rest: usize, words: bool) -> Vec<(V
             // Each pass pops one cell, so the loop ends.
             while row.last().is_some_and(|(ch, _)| *ch == ' ') {
                 row.pop();
+                indices.pop();
             }
-            rows.push((std::mem::take(&mut row), join));
+            rows.push((std::mem::take(&mut row), join, std::mem::take(&mut indices)));
             join = Join::WrapSpace;
             used = 0;
         }
@@ -667,22 +736,64 @@ fn wrap_joined(cells: &[Cell], first: usize, rest: usize, words: bool) -> Vec<(V
             continue;
         }
         // One pass per cell of the piece.
-        for &cell in piece {
+        for (offset, &cell) in piece.iter().enumerate() {
             let room = if rows.is_empty() { first } else { rest };
             let width = char_width(cell.0);
             if used.saturating_add(width) > room && !row.is_empty() {
-                rows.push((std::mem::take(&mut row), join));
+                rows.push((std::mem::take(&mut row), join, std::mem::take(&mut indices)));
                 join = Join::Wrap;
                 used = 0;
             }
             row.push(cell);
+            indices.push(start.saturating_add(offset));
             used = used.saturating_add(width);
         }
     }
     if !row.is_empty() {
-        rows.push((row, join));
+        rows.push((row, join, indices));
     }
     rows
+}
+
+/// The links drawn on one wrapped row: each link range over the source
+/// cells that this row's cells hold, from its first cell to its last
+/// one's end, offset past the row's prefix `prefix` cells
+/// (`docs/tui.md`, "Links").
+fn link_cols(
+    row: &[Cell],
+    indices: &[usize],
+    prefix: usize,
+    links: &[(Range<usize>, String)],
+) -> Vec<(Range<u16>, String)> {
+    let mut out = Vec::new();
+    for (range, url) in links {
+        let mut first: Option<usize> = None;
+        let mut last: Option<usize> = None;
+        for (at, source) in indices.iter().enumerate() {
+            if range.contains(source) {
+                first.get_or_insert(at);
+                last = Some(at);
+            }
+        }
+        if let (Some(first), Some(last)) = (first, last)
+            && let Some(cells) = row.get(first..=last)
+        {
+            let mut start = prefix;
+            for (ch, _) in row.get(..first).unwrap_or_default() {
+                start = start.saturating_add(char_width(*ch));
+            }
+            let mut end = start;
+            for (ch, _) in cells {
+                end = end.saturating_add(char_width(*ch));
+            }
+            let start = u16::try_from(start).unwrap_or(u16::MAX);
+            let end = u16::try_from(end).unwrap_or(u16::MAX);
+            if start < end {
+                out.push((start..end, url.clone()));
+            }
+        }
+    }
+    out
 }
 
 /// Cells as spans, one per run of the same style.

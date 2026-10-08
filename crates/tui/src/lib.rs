@@ -29,6 +29,7 @@ mod logical;
 mod markdown;
 mod mouse;
 mod offer;
+mod opener;
 mod osc;
 mod pages;
 mod rows;
