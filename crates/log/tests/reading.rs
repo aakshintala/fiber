@@ -610,3 +610,42 @@ fn a_catch_up_never_parses_a_line_before_the_watcher_subscribed() {
     let rx = relay(watcher);
     assert_eq!(durable(&rx, written.len()), written);
 }
+
+#[test]
+fn a_watcher_behind_by_more_than_a_queue_catches_up_through_pages_cut_by_bytes() {
+    let (_tmp, log, _) = steps("watch-pages-bytes", 0);
+    let watcher = log.watch();
+    // The queue holds the first `CAPACITY` lines and drops the rest. The
+    // catch-up reads the 300 KiB lines after them, about three to a page.
+    let mut written: Vec<Envelope> = (0..CAPACITY)
+        .map(|_| log.append(&empty("step_started"), None, None).unwrap())
+        .collect();
+    let reply = "x".repeat(300 * 1024);
+    for _ in 0..10 {
+        let text = event("text_completed", serde_json::json!({"text": reply}));
+        written.push(log.append(&text, None, None).unwrap());
+        written.push(log.append(&empty("step_started"), None, None).unwrap());
+    }
+    let rx = relay(watcher);
+    assert_eq!(durable(&rx, written.len()), written);
+    let live = log.append(&empty("step_started"), None, None).unwrap();
+    assert_eq!(next(&rx), Some(live));
+}
+
+#[test]
+fn a_watch_all_watcher_that_falls_behind_catches_up_past_its_end_bound() {
+    let (_tmp, log, written) = steps("watch-all-lag", 2 * CAPACITY);
+    let watcher = log.watch_all().unwrap();
+    // Nobody drains while the flood is appended, so the queue holds its
+    // first `CAPACITY` lines and drops the rest. The backlog stops at the
+    // subscribe-time line count; the catch-up reads past it, to the table's
+    // current end.
+    let flood: Vec<Envelope> = (0..CAPACITY + 500)
+        .map(|_| log.append(&empty("step_started"), None, None).unwrap())
+        .collect();
+    let rx = relay(watcher);
+    let expected: Vec<Envelope> = written.into_iter().chain(flood).collect();
+    assert_eq!(durable(&rx, expected.len()), expected);
+    let live = log.append(&empty("step_started"), None, None).unwrap();
+    assert_eq!(next(&rx), Some(live));
+}
