@@ -288,7 +288,9 @@ impl Writer {
         // Both parts are non-empty: the result is built in the longer of
         // the two buffers, copying the shorter once, so finishing holds
         // no second copy of either. Each insert copies only what it adds.
-        if title.len() < self.out.len() {
+        // Equal lengths take this branch: either copy costs the same and
+        // the output is identical, so no measurement can tell them apart.
+        if title.len() <= self.out.len() {
             self.out.insert_str(0, "\n\n");
             self.out.insert_str(0, &title);
             self.out.insert_str(0, "# ");

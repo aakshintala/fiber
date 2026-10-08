@@ -211,3 +211,66 @@ fn deeply_nested_templates_hold_four_bytes_per_element() {
         "plain peak {peak}"
     );
 }
+
+/// The body length the finishing tests use: `String` doubling lands
+/// exactly on it, so one title byte more doubles the title's capacity.
+const FINISH_BODY: usize = 131_072;
+
+/// Fetches a page of a plain title of `title_len` characters over a
+/// plain body of `FINISH_BODY`, with the whole result checked exactly:
+/// both lengths are exact, so each side of the shorter-part choice in
+/// `Writer::finish` measures differently.
+fn finish_fetch(title_len: usize) -> Fetched {
+    let title = "t".repeat(title_len);
+    let body = "x".repeat(FINISH_BODY);
+    let html = format!("<title>{title}</title>{body}");
+    let fetched = fetch("text/html; charset=utf-8", html.into_bytes());
+    let expected = format!("# {title}\n\n{body}\n");
+    assert_markdown_eq(&expected, markdown(&fetched), "the titled page");
+    fetched
+}
+
+/// The empty page's working peak, measured the same way.
+fn empty_working() -> usize {
+    working(&fetch("text/html; charset=utf-8", Vec::new()))
+}
+
+#[test]
+fn finishing_a_shorter_title_copies_only_the_title() {
+    let baseline = empty_working();
+    let fetched = finish_fetch(FINISH_BODY - 1);
+    // The title is the shorter part: the working peak holds it, not the
+    // body, which became the result.
+    assert!(
+        working(&fetched) <= baseline + (FINISH_BODY - 1) + WORKING,
+        "working {}",
+        working(&fetched)
+    );
+}
+
+#[test]
+fn finishing_an_equal_title_copies_either_part() {
+    let baseline = empty_working();
+    let fetched = finish_fetch(FINISH_BODY);
+    // Equal lengths take the title branch: either copy costs the same,
+    // so the peak only pins the bound, not the branch.
+    assert!(
+        working(&fetched) <= baseline + FINISH_BODY + WORKING,
+        "working {}",
+        working(&fetched)
+    );
+}
+
+#[test]
+fn finishing_a_longer_title_copies_only_the_body() {
+    let baseline = empty_working();
+    let fetched = finish_fetch(FINISH_BODY + 1);
+    // The body is the shorter part: the working peak holds it, not the
+    // title, which became the result. The title's capacity doubled past
+    // the body's, so copying it instead would cost 128 KiB more.
+    assert!(
+        working(&fetched) <= baseline + FINISH_BODY + WORKING,
+        "working {}",
+        working(&fetched)
+    );
+}
