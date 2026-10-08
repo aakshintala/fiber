@@ -10,6 +10,7 @@
 mod dependents;
 pub mod diag;
 mod export;
+mod history;
 mod offsets;
 mod rate;
 mod read;
@@ -26,6 +27,7 @@ use contract::{ErrorCode, SessionId};
 
 pub use dependents::dependents;
 pub use export::export;
+pub use history::{Segment, history, history_to, last_line};
 pub use rate::Rate;
 pub use read::{Injector, Lines, Watcher, lines, read};
 pub use resolve::resolve;
@@ -95,6 +97,16 @@ pub enum Error {
     /// The export target already exists: an export writes a new directory.
     #[error("{0} already exists; export writes a new directory")]
     Exists(PathBuf),
+    /// A history pointer names a line no log holds: a fork or rewind
+    /// point past its log's end, or a chain that repeats a session
+    /// (`docs/events.md`, "Rewind").
+    #[error("{path}: {reason}")]
+    Pointer {
+        /// The log the pointer was read from.
+        path: PathBuf,
+        /// Why it names no line.
+        reason: String,
+    },
     /// A complete line in the log is not an event line.
     #[error("{path}, line {line}: {source}")]
     Unreadable {
@@ -128,7 +140,9 @@ impl Error {
             Self::Ambiguous { .. } | Self::Exists(_) => ErrorCode::Usage,
             // Only a failed write or fsync stops a log.
             Self::Poisoned { .. } | Self::Io { .. } => ErrorCode::IoFailed,
-            Self::Unreadable { .. } | Self::Encode(_) => ErrorCode::LogCorrupt,
+            Self::Unreadable { .. } | Self::Encode(_) | Self::Pointer { .. } => {
+                ErrorCode::LogCorrupt
+            }
         }
     }
 }
