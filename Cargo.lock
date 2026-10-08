@@ -1220,6 +1220,7 @@ version = "0.0.0"
 dependencies = [
  "contract",
  "fakes",
+ "rustix",
  "serde_json",
 ]
 
