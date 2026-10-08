@@ -9,6 +9,7 @@
 
 mod app;
 mod approvals;
+mod attention;
 mod bindings;
 mod cells;
 mod clipboard;
@@ -54,6 +55,8 @@ use std::os::unix::net::UnixStream;
 use contract::{HubLine, SessionId};
 
 use crate::link::Line;
+
+pub use attention::Attention;
 
 pub use home::Launch;
 

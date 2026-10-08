@@ -85,6 +85,9 @@ pub fn run(
         title: osc::Title::default(),
     };
     terminal.app.set_opener(terminal.open_command.is_some());
+    terminal
+        .app
+        .set_osc9(crate::attention::supported(&terminal.var));
     // The first frame waits on nothing: the queries are out, and nothing
     // reads the tty or the hub until it is drawn.
     if terminal.screen.draw(&mut terminal.app, None).is_err() {
@@ -342,6 +345,7 @@ impl<B: Backend> Loop<B> {
             return Some(1);
         }
         self.write_title();
+        self.write_alerts();
         None
     }
 
@@ -350,6 +354,15 @@ impl<B: Backend> Loop<B> {
         if let Some(bytes) = self.title.next(self.app.title())
             && let Some(mut tty) = self.tty.as_ref()
         {
+            tty.write_all(&bytes).unwrap_or(());
+        }
+    }
+
+    /// Writes the attention bytes this input queued (`docs/tui.md`,
+    /// "Getting the person's attention"). A failed write is dropped.
+    fn write_alerts(&mut self) {
+        let bytes = self.app.take_alerts();
+        if let Some(mut tty) = self.tty.as_ref() {
             tty.write_all(&bytes).unwrap_or(());
         }
     }
@@ -568,3 +581,7 @@ mod loop_tests;
 #[cfg(test)]
 #[path = "lib_mouse_tests.rs"]
 mod mouse_tests;
+
+#[cfg(test)]
+#[path = "lib_attention_tests.rs"]
+mod attention_tests;

@@ -61,6 +61,9 @@ pub struct Launch {
     /// The person's `keys` (`docs/configuration.md`, "Keys"): the
     /// effective bindings overlay it onto the defaults at startup.
     pub keys: crate::KeysSetup,
+    /// `tui.attention.*`: the notification, the bell and the title
+    /// (`docs/tui.md`, "Getting the person's attention").
+    pub attention: crate::Attention,
 }
 
 /// What home draws, built by [`crate::app::App::home_screen`].
