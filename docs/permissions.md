@@ -280,7 +280,7 @@ everywhere.
 
 The notes are fixed for the session. They sit ahead of the person's messages
 and the tool calls, and every reviewer pass extends the cache chain that
-follows them, so they change only on `reload` or in the next session
+follows them, so they change only on `reload`, on a resume, or in a new session
 (`docs/prompt-cache.md`, "Rules for other areas"). A delegate's reviewer reads
 the same layers, so it gets the same notes.
 
