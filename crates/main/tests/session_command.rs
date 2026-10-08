@@ -2692,6 +2692,24 @@ fn a_delegate_runs_one_turn_and_exits_with_its_parent_recorded() {
     assert_eq!(exited["payload"]["exit_code"], 0);
     assert_eq!(exited["payload"]["text"], "Hello.");
     let lines = delegate_events(&setup, &id);
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
     let started = lines
         .iter()
         .find(|line| line["kind"] == "session_started")
@@ -2718,6 +2736,27 @@ fn an_ask_user_call_ends_a_delegate_turn_with_its_questions() {
     assert_eq!(exited["kind"], "fiber_exited");
     assert_eq!(exited["payload"]["exit_code"], 0);
     assert_eq!(exited["payload"]["questions"], questions);
+    let lines = delegate_events(&setup, &id);
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
 }
 
 #[test]
@@ -2740,6 +2779,23 @@ fn dropping_a_delegate_lifeline_exits_129_within_the_bound() {
     let exited = out.last().expect("fiber_exited is the last stdout line");
     assert_eq!(exited["kind"], "fiber_exited");
     assert_eq!(exited["payload"]["exit_code"], 129);
+    let lines = delegate_events(&setup, &id);
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "usage_recorded",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
 }
 
 #[test]
