@@ -4,17 +4,27 @@
 //! process, under this list's lock, and no id of 1 or less is ever
 //! signalled: `kill(-1)` reaches every process the user owns.
 
-use std::sync::{Mutex, MutexGuard, PoisonError};
-
-#[cfg(test)]
 use std::io;
+use std::process::{Child, Command, ExitStatus};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 #[cfg(test)]
-use std::process::{Child, Command};
+use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use rustix::process::{Pid, Signal};
 
 /// The delegate groups that may still hold a process.
 static LIVE: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+
+/// Serializes the test that kills every group against every test with a
+/// live child: `kill_every_group` reaches the whole list, so it runs
+/// alone while the others share the lock. Production code never takes it.
+#[cfg(test)]
+static SERIAL: RwLock<()> = RwLock::new(());
+
+/// Every signal sent, in order. Tests read it to prove what went out and
+/// what did not, without racing the kernel.
+#[cfg(test)]
+static SENT: Mutex<Vec<(u32, Signal)>> = Mutex::new(Vec::new());
 
 fn live() -> MutexGuard<'static, Vec<u32>> {
     LIVE.lock().unwrap_or_else(PoisonError::into_inner)
@@ -37,6 +47,10 @@ fn is_alive(pgid: u32) -> bool {
 }
 
 fn send(pgid: u32, signal: Signal) {
+    #[cfg(test)]
+    SENT.lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .push((pgid, signal));
     let Some(pid) = pid(pgid) else {
         return;
     };
@@ -48,7 +62,6 @@ fn send(pgid: u32, signal: Signal) {
 /// Spawns `cmd`, the leader of its own group, and lists the group. The
 /// list stays locked across the spawn, so no kill or read of the list can
 /// see the child before its group is listed.
-#[cfg(test)]
 pub(crate) fn spawn(cmd: &mut Command) -> io::Result<Child> {
     let mut live = live();
     let child = cmd.spawn()?;
@@ -59,13 +72,11 @@ pub(crate) fn spawn(cmd: &mut Command) -> io::Result<Child> {
 /// Lists `pgid`, a group spawned outside [`spawn`]. Tests use it for a
 /// group that holds nothing.
 #[cfg(test)]
-#[cfg(test)]
 pub(crate) fn insert(pgid: u32) {
     live().push(pgid);
 }
 
 /// Whether `pgid` is still listed.
-#[cfg(test)]
 pub(crate) fn listed(pgid: u32) -> bool {
     live().contains(&pgid)
 }
@@ -78,7 +89,6 @@ pub(crate) fn group_alive(pgid: u32) -> bool {
 
 /// Sends `signal` to `pgid`: only to a listed group that still holds a
 /// process, under the list's lock. True when it was sent.
-#[cfg(test)]
 pub(crate) fn signal(pgid: u32, signal: Signal) -> bool {
     if refused(pgid) {
         return false;
@@ -95,25 +105,25 @@ pub(crate) fn signal(pgid: u32, signal: Signal) -> bool {
 /// `NOWAIT` saw it exit: the reap cannot race a signal to a retired group.
 /// An empty group retires in the same critical section; a group with a
 /// surviving member gets SIGKILL and stays listed until it is empty.
-#[cfg(test)]
-pub(crate) fn reap_locked(child: &mut Child, pgid: u32) {
+/// Returns the leader's status, when it was reaped here.
+pub(crate) fn reap_locked(child: &mut Child, pgid: u32) -> Option<ExitStatus> {
     let mut live = live();
     // Non-blocking now: `waitid` already saw the exit.
-    let reaped = child.try_wait().ok().flatten().is_some();
+    let status = child.try_wait().ok().flatten();
     if !live.contains(&pgid) {
-        return;
+        return status;
     }
     if !is_alive(pgid) {
         live.retain(|listed| *listed != pgid);
-    } else if reaped {
+    } else if status.is_some() {
         send(pgid, Signal::KILL);
     }
+    status
 }
 
 /// Retires `pgid` once its group is empty. True when it retired it: a
 /// listed group that still holds a process, or an unknown group, stays as
 /// it is.
-#[cfg(test)]
 pub(crate) fn retire_if_empty(pgid: u32) -> bool {
     let mut live = live();
     if !live.contains(&pgid) || is_alive(pgid) {
@@ -132,6 +142,27 @@ pub fn kill_every_group() {
     for pgid in live.iter() {
         send(*pgid, Signal::KILL);
     }
+}
+
+/// Holds the serial lock shared: other holders keep running while the
+/// group killer waits. Test-only.
+#[cfg(test)]
+pub(crate) fn serial_shared() -> RwLockReadGuard<'static, ()> {
+    SERIAL.read().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Holds the serial lock alone: every other holder is done first.
+/// Test-only, for the one test that kills every group.
+#[cfg(test)]
+pub(crate) fn serial_exclusive() -> RwLockWriteGuard<'static, ()> {
+    SERIAL.write().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Every signal sent so far, in order. Test-only: the kernel cannot say
+/// what was sent to a group that is already gone.
+#[cfg(test)]
+pub(crate) fn sent_signals() -> Vec<(u32, Signal)> {
+    SENT.lock().unwrap_or_else(PoisonError::into_inner).clone()
 }
 
 /// Holds the list's lock until the guard drops. Tests use it to hold the

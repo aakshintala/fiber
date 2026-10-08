@@ -18,8 +18,8 @@ use std::time::Duration;
 use fakes::{Watchdog, group_empties, kill_group, within};
 
 use super::{
-    group_alive, insert, kill_every_group, listed, reap_locked, refused, retire_if_empty, signal,
-    spawn, with_lock,
+    group_alive, insert, kill_every_group, listed, reap_locked, refused, retire_if_empty,
+    serial_exclusive, serial_shared, signal, spawn, with_lock,
 };
 
 /// How long a test waits on a child before it fails.
@@ -53,6 +53,7 @@ fn unsafe_ids_are_refused_before_anything_runs() {
 
 #[test]
 fn a_spawned_group_is_listed() {
+    let _serial = serial_shared();
     let (mut child, watchdog) = sleeping();
     let pgid = child.id();
     assert!(listed(pgid));
@@ -64,6 +65,7 @@ fn a_spawned_group_is_listed() {
 
 #[test]
 fn a_live_group_gets_sigterm() {
+    let _serial = serial_shared();
     let (mut child, watchdog) = sleeping();
     let pgid = child.id();
     assert!(signal(pgid, rustix::process::Signal::TERM));
@@ -74,6 +76,7 @@ fn a_live_group_gets_sigterm() {
 
 #[test]
 fn kill_every_group_kills_every_listed_group() {
+    let _serial = serial_exclusive();
     let (mut first, first_watch) = sleeping();
     let (mut second, second_watch) = sleeping();
     let (first_pgid, second_pgid) = (first.id(), second.id());
@@ -88,6 +91,7 @@ fn kill_every_group_kills_every_listed_group() {
 
 #[test]
 fn a_reaped_group_whose_members_are_gone_leaves_the_list() {
+    let _serial = serial_shared();
     let (mut child, watchdog) = sleeping();
     let pgid = child.id();
     child.kill().unwrap();
@@ -103,6 +107,7 @@ fn a_reaped_group_whose_members_are_gone_leaves_the_list() {
 
 #[test]
 fn a_listed_but_empty_group_is_not_signalled() {
+    let _serial = serial_shared();
     // Listed without a member: the guard needs both, so neither `&&`
     // operand alone sends.
     let pgid = 999_999_007;
@@ -114,6 +119,7 @@ fn a_listed_but_empty_group_is_not_signalled() {
 
 #[test]
 fn a_reaped_leader_with_a_surviving_member_kills_it_and_stays_listed() {
+    let _serial = serial_shared();
     let dir = fakes::TempDir::new("fiber-delegate-member");
     let pidfile = dir.path().join("pid");
     // The member outlives the leader in the same group; the watchdog is
@@ -160,6 +166,7 @@ fn a_reaped_leader_with_a_surviving_member_kills_it_and_stays_listed() {
 
 #[test]
 fn an_unlisted_live_group_is_not_signalled() {
+    let _serial = serial_shared();
     let mut command = Command::new("sleep");
     command.arg("60").process_group(0);
     let mut child = command.spawn().unwrap();
@@ -174,6 +181,7 @@ fn an_unlisted_live_group_is_not_signalled() {
 
 #[test]
 fn the_reap_waits_for_the_lock_and_leaves_a_zombie_until_then() {
+    let _serial = serial_shared();
     let mut command = Command::new("sh");
     command.arg("-c").arg("exit 0").process_group(0);
     let mut child = spawn(&mut command).unwrap();

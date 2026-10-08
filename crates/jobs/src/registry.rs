@@ -80,13 +80,11 @@ impl Drop for Unreported {
 /// produced one, its finish. Dropped unreported, it records the job failed
 /// `indeterminate` with an empty finish, as [`End`] does for other jobs.
 /// The runner (task 3.3) is its only caller.
-#[allow(dead_code, reason = "the runner reports through it in task 3.3")]
 pub(crate) struct Finish(Unreported);
 
 impl Finish {
     /// Records the delegate's end. The payload's id is replaced with the
     /// recorded one, as [`Unreported::report`] does.
-    #[allow(dead_code, reason = "the runner reports through it in task 3.3")]
     pub(crate) fn report(self, completed: JobCompleted, delegate: Option<DelegateFinished>) {
         self.0.report(completed, delegate);
     }
