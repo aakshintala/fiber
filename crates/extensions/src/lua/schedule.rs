@@ -355,6 +355,8 @@ fn settle(
             return;
         }
     }
+    #[cfg(test)]
+    settle_hook(&target);
     let exec = matches!(request, Request::Exec(_));
     let deliver: Deliver = {
         let hub = Arc::clone(hub);
@@ -407,7 +409,9 @@ fn settle(
             (None, None)
         }
         Request::Drive(request) => {
-            match hub.driver() {
+            // Read before the admission lock below takes it.
+            let driver = hub.driver();
+            match driver {
                 Some(driver) => {
                     // The door runs the command elsewhere, as `host.http`
                     // does: a driven `prompt` carrying an image blocks on
@@ -417,6 +421,12 @@ fn settle(
                     // returns, and a reply for an unparked id is dropped.
                     // No off-thread wait to cancel: the parked deadline
                     // bounds the call, and a late answer is dropped.
+                    // Parked and spawned under one lock hold with the phase
+                    // recheck, so no abandon lands between them.
+                    let mut shared = hub.lock();
+                    if !shared.admit_work() {
+                        return;
+                    }
                     parked.push(Parked {
                         id,
                         thread,
@@ -428,17 +438,18 @@ fn settle(
                         ask: None,
                         exec: false,
                     });
-                    if let Some(progress) = hub.lock().calls.get_mut(&id) {
+                    if let Some(progress) = shared.calls.get_mut(&id) {
                         *progress = Progress::Started {
                             deadline,
                             parked: true,
                         };
                     }
-                    hub.notify();
                     let answered = Arc::clone(hub);
                     let extension = name.to_owned();
                     let command = request.command;
                     let args = request.args;
+                    // Spawned under the admission lock, so the worker never
+                    // starts after Stopped: `stop` waits for this lock.
                     let spawned =
                         thread::Builder::new()
                             .name(format!("drive {name}"))
@@ -461,6 +472,7 @@ fn settle(
                         // The spawn failed after the park: drop exactly the
                         // callback just parked, so nothing later resumes it.
                         take_parked(parked, id);
+                        drop(shared);
                         return hub.finish(
                             id,
                             Err(Error::Io {
@@ -469,6 +481,8 @@ fn settle(
                             }),
                         );
                     }
+                    drop(shared);
+                    hub.notify();
                     return;
                 }
                 None => {
@@ -483,13 +497,42 @@ fn settle(
             }
         }
         Request::Http(request) => {
-            if let Some(script) = hub.host_script() {
+            // Read before the admission lock below takes it.
+            let script = hub.host_script();
+            if let Some(script) = script {
                 deliver(Reply::Http(script.http(request.case_value())));
             } else {
+                // Parked and spawned under one lock hold with the phase
+                // recheck, so no abandon lands between them.
+                let mut shared = hub.lock();
+                if !shared.admit_work() {
+                    return;
+                }
+                parked.push(Parked {
+                    id,
+                    thread,
+                    target: target.clone(),
+                    deadline,
+                    timeout,
+                    wake: None,
+                    _cancel: None,
+                    ask: None,
+                    exec: false,
+                });
+                if let Some(progress) = shared.calls.get_mut(&id) {
+                    *progress = Progress::Started {
+                        deadline,
+                        parked: true,
+                    };
+                }
+                // Spawned under the admission lock, so the worker never
+                // starts after Stopped: `stop` waits for this lock.
                 let spawned = thread::Builder::new()
                     .name(format!("http {name}"))
                     .spawn(move || deliver(Reply::Http(host::perform(&request))));
                 if let Err(source) = spawned {
+                    take_parked(parked, id);
+                    drop(shared);
                     return hub.finish(
                         id,
                         Err(Error::Io {
@@ -498,6 +541,9 @@ fn settle(
                         }),
                     );
                 }
+                drop(shared);
+                hub.notify();
+                return;
             }
             (None, None)
         }
@@ -513,7 +559,9 @@ fn settle(
                 args: request.args.clone(),
                 cwd: request.cwd.clone(),
             });
-            if let Some(script) = hub.host_script() {
+            // Read before the admission lock below takes it.
+            let script = hub.host_script();
+            if let Some(script) = script {
                 let result = script.exec(request.case_value()).map(|reply| {
                     let ran = exec::Ran {
                         exit_code: Some(reply.code),
@@ -528,13 +576,43 @@ fn settle(
                 deliver(Reply::Exec(result));
                 (None, None)
             } else {
-                let (cancel_tx, cancel_rx) = std::sync::mpsc::channel::<()>();
+                // Admitted under one lock hold with the phase check, so no
+                // abandon lands between them; parked there too. The stop
+                // sender stays in the hub, so the stop reaches the run
+                // without the Lua thread, and the run's end clears it.
+                let mut shared = hub.lock();
+                let Some(cancel_rx) = shared.admit_exec(id) else {
+                    return;
+                };
+                parked.push(Parked {
+                    id,
+                    thread,
+                    target: target.clone(),
+                    deadline,
+                    timeout,
+                    wake: None,
+                    _cancel: None,
+                    ask: None,
+                    exec: true,
+                });
+                if let Some(progress) = shared.calls.get_mut(&id) {
+                    *progress = Progress::Started {
+                        deadline,
+                        parked: true,
+                    };
+                }
                 let clock = hub.clock_handle();
+                // Spawned under the admission lock, so the worker never
+                // starts after Stopped: `stop` waits for this lock.
                 let spawned =
                     thread::Builder::new()
                         .name(format!("exec {name}"))
                         .spawn(move || {
                             let outcome = exec::run(&request, clock.as_ref(), deadline, cancel_rx);
+                            // The group is empty or killed and drained past
+                            // here: a cancelled call may return only now.
+                            hub_exec.lock().finish_exec(id);
+                            hub_exec.notify();
                             match &outcome {
                                 Ok(ran) => send_exec(&hub_exec, meta.as_ref(), ran),
                                 Err(failed) => {
@@ -549,6 +627,9 @@ fn settle(
                             });
                         });
                 if let Err(source) = spawned {
+                    take_parked(parked, id);
+                    shared.finish_exec(id);
+                    drop(shared);
                     return hub.finish(
                         id,
                         Err(Error::Io {
@@ -557,7 +638,9 @@ fn settle(
                         }),
                     );
                 }
-                (Some(cancel_tx), None)
+                drop(shared);
+                hub.notify();
+                return;
             }
         }
         Request::Lock => {
@@ -624,6 +707,44 @@ fn settle(
         };
     }
     hub.notify();
+}
+
+/// What a test pauses `settle` with: called with the suspending target.
+#[cfg(test)]
+type SettleHook = Arc<dyn Fn(&Target) + Send + Sync>;
+
+/// A test's pause inside `settle`, between the stopped-phase check and the
+/// admission of host work: it runs without the hub lock, so the test may
+/// abandon the VM there, forcing the race without sleeps. The hook sees
+/// only calls for the tool it names; every other call passes through.
+#[cfg(test)]
+static SETTLE_HOOK: std::sync::Mutex<Option<SettleHook>> = std::sync::Mutex::new(None);
+
+/// Runs `hook` at each `settle` admission point from now on.
+#[cfg(test)]
+pub(super) fn pause_settle(hook: SettleHook) {
+    *SETTLE_HOOK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(hook);
+}
+
+/// Stops pausing at each `settle` admission point.
+#[cfg(test)]
+pub(super) fn unpause_settle() {
+    *SETTLE_HOOK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+}
+
+#[cfg(test)]
+fn settle_hook(target: &Target) {
+    let hook = SETTLE_HOOK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    if let Some(hook) = hook {
+        hook(target);
+    }
 }
 
 /// Drops the parked callback `id`, when it is still parked, and reports

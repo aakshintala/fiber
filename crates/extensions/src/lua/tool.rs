@@ -322,6 +322,20 @@ impl LuaExtension {
     }
 }
 
+/// An admitted `host.exec` run: its stop sender, held until cancel, stop
+/// or completion, so the stop reaches the exec thread without the Lua thread.
+pub(super) struct ExecAdmit {
+    stop: Option<std::sync::mpsc::Sender<()>>,
+}
+
+impl ExecAdmit {
+    /// Drops the stop sender, so the stop reaches the exec thread without
+    /// the Lua thread running.
+    pub(super) fn stop_take(&mut self) {
+        self.stop.take();
+    }
+}
+
 /// What a tool call's caller does next: as [`Shared::judge`] says, or
 /// `None` once the call was cancelled.
 type Judged = (Option<Next>, Vec<Delivery>);
@@ -329,7 +343,8 @@ type Judged = (Option<Next>, Vec<Delivery>);
 impl Shared {
     /// Cancels the call `id`: a queued call is dropped and ends cancelled; a
     /// started one is marked for the thread, and one running Lua is
-    /// interrupted. One that ended keeps how it ended.
+    /// interrupted. One that ended keeps how it ended. Dropping an admitted
+    /// exec's stop sender stops its run without the Lua thread.
     pub(super) fn cancel_call(&mut self, id: u64) {
         match self.calls.get(&id) {
             Some(Progress::Queued) => {
@@ -341,9 +356,51 @@ impl Shared {
                     self.interrupt.store(true, Ordering::SeqCst);
                 }
                 self.cancelled.insert(id);
+                self.stop_exec(id);
             }
             Some(Progress::Done(_) | Progress::Cancelled) | None => {}
         }
+    }
+
+    /// Admits host work once the extension is ready: the check holds the
+    /// admission lock through the spawn, so no abandon lands between them.
+    /// Drive and HTTP workers start through here; exec admits through
+    /// `admit_exec`, which also registers its run.
+    pub(super) fn admit_work(&self) -> bool {
+        matches!(self.phase, Phase::Ready(_))
+    }
+
+    /// Admits an exec run for the call `id` when the extension is ready:
+    /// the phase check and the registration hold one lock, so no abandon
+    /// lands between them. Returns the stop receiver the run watches, or
+    /// `None` once stopped, when no run starts.
+    pub(super) fn admit_exec(&mut self, id: u64) -> Option<std::sync::mpsc::Receiver<()>> {
+        if !matches!(self.phase, Phase::Ready(_)) {
+            return None;
+        }
+        let (stop, rx) = std::sync::mpsc::channel::<()>();
+        self.execs.insert(id, ExecAdmit { stop: Some(stop) });
+        Some(rx)
+    }
+
+    /// Stops the admitted exec run of the call `id`, if any: the sender's
+    /// drop reaches the exec thread without the Lua thread running.
+    pub(super) fn stop_exec(&mut self, id: u64) {
+        if let Some(admit) = self.execs.get_mut(&id) {
+            admit.stop.take();
+        }
+    }
+
+    /// Ends the admitted exec run of the call `id`: its group is empty or
+    /// killed and drained, so a cancelled call may return.
+    pub(super) fn finish_exec(&mut self, id: u64) {
+        self.execs.remove(&id);
+    }
+
+    /// Whether the call `id` has an admitted exec run still going: its
+    /// group may still write, so a cancelled call must not return yet.
+    pub(super) fn exec_pending(&self, id: u64) -> bool {
+        self.execs.contains_key(&id)
     }
 
     /// Ends the call `id`, if it was cancelled, once its thread work has
@@ -360,8 +417,9 @@ impl Shared {
 
     /// Judges the tool call `id` as [`Shared::judge`] does, except that a
     /// cancelled call parked on a host call waits for the thread to stop
-    /// it, past its deadline too, and a cancelled call the extension's end
-    /// fails ends cancelled.
+    /// it, past its deadline too; one parked on `host.exec` waits for the
+    /// run's group to empty, even abandoned; and a cancelled call the
+    /// extension's end fails ends cancelled once no admitted run is going.
     pub(super) fn judge_tool(
         &mut self,
         name: &str,
@@ -370,6 +428,14 @@ impl Shared {
         asked: Instant,
         now: Instant,
     ) -> Judged {
+        // Before `judge`, which forgets a stopped call: an admitted run
+        // still going may still write, so the call waits for its end.
+        if self.exec_pending(id)
+            && self.cancelled.contains(&id)
+            && !matches!(self.phase, Phase::Ready(_))
+        {
+            return (Some(Next::Sleep(None)), Vec::new());
+        }
         let cancelled = self.cancelled.contains(&id);
         match self.calls.get(&id) {
             Some(Progress::Cancelled) => {

@@ -1150,3 +1150,92 @@ fiber.tool("find", {{
     assert_eq!(failed(&ran(&stuck)).0, ErrorCode::ToolError);
     assert_eq!(ran(&waiting), cancelled());
 }
+
+#[test]
+fn a_cancelled_exec_abandoned_with_the_vm_returns_only_once_its_group_is_empty() {
+    let dir = fakes::TempDir::new("fiber-lua-tools");
+    let ready = fakes::children::Ready::new(dir.path());
+    let out = dir.path().join("out");
+    let clock = FakeClock::new();
+    let ext = extension(
+        dir.path(),
+        "stuckexec",
+        &format!(
+            r#"
+fiber.tool("exec", {{
+  description = "d", input_schema = {{ type = "object" }},
+  effects = {{ effects = {{ "executes" }}, reversible = false }}, timeout = 60000,
+  run = function()
+    host.exec("sh", {{ "-c", {script:?}, {ready:?}, {out:?} }})
+    return "ran"
+  end,
+}})
+fiber.tool("find", {{
+  description = "d", input_schema = {{ type = "object" }},
+  effects = {{ effects = {{}}, reversible = true }}, timeout = 50,
+  run = function()
+    require("go_find")
+    string.find(string.rep("a", 100000), "a*a*a*a*b")
+  end,
+}})
+"#,
+            script =
+                r#"trap 'echo $$ >> "$0"' TERM; echo $$ > "$0"; while :; do echo x >> "$1"; done"#,
+            ready = ready.path().display().to_string(),
+            out = out.display().to_string(),
+        ),
+        clock.clone(),
+    );
+    let went = go_module(dir.path(), "find");
+    let tools = by_name(&ext);
+    let cancel = CancelToken::new();
+    let first = run_cancellable(&tools["exec"], &cancel);
+    let group = ready.wait(WAIT)[0];
+    let watchdog = fakes::Watchdog::group(group);
+    let asked = clock.now();
+    let stuck = run(&tools["find"], json!({}));
+    went.recv_timeout(WAIT)
+        .expect("waited for the stuck callback to pass its clock check");
+    // The stop's SIGKILL bound anchors at the cancel, so the cancel lands
+    // 300 ms into the stuck call's 50 ms timeout plus grace: the abandon
+    // below does not cross the 800 ms bound early.
+    clock.advance(Duration::from_millis(300));
+    // The thread is stuck in a C call, so it never drops the parked call.
+    cancel.cancel();
+    assert!(
+        first.recv_timeout(Duration::from_millis(200)).is_err(),
+        "the parked call returned before the abandon"
+    );
+    let abandon_at = asked + Duration::from_millis(50) + GRACE;
+    assert!(
+        clock.await_parked(abandon_at, WAIT),
+        "waited for the stuck call's caller to park at the grace"
+    );
+    clock.advance(Duration::from_millis(750));
+    assert_eq!(failed(&ran(&stuck)).0, ErrorCode::ToolError);
+    // Abandoned with the VM: the call is still going while its group runs.
+    assert!(
+        first.try_recv().is_err(),
+        "the call returned at the abandon while its group still ran"
+    );
+    // The stop reached the run without the Lua thread: SIGTERM arrived,
+    // and the group runs on past it.
+    ready.wait(WAIT);
+    assert!(
+        first.recv_timeout(Duration::from_millis(200)).is_err(),
+        "the call returned while its group still ran"
+    );
+    // Past the SIGKILL 800 ms after the SIGTERM: the group is killed and
+    // drained before the call returns.
+    clock.advance(Duration::from_millis(800));
+    assert_eq!(ran(&first), cancelled());
+    assert!(
+        !fakes::kill_group(group, "0").unwrap(),
+        "the group is empty when the call returns"
+    );
+    let len = || std::fs::metadata(&out).unwrap().len();
+    let before = len();
+    pause(Duration::from_millis(100));
+    assert_eq!(len(), before, "nothing writes after the call returned");
+    watchdog.stand_down(WAIT);
+}
