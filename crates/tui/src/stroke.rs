@@ -117,12 +117,10 @@ impl Stroke {
         let mut key_name = parts.next_back().ok_or_else(invalid)?;
         // `ctrl++` names Ctrl with the plus key: the split leaves the key
         // empty, so the plus before the separator is the key instead.
-        // `ctrl+` still names nothing.
+        // `ctrl+` still names nothing. Only a text ending in `++` gets
+        // here with an empty key, so the separator piece is empty too.
         if key_name.is_empty() && text.ends_with("++") {
-            let separator = parts.next_back().ok_or_else(invalid)?;
-            if !separator.is_empty() {
-                return Err(invalid());
-            }
+            parts.next_back().ok_or_else(invalid)?;
             key_name = "+";
         }
         let mut mods = Mods::NONE;
