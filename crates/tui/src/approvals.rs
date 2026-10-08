@@ -1,24 +1,30 @@
-//! The approval queue: requests from every session in the order they
-//! arrived, the panel that shows one, and the `reply` that answers it
-//! (`docs/tui.md`, "Approvals and questions").
+//! The approval queue: approvals and question forms from every session in
+//! the order they arrived, the panel that shows one, and the `reply` that
+//! answers it (`docs/tui.md`, "Approvals and questions").
 
 use std::collections::HashMap;
 
 use contract::commands::{Remember, RememberScope, Reply, ReplyAnswer};
 use contract::events::{
-    AskStep, Decision, Escalation, PermissionRequested, RuleOffer, RuleScope, ToolCallRequested,
+    AskStep, Decision, Escalation, Interaction, InteractionRequested, PermissionRequested,
+    RuleOffer, RuleScope, ToolCallRequested,
 };
+use contract::shapes::True;
 use contract::{Envelope, RequestId, SessionId};
 use serde_json::Value;
 
 use crate::app::session_command;
-use crate::keys::Key;
+use crate::keys::{Edit, Key};
+
+pub(crate) mod form;
 
 /// The envelope kinds the queue folds, from any session.
-pub(crate) const KINDS: [&str; 3] = [
+pub(crate) const KINDS: [&str; 5] = [
     "tool_call_requested",
     "permission_requested",
     "permission_resolved",
+    "interaction_requested",
+    "interaction_resolved",
 ];
 
 /// A choice on the approval panel.
@@ -34,12 +40,31 @@ enum Choice {
     Deny,
 }
 
-/// One approval request in the queue: a session's `permission_requested`
-/// not yet resolved.
+/// One request in the queue: a session's `permission_requested`, or its
+/// `interaction_requested` form, not yet resolved.
 #[derive(Debug, Clone)]
 struct Request {
     session: SessionId,
     request_id: String,
+    /// What it asks.
+    ask: Ask,
+    /// Put aside with Esc and not shown since.
+    aside: bool,
+    /// The `reply` sent for it; it leaves the visible queue until a
+    /// rejection puts it back.
+    answered_by: Option<String>,
+}
+
+/// What a request asks: an approval or a question form.
+#[derive(Debug, Clone)]
+enum Ask {
+    Approval(Approval),
+    Form(form::Form),
+}
+
+/// An approval: the call it asks about and the person's choice so far.
+#[derive(Debug, Clone)]
+struct Approval {
     /// The asking call's tool and arguments, when its `tool_call_requested`
     /// was seen.
     call: Option<(String, String)>,
@@ -48,11 +73,6 @@ struct Request {
     /// What the person typed, kept while the request waits.
     feedback: String,
     cursor: Choice,
-    /// Put aside with Esc and not shown since.
-    aside: bool,
-    /// The `reply` sent for it; it leaves the visible queue until a
-    /// rejection puts it back.
-    answered_by: Option<String>,
 }
 
 impl Request {
@@ -65,7 +85,9 @@ impl Request {
     fn waiting(&self) -> bool {
         self.answered_by.is_none()
     }
+}
 
+impl Approval {
     /// The rule an allow can remember, offered only at review.
     fn rule(&self) -> Option<&RuleOffer> {
         match &self.step {
@@ -149,109 +171,38 @@ impl Request {
             Choice::Deny => format!("deny · {}", self.feedback),
         }
     }
-}
 
-/// The approval panel as it draws.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Panel {
-    /// Its lines, before wrapping: header, why, the call, the choices.
-    pub(crate) lines: Vec<String>,
-    /// Whether it takes the alert tint: the reviewer escalated.
-    pub(crate) alert: bool,
-}
-
-/// What a key did on the open panel.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PanelKey {
-    /// The panel took it; nothing to send.
-    Handled,
-    /// Enter: answer the shown request.
-    Answer,
-}
-
-/// The approval queue and the panel's place in it.
-#[derive(Debug, Default)]
-pub(crate) struct Queue {
-    /// Requests in the order they arrived, from any session.
-    requests: Vec<Request>,
-    /// The request the panel shows, by key; `None` when the panel is
-    /// closed.
-    shown: Option<(String, String)>,
-    /// Each call's tool and arguments by session and action, until a
-    /// request about it arrives. debt: a call never asked about stays until
-    /// the terminal exits, bounded by the sessions' calls; upgrade when tool
-    /// groups (see #670) fold calls for display.
-    calls: HashMap<(String, String), (String, String)>,
-}
-
-impl Queue {
-    /// The approval panel, while it is open.
-    pub(crate) fn panel(&self) -> Option<Panel> {
-        let at = self.shown_index()?;
-        let request = self.requests.get(at)?;
-        let waiting: Vec<usize> = self.waiting_indices().collect();
-        let k = waiting
-            .iter()
-            .position(|index| *index == at)
-            .unwrap_or_default()
-            .saturating_add(1);
-        let mut header = format!(
-            "approval · {} · {k} of {}",
-            request.session.0,
-            waiting.len()
-        );
-        if !request.reversible {
+    /// The panel's lines under `header`: why it asked, the call, the
+    /// choices.
+    fn lines(&self, mut header: String) -> Vec<String> {
+        if !self.reversible {
             header.push_str(" · irreversible");
         }
-        let mut lines = vec![header, request.why()];
-        if let Some((tool, arguments)) = &request.call {
+        let mut lines = vec![header, self.why()];
+        if let Some((tool, arguments)) = &self.call {
             lines.push(format!("{tool} {arguments}"));
         }
-        for choice in request.choices() {
-            let mark = if choice == request.cursor { '›' } else { ' ' };
-            lines.push(format!("{mark} {}", request.label(choice)));
+        for choice in self.choices() {
+            let mark = if choice == self.cursor { '›' } else { ' ' };
+            lines.push(format!("{mark} {}", self.label(choice)));
         }
-        Some(Panel {
-            lines,
-            alert: matches!(
-                request.step,
-                AskStep::Review {
-                    escalation: Some(_),
-                    ..
-                }
-            ),
-        })
+        lines
     }
 
-    /// The badge line while the panel is closed and requests wait,
-    /// counting `extra` requests held elsewhere with them.
-    pub(crate) fn badge(&self, extra: usize) -> Option<String> {
-        if self.shown.is_some() {
-            return None;
-        }
-        let waiting = self.waiting_indices().count().saturating_add(extra);
-        (waiting > 0).then(|| format!("! {waiting} waiting · /approvals or ⌥A"))
-    }
-
-    /// Handles a key while the panel is open; `None` when the panel is
-    /// closed or the key is not the panel's.
-    pub(crate) fn on_key(&mut self, key: &Key) -> Option<PanelKey> {
-        let at = self.shown_index()?;
-        let request = self.requests.get_mut(at)?;
+    /// A key on the shown approval. Esc and ⌥A act on the queue
+    /// ([`Queue::on_key`]) before this.
+    fn on_key(&mut self, key: &Key) -> Option<PanelKey> {
         match key {
-            Key::Char(ch) => {
-                request.feedback.push(*ch);
-                request.cursor = Choice::Deny;
-            }
+            Key::Char(ch) => self.type_char(*ch),
             Key::Backspace => {
-                request.feedback.pop();
-                request.cursor = Choice::Deny;
+                self.feedback.pop();
+                self.cursor = Choice::Deny;
             }
             Key::Up | Key::Down => {
-                let choices = request.choices();
+                let choices = self.choices();
                 let now = choices
                     .iter()
-                    .position(|choice| *choice == request.cursor)
+                    .position(|choice| *choice == self.cursor)
                     .unwrap_or_default();
                 let next = if *key == Key::Up {
                     now.saturating_sub(1)
@@ -259,26 +210,14 @@ impl Queue {
                     now.saturating_add(1)
                 };
                 if let Some(choice) = choices.get(next) {
-                    request.cursor = *choice;
+                    self.cursor = *choice;
                 }
             }
             Key::Enter => return Some(PanelKey::Answer),
-            Key::Esc => {
-                request.aside = true;
-                self.show_after(at);
-            }
-            Key::AltA => {
-                let next = (at.saturating_add(1)..self.requests.len())
-                    .chain(0..at)
-                    .find(|index| self.requests.get(*index).is_some_and(Request::waiting));
-                if let Some(next) = next {
-                    self.show(next);
-                }
-            }
             // Tab, Shift+Tab, Ctrl+G and Ctrl+R do nothing in the panel,
             // which stands in the input box's place; F1 opens the key map
             // over it.
-            Key::Tab | Key::BackTab | Key::CtrlG | Key::CtrlR => {}
+            Key::Esc | Key::AltA | Key::Tab | Key::BackTab | Key::CtrlG | Key::CtrlR => {}
             // The layout's keys reach the screen behind the panel.
             Key::PageUp
             | Key::PageDown
@@ -298,14 +237,199 @@ impl Queue {
         Some(PanelKey::Handled)
     }
 
+    /// An editing key: a paste is typed into the feedback, a control
+    /// character as a space; every other edit does nothing.
+    fn on_edit(&mut self, edit: &Edit) {
+        match edit {
+            Edit::Paste(text) => {
+                for ch in text.chars() {
+                    self.type_char(if ch.is_control() { ' ' } else { ch });
+                }
+            }
+            Edit::Left
+            | Edit::Right
+            | Edit::ShiftEnter
+            | Edit::CtrlJ
+            | Edit::WordLeft
+            | Edit::WordRight
+            | Edit::DeleteWord
+            | Edit::LineStart
+            | Edit::LineEnd
+            | Edit::Delete => {}
+        }
+    }
+
+    /// Typing goes to the feedback and moves the cursor to deny.
+    fn type_char(&mut self, ch: char) {
+        self.feedback.push(ch);
+        self.cursor = Choice::Deny;
+    }
+}
+
+/// The request panel as it draws.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Panel {
+    /// Its lines, before wrapping: the header, then the approval's or the
+    /// form's rows.
+    pub(crate) lines: Vec<String>,
+    /// Whether it takes the alert tint: the reviewer escalated. Never on a
+    /// form.
+    pub(crate) alert: bool,
+}
+
+/// What a key did on the open panel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PanelKey {
+    /// The panel took it; nothing to send.
+    Handled,
+    /// Answer the shown request.
+    Answer,
+    /// Decline the shown form: Esc, or "Chat about this".
+    Decline,
+}
+
+/// The approval queue and the panel's place in it.
+#[derive(Debug, Default)]
+pub(crate) struct Queue {
+    /// Requests in the order they arrived, from any session.
+    requests: Vec<Request>,
+    /// The request the panel shows, by key; `None` when the panel is
+    /// closed.
+    shown: Option<(String, String)>,
+    /// Each call's tool and arguments by session and action, until a
+    /// request about it arrives. debt: a call never asked about stays until
+    /// the terminal exits, bounded by the sessions' calls; upgrade when tool
+    /// groups (see #670) fold calls for display.
+    calls: HashMap<(String, String), (String, String)>,
+    /// Declines sent and not yet answered, by `reply` command id: the
+    /// session whose turn a `cancel` ends once the decline is accepted.
+    declines: HashMap<String, SessionId>,
+}
+
+impl Queue {
+    /// The request panel, while it is open: `approval` or `question`, the
+    /// session asking, and its place among the requests waiting.
+    pub(crate) fn panel(&self) -> Option<Panel> {
+        let at = self.shown_index()?;
+        let request = self.requests.get(at)?;
+        let waiting: Vec<usize> = self.waiting_indices().collect();
+        let k = waiting
+            .iter()
+            .position(|index| *index == at)
+            .unwrap_or_default()
+            .saturating_add(1);
+        let place = format!("{} · {k} of {}", request.session.0, waiting.len());
+        Some(match &request.ask {
+            Ask::Approval(approval) => Panel {
+                lines: approval.lines(format!("approval · {place}")),
+                alert: matches!(
+                    approval.step,
+                    AskStep::Review {
+                        escalation: Some(_),
+                        ..
+                    }
+                ),
+            },
+            Ask::Form(form) => Panel {
+                lines: form.lines(format!("question · {place}")),
+                alert: false,
+            },
+        })
+    }
+
+    /// Whether the panel shows a request.
+    pub(crate) fn open(&self) -> bool {
+        self.shown_index().is_some()
+    }
+
+    /// The badge line while the panel is closed and requests wait,
+    /// counting `extra` requests held elsewhere with them.
+    pub(crate) fn badge(&self, extra: usize) -> Option<String> {
+        if self.shown.is_some() {
+            return None;
+        }
+        let waiting = self.waiting_indices().count().saturating_add(extra);
+        (waiting > 0).then(|| format!("! {waiting} waiting · /approvals or ⌥A"))
+    }
+
+    /// Handles a key while the panel is open; `None` when the panel is
+    /// closed or the key is not the panel's. ⌥A moves to the next request
+    /// waiting; Esc puts an approval aside and declines a form.
+    pub(crate) fn on_key(&mut self, key: &Key) -> Option<PanelKey> {
+        let at = self.shown_index()?;
+        if *key == Key::AltA {
+            let next = (at.saturating_add(1)..self.requests.len())
+                .chain(0..at)
+                .find(|index| self.requests.get(*index).is_some_and(Request::waiting));
+            if let Some(next) = next {
+                self.show(next);
+            }
+            return Some(PanelKey::Handled);
+        }
+        let request = self.requests.get_mut(at)?;
+        match &mut request.ask {
+            Ask::Approval(_) if *key == Key::Esc => {
+                request.aside = true;
+                self.show_after(at);
+                Some(PanelKey::Handled)
+            }
+            Ask::Approval(approval) => approval.on_key(key),
+            Ask::Form(form) => form.on_key(key),
+        }
+    }
+
+    /// Hands an editing key to the shown request (`docs/tui.md`, "A
+    /// question form").
+    pub(crate) fn on_edit(&mut self, edit: &Edit) {
+        let Some(at) = self.shown_index() else {
+            return;
+        };
+        match self.requests.get_mut(at).map(|request| &mut request.ask) {
+            Some(Ask::Approval(approval)) => approval.on_edit(edit),
+            Some(Ask::Form(form)) => form.on_edit(edit),
+            None => {}
+        }
+    }
+
     /// Answers the shown request with the `reply` command `id`, returning
     /// its line, and moves the panel on. `None` when the panel is closed.
     pub(crate) fn answer(&mut self, id: &str) -> Option<String> {
         let at = self.shown_index()?;
+        let answer = match &self.requests.get(at)?.ask {
+            Ask::Approval(approval) => approval.answer(),
+            Ask::Form(form) => form.answer(),
+        };
+        self.reply(at, id, answer)
+    }
+
+    /// Declines the shown form with the `reply` command `id`, returning its
+    /// line, and moves the panel on. `None` when no form is shown.
+    pub(crate) fn decline(&mut self, id: &str) -> Option<String> {
+        let at = self.shown_index()?;
+        let request = self.requests.get(at)?;
+        let session = match request.ask {
+            Ask::Form(_) => request.session.clone(),
+            Ask::Approval(_) => return None,
+        };
+        let line = self.reply(at, id, ReplyAnswer::Declined { declined: True })?;
+        self.declines.insert(id.to_owned(), session);
+        Some(line)
+    }
+
+    /// The session whose turn a `cancel` ends now that the decline `id` was
+    /// accepted (`docs/tui.md`, "A question form"); `None` when `id` is no
+    /// decline. It is answered once.
+    pub(crate) fn declined(&mut self, id: &str) -> Option<SessionId> {
+        self.declines.remove(id)
+    }
+
+    /// Sends `answer` for the request at `at` as `reply` command `id`: it
+    /// leaves the visible queue until a rejection puts it back.
+    fn reply(&mut self, at: usize, id: &str, answer: ReplyAnswer) -> Option<String> {
         let request = self.requests.get_mut(at)?;
         let reply = Reply {
             request_id: RequestId(request.request_id.clone()),
-            answer: request.answer(),
+            answer,
         };
         let args = serde_json::to_value(reply).ok();
         let line = session_command(id, "reply", &request.session, args).to_string();
@@ -315,8 +439,10 @@ impl Queue {
     }
 
     /// The `reply` command `id` failed: its request, if it is still
-    /// pending, is back where it was, unanswered.
+    /// pending, is back where it was, unanswered, and a failed decline
+    /// cancels nothing.
     pub(crate) fn restore(&mut self, id: &str) {
+        self.declines.remove(id);
         let Some(at) = self
             .requests
             .iter()
@@ -341,7 +467,7 @@ impl Queue {
     }
 
     /// Folds one of [`KINDS`] from any session: the call, the request and
-    /// its resolution.
+    /// its resolution. Only a `form` interaction is queued.
     pub(crate) fn fold(&mut self, envelope: &Envelope) {
         let session = &envelope.session_id;
         let action = envelope.action_id.as_ref().map(|id| id.0.clone());
@@ -364,26 +490,35 @@ impl Queue {
                 let Ok(asked) = serde_json::from_value::<PermissionRequested>(payload) else {
                     return;
                 };
-                let key = (session.0.clone(), asked.request_id.0.clone());
-                if self.requests.iter().any(|request| request.key() == key) {
-                    return;
-                }
-                let call =
-                    action.and_then(|action| self.calls.remove(&(session.0.clone(), action)));
-                self.requests.push(Request {
-                    session: session.clone(),
-                    request_id: asked.request_id.0,
-                    call,
-                    reversible: asked.declared.reversible,
-                    step: asked.step,
-                    feedback: String::new(),
-                    cursor: Choice::Once,
-                    aside: false,
-                    answered_by: None,
+                self.queue(session, asked.request_id.0, |calls| {
+                    let call = action.and_then(|action| calls.remove(&(session.0.clone(), action)));
+                    Ask::Approval(Approval {
+                        call,
+                        reversible: asked.declared.reversible,
+                        step: asked.step,
+                        feedback: String::new(),
+                        cursor: Choice::Once,
+                    })
                 });
-                self.surface(self.requests.len().saturating_sub(1));
             }
-            _ => {
+            "interaction_requested" => {
+                let Ok(asked) = serde_json::from_value::<InteractionRequested>(payload) else {
+                    return;
+                };
+                match asked.interaction {
+                    Interaction::Form { fields } => {
+                        self.queue(session, asked.request_id.0, |_| {
+                            Ask::Form(form::Form::new(fields))
+                        });
+                    }
+                    // The other kinds are not drawn yet (#1243).
+                    Interaction::Confirm { .. }
+                    | Interaction::Select { .. }
+                    | Interaction::MultiSelect { .. }
+                    | Interaction::TextInput { .. } => {}
+                }
+            }
+            "permission_resolved" | "interaction_resolved" => {
                 let Some(request_id) = envelope.payload.get("request_id").and_then(Value::as_str)
                 else {
                     return;
@@ -401,7 +536,31 @@ impl Queue {
                 }
                 self.requests.remove(at);
             }
+            _ => {}
         }
+    }
+
+    /// Queues the request `request_id` from `session`, made by `ask` from
+    /// the calls seen, and surfaces it. A request already queued, such as a
+    /// form raised again on resume, keeps what the person typed.
+    fn queue(
+        &mut self,
+        session: &SessionId,
+        request_id: String,
+        ask: impl FnOnce(&mut HashMap<(String, String), (String, String)>) -> Ask,
+    ) {
+        let key = (session.0.clone(), request_id.clone());
+        if self.requests.iter().any(|request| request.key() == key) {
+            return;
+        }
+        self.requests.push(Request {
+            session: session.clone(),
+            request_id,
+            ask: ask(&mut self.calls),
+            aside: false,
+            answered_by: None,
+        });
+        self.surface(self.requests.len().saturating_sub(1));
     }
 
     /// The index of the request the panel shows.

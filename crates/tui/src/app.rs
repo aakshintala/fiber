@@ -41,6 +41,7 @@ pub(crate) mod copy;
 mod find;
 #[path = "app_focus.rs"]
 mod focus;
+mod form;
 #[path = "history.rs"]
 mod history;
 #[path = "app_home.rs"]
@@ -299,6 +300,7 @@ impl App {
         match self.queue.on_key(&key) {
             Some(PanelKey::Handled) => return Effect::None,
             Some(PanelKey::Answer) => return self.answer(),
+            Some(PanelKey::Decline) => return self.decline(),
             None => {}
         }
         if let Some(effect) = self.offer_key(&key) {
@@ -711,20 +713,6 @@ impl App {
         }
     }
 
-    /// Sends the shown request's answer. With the link down nothing goes
-    /// out and the request stays.
-    fn answer(&mut self) -> Effect {
-        if self.link != Link::Up {
-            return Effect::None;
-        }
-        let id = mint();
-        let Some(line) = self.queue.answer(&id) else {
-            return Effect::None;
-        };
-        self.pending.insert(id, (Kind::Reply, String::new()));
-        Effect::Send(vec![line])
-    }
-
     /// `/approvals` and Alt+A with the panel closed: a put-aside offer
     /// opens again, else the panel opens at the first request waiting, or a
     /// notice says none waits.
@@ -747,15 +735,16 @@ impl App {
         if approvals::KINDS.contains(&envelope.kind.as_str()) {
             self.queue.fold(envelope);
         }
+        let mut send = self.reply_ack(envelope);
         if self.session() != Some(&envelope.session_id) {
-            return Vec::new();
+            return send;
         }
         // The search's fetch answers here, never in the pages: its lines
         // fold into the scan and go no further.
-        if let Some(send) = self.find_answered(envelope) {
+        if let Some(lines) = self.find_answered(envelope) {
+            send.extend(lines);
             return send;
         }
-        let mut send = Vec::new();
         if envelope.kind == "turn_started"
             && let Some(started) = read!(envelope, TurnStarted)
         {

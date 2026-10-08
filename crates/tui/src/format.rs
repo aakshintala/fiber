@@ -667,6 +667,44 @@ fn thought_rows(thought: &Thought, gutter: &str, out: &mut Rows) {
     out.end_scope();
 }
 
+/// One question's answer as `ask_user`'s result writes it (`docs/tools.md`,
+/// "The result"): `<header>: skipped` when `said` is `None`, else the chosen
+/// labels and then the typed text, joined by `, `. A header or label keeps
+/// JSON's escapes without quotes and the text is a JSON string, so the row
+/// stays one line.
+pub(crate) fn answer_row(header: &str, said: Option<(&[String], Option<&str>)>) -> String {
+    let said = match said {
+        None => "skipped".to_owned(),
+        Some((labels, text)) => {
+            let mut parts: Vec<String> = labels.iter().map(|label| escaped(label)).collect();
+            parts.extend(text.map(quoted));
+            parts.join(", ")
+        }
+    };
+    format!("{}: {said}", escaped(header))
+}
+
+/// The note on a whole form, as `ask_user`'s result writes it: `note: `
+/// and the note as a JSON string (`docs/tools.md`, "The result").
+pub(crate) fn note_row(note: &str) -> String {
+    format!("note: {}", quoted(note))
+}
+
+/// `text` as a JSON string, quotes included.
+fn quoted(text: &str) -> String {
+    Value::String(text.to_owned()).to_string()
+}
+
+/// `text` with JSON's escapes but without the quotes around it.
+fn escaped(text: &str) -> String {
+    let quoted = quoted(text);
+    quoted
+        .strip_prefix('"')
+        .and_then(|rest| rest.strip_suffix('"'))
+        .unwrap_or(&quoted)
+        .to_owned()
+}
+
 #[cfg(test)]
 #[path = "format_tests.rs"]
 mod tests;

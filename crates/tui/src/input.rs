@@ -4,7 +4,7 @@
 use ratatui::text::Span;
 
 use crate::approvals::Queue;
-use crate::keys::{Edit, Key};
+use crate::keys::Edit;
 
 /// A paste of more lines than this shows as one token.
 const PASTE_LINES: usize = 10;
@@ -51,17 +51,13 @@ impl Default for Draft {
     }
 }
 
-/// Routes one editing key: the approval panel, while open, takes a paste
-/// as typed feedback, its line breaks as spaces, and no other editing key;
-/// otherwise the draft takes it.
+/// Routes one editing key: the request the panel shows takes every edit
+/// while it is open; otherwise the draft takes it.
 pub(crate) fn route(edit: Edit, draft: &mut Draft, queue: &mut Queue) {
-    if queue.panel().is_none() {
+    if queue.open() {
+        queue.on_edit(&edit);
+    } else {
         draft.edit(edit);
-    } else if let Edit::Paste(text) = edit {
-        for ch in text.chars() {
-            let ch = if ch.is_control() { ' ' } else { ch };
-            queue.on_key(&Key::Char(ch));
-        }
     }
 }
 

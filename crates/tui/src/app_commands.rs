@@ -111,7 +111,8 @@ impl App {
         if let Some(effect) = self.find_edit(&edit) {
             return effect;
         }
-        if self.search_edit(&edit) || (self.focus.is_some() && self.panel().is_none()) {
+        // A request on the panel takes the edit ahead of the prompt search.
+        if self.panel().is_none() && (self.search_edit(&edit) || self.focus.is_some()) {
             return Effect::None;
         }
         crate::input::route(edit, &mut self.draft, &mut self.queue);

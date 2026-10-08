@@ -819,3 +819,23 @@ fn the_steering_keys_do_nothing_while_the_panel_is_open() {
     // With the panel closed they are not the panel's.
     assert_eq!(Queue::default().on_key(&Key::AltX), None);
 }
+
+#[test]
+fn an_unknown_kind_naming_a_waiting_request_changes_nothing() {
+    let mut queue = folded(&[standing_ask(S_A, "a_1", "r_1", "one")]);
+    queue.fold(&envelope(
+        S_A,
+        "notice",
+        serde_json::json!({"request_id": "r_1", "message": "hi"}),
+        "a_1",
+    ));
+    assert_eq!(header(&queue), format!("approval · {S_A} · 1 of 1"));
+}
+
+#[test]
+fn permission_resolved_still_removes_an_approval() {
+    let mut queue = folded(&[standing_ask(S_A, "a_1", "r_1", "one")]);
+    queue.fold(&resolved(S_A, "r_1"));
+    assert!(queue.panel().is_none());
+    assert!(queue.badge(0).is_none());
+}
