@@ -72,6 +72,11 @@ asserted as plain equality between the two.
 A test asserts at least one positive fact. A check that only says something
 did not happen passes when the feature never ran.
 
+A test on a large value, such as a page or a payload of more than a few KiB,
+compares its length and its content without printing it whole on failure: an
+`assert_eq!` that fails on a 2 MiB string writes megabytes to the CI log and
+can time the job out. Report the length and the first differing offset.
+
 ### Values that change every run
 
 Binary-level tests replace `ts`, ids and durations with placeholders before
