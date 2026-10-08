@@ -93,6 +93,17 @@ fn assert_success(output: &Output) {
     assert!(String::from_utf8_lossy(&output.stdout).starts_with("ok "));
 }
 
+fn assert_malformed(output: &Output, reason: &str) {
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.starts_with("FAIL "), "{stdout}");
+    assert!(stdout.contains(reason), "{stdout}");
+}
 fn assert_failure(output: &Output, reason: &str) {
     assert_eq!(
         output.status.code(),
@@ -462,7 +473,19 @@ fn unsupported_provider_call_is_a_malformed_case() {
         "call": {"provider": "openrouter", "function": "models", "arg": {}},
         "returns": []
     });
-    assert_failure(&run_case(&setup, "unsupported", &value), "cost");
+    assert_malformed(&run_case(&setup, "unsupported", &value), "cost");
+}
+
+#[test]
+fn invalid_json_is_a_malformed_case() {
+    let setup = setup("");
+    let file = setup.workspace().join("tests").join("broken.json");
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    fs::write(&file, "{not json").unwrap();
+    let mut command = setup.fiber(&["extension-case", "tests/broken.json"]);
+    command.current_dir(setup.workspace());
+    let output = support::run_to_exit(setup.deadline, "the extension case child", command);
+    assert_malformed(&output, "invalid JSON");
 }
 
 #[test]

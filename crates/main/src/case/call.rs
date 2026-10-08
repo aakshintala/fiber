@@ -10,17 +10,17 @@ use serde_json::{Value, json};
 
 use super::clock::CaseClock;
 use super::format::{CallCase, CallOutcome};
-use super::run::report;
+use super::run::{malformed, report};
 
 /// Runs a provider call without creating a session.
 pub(crate) fn run_case(case: CallCase, name: String, process_clock: Arc<dyn Clock>) -> i32 {
     let call = case.call;
     if let Err(error) = function(&call.function) {
-        return report(&name, &[error]);
+        return malformed(&name, &[error]);
     }
     let arg = match cost_args(&call.arg) {
         Ok(arg) => arg,
-        Err(error) => return report(&name, &[error]),
+        Err(error) => return malformed(&name, &[error]),
     };
     let home = match config::fiber_home_from_env() {
         Ok(home) => home,

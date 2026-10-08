@@ -318,12 +318,12 @@ pub(crate) fn extension_case(
     let bytes = match fs::read(&path) {
         Ok(bytes) => bytes,
         Err(error) => {
-            return report(&fallback_name, &[format!("{}: {error}", path.display())]);
+            return malformed(&fallback_name, &[format!("{}: {error}", path.display())]);
         }
     };
     let case = match Case::parse(&path, &bytes) {
         Ok(case) => case,
-        Err(error) => return report(&fallback_name, &[error]),
+        Err(error) => return malformed(&fallback_name, &[error]),
     };
     let (name, case) = match case {
         Case::Call(call) => {
@@ -390,11 +390,22 @@ fn has_fiber_exited(events: &[Value]) -> bool {
         .any(|event| event.get("kind").and_then(Value::as_str) == Some("fiber_exited"))
 }
 
+pub(super) fn report(name: &str, failures: &[String]) -> i32 {
+    verdict(name, failures, 1)
+}
+
+/// A malformed case: invalid JSON, an unsupported function or a bad field.
+/// The case never ran, so this is a wrong invocation, which exits 2
+/// (`docs/invocation.md`, "Commands and flags").
+pub(super) fn malformed(name: &str, failures: &[String]) -> i32 {
+    verdict(name, failures, 2)
+}
+
 #[allow(
     clippy::print_stdout,
     reason = "the hidden child reports one verdict on stdout (`docs/testing.md`, \"Testing an extension\")"
 )]
-pub(super) fn report(name: &str, failures: &[String]) -> i32 {
+fn verdict(name: &str, failures: &[String], code: i32) -> i32 {
     if failures.is_empty() {
         println!("ok {name}");
         return 0;
@@ -403,7 +414,7 @@ pub(super) fn report(name: &str, failures: &[String]) -> i32 {
     for failure in failures {
         println!("  {failure}");
     }
-    1
+    code
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
