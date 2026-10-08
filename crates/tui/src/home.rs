@@ -11,7 +11,6 @@ use serde_json::Value;
 /// gave it when it first appeared, its ✕ in the last column, the scope
 /// toggle heading the list, the workspace chip opening the workspace
 /// picker, and one picker row by its index in the list fixed at open.
-/// The worktree switch lands in a later part.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Spot {
     /// A session row: clicking it, or Enter on it while focused, opens
@@ -25,6 +24,9 @@ pub(crate) enum Spot {
     Toggle,
     /// The workspace chip: clicking it opens the workspace picker.
     Workspace,
+    /// The new worktree switch: clicking it, or Enter on it while
+    /// focused, toggles it.
+    Worktree,
     /// A picker row, by its index in the list fixed at open.
     Pick(usize),
 }
@@ -210,6 +212,9 @@ pub(crate) struct Row {
     pub(crate) name: String,
     /// The workspace path.
     pub(crate) workspace: String,
+    /// The session runs in a git repository: its last status carried
+    /// `git`. An unreadable row never does.
+    pub(crate) git: bool,
     /// The project's key.
     pub(crate) project: String,
     /// What the session is doing.
@@ -369,6 +374,14 @@ impl Sessions {
         self.recent.last()
     }
 
+    /// Whether any row, live or exited, is in `workspace` inside git.
+    pub(crate) fn in_git(&self, workspace: &str) -> bool {
+        self.feed
+            .iter()
+            .chain(self.recent.iter())
+            .any(|row| row.workspace == workspace && row.git)
+    }
+
     /// The row for `id`, live or exited.
     pub(crate) fn row(&self, id: &SessionId) -> Option<&Row> {
         self.feed
@@ -447,6 +460,7 @@ pub(crate) fn from_status(envelope: &Envelope) -> Row {
             name: String::new(),
             workspace: String::new(),
             project: String::new(),
+            git: false,
             state: State::Unreadable,
             left: None,
             waiting: None,
@@ -464,6 +478,7 @@ pub(crate) fn from_status(envelope: &Envelope) -> Row {
         name: status.name,
         workspace: status.workspace,
         project: status.project,
+        git: status.git.is_some(),
         state,
         left: None,
         waiting,
@@ -524,6 +539,7 @@ pub(crate) fn recent_rows(result: &Value) -> Vec<Row> {
                             .and_then(Value::as_str)
                             .unwrap_or_default()
                             .to_owned(),
+                        git: status.as_ref().is_some_and(|status| status.git.is_some()),
                         project: session
                             .get("project")
                             .and_then(Value::as_str)

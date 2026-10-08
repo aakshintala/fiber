@@ -1224,3 +1224,17 @@ fn a_token_span_starting_at_the_box_edge_has_no_target() {
     );
     assert_eq!(tokens, vec![]);
 }
+
+#[test]
+fn home_chips_inside_git() {
+    // The launch directory is in git, so the new worktree switch sits
+    // beside the workspace chip, off.
+    insta::assert_snapshot!("home_chips_inside_git", screen(&git_home(80, 24), 80, 24));
+}
+
+#[test]
+fn home_chips_outside_git() {
+    // Outside git the switch is not shown: no placeholder takes its
+    // place.
+    insta::assert_snapshot!("home_chips_outside_git", screen(&home(80, 24), 80, 24));
+}
