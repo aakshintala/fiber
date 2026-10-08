@@ -2,7 +2,7 @@
 //! pages hold a turn at its boundaries, and that pinning a turn's pages and
 //! releasing them are observable in the pinned set.
 
-use super::{pages_for_turn, release_turn};
+use super::{pages_for_turn, request_turn};
 use crate::window::Pages;
 
 const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
@@ -33,12 +33,17 @@ fn pages_for_turn_keeps_a_cut_pages_tail_with_its_turn() {
 }
 
 #[test]
-fn release_turn_lets_its_pages_page_out_again() {
-    let mut pages = Pages::new(80);
-    pages.want(0);
+fn request_turn_pins_only_what_its_copy_does_not_hold() {
+    let mut pages = fold_all(&turn_cut_session());
+    assert!(pages.page_count() > 1, "no page cut");
+    pages.trim(usize::MAX / 2, 1);
+    assert!(pages.part(0).is_none(), "page 0 stays resident");
+    let missing = request_turn(&mut pages, 0, &[]);
+    assert_eq!(missing, vec![0]);
     assert_eq!(pages.pinned(), 1);
-    release_turn(&mut pages, 0);
-    assert_eq!(pages.pinned(), 0);
+    // The pending copy holds page 0 already: asking again pins nothing.
+    assert_eq!(request_turn(&mut pages, 0, &missing), vec![0]);
+    assert_eq!(pages.pinned(), 1);
 }
 
 /// One line of a session that cuts pages, numbered from `seq`.
