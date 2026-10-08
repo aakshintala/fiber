@@ -1,0 +1,16 @@
+---
+source: crates/tui/src/view/request_tests.rs
+expression: "screen(&app, 60, 12).0"
+---
+
+
+
+
+question · s_aaaaaaaaaaaaaaaa · 1 of 1
+[Base ✓]  Name  Submit
+Which branch?
+  [x] main (Recommended) · the default
+› [x] dev
+  ✎ answer in words
+  Next →
+  Chat about this

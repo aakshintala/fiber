@@ -5,7 +5,8 @@
 use contract::commands::{ReplyAnswer, SentFormAnswer};
 use contract::shapes::{Question, True};
 
-use super::PanelKey;
+use super::{Panel, PanelKey, PanelSpot};
+use crate::format::width;
 use crate::keys::{Edit, Key};
 
 /// A question form and what the person has answered so far.
@@ -75,6 +76,19 @@ enum SubmitRow {
     Chat,
 }
 
+/// A click target on the form: a tab, or a row of the shown tab. `Tab(n)`,
+/// `n` the question count, is the Submit tab.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Spot {
+    Tab(usize),
+    Option(usize),
+    Words,
+    Next,
+    Note,
+    Send,
+    Chat,
+}
+
 impl Form {
     /// A form over `fields`, nothing chosen, on the first question's
     /// landing row; on the Submit tab when there is no question.
@@ -104,7 +118,7 @@ impl Form {
     pub(crate) fn on_key(&mut self, key: &Key) -> Option<PanelKey> {
         match key {
             Key::Esc => return Some(PanelKey::Decline),
-            Key::Enter => return self.enter(),
+            Key::Enter => return Some(self.enter()),
             Key::Char(' ') => self.space(),
             Key::Char(ch) => self.type_char(*ch),
             Key::Backspace => self.backspace(),
@@ -167,15 +181,74 @@ impl Form {
         ReplyAnswer::Form { answers, note }
     }
 
-    /// The panel's lines: `header`, the tab line, then the shown tab's rows.
-    /// Text from the model has its control characters drawn as spaces.
-    pub(crate) fn lines(&self, header: String) -> Vec<String> {
-        let mut lines = vec![header, self.tab_line()];
-        match self.at {
-            Cursor::Question { field, row } => self.question_lines(field, row, &mut lines),
-            Cursor::Submit(row) => self.submit_lines(row, &mut lines),
+    /// A click on `spot`: a tab opens it; a row takes the cursor, then an
+    /// option does what Enter does on a single-choice option and what Space
+    /// does on a multi-choice one, and `Next →`, `Submit` and "Chat about
+    /// this" do what Enter does there (`docs/tui.md`, "A question form").
+    /// A row the shown tab lacks does nothing.
+    pub(crate) fn click(&mut self, spot: Spot) -> PanelKey {
+        let at = match (spot, self.at) {
+            (Spot::Tab(tab), _) => {
+                self.open_tab(tab);
+                return PanelKey::Handled;
+            }
+            (Spot::Option(option), Cursor::Question { field, .. }) => Cursor::Question {
+                field,
+                row: Row::Option(option),
+            },
+            (Spot::Words, Cursor::Question { field, .. }) => Cursor::Question {
+                field,
+                row: Row::Words,
+            },
+            (Spot::Next, Cursor::Question { field, .. }) => Cursor::Question {
+                field,
+                row: Row::Next,
+            },
+            (Spot::Chat, Cursor::Question { field, .. }) => Cursor::Question {
+                field,
+                row: Row::Chat,
+            },
+            (Spot::Note, Cursor::Submit(_)) => Cursor::Submit(SubmitRow::Note),
+            (Spot::Send, Cursor::Submit(_)) => Cursor::Submit(SubmitRow::Send),
+            (Spot::Chat, Cursor::Submit(_)) => Cursor::Submit(SubmitRow::Chat),
+            (Spot::Option(_) | Spot::Words | Spot::Next, Cursor::Submit(_))
+            | (Spot::Note | Spot::Send, Cursor::Question { .. }) => return PanelKey::Handled,
+        };
+        if !self.rows().contains(&at) {
+            return PanelKey::Handled;
         }
-        lines.iter().map(|line| clean(line)).collect()
+        self.at = at;
+        match spot {
+            Spot::Option(_) => match self.answers.get(self.tab()).map(|field| &field.picks) {
+                Some(Picks::Many(_)) => {
+                    self.space();
+                    PanelKey::Handled
+                }
+                Some(Picks::One(_)) | None => self.enter(),
+            },
+            Spot::Tab(_) | Spot::Words | Spot::Note => PanelKey::Handled,
+            Spot::Next | Spot::Send | Spot::Chat => self.enter(),
+        }
+    }
+
+    /// The panel under `header` at `width` columns: the tab line, then the
+    /// shown tab's rows, each row a click target. Text from the model has
+    /// its control characters drawn as spaces.
+    pub(crate) fn panel(&self, header: String, width: u16) -> Panel {
+        let mut panel = Panel {
+            lines: Vec::new(),
+            alert: false,
+            spots: Vec::new(),
+            cursor: None,
+            caret: None,
+        };
+        push(&mut panel, &header, None, false);
+        self.tab_line(width, &mut panel);
+        match self.at {
+            Cursor::Question { field, row } => self.question_lines(field, row, &mut panel),
+            Cursor::Submit(row) => self.submit_lines(row, &mut panel),
+        }
+        panel
     }
 
     /// The tab shown: a question's index, or the question count for Submit.
@@ -211,7 +284,7 @@ impl Form {
     /// Enter: chooses a single-choice option and moves on, moves on from
     /// any other question row, sends from the note or `Submit`, and
     /// declines from "Chat about this".
-    fn enter(&mut self) -> Option<PanelKey> {
+    fn enter(&mut self) -> PanelKey {
         match self.at {
             Cursor::Question { field, row } => match row {
                 Row::Option(option) => {
@@ -225,12 +298,12 @@ impl Form {
                     self.move_on();
                 }
                 Row::Words | Row::Next => self.move_on(),
-                Row::Chat => return Some(PanelKey::Decline),
+                Row::Chat => return PanelKey::Decline,
             },
-            Cursor::Submit(SubmitRow::Note | SubmitRow::Send) => return Some(PanelKey::Answer),
-            Cursor::Submit(SubmitRow::Chat) => return Some(PanelKey::Decline),
+            Cursor::Submit(SubmitRow::Note | SubmitRow::Send) => return PanelKey::Answer,
+            Cursor::Submit(SubmitRow::Chat) => return PanelKey::Decline,
         }
-        Some(PanelKey::Handled)
+        PanelKey::Handled
     }
 
     /// Space: toggles a multi-choice option, chooses or clears a
@@ -363,8 +436,9 @@ impl Form {
     }
 
     /// One tab per question header, ` ✓` when answered, then Submit; the
-    /// shown tab in brackets.
-    fn tab_line(&self) -> String {
+    /// shown tab in brackets. Each tab is a click target over its columns
+    /// only while the line fits `cols` columns on one row.
+    fn tab_line(&self, cols: u16, panel: &mut Panel) {
         let shown = self.tab();
         let mut tabs: Vec<String> = self
             .fields
@@ -376,26 +450,40 @@ impl Form {
                 } else {
                     ""
                 };
-                format!("{}{mark}", question.header)
+                clean(&format!("{}{mark}", question.header))
             })
             .collect();
         tabs.push("Submit".to_owned());
         if let Some(tab) = tabs.get_mut(shown) {
             *tab = format!("[{tab}]");
         }
-        tabs.join("  ")
+        let text = tabs.join(TAB_GAP);
+        let line = panel.lines.len();
+        if width(&text) <= usize::from(cols) {
+            let mut from = 0u16;
+            for (tab, text) in tabs.iter().enumerate() {
+                let to = from.saturating_add(cells(text));
+                panel.spots.push(PanelSpot {
+                    line,
+                    cols: Some((from, to)),
+                    spot: Spot::Tab(tab),
+                });
+                from = to.saturating_add(cells(TAB_GAP));
+            }
+        }
+        panel.lines.push(text);
     }
 
     /// Question `field`'s rows: the question, its options with their
     /// descriptions, the words row, `Next →` or `Review →`, and "Chat
     /// about this".
-    fn question_lines(&self, field: usize, at: Row, lines: &mut Vec<String>) {
+    fn question_lines(&self, field: usize, at: Row, panel: &mut Panel) {
         let (Some(question), Some(answer)) = (self.fields.get(field), self.answers.get(field))
         else {
             return;
         };
         let mark = |row: Row| if row == at { '›' } else { ' ' };
-        lines.push(question.question.clone());
+        push(panel, &question.question, None, false);
         for (option, choice) in question.options.iter().enumerate() {
             let tick = match (&answer.picks, answer.chosen(option)) {
                 (Picks::One(_), true) => "(•)",
@@ -403,51 +491,86 @@ impl Form {
                 (Picks::Many(_), true) => "[x]",
                 (Picks::Many(_), false) => "[ ]",
             };
-            let mut line = format!("{} {tick} {}", mark(Row::Option(option)), choice.label);
+            let row = Row::Option(option);
+            let mut line = format!("{} {tick} {}", mark(row), choice.label);
             if let Some(description) = &choice.description {
                 line.push_str(" · ");
                 line.push_str(description);
             }
-            lines.push(line);
+            push(panel, &line, Some(Spot::Option(option)), row == at);
         }
         let words = if answer.words.is_empty() {
             "answer in words"
         } else {
             answer.words.as_str()
         };
-        lines.push(format!("{} ✎ {words}", mark(Row::Words)));
+        let line = format!("{} ✎ {words}", mark(Row::Words));
+        push(panel, &line, Some(Spot::Words), at == Row::Words);
         let next = if field.saturating_add(1) == self.fields.len() {
             "Review →"
         } else {
             "Next →"
         };
-        lines.push(format!("{} {next}", mark(Row::Next)));
-        lines.push(format!("{} Chat about this", mark(Row::Chat)));
+        let line = format!("{} {next}", mark(Row::Next));
+        push(panel, &line, Some(Spot::Next), at == Row::Next);
+        let line = format!("{} Chat about this", mark(Row::Chat));
+        push(panel, &line, Some(Spot::Chat), at == Row::Chat);
     }
 
     /// The Submit tab's rows: each answer as the result writes it, the
     /// note, `Submit`, and "Chat about this".
-    fn submit_lines(&self, at: SubmitRow, lines: &mut Vec<String>) {
+    fn submit_lines(&self, at: SubmitRow, panel: &mut Panel) {
         for (field, question) in self.fields.iter().enumerate() {
             let said = self.said(field);
             let said = said
                 .as_ref()
                 .map(|(labels, text)| (labels.as_slice(), text.as_deref()));
-            lines.push(crate::format::answer_row(&question.header, said));
+            push(
+                panel,
+                &crate::format::answer_row(&question.header, said),
+                None,
+                false,
+            );
         }
         let mark = |row: SubmitRow| if row == at { '›' } else { ' ' };
-        if self.note.is_empty() {
-            lines.push(format!(
-                "{} note · type to add a note",
-                mark(SubmitRow::Note)
-            ));
+        let note = if self.note.is_empty() {
+            format!("{} note · type to add a note", mark(SubmitRow::Note))
         } else {
             let note = crate::format::note_row(&self.note);
-            lines.push(format!("{} {note}", mark(SubmitRow::Note)));
-        }
-        lines.push(format!("{} Submit", mark(SubmitRow::Send)));
-        lines.push(format!("{} Chat about this", mark(SubmitRow::Chat)));
+            format!("{} {note}", mark(SubmitRow::Note))
+        };
+        push(panel, &note, Some(Spot::Note), at == SubmitRow::Note);
+        let line = format!("{} Submit", mark(SubmitRow::Send));
+        push(panel, &line, Some(Spot::Send), at == SubmitRow::Send);
+        let line = format!("{} Chat about this", mark(SubmitRow::Chat));
+        push(panel, &line, Some(Spot::Chat), at == SubmitRow::Chat);
     }
+}
+
+/// The space between two tabs on the tab line.
+const TAB_GAP: &str = "  ";
+
+/// Pushes `text` as the panel's next line, its control characters as
+/// spaces, with `spot` over the whole line and the cursor on it when
+/// `here`.
+fn push(panel: &mut Panel, text: &str, spot: Option<Spot>, here: bool) {
+    let line = panel.lines.len();
+    panel.lines.push(clean(text));
+    if let Some(spot) = spot {
+        panel.spots.push(PanelSpot {
+            line,
+            cols: None,
+            spot,
+        });
+    }
+    if here {
+        panel.cursor = Some(line);
+    }
+}
+
+/// How many display cells `text` takes, as a screen column.
+fn cells(text: &str) -> u16 {
+    u16::try_from(width(text)).unwrap_or(u16::MAX)
 }
 
 /// `text` with every control character as a space, so model text stays on

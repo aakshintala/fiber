@@ -1,0 +1,14 @@
+---
+source: crates/tui/src/view/request_tests.rs
+expression: shown
+---
+wrap at forty columns
+  ( ) two · a description long enough to
+wrap at forty columns
+  ( ) three · a description long enough
+to wrap at forty columns
+  ( ) four · a description long enough
+to wrap at forty columns
+  ✎ answer in words
+  Review →
+› Chat about this

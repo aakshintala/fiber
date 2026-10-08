@@ -242,7 +242,8 @@ impl App {
             | TargetId::DismissNotice(_)
             | TargetId::MoreNotices
             | TargetId::CloseOverlay
-            | TargetId::Offer(_) => None,
+            | TargetId::Offer(_)
+            | TargetId::Form(_) => None,
         }
     }
 

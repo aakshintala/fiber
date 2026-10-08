@@ -100,7 +100,7 @@ fn folded(lines: &[contract::Envelope]) -> Queue {
 
 /// The panel's lines, or none when it is closed.
 fn panel(queue: &Queue) -> Vec<String> {
-    queue.panel().map(|panel| panel.lines).unwrap_or_default()
+    queue.panel(80).map(|panel| panel.lines).unwrap_or_default()
 }
 
 /// The panel's line at `row`.
@@ -148,7 +148,7 @@ fn a_standing_ask_shows_the_rule_the_call_and_no_remembering_rows() {
             "  deny · type to add feedback".to_owned(),
         ]
     );
-    assert_eq!(queue.panel().map(|panel| panel.alert), Some(false));
+    assert_eq!(queue.panel(80).map(|panel| panel.alert), Some(false));
 }
 
 #[test]
@@ -197,7 +197,7 @@ fn each_choice_sends_its_answer() {
             serde_json::json!({"id": "c_1", "command": "reply", "session_id": S_A, "args": args}),
             "{downs} down"
         );
-        assert!(queue.panel().is_none());
+        assert!(queue.panel(80).is_none());
         assert!(queue.badge(0).is_none());
     }
 }
@@ -272,10 +272,14 @@ fn the_panel_says_why_it_asked_and_tints_an_escalation() {
     for (extra, why) in cases {
         let queue = folded(&[review(S_A, "r_1", extra)]);
         assert_eq!(row(&queue, 1), why);
-        assert_eq!(queue.panel().map(|panel| panel.alert), Some(true), "{why}");
+        assert_eq!(
+            queue.panel(80).map(|panel| panel.alert),
+            Some(true),
+            "{why}"
+        );
     }
     let queue = folded(&[review(S_A, "r_1", serde_json::json!({}))]);
-    assert_eq!(queue.panel().map(|panel| panel.alert), Some(false));
+    assert_eq!(queue.panel(80).map(|panel| panel.alert), Some(false));
     let queue = folded(&[request(
         S_A,
         "a_1",
@@ -353,7 +357,7 @@ fn esc_steps_through_the_queue_then_closes() {
     assert_eq!(header(&queue), format!("approval · {S_A} · 3 of 3"));
     assert!(queue.badge(0).is_none());
     press(&mut queue, Key::Esc, 1);
-    assert!(queue.panel().is_none());
+    assert!(queue.panel(80).is_none());
     assert_eq!(
         queue.badge(0).as_deref(),
         Some("! 3 waiting · /approvals or ⌥A")
@@ -376,7 +380,7 @@ fn a_request_after_one_put_aside_waits_behind_the_badge() {
     let mut queue = folded(&[standing_ask(S_A, "a_1", "r_1", "one")]);
     press(&mut queue, Key::Esc, 1);
     queue.fold(&standing_ask(S_A, "a_2", "r_2", "two"));
-    assert!(queue.panel().is_none());
+    assert!(queue.panel(80).is_none());
     assert_eq!(
         queue.badge(0).as_deref(),
         Some("! 2 waiting · /approvals or ⌥A")
@@ -444,7 +448,7 @@ fn a_restored_reply_puts_its_request_back_where_it_was() {
 fn a_restored_reply_reopens_a_closed_panel() {
     let mut queue = folded(&[standing_ask(S_A, "a_1", "r_1", "one")]);
     answer(&mut queue);
-    assert!(queue.panel().is_none());
+    assert!(queue.panel(80).is_none());
     queue.restore("c_1");
     assert_eq!(header(&queue), format!("approval · {S_A} · 1 of 1"));
 }
@@ -455,7 +459,7 @@ fn a_reopened_request_is_no_longer_put_aside() {
     press(&mut queue, Key::Esc, 1);
     assert!(queue.open_first());
     answer(&mut queue);
-    assert!(queue.panel().is_none());
+    assert!(queue.panel(80).is_none());
     queue.restore("c_1");
     // Nothing waits put aside, so the request back opens the panel.
     assert_eq!(header(&queue), format!("approval · {S_A} · 1 of 1"));
@@ -479,7 +483,7 @@ fn a_resolved_request_leaves_the_queue() {
     queue.fold(&resolved(S_A, "r_2"));
     assert_eq!(header(&queue), format!("approval · {S_A} · 1 of 1"));
     queue.fold(&resolved(S_A, "r_3"));
-    assert!(queue.panel().is_none());
+    assert!(queue.panel(80).is_none());
     assert!(queue.badge(0).is_none());
 }
 
@@ -836,6 +840,6 @@ fn an_unknown_kind_naming_a_waiting_request_changes_nothing() {
 fn permission_resolved_still_removes_an_approval() {
     let mut queue = folded(&[standing_ask(S_A, "a_1", "r_1", "one")]);
     queue.fold(&resolved(S_A, "r_1"));
-    assert!(queue.panel().is_none());
+    assert!(queue.panel(80).is_none());
     assert!(queue.badge(0).is_none());
 }

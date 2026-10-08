@@ -19,6 +19,7 @@ pub(crate) mod chrome;
 mod home;
 mod marks;
 mod offer;
+mod request;
 mod results;
 
 pub(crate) use home::max_question_scroll;
@@ -74,7 +75,8 @@ pub(crate) fn rows(line: Line<'_>, width: u16) -> usize {
 /// when shown, and the conversation in the rows left with the notices
 /// floating over its top-right corner, or the key map over them while it
 /// is open. A screen too short for them all drops the hint first, then the
-/// badge. A panel taller than the screen keeps its top.
+/// badge. A panel taller than the screen keeps its top, except that a
+/// question form scrolls to keep its cursor's row shown.
 ///
 /// Returns the click targets drawn, in draw order. Last, the target under
 /// `pointer`, if any, gets [`HOVER_TINT`] as its background.
@@ -101,23 +103,7 @@ pub(crate) fn render(
     let mut targets = Vec::new();
     let mut bottom = area.bottom();
     if let Some(panel) = app.panel() {
-        let height: usize = panel
-            .lines
-            .iter()
-            .map(|line| rows(Line::raw(line.as_str()), area.width))
-            .sum();
-        let top = bottom.saturating_sub(to_u16(height)).max(area.y);
-        let rect = Rect::new(area.x, top, area.width, bottom.saturating_sub(top));
-        let tint = if panel.alert {
-            ALERT_TINT
-        } else {
-            APPROVAL_TINT
-        };
-        buf.set_style(rect, tint);
-        Paragraph::new(panel.lines.join("\n"))
-            .wrap(Wrap { trim: false })
-            .render(rect, buf);
-        bottom = top;
+        bottom = request::draw(&panel, area, bottom, buf, &mut targets);
     }
     if app.panel().is_none() {
         let (rows, top, _, _) = input_box(app, area.width);
@@ -366,9 +352,9 @@ fn input_box(app: &App, width: u16) -> (Vec<String>, usize, usize, u16) {
 }
 
 /// Where the terminal cursor shows: at the draft's cursor while the input
-/// box has focus, `None` while navigating, the approval panel or the
-/// repository offer is open, or the cursor's row is off a screen too short
-/// for it.
+/// box has focus, at a question form's text cursor while its words row has
+/// the cursor, `None` while navigating, any other panel or the repository
+/// offer is open, or the cursor's row is off a screen too short for it.
 pub(crate) fn cursor(app: &App, area: Rect) -> Option<Position> {
     if app.chrome().floor_line().is_some() {
         return None;
@@ -380,8 +366,11 @@ pub(crate) fn cursor(app: &App, area: Rect) -> Option<Position> {
         .chrome()
         .layout()
         .map_or(area, |layout| chrome::body(&layout));
-    if app.panel().is_some() || app.focused().is_some() || app.offer_open() {
+    if app.focused().is_some() || app.offer_open() {
         return None;
+    }
+    if let Some(panel) = app.panel() {
+        return request::caret(&panel, area, area.bottom());
     }
     // The search bar's cursor at its query's end, while it is open
     // (`docs/tui.md`, "Search").
