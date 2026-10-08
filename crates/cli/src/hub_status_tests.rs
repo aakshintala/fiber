@@ -601,7 +601,7 @@ const CHILD: &str = "FIBER_CLI_HUB_STATUS_CHILD";
 const CASE: &str = "FIBER_CLI_HUB_STATUS_CASE";
 
 /// How long the child may run before the test kills it and fails.
-const CHILD_DEADLINE: Duration = Duration::from_secs(60);
+const CHILD_DEADLINE: Duration = Duration::from_secs(10);
 
 /// Runs the child case `case` with `vars` in its environment and returns
 /// its exit code.
