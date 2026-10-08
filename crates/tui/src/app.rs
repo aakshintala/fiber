@@ -32,6 +32,7 @@ mod notices;
 #[path = "steering.rs"]
 mod steering;
 
+mod chrome;
 #[path = "app_commands.rs"]
 mod commands;
 #[path = "copy.rs"]
@@ -207,6 +208,8 @@ pub(crate) struct App {
     stops: Vec<crate::mouse::Target>,
     /// Where the panel and the rail are drawn.
     regions: crate::focus::Regions,
+    /// What the person chose to show: the panel's hide.
+    chrome: chrome::Chrome,
 }
 
 impl App {
@@ -235,6 +238,7 @@ impl App {
             focus: None,
             stops: Vec::new(),
             regions: crate::focus::Regions::default(),
+            chrome: chrome::Chrome::default(),
         }
     }
 
@@ -308,6 +312,8 @@ impl App {
             Key::BackTab if self.completions().is_none() => self.navigate(),
             Key::BackTab => Effect::None,
             Key::AltA => self.open_first(),
+            Key::AltP => self.toggle_panel(),
+            Key::AltR | Key::AltDigit(_) => Effect::None,
             Key::CtrlR => self.open_search(),
             Key::CtrlG => self.open_in_editor(),
             Key::AltUp | Key::AltDown | Key::AltX => self.steering_key(&key),
@@ -407,7 +413,6 @@ impl App {
     }
 
     /// The session's name, if it has one.
-    #[cfg_attr(not(test), expect(dead_code, reason = "#669 draws it"))]
     pub(crate) fn name(&self) -> Option<&str> {
         self.name.as_deref()
     }
@@ -416,7 +421,7 @@ impl App {
     /// the screen and at least one.
     pub(crate) fn input_height(&self) -> usize {
         let cap = usize::from(self.screen.height() / 3).max(1);
-        self.draft.rows(self.screen.width()).len().min(cap)
+        self.draft.rows(self.column_width()).len().min(cap)
     }
 
     /// Whether the quit hint shows: armed by a first Ctrl+C, or asking
@@ -435,20 +440,21 @@ impl App {
         self.screen.top()
     }
 
-    /// The conversation's rows: the screen less the input box or the
-    /// panel in its place, the steering queue, the badge and the hint. None
-    /// on a screen too short for them.
+    /// The conversation's rows: the screen less the header, the input box
+    /// or the panel in its place, the steering queue, the badge and the
+    /// hint. None on a screen too short for them.
     pub(crate) fn conversation_height(&self) -> usize {
         let input = self.panel().map_or(self.input_height(), |panel| {
             panel
                 .lines
                 .iter()
                 .map(|line| {
-                    crate::view::rows(ratatui::text::Line::raw(line.as_str()), self.screen.width())
+                    crate::view::rows(ratatui::text::Line::raw(line.as_str()), self.column_width())
                 })
                 .sum()
         });
-        let below = input
+        let below = self.chrome.header_rows()
+            + input
             + self.completion_rows()
             + self.steering().len()
             + usize::from(self.badge().is_some())

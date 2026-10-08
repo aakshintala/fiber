@@ -114,8 +114,8 @@ fn resolve_releases_the_asker_with_that_answer() {
 #[test]
 fn the_release_frees_a_raised_and_a_pending_ask() {
     let wake = Arc::new(SharedWake::default());
-    let raised = Arc::new(Stream::new(Arc::clone(&wake), ActionId("a_1".into())));
-    let pending = Arc::new(Stream::new(Arc::clone(&wake), ActionId("a_2".into())));
+    let raised = Arc::new(Stream::new(Arc::clone(&wake), ActionId("a_1".into()), true));
+    let pending = Arc::new(Stream::new(Arc::clone(&wake), ActionId("a_2".into()), true));
     let mut release = Release::default();
     release.add(Arc::clone(&raised));
     release.add(Arc::clone(&pending));
@@ -149,7 +149,7 @@ fn the_release_frees_a_raised_and_a_pending_ask() {
 #[test]
 fn after_the_release_a_first_ask_returns_no_answer_at_once() {
     let wake = Arc::new(SharedWake::default());
-    let stream = Arc::new(Stream::new(Arc::clone(&wake), ActionId("a_1".into())));
+    let stream = Arc::new(Stream::new(Arc::clone(&wake), ActionId("a_1".into()), true));
     let mut release = Release::default();
     release.add(Arc::clone(&stream));
     drop(release);

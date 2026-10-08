@@ -50,11 +50,26 @@ pub fn rerun(test: &str, env: &[(&str, &str)]) -> Output {
 /// When the test binary cannot be re-run, or the child is still running
 /// after `within`: the child is killed first, so a hung child never keeps
 /// running.
+pub fn rerun_within(test: &str, env: &[(&str, &str)], within: Duration) -> Output {
+    rerun_prepared(test, env, within, |_| {})
+}
+
+/// [`rerun_within`] with `prepare` run on the child's command before the
+/// platform setup, so a test can arrange the child's inherited state.
+///
+/// # Panics
+///
+/// As [`rerun_within`].
 #[allow(
     clippy::panic,
     reason = "a child that cannot run means the test cannot proceed"
 )]
-pub fn rerun_within(test: &str, env: &[(&str, &str)], within: Duration) -> Output {
+fn rerun_prepared(
+    test: &str,
+    env: &[(&str, &str)],
+    within: Duration,
+    prepare: impl FnOnce(&mut Command),
+) -> Output {
     let exe = match std::env::current_exe() {
         Ok(exe) => exe,
         Err(err) => panic!("the test binary's path: {err}"),
@@ -66,6 +81,9 @@ pub fn rerun_within(test: &str, env: &[(&str, &str)], within: Duration) -> Outpu
     }
     command.envs(env.iter().copied());
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    prepare(&mut command);
+    #[cfg(target_os = "macos")]
+    crate::crash_ports::silence(&mut command);
     let child = match command.spawn() {
         Ok(child) => child,
         Err(err) => panic!("`{test}` failed to start: {err}"),

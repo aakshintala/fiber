@@ -394,8 +394,12 @@ fn seeded_input(block: &Value) -> String {
 }
 
 /// A call's streamed input text as its arguments: the JSON object or array
-/// it holds, or the raw text as a string when it holds neither.
+/// it holds, `{}` for no text (a tool that takes no arguments), or the raw
+/// text as a string when it holds neither.
 fn parsed_input(input: String) -> Value {
+    if input.is_empty() {
+        return Value::Object(Map::new());
+    }
     match serde_json::from_str(&input) {
         Ok(value @ (Value::Object(_) | Value::Array(_))) => value,
         Ok(_) | Err(_) => Value::String(input),

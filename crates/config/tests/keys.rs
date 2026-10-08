@@ -377,6 +377,20 @@ fn rows() -> Vec<(&'static [&'static str], Value, Value, &'static str, bool)> {
             LIST,
             false,
         ),
+        (
+            &["tui", "rail", "width"],
+            json!(18.5),
+            json!("wide"),
+            NUMBER,
+            false,
+        ),
+        (
+            &["tui", "panel", "width"],
+            json!(25),
+            json!("wide"),
+            NUMBER,
+            false,
+        ),
         (&["tui", "theme"], json!("light"), json!(1), STR, false),
         (
             &["tui", "reduced_motion"],
@@ -631,7 +645,11 @@ fn with_no_files_the_configuration_is_the_built_in_defaults() {
                 "hover": true,
                 "inline_images": true,
                 "logo_glyph": "⌇",
-                "panel": {"cards": ["session", "changed_files", "delegates", "jobs", "quota"]},
+                "panel": {
+                    "cards": ["session", "changed_files", "delegates", "jobs", "quota"],
+                    "width": 21
+                },
+                "rail": {"width": 15},
                 "reduced_motion": false
             }
         })

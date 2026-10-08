@@ -147,6 +147,16 @@ fn completed_reply() -> Response {
     Response::stream(stream(&[chunk(json!([{"text": "hi"}]), Some("STOP"))]))
 }
 
+#[test]
+fn a_function_call_with_no_args_records_an_empty_object() {
+    let parts = json!([{"functionCall": {"name": "f"}}]);
+    let reply = decoded(&stream(&[chunk(parts, Some("STOP"))])).0.unwrap();
+    let [ReplyAction::ToolCall(call)] = reply.actions.as_slice() else {
+        panic!("{:?}", reply.actions);
+    };
+    assert_eq!(call.arguments, json!({}));
+}
+
 fn error_code(result: Result<Reply, provider::Error>) -> (ErrorCode, String) {
     let error = result.unwrap_err();
     (error.code(), error.to_string())

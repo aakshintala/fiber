@@ -730,6 +730,24 @@ fn reasoning_goes_back_unchanged_only_to_the_model_reference_that_produced_it() 
 }
 
 #[test]
+fn a_tool_call_with_empty_argument_text_records_an_empty_object() {
+    let call = |arguments: &str| {
+        let chunks = [chunk(
+            json!({"tool_calls": [{"index": 0, "id": "c1", "type": "function",
+                "function": {"name": "f", "arguments": arguments}}]}),
+            Some("tool_calls"),
+        )];
+        let reply = decoded(&stream(&chunks)).0.unwrap();
+        let [ReplyAction::ToolCall(call)] = reply.actions.as_slice() else {
+            panic!("{:?}", reply.actions);
+        };
+        call.arguments.clone()
+    };
+    assert_eq!(call(""), json!({}));
+    assert_eq!(call("{\"a\":"), json!("{\"a\":"));
+}
+
+#[test]
 fn each_finish_reason_maps_as_the_docs_say_and_an_unknown_one_fails() {
     let end = |reason: &str| decoded(&stream(&[chunk(json!({"content": "a"}), Some(reason))])).0;
     for reason in ["stop", "tool_calls", "function_call"] {

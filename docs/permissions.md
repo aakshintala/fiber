@@ -293,9 +293,9 @@ them: each layer's text under its heading.
 
 ### How it runs
 
-Two stages. The first asks for a single token: `check`, meaning the call goes
+Two stages. The first asks for one word: `check`, meaning the call goes
 to the reasoning pass, or `allow`. Only a call answered `check` gets the
-reasoning pass. Most reviewed calls cost one token.
+reasoning pass. Most reviewed calls cost a few output tokens.
 
 The reviewer's model is chosen separately from the session's, because a
 review on every effectful action at the session model's price and latency is a

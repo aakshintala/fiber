@@ -14,6 +14,7 @@ use crate::app::App;
 use crate::markdown::{Role, style};
 use crate::mouse::{self, Target, TargetId};
 
+mod chrome;
 #[path = "home_view.rs"]
 mod home;
 mod offer;
@@ -81,11 +82,20 @@ pub(crate) fn render(
     buf: &mut Buffer,
     pointer: Option<(u16, u16)>,
 ) -> Vec<Target> {
-    // Home draws while no session is on screen; the conversation draws
-    // once one attaches.
+    // Below the floor one line shows, home included; home draws while no
+    // session is on screen; the conversation draws in its column once one
+    // attaches.
+    if let Some(line) = app.chrome().floor_line() {
+        chrome::floor(line, area, buf);
+        return Vec::new();
+    }
     if let Some(screen) = app.home_screen() {
         return home::render(app, &screen, area, buf, pointer);
     }
+    let area = match app.chrome().layout() {
+        Some(layout) => chrome::draw(app, &layout, buf),
+        None => area,
+    };
     let mut targets = Vec::new();
     let mut bottom = area.bottom();
     if let Some(panel) = app.panel() {
@@ -332,9 +342,16 @@ fn input_box(app: &App, width: u16) -> (Vec<String>, usize, usize, u16) {
 /// repository offer is open, or the cursor's row is off a screen too short
 /// for it.
 pub(crate) fn cursor(app: &App, area: Rect) -> Option<Position> {
+    if app.chrome().floor_line().is_some() {
+        return None;
+    }
     if let Some(screen) = app.home_screen() {
         return home::cursor(app, &screen, area);
     }
+    let area = app
+        .chrome()
+        .layout()
+        .map_or(area, |layout| chrome::body(&layout));
     if app.panel().is_some() || app.focused().is_some() || app.offer_open() {
         return None;
     }

@@ -11,10 +11,10 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
-use super::Screen;
 use crate::app::App;
 use crate::keys::Key;
 use crate::link::Line;
+use crate::screen::Screen;
 use crate::view;
 
 /// Folds `events`, one envelope per line as one session's stream, and

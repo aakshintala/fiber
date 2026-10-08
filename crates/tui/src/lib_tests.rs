@@ -9,7 +9,8 @@ use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
@@ -24,6 +25,9 @@ fn launch() -> super::Launch {
         model: None,
         thinking: None,
         logo_glyph: "⌇".to_owned(),
+        rail_share: 15.0,
+        panel_share: 21.0,
+        panel_cards: Vec::new(),
     }
 }
 
@@ -190,6 +194,7 @@ pub(super) fn new_loop<B: Backend>(
         hover: true,
         var: Box::new(|_| None),
         copy_command: None,
+        title: crate::osc::Title::default(),
     };
     (lp, attached)
 }
@@ -285,8 +290,9 @@ fn the_first_kitty_reply_pushes_the_flags_once() {
         .try_clone()
         .unwrap_or_else(|err| panic!("dup: {err}"));
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), Some(tty));
-    // A second reply pushes nothing more: the next bytes on the tty are
-    // the marker written after it.
+    // A second reply pushes nothing more: after the push and the first
+    // frame's title, the next bytes on the tty are the marker written
+    // after it.
     feed(
         &mut lp,
         vec![
@@ -299,7 +305,12 @@ fn the_first_kitty_reply_pushes_the_flags_once() {
         .unwrap_or_else(|err| panic!("write: {err}"));
     assert_eq!(
         read_until(&pair.main, b"END", "the kitty push"),
-        b"\x1b[>1uEND"
+        [
+            b"\x1b[>1u".to_vec(),
+            crate::osc::title("fiber"),
+            b"END".to_vec()
+        ]
+        .concat()
     );
     assert_eq!(crate::term::KITTY_PUSH, b"\x1b[>1u");
     // Once pushed, Esc is `CSI 27u`: a lone ESC ending a read is held.
@@ -450,13 +461,14 @@ fn a_schema_mismatch_says_so_and_hangs_up() {
 fn restore_puts_back_what_setup_changed() {
     let pair = open();
     crate::term::setup(&pair.slave, true).unwrap_or_else(|err| panic!("setup: {err}"));
-    let start = "\x1b[?1049h\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b[?u\x1b[c";
+    let start =
+        "\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b[?u\x1b[c";
     assert_eq!(
         read_exact(&pair.main, start.len(), "the start bytes"),
         start.as_bytes()
     );
-    super::restore();
-    let end = "\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?1049l\x1b[?25h";
+    crate::restore();
+    let end = "\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[23;2t\x1b[?1049l\x1b[?25h";
     assert_eq!(
         read_exact(&pair.main, end.len(), "the restore bytes"),
         end.as_bytes()
@@ -483,134 +495,10 @@ fn resize_redraws_at_the_new_size() {
     feed(&mut lp, vec![Input::Bytes(b"hi".to_vec()), Input::Resize]);
     // The input line draws on the new last row; the test backend keeps its
     // 60x12 buffer, cleared by the resize.
-    let shown = crate::view::text(lp.screen.terminal.backend().inner.buffer());
+    let shown = crate::view::text(lp.screen.backend().buffer());
     let rows: Vec<&str> = shown.lines().collect();
     assert_eq!(rows.get(9).copied(), Some("> hi"));
     assert!(rows.iter().skip(10).all(|row| row.is_empty()));
-}
-
-#[test]
-fn the_screen_reports_the_tty_size_not_the_backends() {
-    // ratatui clears a fixed viewport at the size its backend reports;
-    // the backend's own answer is never asked.
-    let mut screen =
-        Screen::new(TestBackend::new(60, 12), 40, 10).unwrap_or_else(|err| panic!("screen: {err}"));
-    let size = |screen: &Screen<TestBackend>| {
-        screen
-            .terminal
-            .size()
-            .unwrap_or_else(|err| panic!("size: {err}"))
-    };
-    assert_eq!(size(&screen), ratatui::layout::Size::new(40, 10));
-    screen
-        .resize(30, 8)
-        .unwrap_or_else(|err| panic!("resize: {err}"));
-    assert_eq!(size(&screen), ratatui::layout::Size::new(30, 8));
-    let window = ratatui::backend::Backend::window_size(screen.terminal.backend_mut())
-        .unwrap_or_else(|err| panic!("window: {err}"));
-    assert_eq!(window.columns_rows, ratatui::layout::Size::new(30, 8));
-}
-
-/// A backend that records each call it gets.
-#[derive(Default)]
-struct Calls(Vec<String>);
-
-impl Backend for Calls {
-    type Error = std::convert::Infallible;
-
-    fn draw<'a, I>(&mut self, content: I) -> Result<(), Self::Error>
-    where
-        I: Iterator<Item = (u16, u16, &'a ratatui::buffer::Cell)>,
-    {
-        self.0.push(format!("draw {}", content.count()));
-        Ok(())
-    }
-
-    fn hide_cursor(&mut self) -> Result<(), Self::Error> {
-        self.0.push("hide".to_owned());
-        Ok(())
-    }
-
-    fn show_cursor(&mut self) -> Result<(), Self::Error> {
-        self.0.push("show".to_owned());
-        Ok(())
-    }
-
-    fn get_cursor_position(&mut self) -> Result<ratatui::layout::Position, Self::Error> {
-        self.0.push("get".to_owned());
-        Ok(ratatui::layout::Position::new(3, 4))
-    }
-
-    fn set_cursor_position<P: Into<ratatui::layout::Position>>(
-        &mut self,
-        position: P,
-    ) -> Result<(), Self::Error> {
-        let position = position.into();
-        self.0.push(format!("set {} {}", position.x, position.y));
-        Ok(())
-    }
-
-    fn clear(&mut self) -> Result<(), Self::Error> {
-        self.0.push("clear".to_owned());
-        Ok(())
-    }
-
-    fn clear_region(&mut self, clear_type: ratatui::backend::ClearType) -> Result<(), Self::Error> {
-        self.0.push(format!("clear {clear_type}"));
-        Ok(())
-    }
-
-    fn size(&self) -> Result<ratatui::layout::Size, Self::Error> {
-        Ok(ratatui::layout::Size::new(1, 1))
-    }
-
-    fn window_size(&mut self) -> Result<ratatui::backend::WindowSize, Self::Error> {
-        Ok(ratatui::backend::WindowSize {
-            columns_rows: ratatui::layout::Size::new(1, 1),
-            pixels: ratatui::layout::Size::new(1, 1),
-        })
-    }
-
-    fn flush(&mut self) -> Result<(), Self::Error> {
-        self.0.push("flush".to_owned());
-        Ok(())
-    }
-}
-
-#[test]
-fn the_tty_sized_backend_passes_every_call_but_the_size_through() {
-    let mut backend = super::TtySized {
-        inner: Calls::default(),
-        size: ratatui::layout::Size::new(40, 10),
-    };
-    let cell = ratatui::buffer::Cell::default();
-    let ok = |result: Result<(), std::convert::Infallible>| result.unwrap_or(());
-    ok(backend.draw([(0, 0, &cell), (1, 0, &cell)].into_iter()));
-    ok(backend.hide_cursor());
-    ok(backend.show_cursor());
-    let position = backend
-        .get_cursor_position()
-        .unwrap_or_else(|err| match err {});
-    assert_eq!(position, ratatui::layout::Position::new(3, 4));
-    ok(backend.set_cursor_position((5, 6)));
-    ok(backend.clear());
-    ok(backend.clear_region(ratatui::backend::ClearType::CurrentLine));
-    ok(backend.flush());
-    assert_eq!(
-        backend.inner.0,
-        [
-            "draw 2",
-            "hide",
-            "show",
-            "get",
-            "set 5 6",
-            "clear",
-            "clear CurrentLine",
-            "flush"
-        ]
-    );
-    let size = backend.size().unwrap_or_else(|err| match err {});
-    assert_eq!(size, ratatui::layout::Size::new(40, 10));
 }
 
 #[test]
@@ -652,7 +540,7 @@ fn run_quits_on_double_ctrl_c_with_the_reader_blocked() {
     // two queries, then the first frame before anything is written to the
     // master.
     let expected =
-        b"\x1b[?1049h\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b[?u\x1b[c";
+        b"\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b[?u\x1b[c";
     let start = read_exact(&pair.main, expected.len(), "the start bytes");
     assert_eq!(start, expected);
     // On home the input line is not on the last row: the first frame is
@@ -678,7 +566,7 @@ fn run_quits_on_double_ctrl_c_with_the_reader_blocked() {
     assert!(is_cooked(&after));
     // After the last frame the output holds the restore bytes.
     let marker =
-        b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?1049l\x1b[?25h";
+        b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[23;2t\x1b[?1049l\x1b[?25h";
     let tail = read_until(&pair.main, marker, "the restore bytes");
     assert_eq!(
         tail.get(tail.len().saturating_sub(marker.len())..),
@@ -718,14 +606,14 @@ fn run_shows_a_failed_connect_and_still_quits_restored() {
     assert_eq!(code, 0);
     read_until(
         &pair.main,
-        b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?1049l\x1b[?25h",
+        b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[23;2t\x1b[?1049l\x1b[?25h",
         "the restore bytes",
     );
     assert!(is_cooked(
         &rustix::termios::tcgetattr(&pair.slave).unwrap_or_else(|err| panic!("attr: {err}"))
     ));
     // A second restore writes nothing: the next bytes are the test's own.
-    super::restore();
+    crate::restore();
     (&pair.slave)
         .write_all(b"mark")
         .unwrap_or_else(|err| panic!("write: {err}"));
@@ -874,9 +762,9 @@ fn each_approval_choice_goes_to_the_hub_as_a_reply() {
 fn the_screen_shows_the_cursor_at_the_draft() {
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
     feed(&mut lp, vec![Input::Bytes(b"ab\x1b[D".to_vec())]);
-    let backend = lp.screen.terminal.backend_mut();
-    assert!(backend.inner.cursor_visible());
-    backend.inner.assert_cursor_position((3, 11));
+    let backend = lp.screen.backend_mut();
+    assert!(backend.cursor_visible());
+    backend.assert_cursor_position((3, 11));
 }
 
 #[test]
@@ -896,16 +784,6 @@ fn a_cursor_move_alone_writes_and_a_still_frame_writes_nothing() {
     assert_eq!(sink.len(), start);
 }
 
-/// A reader on a pipe standing in for the tty: the reader, the pipe's
-/// write end and the loop's channel.
-fn piped_reader() -> (super::Reader, io::PipeWriter, mpsc::Receiver<Input>) {
-    let (read, write) = io::pipe().unwrap_or_else(|err| panic!("pipe: {err}"));
-    let tty = File::from(std::os::fd::OwnedFd::from(read));
-    let (tx, rx) = mpsc::channel();
-    let reader = super::Reader::spawn(&tty, tx).unwrap_or_else(|| panic!("the reader started"));
-    (reader, write, rx)
-}
-
 /// The next bytes the reader sends, with one deadline.
 fn next_bytes(rx: &mpsc::Receiver<Input>, what: &str) -> Vec<u8> {
     match rx.recv_timeout(DEADLINE) {
@@ -915,100 +793,12 @@ fn next_bytes(rx: &mpsc::Receiver<Input>, what: &str) -> Vec<u8> {
     }
 }
 
-/// Pauses `reader` on a thread with one deadline, handing it back.
-fn paused(reader: super::Reader) -> super::Reader {
-    within("the pause to return", move || {
-        let mut reader = reader;
-        reader.pause();
-        reader
-    })
-}
-
-#[test]
-fn a_paused_reader_holds_the_ttys_bytes_until_resumed() {
-    let (reader, mut tty, rx) = piped_reader();
-    tty.write_all(b"a")
-        .unwrap_or_else(|err| panic!("write: {err}"));
-    assert_eq!(next_bytes(&rx, "the first byte"), b"a");
-    let reader = paused(reader);
-    // Pause returned only once the reader parked.
-    assert!(reader.gate.lock().parked);
-    tty.write_all(b"b")
-        .unwrap_or_else(|err| panic!("write: {err}"));
-    // Parked on the condition variable, it reads nothing.
-    assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
-    assert!(reader.gate.lock().parked);
-    reader.resume();
-    assert_eq!(next_bytes(&rx, "the byte after resume"), b"b");
-    assert!(!reader.gate.lock().parked);
-    // A second pause and resume works the same.
-    let reader = paused(reader);
-    tty.write_all(b"c")
-        .unwrap_or_else(|err| panic!("write: {err}"));
-    assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
-    reader.resume();
-    assert_eq!(next_bytes(&rx, "the byte after the second resume"), b"c");
-}
-
-#[test]
-fn bytes_read_before_the_pause_are_sent_not_lost() {
-    let (reader, mut tty, rx) = piped_reader();
-    tty.write_all(b"xy")
-        .unwrap_or_else(|err| panic!("write: {err}"));
-    let reader = paused(reader);
-    reader.resume();
-    let mut got = Vec::new();
-    while got.len() < 2 {
-        got.extend(next_bytes(&rx, "the bytes written before the pause"));
-    }
-    assert_eq!(got, b"xy");
-}
-
-#[test]
-fn pause_on_an_ended_reader_returns_at_once() {
-    let (reader, tty, rx) = piped_reader();
-    // The tty's end ends the reader: its sender drops.
-    drop(tty);
-    match rx.recv_timeout(DEADLINE) {
-        Err(mpsc::RecvTimeoutError::Disconnected) => {}
-        Ok(_) => panic!("bytes instead of the reader's end"),
-        Err(mpsc::RecvTimeoutError::Timeout) => {
-            panic!("waited {DEADLINE:?} for the reader to end")
-        }
-    }
-    let reader = paused(reader);
-    assert!(reader.gate.lock().ended);
-    assert!(!reader.gate.lock().parked);
-}
-
-#[test]
-fn a_reader_whose_channel_closed_ends() {
-    let (reader, mut tty, rx) = piped_reader();
-    drop(rx);
-    tty.write_all(b"a")
-        .unwrap_or_else(|err| panic!("write: {err}"));
-    // Its send fails, and it records its end.
-    let state = reader.gate.lock();
-    let (state, waited) = reader
-        .gate
-        .changed
-        .wait_timeout_while(state, DEADLINE, |state| !state.ended)
-        .unwrap_or_else(|err| panic!("lock: {err}"));
-    assert!(
-        !waited.timed_out(),
-        "waited {DEADLINE:?} for the reader to end"
-    );
-    drop(state);
-    // Pause on it returns at once.
-    let reader = paused(reader);
-    assert!(!reader.gate.lock().parked);
-}
-
 #[test]
 fn hand_over_gives_the_terminal_and_its_input_to_the_program() {
     let mut pair = open();
     crate::term::setup(&pair.slave, true).unwrap_or_else(|err| panic!("setup: {err}"));
-    let start = "\x1b[?1049h\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b[?u\x1b[c";
+    let start =
+        "\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b[?u\x1b[c";
     read_exact(&pair.main, start.len(), "the start bytes");
     let tty = pair
         .slave
@@ -1029,6 +819,7 @@ fn hand_over_gives_the_terminal_and_its_input_to_the_program() {
     // The pause inside blocks: the loop runs on a thread, with a deadline.
     let (lp, code, seen) = within("the hand-over", move || {
         let mut seen = None;
+        lp.write_title();
         let code = lp.hand_over(|| {
             let cooked =
                 rustix::termios::tcgetattr(&slave).unwrap_or_else(|err| panic!("attr: {err}"));
@@ -1041,6 +832,8 @@ fn hand_over_gives_the_terminal_and_its_input_to_the_program() {
             });
             seen = Some((is_cooked(&cooked), line.unwrap_or_default()));
         });
+        // The same title is written again after the program.
+        lp.write_title();
         (lp, code, seen)
     });
     drop(lp);
@@ -1051,17 +844,17 @@ fn hand_over_gives_the_terminal_and_its_input_to_the_program() {
     ));
     // The terminal was restored, then set up again with hover and kitty's
     // flags.
-    let restore =
-        "\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?1049l\x1b[?25h";
+    let restore = "\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[23;2t\x1b[?1049l\x1b[?25h";
     let echoed = read_until(&pair.main, restore.as_bytes(), "the restore bytes");
     assert!(echoed.ends_with(restore.as_bytes()));
     // In between, the cooked terminal echoed the program's line.
-    let resumed =
-        "typed\r\n\x1b[?1049h\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b[>1u";
+    let resumed = "typed\r\n\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b[>1u";
     assert_eq!(
         read_until(&pair.main, resumed.as_bytes(), "the resume bytes"),
         resumed.as_bytes()
     );
+    let title = crate::osc::title("fiber");
+    assert_eq!(read_exact(&pair.main, title.len(), "the title"), title);
     // The reader runs again.
     pair.main
         .write_all(b"k")
@@ -1087,15 +880,6 @@ fn ctrl_c_or_ctrl_backslash_in_a_cooked_terminal_leaves_fiber_running() {
         .unwrap_or_else(|err| panic!("raise: {err}"));
     signal_hook::low_level::raise(signal_hook::consts::SIGQUIT)
         .unwrap_or_else(|err| panic!("raise: {err}"));
-}
-
-#[test]
-fn pause_on_a_reader_already_parked_returns_at_once() {
-    let (_woken, wake) = io::pipe().unwrap_or_else(|err| panic!("pipe: {err}"));
-    let gate = Arc::new(super::Gate::default());
-    gate.lock().parked = true;
-    let reader = paused(super::Reader { gate, wake });
-    assert!(reader.gate.lock().paused);
 }
 
 /// A fake editor and what keeps it in check.
@@ -1243,7 +1027,7 @@ fn a_copy_writes_osc_52_and_pipes_the_code_to_the_command() {
             line("assistant_message_delta", reply, Some("a_1")),
         ],
     );
-    let shown = crate::view::text(lp.screen.terminal.backend().inner.buffer());
+    let shown = crate::view::text(lp.screen.backend().buffer());
     let row = shown
         .lines()
         .position(|line| line.ends_with("copy"))
@@ -1276,7 +1060,12 @@ fn a_copy_writes_osc_52_and_pipes_the_code_to_the_command() {
     // A left click off any target, here on blank cells, clears "Copied".
     feed(&mut lp, vec![at(0, 2, 0, 'M'), at(0, 2, 0, 'm')]);
     assert!(!lp.app.copied());
-    let osc = b"\x1b]52;c;bGV0IGEgPSAxOw==\x07";
+    // The first frame's title, then the copy.
+    let osc = [
+        crate::osc::title("fiber"),
+        b"\x1b]52;c;bGV0IGEgPSAxOw==\x07".to_vec(),
+    ]
+    .concat();
     assert_eq!(read_exact(&pair.main, osc.len(), "the OSC 52 bytes"), osc);
     ready.wait(DEADLINE);
     assert_eq!(
@@ -1313,7 +1102,7 @@ fn a_non_left_press_keeps_copied_and_a_left_press_clears_it() {
             line("assistant_message_delta", reply, Some("a_1")),
         ],
     );
-    let shown = crate::view::text(lp.screen.terminal.backend().inner.buffer());
+    let shown = crate::view::text(lp.screen.backend().buffer());
     let row = shown
         .lines()
         .position(|line| line.ends_with("copy"))
@@ -1479,7 +1268,7 @@ fn hub_status(session: &str, state: &str) -> String {
 
 /// The terminal's restore bytes, after its last frame.
 const RESTORE: &[u8] =
-    b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?1049l\x1b[?25h";
+    b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[23;2t\x1b[?1049l\x1b[?25h";
 
 /// Runs the terminal on a pty with `hub` as its hub stream: the pty pair,
 /// and the exit code once it quits.
@@ -1512,7 +1301,7 @@ fn spawn_run(hub: UnixStream) -> (Pair, mpsc::Receiver<i32>) {
 /// Reads the start bytes and the first frame.
 fn first_frame(pair: &Pair) {
     let expected =
-        b"\x1b[?1049h\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b[?u\x1b[c";
+        b"\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b[?u\x1b[c";
     assert_eq!(
         read_exact(&pair.main, expected.len(), "the start bytes"),
         expected
@@ -1635,4 +1424,127 @@ fn run_close_all_with_a_lost_hub_still_prints_the_resume_line() {
         tail.get(tail.len().saturating_sub(line.len())..),
         Some(line.as_slice())
     );
+}
+
+#[test]
+fn run_writes_the_title_once_until_it_changes() {
+    let pair = open();
+    let tty = pair
+        .slave
+        .try_clone()
+        .unwrap_or_else(|err| panic!("dup: {err}"));
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), Some(tty));
+    lp.app.set_home(launch());
+    let (_tx, rx) = mpsc::channel();
+    // Two frames on home, one title; a status for the attached session
+    // renames it, and the same status again writes nothing.
+    assert_eq!(lp.step(Input::Bytes(Vec::new()), &rx), None);
+    assert_eq!(lp.step(Input::Bytes(Vec::new()), &rx), None);
+    lp.app
+        .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    for _ in 0..2 {
+        assert_eq!(
+            lp.step(Input::Hub(live_status("s_aaaaaaaaaaaaaaaa", "idle")), &rx),
+            None
+        );
+    }
+    (&pair.slave)
+        .write_all(b"ENDMARK")
+        .unwrap_or_else(|err| panic!("write: {err}"));
+    let written = read_until(&pair.main, b"ENDMARK", "the mark");
+    let expected = [
+        crate::osc::title("fiber"),
+        crate::osc::title("✓ fix the parser · fiber"),
+        b"ENDMARK".to_vec(),
+    ]
+    .concat();
+    assert_eq!(written, expected);
+}
+
+fn owned(paths: &[&str]) -> Vec<String> {
+    paths.iter().map(|path| (*path).to_owned()).collect()
+}
+
+/// Runs git with `args` in `dir`, which must succeed.
+fn git(dir: &Path, args: &[&str]) {
+    let dir = dir.to_path_buf();
+    let args: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
+    let what = format!("git {}", args.join(" "));
+    let status = within(&what, move || {
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(&dir)
+            .args(&args)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+    })
+    .unwrap_or_else(|err| panic!("{what}: {err}"));
+    assert!(status.success(), "{what}: {status}");
+}
+
+/// A repository with `a.txt` and `sub/b.rs` tracked and `c.txt` not.
+fn repository() -> fakes::TempDir {
+    let dir = fakes::TempDir::new("tui-files");
+    let root = dir.path();
+    std::fs::create_dir(root.join("sub")).unwrap_or_else(|err| panic!("mkdir: {err}"));
+    for file in ["a.txt", "sub/b.rs", "c.txt"] {
+        std::fs::write(root.join(file), "x").unwrap_or_else(|err| panic!("{file}: {err}"));
+    }
+    git(root, &["init", "-q"]);
+    git(root, &["add", "a.txt", "sub/b.rs"]);
+    dir
+}
+
+/// The next result the worker posts, within [`DEADLINE`].
+fn next_result(rx: &Receiver<Input>, what: &str) -> (u64, Result<Vec<String>, String>) {
+    match rx.recv_timeout(DEADLINE) {
+        Ok(Input::Files { generation, result }) => (generation, result),
+        Ok(_) => panic!("{what}: not a file search result"),
+        Err(err) => panic!("waited {DEADLINE:?} for {what}: {err}"),
+    }
+}
+
+#[test]
+fn the_loop_lists_searches_and_drops_the_worker_on_close() {
+    let dir = repository();
+    let mut app = App::new(dir.path().to_path_buf());
+    app.set_size(60, 12);
+    let (out, rx) = mpsc::channel();
+    let mut lp = Loop {
+        app,
+        parser: crate::keys::Parser::default(),
+        screen: Screen::new(TestBackend::new(60, 12), 60, 12)
+            .unwrap_or_else(|err| panic!("screen: {err}")),
+        hub: None,
+        tty: None,
+        on_attach: Box::new(|_| {}),
+        clock: fakes::clock::FakeClock::new(),
+        wakeups: 0,
+        files_out: Some(out),
+        search: None,
+        stash: std::collections::VecDeque::new(),
+        reader: None,
+        pointer: crate::mouse::Pointer::default(),
+        hover: true,
+        var: Box::new(|_| None),
+        copy_command: None,
+        title: crate::osc::Title::default(),
+    };
+    // No hub: a frame fetches no history, so nothing arrives here.
+    let (_hub, idle) = mpsc::channel();
+    assert_eq!(lp.step(Input::Bytes(b"@".to_vec()), &idle), None);
+    assert!(lp.search.is_some());
+    let (generation, result) = next_result(&rx, "the listing's first search");
+    assert_eq!(generation, lp.app.generation());
+    assert_eq!(lp.step(Input::Files { generation, result }, &idle), None);
+    let shown = lp.app.completions().map(|c| c.lines).unwrap_or_default();
+    assert_eq!(shown, owned(&["a.txt", "sub/b.rs"]));
+    assert_eq!(lp.step(Input::Bytes(b"b".to_vec()), &idle), None);
+    let (generation, result) = next_result(&rx, "the search for b");
+    assert_eq!(result, Ok(owned(&["sub/b.rs"])));
+    assert_eq!(lp.step(Input::Files { generation, result }, &idle), None);
+    assert_eq!(lp.step(Input::Bytes(b"\t".to_vec()), &idle), None);
+    assert_eq!(lp.app.draft(), "sub/b.rs ");
+    assert!(lp.search.is_none());
 }

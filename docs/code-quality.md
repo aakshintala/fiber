@@ -178,6 +178,7 @@ the code and the list disagree.
 | Crate | File | Why |
 |---|---|---|
 | `tools` | `crates/tools/src/shell/spawn.rs` | `pre_exec` calls `setsid`, and for a `tty` command the `TIOCSCTTY` ioctl on fd 0, between fork and exec |
+| `fakes` | `crates/fakes/src/crash_ports.rs` | on macOS, `pre_exec` calls `task_set_exception_ports` so a re-run child's deliberate `abort()` writes no ReportCrash report; its test reads the port back with `task_get_exception_ports` |
 | `log` | `crates/log/src/diag/memory.rs` | on macOS, `proc_pid_rusage` reads the peak physical footprint for a `peak_memory` line |
 
 `unsafe` inside dependencies is `docs/dependencies.md`'s.

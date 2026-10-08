@@ -118,9 +118,9 @@ fn hover_writes_only_when_the_target_under_the_pointer_changes() {
 fn hover_redraws_only_the_targets_row() {
     let (mut lp, _) = new_loop(Cells::default(), None);
     feed(&mut lp, vec![offering("r_1"), esc()]);
-    lp.screen.terminal.backend_mut().inner.drawn.clear();
+    lp.screen.backend_mut().drawn.clear();
     feed(&mut lp, vec![motion(2, 10)]);
-    let drawn = &lp.screen.terminal.backend().inner.drawn;
+    let drawn = &lp.screen.backend().drawn;
     assert_eq!(drawn.len(), 30);
     assert!(drawn.iter().all(|&(x, y)| y == 10 && x < 30), "{drawn:?}");
 }
@@ -216,7 +216,7 @@ fn hover_frames_counts_the_bytes_each_report_wrote() {
 
 /// The screen a loop on a [`TestBackend`] shows, as text.
 fn shown(lp: &super::Loop<TestBackend>) -> String {
-    crate::view::text(lp.screen.terminal.backend().inner.buffer())
+    crate::view::text(lp.screen.backend().buffer())
 }
 
 /// The first row of `lp`'s screen whose text, trimmed, starts with `start`.
@@ -291,14 +291,14 @@ fn hover_over_a_group_line_tints_only_its_row() {
     let lp = grouped(TestBackend::new(60, 12));
     let group = row_of(&lp, "• Read");
     let mut lp = grouped(Cells::default());
-    lp.screen.terminal.backend_mut().inner.drawn.clear();
+    lp.screen.backend_mut().drawn.clear();
     feed(&mut lp, vec![motion(5, group)]);
-    let drawn = &lp.screen.terminal.backend().inner.drawn;
+    let drawn = &lp.screen.backend().drawn;
     assert_eq!(drawn.len(), 60);
     assert!(drawn.iter().all(|&(_, y)| y == group), "{drawn:?}");
     let mut lp = grouped(TestBackend::new(60, 12));
     feed(&mut lp, vec![motion(5, group)]);
-    let buf = lp.screen.terminal.backend().inner.buffer();
+    let buf = lp.screen.backend().buffer();
     for y in 0..12 {
         for x in 0..60 {
             let bg = buf.cell((x, y)).map(|cell| cell.bg);
@@ -319,7 +319,7 @@ fn attached(inputs: Vec<Input>) -> super::Loop<TestBackend> {
 
 /// The click target under 0-based `col`, `row` of `lp`'s last frame.
 fn hit_at(lp: &super::Loop<TestBackend>, col: u16, row: u16) -> Option<crate::mouse::TargetId> {
-    crate::mouse::hit(&lp.screen.targets, col, row)
+    crate::mouse::hit(lp.screen.targets(), col, row)
 }
 
 #[test]

@@ -137,6 +137,9 @@ impl App {
             | Key::AltUp
             | Key::AltDown
             | Key::AltX
+            | Key::AltP
+            | Key::AltR
+            | Key::AltDigit(_)
             | Key::Tab
             | Key::BackTab
             | Key::F1
@@ -361,6 +364,9 @@ impl App {
             | Key::AltUp
             | Key::AltDown
             | Key::AltX
+            | Key::AltP
+            | Key::AltR
+            | Key::AltDigit(_)
             | Key::BackTab
             | Key::F1
             | Key::CtrlO
@@ -384,6 +390,10 @@ impl App {
         let effect = match name {
             "home" | "new" => self.leave(),
             "resume" => self.resume_list(),
+            "panel" => {
+                self.draft.clear();
+                self.toggle_panel()
+            }
             "handoff" => {
                 let args = (!rest.is_empty()).then(|| json!({ "instructions": rest }));
                 self.send_command("handoff", args)
@@ -482,7 +492,7 @@ impl App {
         let total: usize = keymap::lines()
             .iter()
             .map(|line| {
-                crate::view::rows(ratatui::text::Line::raw(line.as_str()), self.screen.width())
+                crate::view::rows(ratatui::text::Line::raw(line.as_str()), self.column_width())
             })
             .sum();
         let last = total.saturating_sub(height);
@@ -501,6 +511,9 @@ impl App {
             | Key::AltUp
             | Key::AltDown
             | Key::AltX
+            | Key::AltP
+            | Key::AltR
+            | Key::AltDigit(_)
             | Key::Tab
             | Key::BackTab
             | Key::F1

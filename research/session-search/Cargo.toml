@@ -1,0 +1,13 @@
+[package]
+name = "session-search"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+contract = { path = "../../crates/contract" }
+log = { path = "../../crates/log" }
+serde_json = "1"
+
+# Standalone: never part of Fiber's workspace. Evidence for #578.
+[workspace]

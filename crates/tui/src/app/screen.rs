@@ -35,12 +35,17 @@ impl Screen {
         }
     }
 
-    /// Sets the size, each side at least 1; a new width re-counts every
-    /// page.
+    /// Sets the size, each side at least 1. The pages wrap at what
+    /// [`Screen::wrap_at`] names, which the app sets from the layout.
     pub(super) fn set_size(&mut self, width: u16, height: u16) {
         self.width = width.max(1);
         self.height = height.max(1);
-        self.pages.set_width(self.width);
+    }
+
+    /// Wraps the pages at `width` columns; a new width re-counts every
+    /// page.
+    pub(super) fn wrap_at(&mut self, width: u16) {
+        self.pages.set_width(width.max(1));
     }
 
     /// The screen's columns.

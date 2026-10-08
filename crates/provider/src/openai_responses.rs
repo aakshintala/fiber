@@ -539,6 +539,7 @@ impl Decoder {
                 let raw = str_at(item, "arguments");
                 let arguments = match serde_json::from_str(raw) {
                     Ok(Value::Object(map)) => Value::Object(map),
+                    _ if raw.is_empty() => Value::Object(serde_json::Map::new()),
                     Ok(_) | Err(_) => Value::String(raw.to_owned()),
                 };
                 self.actions.push(ReplyAction::ToolCall(ToolCallRequested {

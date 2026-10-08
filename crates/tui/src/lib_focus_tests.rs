@@ -95,8 +95,7 @@ fn a_focus_reset_saves_the_rerendered_cells() {
     assert_eq!(renders, 2, "a stale focus causes a rerender");
     assert_eq!(
         lp.screen
-            .last
-            .as_ref()
+            .last()
             .and_then(|(cells, _)| cells.cell((0, 0)))
             .map(|cell| cell.symbol()),
         Some("n"),
@@ -117,10 +116,7 @@ fn focus_that_loses_its_target_returns_in_the_same_frame() {
     feed(&mut lp, inputs);
     assert_eq!(lp.app.focused(), None);
     assert!(
-        lp.screen
-            .last
-            .as_ref()
-            .is_some_and(|(_, cursor)| cursor.is_some()),
+        lp.screen.last().is_some_and(|(_, cursor)| cursor.is_some()),
         "the redrawn frame shows the cursor"
     );
 }
