@@ -144,7 +144,7 @@ only that crate, in KiB; the empty program is 323 KiB.
 | html5ever | `web_fetch`'s tokenizer, without its tree builder | 808 | 960 | 480 | 19 | 1,058 |
 | encoding_rs | `web_fetch`'s decoding by the declared character set | 224 | 332 | 272 | 5 | 490 |
 | pulldown-cmark | the terminal's markdown in replies (`docs/tui.md`, "Look") | 428 | 384 | ~0 | 4 | 724 |
-| flate2 | decompressing the release's docs and extensions archives (`docs/releasing.md`, "Installing"), and the test fakes' release archives | TBD | TBD | 592 | 6 | TBD |
+| flate2 | decompressing the release's docs and extensions archives (`docs/releasing.md`, "Installing"), and the test fakes' release archives | 560 | 640 | 592 | 6 | 403 |
 | all of the above together | | 8,292 | 7,532 | 5,009 | 153 | 7,729 |
 | image, fast_image_resize | the image child; png, jpeg, gif and webp only (`docs/model-routing.md`, "Image limits") | 68,076 | 67,604 | 67,825 | 32 | 5,234 |
 
