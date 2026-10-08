@@ -44,6 +44,7 @@ impl CaseClock {
     }
 
     /// The deadlines currently parked in [`Clock::wait_until`].
+    #[cfg(test)]
     pub(crate) fn parked(&self) -> Vec<Option<Instant>> {
         lock(&self.state)
             .parked
@@ -80,6 +81,7 @@ impl CaseClock {
     }
 
     /// Moves case time by `d` and wakes every subscribed clock waiter.
+    #[cfg(test)]
     pub(crate) fn advance(&self, d: Duration) {
         let wakers = move_by(&mut lock(&self.state), d);
         self.wake(wakers);

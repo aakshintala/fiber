@@ -1,4 +1,4 @@
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::OsStringExt;
 use std::path::PathBuf;
 
@@ -75,6 +75,17 @@ fn the_menu_is_hand_grouped_and_names_every_visible_subcommand() {
         "{parsed:?}"
     );
     assert_eq!(super::render_help::<&str>(&[]).unwrap(), menu());
+}
+
+#[test]
+fn extension_case_is_a_hidden_internal_command() {
+    let parsed = parse_from(["fiber", "extension-case", "tests/first.json"]);
+    assert!(
+        matches!(parsed, Invocation::Run(Some(Commands::ExtensionCase { ref case })) if case.as_os_str() == OsStr::new("tests/first.json")),
+        "{parsed:?}"
+    );
+    assert!(!visible().iter().any(|name| name == "extension-case"));
+    assert!(!menu().contains("extension-case"));
 }
 
 #[test]

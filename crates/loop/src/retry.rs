@@ -214,6 +214,9 @@ impl crate::Loop {
                             if self.turn_cancelled() {
                                 return Ok(Attempted::Interrupted);
                             }
+                            let clock = self.log.clock();
+                            let now = clock.now();
+                            let until = now.checked_add(delay).unwrap_or(now);
                             self.append(
                                 &Event::RetryScheduled(RetryScheduled {
                                     code: failure.code.clone(),
@@ -223,10 +226,12 @@ impl crate::Loop {
                                 turn,
                                 Some(&message),
                             )?;
-                            // The wait is the delay after the failure: anchored
-                            // when the failure is handled, so time the call took
-                            // never shortens it.
-                            if self.wait_retry(delay) {
+                            #[cfg(test)]
+                            retry_scheduled_test_pause();
+                            // The deadline is fixed before the line: an advance
+                            // after `retry_scheduled` cannot stretch this wait
+                            // (`docs/testing.md`, "Waits and timeouts").
+                            if self.wait_retry(until) {
                                 return Ok(Attempted::Interrupted);
                             }
                             retries = retries.saturating_add(1);
@@ -243,25 +248,19 @@ impl crate::Loop {
         }
     }
 
-    /// Parks the loop thread for `delay` on the log's clock, woken by a
+    /// Parks the loop thread until `until` on the log's clock, woken by a
     /// clock move and by the turn's cancel. True when the turn was
     /// cancelled. The deadline is anchored when the failure is handled, so
     /// a clock move before the wait starts never shortens it. The wake is
     /// subscribed to the clock and the cancel first, then the deadline and
     /// the cancel are checked, and re-checked after every wake, so a bump
     /// that lands before the park is still seen.
-    fn wait_retry(&self, delay: Duration) -> bool {
+    fn wait_retry(&self, until: std::time::Instant) -> bool {
         let wake = Arc::new(SharedWake::default());
         let keeper: Arc<dyn Wake> = wake.clone();
         let clock = self.log.clock().clone();
         clock.subscribe(Arc::downgrade(&keeper));
         self.cancel.subscribe(Arc::downgrade(&keeper));
-        let until = clock.now().checked_add(delay).unwrap_or_else(|| {
-            // Unreachable in practice: the delay is capped at `max`, so this
-            // needs the clock near the end of the `Instant` range. Fall back
-            // to no wait rather than a deadline that cannot be built.
-            clock.now()
-        });
         loop {
             if self.turn_cancelled() {
                 return true;
@@ -277,6 +276,35 @@ impl crate::Loop {
 /// A delay as whole milliseconds for `retry_scheduled.delay_ms`, saturating.
 fn delay_ms(delay: Duration) -> u64 {
     u64::try_from(delay.as_millis()).unwrap_or(u64::MAX)
+}
+
+#[cfg(test)]
+type RetryScheduledHook = Arc<dyn Fn() + Send + Sync>;
+
+#[cfg(test)]
+static RETRY_SCHEDULED_HOOK: std::sync::OnceLock<std::sync::Mutex<Option<RetryScheduledHook>>> =
+    std::sync::OnceLock::new();
+
+#[cfg(test)]
+fn retry_scheduled_test_pause() {
+    // This pause forces the line-to-wait interleaving (`docs/testing.md`,
+    // "Waits and timeouts"): the test advances only after `retry_scheduled`.
+    let hook = RETRY_SCHEDULED_HOOK
+        .get_or_init(|| std::sync::Mutex::new(None))
+        .lock()
+        .unwrap()
+        .clone();
+    if let Some(hook) = hook {
+        hook();
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn set_retry_scheduled_hook(hook: Option<Arc<dyn Fn() + Send + Sync>>) {
+    *RETRY_SCHEDULED_HOOK
+        .get_or_init(|| std::sync::Mutex::new(None))
+        .lock()
+        .unwrap() = hook;
 }
 
 #[cfg(test)]

@@ -1,10 +1,20 @@
 //! Unit tests of `Retry::decide`: retryable failures, backoff and attempt limit
 //! (`docs/model-routing.md`, "When a model call fails").
 
+use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
+use std::thread;
 use std::time::Duration;
 
+use crate::{Loop, Model};
 use contract::ErrorCode;
-use contract::shapes::Failure;
+use contract::inbox::{Ack, Delivery, Message};
+use contract::rules::{Rules, RulesError, StandingRules};
+use contract::shapes::{ContentPart, Failure, Origin, Sender};
+use contract::{CommandId, SessionId};
+use fakes::clock::FakeClock;
+use fakes::{Scripted, ScriptedProvider};
+use log::Log;
 
 use super::{Decision, Retry};
 
@@ -268,6 +278,140 @@ fn a_saturated_asked_wait_fails_at_once_whatever_the_cap() {
         u64::MAX - 1,
         "only the saturated value counts as over every cap"
     );
+}
+
+#[test]
+fn advancing_on_retry_scheduled_does_not_stretch_the_retry_deadline() {
+    const DEADLINE: Duration = Duration::from_secs(5);
+    let home = fakes::TempDir::new("fiber-retry-deadline");
+    let workspace = home.path().join("workspace");
+    let credentials = home.path().join("credentials");
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::create_dir_all(&credentials).unwrap();
+    let clock = FakeClock::new();
+    let clock_for_loop: Arc<dyn contract::clock::Clock> = clock.clone();
+    let log = Arc::new(
+        Log::create(
+            home.path(),
+            SessionId("s_retry_deadline".into()),
+            clock_for_loop.clone(),
+        )
+        .unwrap(),
+    );
+    let (inbox, receiver) = mpsc::channel();
+    let provider = Arc::new(ScriptedProvider::new(vec![
+        Scripted::failed(Failure {
+            code: ErrorCode::RateLimited,
+            message: "try again".into(),
+            retry_after_ms: None,
+            provider: None,
+        }),
+        Scripted::text("Recovered."),
+    ]));
+    let rules: Arc<dyn Rules> = Arc::new(NoRules);
+    let mut looped = Loop::start(
+        Arc::clone(&log),
+        provider,
+        Model {
+            reference: "fake/model".into(),
+            cost: None,
+            subscription: false,
+        },
+        crate::prompt::PromptInputs::new(
+            home.path().to_path_buf(),
+            "/bin/sh".into(),
+            home.path()
+                .join("s_retry_deadline/events.jsonl")
+                .display()
+                .to_string(),
+            clock_for_loop,
+            fakes::CONTEXT_WINDOW,
+        ),
+        receiver,
+        Vec::new(),
+        crate::Permissions {
+            workspace: workspace.display().to_string(),
+            credentials,
+            credential_files: Vec::new(),
+            rules,
+        },
+    )
+    .unwrap();
+    inbox
+        .send(Delivery::Prompt(
+            Message {
+                content: vec![ContentPart::Text { text: "hi".into() }],
+                sender: Sender {
+                    origin: Origin::Driver,
+                    command_id: Some(CommandId("c_retry_deadline".into())),
+                },
+            },
+            Ack(Box::new(|_| {})),
+        ))
+        .unwrap();
+
+    let (at_schedule_tx, at_schedule_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let release_rx = Mutex::new(release_rx);
+    super::set_retry_scheduled_hook(Some(Arc::new(move || {
+        at_schedule_tx.send(()).unwrap();
+        release_rx.lock().unwrap().recv_timeout(DEADLINE).unwrap();
+    })));
+    let _reset = ResetScheduleHook;
+    let mut watcher = log.watch_all().unwrap();
+    let (retry_started_tx, retry_started_rx) = mpsc::channel();
+    let watch = thread::spawn(move || {
+        let mut starts = 0;
+        while let Ok(Some(line)) = watcher.recv() {
+            if line.kind == "assistant_message_started" {
+                starts += 1;
+                if starts == 2 {
+                    retry_started_tx.send(()).unwrap();
+                    return;
+                }
+            }
+        }
+    });
+    let turn = thread::spawn(move || looped.turn());
+
+    at_schedule_rx
+        .recv_timeout(DEADLINE)
+        .expect("retry_scheduled was appended before the retry wait");
+    clock.advance(Duration::from_secs(2));
+    release_tx.send(()).unwrap();
+    let retried_without_another_advance = retry_started_rx.recv_timeout(DEADLINE).is_ok();
+    if !retried_without_another_advance {
+        clock.advance(Duration::from_secs(2));
+    }
+    assert_eq!(
+        turn.join().unwrap().unwrap(),
+        Some(contract::events::TurnOutcome::Completed)
+    );
+    watch.join().unwrap();
+    assert!(
+        retried_without_another_advance,
+        "the advance after retry_scheduled must release the deadline already fixed"
+    );
+}
+
+struct NoRules;
+
+impl Rules for NoRules {
+    fn read(&self) -> Result<StandingRules, RulesError> {
+        Ok(StandingRules::default())
+    }
+
+    fn remember(&self, _: &str, _: &str, _: &SessionId) -> Result<(), RulesError> {
+        Ok(())
+    }
+}
+
+struct ResetScheduleHook;
+
+impl Drop for ResetScheduleHook {
+    fn drop(&mut self) {
+        super::set_retry_scheduled_hook(None);
+    }
 }
 
 #[test]

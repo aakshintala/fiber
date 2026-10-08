@@ -56,6 +56,7 @@ pub(crate) fn run(
         clock,
         &signals,
         fiber,
+        None,
     )
 }
 
@@ -64,6 +65,10 @@ pub(crate) fn run(
 /// only in the id's source (minted vs `--id`), the workspace (the current
 /// directory on entry, applied by chdir before the call) and the first
 /// deliveries (prompt plus `close` vs an optional prompt).
+#[allow(
+    clippy::too_many_arguments,
+    reason = "session setup threads the case runner beside the existing session inputs"
+)]
 pub(crate) fn new_session(
     id: SessionId,
     model: Option<String>,
@@ -72,8 +77,11 @@ pub(crate) fn new_session(
     clock: Arc<dyn contract::clock::Clock>,
     signals: &Arc<doors::Signals>,
     fiber: Result<PathBuf, String>,
+    case_run: Option<Arc<crate::case::run::CaseRun>>,
 ) -> i32 {
-    let mut parts = match parts_with(model, None, None, None, Arc::clone(&clock)) {
+    let host = case_run.as_ref().map(|case| case.host_script());
+    let clock = case_run.as_ref().map_or(clock, |case| case.session_clock());
+    let mut parts = match parts_with(model, None, None, None, Arc::clone(&clock), host) {
         Ok(parts) => parts,
         Err(e) => return ask_failed(e),
     };
@@ -139,14 +147,12 @@ pub(crate) fn new_session(
         Err(e) => return stop_and_fail(session_servers, failed(e.code(), e)),
     };
     job_emit.set(Arc::clone(&log) as _);
-    let session = match Session::open(
-        &home,
-        &dir,
-        &log,
-        Arc::clone(&clock),
-        infos,
-        Box::new(io::stdout()),
-    ) {
+    let event_output: Box<dyn io::Write + Send> = if case_run.is_some() {
+        Box::new(io::sink())
+    } else {
+        Box::new(io::stdout())
+    };
+    let session = match Session::open(&home, &dir, &log, Arc::clone(&clock), infos, event_output) {
         Ok(session) => session,
         Err(e) => return stop_and_fail(session_servers, e),
     };
@@ -174,12 +180,22 @@ pub(crate) fn new_session(
         return code;
     }
     let inbox_wake = session.inbox_wake();
+    let case_driver = case_run.as_ref().and_then(|case| {
+        match case.start(session.driver(), Arc::clone(&log), Arc::clone(&cancel)) {
+            Ok(driver) => Some(driver),
+            Err(error) => {
+                case.record_failure(format!("starting the case driver: {error}"));
+                None
+            }
+        }
+    });
+    let run_one_turn = one_turn || (case_run.is_some() && case_driver.is_none());
     let code = run_turn(
         &session,
         &log,
         &dir,
         prompt,
-        one_turn,
+        run_one_turn,
         cancel,
         |inbox, cancel| {
             finish(
@@ -212,7 +228,7 @@ pub(crate) fn new_session(
                 // Only one-turn `fiber ask` runs with no client: the
                 // session command serves clients that may answer
                 // (`docs/permissions.md`, "Headless").
-                !one_turn,
+                !run_one_turn,
                 reviewer,
                 limits,
                 retry,
@@ -220,6 +236,16 @@ pub(crate) fn new_session(
             )
         },
     );
+    if let Some(case_driver) = case_driver {
+        match case_driver.join() {
+            Ok(()) => {}
+            Err(_) => {
+                if let Some(case) = &case_run {
+                    case.record_failure("the case driver panicked".to_owned());
+                }
+            }
+        }
+    }
     session_servers.servers.stop();
     close(session, log, &home, &dir, &workspace, &*clock);
     code

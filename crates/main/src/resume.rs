@@ -145,6 +145,7 @@ fn resumed_session(
         folded.credential.as_deref(),
         recorded_thinking,
         Arc::clone(&clock),
+        None,
     ) {
         Ok(mut parts) => {
             // The session directory's log: the opening message's

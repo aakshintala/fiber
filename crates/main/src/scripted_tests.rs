@@ -140,7 +140,9 @@ fn parts(
         std::fs::write(workspace.join(name), text).unwrap();
     }
     let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
-    crate::parts_in(home, workspace, None, recorded, None, None, clock, None)
+    crate::parts_in(
+        home, workspace, None, recorded, None, None, clock, None, None,
+    )
 }
 
 const ONE_STEP: &str = r#"{"steps": [{"text": "Hi."}]}"#;

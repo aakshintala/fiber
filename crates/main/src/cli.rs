@@ -159,6 +159,13 @@ pub(crate) enum Commands {
         )]
         args: Vec<OsString>,
     },
+    /// The case runner's child command: hidden and free to change.
+    #[command(hide = true)]
+    ExtensionCase {
+        /// The case file the parent asked this child to run.
+        #[arg(value_name = "case")]
+        case: PathBuf,
+    },
     /// The internal session command: hidden and free to change.
     #[command(hide = true)]
     Session(SessionArgs),

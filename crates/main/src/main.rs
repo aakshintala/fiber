@@ -160,6 +160,9 @@ fn run() -> i32 {
                 Err(sentence) => ask_failed(usage(sentence)),
             }
         }
+        cli::Invocation::Run(Some(cli::Commands::ExtensionCase { case })) => {
+            case::run::extension_case(case, clock, fiber)
+        }
         cli::Invocation::Run(Some(cli::Commands::Session(args))) => {
             session_command::run(args, clock, fiber)
         }
@@ -312,6 +315,7 @@ fn ask_new(
         clock,
         signals,
         fiber,
+        None,
     )
 }
 
@@ -441,6 +445,7 @@ fn parts_with(
     recorded_credential: Option<&str>,
     recorded_thinking: Option<ThinkingLevel>,
     clock: Arc<dyn contract::clock::Clock>,
+    host: Option<Arc<extensions::HostScript>>,
 ) -> Result<Parts, Failure> {
     let home = config::fiber_home_from_env().map_err(|e| failed(e.code(), e))?;
     let workspace = std::env::current_dir()
@@ -453,6 +458,7 @@ fn parts_with(
         recorded_credential,
         recorded_thinking,
         clock,
+        host,
         prompt_files::agents_home(std::env::var_os("HOME")),
     )
 }
@@ -463,7 +469,7 @@ fn parts_with(
 /// cannot overflow the fixture model's context.
 #[allow(
     clippy::too_many_arguments,
-    reason = "one composition of the session's parts: homes, model choice and clock"
+    reason = "one composition of the session's parts: homes, model choice, clock and runner host"
 )]
 fn parts_in(
     home: PathBuf,
@@ -473,6 +479,7 @@ fn parts_in(
     recorded_credential: Option<&str>,
     recorded_thinking: Option<ThinkingLevel>,
     clock: Arc<dyn contract::clock::Clock>,
+    host: Option<Arc<extensions::HostScript>>,
     agents_home: Option<PathBuf>,
 ) -> Result<Parts, Failure> {
     let (sessions, project) = ::cli::project_of(&home, &workspace)?;
@@ -497,7 +504,7 @@ fn parts_in(
         &config,
         Arc::clone(&clock),
         session_locks,
-        None,
+        host,
     );
     let naming = lua_providers::add_lua(&extensions, &mut providers, &config)?;
     scripted::prepare(&mut providers, &config, recorded);
