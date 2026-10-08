@@ -1,3 +1,11 @@
+-- OpenRouter's model list (docs/model-routing.md, "Model discovery"): one
+-- entry per model of GET https://openrouter.ai/api/v1/models whose
+-- `supported_parameters` include `tools`. The endpoint needs no key, so the
+-- request carries no authorization. Any failure raises, so the cached list
+-- stays: a status other than 200, a body that is not JSON, a `data` field
+-- that is not a table, an unreadable price, or a list that would hold no
+-- entry at all.
+--
 -- OpenRouter's generation lookup (docs/model-routing.md, "Cost"): the cost of
 -- a call that ended without one, from GET <base_url>/generation?id=<id>.
 -- The lookup answers 404 until the generation's cost is known, which is
@@ -10,7 +18,108 @@ local function encode(text)
   end))
 end
 
+-- Whether the decoded JSON list `list` holds `want`. A value that is not
+-- a table holds nothing: JSON null decodes to a light userdata, never nil,
+-- so every read here tests the type.
+local function contains(list, want)
+  if type(list) ~= "table" then
+    return false
+  end
+  for _, v in ipairs(list) do
+    if v == want then
+      return true
+    end
+  end
+  return false
+end
+
+-- The price `pricing[field]` in US dollars per million tokens. OpenRouter
+-- quotes dollars per token as a string, so appending `e6` shifts the
+-- decimal: `0.0000001` reads as `0.1`, where multiplying would round. A
+-- value that is absent, null or not a string counts as absent, as does a
+-- negative price. A string no number reads from raises.
+local function price_per_million(pricing, field)
+  local raw = pricing[field]
+  if type(raw) ~= "string" then
+    return nil
+  end
+  local per_m = tonumber(raw .. "e6")
+  if per_m == nil then
+    error("openrouter models: unreadable price for `" .. field .. "`: " .. raw, 0)
+  end
+  if per_m < 0 then
+    return nil
+  end
+  return per_m
+end
+
 fiber.provider("openrouter", {
+  models = {
+    timeout = 10000,
+    run = function()
+      local reply = host.http({
+        url = "https://openrouter.ai/api/v1/models",
+      })
+      if reply.status ~= 200 then
+        error("openrouter models: unexpected status " .. tostring(reply.status), 0)
+      end
+      local data = json.decode(reply.body).data
+      if type(data) ~= "table" then
+        error("openrouter models: the reply holds no model list", 0)
+      end
+      local list = {}
+      for _, m in ipairs(data) do
+        if type(m) == "table" and contains(m.supported_parameters, "tools") then
+          local entry = {
+            id = m.id,
+            protocol = "openai-completions",
+            base_url = "https://openrouter.ai/api/v1",
+            compat = { cache_key_field = "session_id" },
+          }
+          if contains(m.supported_parameters, "reasoning") then
+            entry.compat.reasoning_object = true
+          end
+          if type(m.id) == "string" and m.id:sub(1, 10) == "anthropic/" then
+            entry.compat.anthropic = true
+          end
+          if type(m.context_length) == "number" then
+            entry.context_window = m.context_length
+          end
+          if type(m.top_provider) == "table"
+            and type(m.top_provider.max_completion_tokens) == "number"
+          then
+            entry.max_output_tokens = m.top_provider.max_completion_tokens
+          end
+          if type(m.architecture) == "table"
+            and type(m.architecture.input_modalities) == "table"
+          then
+            entry.input = m.architecture.input_modalities
+          end
+          if type(m.pricing) == "table" then
+            local input = price_per_million(m.pricing, "prompt")
+            local output = price_per_million(m.pricing, "completion")
+            if input ~= nil and output ~= nil then
+              local cost = { input = input, output = output }
+              local cache_read = price_per_million(m.pricing, "input_cache_read")
+              if cache_read ~= nil then
+                cost.cache_read = cache_read
+              end
+              local cache_write = price_per_million(m.pricing, "input_cache_write")
+              if cache_write ~= nil then
+                cost.cache_write = cache_write
+              end
+              entry.cost = cost
+            end
+          end
+          list[#list + 1] = entry
+        end
+      end
+      if #list == 0 then
+        error("openrouter models: the listing holds no model with `tools`", 0)
+      end
+      return list
+    end,
+  },
   cost = {
     timeout = 10000,
     run = function(call)

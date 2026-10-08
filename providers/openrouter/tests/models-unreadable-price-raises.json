@@ -1,0 +1,26 @@
+{
+  "call": {
+    "provider": "openrouter",
+    "function": "models",
+    "arg": {}
+  },
+  "host": {
+    "http": [
+      {
+        "request": {
+          "method": "GET",
+          "url": "https://openrouter.ai/api/v1/models",
+          "headers": {"authorization": null}
+        },
+        "reply": {
+          "status": 200,
+          "body": "{\"data\":[{\"id\":\"edge/free\",\"context_length\":1000,\"architecture\":{\"input_modalities\":[\"text\"]},\"pricing\":{\"prompt\":\"free\",\"completion\":\"0.000002\"},\"top_provider\":{\"max_completion_tokens\":100},\"supported_parameters\":[\"tools\"]}]}"
+        }
+      }
+    ]
+  },
+  "error": {
+    "code": "extension_failed",
+    "message": "`github.com/aakshintala/fiber/providers/openrouter`: openrouter models: unreadable price for `prompt`: free"
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "call": {
+    "provider": "openrouter",
+    "function": "models",
+    "arg": {}
+  },
+  "host": {
+    "http": [
+      {
+        "request": {
+          "method": "GET",
+          "url": "https://openrouter.ai/api/v1/models",
+          "headers": {"authorization": null}
+        },
+        "reply": {
+          "status": 200,
+          "body": "{\"data\":null}"
+        }
+      }
+    ]
+  },
+  "error": {
+    "code": "extension_failed",
+    "message": "`github.com/aakshintala/fiber/providers/openrouter`: openrouter models: the reply holds no model list"
+  }
+}
