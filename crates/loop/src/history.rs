@@ -108,16 +108,27 @@ pub(crate) fn fold(segments: &[Segment]) -> Result<Resumed, Error> {
             for line in log::lines(&segment.dir)? {
                 let line = line?;
                 end += 1;
-                // The point is inclusive: the history holds the lines
-                // with `seq <= to` (`docs/events.md`, "Rewind").
+                let seq = line.seq.as_ref().map(|seq| seq.0);
+                // Past the point the log is unread (`docs/events.md`,
+                // "Resume"): breaking here leaves those lines unparsed,
+                // however corrupt they are.
                 if segment
                     .to
                     .as_ref()
-                    .is_some_and(|to| line.seq.as_ref().is_some_and(|seq| seq.0 > to.0))
+                    .is_some_and(|to| seq.is_some_and(|seq| seq > to.0))
                 {
-                    continue;
+                    break;
                 }
                 fold_line(&line, &mut fold)?;
+                // The point is inclusive (`docs/events.md`, "Rewind"):
+                // its own line is the last one read.
+                if segment
+                    .to
+                    .as_ref()
+                    .is_some_and(|to| seq.is_some_and(|seq| seq == to.0))
+                {
+                    break;
+                }
             }
         } else {
             for line in segment.lines(0)? {

@@ -349,6 +349,27 @@ fn forked_without_a_build_reads_the_model_from_the_calls_and_switches() {
 }
 
 #[test]
+fn forked_leaves_a_garbage_line_past_the_point_unread() {
+    // The point's own line is the last one the fold reads: a garbage
+    // line right past it fails nothing.
+    let (_home, sessions) = sessions("garbage");
+    let dir = sessions.join(A);
+    fs::create_dir_all(&dir).unwrap();
+    let mut text = String::new();
+    for line in [
+        envelope(A, 0, None, None, &started("/w", None)),
+        envelope(A, 1, None, None, &usage("fake/model-1", "fiber-1", 7)),
+    ] {
+        text.push_str(&serde_json::to_string(&line).unwrap());
+        text.push('\n');
+    }
+    text.push_str("{\"kind\": \"usage_recorded\", broken\n");
+    fs::write(dir.join("events.jsonl"), text).unwrap();
+    let folded = forked(&dir, Seq(1)).unwrap();
+    assert_eq!(folded.model.as_deref(), Some("fake/model-1"));
+}
+
+#[test]
 fn the_window_reader_makes_a_parent_image_absolute_and_keeps_the_owns() {
     let (home, sessions) = sessions("images");
     write_log(

@@ -380,3 +380,32 @@ fn lines_past_the_point_are_never_parsed() {
         .collect();
     assert_eq!(kinds, ["session_started", "turn_started"]);
 }
+
+#[test]
+fn a_garbage_line_right_past_the_point_is_never_read() {
+    // The point's own line is the last one read: a garbage line at
+    // `to + 1` still returns the lines from `from` to `to` with no error.
+    let home = fakes::TempDir::new("log-history-garbage");
+    let sessions = home.path().join("sessions");
+    let dir = sessions.join("s_aaaaaaaaaaaaaaaa");
+    fs::create_dir_all(&dir).unwrap();
+    let mut text = String::new();
+    for line in [
+        started("s_aaaaaaaaaaaaaaaa", 0, None),
+        plain("s_aaaaaaaaaaaaaaaa", 1, "turn_started"),
+        plain("s_aaaaaaaaaaaaaaaa", 2, "turn_completed"),
+    ] {
+        text.push_str(&line.to_string());
+        text.push('\n');
+    }
+    text.push_str("{\"kind\": \"turn_started\", broken\n");
+    fs::write(dir.join(EVENTS), text).unwrap();
+    let segments = history_to(&dir, Seq(2)).unwrap();
+    let held: Vec<u64> = segments[0]
+        .lines(1)
+        .unwrap()
+        .into_iter()
+        .map(|line| line.seq.unwrap().0)
+        .collect();
+    assert_eq!(held, [1, 2]);
+}

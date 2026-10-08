@@ -109,9 +109,9 @@ impl Segment {
                 io_at(&path)(error)
             }
         })?;
-        // A durable log's line `n` carries `seq` `n`: the log holds
-        // durable lines only, and `Log` mints `seq` for each. Past the
-        // point the bytes are never parsed.
+        // Past the point the bytes are never read, let alone parsed:
+        // stopping on the point's own line leaves line `to + 1`
+        // unread, however corrupt it is.
         let mut reader = BufReader::new(file);
         let mut buf = Vec::new();
         let mut held = Vec::new();
@@ -121,9 +121,6 @@ impl Segment {
             buf.clear();
             let read = reader.read_until(b'\n', &mut buf).map_err(io_at(&path))?;
             if read == 0 || buf.last() != Some(&b'\n') {
-                break;
-            }
-            if number > end {
                 break;
             }
             number += 1;
@@ -142,6 +139,9 @@ impl Segment {
             last = Some(seq);
             if seq >= from {
                 held.push(line);
+            }
+            if seq == end {
+                break;
             }
         }
         // The log ends before `to`: nothing past its last line is in
