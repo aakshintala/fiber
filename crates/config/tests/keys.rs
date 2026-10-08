@@ -449,6 +449,13 @@ fn rows() -> Vec<(&'static [&'static str], Value, Value, &'static str, bool)> {
             "one of \"⌇\", \"≈\"",
             false,
         ),
+        (
+            &["keys", "send"],
+            json!(["ctrl+s"]),
+            json!(5),
+            "a string or a list of strings",
+            false,
+        ),
     ]
 }
 
@@ -942,4 +949,63 @@ fn a_global_diagnostics_level_that_is_not_info_or_debug_is_config_invalid() {
             "{bad}"
         );
     }
+}
+
+#[test]
+fn a_keys_entry_reads_a_string_a_list_or_an_empty_list() {
+    for good in [json!("ctrl+s"), json!(["ctrl+s", "alt+s"]), json!([])] {
+        let setup = Setup::new();
+        setup.write(
+            &setup.global(),
+            &nest(&["keys", "send"], good.clone()).to_string(),
+        );
+        let config = setup.load(&[]).unwrap();
+        assert!(
+            config.notices().is_empty(),
+            "{good:?}: {:?}",
+            config.notices()
+        );
+        assert_eq!(
+            config.get("keys.send", None),
+            Some((good.clone(), Source::Global(setup.global()))),
+            "{good:?}"
+        );
+    }
+}
+
+#[test]
+fn a_keys_entry_holding_anything_but_strings_is_config_invalid() {
+    for bad in [json!([5]), json!(["a", 5])] {
+        let setup = Setup::new();
+        setup.write(
+            &setup.global(),
+            &nest(&["keys", "send"], bad.clone()).to_string(),
+        );
+        let e = setup.load(&[]).unwrap_err();
+        assert_eq!(e.code(), ErrorCode::ConfigInvalid, "{bad}");
+        assert_eq!(
+            e.to_string(),
+            format!(
+                "{}: `keys.send` must be a string or a list of strings.",
+                setup.global().display()
+            ),
+            "{bad}"
+        );
+    }
+}
+
+#[test]
+fn the_project_file_in_fiber_home_merges_its_keys_with_the_global_file() {
+    let setup = Setup::new();
+    setup.write(&setup.global(), r#"{"keys": {"send": "ctrl+s"}}"#);
+    setup.write(&setup.project(), r#"{"keys": {"copy_focused": ["c"]}}"#);
+    let config = setup.load(&[]).unwrap();
+    assert!(config.notices().is_empty(), "{:?}", config.notices());
+    assert_eq!(
+        config.get("keys", None),
+        Some((
+            json!({"send": "ctrl+s", "copy_focused": ["c"]}),
+            Source::Project(setup.project())
+        ))
+    );
 }

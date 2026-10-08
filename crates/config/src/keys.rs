@@ -27,6 +27,8 @@ pub(crate) enum Kind {
     Number,
     OneOf(&'static [&'static str]),
     StrList,
+    /// A string, or a list of strings (`[]` included): `keys.*`.
+    StrOrStrList,
     /// An object whose values are strings, such as a server's `env`.
     StrMap,
     /// An object whose values are booleans, such as MCP hints.
@@ -50,6 +52,12 @@ impl Kind {
             Self::StrList => value
                 .as_array()
                 .is_some_and(|items| items.iter().all(Value::is_string)),
+            Self::StrOrStrList => {
+                value.is_string()
+                    || value
+                        .as_array()
+                        .is_some_and(|items| items.iter().all(Value::is_string))
+            }
             Self::StrMap => value
                 .as_object()
                 .is_some_and(|map| map.values().all(Value::is_string)),
@@ -84,6 +92,7 @@ impl Kind {
             Self::Number => "a number".into(),
             Self::OneOf(allowed) => format!("one of \"{}\"", allowed.join("\", \"")),
             Self::StrList => "a list of strings".into(),
+            Self::StrOrStrList => "a string or a list of strings".into(),
             Self::StrMap => "an object of strings".into(),
             Self::BoolMap => "an object of true or false values".into(),
             Self::Credential => {
@@ -172,7 +181,7 @@ const fn person_files(path: &'static str, kind: Kind) -> Key {
 
 use Kind::{
     Bool, BoolMap, Count, CountBelow, Credential, Duration as DurationKind, Number, OneOf,
-    RepositoryExtensions, Str, StrList, StrMap,
+    RepositoryExtensions, Str, StrList, StrMap, StrOrStrList,
 };
 
 const YES: bool = true;
@@ -258,6 +267,7 @@ pub(crate) const KEYS: &[Key] = &[
     key("tui.hover", Bool, NO, Some("true")),
     key("tui.inline_images", Bool, NO, Some("true")),
     key("tui.logo_glyph", OneOf(&["⌇", "≈"]), NO, Some("\"⌇\"")),
+    key("keys.*", StrOrStrList, NO, None),
     global_only(
         "diagnostics.level",
         OneOf(DIAGNOSTIC_LEVELS),
