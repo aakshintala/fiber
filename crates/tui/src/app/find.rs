@@ -62,6 +62,21 @@ pub(crate) struct Anchor {
     pub(crate) at: Range<usize>,
 }
 
+impl Anchor {
+    /// A match's identity from its page, its whole logical line and its
+    /// char range in it: the row is never compared, so a new width never
+    /// invalidates it (`docs/tui.md`, "Search").
+    pub(crate) fn new(page: usize, line: &Logical, at: Range<usize>) -> Anchor {
+        Anchor {
+            page,
+            scopes: line.scopes.clone(),
+            line_hash: line_hash(&line.text),
+            line_len: line.text.chars().count(),
+            at,
+        }
+    }
+}
+
 /// One match: its identity, and which of its page's matches with equal
 /// scopes it is, in order, which locates it on screen.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -355,13 +370,7 @@ fn search_shown(
         let hash = line_hash(&line.text);
         let len = line.text.chars().count();
         for at in logical::matches(&line.text, query) {
-            let anchor = Anchor {
-                page,
-                scopes: line.scopes.clone(),
-                line_hash: hash,
-                line_len: len,
-                at,
-            };
+            let anchor = Anchor::new(page, line, at);
             let (row, hidden) = match placed
                 .0
                 .get_mut(&(hash, len, line.scopes.clone()))
@@ -398,13 +407,7 @@ fn search_scratch(
     for line in lines {
         for at in logical::matches(&line.text, query) {
             out.push((
-                Anchor {
-                    page,
-                    scopes: line.scopes.clone(),
-                    line_hash: line_hash(&line.text),
-                    line_len: line.text.chars().count(),
-                    at,
-                },
+                Anchor::new(page, line, at),
                 start.saturating_add(offsets.get(line.row).copied().unwrap_or(0)),
                 false,
             ));
@@ -464,8 +467,8 @@ impl App {
                 self.find.close();
                 Some(Effect::None)
             }
-            // A second Ctrl+F opens the results view, which lands with
-            // the task that draws it; until then the bar stays open.
+            // A second Ctrl+F opens the results view; until then the
+            // bar stays open.
             Key::CtrlF => Some(Effect::None),
             // The view's keys scroll on with the bar open.
             Key::PageUp | Key::PageDown => None,
@@ -488,11 +491,11 @@ impl App {
             // Between matches, wrapping at either end (`docs/tui.md`,
             // "Search").
             Key::Enter | Key::Down => {
-                self.find_next();
+                self.step_find(true);
                 Some(Effect::None)
             }
             Key::Up => {
-                self.find_prev();
+                self.step_find(false);
                 Some(Effect::None)
             }
         }
@@ -521,7 +524,7 @@ impl App {
             return Some(self.find.pause());
         }
         if *edit == Edit::ShiftEnter {
-            self.find_prev();
+            self.step_find(false);
             return Some(Effect::None);
         }
         Some(Effect::None)
@@ -569,16 +572,8 @@ impl App {
             // once however many of its chars match.
             let mut placed: HashMap<usize, Vec<crate::cells::Placed>> = HashMap::new();
             for line in logical::logical(&rows, &texts) {
-                let hash = line_hash(&line.text);
-                let len = line.text.chars().count();
                 for hit in logical::matches(&line.text, &self.find.query) {
-                    let anchor = Anchor {
-                        page: at,
-                        scopes: line.scopes.clone(),
-                        line_hash: hash,
-                        line_len: len,
-                        at: hit.clone(),
-                    };
+                    let anchor = Anchor::new(at, &line, hit.clone());
                     let current = self
                         .find
                         .current
@@ -632,13 +627,8 @@ impl App {
         }
         self.find.due = true;
         self.start_scan();
-        for at in self.find.order.clone() {
-            if self.screen.pages().part(at).is_some() {
-                self.scan_resident(at);
-            }
-        }
-        self.pump_find();
-        // Reveals in the same step: the current match's sections open
+        // Scans resident pages, fetches the first dropped one, and
+        // reveals the current match in the same step: its sections open
         // and the view scrolls to it, and a dropped page it sits on
         // loads with the frame's other pages.
         self.settle_find();
@@ -664,22 +654,16 @@ impl App {
         self.find.order = (start..count).chain(0..start).collect();
     }
 
-    /// Scans resident page `at` for the current query, recording its
-    /// matches whole and picking the current match when it can become it.
-    fn scan_resident(&mut self, at: usize) {
-        let revision = self.screen.pages().index().revision(at);
-        if self.find.scanned.get(&at) == Some(&revision) {
-            return;
-        }
-        let query = self.find.query.clone();
-        let width = self.screen.pages().wrap_width();
-        let Some((rows, texts)) = self.screen.pages().page_text(at) else {
-            return;
-        };
-        let Some((open_rows, open_texts)) = self.screen.pages().page_text_open(at) else {
-            return;
-        };
-        let start = self.screen.pages().index().start(at);
+    /// Page `at`'s shown lines' row map with its first conversation row:
+    /// each shown logical line's identity to its rows in order, and each
+    /// drawn section target to its own line's row. `None` when the page
+    /// is dropped (`docs/tui.md`, "Search": marks follow whatever is
+    /// drawn).
+    fn placed_for(&self, at: usize) -> Option<(Placed, usize)> {
+        let pages = self.screen.pages();
+        let width = pages.wrap_width();
+        let (rows, texts) = pages.page_text(at)?;
+        let start = pages.index().start(at);
         let shown_offsets = row_offsets(&rows, width);
         let mut placed: Placed = (HashMap::new(), HashMap::new());
         for line in logical::logical(&rows, &texts) {
@@ -701,6 +685,40 @@ impl App {
                     .or_insert(start.saturating_add(shown_offsets.get(idx).copied().unwrap_or(0)));
             }
         }
+        Some((placed, start))
+    }
+
+    /// Scans every resident page whose revision moved, in scan order.
+    /// Whether any page scanned.
+    fn scan_resident_all(&mut self) -> bool {
+        let mut rescanned = false;
+        for at in self.find.order.clone() {
+            let revision = self.screen.pages().index().revision(at);
+            if self.find.scanned.get(&at) == Some(&revision) {
+                continue;
+            }
+            if self.screen.pages().part(at).is_some() {
+                self.scan_resident(at);
+                rescanned = true;
+            }
+        }
+        rescanned
+    }
+
+    /// Scans resident page `at` for the current query, recording its
+    /// matches whole and picking the current match when it can become it.
+    fn scan_resident(&mut self, at: usize) {
+        let revision = self.screen.pages().index().revision(at);
+        if self.find.scanned.get(&at) == Some(&revision) {
+            return;
+        }
+        let query = self.find.query.clone();
+        let Some((open_rows, open_texts)) = self.screen.pages().page_text_open(at) else {
+            return;
+        };
+        let Some((mut placed, start)) = self.placed_for(at) else {
+            return;
+        };
         let found = search_shown(
             at,
             &logical::logical(&open_rows, &open_texts),
@@ -896,18 +914,9 @@ impl App {
             return;
         }
         let old = self.find.current.clone();
-        let mut rescanned = false;
-        for at in self.find.order.clone() {
-            let revision = self.screen.pages().index().revision(at);
-            if self.find.scanned.get(&at) == Some(&revision) {
-                continue;
-            }
-            if self.screen.pages().part(at).is_some() {
-                self.scan_resident(at);
-                rescanned = true;
-            }
-        }
-        if rescanned && let Some(old) = old {
+        if self.scan_resident_all()
+            && let Some(old) = old
+        {
             self.find.reconcile(old);
         }
         self.pump_find();
@@ -962,86 +971,28 @@ impl App {
     /// The current match's conversation row and whether a closed section
     /// hides it, on its resident page.
     fn current_place(&self, current: &Match) -> Option<(usize, bool)> {
-        let pages = self.screen.pages();
         let at = current.anchor.page;
         let query = self.find.query.clone();
-        let width = pages.wrap_width();
-        let (rows, texts) = pages.page_text(at)?;
-        let (open_rows, open_texts) = pages.page_text_open(at)?;
-        let start = pages.index().start(at);
-        let shown_offsets = row_offsets(&rows, width);
-        let mut placed: Placed = (HashMap::new(), HashMap::new());
-        for line in logical::logical(&rows, &texts) {
-            placed
-                .0
-                .entry((
-                    line_hash(&line.text),
-                    line.text.chars().count(),
-                    line.scopes.clone(),
-                ))
-                .or_default()
-                .push_back(start.saturating_add(shown_offsets.get(line.row).copied().unwrap_or(0)));
-        }
-        for (idx, (_, target)) in rows.iter().enumerate() {
-            if let Some(target) = target {
-                placed
-                    .1
-                    .entry(*target)
-                    .or_insert(start.saturating_add(shown_offsets.get(idx).copied().unwrap_or(0)));
-            }
-        }
-        for line in logical::logical(&open_rows, &open_texts) {
-            if line_hash(&line.text) != current.anchor.line_hash
-                || line.text.chars().count() != current.anchor.line_len
-                || line.scopes != current.anchor.scopes
-            {
-                continue;
-            }
-            for at in logical::matches(&line.text, &query) {
-                let (row, hidden) = match placed
-                    .0
-                    .get_mut(&(
-                        current.anchor.line_hash,
-                        current.anchor.line_len,
-                        line.scopes.clone(),
-                    ))
-                    .and_then(VecDeque::pop_front)
-                {
-                    Some(row) => (row, false),
-                    None => (
-                        line.scopes
-                            .iter()
-                            .rev()
-                            .find_map(|scope| placed.1.get(scope))
-                            .copied()
-                            .unwrap_or(start),
-                        true,
-                    ),
-                };
-                if at == current.anchor.at {
-                    return Some((row, hidden));
-                }
+        let (open_rows, open_texts) = self.screen.pages().page_text_open(at)?;
+        let (mut placed, start) = self.placed_for(at)?;
+        for (anchor, row, hidden) in search_shown(
+            at,
+            &logical::logical(&open_rows, &open_texts),
+            &query,
+            &mut placed,
+            start,
+        ) {
+            if anchor == current.anchor {
+                return Some((row, hidden));
             }
         }
         None
     }
 
-    /// Moves to the previous match, wrapping: lands with the task that
-    /// moves between matches.
-    fn find_prev(&mut self) {
-        self.step_find(false);
-    }
-
-    /// Moves to the next match, wrapping (`docs/tui.md`, "Search":
-    /// Enter or ↓ moves to the next match, Shift+Enter or ↑ to the
-    /// previous, both wrapping).
-    fn find_next(&mut self) {
-        self.step_find(true);
-    }
-
     /// Moves `down` through the matches in page order, then render order,
     /// wrapping at either end; nothing with no matches. The newly current
-    /// match is revealed.
+    /// match is revealed (`docs/tui.md`, "Search": Enter or ↓ moves to
+    /// the next match, Shift+Enter or ↑ to the previous, both wrapping).
     fn step_find(&mut self, down: bool) {
         let flat = self.find.flat();
         if flat.is_empty() {

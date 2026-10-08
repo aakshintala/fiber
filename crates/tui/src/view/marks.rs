@@ -69,11 +69,10 @@ fn bar_text(bar: &FindBar) -> String {
     }
 }
 
-/// Paints the bar right-aligned on `area`'s first row.
-fn draw_bar(bar: &FindBar, area: Rect, buf: &mut Buffer) {
-    if area.is_empty() {
-        return;
-    }
+/// The bar's cells on `area`'s first row: its left edge and its width
+/// (`docs/tui.md`, "Search": the bar floats over the conversation's
+/// top-right corner).
+fn bar_span(bar: &FindBar, area: Rect) -> (u16, usize) {
     let text = bar_text(bar);
     let width = crate::format::width(&text)
         .min(BAR_WIDTH)
@@ -81,7 +80,16 @@ fn draw_bar(bar: &FindBar, area: Rect, buf: &mut Buffer) {
     let x = area
         .right()
         .saturating_sub(u16::try_from(width).unwrap_or(u16::MAX));
-    buf.set_stringn(x, area.y, &text, width, Style::default());
+    (x, width)
+}
+
+/// Paints the bar right-aligned on `area`'s first row.
+fn draw_bar(bar: &FindBar, area: Rect, buf: &mut Buffer) {
+    if area.is_empty() {
+        return;
+    }
+    let (x, width) = bar_span(bar, area);
+    buf.set_stringn(x, area.y, bar_text(bar), width, Style::default());
 }
 
 /// The bar's cursor at its query's end, while the bar is open: `None` on
@@ -90,15 +98,9 @@ pub(super) fn bar_cursor(bar: &FindBar, area: Rect) -> Option<Position> {
     if area.is_empty() {
         return None;
     }
-    let text = bar_text(bar);
-    let width = crate::format::width(&text)
-        .min(BAR_WIDTH)
-        .min(usize::from(area.width));
+    let (x, width) = bar_span(bar, area);
     let before = crate::format::width(&format!("find: {}", bar.query)).min(width);
-    let x = area
-        .right()
-        .saturating_sub(u16::try_from(width).unwrap_or(u16::MAX))
-        .saturating_add(u16::try_from(before).unwrap_or(u16::MAX));
+    let x = x.saturating_add(u16::try_from(before).unwrap_or(u16::MAX));
     Some(Position::new(x, area.y))
 }
 
