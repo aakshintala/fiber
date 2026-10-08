@@ -65,6 +65,11 @@ pub struct Asking {
     pub until: Option<Instant>,
     /// A check beyond the kind's, if any.
     pub check: Option<Check>,
+    /// The call does nothing else while this waits, and running it again
+    /// with the same arguments raises the same interaction. The session may
+    /// exit on it as on a pending approval, and resuming runs the call
+    /// again (`docs/tools.md`, "When a person can answer").
+    pub suspends: bool,
 }
 
 /// How an [`Ask::ask`] ended.

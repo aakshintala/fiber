@@ -15,6 +15,10 @@ pub(crate) enum TargetId {
     NewBelow,
     /// A conversation line: opens or closes what it names.
     Line(crate::app::Target),
+    /// A link drawn on a conversation row: the screen row and column of
+    /// its first cell, and a hash of the destination drawn there
+    /// (`docs/tui.md`, "Links": a stale frame never opens another URL).
+    Link { row: usize, col: u16, url: u64 },
     /// The paste token with this number in the input box: opens its text
     /// in the editor.
     Token(usize),
@@ -62,19 +66,23 @@ pub(crate) fn hit(targets: &[Target], col: u16, row: u16) -> Option<TargetId> {
 }
 
 /// The pointer: where it last was, when hover records it, and the target
-/// a left press went down on.
+/// a left press went down on and its cell.
 #[derive(Debug, Default)]
 pub(crate) struct Pointer {
     /// The last cell reported; never set with hover off.
     pub(crate) at: Option<(u16, u16)>,
     /// The target under the last left press, until a release.
     pressed: Option<TargetId>,
+    /// The cell of the last left press, until a release.
+    pressed_at: Option<(u16, u16)>,
 }
 
 impl Pointer {
     /// Takes one report against the targets on screen and returns the
     /// target clicked, if any: a left press then a release on the same
-    /// target. Any other press disarms the click.
+    /// target. Any other press disarms the click, and so does a drag to
+    /// another cell: a drag selects (`docs/tui.md`, "Selection and copy"),
+    /// so one that returns to its target and releases does not click.
     pub(crate) fn on_mouse(
         &mut self,
         mouse: &Mouse,
@@ -88,16 +96,25 @@ impl Pointer {
         match mouse.kind {
             MouseKind::Press(Button::Left) => {
                 self.pressed = here;
+                self.pressed_at = Some((mouse.col, mouse.row));
                 None
             }
             MouseKind::Press(_) => {
                 self.pressed = None;
+                self.pressed_at = None;
                 None
             }
-            MouseKind::Release => self.pressed.take().filter(|pressed| Some(*pressed) == here),
-            MouseKind::Motion | MouseKind::Drag(_) | MouseKind::WheelUp | MouseKind::WheelDown => {
+            MouseKind::Release => {
+                self.pressed_at = None;
+                self.pressed.take().filter(|pressed| Some(*pressed) == here)
+            }
+            MouseKind::Drag(_) => {
+                if Some((mouse.col, mouse.row)) != self.pressed_at {
+                    self.pressed = None;
+                }
                 None
             }
+            MouseKind::Motion | MouseKind::WheelUp | MouseKind::WheelDown => None,
         }
     }
 }

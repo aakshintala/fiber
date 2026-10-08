@@ -375,7 +375,7 @@ fn parse_csi(buf: &[u8]) -> Step {
 /// final byte `m` when `release`. `None` for a malformed report: a
 /// parameter that is not all digits, not three parameters, a coordinate
 /// of 0 or above `u16::MAX`, a press of no button, a horizontal wheel or
-/// a button above 7.
+/// a button above 7. A report with Shift held is `None` too.
 fn sgr_mouse(params: &[u8], release: bool) -> Option<Mouse> {
     let mut fields = params.split(|byte| *byte == b';').map(|field| {
         if field.is_empty() || !field.iter().all(u8::is_ascii_digit) {
@@ -389,8 +389,14 @@ fn sgr_mouse(params: &[u8], release: bool) -> Option<Mouse> {
     if fields.next().is_some() {
         return None;
     }
-    // Shift, Alt and Ctrl are bits 4, 8 and 16 (0b1_1100); they are ignored.
-    let cb = cb & !0b1_1100;
+    // Shift is bit 4: a terminal that reports a Shift-drag leaves it the
+    // terminal's native selection (`docs/tui.md`, "Selection and copy"), so
+    // a Shift report is no click, selection or hover. Alt and Ctrl are bits
+    // 8 and 16 (0b1_1000); they are ignored.
+    if cb & 4 != 0 {
+        return None;
+    }
+    let cb = cb & !0b1_1000;
     let button = match cb & 3 {
         0 => Some(Button::Left),
         1 => Some(Button::Middle),

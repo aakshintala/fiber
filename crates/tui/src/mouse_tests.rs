@@ -117,16 +117,54 @@ fn motion_drag_and_wheel_keep_a_press_and_click_nothing() {
     let targets = targets();
     let mut pointer = Pointer::default();
     pointer.on_mouse(&at(LEFT, 2, 3), &targets, true);
-    for kind in [
-        MouseKind::Motion,
-        MouseKind::Drag(Button::Left),
-        MouseKind::WheelUp,
-        MouseKind::WheelDown,
-    ] {
+    for kind in [MouseKind::Motion, MouseKind::WheelUp, MouseKind::WheelDown] {
         assert_eq!(pointer.on_mouse(&at(kind, 3, 3), &targets, true), None);
     }
+    // A drag on the press's own cell keeps it.
+    assert_eq!(
+        pointer.on_mouse(&at(MouseKind::Drag(Button::Left), 2, 3), &targets, true),
+        None
+    );
     assert_eq!(
         pointer.on_mouse(&at(MouseKind::Release, 3, 3), &targets, true),
+        Some(TargetId::Badge)
+    );
+}
+
+#[test]
+fn a_drag_to_another_cell_disarms_the_click() {
+    let targets = targets();
+    let mut pointer = Pointer::default();
+    pointer.on_mouse(&at(LEFT, 2, 3), &targets, true);
+    // Another cell of the same target: still a drag, so no click.
+    pointer.on_mouse(&at(MouseKind::Drag(Button::Left), 3, 3), &targets, true);
+    assert_eq!(
+        pointer.on_mouse(&at(MouseKind::Release, 3, 3), &targets, true),
+        None
+    );
+}
+
+#[test]
+fn a_drag_that_returns_and_releases_on_its_target_does_not_click() {
+    let targets = targets();
+    let mut pointer = Pointer::default();
+    pointer.on_mouse(&at(LEFT, 2, 3), &targets, true);
+    pointer.on_mouse(&at(MouseKind::Drag(Button::Left), 0, 0), &targets, true);
+    pointer.on_mouse(&at(MouseKind::Drag(Button::Left), 2, 3), &targets, true);
+    assert_eq!(
+        pointer.on_mouse(&at(MouseKind::Release, 2, 3), &targets, true),
+        None
+    );
+}
+
+#[test]
+fn a_drag_within_the_press_cell_still_clicks() {
+    let targets = targets();
+    let mut pointer = Pointer::default();
+    pointer.on_mouse(&at(LEFT, 2, 3), &targets, true);
+    pointer.on_mouse(&at(MouseKind::Drag(Button::Left), 2, 3), &targets, true);
+    assert_eq!(
+        pointer.on_mouse(&at(MouseKind::Release, 2, 3), &targets, true),
         Some(TargetId::Badge)
     );
 }

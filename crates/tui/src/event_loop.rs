@@ -77,8 +77,11 @@ pub fn run(
         var: Box::new(|name| std::env::var(name).ok()),
         copy_command: clipboard::command(|name| std::env::var_os(name), clipboard::on_path)
             .map(|argv| argv.into_iter().map(str::to_owned).collect()),
+        open_command: crate::opener::command(|name| std::env::var_os(name), clipboard::on_path)
+            .map(|argv| argv.into_iter().map(str::to_owned).collect()),
         title: osc::Title::default(),
     };
+    terminal.app.set_opener(terminal.open_command.is_some());
     // The first frame waits on nothing: the queries are out, and nothing
     // reads the tty or the hub until it is drawn.
     if terminal.screen.draw(&mut terminal.app, None).is_err() {
@@ -159,6 +162,9 @@ struct Loop<B: Backend> {
     var: Var,
     /// The system clipboard command a copy is piped to, beside OSC 52.
     copy_command: Option<Vec<String>>,
+    /// The program a link click runs with the URL appended, or none over
+    /// SSH or with no opener on `PATH` (`docs/tui.md`, "Links").
+    open_command: Option<Vec<String>>,
     /// The window title last written.
     title: osc::Title,
 }
@@ -206,10 +212,18 @@ impl<B: Backend> Loop<B> {
                             if mouse.kind == MouseKind::Press(Button::Left) {
                                 self.app.clear_copied();
                             }
+                            let selected = self.app.on_select(&mouse, self.screen.targets());
                             let clicked =
                                 self.pointer
                                     .on_mouse(&mouse, self.screen.targets(), self.hover);
-                            clicked.map_or(Effect::None, |target| self.app.on_click(target))
+                            // A click's effect, else the selection's.
+                            let effect =
+                                clicked.map_or(Effect::None, |target| self.app.on_click(target));
+                            if effect == Effect::None {
+                                selected
+                            } else {
+                                effect
+                            }
                         }
                         Event::Reply(Reply::KittyFlags(_)) => {
                             self.kitty();
@@ -221,6 +235,13 @@ impl<B: Backend> Loop<B> {
                         Effect::None => {}
                         Effect::Copy(text) => {
                             clipboard::copy(self.tty.as_ref(), self.copy_command.as_deref(), text);
+                        }
+                        Effect::OpenLink(url) => {
+                            if let Some(argv) = self.open_command.clone() {
+                                let mut argv = argv;
+                                argv.push(url);
+                                drop(clipboard::pipe(argv, String::new()));
+                            }
                         }
                         Effect::Send(lines) => self.send(&lines),
                         Effect::Quit => return Some(0),
@@ -289,6 +310,10 @@ impl<B: Backend> Loop<B> {
             self.search = None;
         }
         self.page_in(rx);
+        // A selection's copy waiting on dropped pages runs once they load.
+        if let Some(text) = self.app.take_copy() {
+            clipboard::copy(self.tty.as_ref(), self.copy_command.as_deref(), text);
+        }
         if self.screen.draw(&mut self.app, self.pointer.at).is_err() {
             return Some(1);
         }

@@ -831,3 +831,30 @@ pub(crate) fn run_to_exit(deadline: Deadline, what: &str, mut command: Command) 
     watchdog.stand_down(deadline.cleanup());
     output
 }
+
+/// What the log holds of one writer at a time: one `session_started`,
+/// `fiber_started` lines of which only the first is not resumed, and
+/// `seq` carrying on without a gap.
+pub(crate) fn assert_one_continued_log(lines: &[Value], started: usize) {
+    let count = |kind: &str| lines.iter().filter(|line| line["kind"] == kind).count();
+    assert_eq!(count("session_started"), 1);
+    let fibers: Vec<&Value> = lines
+        .iter()
+        .filter(|line| line["kind"] == "fiber_started")
+        .collect();
+    assert_eq!(fibers.len(), started, "{lines:?}");
+    assert_eq!(fibers[0]["payload"]["resumed"], false);
+    assert!(
+        fibers[1..]
+            .iter()
+            .all(|line| line["payload"]["resumed"] == true)
+    );
+    let seqs: Vec<u64> = lines
+        .iter()
+        .map(|line| line["seq"].as_u64().unwrap())
+        .collect();
+    assert!(
+        seqs.windows(2).all(|pair| pair[1] == pair[0] + 1),
+        "{seqs:?}"
+    );
+}

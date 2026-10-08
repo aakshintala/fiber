@@ -1765,6 +1765,7 @@ fn confirm_requested(request_id: &str) -> Event {
         },
         action_ids: None,
         extension: None,
+        resumes: false,
     })
 }
 
@@ -2153,7 +2154,7 @@ fn a_suspended_on_naming_an_interaction_resumes_as_cut_short() {
     assert_eq!(outcome, Some(contract::events::TurnOutcome::Completed));
     let _ = looped;
 
-    // Only approvals re-raise.
+    // An interaction not logged `resumes: true` does not re-raise.
     assert_eq!(
         history.new_kinds(),
         [

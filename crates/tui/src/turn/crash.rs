@@ -16,7 +16,7 @@ use ratatui::text::Line;
 use super::{Ending, Entry, Fold, Turn, open};
 use crate::app::{Target, read};
 use crate::format;
-use crate::turn::Row;
+use crate::rows::Rows;
 
 /// What the fold knows of the process and its jobs.
 #[derive(Debug, Clone, Default)]
@@ -116,7 +116,7 @@ pub(crate) enum Aside {
 
 impl Aside {
     /// Its lines.
-    pub(crate) fn rows(&self, out: &mut Vec<Row>) {
+    pub(crate) fn rows(&self, out: &mut Rows) {
         match self {
             Self::Line(line) => out.push((line.clone(), None)),
             Self::Orphans { id, jobs, open } => {

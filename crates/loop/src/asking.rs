@@ -29,6 +29,8 @@ enum Slot {
         interaction: Interaction,
         until: Option<Instant>,
         check: Option<Check>,
+        /// Raised with [`Asking::suspends`].
+        suspends: bool,
     },
     /// Answered; the asking thread has not taken the answer yet.
     Resolved(Answered),
@@ -39,6 +41,9 @@ enum Slot {
 struct Inner {
     slot: Slot,
     closed: bool,
+    /// The request the next raise is, already written, bound by
+    /// [`AskSlot::reraise`].
+    reraise: Option<RequestId>,
 }
 
 /// One running call's ask, shared by its thread and the loop thread.
@@ -82,6 +87,7 @@ impl Default for AskSlot {
             inner: Mutex::new(Inner {
                 slot: Slot::Idle,
                 closed: false,
+                reraise: None,
             }),
             cv: Condvar::new(),
         }
@@ -137,6 +143,19 @@ impl AskSlot {
         }
     }
 
+    /// The next raise is `request`, whose line is already written: a
+    /// request raised again on resume keeps its `request_id`
+    /// (`docs/invocation.md`, "Lifecycle").
+    pub(crate) fn reraise(&self, request: RequestId) {
+        lock(&self.inner).reraise = Some(request);
+    }
+
+    /// The request [`AskSlot::reraise`] bound, once: the raise taken next
+    /// is it, and writes no line.
+    pub(crate) fn take_reraise(&self) -> Option<RequestId> {
+        lock(&self.inner).reraise.take()
+    }
+
     /// Records the taken ask as pending under `request`, once its line is
     /// written.
     pub(crate) fn pend(
@@ -145,13 +164,21 @@ impl AskSlot {
         interaction: Interaction,
         until: Option<Instant>,
         check: Option<Check>,
+        suspends: bool,
     ) {
         lock(&self.inner).slot = Slot::Pending {
             request,
             interaction,
             until,
             check,
+            suspends,
         };
+    }
+
+    /// Whether the pending interaction was raised with
+    /// [`Asking::suspends`]; false when none is pending.
+    pub(crate) fn pending_suspends(&self) -> bool {
+        matches!(lock(&self.inner).slot, Slot::Pending { suspends: true, .. })
     }
 
     /// The pending request and its `until`, if one is pending.

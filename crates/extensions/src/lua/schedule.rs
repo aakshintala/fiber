@@ -342,6 +342,7 @@ fn settle(
                     interaction,
                     action_ids: None,
                     extension: Some(name.to_owned()),
+                    resumes: false,
                 };
                 let unsent = shared.raise(id, requested);
                 // Parked before anything can answer: the answer resumes

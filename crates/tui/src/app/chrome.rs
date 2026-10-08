@@ -180,7 +180,10 @@ impl App {
             .chrome
             .lay_out(self.screen.width(), self.screen.height(), home);
         let width = self.column_width();
-        self.screen.wrap_at(width);
+        // A new width moves every row, so a selection clears.
+        if self.screen.wrap_at(width) {
+            self.clear_selection();
+        }
         if moved {
             self.set_regions(self.chrome.regions());
         }

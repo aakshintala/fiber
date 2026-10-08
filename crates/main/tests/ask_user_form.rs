@@ -546,3 +546,257 @@ fn a_form_waits_without_a_timeout() {
     );
     hubbed.finish();
 }
+
+/// Makes `fake/m` the configured model, with `session.idle_exit_ms` when
+/// given.
+fn idle(setup: &Setup, ms: Option<u64>) {
+    let config = match ms {
+        Some(ms) => json!({"model": "fake/m", "session": {"idle_exit_ms": ms}}),
+        None => json!({"model": "fake/m"}),
+    };
+    write_json(&setup.home().join("config.json"), &config);
+}
+
+/// The log of session `id` in `setup`'s workspace, parsed.
+fn log_of(setup: &Setup, id: &str) -> Vec<Value> {
+    let dir = log::sessions_dir(&setup.home(), &doors::project(&setup.workspace())).join(id);
+    fs::read_to_string(dir.join("events.jsonl"))
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+
+/// The kinds of `lines` after the last `fiber_exited` that names a
+/// suspended request: what the resumed process wrote.
+fn kinds_after_suspension(lines: &[Value]) -> Vec<&str> {
+    let start = lines
+        .iter()
+        .rposition(|line| {
+            line["kind"] == "fiber_exited" && line["payload"]["suspended_on"].is_string()
+        })
+        .expect("the session exited suspended");
+    lines[start + 1..]
+        .iter()
+        .map(|line| line["kind"].as_str().unwrap())
+        .collect()
+}
+
+#[test]
+fn a_session_idle_on_a_form_exits_suspended_and_a_reply_through_the_hub_resumes_it() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([ask_user(&base_and_name()), hello()]).unwrap();
+    server.hold();
+    setup.provider(&server);
+    // Long enough to cover the start handshake, short enough to idle out
+    // on the form.
+    idle(&setup, Some(2000));
+    let hub = Arc::new(Mutex::new(None));
+    let (a, _) = connect_hub(&setup, &hub);
+    let workspace = setup.workspace().to_string_lossy().into_owned();
+    let guard = SessionGuard::arm(setup.deadline, &workspace);
+    let session = start_session(&a, &workspace, "ask-me");
+    // Subscribed while the model call is held: the form's idle wait starts
+    // only after it.
+    a.send(&command(
+        "c_sub_a",
+        &session,
+        "subscribe",
+        &json!({"level": "full"}),
+    ));
+    until(&a, "the subscribe acknowledgement", |line| {
+        answers(line, "c_sub_a")
+    });
+    server.release();
+    let asked = until(&a, "interaction_requested", |line| {
+        line["kind"] == "interaction_requested"
+    });
+    let requested = asked.last().unwrap().clone();
+    let request = request_of(&requested);
+    let exited = until(&a, "fiber_exited", |line| line["kind"] == "fiber_exited");
+    assert!(
+        fakes::matching_exits(&workspace, setup.deadline.left()),
+        "waited until the deadline for the session process to exit"
+    );
+    assert_eq!(
+        exited.last().unwrap()["payload"]["suspended_on"],
+        request.as_str()
+    );
+    assert!(
+        of_kind(&exited, "interaction_resolved").is_empty(),
+        "{exited:?}"
+    );
+    idle(&setup, None);
+
+    let answered = json!([
+        {"labels": ["dev"]},
+        {"labels": [], "text": "fiber-cli"}
+    ]);
+    a.send(&command(
+        "c_reply",
+        &session,
+        "reply",
+        &json!({"request_id": request, "answers": answered}),
+    ));
+    let (mut accepted, mut ended) = (false, false);
+    let resumed = until(&a, "the reply and the resumed turn", |line| {
+        accepted |= answers(line, "c_reply");
+        ended |= line["kind"] == "turn_completed";
+        accepted && ended
+    });
+    let answer = resumed
+        .iter()
+        .find(|line| answers(line, "c_reply"))
+        .unwrap();
+    assert_eq!(answer["kind"], "command_accepted", "{answer}");
+    // What the resumed process wrote, after the hub's replay of the log.
+    let start = resumed
+        .iter()
+        .position(|line| line["kind"] == "fiber_started" && line["payload"]["resumed"] == true)
+        .expect("the session resumed");
+    let resumed = &resumed[start..];
+    let raised = of_kind(resumed, "interaction_requested");
+    assert_eq!(raised.len(), 1, "{resumed:?}");
+    assert_eq!(
+        raised[0]["payload"], requested["payload"],
+        "the same request"
+    );
+    let resolved = of_kind(resumed, "interaction_resolved")[0];
+    assert_eq!(resolved["payload"]["request_id"], request.as_str());
+    assert_eq!(resolved["payload"]["by"], "person");
+    assert_eq!(resolved["payload"]["answers"], answered);
+    let completed = of_kind(resumed, "tool_call_completed")[0];
+    assert_eq!(completed["payload"]["status"], "completed");
+    assert_eq!(
+        completed["payload"]["content"][0]["text"],
+        "Base: dev\nName: \"fiber-cli\""
+    );
+    assert_eq!(
+        of_kind(resumed, "turn_completed")[0]["payload"]["outcome"],
+        "completed"
+    );
+
+    a.send(&command("c_close", &session, "close", &json!({})));
+    until(&a, "fiber_exited", |line| line["kind"] == "fiber_exited");
+    guard.wait_gone();
+    drop(a);
+    let lines = log_of(&setup, &session);
+    assert_one_continued_log(&lines, 2);
+    assert_eq!(
+        kinds_after_suspension(&lines),
+        [
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "interaction_requested",
+            "interaction_resolved",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
+    if let Some(running) = hub.lock().unwrap().take() {
+        running.kill_and_wait();
+    }
+}
+
+#[test]
+fn fiber_ask_resume_on_a_form_suspended_session_ends_the_turn_with_the_questions() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([ask_user(&base_and_name()), hello()]).unwrap();
+    setup.provider(&server);
+    idle(&setup, Some(0));
+    let workspace = setup.workspace().to_string_lossy().into_owned();
+    let id = doors::mint("s_");
+    let suspended = run_to_exit(
+        setup.deadline,
+        "fiber session",
+        setup.fiber(&[
+            "session",
+            "--id",
+            &id,
+            "--workspace",
+            &workspace,
+            "--prompt",
+            "ask-me",
+        ]),
+    );
+    assert_eq!(
+        suspended.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&suspended.stderr)
+    );
+    let lines = log_of(&setup, &id);
+    let request = request_of(of_kind(&lines, "interaction_requested")[0]);
+    assert_eq!(
+        lines.last().unwrap()["payload"]["suspended_on"],
+        request.as_str()
+    );
+    idle(&setup, None);
+
+    let mut ask = setup.fiber(&["ask", "--resume", &id, "next"]);
+    ask.current_dir(setup.workspace());
+    let resumed = run_to_exit(setup.deadline, "fiber ask --resume", ask);
+    assert_eq!(
+        resumed.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&resumed.stderr)
+    );
+    let lines = log_of(&setup, &id);
+    assert_one_continued_log(&lines, 2);
+    assert_eq!(
+        kinds_after_suspension(&lines),
+        [
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "interaction_requested",
+            "interaction_resolved",
+            "tool_call_completed",
+            "turn_completed",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
+    let raised = of_kind(&lines, "interaction_requested");
+    assert_eq!(raised.len(), 2, "raised again");
+    assert_eq!(
+        raised[1]["payload"], raised[0]["payload"],
+        "the same request"
+    );
+    let resolved = of_kind(&lines, "interaction_resolved")[0];
+    assert_eq!(resolved["payload"]["request_id"], request.as_str());
+    assert_eq!(resolved["payload"]["by"], "fiber");
+    assert_eq!(resolved["payload"]["declined"], true);
+    let completed = of_kind(&lines, "tool_call_completed")[0];
+    assert_eq!(completed["payload"]["status"], "completed");
+    assert_eq!(completed["payload"]["content"][0]["text"], SENT);
+    assert_eq!(
+        completed["payload"]["control"]["questions"],
+        base_and_name()
+    );
+    let ended = of_kind(&lines, "turn_completed");
+    assert_eq!(
+        ended[0]["payload"],
+        json!({"outcome": "completed", "questions": base_and_name()})
+    );
+    assert_eq!(ended[1]["payload"]["outcome"], "completed");
+    assert_eq!(
+        server.requests().len(),
+        2,
+        "the prompt's turn asked the model"
+    );
+}

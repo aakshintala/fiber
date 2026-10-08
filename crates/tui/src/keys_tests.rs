@@ -571,7 +571,7 @@ fn sgr_motion_drag_and_wheel() {
 
 #[test]
 fn sgr_modifier_bits_are_ignored() {
-    for cb in [4, 8, 16, 28] {
+    for cb in [8, 16, 24] {
         let report = format!("\x1b[<{cb};1;1M");
         assert_eq!(
             feed_all(&[report.as_bytes()]),
@@ -587,6 +587,31 @@ fn sgr_modifier_bits_are_ignored() {
         feed_all(&[b"\x1b[<80;1;1M"]),
         vec![mouse(MouseKind::WheelUp, 0, 0)]
     );
+}
+
+#[test]
+fn shift_mouse_reports_are_dropped() {
+    // A Shift report stays the terminal's native selection: no event.
+    for (name, report) in [
+        ("Shift press", "\x1b[<4;3;2M"),
+        ("Shift drag", "\x1b[<36;3;2M"),
+        ("Shift release", "\x1b[<4;3;2m"),
+        ("Shift wheel", "\x1b[<68;3;2M"),
+        ("Shift with Ctrl", "\x1b[<20;3;2M"),
+    ] {
+        assert!(feed_all(&[report.as_bytes()]).is_empty(), "{name}");
+    }
+    // Alt and Ctrl still parse.
+    for (name, report) in [
+        ("Alt press", "\x1b[<8;3;2M"),
+        ("Ctrl press", "\x1b[<16;3;2M"),
+    ] {
+        assert_eq!(
+            feed_all(&[report.as_bytes()]),
+            vec![mouse(MouseKind::Press(Button::Left), 2, 1)],
+            "{name}"
+        );
+    }
 }
 
 #[test]

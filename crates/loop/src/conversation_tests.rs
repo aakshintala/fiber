@@ -1129,7 +1129,7 @@ mod window {
                     halted.turn.clone(),
                     halted.action.clone(),
                     halted.batch.clone(),
-                    halted.request.clone(),
+                    halted.pending.request_id().clone(),
                 )
             })
         };

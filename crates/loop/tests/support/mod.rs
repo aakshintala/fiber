@@ -1174,6 +1174,52 @@ impl Session {
         }
     }
 
+    /// Resumes the session's log in a new loop with `tools`, as a new
+    /// process does once the old loop is gone: `fiber_started`, a new
+    /// inbox, a new cancel signal, and the inbox wake wired.
+    pub(crate) fn resume(&mut self, tools: Vec<Arc<dyn Tool>>) {
+        let folded = r#loop::resumed(&self.dir).unwrap();
+        r#loop::fiber_started(&self.log, "0.0.1", true).unwrap();
+        let (inbox, rx) = mpsc::channel();
+        self.inbox = inbox;
+        let home = self.dir.parent().unwrap().to_path_buf();
+        let clock: Arc<dyn contract::clock::Clock> = self.clock.clone();
+        let mut prompt = r#loop::PromptInputs::new(
+            home,
+            "/bin/sh".into(),
+            self.dir.join("events.jsonl").display().to_string(),
+            clock,
+            fakes::CONTEXT_WINDOW,
+        );
+        prompt.credential = Some("work".into());
+        self.cancel = Arc::new(TurnCancel::default());
+        let sender = Arc::new(self.inbox.clone());
+        let wake = Arc::new(InboxWake(Arc::downgrade(&sender)));
+        self.woken = Some(sender);
+        let looped = Loop::resume(
+            Arc::clone(&self.log),
+            folded,
+            Arc::clone(&self.provider) as Arc<dyn Provider>,
+            unpriced(),
+            prompt,
+            rx,
+            tools
+                .into_iter()
+                .map(|tool| ("builtin".to_owned(), tool))
+                .collect(),
+            r#loop::Permissions {
+                workspace: self.workspace.display().to_string(),
+                credentials: self.credentials.clone(),
+                credential_files: Vec::new(),
+                rules: self.rules.clone(),
+            },
+        )
+        .unwrap()
+        .cancelled_by(Arc::clone(&self.cancel))
+        .inbox_wake(wake);
+        self.looped = Some(looped);
+    }
+
     /// Whether a person can answer an approval.
     pub(crate) fn answerable(mut self, yes: bool) -> Self {
         self.looped = self.looped.take().map(|looped| looped.answerable(yes));

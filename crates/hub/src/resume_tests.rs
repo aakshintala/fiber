@@ -1069,3 +1069,85 @@ fn a_command_for_an_exiting_delegate_is_refused_at_once() {
     assert_eq!(temp.clock.now(), temp.clock.origin());
     assert!(starter.resumed().is_empty());
 }
+
+/// A `subscribe` accepted as the session dies is replayed to the resumed
+/// session. With `prior`, the client first sets that level as `c_1`, and
+/// the accepted subscribe is `c_2`; without it, the accepted subscribe is
+/// `c_1`.
+fn an_accepted_subscribe_is_replayed(prior: Option<&str>) {
+    let temp = Temp::new();
+    temp.recorded();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    let (accepted, reply) = if let Some(level) = prior {
+        client.subscribe("c_1", level);
+        assert_eq!(client.acknowledged("the subscribe"), "c_1");
+        ("c_2", "c_3")
+    } else {
+        ("c_1", "c_2")
+    };
+    let before = usize::from(prior.is_some());
+    let (parked_tx, parked_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    // Parks the old relay thread after it reads the acknowledgement and
+    // before it keeps the level, so the reconnect below runs while the
+    // acceptance is still unrecorded.
+    *crate::connection::lock(&hub.before_accepted) = Some(Box::new(move |line: &[u8], _| {
+        assert!(crate::relay::acknowledges(line, accepted), "{line:?}");
+        parked_tx.send(()).unwrap_or(());
+        release_rx
+            .recv_timeout(DEADLINE)
+            .expect("the reconnect releases the parked acknowledgement");
+    }));
+    client.subscribe(accepted, "full");
+    parked_rx
+        .recv_timeout(DEADLINE)
+        .expect("the relay parks before keeping the subscribe");
+    assert!(starter.stop(&sid(), DEADLINE), "the fake session ended");
+    *crate::connection::lock(&hub.before_join) = Some(Box::new(move || {
+        release_tx.send(()).unwrap_or(());
+    }));
+    client.send(reply, "reply");
+    let first = client.acknowledged("the first acknowledgement");
+    let second = client.acknowledged("the second acknowledgement");
+    let mut ids = [first, second];
+    ids.sort();
+    assert_eq!(ids, [accepted.to_owned(), reply.to_owned()]);
+    assert_eq!(starter.resumed().len(), 2);
+    let got = received_levels(&starter);
+    assert_eq!(got.len(), before + 3, "{got:?}");
+    if let Some(level) = prior {
+        assert_eq!(
+            got[0],
+            ("c_1".into(), "subscribe".into(), Some(level.into()))
+        );
+    }
+    assert_eq!(
+        got[before],
+        (accepted.into(), "subscribe".into(), Some("full".into()))
+    );
+    let replay = &got[before + 1];
+    assert_eq!(replay.1, "subscribe");
+    assert!(replay.0.starts_with("c_"), "{got:?}");
+    assert_ne!(replay.0, "c_1", "the replay carries an id of the hub's own");
+    assert_ne!(
+        replay.0, accepted,
+        "the replay carries an id of the hub's own"
+    );
+    assert_eq!(replay.2, Some("full".into()), "{got:?}");
+    assert_eq!(
+        got[before + 2],
+        (reply.into(), "reply".into(), Some("full".into()))
+    );
+}
+
+#[test]
+fn a_subscribe_accepted_as_the_session_dies_is_replayed() {
+    an_accepted_subscribe_is_replayed(None);
+}
+
+#[test]
+fn a_level_change_accepted_as_the_session_dies_is_replayed() {
+    an_accepted_subscribe_is_replayed(Some("summary"));
+}

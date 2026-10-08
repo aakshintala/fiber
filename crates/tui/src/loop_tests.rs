@@ -149,6 +149,7 @@ fn opened() -> (
         hover: true,
         var: Box::new(|_| None),
         copy_command: None,
+        open_command: None,
         title: crate::osc::Title::default(),
     };
     let (tx, rx) = mpsc::channel();
@@ -606,4 +607,43 @@ fn the_paging_report_names_the_furthest_jump_row() {
             .unwrap_or_else(|error| panic!("{error} in {report}")),
     );
     assert_eq!(row, total.saturating_mul(count - 1) / count, "{report}");
+}
+
+#[test]
+fn a_selection_waiting_on_a_page_copies_in_the_same_step() {
+    let (mut lp, theirs, tx, rx) = opened();
+    let dir = fakes::TempDir::new("tui-select-page");
+    let path = dir.path().join("tty");
+    lp.tty = Some(std::fs::File::create(&path).unwrap_or_else(|err| panic!("tty: {err}")));
+    let seen = serve(theirs, tx.clone(), answers_all());
+    // At the top, page 0 loads; a drag over its first rows, then End, which
+    // drops it, then the release: the copy waits on page 0, which the same
+    // step fetches, and copies.
+    let mut inputs = to_the_top();
+    inputs.push(Input::Bytes(b"\x1b[<0;1;1M\x1b[<32;40;3M".to_vec()));
+    inputs.push(Input::Bytes(b"\x1b[F".to_vec()));
+    inputs.push(Input::Bytes(b"\x1b[<0;40;3m".to_vec()));
+    let lp = run(lp, rx, &tx, inputs);
+    assert_eq!(lp.app.pages().pinned(), 0, "its pages stay pinned");
+    let before = ranges(&seen).iter().filter(|range| range.0 == 0).count();
+    assert!(
+        before >= 2,
+        "page 0 was not fetched again: {:?}",
+        ranges(&seen)
+    );
+    let written = std::fs::read(&path).unwrap_or_else(|err| panic!("read tty: {err}"));
+    let text = String::from_utf8_lossy(&written).into_owned();
+    let start = text.find("\x1b]52;c;").expect("an OSC 52 copy");
+    let payload: String = text
+        .get(start + 7..)
+        .unwrap_or_default()
+        .chars()
+        .take_while(|ch| *ch != '\x07')
+        .collect();
+    use base64::Engine as _;
+    let copied = base64::engine::general_purpose::STANDARD
+        .decode(payload)
+        .unwrap_or_else(|err| panic!("base64: {err}"));
+    let copied = String::from_utf8_lossy(&copied).into_owned();
+    assert!(copied.contains("first"), "{copied:?}");
 }

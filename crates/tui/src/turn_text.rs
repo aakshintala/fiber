@@ -63,26 +63,13 @@ pub(crate) fn missing_pages(pages: &Pages, turn: usize) -> Vec<usize> {
         .collect()
 }
 
-/// Keeps every dropped page holding turn `turn` resident until its copy
-/// runs, returning those pages.
-pub(crate) fn request_turn(pages: &mut Pages, turn: usize) -> Vec<usize> {
+/// The dropped pages holding turn `turn`, keeping those its pending copy
+/// does not hold already (`held`) resident until the copy runs: a pending
+/// copy pins each page once, and unpins exactly the pages it pinned.
+pub(crate) fn request_turn(pages: &mut Pages, turn: usize, held: &[usize]) -> Vec<usize> {
     let missing = missing_pages(pages, turn);
-    for at in &missing {
+    for at in missing.iter().filter(|at| !held.contains(at)) {
         pages.want(*at);
     }
     missing
-}
-
-/// Lets the pages holding turn `turn` drop with the window again.
-pub(crate) fn release_turn(pages: &mut Pages, turn: usize) {
-    let count = pages.page_count();
-    let mut firsts = Vec::with_capacity(count);
-    let mut cuts = Vec::with_capacity(count);
-    for at in 0..count {
-        firsts.push(pages.page_first(at).unwrap_or(usize::MAX));
-        cuts.push(pages.page_cut(at));
-    }
-    for at in pages_for_turn(&firsts, &cuts, count, turn) {
-        pages.unwant(at);
-    }
 }

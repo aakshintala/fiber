@@ -91,8 +91,12 @@ Run the probe from a session with
 `gh run watch` and `gh run download <run-id>`. The workflow
 (`.github/workflows/dependency-probe.yml`) runs `run.sh` on `ubuntu-24.04`,
 `ubuntu-24.04-arm` and `macos-26` (macOS arm64), and uploads each table as the
-artifact `dependency-probe-<runner>`. A runner's figures differ from run to
-run by the noise floor below.
+artifact `dependency-rss-<runner>`. A runner's figures differ from run to
+run by the noise floor below. The workflow's one input, `probe`, is a choice:
+`dependency-rss` (the default) or `session-search`, which runs
+`research/session-search/run.sh`, the timings of the session search scan, with
+`-f probe=session-search`. It uploads `session-search-<runner>`; only the Linux
+runners report cold-cache rows.
 
 A new crate gets a workload in the probe and a row here, measured on Linux
 x86_64, Linux arm64 and macOS arm64. A crate already in the tree through another

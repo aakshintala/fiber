@@ -17,7 +17,7 @@ use super::crash::{self, Aside};
 use super::{Entry, Fold, Turn, open};
 use crate::app::{Target, read};
 use crate::format;
-use crate::turn::Row;
+use crate::rows::Rows;
 
 /// The band's tint.
 /// debt: a fixed colour, not a theme role; upgrade when colour roles land
@@ -144,7 +144,7 @@ impl Band {
 
     /// Its lines: the band, then "▸ note" once there is a note, and the
     /// note under it when open.
-    pub(crate) fn rows(&self, out: &mut Vec<Row>) {
+    pub(crate) fn rows(&self, out: &mut Rows) {
         let state = match &self.state {
             State::Writing => "writing the note…".to_owned(),
             State::Done { before, after } => {

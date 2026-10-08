@@ -172,6 +172,7 @@ struct Recorded {
     action_ids: Vec<ActionId>,
     until: Option<std::time::Instant>,
     checked: bool,
+    suspends: bool,
 }
 
 impl FakeAsk {
@@ -211,6 +212,7 @@ impl Ask for FakeAsk {
             action_ids: asking.action_ids,
             until: asking.until,
             checked: asking.check.is_some(),
+            suspends: asking.suspends,
         });
         self.answers.lock().unwrap().remove(0)
     }
@@ -278,7 +280,7 @@ fn a_session_nobody_can_answer_gets_the_questions_without_an_ask() {
 }
 
 #[test]
-fn the_ask_is_one_form_of_the_questions_with_no_timeout() {
+fn the_ask_is_one_form_of_the_questions_with_no_timeout_that_suspends() {
     let arguments = two_questions();
     let ask = FakeAsk::answering(form(vec![skipped(), skipped()], None));
     let _ = run_asking(&arguments, &ask);
@@ -290,6 +292,7 @@ fn the_ask_is_one_form_of_the_questions_with_no_timeout() {
             action_ids: Vec::new(),
             until: None,
             checked: false,
+            suspends: true,
         }]
     );
 }

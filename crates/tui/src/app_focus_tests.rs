@@ -1340,7 +1340,8 @@ fn whole_turn_zero(lines: &[Line], envelopes: &[contract::Envelope]) -> String {
         | Effect::Exit(_)
         | Effect::ListFiles
         | Effect::Search { .. }
-        | Effect::Editor { .. } => panic!("the whole turn copies"),
+        | Effect::Editor { .. }
+        | Effect::OpenLink(_) => panic!("the whole turn copies"),
     }
 }
 
@@ -1459,4 +1460,36 @@ fn ctrl_g_on_a_turn_spanning_dropped_pages_opens_the_whole_turn() {
             text: want
         },
     );
+}
+
+#[test]
+fn a_second_y_on_a_pending_turn_pins_nothing_twice() {
+    let (mut app, envelopes, prior) = pending_copy();
+    let pinned = app.pages().pinned();
+    app.focus = Some(TargetId::Turn(0));
+    assert_eq!(app.on_key(Key::Char('y'), now()), Effect::None);
+    assert_eq!(
+        app.pages().pinned(),
+        pinned,
+        "the second press pinned a page again"
+    );
+    load_needed(&mut app, &envelopes);
+    app.focus = Some(TargetId::Turn(0));
+    assert!(matches!(app.on_key(Key::Char('y'), now()), Effect::Copy(_)));
+    assert_eq!(
+        app.pages().pinned(),
+        prior,
+        "the copy unpins what it pinned"
+    );
+}
+
+#[test]
+fn a_turn_copy_with_nothing_missing_pins_nothing() {
+    let (mut app, _, prior) = pending_copy();
+    // Turn 1 is resident: copying it pins nothing, and replaces turn 0's
+    // pending copy, whose pins go with it.
+    app.focus = Some(TargetId::Turn(1));
+    assert!(app.turn_text(1).is_some());
+    assert_eq!(app.pages().pinned(), prior);
+    assert!(app.pending_turn.is_none());
 }

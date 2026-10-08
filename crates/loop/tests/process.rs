@@ -490,6 +490,7 @@ fn fiber_exited_names_the_unresolved_request() {
             },
             action_ids: None,
             extension: None,
+            resumes: false,
         }),
         None,
     );
@@ -600,6 +601,7 @@ fn interaction(id: &str) -> Event {
         },
         action_ids: None,
         extension: None,
+        resumes: false,
     })
 }
 

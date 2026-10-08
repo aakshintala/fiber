@@ -43,6 +43,10 @@ pub(crate) struct Notices {
     next: usize,
     stack: Vec<Notice>,
     overlay: Option<Overlay>,
+    /// While a drag selects, the first id pushed since it began: that
+    /// notice and later ones wait for the release ("Notices": a notice that
+    /// arrives during a drag waits for the release).
+    held_from: Option<usize>,
 }
 
 /// One box as the view draws it.
@@ -66,6 +70,25 @@ impl Notices {
     #[cfg(test)]
     pub(crate) fn newest(&self) -> Option<&str> {
         self.stack.last().map(|notice| notice.text.as_str())
+    }
+
+    /// A drag began: notices pushed from now on wait, kept but not drawn,
+    /// listed or clickable, until [`Notices::release`].
+    pub(crate) fn hold(&mut self) {
+        self.held_from.get_or_insert(self.next);
+    }
+
+    /// The drag ended: the notices that waited show, newest on top.
+    pub(crate) fn release(&mut self) {
+        self.held_from = None;
+    }
+
+    /// The notices that show, oldest first: all but those a drag holds.
+    fn shown(&self) -> impl DoubleEndedIterator<Item = &Notice> {
+        let held = self.held_from;
+        self.stack
+            .iter()
+            .filter(move |notice| held.is_none_or(|from| notice.id < from))
     }
 
     /// Removes notice `id`, closing an overlay that showed it alone.
@@ -99,8 +122,7 @@ impl Notices {
     pub(crate) fn overlay(&self) -> Option<Vec<String>> {
         let overlay = self.overlay?;
         Some(
-            self.stack
-                .iter()
+            self.shown()
                 .rev()
                 .filter(|notice| overlay == Overlay::All || overlay == Overlay::One(notice.id))
                 .map(|notice| notice.text.clone())
@@ -128,8 +150,7 @@ impl Notices {
             return Vec::new();
         }
         let mut boxes: Vec<NoticeBox> = self
-            .stack
-            .iter()
+            .shown()
             .rev()
             .take(SHOWN)
             .map(|notice| NoticeBox {
@@ -137,7 +158,7 @@ impl Notices {
                 rows: rows(&notice.text, text),
             })
             .collect();
-        let rest = self.stack.len().saturating_sub(SHOWN);
+        let rest = self.shown().count().saturating_sub(SHOWN);
         if rest > 0 {
             boxes.push(NoticeBox {
                 id: None,

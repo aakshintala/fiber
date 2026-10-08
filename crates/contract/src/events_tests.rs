@@ -456,7 +456,7 @@ fn samples() -> Vec<(&'static str, Value)> {
         ),
         (
             "interaction_requested",
-            json!({"request_id": "r", "kind": "form", "fields": questions}),
+            json!({"request_id": "r", "kind": "form", "fields": questions, "resumes": true}),
         ),
         (
             "interaction_resolved",
@@ -846,6 +846,27 @@ fn repaired_and_repairs_come_together_or_not_at_all() {
             "{payload}"
         );
     }
+}
+
+#[test]
+fn resumes_reads_from_a_line_and_is_written_only_when_true() {
+    let fields = json!([{"header": "h", "question": "q"}]);
+    let resumed = json!({"request_id": "r", "kind": "form", "fields": fields, "resumes": true});
+    let Some(Event::InteractionRequested(requested)) =
+        read("interaction_requested", resumed).unwrap()
+    else {
+        panic!("not an interaction request");
+    };
+    assert!(requested.resumes);
+    let plain = json!({"request_id": "r", "kind": "form", "fields": fields});
+    let event = read("interaction_requested", plain.clone())
+        .unwrap()
+        .unwrap();
+    let Event::InteractionRequested(requested) = &event else {
+        panic!("{event:?}");
+    };
+    assert!(!requested.resumes);
+    assert_eq!(Value::Object(event.payload().unwrap()), plain);
 }
 
 #[test]

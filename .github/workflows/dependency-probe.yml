@@ -1,11 +1,21 @@
 name: Dependency probe
 
-# Runs research/dependency-rss/run.sh, the per-crate memory probe of
-# docs/dependencies.md ("Measuring memory"), on the three runner types. Manual
-# only: `gh workflow run dependency-probe.yml --ref <branch>`, never on a push
-# or a pull request. The ref is the only input.
+# Runs a research probe on the three runner types: research/dependency-rss
+# (the per-crate memory probe of docs/dependencies.md, "Measuring memory") or
+# research/session-search (the session_search scan timings of #578). Manual
+# only: `gh workflow run dependency-probe.yml --ref <branch> -f probe=<name>`,
+# never on a push or a pull request. The probe input is a fixed choice, never a
+# path.
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      probe:
+        description: Which probe to run
+        type: choice
+        options:
+          - dependency-rss
+          - session-search
+        default: dependency-rss
 
 permissions:
   contents: read
@@ -17,18 +27,27 @@ jobs:
       matrix:
         runner: [ubuntu-24.04, ubuntu-24.04-arm, macos-26]
     runs-on: ${{ matrix.runner }}
-    # No history yet; generous until a few runs set a median.
-    timeout-minutes: 45
+    # No history yet; generous until a few runs set a median. The
+    # session-search probe builds and scans about 9 GB of generated logs.
+    timeout-minutes: ${{ inputs.probe == 'session-search' && 150 || 45 }}
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Run the probe
         shell: bash
-        run: sh research/dependency-rss/run.sh | tee probe.md
+        env:
+          PROBE: ${{ inputs.probe }}
+        run: |
+          case "$PROBE" in
+            dependency-rss) script=research/dependency-rss/run.sh ;;
+            session-search) script=research/session-search/run.sh ;;
+            *) echo "::error::unknown probe $PROBE"; exit 1 ;;
+          esac
+          bash "$script" | tee probe.md
 
       - name: Upload the table
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: dependency-probe-${{ matrix.runner }}
+          name: ${{ inputs.probe }}-${{ matrix.runner }}
           path: probe.md

@@ -61,7 +61,8 @@ fn sent(effect: Effect) -> Vec<Value> {
         | Effect::Search { .. }
         | Effect::Editor { .. }
         | Effect::Exit(_)
-        | Effect::Copy(_) => Vec::new(),
+        | Effect::Copy(_)
+        | Effect::OpenLink(_) => Vec::new(),
     }
 }
 

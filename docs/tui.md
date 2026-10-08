@@ -668,7 +668,12 @@ How search reads a large session is "History and paging".
 ### Links
 
 Mouse capture turns off the terminal's own link detection, so links are
-marked with OSC 8 or handled on click.
+handled on click: an escape sequence in a cell breaks the width measure.
+Markdown links (tables included) and bare `http://`/`https://` URLs open
+on click; schemes are `http`, `https` and `mailto`. A click runs `open` or
+`xdg-open` on the terminal's machine; over SSH or with no opener the click
+copies the URL and shows "Copied". A focused link opens with Enter and
+copies with `y`.
 
 ## Keys
 
@@ -1132,7 +1137,7 @@ line is a list of spans:
   `muted` or `accent`. There are no hex colours and no escape codes, so every
   extension follows the theme, a light or dark switch and `NO_COLOR`. The
   roles are listed with the themes and belong to the extension API.
-- `link` makes the span an OSC 8 link, written by the terminal.
+- `link` makes the span a link, opened on click as "Links" says.
 - `click` makes the span's cells a click target with that id ("Input and
   focus").
 

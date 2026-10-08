@@ -223,13 +223,14 @@ impl App {
 
     /// The text y copies and Ctrl+G opens: a conversation line's rows, a
     /// code block's code, a paste token's text, a notice's whole text, a
-    /// steering row's text; None for a control. A turn spanning dropped
+    /// steering row's text, a link's URL; None for a control. A turn spanning dropped
     /// pages loads them first: the first press asks for them and says so,
     /// and the next press copies the whole turn.
     fn item_text(&mut self, id: TargetId) -> Option<String> {
         match id {
             TargetId::Home(spot) => self.home_text(spot),
             TargetId::Line(target) => self.line_text(target),
+            TargetId::Link { .. } => self.link_text(id),
             TargetId::Token(number) => self.draft.token_text(number).map(str::to_owned),
             TargetId::Notice(id) => self.notices.text(id).map(str::to_owned),
             TargetId::Steering(at) => self.steering.text(at).map(str::to_owned),
@@ -281,17 +282,29 @@ impl App {
         {
             self.cancel_pending_turn();
         }
-        let missing = crate::turn_text::request_turn(self.screen.pages_mut(), at);
+        // A pending copy pins each page once: a second press pins only the
+        // pages it does not hold, and the copy unpins exactly its own.
+        let mut held = self
+            .pending_turn
+            .take()
+            .map(|pending| pending.pages)
+            .unwrap_or_default();
+        let missing = crate::turn_text::request_turn(self.screen.pages_mut(), at, &held);
+        for page in missing.iter().copied() {
+            if !held.contains(&page) {
+                held.push(page);
+            }
+        }
+        self.pending_turn = Some(crate::turn_text::PendingTurn {
+            turn: at,
+            pages: held,
+        });
         if !missing.is_empty() {
-            self.pending_turn = Some(crate::turn_text::PendingTurn {
-                turn: at,
-                pages: missing,
-            });
             self.notices.push("Loading history…".to_owned());
             return None;
         }
         let text = self.screen.pages().turn_text(at);
-        crate::turn_text::release_turn(self.screen.pages_mut(), at);
+        self.cancel_pending_turn();
         text
     }
 
