@@ -103,11 +103,13 @@ for corpus in 300:25 1300:25 4000:25 1300:0; do
         fi
         case "$rss_mode" in
           gnu)
-            read -r ms hits _ < <(/usr/bin/time -f '%M' "$BIN" scan "$home" "$query" 2>"$TIMEFILE")
+            out=$(/usr/bin/time -f '%M' "$BIN" scan "$home" "$query" 2>"$TIMEFILE")
+            read -r ms hits _ <<<"$out"
             rss=$(( $(cat "$TIMEFILE") * 1024 ))
             ;;
           bsd)
-            read -r ms hits _ < <(/usr/bin/time -l "$BIN" scan "$home" "$query" 2>"$TIMEFILE")
+            out=$(/usr/bin/time -l "$BIN" scan "$home" "$query" 2>"$TIMEFILE")
+            read -r ms hits _ <<<"$out"
             rss=$(awk '/maximum resident set size/ { print $1 }' "$TIMEFILE")
             ;;
         esac
