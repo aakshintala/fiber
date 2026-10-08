@@ -1735,3 +1735,42 @@ fn session_rewound_from_parses_and_conflicts_with_a_fresh_start() {
         assert!(said.contains("--rewound-from"), "{said}");
     }
 }
+
+#[test]
+fn ask_resume_takes_a_credential_label() {
+    let Invocation::Run(Some(Commands::Ask(args))) = parse_from([
+        "fiber",
+        "ask",
+        "--resume",
+        "s_abc",
+        "--credential",
+        "home",
+        "hi",
+    ]) else {
+        panic!("resume with a credential label");
+    };
+    assert_eq!(args.resume.as_deref(), Some("s_abc"));
+    assert_eq!(args.credential.as_deref(), Some("home"));
+
+    let Invocation::Run(Some(Commands::Ask(args))) =
+        parse_from(["fiber", "ask", "--resume", "s_abc", "hi"])
+    else {
+        panic!("resume without a credential label");
+    };
+    assert_eq!(args.credential, None);
+}
+
+#[test]
+fn ask_credential_without_resume_is_a_usage_error() {
+    let message = sentence(&["fiber", "ask", "--credential", "home", "hi"]);
+    assert!(
+        message.contains("--resume"),
+        "the error names `--resume`: {message}"
+    );
+}
+
+#[test]
+fn ask_help_shows_credential() {
+    let rendered = super::render_help(&["ask"]).unwrap();
+    assert!(rendered.contains("--credential <label>"), "{rendered}");
+}

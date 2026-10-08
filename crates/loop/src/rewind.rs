@@ -75,8 +75,12 @@ impl Loop {
         )?;
         let mut folded = crate::resume::resumed(log.dir())?;
         let logged = folded.preamble.clone();
-        // The new session adopts no job: nothing it folds can orphan.
+        // The new session adopts no job: nothing it folds can orphan. It
+        // continues the logged build verbatim, so it writes no
+        // `model_changed` for a label the log changed after the point
+        // (`docs/events.md`, "Rewind").
         folded.orphans = Vec::new();
+        folded.settings = None;
         let mut rewound = Loop::resume(
             log,
             folded,

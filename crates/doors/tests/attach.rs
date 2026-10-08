@@ -135,6 +135,7 @@ impl Opened {
 fn attach_on_thread<W: Write + Send + 'static>(
     home: PathBuf,
     id: SessionId,
+    credential: Option<String>,
     prompt: String,
     out: W,
     refused: Failure,
@@ -142,7 +143,7 @@ fn attach_on_thread<W: Write + Send + 'static>(
     let (done, finished) = mpsc::channel();
     thread::spawn(move || {
         let mut out = out;
-        let code = attach(&home, &id, prompt, &mut out, refused);
+        let code = attach(&home, &id, credential.as_deref(), prompt, &mut out, refused);
         match done.send((code, out)) {
             Ok(()) | Err(_) => {}
         }
@@ -215,6 +216,7 @@ fn prompt_of(inbox: &Receiver<Delivery>) -> (Vec<ContentPart>, CommandId, Ack) {
         | Delivery::SteerDrop(..)
         | Delivery::Handoff(..)
         | Delivery::Model(..)
+        | Delivery::Credential(..)
         | Delivery::Reply(..)
         | Delivery::Job(_)
         | Delivery::JobLine(_)
@@ -314,6 +316,7 @@ fn attach_prints_only_its_turn_and_leaves_the_session_up() {
     let finished = attach_on_thread(
         opened.home.clone(),
         opened.id.clone(),
+        None,
         "during".into(),
         Vec::new(),
         refused(&opened.id),
@@ -389,6 +392,7 @@ fn a_failed_turn_prints_its_lines_and_returns_1() {
     let finished = attach_on_thread(
         opened.home.clone(),
         opened.id.clone(),
+        None,
         "doomed".into(),
         Vec::new(),
         refused(&opened.id),
@@ -417,6 +421,7 @@ fn a_prompt_rejected_busy_is_a_failure_printing_nothing() {
             | Delivery::SteerDrop(..)
             | Delivery::Handoff(..)
             | Delivery::Model(..)
+            | Delivery::Credential(..)
             | Delivery::Reply(..)
             | Delivery::Rewind(..)
             | Delivery::Cancelled
@@ -434,6 +439,7 @@ fn a_prompt_rejected_busy_is_a_failure_printing_nothing() {
     let finished = attach_on_thread(
         opened.home.clone(),
         opened.id.clone(),
+        None,
         "late".into(),
         Vec::new(),
         refused(&opened.id),
@@ -483,6 +489,7 @@ fn the_session_ending_before_the_turn_completes_is_a_failure_not_a_hang() {
     let finished = attach_on_thread(
         opened.home.clone(),
         opened.id.clone(),
+        None,
         "cut".into(),
         Vec::new(),
         refused(&opened.id),
@@ -503,7 +510,7 @@ fn the_session_ending_before_the_turn_completes_is_a_failure_not_a_hang() {
 fn stand_in(
     socket: &Path,
     schema_version: u32,
-    behave: impl FnOnce(BufReader<UnixStream>, Value, Value) + Send + 'static,
+    behave: impl FnOnce(BufReader<UnixStream>, Value, Value, &mut UnixStream) + Send + 'static,
 ) -> (JoinHandle<()>, Receiver<Vec<String>>) {
     let listener = UnixListener::bind(socket).unwrap();
     let (done, finished) = mpsc::channel();
@@ -547,7 +554,7 @@ fn stand_in(
                 &accepted(&prompted, schema_version, &SessionId("s_stand".into())),
             );
         }
-        behave(reader, sub, prompted);
+        behave(reader, sub, prompted, &mut writer);
         match done.send(received) {
             Ok(()) | Err(_) => {}
         }
@@ -590,11 +597,12 @@ fn a_different_schema_version_is_session_held_naming_both_versions() {
     std::fs::create_dir_all(&run).unwrap();
     let id = SessionId(mint("s_"));
     let socket = run.join(&id.0);
-    let server = stand_in(&socket, SCHEMA_VERSION + 1, |_, _, _| {});
+    let server = stand_in(&socket, SCHEMA_VERSION + 1, |_, _, _, _| {});
 
     let finished = attach_on_thread(
         home.clone(),
         id.clone(),
+        None,
         "hi".into(),
         Vec::new(),
         refused(&id),
@@ -636,11 +644,12 @@ fn a_connection_closed_before_the_turn_completes_is_a_failure() {
     let socket = run.join(&id.0);
     // The stand-in answers both commands, then drops the connection with no
     // turn and no `fiber_exited`.
-    let server = stand_in(&socket, SCHEMA_VERSION, |_, _, _| {});
+    let server = stand_in(&socket, SCHEMA_VERSION, |_, _, _, _| {});
 
     let finished = attach_on_thread(
         home.clone(),
         id.clone(),
+        None,
         "hi".into(),
         Vec::new(),
         refused(&id),
@@ -667,6 +676,7 @@ fn a_socket_that_refuses_returns_the_refusal() {
     let finished = attach_on_thread(
         home.clone(),
         id.clone(),
+        None,
         "hi".into(),
         Vec::new(),
         expected.clone(),
@@ -712,6 +722,7 @@ fn an_unwritable_stdout_is_an_io_failure() {
     let finished = attach_on_thread(
         opened.home.clone(),
         opened.id.clone(),
+        None,
         "lost".into(),
         Broken,
         refused(&opened.id),
@@ -721,4 +732,138 @@ fn an_unwritable_stdout_is_an_io_failure() {
 
     assert_eq!(failed.code, ErrorCode::IoFailed);
     assert_eq!(opened.close(inbox), Ok(()));
+}
+
+#[test]
+fn attach_with_a_label_sends_credential_before_the_prompt() {
+    let temp = Temp::new();
+    let home = temp.0.join("h");
+    let run = home.join("run");
+    std::fs::create_dir_all(&run).unwrap();
+    let id = SessionId(mint("s_"));
+    let socket = run.join(&id.0);
+    // The fake session answers the credential, then the prompt, then the
+    // prompt's turn, as the loop would: the read sequence is the order
+    // attach sends them in.
+    let server = stand_in(
+        &socket,
+        SCHEMA_VERSION,
+        |mut reader, sub, second, writer| {
+            assert_eq!(second["command"], "credential");
+            assert_eq!(second["args"], serde_json::json!({"label": "home"}));
+            send(
+                writer,
+                &accepted(&second, SCHEMA_VERSION, &SessionId("s_stand".into())),
+            );
+            let mut third = String::new();
+            reader
+                .read_line(&mut third)
+                .expect("the prompt arrives after the accept");
+            let prompted: Value = serde_json::from_str(third.trim_end()).unwrap();
+            assert_eq!(prompted["command"], "prompt");
+            for (seen, name) in [
+                (&sub, "subscribe"),
+                (&second, "credential"),
+                (&prompted, "prompt"),
+            ] {
+                assert!(
+                    seen["id"].as_str().is_some_and(|id| id.starts_with("c_")),
+                    "{name}"
+                );
+            }
+            assert_ne!(sub["id"], second["id"]);
+            assert_ne!(second["id"], prompted["id"]);
+            assert_ne!(sub["id"], prompted["id"]);
+            send(
+                writer,
+                &accepted(&prompted, SCHEMA_VERSION, &SessionId("s_stand".into())),
+            );
+            // The prompt's turn, as the loop writes it.
+            let command = prompted["id"].as_str().unwrap();
+            send(
+                writer,
+                &serde_json::to_string(&serde_json::json!({
+                    "kind": "turn_started",
+                    "payload": {"input": [{"command_id": command,
+                        "content": [{"type": "text", "text": "hi"}]}]},
+                }))
+                .unwrap(),
+            );
+            send(
+                writer,
+                &serde_json::to_string(&serde_json::json!({
+                    "kind": "turn_completed",
+                    "payload": {"outcome": "completed"},
+                }))
+                .unwrap(),
+            );
+        },
+    );
+
+    let finished = attach_on_thread(
+        home.clone(),
+        id.clone(),
+        Some("home".into()),
+        "hi".into(),
+        Vec::new(),
+        refused(&id),
+    );
+    let (code, out) = attached(finished, "attach to return");
+    assert_eq!(code.unwrap(), 0);
+    let text = String::from_utf8(out).unwrap();
+    assert_eq!(
+        kinds(&text),
+        ["turn_started", "turn_completed"].map(String::from)
+    );
+    let received = stood_in(server, "the stand-in to see the connection end");
+    assert_eq!(
+        received.len(),
+        2,
+        "subscribe, then credential: {received:?}"
+    );
+}
+
+#[test]
+fn attach_with_a_rejected_label_fails_printing_nothing() {
+    let temp = Temp::new();
+    let home = temp.0.join("h");
+    let run = home.join("run");
+    std::fs::create_dir_all(&run).unwrap();
+    let id = SessionId(mint("s_"));
+    let socket = run.join(&id.0);
+    let server = stand_in(&socket, SCHEMA_VERSION, |mut reader, _, second, writer| {
+        assert_eq!(second["command"], "credential");
+        send(
+            writer,
+            &serde_json::to_string(&serde_json::json!({
+                "kind": "command_rejected",
+                "payload": {"command_id": second["id"],
+                    "code": "credential_missing", "message": "no such label"},
+            }))
+            .unwrap(),
+        );
+        // No prompt follows: attach returns on the rejection, closing
+        // the connection, so the next read is the EOF, within DEADLINE.
+        let mut next = String::new();
+        match reader.read_line(&mut next) {
+            Ok(0) => {}
+            Ok(_) => panic!("no prompt is sent after the rejection: {next}"),
+            Err(error) => panic!("the connection ends after the rejection: {error}"),
+        }
+    });
+
+    let finished = attach_on_thread(
+        home.clone(),
+        id.clone(),
+        Some("nope".into()),
+        "hi".into(),
+        Vec::new(),
+        refused(&id),
+    );
+    let (failed, out) = attached(finished, "attach to return");
+    let failed = failed.unwrap_err();
+    assert_eq!(failed.code, ErrorCode::CredentialMissing);
+    assert_eq!(failed.message, "no such label");
+    assert!(out.is_empty(), "a rejection prints nothing");
+    stood_in(server, "the stand-in to see the connection end");
 }

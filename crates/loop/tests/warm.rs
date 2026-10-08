@@ -738,7 +738,9 @@ fn a_switch_while_warming_sends_no_refresh_and_restarts_idle_from_the_switch() {
 
     let next: Arc<ScriptedProvider> = Arc::new(ScriptedProvider::new(vec![]));
     let prepare: r#loop::Prepare = Arc::new(
-        move |args: &contract::commands::ModelArgs, chosen: Option<contract::ThinkingLevel>| {
+        move |args: &contract::commands::ModelArgs,
+              _label: Option<&str>,
+              chosen: Option<contract::ThinkingLevel>| {
             let _ = chosen;
             Ok(r#loop::Prepared {
                 provider: Arc::clone(&next) as Arc<dyn contract::provider::Provider>,
@@ -848,7 +850,9 @@ fn a_during_turn_switch_followed_by_a_turn_keeps_warming_the_new_cache() {
     ]));
     let for_prepare = Arc::clone(&next);
     let prepare: r#loop::Prepare = Arc::new(
-        move |args: &contract::commands::ModelArgs, chosen: Option<contract::ThinkingLevel>| {
+        move |args: &contract::commands::ModelArgs,
+              _label: Option<&str>,
+              chosen: Option<contract::ThinkingLevel>| {
             let _ = chosen;
             Ok(r#loop::Prepared {
                 provider: Arc::clone(&for_prepare) as Arc<dyn contract::provider::Provider>,

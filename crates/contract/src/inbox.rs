@@ -63,6 +63,8 @@ pub enum Delivery {
     SteerDrop(crate::CommandId, Ack),
     /// Switches model or thinking at the next turn boundary.
     Model(crate::commands::ModelArgs, Ack),
+    /// Switches the credential label at the next turn boundary.
+    Credential(crate::commands::CredentialArgs, Ack),
     /// Starts a new session that continues this one from an earlier point
     /// (`docs/events.md`, "Rewind").
     Rewind(crate::commands::RewindArgs, Ack),

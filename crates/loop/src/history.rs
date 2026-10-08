@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use contract::events::{DecidedBy, Decision, Event, Outcome};
+use contract::events::{DecidedBy, Decision, Event, ModelSettings, Outcome};
 use contract::{Envelope, Seq, TurnId};
 use log::{Log, Segment};
 use serde_json::Value;
@@ -57,6 +57,7 @@ pub(crate) fn fold(segments: &[Segment]) -> Result<Resumed, Error> {
     let mut model = None;
     let mut credential = None;
     let mut thinking = None;
+    let mut settings = None;
     let mut ledger = crate::usage::Ledger::default();
     // A parent segment's own first-seen generations, so a correction there
     // keeps the model its call was first recorded at, as the ledger does
@@ -88,6 +89,7 @@ pub(crate) fn fold(segments: &[Segment]) -> Result<Resumed, Error> {
         model: &mut model,
         credential: &mut credential,
         thinking: &mut thinking,
+        settings: &mut settings,
         ledger: &mut ledger,
         parent_ledger: &mut parent_ledger,
         own_segment: false,
@@ -148,6 +150,7 @@ pub(crate) fn fold(segments: &[Segment]) -> Result<Resumed, Error> {
         model,
         credential,
         thinking,
+        settings,
         window,
         end,
         seed,
@@ -169,6 +172,7 @@ struct Fold<'a> {
     model: &'a mut Option<String>,
     credential: &'a mut Option<String>,
     thinking: &'a mut Option<String>,
+    settings: &'a mut Option<ModelSettings>,
     ledger: &'a mut crate::usage::Ledger,
     parent_ledger: &'a mut crate::usage::Ledger,
     own_segment: bool,
@@ -218,10 +222,20 @@ fn fold_line(line: &Envelope, fold: &mut Fold<'_>) -> Result<(), Error> {
     } else if let Event::PreambleBuilt(built) = &event {
         fold.credential.clone_from(&built.credential);
         *fold.preamble = Some(built.clone());
+        // The settings the log last recorded, for a resume that switches
+        // the credential label (`docs/model-routing.md`, "Which credential
+        // a session uses").
+        *fold.settings = Some(ModelSettings {
+            model: built.model.clone(),
+            thinking: built.thinking.clone(),
+            cache_lifetime: built.cache_lifetime,
+            credential: built.credential.clone(),
+        });
     } else if let Event::ModelChanged(changed) = &event {
         *fold.model = Some(changed.after.model.clone());
         fold.credential.clone_from(&changed.after.credential);
         *fold.thinking = changed.after.thinking.clone();
+        *fold.settings = Some(changed.after.clone());
     } else if let Event::PermissionResolved(resolved) = &event {
         if let Some(grant) = &resolved.grant {
             fold.grants.push(grant.clone());

@@ -1103,33 +1103,35 @@ fn another_calls_deltas_keep_flowing_while_one_is_pending() {
 }
 
 fn prepare_to(provider: Arc<ScriptedProvider>) -> r#loop::Prepare {
-    Arc::new(move |_args: &contract::commands::ModelArgs, chosen| {
-        Ok(Prepared {
-            provider: Arc::clone(&provider) as Arc<dyn Provider>,
-            model: Model {
-                reference: "fake/model-2".into(),
-                cost: None,
-                subscription: false,
-            },
-            thinking: chosen,
-            chosen,
-            credential: Some("work".into()),
-            cache_lifetime: CacheLifetime::OneHour,
-            context_window: fakes::CONTEXT_WINDOW,
-            addendum: None,
-            handoff: HandoffSettings::default(),
-            reviewer: Err(contract::shapes::Failure {
-                code: ErrorCode::NoModel,
-                message: r#loop::NO_MODEL_MESSAGE.into(),
-                retry_after_ms: None,
-                provider: None,
-            }),
-            web_search: r#loop::Hosted::Keep,
-            notice: None,
-            applied: None,
-            credential_files: Vec::new(),
-        })
-    })
+    Arc::new(
+        move |_args: &contract::commands::ModelArgs, _label: Option<&str>, chosen| {
+            Ok(Prepared {
+                provider: Arc::clone(&provider) as Arc<dyn Provider>,
+                model: Model {
+                    reference: "fake/model-2".into(),
+                    cost: None,
+                    subscription: false,
+                },
+                thinking: chosen,
+                chosen,
+                credential: Some("work".into()),
+                cache_lifetime: CacheLifetime::OneHour,
+                context_window: fakes::CONTEXT_WINDOW,
+                addendum: None,
+                handoff: HandoffSettings::default(),
+                reviewer: Err(contract::shapes::Failure {
+                    code: ErrorCode::NoModel,
+                    message: r#loop::NO_MODEL_MESSAGE.into(),
+                    retry_after_ms: None,
+                    provider: None,
+                }),
+                web_search: r#loop::Hosted::Keep,
+                notice: None,
+                applied: None,
+                credential_files: Vec::new(),
+            })
+        },
+    )
 }
 
 #[test]

@@ -117,6 +117,9 @@ impl Loop {
             Delivery::Model(_, ack) => {
                 reject(ack, ErrorCode::Closing, CLOSING);
             }
+            Delivery::Credential(_, ack) => {
+                reject(ack, ErrorCode::Closing, CLOSING);
+            }
             Delivery::SteerDrop(_, ack) => reject(ack, ErrorCode::StaleRequest, STALE_STEER),
             Delivery::Reply(_, ack) => reject(ack, ErrorCode::StaleRequest, STALE_REPLY),
             Delivery::Close(ack) => accept(ack),
