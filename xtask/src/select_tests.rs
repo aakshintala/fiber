@@ -1615,6 +1615,59 @@ fn only_direct_json_files_make_a_case_package() {
 }
 
 #[test]
+fn a_package_root_that_is_a_file_reports_the_root_path() {
+    let selection = selection_with_main_for_loop_change();
+
+    let providers = crate::test_dir::TestDir::new("extension-packages-provider-root-file");
+    providers.write("providers", "not a directory");
+    let error = extension_packages(&selection, providers.path()).unwrap_err();
+    assert!(
+        error.starts_with(&providers.path().join("providers").display().to_string()),
+        "{error}"
+    );
+
+    let extensions = crate::test_dir::TestDir::new("extension-packages-extension-root-file");
+    extensions.write("providers/.keep", "");
+    extensions.write("extensions", "not a directory");
+    let error = extension_packages(&selection, extensions.path()).unwrap_err();
+    assert!(
+        error.starts_with(&extensions.path().join("extensions").display().to_string()),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_package_tests_path_that_is_a_file_reports_that_path() {
+    let root = crate::test_dir::TestDir::new("extension-packages-tests-file");
+    root.write("providers/acme/tests", "not a directory");
+    let selection = selection_with_main_for_loop_change();
+
+    let error = extension_packages(&selection, root.path()).unwrap_err();
+    assert!(
+        error.starts_with(
+            &root
+                .path()
+                .join("providers/acme/tests")
+                .display()
+                .to_string()
+        ),
+        "{error}"
+    );
+}
+
+#[test]
+fn missing_package_roots_and_tests_are_skipped() {
+    let root = crate::test_dir::TestDir::new("extension-packages-missing");
+    root.write("providers/no-tests/extension.json", "{}");
+    let selection = selection_with_main_for_loop_change();
+
+    assert_eq!(
+        extension_packages(&selection, root.path()).unwrap(),
+        Some(Vec::<String>::new())
+    );
+}
+
+#[test]
 fn a_missing_package_root_group_is_empty() {
     let root = crate::test_dir::TestDir::new("extension-packages-no-group");
     root.write("providers/acme/tests/case.json", "{}");

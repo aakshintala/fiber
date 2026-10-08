@@ -13,7 +13,9 @@ use std::ffi::OsString;
 use std::fs;
 use std::io;
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
+use std::process::{Command, ExitStatus};
 use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
@@ -23,8 +25,9 @@ use fakes::{Watchdog, group_empties, matching_exits};
 use serde_json::json;
 
 use super::{
-    ChildEnvironment, MAX_SOCKET_PATH, RunOptions, RunTimeouts, child_command, discover_cases,
-    extension_test_with, longest_planned_socket, process_group_id, summary,
+    ChildEnvironment, MAX_SOCKET_PATH, ProcessClock, RunDirectory, RunOptions, RunTimeouts,
+    child_command, discover_cases, extension_test, extension_test_with, group_alive,
+    longest_planned_socket, process_group_id, summary,
 };
 
 const TEST_WAIT: Duration = Duration::from_secs(15);
@@ -33,45 +36,13 @@ const GROUP_EMPTY_WAIT: Duration = Duration::from_secs(5);
 const MATCHING_EXIT_WAIT: Duration = Duration::from_secs(5);
 
 struct Setup {
-    root: TestRoot,
+    root: fakes::TempDir,
     package: PathBuf,
-}
-
-/// A short directory directly under `/tmp`, removed on drop. Case sockets
-/// bind under the runner's temp root, and every byte of that root counts
-/// against the 100-byte socket budget (`MAX_SOCKET_PATH`), so test roots
-/// stay out of a long `TMPDIR`.
-struct TestRoot {
-    path: PathBuf,
-}
-
-impl TestRoot {
-    fn new() -> Self {
-        for _ in 0..64 {
-            let path = PathBuf::from(format!("/tmp/fx{}", doors::mint("")));
-            match fs::create_dir(&path) {
-                Ok(()) => return Self { path },
-                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
-                Err(error) => panic!("creating {}: {error}", path.display()),
-            }
-        }
-        panic!("no unique test directory under /tmp");
-    }
-
-    fn path(&self) -> &Path {
-        &self.path
-    }
-}
-
-impl Drop for TestRoot {
-    fn drop(&mut self) {
-        let _removed = fs::remove_dir_all(&self.path);
-    }
 }
 
 impl Setup {
     fn new() -> Self {
-        let root = TestRoot::new();
+        let root = fakes::TempDir::new("fiber-extension-test");
         let package = root.path().join("package");
         fs::create_dir_all(package.join("tests")).unwrap();
         fs::write(
@@ -101,7 +72,7 @@ impl Setup {
                 path: Some(OsString::from("/bin:/usr/bin")),
                 home: Some(OsString::from("/tmp/fiber-test-home")),
             },
-            temp_root: self.root.path().to_path_buf(),
+            temp_root: PathBuf::from("/tmp"),
             fiber_prefix,
         }
     }
@@ -154,6 +125,21 @@ fn a_missing_manifest_is_a_usage_error_naming_the_path() {
         "{error}"
     );
     assert_eq!(error.lines().count(), 1, "{error}");
+}
+
+#[test]
+fn discover_cases_ignores_a_missing_tests_directory_but_rejects_a_file() {
+    let setup = Setup::new();
+    let tests = setup.package.join("tests");
+    fs::remove_dir(&tests).unwrap();
+    assert_eq!(
+        discover_cases(&setup.package).unwrap(),
+        Vec::<PathBuf>::new()
+    );
+
+    fs::write(&tests, "not a directory").unwrap();
+    let error = discover_cases(&setup.package).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::NotADirectory);
 }
 
 #[test]
@@ -395,6 +381,171 @@ fn zero_exit_requires_one_ok_verdict_and_no_reason_lines() {
         "FAIL reason\n  extra reason\nFAIL wrong verdict\n  case child exited with exit code 0 without a successful verdict\n0 passed, 2 failed\n"
     );
     assert!(err.is_empty());
+}
+
+#[test]
+fn the_public_entry_maps_package_and_fiber_outcomes_to_exit_codes() {
+    const CHILD: &str = "FIBER_EXTENSION_TEST_ENTRY_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        public_entry_exit_codes();
+        return;
+    }
+
+    let name = module_path!().split_once("::").unwrap().1;
+    let test = format!("{name}::the_public_entry_maps_package_and_fiber_outcomes_to_exit_codes");
+    let child = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", &test, "--nocapture", "--test-threads=1"])
+        .env(CHILD, "1")
+        .env("TMPDIR", "/tmp")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let watchdog = Watchdog::group(child.id());
+    let status = wait_child(child);
+    assert!(status.success(), "public entry test child exited {status}");
+    watchdog.stand_down(TEST_WAIT);
+}
+
+fn public_entry_exit_codes() {
+    let passing = Setup::new();
+    passing.case("pass.json");
+    let failing = Setup::new();
+    failing.case("fail.json");
+    let missing_manifest = fakes::TempDir::new("fiber-extension-test-no-manifest");
+    let stand_in =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("testdata/extension-test-stand-in.sh");
+    let watchdog = Watchdog::matching(&stand_in.display().to_string());
+
+    assert_eq!(
+        public_entry(passing.package.clone(), Ok(stand_in.clone())),
+        0
+    );
+    assert_eq!(
+        public_entry(failing.package.clone(), Ok(stand_in.clone())),
+        1
+    );
+    assert_eq!(
+        public_entry(passing.package.clone(), Err("fiber is missing".to_owned())),
+        1
+    );
+    assert_eq!(
+        public_entry(missing_manifest.path().to_path_buf(), Ok(stand_in)),
+        2
+    );
+
+    watchdog.stand_down(TEST_WAIT);
+}
+
+fn public_entry(path: PathBuf, fiber: Result<PathBuf, String>) -> i32 {
+    let (send, receive) = mpsc::channel();
+    thread::spawn(move || {
+        let _sent = send.send(extension_test(Some(&path), fiber));
+    });
+    receive
+        .recv_timeout(TEST_WAIT)
+        .expect("public extension test entry did not return")
+}
+
+#[test]
+fn group_alive_distinguishes_a_reaped_group_from_a_live_group() {
+    let exited = Command::new("/bin/sh")
+        .args(["-c", "exit 0"])
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let exited_group = exited.id();
+    assert!(wait_child(exited).success());
+    assert!(!group_alive(exited_group).unwrap());
+
+    let live = Command::new("/bin/sleep")
+        .arg("60")
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let live_group = live.id();
+    let watchdog = Watchdog::group(live_group);
+    assert!(group_alive(live_group).unwrap());
+    assert!(fakes::kill_group(live_group, "KILL").unwrap());
+    let _status = wait_child(live);
+    assert!(!group_alive(live_group).unwrap());
+    watchdog.stand_down(TEST_WAIT);
+}
+
+fn wait_child(mut child: std::process::Child) -> ExitStatus {
+    let (send, receive) = mpsc::channel();
+    thread::spawn(move || {
+        let _sent = send.send(child.wait());
+    });
+    receive
+        .recv_timeout(TEST_WAIT)
+        .expect("child did not exit before the test deadline")
+        .unwrap()
+}
+
+#[test]
+fn run_directory_cleanup_removes_it_and_reports_removal_errors() {
+    let root = fakes::TempDir::new("fiber-extension-test-cleanup");
+    let directory = RunDirectory::new(root.path()).unwrap();
+    let path = directory.path.clone();
+    directory.cleanup().unwrap();
+    assert!(!path.exists());
+
+    let directory = RunDirectory::new(root.path()).unwrap();
+    let path = directory.path.clone();
+    fs::remove_dir_all(&path).unwrap();
+    fs::write(&path, "not a directory").unwrap();
+    assert_eq!(
+        directory.cleanup().unwrap_err().kind(),
+        io::ErrorKind::NotADirectory
+    );
+}
+
+#[test]
+fn dropping_a_run_directory_removes_it() {
+    let root = fakes::TempDir::new("fiber-extension-test-drop");
+    let path = {
+        let directory = RunDirectory::new(root.path()).unwrap();
+        directory.path.clone()
+    };
+    assert!(!path.exists());
+}
+
+#[test]
+fn process_clock_wait_until_calls_once_with_the_remaining_duration() {
+    let clock = ProcessClock;
+    let mut unbounded = Vec::new();
+    clock.wait_until(None, &mut |duration| unbounded.push(duration));
+    assert_eq!(unbounded, [None]);
+
+    let distance = Duration::from_secs(86_400);
+    let deadline = clock.now().checked_add(distance).unwrap();
+    let mut calls = 0;
+    clock.wait_until(Some(deadline), &mut |duration| {
+        calls += 1;
+        let Some(duration) = duration else {
+            panic!("a deadline must have a remaining duration");
+        };
+        assert!(duration > Duration::ZERO);
+        assert!(duration <= distance);
+    });
+    assert_eq!(calls, 1);
+
+    let past = clock.now().checked_sub(Duration::from_secs(1)).unwrap();
+    let mut expired = Vec::new();
+    clock.wait_until(Some(past), &mut |duration| expired.push(duration));
+    assert_eq!(expired, [Some(Duration::ZERO)]);
+}
+
+#[test]
+fn process_clock_sleep_advances_its_own_time_by_the_requested_duration() {
+    let clock = ProcessClock;
+    let duration = Duration::from_millis(5);
+    let before = clock.now();
+    clock.sleep(duration);
+    assert!(clock.now().saturating_duration_since(before) >= duration);
 }
 
 #[test]
