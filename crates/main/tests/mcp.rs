@@ -1418,6 +1418,7 @@ fn a_cached_servers_prompt_starts_it_when_run() {
 
     let first = setup.run(&["ask", "/greet Ada warm"]);
     assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
+    assert_eq!(first.kinds(), hello_kinds(&[]));
     fs::remove_file(dir.join("pid.txt")).expect("pid.txt");
     let run = setup.run(&["ask", "/greet Ada warm"]);
 

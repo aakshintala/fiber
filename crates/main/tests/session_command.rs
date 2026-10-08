@@ -1545,8 +1545,8 @@ fn workspace_skill(setup: &Setup, name: &str, header: &str) {
     .unwrap();
 }
 
-/// Subscribes `client`, sends `commands`, and returns its answer's `result`.
-fn commands_answer(client: &Socket) -> Value {
+/// Subscribes `client`, sends `commands`, and returns the event stream and answer.
+fn commands_answer(client: &Socket) -> (Vec<Value>, Value) {
     send(
         client,
         r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
@@ -1555,7 +1555,8 @@ fn commands_answer(client: &Socket) -> Value {
     let lines = until(client, "the commands answer", |line| {
         line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_cmds"
     });
-    lines.last().unwrap()["payload"]["result"].clone()
+    let result = lines.last().unwrap()["payload"]["result"].clone();
+    (lines, result)
 }
 
 #[test]
@@ -1577,8 +1578,9 @@ fn commands_answers_with_the_workspaces_skills_and_templates() {
     let mut running = setup.start_session(&id, &[]);
     let client = running.connect(&setup.socket(&id));
     running.wait_for("extensions_loaded");
+    let (_, result) = commands_answer(&client);
     assert_eq!(
-        commands_answer(&client),
+        result,
         json!({"commands": [
             {"name": "review-pr", "description": "Reviews a pull request.", "tag": "skill"},
             {"name": "ship", "description": "Ships it.", "argument_hint": "<tag>",
@@ -1607,8 +1609,9 @@ fn a_resumed_session_answers_commands_from_its_recorded_workspace() {
 
     let mut running = setup.start_session(&id, &["--resume"]);
     let client = running.connect(&setup.socket(&id));
+    let (_, result) = commands_answer(&client);
     assert_eq!(
-        commands_answer(&client),
+        result,
         json!({"commands": [
             {"name": "later", "description": "Added before the resume.", "tag": "skill"}]})
     );
@@ -2932,17 +2935,41 @@ fn commands_answers_with_a_servers_prompts_tagged_with_its_name() {
     let mut running = setup.start_session(&id, &[]);
     let client = running.connect(&setup.socket(&id));
     running.wait_for("extensions_loaded");
+    let (mut events, result) = commands_answer(&client);
     assert_eq!(
-        commands_answer(&client),
+        result,
         json!({"commands": [
             {"name": "greet", "description": "Greets someone.",
              "argument_hint": "<who> [tone]", "tag": "fx"}]})
     );
     send(&client, r#"{"id":"c_close","command":"close"}"#);
-    let _tail = until_close(&client);
+    events.extend(until_close(&client));
     drop(client);
-    let (status, _out, stderr) = running.wait();
+    let (status, out, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
+    assert_eq!(
+        kinds(&events),
+        [
+            "command_accepted",
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "clients",
+            "command_accepted",
+            "command_accepted",
+            "fiber_exited",
+        ],
+    );
+    assert_eq!(
+        kinds(&out),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "clients",
+            "fiber_exited",
+        ],
+    );
 }
 
 #[test]
@@ -2957,18 +2984,81 @@ fn a_resumed_session_answers_commands_with_its_servers_prompts() {
     setup.provider(&server);
     prompt_fixture(&setup);
     let id = doors::mint("s_");
-    suspend_on_an_approval(&setup, &id);
+    let pending = suspend_on_an_approval(&setup, &id);
     // The suspend rewrote `config.json` to the model alone: the resume
     // needs the servers back.
     prompt_fixture(&setup);
 
     let mut running = setup.start_session(&id, &["--resume"]);
     let client = running.connect(&setup.socket(&id));
+    let (mut events, result) = commands_answer(&client);
     assert_eq!(
-        commands_answer(&client),
+        result,
         json!({"commands": [
             {"name": "greet", "description": "Greets someone.",
              "argument_hint": "<who> [tone]", "tag": "fx"}]})
     );
-    // Dropping `running` kills the session, still waiting on the approval.
+    let mut resumed = events
+        .iter()
+        .any(|line| line["kind"] == "fiber_started" && line["payload"]["resumed"] == true);
+    let replay = until(&client, "the re-raised permission request", |line| {
+        if line["kind"] == "fiber_started" && line["payload"]["resumed"] == true {
+            resumed = true;
+        }
+        resumed && line["kind"] == "permission_requested"
+    });
+    assert_eq!(
+        replay.last().unwrap()["payload"]["request_id"],
+        pending.as_str()
+    );
+    events.extend(replay);
+    send(
+        &client,
+        r#"{"id":"c_close_now","command":"close","args":{"now":true}}"#,
+    );
+    events.extend(until(&client, "the close answer", |line| {
+        line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_close_now"
+    }));
+    events.extend(until_close(&client));
+    drop(client);
+    let (status, out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+    assert_eq!(
+        kinds(&events),
+        [
+            "command_accepted",
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "permission_requested",
+            "fiber_exited",
+            "fiber_started",
+            "extensions_loaded",
+            "clients",
+            "command_accepted",
+            "preamble_built",
+            "permission_requested",
+            "command_accepted",
+            "fiber_exited",
+        ],
+    );
+    assert_eq!(
+        kinds(&out),
+        [
+            "fiber_started",
+            "extensions_loaded",
+            "clients",
+            "preamble_built",
+            "permission_requested",
+            "fiber_exited",
+        ],
+    );
 }
