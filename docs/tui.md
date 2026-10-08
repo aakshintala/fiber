@@ -614,8 +614,9 @@ box, as an approval does (`docs/tools.md`, "Asking the person").
   Enter moves on to the next question, or to Submit after the last one. The
   question ends with a `Next →` row, `Review →` on the last question, that
   does the same for the mouse.
-- ← and → move between the tabs, except in the row to answer in words, where
-  they move the cursor. Tab and Shift+Tab move between the tabs from any row.
+- ← and → move between the tabs, except in a row that takes typed text (the
+  answer in words, or the note), where they move the cursor. Tab and Shift+Tab
+  move between the tabs from any row.
 - "Chat about this", and Esc, decline the form and end the turn, so the person
   can answer in their own words. The terminal sends `reply` with `declined`,
   then `cancel`: the call completes `declined`, and the cancel ends the turn.
