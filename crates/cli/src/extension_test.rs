@@ -59,6 +59,9 @@ impl RunTimeouts {
     }
 }
 
+type GroupSignal = dyn Fn(u32, Signal) -> io::Result<()> + Send + Sync;
+type GroupProbe = fn(u32) -> io::Result<bool>;
+
 /// Dependencies for one runner invocation. Tests supply the clock,
 /// environment and child command prefix instead of mutating process state.
 struct RunOptions {
@@ -67,6 +70,9 @@ struct RunOptions {
     environment: ChildEnvironment,
     temp_root: PathBuf,
     fiber_prefix: Vec<OsString>,
+    // Tests inject these separately to cover a live child with an empty-group observation.
+    group_signal: Arc<GroupSignal>,
+    group_probe: GroupProbe,
 }
 
 /// `fiber extension test [<path>]`: run every case in a package directory.
@@ -84,6 +90,8 @@ pub fn extension_test(path: Option<&Path>, fiber: Result<PathBuf, String>) -> i3
         environment: ChildEnvironment::from_process(),
         temp_root: std::env::temp_dir(),
         fiber_prefix: Vec::new(),
+        group_signal: Arc::new(signal_group),
+        group_probe: group_alive,
     };
     extension_test_with(
         path,
@@ -402,7 +410,7 @@ fn run_child(
         let Some(mut child) = lock(&reaper_child).take() else {
             return Err(format!("starting case child reaper: {error}"));
         };
-        let kill_error = signal_group(group, Signal::KILL).err();
+        let kill_error = (options.group_signal)(group, Signal::KILL).err();
         if kill_error.is_some() {
             let _killed = child.kill();
         }
@@ -432,11 +440,11 @@ fn run_child(
     }
 
     let started_term = options.clock.now();
-    signal_group(group, Signal::TERM)
+    (options.group_signal)(group, Signal::TERM)
         .map_err(|error| format!("sending SIGTERM to case group: {error}"))?;
     let second_term = after(options.clock.as_ref(), options.timeouts.second_sigterm);
     wait_until(options.clock.as_ref(), second_term, signal.as_ref());
-    signal_group(group, Signal::TERM)
+    (options.group_signal)(group, Signal::TERM)
         .map_err(|error| format!("sending the second SIGTERM to case group: {error}"))?;
 
     let grace_deadline = started_term
@@ -449,10 +457,10 @@ fn run_child(
         grace_deadline,
         signal.as_ref(),
     )?;
-    let group_remains =
-        group_alive(group).map_err(|error| format!("checking the case process group: {error}"))?;
+    let group_remains = (options.group_probe)(group)
+        .map_err(|error| format!("checking the case process group: {error}"))?;
     if status.is_none() || group_remains {
-        signal_group(group, Signal::KILL)
+        (options.group_signal)(group, Signal::KILL)
             .map_err(|error| format!("sending SIGKILL to case group: {error}"))?;
     }
 

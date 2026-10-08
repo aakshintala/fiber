@@ -11,23 +11,24 @@
 
 use std::ffi::OsString;
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 
-use contract::clock::Clock;
+use contract::clock::{Clock, Wake};
 use fakes::{Watchdog, group_empties, matching_exits};
+use rustix::process::Signal;
 use serde_json::json;
 
 use super::{
     ChildEnvironment, MAX_SOCKET_PATH, ProcessClock, RunDirectory, RunOptions, RunTimeouts,
-    child_command, discover_cases, extension_test, extension_test_with, group_alive,
-    longest_planned_socket, process_group_id, summary,
+    WaitSignal, child_command, discover_cases, extension_test, extension_test_with, group_alive,
+    longest_planned_socket, process_group_id, signal_group, summary,
 };
 
 const TEST_WAIT: Duration = Duration::from_secs(15);
@@ -36,6 +37,11 @@ const GROUP_EMPTY_WAIT: Duration = Duration::from_secs(5);
 const PID_EXIT_WAIT: Duration = Duration::from_secs(5);
 const PID_EXIT_POLL: Duration = Duration::from_millis(50);
 const MATCHING_EXIT_WAIT: Duration = Duration::from_secs(5);
+const WAIT_SIGNAL_BOUND: Duration = Duration::from_millis(50);
+
+fn empty_group(_group: u32) -> io::Result<bool> {
+    Ok(false)
+}
 
 struct Setup {
     root: fakes::TempDir,
@@ -76,6 +82,8 @@ impl Setup {
             },
             temp_root: PathBuf::from("/tmp"),
             fiber_prefix,
+            group_signal: Arc::new(signal_group),
+            group_probe: group_alive,
         }
     }
 }
@@ -563,6 +571,46 @@ fn dropping_a_run_directory_removes_it() {
 }
 
 #[test]
+fn prepare_wait_clears_an_earlier_wake_and_a_later_wake_releases_the_wait() {
+    let signal = Arc::new(WaitSignal::default());
+    signal.wake();
+    signal.prepare_wait();
+
+    let guard = super::lock(&signal.notified);
+    let (guard, timeout) = signal
+        .changed
+        .wait_timeout_while(guard, WAIT_SIGNAL_BOUND, |notified| !*notified)
+        .unwrap();
+    assert!(timeout.timed_out(), "a prior wake released the wait");
+    assert!(!*guard, "the cleared wake remained set");
+    drop(guard);
+
+    signal.prepare_wait();
+    let waiting = Arc::clone(&signal);
+    let (ready, started) = mpsc::channel();
+    let (finished, result) = mpsc::channel();
+    thread::spawn(move || {
+        let guard = super::lock(&waiting.notified);
+        ready.send(()).unwrap();
+        let (guard, timeout) = waiting
+            .changed
+            .wait_timeout_while(guard, WAIT_SIGNAL_BOUND, |notified| !*notified)
+            .unwrap();
+        finished.send((timeout.timed_out(), *guard)).unwrap();
+    });
+    started
+        .recv_timeout(TEST_WAIT)
+        .expect("waiter holds the signal lock before waiting");
+    signal.wake();
+    assert_eq!(
+        result
+            .recv_timeout(TEST_WAIT)
+            .expect("wake releases the bounded wait"),
+        (false, true)
+    );
+}
+
+#[test]
 fn process_clock_wait_until_calls_once_with_the_remaining_duration() {
     let clock = ProcessClock;
     let mut unbounded = Vec::new();
@@ -603,6 +651,193 @@ fn process_group_ids_that_could_signal_everyone_are_refused() {
     assert!(process_group_id(1).is_err());
     assert!(process_group_id(2).is_ok());
     assert!(process_group_id(u32::MAX).is_err());
+}
+
+#[test]
+fn an_exited_child_does_not_leave_a_sigterm_ignoring_descendant_in_its_group() {
+    let setup = Setup::new();
+    setup.case("descendant.json");
+    let ready = fakes::children::Ready::new(setup.root.path());
+    let block = setup.root.path().join("descendant.fifo");
+    let script = setup.root.path().join("descendant.pl");
+    fs::write(
+        &script,
+        r#"exec perl - "$@" <<'PERL'
+use strict;
+use warnings;
+use POSIX;
+my ($ready, $block) = @ARGV;
+POSIX::mkfifo($block, 0600) == 0 or die $!;
+$SIG{TERM} = "IGNORE";
+$| = 1;
+sub emit {
+    open my $file, ">", $ready or die $!;
+    print {$file} "$_[0]\n";
+    close $file;
+}
+emit($$);
+my $descendant = fork();
+die $! unless defined $descendant;
+if ($descendant == 0) {
+    $SIG{TERM} = "IGNORE";
+    emit($$);
+    open my $hold, "<", $block or die $!;
+    while (<$hold>) {}
+    exit 0;
+}
+open my $hold, "<", $block or die $!;
+while (<$hold>) {}
+PERL
+"#,
+    )
+    .unwrap();
+    let mut prefix = script_prefix(&script);
+    prefix.extend([
+        ready.path().as_os_str().to_owned(),
+        block.as_os_str().to_owned(),
+    ]);
+    let clock = fakes::clock::FakeClock::new();
+    let case_limit = Duration::from_millis(100);
+    let options = setup.options(Arc::clone(&clock) as Arc<dyn Clock>, prefix);
+    let options = RunOptions {
+        timeouts: RunTimeouts {
+            case: case_limit,
+            ..options.timeouts
+        },
+        ..options
+    };
+    let receive = run_in_thread(setup.package.clone(), PathBuf::from("/bin/sh"), options);
+    let group = ready.wait(READY_WAIT)[0];
+    let descendant = ready.wait(READY_WAIT)[0];
+    let watchdog = Watchdog::group(group);
+
+    assert!(
+        clock.await_parked(clock.origin() + case_limit, TEST_WAIT),
+        "runner did not wait on its case deadline"
+    );
+    clock.advance(case_limit);
+    let second_signal = clock.now() + Duration::from_secs(1);
+    assert!(
+        clock.await_parked(second_signal, TEST_WAIT),
+        "runner did not wait before its second SIGTERM"
+    );
+    clock.advance(Duration::from_secs(1));
+    let grace_end = clock.now() + Duration::from_secs(4);
+    let marked = clock
+        .mark_parked(grace_end, TEST_WAIT)
+        .expect("runner did not wait through TERM_GRACE");
+    assert!(fakes::kill_pid(group, "KILL").unwrap());
+    assert!(
+        clock.await_parked_since(&marked, Some(grace_end), TEST_WAIT),
+        "child reaper did not wake the grace wait"
+    );
+    clock.advance(Duration::from_secs(4));
+
+    let (code, out, err) = receive.recv_timeout(TEST_WAIT).unwrap();
+    assert_eq!(code, 1);
+    assert!(
+        out.contains("FAIL descendant\n  did not finish within"),
+        "{out}"
+    );
+    assert!(err.is_empty());
+    assert!(
+        pid_exits_or_is_zombie(group, PID_EXIT_WAIT),
+        "the process-group leader {group} did not exit"
+    );
+    assert!(
+        group_empties(group, GROUP_EMPTY_WAIT),
+        "SIGKILL did not empty process group {group}"
+    );
+    assert!(
+        pid_exits_or_is_zombie(descendant, PID_EXIT_WAIT),
+        "SIGKILL did not stop descendant {descendant}"
+    );
+    watchdog.stand_down(TEST_WAIT);
+}
+
+#[test]
+fn an_unreaped_child_gets_sigkill_even_when_the_group_probe_is_empty() {
+    let setup = Setup::new();
+    setup.case("hang.json");
+    let ready = fakes::children::Ready::new(setup.root.path());
+    let block = setup.root.path().join("release.fifo");
+    let script = setup.root.path().join("wait-for-release.sh");
+    fs::write(
+        &script,
+        "printf '%s\\n' \"$$\" > \"$1\"; mkfifo \"$2\"; printf '%s\\n' \"$$\" >> \"$1\"; read -r _ < \"$2\"; printf 'ok late\\n'",
+    )
+    .unwrap();
+    let mut prefix = script_prefix(&script);
+    prefix.extend([
+        ready.path().as_os_str().to_owned(),
+        block.as_os_str().to_owned(),
+    ]);
+    let clock = fakes::clock::FakeClock::new();
+    let case_limit = Duration::from_millis(100);
+    let mut options = setup.options(Arc::clone(&clock) as Arc<dyn Clock>, prefix);
+    options.timeouts = RunTimeouts {
+        case: case_limit,
+        ..options.timeouts
+    };
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let sent_by_signal = Arc::clone(&sent);
+    options.group_signal = Arc::new(move |_group, signal| {
+        sent_by_signal.lock().unwrap().push(signal);
+        Ok(())
+    });
+    // Keep the child alive while presenting the empty-group outcome to run_child.
+    options.group_probe = empty_group;
+    let reap_timeout = options.timeouts.reap;
+    let receive = run_in_thread(setup.package.clone(), PathBuf::from("/bin/sh"), options);
+    let group = ready.wait(READY_WAIT)[0];
+    let _child = ready.wait(READY_WAIT);
+    let watchdog = Watchdog::group(group);
+
+    assert!(
+        clock.await_parked(clock.origin() + case_limit, TEST_WAIT),
+        "runner did not wait on its case deadline"
+    );
+    clock.advance(case_limit);
+    let second_signal = clock.now() + Duration::from_secs(1);
+    assert!(
+        clock.await_parked(second_signal, TEST_WAIT),
+        "runner did not wait before its second SIGTERM"
+    );
+    clock.advance(Duration::from_secs(1));
+    let grace_end = clock.now() + Duration::from_secs(4);
+    assert!(
+        clock.await_parked(grace_end, TEST_WAIT),
+        "runner did not wait through TERM_GRACE"
+    );
+    clock.advance(Duration::from_secs(4));
+    assert!(
+        clock.await_parked(clock.now() + reap_timeout, TEST_WAIT),
+        "runner did not wait for the child to be reaped"
+    );
+    assert_eq!(
+        *sent.lock().unwrap(),
+        [Signal::TERM, Signal::TERM, Signal::KILL]
+    );
+
+    let (released, released_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let result = fs::OpenOptions::new()
+            .write(true)
+            .open(block)
+            .and_then(|mut writer| writeln!(writer, "release"));
+        let _sent = released.send(result);
+    });
+    released_rx
+        .recv_timeout(TEST_WAIT)
+        .expect("child opened its release fifo")
+        .unwrap();
+
+    let (code, out, err) = receive.recv_timeout(TEST_WAIT).unwrap();
+    assert_eq!(code, 1);
+    assert!(out.contains("did not finish within"), "{out}");
+    assert!(err.is_empty());
+    assert!(group_empties(group, GROUP_EMPTY_WAIT));
+    watchdog.stand_down(TEST_WAIT);
 }
 
 #[test]
