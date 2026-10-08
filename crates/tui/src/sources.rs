@@ -58,6 +58,20 @@ impl Gate {
     }
 }
 
+/// The stack of each terminal thread. A thread's default 2 MiB stack can
+/// land on a 2 MiB-aligned span of its own, and the kernel then backs its
+/// first touch with one 2 MiB huge page: the idle terminal measured 2 MiB
+/// more in about half its runs. A stack under 2 MiB cannot hold such a
+/// span. The threads read, parse one line and send, so 1 MiB is ample.
+const STACK: usize = 1_048_576;
+
+/// A builder for the terminal thread `name`, with [`STACK`].
+pub(crate) fn builder(name: &str) -> thread::Builder {
+    thread::Builder::new()
+        .name(name.to_owned())
+        .stack_size(STACK)
+}
+
 /// Reads the tty on its own thread, polling it and a wake pipe, so the loop
 /// can stop it from reading while another program has the terminal. Left
 /// blocked on quit; it ends with the process.
@@ -76,8 +90,7 @@ impl Reader {
         let (woken, wake) = io::pipe().ok()?;
         let gate = Arc::new(Gate::default());
         let shared = Arc::clone(&gate);
-        thread::Builder::new()
-            .name("tui-input".to_owned())
+        builder("tui-input")
             .spawn(move || {
                 read_input(tty, &woken, &shared, &tx);
                 shared.end();
@@ -155,37 +168,33 @@ fn read_input(mut tty: File, mut woken: &PipeReader, gate: &Gate, tx: &Sender<In
 /// Connects to the hub on its own thread, after the first frame, then
 /// reads its lines.
 pub(crate) fn spawn_hub(connect: Connect, tx: Sender<Input>) {
-    let hub = thread::Builder::new()
-        .name("tui-hub".to_owned())
-        .spawn(move || {
-            let connected = connect().and_then(|(stream, hello)| {
-                let reader = stream.try_clone()?;
-                Ok((stream, reader, hello))
-            });
-            match connected {
-                Ok((stream, reader, hello)) => {
-                    if tx.send(Input::Connected(stream, hello)).is_ok() {
-                        link::read_lines(reader, &tx);
-                    }
-                }
-                Err(error) => drop(tx.send(Input::ConnectFailed(error.to_string()))),
-            }
+    let hub = builder("tui-hub").spawn(move || {
+        let connected = connect().and_then(|(stream, hello)| {
+            let reader = stream.try_clone()?;
+            Ok((stream, reader, hello))
         });
+        match connected {
+            Ok((stream, reader, hello)) => {
+                if tx.send(Input::Connected(stream, hello)).is_ok() {
+                    link::read_lines(reader, &tx);
+                }
+            }
+            Err(error) => drop(tx.send(Input::ConnectFailed(error.to_string()))),
+        }
+    });
     drop(hub);
 }
 
 /// Turns SIGWINCH into [`Input::Resize`] on its own thread. Left blocked on
 /// quit; it ends with the process.
 pub(crate) fn spawn_resize(mut signals: Signals, tx: Sender<Input>) {
-    let resize = thread::Builder::new()
-        .name("tui-resize".to_owned())
-        .spawn(move || {
-            for _ in signals.forever() {
-                if tx.send(Input::Resize).is_err() {
-                    return;
-                }
+    let resize = builder("tui-resize").spawn(move || {
+        for _ in signals.forever() {
+            if tx.send(Input::Resize).is_err() {
+                return;
             }
-        });
+        }
+    });
     drop(resize);
 }
 
