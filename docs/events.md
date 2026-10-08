@@ -819,6 +819,7 @@ Ephemeral. The envelope's `action_id` is the failed assistant message.
 |---|---|---|---|
 | `code` | string | yes | the failed call's `error.code` |
 | `attempt` | integer | yes | the attempt about to be made |
+| `last_attempt` | integer | yes | the last attempt the retry policy allows, 1 + `retry.attempts` |
 | `delay_ms` | integer | yes | the wait before it |
 
 #### `notice`

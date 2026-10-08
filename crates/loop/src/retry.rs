@@ -225,6 +225,7 @@ impl crate::Loop {
                                 &Event::RetryScheduled(RetryScheduled {
                                     code: failure.code.clone(),
                                     attempt: attempt.saturating_add(1),
+                                    last_attempt: self.retry.attempts.saturating_add(1),
                                     delay_ms: delay_ms(delay),
                                 }),
                                 turn,
