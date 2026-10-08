@@ -20,7 +20,7 @@
 //! shutdown only once started with no signal seen yet, and otherwise does
 //! nothing, so a later SIGTERM or SIGINT is a second signal.
 
-use std::io;
+use std::io::{self, Read};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -29,7 +29,9 @@ use contract::clock::{Clock, Wake};
 use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
 
 /// From the signal to exit, per process (`docs/invocation.md`, "Shutdown").
-const BOUND: Duration = Duration::from_secs(5);
+/// A delegate's stop waits this long too: `main` passes it into `jobs`
+/// as the stop bound, so there is one constant.
+pub const SHUTDOWN_BOUND: Duration = Duration::from_secs(5);
 
 /// The exit code a `close` with `now` ends the process with: success, as an
 /// ordinary `close` would (`docs/invocation.md`, "Lifecycle").
@@ -215,6 +217,28 @@ impl Signals {
         self.run(action, None, on_signal, None);
     }
 
+    /// Starts the lifeline: a thread that reads `input` to EOF or an
+    /// error, then handles SIGHUP (`docs/delegates.md`, "Lifetime"). A
+    /// Fiber delegate's parent holds the write end open and never writes
+    /// to it, so end of file means the parent is gone, however it died:
+    /// a shutdown with exit 129, a hangup. Before [`Signals::start`] the
+    /// armed and booting phases exit or record as for a real SIGHUP. Any
+    /// byte the parent writes is ignored.
+    pub fn lifeline(self: &Arc<Self>, input: Box<dyn Read + Send>) {
+        let signals = Arc::clone(self);
+        let watched = thread::Builder::new()
+            .name("lifeline".to_owned())
+            .spawn(move || {
+                drain(input);
+                signals.handle(SIGHUP);
+            });
+        // No thread, no lifeline: without it a dead parent would leave
+        // the delegate running, so the hangup is taken at once instead.
+        if watched.is_err() {
+            self.handle(SIGHUP);
+        }
+    }
+
     /// Handles one signal. The callbacks run outside the lock.
     fn handle(self: &Arc<Self>, signal: i32) {
         let (action, on_record, on_signal, on_second) = {
@@ -265,12 +289,12 @@ impl Signals {
         }
     }
 
-    /// Starts the bound: [`BOUND`] from now on the clock, `on_bound` runs
+    /// Starts the bound: [`SHUTDOWN_BOUND`] from now on the clock, `on_bound` runs
     /// and the process exits with `code`. It writes nothing: a line it
     /// wrote could be followed by a stuck loop's.
     fn bound(self: &Arc<Self>, code: i32) {
         let now = self.clock.now();
-        let until = now.checked_add(BOUND).unwrap_or(now);
+        let until = now.checked_add(SHUTDOWN_BOUND).unwrap_or(now);
         let signals = Arc::clone(self);
         let started = (self.spawn)(Box::new(move || {
             sleep_until(signals.clock.as_ref(), until);
@@ -347,6 +371,18 @@ fn sleep_until(clock: &dyn Clock, until: Instant) {
                     .unwrap_or_else(PoisonError::into_inner),
             };
         });
+    }
+}
+
+/// Reads `input` to EOF or an error, ignoring every byte: the parent
+/// never writes to the lifeline.
+fn drain(mut input: Box<dyn Read + Send>) {
+    let mut buf = [0u8; 1024];
+    loop {
+        match input.read(&mut buf) {
+            Ok(0) | Err(_) => return,
+            Ok(_) => {}
+        }
     }
 }
 
