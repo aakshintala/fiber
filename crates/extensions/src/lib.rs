@@ -43,6 +43,7 @@ pub use manage::{Item, Plan, Request, plan};
 pub use oauth::{Browser, SystemBrowser};
 pub use prepare::platform;
 pub use providers::{Model, Providers, StartedRefresh, leave_out_invalid, refresh_lists};
+pub use release::{Release, install_release};
 pub use repository::{
     Decision, Index, Pending, RepoItem, SessionOffer, Store, declared_items, hash, kind_name,
     pending,
@@ -221,6 +222,15 @@ pub enum Error {
     BinaryChecksum {
         /// The extension.
         name: String,
+        /// Where it was downloaded from.
+        url: String,
+    },
+    /// A release archive whose SHA-256 is not the one its `.sha256` file
+    /// holds.
+    #[error("`{archive}` from {url} does not match its .sha256 file.")]
+    ArchiveChecksum {
+        /// The archive's file name.
+        archive: String,
         /// Where it was downloaded from.
         url: String,
     },
@@ -422,6 +432,7 @@ impl Error {
             | Self::BadRecord { .. }
             | Self::InstallStep { .. }
             | Self::BinaryChecksum { .. }
+            | Self::ArchiveChecksum { .. }
             | Self::BadArchive { .. }
             | Self::Rollback { .. } => ErrorCode::IoFailed,
             Self::InstallExited { .. } => ErrorCode::NonzeroExit,

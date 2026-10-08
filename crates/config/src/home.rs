@@ -18,12 +18,21 @@ pub fn fiber_home(
     fiber_home: Option<OsString>,
     home: Option<OsString>,
 ) -> Result<PathBuf, ConfigError> {
-    let dir = match fiber_home {
-        Some(value) if value.is_empty() => {
-            return Err(ConfigError::FiberHome(
-                "FIBER_HOME is empty; set it to an absolute path or unset it.",
-            ));
-        }
+    let dir = fiber_home_path(fiber_home, home)?;
+    create_fiber_home(&dir)?;
+    Ok(dir)
+}
+
+/// Where Fiber home is, as [`fiber_home`] resolves it, without creating
+/// anything.
+pub fn fiber_home_path(
+    fiber_home: Option<OsString>,
+    home: Option<OsString>,
+) -> Result<PathBuf, ConfigError> {
+    match fiber_home {
+        Some(value) if value.is_empty() => Err(ConfigError::FiberHome(
+            "FIBER_HOME is empty; set it to an absolute path or unset it.",
+        )),
         Some(value) => {
             let dir = PathBuf::from(value);
             if dir.is_relative() {
@@ -31,31 +40,37 @@ pub fn fiber_home(
                     "FIBER_HOME must be an absolute path.",
                 ));
             }
-            dir
+            Ok(dir)
         }
         None => match home.map(PathBuf::from) {
-            Some(home) if home.is_absolute() => home.join(".fiber"),
-            Some(_) | None => {
-                return Err(ConfigError::FiberHome(
-                    "HOME is not an absolute path, so Fiber home is unknown; set FIBER_HOME.",
-                ));
-            }
+            Some(home) if home.is_absolute() => Ok(home.join(".fiber")),
+            Some(_) | None => Err(ConfigError::FiberHome(
+                "HOME is not an absolute path, so Fiber home is unknown; set FIBER_HOME.",
+            )),
         },
-    };
+    }
+}
+
+/// Creates Fiber home at `dir` and any missing parent, mode 0700.
+pub fn create_fiber_home(dir: &Path) -> Result<(), ConfigError> {
     DirBuilder::new()
         .recursive(true)
         .mode(0o700)
-        .create(&dir)
+        .create(dir)
         .map_err(|source| ConfigError::Io {
-            file: dir.clone(),
+            file: dir.to_path_buf(),
             source,
-        })?;
-    Ok(dir)
+        })
 }
 
 /// [`fiber_home`] from the process's `FIBER_HOME` and `HOME`.
 pub fn fiber_home_from_env() -> Result<PathBuf, ConfigError> {
     fiber_home(std::env::var_os("FIBER_HOME"), std::env::var_os("HOME"))
+}
+
+/// [`fiber_home_path`] from the process's `FIBER_HOME` and `HOME`.
+pub fn fiber_home_path_from_env() -> Result<PathBuf, ConfigError> {
+    fiber_home_path(std::env::var_os("FIBER_HOME"), std::env::var_os("HOME"))
 }
 
 /// A project's key, naming `projects/<key>/` in Fiber home: the slug of the

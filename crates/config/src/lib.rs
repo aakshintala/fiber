@@ -37,7 +37,10 @@ pub use extension::{
     Binary, Cost, Manifest, ModelData, Opening, Placeholder, Process, Protocol, ProviderData, Tier,
     read_manifest, read_package_text, read_providers,
 };
-pub use home::{ProjectKey, fiber_home, fiber_home_from_env};
+pub use home::{
+    ProjectKey, create_fiber_home, fiber_home, fiber_home_from_env, fiber_home_path,
+    fiber_home_path_from_env,
+};
 pub use names::{SHORT_NAMES, dir_name, full_name, short_name};
 pub use rules::RulesFiles;
 pub use secret::{
