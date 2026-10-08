@@ -26,7 +26,11 @@ impl Providers {
     /// without a `:<level>` suffix: a model whose id is the script's path,
     /// under a provider named `scripted` with no credential, quota, cost or
     /// prompt cache. A reference to another provider, or one naming no
-    /// path, adds nothing; a path already added is added once.
+    /// path, adds nothing; a path already added is added once. A `scripted`
+    /// entry this function did not build — no installed package may register
+    /// the name, and `load` and `add_lua` leave such a provider out — is
+    /// replaced, never reused: only an entry whose models all speak
+    /// `Scripted` reaches no network.
     pub fn add_scripted(&mut self, typed: &str) {
         let (rest, _) = Self::split_thinking(typed);
         let Some(id) = rest.strip_prefix("scripted/") else {
@@ -34,6 +38,17 @@ impl Providers {
         };
         if id.is_empty() {
             return;
+        }
+        if self.by_name.get(SCRIPTED).is_some_and(|data| {
+            data.models
+                .iter()
+                .any(|model| model.protocol != Protocol::Scripted)
+        }) {
+            self.by_name.remove(SCRIPTED);
+            self.lua.remove(SCRIPTED);
+            self.extension_of.remove(SCRIPTED);
+            self.addenda.remove(SCRIPTED);
+            self.unconfigured.remove(SCRIPTED);
         }
         let data = self
             .by_name
