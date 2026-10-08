@@ -424,6 +424,38 @@ end } })"#,
 }
 
 #[test]
+fn a_call_case_finds_the_provider_when_the_package_name_differs() {
+    let server = ProviderServer::start([Response::status(
+        200,
+        r#"{"data":{"total_cost":0.5}}"#.as_bytes(),
+    )])
+    .unwrap();
+    let setup = setup_named(
+        "casefixture",
+        r#"fiber.provider("acme", { cost = { timeout = 5000, run = function(call)
+  local reply = host.http({url = call.base_url .. "/generation?id=" .. call.generation_id,
+                           headers = {authorization = "Bearer " .. call.key}})
+  return json.decode(reply.body).data.total_cost
+end } })"#,
+    );
+    let value = json!({
+        "call": {"provider": "acme", "function": "cost", "arg": {
+            "generation_id": "gen-abc", "base_url": server.url(), "key": "secret"
+        }},
+        "host": {"http": [{
+            "request": {
+                "url": format!("{}/generation?id=gen-abc", server.url()),
+                "headers": {"authorization": "Bearer secret"}
+            },
+            "reply": {"status": 200, "body": "{\"data\":{\"total_cost\":0.5}}"}
+        }]},
+        "returns": 0.5
+    });
+    assert_success(&run_case(&setup, "cost-other-name", &value));
+    assert!(server.requests().is_empty(), "call case opened a socket");
+}
+
+#[test]
 fn unsupported_provider_call_is_a_malformed_case() {
     let setup = setup("");
     let value = json!({
