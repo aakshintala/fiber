@@ -213,6 +213,7 @@ fn asked(id: &str) -> InteractionRequested {
         },
         action_ids: None,
         extension: Some("fiber.test/notes".into()),
+        resumes: false,
     }
 }
 

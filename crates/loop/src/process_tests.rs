@@ -98,6 +98,7 @@ fn asked(id: &str) -> Event {
         },
         action_ids: None,
         extension: Some("fiber.test/notes".into()),
+        resumes: false,
     })
 }
 
@@ -109,6 +110,7 @@ fn asked_without_extension(id: &str) -> Event {
         },
         action_ids: None,
         extension: None,
+        resumes: false,
     })
 }
 

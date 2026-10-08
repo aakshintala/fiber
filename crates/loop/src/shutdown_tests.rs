@@ -621,6 +621,7 @@ fn asked(id: &str) -> contract::events::InteractionRequested {
         },
         action_ids: None,
         extension: Some("fiber.test/notes".into()),
+        resumes: false,
     }
 }
 

@@ -700,6 +700,7 @@ Durable. The envelope carries no `action_id`; the payload names the calls.
 | `prompt` | string | no | the question, on every kind but `form` |
 | `options` | array | no | on `select` and `multi_select`: each a `label` (string) and an optional `description` (string) |
 | `fields` | `questions` | no | on `form`, one per question |
+| `resumes` | boolean | no | `true` when the process may exit with this request pending, and resuming runs the call that raised it again, which raises it again with the same `request_id` (`docs/tools.md`, "When a person can answer"); absent otherwise |
 
 #### `interaction_resolved`
 
@@ -1331,7 +1332,7 @@ What the reader can tell about work that was in flight, from the log alone:
 |---|---|
 | `tool_call_requested`, no `tool_call_started` | provably never ran; safe to run or discard |
 | `tool_call_requested` with `provider_item` | the provider ran it; Fiber never reviews, runs or answers it on resume |
-| `tool_call_started`, no `tool_call_completed` | uncertain; Fiber never re-runs it, and the model is told its outcome is unknown |
+| `tool_call_started`, no `tool_call_completed` | uncertain; Fiber never re-runs it, and the model is told its outcome is unknown, unless a `fiber_exited` with `suspended_on` names an `interaction_requested` with `resumes: true` that call raised: the call was waiting on the person, and resuming runs it again, with no second `tool_call_started`, so it raises the request again |
 | `tool_call_completed` | ran, with its outcome |
 | `job_started`, no `job_completed` | the process that ran it died; on open Fiber writes `job_completed` with `status: failed` and `error.code: orphaned`, unless a `rewound` lists the job |
 | `turn_started`, no `turn_completed` | the turn was cut short; render what was logged and say so, unless a `fiber_exited` with `suspended_on` follows, in which case the turn resumes with the request raised again |

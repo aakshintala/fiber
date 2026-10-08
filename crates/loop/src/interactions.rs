@@ -86,6 +86,9 @@ impl Loop {
                     interaction: asking.interaction.clone(),
                     action_ids: Some(action_ids),
                     extension: None,
+                    // Only an ask that suspends may be raised again by
+                    // running its call (`docs/events.md`, "Resume").
+                    resumes: asking.suspends,
                 };
                 self.append(&Event::InteractionRequested(requested), turn, None)?;
                 slot.pend(request, asking.interaction, asking.until, asking.check);

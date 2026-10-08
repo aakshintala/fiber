@@ -1765,6 +1765,7 @@ fn confirm_requested(request_id: &str) -> Event {
         },
         action_ids: None,
         extension: None,
+        resumes: false,
     })
 }
 

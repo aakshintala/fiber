@@ -257,6 +257,7 @@ fn requested(id: &str) -> InteractionRequested {
         interaction: asked("confirm"),
         action_ids: None,
         extension: Some("ext".into()),
+        resumes: false,
     }
 }
 

@@ -133,6 +133,7 @@ fn plain(interaction: Interaction) -> Make {
         action_ids: Vec::new(),
         until: None,
         check: None,
+        suspends: false,
     })
 }
 
@@ -142,6 +143,7 @@ fn checked(interaction: Interaction, check: fn(&Answer) -> bool) -> Make {
         action_ids: Vec::new(),
         until: None,
         check: Some(Box::new(check) as Check),
+        suspends: false,
     })
 }
 
@@ -811,6 +813,7 @@ fn until_later() -> (Make, Arc<Mutex<Option<Instant>>>) {
         action_ids: Vec::new(),
         until: *read.lock().unwrap(),
         check: None,
+        suspends: false,
     });
     (make, at)
 }
@@ -886,12 +889,14 @@ fn action_ids_are_written_as_given_or_as_the_call_alone() {
             action_ids: vec![ActionId("a_other".into()), own.clone()],
             until: *first.lock().unwrap(),
             check: None,
+            suspends: false,
         }),
         Box::new(move |_| Asking {
             interaction: confirm(),
             action_ids: Vec::new(),
             until: *second.lock().unwrap(),
             check: None,
+            suspends: false,
         }),
     ]);
     let mut session = session(&["asks"], vec![tool]).inbox_woken();
@@ -1126,6 +1131,7 @@ fn other_deliveries_are_admitted_while_a_call_waits() {
         interaction: confirm(),
         action_ids: None,
         extension: Some("ext".into()),
+        resumes: false,
     }));
     let extension = tap.wait_for("interaction_requested");
     assert_eq!(extension.payload["extension"], "ext");
@@ -1312,5 +1318,44 @@ fn a_log_failure_before_a_calls_first_ask_releases_it() {
             .iter()
             .all(|line| line.kind != "interaction_resolved"),
         "nothing is written after the failure"
+    );
+}
+
+#[test]
+fn an_ask_that_suspends_is_logged_resumes_and_any_other_without_the_key() {
+    // `until` already passed, so Fiber declines each at once after its
+    // request line.
+    let past = Arc::new(Mutex::new(None::<Instant>));
+    let (first, second) = (Arc::clone(&past), Arc::clone(&past));
+    let (tool, answers) = Asks::new(vec![
+        Box::new(move |_| Asking {
+            interaction: confirm(),
+            action_ids: Vec::new(),
+            until: *first.lock().unwrap(),
+            check: None,
+            suspends: true,
+        }),
+        Box::new(move |_| Asking {
+            interaction: confirm(),
+            action_ids: Vec::new(),
+            until: *second.lock().unwrap(),
+            check: None,
+            suspends: false,
+        }),
+    ]);
+    let mut session = session(&["asks"], vec![tool]).inbox_woken();
+    *past.lock().unwrap() = Some(session.clock.now());
+    session.inbox.send(delivery("go")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    assert_eq!(told(&answers), Answered::NoAnswer);
+    assert_eq!(told(&answers), Answered::NoAnswer);
+    let lines = session.lines();
+    let requested = of_kind(&lines, "interaction_requested");
+    assert_eq!(requested.len(), 2);
+    assert_eq!(requested[0].payload["resumes"], true);
+    assert!(
+        requested[1].payload.get("resumes").is_none(),
+        "{:?}",
+        requested[1].payload
     );
 }

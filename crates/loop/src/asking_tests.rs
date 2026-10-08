@@ -39,6 +39,7 @@ fn asking() -> Asking {
         action_ids: Vec::new(),
         until: None,
         check: None,
+        suspends: false,
     }
 }
 

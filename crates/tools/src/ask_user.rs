@@ -132,6 +132,10 @@ impl Tool for AskUser {
             action_ids: Vec::new(),
             until: None,
             check: None,
+            // It lives like a pending approval: the session may exit on it,
+            // and resuming runs the call again (`docs/tools.md`, "When a
+            // person can answer").
+            suspends: true,
         });
         match answer {
             Answered::Reply(Answer::Form { answers, note }) => {

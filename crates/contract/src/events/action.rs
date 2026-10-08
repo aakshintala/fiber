@@ -597,6 +597,11 @@ pub struct InteractionRequested {
     /// The extension that raised it with `host.ask`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extension: Option<String>,
+    /// The process may exit with it pending, and resuming runs the call
+    /// that raised it again, which raises it again with the same
+    /// `request_id` (`docs/events.md`, `interaction_requested`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub resumes: bool,
 }
 
 /// `interaction_requested` as a line carries it, before its keys are checked
@@ -607,6 +612,8 @@ struct InteractionRequestedLine {
     kind: InteractionKind,
     action_ids: Option<Vec<ActionId>>,
     extension: Option<String>,
+    #[serde(default)]
+    resumes: bool,
     prompt: Option<String>,
     options: Option<Vec<Choice>>,
     fields: Option<Vec<Question>>,
@@ -634,6 +641,7 @@ impl TryFrom<InteractionRequestedLine> for InteractionRequested {
             interaction,
             action_ids: line.action_ids,
             extension: line.extension,
+            resumes: line.resumes,
         })
     }
 }
