@@ -210,3 +210,23 @@ fn more_blocks_than_the_table_holds_panic_naming_the_overflow() {
     let ((), after) = large_blocks_during(|| drop(large()));
     assert_eq!(after, 1, "the next scope counts again");
 }
+
+#[test]
+#[allow(clippy::panic, reason = "this test must unwind through an open scope")]
+fn a_scope_that_unwinds_is_closed() {
+    use std::panic::AssertUnwindSafe;
+    let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        large_blocks_during(|| {
+            // Without `Scope::drop` closing the scope, this block and the
+            // scope's depth leak into the next scope on this thread.
+            std::mem::forget(large());
+            panic!("unwind through an open scope");
+        })
+    }));
+    assert!(outcome.is_err(), "the inner closure panics");
+    let ((), after) = large_blocks_during(|| drop(large()));
+    assert_eq!(
+        after, 1,
+        "the unwound scope's block and depth must not leak into the next scope"
+    );
+}
