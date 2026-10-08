@@ -1043,15 +1043,14 @@ Also measured in Fiber, on the same machine:
   session, one frame each. The slowest frame took 1.9 ms, and 1.1 ms on the
   larger session.
 
-On Linux x86_64, in a 4-core shared Claude cloud container (16 GiB, so every
-timing is an upper bound), the same session gave, as the median of three runs:
-the opening pass and first frame 308 ms, the slowest frame that loaded pages
-1.3 ms, the slowest jump frame 2.6 ms, counting every page again at a new
-width 24 ms, and the slowest append frame 1.8 ms with at most 5 pages holding
-cards. The counts match macOS: 2,915 rows in 120 pages. Peak resident memory
-was 10.4 MiB (10,612 KiB), the jig's copy of the session included. Repeatable
-Linux numbers are future work in
-[#1172](https://github.com/aakshintala/fiber/issues/1172).
+On Linux x86_64 the benchmark job (`docs/performance.md`, "Measuring", the
+`paging` rows) runs the jig on every pull request. Its run of 7 October 2026
+(GitHub Actions run 37700922577) gave, as the median of 5 runs: the opening
+pass and first frame 673 ms, the slowest frame that loaded pages 3.0 ms, the
+slowest jump frame 5.4 ms, counting every page again at a new width 61 ms, and
+the slowest append frame 1.4 ms. The jig's session had 8,285 lines, 10 turns
+and 1,051 tool calls, and the counts match macOS: 2,915 rows in 120 pages.
+Peak resident memory was 8,796 KiB, the jig's copy of the session included.
 
 ## Extension seams
 

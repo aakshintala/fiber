@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# Builds the tui crate's paging jig (docs/testing.md, "Jigs") in the release
+# profile for the target that ships, x86_64-unknown-linux-musl, so the
+# benchmark job's paging rows (docs/performance.md) measure the shipped
+# allocator and code generation. The checkout's HEAD is the head.
+#
+# Usage: scripts/paging-jig [BASE_COMMIT]
+# With a base commit (a pull request), the base jig is also built, in a git
+# worktree reusing this checkout's target directory. A base with no jig, or
+# whose jig does not build, has none: the script says so, exits 0, and the
+# base's paging timings are reported unavailable. Only a failed head build
+# fails the script.
+#
+# Outputs: $RUNNER_TEMP/release/head/paging, and $RUNNER_TEMP/release/base/paging
+# when the base has a jig that builds. Runs on Linux.
+set -euo pipefail
+shopt -s inherit_errexit
+cd "$(git rev-parse --show-toplevel)"
+
+readonly target=x86_64-unknown-linux-musl
+readonly source=crates/tui/examples/paging.rs
+base_commit=${1:-}
+out="${RUNNER_TEMP:?}/release"
+top=$PWD
+
+# Builds the jig of the checkout in the current directory into the shared
+# target directory and copies it to $1. Each step is chained, so a failed
+# build fails the function even where errexit does not apply, and never
+# copies a jig an earlier build left in target/.
+build() {
+  CARGO_TARGET_DIR="$top/target" cargo build --release --locked --target "$target" \
+    -p tui --example paging &&
+    mkdir -p "${1%/*}" &&
+    cp "$top/target/$target/release/examples/paging" "$1"
+}
+
+# The head is copied out of target/ before any base build overwrites it.
+build "$out/head/paging"
+echo "paging-jig: head $(git rev-parse --short HEAD) jig built"
+
+if [ -n "$base_commit" ]; then
+  base_sha=$(git rev-parse --short "$base_commit")
+  if ! git cat-file -e "$base_commit:$source" 2>/dev/null; then
+    echo "paging-jig: the base $base_sha has no paging jig; its paging timings are unavailable"
+    exit 0
+  fi
+  worktree="$RUNNER_TEMP/paging-base"
+  trap 'git -C "$top" worktree remove --force "$worktree"' EXIT
+  git worktree add --detach "$worktree" "$base_commit"
+  # The base may pin another toolchain; each command reads its
+  # rust-toolchain.toml.
+  if (cd "$worktree" && rustup toolchain install && rustup target add "$target" &&
+    build "$out/base/paging"); then
+    echo "paging-jig: base $base_sha jig built"
+  else
+    rm -f "$out/base/paging"
+    echo "paging-jig: the base $base_sha jig did not build; its paging timings are unavailable"
+  fi
+fi

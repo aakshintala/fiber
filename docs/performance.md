@@ -37,6 +37,13 @@ and about 4 ms with every size and modification time unchanged; a release
 build takes about 8 ms and 2.5 ms. Both include resolving each path and
 reading the index. No Linux figure is measured.
 
+The `paging` rows measure the `tui` crate's `paging` jig (`docs/testing.md`,
+"Jigs"), a process that runs the terminal's paging over a generated session
+it holds in memory, standing in for the hub's log; its memory row covers that
+copy. It runs no provider extension and no compiled-in tool: it measures the
+terminal's paging and drawing alone, so the fresh-install load above does not
+apply to it.
+
 Memory follows the context window, not the transcript. After a handoff the
 session holds the handoff note and what came after it, and a resumed session
 reads from its last handoff (`docs/handoff.md`). A 2-million-token session and
@@ -59,6 +66,12 @@ a 20-thousand-token one fit the same ceiling.
 | Terminal to its first frame, attaching | 50 ms plus 10 ms per MiB of session log | Linux x86_64 | picked |
 | Listing 1,000 sessions in one project, warm cache | 50 ms | Linux x86_64 | picked |
 | `session_list`, waiting for every running session's status | 2 s for the whole call | Linux x86_64 | picked |
+| `paging` jig, its session at scale 1 and 160 by 48 | 17,592 KiB peak RSS | Linux x86_64 | measured |
+| `paging` jig, open pass and first frame | 1,347 ms | Linux x86_64 | measured |
+| `paging` jig, slowest frame that loaded pages | 7 ms | Linux x86_64 | measured |
+| `paging` jig, slowest jump frame | 11 ms | Linux x86_64 | measured |
+| `paging` jig, slowest re-count at a new width | 123 ms | Linux x86_64 | measured |
+| `paging` jig, slowest append frame | 3 ms | Linux x86_64 | measured |
 
 Basis says where a number came from:
 
@@ -126,7 +139,9 @@ never gated.
 No test asserts a timing (`docs/testing.md`). The budgets are a benchmark job,
 separate from the tests. The harness, `cargo run -p main --example bench`,
 measures a `fiber` binary and writes its results to a file, and
-`cargo xtask bench-report` judges that file against the table above.
+`cargo xtask bench-report` judges that file against the table above. The
+`paging` rows run the jig at scale 1 and 160 by 48, built in the release
+profile for the target that ships, and read its peak RSS from GNU time.
 
 ## When a budget is exceeded
 
