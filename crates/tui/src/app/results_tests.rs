@@ -384,12 +384,13 @@ fn the_view_opens_on_the_current_match_by_its_place() {
 }
 
 #[test]
-fn a_zero_height_view_keeps_its_top_one_past_the_selection() {
-    // With no rows drawn, a selection already at the top moves the top
-    // one past it: the clamp as it stands.
+fn a_zero_height_view_keeps_the_selection_at_its_top() {
+    // With no rows drawn the view counts as one row tall.
     let mut results = super::Results::default();
     results.go(0, 3, 0);
-    assert_eq!((results.selected, results.top), (0, 1));
+    assert_eq!((results.selected, results.top), (0, 0));
+    results.go(2, 3, 0);
+    assert_eq!((results.selected, results.top), (2, 2));
 }
 
 #[test]

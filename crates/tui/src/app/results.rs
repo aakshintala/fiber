@@ -41,11 +41,13 @@ impl Results {
             return;
         }
         self.selected = at.min(len.saturating_sub(1));
-        if self.selected < self.top {
-            self.top = self.selected;
-        } else if self.selected >= self.top.saturating_add(height) {
-            self.top = self.selected.saturating_add(1).saturating_sub(height);
-        }
+        // A view with no rows is kept one row tall, so the selection never
+        // lands past the top.
+        let low = self
+            .selected
+            .saturating_add(1)
+            .saturating_sub(height.max(1));
+        self.top = self.top.clamp(low, self.selected);
     }
 
     /// ↓ or ↑ (and `j` or `k`) moves by one entry, holding at either end;
