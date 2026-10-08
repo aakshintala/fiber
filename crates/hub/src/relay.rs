@@ -9,7 +9,14 @@
 //! accepted `subscribe` replaces the kept one, so a reconnect to that
 //! session sends it again under a hub-minted id before the client's
 //! command, dropping the session's acknowledgement of it. A `subscribe`
-//! the session rejects, or never answers, is not kept.
+//! the session rejects, or never answers, is not kept. A reconnect waits
+//! for the old relay thread to deliver every acknowledgement it read
+//! before it reads the kept subscription, so the replay is the accepted
+//! level. The wait holds no lock; the joined thread waits only on the
+//! session stream and the client writer. A client that stops reading can
+//! hold the old thread in its forward of a later line, after that line is
+//! already kept, until the client reads or disconnects; only that client's
+//! own reconnect waits.
 //!
 //! A `closing` answer from a session whose log ends in `fiber_exited` is
 //! not passed on: the command is routed again to the resumed session.
@@ -33,12 +40,15 @@ pub(crate) type Kept = Arc<Mutex<Vec<(String, Map<String, Value>)>>>;
 
 /// One relay: the session connection, the writer the next command for it
 /// uses, and the commands it has not acknowledged. The relay thread owns
-/// the reader; both halves close together.
+/// the reader; both halves close together. The thread handle is what a
+/// reconnect joins after a failed write, so every acknowledgement the old
+/// thread read is kept before the kept subscription is read.
 pub(crate) struct Relay {
     pub(crate) session: String,
     pub(crate) epoch: u64,
     pub(crate) writer: UnixStream,
     pub(crate) kept: Kept,
+    pub(crate) thread: Option<thread::JoinHandle<()>>,
 }
 
 /// A connection's relays, the last epoch minted on it, and the last
@@ -176,9 +186,37 @@ fn route(
             if sent {
                 return;
             }
-            held.entries.remove(at);
+            // The write failed: the session is gone. Shut the entry's
+            // writer so the old thread's read ends, then wait for it to
+            // deliver every acknowledgement it read before reading the kept
+            // level. The join holds no lock; the thread takes it to keep.
+            let old = held.entries.get_mut(at).map(|entry| {
+                let thread = entry.thread.take();
+                let epoch = entry.epoch;
+                match entry.writer.shutdown(Shutdown::Both) {
+                    Ok(()) | Err(_) => {}
+                }
+                (thread, epoch)
+            });
+            drop(held);
+            #[cfg(test)]
+            {
+                if let Some(before) = lock(&hub.before_join).take() {
+                    before();
+                }
+            }
+            if let Some((thread, epoch)) = old {
+                if let Some(thread) = thread {
+                    match thread.join() {
+                        Ok(()) | Err(_) => {}
+                    }
+                }
+                lock(relays).finish(session, epoch);
+            }
+            lock(relays).subscription(session)
+        } else {
+            held.subscription(session)
         }
-        held.subscription(session)
     };
     let sid = SessionId(session.to_owned());
     let opened = if exited {
@@ -240,12 +278,13 @@ fn route(
     });
     // A thread that never started leaves no entry: the next command for
     // the session reconnects.
-    if relayed.is_ok() {
+    if let Ok(thread) = relayed {
         held.entries.push(Relay {
             session: session.to_owned(),
             epoch,
             writer: stream,
             kept,
+            thread: Some(thread),
         });
     }
 }
@@ -309,6 +348,12 @@ fn relay(
                         continue;
                     }
                     Some(Settled::Subscribed(line)) => {
+                        #[cfg(test)]
+                        {
+                            if let Some(before) = lock(&hub.before_accepted).take() {
+                                before(&buf, relays);
+                            }
+                        }
                         lock(relays).accepted(session, epoch, line);
                     }
                     None => {}
