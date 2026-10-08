@@ -24,6 +24,14 @@ pub(crate) use shown::{Reviewed, render_reviewed};
 /// What step 7 says about one call: it runs, or how its denial reads.
 type Decided = Result<Approved, Box<ToolCallCompleted>>;
 
+/// The first stage's output limit. A reviewer model that reasons before it
+/// answers spends the limit on that reasoning, so the limit covers it as well
+/// as the word. Measured against the models a first-party provider names for
+/// review (`docs/model-routing.md`): `claude-sonnet-5-5` takes 4 tokens for
+/// `allow` and 3 for `check`; `gpt-6-luna` and `gemini-3.8-flash` reasoned
+/// for up to 50 and 82 tokens before the one-token word.
+const FIRST_STAGE_OUTPUT_TOKENS: u64 = 128;
+
 /// What a `no_model` escalation and notice say: nothing chose the
 /// reviewer's model, so every reviewed call goes to a person
 /// (`docs/permissions.md`, "How it runs").
@@ -103,8 +111,7 @@ pub(crate) enum Second {
     Block { reason: String },
 }
 
-/// Reads a first-stage verdict: `check` or `allow`, cleaned. A reply cut
-/// off by the output limit still reads.
+/// Reads a first-stage verdict: `check` or `allow`, cleaned.
 pub(crate) fn read_first(text: &str) -> Result<First, String> {
     match clean(text).as_str() {
         "allow" => Ok(First::Allow),
@@ -230,7 +237,7 @@ impl Loop {
             &endpoint,
             &prompt.shared,
             &prompt.first,
-            Some(1),
+            Some(FIRST_STAGE_OUTPUT_TOKENS),
             read_first,
         )? {
             StageReply::Read(First::Allow) => self.second_allow(&under, &endpoint, 1, None),
