@@ -1112,3 +1112,63 @@ fn close_during_an_approval_denies_it_by_cancel() {
         assert_eq!(done.payload["reason"], "no_person");
     }
 }
+
+/// A shutdown that closes the inbox while a standing ask waits leaves the
+/// request pending: no denial is written, so resuming raises it again
+/// (`docs/invocation.md`, "Shutdown").
+#[test]
+fn a_shutdown_that_closes_the_inbox_during_a_standing_ask_leaves_the_request_pending() {
+    let tool = shell("npm publish");
+    let mut session = Session::with_tools(
+        vec![
+            calls_reply("", &[("shell", paris()), ("shell", paris())]),
+            Scripted::text("Done."),
+        ],
+        None,
+        vec![Arc::clone(&tool) as Arc<dyn Tool>],
+    );
+    session.rules.set(standing_ask());
+    // Swapping in an unrelated sender drops the session's only one once the
+    // thread below drops it: the disconnect is the path taken, because the
+    // loop is parked in `recv` when it lands.
+    let inbox = std::mem::replace(&mut session.inbox, mpsc::channel().0);
+    inbox.send(support::delivery("go")).unwrap();
+    let watcher = session.log.watch();
+    let clock = Arc::clone(&session.clock);
+    let cancel = Arc::clone(&session.cancel);
+    std::thread::scope(|scope| {
+        scope.spawn(move || {
+            support::read_until(watcher, "a permission_requested line", |line| {
+                line.kind == "permission_requested"
+            });
+            // The wait parks in `recv` with no deadline, so the drop below
+            // disconnects it: the shutdown's wake would end the wait
+            // without a disconnect instead. The park wait takes
+            // [`support::DEADLINE`].
+            assert!(
+                clock.await_parked_unbounded(support::DEADLINE),
+                "the standing ask's wait parked in recv"
+            );
+            cancel.shutdown(143);
+            drop(inbox);
+        });
+        // The wait ends as the idle delay ends it: no turn outcome.
+        assert_eq!(session.turn(), None);
+    });
+    // `Session::lines` waits for a `turn_completed` the shutdown never
+    // writes, so the log is read directly (`docs/testing.md`, "Waits and
+    // timeouts").
+    let lines: Vec<contract::Envelope> = log::read(&session.dir).unwrap();
+    let kinds = kinds(&lines);
+    assert_eq!(kinds.last(), Some(&"permission_requested"));
+    assert!(!kinds.contains(&"permission_resolved"));
+    assert!(!kinds.contains(&"tool_call_completed"));
+    assert!(!kinds.contains(&"turn_completed"));
+    assert!(tool.ran().is_empty());
+    let request_id = lines.last().unwrap().payload["request_id"].clone();
+    let written =
+        r#loop::fiber_exited(&session.log, &session.dir, Ok(()), true, Some(143)).unwrap();
+    assert_eq!(written.code, 143);
+    let exited = log::read(&session.dir).unwrap().pop().unwrap();
+    assert_eq!(exited.payload["suspended_on"], request_id);
+}

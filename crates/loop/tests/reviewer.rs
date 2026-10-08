@@ -2207,7 +2207,8 @@ fn a_shutdown_that_closes_the_inbox_during_an_escalation_leaves_the_request_pend
             });
             // The wait parks in `recv` with no deadline, so the drop below
             // disconnects it: the shutdown's wake would end the wait
-            // without a disconnect instead. One [`support::DEADLINE`].
+            // without a disconnect instead. The park wait takes
+            // [`support::DEADLINE`].
             assert!(
                 clock.await_parked_unbounded(support::DEADLINE),
                 "the escalation's wait parked in recv"

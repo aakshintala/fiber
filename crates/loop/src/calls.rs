@@ -529,7 +529,7 @@ impl Loop {
                 None,
             ),
         )?;
-        Ok(denied("no_person", format!("{reason} It did not run.")))
+        Ok(no_person())
     }
 
     /// Checks `reply` against `offer`, the request's rule offer (`None` on a
