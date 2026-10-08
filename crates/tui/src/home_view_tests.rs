@@ -31,6 +31,7 @@ fn home_with_glyph(width: u16, height: u16, glyph: &str) -> App {
         rail_share: 15.0,
         panel_share: 21.0,
         panel_cards: Vec::new(),
+        attention: crate::Attention::default(),
     });
     app.set_size(width, height);
     app
@@ -53,6 +54,7 @@ fn git_home(width: u16, height: u16) -> App {
         rail_share: 15.0,
         panel_share: 21.0,
         panel_cards: Vec::new(),
+        attention: crate::Attention::default(),
     });
     app.set_size(width, height);
     app
@@ -409,6 +411,7 @@ fn home_chips() {
         rail_share: 15.0,
         panel_share: 21.0,
         panel_cards: Vec::new(),
+        attention: crate::Attention::default(),
     });
     app.set_size(80, 24);
     insta::assert_snapshot!("home_chips", screen(&app, 80, 24));

@@ -18,7 +18,7 @@ use crate::socket::{bind, remove_socket};
 use crate::{failure, mint};
 use contract::clock::{Clock, Wake};
 use contract::emit::Emit;
-use contract::events::{Clients, CommandInfo, Event, ToolInfo};
+use contract::events::{Clients, CommandInfo, Event, SkillInfo, ToolInfo};
 use contract::inbox::{Ack, Delivery, Message};
 use contract::shapes::{ContentPart, Failure, Origin, Sender as CommandSender};
 use contract::tool::Tool;
@@ -62,6 +62,9 @@ pub(crate) struct Gate {
     /// What the `commands` command answers with, set by
     /// [`Session::commands`]; empty until then.
     commands: Mutex<Vec<CommandInfo>>,
+    /// What the `skills` command answers with, set by [`Session::skills`];
+    /// empty until then.
+    skills: Mutex<Vec<SkillInfo>>,
     /// The id of every command this process accepted or is running, across
     /// connections, so a repeat is rejected `duplicate_command` (`docs/invocation.md`).
     accepted: Mutex<HashSet<String>>,
@@ -247,6 +250,15 @@ impl Session {
     /// empty list.
     pub fn commands(&self, commands: Vec<CommandInfo>) {
         *lock(&self.gate.commands) = commands;
+    }
+
+    /// Every skill discovery read, switched-off and shadowed ones included
+    /// and marked, which the `skills` driver command answers with
+    /// verbatim (`docs/invocation.md`, "What each command does"). Set
+    /// before [`Session::run`]; with none set, the answer is an empty
+    /// list.
+    pub fn skills(&self, skills: Vec<SkillInfo>) {
+        *lock(&self.gate.skills) = skills;
     }
 
     /// The session's jobs, which the `job_stop` and `background` driver
@@ -452,6 +464,10 @@ impl Gate {
         lock(&self.commands).clone()
     }
 
+    pub(crate) fn skills(&self) -> Vec<SkillInfo> {
+        lock(&self.skills).clone()
+    }
+
     pub(crate) fn door(&self) -> Option<Arc<dyn contract::extension::ExtensionDoor>> {
         lock(&self.door).clone()
     }
@@ -535,6 +551,7 @@ fn open_in(
         session_id,
         tools: Mutex::new(tools),
         commands: Mutex::new(Vec::new()),
+        skills: Mutex::new(Vec::new()),
         accepted: Mutex::new(HashSet::new()),
         inbox: Mutex::new(None),
         cancel: Mutex::new(None),

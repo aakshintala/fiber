@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::action::Progress;
-use super::context::Outcome;
+use super::context::{Outcome, SkillSource};
 use crate::shapes::{Failure, Point, Process, Question, Usage, Worktree};
 use crate::{CommandId, Envelope, ErrorCode, JobId, SessionId};
 
@@ -349,6 +349,11 @@ pub enum CommandResult {
         /// One per `/name` the session runs.
         commands: Vec<CommandInfo>,
     },
+    /// For `skills`.
+    Skills {
+        /// One per skill discovery found.
+        skills: Vec<SkillInfo>,
+    },
     /// For `history`: the durable lines in the requested range.
     History {
         /// At most 256 durable event lines.
@@ -395,6 +400,32 @@ pub struct ToolInfo {
     /// Its estimated tokens; absent before the first request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tokens: Option<u64>,
+}
+
+/// One skill discovery found (`docs/invocation.md`, "What each command
+/// does", `skills`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SkillInfo {
+    /// The skill's name.
+    pub name: String,
+    /// A one-line description.
+    pub description: String,
+    /// Its `SKILL.md`, as discovery logs it.
+    pub path: String,
+    /// Where it was found.
+    pub source: SkillSource,
+    /// The extension's name, exactly when the source is an extension.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extension: Option<String>,
+    /// Whether its header and place let the model load it.
+    pub model_invocable: bool,
+    /// Whether `skills.disabled` switches it off.
+    pub disabled: bool,
+    /// The `SKILL.md` paths of the skills it shadows.
+    pub shadows: Vec<String>,
+    /// The winning skill's `SKILL.md` path, exactly on a shadowed skill.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shadowed_by: Option<String>,
 }
 
 /// One `/name` the session runs (`docs/invocation.md`, "What each command
