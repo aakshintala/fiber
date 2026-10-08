@@ -1052,6 +1052,7 @@ fn reviewer_denies_from_before_the_resume_count_toward_the_session_limit() {
             },
             cache_lifetime: contract::events::CacheLifetime::OneHour,
             context_window: fakes::CONTEXT_WINDOW,
+            thinking_levels: Vec::new(),
         }),
         r#loop::BlockLimits::default(),
     );
@@ -1153,6 +1154,7 @@ fn resume_after_prior_denials(decided_by: DecidedBy) -> (History, contract::even
             },
             cache_lifetime: contract::events::CacheLifetime::OneHour,
             context_window: fakes::CONTEXT_WINDOW,
+            thinking_levels: Vec::new(),
         }),
         r#loop::BlockLimits::default(),
     );
@@ -1284,6 +1286,7 @@ fn the_reviewers_first_request_contains_the_earlier_tool_calls() {
             },
             cache_lifetime: contract::events::CacheLifetime::OneHour,
             context_window: fakes::CONTEXT_WINDOW,
+            thinking_levels: Vec::new(),
         }),
         r#loop::BlockLimits::default(),
     );
@@ -2915,6 +2918,7 @@ fn with_blocking_reviewer(looped: Loop, reviewer: Arc<ScriptedProvider>) -> Loop
             },
             cache_lifetime: contract::events::CacheLifetime::OneHour,
             context_window: fakes::CONTEXT_WINDOW,
+            thinking_levels: Vec::new(),
         }),
         r#loop::BlockLimits::default(),
     )

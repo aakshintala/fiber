@@ -1353,6 +1353,7 @@ impl Session {
             cost,
             CacheLifetime::OneHour,
             fakes::CONTEXT_WINDOW,
+            Vec::new(),
         )
     }
 
@@ -1368,6 +1369,7 @@ impl Session {
             None,
             cache_lifetime,
             fakes::CONTEXT_WINDOW,
+            Vec::new(),
         )
     }
 
@@ -1383,6 +1385,24 @@ impl Session {
             None,
             CacheLifetime::OneHour,
             window,
+            Vec::new(),
+        )
+    }
+
+    /// As [`Session::reviewer`], with the reviewer's model declaring
+    /// `thinking_levels` (`docs/model-routing.md`, "Thinking").
+    pub(crate) fn reviewer_thinking(
+        &mut self,
+        script: Vec<Scripted>,
+        thinking_levels: Vec<contract::ThinkingLevel>,
+    ) -> Arc<ScriptedProvider> {
+        self.reviewer_with(
+            script,
+            BlockLimits::default(),
+            None,
+            CacheLifetime::OneHour,
+            fakes::CONTEXT_WINDOW,
+            thinking_levels,
         )
     }
 
@@ -1393,6 +1413,7 @@ impl Session {
         cost: Option<contract::provider::Cost>,
         cache_lifetime: CacheLifetime,
         context_window: u64,
+        thinking_levels: Vec<contract::ThinkingLevel>,
     ) -> Arc<ScriptedProvider> {
         let provider = Arc::new(ScriptedProvider::new(script));
         let looped = self.looped.take().unwrap().reviewer(
@@ -1405,6 +1426,7 @@ impl Session {
                 },
                 cache_lifetime,
                 context_window,
+                thinking_levels,
             }),
             limits,
         );

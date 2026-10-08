@@ -295,7 +295,13 @@ them: each layer's text under its heading.
 
 Two stages. The first asks for one word: `check`, meaning the call goes
 to the reasoning pass, or `allow`. Only a call answered `check` gets the
-reasoning pass. Most reviewed calls cost a few output tokens.
+reasoning pass. The first stage asks for the reviewer model's lowest
+thinking level, or none when the model declares none
+(`docs/model-routing.md`, "Thinking"), and caps its reply at 4,096 tokens:
+a ceiling for a model that does not stop, not the answer's length. The
+second stage and the handoff selection ask for the same level, because a
+change of level misses the reviewer's cache (`docs/prompt-cache.md`,
+"Rules for other areas"). Most reviewed calls cost a few output tokens.
 
 The reviewer's model is chosen separately from the session's, because a
 review on every effectful action at the session model's price and latency is a
