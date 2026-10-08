@@ -115,8 +115,7 @@ pub(crate) fn new_session(
     let host = case_run.as_ref().map(|case| case.host_script());
     if !worktree {
         return match run_new(
-            id, model, prompt, one_turn, None, clock, signals, fiber, host, case_run, parent,
-            None,
+            id, model, prompt, one_turn, None, clock, signals, fiber, host, case_run, parent, None,
         ) {
             Ok(code) => code,
             Err(failure) => report(signals, failure),
