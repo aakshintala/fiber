@@ -1851,3 +1851,35 @@ fn identical_lines_walk_one_occurrence_at_a_time() {
     rows.dedup();
     assert_eq!(rows.len(), 1);
 }
+
+/// An app with one `needle` line above fifteen filler lines, searched.
+/// Returns the app with its log and the match's conversation row.
+fn needle_above_fillers() -> (App, Vec<contract::Envelope>, usize) {
+    let mut app = attached(40, 10);
+    let mut log = Vec::new();
+    let mut seq = 0u64;
+    let mut replies = vec!["needle top"];
+    replies.extend((0..15).map(|_| "filler"));
+    text_turn(&mut log, &mut seq, &mut app, &replies);
+    search_all(&mut app, &log, "needle");
+    assert_eq!(count(&app), "1 of 1");
+    let current = app.find.current.clone().expect("a current match");
+    let (row, _) = app.current_place(&current).expect("a row");
+    (app, log, row)
+}
+
+#[test]
+fn a_match_on_the_top_row_marks_it() {
+    let (mut app, _, row) = needle_above_fillers();
+    app.jump(row);
+    assert_eq!(app.top(), Some(row));
+    assert!(!app.find_marks(Rect::new(0, 0, 40, 10)).is_empty());
+}
+
+#[test]
+fn a_match_one_row_above_marks_nothing() {
+    let (mut app, _, row) = needle_above_fillers();
+    app.jump(row.saturating_add(1));
+    assert_eq!(app.top(), Some(row.saturating_add(1)));
+    assert!(app.find_marks(Rect::new(0, 0, 40, 10)).is_empty());
+}

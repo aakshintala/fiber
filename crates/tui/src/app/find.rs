@@ -609,11 +609,16 @@ impl App {
                         if cell.bytes.start > byte {
                             continue;
                         }
-                        let y = y0 as usize
-                            + start
-                                .saturating_add(offsets.get(row).copied().unwrap_or(0))
-                                .saturating_add(usize::from(cell.row))
-                                .saturating_sub(top);
+                        // A row above the viewport draws nothing: it
+                        // converts to no screen row (`docs/tui.md`,
+                        // "Search": marks follow whatever is drawn).
+                        let absolute = start
+                            .saturating_add(offsets.get(row).copied().unwrap_or(0))
+                            .saturating_add(usize::from(cell.row));
+                        if absolute < top {
+                            continue;
+                        }
+                        let y = y0 as usize + absolute.saturating_sub(top);
                         let x = area.x.saturating_add(cell.col);
                         if y < usize::from(area.bottom()) && x < area.right() {
                             out.push((
