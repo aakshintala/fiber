@@ -22,7 +22,8 @@ pub(crate) fn copy_target(turns: &[Turn], target: Target, width: u16) -> Option<
             | Entry::Steer(_)
             | Entry::Group(_)
             | Entry::Aside(_)
-            | Entry::Band(_) => None,
+            | Entry::Band(_)
+            | Entry::Answers(_) => None,
         })
 }
 

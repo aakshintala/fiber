@@ -9,6 +9,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use contract::ErrorCode;
 use contract::SessionId;
 use doors::Session;
 use log::Log;
@@ -97,6 +98,7 @@ pub(crate) fn ask_resume(
     resumed_session(
         log,
         &dir,
+        id,
         model,
         resuming.credential,
         Some(prompt),
@@ -138,7 +140,9 @@ pub(crate) fn session_resume(
         Err(e) => return ask_failed(failed(e.code(), e)),
     };
     let dir = sessions.join(&id.0);
-    resumed_session(log, &dir, model, None, None, false, clock, signals, fiber)
+    resumed_session(
+        log, &dir, id, model, None, None, false, clock, signals, fiber,
+    )
 }
 
 /// One function builds and runs every resumed session, as `new_session`
@@ -149,11 +153,12 @@ pub(crate) fn session_resume(
 /// was.
 #[allow(
     clippy::too_many_arguments,
-    reason = "one resumed session needs its log, directory, mode, clock, signals and recorded executable"
+    reason = "one resumed session needs its log, directory, id, mode, clock, signals and recorded executable"
 )]
 fn resumed_session(
     log: Arc<Log>,
     dir: &Path,
+    id: SessionId,
     model: Option<String>,
     credential: Option<String>,
     prompt: Option<String>,
@@ -213,6 +218,7 @@ fn resumed_session(
         mcp,
         switching,
         switchable,
+        resolve,
         web_search,
         ..
     } = parts;
@@ -226,6 +232,27 @@ fn resumed_session(
         Arc::clone(&clock),
         Arc::clone(&log) as _,
     );
+    // A resumed session declares `delegate_spawn` too, parented to itself.
+    let fiber_path = match fiber.clone() {
+        Ok(fiber_path) => fiber_path,
+        Err(message) => return ask_failed(failed(ErrorCode::IoFailed, message)),
+    };
+    let Some(sessions) = dir.parent() else {
+        return ask_failed(failed(
+            ErrorCode::IoFailed,
+            "the session directory has no parent",
+        ));
+    };
+    let delegates = crate::delegates::Delegates::new(
+        fiber_path,
+        home.clone(),
+        id,
+        Path::new(&folded.workspace).to_path_buf(),
+        sessions.to_path_buf(),
+        Arc::clone(&jobs),
+        Arc::clone(&clock),
+        resolve,
+    );
     crate::shutdown::arm(signals);
     let (tools, infos, driver, session_servers) = match crate::mcp_servers::session_tools(
         fiber,
@@ -237,6 +264,7 @@ fn resumed_session(
         &locks,
         mcp.specs,
         web_search.as_deref(),
+        &delegates,
     ) {
         Ok(built) => built,
         Err(e) => return ask_failed(e),

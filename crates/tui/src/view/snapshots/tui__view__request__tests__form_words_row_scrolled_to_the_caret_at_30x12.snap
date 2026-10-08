@@ -1,0 +1,16 @@
+---
+source: crates/tui/src/view/request_tests.rs
+expression: shown
+---
+
+
+
+
+
+question · s_aaaaaaaaaaaaaaaa
+· 1 of 1
+Base  [Name ✓]  Submit
+What name?
+› ✎  runs past thirty columns
+  Review →
+  Chat about this

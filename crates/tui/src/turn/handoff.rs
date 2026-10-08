@@ -200,7 +200,8 @@ impl Turn {
             | Entry::Reply { .. }
             | Entry::Steer(_)
             | Entry::Group(_)
-            | Entry::Aside(_) => None,
+            | Entry::Aside(_)
+            | Entry::Answers(_) => None,
         })
     }
 
@@ -304,7 +305,11 @@ pub(crate) fn sized(turns: &mut [Turn], line: &UsageRecorded) -> bool {
         .flat_map(|turn| turn.entries.iter_mut().rev())
         .find_map(|entry| match entry {
             Entry::Band(band) => Some(band),
-            Entry::Reply { .. } | Entry::Steer(_) | Entry::Group(_) | Entry::Aside(_) => None,
+            Entry::Reply { .. }
+            | Entry::Steer(_)
+            | Entry::Group(_)
+            | Entry::Aside(_)
+            | Entry::Answers(_) => None,
         });
     match latest.map(|band| &mut band.state) {
         Some(State::Done {

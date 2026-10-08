@@ -195,6 +195,50 @@ fn no_cursor_while_the_offer_is_open() {
     assert!(cursor(&app, area).is_some());
 }
 
+/// A free-text form with one question lands on its words row, so its
+/// caret shows at once.
+fn ask_free_text(app: &mut App) {
+    app.on_line(session_line(
+        "interaction_requested",
+        json!({"request_id": "r_4f", "kind": "form", "action_ids": ["a_1"],
+            "fields": [{"header": "Name", "question": "What name?"}]}),
+    ));
+}
+
+#[test]
+fn a_shown_forms_caret_wins_over_the_open_offer() {
+    let mut app = offered(json!([server("db", false)]), 80, 24);
+    ask_free_text(&mut app);
+    assert!(app.offer_open());
+    assert!(app.panel().is_some());
+    // The form's caret shows even while the offer is open.
+    let area = Rect::new(0, 0, 80, 24);
+    let caret = cursor(&app, area);
+    assert!(caret.is_some());
+    // The same form with no offer draws the cursor in the same cell.
+    let mut alone = offered(json!([server("db", false)]), 80, 24);
+    press(&mut alone, Key::Esc);
+    assert!(!alone.offer_open());
+    ask_free_text(&mut alone);
+    assert_eq!(cursor(&alone, area), caret);
+}
+
+#[test]
+fn an_approval_without_a_caret_keeps_the_offer_hiding_the_cursor() {
+    let mut app = offered(json!([server("db", false)]), 80, 24);
+    app.on_line(session_line(
+        "permission_requested",
+        json!({"request_id": "r_1", "effects": ["executes"], "reversible": true,
+            "step": "standing_ask",
+            "standing_rule": {"scope": "global", "prefix": "ls"}}),
+    ));
+    assert!(app.offer_open());
+    assert!(app.panel().is_some());
+    // No words row has the cursor, so the open offer still hides it.
+    let area = Rect::new(0, 0, 80, 24);
+    assert_eq!(cursor(&app, area), None);
+}
+
 #[test]
 fn clicking_a_chip_sets_its_decision_and_moves_the_cursor() {
     let mut app = offered(json!([server("a", false), server("b", false)]), 80, 30);

@@ -438,6 +438,7 @@ fn a_cancelled_review_completes_cancelled() {
             },
             cache_lifetime: contract::events::CacheLifetime::OneHour,
             context_window: fakes::CONTEXT_WINDOW,
+            thinking_levels: Vec::new(),
         }),
         r#loop::BlockLimits::default(),
     );

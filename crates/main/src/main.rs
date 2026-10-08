@@ -17,6 +17,7 @@ mod connect;
 mod cost;
 mod crash;
 mod credential;
+mod delegates;
 mod handoff;
 mod hub_command;
 mod late_emit;
@@ -109,6 +110,8 @@ struct Parts {
     mcp: mcp_servers::Specs,
     /// The second-model preparation, for `Loop::switcher`.
     switching: switch::Switching,
+    /// How a `fiber:` reference resolves for this session's delegates.
+    resolve: jobs::Resolve,
     /// The session's own thinking choice at start.
     switchable: r#loop::Switchable,
     /// The session model's hosted search type, such as `web_search_20250305`.
@@ -709,6 +712,7 @@ fn parts_in(
         switchable: r#loop::Switchable {
             chosen: model.thinking,
         },
+        resolve: crate::delegates::resolver(&providers, &config),
         web_search: model.model.web_search.clone(),
     })
 }
@@ -767,6 +771,7 @@ fn choose_reviewer(
         },
         cache_lifetime: settings::cache_lifetime(config, &model.reference()),
         context_window,
+        thinking_levels: model.model.thinking_levels.clone(),
     })
 }
 

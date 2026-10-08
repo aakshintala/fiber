@@ -26,8 +26,9 @@ use support::Deadline;
 
 /// The request's tool order: the loop keys tools by name, so this is name
 /// order, whatever order `main` pushes them in.
-const TOOL_NAMES: [&str; 9] = [
+const TOOL_NAMES: [&str; 10] = [
     "ask_user",
+    "delegate_spawn",
     "edit",
     "handoff",
     "jobs",
@@ -137,6 +138,46 @@ impl Setup {
         write(
             &self.home().join("config.json"),
             &json!({"model": "fake/m"}),
+        );
+    }
+
+    /// Installs a provider `fake` with models `m` and `r` on
+    /// `openai-responses` at the fake server, `r` declaring the `high` and
+    /// `minimal` thinking levels: the session runs on `m`, the reviewer on
+    /// `r`.
+    fn provider_with_reviewer_thinking(&self, server: &ProviderServer) {
+        let source = self.root.path().join("src");
+        write(
+            &source.join("extension.json"),
+            &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
+        );
+        write(
+            &source.join("providers/fake.json"),
+            &json!({
+                "name": "fake",
+                "credential": {"env": "FIBER_TEST_FAKE_KEY"},
+                "models": [
+                    {"id": "m", "protocol": "openai-responses",
+                        "base_url": format!("{}/v1", server.url()), "context_window": 100000},
+                    {"id": "r", "protocol": "openai-responses",
+                        "base_url": format!("{}/v1", server.url()), "context_window": 100000,
+                        "thinking_levels": ["high", "minimal"]},
+                ]
+            }),
+        );
+        extensions::plan(
+            &self.home(),
+            &extensions::Request::Path(source),
+            "0.0.0",
+            &extensions::Origin::github(),
+            &*fakes::clock::FakeClock::new(),
+        )
+        .unwrap()
+        .commit()
+        .unwrap();
+        write(
+            &self.home().join("config.json"),
+            &json!({"model": "fake/m", "reviewer": {"model": "fake/r"}}),
         );
     }
 
@@ -467,6 +508,41 @@ fn text_reply(text: &str) -> Response {
     stream(&[json!({"type": "response.output_item.done", "item": {
         "type": "message", "content": [{"type": "output_text", "text": text}]
     }})])
+}
+
+/// An `openai-responses` stream of a reasoning item, then the verdict
+/// `allow`, completed with 1,001 output tokens of which 1,000 are reasoning:
+/// what a reviewer that reasons before it answers sends.
+fn reasoning_allow() -> Response {
+    let thought = "checking the call";
+    let mut body = String::new();
+    for event in [
+        json!({"type": "response.reasoning_summary_text.delta", "delta": thought}),
+        json!({"type": "response.output_item.done", "item": {
+            "type": "reasoning", "id": "rs_1",
+            "summary": [{"type": "summary_text", "text": thought}]
+        }}),
+        json!({"type": "response.output_item.done", "item": {
+            "type": "message", "content": [{"type": "output_text", "text": "allow"}]
+        }}),
+    ] {
+        body.push_str(&format!(
+            "event: {}\ndata: {event}\n\n",
+            event["type"].as_str().unwrap()
+        ));
+    }
+    let done = json!({"type": "response.completed", "response": {
+        "id": "resp_1", "status": "completed",
+        "usage": {"input_tokens": 10,
+            "input_tokens_details": {"cached_tokens": 4},
+            "output_tokens": 1001,
+            "output_tokens_details": {"reasoning_tokens": 1000}}
+    }});
+    body.push_str(&format!(
+        "event: {}\ndata: {done}\n\n",
+        done["type"].as_str().unwrap()
+    ));
+    Response::stream(body)
 }
 
 fn tool_names(body: &[u8]) -> Vec<String> {
@@ -2125,10 +2201,10 @@ fn a_lua_write_in_a_data_directory_is_reviewed_and_blocked() {
 
 /// A first-stage `allow` runs the reviewed call with no escalation. The
 /// scripted fake server cannot cut a reply at the request's output limit,
-/// so the test also pins that limit: it is what a real model's tokenizer
-/// meets, and a limit below the word's length cuts a several-token `allow`
-/// into a `reviewer_failed` escalation. The Responses protocol raises any
-/// limit below 16 to 16, so the test pins the exact limit.
+/// so the test also pins that limit: the first stage's output ceiling, a
+/// runaway guard far above any answer, not the answer's length. The
+/// Responses protocol raises any limit below 16 to 16, so the test pins the
+/// exact limit.
 #[test]
 fn a_first_stage_allow_that_takes_several_tokens_runs_the_reviewed_call() {
     let setup = Setup::new();
@@ -2211,7 +2287,93 @@ fn a_first_stage_allow_that_takes_several_tokens_runs_the_reviewed_call() {
     let requests = server.requests();
     assert_eq!(requests.len(), 3);
     let first_stage: Value = serde_json::from_slice(&requests[1].body).unwrap();
-    assert_eq!(first_stage["max_output_tokens"], 128);
+    assert_eq!(first_stage["max_output_tokens"], 4096);
+    assert!(first_stage.get("reasoning").is_none());
+}
+
+#[test]
+fn a_reviewer_that_reasons_for_1000_tokens_then_allows_runs_the_reviewed_call() {
+    let setup = Setup::new();
+    let lua = setup.home().join("data/notes/x.lua").display().to_string();
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "write_lua",
+            "write",
+            &json!({"path": lua, "content": "return {}\n"}),
+        )]),
+        reasoning_allow(),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider_with_reviewer_thinking(&server);
+
+    let run = setup.run(&["ask", "save the snippet"]);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "usage_recorded",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
+    let requested = run
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "tool_call_requested")
+        .unwrap();
+    let action = &requested["action_id"];
+    let resolved = run
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "permission_resolved")
+        .unwrap();
+    assert_eq!(&resolved["action_id"], action);
+    assert_eq!(resolved["payload"]["decision"], "allow");
+    assert_eq!(resolved["payload"]["decided_by"], "reviewer");
+    assert_eq!(
+        resolved["payload"]["reviewer"],
+        json!({"model": "fake/r", "stage": 1})
+    );
+    assert!(!run.stdout.contains("reviewer_failed"));
+    let done = run
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "tool_call_completed")
+        .unwrap();
+    assert_eq!(&done["action_id"], action);
+    assert_eq!(done["payload"]["status"], "completed");
+    assert_eq!(
+        fs::read_to_string(setup.home().join("data/notes/x.lua")).unwrap(),
+        "return {}\n"
+    );
+    let requests = server.requests();
+    assert_eq!(requests.len(), 3);
+    let first_stage: Value = serde_json::from_slice(&requests[1].body).unwrap();
+    assert_eq!(first_stage["reasoning"]["effort"], "minimal");
+    assert_eq!(first_stage["max_output_tokens"], 4096);
 }
 
 #[test]

@@ -19,7 +19,7 @@ use contract::events::{CacheLifetime, Control, TurnOutcome};
 use contract::provider::{Cost, Input, ModelRequest, Provider};
 use contract::shapes::{Effect, Failure};
 use contract::tool::Tool;
-use contract::{Envelope, ErrorCode};
+use contract::{Envelope, ErrorCode, ThinkingLevel};
 use fakes::{Scripted, ScriptedProvider};
 use r#loop::{BlockLimits, Loop, Model, Permissions, PromptInputs, Reviewer};
 use serde_json::{Value, json};
@@ -144,11 +144,14 @@ fn failed(message: &str) -> Scripted {
 fn the_reviewer_keeps_the_selected_messages_then_what_follows() {
     let tool = shell();
     let mut session = Session::with_tools(script(), None, vec![tool as Arc<dyn Tool>]);
-    let reviewer = session.reviewer(vec![
-        Scripted::text("allow"),
-        Scripted::text("1"),
-        Scripted::text("allow"),
-    ]);
+    let reviewer = session.reviewer_thinking(
+        vec![
+            Scripted::text("allow"),
+            Scripted::text("1"),
+            Scripted::text("allow"),
+        ],
+        vec![ThinkingLevel::Minimal],
+    );
     let lines = run_flow(&mut session);
     // The whole flow in order: reviewed call, text, handoff with its selection, reviewed call.
     assert_eq!(
@@ -231,6 +234,13 @@ fn the_reviewer_keeps_the_selected_messages_then_what_follows() {
 
     let requests = reviewer.requests();
     assert_eq!(requests.len(), 3);
+    for (n, request) in requests.iter().enumerate() {
+        assert_eq!(
+            request.thinking,
+            Some(ThinkingLevel::Minimal),
+            "request {n}"
+        );
+    }
     let after = &requests[2];
     let after_texts = texts(after);
     assert_eq!(after_texts.len(), 5);
@@ -413,6 +423,7 @@ fn a_resume_rebuilds_the_reviewers_input_from_the_selection() {
             },
             cache_lifetime: CacheLifetime::OneHour,
             context_window: fakes::CONTEXT_WINDOW,
+            thinking_levels: Vec::new(),
         }),
         BlockLimits::default(),
     );

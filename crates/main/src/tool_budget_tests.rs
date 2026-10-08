@@ -16,7 +16,7 @@ use serde_json::{Map, Value, json};
 /// The largest per-protocol total the built-in definitions may take, in
 /// bytes. It started at the largest total at the commit that added the
 /// check, with no headroom.
-const BUDGET: usize = 8_186;
+const BUDGET: usize = 8_881;
 
 /// The one hosted tool type a protocol reads back
 /// (`config::Protocol::reads_web_search`).
@@ -46,6 +46,28 @@ fn protocol_name(protocol: Protocol) -> &'static str {
     }
 }
 
+/// The delegates the budget measures tools for: nothing resolves, so
+/// `delegate_spawn` is declared but never runs one.
+fn delegates() -> crate::delegates::Delegates {
+    let root = fakes::TempDir::new("fiber-tool-delegate");
+    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    let jobs = jobs::Registry::new(
+        root.path().join("artifacts"),
+        Arc::clone(&clock),
+        Arc::new(fakes::Recorder::default()),
+    );
+    crate::delegates::Delegates::new(
+        root.path().join("fiber-stub"),
+        root.path().join("home"),
+        contract::SessionId("s_test".into()),
+        root.path().to_path_buf(),
+        root.path().join("sessions"),
+        jobs,
+        clock,
+        Arc::new(|_| Err(Vec::new())),
+    )
+}
+
 /// Every definition `builtin` registers, the hosted search included.
 fn builtin_definitions() -> Vec<ToolDefinition> {
     let root = fakes::TempDir::new("fiber-tool-budget");
@@ -64,6 +86,7 @@ fn builtin_definitions() -> Vec<ToolDefinition> {
         &jobs,
         &Arc::new(tools::PathLocks::new()),
         Some(HOSTED_SEARCH),
+        &delegates(),
     )
     .unwrap();
     let definitions: Vec<ToolDefinition> =

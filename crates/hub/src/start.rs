@@ -59,8 +59,10 @@ pub(crate) struct Held {
 }
 
 /// Runs `start` (`command`) for `workspace`, with `model` and `content`
-/// when the client named them. `workspace` is absolute and an existing
-/// directory; anything else is `invalid_arguments`. With `content`, the
+/// when the client named them, in a new worktree of the workspace with
+/// `worktree` (`docs/invocation.md`, "Isolation"). `workspace` is
+/// absolute and an existing directory; anything else is
+/// `invalid_arguments`. With `content`, the
 /// prompt is held, not sent: the caller answers first, then sends it with
 /// [`prompt`].
 pub(crate) fn run(
@@ -68,6 +70,7 @@ pub(crate) fn run(
     command: &CommandId,
     workspace: &str,
     model: Option<&str>,
+    worktree: bool,
     content: Option<&Value>,
 ) -> Outcome {
     let workspace_path = Path::new(workspace);
@@ -78,7 +81,7 @@ pub(crate) fn run(
         return invalid("The workspace is not an existing directory.");
     }
     let id = SessionId(mint("s_"));
-    let started = match hub.starter.start(&id, workspace_path, model) {
+    let started = match hub.starter.start(&id, workspace_path, model, worktree) {
         Ok(started) => started,
         Err(error) => {
             return io_failed(hub, &id, &format!("{error}."));
