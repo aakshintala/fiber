@@ -253,7 +253,8 @@ fn release_copies_the_unwrapped_text_and_shows_copied() {
 
 #[test]
 fn a_selection_over_paragraphs_keeps_the_blank_line_between() {
-    let mut app = replied(40, 10, "alpha\n\nbeta");
+    // The blank line after "beta" is outside the selection.
+    let mut app = replied(40, 10, "alpha\n\nbeta\n\ngamma");
     let alpha = find(&app, "alpha");
     let beta = find(&app, "beta");
     assert_eq!(
