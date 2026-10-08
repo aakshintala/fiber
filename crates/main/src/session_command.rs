@@ -282,6 +282,7 @@ pub(crate) fn run_new(
         mcp.specs,
         web_search.as_deref(),
         &delegates,
+        extensions.tools(),
     )?;
     let forget = Arc::clone(&session_servers.forget);
     let hosted_stands = crate::switch::hosted_stands(&tools);

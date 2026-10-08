@@ -265,6 +265,7 @@ fn resumed_session(
         mcp.specs,
         web_search.as_deref(),
         &delegates,
+        extensions.tools(),
     ) {
         Ok(built) => built,
         Err(e) => return ask_failed(e),
