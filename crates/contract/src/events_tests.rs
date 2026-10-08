@@ -505,7 +505,7 @@ fn samples() -> Vec<(&'static str, Value)> {
         ),
         (
             "retry_scheduled",
-            json!({"code": "rate_limited", "attempt": 2, "delay_ms": 500}),
+            json!({"code": "rate_limited", "attempt": 2, "delay_ms": 500, "last_attempt": 4}),
         ),
         (
             "notice",
@@ -698,6 +698,17 @@ fn samples() -> Vec<(&'static str, Value)> {
             json!({"code": "malformed", "message": "m"}),
         ),
     ]
+}
+
+#[test]
+fn a_retry_scheduled_without_last_attempt_does_not_read() {
+    assert!(
+        read(
+            "retry_scheduled",
+            json!({"code": "rate_limited", "attempt": 2, "delay_ms": 500})
+        )
+        .is_err()
+    );
 }
 
 #[test]

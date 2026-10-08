@@ -673,7 +673,7 @@ fn a_retry_notice_is_retrying_until_the_next_message_or_step() {
     assert!(w.feed(
         "retry_scheduled",
         None,
-        &json!({"code": "rate_limited", "attempt": 2, "delay_ms": 1})
+        &json!({"code": "rate_limited", "attempt": 2, "delay_ms": 1, "last_attempt": 4})
     ));
     assert_eq!(w.status().state, SessionState::Retrying);
     w.feed("assistant_message_started", Some("a1"), &json!({}));
@@ -681,14 +681,14 @@ fn a_retry_notice_is_retrying_until_the_next_message_or_step() {
     w.feed(
         "retry_scheduled",
         None,
-        &json!({"code": "rate_limited", "attempt": 2, "delay_ms": 1}),
+        &json!({"code": "rate_limited", "attempt": 2, "delay_ms": 1, "last_attempt": 4}),
     );
     w.feed("step_started", None, &json!({}));
     assert_eq!(w.status().state, SessionState::Streaming);
     w.feed(
         "retry_scheduled",
         None,
-        &json!({"code": "rate_limited", "attempt": 2, "delay_ms": 1}),
+        &json!({"code": "rate_limited", "attempt": 2, "delay_ms": 1, "last_attempt": 4}),
     );
     w.finish();
     assert_eq!(w.status().state, SessionState::Idle);
@@ -1202,7 +1202,7 @@ fn an_ephemeral_retry_notice_is_read_and_another_ephemeral_line_is_not() {
     assert_eq!(w.status().state, SessionState::Streaming);
     let retry = ephemeral(
         "retry_scheduled",
-        &json!({"code": "rate_limited", "attempt": 2, "delay_ms": 1000}),
+        &json!({"code": "rate_limited", "attempt": 2, "delay_ms": 1000, "last_attempt": 4}),
     );
     assert!(w.fold.observe(&retry));
     assert_eq!(w.status().state, SessionState::Retrying);
