@@ -273,3 +273,33 @@ fn no_colour_outside_the_theme() {
     }
     assert!(found.is_empty(), "{found:#?}");
 }
+
+/// The first column of the first table under `### Themes` in `doc`, each
+/// cell with its backticks taken off.
+fn doc_roles(doc: &str) -> Vec<String> {
+    doc.lines()
+        .skip_while(|line| *line != "### Themes")
+        .skip(1)
+        .take_while(|line| !line.starts_with('#'))
+        .skip_while(|line| !line.starts_with('|'))
+        .take_while(|line| line.starts_with('|'))
+        .skip(2)
+        .filter_map(|line| line.split('|').nth(1))
+        .map(|cell| cell.trim().trim_matches('`').to_owned())
+        .collect()
+}
+
+#[test]
+fn doc_roles_reads_the_first_column_of_the_themes_table() {
+    let doc = "## Look\n\n| a | b |\n|---|---|\n| `x` | no |\n\n### Themes\n\nText.\n\n\
+               | Role | Use |\n|---|---|\n| `text` | words |\n| `muted` | dim |\n\nAfter.\n\n\
+               | `later` | no |\n\n### Next\n";
+    assert_eq!(doc_roles(doc), ["text", "muted"]);
+}
+
+#[test]
+fn the_doc_lists_every_role() {
+    let doc = include_str!("../../../docs/tui.md");
+    let names: Vec<&str> = Role::ALL.into_iter().map(Role::name).collect();
+    assert_eq!(doc_roles(doc), names);
+}

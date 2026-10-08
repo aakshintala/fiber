@@ -24,6 +24,7 @@ Default `~/.fiber` on macOS and Linux; `FIBER_HOME` relocates all of it.
   extensions/<name>/              installed extensions, one directory each
   docs/                           Fiber's docs for the installed version (docs/releasing.md)
   docs/skills/<name>/             a built-in skill (docs/system-prompt.md)
+  themes/<name>.json              a theme (docs/tui.md, "Themes")
   pinned/<content-hash>/          approved copies of code a repository ships
   pinned.json                     size, modification time and hash of each declared path
   data/<extension>/               an extension's data for this machine
