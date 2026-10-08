@@ -196,6 +196,59 @@ fn an_accepted_command_that_is_not_subscribe_changes_nothing() {
 }
 
 #[test]
+fn only_an_accepted_full_subscribe_returns_the_waiting_first_prompt() {
+    let line = |id: &str, command: &str, level: &str| {
+        json!({"id": id, "command": command, "args": {"level": level}})
+            .as_object()
+            .unwrap()
+            .clone()
+    };
+    let sid = "s_aaaaaaaaaaaaaaaa";
+    let mut relays = Relays::default();
+    let stale = relays.mint();
+    let epoch = relays.mint();
+    let (writer, _) = UnixStream::pair().unwrap();
+    relays.entries.push(Relay {
+        session: sid.to_owned(),
+        epoch,
+        writer,
+        kept: Kept::default(),
+        replayed: Replayed::default(),
+        thread: None,
+    });
+    let first = crate::first::First::new(std::sync::Arc::default());
+    relays
+        .awaiting
+        .push((sid.to_owned(), std::sync::Arc::clone(&first)));
+    assert!(
+        relays
+            .accepted(sid, epoch, line("c_1", "subscribe", "summary"))
+            .is_none()
+    );
+    assert!(
+        relays
+            .accepted(sid, epoch, line("c_2", "prompt", "full"))
+            .is_none()
+    );
+    assert!(
+        relays
+            .accepted(sid, stale, line("c_3", "subscribe", "full"))
+            .is_none(),
+        "a stale relay's acknowledgement releases nothing"
+    );
+    assert_eq!(relays.awaiting.len(), 1, "the entry is kept until full");
+    let released = relays.accepted(sid, epoch, line("c_4", "subscribe", "full"));
+    assert!(released.is_some_and(|released| std::sync::Arc::ptr_eq(&released, &first)));
+    assert!(relays.awaiting.is_empty());
+    assert!(
+        relays
+            .accepted(sid, epoch, line("c_5", "subscribe", "full"))
+            .is_none(),
+        "a second full subscribe releases nothing"
+    );
+}
+
+#[test]
 fn only_an_acknowledgement_of_the_replayed_id_is_dropped() {
     let line = |kind: &str, id: &str| {
         let mut bytes = serde_json::to_vec(&json!({

@@ -19,6 +19,7 @@ use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use contract::clock::{Clock, Wake, wall_ms};
+use contract::commands::SentPart;
 use contract::events::CommandResult;
 use contract::{CommandId, ErrorCode, HubLine, SCHEMA_VERSION, SessionId};
 use serde_json::{Map, Value};
@@ -26,6 +27,7 @@ use serde_json::{Map, Value};
 use crate::Starter;
 use crate::diag::Diag;
 use crate::feed::{Feed, answer, on_feed};
+use crate::first::{FIRST_PROMPT_WAIT, First};
 use crate::relay::Relays;
 use crate::start::{self, Outcome};
 
@@ -330,16 +332,39 @@ impl Wake for Tick {
     }
 }
 
+/// What one check of [`Tick::wait_for`] found.
+pub(crate) enum Wait {
+    /// The wait is over.
+    Done,
+    /// Park until this instant (`None`: no deadline) or a wake.
+    Until(Option<Instant>),
+}
+
 impl Tick {
     /// Returns once `clock` reads `until` or later.
     pub(crate) fn until(&self, clock: &dyn Clock, until: Instant) {
+        self.wait_for(clock, &mut |now| {
+            if now >= until {
+                Wait::Done
+            } else {
+                Wait::Until(Some(until))
+            }
+        });
+    }
+
+    /// Calls `check` with the clock's reading, under the tick lock, until it
+    /// returns [`Wait::Done`], parking on the clock between calls as it
+    /// says. A wake after a change to what `check` reads is never missed:
+    /// the change's `wake` takes the tick lock, so it waits until this
+    /// thread parks.
+    pub(crate) fn wait_for(&self, clock: &dyn Clock, check: &mut dyn FnMut(Instant) -> Wait) {
         loop {
             let guard = lock(&self.held);
-            if clock.now() >= until {
+            let Wait::Until(until) = check(clock.now()) else {
                 return;
-            }
+            };
             let mut slot = Some(guard);
-            clock.wait_until(Some(until), &mut |bound| {
+            clock.wait_until(until, &mut |bound| {
                 let Some(guard) = slot.take() else {
                     return;
                 };
@@ -421,7 +446,17 @@ pub(crate) fn serve_counted(stream: UnixStream, hub: Arc<Hub>, n: u64) {
     if let Some(heard) = heard {
         hub.feed.attention.unlisten(heard);
     }
-    lock(&relays).close_all();
+    // A first prompt still waiting for this connection's subscription goes
+    // out now: the connection will never subscribe. Released once the
+    // relays lock is dropped.
+    let waiting = {
+        let mut held = lock(&relays);
+        held.close_all();
+        std::mem::take(&mut held.awaiting)
+    };
+    for (_, first) in waiting {
+        first.release();
+    }
     disconnect(&hub, n);
 }
 
@@ -458,7 +493,7 @@ fn on_command(
         return;
     }
     match line.command.as_str() {
-        "start" => on_start(&line.id, &line.args, hub, writer),
+        "start" => on_start(&line.id, &line.args, hub, writer, relays),
         "status" => on_status(&line.id, &line.args, hub, writer),
         "prompt_history" => match crate::prompt_history::answer(&hub.home, &line.args) {
             Ok(result) => accept_result(writer, hub, &line.id, result),
@@ -542,11 +577,18 @@ fn classify(bytes: &[u8]) -> Result<Classified, Option<CommandId>> {
     })
 }
 
+/// Answers `start` (`docs/invocation.md`, "What the hub speaks"). With
+/// `content`, the answer comes first: the release entry is registered and
+/// the `hub-first-prompt` thread started, unarmed, before the answer is
+/// written, and its bound is armed only once the write returns, whether it
+/// succeeded or not. So the prompt never precedes the answer, and a
+/// release can only follow it.
 fn on_start(
     id: &CommandId,
     args: &Map<String, Value>,
     hub: &Arc<Hub>,
     writer: &Arc<Mutex<UnixStream>>,
+    relays: &Arc<Mutex<Relays>>,
 ) {
     let Some((workspace, model, content)) = start_args(args) else {
         reject(
@@ -558,19 +600,41 @@ fn on_start(
         );
         return;
     };
-    match start::run(hub, workspace, model, content) {
-        Outcome::Accepted { session_id } => {
-            let result = CommandResult::Start { session_id };
-            accept_result(
-                writer,
-                hub,
-                id,
-                serde_json::to_value(&result).unwrap_or(Value::Null),
-            );
-        }
+    let (session_id, held) = match start::run(hub, id, workspace, model, content) {
+        Outcome::Accepted { session_id, first } => (session_id, first),
         Outcome::Rejected { code, message } => {
             reject(writer, hub, Some(id), &code, &message);
+            return;
         }
+    };
+    let first = match held {
+        Some(held) => {
+            let first = First::new(Arc::clone(&hub.tick));
+            lock(relays)
+                .awaiting
+                .push((session_id.0.clone(), Arc::clone(&first)));
+            if crate::first::later(hub, relays, *held, Arc::clone(&first)).is_err() {
+                crate::first::forget(relays, &first);
+                let failed =
+                    start::io_failed(hub, &session_id, "its first prompt could not be sent.");
+                if let Outcome::Rejected { code, message } = failed {
+                    reject(writer, hub, Some(id), &code, &message);
+                }
+                return;
+            }
+            Some(first)
+        }
+        None => None,
+    };
+    let result = CommandResult::Start { session_id };
+    accept_result(
+        writer,
+        hub,
+        id,
+        serde_json::to_value(&result).unwrap_or(Value::Null),
+    );
+    if let Some(first) = first {
+        first.arm(hub.clock.now() + FIRST_PROMPT_WAIT);
     }
 }
 
@@ -604,8 +668,9 @@ fn on_status(
 }
 
 /// `start`'s `args`: `workspace` (required string), `model` (optional
-/// string), `content` (optional, passed through as JSON). A wrong,
-/// missing or extra key, or an explicit `null`, is `None`.
+/// string), `content` (optional, passed through as JSON once it fits
+/// `prompt`'s `content`). A wrong, missing or extra key, or an explicit
+/// `null`, is `None`.
 fn start_args(args: &Map<String, Value>) -> Option<(&str, Option<&str>, Option<&Value>)> {
     if contains_null(&Value::Object(args.clone())) {
         return None;
@@ -622,7 +687,13 @@ fn start_args(args: &Map<String, Value>) -> Option<(&str, Option<&str>, Option<&
         Some(Value::String(model)) => Some(model.as_str()),
         Some(_) => return None,
     };
-    Some((workspace, model, args.get("content")))
+    let content = args.get("content");
+    if let Some(content) = content
+        && serde_json::from_value::<Vec<SentPart>>(content.clone()).is_err()
+    {
+        return None;
+    }
+    Some((workspace, model, content))
 }
 
 pub(crate) fn accept_result(

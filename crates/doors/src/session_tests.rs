@@ -117,6 +117,8 @@ pub(crate) enum Probe {
     /// A `full` subscribe has its watcher and seed queued, before the writer
     /// starts.
     SubscribeSeeded,
+    /// A `full` subscribe's acknowledgement is written.
+    SubscribeAcknowledged,
 }
 
 /// What [`Gate::probe`] calls at each [`Probe`] point.
@@ -1700,7 +1702,7 @@ fn close_waits_for_a_driver_shell_admitted_after_its_first_wait() {
                 .expect("the test resumes close");
         }
         Probe::ShellsWaiting => if let Ok(()) = waiting_tx.send(()) {},
-        Probe::SubscribeSeeded => {}
+        Probe::SubscribeSeeded | Probe::SubscribeAcknowledged => {}
     }));
     let socket = opened.socket.clone();
     let mut connected = None;
@@ -2089,6 +2091,51 @@ fn a_full_subscriber_sees_the_kept_ui_line_before_a_later_one() {
                 ],
                 ["A", "B"]
             );
+            Ok(())
+        })
+        .unwrap();
+    close_within(opened.session, opened.log);
+}
+
+#[test]
+fn a_full_subscribe_is_counted_before_its_acknowledgement() {
+    // A client that reads its acknowledgement is counted in `clients`, so a
+    // prompt sent once the acknowledgement arrives finds it connected.
+    reset();
+    let opened = open();
+    let gate = Arc::clone(&opened.session.gate);
+    // Held weakly: the gate keeps the probe, and `close` must drop the log's
+    // last handle to end the writer.
+    let log = Arc::downgrade(&opened.log);
+    let (count_tx, count) = mpsc::channel();
+    *super::lock(&gate.probe) = Some(Arc::new(move |point| {
+        if point != Probe::SubscribeAcknowledged {
+            return;
+        }
+        let latest = log
+            .upgrade()
+            .expect("the log is open")
+            .latest("clients")
+            .map_or(0, |line| line.payload["count"].as_u64().unwrap());
+        if let Ok(()) = count_tx.send(latest) {}
+    }));
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_full", "full");
+            let counted = count
+                .recv_timeout(DEADLINE)
+                .expect("the subscribe was acknowledged");
+            assert_eq!(counted, 1, "the acknowledgement preceded the count");
+            let ack = recv(&client);
+            assert_eq!(ack["kind"], "command_accepted");
+            assert_eq!(ack["payload"]["command_id"], "c_full");
+            let clients = client
+                .recv_until(DEADLINE, |line| line["kind"] == "clients")
+                .expect("the clients line follows the seed");
+            assert_eq!(clients["payload"]["count"], 1);
             Ok(())
         })
         .unwrap();

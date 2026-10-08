@@ -18,6 +18,7 @@ mod error;
 #[cfg(test)]
 pub(crate) mod fake;
 mod feed;
+mod first;
 mod idle;
 mod listen;
 mod prompt_history;

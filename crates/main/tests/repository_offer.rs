@@ -2,7 +2,10 @@
 //! "Code a repository ships"): a session with a `full` client raises it and
 //! takes the client's `decisions`; `fiber ask` has nobody to ask, so it skips
 //! each item with a notice or fails on a required one; a session that exits
-//! on its first offer is kept and raises the offer again on resume.
+//! on its first offer is kept and raises the offer again on resume. A
+//! `start` with `content` through the hub waits for the requester's `full`
+//! subscription, so a client that subscribes is offered the code, and a
+//! connection that never subscribes runs unattended.
 
 #![allow(
     clippy::unwrap_used,
@@ -20,14 +23,17 @@ use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 
 use fakes::Client;
 use fakes::{ProviderServer, Watchdog};
 use serde_json::{Value, json};
-use support::{Deadline, HubProc, Setup, hello, run_to_exit, write_json};
+use support::{
+    Deadline, HubProc, SessionGuard, Setup, Socket, close_session, connect_hub, hello, run_to_exit,
+    start_session, subscribe, until, write_json,
+};
 
 /// Declares the MCP server `db` in the workspace's repository file.
 fn declare_db(setup: &Setup, extra: &Value) {
@@ -564,4 +570,100 @@ fn a_session_that_exits_on_its_first_offer_raises_it_again_on_resume() {
             "fiber_exited",
         ]
     );
+}
+
+/// Ends a session started through the hub: kills the hub, closes the
+/// session on its own socket and waits for its processes to exit.
+fn end_through_hub(
+    setup: &Setup,
+    hub: &Arc<Mutex<Option<HubProc>>>,
+    id: &str,
+    guard: SessionGuard,
+) {
+    let hub = hub.lock().unwrap().take().expect("the starter ran");
+    assert!(!hub.kill_and_wait().success(), "SIGKILL ends the hub");
+    let direct = Socket::connect(setup.deadline, &setup.session_socket(id));
+    close_session(&direct);
+    drop(direct);
+    guard.wait_gone();
+}
+
+#[test]
+fn a_client_that_starts_with_content_through_the_hub_is_offered_the_code() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    declare_db(&setup, &json!({}));
+    let hub = Arc::new(Mutex::new(None));
+    let (client, _) = connect_hub(&setup, &hub);
+    let workspace = setup.workspace().to_string_lossy().into_owned();
+    let guard = SessionGuard::arm(setup.deadline, &workspace);
+    let id = start_session(&client, &workspace, "hi");
+    subscribe(&client, &id);
+    let lines = until(&client, "repository_code_offered", |line| {
+        line["kind"] == "repository_code_offered"
+    });
+    let offered = lines.last().unwrap();
+    let request = offered["payload"]["request_id"].as_str().unwrap();
+    client.send(&format!(
+        r#"{{"id":"c_reply","session_id":"{id}","command":"reply","args":{{"request_id":"{request}","decisions":["approve"]}}}}"#
+    ));
+    until(&client, "turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    drop(client);
+    let kinds = durable_kinds(&setup, &id);
+    let at = |kind: &str| {
+        kinds
+            .iter()
+            .position(|seen| seen == kind)
+            .unwrap_or_else(|| panic!("no {kind} in {kinds:?}"))
+    };
+    assert!(at("repository_code_offered") < at("repository_code_resolved"));
+    assert!(at("repository_code_resolved") < at("preamble_built"));
+    end_through_hub(&setup, &hub, &id, guard);
+}
+
+#[test]
+fn a_start_with_content_that_never_subscribes_runs_unattended() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    declare_db(&setup, &json!({}));
+    let hub = Arc::new(Mutex::new(None));
+    let (client, _) = connect_hub(&setup, &hub);
+    let workspace = setup.workspace().to_string_lossy().into_owned();
+    let guard = SessionGuard::arm(setup.deadline, &workspace);
+    let id = start_session(&client, &workspace, "hi");
+    // The offer is decided once, before the first model request: by then
+    // the session has decided with nobody to answer.
+    assert!(
+        server.await_requests(1, setup.deadline.left()),
+        "the turn's model request within the deadline"
+    );
+    subscribe(&client, &id);
+    let lines = until(&client, "turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    let kinds: Vec<&str> = lines
+        .iter()
+        .filter_map(|line| line["kind"].as_str())
+        .collect();
+    assert!(kinds.contains(&"preamble_built"), "{kinds:?}");
+    for kind in ["repository_code_offered", "repository_code_resolved"] {
+        assert!(!kinds.contains(&kind), "{kind} in {kinds:?}");
+    }
+    drop(client);
+    let durable = durable_kinds(&setup, &id);
+    assert!(
+        durable.iter().any(|kind| kind == "turn_completed"),
+        "{durable:?}"
+    );
+    for kind in ["repository_code_offered", "repository_code_resolved"] {
+        assert!(
+            !durable.iter().any(|seen| seen == kind),
+            "{kind} in {durable:?}"
+        );
+    }
+    end_through_hub(&setup, &hub, &id, guard);
 }
