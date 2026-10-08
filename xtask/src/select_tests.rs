@@ -510,6 +510,41 @@ fn test_files_map_to_their_tests() {
 }
 
 #[test]
+fn an_example_test_file_maps_to_its_binary() {
+    let files = strings(&[
+        "crates/main/examples/bench/run_tests.rs",
+        "crates/main/examples/bench/main_tests.rs",
+        "crates/main/examples/bench/fold/inner_tests.rs",
+        "crates/main/examples/bench/run.rs",
+    ]);
+    let (expression, packages) = test_filter(&files, &members(), &[]);
+    assert_eq!(
+        expression.split(" | ").collect::<Vec<_>>(),
+        [
+            "(binary_id(main::example/bench) & test(/^run::tests::/))",
+            "(binary_id(main::example/bench) & test(/^tests::/))",
+            "(binary_id(main::example/bench) & test(/^fold::inner::tests::/))",
+        ]
+    );
+    assert_eq!(packages, strings(&["main"]));
+}
+
+#[test]
+fn a_path_declared_example_test_file_maps_to_its_declaring_module() {
+    let files = strings(&["crates/main/examples/bench/run_tests.rs"]);
+    let sources = vec![decl(
+        "main",
+        "crates/main/examples/bench/run.rs",
+        "#[cfg(test)]\n#[path = \"run_tests.rs\"]\nmod tests;",
+    )];
+    let (expression, _) = test_filter(&files, &members(), &sources);
+    assert_eq!(
+        expression,
+        "(binary_id(main::example/bench) & test(/^run::tests::/))"
+    );
+}
+
+#[test]
 fn only_a_crate_root_file_is_a_crate_root() {
     let (expression, _) = test_filter(
         &strings(&["crates/log/src/fold/lib_tests.rs"]),
