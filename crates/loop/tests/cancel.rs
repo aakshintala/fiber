@@ -394,6 +394,12 @@ fn a_pending_approval_is_denied_by_cancel_and_later_calls_never_start() {
     assert_eq!(resolved.len(), 1);
     assert_eq!(resolved[0].payload["decision"], "deny");
     assert_eq!(resolved[0].payload["decided_by"], "cancel");
+    // A turn cancel names itself in the denial's reason, as a close does
+    // (`docs/events.md`, `permission_resolved`).
+    assert_eq!(
+        resolved[0].payload["reason"],
+        "The turn was cancelled while waiting for an answer."
+    );
     assert_eq!(resolved[0].payload["request_id"], request_id);
     let done = completed(&lines);
     assert_eq!(done.len(), 2);

@@ -451,10 +451,12 @@ impl Loop {
             // The idle delay passed. `idle_left` is set; the caller writes
             // nothing for this call.
             Asked::Idle => Ok(Err(self.cancelled_before_ran())),
-            Asked::Closed(request_id) => {
-                let completed =
-                    self.reviewer_deny(under.id, under.turn, Some(request_id), reason, reviewer)?;
-                Ok(Err(completed))
+            // The close already denied the request by `cancel`: the block
+            // budget still applies, and the call completes as the reviewer's
+            // block (`docs/events.md`, `permission_resolved`).
+            Asked::Closed => {
+                self.check_block_end();
+                Ok(Err(blocked(&reason)))
             }
         }
     }
@@ -589,13 +591,7 @@ impl Loop {
             Some(id),
         )?;
         self.check_block_end();
-        Ok(crate::completion::denied(
-            "reviewer",
-            format!(
-                "The reviewer blocked this call: {reason} Respect this boundary and find \
-                 another way to do the task. It did not run."
-            ),
-        ))
+        Ok(blocked(&reason))
     }
 
     /// When the session limit is reached with no person to answer, the
@@ -676,6 +672,20 @@ impl Loop {
         }
         Ok(())
     }
+}
+
+/// The completion of a call the reviewer blocked: the reviewer's verdict on
+/// `reason`, which never ran. What [`Loop::reviewer_deny`] completes a
+/// denied call with, and what a `close` taken while an escalation waits
+/// completes it with, the decision line already written.
+fn blocked(reason: &str) -> Box<ToolCallCompleted> {
+    crate::completion::denied(
+        "reviewer",
+        format!(
+            "The reviewer blocked this call: {reason} Respect this boundary and find \
+             another way to do the task. It did not run."
+        ),
+    )
 }
 
 /// A `permission_resolved` line: `request_id`, `decision`, `decided_by`,

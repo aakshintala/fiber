@@ -1501,12 +1501,15 @@ fn failures_without_an_answer_count_toward_the_consecutive_limit() {
         .filter(|l| l.kind == "permission_resolved")
         .collect();
     assert_eq!(resolved.len(), 3);
-    for line in &resolved[..2] {
+    // With no sender left nobody can answer: every denial is the close's,
+    // not a reviewer's verdict (`docs/events.md`, `permission_resolved`).
+    for line in &resolved {
         assert_eq!(line.payload["decision"], "deny");
-        assert_eq!(line.payload["decided_by"], "reviewer");
+        assert_eq!(line.payload["decided_by"], "cancel");
+        assert_eq!(line.payload.get("reviewer"), None);
         assert_eq!(
             line.payload["reason"],
-            "The session ended while waiting for an answer."
+            "The session closed while waiting for an answer."
         );
     }
     for done in completed(&lines) {
@@ -1517,10 +1520,10 @@ fn failures_without_an_answer_count_toward_the_consecutive_limit() {
     assert!(tool.ran().is_empty());
 }
 
-/// `close` taken while an escalation waits ends the wait as its step's
-/// unanswerable denial, and every later escalation in the turn denies
-/// without raising a request: `close` needs no `answerable` check of its
-/// own, because taking it already denies every later approval.
+/// `close` taken while an escalation waits denies the pending request by
+/// `cancel`, and every later escalation in the turn denies without raising
+/// a request: `close` needs no `answerable` check of its own, because
+/// taking it already denies every later approval.
 #[test]
 fn close_taken_during_an_escalation_leaves_later_calls_unanswerable() {
     let tool = shell(None, None);
@@ -1605,7 +1608,16 @@ fn close_taken_during_an_escalation_leaves_later_calls_unanswerable() {
         .filter(|l| l.kind == "permission_resolved")
         .collect();
     assert_eq!(resolved.len(), 2);
-    assert_eq!(resolved[0].payload["reason"], "first reason");
+    // The close denies the pending request itself: `cancel`, naming the
+    // close, with no reviewer verdict (`docs/events.md`,
+    // `permission_resolved`).
+    assert_eq!(resolved[0].payload["decision"], "deny");
+    assert_eq!(resolved[0].payload["decided_by"], "cancel");
+    assert_eq!(resolved[0].payload.get("reviewer"), None);
+    assert_eq!(
+        resolved[0].payload["reason"],
+        "The session closed while waiting for an answer."
+    );
     assert_eq!(
         resolved[0].payload["request_id"],
         requested[0].payload["request_id"]
@@ -1620,11 +1632,11 @@ fn close_taken_during_an_escalation_leaves_later_calls_unanswerable() {
     assert!(tool.ran().is_empty());
 }
 
-/// `close` taken while a failed review's escalation waits denies with the
-/// failed stage named: the closed request carries it, and the later call,
-/// denied with no request raised, carries it too.
+/// `close` taken while a failed review's escalation waits denies the closed
+/// request by `cancel`, with no stage recorded: only a later call, denied
+/// with no request raised, names the failed stage.
 #[test]
-fn close_taken_during_a_failed_review_names_the_failed_stage() {
+fn close_taken_during_a_failed_review_names_the_failed_stage_on_later_calls() {
     let tool = shell(None, None);
     let mut session = Session::with_tools(
         vec![
@@ -1709,10 +1721,14 @@ fn close_taken_during_a_failed_review_names_the_failed_stage() {
         resolved[0].payload["request_id"],
         requested[0].payload["request_id"]
     );
-    assert_eq!(resolved[0].payload["decided_by"], "reviewer");
+    // The closed request is denied by the close, so it carries no stage
+    // (`docs/events.md`, `permission_resolved`).
+    assert_eq!(resolved[0].payload["decision"], "deny");
+    assert_eq!(resolved[0].payload["decided_by"], "cancel");
+    assert_eq!(resolved[0].payload.get("reviewer"), None);
     assert_eq!(
-        resolved[0].payload["reviewer"],
-        json!({"model": REVIEWER_MODEL, "stage": 1})
+        resolved[0].payload["reason"],
+        "The session closed while waiting for an answer."
     );
     assert_eq!(resolved[1].payload.get("request_id"), None);
     assert_eq!(
@@ -1727,11 +1743,11 @@ fn close_taken_during_a_failed_review_names_the_failed_stage() {
     assert!(tool.ran().is_empty());
 }
 
-/// `close` taken while a `no_model` escalation waits denies as `no_reviewer`:
-/// the closed request carries it, and the later call, denied with no request
-/// raised, carries it too. No reviewer request is ever sent.
+/// `close` taken while a `no_model` escalation waits denies the closed
+/// request by `cancel`: only the later call, denied with no request raised,
+/// denies as `no_reviewer`. No reviewer request is ever sent.
 #[test]
-fn close_taken_during_a_no_model_escalation_denies_as_no_reviewer() {
+fn close_taken_during_a_no_model_escalation_denies_later_calls_as_no_reviewer() {
     let tool = shell(None, None);
     let mut session = Session::with_tools(
         vec![
@@ -1810,8 +1826,15 @@ fn close_taken_during_a_no_model_escalation_denies_as_no_reviewer() {
         resolved[0].payload["request_id"],
         requested[0].payload["request_id"]
     );
-    assert_eq!(resolved[0].payload["decided_by"], "no_reviewer");
+    // The closed request is denied by the close, not for want of a reviewer
+    // (`docs/events.md`, `permission_resolved`).
+    assert_eq!(resolved[0].payload["decision"], "deny");
+    assert_eq!(resolved[0].payload["decided_by"], "cancel");
     assert_eq!(resolved[0].payload.get("reviewer"), None);
+    assert_eq!(
+        resolved[0].payload["reason"],
+        "The session closed while waiting for an answer."
+    );
     assert_eq!(resolved[1].payload.get("request_id"), None);
     assert_eq!(resolved[1].payload["decided_by"], "no_reviewer");
     assert_eq!(resolved[1].payload.get("reviewer"), None);
@@ -1911,7 +1934,14 @@ fn close_taken_during_an_escalation_leaves_a_later_standing_ask_unanswerable() {
         .iter()
         .filter(|l| l.kind == "permission_resolved")
         .collect();
-    assert_eq!(resolved[0].payload["decided_by"], "reviewer");
+    // The close denies the pending escalation itself (`docs/events.md`,
+    // `permission_resolved`).
+    assert_eq!(resolved[0].payload["decided_by"], "cancel");
+    assert_eq!(resolved[0].payload.get("reviewer"), None);
+    assert_eq!(
+        resolved[0].payload["reason"],
+        "The session closed while waiting for an answer."
+    );
     assert_eq!(
         resolved[0].payload["request_id"],
         requested[0].payload["request_id"]
@@ -1981,10 +2011,13 @@ fn an_unanswered_escalation_past_the_session_limit_ends_the_turn_blocked() {
     );
     let resolved = line(&lines, "permission_resolved");
     assert_eq!(resolved.payload["decision"], "deny");
-    assert_eq!(resolved.payload["decided_by"], "reviewer");
+    // With no sender left nobody can answer: the denial is the close's, not
+    // a reviewer's verdict (`docs/events.md`, `permission_resolved`).
+    assert_eq!(resolved.payload["decided_by"], "cancel");
+    assert_eq!(resolved.payload.get("reviewer"), None);
     assert_eq!(
         resolved.payload["reason"],
-        "The session ended while waiting for an answer."
+        "The session closed while waiting for an answer."
     );
     assert_eq!(
         resolved.payload["request_id"],
@@ -2137,4 +2170,70 @@ fn a_remembered_allow_taken_before_the_shutdown_stands_and_the_call_never_runs()
     assert!(lines.iter().all(|l| l.kind != "tool_call_started"));
     assert_eq!(lines.last().unwrap().kind, "turn_completed");
     assert_eq!(lines.last().unwrap().payload["outcome"], "interrupted");
+}
+
+/// A shutdown that closes the inbox while an escalation waits leaves the
+/// request pending: no denial is written, so resuming raises it again
+/// (`docs/invocation.md`, "Shutdown").
+#[test]
+fn a_shutdown_that_closes_the_inbox_during_an_escalation_leaves_the_request_pending() {
+    let tool = shell(None, None);
+    let mut session = Session::with_tools(
+        vec![calls_reply("", &[("shell", paris())])],
+        None,
+        vec![tool.clone() as Arc<dyn Tool>],
+    );
+    let failed = || {
+        Scripted::failed(Failure {
+            code: ErrorCode::Timeout,
+            message: "the reviewer timed out".into(),
+            retry_after_ms: None,
+            provider: None,
+        })
+    };
+    let reviewer = session.reviewer(vec![failed()]);
+    // Swapping in an unrelated sender drops the session's only one once the
+    // thread below drops it: the disconnect is the path taken, because the
+    // loop is parked in `recv` when it lands.
+    let inbox = std::mem::replace(&mut session.inbox, mpsc::channel().0);
+    inbox.send(delivery("go")).unwrap();
+    let watcher = session.log.watch();
+    let clock = Arc::clone(&session.clock);
+    let cancel = Arc::clone(&session.cancel);
+    std::thread::scope(|scope| {
+        scope.spawn(move || {
+            support::read_until(watcher, "a permission_requested line", |line| {
+                line.kind == "permission_requested"
+            });
+            // The wait parks in `recv` with no deadline, so the drop below
+            // disconnects it: the shutdown's wake would end the wait
+            // without a disconnect instead. The park wait takes
+            // [`support::DEADLINE`].
+            assert!(
+                clock.await_parked_unbounded(support::DEADLINE),
+                "the escalation's wait parked in recv"
+            );
+            cancel.shutdown(143);
+            drop(inbox);
+        });
+        // The wait ends as the idle delay ends it: no turn outcome.
+        assert_eq!(session.turn(), None);
+    });
+    // `Session::lines` waits for a `turn_completed` the shutdown never
+    // writes, so the log is read directly (`docs/testing.md`, "Waits and
+    // timeouts").
+    let lines: Vec<contract::Envelope> = log::read(&session.dir).unwrap();
+    let kinds = kinds(&lines);
+    assert_eq!(kinds.last(), Some(&"permission_requested"));
+    assert!(!kinds.contains(&"permission_resolved"));
+    assert!(!kinds.contains(&"tool_call_completed"));
+    assert!(!kinds.contains(&"turn_completed"));
+    assert!(tool.ran().is_empty());
+    let request_id = lines.last().unwrap().payload["request_id"].clone();
+    let written =
+        r#loop::fiber_exited(&session.log, &session.dir, Ok(()), true, Some(143)).unwrap();
+    assert_eq!(written.code, 143);
+    let exited = log::read(&session.dir).unwrap().pop().unwrap();
+    assert_eq!(exited.payload["suspended_on"], request_id);
+    assert_eq!(reviewer.requests().len(), 1);
 }

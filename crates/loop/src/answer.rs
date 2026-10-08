@@ -4,21 +4,31 @@
 
 use contract::events::{AskStep, DecidedBy, Decision, PermissionRequested};
 use contract::inbox::Delivery;
-use contract::{ActionId, ErrorCode, TurnId};
+use contract::{ActionId, ErrorCode, RequestId, TurnId};
 
 use crate::calls::Asked;
 use crate::completion::{denied, resolved};
 use crate::inbox::{self, InboxRecv, Waited};
 use crate::{Error, Loop};
 
+/// The denial's reason when the session closed while the request was
+/// pending (`docs/events.md`, `permission_resolved`).
+const CLOSED: &str = "The session closed while waiting for an answer.";
+/// The denial's reason when the turn was cancelled while the request was
+/// pending (`docs/events.md`, `permission_resolved`).
+const CANCELLED: &str = "The turn was cancelled while waiting for an answer.";
+
 impl Loop {
     /// Waits for the answer to `request`, already written for the call
     /// `id` of `tool`. Other deliveries are admitted as at any drain. A
     /// reply that does not fit is rejected and the wait goes on; one that
     /// names another request is rejected `stale_request`. `close` taken
-    /// while waiting returns [`Asked::Closed`]; the inbox closing denies
-    /// with no person to answer. A reply or `close` held aside before the
-    /// request was raised again is taken first, as if it came now.
+    /// while waiting denies the request by `cancel` and returns
+    /// [`Asked::Closed`]; the inbox closing denies it the same way while
+    /// the session is not shutting down, and leaves it pending when it is
+    /// (`docs/events.md`, `permission_resolved`; `docs/invocation.md`,
+    /// "Shutdown"). A reply or `close` held aside before the request was
+    /// raised again is taken first, as if it came now.
     pub(crate) fn await_answer(
         &mut self,
         id: &ActionId,
@@ -31,12 +41,6 @@ impl Loop {
             AskStep::StandingAsk { .. } => None,
             AskStep::Review { rule, .. } => rule.clone(),
         };
-        // Who denies when the inbox closes with no answer follows from
-        // the step, as the request carries it.
-        let closed_by = match &request.step {
-            AskStep::StandingAsk { .. } => DecidedBy::StandingRule,
-            AskStep::Review { .. } => DecidedBy::Reviewer,
-        };
         // Waiting on an approval is idle (`docs/invocation.md`, "Lifecycle").
         // The deadline is this moment, and a rejected reply does not move it.
         let deadline = self.idle_deadline();
@@ -45,37 +49,43 @@ impl Loop {
                 Some(delivery) => delivery,
                 None => match self.recv_until(deadline, false, None) {
                     InboxRecv::Delivery(delivery) => delivery,
-                    // Without `check` or a refresh instant the wait never
-                    // ends unattended or to warm; the
-                    // arm keeps the match total.
-                    InboxRecv::Idle | InboxRecv::Unattended | InboxRecv::Warm => {
-                        self.idle_left = true;
-                        return Ok(Asked::Idle);
-                    }
-                    // Every sender is gone, so no answer can come.
-                    InboxRecv::Closed => {
-                        let reason = "The session ended while waiting for an answer.";
-                        self.decided(
-                            id,
-                            turn,
-                            resolved(
-                                Some(request_id),
-                                Decision::Deny,
-                                closed_by,
-                                Some(reason.to_owned()),
-                                None,
-                            ),
-                        )?;
+                    // Every sender is gone, so no answer can come: the session
+                    // closed while the request was pending, and the request
+                    // is denied by `cancel` (`docs/events.md`,
+                    // `permission_resolved`). Under a shutdown the request
+                    // stays pending for the resume instead
+                    // (`docs/invocation.md`, "Shutdown").
+                    InboxRecv::Closed if !self.shutting_down() => {
+                        self.closed(id, turn, request_id.clone())?;
                         return Ok(Asked::Gone(denied(
                             "no_person",
-                            format!("{reason} It did not run."),
+                            format!("{CLOSED} It did not run."),
                         )));
+                    }
+                    // Without `check` or a refresh instant the wait never
+                    // ends unattended or to warm; the
+                    // arm keeps the match total. A disconnect under a
+                    // shutdown joins it: the wait ends as the idle delay
+                    // ends it, and the request stays pending.
+                    InboxRecv::Idle
+                    | InboxRecv::Unattended
+                    | InboxRecv::Warm
+                    | InboxRecv::Closed => {
+                        self.idle_left = true;
+                        return Ok(Asked::Idle);
                     }
                 },
             };
             match self.take_while_waiting(&request_id, delivery, turn)? {
                 Waited::Again => {}
-                Waited::Closed => return Ok(Asked::Closed(request_id)),
+                // `close` was taken while the request was pending: the
+                // request is denied by `cancel`, and the caller only
+                // completes the call (`docs/events.md`,
+                // `permission_resolved`).
+                Waited::Closed => {
+                    self.closed(id, turn, request_id.clone())?;
+                    return Ok(Asked::Closed);
+                }
                 // The wake the door delivers after an accepted cancel:
                 // the request ends denied by the cancel, and the call
                 // completes `cancelled`. A stale wake from an earlier
@@ -88,7 +98,7 @@ impl Loop {
                             Some(request_id),
                             Decision::Deny,
                             DecidedBy::Cancel,
-                            None,
+                            Some(CANCELLED.to_owned()),
                             None,
                         ),
                     )?;
@@ -129,6 +139,22 @@ impl Loop {
                 }
             }
         }
+    }
+
+    /// Denies `request_id` by `cancel` with [`CLOSED`]: the session closed
+    /// while it was pending.
+    fn closed(&mut self, id: &ActionId, turn: &TurnId, request_id: RequestId) -> Result<(), Error> {
+        self.decided(
+            id,
+            turn,
+            resolved(
+                Some(request_id),
+                Decision::Deny,
+                DecidedBy::Cancel,
+                Some(CLOSED.to_owned()),
+                None,
+            ),
+        )
     }
 
     /// The first delivery held aside before a finishing turn raised its

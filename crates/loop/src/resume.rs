@@ -665,9 +665,10 @@ impl Loop {
                 self.cancel.disarm();
                 return Ok(None);
             }
-            Asked::Closed(request_id) => {
-                Err(self.unanswerable(&action, &turn, Some(request_id))?)
-            }
+            // The close already denied the re-raised request by `cancel`:
+            // the call completes as one no person can answer
+            // (`docs/events.md`, `permission_resolved`).
+            Asked::Closed => Err(crate::calls::no_person()),
         };
         let mut decision = Some(decision);
         let mut before = true;

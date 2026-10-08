@@ -2327,3 +2327,89 @@ fn close_now_after_close_stops_the_job_it_was_waiting_for() {
         .concat()
     );
 }
+
+#[test]
+fn close_on_a_pending_review_escalation_denies_it_by_cancel() {
+    // A binary-level reproduction of a `close` taken while a review
+    // escalation waits: the reviewer's stage-1 failure raises a person ask,
+    // and the close denies it (`docs/testing.md`, "What a change ships
+    // with").
+    let setup = Setup::new();
+    // A `write` under the data directory is not fast-pathed, so it reaches
+    // the review step: a `shell` call only reads, and the loop fast-paths
+    // it past the reviewer (`docs/permissions.md`, "Fast paths").
+    let lua = setup.home().join("data/notes/x.lua").display().to_string();
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "write_lua",
+            "write",
+            &json!({"path": lua, "content": "return {}\n"}),
+        )]),
+        Response::status(400, "{}"),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    // The session's reviewer answers on the same fake server, as
+    // `crates/main/tests/tools.rs` `with_reviewer` wires it.
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "reviewer": {"model": "fake/m"}}),
+    );
+    let id = doors::mint("s_");
+    let mut running = setup.start_session(&id, &[]);
+    let client = running.connect(&setup.socket(&id));
+    running.wait_for("extensions_loaded");
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    let sub = recv(&client, "the subscribe acknowledgement");
+    assert_eq!(sub["payload"]["command_id"], "c_sub");
+    send(
+        &client,
+        r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"save the snippet"}]}}"#,
+    );
+    // Each receive below takes what remains of the test's `Deadline`,
+    // naming the wait (`docs/testing.md`, "Waits and timeouts").
+    let asked = until(&client, "the escalation's permission_requested", |line| {
+        line["kind"] == "permission_requested"
+    });
+    let request = asked.last().expect("the escalation was requested");
+    assert_eq!(request["payload"]["step"], "review");
+    let request_id = request["payload"]["request_id"].as_str().unwrap();
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let denied = until(&client, "the close's permission_resolved", |line| {
+        line["kind"] == "permission_resolved"
+    });
+    let resolved = denied
+        .iter()
+        .find(|line| line["kind"] == "permission_resolved")
+        .expect("the close resolved the request");
+    assert_eq!(resolved["payload"]["request_id"], request_id);
+    assert_eq!(resolved["payload"]["decision"], "deny");
+    // Nobody decided: the denial is the close's, with no reviewer object
+    // (`docs/events.md`, `permission_resolved`).
+    assert_eq!(resolved["payload"]["decided_by"], "cancel");
+    assert!(resolved["payload"].get("reviewer").is_none());
+    assert_eq!(
+        resolved["payload"]["reason"],
+        "The session closed while waiting for an answer."
+    );
+    let done = until(&client, "the denied turn's turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    let end = done.last().expect("the turn ended");
+    assert_eq!(end["payload"]["outcome"], "completed");
+    let completed = done
+        .iter()
+        .find(|line| line["kind"] == "tool_call_completed")
+        .expect("the denied call completed");
+    assert_eq!(completed["payload"]["status"], "denied");
+    let _tail = until_close(&client);
+    drop(client);
+    let (status, out, stderr) = running.wait();
+    let exited = assert_exited_0(status, &out, &stderr);
+    // The denied request resolved in the turn: nothing stays pending.
+    assert_eq!(exited["payload"].get("suspended_on"), None);
+}
