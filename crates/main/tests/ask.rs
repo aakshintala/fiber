@@ -2765,11 +2765,20 @@ fn first_party_reviewer_models_name_a_shipped_non_contributor_model() {
     let mut seen: Vec<String> = Vec::new();
     for dir in &packages {
         for provider in config::read_providers(dir).unwrap() {
+            // A provider whose `models()` lists live ships no static models, so
+            // its reviewer model can only be checked for not being a contributor.
+            let valid = if provider.models.is_empty() {
+                provider
+                    .reviewer_model
+                    .as_deref()
+                    .is_none_or(|m| !m.contains("contributor"))
+            } else {
+                reviewer_model_valid(&provider)
+            };
             assert!(
-                reviewer_model_valid(&provider),
+                valid,
                 "{} names {:?} outside its models or a contributor model",
-                provider.name,
-                provider.reviewer_model
+                provider.name, provider.reviewer_model
             );
             match provider.name.as_str() {
                 "muse" | "opencode-zen" => assert_eq!(
