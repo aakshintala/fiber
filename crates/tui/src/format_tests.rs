@@ -1,6 +1,8 @@
 //! Tests for a card's figures.
 
-use super::{Kinds, count, cut, duration, heading, money, seconds, tokens, wrap};
+use serde_json::json;
+
+use super::{Kind, Kinds, count, cut, duration, heading, kind, money, seconds, tokens, wrap};
 
 #[test]
 fn durations_truncate_to_whole_seconds_at_each_threshold() {
@@ -58,13 +60,14 @@ fn every_kind_in_order_capitalised() {
         added: 175,
         removed: 83,
         ran: 9,
+        asked: 4,
         other: 3,
         thoughts: 4,
     };
     assert_eq!(
         kinds.summary(),
         "Read 34 files, searched 84 patterns, edited 24 files +175 −83, ran 9 commands, \
-         3 other calls, thought 4 times"
+         asked 4 questions, 3 other calls, thought 4 times"
     );
 }
 
@@ -77,13 +80,14 @@ fn every_kind_singular() {
         added: 3,
         removed: 1,
         ran: 1,
+        asked: 1,
         other: 1,
         thoughts: 1,
     };
     assert_eq!(
         kinds.summary(),
-        "Read 1 file, searched 1 pattern, edited 1 file +3 −1, ran 1 command, 1 other call, \
-         thought once"
+        "Read 1 file, searched 1 pattern, edited 1 file +3 −1, ran 1 command, \
+         asked 1 question, 1 other call, thought once"
     );
 }
 
@@ -127,6 +131,13 @@ fn kinds_with_no_calls_are_left_out() {
             ..Kinds::default()
         }),
         "Ran 2 commands"
+    );
+    assert_eq!(
+        only(Kinds {
+            asked: 2,
+            ..Kinds::default()
+        }),
+        "Asked 2 questions"
     );
     assert_eq!(
         only(Kinds {
@@ -296,4 +307,25 @@ fn answer_rows_escape_headers_and_labels_onto_one_line() {
         r#"Pick\nnow: a \"b\", "x\ny""#
     );
     assert_eq!(note_row("one\ntwo"), r#"note: "one\ntwo""#);
+}
+
+#[test]
+fn ask_user_counts_its_questions_when_it_has_any() {
+    let questions = |arguments| match kind("ask_user", &arguments) {
+        Kind::Ask(n) => Some(n),
+        Kind::Read | Kind::Edit | Kind::Search | Kind::Ran | Kind::Other => None,
+    };
+    assert_eq!(questions(json!({"questions": [{}]})), Some(1));
+    assert_eq!(questions(json!({"questions": [{}, {}, {}]})), Some(3));
+    assert_eq!(questions(json!({"questions": []})), None);
+    assert_eq!(questions(json!({"questions": "x"})), None);
+    assert_eq!(questions(json!({})), None);
+    assert!(matches!(
+        kind("ask_user", &json!({"questions": []})),
+        Kind::Other
+    ));
+    assert!(matches!(
+        kind("other", &json!({"questions": [{}]})),
+        Kind::Other
+    ));
 }
