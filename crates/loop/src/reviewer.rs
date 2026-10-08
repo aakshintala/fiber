@@ -234,7 +234,7 @@ impl Loop {
                 cost: reviewer.model.cost.clone(),
                 subscription: reviewer.model.subscription,
                 cache_lifetime: reviewer.cache_lifetime,
-                thinking: request::lowest(&[]),
+                thinking: request::lowest(&reviewer.thinking_levels),
             },
             Err(failure) => {
                 let failure = failure.clone();

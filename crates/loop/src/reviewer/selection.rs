@@ -102,7 +102,7 @@ impl Loop {
                     cost: reviewer.model.cost.clone(),
                     subscription: reviewer.model.subscription,
                     cache_lifetime: reviewer.cache_lifetime,
-                    thinking: super::request::lowest(&[]),
+                    thinking: super::request::lowest(&reviewer.thinking_levels),
                 },
                 reviewer.context_window,
             ),

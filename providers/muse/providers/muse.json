@@ -10,6 +10,7 @@
       "base_url": "https://api.meta.ai/v1",
       "context_window": 1048576,
       "max_output_tokens": 131072,
+      "thinking_levels": ["minimal", "low", "medium", "high", "xhigh", "max"],
       "input": [
         "text",
         "image"
@@ -26,6 +27,7 @@
       "base_url": "https://api.meta.ai/v1",
       "context_window": 1048576,
       "max_output_tokens": 131072,
+      "thinking_levels": ["minimal", "low", "medium", "high", "xhigh", "max"],
       "input": [
         "text",
         "image"
