@@ -73,7 +73,9 @@ fn pipelined_subscribe_is_kept_across_resume() {
         line["kind"] == "fiber_exited"
     });
     assert!(
-        !exited.iter().any(|line| line["payload"]["code"] == "not_subscribed"),
+        !exited
+            .iter()
+            .any(|line| line["payload"]["code"] == "not_subscribed"),
         "{exited:?}"
     );
     // The next command resumes and succeeds at the kept level.
@@ -84,6 +86,10 @@ fn pipelined_subscribe_is_kept_across_resume() {
     assert_eq!(ack["kind"], "command_accepted", "{ack}");
     assert_eq!(ack["payload"]["command_id"], "c_next");
     drop(client);
-    hub.lock().unwrap().take().expect("the hub ran").kill_and_wait();
+    hub.lock()
+        .unwrap()
+        .take()
+        .expect("the hub ran")
+        .kill_and_wait();
     guard.wait_gone();
 }
