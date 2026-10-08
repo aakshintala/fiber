@@ -684,6 +684,53 @@ fn get_on_a_lazy_server_starts_it() {
 }
 
 #[test]
+fn get_returns_the_failed_start_record_for_a_cached_prompt() {
+    use contract::ErrorCode;
+    use contract::events::{McpServerFailed, ServerFailure};
+    use contract::shapes::Failure;
+    use contract::tool::ServerRecord;
+
+    let session = greet_session();
+    let first = session.start(vec![session.spec("fx")]);
+    assert!(first.failed.is_empty());
+    Session::stop(first.servers);
+
+    // The cache keeps the listed prompt available without starting its
+    // server, so `get` observes this failed lazy start.
+    write(&session.dir, "fail-start", "");
+    let started = session.start(vec![session.spec("fx")]);
+    assert!(started.failed.is_empty());
+    let output = Session::get(
+        &started.prompts,
+        "fx",
+        "greet",
+        "Ada warm",
+        &fakes::CancelToken::new(),
+    );
+
+    assert_eq!(
+        output.error.expect("the prompt start fails").code,
+        ErrorCode::McpPromptFailed
+    );
+    assert_eq!(
+        output.servers,
+        [ServerRecord::Failed(McpServerFailed {
+            server: "fx".to_owned(),
+            reason: ServerFailure::StartFailed,
+            will_restart: true,
+            error: Failure {
+                code: ErrorCode::McpServerUnavailable,
+                message: "The MCP server `fx` failed to start: The server's `initialize` reply was not a result. Check its `command` and `args` under `mcp.servers` in your configuration.".to_owned(),
+                retry_after_ms: None,
+                provider: None,
+            },
+        })],
+        "the failed start record is returned in the observed order",
+    );
+    Session::stop(started.servers);
+}
+
+#[test]
 fn a_missing_required_argument_is_invalid_and_never_reaches_the_server() {
     use contract::ErrorCode;
     let session = greet_session();
