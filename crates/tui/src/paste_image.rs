@@ -309,13 +309,30 @@ fn wait_for_exit(id: u32) {
     loop {
         match rustix::process::waitid(
             WaitId::Pid(pid),
-            WaitIdOptions::EXITED | WaitIdOptions::NOWAIT,
+            WaitIdOptions::EXITED.union(WaitIdOptions::NOWAIT),
         ) {
             Ok(_) => return,
             Err(Errno::INTR) => {}
             Err(_) => return,
         }
     }
+}
+
+/// Signals the command's group, then signals the child only if its exit
+/// has not been observed. A watcher notification arriving during the group
+/// signal is observed before deciding whether to signal the child.
+fn signal_after_group(
+    id: u32,
+    exited: bool,
+    exited_rx: &mpsc::Receiver<()>,
+    signal_group: impl FnOnce(u32),
+    signal_pid: impl FnOnce(u32),
+) {
+    signal_group(id);
+    if exited || exited_rx.try_recv().is_ok() {
+        return;
+    }
+    signal_pid(id);
 }
 
 /// Runs the read of `child` to `end`, then ends it the same way every
@@ -433,10 +450,7 @@ fn run(
             }
         });
     };
-    signal_group(id);
-    if !exited_rx.try_recv().is_ok() {
-        signal_pid(id);
-    }
+    signal_after_group(id, exited, &exited_rx, signal_group, signal_pid);
     let _ = stdout;
     match exited_rx.recv() {
         Ok(_) | Err(_) => {}
@@ -527,7 +541,7 @@ fn apple_script_png(stdout: &[u8]) -> Option<Vec<u8>> {
         let (Some(high), Some(low)) = (pair.first(), pair.get(1)) else {
             return None;
         };
-        out.push(hex_val(*high)? << 4 | hex_val(*low)?);
+        out.push((hex_val(*high)? << 4) + hex_val(*low)?);
     }
     Some(out)
 }

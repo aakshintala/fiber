@@ -1,6 +1,7 @@
 //! Tests for the clipboard image reader: the command choice, the frame
 //! decode, the size checks and the read under its deadline.
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::Path;
@@ -13,7 +14,8 @@ use fakes::clock::FakeClock;
 use fakes::{TempDir, Watchdog, group_empties, kill_pid, pids_exit};
 
 use super::{
-    Decode, Failed, NO_CLIPBOARD, Reader, apple_script_png, command, png_size, read, refused, start,
+    Decode, Failed, NO_CLIPBOARD, Reader, apple_script_png, command, png_size, read, refused,
+    signal_after_group, start,
 };
 
 /// One named wall-clock deadline for every blocking wait.
@@ -232,7 +234,13 @@ fn apple_script_output_decodes_to_png_bytes() {
         apple_script_png(&format!("«data PNGf{}»\n", hex_lower(PIXEL)).into_bytes()),
         Some(PIXEL.to_vec())
     );
-    // D7: `«data PNGf»` is empty, then no image.
+    // D7: multi-nibble bytes decode by combining distinct high and low
+    // nibbles, including either nibble being zero.
+    assert_eq!(
+        apple_script_png("«data PNGf1fa00b»".as_bytes()),
+        Some(vec![0x1f, 0xa0, 0x0b])
+    );
+    // D8: `«data PNGf»` is empty, then no image.
     assert_eq!(
         apple_script_png("«data PNGf»\n".as_bytes()),
         Some(Vec::new())
@@ -372,6 +380,75 @@ fn reaped(watchdog: Watchdog, pgid: u32, what: &str) {
         "{what} left its group behind"
     );
     watchdog.stand_down(DEADLINE);
+}
+
+#[test]
+fn an_unobserved_exit_at_group_signal_takes_the_pid_signal_path() {
+    let (tx, exited_rx) = mpsc::channel();
+    let group_signalled = Cell::new(false);
+    let pid_signalled = Cell::new(false);
+    signal_after_group(
+        42,
+        false,
+        &exited_rx,
+        |id| {
+            assert_eq!(id, 42);
+            group_signalled.set(true);
+        },
+        |id| {
+            assert_eq!(id, 42);
+            assert!(group_signalled.get());
+            pid_signalled.set(true);
+        },
+    );
+    drop(tx);
+    assert!(group_signalled.get());
+    assert!(pid_signalled.get());
+}
+
+#[test]
+fn an_exit_observed_during_group_signal_skips_the_pid_signal_path() {
+    let (exited_tx, exited_rx) = mpsc::channel();
+    let group_signalled = Cell::new(false);
+    let pid_signalled = Cell::new(false);
+    signal_after_group(
+        42,
+        false,
+        &exited_rx,
+        |id| {
+            assert_eq!(id, 42);
+            group_signalled.set(true);
+            exited_tx.send(()).unwrap();
+        },
+        |id| {
+            assert_eq!(id, 42);
+            pid_signalled.set(true);
+        },
+    );
+    assert!(group_signalled.get());
+    assert!(!pid_signalled.get());
+}
+
+#[test]
+fn an_already_observed_exit_skips_the_pid_signal_path() {
+    let (_tx, exited_rx) = mpsc::channel();
+    let group_signalled = Cell::new(false);
+    let pid_signalled = Cell::new(false);
+    signal_after_group(
+        42,
+        true,
+        &exited_rx,
+        |id| {
+            assert_eq!(id, 42);
+            group_signalled.set(true);
+        },
+        |id| {
+            assert_eq!(id, 42);
+            pid_signalled.set(true);
+        },
+    );
+    assert!(group_signalled.get());
+    assert!(!pid_signalled.get());
 }
 
 #[test]
@@ -656,10 +733,27 @@ fn a_successful_read_kills_what_the_command_left_behind() {
 
 #[test]
 fn the_pixel_limit_is_the_sessions() {
-    // P3: exactly 50,000,000 pixels pass; one more, and u32::MAX squared,
-    // are refused without overflow.
+    // P3: exactly 50,000,000 pixels pass. Products over the limit are
+    // refused even when their dimension sum is below it; u32::MAX squared
+    // is refused without overflow.
     for (width, height, want) in [
         (10_000u32, 5_000u32, Ok(header(10_000, 5_000))),
+        (
+            10_000u32,
+            10_000u32,
+            Err(Failed::TooManyPixels {
+                width: 10_000,
+                height: 10_000,
+            }),
+        ),
+        (
+            7_071u32,
+            7_072u32,
+            Err(Failed::TooManyPixels {
+                width: 7_071,
+                height: 7_072,
+            }),
+        ),
         (
             50_000_001u32,
             1u32,
