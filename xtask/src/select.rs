@@ -382,10 +382,10 @@ pub(crate) struct Plan {
     pub(crate) shards: u64,
 }
 
-pub(crate) fn plan(mode: &str, packages: &[String], event: &str, bug: bool) -> Plan {
+pub(crate) fn plan(mode: &str, packages: &[String], event: &str, bug: bool, mutants: bool) -> Plan {
     let pr = event == "pull_request";
     let code = mode != "docs";
-    let shards = if code { MUTANT_SHARDS } else { 0 };
+    let shards = if code && mutants { MUTANT_SHARDS } else { 0 };
     let jobs = BTreeMap::from([
         ("lint", !pr || code),
         // The backstop on `main` compiles the whole workspace on every push.
