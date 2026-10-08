@@ -187,7 +187,8 @@ pub(crate) struct Finished {
 
 /// Runs `command` in its own process group with stdin closed, waiting up to
 /// `within` on `clock` for it to exit, then stops its group and collects
-/// its output. Past `within` it errs naming `what`. Output still open
+/// its output. Past `within` it errs naming `what`, followed by the
+/// group's cleanup error if there was one. Output still open
 /// [`STOP`] after the group is gone, held by a process that left the group,
 /// is an error rather than a wait.
 pub(crate) fn run_to_end(
@@ -213,8 +214,17 @@ pub(crate) fn run_to_end(
         .try_wait()
         .map_err(|err| format!("waiting for {what}: {err}"))?;
     // Signals reach the group in real time, whatever clock times the run.
-    proc.stop(&System)?;
-    let status = status.ok_or_else(|| format!("timed out waiting for {what}"))?;
+    let stopped = proc.stop(&System);
+    // The deadline is the cause when the run timed out; a failed cleanup
+    // follows it rather than replacing it.
+    let Some(status) = status else {
+        let timed_out = format!("timed out waiting for {what}");
+        return Err(match stopped {
+            Ok(()) => timed_out,
+            Err(cleanup) => format!("{timed_out}; {cleanup}"),
+        });
+    };
+    stopped?;
     let closed = |text: &mpsc::Receiver<String>| {
         text.recv_timeout(STOP)
             .map_err(|_| format!("the output of {what} stayed open"))
