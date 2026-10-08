@@ -32,12 +32,13 @@ use serde_json::{Map, Value};
 
 use crate::connection::{Hub, lock, reject};
 use crate::first::First;
+use crate::retire::{AckOrder, Retire};
 
 /// The commands relayed on one session connection that the session has
-/// not acknowledged yet: each command id and its line without the
-/// `session_id`, so a `closing` answer can route it again. Shared by the
-/// relay entry and its thread.
-pub(crate) type Kept = Arc<Mutex<Vec<(String, Map<String, Value>)>>>;
+/// not acknowledged yet: each command id, its line without the
+/// `session_id`, and whether it was written to the socket, so a `closing`
+/// answer can route it again. Shared by the relay entry and its thread.
+pub(crate) type Kept = Arc<Mutex<Vec<(String, Map<String, Value>, bool)>>>;
 
 /// The hub-minted `subscribe` ids whose acknowledgements one relay thread
 /// drops: the replay it sent again, and any level transferred onto its
@@ -57,6 +58,10 @@ pub(crate) struct Relay {
     pub(crate) kept: Kept,
     pub(crate) replayed: Replayed,
     pub(crate) thread: Option<thread::JoinHandle<()>>,
+    /// Why the relay no longer takes writes, if it does not: a seam for
+    /// the acknowledgement order across a re-route, wired up by the fix.
+    #[allow(dead_code, reason = "red-commit seam: the fix commit reads this")]
+    pub(crate) retiring: Option<Retire>,
 }
 
 /// A connection's relays, the last epoch minted on it, and the last
@@ -76,6 +81,9 @@ pub(crate) struct Relays {
     /// Per session this connection started with `content`, the first
     /// prompt that waits for its `full` subscription (`crate::first`).
     pub(crate) awaiting: Vec<(String, Arc<First>)>,
+    /// One connection's commands per session in read order: a seam for the
+    /// acknowledgement order across a re-route, wired up by the fix.
+    pub(crate) order: Arc<AckOrder>,
 }
 
 impl Relays {
@@ -236,21 +244,32 @@ pub(crate) fn relay_command(
     };
     let mut stripped = object.clone();
     stripped.remove("session_id");
-    route(id, session, stripped, hub, writer, relays, false);
+    route(id, session, stripped, hub, writer, relays, None, false);
+    #[cfg(test)]
+    {
+        if let Some(after) = lock(&hub.after_relay).take() {
+            after();
+        }
+    }
 }
 
-/// Passes `stripped` to the session's open relay, or to a new connection:
-/// the socket that accepts, or a resumed session. With `exited`, the
-/// session's log ends in `fiber_exited` and a socket that accepts may be
-/// its exiting process, so the connection comes from
-/// [`crate::resume::resume_exited`].
-fn route(
+/// Passes `stripped` to the session's oldest relay newer than `from`
+/// (`None`: the oldest of all), or to a new connection: the socket that
+/// accepts, or a resumed session. With `exited`, the session's log ends
+/// in `fiber_exited` and a socket that accepts may be its exiting process,
+/// so the connection comes from [`crate::resume::resume_exited`].
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the command, its session, the hub, the client and the relays are one hand-off"
+)]
+pub(crate) fn route(
     id: &CommandId,
     session: &str,
     stripped: Map<String, Value>,
     hub: &Arc<Hub>,
     writer: &Arc<Mutex<UnixStream>>,
     relays: &Arc<Mutex<Relays>>,
+    from: Option<u64>,
     exited: bool,
 ) {
     let Some(bytes) = line_bytes(&stripped) else {
@@ -258,15 +277,13 @@ fn route(
     };
     let kept = {
         let mut held = lock(relays);
-        if let Some(at) = held
-            .entries
-            .iter()
-            .position(|entry| entry.session == session)
-        {
+        if let Some(at) = held.entries.iter().position(|entry| {
+            entry.session == session && from.is_none_or(|from| entry.epoch > from)
+        }) {
             // Kept before the write, so the relay thread finds it when the
             // session answers.
             let sent = held.entries.get(at).is_some_and(|entry| {
-                lock(&entry.kept).push((id.0.clone(), stripped.clone()));
+                lock(&entry.kept).push((id.0.clone(), stripped.clone(), true));
                 write_all(&entry.writer, &bytes).is_ok()
             });
             if sent {
@@ -285,12 +302,6 @@ fn route(
                 (thread, epoch)
             });
             drop(held);
-            #[cfg(test)]
-            {
-                if let Some(before) = lock(&hub.before_join).take() {
-                    before();
-                }
-            }
             if let Some((thread, epoch)) = old {
                 if let Some(thread) = thread {
                     match thread.join() {
@@ -364,7 +375,7 @@ pub(crate) fn attach(
     let kept: Kept = Arc::new(Mutex::new(
         command
             .as_ref()
-            .map(|(id, _, stripped)| (id.0.clone(), stripped.clone()))
+            .map(|(id, _, stripped)| (id.0.clone(), stripped.clone(), true))
             .into_iter()
             .collect(),
     ));
@@ -383,6 +394,7 @@ pub(crate) fn attach(
             return;
         }
     };
+    let order = lock(relays).order.clone();
     let mut held = lock(relays);
     let epoch = held.mint();
     // The thread may run before its entry is pushed: on session EOF it
@@ -397,6 +409,7 @@ pub(crate) fn attach(
             epoch,
             replayed: Arc::clone(&replayed),
             kept,
+            order: Arc::clone(&order),
         };
         move || relay(owned, &session, reader, &hub, &writer, &relays)
     });
@@ -410,6 +423,7 @@ pub(crate) fn attach(
             kept,
             replayed,
             thread: Some(thread),
+            retiring: None,
         });
     }
 }
@@ -421,6 +435,10 @@ struct RelayThread {
     epoch: u64,
     replayed: Replayed,
     kept: Kept,
+    /// The connection's acknowledgement queue: a seam for the
+    /// acknowledgement order across a re-route, wired up by the fix.
+    #[allow(dead_code, reason = "red-commit seam: the fix commit reads this")]
+    order: Arc<AckOrder>,
 }
 
 fn not_found(writer: &Arc<Mutex<UnixStream>>, hub: &Hub, id: &CommandId, session: &str) {
@@ -449,6 +467,7 @@ fn relay(
         epoch,
         replayed,
         kept,
+        ..
     } = owned;
     let mut read = BufReader::new(reader);
     let mut buf = Vec::new();
@@ -480,7 +499,16 @@ fn relay(
                     Some(Settled::Reroute(id, line)) => {
                         exiting = true;
                         lock(relays).finish(session, epoch);
-                        route(&CommandId(id), session, line, hub, writer, relays, true);
+                        route(
+                            &CommandId(id),
+                            session,
+                            line,
+                            hub,
+                            writer,
+                            relays,
+                            None,
+                            true,
+                        );
                         continue;
                     }
                     Some(Settled::Rewound(next)) => {
@@ -567,8 +595,8 @@ fn settle(line: &[u8], kept: &Kept, hub: &Hub, session: &str, exiting: bool) -> 
             return None;
         }
         let (id, verdict) = acknowledgement(line)?;
-        let at = kept.iter().position(|(kept, _)| *kept == id)?;
-        let (_, command) = kept.remove(at);
+        let at = kept.iter().position(|(kept, _, _)| *kept == id)?;
+        let (_, command, _) = kept.remove(at);
         ((id, command), verdict)
     };
     // The kept lock is released before the caller takes the relays lock:

@@ -655,6 +655,7 @@ fn follow_leaves_a_relay_already_holding_the_level_alone() {
             kept: crate::relay::Kept::default(),
             replayed: crate::relay::Replayed::default(),
             thread: None,
+            retiring: None,
         });
     }
     let (write, _) = UnixStream::pair().unwrap();
@@ -755,6 +756,7 @@ fn follow_transfers_the_kept_level_onto_an_unsubscribed_relay() {
             kept: crate::relay::Kept::default(),
             replayed: crate::relay::Replayed::default(),
             thread: None,
+            retiring: None,
         });
     }
     let (write, _) = UnixStream::pair().unwrap();
