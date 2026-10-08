@@ -372,6 +372,27 @@ fn no_selection_starts_over_the_view() {
 }
 
 #[test]
+fn the_view_opens_on_the_current_match_by_its_place() {
+    let mut app = turned(40, 10, &["needle one", "needle two", "needle three"]);
+    scan(&mut app, "needle");
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(count(&app), "3 of 3");
+    assert_eq!(app.find.current_index(), Some(2));
+    open(&mut app);
+    assert_eq!(cursor(&app), (2, 2));
+}
+
+#[test]
+fn a_zero_height_view_keeps_its_top_one_past_the_selection() {
+    // With no rows drawn, a selection already at the top moves the top
+    // one past it: the clamp as it stands.
+    let mut results = super::Results::default();
+    results.go(0, 3, 0);
+    assert_eq!((results.selected, results.top), (0, 1));
+}
+
+#[test]
 fn the_selected_entry_stays_on_its_occurrence_when_matches_appear_before_it() {
     let mut app = attached(40, 10);
     // The pads stream first, so completing them later replaces their
