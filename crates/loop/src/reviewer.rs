@@ -726,6 +726,9 @@ fn resolved(
 /// when no rule can match the call (`docs/permissions.md`, "What a rule
 /// matches").
 fn rule_offer(effects: &Effects) -> Option<RuleOffer> {
+    if effects.always_reviewed {
+        return None;
+    }
     let subject = effects.subject.as_ref()?;
     Some(RuleOffer {
         subject: subject.clone(),

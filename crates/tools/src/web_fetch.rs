@@ -140,6 +140,7 @@ impl Tool for WebFetch {
             },
             subject: Some(target::subject(&uri)),
             prefix: Some(target::prefix(&uri)),
+            always_reviewed: false,
         })
     }
 

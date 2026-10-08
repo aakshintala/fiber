@@ -320,3 +320,28 @@ fn the_system_prompt_carries_the_notes_after_the_shared_instructions() {
     let notes = "## Notes that hold everywhere\n\nOur org is acme.";
     assert_eq!(system_prompt(shared, notes), format!("{shared}\n\n{notes}"));
 }
+
+#[test]
+fn an_always_reviewed_call_offers_no_rule() {
+    use super::rule_offer;
+    use contract::shapes::{DeclaredEffects, Effect};
+    use contract::tool::Effects;
+    let plain = Effects {
+        declared: DeclaredEffects {
+            effects: vec![Effect::Executes],
+            reversible: false,
+            paths: None,
+        },
+        subject: Some("npm test --watch".into()),
+        prefix: Some("npm test".into()),
+        always_reviewed: false,
+    };
+    let offered = rule_offer(&plain).expect("a plain call offers its subject and prefix");
+    assert_eq!(offered.subject, "npm test --watch");
+    assert_eq!(offered.prefix, "npm test");
+    let flagged = Effects {
+        always_reviewed: true,
+        ..plain
+    };
+    assert!(rule_offer(&flagged).is_none());
+}

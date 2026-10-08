@@ -51,6 +51,7 @@ fn declared(
         },
         subject,
         prefix,
+        always_reviewed: false,
     }
 }
 

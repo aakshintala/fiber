@@ -972,6 +972,7 @@ impl contract::tool::Tool for HostedFake {
             },
             subject: Some(String::new()),
             prefix: None,
+            always_reviewed: false,
         })
     }
 

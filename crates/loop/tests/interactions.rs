@@ -88,6 +88,7 @@ impl Tool for Asks {
             },
             subject: Some(String::new()),
             prefix: None,
+            always_reviewed: false,
         })
     }
 
@@ -561,6 +562,7 @@ impl Tool for Answerable {
             },
             subject: Some(String::new()),
             prefix: None,
+            always_reviewed: false,
         })
     }
 

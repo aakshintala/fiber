@@ -63,6 +63,7 @@ impl Tool for WriteAgents {
             },
             subject: Some(String::new()),
             prefix: None,
+            always_reviewed: false,
         })
     }
 
@@ -128,6 +129,7 @@ impl Tool for WriteHome {
             },
             subject: Some(String::new()),
             prefix: None,
+            always_reviewed: false,
         })
     }
 
