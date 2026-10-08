@@ -203,6 +203,32 @@ fn a_bare_url_inside_a_markdown_label_keeps_the_markdown_destination() {
 }
 
 #[test]
+fn a_bare_url_wrapped_over_three_rows_opens_whole_from_each_row() {
+    let url = "http://example.com/aaaa-bbbb-cccc-dddd-eeee-ffff-gggg-hhhh";
+    let mut app = replied(24, 16, &format!("see {url} for more"));
+    app.set_opener(true);
+    let area = app.conversation_area();
+    let found = app.visible_links(area);
+    let entry = found
+        .iter()
+        .find(|link| link.url == url)
+        .unwrap_or_else(|| panic!("no wrapped bare link in {found:?}"));
+    // One link, one rect per row it covers: a click on any row opens
+    // the whole URL, not the row's fragment.
+    assert_eq!(entry.rects.len(), 3, "{entry:?}");
+    for rect in &entry.rects {
+        let (_, targets) = draw(&app);
+        let id = hit(&targets, rect.x, rect.y).expect("a target on the row");
+        assert_eq!(id, entry.id, "{rect:?}");
+        assert_eq!(
+            app.on_click(id),
+            Effect::OpenLink(url.to_owned()),
+            "{rect:?}"
+        );
+    }
+}
+
+#[test]
 fn a_click_on_a_markdown_link_opens_its_destination() {
     let mut app = replied(60, 12, "[docs](https://example.com/a)");
     app.set_opener(true);

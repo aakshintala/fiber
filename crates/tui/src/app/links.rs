@@ -145,12 +145,16 @@ impl App {
                 let to = line_end.min(end);
                 if from < to {
                     self.line_links(
-                        line, text, grow, from, to, y0, top, last, area, width, area_width,
-                        &mut found,
+                        text, from, to, y0, top, last, area, width, area_width, &mut found,
                     );
                 }
                 grow = line_end;
             }
+            // Bare URLs come from the page's logical text, so a URL
+            // markdown wrapped over rows stays one whole destination.
+            self.bare_links(
+                rows, texts, start, top, end, y0, last, area, area_width, &mut found,
+            );
         }
         // Consecutive occurrences with the same destination are the one
         // link wrapped over those rows.
@@ -181,18 +185,15 @@ impl App {
         out
     }
 
-    /// The links of one drawn `line` starting at wrapped row `grow`:
-    /// each markdown link's cells and each bare URL's, on the visible
-    /// sub-rows `from..to`.
+    /// The links of one drawn `line`: each markdown link's cells on the
+    /// visible sub-rows `from..to`.
     #[allow(
         clippy::too_many_arguments,
         reason = "a link's cells need its line, rows and area"
     )]
     fn line_links(
         &self,
-        line: &ratatui::text::Line<'static>,
         text: &crate::rows::RowText,
-        grow: usize,
         from: usize,
         to: usize,
         y0: u16,
@@ -233,68 +234,125 @@ impl App {
                 found.push((usize::from(y), x, url.clone(), Rect::new(x, y, w, 1)));
             }
         }
-        // Bare URLs: their bytes in the line's text, placed as drawn so a
-        // URL wrapped by the terminal maps onto each sub-row it covers.
-        // Cells a markdown link already covers keep its destination: the
-        // markdown entry above carries it (`docs/tui.md`, "Links").
-        let whole = line.to_string();
-        let bare = urls(&whole);
-        if bare.is_empty() {
-            return;
+    }
+
+    /// The bare URLs of one page's logical text: each whole URL, even one
+    /// markdown wrapped over rows, mapped onto every drawn row it covers,
+    /// less the cells a markdown link covers (`docs/tui.md`, "Links").
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "a link's cells need its rows and area"
+    )]
+    fn bare_links(
+        &self,
+        rows: &[crate::turn::Row],
+        texts: &[crate::rows::RowText],
+        start: usize,
+        top: usize,
+        end: usize,
+        y0: u16,
+        last: u16,
+        area: Rect,
+        area_width: u16,
+        found: &mut Vec<(usize, u16, String, Rect)>,
+    ) {
+        // The conversation row each page row's first drawn row holds.
+        let mut first: Vec<usize> = Vec::with_capacity(rows.len());
+        let mut at = start;
+        for (line, _) in rows {
+            first.push(at);
+            at = at.saturating_add(crate::view::rows(line.clone(), area_width));
         }
-        let placed = crate::cells::place(line, area_width);
-        for range in bare {
-            // The placed cells the URL covers, by sub-row, less the
-            // cells a markdown link covers.
-            let mut per_row: BTreeMap<u16, (u16, u16)> = BTreeMap::new();
-            for cell in &placed {
-                if cell.bytes.start < range.end
-                    && range.start < cell.bytes.end
-                    && !text.links.iter().any(|(link, _)| link.contains(&cell.col))
-                {
-                    let (sub, col) = (cell.row, cell.col);
-                    let end = cell.col.saturating_add(cell.width);
+        // The placed cells of each page row a URL touches, on demand.
+        let mut placed: Vec<Option<Vec<crate::cells::Placed>>> = vec![None; rows.len()];
+        for logical in crate::logical::logical(rows, texts) {
+            // The byte each logical char starts at.
+            let bytes: Vec<usize> = logical.text.char_indices().map(|(at, _)| at).collect();
+            for range in urls(&logical.text) {
+                // The URL's chars back on their drawn cells, by
+                // conversation row, less the cells a markdown link
+                // covers, so the markdown entry keeps them.
+                let mut per_row: BTreeMap<usize, (u16, u16)> = BTreeMap::new();
+                for (at, byte) in bytes.iter().enumerate() {
+                    let char_end = bytes
+                        .get(at.saturating_add(1))
+                        .copied()
+                        .unwrap_or(logical.text.len());
+                    if *byte < range.start || char_end > range.end {
+                        continue;
+                    }
+                    let Some((row_at, offset)) =
+                        logical.from.get(at).copied().flatten()
+                    else {
+                        continue;
+                    };
+                    if !placed.get(row_at).is_some_and(|slot| slot.is_some())
+                        && let Some((line, _)) = rows.get(row_at)
+                    {
+                        let cells = crate::cells::place(line, area_width);
+                        if let Some(slot) = placed.get_mut(row_at) {
+                            *slot = Some(cells);
+                        }
+                    }
+                    let Some(Some(cells)) = placed.get(row_at) else {
+                        continue;
+                    };
+                    let Some(cell) = cells
+                        .iter()
+                        .find(|cell| cell.bytes.start <= offset && offset < cell.bytes.end)
+                    else {
+                        continue;
+                    };
+                    if texts.get(row_at).is_some_and(|text| {
+                        text.links.iter().any(|(link, _)| link.contains(&cell.col))
+                    }) {
+                        continue;
+                    }
+                    let Some(base) = first.get(row_at).copied() else {
+                        continue;
+                    };
+                    let row = base.saturating_add(usize::from(cell.row));
+                    let end_col = cell.col.saturating_add(cell.width);
                     per_row
-                        .entry(sub)
-                        .and_modify(|(first, last)| {
-                            *first = (*first).min(col);
-                            *last = (*last).max(end);
+                        .entry(row)
+                        .and_modify(|(first_col, last_col)| {
+                            *first_col = (*first_col).min(cell.col);
+                            *last_col = (*last_col).max(end_col);
                         })
-                        .or_insert((col, end));
+                        .or_insert((cell.col, end_col));
                 }
-            }
-            // One entry per sub-row the URL's uncovered cells draw on.
-            for (sub, (first, last_col)) in per_row {
-                let row = grow.saturating_add(usize::from(sub));
-                if row < from || row >= to {
-                    continue;
+                // One entry per row the URL's uncovered cells draw on.
+                for (row, (first_col, last_col)) in per_row {
+                    if row < top || row >= end {
+                        continue;
+                    }
+                    let Some(y) = row
+                        .checked_sub(top)
+                        .and_then(|at| u16::try_from(at).ok())
+                        .map(|at| y0.saturating_add(at))
+                        .filter(|y| *y <= last)
+                    else {
+                        continue;
+                    };
+                    if last_col <= first_col {
+                        continue;
+                    }
+                    let x = area.x.saturating_add(first_col);
+                    let w = last_col
+                        .saturating_sub(first_col)
+                        .min(area.right().saturating_sub(x));
+                    if w == 0 {
+                        continue;
+                    }
+                    let url = logical.text.get(range.clone()).unwrap_or_default().to_owned();
+                    if url.is_empty() {
+                        continue;
+                    }
+                    // A bare URL is a link even when its destination would not
+                    // open alone; `follow_link` still checks it. Markdown
+                    // validity (`mailto` included) does not apply here.
+                    found.push((usize::from(y), x, url, Rect::new(x, y, w, 1)));
                 }
-                let Some(y) = row
-                    .checked_sub(top)
-                    .and_then(|at| u16::try_from(at).ok())
-                    .map(|at| y0.saturating_add(at))
-                    .filter(|y| *y <= last)
-                else {
-                    continue;
-                };
-                if last_col <= first {
-                    continue;
-                }
-                let x = area.x.saturating_add(first);
-                let w = last_col
-                    .saturating_sub(first)
-                    .min(area.right().saturating_sub(x));
-                if w == 0 {
-                    continue;
-                }
-                let url = whole.get(range.clone()).unwrap_or_default().to_owned();
-                if url.is_empty() {
-                    continue;
-                }
-                // A bare URL is a link even when its destination would not
-                // open alone; `follow_link` still checks it. Markdown
-                // validity (`mailto` included) does not apply here.
-                found.push((usize::from(y), x, url, Rect::new(x, y, w, 1)));
             }
         }
     }
