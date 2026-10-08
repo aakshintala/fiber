@@ -480,6 +480,13 @@ fn a_rejected_reply_does_not_move_the_idle_deadline() {
 
     assert_eq!(finish(&mut session, &finished), None);
     let lines = exit(&mut session, None);
+    assert_kinds(
+        &lines,
+        &[
+            OPENING,
+            &["tool_call_started", "interaction_requested", "fiber_exited"],
+        ],
+    );
     assert_eq!(
         of_kind(&lines, "fiber_exited")[0].payload["suspended_on"],
         request
@@ -498,14 +505,18 @@ fn waits_past_the_idle_delay(later: &'static str) {
     let tap = Tap::new(&session.log);
     let finished = start(&mut session);
     let request = request_id(&tap.wait_for("interaction_requested"));
-    clock.advance(IDLE * 2);
-    // A stale reply is answered from the step's wait, after the advance.
-    let stale = answer(&session, "r_nope", main_branch());
-    assert_eq!(stale.unwrap_err().code, ErrorCode::StaleRequest);
     assert!(
         clock.await_parked_unbounded(DEADLINE),
         "the step waits for the answer with no deadline"
     );
+    let mark = clock.advance_marked(IDLE * 2);
+    assert!(
+        clock.await_parked_since(&mark, None, DEADLINE),
+        "past the idle delay the step still waits with no deadline"
+    );
+    // A stale reply is answered from the step's wait, after the advance.
+    let stale = answer(&session, "r_nope", main_branch());
+    assert_eq!(stale.unwrap_err().code, ErrorCode::StaleRequest);
     still_running(&finished);
     no_resolution(&tap);
     assert_eq!(answer(&session, &request, main_branch()), Ok(None));
@@ -515,6 +526,19 @@ fn waits_past_the_idle_delay(later: &'static str) {
         Some(TurnOutcome::Completed)
     );
     let lines = session.lines();
+    // A call that fails its schema never starts: only `reads` writes the
+    // second `tool_call_started`.
+    let mut middle = vec!["tool_call_started"];
+    if later == "reads" {
+        middle.push("tool_call_started");
+    }
+    middle.extend([
+        "interaction_requested",
+        "interaction_resolved",
+        "tool_call_completed",
+        "tool_call_completed",
+    ]);
+    assert_kinds(&lines, &[OPENING_TWO, &middle, DONE]);
     let requested = of_kind(&lines, "tool_call_requested");
     let completed: Vec<_> = of_kind(&lines, "tool_call_completed")
         .iter()
@@ -549,7 +573,15 @@ fn the_idle_delay_counts_from_when_the_earlier_call_completes() {
     let tap = Tap::new(&session.log);
     let finished = start(&mut session);
     let request = request_id(&tap.wait_for("interaction_requested"));
-    clock.advance(IDLE);
+    assert!(
+        clock.await_parked_unbounded(DEADLINE),
+        "the step waits for the earlier call with no deadline"
+    );
+    let mark = clock.advance_marked(IDLE);
+    assert!(
+        clock.await_parked_since(&mark, None, DEADLINE),
+        "the advance leaves the step waiting with no deadline"
+    );
     gate.open();
     tap.wait_for("tool_call_completed");
     let at = clock.now() + IDLE;
@@ -607,6 +639,13 @@ fn a_running_job_keeps_a_pending_form_from_going_idle() {
 
     assert_eq!(finish(&mut session, &finished), None);
     let lines = exit(&mut session, None);
+    assert_kinds(
+        &lines,
+        &[
+            OPENING,
+            &["tool_call_started", "interaction_requested", "fiber_exited"],
+        ],
+    );
     assert_eq!(
         of_kind(&lines, "fiber_exited")[0].payload["suspended_on"],
         request
@@ -821,13 +860,17 @@ fn an_ask_that_does_not_suspend_keeps_the_session_past_the_idle_delay() {
     let finished = start(&mut session);
     let requested = tap.wait_for("interaction_requested");
     assert!(requested.payload.get("resumes").is_none());
-    clock.advance(IDLE * 2);
-    let stale = answer(&session, "r_nope", main_branch());
-    assert_eq!(stale.unwrap_err().code, ErrorCode::StaleRequest);
     assert!(
         clock.await_parked_unbounded(DEADLINE),
         "the step waits for the answer with no deadline"
     );
+    let mark = clock.advance_marked(IDLE * 2);
+    assert!(
+        clock.await_parked_since(&mark, None, DEADLINE),
+        "past the idle delay the step still waits with no deadline"
+    );
+    let stale = answer(&session, "r_nope", main_branch());
+    assert_eq!(stale.unwrap_err().code, ErrorCode::StaleRequest);
     still_running(&finished);
     no_resolution(&tap);
     let request = request_id(&requested);
@@ -835,6 +878,20 @@ fn an_ask_that_does_not_suspend_keeps_the_session_past_the_idle_delay() {
     assert_eq!(
         finish(&mut session, &finished),
         Some(TurnOutcome::Completed)
+    );
+    let lines = session.lines();
+    assert_kinds(
+        &lines,
+        &[
+            OPENING,
+            &[
+                "tool_call_started",
+                "interaction_requested",
+                "interaction_resolved",
+                "tool_call_completed",
+            ],
+            DONE,
+        ],
     );
 }
 
@@ -1140,6 +1197,10 @@ fn resumes_as_cut_short(edit: impl FnOnce(&Session, &Envelope) -> String) {
         Some(TurnOutcome::Completed)
     );
     let lines = session.lines();
+    assert_kinds(
+        &lines,
+        &[&["fiber_started", "preamble_built", "turn_started"], DONE],
+    );
     assert!(
         of_kind(&lines, "interaction_requested").is_empty(),
         "nothing is raised again"
