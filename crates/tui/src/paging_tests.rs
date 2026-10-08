@@ -241,8 +241,7 @@ fn whole(pages: &Pages, lines: &[Envelope]) -> Vec<Row> {
     }
     let mut out = Rows::default();
     pages.draw(0, &part, &mut out);
-    let out = out.into_parts().0;
-    out
+    out.into_parts().0
 }
 
 /// Every page's lines joined, loading each dropped page from `lines`, and

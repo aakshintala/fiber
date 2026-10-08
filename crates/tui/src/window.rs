@@ -178,14 +178,12 @@ type DrawData = (Vec<Row>, Vec<RowText>, FocusItems, TurnRanges);
 
 /// The lines shown from a row on: the first shown page's first row, each
 /// line with its rows and click target, and the turn ranges in those lines.
-/// A page not loaded is one blank line of its rows. `texts` holds one per
-/// line: what each adds to its logical line, plain for a blank one.
+/// A page not loaded is one blank line of its rows.
 #[derive(Debug)]
 pub(crate) struct Shown {
     pub(crate) first: usize,
     pub(crate) lines: Vec<(Line<'static>, usize, Option<Target>)>,
     pub(crate) turns: TurnRanges,
-    pub(crate) texts: Vec<RowText>,
 }
 
 /// A focus stop's row, height and stable id across paging.
@@ -714,7 +712,6 @@ impl Pages {
         let mut first = None;
         let mut lines = Vec::new();
         let mut turns = Vec::new();
-        let mut texts = Vec::new();
         let mut start = 0usize;
         for (at, page) in self.index.pages().iter().enumerate() {
             if start >= end {
@@ -725,9 +722,8 @@ impl Pages {
                 first.get_or_insert(start);
                 match self.part(at) {
                     Some(part) => {
-                        let (rows, page_texts, _, page_turns) = self.draw_data(at, part);
+                        let (rows, _, _, page_turns) = self.draw_data(at, part);
                         let base = lines.len();
-                        texts.extend(page_texts);
                         lines.extend(rows.into_iter().map(|(line, target)| {
                             let count = crate::view::rows(line.clone(), self.width);
                             (line, count, target)
@@ -738,10 +734,7 @@ impl Pages {
                                 .map(|(turn, range)| (turn, base + range.start..base + range.end)),
                         );
                     }
-                    None => {
-                        lines.push((Line::default(), page.rows, None));
-                        texts.push(RowText::plain());
-                    }
+                    None => lines.push((Line::default(), page.rows, None)),
                 }
             }
             start = next;
@@ -750,7 +743,6 @@ impl Pages {
             first: first.unwrap_or(start),
             lines,
             turns,
-            texts,
         }
     }
 

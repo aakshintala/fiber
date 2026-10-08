@@ -14,6 +14,19 @@ use super::Target;
 use crate::view::Scroll;
 use crate::window::Pages;
 
+/// One line drawing a row in the view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct OnScreen {
+    /// Its page.
+    pub(crate) page: usize,
+    /// Its index among the page's lines.
+    pub(crate) line: usize,
+    /// Its first conversation row.
+    pub(crate) row: usize,
+    /// How many rows it draws.
+    pub(crate) rows: usize,
+}
+
 /// The screen's size, the scroll position and the resident pages. The top
 /// row is never past the bottom once settled, and the size is at least
 /// 1x1.
@@ -43,9 +56,12 @@ impl Screen {
     }
 
     /// Wraps the pages at `width` columns; a new width re-counts every
-    /// page.
-    pub(super) fn wrap_at(&mut self, width: u16) {
-        self.pages.set_width(width.max(1));
+    /// page. Returns whether the width changed.
+    pub(super) fn wrap_at(&mut self, width: u16) -> bool {
+        let width = width.max(1);
+        let changed = width != self.pages.wrap_width();
+        self.pages.set_width(width);
+        changed
     }
 
     /// The screen's columns.
@@ -163,6 +179,51 @@ impl Screen {
             self.scroll.top = Some(self.view_top(height));
         }
         self.pages.trim(self.view_top(height), height);
+    }
+
+    /// The lines drawing a row in the view `height` rows tall, top to
+    /// bottom: each one's page, its index among the page's lines, its first
+    /// conversation row and its row count. A dropped page is one line of
+    /// its rows, as it draws blank.
+    pub(super) fn on_screen(&self, height: usize) -> Vec<OnScreen> {
+        let top = self.view_top(height);
+        let end = top.saturating_add(height);
+        let width = self.pages.wrap_width();
+        let mut out = Vec::new();
+        let mut start = 0usize;
+        for (page, held) in self.pages.index().pages().iter().enumerate() {
+            if start >= end {
+                break;
+            }
+            let next = start.saturating_add(held.rows);
+            if next > top {
+                match self.pages.page_text(page) {
+                    Some((rows, _)) => {
+                        let mut row = start;
+                        for (line, (drawn, _)) in rows.into_iter().enumerate() {
+                            let count = crate::view::rows(drawn, width);
+                            if row.saturating_add(count) > top && row < end {
+                                out.push(OnScreen {
+                                    page,
+                                    line,
+                                    row,
+                                    rows: count,
+                                });
+                            }
+                            row = row.saturating_add(count);
+                        }
+                    }
+                    None => out.push(OnScreen {
+                        page,
+                        line: 0,
+                        row: start,
+                        rows: held.rows,
+                    }),
+                }
+            }
+            start = next;
+        }
+        out
     }
 
     /// The top row when following: the last screenful.

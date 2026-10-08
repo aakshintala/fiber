@@ -206,10 +206,18 @@ impl<B: Backend> Loop<B> {
                             if mouse.kind == MouseKind::Press(Button::Left) {
                                 self.app.clear_copied();
                             }
+                            let selected = self.app.on_select(&mouse, self.screen.targets());
                             let clicked =
                                 self.pointer
                                     .on_mouse(&mouse, self.screen.targets(), self.hover);
-                            clicked.map_or(Effect::None, |target| self.app.on_click(target))
+                            // A click's effect, else the selection's.
+                            let effect =
+                                clicked.map_or(Effect::None, |target| self.app.on_click(target));
+                            if effect == Effect::None {
+                                selected
+                            } else {
+                                effect
+                            }
                         }
                         Event::Reply(Reply::KittyFlags(_)) => {
                             self.kitty();
@@ -289,6 +297,10 @@ impl<B: Backend> Loop<B> {
             self.search = None;
         }
         self.page_in(rx);
+        // A selection's copy waiting on dropped pages runs once they load.
+        if let Some(text) = self.app.take_copy() {
+            clipboard::copy(self.tty.as_ref(), self.copy_command.as_deref(), text);
+        }
         if self.screen.draw(&mut self.app, self.pointer.at).is_err() {
             return Some(1);
         }

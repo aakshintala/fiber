@@ -11,11 +11,13 @@ use crate::turn::Row;
 
 /// One logical line: its text, and for each of its chars the row it came
 /// from, by index in the page's rows, and its byte offset in that row's
-/// `line.to_string()`; `None` for the space a soft wrap dropped.
+/// `line.to_string()`; `None` for the space a soft wrap dropped. `row` is
+/// the row it starts on, so a blank line, which has no char, has a place.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct Logical {
     pub(crate) text: String,
     pub(crate) from: Vec<Option<(usize, usize)>>,
+    pub(crate) row: usize,
 }
 
 /// The logical lines `rows` draw, each row's text joined to the line
@@ -36,7 +38,10 @@ pub(crate) fn logical(rows: &[Row], texts: &[RowText]) -> Vec<Logical> {
                 current
             }
             (Join::Break, _) | (Join::Wrap | Join::WrapSpace, None) => {
-                out.push(Logical::default());
+                out.push(Logical {
+                    row: at,
+                    ..Logical::default()
+                });
                 let Some(current) = out.last_mut() else {
                     continue;
                 };

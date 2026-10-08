@@ -56,7 +56,7 @@ pub(super) fn draw(app: &App, layout: &Layout, buf: &mut Buffer) -> Rect {
 }
 
 /// The rect the conversation draws in: the column below its header row.
-pub(super) fn body(layout: &Layout) -> Rect {
+pub(crate) fn body(layout: &Layout) -> Rect {
     let column = layout.column;
     Rect {
         y: column.y.saturating_add(1),

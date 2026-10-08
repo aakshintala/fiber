@@ -14,9 +14,10 @@ use crate::app::App;
 use crate::markdown::{Role, style};
 use crate::mouse::{self, Target, TargetId};
 
-mod chrome;
+pub(crate) mod chrome;
 #[path = "home_view.rs"]
 mod home;
+mod marks;
 mod offer;
 
 pub(crate) use home::max_question_scroll;
@@ -181,7 +182,10 @@ pub(crate) fn render(
             // The repository offer swaps in for the conversation.
             match app.offer_rows(conversation.width) {
                 Some((rows, top)) => offer::render(&rows, top, conversation, buf, &mut targets),
-                None => conversation_rows(app, conversation, buf, &mut targets),
+                None => {
+                    conversation_rows(app, conversation, buf, &mut targets);
+                    marks::draw(app, conversation, buf);
+                }
             }
             notices(app, conversation, buf, &mut targets);
         }
@@ -283,6 +287,8 @@ fn notices(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
         overlay_cross(buf, area, targets);
         return;
     }
+    // "Copied" takes the corner's first row while it shows.
+    y = y.saturating_add(u16::from(app.copied()));
     for notice in app.notices() {
         let top = y;
         let mut wide = 0;
@@ -378,7 +384,6 @@ fn conversation_rows(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<
         first,
         lines,
         turns,
-        ..
     } = app.shown(top, height);
     let mut start = first;
     let overlay = app.has_new() && area.height > 0;

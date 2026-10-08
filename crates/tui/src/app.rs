@@ -47,6 +47,7 @@ mod home;
 mod mouse;
 mod offer;
 mod screen;
+mod select;
 
 use screen::Screen;
 
@@ -210,6 +211,9 @@ pub(crate) struct App {
     regions: crate::focus::Regions,
     /// What the person chose to show: the panel's hide.
     chrome: chrome::Chrome,
+    /// The drag selecting conversation text, and a copy waiting on dropped
+    /// pages (`docs/tui.md`, "Selection and copy").
+    select: select::Selection,
 }
 
 impl App {
@@ -239,6 +243,7 @@ impl App {
             stops: Vec::new(),
             regions: crate::focus::Regions::default(),
             chrome: chrome::Chrome::default(),
+            select: select::Selection::default(),
         }
     }
 
@@ -274,6 +279,9 @@ impl App {
             return effect;
         }
         if let Some(effect) = self.history_key(&key) {
+            return effect;
+        }
+        if let Some(effect) = self.select_key(&key) {
             return effect;
         }
         if let Some(effect) = self.focus_key(&key) {
@@ -355,6 +363,7 @@ impl App {
             self.link = Link::Down;
             self.notices.push("Connection lost.".to_owned());
         }
+        self.abandon_copy();
         self.settle();
     }
 
@@ -483,9 +492,11 @@ impl App {
             .collect()
     }
 
-    /// Opens or closes what `target` names.
+    /// Opens or closes what `target` names. The rows move, so a selection
+    /// clears.
     pub(crate) fn open(&mut self, target: Target) {
         if self.screen.open(target) {
+            self.clear_selection();
             self.settle();
         }
     }
@@ -535,6 +546,7 @@ impl App {
     /// them all. Groups made later start the same way.
     fn toggle_ledgers(&mut self) {
         self.screen.pages_mut().toggle_ledgers();
+        self.clear_selection();
         self.settle();
     }
 
