@@ -24,6 +24,7 @@ fn a_stale_relay_never_overwrites_a_reconnects_subscription() {
             epoch,
             writer,
             kept: Kept::default(),
+            thread: None,
         }
     }
     let line = |id: &str, level: &str| {
@@ -65,6 +66,7 @@ fn a_stale_relay_never_drops_a_reconnect_to_the_same_session() {
             epoch,
             writer,
             kept: Kept::default(),
+            thread: None,
         }
     }
     let sid = "s_0123456789abcdef";
@@ -94,6 +96,7 @@ fn relay_slots_drop_only_their_own_entry() {
             epoch,
             writer,
             kept: Kept::default(),
+            thread: None,
         }
     }
     let entries = [
@@ -117,6 +120,7 @@ fn an_accepted_subscribe_replaces_the_kept_one() {
             epoch,
             writer,
             kept: Kept::default(),
+            thread: None,
         }
     }
     let line = |id: &str, command: &str| {
@@ -173,6 +177,7 @@ fn an_accepted_command_that_is_not_subscribe_changes_nothing() {
             epoch,
             writer,
             kept: Kept::default(),
+            thread: None,
         }
     });
     relays.accepted("s_aaaaaaaaaaaaaaaa", epoch, line("c_1", "prompt"));
@@ -347,4 +352,88 @@ fn a_rejected_subscribe_settles_to_nothing() {
     )]));
     assert!(settle(&rejected("c_2", "closing"), &kept, &hub, sid, false).is_none());
     assert!(kept.lock().unwrap().is_empty(), "the rejection is consumed");
+}
+
+#[test]
+fn a_reconnect_proceeds_without_a_thread_or_after_a_panic() {
+    use std::io::{BufRead, BufReader};
+    use std::net::Shutdown;
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+    const DEADLINE: Duration = Duration::from_secs(10);
+    const SID: &str = "s_0123456789abcdef";
+    for panics in [false, true] {
+        let held = fakes::TempDir::new("rp");
+        let dir = held.path().join("h");
+        std::fs::create_dir_all(&dir).unwrap();
+        let workspace = dir.join("w");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let log_dir = dir.join("projects").join("-p").join("sessions").join(SID);
+        std::fs::create_dir_all(&log_dir).unwrap();
+        std::fs::write(
+            log_dir.join("events.jsonl"),
+            format!(
+                "{{\"kind\":\"session_started\",\"seq\":0,\"session_id\":\"{SID}\",\"payload\":{{\"workspace\":\"{}\"}}}}\n{{}}\n",
+                workspace.display()
+            ),
+        )
+        .unwrap();
+        let clock = fakes::clock::FakeClock::new();
+        let timed: Arc<dyn contract::clock::Clock> = clock;
+        let hub = Arc::new(crate::connection::Hub::new(
+            &dir,
+            "0.0.0",
+            Arc::new(crate::fake::FakeStarter::bind_and_hold(&dir)),
+            Arc::clone(&timed),
+            crate::diag::Diag::open(&dir, timed),
+        ));
+        let relays: Arc<Mutex<Relays>> = Arc::new(Mutex::new(Relays::default()));
+        let epoch = crate::connection::lock(&relays).mint();
+        let (writer, _peer) = UnixStream::pair().unwrap();
+        writer.shutdown(Shutdown::Both).unwrap_or(());
+        let thread = if panics {
+            Some(
+                std::thread::Builder::new()
+                    .spawn(|| panic!("the old relay thread panicked"))
+                    .unwrap(),
+            )
+        } else {
+            None
+        };
+        crate::connection::lock(&relays).entries.push(Relay {
+            session: SID.to_owned(),
+            epoch,
+            writer,
+            kept: Kept::default(),
+            thread,
+        });
+        let (client_write, client_read) = UnixStream::pair().unwrap();
+        client_read.set_read_timeout(Some(DEADLINE)).unwrap();
+        let client_writer: Arc<Mutex<UnixStream>> = Arc::new(Mutex::new(client_write));
+        let mut stripped = serde_json::Map::new();
+        stripped.insert("id".to_owned(), Value::String("c_1".to_owned()));
+        stripped.insert("command".to_owned(), Value::String("reply".to_owned()));
+        stripped.insert("args".to_owned(), Value::Object(serde_json::Map::new()));
+        route(
+            &contract::CommandId("c_1".to_owned()),
+            SID,
+            stripped,
+            &hub,
+            &client_writer,
+            &relays,
+            false,
+        );
+        let mut read = BufReader::new(client_read);
+        let mut text = String::new();
+        read.read_line(&mut text)
+            .expect("the resumed session acknowledges the command");
+        let line: Value = serde_json::from_str(text.trim_end()).unwrap();
+        assert_eq!(line["kind"], "command_accepted", "{line}");
+        assert_eq!(line["payload"]["command_id"], "c_1", "{line}");
+        assert_eq!(
+            crate::connection::lock(&relays).entries.len(),
+            1,
+            "the dead entry is gone; only the reconnect's remains"
+        );
+    }
 }
