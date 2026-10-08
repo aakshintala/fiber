@@ -5,14 +5,13 @@
 //! refuses it as headless when no person can answer), finishes the turn,
 //! and then runs the prompt as the next turn.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 
 use contract::events::{
-    DecidedBy, Decision, Event, Grant, JobCompleted, Outcome, ToolCallRequested, TurnCompleted,
-    TurnOutcome,
+    DecidedBy, Decision, Event, Grant, JobCompleted, ToolCallRequested, TurnCompleted, TurnOutcome,
 };
 use contract::inbox::Delivery;
 use contract::provider::Provider;
@@ -26,7 +25,7 @@ use crate::cancel::Commit;
 use crate::completion::resolved;
 use crate::handoff::Carry;
 use crate::retry::Retry;
-use crate::reviewer::{BlockLimits, NO_MODEL_MESSAGE, Reviewed, render_reviewed};
+use crate::reviewer::{BlockLimits, NO_MODEL_MESSAGE, Reviewed};
 use crate::suspend::Pending;
 use crate::{Error, Loop, Model, Permissions, Step};
 
@@ -34,19 +33,24 @@ use crate::{Error, Loop, Model, Permissions, Step};
 /// answer (`docs/events.md`, `permission_resolved`).
 const NOBODY_TO_ANSWER: &str = "The session was resumed with nobody to answer.";
 
-/// What a resume folds back in one streaming pass over the log: the
-/// session, the workspace the first `session_started` recorded, the model
-/// the last `usage_recorded` names, if any, and the session-wide state a
-/// resumed loop restores. The pass also finds the window a resume reads:
-/// the lines from the last completed handoff on (`docs/handoff.md`,
-/// "Resume").
+/// What a resume folds back over the session's chain of logs, root
+/// first (`docs/events.md`, "Rewind"): the session, the root the cache
+/// keys are built from, the workspace the own log's first
+/// `session_started` recorded, the model the last `usage_recorded` names,
+/// if any, and the session-wide state a resumed loop restores. The pass
+/// also finds the window a resume reads: the lines from the last completed
+/// handoff on (`docs/handoff.md`, "Resume").
 pub struct Resumed {
-    /// The session's id, from the first `session_started` line: the cache
-    /// keys are built from it (`docs/prompt-cache.md`, "Rules for other
-    /// areas").
+    /// The own session's id, from its directory name: the diagnostic log
+    /// and the reviewer key are built from it (`docs/prompt-cache.md`,
+    /// "Rules for other areas").
     pub session: String,
+    /// The root session's id, from its directory name: the cache keys are
+    /// built from it (`docs/prompt-cache.md`, "Cache markers and keys").
+    pub root: String,
     /// The first `session_started`'s workspace: a resumed session keeps it,
     /// wherever the resume runs (`docs/state.md`, "Sessions and resume").
+    /// The own log's, when the session continues another.
     pub workspace: String,
     /// The model of the last call recorded, or of the last `model_changed`
     /// when it came later; a late cost's second record of a call is not a
@@ -62,12 +66,14 @@ pub struct Resumed {
     /// treats it as its own choice (`docs/model-routing.md`, "Thinking").
     /// `None` when the log holds none.
     pub thinking: Option<String>,
-    /// The `seq` the window starts at: the latest `turn_started` of the
-    /// latest completed handoff's turn, before that handoff; 0 with no
-    /// completed handoff, or none of its turn's `turn_started` lines.
-    pub(crate) window: u64,
-    /// How many lines the pass read: the window ends there, before any line
-    /// written after the pass.
+    /// The window's start, as a position in the chain: the segment and the
+    /// `seq` the window starts at: the latest `turn_started` of the
+    /// latest completed handoff's turn, before that handoff; the chain's
+    /// start with no completed handoff, or none of its turn's
+    /// `turn_started` lines.
+    pub(crate) window: (usize, u64),
+    /// How many lines the own log holds: the window ends there, before any
+    /// line written after the pass.
     pub(crate) end: u64,
     /// The render state at the window start that the window's own lines do
     /// not rebuild: the jobs running and the session log's path.
@@ -87,147 +93,15 @@ pub struct Resumed {
     pub(crate) offers: crate::offer::Folded,
 }
 
-/// The kinds the pass reads a payload of. Every other line's envelope is
-/// read and its payload never parsed.
-const FOLDED: &[&str] = &[
-    "session_started",
-    "usage_recorded",
-    "preamble_built",
-    "model_changed",
-    "permission_resolved",
-    "turn_started",
-    "steering_applied",
-    "tool_call_requested",
-    "job_started",
-    "job_completed",
-    "rewound",
-    "opening_message",
-    "handoff_completed",
-    "reviewer_kept",
-    "repository_code_offered",
-    "repository_code_resolved",
-];
-
-/// Folds the log in the session directory `dir` in one pass, one line at a
-/// time, holding no parsed vector of it (`docs/events.md`, "Resume"): the
-/// session, the workspace, the model, the credential label, the
-/// session-wide state, and the window a resume reads. A log with no
-/// `session_started` is corrupt, as is a line that is not an envelope or a
-/// folded line whose payload does not read as its kind.
+/// Folds the log in the session directory `dir` over its chain, root
+/// first (`docs/events.md`, "Rewind"): the session, the root, the
+/// workspace, the model, the credential label, the session-wide state,
+/// and the window a resume reads. A log with no `session_started` is
+/// corrupt, as is a line that is not an envelope or a folded line whose
+/// payload does not read as its kind.
 pub fn resumed(dir: &Path) -> Result<Resumed, Error> {
-    let mut first: Option<(String, String)> = None;
-    let mut model = None;
-    let mut credential = None;
-    let mut thinking = None;
-    let mut ledger = crate::usage::Ledger::default();
-    let mut grants = Vec::new();
-    let mut session_blocks = 0;
-    // The reviewer's input follows the session's handoffs
-    // (`docs/permissions.md`, "At a handoff").
-    let mut reviewed = Vec::new();
-    let mut orphans = crate::jobs::Orphans::default();
-    let mut offers = crate::offer::Folded::default();
-    // The jobs running and the session log's path as of the line read.
-    let mut running = Carry::default();
-    // Each turn's latest `turn_started` since the last completed handoff,
-    // with the state at it: a later handoff names one of them.
-    let mut starts: HashMap<TurnId, (u64, Carry)> = HashMap::new();
-    let mut window = (0, Carry::default());
-    let mut end = 0;
-    for line in log::lines(dir)? {
-        let line = line?;
-        end += 1;
-        if !line.is_durable() || !FOLDED.contains(&line.kind.as_str()) {
-            continue;
-        }
-        let Some(event) = Event::from_envelope(&line).map_err(Error::Unreadable)? else {
-            continue;
-        };
-        render_reviewed(&mut reviewed, &event, line.action_id.as_ref(), line.seq);
-        orphans.fold(&event);
-        offers.fold(&event);
-        running.fold_jobs(&event);
-        if let Event::SessionStarted(started) = &event
-            && first.is_none()
-        {
-            first = Some((line.session_id.0.clone(), started.workspace.clone()));
-        } else if let Event::UsageRecorded(recorded) = &event {
-            // A correction keeps the model the call was first recorded at,
-            // which may be an earlier model than the latest one.
-            if !ledger.record(recorded) {
-                model = Some(recorded.model.clone());
-            }
-        } else if let Event::PreambleBuilt(built) = &event {
-            credential.clone_from(&built.credential);
-        } else if let Event::ModelChanged(changed) = &event {
-            model = Some(changed.after.model.clone());
-            credential = changed.after.credential.clone();
-            thinking = changed.after.thinking.clone();
-        } else if let Event::PermissionResolved(resolved) = &event {
-            if let Some(grant) = &resolved.grant {
-                grants.push(grant.clone());
-            }
-            // A model's block, a reviewer failure and a denial with no
-            // reviewer set up each count, as they do live. The
-            // spending-budget denial is `decided_by: budget` and does not.
-            // debt: undercounts session blocks whose escalation a person
-            // answered or a cancel ended; fixed when the log records blocks.
-            if resolved.decision == Decision::Deny
-                && matches!(
-                    resolved.decided_by,
-                    DecidedBy::Reviewer | DecidedBy::NoReviewer
-                )
-            {
-                session_blocks += 1;
-            }
-        } else if let Event::OpeningMessage(message) = &event {
-            running
-                .session_log
-                .clone_from(&message.environment.session_log);
-        } else if let Event::TurnStarted(_) = &event {
-            if let (Some(turn), Some(seq)) = (&line.turn_id, line.seq) {
-                let state = Carry {
-                    jobs: running.jobs.clone(),
-                    session_log: running.session_log.clone(),
-                    ..Carry::default()
-                };
-                starts.insert(turn.clone(), (seq.0, state));
-            }
-        } else if let Event::HandoffCompleted(done) = &event
-            && done.outcome == Outcome::Completed
-        {
-            let turn = line.turn_id.as_ref();
-            window = turn
-                .and_then(|turn| starts.get(turn))
-                .cloned()
-                .unwrap_or_default();
-            // Only this turn can complete another handoff before its
-            // next `turn_started`.
-            starts.retain(|started, _| Some(started) == turn);
-        }
-    }
-    let Some((session, workspace)) = first else {
-        return Err(Error::NoSessionStarted);
-    };
-    let (window, seed) = window;
-    Ok(Resumed {
-        session,
-        workspace,
-        model,
-        credential,
-        thinking,
-        window,
-        end,
-        seed,
-        ledger,
-        grants,
-        session_blocks,
-        reviewed,
-        orphans: orphans.finish(),
-        offers,
-    })
+    crate::history::fold(&log::history(dir)?)
 }
-
 /// A turn cut short on a pending approval or question: what the finishing
 /// turn writes back under the same turn id (`docs/invocation.md`,
 /// "Lifecycle").
@@ -336,7 +210,7 @@ pub(crate) fn suspended(lines: &[Envelope]) -> Result<Option<Suspended>, Error> 
 impl Loop {
     /// Resumes the session `resumed` folded on `log`, which already holds
     /// the lock: the conversation is rebuilt from the window `resumed`
-    /// found, with the fixed results for the calls a crash left without
+    /// found, across the chain it folds, with the fixed results for the calls a crash left without
     /// one, and the folds a new loop builds from nothing are restored. The
     /// window is the only part of the log read here, up to the line count
     /// the pass saw, so lines written since (`fiber_started` and the
@@ -360,6 +234,7 @@ impl Loop {
     ) -> Result<Self, Error> {
         let Resumed {
             session,
+            root,
             window,
             end,
             seed,
@@ -372,10 +247,7 @@ impl Loop {
             offers,
             ..
         } = resumed;
-        let lines = log.range(
-            window,
-            usize::try_from(end.saturating_sub(window)).unwrap_or(usize::MAX),
-        )?;
+        let lines = crate::history::read_window(&log, window, end)?;
         // The suspended turn, if any: its batch stays open, so the rebuild
         // writes no fixed result for it; the finishing turn completes it.
         let halted = suspended(&lines)?;
@@ -440,11 +312,11 @@ impl Loop {
             preamble: None,
             inbox,
             cancel: std::sync::Arc::new(crate::TurnCancel::default()),
-            // The session's own id, as `Loop::start` sets it: no parent or
-            // fork exists yet (`docs/prompt-cache.md`, "Rules for other
-            // areas").
+            // The root session's id: every session on a rewind chain
+            // shares the root's cache key (`docs/prompt-cache.md`, "Cache
+            // markers and keys").
             reviewer_key: format!("{session}:reviewer"),
-            cache_key: session,
+            cache_key: root,
             queued: VecDeque::new(),
             closing: false,
             suspended: halted,

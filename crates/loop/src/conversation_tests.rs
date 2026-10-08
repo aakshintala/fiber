@@ -1119,7 +1119,7 @@ mod window {
         let folded = resumed(&session.dir()).unwrap();
         let all = session.lines();
         assert_eq!(folded.end, u64::try_from(all.len()).unwrap());
-        let start = usize::try_from(folded.window).unwrap();
+        let start = usize::try_from(folded.window.1).unwrap();
         let window = &all[start..];
 
         let whole_halt = suspended(&all).unwrap();
@@ -1163,7 +1163,7 @@ mod window {
 
         let folded = same_as_whole(&session);
 
-        assert_eq!(folded.window, 0);
+        assert_eq!(folded.window, (0, 0));
         assert_eq!(folded.session, "s_1");
         assert_eq!(folded.workspace, "/w");
         assert_eq!(folded.model.as_deref(), Some("fake/second"));
@@ -1185,7 +1185,7 @@ mod window {
 
         let folded = same_as_whole(&session);
 
-        assert_eq!(folded.window, start);
+        assert_eq!(folded.window, (0, start));
         // The jobs running at the window start, and the path before it.
         assert_eq!(
             folded.seed.jobs,
@@ -1233,7 +1233,7 @@ mod window {
         handoff(&session, "t_2", "a_note", Outcome::Completed);
         session.write(&opening("new-log"), Some("t_2"), None);
 
-        assert_eq!(same_as_whole(&session).window, start);
+        assert_eq!(same_as_whole(&session).window, (0, start));
     }
 
     #[test]
@@ -1250,7 +1250,7 @@ mod window {
         session.write(&handoff_started(), Some("t_4"), None);
         session.write(&reply(), Some("t_4"), Some("a_note3"));
 
-        assert_eq!(same_as_whole(&session).window, start);
+        assert_eq!(same_as_whole(&session).window, (0, start));
     }
 
     #[test]
@@ -1260,7 +1260,7 @@ mod window {
         session.write(&turn("two"), Some("t_2"), None);
         handoff(&session, "t_2", "a_note", Outcome::Failed);
 
-        assert_eq!(same_as_whole(&session).window, 0);
+        assert_eq!(same_as_whole(&session).window, (0, 0));
     }
 
     #[test]
@@ -1277,7 +1277,7 @@ mod window {
 
         let folded = same_as_whole(&session);
 
-        assert_eq!(folded.window, start);
+        assert_eq!(folded.window, (0, start));
         assert_eq!(folded.seed.session_log, "mid-log");
         assert_eq!(folded.seed.jobs.len(), 3);
     }
@@ -1292,7 +1292,7 @@ mod window {
         handoff(&session, "t_2", "a_note2", Outcome::Completed);
         session.write(&opening("new-log"), Some("t_2"), None);
 
-        assert_eq!(same_as_whole(&session).window, start);
+        assert_eq!(same_as_whole(&session).window, (0, start));
     }
 
     #[test]
@@ -1305,7 +1305,7 @@ mod window {
         handoff(&session, "t_2", "a_note", Outcome::Completed);
         session.write(&opening("new-log"), Some("t_2"), None);
 
-        assert_eq!(same_as_whole(&session).window, start);
+        assert_eq!(same_as_whole(&session).window, (0, start));
     }
 
     #[test]
@@ -1318,7 +1318,7 @@ mod window {
         handoff(&session, "t_2", "a_note", Outcome::Completed);
         session.write(&opening("new-log"), Some("t_2"), None);
 
-        assert_eq!(same_as_whole(&session).window, start);
+        assert_eq!(same_as_whole(&session).window, (0, start));
     }
 
     #[test]
@@ -1330,7 +1330,7 @@ mod window {
 
         let folded = same_as_whole(&session);
 
-        assert_eq!(folded.window, 0);
+        assert_eq!(folded.window, (0, 0));
         assert_eq!(folded.seed, Carry::default());
     }
 
@@ -1356,7 +1356,7 @@ mod window {
 
         let folded = same_as_whole(&session);
 
-        assert_eq!(folded.window, start);
+        assert_eq!(folded.window, (0, start));
         assert_eq!(folded.grants.len(), 2);
     }
 
@@ -1462,7 +1462,7 @@ mod window {
 
         let folded = resumed(&after.dir()).unwrap();
 
-        assert_eq!(folded.window, start);
+        assert_eq!(folded.window, (0, start));
         assert!(start > u64::try_from(bad).unwrap());
     }
 
