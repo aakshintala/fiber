@@ -109,14 +109,15 @@ pub(crate) fn signal(pgid: u32, signal: Signal) -> bool {
     true
 }
 
-/// Reaps the leader, only under the list's lock, after `waitid` with
-/// `NOWAIT` saw it exit: the reap cannot race a signal to a retired group.
+/// Reaps the leader with `try_wait`, only under the list's lock: the reap
+/// cannot race a signal to a retired group. Called on every wake, so a
+/// leader still running is left as it is and gives `None`.
 /// An empty group retires in the same critical section; a group with a
 /// surviving member gets SIGKILL and stays listed until it is empty.
 /// Returns the leader's status, when it was reaped here.
 pub(crate) fn reap_locked(child: &mut Child, pgid: u32) -> Option<ExitStatus> {
     let mut live = live();
-    // Non-blocking now: `waitid` already saw the exit.
+    // Non-blocking: `None` while the leader still runs.
     let status = child.try_wait().ok().flatten();
     if !live.contains(&pgid) {
         return status;
