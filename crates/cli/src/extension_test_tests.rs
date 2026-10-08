@@ -690,8 +690,8 @@ $SIG{TERM} = sub {
     if ($terms == 1) {
         emit($$);
     } else {
-        emit($$);
         kill "KILL", $escaped;
+        emit($$);
         exit 0;
     }
 };
