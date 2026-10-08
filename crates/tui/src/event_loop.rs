@@ -269,14 +269,10 @@ impl<B: Backend> Loop<B> {
                                 let out = out.clone();
                                 // A pause thread outliving the loop finds
                                 // the channel closed and returns.
-                                drop(
-                                    std::thread::Builder::new()
-                                        .name("tui-find-pause".to_owned())
-                                        .spawn(move || {
-                                            clock.sleep(after);
-                                            drop(out.send(Input::FindDue(generation)));
-                                        }),
-                                );
+                                drop(crate::sources::builder("tui-find-pause").spawn(move || {
+                                    clock.sleep(after);
+                                    drop(out.send(Input::FindDue(generation)));
+                                }));
                             }
                         }
                         Effect::Search { generation, query } => {
