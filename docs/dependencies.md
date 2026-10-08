@@ -141,7 +141,7 @@ only that crate, in KiB; the empty program is 323 KiB.
 | encoding_rs | `web_fetch`'s decoding by the declared character set | 224 | 332 | 272 | 5 | 490 |
 | pulldown-cmark | the terminal's markdown in replies (`docs/tui.md`, "Look") | 428 | 384 | ~0 | 4 | 724 |
 | all of the above together | | 8,292 | 7,532 | 5,009 | 153 | 7,729 |
-| image, fast_image_resize | the image child; png, jpeg, gif and webp only (`docs/model-routing.md`, "Image limits") | 68,076 | 67,604 | 72,352 | 32 | 5,234 |
+| image, fast_image_resize | the image child; png, jpeg, gif and webp only (`docs/model-routing.md`, "Image limits") | 68,076 | 67,604 | 67,825 | 32 | 5,234 |
 
 Notes:
 
