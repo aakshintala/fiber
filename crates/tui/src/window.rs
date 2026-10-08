@@ -186,6 +186,16 @@ pub(crate) struct Shown {
     pub(crate) turns: TurnRanges,
 }
 
+/// What a page draws: as shown, or with every section open for the
+/// search (`docs/tui.md`, "Search": every match is counted at once).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Draw {
+    /// As shown: a closed section draws its own line only.
+    Shown,
+    /// Every collapsible body draws, open or not.
+    AllOpen,
+}
+
 /// A focus stop's row, height and stable id across paging.
 pub(crate) type FocusItems = Vec<(usize, usize, TargetId)>;
 
@@ -469,8 +479,7 @@ impl Pages {
                 if let Some((page, part)) = folding.take() {
                     self.keep(page, part);
                 }
-                let seed = self.seeds.get(at).cloned();
-                folding = seed.map(|seed| (at, Part::seeded(seed)));
+                folding = self.begin(at).map(|part| (at, part));
             }
             if let Some((_, part)) = &mut folding {
                 fold(part, line);
@@ -481,26 +490,63 @@ impl Pages {
         }
     }
 
-    /// Keeps page `at`'s folded cards, closes the group the next page ends,
-    /// applies what the person opened, and counts its rows.
-    fn keep(&mut self, at: usize, mut part: Part) {
+    /// The cards page `at` starts folding from: its seed's, or `None` for
+    /// the open page, which holds the live fold, and for an unknown one.
+    fn begin(&self, at: usize) -> Option<Part> {
+        if at >= self.closed.len() {
+            return None;
+        }
+        self.seeds.get(at).cloned().map(Part::seeded)
+    }
+
+    /// Finishes page `at`'s folded cards without keeping them: closes the
+    /// group the next page ends, applies what the person opened, and
+    /// restores the live durations, as [`Pages::keep`] does before it
+    /// counts. The search folds a dropped page through it and draws the
+    /// result without keeping it.
+    fn finish(&self, at: usize, part: &mut Part) {
         if self.seeds.get(at).is_some_and(|seed| seed.cut)
             && let Some(card) = part.turns.last_mut()
         {
             card.end_group();
         }
         for (target, open) in &self.overrides {
-            set(&mut part, target, *open);
+            set(part, target, *open);
         }
         if let Some(seed) = self.seeds.get(at) {
-            restore_spans(&mut part, &seed.spans);
+            restore_spans(part, &seed.spans);
         }
+    }
+
+    /// Keeps page `at`'s folded cards, closes the group the next page ends,
+    /// applies what the person opened, and counts its rows.
+    fn keep(&mut self, at: usize, mut part: Part) {
+        self.finish(at, &mut part);
         if let Some(slot) = self.closed.get_mut(at) {
             *slot = Some(part);
         }
         self.stale.remove(&at);
         self.failed.remove(&at);
         self.count(at);
+    }
+
+    /// Closed page `at` folded from its seed and drawn with every section
+    /// open, kept nowhere: what the search scans on a dropped page
+    /// (`docs/tui.md`, "History and paging": search renders each page
+    /// to text and keeps only its matches). `None` for the open page,
+    /// which holds the live fold, and for an unknown one.
+    pub(crate) fn fold_text(
+        &self,
+        at: usize,
+        lines: &[Envelope],
+    ) -> Option<(Vec<Row>, Vec<RowText>)> {
+        let mut part = self.begin(at)?;
+        for line in lines {
+            fold(&mut part, line);
+        }
+        self.finish(at, &mut part);
+        let (rows, texts, _, _) = self.draw_data(at, &part, Draw::AllOpen);
+        Some((rows, texts))
     }
 
     /// The page holding `seq` could not be loaded: it is not asked for
@@ -587,7 +633,15 @@ impl Pages {
     /// it is dropped.
     pub(crate) fn page_text(&self, at: usize) -> Option<(Vec<Row>, Vec<RowText>)> {
         let part = self.part(at)?;
-        let (rows, texts, _, _) = self.draw_data(at, part);
+        let (rows, texts, _, _) = self.draw_data(at, part, Draw::Shown);
+        Some((rows, texts))
+    }
+
+    /// A resident page's rows and texts drawn with every section open;
+    /// `None` while it is dropped.
+    pub(crate) fn page_text_open(&self, at: usize) -> Option<(Vec<Row>, Vec<RowText>)> {
+        let part = self.part(at)?;
+        let (rows, texts, _, _) = self.draw_data(at, part, Draw::AllOpen);
         Some((rows, texts))
     }
 
@@ -645,13 +699,53 @@ impl Pages {
         let Some((at, open)) = found else {
             return false;
         };
+        self.record(target, open, at);
+        true
+    }
+
+    /// Opens what `target` names on resident pages and the pending parts,
+    /// as [`Pages::open`] does but never closing: a search expanding the
+    /// sections around its current match (`docs/tui.md`, "Search"). The
+    /// override is recorded so a dropped page loads it open, and whether
+    /// anything changed.
+    pub(crate) fn force_open(&mut self, target: &Target) -> bool {
+        let last = self.closed.len();
+        let mut changed = false;
+        for at in 0..=last {
+            let found = if at == last {
+                set(&mut self.open, target, true)
+            } else {
+                self.closed
+                    .get_mut(at)
+                    .is_some_and(|part| part.as_mut().is_some_and(|part| set(part, target, true)))
+            };
+            if found {
+                self.record(target, true, at);
+                changed = true;
+            }
+        }
+        if !changed {
+            // Nothing resident holds it, but a dropped page may: the
+            // override still loads it open.
+            self.overrides.insert(*target, true);
+            if let Some(pending) = &mut self.pending {
+                set(&mut pending.before, target, true);
+                set(&mut pending.next, target, true);
+            }
+        }
+        changed
+    }
+
+    /// Records what `target` names as `open`, sets it on the pending
+    /// parts, and counts page `at`: what [`Pages::open`] and
+    /// [`Pages::force_open`] share.
+    fn record(&mut self, target: &Target, open: bool, at: usize) {
         self.overrides.insert(*target, open);
         if let Some(pending) = &mut self.pending {
             set(&mut pending.before, target, open);
             set(&mut pending.next, target, open);
         }
         self.count(at);
-        true
     }
 
     /// Ctrl+O: closes every ledger when all on the resident pages are open,
@@ -722,7 +816,7 @@ impl Pages {
                 first.get_or_insert(start);
                 match self.part(at) {
                     Some(part) => {
-                        let (rows, _, _, page_turns) = self.draw_data(at, part);
+                        let (rows, _, _, page_turns) = self.draw_data(at, part, Draw::Shown);
                         let base = lines.len();
                         lines.extend(rows.into_iter().map(|(line, target)| {
                             let count = crate::view::rows(line.clone(), self.width);
@@ -773,7 +867,7 @@ impl Pages {
             .filter_map(|(at, part)| part.as_ref().map(|part| (at, part)))
             .chain(std::iter::once((self.closed.len(), &self.open)))
         {
-            let (rows, _, _, turns) = self.draw_data(at, part);
+            let (rows, _, _, turns) = self.draw_data(at, part, Draw::Shown);
             for (_, range) in turns.into_iter().filter(|(id, _)| *id == turn) {
                 if let Some(turn_rows) = rows.get(range) {
                     text.extend(turn_rows.iter().filter(|(_, target)| target.is_none()).map(
@@ -851,15 +945,18 @@ impl Pages {
     /// A page's lines: each card's, and the ▣ line of each card that ends
     /// on it, drawn from its turn's totals.
     fn draw(&self, page: usize, part: &Part, out: &mut Rows) {
-        let (rows, texts, _, _) = self.draw_data(page, part);
+        let (rows, texts, _, _) = self.draw_data(page, part, Draw::Shown);
         for (row, text) in rows.into_iter().zip(texts) {
             out.push_text(row, text);
         }
     }
 
     /// A page's lines, their turn ranges, and stable focus stops.
-    fn draw_data(&self, page: usize, part: &Part) -> DrawData {
-        let mut out = Rows::default();
+    fn draw_data(&self, page: usize, part: &Part, mode: Draw) -> DrawData {
+        let mut out = match mode {
+            Draw::Shown => Rows::default(),
+            Draw::AllOpen => Rows::all_open(),
+        };
         let mut turns = Vec::new();
         let mut asides = part
             .fold
@@ -934,7 +1031,7 @@ impl Pages {
         let Some(part) = self.part(at) else {
             return;
         };
-        let (lines, _, focus, _) = self.draw_data(at, part);
+        let (lines, _, focus, _) = self.draw_data(at, part, Draw::Shown);
         let width = self.width;
         let open = at == self.closed.len();
         let mut wrapped = HashMap::new();
@@ -995,19 +1092,17 @@ fn restore_spans(part: &mut Part, spans: &[(u64, u64)]) {
     }
 }
 
-/// Sets what `target` names in `part` to `open`, when it holds it.
-fn set(part: &mut Part, target: &Target, open: bool) {
-    if !part
-        .turns
+/// Sets what `target` names in `part` to `open`; whether it holds it.
+fn set(part: &mut Part, target: &Target, open: bool) -> bool {
+    part.turns
         .iter_mut()
         .any(|card| card.set_open(target, open))
-    {
-        part.fold
+        || part
+            .fold
             .asides
             .iter_mut()
             .map(|(_, aside)| aside)
-            .any(|aside| aside.set_open(target, open));
-    }
+            .any(|aside| aside.set_open(target, open))
 }
 
 /// Folds one line into a page's cards and fold state using the turn's

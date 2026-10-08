@@ -642,3 +642,25 @@ fn start_is_the_sum_of_the_rows_before() {
     assert_eq!(starts, index.starts());
     assert_eq!(index.start(4), 10, "past the last page is the total");
 }
+
+#[test]
+fn set_rows_bumps_the_page_revision() {
+    let mut index = Index::default();
+    assert_eq!(index.revision(0), 0);
+    index.set_rows(0, 10);
+    assert_eq!(index.revision(0), 1);
+    // A recount bumps it whether or not the count changed.
+    index.set_rows(0, 10);
+    assert_eq!(index.revision(0), 2);
+}
+
+#[test]
+fn a_new_page_starts_at_revision_zero() {
+    let mut index = Index::default();
+    index.set_rows(0, 10);
+    let mut seq = 1u64;
+    filler(&mut index, &mut seq, PAGE_LINES);
+    push(&mut index, seq, "turn_started", None, true);
+    assert_eq!(index.pages().len(), 2);
+    assert_eq!(index.revision(1), 0);
+}

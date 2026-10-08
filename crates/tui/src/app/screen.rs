@@ -105,6 +105,17 @@ impl Screen {
         changed
     }
 
+    /// Opens what `target` names without ever closing, as a search
+    /// expanding the sections around its current match does; whether
+    /// anything changed (`docs/tui.md`, "Search").
+    pub(super) fn force_open(&mut self, target: &Target) -> bool {
+        let changed = self.pages.force_open(target);
+        if changed {
+            self.scroll.changed();
+        }
+        changed
+    }
+
     /// Drops every page and follows.
     pub(super) fn clear(&mut self) {
         self.pages.clear();

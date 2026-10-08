@@ -99,6 +99,7 @@ fn sent(effect: Effect) -> Vec<Value> {
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
+        | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
         | Effect::Exit(_)

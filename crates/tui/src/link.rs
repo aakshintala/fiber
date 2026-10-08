@@ -30,6 +30,27 @@ pub(crate) fn parse_line(text: &str) -> Option<Line> {
     }
 }
 
+/// Reads a `history` answer: its durable lines on `command_accepted`,
+/// or why there are none on `command_rejected` or an unreadable answer.
+/// The loop and the search both read answers through it, so the two
+/// cannot read one differently (`docs/tui.md`, "History and paging").
+pub(crate) fn history_answer(line: &Envelope) -> Result<Vec<Envelope>, String> {
+    if line.kind != "command_accepted" {
+        return Err(line
+            .payload
+            .get("message")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("rejected")
+            .to_owned());
+    }
+    line.payload
+        .get("result")
+        .and_then(|result| result.get("lines"))
+        .cloned()
+        .and_then(|lines| serde_json::from_value(lines).ok())
+        .ok_or_else(|| "the answer could not be read".to_owned())
+}
+
 /// Writes one command line.
 pub(crate) fn write_line(mut stream: &UnixStream, line: &str) -> std::io::Result<()> {
     stream.write_all(format!("{line}\n").as_bytes())?;

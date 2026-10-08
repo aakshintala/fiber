@@ -647,9 +647,12 @@ wraps onto.
 The search bar floats over the conversation's top-right corner, as an
 editor's find box does, and the input box keeps its draft. Every match is
 marked, the current one brighter, with "3 of 41". A match inside a collapsed
-section expands it.
+section expands it when it becomes the current match.
 
-Matching is plain text. No model ranks the matches or interprets the query.
+Matching is plain text: it folds case per character, matches literally, and
+keeps at most 10,000 matches ("10000+"). No model ranks the matches or
+interprets the query. Enter or ↓ moves to the next match, Shift+Enter or ↑
+to the previous; both wrap.
 
 Ctrl+F a second time, or a click on the "3 of 41" count, opens the search
 results as a swapped view ("Swapped views"): every match, one row each, with
@@ -783,6 +786,7 @@ keyboard's reach.
 | Show or hide the rail | `toggle_rail` | ⌥R | drag its edge |
 | Search | `search` | Ctrl+F; Cmd+F where forwarded | |
 | Open the search results | `search_results` | Ctrl+F with search open | click the match count |
+| Next or previous match | `search_next_prev` | Enter or ↓, Shift+Enter or ↑, with search open | |
 | Jump to the end | `jump_to_end` | End | click "↓ New messages below" |
 | Select a queued steering message | `select_steering` | ⌥↑ ⌥↓ | its mouse target |
 | Amend it | `amend_steering` | Enter | its mouse target |
@@ -1005,7 +1009,7 @@ the session's offset table (`docs/invocation.md`, "Driver commands";
   loading.
 - **Search streams the session's lines** with `history`, rendering each page to text and keeping only its
   matches. On a large session it does not run on every keystroke: it waits for
-  a pause in typing, or runs off the frame thread.
+  a pause in typing of a quarter of a second, or runs off the frame thread.
 - **A selection's ends are row indices.** Copying reads the rows between them,
   rendering again any page dropped since the drag began.
 
@@ -1027,7 +1031,7 @@ Fiber's figures are the median of three runs.
 | Panel pass at open | 18.7 ms | 55.0 ms, the opening pass and the first frame |
 | Counting rows | about 4 ms per MiB of log | in the opening pass; 12.1 ms to count every page again at a new width |
 | Slowest frame that loaded pages | 5.1 ms | 1.1 ms |
-| Search of the whole log | 19.6 ms | not built |
+| Search of the whole log | 19.6 ms | 188.3 ms |
 
 Estimated row counts moved the scroll bar's thumb by up to 17 cells in one row,
 which is why counts are exact. The timings do not carry over to Linux; the

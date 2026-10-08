@@ -265,7 +265,7 @@ A crate's first implementation ticket ships the jigs listed for it:
 | `fakes` | `provider-server` | Serves a scripted or recorded stream on a free local port, prints that address, then prints each request it receives. |
 | `tools` | `call` | Runs one tool call with the given arguments and prints its result. |
 | `tui` | `draw` | Draws an events file at a given width and prints the screen as text. |
-| `tui` | `paging` | Generates a large session and measures the terminal paging it: the opening pass, the frames that load pages, jumps, a re-count at a new width, and appending to a running turn. |
+| `tui` | `paging` | Generates a large session and measures the terminal paging it: the opening pass, the frames that load pages, jumps, a search of the whole log, a re-count at a new width, and appending to a running turn. |
 | `tui` | `hover` | Sends motion reports through the terminal's screen over an events file and prints the frames, bytes and time per report. |
 | `loop` | `turn` | Runs one turn against the fake provider and test tools and prints its events. |
 | `extensions` | `pin_check` | Times checking a repository's declared paths against `pinned.json`, cold and warm, in one process. |

@@ -32,6 +32,7 @@ impl Track {
             skip,
             decoration,
             links,
+            scopes: Vec::new(),
         });
     }
 

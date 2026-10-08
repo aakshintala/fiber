@@ -74,6 +74,10 @@ enum Flight {
 #[derive(Debug)]
 pub(crate) struct Index {
     pages: Vec<Page>,
+    /// One revision per page, pushed with it: a page's revision only
+    /// grows, so a search rescans a page whose text moved (`docs/tui.md`,
+    /// "History and paging").
+    revisions: Vec<u64>,
     /// Actions in flight, with the turn each began in.
     in_flight: BTreeMap<(Flight, ActionId), u64>,
     /// How many turns have started.
@@ -88,6 +92,7 @@ impl Default for Index {
     fn default() -> Self {
         Self {
             pages: vec![Page::default()],
+            revisions: vec![0],
             in_flight: BTreeMap::new(),
             turns: 0,
             group: false,
@@ -136,6 +141,7 @@ impl Index {
                 self.group = false;
                 if held >= PAGE_LINES && self.in_flight.is_empty() {
                     self.pages.push(Page::default());
+                    self.revisions.push(0);
                     cut = Cut::Here;
                 }
             }
@@ -204,6 +210,7 @@ impl Index {
             lines: moved,
             rows: 0,
         });
+        self.revisions.push(0);
     }
 
     /// The pages, the open one last.
@@ -211,11 +218,20 @@ impl Index {
         &self.pages
     }
 
-    /// Sets page `at`'s row count.
+    /// Sets page `at`'s row count, bumping its revision whether or not the
+    /// count changed: a replacement of equal length still rescans.
     pub(crate) fn set_rows(&mut self, at: usize, rows: usize) {
         if let Some(page) = self.pages.get_mut(at) {
             page.rows = rows;
         }
+        if let Some(revision) = self.revisions.get_mut(at) {
+            *revision = revision.saturating_add(1);
+        }
+    }
+
+    /// Page `at`'s revision, 0 for a page never counted.
+    pub(crate) fn revision(&self, at: usize) -> u64 {
+        self.revisions.get(at).copied().unwrap_or(0)
     }
 
     /// The page holding `seq`, if any does.
