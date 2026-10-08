@@ -275,7 +275,7 @@ fn a_wake_after_the_sequence_snapshot_returns_the_wait() {
     let end = opened.end;
     let reported = id.clone();
     thread::spawn(move || {
-        super::BEFORE_PARK.with(|slot| {
+        super::park::BEFORE_PARK.with(|slot| {
             *slot.borrow_mut() = Some(Box::new(move || {
                 (end.0)(JobCompleted {
                     job_id: JobId(reported),
