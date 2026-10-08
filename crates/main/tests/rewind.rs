@@ -264,6 +264,9 @@ fn a_rewind_continues_the_session_from_the_latest_turn() {
     until(client, "the new session's fiber_started", |line| {
         line["session_id"] == next && line["kind"] == "fiber_started"
     });
+    until(client, "the new session's extensions_loaded", |line| {
+        line["session_id"] == next && line["kind"] == "extensions_loaded"
+    });
     // The new log before any prompt is one fresh start continuing the old.
     let new_log = session_log(&setup, &next);
     let new_kinds: Vec<&str> = new_log
