@@ -12,9 +12,9 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 
 use contract::Envelope;
 use contract::events::{
-    InputItem, ReasoningCompleted, RetryScheduled, SteeringApplied, TextCompleted, TextDelta,
-    ToolCallArgumentsDelta, ToolCallCompleted, ToolCallRequested, TurnCompleted, TurnOutcome,
-    TurnStarted, UsageRecorded,
+    AssistantMessageCompleted, InputItem, MessageOutcome, ReasoningCompleted, RetryScheduled,
+    SteeringApplied, TextCompleted, TextDelta, ToolCallArgumentsDelta, ToolCallCompleted,
+    ToolCallRequested, TurnCompleted, TurnOutcome, TurnStarted, UsageRecorded,
 };
 use ratatui::text::Line;
 use serde_json::Value;
@@ -182,6 +182,7 @@ impl Turn {
     /// `step_started`.
     pub(crate) fn step_started(&mut self) {
         self.step = self.step.saturating_add(1);
+        self.attempts = 0;
     }
 
     /// `assistant_message_completed`: whatever it was still emitting is no
@@ -517,14 +518,9 @@ impl Turn {
             })
     }
 
-    /// `assistant_message_started`: another attempt of the request that just
-    /// failed, or the first of a new one.
+    /// `assistant_message_started`: one more attempt of the request.
     fn message_started(&mut self) {
-        self.attempts = if self.retry.is_some() {
-            self.attempts.saturating_add(1)
-        } else {
-            1
-        };
+        self.attempts = self.attempts.saturating_add(1);
     }
 
     /// `retry_scheduled`: the retry pends, and the open group counts the
@@ -595,6 +591,15 @@ pub(crate) fn fold_line(turns: &mut Vec<Turn>, fold: &mut Fold, envelope: &Envel
         && let Some(turn) = open(turns)
     {
         turn.retry = None;
+    }
+    // The request ends at a handoff, whose note request is its own, and at a
+    // call that completed; a failed call is the request's retry.
+    let request_ended = kind == "handoff_started"
+        || (kind == "assistant_message_completed"
+            && read!(envelope, AssistantMessageCompleted)
+                .is_some_and(|done| done.outcome != MessageOutcome::Failed));
+    if request_ended && let Some(turn) = open(turns) {
+        turn.attempts = 0;
     }
     let changed = match kind {
         "turn_started" => read!(envelope, TurnStarted).is_some_and(|started| {
