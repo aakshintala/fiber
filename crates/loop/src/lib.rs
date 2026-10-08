@@ -61,6 +61,7 @@ mod schema;
 mod shutdown;
 mod skill_header;
 mod skills;
+mod slash;
 mod status;
 mod step;
 mod suspend;
@@ -72,7 +73,7 @@ mod warm;
 
 pub use cancel::TurnCancel;
 pub use caps::{ResultCaps, capped};
-pub use commands::commands;
+pub use commands::{Commands, commands};
 pub use conversation::rebuild;
 pub use error::Error;
 pub use handoff::HandoffSettings;
@@ -84,6 +85,7 @@ pub use resume::{Resumed, resumed};
 pub use retry::Retry;
 pub use reviewer::{BlockLimits, NO_MODEL_MESSAGE, Reviewer};
 pub use rewind::{Rewound, rewind_note};
+pub use slash::{FetchPrompt, ServerPrompts};
 pub use switch::{Hosted, NO_SWITCH, Prepare, Prepared, Switchable};
 
 /// The model a session's calls reach, and the prices those calls are logged
@@ -197,6 +199,10 @@ pub struct Loop {
     workspace_label: String,
     /// Whether a person can answer an approval; `false` for `fiber ask`.
     answerable: bool,
+    /// The session's MCP prompt rows and how to run one, if `main`
+    /// started servers with prompts (`docs/mcp.md`, "Prompts and
+    /// resources").
+    server_prompts: Option<slash::ServerPrompts>,
     /// The offer of the repository's code before the first request.
     repository: offer::State,
     /// Whether the opening message was already written: a resume over a
@@ -424,6 +430,7 @@ impl Loop {
             turn_blocked: None,
             workspace_label: permissions.workspace,
             answerable: true,
+            server_prompts: None,
             repository: offer::State::default(),
             opened: false,
             changes,

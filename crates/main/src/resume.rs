@@ -274,7 +274,8 @@ fn resumed_session(
     extensions.emit_to(Arc::new(log::WeakEmit::new(&log)));
     extensions.drive_to(session.driver());
     extensions.answerable(!one_turn);
-    let mut all_commands = r#loop::commands(&prompt_inputs, Path::new(&folded.workspace));
+    let mut all_commands =
+        r#loop::commands(&prompt_inputs, Path::new(&folded.workspace), &[]).rows;
     all_commands.extend(extensions.commands());
     session.commands(all_commands);
     let door = crate::switch::Door {
