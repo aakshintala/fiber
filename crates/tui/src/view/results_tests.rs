@@ -148,24 +148,113 @@ fn results_with_the_selected_entry_scrolled() {
 }
 
 #[test]
-fn a_long_entry_is_cut_to_the_width() {
+fn a_long_row_windows_around_its_match() {
     let entry = (
         "before".to_owned(),
         format!("a needle {}", "x".repeat(400)),
         2..8,
         "after".to_owned(),
     );
+    // The row is wider than the view: it shows 80 cells around the
+    // match instead of the context hiding it.
     let (text, hit) = super::entry_row(&entry, 80);
-    assert!(crate::format::width(&text) > 80);
-    assert!(hit.end <= 80, "the highlight stays on screen: {hit:?}");
+    assert_eq!(crate::format::width(&text), 80);
     assert_eq!(&text[hit.start as usize..hit.end as usize], "needle");
-    // A narrower width clips the highlight, never past the edge.
-    let (_, clipped) = super::entry_row(&entry, 10);
-    assert_eq!(clipped, 9..10);
-    // A match wholly past the edge keeps an empty range.
-    let past_edge = ("x".repeat(400), "needle".to_owned(), 0..6, String::new());
-    let (_, past) = super::entry_row(&past_edge, 10);
-    assert_eq!(past, 10..10);
+    // A narrower width centres the window on the match.
+    let (narrow, hit) = super::entry_row(&entry, 10);
+    assert_eq!(crate::format::width(&narrow), 10);
+    assert_eq!(&narrow[hit.start as usize..hit.end as usize], "needle");
+}
+
+#[test]
+fn a_long_preceding_line_never_hides_the_match() {
+    // A 400-character line before the match at width 80: the match
+    // text appears in the row.
+    let entry = (
+        "x".repeat(400),
+        "needle here".to_owned(),
+        0..6,
+        String::new(),
+    );
+    let (text, hit) = super::entry_row(&entry, 80);
+    assert_eq!(crate::format::width(&text), 80);
+    assert!(text.contains("needle"), "the match stays visible: {text:?}");
+    assert_eq!(&text[hit.start as usize..hit.end as usize], "needle");
+}
+
+#[test]
+fn a_match_at_the_rows_end_clamps_the_window_to_the_row() {
+    let entry = ("x".repeat(400), "needle".to_owned(), 0..6, String::new());
+    let (text, hit) = super::entry_row(&entry, 10);
+    assert_eq!(crate::format::width(&text), 10);
+    assert_eq!(&text[hit.start as usize..hit.end as usize], "needle");
+    assert!(
+        text.ends_with("needle"),
+        "the window ends at the row: {text:?}"
+    );
+}
+
+#[test]
+fn a_match_at_the_rows_start_opens_the_window_at_the_row() {
+    let entry = (
+        String::new(),
+        format!("needle {}", "x".repeat(400)),
+        0..6,
+        String::new(),
+    );
+    let (text, hit) = super::entry_row(&entry, 10);
+    assert!(
+        text.starts_with("needle"),
+        "the window opens at the row: {text:?}"
+    );
+    assert_eq!(&text[hit.start as usize..hit.end as usize], "needle");
+}
+
+#[test]
+fn a_row_exactly_the_views_width_shows_whole() {
+    let entry = ("ab".to_owned(), "needle".to_owned(), 0..6, "cd".to_owned());
+    // `ab needle cd` is 12 cells: exactly the width shows it whole.
+    let (text, hit) = super::entry_row(&entry, 12);
+    assert_eq!(text, "ab needle cd");
+    assert_eq!(hit, 3..9);
+    // One cell narrower windows around the match.
+    let (cut, hit) = super::entry_row(&entry, 11);
+    assert_eq!(crate::format::width(&cut), 11);
+    assert_eq!(&cut[hit.start as usize..hit.end as usize], "needle");
+}
+
+#[test]
+fn a_match_wider_than_the_view_clips_at_its_edge() {
+    let entry = (String::new(), "needle".to_owned(), 0..6, String::new());
+    let (text, hit) = super::entry_row(&entry, 4);
+    assert_eq!(text, "need");
+    assert_eq!(hit, 0..4);
+}
+
+#[test]
+fn a_row_for_no_cells_is_empty() {
+    let entry = (
+        "before".to_owned(),
+        "needle".to_owned(),
+        0..6,
+        "after".to_owned(),
+    );
+    assert_eq!(super::entry_row(&entry, 0), (String::new(), 0..0));
+}
+
+#[test]
+fn a_wide_char_straddling_the_window_edge_is_dropped() {
+    // `\u{3042}` is two cells: ending the window mid-char drops it,
+    // so the row never runs past the view.
+    let entry = (
+        String::new(),
+        "\u{3042}needle".to_owned(),
+        1..7,
+        String::new(),
+    );
+    let (text, hit) = super::entry_row(&entry, 7);
+    assert!(crate::format::width(&text) <= 7);
+    assert_eq!(&text[hit.start as usize..hit.end as usize], "needle");
 }
 
 #[test]

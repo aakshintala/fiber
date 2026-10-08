@@ -4,8 +4,8 @@ expression: "screen(&app, 80, 24)"
 ---
 3 matches for “needle”                                     find: needle · 1 of ✕
 the first needle here a long line with a needle in it xxxxxxxxxxxxxxxxxxxxxxxxxx
-the first needle here a long line with a needle in it xxxxxxxxxxxxxxxxxxxxxxxxxx
-a long line with a needle in it xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+first needle here a long line with a needle in it xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx a last needle
 
 
 
@@ -31,7 +31,7 @@ a long line with a needle in it xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ................................................................................
 ..........HHHHHH................................................................
 SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS
-................................................................................
+..........................................................................HHHHHH
 ................................................................................
 ................................................................................
 ................................................................................

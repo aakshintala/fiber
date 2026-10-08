@@ -71,7 +71,9 @@ pub(super) fn render(view: &ResultsView, area: Rect, buf: &mut Buffer, targets: 
 
 /// One entry's row text with its match's cell range: the non-empty lines
 /// joined by one space, so a match at a page's edge shows only what the
-/// scan kept (`docs/tui.md`, "Search").
+/// scan kept. A row wider than the view shows the cells around the match,
+/// so the match is always visible however long the lines around it are
+/// (`docs/tui.md`, "Search").
 fn entry_row(entry: &Entry, width: u16) -> (String, Range<u16>) {
     let (before, line, at, after) = entry;
     let mut text = String::new();
@@ -85,16 +87,62 @@ fn entry_row(entry: &Entry, width: u16) -> (String, Range<u16>) {
         text.push(' ');
         text.push_str(after);
     }
+    let total = crate::format::width(&text);
+    let target = usize::from(width);
     // The match's cells from the row's start: the lines before it, then
     // the cut line's chars up to the match.
     let skipped: String = line.chars().take(at.start).collect();
     let start = prefix.saturating_add(crate::format::width(&skipped));
-    let start = u16::try_from(start).unwrap_or(u16::MAX);
     let span = at.end.saturating_sub(at.start);
     let hit: String = line.chars().skip(at.start).take(span).collect();
-    let end = start.saturating_add(u16::try_from(crate::format::width(&hit)).unwrap_or(u16::MAX));
-    let end = end.min(width);
-    (text, start.min(end)..end)
+    let hit_width = crate::format::width(&hit);
+    if total <= target {
+        let start = to_u16(start);
+        let end = start.saturating_add(to_u16(hit_width));
+        return (text, start.min(end)..end);
+    }
+    // The row is wider than the view: the window holds `target` cells
+    // around the match, so the cells around it show the lines around
+    // the match instead of hiding it behind its own context.
+    if target == 0 {
+        return (String::new(), 0..0);
+    }
+    let end = start.saturating_add(hit_width);
+    let win = start
+        .saturating_sub(target.saturating_sub(hit_width) / 2)
+        .min(total.saturating_sub(target));
+    let stop = win.saturating_add(target);
+    windowed(&text, start, end, win, stop)
+}
+
+/// The cells `win..stop` of `text` with the match `start..end` relative
+/// to them: chars straddling an edge are dropped, so the row never runs
+/// past the view (`docs/tui.md`, "Search").
+fn windowed(text: &str, start: usize, end: usize, win: usize, stop: usize) -> (String, Range<u16>) {
+    let mut out = String::new();
+    let mut cells = 0usize;
+    let mut shown = 0u16..0u16;
+    let mut wide = [0u8; 4];
+    for ch in text.chars() {
+        let step = crate::format::width(ch.encode_utf8(&mut wide));
+        let next = cells.saturating_add(step);
+        if cells >= win && next <= stop {
+            if cells == start {
+                shown.start = to_u16(crate::format::width(&out));
+            }
+            out.push(ch);
+            if next == end {
+                shown.end = to_u16(crate::format::width(&out));
+            }
+        }
+        cells = next;
+    }
+    // A match wider than the window clips at its edge: what fits still
+    // shows.
+    if end > stop {
+        shown.end = to_u16(crate::format::width(&out));
+    }
+    (out, shown)
 }
 
 #[cfg(test)]
