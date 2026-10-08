@@ -12,6 +12,15 @@
 # Cold runs need GNU dd (`iflag=nocache`, Linux). Eviction is confirmed with
 # `fincore` when it is installed. Elsewhere the cold rows are skipped.
 #
+# Each scan runs under `/usr/bin/time` so its peak RSS lands in the trailing
+# `peak_rss_bytes` column (median of the five runs' peaks, in bytes): GNU
+# `time -f %M` on Linux (KiB, times 1024), BSD `time -l`'s maximum resident
+# set size on macOS. Without `/usr/bin/time` the column reads `unavailable`
+# and the run still succeeds. The wrapper reports on stderr, so the scan's
+# own `ms` timing on stdout is unchanged. The column is appended at the end,
+# so earlier rows without it are untouched. The script prints the core count
+# (`nproc`, else `getconf _NPROCESSORS_ONLN`) once at the start for the log.
+#
 # CORPUS (default: $TMPDIR/fiber-session-search) holds the generated homes,
 # kept between runs; delete it when done. Needs about 9 GB of free disk.
 set -euo pipefail
@@ -31,6 +40,22 @@ if dd --version >/dev/null 2>&1; then
   cold=yes
 fi
 
+if command -v nproc >/dev/null 2>&1; then
+  echo "nproc: $(nproc)"
+else
+  echo "nproc: $(getconf _NPROCESSORS_ONLN)"
+fi
+
+rss_mode=none
+if command -v /usr/bin/time >/dev/null 2>&1; then
+  case "$(uname -s)" in
+    Linux) rss_mode=gnu ;;
+    Darwin) rss_mode=bsd ;;
+  esac
+fi
+TIMEFILE=$(mktemp)
+trap 'rm -f "$TIMEFILE"' EXIT
+
 evict() {
   find "$1" -type f -print0 |
     xargs -0 -n 64 sh -c 'for f; do dd if="$f" iflag=nocache count=0 status=none; done' _
@@ -49,7 +74,7 @@ resident() {
 median() { sort -n | awk '{ v[NR] = $1 } END { print v[int((NR + 1) / 2)] }'; }
 
 if [ ! -f "$OUT" ]; then
-  printf 'date\tplatform\tcorpus_mib\tartifact_every\tlog_mib\tartifact_mib\tsessions\tquery\tcache\tresident_bytes\tmedian_ms\truns_ms\thits\n' > "$OUT"
+  printf 'date\tplatform\tcorpus_mib\tartifact_every\tlog_mib\tartifact_mib\tsessions\tquery\tcache\tresident_bytes\tmedian_ms\truns_ms\thits\tpeak_rss_bytes\n' > "$OUT"
 fi
 
 for corpus in 300:25 1300:25 4000:25 1300:0; do
@@ -67,21 +92,50 @@ for corpus in 300:25 1300:25 4000:25 1300:0; do
     if [ "$cold" = yes ]; then caches="warm cold"; fi
     for cache in $caches; do
       times=()
+      rss_values=()
       hits=
       left=
+      rss_bad=no
       if [ "$cache" = warm ]; then "$BIN" scan "$home" "$query" >/dev/null; fi
       for _ in $(seq "$RUNS"); do
         if [ "$cache" = cold ]; then
           evict "$home"
           left=$(resident "$home")
         fi
-        read -r ms hits _ < <("$BIN" scan "$home" "$query")
+        case "$rss_mode" in
+          gnu)
+            read -r ms hits _ < <(/usr/bin/time -f '%M' "$BIN" scan "$home" "$query" 2>"$TIMEFILE")
+            rss_kb=$(cat "$TIMEFILE")
+            case "$rss_kb" in
+              ''|*[!0-9]*) rss=unavailable ;;
+              *) rss=$((rss_kb * 1024)) ;;
+            esac
+            ;;
+          bsd)
+            read -r ms hits _ < <(/usr/bin/time -l "$BIN" scan "$home" "$query" 2>"$TIMEFILE")
+            rss=$(awk '/maximum resident set size/ { print $1 }' "$TIMEFILE")
+            case "$rss" in
+              ''|*[!0-9]*) rss=unavailable ;;
+            esac
+            ;;
+          *)
+            read -r ms hits _ < <("$BIN" scan "$home" "$query")
+            rss=unavailable
+            ;;
+        esac
         times+=("$ms")
+        rss_values+=("$rss")
+        if [ "$rss" = unavailable ]; then rss_bad=yes; fi
       done
       med=$(printf '%s\n' "${times[@]}" | median)
-      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+      if [ "$rss_bad" = yes ]; then
+        rss_med=unavailable
+      else
+        rss_med=$(printf '%s\n' "${rss_values[@]}" | median)
+      fi
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$(date +%F)" "$PLATFORM" "$mib" "$every" "$log_mib" "$artifact_mib" "$sessions" \
-        "$query" "$cache" "${left:-}" "$med" "$(IFS=,; echo "${times[*]}")" "$hits" |
+        "$query" "$cache" "${left:-}" "$med" "$(IFS=,; echo "${times[*]}")" "$hits" "$rss_med" |
         tee -a "$OUT"
     done
   done
