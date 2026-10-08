@@ -135,3 +135,43 @@ fn an_out_of_range_share_reads_as_the_default() {
         );
     }
 }
+
+#[test]
+fn without_keys_anywhere_launch_keys_user_is_empty() {
+    let dir = fakes::TempDir::new("fiber-launch-keys-empty");
+    let workspace = dir.path().to_path_buf();
+    let plain = config(dir.path(), &workspace, Vec::new());
+    assert!(
+        launch(workspace.clone(), &workspace, &plain)
+            .keys
+            .user
+            .is_empty()
+    );
+}
+
+#[test]
+fn global_and_project_keys_merge_as_written() {
+    let dir = fakes::TempDir::new("fiber-launch-keys");
+    let workspace = dir.path().to_path_buf();
+    std::fs::write(
+        dir.path().join("config.json"),
+        r#"{"keys": {"send": "ctrl+s"}}"#,
+    )
+    .unwrap_or_else(|err| panic!("global keys: {err}"));
+    let project_dir = dir.path().join("projects").join("-w");
+    std::fs::create_dir_all(&project_dir).unwrap_or_else(|err| panic!("mkdir: {err}"));
+    std::fs::write(
+        project_dir.join("config.json"),
+        r#"{"keys": {"copy_focused": ["c"]}}"#,
+    )
+    .unwrap_or_else(|err| panic!("project keys: {err}"));
+    let config = config(dir.path(), &workspace, Vec::new());
+    let user = launch(workspace.clone(), &workspace, &config).keys.user;
+    assert_eq!(
+        user,
+        serde_json::json!({"send": "ctrl+s", "copy_focused": ["c"]})
+            .as_object()
+            .cloned()
+            .unwrap_or_default()
+    );
+}

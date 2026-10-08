@@ -8,6 +8,15 @@ use std::path::{Path, PathBuf};
 
 use config::Config;
 
+/// The person's `keys` (`docs/configuration.md`, "Keys"): the merged
+/// `keys` object as written, empty when no file sets it.
+fn user_keys(config: &Config) -> serde_json::Map<String, serde_json::Value> {
+    config
+        .get("keys", None)
+        .and_then(|(value, _)| serde_json::from_value(value).ok())
+        .unwrap_or_default()
+}
+
 /// Builds the terminal's launch description from the launch directory,
 /// its identity path, and the loaded configuration.
 pub(crate) fn launch(workspace: PathBuf, identity: &Path, config: &Config) -> tui::Launch {
@@ -57,7 +66,9 @@ pub(crate) fn launch(workspace: PathBuf, identity: &Path, config: &Config) -> tu
                     .map(str::to_owned)
                     .to_vec()
             }),
-        keys: tui::KeysSetup::default(),
+        keys: tui::KeysSetup {
+            user: user_keys(config),
+        },
     }
 }
 
