@@ -318,7 +318,6 @@ impl Prompts {
             return failed(
                 ErrorCode::McpPromptFailed,
                 format!("The MCP server `{server}` has no prompt `/{prompt}`."),
-                Vec::new(),
             );
         };
         let filled = match fill(&entry.prompt.arguments, arguments) {
@@ -338,7 +337,6 @@ impl Prompts {
                     format!(
                         "The MCP server `{server}`'s prompt `/{prompt}` needs {needs}.{follow}"
                     ),
-                    Vec::new(),
                 );
             }
         };
@@ -346,7 +344,6 @@ impl Prompts {
             return failed(
                 ErrorCode::McpPromptFailed,
                 not_run(server, prompt, &slot::unavailable(server)),
-                Vec::new(),
             );
         };
         match slot.serve() {
@@ -385,7 +382,6 @@ impl Prompts {
                                 "The MCP server `{server}`'s prompt `/{prompt}` returned {reason}, \
                                  which Fiber cannot send as a message."
                             ),
-                            Vec::new(),
                         ),
                     },
                     Err(CallError::Timeout) => failed(
@@ -395,7 +391,6 @@ impl Prompts {
                              within {} ms.",
                             entry.timeout.as_millis(),
                         ),
-                        Vec::new(),
                     ),
                     Err(CallError::Cancelled) => failed(
                         ErrorCode::McpPromptFailed,
@@ -403,7 +398,6 @@ impl Prompts {
                             "The run of the prompt `/{prompt}` on the MCP server `{server}` was \
                              cancelled; the server may still act on it."
                         ),
-                        Vec::new(),
                     ),
                     // The run is never replayed: the next run restarts
                     // the server, if a restart is left.
@@ -412,7 +406,6 @@ impl Prompts {
                             let output = failed(
                                 ErrorCode::McpPromptFailed,
                                 not_run(server, prompt, &record.error.message),
-                                Vec::new(),
                             );
                             servers.push(ServerRecord::Failed(record));
                             output
@@ -420,7 +413,6 @@ impl Prompts {
                         None => failed(
                             ErrorCode::McpPromptFailed,
                             not_run(server, prompt, &slot::unavailable(server)),
-                            Vec::new(),
                         ),
                     },
                     Err(CallError::JsonRpc { message, .. }) => failed(
@@ -428,7 +420,6 @@ impl Prompts {
                         format!(
                             "The MCP server `{server}` refused the prompt `/{prompt}`: {message}."
                         ),
-                        Vec::new(),
                     ),
                 };
                 output.servers = servers;
@@ -438,7 +429,7 @@ impl Prompts {
     }
 }
 
-fn failed(code: ErrorCode, message: String, servers: Vec<ServerRecord>) -> Output {
+fn failed(code: ErrorCode, message: String) -> Output {
     Output {
         error: Some(Failure {
             code,
@@ -446,7 +437,6 @@ fn failed(code: ErrorCode, message: String, servers: Vec<ServerRecord>) -> Outpu
             retry_after_ms: None,
             provider: None,
         }),
-        servers,
         ..Output::default()
     }
 }

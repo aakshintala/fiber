@@ -474,6 +474,28 @@ fn text_joins_every_message_in_order() {
     }
 }
 
+#[test]
+fn embedded_resource_text_and_blob_guard_are_distinct() {
+    use super::text;
+
+    assert_eq!(
+        text(
+            &json!({"messages": [{"content": {"type": "resource", "resource": {"text": "Available text"}}}]})
+        ),
+        Ok("Available text".to_owned()),
+    );
+    assert_eq!(
+        text(
+            &json!({"messages": [{"content": {"type": "resource", "resource": {"blob": "aGk="}}}]})
+        ),
+        Err("a binary resource".to_owned()),
+    );
+    assert_eq!(
+        text(&json!({"messages": [{"content": {"type": "resource", "resource": {}}}]})),
+        Err("an unreadable resource".to_owned()),
+    );
+}
+
 struct Session {
     dir: TempDir,
     fake: Arc<FakeClock>,
@@ -767,6 +789,7 @@ fn a_prompt_no_server_lists_fails_without_asking() {
 #[test]
 fn a_server_that_dies_mid_get_is_recorded_once_and_restarts_on_the_next() {
     use contract::ErrorCode;
+    use contract::events::{McpServerReady, ServerFailure};
     use contract::tool::ServerRecord;
     let session = greet_session();
     session.prompt_result("greet", "exit");
@@ -789,6 +812,9 @@ fn a_server_that_dies_mid_get_is_recorded_once_and_restarts_on_the_next() {
     let [ServerRecord::Failed(failed)] = &first.servers[..] else {
         panic!("one failure record: {:?}", first.servers);
     };
+    assert_eq!(failed.server, "fx");
+    assert_eq!(failed.reason, ServerFailure::Died);
+    assert_eq!(failed.error.code, ErrorCode::McpServerUnavailable);
     assert!(failed.will_restart);
     // The file replaced, the next run restarts the server and reads it.
     session.prompt_result(
@@ -803,11 +829,12 @@ fn a_server_that_dies_mid_get_is_recorded_once_and_restarts_on_the_next() {
         &fakes::CancelToken::new(),
     );
     assert!(second.error.is_none());
-    assert_eq!(second.servers.len(), 1, "the restart is recorded");
-    assert!(
-        matches!(second.servers[0], ServerRecord::Ready(_)),
-        "the restart brings it back: {:?}",
+    assert_eq!(
         second.servers,
+        [ServerRecord::Ready(McpServerReady {
+            server: "fx".to_owned(),
+        })],
+        "a successful get carries the restart record",
     );
     Session::stop(started.servers);
 }

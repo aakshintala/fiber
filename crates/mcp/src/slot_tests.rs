@@ -15,7 +15,7 @@ use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
 use crate::server::ListedTool;
-use crate::slot::State;
+use crate::slot::{Run, Served, State};
 use crate::start::{
     DEFAULT_CALL_TIMEOUT, DEFAULT_STARTUP_TIMEOUT, ServerSpec, Servers, Started, start,
 };
@@ -148,6 +148,18 @@ impl Setup {
         result
             .recv_timeout(WITHIN)
             .unwrap_or_else(|_| panic!("the call ends within {WITHIN:?}"))
+    }
+
+    fn serve_slot(&self, slot: &Arc<crate::slot::Slot>) -> Served {
+        // Threaded with a wall-clock limit: startup waits on the fake clock.
+        let slot = Arc::clone(slot);
+        let (done, result) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            done.send(slot.serve()).expect("collected");
+        });
+        result
+            .recv_timeout(WITHIN)
+            .unwrap_or_else(|_| panic!("the serve ends within {WITHIN:?}"))
     }
 
     fn stop(&self, servers: Servers) {
@@ -835,6 +847,60 @@ fn a_restart_listing_other_tools_updates_the_cache_and_keeps_the_declarations() 
     let again = setup.run(&echo);
     assert!(again.error.is_none());
     assert!(again.servers.is_empty());
+    setup.stop(started.servers);
+}
+
+#[test]
+fn run_rejects_its_server_after_a_concurrent_restart_replaces_it() {
+    let setup = Setup::new();
+    setup.tools(&json!([{"name": "echo"}]));
+    let started = setup.start(vec![setup.spec("fx")]);
+    let slot = Arc::clone(&started.servers.slots[0]);
+    let old_pid = setup.pid();
+    let (served, got_served) = std::sync::mpsc::channel();
+    let (resume, wait_to_resume) = std::sync::mpsc::channel();
+    *super::lock(&slot.run_after_serve) = Some(Box::new(move || {
+        served
+            .send(())
+            .expect("the call reached the live-server check");
+        wait_to_resume
+            .recv_timeout(WITHIN)
+            .expect("the concurrent restart finishes within the wall-clock limit");
+    }));
+    let (done, result) = std::sync::mpsc::channel();
+    let calling = Arc::clone(&slot);
+    std::thread::spawn(move || {
+        done.send(calling.run("echo")).expect("collected");
+    });
+    got_served
+        .recv_timeout(WITHIN)
+        .expect("run served the original server within the wall-clock limit");
+
+    setup.kill(&started);
+    setup.tools(&json!([{"name": "replacement"}]));
+    let restarted = setup.serve_slot(&slot);
+    let new_pid = setup.pid();
+    resume.send(()).expect("release the waiting call");
+    let outcome = result
+        .recv_timeout(WITHIN)
+        .expect("the call ends within the wall-clock limit");
+
+    assert_ne!(
+        old_pid, new_pid,
+        "the concurrent restart replaced the child"
+    );
+    let Served::Up(_, records) = restarted else {
+        panic!("the concurrent restart brings the server back");
+    };
+    assert_eq!(lines(&records), ["failed died restart", "ready"]);
+    let Run::Failed(failed) = outcome else {
+        panic!("a call using the replaced server fails as unavailable");
+    };
+    assert_eq!(failed.error.code, ErrorCode::McpServerUnavailable);
+    assert!(
+        failed.records.is_empty(),
+        "the restart's records belong to its call"
+    );
     setup.stop(started.servers);
 }
 

@@ -32,6 +32,9 @@ pub(crate) struct Slot {
     clock: Arc<dyn Clock>,
     version: String,
     state: Mutex<State>,
+    /// Test-only pause after `serve` returns and before `run` checks the live server.
+    #[cfg(test)]
+    run_after_serve: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
 /// What the slot holds. `listed` is always the last raw lists this slot
@@ -100,6 +103,8 @@ impl Slot {
             clock: Arc::clone(clock),
             version: version.to_owned(),
             state: Mutex::new(state),
+            #[cfg(test)]
+            run_after_serve: Mutex::new(None),
         })
     }
 
@@ -261,6 +266,10 @@ impl Slot {
         match self.serve() {
             Served::Failed(failed) => Run::Failed(failed),
             Served::Up(server, records) => {
+                #[cfg(test)]
+                if let Some(hook) = lock(&self.run_after_serve).take() {
+                    hook();
+                }
                 let present = match &*lock(&self.state) {
                     State::Running {
                         server: live,
