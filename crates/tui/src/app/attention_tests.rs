@@ -287,3 +287,73 @@ fn title_off_keeps_the_normal_title() {
     assert_eq!(app.title(), "fiber");
     assert!(!app.take_alerts().is_empty());
 }
+
+#[test]
+fn an_attention_before_its_row_still_titles_waiting() {
+    let mut app = home(Attention::default());
+    app.on_line(attention(SESSION, "waiting"));
+    assert_eq!(app.title(), "! fiber · waiting");
+    app.on_line(waiting_row(SESSION, "approval"));
+    assert_eq!(app.title(), "! fiber · approval");
+}
+
+#[test]
+fn a_deleted_session_clears_its_waiting_title() {
+    let mut app = home(Attention::default());
+    app.on_line(waiting_row(SESSION, "approval"));
+    app.on_line(attention(SESSION, "waiting"));
+    assert_eq!(app.title(), "! fiber · approval");
+    // An accepted delete drops the feed row; the next hub line folds the
+    // rows in and clears the title.
+    app.home
+        .as_mut()
+        .unwrap_or_else(|| panic!("home"))
+        .sessions
+        .remove(&contract::SessionId(SESSION.to_owned()));
+    app.on_line(live(OTHER, serde_json::json!({"state": "idle"})));
+    assert_eq!(app.title(), "fiber");
+    // The id waiting again without a new attention line never re-shows.
+    app.on_line(waiting_row(SESSION, "approval"));
+    assert_eq!(app.title(), "fiber");
+}
+
+#[test]
+fn a_seen_row_that_stops_waiting_stays_cleared() {
+    let mut app = home(Attention::default());
+    app.on_line(waiting_row(SESSION, "approval"));
+    app.on_line(attention(SESSION, "waiting"));
+    assert_eq!(app.title(), "! fiber · approval");
+    app.on_line(live(SESSION, serde_json::json!({"state": "streaming"})));
+    assert_eq!(app.title(), "fiber");
+    // Waiting again without a new attention line never re-shows.
+    app.on_line(waiting_row(SESSION, "question"));
+    assert_eq!(app.title(), "fiber");
+    // A new attention line titles again.
+    app.on_line(attention(SESSION, "waiting"));
+    assert_eq!(app.title(), "! fiber · question");
+}
+
+#[test]
+fn a_seen_row_that_leaves_stays_cleared() {
+    let mut app = home(Attention::default());
+    app.on_line(waiting_row(SESSION, "approval"));
+    app.on_line(attention(SESSION, "waiting"));
+    assert_eq!(app.title(), "! fiber · approval");
+    app.on_line(left(SESSION, "exited"));
+    assert_eq!(app.title(), "fiber");
+    // A status resumes the session live, but without a new attention line
+    // the title stays normal.
+    app.on_line(waiting_row(SESSION, "approval"));
+    assert_eq!(app.title(), "fiber");
+}
+
+#[test]
+fn an_attention_for_a_row_already_past_waiting_shows_no_title() {
+    let mut app = home(Attention::default());
+    app.on_line(live(SESSION, serde_json::json!({"state": "streaming"})));
+    app.on_line(attention(SESSION, "waiting"));
+    assert_eq!(app.title(), "fiber");
+    // Waiting later without a new attention line never shows.
+    app.on_line(waiting_row(SESSION, "approval"));
+    assert_eq!(app.title(), "fiber");
+}

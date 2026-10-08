@@ -24,8 +24,11 @@ pub(super) struct State {
 /// "Getting the person's attention").
 #[derive(Debug)]
 enum Latest {
-    /// A session waiting on the person.
-    Waiting(SessionId),
+    /// A session waiting on the person, and whether its feed row has been
+    /// observed since the line arrived: the hub writes `attention` lines on
+    /// a different path from the feed, so the line can arrive before the
+    /// row.
+    Waiting { session: SessionId, seen: bool },
     /// A session whose turn finished.
     Finished,
 }
@@ -48,7 +51,17 @@ impl App {
             let bytes = crate::attention::bytes(&line, settings, self.attention.osc9);
             self.attention.out.extend_from_slice(&bytes);
             self.attention.latest = Some(match line.reason {
-                crate::attention::Reason::Waiting { .. } => Latest::Waiting(line.session),
+                crate::attention::Reason::Waiting { .. } => {
+                    let seen = self
+                        .home
+                        .as_ref()
+                        .and_then(|home| home.sessions.row(&line.session))
+                        .is_some();
+                    Latest::Waiting {
+                        session: line.session,
+                        seen,
+                    }
+                }
                 crate::attention::Reason::Finished => Latest::Finished,
             });
         }
@@ -79,20 +92,63 @@ impl App {
         }
         match &self.attention.latest {
             None => None,
-            Some(Latest::Waiting(session)) => self.waiting_title(session),
+            Some(Latest::Waiting { session, seen }) => self.waiting_title(session, *seen),
             Some(Latest::Finished) => Some("✓ fiber · finished".to_owned()),
+        }
+    }
+
+    /// Folds the feed rows into the latest waiting `attention` line
+    /// (`docs/tui.md`, "Getting the person's attention"): the first row
+    /// observed for the session marks it seen, and once seen, a row that
+    /// is gone, left, or no longer waiting clears the title, so it never
+    /// returns when the id waits again without a new line. A session with
+    /// no row yet still waits. Runs after every hub line, which is where
+    /// every row change folds in.
+    pub(super) fn reconcile_attention(&mut self) {
+        let session = match &self.attention.latest {
+            Some(Latest::Waiting { session, .. }) => session.clone(),
+            Some(Latest::Finished) | None => return,
+        };
+        // Whether a row is listed, and whether it still waits: copied out
+        // so the row's borrow ends before the title clears below.
+        let (present, waiting) = match self
+            .home
+            .as_ref()
+            .and_then(|home| home.sessions.row(&session))
+        {
+            None => (false, false),
+            Some(row) => (true, row.left.is_none() && row.state == HomeState::Waiting),
+        };
+        if !present {
+            let seen = matches!(
+                &self.attention.latest,
+                Some(Latest::Waiting { seen: true, .. })
+            );
+            if seen {
+                self.attention.latest = None;
+            }
+            return;
+        }
+        if let Some(Latest::Waiting { seen, .. }) = self.attention.latest.as_mut() {
+            *seen = true;
+        }
+        if !waiting {
+            self.attention.latest = None;
         }
     }
 
     /// The window title while `session` waits on the person: `! fiber ·
     /// <kind>` while its feed row still waits, else `None` for the normal
-    /// title. A session with no row still waits.
-    fn waiting_title(&self, session: &SessionId) -> Option<String> {
+    /// title. A session with no row yet still waits; one whose row was
+    /// already seen stays cleared, and only a new `attention` line brings
+    /// the title back.
+    fn waiting_title(&self, session: &SessionId, seen: bool) -> Option<String> {
         let kind = match self
             .home
             .as_ref()
             .and_then(|home| home.sessions.row(session))
         {
+            None if seen => return None,
             None => "waiting",
             Some(row) if row.left.is_none() && row.state == HomeState::Waiting => {
                 waiting_kind(row.waiting.as_deref())
