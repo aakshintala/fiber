@@ -97,16 +97,13 @@ pub(crate) struct Paths {
     old: PathBuf,
 }
 
-/// Checks the extension at `source` and copies it, with its record, to a
-/// fresh directory beside where it will live; nothing installed changes.
-/// `id` is unique to the plan, so two plans never share a directory.
-pub(crate) fn stage(
-    home: &Path,
-    id: usize,
+/// Every check staging makes on the extension at `source`, without writing
+/// anything: its manifest, the Fiber version it needs against
+/// `fiber_version`, its API version, its name, and its providers' data.
+pub(crate) fn check(
     source: &Path,
     fiber_version: &str,
-    record: &Record,
-) -> Result<(Manifest, Vec<ProviderData>, Paths), Error> {
+) -> Result<(Manifest, Vec<ProviderData>), Error> {
     let manifest = config::read_manifest(source)?;
     if version(&manifest.fiber)? > version(fiber_version)? {
         return Err(Error::NeedsNewerFiber {
@@ -121,6 +118,24 @@ pub(crate) fn stage(
             api: manifest.api,
         });
     }
+    slug(&manifest.name)?;
+    let providers = config::read_providers(source)?;
+    Ok((manifest, providers))
+}
+
+/// Checks the extension at `source` and copies it, with its record, to a
+/// fresh directory beside where it will live; nothing installed changes.
+/// `id` is unique to the plan, so two plans never share a directory. The
+/// providers returned are read from the copy, which keeps symbolic links
+/// as links, so a link that leaves the extension is refused there.
+pub(crate) fn stage(
+    home: &Path,
+    id: usize,
+    source: &Path,
+    fiber_version: &str,
+    record: &Record,
+) -> Result<(Manifest, Vec<ProviderData>, Paths), Error> {
+    let (manifest, _) = check(source, fiber_version)?;
     let slug = slug(&manifest.name)?;
     let root = home.join("extensions");
     fs::create_dir_all(&root).map_err(io(&root))?;
@@ -417,7 +432,7 @@ pub(crate) fn slug(name: &str) -> Result<String, Error> {
 }
 
 /// Copies a directory tree, keeping symbolic links as links.
-fn copy(from: &Path, to: &Path) -> Result<(), Error> {
+pub(crate) fn copy(from: &Path, to: &Path) -> Result<(), Error> {
     fs::create_dir_all(to).map_err(io(to))?;
     for entry in fs::read_dir(from).map_err(io(from))? {
         let entry = entry.map_err(io(from))?;

@@ -1,0 +1,8 @@
+#!/bin/sh
+# Stands in for sysctl in crates/main/tests/install_script.rs: the test
+# picks whether `sysctl -n hw.optional.arm64` reports an arm64 Mac.
+if [ "$*" = "-n hw.optional.arm64" ]; then
+  printf '%s\n' "$FIBER_TEST_ARM64"
+else
+  exit 64
+fi

@@ -92,6 +92,8 @@ pub(super) fn again(name: &str, e: &Error) -> Error {
         | Error::InstallExited { .. }
         | Error::Download { .. }
         | Error::BinaryChecksum { .. }
+        | Error::ArchiveChecksum { .. }
+        | Error::BadArchive { .. }
         | Error::Rollback { .. }
         | Error::ProviderMissing { .. }
         | Error::ModelMissing { .. }

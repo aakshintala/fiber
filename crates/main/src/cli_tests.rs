@@ -1387,6 +1387,40 @@ fn help_hub_install_prints_that_commands_help() {
 }
 
 #[test]
+fn the_hidden_release_install_takes_a_version_and_a_base_url() {
+    let Invocation::Run(Some(Commands::ReleaseInstall { version, base_url })) =
+        parse_from(["fiber", "release-install", "0.3.0"])
+    else {
+        panic!("release-install with a version");
+    };
+    assert_eq!(version, "0.3.0");
+    assert_eq!(base_url, None);
+    let Invocation::Run(Some(Commands::ReleaseInstall { version, base_url })) = parse_from([
+        "fiber",
+        "release-install",
+        "0.3.0",
+        "--base-url",
+        "file:///tmp/r",
+    ]) else {
+        panic!("release-install with a base URL");
+    };
+    assert_eq!(version, "0.3.0");
+    assert_eq!(base_url.as_deref(), Some("file:///tmp/r"));
+    assert!(
+        command()
+            .try_get_matches_from(["fiber", "release-install"])
+            .is_err(),
+        "the version is required"
+    );
+    assert!(
+        !command()
+            .get_subcommands()
+            .any(|sub| sub.get_name() == "release-install" && !sub.is_hide_set()),
+        "the release install step stays out of the menu"
+    );
+}
+
+#[test]
 fn the_hidden_refresh_child_takes_provider_names_only() {
     let Invocation::Run(Some(Commands::RefreshModelLists { providers })) =
         parse_from(["fiber", "refresh-model-lists", "openai", "anthropic"])

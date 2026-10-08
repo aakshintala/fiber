@@ -21,6 +21,7 @@ mod manage;
 mod oauth;
 mod prepare;
 mod providers;
+mod release;
 mod repository;
 mod resolve;
 
@@ -42,6 +43,7 @@ pub use manage::{Item, Plan, Request, plan};
 pub use oauth::{Browser, SystemBrowser};
 pub use prepare::platform;
 pub use providers::{Model, Providers, StartedRefresh, leave_out_invalid, refresh_lists};
+pub use release::{Release, install_release};
 pub use repository::{
     Decision, Index, Pending, RepoItem, SessionOffer, Store, declared_items, hash, kind_name,
     pending,
@@ -207,10 +209,10 @@ pub enum Error {
         /// Why, including what the step wrote.
         why: String,
     },
-    /// A binary could not be downloaded.
-    #[error("`{name}`: its binary could not be downloaded: {why}")]
+    /// A download failed: an extension's binary, or a release file.
+    #[error("`{name}`: a download failed: {why}")]
     Download {
-        /// The extension.
+        /// The extension, or the release file.
         name: String,
         /// Why.
         why: String,
@@ -222,6 +224,25 @@ pub enum Error {
         name: String,
         /// Where it was downloaded from.
         url: String,
+    },
+    /// A release archive whose SHA-256 is not the one its `.sha256` file
+    /// holds.
+    #[error("`{archive}` from {url} does not match its .sha256 file.")]
+    ArchiveChecksum {
+        /// The archive's file name.
+        archive: String,
+        /// Where it was downloaded from.
+        url: String,
+    },
+    /// A release archive Fiber will not unpack: not gzip, not plain ustar, a
+    /// member that is not a file, a directory or a relative symlink inside
+    /// its directory, or a layout that is not the release's.
+    #[error("`{archive}`: {why}")]
+    BadArchive {
+        /// The archive's file name.
+        archive: String,
+        /// Why, naming the member.
+        why: String,
     },
     /// A move failed and some extensions could not be put back.
     #[error("The install failed ({why}) and these could not be put back: {}", stuck.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", "))]
@@ -411,6 +432,8 @@ impl Error {
             | Self::BadRecord { .. }
             | Self::InstallStep { .. }
             | Self::BinaryChecksum { .. }
+            | Self::ArchiveChecksum { .. }
+            | Self::BadArchive { .. }
             | Self::Rollback { .. } => ErrorCode::IoFailed,
             Self::InstallExited { .. } => ErrorCode::NonzeroExit,
             Self::MajorConflict { .. } | Self::NoVersion { .. } | Self::Unresolved => {

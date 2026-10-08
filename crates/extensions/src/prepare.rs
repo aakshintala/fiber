@@ -101,7 +101,7 @@ fn binary_name(url: &str) -> Option<&str> {
     (!name.is_empty() && name != "." && name != "..").then_some(name)
 }
 
-fn download(name: &str, url: &str) -> Result<Vec<u8>, Error> {
+pub(crate) fn download(name: &str, url: &str) -> Result<Vec<u8>, Error> {
     let fail = |why: String| Error::Download {
         name: name.into(),
         why: format!("{url}: {why}"),
@@ -123,7 +123,7 @@ fn download(name: &str, url: &str) -> Result<Vec<u8>, Error> {
         .map_err(|e| fail(e.to_string()))
 }
 
-fn hex(bytes: &[u8]) -> String {
+pub(crate) fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 

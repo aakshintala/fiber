@@ -428,6 +428,29 @@ fn main() {
         let (text, _, _) = encoding_rs::WINDOWS_1252.decode(&bytes);
         black_box(text.len());
     }
+    #[cfg(feature = "flate2")]
+    {
+        // The release install step: a 4 MiB ustar-like stream gzipped in
+        // process, a block at a time, then streamed from memory through the
+        // decoder, as the unpacker reads a downloaded archive.
+        use std::io::Write;
+        let mut encoder =
+            flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        let page = text(40);
+        let mut written = 0;
+        while written < 4 * 1024 * 1024 {
+            let mut member = vec![0u8; 512];
+            member[..12].copy_from_slice(b"docs/page.md");
+            member[257..263].copy_from_slice(b"ustar\0");
+            member.extend_from_slice(page.as_bytes());
+            member.resize(member.len().next_multiple_of(512), 0);
+            encoder.write_all(&member).unwrap();
+            written += member.len();
+        }
+        let gz = encoder.finish().unwrap();
+        let mut decoder = flate2::bufread::GzDecoder::new(&gz[..]);
+        black_box(std::io::copy(&mut decoder, &mut std::io::sink()).unwrap());
+    }
     #[cfg(feature = "pulldown-cmark")]
     {
         let md = "# Heading\n\nSome *emphasis* and `code`.\n\n- item\n- item\n\n```rust\nfn main() {}\n```\n\n".repeat(20);

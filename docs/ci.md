@@ -123,6 +123,7 @@ On Linux x86_64 alone:
 - no crate but `tui` and `main` has `ratatui` or `crossterm` in its normal
   dependency tree (`cargo xtask tui-isolation`), so no other crate depends on
   a crate admitted only for the terminal
+- `shellcheck --shell=sh` on `scripts/install.sh` and its test stubs
 - cargo-deny's licence, source and ban checks
 - the built-in tool definitions within their byte budget, with each
   definition's size printed

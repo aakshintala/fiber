@@ -4,7 +4,8 @@
 //! `fiber extension install`, `fiber extension update`,
 //! `fiber extension remove`, `fiber extension list`, `fiber hub install`,
 //! `fiber hub uninstall` and `fiber hub status`, and the hub restart
-//! `fiber update` calls (`docs/architecture.md`, "The modules"). `main` parses argv and
+//! `fiber update` calls, and the release install step `install.sh` runs
+//! (`docs/architecture.md`, "The modules"). `main` parses argv and
 //! dispatches here; this crate takes plain values.
 
 use std::fmt::Display;
@@ -24,6 +25,7 @@ mod hub_unit;
 mod login;
 mod models;
 mod prune;
+mod release;
 mod sessions;
 mod sessions_list;
 mod table;
@@ -36,6 +38,7 @@ pub use hub_status::hub_status;
 pub use login::{LogoutTarget, run_login, run_logout};
 pub use models::{models, refresh_model_lists};
 pub use prune::{PruneArgs, prune};
+pub use release::release_install;
 pub use sessions::{delete, export};
 pub use sessions_list::list as sessions_list;
 

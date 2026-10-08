@@ -170,6 +170,17 @@ pub(crate) enum Commands {
         #[arg(value_name = "provider")]
         providers: Vec<String>,
     },
+    /// The release install step `install.sh` runs: hidden and free to
+    /// change.
+    #[command(hide = true)]
+    ReleaseInstall {
+        /// The release's version, which must be this binary's own.
+        #[arg(value_name = "version")]
+        version: String,
+        /// Where releases are published, for tests.
+        #[arg(long = "base-url", value_name = "url")]
+        base_url: Option<String>,
+    },
     /// Manage the hub's login service, or print the hub's state
     #[command(subcommand, arg_required_else_help = false)]
     Hub(HubCommands),

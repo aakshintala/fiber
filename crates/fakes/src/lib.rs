@@ -21,6 +21,7 @@ pub mod refused;
 mod rerun;
 mod scripted_provider;
 mod temp_dir;
+pub mod ustar;
 mod watchdog;
 mod within;
 
