@@ -561,6 +561,14 @@ fn kinds(lines: &[Value]) -> Vec<&str> {
         .map(|line| line["kind"].as_str().unwrap())
         .collect()
 }
+
+/// The ordered event kinds, omitting `clients`, which can race with loop writes.
+fn kinds_except_clients(lines: &[Value]) -> Vec<&str> {
+    kinds(lines)
+        .into_iter()
+        .filter(|kind| *kind != "clients")
+        .collect()
+}
 /// The socket's event kinds for one prompt and `close`: the subscribe, the
 /// prompt's turn, and the close. The prompt-over-the-socket, skill and
 /// same-id tests run exactly this shape, so they share it.
@@ -3034,8 +3042,18 @@ fn a_resumed_session_answers_commands_with_its_servers_prompts() {
     drop(client);
     let (status, out, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
+    for stream in [&events, &out] {
+        assert_eq!(
+            kinds(stream)
+                .iter()
+                .filter(|kind| **kind == "clients")
+                .count(),
+            1,
+            "the resumed client was counted once"
+        );
+    }
     assert_eq!(
-        kinds(&events),
+        kinds_except_clients(&events),
         [
             "command_accepted",
             "session_started",
@@ -3053,7 +3071,6 @@ fn a_resumed_session_answers_commands_with_its_servers_prompts() {
             "fiber_exited",
             "fiber_started",
             "extensions_loaded",
-            "clients",
             "preamble_built",
             "permission_requested",
             "command_accepted",
@@ -3062,11 +3079,10 @@ fn a_resumed_session_answers_commands_with_its_servers_prompts() {
         ],
     );
     assert_eq!(
-        kinds(&out),
+        kinds_except_clients(&out),
         [
             "fiber_started",
             "extensions_loaded",
-            "clients",
             "preamble_built",
             "permission_requested",
             "fiber_exited",
