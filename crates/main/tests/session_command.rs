@@ -2991,27 +2991,38 @@ fn a_resumed_session_answers_commands_with_its_servers_prompts() {
 
     let mut running = setup.start_session(&id, &["--resume"]);
     let client = running.connect(&setup.socket(&id));
-    let (mut events, result) = commands_answer(&client);
+    // Capture the replayed request before asking for commands: it can arrive
+    // before that command's answer and be consumed with it.
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    let mut resumed = false;
+    let mut events = until(&client, "the re-raised permission request", |line| {
+        if line["kind"] == "fiber_started" && line["payload"]["resumed"] == true {
+            resumed = true;
+        }
+        resumed
+            && line["kind"] == "permission_requested"
+            && line["payload"]["request_id"] == pending.as_str()
+    });
+    assert_eq!(
+        events.last().unwrap()["payload"]["request_id"],
+        pending.as_str()
+    );
+
+    send(&client, r#"{"id":"c_cmds","command":"commands"}"#);
+    let commands = until(&client, "the commands answer", |line| {
+        line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_cmds"
+    });
+    let result = commands.last().unwrap()["payload"]["result"].clone();
     assert_eq!(
         result,
         json!({"commands": [
             {"name": "greet", "description": "Greets someone.",
              "argument_hint": "<who> [tone]", "tag": "fx"}]})
     );
-    let mut resumed = events
-        .iter()
-        .any(|line| line["kind"] == "fiber_started" && line["payload"]["resumed"] == true);
-    let replay = until(&client, "the re-raised permission request", |line| {
-        if line["kind"] == "fiber_started" && line["payload"]["resumed"] == true {
-            resumed = true;
-        }
-        resumed && line["kind"] == "permission_requested"
-    });
-    assert_eq!(
-        replay.last().unwrap()["payload"]["request_id"],
-        pending.as_str()
-    );
-    events.extend(replay);
+    events.extend(commands);
     send(
         &client,
         r#"{"id":"c_close_now","command":"close","args":{"now":true}}"#,
@@ -3043,9 +3054,9 @@ fn a_resumed_session_answers_commands_with_its_servers_prompts() {
             "fiber_started",
             "extensions_loaded",
             "clients",
-            "command_accepted",
             "preamble_built",
             "permission_requested",
+            "command_accepted",
             "command_accepted",
             "fiber_exited",
         ],
