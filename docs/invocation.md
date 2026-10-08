@@ -552,7 +552,9 @@ bound has passed. A command after `close` and before `fiber_exited` still gets
 
 **A session that never got a prompt leaves nothing behind.** A session that
 exits with no `turn_started` and no `repository_code_offered` in its log
-deletes its own directory.
+deletes its own directory, unless its `session_started` has `forked_from`
+and its process started: a rewind's new session is kept, because the old
+session's `rewound` points at it.
 
 **`close` ends the session whoever else is attached.** It accepts no more
 prompts, finishes the turn in flight, then any running jobs (`docs/tools.md`,

@@ -56,6 +56,8 @@ pub(crate) struct FakeStarter {
     received: Arc<Received>,
     /// Each `resume` call's session and workspace, in order.
     resumed: Arc<Mutex<Vec<(SessionId, PathBuf)>>>,
+    /// Each `rewind` call's new session, workspace and old session, in order.
+    rewound: Arc<Mutex<Vec<(SessionId, PathBuf, SessionId)>>>,
     /// The connections the fake sessions accepted and still serve.
     serving: Arc<Serving>,
     /// How many more `resume` calls exit `session_held` without binding,
@@ -156,6 +158,7 @@ impl FakeStarter {
             append_started: false,
             received: Arc::new(Received::default()),
             resumed: Arc::new(Mutex::new(Vec::new())),
+            rewound: Arc::new(Mutex::new(Vec::new())),
             serving: Arc::new(Serving::default()),
             held: Arc::new(Mutex::new(0)),
         }
@@ -181,6 +184,11 @@ impl FakeStarter {
     /// Each `resume` call's session and workspace, in order.
     pub(crate) fn resumed(&self) -> Vec<(SessionId, PathBuf)> {
         lock(&self.resumed).clone()
+    }
+
+    /// Each `rewind` call's new session, workspace and old session, in order.
+    pub(crate) fn rewound(&self) -> Vec<(SessionId, PathBuf, SessionId)> {
+        lock(&self.rewound).clone()
     }
 
     /// Ends session `id` as an exiting process does: its socket is gone,
@@ -237,6 +245,16 @@ impl Starter for FakeStarter {
         _workspace: &Path,
         _model: Option<&str>,
     ) -> std::io::Result<Box<dyn Started>> {
+        self.launch(id)
+    }
+
+    fn rewind(
+        &self,
+        id: &SessionId,
+        workspace: &Path,
+        from: &SessionId,
+    ) -> std::io::Result<Box<dyn Started>> {
+        lock(&self.rewound).push((id.clone(), workspace.to_path_buf(), from.clone()));
         self.launch(id)
     }
 

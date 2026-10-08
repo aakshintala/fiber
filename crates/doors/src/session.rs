@@ -584,21 +584,26 @@ pub(crate) fn park_reader_for_test() {
     tests::park_reader();
 }
 
-/// Whether the session's log has a `turn_started` or a
-/// `repository_code_offered`, read one line at a time up to the first: a
-/// session that exits on its first offer is kept, so the offer is raised
-/// again on resume. A log that cannot be read, or a line that does not parse
-/// before the first, keeps the session, so nothing is deleted on a guess.
+/// Whether the session's log shows it was ever prompted: a `turn_started`
+/// or a `repository_code_offered`, read one line at a time up to the first:
+/// a session that exits on its first offer is kept, so the offer is raised
+/// again on resume. A session that continues another is kept once its
+/// process started, even with no prompt yet: the old log's `rewound`
+/// points at it (`docs/invocation.md`, "Lifecycle"). A log that cannot be
+/// read, or a line that does not parse before the first, keeps the session,
+/// so nothing is deleted on a guess.
 fn prompted(dir: &Path) -> bool {
     log::lines(dir).map_or(true, |mut lines| {
+        let mut forked = false;
         lines.any(|line| {
-            line.map_or(true, |line| {
-                matches!(
-                    Event::from_envelope(&line),
-                    Ok(Some(
-                        Event::TurnStarted(_) | Event::RepositoryCodeOffered(_)
-                    ))
-                )
+            line.map_or(true, |line| match Event::from_envelope(&line) {
+                Ok(Some(Event::TurnStarted(_) | Event::RepositoryCodeOffered(_))) => true,
+                Ok(Some(Event::SessionStarted(started))) => {
+                    forked = started.forked_from.is_some();
+                    false
+                }
+                Ok(Some(Event::FiberStarted(_))) => forked,
+                Ok(_) | Err(_) => false,
             })
         })
     })
@@ -626,10 +631,13 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// Copies every event to `out`, one JSON line each, until `fiber_exited` or
-/// the end of the log. Durable lines serialize as the log wrote them, so
-/// stdout filtered to them is `events.jsonl` byte for byte
-/// (`docs/invocation.md`, "What a caller gets back").
+/// Copies every event to `out`, one JSON line each, until `fiber_exited`
+/// or `rewound`, or the end of the log. Durable lines serialize as the log
+/// wrote them, so stdout filtered to them is `events.jsonl` byte for byte
+/// (`docs/invocation.md`, "What a caller gets back"). `rewound` closes
+/// the process boundary as `fiber_exited` does: nothing follows it, so the
+/// copy ends there even while the log itself is still held
+/// (`docs/events.md`, "Rewind").
 fn print(mut watcher: Watcher, mut out: Box<dyn Write + Send>) {
     while let Ok(Some(line)) = watcher.recv() {
         if line.kind == client::STOP {
@@ -640,7 +648,7 @@ fn print(mut watcher: Watcher, mut out: Box<dyn Write + Send>) {
         if client::write_line(out.as_mut(), &line).is_err() {
             return;
         }
-        if line.kind == "fiber_exited" {
+        if line.kind == "fiber_exited" || line.kind == "rewound" {
             return;
         }
     }

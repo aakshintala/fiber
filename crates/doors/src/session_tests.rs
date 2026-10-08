@@ -2433,3 +2433,134 @@ fn the_inbox_wake_wakes_the_loop_and_never_keeps_the_inbox_open() {
         "the inbox closes with the session"
     );
 }
+
+#[test]
+fn close_keeps_a_started_rewound_session_with_no_prompt() {
+    use contract::events::{FiberStarted, Rewind, SessionStarted, Variables, VariablesSource};
+    use contract::shapes::Point;
+
+    let started = || {
+        Event::SessionStarted(SessionStarted {
+            workspace: "/w".into(),
+            variables: Variables {
+                path: "/usr/bin".into(),
+                names: Vec::new(),
+                source: VariablesSource::Inherited,
+            },
+            parent: None,
+            forked_from: Some(Point {
+                session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".into()),
+                seq: contract::Seq(3),
+            }),
+            rewind: Some(Rewind {
+                summary: None,
+                note: "n".into(),
+                jobs: Vec::new(),
+            }),
+            worktree: None,
+        })
+    };
+    let fiber = || {
+        Event::FiberStarted(FiberStarted {
+            version: "0.0.0".into(),
+            resumed: false,
+        })
+    };
+    assert!(
+        kept_after_close(vec![started(), fiber()]),
+        "a started rewound session is kept"
+    );
+    assert!(
+        !kept_after_close(vec![started()]),
+        "a rewind that never started leaves nothing behind"
+    );
+    let plain = || {
+        let Event::SessionStarted(mut first) = started() else {
+            panic!("a session_started");
+        };
+        first.forked_from = None;
+        first.rewind = None;
+        Event::SessionStarted(first)
+    };
+    assert!(
+        !kept_after_close(vec![plain(), fiber()]),
+        "a started session with no point to continue from is deleted"
+    );
+}
+
+#[test]
+fn print_ends_at_rewound_while_the_log_is_held() {
+    use contract::events::{Rewound, SessionStarted, Variables, VariablesSource};
+    use contract::shapes::Point;
+
+    struct SharedOut(Arc<Mutex<Vec<u8>>>);
+    impl Write for SharedOut {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            lock(&self.0).extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let temp = fakes::TempDir::new("fd");
+    let sessions = temp.path().join("h").join("projects/p/sessions");
+    let id = contract::SessionId(crate::mint("s_"));
+    let clock = FakeClock::new();
+    let timed: Arc<dyn Clock> = clock;
+    let log = Arc::new(Log::create(&sessions, id.clone(), Arc::clone(&timed)).unwrap());
+    let watcher = log.watch();
+    // Seeded after the watch starts, as the printer sees them live.
+    for event in [
+        Event::SessionStarted(SessionStarted {
+            workspace: "/w".into(),
+            variables: Variables {
+                path: "/usr/bin".into(),
+                names: Vec::new(),
+                source: VariablesSource::Inherited,
+            },
+            parent: None,
+            forked_from: Some(Point {
+                session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".into()),
+                seq: contract::Seq(3),
+            }),
+            rewind: None,
+            worktree: None,
+        }),
+        Event::Rewound(Rewound {
+            new_session_id: contract::SessionId("s_bbbbbbbbbbbbbbbb".into()),
+            seq: contract::Seq(5),
+            from_session_id: None,
+            jobs: Vec::new(),
+        }),
+    ] {
+        log.append(&event, None, None).unwrap();
+    }
+    let out = Arc::new(Mutex::new(Vec::new()));
+    let (done, finished) = mpsc::channel();
+    thread::Builder::new()
+        .name("print-rewound".to_owned())
+        .spawn({
+            let out = Arc::clone(&out);
+            move || {
+                super::print(watcher, Box::new(SharedOut(out)));
+                done.send(()).unwrap_or(());
+            }
+        })
+        .unwrap();
+    // The log stays held: without `rewound` closing the copy, the print
+    // would wait for a `fiber_exited` that never comes.
+    let _held = log;
+    assert!(
+        finished.recv_timeout(DEADLINE).is_ok(),
+        "the copy ends at `rewound`"
+    );
+    let out = String::from_utf8_lossy(&lock(&out).clone()).into_owned();
+    assert_eq!(out.lines().count(), 2, "both lines are copied");
+    assert!(
+        out.contains("\"rewound\""),
+        "the last line copied is `rewound`"
+    );
+}

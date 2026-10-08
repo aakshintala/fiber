@@ -26,7 +26,7 @@ use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Sender};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -71,6 +71,9 @@ pub(crate) struct Feed {
     /// scanner.
     _wake: Arc<dyn Wake>,
     scanner: Mutex<Option<JoinHandle<()>>>,
+    /// Starts the session a `rewound` last line names, set once by the hub
+    /// serving it, so a rewind no client relays still starts it.
+    pub(crate) on_rewound: OnceLock<Box<dyn Fn(SessionId, SessionId) + Send + Sync>>,
     #[cfg(test)]
     settle_pause: Mutex<Option<SettlePause>>,
 }
@@ -146,6 +149,7 @@ impl Feed {
             tick,
             _wake: wake,
             scanner: Mutex::new(None),
+            on_rewound: OnceLock::new(),
             #[cfg(test)]
             settle_pause: Mutex::new(None),
         }
@@ -483,6 +487,7 @@ impl Feed {
     /// directory is gone was never prompted: it exited, leaving nothing.
     fn on_left(&self, id: &str, found: Option<(String, PathBuf, u64)>) {
         let _settle = Settle(self, id);
+        crate::rewind::notify_left(&self.on_rewound, id, &found);
         let how = found
             .as_ref()
             .filter(|(_, dir, _)| dir.is_dir())

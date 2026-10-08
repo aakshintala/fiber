@@ -216,6 +216,15 @@ impl crate::Starter for FailStarter {
     fn resume(&self, _id: &SessionId, _workspace: &Path) -> io::Result<Box<dyn crate::Started>> {
         Err(io::Error::other(self.message.clone()))
     }
+
+    fn rewind(
+        &self,
+        _id: &SessionId,
+        _workspace: &Path,
+        _from: &SessionId,
+    ) -> io::Result<Box<dyn crate::Started>> {
+        Err(io::Error::other(self.message.clone()))
+    }
 }
 
 #[test]

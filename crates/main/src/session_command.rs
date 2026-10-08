@@ -52,6 +52,15 @@ pub(crate) fn run(
             fiber,
         );
     }
+    if let Some(from) = args.rewound_from {
+        return crate::rewind::session_rewound(
+            SessionId(args.id),
+            SessionId(from),
+            clock,
+            &signals,
+            fiber,
+        );
+    }
     // A delegate's stdin is its lifeline: the parent holds the write end
     // open and never writes to it (`docs/delegates.md`, "Lifetime").
     let parent = args
@@ -106,7 +115,7 @@ pub(crate) fn new_session(
     let host = case_run.as_ref().map(|case| case.host_script());
     if !worktree {
         return match run_new(
-            id, model, prompt, one_turn, None, clock, signals, fiber, host, case_run, parent,
+            id, model, prompt, one_turn, None, clock, signals, fiber, host, case_run, parent, None,
         ) {
             Ok(code) => code,
             Err(failure) => report(signals, failure),
@@ -156,6 +165,7 @@ pub(crate) fn new_session(
         fiber,
         host,
         case_run,
+        parent,
         None,
     );
     isolation.end();
@@ -171,7 +181,7 @@ pub(crate) fn new_session(
     clippy::too_many_arguments,
     reason = "session execution carries its isolation, case and startup inputs"
 )]
-fn run_new(
+pub(crate) fn run_new(
     id: SessionId,
     model: Option<String>,
     prompt: Option<String>,
@@ -183,8 +193,34 @@ fn run_new(
     host: Option<Arc<extensions::HostScript>>,
     case_run: Option<Arc<crate::case::run::CaseRun>>,
     parent: Option<Parent>,
+    rewound: Option<r#loop::Rewound>,
 ) -> Result<i32, Failure> {
-    let mut parts = parts_with(model, None, None, None, Arc::clone(&clock), host)?;
+    // A rewind's new session runs where the old one did, with the model,
+    // credential and thinking level the old log's latest build recorded,
+    // as a resume keeps its recorded ones (`docs/events.md`, "Rewind").
+    let mut parts = match &rewound {
+        Some(start) => {
+            let home = config::fiber_home_from_env().map_err(|e| failed(e.code(), e))?;
+            let workspace = std::env::current_dir()
+                .map_err(|e| failed(ErrorCode::IoFailed, format!("the current directory: {e}")))?;
+            let sessions = log::sessions_dir(&home, &doors::project(&workspace));
+            let folded = r#loop::forked(&sessions.join(&start.from.session_id.0), start.from.seq)
+                .map_err(|e| failed(e.code(), e))?;
+            let thinking = folded
+                .thinking
+                .as_deref()
+                .and_then(|level| level.parse::<contract::ThinkingLevel>().ok());
+            parts_with(
+                None,
+                folded.model.as_deref(),
+                folded.credential.as_deref(),
+                thinking,
+                Arc::clone(&clock),
+                host,
+            )?
+        }
+        None => parts_with(model, None, None, None, Arc::clone(&clock), host)?,
+    };
     crash::attach(&id);
     let dir = parts.sessions.join(&id.0);
     // The session directory's log: the opening message's environment
@@ -302,33 +338,44 @@ fn run_new(
         run_one_turn,
         cancel,
         |inbox, cancel| {
+            // `Loop::start` writes `session_started`, which `fiber_started`
+            // follows (`docs/events.md`); a rewind's start writes the
+            // `session_started` that continues the old log instead, and a
+            // delegate opens through `Loop::delegate`, naming its parent.
+            let started = match (rewound, parent) {
+                (Some(start), _) => Loop::rewound(
+                    Arc::clone(&log),
+                    start,
+                    provider,
+                    model,
+                    prompt_inputs,
+                    inbox,
+                    r#loop::capped(tools, &caps),
+                    permissions,
+                ),
+                (None, Some(parent)) => Loop::delegate(
+                    Arc::clone(&log),
+                    provider,
+                    model,
+                    prompt_inputs,
+                    inbox,
+                    r#loop::capped(tools, &caps),
+                    permissions,
+                    parent,
+                ),
+                (None, None) => Loop::start(
+                    Arc::clone(&log),
+                    provider,
+                    model,
+                    prompt_inputs,
+                    inbox,
+                    r#loop::capped(tools, &caps),
+                    permissions,
+                    worktree,
+                ),
+            };
             finish(
-                // `Loop::start` writes `session_started`, which `fiber_started`
-                // follows (`docs/events.md`). A delegate opens through
-                // `Loop::delegate` instead, naming its parent.
-                match parent {
-                    Some(parent) => Loop::delegate(
-                        Arc::clone(&log),
-                        provider,
-                        model,
-                        prompt_inputs,
-                        inbox,
-                        r#loop::capped(tools, &caps),
-                        permissions,
-                        parent,
-                    ),
-                    None => Loop::start(
-                        Arc::clone(&log),
-                        provider,
-                        model,
-                        prompt_inputs,
-                        inbox,
-                        r#loop::capped(tools, &caps),
-                        permissions,
-                        worktree,
-                    ),
-                }
-                .and_then(|looped| {
+                started.and_then(|looped| {
                     r#loop::fiber_started(&log, env!("CARGO_PKG_VERSION"), false)?;
                     session_extensions::written(&log, &extensions)?;
                     r#loop::mcp_servers_started(&log, session_servers.failed, mcp.notices)?;
@@ -373,7 +420,7 @@ fn run_new(
 /// Prints a startup failure, asking about a recorded signal first: a
 /// signal that arrived before `fiber_started` exits with its code and
 /// writes nothing (`docs/invocation.md`, "Shutdown").
-fn report(signals: &doors::Signals, failure: Failure) -> i32 {
+pub(crate) fn report(signals: &doors::Signals, failure: Failure) -> i32 {
     signals.recorded().unwrap_or_else(|| ask_failed(failure))
 }
 

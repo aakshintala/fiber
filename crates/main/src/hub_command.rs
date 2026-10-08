@@ -132,23 +132,43 @@ impl hub::Starter for SpawnStarter {
         workspace: &Path,
         model: Option<&str>,
     ) -> std::io::Result<Box<dyn hub::Started>> {
-        spawn(id, session_command(&self.exe, id, workspace, model, false))
+        spawn(
+            id,
+            session_command(&self.exe, id, workspace, model, false, None),
+        )
     }
 
     fn resume(&self, id: &SessionId, workspace: &Path) -> std::io::Result<Box<dyn hub::Started>> {
-        spawn(id, session_command(&self.exe, id, workspace, None, true))
+        spawn(
+            id,
+            session_command(&self.exe, id, workspace, None, true, None),
+        )
+    }
+
+    fn rewind(
+        &self,
+        id: &SessionId,
+        workspace: &Path,
+        from: &SessionId,
+    ) -> std::io::Result<Box<dyn hub::Started>> {
+        spawn(
+            id,
+            session_command(&self.exe, id, workspace, None, false, Some(from)),
+        )
     }
 }
 
 /// `exe session --id <id> --workspace <workspace>`, with `--model` when
-/// one is named and `--resume` for a resume, in its own process group with
-/// stdout piped for the drain.
+/// one is named, `--resume` for a resume and `--rewound-from` for a
+/// rewind's new session, in its own process group with stdout piped for
+/// the drain.
 fn session_command(
     exe: &Path,
     id: &SessionId,
     workspace: &Path,
     model: Option<&str>,
     resume: bool,
+    rewound_from: Option<&SessionId>,
 ) -> Command {
     let mut command = Command::new(exe);
     command
@@ -162,6 +182,9 @@ fn session_command(
     }
     if resume {
         command.arg("--resume");
+    }
+    if let Some(from) = rewound_from {
+        command.arg("--rewound-from").arg(&from.0);
     }
     command
         .stdin(Stdio::null())

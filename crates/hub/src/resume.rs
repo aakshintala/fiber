@@ -240,9 +240,9 @@ pub(crate) fn find_log(home: &Path, session: &SessionId) -> Option<PathBuf> {
 }
 
 /// What the log's first line, its `session_started`, recorded.
-struct Recorded {
+pub(crate) struct Recorded {
     /// The session's workspace.
-    workspace: PathBuf,
+    pub(crate) workspace: PathBuf,
     /// Whether it names a `parent` that is not `null`: a delegate's. A
     /// parent of any shape counts, so a malformed one is never resumed.
     delegate: bool,
@@ -250,7 +250,7 @@ struct Recorded {
 
 /// What the log's first line recorded. `None` when that line cannot be
 /// read, is not `session_started` or holds no string workspace.
-fn recorded(log: &Path) -> Option<Recorded> {
+pub(crate) fn recorded(log: &Path) -> Option<Recorded> {
     let mut first = String::new();
     BufReader::new(File::open(log).ok()?)
         .read_line(&mut first)

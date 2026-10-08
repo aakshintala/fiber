@@ -1687,3 +1687,51 @@ fn the_hidden_refresh_child_takes_provider_names_only() {
         "the refresh child stays out of the menu"
     );
 }
+
+#[test]
+fn session_rewound_from_parses_and_conflicts_with_a_fresh_start() {
+    let Invocation::Run(Some(Commands::Session(args))) = parse_from([
+        "fiber",
+        "session",
+        "--id",
+        "s_0123456789abcdef",
+        "--workspace",
+        "/home/u/proj",
+        "--rewound-from",
+        "s_aaaaaaaaaaaaaaaa",
+    ]) else {
+        panic!("session with --rewound-from");
+    };
+    assert_eq!(args.rewound_from, Some("s_aaaaaaaaaaaaaaaa".to_owned()));
+    assert!(!args.resume);
+    assert!(!args.worktree);
+
+    for extra in [
+        vec!["--resume"],
+        vec!["--prompt", "hi"],
+        vec!["--model", "fake/m"],
+        vec!["--worktree"],
+        vec![
+            "--prompt",
+            "hi",
+            "--parent",
+            "s_bbbbbbbbbbbbbbbb",
+            "--delegate-id",
+            "j_bbbbbbbbbbbbbbbb",
+        ],
+    ] {
+        let mut argv = vec![
+            "fiber",
+            "session",
+            "--id",
+            "s_0123456789abcdef",
+            "--workspace",
+            "/w",
+            "--rewound-from",
+            "s_aaaaaaaaaaaaaaaa",
+        ];
+        argv.extend(extra);
+        let (_, said) = usage(&argv);
+        assert!(said.contains("--rewound-from"), "{said}");
+    }
+}

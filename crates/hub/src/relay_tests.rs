@@ -24,6 +24,7 @@ fn a_stale_relay_never_overwrites_a_reconnects_subscription() {
             epoch,
             writer,
             kept: Kept::default(),
+            replayed: Replayed::default(),
             thread: None,
         }
     }
@@ -66,6 +67,7 @@ fn a_stale_relay_never_drops_a_reconnect_to_the_same_session() {
             epoch,
             writer,
             kept: Kept::default(),
+            replayed: Replayed::default(),
             thread: None,
         }
     }
@@ -96,6 +98,7 @@ fn relay_slots_drop_only_their_own_entry() {
             epoch,
             writer,
             kept: Kept::default(),
+            replayed: Replayed::default(),
             thread: None,
         }
     }
@@ -120,6 +123,7 @@ fn an_accepted_subscribe_replaces_the_kept_one() {
             epoch,
             writer,
             kept: Kept::default(),
+            replayed: Replayed::default(),
             thread: None,
         }
     }
@@ -177,6 +181,7 @@ fn an_accepted_command_that_is_not_subscribe_changes_nothing() {
             epoch,
             writer,
             kept: Kept::default(),
+            replayed: Replayed::default(),
             thread: None,
         }
     });
@@ -405,6 +410,7 @@ fn a_reconnect_proceeds_without_a_thread_or_after_a_panic() {
             epoch,
             writer,
             kept: Kept::default(),
+            replayed: Replayed::default(),
             thread,
         });
         let (client_write, client_read) = UnixStream::pair().unwrap();
@@ -446,4 +452,340 @@ fn a_reconnect_proceeds_without_a_thread_or_after_a_panic() {
             "the dead entry is gone; only the reconnect's remains"
         );
     }
+}
+
+#[test]
+fn an_accepted_rewind_settles_to_the_session_it_names() {
+    let held = fakes::TempDir::new("rs");
+    let hub = hub(&held);
+    let sid = "s_aaaaaaaaaaaaaaaa";
+    let next = "s_bbbbbbbbbbbbbbbb";
+    let command = json!({"id": "c_rw1", "command": "rewind", "args": {}})
+        .as_object()
+        .unwrap()
+        .clone();
+    let kept: Kept =
+        std::sync::Arc::new(std::sync::Mutex::new(vec![("c_rw1".to_owned(), command)]));
+    let ack = serde_json::to_vec(&json!({
+        "kind": "command_accepted", "ts": 1, "schema_version": 1,
+        "payload": {"command_id": "c_rw1", "result": {"new_session_id": next}},
+    }))
+    .unwrap();
+    match settle(&ack, &kept, &hub, sid, false) {
+        Some(Settled::Rewound(started)) => assert_eq!(started.0, next),
+        settled => panic!("an accepted rewind starts, got {}", settled.is_some()),
+    }
+    assert!(kept.lock().unwrap().is_empty(), "the ack is consumed");
+}
+
+#[test]
+fn a_rewind_without_a_minted_session_settles_to_nothing() {
+    let held = fakes::TempDir::new("rs");
+    let hub = hub(&held);
+    let sid = "s_aaaaaaaaaaaaaaaa";
+    let kept_for = |command: Value| {
+        std::sync::Arc::new(std::sync::Mutex::new(vec![(
+            "c_rw1".to_owned(),
+            command.as_object().unwrap().clone(),
+        )]))
+    };
+    let rewind = json!({"id": "c_rw1", "command": "rewind", "args": {}});
+    // A rejection starts nothing.
+    let rejected = serde_json::to_vec(&json!({
+        "kind": "command_rejected", "ts": 1, "schema_version": 1,
+        "payload": {"command_id": "c_rw1", "code": "busy", "message": "m"},
+    }))
+    .unwrap();
+    assert!(
+        settle(&rejected, &kept_for(rewind.clone()), &hub, sid, false).is_none(),
+        "a rejected rewind starts nothing"
+    );
+    // An acknowledgement naming no minted session starts nothing.
+    for next in [Value::Null, json!("nope"), json!({"id": "x"})] {
+        let ack = serde_json::to_vec(&json!({
+            "kind": "command_accepted", "ts": 1, "schema_version": 1,
+            "payload": {"command_id": "c_rw1", "result": {"new_session_id": next}},
+        }))
+        .unwrap();
+        assert!(
+            settle(&ack, &kept_for(rewind.clone()), &hub, sid, false).is_none(),
+            "an acknowledgement naming {next} starts nothing"
+        );
+    }
+    // An accepted rewind with no result starts nothing.
+    let bare = serde_json::to_vec(&json!({
+        "kind": "command_accepted", "ts": 1, "schema_version": 1,
+        "payload": {"command_id": "c_rw1"},
+    }))
+    .unwrap();
+    assert!(
+        settle(&bare, &kept_for(rewind), &hub, sid, false).is_none(),
+        "an acknowledgement with no result starts nothing"
+    );
+}
+
+#[test]
+fn an_accepted_prompt_naming_a_minted_session_starts_nothing() {
+    let held = fakes::TempDir::new("rs");
+    let hub = hub(&held);
+    let sid = "s_aaaaaaaaaaaaaaaa";
+    let prompt = json!({"id": "c_p1", "command": "prompt", "args": {}})
+        .as_object()
+        .unwrap()
+        .clone();
+    let kept: Kept = std::sync::Arc::new(std::sync::Mutex::new(vec![("c_p1".to_owned(), prompt)]));
+    // Only a rewind starts a session, whatever result an acknowledgement carries.
+    let ack = serde_json::to_vec(&json!({
+        "kind": "command_accepted", "ts": 1, "schema_version": 1,
+        "payload": {"command_id": "c_p1", "result": {"new_session_id": "s_bbbbbbbbbbbbbbbb"}},
+    }))
+    .unwrap();
+    assert!(
+        settle(&ack, &kept, &hub, sid, false).is_none(),
+        "an accepted prompt starts nothing, even with a minted-shape session"
+    );
+    assert!(kept.lock().unwrap().is_empty(), "the ack is consumed");
+}
+
+#[test]
+fn muted_drops_each_replay_once() {
+    let ack = |id: &str| {
+        serde_json::to_vec(&json!({
+            "kind": "command_accepted", "ts": 1, "schema_version": 1,
+            "payload": {"command_id": id},
+        }))
+        .unwrap()
+    };
+    let replayed: Replayed = Replayed::default();
+    replayed.lock().unwrap().push("c_hub".to_owned());
+    assert!(muted(&ack("c_hub"), &replayed));
+    assert!(
+        replayed.lock().unwrap().is_empty(),
+        "a replayed acknowledgement is consumed"
+    );
+    assert!(!muted(&ack("c_hub"), &replayed), "only once");
+    assert!(!muted(&ack("c_1"), &replayed), "other ids pass through");
+    assert!(!muted(b"not json\n", &replayed), "not an acknowledgement");
+}
+
+#[test]
+fn transfer_drops_a_dead_relay_and_reports_it() {
+    let mut relays = Relays::default();
+    let sid = "s_aaaaaaaaaaaaaaaa";
+    let line = json!({"id": "c_sub1", "command": "subscribe", "args": {"level": "full"}})
+        .as_object()
+        .unwrap()
+        .clone();
+    let epoch = relays.mint();
+    let (writer, peer) = UnixStream::pair().unwrap();
+    writer.shutdown(std::net::Shutdown::Both).unwrap_or(());
+    drop(peer);
+    relays.entries.push(Relay {
+        session: sid.to_owned(),
+        epoch,
+        writer,
+        kept: Kept::default(),
+        replayed: Replayed::default(),
+        thread: None,
+    });
+    assert!(!relays.transfer(sid, &line));
+    assert!(relays.entries.is_empty(), "the dead relay is dropped");
+    assert_eq!(
+        relays.subscription(sid),
+        Some(line),
+        "the level is kept anyway"
+    );
+}
+
+#[test]
+fn a_failed_transfer_unmutes_only_its_own_minted_id() {
+    let mut relays = Relays::default();
+    let sid = "s_aaaaaaaaaaaaaaaa";
+    let line = json!({"id": "c_sub1", "command": "subscribe", "args": {"level": "full"}})
+        .as_object()
+        .unwrap()
+        .clone();
+    let epoch = relays.mint();
+    let (writer, peer) = UnixStream::pair().unwrap();
+    writer.shutdown(std::net::Shutdown::Both).unwrap_or(());
+    drop(peer);
+    // A mute from an earlier replay is still waiting for its acknowledgement.
+    let replayed: Replayed = Replayed::default();
+    replayed.lock().unwrap().push("c_unrelated".to_owned());
+    relays.entries.push(Relay {
+        session: sid.to_owned(),
+        epoch,
+        writer,
+        kept: Kept::default(),
+        replayed: std::sync::Arc::clone(&replayed),
+        thread: None,
+    });
+    assert!(!relays.transfer(sid, &line));
+    assert_eq!(
+        *replayed.lock().unwrap(),
+        vec!["c_unrelated".to_owned()],
+        "the failed write's minted mute is removed and the other stays"
+    );
+}
+
+#[test]
+fn a_transfer_registers_before_the_session_can_answer() {
+    use std::io::{BufRead, BufReader, Write};
+    use std::sync::mpsc;
+    use std::time::Duration;
+    const DEADLINE: Duration = Duration::from_secs(10);
+    const SID: &str = "s_0123456789abcdef";
+    let held = fakes::TempDir::new("rt");
+    let hub = std::sync::Arc::new(hub(&held));
+    // The relay thread reads the session end; the fake bridges the entry
+    // writer's end back to it. The reply stays gated until transfer pauses
+    // after its write and before the old registration point.
+    let (relay_end, fake_write_end) = UnixStream::pair().unwrap();
+    let (entry_end, fake_read_end) = UnixStream::pair().unwrap();
+    fake_read_end.set_read_timeout(Some(DEADLINE)).unwrap();
+    let relays: std::sync::Arc<std::sync::Mutex<Relays>> =
+        std::sync::Arc::new(std::sync::Mutex::new(Relays::default()));
+    let (written_tx, written_rx) = mpsc::channel();
+    let (release_transfer_tx, release_transfer_rx) = mpsc::channel();
+    crate::connection::lock(&relays).after_transfer_write = Some(Box::new(move || {
+        written_tx.send(()).unwrap_or(());
+        release_transfer_rx
+            .recv_timeout(DEADLINE)
+            .expect("the test releases the transfer pause");
+    }));
+    let (filter_tx, filter_rx) = mpsc::channel();
+    let (release_filter_tx, release_filter_rx) = mpsc::channel();
+    *crate::connection::lock(&hub.after_replay_filter) = Some(Box::new(move |line, muted| {
+        filter_tx
+            .send((acknowledgement(line).is_some(), muted))
+            .unwrap_or(());
+        release_filter_rx
+            .recv_timeout(DEADLINE)
+            .expect("the test releases the relay pause");
+    }));
+    let (client_write, client_read) = UnixStream::pair().unwrap();
+    client_read.set_read_timeout(Some(DEADLINE)).unwrap();
+    let client_writer = std::sync::Arc::new(std::sync::Mutex::new(client_write));
+    let replayed: Replayed = Replayed::default();
+    let kept: Kept = Kept::default();
+    let epoch = crate::connection::lock(&relays).mint();
+    let thread = std::thread::Builder::new()
+        .name("hub-relay".to_owned())
+        .spawn({
+            let hub = std::sync::Arc::clone(&hub);
+            let writer = std::sync::Arc::clone(&client_writer);
+            let relays = std::sync::Arc::clone(&relays);
+            let replayed = std::sync::Arc::clone(&replayed);
+            let kept = std::sync::Arc::clone(&kept);
+            move || {
+                relay(
+                    RelayThread {
+                        epoch,
+                        replayed,
+                        kept,
+                    },
+                    SID,
+                    relay_end,
+                    &hub,
+                    &writer,
+                    &relays,
+                )
+            }
+        })
+        .unwrap();
+    crate::connection::lock(&relays).entries.push(Relay {
+        session: SID.to_owned(),
+        epoch,
+        writer: entry_end,
+        kept,
+        replayed,
+        thread: None,
+    });
+    let (reply_tx, reply_rx) = mpsc::channel();
+    let fake = std::thread::Builder::new()
+        .name("gated-session".to_owned())
+        .spawn(move || {
+            let mut read = BufReader::new(fake_read_end);
+            let mut buf = String::new();
+            if read.read_line(&mut buf).unwrap() == 0 {
+                return;
+            }
+            let command: Value = serde_json::from_str(buf.trim_end()).unwrap();
+            let id = command.get("id").cloned().unwrap();
+            reply_rx
+                .recv_timeout(DEADLINE)
+                .expect("the test releases the fake reply");
+            let mut ack = serde_json::to_vec(&json!({
+                "kind": "command_accepted", "ts": 1, "schema_version": 1,
+                "payload": {"command_id": id},
+            }))
+            .unwrap();
+            ack.push(b'\n');
+            let mut write = fake_write_end.try_clone().unwrap();
+            write.write_all(&ack).unwrap();
+            write.flush().unwrap();
+            // A live line behind the acknowledgement: the client must read
+            // this first, never the hub-only acknowledgement.
+            let status =
+                b"{\"kind\":\"session_status\",\"ts\":1,\"schema_version\":1,\"payload\":{}}\n";
+            write.write_all(status).unwrap();
+            write.flush().unwrap();
+            // Hold the session open until the entry goes away.
+            buf.clear();
+            match read.read_line(&mut buf) {
+                Ok(_) | Err(_) => {}
+            }
+        })
+        .unwrap();
+    let line = json!({"id": "c_sub1", "command": "subscribe", "args": {"level": "full"}})
+        .as_object()
+        .unwrap()
+        .clone();
+    let transfer = std::thread::Builder::new()
+        .name("relay-transfer".to_owned())
+        .spawn({
+            let relays = std::sync::Arc::clone(&relays);
+            move || crate::connection::lock(&relays).transfer(SID, &line)
+        })
+        .unwrap();
+
+    let write_reached = written_rx.recv_timeout(DEADLINE).is_ok();
+    reply_tx.send(()).unwrap_or(());
+    let filter_result = if write_reached {
+        filter_rx.recv_timeout(DEADLINE).ok()
+    } else {
+        None
+    };
+    // The relay has made its filter decision while transfer is still paused.
+    // This is the bad interleaving if registration follows the write.
+    release_transfer_tx.send(()).unwrap_or(());
+    let transferred = transfer.join().unwrap();
+    release_filter_tx.send(()).unwrap_or(());
+    let mut read = BufReader::new(client_read);
+    let mut first = String::new();
+    let first_read = read.read_line(&mut first);
+    let first_kind = first_read.ok().and_then(|_| {
+        serde_json::from_str::<Value>(first.trim_end())
+            .ok()
+            .and_then(|value| value.get("kind")?.as_str().map(str::to_owned))
+    });
+
+    // Tear down before asserting, so a failed interleaving still joins both
+    // session-side threads.
+    crate::connection::lock(&relays).entries.clear();
+    fake.join().unwrap();
+    thread.join().unwrap();
+
+    assert!(write_reached, "transfer reached the post-write pause");
+    assert_eq!(
+        filter_result,
+        Some((true, true)),
+        "the acknowledgement is filtered before transfer resumes"
+    );
+    assert!(transferred, "the transfer completed");
+    assert_eq!(
+        first_kind.as_deref(),
+        Some("session_status"),
+        "the transferred acknowledgement never reaches the client"
+    );
 }

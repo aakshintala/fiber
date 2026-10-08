@@ -8,6 +8,7 @@
 //! the hub. Every connection
 //! opens with `hub_hello`, before any acknowledgement.
 
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
@@ -19,7 +20,7 @@ use std::time::{Duration, Instant};
 
 use contract::clock::{Clock, Wake, wall_ms};
 use contract::events::CommandResult;
-use contract::{CommandId, ErrorCode, HubLine, SCHEMA_VERSION};
+use contract::{CommandId, ErrorCode, HubLine, SCHEMA_VERSION, SessionId};
 use serde_json::{Map, Value};
 
 use crate::Starter;
@@ -53,12 +54,20 @@ pub(crate) struct Hub {
     /// Held across a resume: one at a time per hub, so two commands for
     /// one exited session start one process.
     pub(crate) resume_gate: Mutex<()>,
+    /// One start at a time per next session: a slow rewind start blocks
+    /// only the threads starting that same session, never a resume, which
+    /// takes the shared gate instead (`docs/invocation.md`, "`rewind`
+    /// starts a new session process").
+    pub(crate) starting: Mutex<HashMap<SessionId, Arc<Mutex<()>>>>,
     /// Tests only: a one-shot pause run before `hub_hello` is sent.
     #[cfg(test)]
     pub(crate) before_hello: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     /// Tests only: a one-shot pause before the next forwarded session line.
     #[cfg(test)]
     pub(crate) before_forward: ForwardHook,
+    /// Tests only: observes and pauses after the relay filters a session line.
+    #[cfg(test)]
+    pub(crate) after_replay_filter: ReplayFilterHook,
     /// Tests only: a one-shot pause before an accepted `subscribe` is kept.
     #[cfg(test)]
     pub(crate) before_accepted: ForwardHook,
@@ -117,10 +126,13 @@ impl Hub {
             tick,
             wake,
             resume_gate: Mutex::new(()),
+            starting: Mutex::new(HashMap::new()),
             #[cfg(test)]
             before_hello: Mutex::new(None),
             #[cfg(test)]
             before_forward: Mutex::new(None),
+            #[cfg(test)]
+            after_replay_filter: Mutex::new(None),
             #[cfg(test)]
             before_accepted: Mutex::new(None),
             #[cfg(test)]
@@ -286,6 +298,10 @@ impl Hub {
 /// the line about to be written, and the relays, with no lock held.
 #[cfg(test)]
 type ForwardHook = Mutex<Option<Box<dyn FnOnce(&[u8], &Arc<Mutex<Relays>>) + Send>>>;
+
+/// Tests only: a one-shot pause after a session line's replay-filter decision.
+#[cfg(test)]
+type ReplayFilterHook = Mutex<Option<Box<dyn FnOnce(&[u8], bool) + Send>>>;
 
 /// What `poll_accept` decided for one accepted stream.
 pub(crate) enum Accept {
