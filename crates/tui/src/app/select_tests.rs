@@ -1132,3 +1132,45 @@ fn the_conversation_area_is_the_drawn_rect() {
         assert!(!below.contains("▣"), "{name}: {below:?}");
     }
 }
+
+#[test]
+fn a_selection_starting_after_a_zero_width_character_skips_it() {
+    // A zero-width grapheme draws into no cell: the copy starts at the
+    // selected `c`, not at the character before it.
+    let mut app = replied(40, 10, "ab\u{200b}cd");
+    let at = find(&app, "ab");
+    let c = right(at, 2);
+    assert_eq!(
+        select(&mut app, c, right(c, 1)),
+        Effect::Copy("cd".to_owned())
+    );
+}
+
+#[test]
+fn a_selection_starting_after_a_wrapped_space_copies_no_space_before_it() {
+    // The space the wrap drops has no cell and lies before the selection.
+    let mut app = replied(12, 10, "alpha beta gamma delta");
+    let gamma = find(&app, "gamma");
+    let delta = find(&app, "delta");
+    assert_eq!(delta.1, gamma.1, "{:#?}", rows(&app));
+    assert_eq!(
+        select(&mut app, gamma, right(delta, 4)),
+        Effect::Copy("gamma delta".to_owned())
+    );
+}
+
+#[test]
+fn a_selection_at_the_area_edge_draws_no_empty_rect() {
+    // No pointer reaches the column past the area's right edge: a span
+    // starting there covers no cell, so it draws no zero-width rect.
+    let mut app = replied(40, 10, "hello there");
+    let area = app.conversation_area();
+    let (top, _) = app.scroll();
+    let edge = super::Point {
+        row: top,
+        col: area.width,
+    };
+    app.select.anchor = Some(edge);
+    app.select.head = Some(edge);
+    assert_eq!(app.selection_cells(area), Vec::<Rect>::new());
+}
