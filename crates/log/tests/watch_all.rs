@@ -19,7 +19,7 @@ use std::time::Duration;
 use common::*;
 use contract::Envelope;
 use contract::emit::Emit;
-use log::{Log, Watcher};
+use log::{Log, Watcher, read};
 use serde_json::{Map, Value};
 
 const DEADLINE: Duration = Duration::from_secs(10);
@@ -265,4 +265,67 @@ fn watch_all_meets_an_unparseable_line_in_a_later_page_when_it_gets_there() {
         err.to_string().contains(&format!("line {}", CAPACITY + 2)),
         "{err}"
     );
+}
+
+/// A log of small lines around three replies of 2 MiB, each larger than a
+/// page, and what each append returned.
+fn large(name: &str) -> (common::TestDir, Log, Vec<Envelope>) {
+    let (tmp, log) = open(name);
+    let reply = "x".repeat(2 * 1024 * 1024);
+    let mut written = Vec::new();
+    for _ in 0..3 {
+        written.push(log.append(&empty("step_started"), None, None).unwrap());
+        let text = event("text_completed", serde_json::json!({"text": reply}));
+        written.push(log.append(&text, None, None).unwrap());
+    }
+    written.push(log.append(&empty("step_started"), None, None).unwrap());
+    (tmp, log, written)
+}
+
+#[test]
+fn watch_all_yields_a_log_of_lines_larger_than_a_page_then_live_lines() {
+    let (tmp, log, written) = large("watch-all-large");
+    assert_eq!(read(&tmp.session(&id("s_1"))).unwrap(), written);
+    let rx = relay(log.watch_all().unwrap());
+    let live = log.append(&empty("step_started"), None, None).unwrap();
+    assert_eq!(durable(&rx, written.len()), written);
+    assert_eq!(next(&rx), Some(live));
+}
+
+#[test]
+fn watch_all_seeded_over_lines_larger_than_a_page_yields_the_log_then_seeds_then_live_lines() {
+    let (_tmp, log, written) = large("watch-all-seeded-large");
+    let tokens = serde_json::json!({"input": 1, "cache_read": 0, "cache_write": {"5m": 0, "1h": 0}, "output": 1});
+    let status = event(
+        "session_status",
+        serde_json::json!({"name": "n", "workspace": "/w", "model": "p/m",
+            "state": "idle", "since": 1,
+            "spend": {"tokens": tokens, "cost": 0.0, "subscription_cost": 0.0},
+            "delegates": 0, "jobs": 0, "project": "-w", "clients": 0}),
+    );
+    let queue = event(
+        "steering_queue",
+        serde_json::json!({"messages": [{"content": [{"type": "text", "text": "t"}],
+            "source": "driver", "command_id": "c"}]}),
+    );
+    let ui = event(
+        "extension_ui",
+        serde_json::json!({"extension": "e", "status": "s"}),
+    );
+    for seed in [&status, &queue, &ui] {
+        log.append(seed, None, None).unwrap();
+    }
+    // A durable line appended after the subscribe returns but before
+    // anything is drained still arrives last: the backlog stops at the
+    // table's line count when the first page was read, and the line reaches
+    // the watcher through its queue, behind the seeds.
+    let watcher = log.watch_all_seeded().unwrap();
+    let live = log.append(&empty("step_started"), None, None).unwrap();
+    let rx = relay(watcher);
+    for line in &written {
+        assert_eq!(next(&rx).as_ref(), Some(line));
+    }
+    let seeds: Vec<String> = (0..3).map(|_| next(&rx).unwrap().kind).collect();
+    assert_eq!(seeds, ["session_status", "steering_queue", "extension_ui"]);
+    assert_eq!(next(&rx), Some(live));
 }

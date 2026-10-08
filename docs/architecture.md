@@ -61,7 +61,7 @@ ephemeral event where it is display-only.
 | `hub` | Lists, starts and resumes sessions and relays every client connection to a session's socket, over its local socket and, when installed with a port, a websocket on `127.0.0.1` that authenticates each device by token (`docs/invocation.md`, "The hub"). Holds no session and no push credential; does no TLS. |
 | `doors` | `fiber ask` (argv or stdin in, JSON lines out), and the internal session command that it, the hub and a parent run. Which doors exist and what a driver may send is `docs/invocation.md`; this page only fixes that none has a privilege the TUI lacks. |
 | `picture` | The image child (`docs/invocation.md`, "Processes"): decodes, refuses, fits and re-encodes one image under the limits in `docs/model-routing.md`, "Image limits". Only `main` depends on it, so no session process runs image code. |
-| `cli` | Every command that does not run a session: `login`, `logout`, `approve`, `sessions`, `sessions export`, `sessions delete`, `sessions prune`, `models`, `extension install/update/remove/list` and `config get/set` today, and later `sessions search`, `upgrade` and `hub pair` as they are built. `main` dispatches to it. |
+| `cli` | Every command that does not run a session: `login`, `logout`, `approve`, `sessions`, `sessions export`, `sessions delete`, `sessions prune`, `models`, `extension install/update/remove/list`, `config get/set`, `hub install`, `hub uninstall` and `hub status` today, and later `sessions search`, `upgrade` and `hub pair` as they are built. `main` dispatches to it. |
 | `main` | The composition root. Parses argv, builds everything once, picks a door. No feature logic. |
 
 ### Why contract exists
@@ -99,9 +99,10 @@ as a normal one, and no release binary contains it.
 
 When a module needs code that sits in a module it may not call, `contract`
 defines a trait and `main` injects the implementation: `Sessions`, the socket
-client in `doors` that `tools` uses for the session tools, and `Images`, the
+client in `doors` that `tools` uses for the session tools, `Images`, the
 image child's driver in `tools` that `doors` and `mcp` use for pasted and MCP
-images.
+images, and `Scan`, the session log search in `log` that `tools` uses for
+`session_search`.
 
 1. Calls point one way. If A may call B, B may never call A. B answers, or it
    emits an event and A picks it up.

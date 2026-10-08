@@ -2,8 +2,9 @@
 //! `fiber logout`, `fiber approve`, `fiber sessions`, `fiber sessions export`,
 //! `fiber sessions delete`, `fiber sessions prune`, `fiber models`,
 //! `fiber extension install`, `fiber extension update`,
-//! `fiber extension remove` and `fiber extension list`
-//! (`docs/architecture.md`, "The modules"). `main` parses argv and
+//! `fiber extension remove`, `fiber extension list`, `fiber hub install`,
+//! `fiber hub uninstall` and `fiber hub status`, and the hub restart
+//! `fiber update` calls (`docs/architecture.md`, "The modules"). `main` parses argv and
 //! dispatches here; this crate takes plain values.
 
 use std::fmt::Display;
@@ -17,6 +18,9 @@ use doors::failure;
 mod approve;
 mod config;
 mod extension;
+mod hub_service;
+mod hub_status;
+mod hub_unit;
 mod login;
 mod models;
 mod prune;
@@ -27,6 +31,8 @@ mod table;
 pub use approve::approve;
 pub use config::{config_get, config_set};
 pub use extension::{extension_install, extension_list, extension_remove, extension_update};
+pub use hub_service::{hub_install, hub_restart, hub_uninstall};
+pub use hub_status::hub_status;
 pub use login::{LogoutTarget, run_login, run_logout};
 pub use models::{models, refresh_model_lists};
 pub use prune::{PruneArgs, prune};

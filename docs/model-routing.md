@@ -67,8 +67,7 @@ and decides it per tool. It sends `true` only when the tool's schema already
 fits the vendor's strict subset, and `false` otherwise. Fiber never rewrites a
 schema to fit, and never moves keywords into the description. Fiber's built-in
 tools are written to fit the strict subset, except a tool whose section in
-`docs/tools.md` says it is sent with `strict: false` (`ask_user`,
-`name_session`).
+`docs/tools.md` says it is sent with `strict: false`.
 
 An extension cannot add a protocol. A vendor with a new wire format needs a
 Fiber release.

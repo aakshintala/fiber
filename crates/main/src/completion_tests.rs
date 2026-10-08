@@ -102,7 +102,7 @@ fn the_copy_has_the_parsers_visible_grammar_in_both_directions() {
             "image",
             "session",
             "refresh-model-lists",
-            "hub",
+            "serve",
         ] {
             assert!(
                 !shape.path.split(' ').any(|word| word == hidden),
@@ -116,6 +116,13 @@ fn the_copy_has_the_parsers_visible_grammar_in_both_directions() {
             );
         }
     }
+    assert!(paths.contains(&"fiber hub install"), "{paths:?}");
+    assert!(
+        copy.iter()
+            .flat_map(|shape| &shape.args)
+            .all(|arg| arg.long.as_deref() != Some("installed")),
+        "the copy offers --installed"
+    );
     let root = copy.first().unwrap();
     let flags: Vec<(Option<char>, Option<&str>)> = root
         .args
@@ -251,7 +258,13 @@ fn the_fish_script_offers_commands_and_ends_without_file_names() {
         ),
         "{text}"
     );
-    for absent in ["\"grep\"", "\"hub\"", "\"session\"", "bash zsh fish"] {
+    for absent in [
+        "\"grep\"",
+        "\"serve\"",
+        "-l installed",
+        "\"session\"",
+        "bash zsh fish",
+    ] {
         assert!(!text.contains(absent), "{absent}\n{text}");
     }
 }

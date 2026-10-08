@@ -705,34 +705,17 @@ fn excess_list_closes_pop_the_counter_first() {
 
 #[test]
 fn a_million_nested_lists_keep_the_stack_at_its_cap() {
-    use html5ever::tokenizer::{BufferQueue, Tokenizer, TokenizerOpts};
-    use std::cell::RefCell;
-
     let depth = 1_000_000;
-    let cell = RefCell::new(super::Converter::default());
+    let mut stream = super::Stream::default();
+    stream.push(&"<ul>".repeat(depth));
     {
-        let sink = super::Sink { cell: &cell };
-        let tokenizer = Tokenizer::new(sink, TokenizerOpts::default());
-        let queue = BufferQueue::default();
-        queue.push_back("<ul>".repeat(depth).into());
-        let _feed = tokenizer.feed(&queue);
-        tokenizer.end();
-    }
-    {
-        let converter = cell.borrow();
+        let converter = stream.tokenizer.sink.cell.borrow();
         assert_eq!(converter.lists.len(), super::MAX_LEVELS);
         assert_eq!(converter.over, depth - super::MAX_LEVELS);
     }
+    stream.push(&"</ul>".repeat(depth));
     {
-        let sink = super::Sink { cell: &cell };
-        let tokenizer = Tokenizer::new(sink, TokenizerOpts::default());
-        let queue = BufferQueue::default();
-        queue.push_back("</ul>".repeat(depth).into());
-        let _feed = tokenizer.feed(&queue);
-        tokenizer.end();
-    }
-    {
-        let converter = cell.borrow();
+        let converter = stream.tokenizer.sink.cell.borrow();
         assert!(converter.lists.is_empty());
         assert_eq!(converter.over, 0);
     }

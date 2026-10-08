@@ -6,8 +6,9 @@
 //! `prompt_history`, `feed`, `dismiss`, `recent`, `sessions` and `delete`,
 //! and relays session commands to `run/<session_id>` (`docs/invocation.md`,
 //! "What the hub speaks"). It sends `attention` to every connection
-//! (`docs/invocation.md`, "Attention"). It exits once no client has been connected for
-//! `hub.idle_exit_ms` (`docs/configuration.md`).
+//! (`docs/invocation.md`, "Attention"). A hub a client started exits once no
+//! client has been connected for `hub.idle_exit_ms`
+//! (`docs/configuration.md`); an installed hub never exits for being idle.
 
 mod attention;
 mod connection;
@@ -53,6 +54,18 @@ pub struct Settings {
     pub level: log::diag::Level,
 }
 
+/// How the hub was started (`docs/invocation.md`, "The hub").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    /// A client started it: it exits 0 when another hub holds the `run/`
+    /// lock or answers on `run/hub`, and once no client has been connected
+    /// for `hub.idle_exit_ms`.
+    OnDemand,
+    /// The login service runs it: it waits for the `run/` lock, never exits
+    /// for being idle, and never exits 0.
+    Installed,
+}
+
 /// Starts a session the hub was asked for, or resumes one a relayed command
 /// names: runs the internal session command in `workspace` with `id`, so
 /// the starter knows the id before the process runs and nothing is read
@@ -80,36 +93,60 @@ pub trait Started: Send {
     fn exited(&self) -> Option<Failure>;
 }
 
-/// Runs the hub in `home` until it exits for idleness: `Ok(0)` on idle
-/// exit, or when another hub holds the `run/` lock or answers on `run/hub`.
-/// The signal path exits the process with 128 plus the signal, as
-/// `doors::signal_code` does.
+/// Runs the hub in `home` in `mode` until it stops, returning the exit
+/// code. The signal path returns 128 plus the signal, as
+/// `doors::signal_code` does, and a hub that cannot accept returns 1.
 ///
 /// The hub takes the `run/` lock, opens `logs/hub.log`, then calls
-/// `configure` for its [`Settings`] and binds `run/hub`. A hub that loses
-/// the lock returns `Ok(0)` having written nothing and never calls
-/// `configure`; a failure to take the lock is returned unlogged, since only
-/// the lock's holder writes `hub.log`. Every later failure is written to
-/// `hub.log` once, as an `error` line with its code, while the lock is still
-/// held, and returned for the caller to print.
+/// `configure` for its [`Settings`] and binds `run/hub`. A hub a client
+/// started returns `Ok(0)` on idle exit, and when another hub holds the
+/// lock or answers on `run/hub`; one that loses the lock has written
+/// nothing and never calls `configure`. An installed hub blocks until the
+/// lock is free, ignores `Settings::idle_exit`, and treats a process
+/// answering on `run/hub` as a start failure. A failure to take the lock is
+/// returned unlogged, since only the lock's holder writes `hub.log`. Every
+/// later failure is written to `hub.log` once, as an `error` line with its
+/// code, while the lock is still held, and returned for the caller to print.
 pub fn serve(
     home: &Path,
+    mode: Mode,
     configure: impl FnOnce() -> Result<Settings, Failure>,
     fiber_version: &str,
     starter: Arc<dyn Starter>,
     clock: Arc<dyn Clock>,
 ) -> Result<i32, StartError> {
-    let Some(lock) = listen::lock(home)? else {
-        return Ok(0);
+    let lock = match mode {
+        Mode::OnDemand => match listen::lock(home)? {
+            Some(lock) => lock,
+            None => return Ok(0),
+        },
+        Mode::Installed => listen::lock_wait(home)?,
     };
     let diag = Diag::open(home, Arc::clone(&clock));
-    let (bound, settings) = match configure_and_bind(&lock, home, configure) {
-        Ok(Some(bound)) => bound,
-        Ok(None) => return Ok(0),
+    let bound = match configure_and_bind(&lock, home, configure) {
+        Ok(Some(bound)) => Ok(bound),
+        Ok(None) => match mode {
+            Mode::OnDemand => return Ok(0),
+            Mode::Installed => Err(StartError::Io {
+                path: home.join("run").join("hub"),
+                source: io::Error::other(
+                    "another process answers on run/hub without holding the run/ lock",
+                ),
+            }),
+        },
+        Err(error) => Err(error),
+    };
+    let (bound, settings) = match bound {
+        Ok(bound) => bound,
         Err(error) => {
             diag.error(&start::code_name(&error.code()), &error.to_string());
             return Err(error);
         }
+    };
+    let idle_exit = match mode {
+        Mode::OnDemand => settings.idle_exit,
+        // Past the end of time: the idle wait never expires.
+        Mode::Installed => Duration::MAX,
     };
     let held = Held::new(lock, bound);
     let diag = diag.with_level(settings.level);
@@ -118,7 +155,7 @@ pub fn serve(
     let got = Arc::new(AtomicI32::new(0));
     arm(&got, hub.waker());
     hub.feed.start();
-    let exit = idle::run(&hub, &held, settings.idle_exit, &got);
+    let exit = idle::run(&hub, &held, idle_exit, &got);
     hub.feed.stop();
     held.stop();
     Ok(exit.code())

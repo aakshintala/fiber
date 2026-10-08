@@ -72,6 +72,11 @@ asserted as plain equality between the two.
 A test asserts at least one positive fact. A check that only says something
 did not happen passes when the feature never ran.
 
+A test on a large value, such as a page or a payload of more than a few KiB,
+compares its length and its content without printing it whole on failure: an
+`assert_eq!` that fails on a 2 MiB string writes megabytes to the CI log and
+can time the job out. Report the length and the first differing offset.
+
 ### Values that change every run
 
 Binary-level tests replace `ts`, ids and durations with placeholders before
@@ -177,6 +182,9 @@ is a real child session process, because it is Fiber. The fakes are:
 - a scripted foreign harness, standing in for a delegate that is not Fiber
 - a local OAuth token endpoint
 - a second client on a session's socket, including a slow watcher
+- a counting allocator, which counts the blocks of 1 MiB or more a thread
+  holds at once; `fakes` only exports it, and each test binary that
+  measures installs it as its own global allocator and holds nothing else
 
 The fakes live in one crate, `fakes`, which depends only on `contract` and
 is a test-only dependency of the crates that use it (`docs/architecture.md`,

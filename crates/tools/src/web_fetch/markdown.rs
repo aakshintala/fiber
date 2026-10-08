@@ -1,9 +1,10 @@
 //! HTML to markdown for `web_fetch` (`docs/tools.md`, "web_fetch"). One pass
 //! over the page, no tree: html5ever's tokenizer, with no document tree,
-//! feeds the single-pass writer in a child module in slices, so the converter
-//! holds the page and its output, and no nesting depth in the input becomes recursion
-//! or an indent without a cap. Every character reference is decoded per the
-//! HTML standard by the tokenizer, in text and attributes.
+//! feeds the single-pass writer in a child module as the page's text
+//! arrives, so the converter holds its output and never the page, and no
+//! nesting depth in the input becomes recursion or an indent without a cap.
+//! Every character reference is decoded per the HTML standard by the
+//! tokenizer, in text and attributes.
 
 use std::cell::RefCell;
 
@@ -22,28 +23,60 @@ use writer::Writer;
 /// that nests deeper than this gets no more indentation.
 const MAX_LEVELS: usize = 8;
 
-/// The largest slice of the page fed to the tokenizer at once: the
-/// converter never holds a second whole copy as tendrils.
+/// The largest slice of a whole page [`to_markdown`] feeds at once.
+#[cfg(test)]
 const SLICE: usize = 64 * 1024;
 
-/// Converts `html` to markdown: headings, paragraphs, lists, links, images,
-/// emphasis, code, quotes and tables, with scripts, styles and the head
-/// dropped. Text that is not markup, and markup it does not know, passes
-/// through. The result ends with one newline, or is empty.
+/// Converts a page whose text arrives in pieces to markdown: headings,
+/// paragraphs, lists, links, images, emphasis, code, quotes and tables,
+/// with scripts, styles and the head dropped. Text that is not markup, and
+/// markup it does not know, passes through. However the page is cut into
+/// pieces, the markdown is the same: a tag, entity, character or
+/// `</script>` cut across pieces changes nothing.
+pub(crate) struct Stream {
+    tokenizer: Tokenizer<Sink>,
+    queue: BufferQueue,
+}
+
+impl Default for Stream {
+    fn default() -> Self {
+        let sink = Sink {
+            cell: RefCell::default(),
+        };
+        Self {
+            tokenizer: Tokenizer::new(sink, TokenizerOpts::default()),
+            queue: BufferQueue::default(),
+        }
+    }
+}
+
+impl Stream {
+    /// Converts the next piece of the page.
+    pub(crate) fn push(&mut self, text: &str) {
+        self.queue.push_back(text.into());
+        let _feed = self.tokenizer.feed(&self.queue);
+    }
+
+    /// Ends the page: the markdown, ending with one newline, or empty.
+    pub(crate) fn finish(self) -> String {
+        self.tokenizer.end();
+        let converter = self.tokenizer.sink.cell.into_inner();
+        converter.writer.finish(converter.title)
+    }
+}
+
+/// Converts `html` whole to markdown, as [`Stream`] does.
+#[cfg(test)]
 pub(crate) fn to_markdown(html: &str) -> String {
     convert(html, SLICE)
 }
 
-/// Converts `html` feeding the tokenizer in slices of at most `slice`
-/// bytes, each cut on a char boundary. Every slice size converts the same:
-/// a tag, entity, multibyte char or `</script>` cut across slices changes
-/// nothing.
+/// Converts `html` pushing slices of at most `slice` bytes, each cut on a
+/// char boundary.
+#[cfg(test)]
 fn convert(html: &str, slice: usize) -> String {
     let slice = slice.max(1);
-    let cell = RefCell::new(Converter::default());
-    let sink = Sink { cell: &cell };
-    let tokenizer = Tokenizer::new(sink, TokenizerOpts::default());
-    let queue = BufferQueue::default();
+    let mut stream = Stream::default();
     let bytes = html.as_bytes();
     let mut start = 0;
     // `end` never passes the length, so the cuts land on it exactly.
@@ -57,23 +90,20 @@ fn convert(html: &str, slice: usize) -> String {
         } else {
             floor
         };
-        queue.push_back(html.get(start..end).unwrap_or_default().into());
-        let _feed = tokenizer.feed(&queue);
+        stream.push(html.get(start..end).unwrap_or_default());
         start = end;
     }
-    tokenizer.end();
-    let converter = cell.into_inner();
-    converter.writer.finish(converter.title)
+    stream.finish()
 }
 
 /// The tokenizer's sink: tags drive the writer, character tokens become
 /// text, and everything else (comments, doctypes, parse errors, NUL) writes
 /// nothing.
-struct Sink<'a> {
-    cell: &'a RefCell<Converter>,
+struct Sink {
+    cell: RefCell<Converter>,
 }
 
-impl TokenSink for Sink<'_> {
+impl TokenSink for Sink {
     type Handle = ();
 
     fn process_token(&self, token: Token, _line: u64) -> TokenSinkResult<Self::Handle> {

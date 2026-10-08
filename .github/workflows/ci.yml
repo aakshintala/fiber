@@ -193,6 +193,28 @@ jobs:
         run: cargo build --workspace --all-targets
       - name: scripts/check, the per-platform checks
         run: scripts/check --base "$BASE" --platform-only
+      # The hub's login service against systemd's user instance
+      # (crates/main/tests/hub_service.rs). The runner has no user instance
+      # until lingering is enabled for its user.
+      - name: The hub's login service under systemd
+        if: matrix.runner == 'ubuntu-24.04'
+        timeout-minutes: 5
+        run: |
+          sudo loginctl enable-linger "$USER"
+          export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          state=""
+          for _ in $(seq 1 30); do
+            state=$(systemctl --user is-system-running 2>/dev/null || true)
+            if [ "$state" = running ] || [ "$state" = degraded ]; then
+              break
+            fi
+            sleep 1
+          done
+          if [ "$state" != running ] && [ "$state" != degraded ]; then
+            echo "systemd's user instance is not running after 30 s: '$state'"
+            exit 1
+          fi
+          cargo nextest run -p main --test hub_service --run-ignored only
 
   mutants:
     name: Mutants (shard ${{ matrix.shard }})
@@ -257,9 +279,9 @@ jobs:
     needs: select
     if: fromJSON(needs.select.outputs.jobs).release
     runs-on: ubuntu-24.04
-    # The release build, the debug benchmark harness build and the benchmarks
-    # ran in about 5 minutes (docs/ci.md, "Job time limits"): twice that,
-    # rounded up.
+    # The release build, the debug benchmark harness build, the paging jig's
+    # head and base builds and the benchmarks ran in about 7.5 minutes on the
+    # pull request that added the jig (docs/ci.md, "Job time limits").
     timeout-minutes: 15
     env:
       BASE: ${{ needs.select.outputs.base }}
@@ -280,7 +302,7 @@ jobs:
         run: |
           rustup target add x86_64-unknown-linux-musl
           sudo apt-get $APT_OPTS update
-          sudo apt-get $APT_OPTS install -y --no-install-recommends musl-tools
+          sudo apt-get $APT_OPTS install -y --no-install-recommends musl-tools time
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: release
@@ -304,6 +326,12 @@ jobs:
           BASE_COMMIT: ${{ steps.base.outputs.commit }}
           BASE_CACHED: ${{ steps.stored.outputs.cache-hit }}
         run: scripts/release-size "$BASE_COMMIT"
+      # The paging rows' jig, built for the target that ships; a base without
+      # one leaves its paging timings unavailable.
+      - name: Build the paging jig
+        env:
+          BASE_COMMIT: ${{ steps.base.outputs.commit }}
+        run: scripts/paging-jig "$BASE_COMMIT"
       # Only the backstop saves, so a pull request's base comes from main.
       - name: Store this commit's binary
         if: github.event_name == 'push'
@@ -331,12 +359,17 @@ jobs:
           out=$RUNNER_TEMP/bench
           mkdir -p "$out"
           harness=target/debug/examples/bench
-          "$harness" --fiber "$RUNNER_TEMP/release/head/fiber" --out "$out/head.json" --only all
+          "$harness" --fiber "$RUNNER_TEMP/release/head/fiber" --out "$out/head.json" --only all \
+            --paging "$RUNNER_TEMP/release/head/paging"
           if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            base_paging=()
+            if [ -f "$RUNNER_TEMP/release/base/paging" ]; then
+              base_paging=(--paging "$RUNNER_TEMP/release/base/paging")
+            fi
             # The base feeds advisory timings only: a base run that writes no
             # file is reported by bench-report, not here.
             "$harness" --fiber "$RUNNER_TEMP/release/base/fiber" --out "$out/base.json" --only timing \
-              || echo "::warning::the base binary's benchmarks exited $?"
+              "${base_paging[@]}" || echo "::warning::the base binary's benchmarks exited $?"
           fi
       - name: Judge the benchmarks against docs/performance.md
         id: report

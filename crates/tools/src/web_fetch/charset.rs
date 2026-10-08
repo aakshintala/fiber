@@ -2,29 +2,74 @@
 //! WHATWG precedence: a BOM, then the `Content-Type` header's `charset`,
 //! then a `<meta>` in the first 1024 bytes, then UTF-8.
 
+#[cfg(test)]
 use std::borrow::Cow;
 use std::cell::RefCell;
 
-use encoding_rs::Encoding;
+use encoding_rs::{CoderResult, Decoder, Encoding};
 use html5ever::tokenizer::{
     BufferQueue, TagKind, Token, TokenSink, TokenSinkResult, Tokenizer, TokenizerOpts,
 };
 
 /// How many leading bytes the `<meta>` prescan reads, lossily as UTF-8.
-const PRESCAN: usize = 1024;
+pub(super) const PRESCAN: usize = 1024;
 
-/// Decodes `bytes` by its declared character set: a BOM, then the
+/// The room the decoder writes into before it hands its text over.
+const OUT: usize = 65_536;
+
+/// The declared character set of a page whose first bytes are `head`: the
 /// `Content-Type` header's `charset`, then a `<meta>` in the first 1024
-/// bytes, then UTF-8. Never fails: a label `encoding_rs` does not know is
-/// skipped for the next source, and unknown bytes become `�`. A BOM is
-/// removed. Borrows when UTF-8 is chosen and the bytes after any BOM are
-/// valid UTF-8.
-pub(crate) fn decode<'a>(content_type: Option<&str>, bytes: &'a [u8]) -> Cow<'a, str> {
-    let encoding = content_type
+/// bytes, then UTF-8. A label `encoding_rs` does not know is skipped for
+/// the next source. A BOM outranks all three; the decoder sniffs it.
+pub(crate) fn encoding(content_type: Option<&str>, head: &[u8]) -> &'static Encoding {
+    content_type
         .and_then(header_encoding)
-        .or_else(|| meta_encoding(bytes))
-        .unwrap_or(encoding_rs::UTF_8);
-    encoding.decode(bytes).0
+        .or_else(|| meta_encoding(head))
+        .unwrap_or(encoding_rs::UTF_8)
+}
+
+/// Decodes `bytes` whole by its declared character set ([`encoding`]),
+/// the BOM first. Never fails: unknown bytes become `�`. A BOM is removed.
+/// Borrows when UTF-8 is chosen and the bytes after any BOM are valid
+/// UTF-8. [`Decoding`] gives the same text piece by piece.
+#[cfg(test)]
+pub(crate) fn decode<'a>(content_type: Option<&str>, bytes: &'a [u8]) -> Cow<'a, str> {
+    encoding(content_type, bytes).decode(bytes).0
+}
+
+/// Decodes a page arriving in pieces. Whatever the pieces, the text handed
+/// over, joined, is the whole page decoded at once: a BOM still wins and is
+/// removed, a character cut across pieces is decoded once whole, and bytes
+/// that are not valid become `�`. Each handed-over piece is at most 64 KiB.
+pub(crate) struct Decoding {
+    decoder: Decoder,
+    out: String,
+}
+
+impl Decoding {
+    pub(crate) fn new(encoding: &'static Encoding) -> Self {
+        Self {
+            decoder: encoding.new_decoder(),
+            out: String::with_capacity(OUT),
+        }
+    }
+
+    /// Decodes `bytes`, handing the text to `out` as the room fills. `last`
+    /// is true once, for the final piece, which may be empty: it flushes a
+    /// character the page ends inside of as `�`.
+    pub(crate) fn push(&mut self, mut bytes: &[u8], last: bool, out: &mut dyn FnMut(&str)) {
+        loop {
+            let (result, read, _) = self.decoder.decode_to_string(bytes, &mut self.out, last);
+            bytes = bytes.get(read..).unwrap_or_default();
+            out(&self.out);
+            self.out.clear();
+            match result {
+                CoderResult::InputEmpty => return,
+                // The room is full: hand it over and go on.
+                CoderResult::OutputFull => {}
+            }
+        }
+    }
 }
 
 /// The `charset` parameter of a `Content-Type` value: split on `;`, the name

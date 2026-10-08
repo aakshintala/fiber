@@ -4,7 +4,9 @@
 //! result file for `cargo xtask bench-report` to judge. It measures; it
 //! judges nothing.
 //!
-//! `bench --fiber <path> --out <file> [--runs 5] [--idle-secs 10] [--only all|timing]`
+//! `bench --fiber <path> --out <file> [--runs 5] [--idle-secs 10] [--only all|timing] [--paging <jig>]`
+//! (`--paging` names the `tui` crate's `paging` jig; without it that workload
+//! does not run)
 //! exits 0 once the file is written (a failed workload is recorded in it),
 //! 2 on a usage error or a host other than Linux, and 1 when the file
 //! cannot be written.
@@ -18,6 +20,7 @@ mod busy;
 mod home;
 mod idle;
 mod linux;
+mod paging;
 mod pty;
 mod resume;
 mod run;
@@ -29,8 +32,8 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
-const USAGE: &str =
-    "usage: bench --fiber <path> --out <file> [--runs 5] [--idle-secs 10] [--only all|timing]";
+const USAGE: &str = "usage: bench --fiber <path> --out <file> [--runs 5] [--idle-secs 10] \
+     [--only all|timing] [--paging <jig>]";
 
 /// The result file's format, which `cargo xtask bench-report` checks.
 const SCHEMA: u32 = 1;
@@ -50,10 +53,11 @@ struct Args {
     runs: u32,
     idle_secs: u64,
     only: Only,
+    paging: Option<PathBuf>,
 }
 
 fn parse(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
-    let (mut fiber, mut out) = (None, None);
+    let (mut fiber, mut out, mut paging) = (None, None, None);
     let (mut runs, mut idle_secs, mut only) = (5, 10, Only::All);
     while let Some(flag) = args.next() {
         let value = args.next().ok_or_else(|| format!("{flag} needs a value"))?;
@@ -68,6 +72,7 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
         match flag.as_str() {
             "--fiber" => fiber = Some(PathBuf::from(&value)),
             "--out" => out = Some(PathBuf::from(&value)),
+            "--paging" => paging = Some(PathBuf::from(&value)),
             "--runs" => {
                 runs = u32::try_from(number("--runs")?).map_err(|err| format!("--runs: {err}"))?;
             }
@@ -88,7 +93,24 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
         runs,
         idle_secs,
         only,
+        paging,
     })
+}
+
+/// Each workload `args` selects, with its run count.
+fn selected(args: &Args) -> Vec<(&'static idle::Workload, u32)> {
+    let paging = paging::WORKLOADS.iter().filter(|_| args.paging.is_some());
+    let repeated = idle::WORKLOADS
+        .iter()
+        .chain(&busy::WORKLOADS)
+        .chain(&resume::WORKLOADS)
+        .chain(paging)
+        .map(|workload| (workload, args.runs));
+    let once = busy::ONCE.iter().map(|workload| (workload, 1));
+    repeated
+        .chain(once)
+        .filter(|(workload, _)| args.only == Only::All || workload.timing)
+        .collect()
 }
 
 /// Runs each selected workload `runs` times, and each workload that runs
@@ -106,17 +128,9 @@ fn bench(args: &Args) -> Value {
                 clock: &clock,
                 idle: Duration::from_secs(args.idle_secs),
                 path: std::env::var_os("PATH"),
+                paging: args.paging.as_deref(),
             };
-            let repeated = idle::WORKLOADS
-                .iter()
-                .chain(&busy::WORKLOADS)
-                .chain(&resume::WORKLOADS)
-                .map(|workload| (workload, args.runs));
-            let once = busy::ONCE.iter().map(|workload| (workload, 1));
-            let selected = repeated
-                .chain(once)
-                .filter(|(workload, _)| args.only == Only::All || workload.timing);
-            for (workload, runs) in selected {
+            for (workload, runs) in selected(args) {
                 if let Some(samples) = repeat(&ctx, workload, runs, &mut failures) {
                     metrics.extend(samples);
                 }

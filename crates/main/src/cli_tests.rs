@@ -886,7 +886,8 @@ fn the_search_subcommands_stay_hidden_but_parse_everything_after() {
             "logout",
             "completion",
             "version",
-            "help"
+            "help",
+            "hub"
         ]
     );
     let Invocation::Run(Some(Commands::Grep { args })) =
@@ -950,7 +951,8 @@ fn the_image_subcommand_is_hidden_and_passes_its_arguments_through() {
             "logout",
             "completion",
             "version",
-            "help"
+            "help",
+            "hub"
         ]
     );
     let Invocation::Run(Some(Commands::Image { args })) =
@@ -1236,10 +1238,15 @@ fn the_menu_lists_config_get_and_set_under_configuration() {
 
 #[test]
 fn hub_serve_parses_and_stays_hidden() {
-    let Invocation::Run(Some(Commands::Hub(HubCommands::Serve))) =
+    let Invocation::Run(Some(Commands::Hub(HubCommands::Serve { installed: false }))) =
         parse_from(["fiber", "hub", "serve"])
     else {
         panic!("hub serve parses");
+    };
+    let Invocation::Run(Some(Commands::Hub(HubCommands::Serve { installed: true }))) =
+        parse_from(["fiber", "hub", "serve", "--installed"])
+    else {
+        panic!("hub serve --installed parses");
     };
     // `fiber hub` with no subcommand is a usage error, not the hub.
     let (_, missing) = usage(&["fiber", "hub"]);
@@ -1247,20 +1254,135 @@ fn hub_serve_parses_and_stays_hidden() {
         missing.ends_with("Run `fiber --help` for usage."),
         "{missing}"
     );
-    let command_line = |text: &str| text.lines().any(|line| line.starts_with("  hub "));
+    for text in [menu(), super::render_help::<&str>(&[]).unwrap()] {
+        assert!(
+            !text.contains("hub serve"),
+            "the menu names no hub serve:\n{text}"
+        );
+    }
+    let hub_help = super::render_help(&["hub"]).unwrap();
     assert!(
-        !command_line(&menu()),
-        "the menu names no hub command:\n{}",
+        hub_help
+            .lines()
+            .all(|line| !line.trim_start().starts_with("serve")),
+        "{hub_help}"
+    );
+    assert!(hub_help.contains("install"), "{hub_help}");
+    let serve_help = super::render_help(&["hub", "serve"]).unwrap();
+    assert!(!serve_help.contains("--installed"), "{serve_help}");
+}
+
+#[test]
+fn the_menu_lists_the_three_hub_commands_under_the_hub() {
+    assert!(
+        menu().contains(
+            "Configuration:\n\
+             \x20\x20config get <key>                              Print the effective value and the layer it came from\n\
+             \x20\x20config set [--project | --repo] <key> <value>  Write one key in one layer's file\n\
+             \n\
+             The hub:\n\
+             \x20\x20hub install [--port <port>]  Register the hub as a login service\n\
+             \x20\x20hub uninstall                Remove the hub's login service; running sessions carry on\n\
+             \x20\x20hub status [--json]          Print the hub's state: running, version, port, clients, devices, installed\n\
+             \n\
+             Flags:\n"
+        ),
+        "{}",
+        menu()
+    );
+    assert_eq!(
+        menu()
+            .lines()
+            .filter(|line| line.starts_with("  hub "))
+            .count(),
+        3,
+        "{}",
         menu()
     );
     assert!(
-        !command_line(&super::render_help::<&str>(&[]).unwrap()),
-        "top-level help names no hub command"
-    );
-    assert!(
-        visible().iter().all(|name| name != "hub"),
-        "hub stays hidden: {:?}",
+        visible().iter().any(|name| name == "hub"),
+        "hub is visible: {:?}",
         visible()
+    );
+}
+
+#[test]
+fn hub_install_uninstall_and_status_parse() {
+    let Invocation::Run(Some(Commands::Hub(HubCommands::Install { port: None }))) =
+        parse_from(["fiber", "hub", "install"])
+    else {
+        panic!("hub install");
+    };
+    let Invocation::Run(Some(Commands::Hub(HubCommands::Install { port: Some(4040) }))) =
+        parse_from(["fiber", "hub", "install", "--port", "4040"])
+    else {
+        panic!("hub install --port 4040");
+    };
+    let Invocation::Run(Some(Commands::Hub(HubCommands::Install { port: Some(1) }))) =
+        parse_from(["fiber", "hub", "install", "--port", "1"])
+    else {
+        panic!("hub install --port 1");
+    };
+    let Invocation::Run(Some(Commands::Hub(HubCommands::Install { port: Some(65535) }))) =
+        parse_from(["fiber", "hub", "install", "--port", "65535"])
+    else {
+        panic!("hub install --port 65535");
+    };
+    let Invocation::Run(Some(Commands::Hub(HubCommands::Uninstall))) =
+        parse_from(["fiber", "hub", "uninstall"])
+    else {
+        panic!("hub uninstall");
+    };
+    let Invocation::Run(Some(Commands::Hub(HubCommands::Status { json: false }))) =
+        parse_from(["fiber", "hub", "status"])
+    else {
+        panic!("hub status");
+    };
+    let Invocation::Run(Some(Commands::Hub(HubCommands::Status { json: true }))) =
+        parse_from(["fiber", "hub", "status", "--json"])
+    else {
+        panic!("hub status --json");
+    };
+}
+
+#[test]
+fn a_hub_port_outside_1_to_65535_or_an_extra_argument_is_one_usage_sentence() {
+    for args in [
+        &["fiber", "hub", "install", "--port", "0"][..],
+        &["fiber", "hub", "install", "--port", "65536"],
+        &["fiber", "hub", "install", "--port", "x"],
+        &["fiber", "hub", "status", "extra"],
+    ] {
+        let (ask, sentence) = usage(args);
+        assert!(!ask, "{args:?}");
+        assert_eq!(sentence.lines().count(), 1, "{args:?}: {sentence}");
+        assert!(
+            sentence.ends_with("Run `fiber --help` for usage."),
+            "{args:?}: {sentence}"
+        );
+    }
+    assert!(
+        sentence(&["fiber", "hub", "install", "--port", "0"]).contains("--port"),
+        "{}",
+        sentence(&["fiber", "hub", "install", "--port", "0"])
+    );
+}
+
+#[test]
+fn help_hub_install_prints_that_commands_help() {
+    let help = super::render_help(&["hub", "install"]).unwrap();
+    assert!(
+        help.contains("Register the hub as a login service"),
+        "{help}"
+    );
+    assert!(help.contains("--port <port>"), "{help}");
+    let parsed = parse_from(["fiber", "help", "hub", "install"]);
+    assert!(
+        matches!(
+            parsed,
+            Invocation::Run(Some(Commands::Help { ref command })) if command == &["hub", "install"]
+        ),
+        "{parsed:?}"
     );
 }
 

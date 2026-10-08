@@ -26,12 +26,13 @@ use support::Deadline;
 
 /// The request's tool order: the loop keys tools by name, so this is name
 /// order, whatever order `main` pushes them in.
-const TOOL_NAMES: [&str; 8] = [
+const TOOL_NAMES: [&str; 9] = [
     "ask_user",
     "edit",
     "handoff",
     "jobs",
     "read",
+    "session_search",
     "shell",
     "web_fetch",
     "write",
@@ -2120,6 +2121,97 @@ fn a_lua_write_in_a_data_directory_is_reviewed_and_blocked() {
 
     assert_blocked_by_reviewer(&run, &server);
     assert!(!setup.home().join("data/notes/x.lua").exists());
+}
+
+/// A first-stage `allow` runs the reviewed call with no escalation. The
+/// scripted fake server cannot cut a reply at the request's output limit,
+/// so the test also pins that limit: it is what a real model's tokenizer
+/// meets, and a limit below the word's length cuts a several-token `allow`
+/// into a `reviewer_failed` escalation. The Responses protocol raises any
+/// limit below 16 to 16, so the test pins the exact limit.
+#[test]
+fn a_first_stage_allow_that_takes_several_tokens_runs_the_reviewed_call() {
+    let setup = Setup::new();
+    let lua = setup.home().join("data/notes/x.lua").display().to_string();
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "write_lua",
+            "write",
+            &json!({"path": lua, "content": "return {}\n"}),
+        )]),
+        text_reply("allow"),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    with_reviewer(&setup);
+
+    let run = setup.run(&["ask", "save the snippet"]);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "usage_recorded",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
+    let requested = run
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "tool_call_requested")
+        .unwrap();
+    let action = &requested["action_id"];
+    let resolved = run
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "permission_resolved")
+        .unwrap();
+    assert_eq!(&resolved["action_id"], action);
+    assert_eq!(resolved["payload"]["decision"], "allow");
+    assert_eq!(resolved["payload"]["decided_by"], "reviewer");
+    assert_eq!(
+        resolved["payload"]["reviewer"],
+        json!({"model": "fake/m", "stage": 1})
+    );
+    assert!(!run.stdout.contains("reviewer_failed"));
+    let done = run
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "tool_call_completed")
+        .unwrap();
+    assert_eq!(&done["action_id"], action);
+    assert_eq!(done["payload"]["status"], "completed");
+    assert_eq!(
+        fs::read_to_string(setup.home().join("data/notes/x.lua")).unwrap(),
+        "return {}\n"
+    );
+    let requests = server.requests();
+    assert_eq!(requests.len(), 3);
+    let first_stage: Value = serde_json::from_slice(&requests[1].body).unwrap();
+    assert_eq!(first_stage["max_output_tokens"], 128);
 }
 
 #[test]

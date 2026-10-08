@@ -77,6 +77,7 @@ fn log_lines(home: &Path) -> Vec<Value> {
 /// fails the test under [`WITHIN`] rather than hanging it.
 fn serve_in(
     home: &Path,
+    mode: Mode,
     configure: impl FnOnce() -> Result<Duration, Failure> + Send + 'static,
 ) -> Result<i32, StartError> {
     let home = home.to_path_buf();
@@ -85,6 +86,7 @@ fn serve_in(
         let starter = Arc::new(FakeStarter::hang(&home));
         let result = serve(
             &home,
+            mode,
             move || {
                 configure().map(|idle_exit| crate::Settings {
                     idle_exit,
@@ -114,7 +116,7 @@ fn too_long(temp: &Temp) -> PathBuf {
 fn a_too_long_home_is_usage_written_to_the_hub_log() {
     let temp = Temp::new();
     let home = too_long(&temp);
-    let Err(error) = serve_in(&home, || Ok(Duration::from_secs(1))) else {
+    let Err(error) = serve_in(&home, Mode::OnDemand, || Ok(Duration::from_secs(1))) else {
         panic!("a too-long home cannot start");
     };
     assert_eq!(error.code(), ErrorCode::Usage);
@@ -134,7 +136,7 @@ fn a_configure_failure_is_written_with_its_code_while_the_lock_is_held() {
     let home = temp.dir.clone();
     let called = Arc::new(AtomicBool::new(false));
     let saw = Arc::clone(&called);
-    let result = serve_in(&temp.dir, move || {
+    let result = serve_in(&temp.dir, Mode::OnDemand, move || {
         // Configuration is read after the lock and the log's directory.
         assert!(home.join("logs").is_dir(), "logs/ exists before configure");
         assert!(
@@ -171,7 +173,7 @@ fn a_hub_that_loses_the_lock_writes_nothing_and_reads_no_configuration() {
         .expect("the other hub's lock");
     let called = Arc::new(AtomicBool::new(false));
     let saw = Arc::clone(&called);
-    let result = serve_in(&temp.dir, move || {
+    let result = serve_in(&temp.dir, Mode::OnDemand, move || {
         saw.store(true, Ordering::SeqCst);
         Ok(Duration::from_secs(1))
     });
@@ -185,7 +187,7 @@ fn a_hub_that_loses_the_lock_writes_nothing_and_reads_no_configuration() {
 fn a_run_that_cannot_be_locked_is_io_failed_and_not_logged() {
     let temp = Temp::new();
     fs::write(temp.dir.join("run"), b"not a directory").unwrap();
-    let Err(error) = serve_in(&temp.dir, || Ok(Duration::from_secs(1))) else {
+    let Err(error) = serve_in(&temp.dir, Mode::OnDemand, || Ok(Duration::from_secs(1))) else {
         panic!("a file at run/ cannot start");
     };
     assert_eq!(error.code(), ErrorCode::IoFailed);
@@ -199,12 +201,42 @@ fn a_live_hub_on_the_socket_means_exit_0_with_no_error_line() {
     fs::create_dir_all(temp.dir.join("run")).unwrap();
     let socket = temp.dir.join("run").join("hub");
     let live = UnixListener::bind(&socket).unwrap();
-    let result = serve_in(&temp.dir, || Ok(Duration::from_secs(1)));
+    let result = serve_in(&temp.dir, Mode::OnDemand, || Ok(Duration::from_secs(1)));
     assert_eq!(result.unwrap(), 0);
     assert!(log_lines(&temp.dir).is_empty());
     assert!(
         UnixStream::connect(&socket).is_ok(),
         "the live socket stays"
+    );
+    drop(live);
+}
+
+#[test]
+fn an_installed_hub_with_another_process_on_the_socket_is_io_failed_and_logged() {
+    let temp = Temp::new();
+    fs::create_dir_all(temp.dir.join("run")).unwrap();
+    let socket = temp.dir.join("run").join("hub");
+    let live = UnixListener::bind(&socket).unwrap();
+    let Err(error) = serve_in(&temp.dir, Mode::Installed, || Ok(Duration::from_secs(1))) else {
+        panic!("an installed hub that cannot bind does not exit cleanly");
+    };
+    assert_eq!(error.code(), ErrorCode::IoFailed);
+    assert!(
+        matches!(&error, StartError::Io { path, .. } if *path == socket),
+        "{error:?}"
+    );
+    assert!(
+        error.to_string().contains("without holding the run/ lock"),
+        "{error}"
+    );
+    let lines = log_lines(&temp.dir);
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert_eq!(lines[0]["level"], "error");
+    assert_eq!(lines[0]["code"], "io_failed");
+    assert_eq!(lines[0]["message"], error.to_string());
+    assert!(
+        UnixStream::connect(&socket).is_ok(),
+        "the other process's socket stays"
     );
     drop(live);
 }

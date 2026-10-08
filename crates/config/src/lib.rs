@@ -44,7 +44,10 @@ pub use secret::{
     CredentialSource, credential_labels, delete_credential, delete_credential_held,
     read_credential, read_secret, store_credential, store_secret,
 };
-pub use write::{Layer, Scope, remove_extension_settings, set, set_global, set_global_if_unset};
+pub use write::{
+    Layer, Scope, get_global, remove_extension_settings, replace_global, set, set_global,
+    set_global_if_unset, write_atomic,
+};
 
 pub use keys::{diagnostics_debug, parse_duration, refresh_after};
 

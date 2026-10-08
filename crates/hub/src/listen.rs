@@ -3,8 +3,9 @@
 //!
 //! [`lock`] opens `run/` (created 0700 if missing) as a `File` and takes an
 //! exclusive, non-blocking lock, which the hub keeps for its lifetime.
-//! Failing to get it means another hub is starting or running, so this one
-//! exits 0 at once, writing nothing. With the lock held, the hub opens its
+//! Failing to get it means another hub is starting or running, so a hub a
+//! client started exits 0 at once, writing nothing; an installed hub takes
+//! the lock with [`lock_wait`] instead, which blocks until it is free. With the lock held, the hub opens its
 //! diagnostic log and reads its configuration, then [`bind`] checks that
 //! `run/hub` fits the platform's socket path, removes any `run/hub` that is
 //! not a live socket, and binds `run/hub` mode 0600. The lock, not the
@@ -60,13 +61,7 @@ impl Held {
 /// Creates `run/` and locks it. `None` means another hub is starting or
 /// running: exit 0 at once, writing nothing.
 pub(crate) fn lock(home: &Path) -> Result<Option<Lock>, StartError> {
-    let run = home.join("run");
-    DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(&run)
-        .map_err(|e| refused(&run, e))?;
-    let file = File::open(&run).map_err(|e| refused(&run, e))?;
+    let (run, file) = open_run(home)?;
     match file.try_lock() {
         Ok(()) => Ok(Some(Lock { _file: file })),
         Err(TryLockError::WouldBlock) => Ok(None),
@@ -74,8 +69,29 @@ pub(crate) fn lock(home: &Path) -> Result<Option<Lock>, StartError> {
     }
 }
 
-/// Binds `run/hub` for the holder of `_lock`. `None` means a live hub
-/// already answers there: exit 0, binding nothing. A failure leaves no
+/// Creates `run/` and blocks until its lock is free, then takes it: an
+/// installed hub waits for a hub a client started to exit for idleness.
+/// While it waits it holds no socket and writes nothing.
+pub(crate) fn lock_wait(home: &Path) -> Result<Lock, StartError> {
+    let (run, file) = open_run(home)?;
+    file.lock().map_err(|e| refused(&run, e))?;
+    Ok(Lock { _file: file })
+}
+
+/// Creates `run/` 0700 when missing and opens it for locking.
+fn open_run(home: &Path) -> Result<(PathBuf, File), StartError> {
+    let run = home.join("run");
+    DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&run)
+        .map_err(|e| refused(&run, e))?;
+    let file = File::open(&run).map_err(|e| refused(&run, e))?;
+    Ok((run, file))
+}
+
+/// Binds `run/hub` for the holder of `_lock`. `None` means something live
+/// already answers there, binding nothing. A failure leaves no
 /// socket this call bound.
 pub(crate) fn bind(_lock: &Lock, home: &Path) -> Result<Option<Bound>, StartError> {
     let socket = home.join("run").join("hub");

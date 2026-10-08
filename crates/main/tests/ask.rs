@@ -1006,6 +1006,11 @@ Configuration:
   config get <key>                              Print the effective value and the layer it came from
   config set [--project | --repo] <key> <value>  Write one key in one layer's file
 
+The hub:
+  hub install [--port <port>]  Register the hub as a login service
+  hub uninstall                Remove the hub's login service; running sessions carry on
+  hub status [--json]          Print the hub's state: running, version, port, clients, devices, installed
+
 Flags:
   -h, --help     Print this menu
   -v, --version  Print the version
@@ -2839,6 +2844,7 @@ fn two_runs_send_byte_identical_preambles() {
             "handoff",
             "jobs",
             "read",
+            "session_search",
             "shell",
             "web_fetch",
             "write"
@@ -3046,6 +3052,41 @@ fn a_lua_providers_model_answers_with_the_token_and_sign_headers() {
     );
     assert!(
         requests.iter().any(|request| request.path == "/token"),
+        "{requests:?}"
+    );
+}
+
+#[test]
+fn a_provider_whose_listing_fails_with_no_cache_is_listed_once() {
+    let setup = Setup::new();
+    let server = ProviderServer::start_routed(
+        [
+            (
+                "/token",
+                Response::status(
+                    200,
+                    json!({"access_token": "tok-1", "expires_at": EXPIRES_AT}).to_string(),
+                ),
+            ),
+            ("/v1/models", Response::status(500, "{}")),
+        ],
+        Response::status(500, "{}"),
+    )
+    .unwrap();
+    fixture(&setup, &server);
+
+    let run = setup.fiber(&["ask", "hi"], None);
+
+    assert_ne!(run.code, Some(0), "no model was discovered: {}", run.stderr);
+    // With no cached copy the synchronous discovery is the only listing: the
+    // start refresh covers stale cached lists only.
+    let requests = server.requests();
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.method == "GET" && request.path == "/v1/models")
+            .count(),
+        1,
         "{requests:?}"
     );
 }

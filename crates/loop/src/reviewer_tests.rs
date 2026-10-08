@@ -260,7 +260,14 @@ fn the_first_stage_reads_one_token() {
             (Ok(_), _) | (Err(_), _) => panic!("{text:?} read wrong"),
         }
     }
-    for text in ["", "maybe", "check please", "allow, I guess", "che ck"] {
+    for text in [
+        "",
+        "maybe",
+        "check please",
+        "allow, I guess",
+        "che ck",
+        "all",
+    ] {
         assert!(read_first(text).is_err(), "{text:?}");
     }
 }
