@@ -491,6 +491,9 @@ fn resize_redraws_the_input_line_on_the_new_last_row() {
     setup.provider(&server);
     let mut run = Run::terminal(&setup);
     run.read_until(">");
+    // The first frame paints every cell on the theme's background, so it
+    // is read through its last row before the resize.
+    run.read_until("\x1b[12;1H");
     let marked = run.output().len();
     rustix::termios::tcsetwinsize(
         &run.main,
