@@ -524,3 +524,261 @@ fn two_tokens_on_one_row_are_two_spans() {
     // "> [Pasted text #1 · 11 lines][Pasted text #2 · 12 lines]"
     assert_eq!(spans, vec![(1, 0, 2, 29), (2, 0, 29, 56)]);
 }
+
+/// Tests for images in the draft: content order, labels, editing, serials
+/// and the editor round trip (`docs/tui.md`, "The input box").
+use std::sync::Arc;
+
+use contract::commands::SentPart;
+
+/// A draft holding `text`, then the image `data`, then `more`.
+fn with_image(text: &str, data: &str, more: &str) -> Draft {
+    let mut draft = typed(text);
+    draft.insert_image(Arc::from(data));
+    for ch in more.chars() {
+        draft.insert(ch);
+    }
+    draft
+}
+
+#[test]
+fn content_keeps_the_order_of_text_and_images() {
+    // I1: text, image, text; two adjacent images hold no empty text part;
+    // a paste token beside an image joins its text run.
+    let draft = with_image("a", "AAA", "bc");
+    let mut two = Draft::default();
+    two.insert_image(Arc::from("AAA"));
+    two.insert_image(Arc::from("BBB"));
+    assert_eq!(
+        draft.content(),
+        vec![
+            SentPart::Text {
+                text: "a".to_owned()
+            },
+            SentPart::Image {
+                data: "AAA".to_owned(),
+                mime_type: "image/png".to_owned()
+            },
+            SentPart::Text {
+                text: "bc".to_owned()
+            },
+        ]
+    );
+    assert_eq!(
+        two.content(),
+        vec![
+            SentPart::Image {
+                data: "AAA".to_owned(),
+                mime_type: "image/png".to_owned()
+            },
+            SentPart::Image {
+                data: "BBB".to_owned(),
+                mime_type: "image/png".to_owned()
+            },
+        ]
+    );
+    let mut token = Draft::default();
+    token.paste(&lines(11));
+    token.insert_image(Arc::from("AAA"));
+    assert_eq!(token.content().len(), 2);
+    assert!(matches!(
+        token.content().first(),
+        Some(SentPart::Text { .. })
+    ));
+}
+
+#[test]
+fn an_image_alone_is_one_part_and_an_empty_draft_has_no_parts() {
+    // I2.
+    let mut draft = Draft::default();
+    draft.insert_image(Arc::from("AAA"));
+    assert_eq!(
+        draft.content(),
+        vec![SentPart::Image {
+            data: "AAA".to_owned(),
+            mime_type: "image/png".to_owned()
+        }]
+    );
+    assert_eq!(Draft::default().content(), Vec::new());
+    assert!(draft.has_image());
+    assert!(!typed("ab").has_image());
+}
+
+#[test]
+fn labels_count_images_in_order() {
+    // I3: deleting the first image renumbers the second to #1; a paste
+    // token keeps its fixed number beside them.
+    let mut draft = with_image("a", "AAA", "b");
+    draft.insert_image(Arc::from("BBB"));
+    assert_eq!(draft.rows(80), vec!["> a[Image #1]b[Image #2]"]);
+    // Cursor at the end: two lefts stand between the images, backspace
+    // drops the first whole.
+    draft.left();
+    draft.left();
+    draft.backspace();
+    assert_eq!(draft.rows(80), vec!["> ab[Image #1]"]);
+    assert_eq!(draft.expand(), "ab[Image #1]");
+    let mut token = Draft::default();
+    token.paste(&lines(11));
+    token.insert_image(Arc::from("AAA"));
+    assert_eq!(
+        token.rows(200),
+        vec!["> [Pasted text #1 · 11 lines][Image #1]"]
+    );
+}
+
+#[test]
+fn backspace_and_delete_remove_an_image_whole() {
+    // I4.
+    let mut draft = with_image("a", "AAA", "b");
+    draft.left();
+    draft.backspace();
+    assert_eq!(draft.expand(), "ab");
+    let mut draft = with_image("a", "AAA", "b");
+    draft.left();
+    draft.left();
+    draft.delete();
+    assert_eq!(draft.expand(), "ab");
+}
+
+#[test]
+fn word_moves_step_over_an_image() {
+    // I5: an image is one word.
+    let mut draft = with_image("ab", "AAA", "cd");
+    assert_eq!(draft.position(), 5);
+    draft.word_left();
+    assert_eq!(draft.position(), 3);
+    draft.word_left();
+    assert_eq!(draft.position(), 2);
+    draft.word_left();
+    assert_eq!(draft.position(), 0);
+    draft.word_right();
+    assert_eq!(draft.position(), 2);
+    draft.word_right();
+    assert_eq!(draft.position(), 3);
+    draft.word_right();
+    assert_eq!(draft.position(), 5);
+    // Deleting back over it drops the word before it, whole.
+    let mut draft = with_image("ab", "AAA", "cd");
+    draft.word_left();
+    draft.delete_word();
+    assert_eq!(draft.expand(), "abcd");
+}
+
+#[test]
+fn at_after_an_image_opens_no_file_panel() {
+    // I6.
+    let mut draft = Draft::default();
+    draft.insert_image(Arc::from("AAA"));
+    assert!(!draft.after_space());
+    assert!(typed("a ").after_space());
+}
+
+#[test]
+fn token_spans_leave_images_out() {
+    // I7.
+    let mut draft = Draft::default();
+    draft.paste(&lines(11));
+    draft.insert_image(Arc::from("AAA"));
+    let spans = draft.token_spans(200);
+    assert!(!spans.is_empty());
+    assert!(spans.iter().all(|span| span.number == 1));
+    assert_eq!(
+        draft.rows(200),
+        vec!["> [Pasted text #1 · 11 lines][Image #1]"]
+    );
+    // An image beside the cursor is no token: Ctrl+G opens the draft.
+    assert_eq!(draft.token_at_cursor(), None);
+}
+
+#[test]
+fn edits_and_moves_renew_the_serial() {
+    // I8: clear, set, edited and mem::take give new serials; put_back gives
+    // a serial differing from both drafts', keeps pieces and images, and
+    // puts the cursor at the end.
+    let mut draft = with_image("ab", "AAA", "");
+    let first = draft.serial();
+    draft.clear();
+    assert_ne!(draft.serial(), first);
+    let cleared = draft.serial();
+    draft.set("xy");
+    assert_ne!(draft.serial(), cleared);
+    let set = draft.serial();
+    draft.edited("xy");
+    assert_ne!(draft.serial(), set);
+    let before = draft.serial();
+    let taken = std::mem::take(&mut draft);
+    assert_ne!(draft.serial(), before);
+    assert_ne!(taken.serial(), draft.serial());
+    let mut back = with_image("ab", "AAA", "cd");
+    let back_serial = back.serial();
+    let moved = std::mem::take(&mut back);
+    let mut box_draft = typed("xy");
+    let box_serial = box_draft.serial();
+    box_draft.put_back(moved);
+    assert_ne!(box_draft.serial(), back_serial);
+    assert_ne!(box_draft.serial(), box_serial);
+    assert_eq!(box_draft.expand(), "ab[Image #1]cd");
+    assert_eq!(box_draft.position(), 5);
+    assert!(box_draft.has_image());
+}
+
+#[test]
+fn the_editor_return_relinks_image_labels() {
+    // I9.
+    let draft = with_image("look ", "AAA", " here");
+    // Kept in place.
+    let mut kept = with_image("look ", "AAA", " here");
+    kept.edited("look [Image #1] here");
+    assert_eq!(kept.content(), draft.content());
+    // Moved.
+    let mut moved = with_image("look ", "AAA", " here");
+    moved.edited("here [Image #1] look");
+    assert_eq!(
+        moved.content(),
+        vec![
+            SentPart::Text {
+                text: "here ".to_owned()
+            },
+            SentPart::Image {
+                data: "AAA".to_owned(),
+                mime_type: "image/png".to_owned()
+            },
+            SentPart::Text {
+                text: " look".to_owned()
+            },
+        ]
+    );
+    // Deleted with its label.
+    let mut dropped = with_image("look ", "AAA", " here");
+    dropped.edited("look here");
+    assert!(!dropped.has_image());
+    assert_eq!(dropped.expand(), "look here");
+    // A repeated label relinks once; the second stays text.
+    let mut twice = with_image("", "AAA", "");
+    twice.edited("[Image #1] and [Image #1]");
+    assert_eq!(
+        twice.content(),
+        vec![
+            SentPart::Image {
+                data: "AAA".to_owned(),
+                mime_type: "image/png".to_owned()
+            },
+            SentPart::Text {
+                text: " and [Image #1]".to_owned()
+            },
+        ]
+    );
+    // Out of range on both sides stays text.
+    let mut bounds = with_image("", "AAA", "");
+    bounds.insert_image(Arc::from("BBB"));
+    bounds.edited("[Image #0] x [Image #3]");
+    assert!(!bounds.has_image());
+    assert_eq!(bounds.expand(), "[Image #0] x [Image #3]");
+}
+
+#[test]
+fn expand_shows_an_image_as_its_label() {
+    // I10.
+    assert_eq!(with_image("look ", "AAA", " here").expand(), "look [Image #1] here");
+}
