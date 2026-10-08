@@ -77,15 +77,49 @@ impl Anchor {
     }
 }
 
+/// How many characters of each snippet line the results view keeps:
+/// the view shows every match with the lines around it and needs no
+/// page (`docs/tui.md`, "Search").
+pub(crate) const SNIPPET: usize = 400;
+
+/// One match's display lines for the results view: its logical line cut
+/// to [`SNIPPET`] characters around the match, with its char range in the
+/// cut line, and one logical line each side, cut to [`SNIPPET`]
+/// characters. Display only, never compared: the anchor holds the whole
+/// line's hash and length (`docs/tui.md`, "Search").
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Snippet {
+    /// The logical line before the match's, or none at a page's edge.
+    pub(crate) before: String,
+    /// The match's logical line, cut around the match.
+    pub(crate) line: String,
+    /// The match's char range in the cut line.
+    pub(crate) at: Range<usize>,
+    /// The logical line after the match's, or none at a page's edge.
+    pub(crate) after: String,
+}
+
 /// One match: its identity, and which of its page's matches with equal
 /// scopes it is, in order, which locates it on screen.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub(crate) struct Match {
     /// Its identity.
     pub(crate) anchor: Anchor,
     /// Its ordinal among the page's matches with equal scopes.
     pub(crate) nth: usize,
+    /// Its display lines for the results view.
+    pub(crate) snippet: Snippet,
 }
+
+impl PartialEq for Match {
+    /// Occurrence identity is the anchor and the ordinal: the display
+    /// snippet never compares (`docs/tui.md`, "Search").
+    fn eq(&self, other: &Self) -> bool {
+        self.anchor == other.anchor && self.nth == other.nth
+    }
+}
+
+impl Eq for Match {}
 
 /// The search's one `history` request on the wire, if any.
 #[derive(Debug)]
@@ -134,6 +168,9 @@ pub(super) struct Find {
     /// The current match is not shown yet: its sections open and the view
     /// scrolls to it.
     reveal: bool,
+    /// The results view, while open: the bar stays open under it
+    /// (`docs/tui.md`, "Search").
+    results: Option<super::results::Results>,
     /// A page could not be read: the count gains ` · incomplete`.
     incomplete: bool,
     /// The page on screen when the scan started: the scan runs from it to
@@ -194,7 +231,7 @@ impl Find {
         &mut self,
         at: usize,
         revision: u64,
-        found: Vec<(Anchor, usize, bool)>,
+        found: Vec<(Anchor, usize, bool, Snippet)>,
     ) -> Vec<(Match, usize, bool)> {
         // A rescan replaces the page's list whole: its old matches go
         // first, so the flattened order stays page order, then render
@@ -207,12 +244,16 @@ impl Find {
         }
         let mut matches = Vec::new();
         let mut kept = Vec::new();
-        for (anchor, row, hidden) in found.into_iter().take(left) {
+        for (anchor, row, hidden, snippet) in found.into_iter().take(left) {
             let nth = matches
                 .iter()
                 .filter(|kept: &&Match| kept.anchor.scopes == anchor.scopes)
                 .count();
-            let kept_match = Match { anchor, nth };
+            let kept_match = Match {
+                anchor,
+                nth,
+                snippet,
+            };
             kept.push((kept_match.clone(), row, hidden));
             matches.push(kept_match);
         }
@@ -249,8 +290,70 @@ impl Find {
     }
 
     /// The kept matches in page order, then render order.
-    fn flat(&self) -> Vec<&Match> {
+    pub(super) fn flat(&self) -> Vec<&Match> {
         self.matches.values().flatten().collect()
+    }
+
+    /// The current match's place in page order, then render order.
+    pub(super) fn current_index(&self) -> Option<usize> {
+        let current = self.current.as_ref()?;
+        self.flat().iter().position(|kept| *kept == current)
+    }
+
+    /// The kept match at `at` in page order, then render order.
+    pub(super) fn match_at(&self, at: usize) -> Option<Match> {
+        self.flat().get(at).cloned().cloned()
+    }
+
+    /// The results view's selected entry's match, if any.
+    fn selected_match(&self) -> Option<Match> {
+        let selected = self.results.as_ref()?.selected();
+        self.match_at(selected)
+    }
+
+    /// Shows the results view, selecting the current match's entry or
+    /// the first one (`docs/tui.md`, "Search").
+    pub(super) fn show_results(&mut self, selected: usize) {
+        self.results = Some(super::results::Results::open(selected));
+    }
+
+    /// Closes the results view; the bar stays open.
+    pub(super) fn hide_results(&mut self) {
+        self.results = None;
+    }
+
+    /// Whether the results view is open.
+    pub(super) fn has_results(&self) -> bool {
+        self.results.is_some()
+    }
+
+    /// What was typed into the bar.
+    pub(super) fn query(&self) -> &str {
+        &self.query
+    }
+
+    /// The results view, for moving its selection.
+    pub(super) fn results_mut(&mut self) -> Option<&mut super::results::Results> {
+        self.results.as_mut()
+    }
+
+    /// The results view's selected entry and its top row.
+    pub(super) fn results_at(&self) -> Option<(usize, usize)> {
+        self.results
+            .as_ref()
+            .map(|results| (results.selected(), results.top()))
+    }
+
+    /// Makes `next` current and shows it: its sections open and the view
+    /// scrolls to it (`docs/tui.md`, "Search").
+    pub(super) fn set_current(&mut self, next: Match) {
+        self.current = Some(next);
+        self.reveal = true;
+    }
+
+    /// The results view's selected entry's line, for a focused entry.
+    pub(super) fn result_line(&self, at: usize) -> Option<String> {
+        self.match_at(at).map(|kept| kept.snippet.line)
     }
 
     /// Pulls pages cut since the query started into the scan order
@@ -281,6 +384,27 @@ impl Find {
             .find(|got| (got.anchor.page, got.nth) > (old.anchor.page, old.nth));
         self.current = after.or(flat.first()).map(|got| (**got).clone());
         self.reveal = false;
+    }
+
+    /// Reconciles the results view's selected entry with rescanned pages
+    /// the same way: the first equal match stays selected, else the
+    /// first match after the old one's place in page order, wrapping,
+    /// else the first one, and none with no matches (`docs/tui.md`,
+    /// "Search").
+    fn remap_selected(&mut self, old: Match, height: usize) {
+        let flat = self.flat();
+        let at = flat
+            .iter()
+            .position(|kept| kept.anchor == old.anchor && kept.nth == old.nth)
+            .or_else(|| {
+                flat.iter()
+                    .position(|kept| (kept.anchor.page, kept.nth) > (old.anchor.page, old.nth))
+            })
+            .unwrap_or(0);
+        let len = flat.len();
+        if let Some(results) = self.results.as_mut() {
+            results.go(at, len, height);
+        }
     }
 
     /// The count beside the query, as drawn.
@@ -346,6 +470,66 @@ type Placed = (
     HashMap<Target, usize>,
 );
 
+/// Cuts `text` to [`SNIPPET`] characters around `hit`, its char range:
+/// the cut text with `hit` relative to it. A short line stays whole, so
+/// the results view needs no page (`docs/tui.md`, "Search").
+fn cut_around(text: &str, hit: &Range<usize>) -> (String, Range<usize>) {
+    let len = text.chars().count();
+    if len <= SNIPPET {
+        return (text.to_owned(), hit.clone());
+    }
+    let span = hit.end.saturating_sub(hit.start);
+    let start = hit
+        .start
+        .saturating_sub(SNIPPET.saturating_sub(span) / 2)
+        .min(len.saturating_sub(SNIPPET));
+    let cut: String = text.chars().skip(start).take(SNIPPET).collect();
+    (
+        cut,
+        hit.start.saturating_sub(start)..hit.end.saturating_sub(start),
+    )
+}
+
+/// Cuts `text` to [`SNIPPET`] characters from its start: a neighbour
+/// line has no match to centre on (`docs/tui.md`, "Search").
+fn cut_head(text: &str) -> String {
+    text.chars().take(SNIPPET).collect()
+}
+
+/// The display snippet for the match `hit` on `line`: its line cut
+/// around the match, one logical line each side cut from its start. A
+/// neighbour at a page's edge is none: the scan renders one page at a
+/// time and fetches nothing extra for a snippet (`docs/tui.md`,
+/// "Search").
+fn snippet_for(
+    line: &Logical,
+    hit: &Range<usize>,
+    before: Option<&str>,
+    after: Option<&str>,
+) -> Snippet {
+    let (cut, rel) = cut_around(&line.text, hit);
+    Snippet {
+        before: before.map(cut_head).unwrap_or_default(),
+        line: cut,
+        at: rel,
+        after: after.map(cut_head).unwrap_or_default(),
+    }
+}
+
+/// The neighbouring lines' text around `lines[at]`, or none at a page's
+/// edge: the scan renders one page at a time and fetches nothing extra
+/// for a snippet (`docs/tui.md`, "Search").
+fn sides(lines: &[Logical], at: usize) -> (Option<&str>, Option<&str>) {
+    (
+        at.checked_sub(1)
+            .and_then(|prev| lines.get(prev))
+            .map(|line| line.text.as_str()),
+        lines
+            .get(at.saturating_add(1))
+            .map(|line| line.text.as_str()),
+    )
+}
+
 /// Every match of `query` in the all-open `lines` of a resident page, each
 /// with its conversation row: a shown line maps to its row, and a line a
 /// closed section hides counts from its outermost closed scope's own line,
@@ -356,13 +540,15 @@ fn search_shown(
     query: &str,
     placed: &mut Placed,
     start: usize,
-) -> Vec<(Anchor, usize, bool)> {
+) -> Vec<(Anchor, usize, bool, Snippet)> {
     let mut out = Vec::new();
-    for line in lines {
+    for (at, line) in lines.iter().enumerate() {
+        let (before, after) = sides(lines, at);
         let hash = line_hash(&line.text);
         let len = line.text.chars().count();
-        for at in logical::matches(&line.text, query) {
-            let anchor = Anchor::new(page, line, at);
+        for hit in logical::matches(&line.text, query) {
+            let snippet = snippet_for(line, &hit, before, after);
+            let anchor = Anchor::new(page, line, hit);
             let (row, hidden) = match placed
                 .0
                 .get_mut(&(hash, len, line.scopes.clone()))
@@ -379,7 +565,7 @@ fn search_shown(
                     true,
                 ),
             };
-            out.push((anchor, row, hidden));
+            out.push((anchor, row, hidden, snippet));
         }
     }
     out
@@ -394,14 +580,17 @@ fn search_scratch(
     offsets: &[usize],
     query: &str,
     start: usize,
-) -> Vec<(Anchor, usize, bool)> {
+) -> Vec<(Anchor, usize, bool, Snippet)> {
     let mut out = Vec::new();
-    for line in lines {
-        for at in logical::matches(&line.text, query) {
+    for (at, line) in lines.iter().enumerate() {
+        let (before, after) = sides(lines, at);
+        for hit in logical::matches(&line.text, query) {
+            let snippet = snippet_for(line, &hit, before, after);
             out.push((
-                Anchor::new(page, line, at),
+                Anchor::new(page, line, hit),
                 start.saturating_add(offsets.get(line.row).copied().unwrap_or(0)),
                 false,
+                snippet,
             ));
         }
     }
@@ -461,7 +650,10 @@ impl App {
             }
             // A second Ctrl+F opens the results view; until then the
             // bar stays open.
-            Key::CtrlF => Some(Effect::None),
+            Key::CtrlF => {
+                self.open_results();
+                Some(Effect::None)
+            }
             // The view's keys scroll on with the bar open.
             Key::PageUp | Key::PageDown => None,
             Key::Backspace
@@ -571,7 +763,11 @@ impl App {
                     let anchor = Anchor::new(at, &line, hit.clone());
                     let nth = seen.get(&anchor.scopes).copied().unwrap_or(0);
                     seen.insert(anchor.scopes.clone(), nth.saturating_add(1));
-                    let got = Match { anchor, nth };
+                    let got = Match {
+                        anchor,
+                        nth,
+                        snippet: Snippet::default(),
+                    };
                     let current = self
                         .find
                         .current
@@ -920,10 +1116,15 @@ impl App {
             return;
         }
         let old = self.find.current.clone();
-        if self.scan_resident_all()
-            && let Some(old) = old
-        {
-            self.find.reconcile(old);
+        let old_selected = self.find.selected_match();
+        if self.scan_resident_all() {
+            if let Some(old) = old {
+                self.find.reconcile(old);
+            }
+            if let Some(old) = old_selected {
+                let height = self.results_height();
+                self.find.remap_selected(old, height);
+            }
         }
         self.pump_find();
         self.reveal_current();
@@ -933,7 +1134,7 @@ impl App {
     /// first, clearing the selection, and the view scrolls to it. On a
     /// dropped page the view scrolls so it loads, and the reveal completes
     /// after.
-    fn reveal_current(&mut self) {
+    pub(super) fn reveal_current(&mut self) {
         if !self.find.reveal {
             return;
         }
@@ -984,7 +1185,7 @@ impl App {
         // Which of the page's matches with equal scopes each hit is,
         // in order: what locates the current match on screen.
         let mut seen: HashMap<Vec<Target>, usize> = HashMap::new();
-        for (anchor, row, hidden) in search_shown(
+        for (anchor, row, hidden, _) in search_shown(
             at,
             &logical::logical(&open_rows, &open_texts),
             &query,
@@ -993,7 +1194,7 @@ impl App {
         ) {
             let nth = seen.get(&anchor.scopes).copied().unwrap_or(0);
             seen.insert(anchor.scopes.clone(), nth.saturating_add(1));
-            if *current == (Match { anchor, nth }) {
+            if current.anchor == anchor && current.nth == nth {
                 return Some((row, hidden));
             }
         }

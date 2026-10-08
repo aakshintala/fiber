@@ -48,6 +48,7 @@ mod links;
 #[path = "app_mouse.rs"]
 mod mouse;
 mod offer;
+pub(crate) mod results;
 mod screen;
 mod select;
 
@@ -299,6 +300,9 @@ impl App {
             return effect;
         }
         if let Some(effect) = self.history_key(&key) {
+            return effect;
+        }
+        if let Some(effect) = self.results_key(&key) {
             return effect;
         }
         if let Some(effect) = self.find_key(&key) {

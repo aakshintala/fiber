@@ -212,12 +212,12 @@ impl App {
     }
 
     /// The ✕ on an open overlay: closes the key map when open, else the
-    /// notice overlay.
+    /// notice overlay, else the search results.
     pub(super) fn close_overlay(&mut self) {
         if self.keymap_top().is_some() {
             self.keymap_key(&Key::Esc);
-        } else {
-            self.notices.close();
+        } else if !self.notices.close() {
+            self.close_results();
         }
     }
 
@@ -233,6 +233,8 @@ impl App {
             TargetId::Link { .. } => self.link_text(id),
             TargetId::Token(number) => self.draft.token_text(number).map(str::to_owned),
             TargetId::Notice(id) => self.notices.text(id).map(str::to_owned),
+            TargetId::FindResult(at) => self.result_line(at),
+            TargetId::FindCount => None,
             TargetId::Steering(at) => self.steering.text(at).map(str::to_owned),
             TargetId::Turn(at) => self.turn_text(at),
             TargetId::Badge

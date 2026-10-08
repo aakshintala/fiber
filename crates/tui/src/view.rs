@@ -19,6 +19,7 @@ pub(crate) mod chrome;
 mod home;
 mod marks;
 mod offer;
+mod results;
 
 pub(crate) use home::max_question_scroll;
 
@@ -182,10 +183,23 @@ pub(crate) fn render(
             // The repository offer swaps in for the conversation.
             match app.offer_rows(conversation.width) {
                 Some((rows, top)) => offer::render(&rows, top, conversation, buf, &mut targets),
-                None => {
-                    conversation_rows(app, conversation, buf, &mut targets);
-                    marks::draw(app, conversation, buf, &mut targets);
-                }
+                // The search results swap in for the conversation while
+                // open, with the ✕ closing them (`docs/tui.md`, "Search",
+                // "Swapped views").
+                None => match app.find_results() {
+                    Some(view) => {
+                        results::render(&view, conversation, buf, &mut targets);
+                        marks::draw(app, conversation, buf, &mut targets);
+                        // The ✕ draws over the bar's last cell, so the
+                        // view keeps a visible closer (`docs/tui.md`,
+                        // "Swapped views").
+                        overlay_cross(buf, conversation, &mut targets);
+                    }
+                    None => {
+                        conversation_rows(app, conversation, buf, &mut targets);
+                        marks::draw(app, conversation, buf, &mut targets);
+                    }
+                },
             }
             notices(app, conversation, buf, &mut targets);
         }
@@ -269,6 +283,7 @@ fn notices(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
                 target.id,
                 TargetId::Line(_)
                     | TargetId::Link { .. }
+                    | TargetId::FindResult(_)
                     | TargetId::NewBelow
                     | TargetId::Turn(_)
                     | TargetId::Offer(_)

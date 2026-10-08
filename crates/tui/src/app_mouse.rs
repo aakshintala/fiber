@@ -19,6 +19,14 @@ impl App {
         let effect = match target {
             TargetId::Badge => self.open_first(),
             TargetId::Link { .. } => self.follow_link(target),
+            TargetId::FindCount => {
+                self.open_results();
+                Effect::None
+            }
+            TargetId::FindResult(at) => {
+                self.jump_to_match(at);
+                Effect::None
+            }
             TargetId::Line(copy @ Target::Copy { .. }) => self.copy(copy),
             TargetId::Line(line) => {
                 self.open(line);

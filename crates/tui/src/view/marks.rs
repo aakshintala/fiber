@@ -8,7 +8,7 @@ use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 
 use crate::app::{App, FindBar};
-use crate::mouse::Target;
+use crate::mouse::{Target, TargetId};
 
 /// The selection's highlight.
 /// debt: a fixed colour, not a theme role; upgrade when colour roles land
@@ -33,10 +33,14 @@ const LINK: Style = Style::new().add_modifier(Modifier::UNDERLINED);
 /// selection's cells, then pushes one click target per row each visible
 /// link covers and underlines its cells. With no bar, no selection and no
 /// link on screen this costs one check each (`docs/tui.md`,
-/// "Performance").
+/// "Performance"). While the results view is open only the bar draws:
+/// it covers the conversation (`docs/tui.md`, "Search").
 pub(super) fn draw(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
     if let Some(bar) = app.find_bar() {
-        draw_bar(&bar, area, buf);
+        draw_bar(&bar, area, buf, targets);
+    }
+    if app.results_open() {
+        return;
     }
     for (rect, current) in app.find_marks(area) {
         let style = if current { CURRENT } else { MATCH };
@@ -83,13 +87,31 @@ fn bar_span(bar: &FindBar, area: Rect) -> (u16, usize) {
     (x, width)
 }
 
-/// Paints the bar right-aligned on `area`'s first row.
-fn draw_bar(bar: &FindBar, area: Rect, buf: &mut Buffer) {
+/// Paints the bar right-aligned on `area`'s first row, pushing a target
+/// over its match count: a click opens the results (`docs/tui.md`,
+/// "Search"). A count the bar's width cuts off is no target.
+fn draw_bar(bar: &FindBar, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
     if area.is_empty() {
         return;
     }
     let (x, width) = bar_span(bar, area);
     buf.set_stringn(x, area.y, bar_text(bar), width, Style::default());
+    // The count starts past `find: <query> · `: past the bar's edge it
+    // is cut off and no target.
+    let start = crate::format::width(&format!("find: {} · ", bar.query));
+    let width = width.saturating_sub(start);
+    if width == 0 {
+        return;
+    }
+    targets.push(Target {
+        id: TargetId::FindCount,
+        rect: Rect::new(
+            x.saturating_add(u16::try_from(start).unwrap_or(u16::MAX)),
+            area.y,
+            u16::try_from(width).unwrap_or(u16::MAX),
+            1,
+        ),
+    });
 }
 
 /// The bar's cursor at its query's end, while the bar is open: `None` on

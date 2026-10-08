@@ -19,6 +19,12 @@ pub(crate) enum TargetId {
     /// its first cell, and a hash of the destination drawn there
     /// (`docs/tui.md`, "Links": a stale frame never opens another URL).
     Link { row: usize, col: u16, url: u64 },
+    /// The search bar's match count: opens the search results
+    /// (`docs/tui.md`, "Search").
+    FindCount,
+    /// A search results entry, by its index: jumps to its match
+    /// (`docs/tui.md`, "Search").
+    FindResult(usize),
     /// The paste token with this number in the input box: opens its text
     /// in the editor.
     Token(usize),
