@@ -148,8 +148,21 @@ impl Setup {
         let mut args = vec!["session", "--id", id, "--workspace"];
         args.push(workspace.to_str().unwrap());
         args.extend(extra);
-        let mut command = self.fiber(&args);
+        self.spawn_session(&args, Stdio::null()).0
+    }
+
+    /// Spawns `fiber` with `args` and `stdin`, draining stdout on a thread
+    /// and keeping stderr for a failure: [`Setup::start_session_in`] and
+    /// the delegate tests share it.
+    fn spawn_session(
+        &self,
+        args: &[&str],
+        stdin: Stdio,
+    ) -> (Running, Option<std::process::ChildStdin>) {
+        let mut command = self.fiber(args);
+        command.stdin(stdin);
         let mut child = command.spawn().unwrap();
+        let stdin = child.stdin.take();
         let group = child.id();
         let guard = KillGroup(group);
         let watchdog = Watchdog::group(group);
@@ -174,16 +187,60 @@ impl Setup {
                 Ok(()) | Err(mpsc::SendError(_)) => {}
             }
         });
-        Running {
-            child,
-            watchdog,
-            group,
-            guard,
-            lines,
-            stderr: stderr_rx,
-            first: Vec::new(),
-            deadline: self.deadline,
-        }
+        (
+            Running {
+                child,
+                watchdog,
+                group,
+                guard,
+                lines,
+                stderr: stderr_rx,
+                first: Vec::new(),
+                deadline: self.deadline,
+            },
+            stdin,
+        )
+    }
+
+    /// Starts `fiber session` in delegate mode with stdin piped: the caller
+    /// holds the returned stdin open for the run, or drops it to take the
+    /// lifeline path. The idle exit is the config's, so the tests set it
+    /// high and the exit proves the run ended on its own.
+    fn start_delegate(
+        &self,
+        id: &str,
+        parent: &str,
+        delegate: &str,
+        extra: &[&str],
+    ) -> (Running, std::process::ChildStdin) {
+        let workspace = self.workspace();
+        let mut args = vec![
+            "session",
+            "--id",
+            id,
+            "--workspace",
+            workspace.to_str().unwrap(),
+            "--model",
+            "fake/m",
+            "--prompt",
+            "hi",
+            "--parent",
+            parent,
+            "--delegate-id",
+            delegate,
+        ];
+        args.extend(extra);
+        let (running, stdin) = self.spawn_session(&args, Stdio::piped());
+        (running, stdin.unwrap())
+    }
+
+    /// The session exits only when its run ends: `session.idle_exit_ms`
+    /// high, keeping the configured model.
+    fn slow_idle(&self) {
+        write_json(
+            &self.home().join("config.json"),
+            &json!({"model": "fake/m", "session": {"idle_exit_ms": 3600000}}),
+        );
     }
 
     /// Runs `fiber` once with `args`, waiting under the test's [`Deadline`]. The
@@ -2585,4 +2642,126 @@ fn the_notes_are_fixed_for_the_session_across_two_turns() {
         !second_instructions.contains("Our org is globex."),
         "{second_instructions:?}"
     );
+}
+
+/// A delegate's parent and job id, as the CLI takes them.
+const PARENT: &str = "s_aaaaaaaaaaaaaaaa";
+const DELEGATE: &str = "j_bbbbbbbbbbbbbbbb";
+
+/// The session's durable lines.
+fn delegate_events(setup: &Setup, id: &str) -> Vec<Value> {
+    let text = fs::read_to_string(setup.session_dir(id).join("events.jsonl")).unwrap();
+    text.lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+
+/// A stream whose one item calls `ask_user` with `questions`.
+fn ask_user(questions: &Value) -> Response {
+    stream(&[json!({"type": "response.output_item.done", "item": {
+        "type": "function_call",
+        "id": "fc_call_ask",
+        "call_id": "call_ask",
+        "name": "ask_user",
+        "arguments": json!({"questions": questions}).to_string()
+    }})])
+}
+
+fn delegate_questions() -> Value {
+    json!([
+        {"header": "Base", "question": "Which branch?", "multiSelect": true,
+         "options": [{"label": "main (Recommended)"}, {"label": "dev"}]},
+        {"header": "Name", "question": "What name?"}
+    ])
+}
+
+#[test]
+fn a_delegate_runs_one_turn_and_exits_with_its_parent_recorded() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    setup.slow_idle();
+    let id = doors::mint("s_");
+    // The idle exit is an hour out: the exit below proves the run ended on
+    // its own, with no idle wait.
+    let (running, _stdin) = setup.start_delegate(&id, PARENT, DELEGATE, &[]);
+    let (status, out, stderr) = running.wait();
+    assert_eq!(status.code(), Some(0), "stderr: {stderr}");
+    let exited = out.last().expect("fiber_exited is the last stdout line");
+    assert_eq!(exited["kind"], "fiber_exited");
+    assert_eq!(exited["payload"]["exit_code"], 0);
+    assert_eq!(exited["payload"]["text"], "Hello.");
+    let lines = delegate_events(&setup, &id);
+    let started = lines
+        .iter()
+        .find(|line| line["kind"] == "session_started")
+        .expect("a session_started line");
+    assert_eq!(
+        started["payload"]["parent"],
+        json!({"session_id": PARENT, "delegate_id": DELEGATE})
+    );
+    assert!(started["payload"].get("worktree").is_none());
+}
+
+#[test]
+fn an_ask_user_call_ends_a_delegate_turn_with_its_questions() {
+    let setup = Setup::new();
+    let questions = delegate_questions();
+    let server = ProviderServer::start([ask_user(&questions)]).unwrap();
+    setup.provider(&server);
+    setup.slow_idle();
+    let id = doors::mint("s_");
+    let (running, _stdin) = setup.start_delegate(&id, PARENT, DELEGATE, &[]);
+    let (status, out, stderr) = running.wait();
+    assert_eq!(status.code(), Some(0), "stderr: {stderr}");
+    let exited = out.last().expect("fiber_exited is the last stdout line");
+    assert_eq!(exited["kind"], "fiber_exited");
+    assert_eq!(exited["payload"]["exit_code"], 0);
+    assert_eq!(exited["payload"]["questions"], questions);
+}
+
+#[test]
+fn dropping_a_delegate_lifeline_exits_129_within_the_bound() {
+    let setup = Setup::new();
+    let prefix = "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"Working\"}\n\n";
+    let server = ProviderServer::start([Response::stall(200, prefix, prefix.len() + 100000)
+        .header("content-type", "text/event-stream")])
+    .unwrap();
+    setup.provider(&server);
+    setup.slow_idle();
+    let id = doors::mint("s_");
+    let (mut running, stdin) = setup.start_delegate(&id, PARENT, DELEGATE, &[]);
+    // The turn's first step started: the provider is stalled mid-turn.
+    running.wait_for("step_started");
+    // The parent is gone: EOF on the lifeline is a hangup.
+    drop(stdin);
+    let (status, out, stderr) = running.wait();
+    assert_eq!(status.code(), Some(129), "stderr: {stderr}");
+    let exited = out.last().expect("fiber_exited is the last stdout line");
+    assert_eq!(exited["kind"], "fiber_exited");
+    assert_eq!(exited["payload"]["exit_code"], 129);
+}
+
+#[test]
+fn a_parent_without_a_prompt_is_a_usage_error_and_starts_nothing() {
+    let setup = Setup::new();
+    let workspace = setup.workspace();
+    let (code, lines, stderr) = setup.run(&[
+        "session",
+        "--id",
+        "s_0123456789abcdef",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--parent",
+        PARENT,
+        "--delegate-id",
+        DELEGATE,
+    ]);
+    assert_eq!(code, Some(2));
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["kind"], "fiber_exited");
+    assert_eq!(lines[0]["payload"]["exit_code"], 2);
+    assert!(stderr.contains("--prompt"), "{stderr}");
+    assert!(!setup.home().join("projects").exists());
+    assert!(!setup.home().join("run").exists());
 }
