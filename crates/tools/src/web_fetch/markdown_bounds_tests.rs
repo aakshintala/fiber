@@ -89,6 +89,39 @@ fn title_text_collapses_as_before() {
     }
 }
 
+/// Misnested markup inside a link converts differently now that the link's
+/// text is written as it arrives: `[` takes the quote depth of the link's
+/// first visible character, and `pre` and `td` content lands inside the
+/// link. Each case names its change; ordinary pages are unaffected.
+#[test]
+fn misnested_markup_inside_a_link_converts_as_redesigned() {
+    // A `blockquote` end inside a link: `[` keeps the depth of the link's
+    // first character, not of its closing tag.
+    assert_eq!(
+        to_markdown("<blockquote><a href=\"u\">x</blockquote>y</a>"),
+        "> [x y](u)\n"
+    );
+    // A `blockquote` start inside a link, closed after it: same rule the
+    // other way, no prefix at the link's start.
+    assert_eq!(
+        to_markdown("<a href=\"u\">x<blockquote>y</a>z</blockquote>"),
+        "[x y](u)z\n"
+    );
+    // A `pre` inside a link: its fence and text land inside the link
+    // rather than before it.
+    assert_eq!(
+        to_markdown("<a href=\"u\">x<pre>y</pre>z</a>"),
+        "[x ```y\n``` z](u)\n"
+    );
+    // A `td` inside a link after its first character: the space before
+    // the link stays, since the pending space clears instead of trimming
+    // the output.
+    assert_eq!(
+        to_markdown("x <a href=\"u\"><td>a<td>b</a>"),
+        "x [a | b](u)\n"
+    );
+}
+
 /// However a page is cut into pieces, link and title text come out the
 /// same: every slice size from 1 to 7 converts like the whole page.
 #[test]

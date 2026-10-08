@@ -40,6 +40,9 @@ const FETCH: Duration = Duration::from_secs(60);
 struct Fetched {
     text: String,
     measured: Bytes,
+    /// The result buffer's address inside the scope: the clone below has
+    /// a different one, allocated past the scope, with no slot.
+    addr: usize,
     _dir: TempDir,
     _server: ProviderServer,
 }
@@ -63,7 +66,7 @@ fn fetch(content_type: &str, page: Vec<u8>) -> Fetched {
     let tool = WebFetch::new(artifacts, FakeClock::new()).with_proxy(None);
     let mut arguments = Map::new();
     arguments.insert("url".to_owned(), Value::String(url));
-    let (result, measured) = within("the fetch", FETCH, move || {
+    let (result, measured, addr) = within("the fetch", FETCH, move || {
         let ((), calibration) = bytes_during(|| drop(black_box(Vec::<u8>::with_capacity(1024))));
         assert_eq!(
             calibration.peak(),
@@ -72,7 +75,12 @@ fn fetch(content_type: &str, page: Vec<u8>) -> Fetched {
         );
         let cancel = CancelToken::new();
         let emit = Recorder::default();
-        bytes_during(|| tool.run(&arguments, &cancel, &emit))
+        let (output, measured) = bytes_during(|| tool.run(&arguments, &cancel, &emit));
+        let addr = match output.content.first() {
+            Some(contract::shapes::ContentPart::Text { text }) => text.as_ptr() as usize,
+            _ => 0,
+        };
+        (output, measured, addr)
     });
     let text = match result.content.first() {
         Some(contract::shapes::ContentPart::Text { text }) => text.clone(),
@@ -82,6 +90,7 @@ fn fetch(content_type: &str, page: Vec<u8>) -> Fetched {
     Fetched {
         text,
         measured,
+        addr,
         _dir: dir,
         _server: server,
     }
@@ -98,7 +107,7 @@ fn markdown(fetched: &Fetched) -> &str {
 
 /// The working peak of a fetch: the peak without the result buffer.
 fn working(fetched: &Fetched) -> usize {
-    fetched.measured.peak_without(fetched.text.as_ptr())
+    fetched.measured.peak_without(fetched.addr as *const u8)
 }
 
 /// The bound every working peak is checked against: the empty page's peak
