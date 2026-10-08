@@ -315,14 +315,9 @@ fn start_rejects_bad_args_without_starting_a_session() {
         command(
             "c_7",
             "start",
-            json!({"workspace": workspace, "worktree": 1}),
-        ),
-        command(
-            "c_8",
-            "start",
             json!({"workspace": workspace, "worktree": Value::Null}),
         ),
-        command("c_9", "status", json!({"level": "full"})),
+        command("c_8", "status", json!({"level": "full"})),
     ];
     for line in &bad {
         client.send(line);

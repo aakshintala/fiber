@@ -19,8 +19,8 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 
 use fakes::ProviderServer;
-use serde_json::json;
-use support::{Deadline, HubProc, Setup, connect_hub, recv_reply, subscribe, until};
+use serde_json::{Value, json};
+use support::{Deadline, HubProc, SessionGuard, Setup, connect_hub, recv_reply, subscribe, until};
 
 /// Runs the system `git` in `dir`, in its own process group, to its exit
 /// under the test's [`Deadline`].
@@ -53,6 +53,18 @@ fn workspace_text(setup: &Setup) -> String {
     setup.workspace().to_string_lossy().into_owned()
 }
 
+/// The event kinds of `lines`, in order, without `session_status`: an
+/// observer thread writes it, so where it falls among the loop's own
+/// lines is not what this test pins (as `tests/session_command.rs`
+/// filters it).
+fn kinds(lines: &[Value]) -> Vec<&str> {
+    lines
+        .iter()
+        .filter(|line| line["kind"] != "session_status")
+        .map(|line| line["kind"].as_str().unwrap())
+        .collect()
+}
+
 #[test]
 fn hub_start_with_worktree_runs_in_a_new_worktree_and_removes_it_clean() {
     let setup = Setup::new();
@@ -63,6 +75,7 @@ fn hub_start_with_worktree_runs_in_a_new_worktree_and_removes_it_clean() {
 
     let hub: Arc<Mutex<Option<HubProc>>> = Arc::new(Mutex::new(None));
     let (client, _) = connect_hub(&setup, &hub);
+    let guard = SessionGuard::arm(setup.deadline, &workspace);
     client.send(
         &json!({
             "id": "c_start",
@@ -79,10 +92,14 @@ fn hub_start_with_worktree_runs_in_a_new_worktree_and_removes_it_clean() {
         .to_owned();
 
     subscribe(&client, &id);
-    let lines = until(&client, "session_started", |line| {
+    // The preamble and opening message are read once at the first turn
+    // (`crates/loop/src/opening.rs`), so a session started with no
+    // content parks after `clients`: closing then races nothing the loop
+    // writes, and the stream below is the whole of it.
+    let mut stream = until(&client, "session_started", |line| {
         line["kind"] == "session_started"
     });
-    let first = lines
+    let first = stream
         .iter()
         .find(|line| line["kind"] == "session_started")
         .expect("session_started is replayed");
@@ -94,13 +111,24 @@ fn hub_start_with_worktree_runs_in_a_new_worktree_and_removes_it_clean() {
     assert!(Path::new(&path).exists(), "the worktree exists");
 
     client.send(&json!({"id": "c_close", "session_id": id, "command": "close"}).to_string());
-    until(&client, "fiber_exited", |line| {
+    let tail = until(&client, "fiber_exited", |line| {
         line["kind"] == "fiber_exited"
     });
-    assert!(
-        fakes::matching_exits(&id, setup.deadline.left()),
-        "waited until the deadline for the session process to exit"
+    stream.extend(tail);
+    // The complete, ordered stream: the replayed start, the live startup
+    // lines, the close acknowledgement, and the exit.
+    assert_eq!(
+        kinds(&stream),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "clients",
+            "command_accepted",
+            "fiber_exited",
+        ]
     );
+    guard.wait_gone();
     // Clean, so both are gone after exit.
     assert!(!Path::new(&path).exists());
     assert!(
