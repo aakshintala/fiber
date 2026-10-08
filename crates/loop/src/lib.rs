@@ -56,6 +56,7 @@ mod skill_header;
 mod skills;
 mod status;
 mod step;
+mod suspend;
 mod switch;
 mod turn;
 mod usage;

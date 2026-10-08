@@ -508,7 +508,9 @@ id is a usage error, because `ask` has no list to show.
 by default (`docs/configuration.md`), whoever is connected. Idle means no turn
 running, no jobs running and no cache warming (`docs/prompt-cache.md`,
 "Warming while idle"). Waiting on an approval or a question is idle,
-because nothing is in flight. Connected clients do not keep a session alive: a
+because nothing is in flight. A question `ask_user` raised counts as idle
+only once every other call of its step has its result; until then the
+session waits for the answer. Connected clients do not keep a session alive: a
 phone or a terminal left open is connected all the time. Leaving never
 cancels. When the delay passes, Fiber exits.
 
@@ -737,7 +739,10 @@ and a repeat does nothing. A SIGTERM or SIGINT after it is a second signal.
 flight `cancelled`, and the turn `turn_completed { outcome: interrupted }`. Two
 things differ from a cancel: a pending approval, question or repository offer stays pending, so
 resuming raises it again (below), and queued steering messages start no turn. They
-were never logged, so they are gone. An extension's pending `host.ask` is the
+were never logged, so they are gone. A question `ask_user` raised stays
+pending only when no later call of its step is still without a result;
+otherwise it ends as on a cancel, with `interaction_resolved` by `fiber` and
+`declined: true`, so the later calls' results are written in order. An extension's pending `host.ask` is the
 exception: its asker lives in a Lua VM that does not survive the exit, so
 `fiber_exited` follows an `interaction_resolved` with `declined: true` and `by`
 `fiber` for each of them, and resuming raises nothing. A request already answered when the signal
