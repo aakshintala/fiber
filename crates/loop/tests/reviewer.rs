@@ -2237,3 +2237,45 @@ fn a_shutdown_that_closes_the_inbox_during_an_escalation_leaves_the_request_pend
     assert_eq!(exited.payload["suspended_on"], request_id);
     assert_eq!(reviewer.requests().len(), 1);
 }
+
+#[test]
+fn the_notes_prefix_every_reviewer_request_and_survive_a_second_call() {
+    let notes = "## Notes that hold everywhere\n\nOur org is acme.\n\n## Notes for this project\n\nNever touch infra/prod.";
+    let tool = shell(None, None);
+    let mut session =
+        Session::with_tools(paired_turns(2), None, vec![tool.clone() as Arc<dyn Tool>])
+            .reviewer_notes(notes);
+    let reviewer = session.reviewer(vec![
+        Scripted::text("check"),
+        Scripted::text("allow looks fine"),
+        Scripted::text("check"),
+        Scripted::text("allow looks fine"),
+    ]);
+    let _first = go(&mut session);
+    let _second = go(&mut session);
+    assert_eq!(tool.ran().len(), 2);
+
+    let requests = reviewer.requests();
+    assert_eq!(requests.len(), 4);
+    for request in &requests {
+        assert!(
+            request.system_prompt.starts_with("## shared\n"),
+            "{:?}",
+            request.system_prompt
+        );
+        assert!(
+            request.system_prompt.ends_with(&format!("\n\n{notes}")),
+            "{:?}",
+            request.system_prompt
+        );
+    }
+    // Both stages and both calls carry byte-identical prefixes: the notes
+    // sit ahead of every reviewer pass, so every pass extends one cache
+    // chain (`docs/prompt-cache.md`, "Rules for other areas").
+    assert!(
+        requests
+            .iter()
+            .all(|r| r.system_prompt == requests[0].system_prompt),
+        "{requests:?}"
+    );
+}

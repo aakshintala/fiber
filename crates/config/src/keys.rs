@@ -109,6 +109,10 @@ pub(crate) enum Scope {
     /// Only Fiber home's `config.json` may set it: any other layer's value
     /// is ignored with a notice.
     GlobalOnly,
+    /// Only the person's own files in Fiber home may set it: the global
+    /// `config.json` or the project's `config.json` in Fiber home. Any
+    /// other layer's value is ignored with a notice.
+    PersonFiles,
 }
 
 /// One row of "Keys". `*` in a path stands for one name, such as a role's.
@@ -151,6 +155,18 @@ const fn global_only(path: &'static str, kind: Kind, default: Option<&'static st
         repo: false,
         scope: Scope::GlobalOnly,
         default,
+    }
+}
+
+/// A key only the person's own files in Fiber home may set: the global
+/// `config.json` or the project's `config.json` in Fiber home.
+const fn person_files(path: &'static str, kind: Kind) -> Key {
+    Key {
+        path,
+        kind,
+        repo: false,
+        scope: Scope::PersonFiles,
+        default: None,
     }
 }
 
@@ -247,6 +263,7 @@ pub(crate) const KEYS: &[Key] = &[
         OneOf(DIAGNOSTIC_LEVELS),
         Some(r#""info""#),
     ),
+    person_files("reviewer.context", Str),
 ];
 
 /// The segments of a key's path; each `*` matches any one name.
@@ -328,7 +345,16 @@ fn walk(
                     Scope::GlobalOnly if !matches!(source, Source::Global(_)) => {
                         notices.push(ignored(path, "only Fiber home's `config.json` may set"));
                     }
-                    Scope::Any | Scope::RepoOnly | Scope::GlobalOnly => {
+                    Scope::PersonFiles
+                        if !matches!(source, Source::Global(_) | Source::Project(_)) =>
+                    {
+                        notices.push(ignored(
+                            path,
+                            "only Fiber home's `config.json` or the project's `config.json` \
+                             in Fiber home may set",
+                        ));
+                    }
+                    Scope::Any | Scope::RepoOnly | Scope::GlobalOnly | Scope::PersonFiles => {
                         if key.kind.accepts(&value) {
                             kept.insert(name, value);
                         } else {

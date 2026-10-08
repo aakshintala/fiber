@@ -94,7 +94,8 @@ pub fn set(
 /// the table, since `keys` names no reason of its own. Only called with a
 /// notice in hand, so a known key that is not repository-settable was
 /// written to a repository, a global-only key was written to another layer,
-/// and any other known key is repository-only.
+/// a person-files key was written outside the person's own files, and any
+/// other known key is repository-only.
 fn refused_why(segments: &[String], source: &Source) -> &'static str {
     match keys::leaf(segments) {
         None => "this Fiber does not know it",
@@ -103,6 +104,9 @@ fn refused_why(segments: &[String], source: &Source) -> &'static str {
         }
         Some(found) => match found.scope {
             keys::Scope::GlobalOnly => "only Fiber home's `config.json` may set it",
+            keys::Scope::PersonFiles => {
+                "only Fiber home's `config.json` or the project's `config.json` in Fiber home may set it"
+            }
             keys::Scope::Any | keys::Scope::RepoOnly => "only a repository's own file may set it",
         },
     }

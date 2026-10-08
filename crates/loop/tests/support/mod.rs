@@ -1337,6 +1337,17 @@ impl Session {
         self
     }
 
+    /// The person's `reviewer.context` notes, rendered as the loop reads
+    /// them (`docs/permissions.md`, "What the person tells it").
+    pub(crate) fn reviewer_notes(mut self, notes: impl Into<String>) -> Self {
+        let notes = notes.into();
+        self.looped = self
+            .looped
+            .take()
+            .map(|looped| looped.reviewer_notes(notes));
+        self
+    }
+
     /// Sets automatic handoff's triggers.
     pub(crate) fn handoff(mut self, settings: r#loop::HandoffSettings) -> Self {
         self.looped = self.looped.take().map(|looped| looped.handoff(settings));

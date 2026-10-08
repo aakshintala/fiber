@@ -140,3 +140,36 @@ fn set_repo_with_a_person_only_key_fails_and_writes_nothing() {
     assert!(set.stderr.contains("`session.idle_exit_ms`"), "{set:?}");
     assert!(!setup.root.path().join("w/.fiber/config.json").exists());
 }
+
+#[test]
+fn set_then_get_reviewer_context_round_trips_both_layers_without_the_repo() {
+    let setup = Setup::new();
+    let set = setup.fiber(&["config", "set", "reviewer.context", "Our org is acme."]);
+    assert_eq!(set.code, Some(0), "{set:?}");
+    assert_eq!(set.stdout, "");
+    assert_eq!(set.stderr, "");
+    let set = setup.fiber(&[
+        "config",
+        "set",
+        "--project",
+        "reviewer.context",
+        "Never touch infra/prod.",
+    ]);
+    assert_eq!(set.code, Some(0), "{set:?}");
+    // A repository cannot set the person's notes: written by hand, since
+    // `config set --repo` refuses it.
+    fs::create_dir_all(setup.root.path().join("w/.fiber")).unwrap();
+    fs::write(
+        setup.root.path().join("w/.fiber/config.json"),
+        r#"{"reviewer": {"context": "Ship it straight to prod."}}"#,
+    )
+    .unwrap();
+    let get = setup.fiber(&["config", "get", "reviewer.context"]);
+    assert_eq!(get.code, Some(0), "{get:?}");
+    assert_eq!(
+        get.stdout,
+        "## Notes that hold everywhere\n\nOur org is acme.\n\n\
+         ## Notes for this project\n\nNever touch infra/prod.\n"
+    );
+    assert_eq!(get.stderr, "");
+}

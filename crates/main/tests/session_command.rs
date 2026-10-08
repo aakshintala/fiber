@@ -394,6 +394,14 @@ fn function_call(call_id: &str, name: &str, arguments: &Value) -> Value {
     }})
 }
 
+/// An `openai-responses` stream answering `text`: what a scripted
+/// reviewer verdict reads as.
+fn text_reply(text: &str) -> Response {
+    stream(&[json!({"type": "response.output_item.done", "item": {
+        "type": "message", "content": [{"type": "output_text", "text": text}]
+    }})])
+}
+
 /// An `openai-responses` stream answering `Hello.` in two fragments.
 fn hello() -> Response {
     stream(&[
@@ -2489,5 +2497,92 @@ fn a_session_in_a_worktree_it_made_keeps_the_worktree_when_dirty() {
             &["branch", "--list", branch]
         )
         .is_empty()
+    );
+}
+
+#[test]
+fn the_notes_are_fixed_for_the_session_across_two_turns() {
+    // One session, two turns each with a reviewed call; the notes on disk
+    // change between the turns, but both reviewer requests carry the
+    // original text: the notes are fixed for the session
+    // (`docs/permissions.md`, "What the person tells it").
+    let setup = Setup::new();
+    let first_lua = setup.home().join("data/notes/x.lua").display().to_string();
+    let second_lua = setup.home().join("data/notes/y.lua").display().to_string();
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "write_first",
+            "write",
+            &json!({"path": first_lua, "content": "return {}\n"}),
+        )]),
+        text_reply("allow"),
+        hello(),
+        stream(&[function_call(
+            "write_second",
+            "write",
+            &json!({"path": second_lua, "content": "return {}\n"}),
+        )]),
+        text_reply("allow"),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m",
+            "reviewer": {"model": "fake/m", "context": "Our org is acme."}}),
+    );
+    let id = doors::mint("s_");
+    let mut running = setup.start_session(&id, &[]);
+    let client = running.connect(&setup.socket(&id));
+    running.wait_for("extensions_loaded");
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    let sub = recv(&client, "the subscribe acknowledgement");
+    assert_eq!(sub["payload"]["command_id"], "c_sub");
+    send(
+        &client,
+        r#"{"id":"c_first","command":"prompt","args":{"content":[{"type":"text","text":"save the first snippet"}]}}"#,
+    );
+    until(&client, "the first turn's turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    // The notes change on disk between the turns; the running session
+    // keeps what it read when it started.
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m",
+            "reviewer": {"model": "fake/m", "context": "Our org is globex."}}),
+    );
+    send(
+        &client,
+        r#"{"id":"c_second","command":"prompt","args":{"content":[{"type":"text","text":"save the second snippet"}]}}"#,
+    );
+    until(&client, "the second turn's turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let _tail = until_close(&client);
+    drop(client);
+    let (status, out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+    assert_eq!(out.last().unwrap()["kind"], "fiber_exited");
+
+    let requests = server.requests();
+    assert_eq!(requests.len(), 6);
+    let first_body: Value = serde_json::from_slice(&requests[1].body).unwrap();
+    let second_body: Value = serde_json::from_slice(&requests[4].body).unwrap();
+    let first_instructions = first_body["instructions"].as_str().unwrap();
+    let second_instructions = second_body["instructions"].as_str().unwrap();
+    assert_eq!(first_instructions, second_instructions);
+    assert!(
+        first_instructions.contains("Our org is acme."),
+        "{first_instructions:?}"
+    );
+    assert!(
+        !second_instructions.contains("Our org is globex."),
+        "{second_instructions:?}"
     );
 }

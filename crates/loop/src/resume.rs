@@ -468,6 +468,7 @@ impl Loop {
                 provider: None,
             }),
             limits: BlockLimits::default(),
+            reviewer_notes: String::new(),
             reviewed,
             reviewer_sent: None,
             consecutive: 0,

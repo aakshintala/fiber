@@ -59,6 +59,13 @@ fn rows() -> Vec<(&'static [&'static str], Value, Value, &'static str, bool)> {
             false,
         ),
         (
+            &["reviewer", "context"],
+            json!("Our org is acme."),
+            json!(5),
+            STR,
+            false,
+        ),
+        (
             &["reviewer", "block_limits", "consecutive"],
             json!(4),
             json!(-1),
@@ -881,6 +888,39 @@ fn a_project_file_or_run_flag_diagnostics_level_is_ignored_as_global_only() {
         Some((json!("info"), Source::Default))
     );
     assert!(!config::diagnostics_debug(&config));
+}
+
+#[test]
+fn a_run_flag_reviewer_context_is_ignored_as_person_files() {
+    let setup = Setup::new();
+    setup.write(
+        &setup.project(),
+        r#"{"reviewer": {"context": "Never touch infra/prod."}}"#,
+    );
+    let config = setup
+        .load(&["reviewer.context=from the command line"])
+        .unwrap();
+    let [notice] = config.notices() else {
+        panic!("{:?}", config.notices());
+    };
+    assert_eq!(notice.code, ErrorCode::ConfigKeyIgnored);
+    assert_eq!(
+        notice.message,
+        "-c: ignored `reviewer.context`, which only Fiber home's `config.json` \
+         or the project's `config.json` in Fiber home may set."
+    );
+    // The flag never reaches the render: the project file's value stands.
+    assert_eq!(
+        config.get("reviewer.context", None),
+        Some((
+            json!("Never touch infra/prod."),
+            Source::Project(setup.project())
+        ))
+    );
+    assert_eq!(
+        config.reviewer_context(),
+        "## Notes for this project\n\nNever touch infra/prod."
+    );
 }
 
 #[test]

@@ -160,6 +160,7 @@ fn resumed_session(
         prompt: prompt_inputs,
         reviewer,
         limits,
+        reviewer_notes,
         budget,
         retry,
         handoff,
@@ -281,6 +282,7 @@ fn resumed_session(
                 .map(|looped| {
                     let looped = crate::session_extensions::hooked(looped.jobs(jobs), &extensions);
                     looped
+                        .reviewer_notes(reviewer_notes)
                         .handoff(handoff)
                         .on_handoff(forget)
                         .switcher(switching.closure(door), switchable)

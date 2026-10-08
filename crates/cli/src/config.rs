@@ -32,6 +32,20 @@ fn run_get(
         overrides: Vec::new(),
     })
     .map_err(|e| failed(e.code(), e))?;
+    // The notes print as the reviewer reads them: each layer's text under
+    // its heading, with no layer named (`docs/permissions.md`, "What the
+    // person tells it").
+    if key == "reviewer.context" {
+        let notes = config.reviewer_context();
+        if notes.is_empty() {
+            writeln!(err, "`{key}` is not set.")
+                .map_err(|e| failed(ErrorCode::IoFailed, format!("standard error: {e}")))?;
+            return Ok(());
+        }
+        writeln!(out, "{notes}")
+            .map_err(|e| failed(ErrorCode::IoFailed, format!("standard output: {e}")))?;
+        return Ok(());
+    }
     match config.get(key, None) {
         Some((value, source)) => {
             let text = serde_json::to_string(&value)

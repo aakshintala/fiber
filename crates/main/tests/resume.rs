@@ -235,6 +235,45 @@ impl Run {
     }
 }
 
+/// An `openai-responses` stream of `events`, then a completed reply.
+fn stream(events: &[Value]) -> Response {
+    let mut body = String::new();
+    for event in events {
+        body.push_str(&format!(
+            "event: {}\ndata: {event}\n\n",
+            event["type"].as_str().unwrap()
+        ));
+    }
+    let done = json!({"type": "response.completed", "response": {
+        "id": "resp_1", "status": "completed",
+        "usage": {"input_tokens": 10, "input_tokens_details": {"cached_tokens": 4}, "output_tokens": 3}
+    }});
+    body.push_str(&format!(
+        "event: {}\ndata: {done}\n\n",
+        done["type"].as_str().unwrap()
+    ));
+    Response::stream(body)
+}
+
+/// A finished `function_call` for `name` with `arguments`.
+fn function_call(call_id: &str, name: &str, arguments: &Value) -> Value {
+    json!({"type": "response.output_item.done", "item": {
+        "type": "function_call",
+        "id": format!("fc_{call_id}"),
+        "call_id": call_id,
+        "name": name,
+        "arguments": arguments.to_string()
+    }})
+}
+
+/// An `openai-responses` stream answering `text`: what a scripted
+/// reviewer verdict reads as.
+fn text_reply(text: &str) -> Response {
+    stream(&[json!({"type": "response.output_item.done", "item": {
+        "type": "message", "content": [{"type": "output_text", "text": text}]
+    }})])
+}
+
 /// An `openai-responses` stream answering `Hello.` in two fragments.
 fn hello() -> Response {
     let events = [
@@ -1616,4 +1655,56 @@ fn an_unreadable_line_before_the_last_handoff_does_not_fail_the_resume() {
     assert!(body.contains("the handoff note"), "{body}");
     assert!(body.contains("next"), "{body}");
     assert!(!body.contains("early answer"), "{body}");
+}
+
+#[test]
+fn a_resumed_turn_reviews_with_the_notes_on_disk() {
+    // A resume is a new process that reads configuration again: notes
+    // changed on disk take effect at resume (`docs/permissions.md`,
+    // "What the person tells it").
+    let setup = Setup::new();
+    let lua = setup.home().join("data/notes/x.lua").display().to_string();
+    let server = ProviderServer::start([
+        hello(),
+        stream(&[function_call(
+            "write_lua",
+            "write",
+            &json!({"path": lua, "content": "return {}\n"}),
+        )]),
+        text_reply("allow"),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    write(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m",
+            "reviewer": {"model": "fake/m", "context": "Our org is acme."}}),
+    );
+
+    let first = setup.fiber(&["ask", "one"]);
+    assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
+    let id = first.session_id().to_owned();
+    let prefix = id[..8].to_owned();
+
+    write(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m",
+            "reviewer": {"model": "fake/m", "context": "Our org is globex."}}),
+    );
+    let second = setup.fiber(&["ask", "--resume", prefix.as_str(), "save the snippet"]);
+    assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
+
+    let requests = server.requests();
+    assert_eq!(requests.len(), 4);
+    let body: Value = serde_json::from_slice(&requests[2].body).unwrap();
+    let instructions = body["instructions"].as_str().unwrap();
+    assert!(
+        instructions.contains("Our org is globex."),
+        "{instructions:?}"
+    );
+    assert!(
+        !instructions.contains("Our org is acme."),
+        "{instructions:?}"
+    );
 }

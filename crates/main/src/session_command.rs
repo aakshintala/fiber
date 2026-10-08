@@ -170,6 +170,7 @@ fn run_new(
         prompt: prompt_inputs,
         reviewer,
         limits,
+        reviewer_notes,
         budget,
         retry,
         handoff,
@@ -286,6 +287,7 @@ fn run_new(
                     r#loop::mcp_servers_started(&log, session_servers.failed, mcp.notices)?;
                     let looped = session_extensions::hooked(looped.jobs(jobs), &extensions);
                     Ok(looped
+                        .reviewer_notes(reviewer_notes)
                         .handoff(handoff)
                         .on_handoff(forget)
                         .switcher(switching.closure(door), switchable)
