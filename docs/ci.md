@@ -252,9 +252,11 @@ workflow file is on `main`.
 
 - `tui-demo.yml` builds the two static Linux binaries of the tui-prototype demo
   (`research/tui-prototype/demo`).
-- `dependency-probe.yml` runs the dependency memory probe on Linux x86_64,
-  Linux arm64 and macOS arm64 and uploads one table per runner
-  (`docs/dependencies.md`, "Measuring memory").
+- `dependency-probe.yml` runs a probe on Linux x86_64, Linux arm64 and macOS
+  arm64 and uploads one table per runner. Its `probe` input picks
+  `dependency-rss` (the default; `docs/dependencies.md`, "Measuring memory")
+  or `session-search` (`research/session-search/run.sh`), e.g.
+  `gh workflow run dependency-probe.yml --ref main -f probe=session-search`.
 
 ## Job time limits
 
