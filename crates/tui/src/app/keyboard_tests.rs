@@ -37,7 +37,7 @@ fn launch() -> Launch {
         rail_share: 15.0,
         panel_share: 21.0,
         panel_cards: Vec::new(),
-        attention: crate::Attention::default(),
+        ..Default::default()
     }
 }
 

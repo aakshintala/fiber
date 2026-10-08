@@ -1,0 +1,28 @@
+{
+  "call": {
+    "provider": "openrouter",
+    "function": "models",
+    "arg": {}
+  },
+  "host": {
+    "http": [
+      {
+        "request": {
+          "method": "GET",
+          "url": "https://openrouter.ai/api/v1/models",
+          "headers": {"authorization": null}
+        },
+        "reply": {
+          "error": {
+            "code": "connection_failed",
+            "message": "host.http: connection reset by peer"
+          }
+        }
+      }
+    ]
+  },
+  "error": {
+    "code": "extension_failed",
+    "message": "`github.com/aakshintala/fiber/providers/openrouter`: host.http: connection reset by peer"
+  }
+}

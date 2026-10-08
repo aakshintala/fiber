@@ -27,6 +27,7 @@ fn home(attention: Attention) -> App {
         panel_share: 21.0,
         panel_cards: Vec::new(),
         attention,
+        ..Default::default()
     });
     app.set_size(80, 24);
     app

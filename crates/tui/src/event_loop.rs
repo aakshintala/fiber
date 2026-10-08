@@ -22,6 +22,7 @@ use crate::app::{App, Effect, mint, session_command};
 use crate::home::Launch;
 use crate::keys::{Button, Event, MouseKind, Parser, Reply};
 use crate::link::{self, Line};
+use crate::look::Look;
 use crate::mouse::Pointer;
 use crate::screen::Screen;
 use crate::sources::{Reader, spawn_hub, spawn_resize};
@@ -53,12 +54,19 @@ pub fn run(
     let Ok(out) = tty.try_clone() else {
         return 1;
     };
-    let Ok(screen) = Screen::new(CrosstermBackend::new(out), width, height) else {
+    let Ok(mut screen) = Screen::new(CrosstermBackend::new(out), width, height) else {
         return 1;
     };
     let mut app = App::new(launch.workspace.clone());
     app.set_zone(jiff::tz::TimeZone::system());
     let mut launch = launch;
+    let (look, notice) = Look::new(std::mem::take(&mut launch.theme), &|name| {
+        std::env::var(name).ok()
+    });
+    screen.set_look(look);
+    if let Some(notice) = notice {
+        app.push_notice(notice);
+    }
     app.set_keys(std::mem::take(&mut launch.keys));
     app.set_home(launch);
     app.set_size(width, height);
@@ -608,6 +616,10 @@ mod mouse_tests;
 #[cfg(test)]
 #[path = "lib_attention_tests.rs"]
 mod attention_tests;
+
+#[cfg(test)]
+#[path = "lib_look_tests.rs"]
+mod look_tests;
 
 #[cfg(test)]
 #[path = "lib_paste_tests.rs"]

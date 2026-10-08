@@ -10,12 +10,14 @@ use contract::ErrorCode;
 use contract::GenerationId;
 use contract::events::{CallStatus, RetryScheduled, ToolCallCompleted, UsageRecorded};
 use contract::shapes::{ContentPart, Failure, Tokens, Usage};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use serde_json::Value;
 
 use crate::app::Target;
+use crate::markdown::style;
 use crate::rows::{Join, RowText, Rows};
+use crate::theme::Role;
 use crate::turn::{Group, Thought, target_id};
 
 /// A span of milliseconds, truncated to whole seconds: `38s` under a
@@ -345,9 +347,7 @@ pub(crate) fn bubble(text: &str, columns: u16, out: &mut Rows) {
     let max = (usize::from(columns).saturating_mul(7) / 10).max(3);
     let rows = wrap_joined(text, max.saturating_sub(2));
     let wide = rows.iter().map(|(row, _)| width(row)).max().unwrap_or(0);
-    // debt: a fixed tint until themes land (#685), when the theme's bubble
-    // colour replaces it.
-    let tint = Style::default().bg(Color::DarkGray);
+    let tint = Style::default().bg(Role::Prompt.color());
     for (row, join) in rows {
         let pad = " ".repeat(wide.saturating_sub(width(&row)));
         let span = Span::styled(format!(" {row}{pad} "), tint);
@@ -514,6 +514,25 @@ pub(crate) fn opened(text: &str, indent: &str, out: &mut Rows) {
     }
 }
 
+/// The diff of a call that changed a file, as [`opened`] draws text, each
+/// line added or removed in the added or removed colour.
+fn opened_diff(text: &str, indent: &str, out: &mut Rows) {
+    for line in text.split('\n') {
+        let role = if line.starts_with('+') {
+            Some(Role::Added)
+        } else if line.starts_with('-') {
+            Some(Role::Removed)
+        } else {
+            None
+        };
+        let mut row = dim(format!("{indent}{line}"));
+        if let Some(role) = role {
+            row = row.patch_style(style(role));
+        }
+        out.push((row, None));
+    }
+}
+
 impl Group {
     /// What its calls did, by kind, and how often the model thought.
     fn kinds(&self) -> Kinds {
@@ -642,9 +661,6 @@ impl Group {
                 let (added, removed) = call.changes.iter().fold((0u64, 0u64), |(a, r), c| {
                     (a.saturating_add(c.added), r.saturating_add(c.removed))
                 });
-                if !call.changes.is_empty() {
-                    row.push_str(&format!(" +{added} −{removed}"));
-                }
                 // The person's answer to a form replaces the status.
                 let status = match call.status {
                     None if self.cut && call.started => " · ? may have run; not run again",
@@ -654,20 +670,33 @@ impl Group {
                     Some(CallStatus::Denied) => " · denied",
                     Some(CallStatus::Cancelled) => " · cancelled",
                 };
-                row.push_str(
-                    call.asked
-                        .as_ref()
-                        .and_then(|asked| asked.suffix())
-                        .unwrap_or(status),
-                );
+                let status = call
+                    .asked
+                    .as_ref()
+                    .and_then(|asked| asked.suffix())
+                    .unwrap_or(status);
+                // A call that changed a file stands out: bold, its counts in
+                // the added and removed colours (`docs/tui.md`, "Tool groups
+                // and the ledger").
                 let line = if call.changes.is_empty() {
+                    row.push_str(status);
                     dim(row)
                 } else {
-                    Line::styled(row, Style::default().add_modifier(Modifier::BOLD))
+                    Line::from(vec![
+                        Span::raw(row),
+                        Span::styled(format!(" +{added}"), style(Role::Added)),
+                        Span::styled(format!(" −{removed}"), style(Role::Removed)),
+                        Span::raw(status.to_owned()),
+                    ])
+                    .style(Style::default().add_modifier(Modifier::BOLD))
                 };
                 out.push((line, Some(Target::Call(call.id))));
                 if out.open_scope(Target::Call(call.id), call.open) {
-                    opened(&call.detail, GAP, out);
+                    if call.changes.is_empty() {
+                        opened(&call.detail, GAP, out);
+                    } else {
+                        opened_diff(&call.detail, GAP, out);
+                    }
                 }
                 out.end_scope();
             }

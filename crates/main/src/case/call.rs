@@ -9,17 +9,14 @@ use contract::clock::Clock;
 use serde_json::{Value, json};
 
 use super::clock::CaseClock;
-use super::format::{CallCase, CallOutcome};
+use super::format::{Call, CallCase, CallOutcome};
 use super::run::{malformed, report};
 
 /// Runs a provider call without creating a session.
 pub(crate) fn run_case(case: CallCase, name: String, process_clock: Arc<dyn Clock>) -> i32 {
     let call = case.call;
-    if let Err(error) = function(&call.function) {
-        return malformed(&name, &[error]);
-    }
-    let arg = match cost_args(&call.arg) {
-        Ok(arg) => arg,
+    let ready = match ready(&call) {
+        Ok(ready) => ready,
         Err(error) => return malformed(&name, &[error]),
     };
     let home = match config::fiber_home_from_env() {
@@ -45,14 +42,24 @@ pub(crate) fn run_case(case: CallCase, name: String, process_clock: Arc<dyn Cloc
         }
     };
     let provider = extensions::LuaProvider::new(extension, call.provider);
-    let key = arg.key.map(Secret::new);
-    let result = provider.cost(&arg.generation_id, &arg.base_url, key.as_ref());
-    let actual = match result {
-        Ok(value) => Ok(value.map_or(Value::Null, |cost| json!(cost))),
-        Err(error) => Err(json!({
-            "code": error.code(),
-            "message": error.to_string()
-        })),
+    let actual = match ready {
+        Ready::Cost(arg) => {
+            let key = arg.key.map(Secret::new);
+            match provider.cost(&arg.generation_id, &arg.base_url, key.as_ref()) {
+                Ok(value) => Ok(value.map_or(Value::Null, |cost| json!(cost))),
+                Err(error) => Err(json!({
+                    "code": error.code(),
+                    "message": error.to_string()
+                })),
+            }
+        }
+        Ready::Models => match provider.list_models() {
+            Ok((_, returned)) => Ok(returned),
+            Err(error) => Err(json!({
+                "code": error.code(),
+                "message": error.to_string()
+            })),
+        },
     };
     let mut failures = compare_result(&case.outcome, actual);
     failures.extend(
@@ -103,17 +110,37 @@ fn provider_extension(
     })
 }
 
-/// The only provider function this ticket supports for a direct case.
-fn function(name: &str) -> Result<(), String> {
-    if name == "cost" {
-        Ok(())
-    } else {
-        Err(format!(
-            "call.function: unsupported `{name}`; supported functions are `cost`"
-        ))
+/// A validated provider call: `cost` carries its args, and `models`
+/// takes none.
+#[derive(Debug)]
+enum Ready {
+    Cost(CostArgs),
+    Models,
+}
+
+/// Validates `call`'s function and args. Anything but `cost` and `models`
+/// names both supported functions.
+fn ready(call: &Call) -> Result<Ready, String> {
+    match call.function.as_str() {
+        "cost" => cost_args(&call.arg).map(Ready::Cost),
+        "models" => models_args(&call.arg).map(|()| Ready::Models),
+        _ => Err(format!(
+            "call.function: unsupported `{}`; supported functions are `cost` and `models`",
+            call.function
+        )),
     }
 }
 
+/// `models` takes no argument: exactly `{}`.
+fn models_args(value: &Value) -> Result<(), String> {
+    if value.as_object().is_some_and(|map| map.is_empty()) {
+        Ok(())
+    } else {
+        Err("call.arg: models expects {}".to_owned())
+    }
+}
+
+#[derive(Debug)]
 struct CostArgs {
     generation_id: GenerationId,
     base_url: String,

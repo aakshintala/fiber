@@ -10,7 +10,7 @@ use contract::events::{
     ContextNudged, HandoffCompleted, HandoffStarted, HandoffTrigger, Note, Outcome, PreambleBuilt,
     UsageRecorded,
 };
-use ratatui::style::{Color, Style};
+use ratatui::style::Style;
 use ratatui::text::Line;
 
 use super::crash::{self, Aside};
@@ -18,11 +18,10 @@ use super::{Entry, Fold, Turn, open};
 use crate::app::{Target, read};
 use crate::format;
 use crate::rows::Rows;
+use crate::theme::Role;
 
 /// The band's tint.
-/// debt: a fixed colour, not a theme role; upgrade when colour roles land
-/// (see #685).
-const TINT: Style = Style::new().bg(Color::Indexed(23));
+const TINT: Style = Style::new().bg(Role::Surface.color());
 
 /// What the trigger reads for a handoff the model started with its tool,
 /// which writes no `handoff_started`.

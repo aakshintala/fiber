@@ -1338,7 +1338,9 @@ fn two_registry_literals_sharing_one_id_are_ambiguous_on_the_full_id() {
 }
 
 /// The OpenRouter package installed in a new home: a Lua provider that
-/// registers only `cost`, beside its data file's models.
+/// registers `cost` and `models`, beside an empty data file. The cached
+/// `z-ai/glm-5.3-flash` entry stands in for a discovery run, so resolving
+/// it never touches the network.
 fn openrouter_home(root: &fakes::TempDir) -> (PathBuf, Config) {
     let home = root.path().join("home");
     let workspace = root.path().join("workspace");
@@ -1353,6 +1355,21 @@ fn openrouter_home(root: &fakes::TempDir) -> (PathBuf, Config) {
     )
     .unwrap()
     .commit()
+    .unwrap();
+    config::write_model_cache(
+        &home,
+        "openrouter",
+        &json!([{
+            "id": "z-ai/glm-5.3-flash",
+            "protocol": "openai-completions",
+            "base_url": "https://openrouter.ai/api/v1",
+            "compat": {"cache_key_field": "session_id", "reasoning_object": true},
+            "context_window": 1048576,
+            "max_output_tokens": 943717,
+            "input": ["text", "image", "video"],
+            "cost": {"input": 0.15, "output": 0.5, "cache_read": 0.03},
+        }]),
+    )
     .unwrap();
     let config = Config::load(Sources {
         home: home.clone(),

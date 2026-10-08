@@ -553,6 +553,7 @@ fn a_note_replaces_the_detail() {
         name: "fix the parser".to_owned(),
         workspace: "/Users/a/work/fiber".to_owned(),
         project: PROJECT.to_owned(),
+        git: false,
         state: State::Waiting,
         left: None,
         waiting: Some("approval: shell".to_owned()),
@@ -576,6 +577,7 @@ fn named(name: &str) -> Row {
         name: name.to_owned(),
         workspace: "/Users/a/work/fiber".to_owned(),
         project: PROJECT.to_owned(),
+        git: false,
         state: State::Idle,
         left: None,
         waiting: None,
@@ -777,4 +779,77 @@ fn quit_line_names_working_and_elsewhere() {
         quit_line(3, 2),
         "3 sessions working, 2 also open elsewhere · enter leave them running · c close all · esc stay"
     );
+}
+
+/// A `session_status` payload with `state` in git on `main`.
+fn git_payload(state: Value) -> Value {
+    let mut payload = payload(state);
+    payload["git"] = json!({"branch": "main"});
+    payload
+}
+
+#[test]
+fn a_feed_row_is_in_git_when_its_status_carries_git() {
+    // Both sides of the `is_some`: a status with git reads true, one
+    // without reads false.
+    let row = from_status(&Envelope {
+        payload: git_payload(json!({"state": "idle"}))
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+        ..envelope("s_aaaaaaaaaaaaaaaa", json!({"state": "idle"}))
+    });
+    assert!(row.git);
+    let plain = from_status(&envelope("s_bbbbbbbbbbbbbbbb", json!({"state": "idle"})));
+    assert!(!plain.git);
+}
+
+#[test]
+fn a_recent_row_is_in_git_when_its_last_status_is() {
+    let mut sessions = Sessions::default();
+    sessions.recent(
+        recent_rows(&result(vec![
+            recent_row(
+                "s_aaaaaaaaaaaaaaaa",
+                "git work",
+                "exited",
+                Some(git_payload(json!({"state": "idle"}))),
+            ),
+            recent_row("s_bbbbbbbbbbbbbbbb", "plain work", "exited", None),
+        ])),
+        true,
+    );
+    let rows = sessions.shown(PROJECT, false);
+    assert!(rows[0].git);
+    assert!(!rows[1].git);
+}
+
+#[test]
+fn an_unreadable_row_is_never_in_git() {
+    let mut newer = envelope("s_aaaaaaaaaaaaaaaa", json!({"state": "streaming"}));
+    newer.schema_version = contract::SCHEMA_VERSION + 1;
+    assert!(!from_status(&newer).git);
+}
+
+#[test]
+fn in_git_names_a_workspace_with_a_git_row() {
+    let mut sessions = Sessions::default();
+    sessions.status(from_status(&Envelope {
+        payload: git_payload(json!({"state": "streaming"}))
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+        ..envelope("s_aaaaaaaaaaaaaaaa", json!({"state": "streaming"}))
+    }));
+    let mut away = payload(json!({"state": "idle"}));
+    away["workspace"] = json!("/Users/a/work/lens");
+    sessions.status(from_status(&Envelope {
+        payload: away.as_object().cloned().unwrap_or_default(),
+        ..envelope("s_bbbbbbbbbbbbbbbb", json!({"state": "idle"}))
+    }));
+    // The git row's workspace reads true; a workspace whose row has no
+    // git, and one with no row at all, read false.
+    assert!(sessions.in_git("/Users/a/work/fiber"));
+    assert!(!sessions.in_git("/Users/a/work/lens"));
+    assert!(!sessions.in_git("/Users/a/work/nowhere"));
 }

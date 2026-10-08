@@ -9,13 +9,48 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 
-use super::{CallOutcome, compare_result, function, provider_extension};
+use super::{CallOutcome, compare_result, provider_extension};
 
 #[test]
-fn only_cost_is_a_supported_provider_call() {
-    assert_eq!(function("cost"), Ok(()));
-    let error = function("models").unwrap_err();
-    assert!(error.contains("cost"), "{error}");
+fn cost_and_models_dispatch_and_anything_else_names_both() {
+    let cost = super::Call {
+        provider: "p".to_owned(),
+        function: "cost".to_owned(),
+        arg: json!({"generation_id": "gen-abc", "base_url": "https://example.test"}),
+    };
+    assert!(matches!(super::ready(&cost), Ok(super::Ready::Cost(_))));
+
+    let models = super::Call {
+        provider: "p".to_owned(),
+        function: "models".to_owned(),
+        arg: json!({}),
+    };
+    assert!(matches!(super::ready(&models), Ok(super::Ready::Models)));
+
+    let quota = super::Call {
+        provider: "p".to_owned(),
+        function: "quota".to_owned(),
+        arg: json!({}),
+    };
+    let error = super::ready(&quota).unwrap_err();
+    assert!(
+        error.contains("cost") && error.contains("models"),
+        "{error}"
+    );
+}
+
+#[test]
+fn models_takes_exactly_an_empty_object() {
+    assert!(super::models_args(&json!({})).is_ok());
+    for arg in [
+        json!({"generation_id": "gen-abc"}),
+        json!([]),
+        json!(null),
+        json!("x"),
+    ] {
+        let error = super::models_args(&arg).unwrap_err();
+        assert!(error.contains("call.arg"), "{arg}: {error}");
+    }
 }
 
 fn returns(value: Value) -> CallOutcome {

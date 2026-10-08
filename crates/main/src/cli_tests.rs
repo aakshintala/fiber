@@ -472,6 +472,102 @@ fn the_menu_lists_sessions_export_under_sessions() {
 }
 
 #[test]
+fn sessions_search_takes_flags_and_a_text() {
+    for (args, all, json, text) in [
+        (&["fiber", "sessions", "search", "x"][..], false, false, "x"),
+        (
+            &["fiber", "sessions", "search", "--all", "x"],
+            true,
+            false,
+            "x",
+        ),
+        (
+            &["fiber", "sessions", "search", "--json", "x"],
+            false,
+            true,
+            "x",
+        ),
+        (
+            &["fiber", "sessions", "search", "--all", "--json", "x"],
+            true,
+            true,
+            "x",
+        ),
+        (
+            &["fiber", "sessions", "search", "--json", "--all", "x"],
+            true,
+            true,
+            "x",
+        ),
+        (
+            &["fiber", "sessions", "search", "--", "-n"],
+            false,
+            false,
+            "-n",
+        ),
+    ] {
+        let parsed = parse_from(args.iter().copied());
+        let Invocation::Run(Some(Commands::Sessions(SessionsArgs {
+            command:
+                Some(SessionsCommands::Search {
+                    all: got_all,
+                    json: got_json,
+                    text: got_text,
+                }),
+            ..
+        }))) = parsed
+        else {
+            panic!("{args:?} is not the search: {parsed:?}");
+        };
+        assert_eq!(
+            (got_all, got_json, got_text.as_str()),
+            (all, json, text),
+            "{args:?}"
+        );
+    }
+}
+
+#[test]
+fn sessions_search_without_a_text_is_a_usage_sentence() {
+    let missing = sentence(&["fiber", "sessions", "search"]);
+    assert!(missing.contains("<text>"), "{missing}");
+    assert!(
+        missing.ends_with("Run `fiber --help` for usage."),
+        "{missing}"
+    );
+    assert_eq!(missing.lines().count(), 1, "{missing}");
+    let empty = sentence(&["fiber", "sessions", "search", ""]);
+    assert!(empty.ends_with("Run `fiber --help` for usage."), "{empty}");
+    assert_eq!(empty.lines().count(), 1, "{empty}");
+}
+
+#[test]
+fn a_search_flag_with_a_list_flag_is_a_usage_sentence() {
+    for args in [
+        &["fiber", "sessions", "--all", "search", "x"][..],
+        &["fiber", "sessions", "--json", "search", "x"],
+    ] {
+        let said = sentence(args);
+        assert!(said.ends_with("Run `fiber --help` for usage."), "{said}");
+        assert_eq!(said.lines().count(), 1, "{said}");
+    }
+}
+
+#[test]
+fn the_menu_lists_sessions_search_under_sessions() {
+    let menu = menu();
+    let sessions = menu
+        .split("\n\n")
+        .find(|group| group.starts_with("Sessions:"))
+        .unwrap();
+    assert!(
+        sessions.lines().any(|l|
+            l == "  sessions search [--all] [--json] <text>                            Search the logs of past and running sessions for the text"),
+        "{sessions}"
+    );
+}
+
+#[test]
 fn models_takes_an_optional_search_and_json() {
     let Invocation::Run(Some(Commands::Models(models))) = parse_from(["fiber", "models"]) else {
         panic!("bare models");

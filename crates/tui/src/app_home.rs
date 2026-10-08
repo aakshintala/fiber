@@ -55,6 +55,14 @@ pub(super) struct Home {
     blockers: Vec<String>,
     /// The workspace picked for the next `start`, else the launch one.
     chosen: Option<String>,
+    /// Whether the picked workspace is in git, read when it was
+    /// chosen: the launch flag for the launch directory, else whether
+    /// some row in that workspace was. Reading it back keeps the
+    /// switch while its rows leave the feed.
+    chosen_git: bool,
+    /// The new worktree switch is on: the next `start` asks for a new
+    /// worktree of the workspace. Choosing a workspace turns it off.
+    worktree: bool,
     /// The workspace picker above the box: its list, fixed at open, and
     /// the selected index.
     picker: Option<(Vec<String>, usize)>,
@@ -133,6 +141,8 @@ impl App {
             focus_list: false,
             blockers: Vec::new(),
             chosen: None,
+            chosen_git: false,
+            worktree: false,
             picker: None,
             prompt: None,
             asks: HashMap::new(),
@@ -218,21 +228,36 @@ impl App {
             // A remote client has no launch directory; the picker it would
             // always show is a later ticket's.
             glyph: home.launch.logo_glyph.clone(),
-            chips: vec![
-                (Some(Spot::Workspace), format!("[{segment}]")),
-                (
-                    None,
-                    format!("[{}]", home.launch.model.as_deref().unwrap_or("no model")),
-                ),
-                (
-                    None,
-                    format!(
-                        "[thinking: {}]",
-                        home.launch.thinking.as_deref().unwrap_or("default")
+            chips: {
+                let mut chips = vec![(Some(Spot::Workspace), format!("[{segment}]"))];
+                // The new worktree switch sits beside the workspace
+                // chip, shown while the workspace in use is in git.
+                if home.in_git() {
+                    chips.push((
+                        Some(Spot::Worktree),
+                        if home.worktree {
+                            "[x] new worktree".to_owned()
+                        } else {
+                            "[ ] new worktree".to_owned()
+                        },
+                    ));
+                }
+                chips.extend([
+                    (
+                        None,
+                        format!("[{}]", home.launch.model.as_deref().unwrap_or("no model")),
                     ),
-                ),
-                (None, "enter starts a session".to_owned()),
-            ],
+                    (
+                        None,
+                        format!(
+                            "[thinking: {}]",
+                            home.launch.thinking.as_deref().unwrap_or("default")
+                        ),
+                    ),
+                    (None, "enter starts a session".to_owned()),
+                ]);
+                chips
+            },
             rows: home
                 .sessions
                 .shown(&home.launch.project, scoped)
@@ -705,6 +730,7 @@ impl App {
             Spot::Stop(key) => self.stop_or_ask(key),
             Spot::Toggle => self.toggle_scope(),
             Spot::Workspace => self.open_picker(),
+            Spot::Worktree => self.toggle_worktree(),
             Spot::Pick(at) => self.pick(at),
         }
     }
@@ -1068,7 +1094,8 @@ impl App {
         }
     }
 
-    /// Chooses the picker's selected workspace for the next `start`.
+    /// Chooses the picker's selected workspace for the next `start`,
+    /// turning the new worktree switch off.
     fn choose_picker(&mut self) {
         let choice = self
             .home
@@ -1076,8 +1103,7 @@ impl App {
             .and_then(|home| home.picker.as_ref())
             .and_then(|(list, selected)| list.get(*selected).cloned());
         if let (Some(home), Some(workspace)) = (self.home.as_mut(), choice) {
-            home.chosen = Some(workspace);
-            home.picker = None;
+            home.choose(workspace);
         }
     }
 
@@ -1089,7 +1115,7 @@ impl App {
     }
 
     /// Clicks the picker row `at`: past the list fixed at open it does
-    /// nothing.
+    /// nothing. Choosing a workspace turns the new worktree switch off.
     fn pick(&mut self, at: usize) -> Effect {
         let choice = self
             .home
@@ -1097,8 +1123,15 @@ impl App {
             .and_then(|home| home.picker.as_ref())
             .and_then(|(list, _)| list.get(at).cloned());
         if let (Some(home), Some(workspace)) = (self.home.as_mut(), choice) {
-            home.chosen = Some(workspace);
-            home.picker = None;
+            home.choose(workspace);
+        }
+        Effect::None
+    }
+
+    /// Flips the new worktree switch.
+    fn toggle_worktree(&mut self) -> Effect {
+        if let Some(home) = self.home.as_mut() {
+            home.worktree = !home.worktree;
         }
         Effect::None
     }
@@ -1112,7 +1145,7 @@ impl App {
                 let row = home.sessions.by_key(key)?;
                 Some(line(row, &home.launch.project))
             }
-            Spot::Stop(_) | Spot::Toggle | Spot::Workspace | Spot::Pick(_) => None,
+            Spot::Stop(_) | Spot::Toggle | Spot::Workspace | Spot::Worktree | Spot::Pick(_) => None,
         }
     }
 
@@ -1246,8 +1279,10 @@ impl App {
     }
 
     /// The `start` args: the picked workspace on home, else the launch
-    /// workspace, and the launch directory as today. Sending one hides the
-    /// placeholder and clears the blocker lines until the run ends.
+    /// workspace, and the launch directory as today. The new worktree
+    /// switch adds `"worktree": true` only while it shows and is on.
+    /// Sending one hides the placeholder and clears the blocker lines
+    /// until the run ends.
     pub(super) fn start_args(&mut self) -> Value {
         match &mut self.home {
             Some(home) => {
@@ -1257,10 +1292,44 @@ impl App {
                     .chosen
                     .clone()
                     .unwrap_or_else(|| home.launch.workspace.display().to_string());
-                json!({ "workspace": workspace })
+                let mut args = json!({"workspace": workspace});
+                if home.worktree
+                    && home.in_git()
+                    && let Some(object) = args.as_object_mut()
+                {
+                    object.insert("worktree".to_owned(), json!(true));
+                }
+                args
             }
             None => json!({ "workspace": self.workspace.display().to_string() }),
         }
+    }
+}
+
+impl Home {
+    /// Whether the new worktree switch shows: the workspace in use is
+    /// in git. With none chosen that is the launch directory; else the
+    /// flag read when the workspace was chosen.
+    fn in_git(&self) -> bool {
+        match &self.chosen {
+            None => self.launch.git,
+            Some(_) => self.chosen_git,
+        }
+    }
+
+    /// Records the workspace picked for the next `start`, turning the
+    /// new worktree switch off and keeping whether it is in git: the
+    /// launch flag for the launch directory, else whether some row in
+    /// that workspace is then.
+    fn choose(&mut self, workspace: String) {
+        self.chosen_git = if workspace == self.launch.workspace.display().to_string() {
+            self.launch.git
+        } else {
+            self.sessions.in_git(&workspace)
+        };
+        self.chosen = Some(workspace);
+        self.worktree = false;
+        self.picker = None;
     }
 }
 

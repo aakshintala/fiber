@@ -758,6 +758,54 @@ fn the_ledger_is_one_row_per_call_split_by_step() {
 }
 
 #[test]
+fn an_edited_file_row_colours_its_counts() {
+    use crate::theme::Role;
+    let mut app = ledger_app();
+    app.open(group(&app));
+    let edited = styled(&app, "  2 edit src/a.rs +3 −1");
+    let fg = |text: &str| {
+        edited
+            .spans
+            .iter()
+            .find(|span| span.content == text)
+            .map(|span| span.style.fg)
+            .unwrap_or_else(|| panic!("{text:?} in {edited:?}"))
+    };
+    assert_eq!(fg(" +3"), Some(Role::Added.color()));
+    assert_eq!(fg(" −1"), Some(Role::Removed.color()));
+    assert_eq!(fg("  2 edit src/a.rs"), None);
+    // Its opened diff: a removed line, then an added one.
+    app.open(target(&app, "  2 edit src/a.rs +3 −1"));
+    let removed = styled(&app, "    -old");
+    let added = styled(&app, "    +new");
+    assert_eq!(removed.style.fg, Some(Role::Removed.color()));
+    assert_eq!(added.style.fg, Some(Role::Added.color()));
+    assert!(dim(&removed) && dim(&added));
+}
+
+#[test]
+fn a_call_that_changed_no_file_opens_its_output_uncoloured() {
+    let mut app = app();
+    start(&mut app, "go", 0);
+    step(&mut app, 0);
+    request(&mut app, "a_1", "shell", json!({"command": "ls"}), 0);
+    complete(
+        &mut app,
+        "a_1",
+        0,
+        json!({"content": [{"type": "text", "text": "+one\n-two"}]}),
+    );
+    text(&mut app, "a_m", "Done.", 0);
+    app.open(group(&app));
+    app.open(target(&app, "  1 shell ls"));
+    for row in ["    +one", "    -two"] {
+        let line = styled(&app, row);
+        assert!(dim(&line), "{row}: {:?}", texts(&app));
+        assert_eq!(line.style.fg, None, "{row}");
+    }
+}
+
+#[test]
 fn opening_a_call_shows_its_error_reason_diff_or_output() {
     let mut app = ledger_app();
     app.open(group(&app));

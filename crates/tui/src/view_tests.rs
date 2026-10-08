@@ -492,6 +492,50 @@ fn approval_irreversible_header() {
     insta::assert_snapshot!("approval_irreversible_header", wide(&mut app).0);
 }
 
+/// The row and column where `needle` first shows in `shown`.
+fn spot(shown: &str, needle: &str) -> (u16, u16) {
+    shown
+        .lines()
+        .enumerate()
+        .find_map(|(row, line)| {
+            let col = line.find(needle)?;
+            let col = line.get(..col)?.chars().count();
+            Some((u16::try_from(row).ok()?, u16::try_from(col).ok()?))
+        })
+        .unwrap_or_else(|| panic!("{needle:?} in\n{shown}"))
+}
+
+#[test]
+fn irreversible_is_bold_error_in_the_header() {
+    use ratatui::style::Modifier;
+    let mut app = asked();
+    // The rule's line ends as the header does, and stays plain.
+    app.on_line(request(
+        S_A,
+        "a_1",
+        "r_1",
+        serde_json::json!({"reversible": false, "step": "standing_ask",
+            "standing_rule": {"scope": "project", "prefix": "git push · irreversible"}}),
+    ));
+    let (shown, buf) = wide(&mut app);
+    let (row, col) = spot(&shown, "1 of 1 · irreversible");
+    let word = col + u16::try_from("1 of 1 · ".chars().count()).expect("a width");
+    for x in word..word + 12 {
+        let cell = &buf[(x, row)];
+        assert_eq!(cell.fg, crate::theme::Role::Error.color(), "col {x}");
+        assert!(cell.modifier.contains(Modifier::BOLD), "col {x}");
+        assert_eq!(cell.bg, crate::theme::Role::Approval.color(), "col {x}");
+    }
+    let before = &buf[(word - 2, row)];
+    assert!(!before.modifier.contains(Modifier::BOLD));
+    assert_eq!(before.fg, ratatui::style::Color::Reset);
+    let (rule, at) = spot(&shown, "push · irreversible");
+    assert_eq!(rule, row + 1, "{shown}");
+    let plain = &buf[(at + 7, rule)];
+    assert!(!plain.modifier.contains(Modifier::BOLD), "{shown}");
+    assert_eq!(plain.fg, ratatui::style::Color::Reset);
+}
+
 #[test]
 fn approval_two_of_three_across_sessions() {
     let now = fakes::clock::FakeClock::new().now();
@@ -1536,20 +1580,12 @@ fn a_streaming_reply_renders_its_markdown_in_place() {
     let header = row("rust");
     assert_eq!(fg(36, header), Some(Role::Accent.color()));
     for x in 0..40 {
-        assert_eq!(
-            bg(x, header),
-            Some(Role::CodeTint.color()),
-            "header col {x}"
-        );
-        assert_eq!(
-            bg(x, header + 2),
-            Some(Role::CodeTint.color()),
-            "code col {x}"
-        );
+        assert_eq!(bg(x, header), Some(Role::Code.color()), "header col {x}");
+        assert_eq!(bg(x, header + 2), Some(Role::Code.color()), "code col {x}");
     }
     assert_eq!(fg(8, header + 2), Some(Role::Keyword.color()));
     assert_eq!(fg(16, header + 2), Some(Role::Number.color()));
-    assert_eq!(fg(0, row("────")), Some(Role::Dim.color()));
+    assert_eq!(fg(0, row("────")), Some(Role::Muted.color()));
 }
 
 #[test]

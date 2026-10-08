@@ -33,6 +33,7 @@ mod session_extensions;
 mod settings;
 mod shutdown;
 mod switch;
+mod theme_setting;
 
 #[cfg(test)]
 #[path = "live_tests.rs"]
@@ -190,6 +191,9 @@ fn run() -> i32 {
                 sessions_delete(&id, cascade, yes, clock.as_ref(), fiber)
             }
             Some(cli::SessionsCommands::Export { id, path }) => ::cli::export(&id, path.as_deref()),
+            Some(cli::SessionsCommands::Search { all, json, text }) => {
+                ::cli::sessions_search(&text, all, json)
+            }
             Some(cli::SessionsCommands::Prune {
                 older_than,
                 cascade,
@@ -817,13 +821,14 @@ fn terminal(fiber: Result<PathBuf, String>) -> i32 {
         Ok(tty) => std::fs::File::from(tty),
         Err(e) => return fail(failed(ErrorCode::IoFailed, format!("the terminal: {e}"))),
     };
+    let theme = theme_setting::setting(&home, &config, &|path| std::fs::read_to_string(path));
     let hub_clock = Arc::clone(&clock);
     let connect: tui::Connect = Box::new(move || {
         let mut start = || start_hub(fiber.clone());
         doors::hub::connect(&home, &mut start, hub_clock.as_ref())
     });
     let identity = doors::project(&workspace);
-    let launch = launch::launch(workspace, &identity, &config);
+    let launch = launch::launch(workspace, &identity, &config, theme);
     tui::run(tty, launch, connect, Box::new(crash::attach), clock)
 }
 

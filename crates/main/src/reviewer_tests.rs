@@ -155,6 +155,23 @@ fn the_reviewer_connects_with_the_lua_provider_its_access_names() {
     .unwrap()
     .commit()
     .unwrap();
+    // The data file holds no models: the cached entry stands in for a
+    // discovery run, so resolving the reference never touches the network.
+    config::write_model_cache(
+        &home,
+        "openrouter",
+        &serde_json::json!([{
+            "id": "z-ai/glm-5.3-flash",
+            "protocol": "openai-completions",
+            "base_url": "https://openrouter.ai/api/v1",
+            "compat": {"cache_key_field": "session_id", "reasoning_object": true},
+            "context_window": 1048576,
+            "max_output_tokens": 943717,
+            "input": ["text", "image", "video"],
+            "cost": {"input": 0.15, "output": 0.5, "cache_read": 0.03},
+        }]),
+    )
+    .unwrap();
     let reference = "openrouter/z-ai/glm-5.3-flash";
     let config = config::Config::load(config::Sources {
         home: home.clone(),

@@ -989,21 +989,21 @@ Linux; the byte and frame counts do.
 
 Measured in Fiber on macOS arm64 (Darwin 25.6.0) with the `hover` jig,
 `cargo run --release -p tui --example hover -- crates/tui/examples/hover.jsonl`,
-at 160 by 48, 20,000 motion reports per case, the median of 5 runs: every
-report draws the screen in memory and compares it with the last frame, 75
-to 80 µs, and writes nothing unless the target under the pointer changed; a
-report that moves along one target, or repeats one cell, costs the same and
-writes nothing; each change of target costs one frame, 140 to 145 µs and 79
-bytes for the badge; a fast sweep over a conversation whose lines are targets
-wrote 1,332 frames and 358,360 bytes in 20,000 reports.
+at 160 by 48, 20,000 motion reports per case, the median of 5 runs, with
+truecolour themes: every report draws the screen in memory and compares it
+with the last frame, 93 to 97 µs, and writes nothing unless the target under
+the pointer changed; a report that moves along one target, or repeats one
+cell, costs the same and writes nothing; each change of target costs one
+frame, painted with the theme's colours, 172 to 187 µs and 105 bytes for the
+badge; a fast sweep over a conversation whose lines are targets wrote 1,332
+frames and 405,992 bytes in 20,000 reports.
 
 Measured in Fiber on Linux x86_64 (6.18.44, a 4-core Intel Xeon at 2.30
 GHz) with the same jig, command, size and runs: a still pointer, and a
 pointer moving along one target, wrote 1 frame and 86 bytes in 20,000
 reports, 115 to 120 µs a report; a change of target on every report wrote
 20,000 frames and 1,580,000 bytes, 79 bytes a frame, 271 µs a report; the
-fast sweep wrote 1,332 frames and 358,360 bytes, 129 µs a report. The frames
-and bytes match the macOS run; the times are 1.4 to 1.9 times as long.
+fast sweep wrote 1,332 frames and 358,360 bytes, 129 µs a report.
 
 ## Look
 
@@ -1015,8 +1015,19 @@ and bytes match the macOS run; the times are 1.4 to 1.9 times as long.
   the right for the person's prompt bubble. The stripe is one unbroken bar,
   because ▌ and ▐ fill half of each cell as Ghostty draws them. Where a
   terminal cannot draw it unbroken, there is no stripe.
-- **Colours come from the theme,** in truecolour where the terminal has it. A
-  256-colour theme uses the grey ramp for its tints.
+- **Colours come from the theme,** in truecolour where the terminal has it:
+  `COLORTERM` of `truecolor` or `24bit`, or a `TERM` of `xterm-ghostty`,
+  `xterm-kitty`, `wezterm` or one ending in `-direct`, which survives SSH where
+  `COLORTERM` is usually dropped. Anywhere else the terminal has 256 colours,
+  and each colour is the nearest entry of the xterm palette: the neutral tints
+  (`background`, `surface`, `surface_raised`, `prompt`, `code`, `hover`,
+  `selection`) take the grey ramp, the other tints take the colour cube so they
+  keep their hue and an alert stays red, and text takes either. The terminal's
+  own 16 colours are never used.
+- **`NO_COLOR`** set and not empty turns colour off: every role is the
+  terminal's default colour. Bold, dim, reversed and underline stay, so focus,
+  selection, matches and state words still show. A half-block edge draws as a blank,
+  because with no tint there is no surface to edge, and its row stays.
 - **Markdown in replies:** headings in the theme's heading colour; code blocks
   on a darker tint with syntax colours, line numbers, a language label and a
   click-to-copy target; tables with a rule under the header and numbers
@@ -1032,6 +1043,59 @@ switches when the terminal reports a change.
 A theme sets colours only. It gives each colour role a value, and an
 extension's spans name the same roles ("What a renderer returns"). Anything
 bigger goes through "Extension seams".
+
+The roles, in order:
+
+| Role | What it colours |
+|---|---|
+| `text` | the full text colour: replies, the draft, anything with no role of its own |
+| `muted` | what the doc calls dim as a colour: READY, line numbers, rules, block quote bars, grips, the logo's counters |
+| `accent` | bullets, the logo's mark, WORKING, the spinner while a turn works, a running job's stripe, the steering and prompt stripes |
+| `heading` | markdown headings |
+| `success` | a finished job's stripe when it succeeded |
+| `warning` | RETRYING and its spinner, the context bar from 60% |
+| `error` | CRASHED, a failed job's stripe, the context bar from 85%, "irreversible" in an approval's header |
+| `attention` | NEEDS INPUT, what a card waits on, a standing ask's stripe |
+| `added` | lines added: an edited file's `+N`, added lines in a diff |
+| `removed` | lines removed: an edited file's `−N`, removed lines in a diff |
+| `code_text` | code with no syntax role |
+| `keyword` | keywords |
+| `string` | string and character literals |
+| `comment` | comments |
+| `number` | number literals |
+| `function` | function and macro names |
+| `type` | type names |
+| `constant` | constants: `true`, `null`, `ALL_CAPS` names |
+| `operator` | operators |
+| `background` | every cell no surface covers |
+| `surface` | the input box, cards, notices, the rail's and the panel's regions, the handoff band |
+| `surface_raised` | the card on screen, a hovered card, pickers |
+| `prompt` | the person's prompt bubble |
+| `code` | code blocks and inline code |
+| `approval` | the approval panel for a standing ask |
+| `alert` | the approval panel for a reviewer's escalation; red in both built-in themes |
+| `hover` | the click target under the pointer |
+| `selection` | selected text |
+| `match` | a search match |
+| `match_current` | the current search match |
+
+A stripe takes its state's colour, and the logo's five letters step through
+`heading`, `accent`, `string`, `type` and `keyword`.
+
+A theme is a file, `themes/<name>.json` in Fiber home, and `tui.theme` names it
+by `<name>`; `dark` and `light` always name the built-ins:
+
+```json
+{"base": "light", "roles": {"accent": "#0b7285", "alert": "#5f1e22"}}
+```
+
+`base`, `dark` or `light`, gives every role the file leaves out, so a theme
+keeps working when a role is added. `roles` maps role names to `#rrggbb`. The
+file is strict: any other key, an unknown role or a value that is not
+`#rrggbb` refuses the whole file. A file that is missing or refused shows one
+notice naming the theme and the reason, and the theme follows the terminal's
+appearance. Nothing writes the bad name back. Colours are given once, in 24
+bits, and the 256-colour form is computed ("Look").
 
 ### Reduced motion
 
@@ -1270,8 +1334,10 @@ built-in rather than drawing the row again.
   changes the first frame, so the terminal loads its TUI extensions before
   drawing it ("Performance"). An extension that passes its loading timeout is
   switched off, and the frame goes ahead without it.
-- **Each drawn item is cached** by its input, the width and the theme. A
-  renderer runs again only when one of those changes, so an unchanged frame
+- **Each drawn item is cached** by its input and the width. Its spans name
+  colour roles, which the theme resolves as the frame is written, so a theme
+  change runs no renderer. A renderer runs again only when its input or the
+  width changes, so an unchanged frame
   calls no Lua and scrolling or searching costs what it costs for built-in
   rows. The cache lives with the paging window and is dropped with its pages.
 
@@ -1392,10 +1458,6 @@ The terminal reads these keys (`docs/configuration.md`, "Keys"):
 
 The skills view writes `skills.disabled`. The tools view writes an MCP
 server's or an extension's `tools.enabled` and `tools.disabled`.
-
-## Not settled here
-
-- The list of the theme's colour roles
 
 ## Evidence
 

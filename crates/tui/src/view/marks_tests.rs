@@ -156,6 +156,69 @@ fn copied_sits_above_the_notices() {
     insta::assert_snapshot!("copied_sits_above_the_notices", shown(&app, 60, 10));
 }
 
+/// Under `NO_COLOR` the selection and the matches keep distinct marks:
+/// the role colours paint to the default, the modifiers stay.
+#[test]
+fn no_color_keeps_selection_and_matches_distinct() {
+    use super::{CURRENT, MATCH};
+    use crate::look::{Look, ThemeSetting};
+    use ratatui::style::{Color, Modifier};
+
+    let mut app = replied(40, 12, "alpha beta needle one needle two gamma");
+    let text = super::super::text(&draw(&app, 40, 12).0);
+    let row = u16::try_from(
+        text.lines()
+            .position(|row| row.contains("alpha"))
+            .expect("the reply's row"),
+    )
+    .expect("a row");
+    let col = u16::try_from(
+        text.lines()
+            .find_map(|row| row.find("alpha"))
+            .expect("alpha"),
+    )
+    .expect("a column");
+    assert!(matches!(
+        select(&mut app, 40, 12, (col, row), (col + 4, row)),
+        Effect::Copy(_)
+    ));
+    search(&mut app, "needle");
+    let (mut buf, _) = draw(&app, 40, 12);
+    // The cells each mark carries, by its role marker before the paint.
+    let at = |style: ratatui::style::Style| {
+        let marked = style.bg.unwrap_or_default();
+        (0..40)
+            .flat_map(|x| (0..12).map(move |y| (x, y)))
+            .find(|at| buf.cell(*at).is_some_and(|cell| cell.bg == marked))
+    };
+    let (selected, matched, current) = (
+        at(SELECTION).expect("a selected cell"),
+        at(MATCH).expect("a matched cell"),
+        at(CURRENT).expect("a current cell"),
+    );
+    let vars: Vec<(String, String)> = vec![("NO_COLOR".to_owned(), "1".to_owned())];
+    let (look, notice) = Look::new(ThemeSetting::Dark, &|name: &str| {
+        vars.iter()
+            .find(|(set, _)| set == name)
+            .map(|(_, value)| value.clone())
+    });
+    assert_eq!(notice, None);
+    look.paint(&mut buf);
+    let cell = |at| buf.cell(at).expect("in the area").clone();
+    for at in [selected, matched, current] {
+        assert_eq!((cell(at).fg, cell(at).bg), (Color::Reset, Color::Reset));
+    }
+    assert_eq!(cell(selected).modifier, Modifier::REVERSED);
+    assert_eq!(cell(matched).modifier, Modifier::UNDERLINED);
+    assert_eq!(cell(current).modifier, Modifier::REVERSED | Modifier::BOLD);
+    assert!(
+        cell(selected).modifier != cell(matched).modifier
+            && cell(matched).modifier != cell(current).modifier
+            && cell(selected).modifier != cell(current).modifier,
+        "the marks stay apart with no colour"
+    );
+}
+
 /// The screen with the pointer over the link, then a rule, then a mask:
 /// `#` where the hover tint is, `.` elsewhere.
 fn hover_shown(app: &App, width: u16, height: u16, at: (u16, u16)) -> String {

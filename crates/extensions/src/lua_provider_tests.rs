@@ -134,3 +134,69 @@ fn detail_is_the_first_line_of_the_extension_s_own_text() {
     };
     assert_eq!(detail(&bad), bad.to_string());
 }
+
+fn models_provider(root: &fakes::TempDir, run: &str) -> (std::path::PathBuf, Arc<LuaProvider>) {
+    let home = root.path().join("home");
+    let dir = root.path().join("ext");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("init.lua"),
+        format!(
+            "fiber.provider(\"p\", {{ models = {{ timeout = 5000, run = function() return {run} end }} }})"
+        ),
+    )
+    .unwrap();
+    let extension = Arc::new(LuaExtension::new(
+        "ext",
+        dir,
+        home.clone(),
+        FakeClock::new(),
+    ));
+    let provider = LuaProvider::new(extension, "p");
+    (home, provider)
+}
+
+fn model_entry(id: &str) -> String {
+    format!(
+        "{{ id = \"{id}\", protocol = \"openai-responses\", \
+         base_url = \"http://127.0.0.1:1/v1\", context_window = 1000 }}"
+    )
+}
+
+#[test]
+fn list_models_returns_the_parsed_list_in_order_and_writes_no_cache() {
+    let root = fakes::TempDir::new("fiber-list-models");
+    let run = format!("{{ {}, {} }}", model_entry("b"), model_entry("a"));
+    let (home, provider) = models_provider(&root, &run);
+    let (models, returned) = within({
+        let provider = Arc::clone(&provider);
+        move || provider.list_models()
+    })
+    .unwrap();
+    assert_eq!(
+        models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+        ["b", "a"]
+    );
+    assert_eq!(returned[0]["id"], serde_json::json!("b"));
+    assert_eq!(returned[1]["id"], serde_json::json!("a"));
+    assert!(
+        config::read_model_cache(&home, "p").unwrap().is_none(),
+        "list_models writes no cache"
+    );
+}
+
+#[test]
+fn list_models_with_a_non_list_return_is_bad_return() {
+    let root = fakes::TempDir::new("fiber-list-models-bad");
+    let (_home, provider) = models_provider(&root, "\"x\"");
+    let err = within({
+        let provider = Arc::clone(&provider);
+        move || provider.list_models()
+    })
+    .unwrap_err();
+    let crate::Error::BadReturn { callback, .. } = &err else {
+        panic!("{err:?}");
+    };
+    assert_eq!(callback, "p.models");
+}

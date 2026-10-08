@@ -61,7 +61,7 @@ ephemeral event where it is display-only.
 | `hub` | Lists, starts and resumes sessions and relays every client connection to a session's socket, over its local socket and, when installed with a port, a websocket on `127.0.0.1` that authenticates each device by token (`docs/invocation.md`, "The hub"). Holds no session and no push credential; does no TLS. |
 | `doors` | `fiber ask` (argv or stdin in, JSON lines out), and the internal session command that it, the hub and a parent run. Which doors exist and what a driver may send is `docs/invocation.md`; this page only fixes that none has a privilege the TUI lacks. |
 | `picture` | The image child (`docs/invocation.md`, "Processes"): decodes, refuses, fits and re-encodes one image under the limits in `docs/model-routing.md`, "Image limits". Only `main` depends on it, so no session process runs image code. |
-| `cli` | Every command that does not run a session: `login`, `logout`, `approve`, `sessions`, `sessions export`, `sessions delete`, `sessions prune`, `models`, `extension install/update/remove/list/test`, `config get/set`, `hub install`, `hub uninstall` and `hub status` today, and later `sessions search`, `upgrade` and `hub pair` as they are built. `main` dispatches to it. |
+| `cli` | Every command that does not run a session: `login`, `logout`, `approve`, `sessions`, `sessions export`, `sessions delete`, `sessions prune`, `sessions search`, `models`, `extension install/update/remove/list/test`, `config get/set`, `hub install`, `hub uninstall` and `hub status` today, and later `upgrade` and `hub pair` as they are built. `main` dispatches to it. |
 | `main` | The composition root. Parses argv, builds everything once, picks a door. No feature logic. |
 
 ### Why contract exists
@@ -243,9 +243,10 @@ The terminal runs in a separate process (`docs/invocation.md`,
 "Processes") with two threads of its own: terminal input, which owns the
 keyboard, and terminal render, which owns the screen. Neither is in the
 session's process.
-Each terminal thread has a 1 MiB stack: a 2 MiB default stack can sit on a
-2 MiB-aligned span, and the kernel backs its first touch with a 2 MiB huge
-page, which showed as 2 MiB more in the idle terminal on Linux x86_64.
+Each thread the terminal spawns has a 1 MiB stack (rendering runs on the
+process's main thread, whose stack the OS sets): a 2 MiB default stack can
+sit on a 2 MiB-aligned span, and the kernel backs its first touch with a
+2 MiB huge page, which showed as 2 MiB more in the idle terminal on Linux x86_64.
 
 `log` is not a thread. It is a shared object behind a lock: whoever emits an
 event calls it, and it mints `seq`, writes, fsyncs and fans out.
