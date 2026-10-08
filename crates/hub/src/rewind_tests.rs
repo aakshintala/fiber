@@ -111,6 +111,17 @@ fn exited_line(old: &str) -> Value {
 }
 
 #[test]
+fn a_next_session_has_one_start_lock_and_each_session_its_own() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::bind_and_hold(&temp.dir));
+    let first = SessionId(id(2));
+    let other = SessionId(id(3));
+    let lock = guard_for(&hub, &first);
+    assert!(Arc::ptr_eq(&lock, &guard_for(&hub, &first)));
+    assert!(!Arc::ptr_eq(&lock, &guard_for(&hub, &other)));
+}
+
+#[test]
 fn continued_names_the_rewound_session() {
     let temp = Temp::new();
     let workspace = temp.workspace();
