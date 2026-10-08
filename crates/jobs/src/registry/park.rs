@@ -9,6 +9,12 @@ use std::time::Instant;
 use contract::clock::{Clock, Wake};
 use contract::tool::Cancel;
 
+impl Wake for Parker {
+    fn wake(&self) {
+        self.bump();
+    }
+}
+
 /// What `wait` and `stop` block on. Every bump is a job's end, a cancel or
 /// a clock move, so a wake that lands before the condvar wait is still
 /// visible in the generation.
@@ -41,7 +47,10 @@ impl Parker {
     /// `None` waits without a deadline. `wake` is held for the whole park,
     /// so a cancel subscribed here can reach its registry; `check` reads
     /// the registry's own state and reports `Some` once the wait is over.
-    /// The loop reads why it woke.
+    /// The generation is snapshotted before the check runs: a bump that
+    /// lands between them is seen by the check, and a bump after it trips
+    /// the wait below, so no wake is ever slept through. The loop reads
+    /// why it woke.
     pub(super) fn park_until(
         &self,
         clock: &dyn Clock,
@@ -58,10 +67,10 @@ impl Parker {
             return Parked::Cancelled;
         }
         loop {
+            let seen = self.generation();
             if let Some(parked) = check() {
                 return parked;
             }
-            let seen = self.generation();
             #[cfg(test)]
             BEFORE_PARK.with(|slot| {
                 if let Some(hook) = slot.borrow_mut().take() {
@@ -108,6 +117,10 @@ pub(super) enum Parked {
     Timeout,
     Cancelled,
 }
+
+#[cfg(test)]
+#[path = "park_tests.rs"]
+mod tests;
 
 // One shot on the waiter, after it has read its state and before it waits.
 // No registry lock is held. `wait_until` cannot host this: the parking

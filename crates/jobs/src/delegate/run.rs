@@ -169,6 +169,16 @@ impl Wake for Parker {
     }
 }
 
+impl Parker {
+    /// The current generation, for the wait's change check. The runner
+    /// snapshots it before reading the fold, the clock and the child,
+    /// and parks only while it still equals the snapshot, so a watcher
+    /// poke or clock move in between is never slept through.
+    fn generation(&self) -> u64 {
+        *self.seq.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
 /// What the watch feeds the fold, shared with the watcher thread: the
 /// last new `seq`, the socket's `fiber_exited` when it received one, and
 /// the one-shot result of the running watch.
@@ -274,15 +284,12 @@ impl Runner {
         Ok(child)
     }
 
-    /// One wait on the clock. A clock move bumps the parker under its
-    /// lock before it notifies, so a wake that lands before this wait is
-    /// still visible and the wait does not sleep through it.
-    fn park(&self, until: Option<Instant>) {
+    /// One wait on the clock, taken only while the generation still
+    /// equals the snapshot read before the loop's checks: a poke or clock
+    /// move after the snapshot trips the check below instead of being
+    /// slept through.
+    fn park(&self, until: Option<Instant>, seen: u64) {
         let mut slot = Some(self.park.seq.lock().unwrap_or_else(PoisonError::into_inner));
-        let seen = match slot.as_ref() {
-            Some(seq) => **seq,
-            None => return,
-        };
         self.clock.wait_until(until, &mut |bound| {
             let Some(seq) = slot.take() else {
                 return;
@@ -340,6 +347,10 @@ impl Runner {
         let mut next_retry = self.clock.now();
         let mut exited_seen = false;
         loop {
+            // Snapshotted before the checks below: a watcher poke or
+            // clock move in between trips the wait at the end instead
+            // of being slept through.
+            let seen = self.park.generation();
             // One watch result, when the watcher finished one.
             match lock(&fold).result.take() {
                 Some(WatchResult::Exited) => exited_seen = true,
@@ -409,7 +420,7 @@ impl Runner {
             {
                 due = kill_at;
             }
-            self.park(Some(due));
+            self.park(Some(due), seen);
         }
     }
 
@@ -419,6 +430,7 @@ impl Runner {
     fn await_drain(&self, drain: &mpsc::Receiver<Option<FiberExited>>) -> Option<FiberExited> {
         let deadline = later(self.clock.as_ref(), self.bound);
         loop {
+            let seen = self.park.generation();
             match drain.try_recv() {
                 Ok(line) => return line,
                 Err(mpsc::TryRecvError::Disconnected) => return None,
@@ -427,7 +439,7 @@ impl Runner {
             if self.clock.now() >= deadline {
                 return None;
             }
-            self.park(Some(deadline));
+            self.park(Some(deadline), seen);
         }
     }
 
@@ -435,6 +447,7 @@ impl Runner {
     /// its group is empty; the report above never waits for this.
     fn retire(&self, pgid: u32) {
         while group::listed(pgid) {
+            let seen = self.park.generation();
             if group::retire_if_empty(pgid) {
                 return;
             }
@@ -443,7 +456,7 @@ impl Runner {
             {
                 group::signal(pgid, Signal::KILL);
             }
-            self.park(Some(later(self.clock.as_ref(), POLL)));
+            self.park(Some(later(self.clock.as_ref(), POLL)), seen);
         }
     }
 }
