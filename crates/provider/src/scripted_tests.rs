@@ -6,13 +6,13 @@
 #![allow(clippy::panic, reason = "test code; a failure is the test's")]
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::mpsc;
+use std::sync::{Arc, Condvar, Mutex, PoisonError, Weak};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime};
 
 use contract::ErrorCode;
-use contract::clock::Clock;
+use contract::clock::{Clock, Wake};
 use contract::events::CacheLifetime;
 use contract::provider::{
     CallError, Delta, Finish, InputSize, ModelCall, ModelRequest, Provider, Reply, ReplyAction,
@@ -26,8 +26,94 @@ use super::{Script, ScriptError, Scripted};
 /// The wall-clock bound on every receive and every wait for a park.
 const WITHIN: Duration = Duration::from_secs(5);
 
-/// How long a park that must not happen is waited for, in wall time.
-const QUIET: Duration = Duration::from_millis(50);
+/// The upper bound on `Clock::wait_until` entries while one pause absorbs a
+/// wake short of its deadline: the wake re-parks, plus at most a stray
+/// spurious wake or two. The `guard.seq != seen` -> `==` mutant returns from
+/// the waker closure at once, so it re-enters without bound and trips this.
+const MAX_PARKS: usize = 8;
+
+/// Wall time meaning "no breach arrived, so the pause stayed under the
+/// bound": the mutant's busy loop trips the bound in microseconds, while a
+/// correct pause never trips it, so the wait runs out.
+const STAYED_UNDER: Duration = Duration::from_secs(2);
+
+/// Counts `Clock::wait_until` entries, delegating everything else to the
+/// `FakeClock`, and signals when the count passes [`MAX_PARKS`].
+struct CountingClock {
+    inner: Arc<FakeClock>,
+    state: Mutex<CountState>,
+    breached: Condvar,
+}
+
+struct CountState {
+    entries: usize,
+    breached: bool,
+}
+
+impl CountingClock {
+    fn new(inner: Arc<FakeClock>) -> Self {
+        Self {
+            inner,
+            state: Mutex::new(CountState {
+                entries: 0,
+                breached: false,
+            }),
+            breached: Condvar::new(),
+        }
+    }
+
+    fn entries(&self) -> usize {
+        self.state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .entries
+    }
+
+    /// True once entries pass [`MAX_PARKS`]; false when `within` runs out.
+    fn await_breach(&self, within: Duration) -> bool {
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let (guard, _) = self
+            .breached
+            .wait_timeout_while(state, within, |state| !state.breached)
+            .unwrap_or_else(PoisonError::into_inner);
+        guard.breached
+    }
+}
+
+impl Clock for CountingClock {
+    fn now(&self) -> Instant {
+        self.inner.now()
+    }
+
+    fn wall(&self) -> SystemTime {
+        self.inner.wall()
+    }
+
+    fn sleep(&self, d: Duration) {
+        self.inner.sleep(d);
+    }
+
+    fn wait_until(&self, until: Option<Instant>, wait: &mut dyn FnMut(Option<Duration>)) {
+        let trip = {
+            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            state.entries += 1;
+            if state.entries > MAX_PARKS && !state.breached {
+                state.breached = true;
+                true
+            } else {
+                false
+            }
+        };
+        if trip {
+            self.breached.notify_all();
+        }
+        self.inner.wait_until(until, wait);
+    }
+
+    fn subscribe(&self, waker: Weak<dyn Wake>) {
+        self.inner.subscribe(waker);
+    }
+}
 
 fn request(text: &str) -> ModelRequest {
     ModelRequest {
@@ -379,10 +465,13 @@ fn a_cancel_during_a_pause_wakes_it_and_returns_cancelled() {
 
 #[test]
 fn a_wake_before_the_deadline_keeps_the_pause_until_every_ms_passes() {
-    let clock = FakeClock::new();
-    let scripted = provider(
-        json!([{ "text": ["a", "b", "c"], "every_ms": 200 }]),
-        &clock,
+    let fake = FakeClock::new();
+    let clock = Arc::new(CountingClock::new(Arc::clone(&fake)));
+    let script = parse(json!({ "steps": [{ "text": ["a", "b", "c"], "every_ms": 200 }] })).unwrap();
+    let scripted = Scripted::new(
+        PathBuf::from("s.json"),
+        script,
+        Arc::clone(&clock) as Arc<dyn Clock>,
     );
     let call: Arc<dyn ModelCall> = Arc::from(scripted.call(&request("hi")));
     let (fragments, received) = mpsc::channel();
@@ -395,27 +484,37 @@ fn a_wake_before_the_deadline_keeps_the_pause_until_every_ms_passes() {
         ended.send(result).unwrap();
     });
 
-    let first = clock.origin() + Duration::from_millis(200);
+    let first = fake.origin() + Duration::from_millis(200);
     assert_eq!(received.recv_timeout(WITHIN).unwrap(), text_delta("a"));
-    let parked = clock.mark_parked(first, WITHIN).unwrap();
+    let parked = fake.mark_parked(first, WITHIN).unwrap();
     // Time moves short of the deadline: the pause wakes, and parks again.
-    clock.advance(Duration::from_millis(100));
-    assert!(clock.await_parked_since(&parked, Some(first), WITHIN));
-    let parked_again = clock.mark_parked(first, WITHIN).unwrap();
-    // Nothing moves, so the pause parks once and does not spin into new parks.
-    assert!(!clock.await_parked_since(&parked_again, Some(first), QUIET));
+    fake.advance(Duration::from_millis(100));
+    assert!(fake.await_parked_since(&parked, Some(first), WITHIN));
+    // A correct pause re-enters `wait_until` a bounded number of times; the
+    // `==` mutant returns from the waker closure at once and spins past the
+    // bound, tripping the breach. A spurious wake of the pause's condvar
+    // only adds one re-entry, so it cannot trip the bound.
+    if clock.await_breach(STAYED_UNDER) {
+        // Let the spinning call out so the failure does not hang the suite.
+        call.cancel();
+        panic!(
+            "wait_until re-entered without bound after a wake short of the deadline: {} entries",
+            clock.entries()
+        );
+    }
     assert!(received.try_recv().is_err());
-    clock.advance(Duration::from_millis(99));
-    assert!(clock.await_parked_since(&parked_again, Some(first), WITHIN));
+    let parked_again = fake.mark_parked(first, WITHIN).unwrap();
+    fake.advance(Duration::from_millis(99));
+    assert!(fake.await_parked_since(&parked_again, Some(first), WITHIN));
     assert!(received.try_recv().is_err());
-    clock.advance(Duration::from_millis(1));
+    fake.advance(Duration::from_millis(1));
     assert_eq!(received.recv_timeout(WITHIN).unwrap(), text_delta("b"));
 
     // A cancel after a wake before the next deadline still ends the pause.
     let second = first + Duration::from_millis(200);
-    let parked = clock.mark_parked(second, WITHIN).unwrap();
-    clock.advance(Duration::from_millis(100));
-    assert!(clock.await_parked_since(&parked, Some(second), WITHIN));
+    let parked = fake.mark_parked(second, WITHIN).unwrap();
+    fake.advance(Duration::from_millis(100));
+    assert!(fake.await_parked_since(&parked, Some(second), WITHIN));
     call.cancel();
     match end.recv_timeout(WITHIN).unwrap() {
         Err(CallError::Cancelled { .. }) => {}
