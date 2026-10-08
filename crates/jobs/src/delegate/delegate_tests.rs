@@ -26,7 +26,7 @@ use super::run::{Launch, Launched, Resolve, Watch, mint_session_id};
 use crate::registry::Registry;
 
 /// How long a test waits on the wall clock before it fails.
-const DEADLINE: Duration = Duration::from_secs(10);
+const DEADLINE: Duration = Duration::from_secs(3);
 
 struct Rig {
     _dir: TempDir,

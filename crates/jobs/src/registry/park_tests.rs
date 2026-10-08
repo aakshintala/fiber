@@ -18,7 +18,7 @@ use fakes::{CancelToken, within};
 use super::{Parked, Parker};
 
 /// How long a test waits on the wall clock before it fails.
-const DEADLINE: Duration = Duration::from_secs(10);
+const DEADLINE: Duration = Duration::from_secs(3);
 
 /// A wake the waiting test never fires: `park_until` only holds it for
 /// the cancel subscription.

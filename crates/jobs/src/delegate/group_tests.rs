@@ -23,7 +23,7 @@ use super::{
 };
 
 /// How long a test waits on a child before it fails.
-const DEADLINE: Duration = Duration::from_secs(10);
+const DEADLINE: Duration = Duration::from_secs(3);
 
 /// A group that holds `sleep 60`, listed through [`spawn`]. Its stdio is
 /// null, so even a child that outlives the test holds no harness pipe.

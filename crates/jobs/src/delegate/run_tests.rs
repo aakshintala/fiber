@@ -34,7 +34,7 @@ use crate::delegate::group::serial_shared;
 use crate::registry::Registry;
 
 /// How long a test waits on the wall clock before it fails.
-const DEADLINE: Duration = Duration::from_secs(10);
+const DEADLINE: Duration = Duration::from_secs(3);
 
 /// The stop bound the tests run with, on the fake clock.
 const BOUND: Duration = Duration::from_secs(5);
@@ -86,7 +86,7 @@ impl Script {
                 Ok(Watched::Exited)
             }
             Some(WatchReply::Block(gate)) => {
-                let _released = gate.recv_timeout(Duration::from_secs(30));
+                let _released = gate.recv_timeout(Duration::from_secs(5));
                 Err(io::Error::other("released"))
             }
         }
@@ -237,9 +237,11 @@ impl Rig {
 
 /// The first notice the runner sends, driving the fake clock in small
 /// steps. Panics after a bounded number of steps, so a runner that never
-/// reports fails the test instead of hanging it.
+/// reports fails the test instead of hanging it. Healthy runs report
+/// within a handful of steps; the bound is wall-clock short so a broken
+/// runner fails in seconds, not minutes.
 fn reported(rig: &Rig) -> contract::inbox::JobNotice {
-    for _ in 0..400 {
+    for _ in 0..150 {
         if let Ok(Delivery::Job(notice)) = rig.inbox.try_recv() {
             return notice;
         }
