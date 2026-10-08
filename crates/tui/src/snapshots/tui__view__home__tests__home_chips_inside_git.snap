@@ -1,6 +1,6 @@
 ---
 source: crates/tui/src/home_view_tests.rs
-expression: "screen(&app, 80, 24)"
+expression: "screen(&git_home(80, 24), 80, 24)"
 ---
 
 
@@ -16,8 +16,8 @@ expression: "screen(&app, 80, 24)"
 
 [w]  [ ] new worktree  [no model]  [thinking: default]  enter starts a session
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-1 waiting in other projects · show all
-✓  here                                                                        ✕
+
+
 
 
 
