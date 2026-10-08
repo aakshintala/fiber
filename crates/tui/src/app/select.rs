@@ -102,12 +102,11 @@ impl Selection {
 /// its cell.
 type Covered = (std::ops::Range<usize>, bool);
 
-/// What a char of a selected line is: under a selected cell, under one
-/// outside the selection, or drawn in no cell (a space a wrap dropped).
+/// What a char of a selected line is: under a selected cell, or not (outside
+/// the selection, or drawn in no cell like a space a wrap dropped).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Under {
     Selected,
-    Outside,
     Unplaced,
 }
 
@@ -426,7 +425,6 @@ impl App {
                     let next = cells.partition_point(|(bytes, _)| bytes.end <= *byte);
                     match cells.get(next) {
                         Some((bytes, true)) if bytes.start <= *byte => Under::Selected,
-                        Some((bytes, false)) if bytes.start <= *byte => Under::Outside,
                         Some(_) | None => Under::Unplaced,
                     }
                 };
@@ -445,7 +443,7 @@ impl App {
                         // The selection is one run in reading order: a
                         // char outside it, or one drawn nowhere before it,
                         // adds nothing.
-                        Under::Outside | Under::Unplaced => {}
+                        Under::Unplaced => {}
                     }
                 }
                 // A blank line has no char to place: it is copied when the
