@@ -140,18 +140,9 @@ impl Config {
             .then(|| provider.credential.clone())
             .flatten();
         let Some(source) = from_config.or(own) else {
-            let mut labels: BTreeSet<String> = credential_labels(&self.home, stored)
-                .unwrap_or_default()
-                .into_iter()
-                .collect();
-            labels.extend(configured.into_iter().flat_map(|l| l.keys().cloned()));
-            if provider.credential.is_some() {
-                labels.insert(DEFAULT_LABEL.into());
-            }
-            let listed = if labels.is_empty() {
-                "none".to_owned()
-            } else {
-                labels.into_iter().collect::<Vec<_>>().join(", ")
+            let listed = match self.labels(provider).as_slice() {
+                [] => "none".to_owned(),
+                labels => labels.join(", "),
             };
             return Err(missing(format!(
                 "nothing is stored in credentials/{stored}/{label}, and no source is configured for it. The labels for `{name}` are: {listed}"
@@ -198,6 +189,33 @@ impl Config {
                     "nothing is stored in credentials/{stored}/{label}, and {from}"
                 ))
             })
+    }
+}
+
+impl Config {
+    /// Every credential label `provider` has: each stored under
+    /// `credentials/<stored>/`, each configured at
+    /// `providers."<name>".credentials`, and `default` when the provider's
+    /// data declares a source. Sorted, each once; an unreadable directory
+    /// lists nothing from it.
+    pub fn labels(&self, provider: &ProviderData) -> Vec<String> {
+        let stored = provider
+            .credential_name
+            .as_deref()
+            .unwrap_or(&provider.name);
+        let mut labels: BTreeSet<String> = credential_labels(&self.home, stored)
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+        labels.extend(
+            configured(&self.merged(None), &provider.name)
+                .into_iter()
+                .flat_map(|labels| labels.keys().cloned()),
+        );
+        if provider.credential.is_some() {
+            labels.insert(DEFAULT_LABEL.into());
+        }
+        labels.into_iter().collect()
     }
 }
 
