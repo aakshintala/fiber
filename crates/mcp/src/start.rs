@@ -211,7 +211,12 @@ pub fn start(
         );
         let link: Weak<Slot> = Arc::downgrade(&slot);
         slots.push(slot);
-        sources.extend(sources_of(&spec.name, &cached.prompts));
+        sources.extend(sources_of(
+            &spec.name,
+            &cached.prompts,
+            &link,
+            spec.call_timeout,
+        ));
         let listed: Vec<ListedTool> = cached.tools.iter().map(ListedTool::read).collect();
         tools.extend(declare(&spec, &listed, &link).into_iter().map(|tool| {
             let info = info(&tool);
@@ -285,7 +290,7 @@ pub(crate) fn open(
         &live,
     );
     let tools: Vec<ListedTool> = live.tools.iter().map(ListedTool::read).collect();
-    let listed = sources_of(&name, &live.prompts);
+    let listed_prompts = live.prompts.clone();
     let slot = Slot::running(
         spec.clone(),
         workspace,
@@ -296,17 +301,25 @@ pub(crate) fn open(
         live,
     );
     let link: Weak<Slot> = Arc::downgrade(&slot);
+    let listed = sources_of(&name, &listed_prompts, &link, spec.call_timeout);
     let declared = declare(&spec, &tools, &link);
     Opened::Up(slot, declared, listed)
 }
 
 /// One prompt row source per listed prompt of `server`.
-fn sources_of(server: &str, prompts: &[serde_json::Value]) -> Vec<PromptSource> {
+fn sources_of(
+    server: &str,
+    prompts: &[serde_json::Value],
+    slot: &Weak<Slot>,
+    timeout: Duration,
+) -> Vec<PromptSource> {
     prompts
         .iter()
         .map(|entry| PromptSource {
             server: server.to_owned(),
             prompt: ListedPrompt::read(entry),
+            slot: slot.clone(),
+            timeout,
         })
         .collect()
 }

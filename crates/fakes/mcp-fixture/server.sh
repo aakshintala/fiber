@@ -30,7 +30,10 @@
 # exactly `hang` is never answered, one holding exactly `exit` makes the
 # server exit without answering, and a missing file answers -32602
 # "Unknown prompt". A `cursor-forever` file makes every `tools/list`
-# and `prompts/list` answer carry `"nextCursor":"again"`, at once.
+# and `prompts/list` answer carry `"nextCursor":"again"`, at once. When
+# the file holds a method name (`tools/list` or `prompts/list`), only
+# that method's list pages forever: one handshake pages tools before
+# prompts, so an endless prompt list needs tools pages to end.
 #
 # It answers `initialize`, `tools/list`, `tools/call`, `prompts/list`,
 # `prompts/get` and `ping`, appends
@@ -63,6 +66,15 @@ pick() {
     printf '%s' "$1" | sed -n "s/.*\"$2\":\"\([^\"]*\)\".*/\1/p"
 }
 
+pages_again() {
+    # $1: the list method. Whether its answers carry another page: an
+    # empty `cursor-forever` file pages every list, one holding a method
+    # name only that method's list.
+    [ -f "$dir/cursor-forever" ] || return 1
+    [ -z "$(cat "$dir/cursor-forever")" ] && return 0
+    [ "$(cat "$dir/cursor-forever")" = "$1" ]
+}
+
 id_of() {
     printf '%s' "$1" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p'
 }
@@ -92,7 +104,7 @@ while IFS= read -r line; do
             else
                 tools="[]"
             fi
-            if [ -f "$dir/cursor-forever" ]; then
+            if pages_again "tools/list"; then
                 answer "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"tools\":$tools,\"nextCursor\":\"again\"}}"
             else
                 answer "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"tools\":$tools}}"
@@ -103,7 +115,7 @@ while IFS= read -r line; do
                 answer "{\"jsonrpc\":\"2.0\",\"id\":$id,\"error\":{\"code\":-32603,\"message\":\"Internal error\"}}"
             else
                 prompts="$(cat "$dir/prompts.json")"
-                if [ -f "$dir/cursor-forever" ]; then
+                if pages_again "prompts/list"; then
                     answer "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"prompts\":$prompts,\"nextCursor\":\"again\"}}"
                 else
                     answer "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"prompts\":$prompts}}"

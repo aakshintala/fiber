@@ -49,8 +49,8 @@ impl Setup {
         write(&self.dir, "prompts.json", prompts);
     }
 
-    fn cursor_forever(&self) {
-        write(&self.dir, "cursor-forever", "");
+    fn cursor_forever(&self, method: &str) {
+        write(&self.dir, "cursor-forever", method);
     }
 
     fn start_result(&self, timeout: Duration) -> Result<crate::server::OpenServer, StartError> {
@@ -197,12 +197,12 @@ fn a_failing_prompt_list_leaves_the_server_started_with_no_prompts() {
 
 #[test]
 fn endless_pages_end_at_the_startup_deadline() {
-    // `tools/list` pages first in one handshake, so the endless cursor
-    // starts only once its pages are done: the first `prompts/list` line
-    // proves tools paging finished.
+    // Tools page before prompts in one handshake, so only the prompt
+    // list pages forever: the tools pages end on their own.
     let setup = Setup::new();
     setup.tools(&json!([{"name": "echo"}]));
     setup.prompts(&greet_prompts().to_string());
+    setup.cursor_forever("prompts/list");
     let timeout = Duration::from_secs(5);
     let (done, result) = mpsc::channel();
     let script = fakes::mcp_fixture().display().to_string();
@@ -222,7 +222,6 @@ fn endless_pages_end_at_the_startup_deadline() {
         done.send(outcome).expect("collected");
     });
     setup.await_requests(r#""method":"prompts/list""#, 1);
-    setup.cursor_forever();
     setup.await_requests(r#""method":"prompts/list""#, 2);
     let pid = setup.pid();
     setup.fake.advance(timeout + Duration::from_millis(1));
@@ -240,7 +239,7 @@ fn endless_pages_end_at_the_startup_deadline() {
 fn endless_tool_pages_end_at_the_startup_deadline() {
     let setup = Setup::new();
     setup.tools(&json!([{"name": "echo"}]));
-    setup.cursor_forever();
+    setup.cursor_forever("tools/list");
     let timeout = Duration::from_secs(5);
     let (done, result) = mpsc::channel();
     let script = fakes::mcp_fixture().display().to_string();
@@ -270,4 +269,618 @@ fn endless_tool_pages_end_at_the_startup_deadline() {
         "endless tool pages end at the startup deadline",
     );
     setup.await_reaped(pid);
+}
+
+#[test]
+fn a_prompt_entry_reads_with_defaults() {
+    let read = super::ListedPrompt::read(&json!({"name": "greet"}));
+    assert_eq!(read.name, "greet");
+    assert_eq!(read.description, String::new());
+    assert!(read.arguments.is_empty());
+    let read = super::ListedPrompt::read(
+        &json!({"name": 7, "description": 7, "arguments": [{"required": true}, {"name": "", "required": true}]}),
+    );
+    assert_eq!(read.name, String::new());
+    assert_eq!(read.description, String::new());
+    assert!(read.arguments.is_empty(), "a nameless argument is dropped");
+}
+
+#[test]
+fn runnable_names_hold_no_whitespace() {
+    use super::ListedPrompt;
+    let runnable = |name: &str| ListedPrompt::read(&json!({"name": name})).runnable();
+    assert!(!runnable(""));
+    assert!(!runnable("a b"));
+    assert!(!runnable("a\tb"));
+    assert!(runnable("greet"));
+    assert!(runnable("a/b"));
+}
+
+#[test]
+fn the_hint_marks_required_arguments() {
+    use super::{Argument, hint};
+    assert_eq!(hint(&[]), None);
+    assert_eq!(
+        hint(&[
+            Argument {
+                name: "who".to_owned(),
+                required: true
+            },
+            Argument {
+                name: "tone".to_owned(),
+                required: false
+            },
+        ]),
+        Some("<who> [tone]".to_owned())
+    );
+}
+
+#[test]
+fn fill_gives_one_word_per_argument_with_the_rest_to_the_last() {
+    use super::{Argument, fill};
+    let args = || {
+        vec![
+            Argument {
+                name: "who".to_owned(),
+                required: true,
+            },
+            Argument {
+                name: "tone".to_owned(),
+                required: false,
+            },
+        ]
+    };
+    let filled = fill(&args(), "Ada warm and kind").expect("filled");
+    assert_eq!(
+        filled.named,
+        serde_json::Map::from_iter([
+            ("who".to_owned(), json!("Ada")),
+            ("tone".to_owned(), json!("warm and kind")),
+        ])
+    );
+    assert_eq!(filled.appended, None);
+    // The last argument takes the rest trimmed at both ends; an empty
+    // last is absent.
+    let filled = fill(&args(), "Ada  ").expect("filled");
+    assert_eq!(
+        filled.named,
+        serde_json::Map::from_iter([("who".to_owned(), json!("Ada"))])
+    );
+    // Missing required names list in order.
+    let missing = fill(&args(), "  \t ").expect_err("missing");
+    assert_eq!(missing, ["who"]);
+    let missing = fill(
+        &[
+            Argument {
+                name: "a".to_owned(),
+                required: true,
+            },
+            Argument {
+                name: "b".to_owned(),
+                required: true,
+            },
+        ],
+        "",
+    )
+    .expect_err("missing");
+    assert_eq!(missing, ["a", "b"]);
+}
+
+#[test]
+fn fill_with_no_arguments_appends_the_text() {
+    use super::fill;
+    let filled = fill(&[], "extra words").expect("filled");
+    assert!(filled.named.is_empty());
+    assert_eq!(filled.appended, Some("extra words".to_owned()));
+    let filled = fill(&[], "   ").expect("filled");
+    assert_eq!(filled.appended, None);
+    let filled = fill(&[], "").expect("filled");
+    assert_eq!(filled.appended, None);
+}
+
+#[test]
+fn text_joins_every_message_in_order() {
+    use super::text;
+    assert_eq!(
+        text(&json!({"messages": [
+            {"role": "user", "content": {"type": "text", "text": "First."}},
+            {"role": "assistant", "content": {"type": "text", "text": "Second."}},
+        ]})),
+        Ok("First.\n\nSecond.".to_owned())
+    );
+    assert_eq!(
+        text(&json!({"messages": [
+            {"role": "user", "content": {"type": "resource", "resource": {"text": "From a file."}}},
+        ]})),
+        Ok("From a file.".to_owned())
+    );
+    for (result, kind) in [
+        (
+            json!({"messages": [{"role": "user", "content": {"type": "image", "data": "aGk="}}]}),
+            "an image",
+        ),
+        (
+            json!({"messages": [{"role": "user", "content": {"type": "audio", "data": "aGk="}}]}),
+            "audio",
+        ),
+        (
+            json!({"messages": [{"role": "user", "content": {"type": "resource", "resource": {"blob": "aGk="}}}]}),
+            "a binary resource",
+        ),
+        (
+            json!({"messages": [{"role": "user", "content": {"type": "resource_link", "uri": "file:///x"}}]}),
+            "a resource link",
+        ),
+        (json!({}), "no messages"),
+        (json!({"messages": []}), "no text"),
+        (
+            json!({"messages": [{"role": "user", "content": {"type": "text", "text": ""}}, {"role": "user"}]}),
+            "no text",
+        ),
+    ] {
+        assert_eq!(text(&result), Err(kind.to_owned()), "kind: {kind}");
+    }
+}
+
+struct Session {
+    dir: TempDir,
+    fake: Arc<FakeClock>,
+}
+
+impl Session {
+    fn new() -> Self {
+        Self {
+            dir: TempDir::new("fiber-mcp-get"),
+            fake: FakeClock::new(),
+        }
+    }
+
+    fn clock(&self) -> Arc<dyn Clock> {
+        self.fake.clone()
+    }
+
+    fn tools(&self, tools: &Value) {
+        write(&self.dir, "tools.json", &tools.to_string());
+    }
+
+    fn prompts(&self, prompts: &Value) {
+        write(&self.dir, "prompts.json", &prompts.to_string());
+    }
+
+    fn prompt_result(&self, name: &str, body: &str) {
+        write(&self.dir, &format!("prompt-{name}.json"), body);
+    }
+
+    fn spec(&self, name: &str) -> crate::start::ServerSpec {
+        crate::start::ServerSpec {
+            name: name.to_owned(),
+            command: fakes::mcp_fixture().display().to_string(),
+            args: vec![self.dir.path().display().to_string()],
+            env: BTreeMap::new(),
+            startup_timeout: crate::start::DEFAULT_STARTUP_TIMEOUT,
+            call_timeout: crate::start::DEFAULT_CALL_TIMEOUT,
+            enabled: None,
+            disabled: Vec::new(),
+            hints: BTreeMap::new(),
+            required: false,
+        }
+    }
+
+    fn start(&self, specs: Vec<crate::start::ServerSpec>) -> crate::start::Started {
+        // Threaded with a wall-clock limit: a silent server would sit
+        // parked on the fake clock forever, so a bare direct start would
+        // hang the test instead of failing it.
+        let workspace = self.dir.path().to_path_buf();
+        let cache = workspace.join("cache");
+        let clock = self.clock();
+        let (done, result) = mpsc::channel();
+        thread::spawn(move || {
+            let started = crate::start::start(specs, &workspace, &cache, &clock, "0.0.0");
+            done.send(started).expect("collected");
+        });
+        result
+            .recv_timeout(WITHIN)
+            .unwrap_or_else(|_| panic!("the start ends within {WITHIN:?}"))
+    }
+
+    fn get(
+        prompts: &crate::prompt::Prompts,
+        server: &str,
+        prompt: &str,
+        arguments: &str,
+        cancel: &fakes::CancelToken,
+    ) -> contract::tool::Output {
+        // Threaded with a wall-clock limit: a hung prompt would sit
+        // parked on the fake clock forever, so a bare direct get would
+        // hang the test instead of failing it.
+        let prompts = prompts.clone();
+        let server = server.to_owned();
+        let prompt = prompt.to_owned();
+        let arguments = arguments.to_owned();
+        let cancel = cancel.clone();
+        let (done, result) = mpsc::channel();
+        thread::spawn(move || {
+            let output = prompts.get(&server, &prompt, &arguments, &cancel);
+            done.send(output).expect("collected");
+        });
+        result
+            .recv_timeout(WITHIN)
+            .unwrap_or_else(|_| panic!("the get ends within {WITHIN:?}"))
+    }
+
+    fn stop(servers: crate::start::Servers) {
+        let (done, stopped) = mpsc::channel();
+        thread::spawn(move || {
+            servers.stop();
+            done.send(()).expect("collected");
+        });
+        stopped
+            .recv_timeout(WITHIN)
+            .unwrap_or_else(|_| panic!("the stop ends within {WITHIN:?}"));
+    }
+
+    fn requests(&self) -> String {
+        std::fs::read_to_string(self.dir.path().join("requests.log")).unwrap_or_default()
+    }
+
+    fn get_line(&self) -> String {
+        self.requests()
+            .lines()
+            .find(|line| line.contains(r#""method":"prompts/get""#))
+            .expect("a prompts/get line")
+            .to_owned()
+    }
+}
+
+fn greet_entry() -> Value {
+    json!({
+        "name": "greet",
+        "description": "Greets someone.",
+        "arguments": [{"name": "who", "required": true}, {"name": "tone"}],
+    })
+}
+
+fn greet_session() -> Session {
+    let session = Session::new();
+    session.tools(&json!([{"name": "echo"}]));
+    session.prompts(&json!([greet_entry()]));
+    session.prompt_result(
+        "greet",
+        r#"{"messages":[{"role":"user","content":{"type":"text","text":"Say hello to Ada, warmly."}}]}"#,
+    );
+    session
+}
+
+#[test]
+fn get_sends_the_named_arguments_and_returns_the_text() {
+    use contract::shapes::ContentPart;
+    let session = greet_session();
+    let started = session.start(vec![session.spec("fx")]);
+    assert!(started.failed.is_empty());
+    let output = Session::get(
+        &started.prompts,
+        "fx",
+        "greet",
+        "Ada warm",
+        &fakes::CancelToken::new(),
+    );
+    assert!(output.error.is_none());
+    assert_eq!(
+        output.content,
+        [ContentPart::Text {
+            text: "Say hello to Ada, warmly.".to_owned(),
+        }]
+    );
+    assert!(output.servers.is_empty());
+    assert!(
+        session
+            .get_line()
+            .contains(r#""arguments":{"tone":"warm","who":"Ada"}"#),
+        "the get sends the named arguments: {}",
+        session.get_line(),
+    );
+    Session::stop(started.servers);
+}
+
+#[test]
+fn get_on_a_lazy_server_starts_it() {
+    let session = greet_session();
+    let first = session.start(vec![session.spec("fx")]);
+    assert!(first.failed.is_empty());
+    Session::stop(first.servers);
+    std::fs::remove_file(session.dir.path().join("pid.txt")).expect("pid.txt");
+    let second = session.start(vec![session.spec("fx")]);
+    assert!(
+        !session.dir.path().join("pid.txt").exists(),
+        "declaring from the cache spawns nothing",
+    );
+    let output = Session::get(
+        &second.prompts,
+        "fx",
+        "greet",
+        "Ada warm",
+        &fakes::CancelToken::new(),
+    );
+    assert!(output.error.is_none());
+    assert!(
+        session.dir.path().join("pid.txt").exists(),
+        "the first prompt run starts the server",
+    );
+    Session::stop(second.servers);
+}
+
+#[test]
+fn a_missing_required_argument_is_invalid_and_never_reaches_the_server() {
+    use contract::ErrorCode;
+    let session = greet_session();
+    let started = session.start(vec![session.spec("fx")]);
+    let output = Session::get(
+        &started.prompts,
+        "fx",
+        "greet",
+        "",
+        &fakes::CancelToken::new(),
+    );
+    let error = output.error.expect("failed");
+    assert_eq!(error.code, ErrorCode::InvalidArguments);
+    assert_eq!(
+        error.message,
+        "The MCP server `fx`'s prompt `/greet` needs <who>. Run it as `/greet <who> [tone]`.",
+    );
+    assert!(
+        !session.requests().contains("prompts/get"),
+        "the server is never asked",
+    );
+    Session::stop(started.servers);
+}
+
+#[test]
+fn a_prompt_with_no_arguments_gets_the_text_after_its_own() {
+    use contract::shapes::ContentPart;
+    let session = Session::new();
+    session.tools(&json!([{"name": "echo"}]));
+    session.prompts(&json!([{"name": "motd", "description": "The message."}]));
+    session.prompt_result(
+        "motd",
+        r#"{"messages":[{"role":"user","content":{"type":"text","text":"Body."}}]}"#,
+    );
+    let started = session.start(vec![session.spec("fx")]);
+    let output = Session::get(
+        &started.prompts,
+        "fx",
+        "motd",
+        "extra words",
+        &fakes::CancelToken::new(),
+    );
+    assert!(output.error.is_none());
+    assert_eq!(
+        output.content,
+        [ContentPart::Text {
+            text: "Body.\n\nextra words".to_owned(),
+        }]
+    );
+    Session::stop(started.servers);
+}
+
+#[test]
+fn a_json_rpc_error_fails_the_prompt() {
+    use contract::ErrorCode;
+    let session = Session::new();
+    session.tools(&json!([{"name": "echo"}]));
+    session.prompts(&json!([greet_entry(), {"name": "refused", "description": "Refused."}]));
+    let started = session.start(vec![session.spec("fx")]);
+    // No `prompt-refused.json`: the fixture refuses with -32602.
+    let output = Session::get(
+        &started.prompts,
+        "fx",
+        "refused",
+        "",
+        &fakes::CancelToken::new(),
+    );
+    let error = output.error.expect("failed");
+    assert_eq!(error.code, ErrorCode::McpPromptFailed);
+    assert_eq!(
+        error.message,
+        "The MCP server `fx` refused the prompt `/refused`: Unknown prompt: refused.",
+    );
+    assert!(output.servers.is_empty());
+    Session::stop(started.servers);
+}
+
+#[test]
+fn a_prompt_no_server_lists_fails_without_asking() {
+    use contract::ErrorCode;
+    let session = greet_session();
+    let started = session.start(vec![session.spec("fx")]);
+    let output = Session::get(
+        &started.prompts,
+        "fx",
+        "missing",
+        "",
+        &fakes::CancelToken::new(),
+    );
+    let error = output.error.expect("failed");
+    assert_eq!(error.code, ErrorCode::McpPromptFailed);
+    assert_eq!(
+        error.message,
+        "The MCP server `fx` has no prompt `/missing`.",
+    );
+    assert!(
+        !session.requests().contains("prompts/get"),
+        "the server is never asked",
+    );
+    Session::stop(started.servers);
+}
+
+#[test]
+fn a_server_that_dies_mid_get_is_recorded_once_and_restarts_on_the_next() {
+    use contract::ErrorCode;
+    use contract::tool::ServerRecord;
+    let session = greet_session();
+    session.prompt_result("greet", "exit");
+    let started = session.start(vec![session.spec("fx")]);
+    let first = Session::get(
+        &started.prompts,
+        "fx",
+        "greet",
+        "Ada warm",
+        &fakes::CancelToken::new(),
+    );
+    let error = first.error.expect("failed");
+    assert_eq!(error.code, ErrorCode::McpPromptFailed);
+    assert!(
+        error.message.contains("was not run: "),
+        "the message names the server, the prompt and the cause: {}",
+        error.message,
+    );
+    assert_eq!(first.servers.len(), 1, "the death is recorded once");
+    let [ServerRecord::Failed(failed)] = &first.servers[..] else {
+        panic!("one failure record: {:?}", first.servers);
+    };
+    assert!(failed.will_restart);
+    // The file replaced, the next run restarts the server and reads it.
+    session.prompt_result(
+        "greet",
+        r#"{"messages":[{"role":"user","content":{"type":"text","text":"Back."}}]}"#,
+    );
+    let second = Session::get(
+        &started.prompts,
+        "fx",
+        "greet",
+        "Ada warm",
+        &fakes::CancelToken::new(),
+    );
+    assert!(second.error.is_none());
+    assert_eq!(second.servers.len(), 1, "the restart is recorded");
+    assert!(
+        matches!(second.servers[0], ServerRecord::Ready(_)),
+        "the restart brings it back: {:?}",
+        second.servers,
+    );
+    Session::stop(started.servers);
+}
+
+#[test]
+fn a_hung_get_times_out_only_after_the_clock_passes_the_call_timeout() {
+    use contract::ErrorCode;
+    let session = greet_session();
+    session.prompt_result("greet", "hang");
+    let timeout = crate::start::DEFAULT_CALL_TIMEOUT;
+    let deadline = session.fake.now().checked_add(timeout).expect("deadline");
+    let started = session.start(vec![session.spec("fx")]);
+    let prompts = started.prompts.clone();
+    let cancel = fakes::CancelToken::new();
+    let (done, result) = mpsc::channel();
+    thread::spawn(move || {
+        let output = prompts.get("fx", "greet", "Ada warm", &cancel);
+        done.send(output).expect("collected");
+    });
+    assert!(
+        session.fake.await_parked(deadline, WITHIN),
+        "the get waits on the call timeout within {WITHIN:?}",
+    );
+    let mark = session.fake.advance_marked(Duration::from_secs(599));
+    assert!(
+        session
+            .fake
+            .await_parked_since(&mark, Some(deadline), WITHIN),
+        "the get waits again a second before its deadline within {WITHIN:?}",
+    );
+    assert!(
+        result.try_recv().is_err(),
+        "the get is still waiting a second before its deadline",
+    );
+    session.fake.advance(Duration::from_secs(1));
+    let output = result
+        .recv_timeout(WITHIN)
+        .unwrap_or_else(|_| panic!("the timed-out get answers within {WITHIN:?}"));
+    let error = output.error.expect("failed");
+    assert_eq!(error.code, ErrorCode::McpPromptFailed);
+    assert_eq!(
+        error.message,
+        "The MCP server `fx` did not answer the prompt `/greet` within 600000 ms.",
+    );
+    Session::stop(started.servers);
+}
+
+#[test]
+fn a_cancel_during_get_sends_cancelled_and_fails_the_prompt() {
+    use contract::ErrorCode;
+    let session = greet_session();
+    session.prompt_result("greet", "hang");
+    let timeout = crate::start::DEFAULT_CALL_TIMEOUT;
+    let deadline = session.fake.now().checked_add(timeout).expect("deadline");
+    let started = session.start(vec![session.spec("fx")]);
+    let prompts = started.prompts.clone();
+    let cancel = fakes::CancelToken::new();
+    let (done, result) = mpsc::channel();
+    {
+        let cancel = cancel.clone();
+        thread::spawn(move || {
+            let output = prompts.get("fx", "greet", "Ada warm", &cancel);
+            done.send(output).expect("collected");
+        });
+    }
+    assert!(
+        session.fake.await_parked(deadline, WITHIN),
+        "the get waits on the call timeout within {WITHIN:?}",
+    );
+    cancel.cancel();
+    let output = result
+        .recv_timeout(WITHIN)
+        .unwrap_or_else(|_| panic!("the cancelled get answers within {WITHIN:?}"));
+    let error = output.error.expect("failed");
+    assert_eq!(error.code, ErrorCode::McpPromptFailed);
+    assert!(
+        error.message.contains("was cancelled"),
+        "the message says the run was cancelled: {}",
+        error.message,
+    );
+    // A later answer proves the cancel reached the server's log.
+    session.prompt_result(
+        "greet",
+        r#"{"messages":[{"role":"user","content":{"type":"text","text":"Back."}}]}"#,
+    );
+    let after = Session::get(
+        &started.prompts,
+        "fx",
+        "greet",
+        "Ada warm",
+        &fakes::CancelToken::new(),
+    );
+    assert!(after.error.is_none());
+    let log = session.requests();
+    let cancelled = log
+        .find("notifications/cancelled")
+        .expect("the cancel is sent");
+    let answered = log
+        .rfind(r#""method":"prompts/get""#)
+        .expect("the later get");
+    assert!(
+        cancelled < answered,
+        "the cancel is logged before the later answer",
+    );
+    Session::stop(started.servers);
+}
+
+#[test]
+fn a_dead_slot_fails_the_prompt_without_spawning() {
+    use contract::ErrorCode;
+    let session = greet_session();
+    let started = session.start(vec![session.spec("fx")]);
+    Session::stop(started.servers);
+    std::fs::remove_file(session.dir.path().join("pid.txt")).expect("pid.txt");
+    let output = Session::get(
+        &started.prompts,
+        "fx",
+        "greet",
+        "Ada warm",
+        &fakes::CancelToken::new(),
+    );
+    let error = output.error.expect("failed");
+    assert_eq!(error.code, ErrorCode::McpPromptFailed);
+    assert!(
+        !session.dir.path().join("pid.txt").exists(),
+        "a dead server never spawns again",
+    );
 }

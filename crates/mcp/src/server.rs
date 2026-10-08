@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use contract::clock::{Clock, Wake};
 use contract::tool::Cancel;
 use rustix::process::Signal;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::effects::Hints;
 use crate::registry::{LIVE, Stopping, before_lock, before_signal, lock, signal};
@@ -319,6 +319,33 @@ impl Server {
         self.request(
             "tools/call",
             &serde_json::json!({"name": tool, "arguments": arguments}),
+            deadline,
+            cancel,
+        )
+    }
+
+    /// Gets `prompt` with `arguments`, waiting until `timeout` passes on
+    /// the clock or `cancel` fires. Params encode with sorted keys, so the
+    /// top-level `name` follows `arguments` on the wire (`docs/mcp.md`,
+    /// "Prompts and resources").
+    pub(crate) fn get_prompt(
+        &self,
+        name: &str,
+        arguments: &Map<String, Value>,
+        timeout: Duration,
+        cancel: &dyn Cancel,
+    ) -> Result<Value, CallError> {
+        let Some(inner) = self.inner.as_ref() else {
+            return Err(CallError::Gone);
+        };
+        let deadline = inner
+            .clock
+            .now()
+            .checked_add(timeout)
+            .unwrap_or(inner.clock.now());
+        self.request(
+            "prompts/get",
+            &serde_json::json!({"name": name, "arguments": arguments}),
             deadline,
             cancel,
         )
