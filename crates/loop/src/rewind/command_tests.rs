@@ -11,7 +11,7 @@
 
 use contract::{ActionId, Envelope, Seq, SessionId};
 
-use super::{Target, point_for};
+use super::{Target, point_for, valid_session_id};
 
 fn line(kind: &str, seq: u64, action: Option<&str>) -> Envelope {
     Envelope {
@@ -249,4 +249,19 @@ fn a_completion_at_the_point_answers_a_call_before_it() {
         line("turn_started", 5, None),
     ];
     assert_eq!(point_for(&lines, &own_target(), Some(Seq(4))), Ok(4));
+}
+
+#[test]
+fn a_session_id_is_s_and_sixteen_lowercase_hex_digits() {
+    for (text, valid) in [
+        ("s_0123456789abcdef", true),
+        ("s_0123456789abcdeg", false),
+        ("s_0123456789ABCDEF", false),
+        ("s_0123456789abcde", false),
+        ("s_0123456789abcdef0", false),
+        ("0123456789abcdef", false),
+        ("s_gggggggggggggggg", false),
+    ] {
+        assert_eq!(valid_session_id(text), valid, "{text}");
+    }
 }

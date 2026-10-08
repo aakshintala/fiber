@@ -53,7 +53,7 @@ fn valid_session_id(text: &str) -> bool {
     hex.len() == 16
         && hex
             .bytes()
-            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 impl Loop {
