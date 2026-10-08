@@ -52,6 +52,8 @@ pub(crate) fn fold(segments: &[Segment]) -> Result<Resumed, Error> {
     let root = first.session_id.0.clone();
     let session = last.session_id.0.clone();
     let mut workspace = None;
+    let mut worktree = None;
+    let mut preamble = None;
     let mut model = None;
     let mut credential = None;
     let mut thinking = None;
@@ -98,6 +100,8 @@ pub(crate) fn fold(segments: &[Segment]) -> Result<Resumed, Error> {
                     &line,
                     &mut Fold {
                         workspace: &mut workspace,
+                        worktree: &mut worktree,
+                        preamble: &mut preamble,
                         model: &mut model,
                         credential: &mut credential,
                         thinking: &mut thinking,
@@ -123,6 +127,8 @@ pub(crate) fn fold(segments: &[Segment]) -> Result<Resumed, Error> {
                     &line,
                     &mut Fold {
                         workspace: &mut workspace,
+                        worktree: &mut worktree,
+                        preamble: &mut preamble,
                         model: &mut model,
                         credential: &mut credential,
                         thinking: &mut thinking,
@@ -151,6 +157,7 @@ pub(crate) fn fold(segments: &[Segment]) -> Result<Resumed, Error> {
         session,
         root,
         workspace,
+        worktree,
         model,
         credential,
         thinking,
@@ -163,12 +170,15 @@ pub(crate) fn fold(segments: &[Segment]) -> Result<Resumed, Error> {
         reviewed,
         orphans: orphans.finish(),
         offers,
+        preamble,
     })
 }
 
 /// What [`fold_line`] threads through one line.
 struct Fold<'a> {
     workspace: &'a mut Option<String>,
+    worktree: &'a mut Option<contract::shapes::Worktree>,
+    preamble: &'a mut Option<contract::events::PreambleBuilt>,
     model: &'a mut Option<String>,
     credential: &'a mut Option<String>,
     thinking: &'a mut Option<String>,
@@ -206,6 +216,7 @@ fn fold_line(line: &Envelope, fold: &mut Fold<'_>) -> Result<(), Error> {
         && fold.workspace.is_none()
     {
         *fold.workspace = Some(started.workspace.clone());
+        *fold.worktree = started.worktree.clone();
     } else if let Event::UsageRecorded(recorded) = &event {
         // A correction keeps the model the call was first recorded at,
         // which may be an earlier model than the latest one.
@@ -219,6 +230,7 @@ fn fold_line(line: &Envelope, fold: &mut Fold<'_>) -> Result<(), Error> {
         }
     } else if let Event::PreambleBuilt(built) = &event {
         fold.credential.clone_from(&built.credential);
+        *fold.preamble = Some(built.clone());
     } else if let Event::ModelChanged(changed) = &event {
         *fold.model = Some(changed.after.model.clone());
         fold.credential.clone_from(&changed.after.credential);
@@ -272,9 +284,18 @@ fn fold_line(line: &Envelope, fold: &mut Fold<'_>) -> Result<(), Error> {
 
 /// Folds `dir`'s chain to `point`: the history of any session on the
 /// chain, the old session or an ancestor, continued from `point`. The
-/// model, credential and thinking are the parent's at the point.
+/// model, credential and thinking are the parent's latest build at or
+/// before the point, when there is one (`docs/events.md`, "Rewind"): an
+/// explicitly chosen model or thinking level is kept even before the old
+/// session's first request.
 pub fn forked(dir: &Path, point: Seq) -> Result<Resumed, Error> {
-    fold(&log::history_to(dir, point)?)
+    let mut folded = fold(&log::history_to(dir, point)?)?;
+    if let Some(built) = &folded.preamble {
+        folded.model = Some(built.model.clone());
+        folded.credential.clone_from(&built.credential);
+        folded.thinking = built.thinking.clone();
+    }
+    Ok(folded)
 }
 
 /// The window's lines across the chain: parent segments through

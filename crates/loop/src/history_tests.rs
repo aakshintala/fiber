@@ -297,7 +297,36 @@ fn forked_gives_the_parents_model_credential_and_thinking_at_the_point() {
     assert_eq!(at_usage.model.as_deref(), Some("fake/model-1"));
     assert_eq!(at_usage.credential.as_deref(), Some("work"));
     assert!(at_usage.thinking.is_none());
+    // The latest build at or before the point wins over the later
+    // switch: the rewound session keeps the model it was built for.
     let at_switch = forked(&sessions.join(A), Seq(3)).unwrap();
+    assert_eq!(at_switch.model.as_deref(), Some("fake/model-1"));
+    assert_eq!(at_switch.credential.as_deref(), Some("work"));
+    assert!(at_switch.thinking.is_none());
+}
+
+#[test]
+fn forked_without_a_build_reads_the_model_from_the_calls_and_switches() {
+    let (_home, sessions) = sessions("forked-bare");
+    write_log(
+        &sessions,
+        A,
+        &[
+            envelope(A, 0, None, None, &started("/w", None)),
+            envelope(A, 1, None, None, &usage("fake/model-1", "fiber-1", 7)),
+            envelope(
+                A,
+                2,
+                None,
+                None,
+                &changed("fake/model-1", "fake/model-2", Some("high")),
+            ),
+        ],
+    );
+    let at_usage = forked(&sessions.join(A), Seq(1)).unwrap();
+    assert_eq!(at_usage.model.as_deref(), Some("fake/model-1"));
+    assert!(at_usage.thinking.is_none());
+    let at_switch = forked(&sessions.join(A), Seq(2)).unwrap();
     assert_eq!(at_switch.model.as_deref(), Some("fake/model-2"));
     assert_eq!(at_switch.thinking.as_deref(), Some("high"));
 }

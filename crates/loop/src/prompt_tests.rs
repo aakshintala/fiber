@@ -166,8 +166,8 @@ fn opening_md_bytes_are_pinned() {
 fn messages_md_bytes_are_pinned() {
     pinned(
         include_bytes!("../prompt/messages.md"),
-        3712,
-        0x36b8f2b544455ca5,
+        4113,
+        0xb75d9a13c9680d1b,
     );
 }
 
@@ -207,6 +207,10 @@ fn messages_md_holds_every_section_the_doc_names() {
         "extension-section",
         "extension-file",
         "budget-line",
+        "rewind-note",
+        "rewind-written",
+        "rewind-ran",
+        "rewind-unchanged",
     ] {
         assert!(
             !section(md, name).is_empty(),

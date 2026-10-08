@@ -229,6 +229,7 @@ impl Rendered {
             Event::TurnStarted(_)
             | Event::SteeringApplied(_)
             | Event::OpeningMessage(_)
+            | Event::SessionStarted(_)
             | Event::InstructionFile(_)
             | Event::DateChanged(_)
             | Event::HandoffStarted(_)
@@ -244,7 +245,6 @@ impl Rendered {
             | Event::AssistantMessageCompleted(_)
             | Event::JobsPendingNotified(_)
             | Event::FiberExited(_)
-            | Event::SessionStarted(_)
             | Event::Rewound(_)
             | Event::StepStarted(_)
             | Event::TurnCompleted(_)
@@ -403,6 +403,13 @@ pub(crate) fn render(
             conversation.push(user(&steering.content));
             carry.input.push(user(&steering.content));
         }
+        // A rewind's note rides on its `session_started`: one user
+        // message, so a live start and a resume render it the same way.
+        Event::SessionStarted(started) => {
+            if let Some(rewind) = &started.rewind {
+                conversation.push(crate::rewind::note_input(rewind));
+            }
+        }
         // The window opens at the conversation's length; a completed handoff
         // replaces the conversation, and any other end truncates it back, so
         // the note request's own lines never stay.
@@ -534,7 +541,6 @@ pub(crate) fn render(
         // records the jobs it named.
         | Event::JobsPendingNotified(_)
         | Event::FiberExited(_)
-        | Event::SessionStarted(_)
         | Event::Rewound(_)
         | Event::StepStarted(_)
         | Event::TurnCompleted(_)

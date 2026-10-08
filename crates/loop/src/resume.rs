@@ -66,8 +66,8 @@ pub struct Resumed {
     /// treats it as its own choice (`docs/model-routing.md`, "Thinking").
     /// `None` when the log holds none.
     pub thinking: Option<String>,
-    /// The window's start, as a position in the chain: the segment and the
-    /// `seq` the window starts at: the latest `turn_started` of the
+    /// The window's start, as a position in the chain: the segment and
+    /// the `seq` the window starts at: the latest `turn_started` of the
     /// latest completed handoff's turn, before that handoff; the chain's
     /// start with no completed handoff, or none of its turn's
     /// `turn_started` lines.
@@ -91,6 +91,14 @@ pub struct Resumed {
     pub(crate) orphans: Vec<JobCompleted>,
     /// The repository's offers: the session's skips and the pending offer.
     pub(crate) offers: crate::offer::Folded,
+    /// The latest `preamble_built` in the chain: a rewound session sends
+    /// it verbatim as its first request (`docs/events.md`, "Rewind").
+    /// `None` when the chain holds none yet.
+    pub(crate) preamble: Option<contract::events::PreambleBuilt>,
+    /// The own log's `session_started.worktree`: the worktree the session
+    /// runs in, when Fiber created one for it or for the session it
+    /// continues (`docs/events.md`, `session_started`).
+    pub worktree: Option<contract::shapes::Worktree>,
 }
 
 /// Folds the log in the session directory `dir` over its chain, root
@@ -102,6 +110,7 @@ pub struct Resumed {
 pub fn resumed(dir: &Path) -> Result<Resumed, Error> {
     crate::history::fold(&log::history(dir)?)
 }
+
 /// A turn cut short on a pending approval or question: what the finishing
 /// turn writes back under the same turn id (`docs/invocation.md`,
 /// "Lifecycle").

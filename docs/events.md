@@ -326,7 +326,7 @@ the envelope's `ts`.
 | `parent` | object | no | for a delegate: `session_id`, its parent session, and `delegate_id`, the delegate's `job_id` there (`docs/delegates.md`) |
 | `forked_from` | object | no | for a fork or a rewind: `session_id` and `seq`, the point it continues from (`docs/delegates.md`, "Forks"; "Rewind" below) |
 | `rewind` | object | no | for a rewind: `summary` (string, optional), `note` (string) and `jobs` (array of strings, the `job_id`s adopted) |
-| `worktree` | object | no | when the session runs in a worktree Fiber created for it: `path` and `branch` (strings); `path` is also `workspace` (`docs/invocation.md`, "Isolation") |
+| `worktree` | object | no | when the session runs in a worktree Fiber created for it, or for the session a rewind continues: `path` and `branch` (strings); `path` is also `workspace` (`docs/invocation.md`, "Isolation") |
 
 #### `rewound`
 
