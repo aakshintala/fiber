@@ -11,7 +11,7 @@
 //!   workspace members, such as `cargo fmt -p`), `package_specs` and
 //!   `library_specs` are `name@version` (for `cargo -p`, which resolves a
 //!   bare name against the whole dependency graph and can be ambiguous)
-//! - `plan --mode M --packages "A B" --event E --bug true|false`:
+//! - `plan --mode M --packages "A B" --event E --bug true|false --mutants true|false`:
 //!   which CI jobs run, as `key=value` lines
 //! - `verdict`: reads `NEEDS` and `JOBS` from the environment and passes only
 //!   if every selected job passed and every other job was skipped
@@ -99,11 +99,13 @@ fn run(args: &[String]) -> Result<bool, String> {
                 .map(str::to_owned)
                 .collect();
             let bug = flag(rest, "--bug")? == "true";
+            let mutants = flag(rest, "--mutants")? == "true";
             let plan = select::plan(
                 &flag(rest, "--mode")?,
                 &packages,
                 &flag(rest, "--event")?,
                 bug,
+                mutants,
             );
             let shards: Vec<u64> = (0..plan.shards).collect();
             println!(

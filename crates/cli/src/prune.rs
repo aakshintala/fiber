@@ -13,6 +13,7 @@ use contract::clock::Clock;
 use contract::shapes::Failure;
 
 mod diagnostics;
+mod ignored;
 mod sessions;
 mod worktrees;
 

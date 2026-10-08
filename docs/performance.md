@@ -18,7 +18,7 @@ process and holds the same budgets as any session. The hub's own budgets,
 idle memory, idle CPU, threads and time to first response with N sessions,
 are not set yet ([Control center](https://github.com/aakshintala/fiber/issues/256)). The image child's memory is its
 own process's, not the session's. Peak over an empty program is 68,076 KiB
-on Linux x86_64, 67,604 KiB on Linux arm64 and 72,352 KiB on macOS arm64;
+on Linux x86_64, 67,604 KiB on Linux arm64 and 67,825 KiB on macOS arm64;
 an 81-megapixel PNG, which the 50-megapixel cap refuses, peaks at 308,372 KiB
 (`research/image-limits/README.md`).
 
@@ -130,7 +130,8 @@ Each number is the median of 5 runs. Memory is peak RSS on Linux and peak
 footprint on macOS, by the method in `docs/dependencies.md`. Idle CPU is the
 voluntary and involuntary context switch counts in
 `/proc/<pid>/task/*/status`, read before and after the idle window: 10
-seconds on a pull request and 60 at release. A truly idle process switches
+seconds on a pull request, the "Release build and size" job included, and 60
+in the release workflow (`docs/releasing.md`). A truly idle process switches
 zero times in either. fsyncs are the session's `fdatasync` calls, counted
 with strace in one more run of the busy turn, which is never a timing or
 memory sample, and log bytes are the size of `events.jsonl`, so both are

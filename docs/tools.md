@@ -1132,10 +1132,14 @@ flags").
   counts toward the built-in budget ("Size budget in CI").
 - Its optional properties and the `minLength` and `minimum` limits put its
   schema outside the strict subset, so it is sent with `strict: false`.
-- One scan of 1.3 GB of logs with no artifacts took 2.4 s warm on macOS arm64
-  and 6.7 to 6.9 s cold on a Linux x86_64 runner; the same logs with a tool
-  output in 25 saved as an artifact took 5 to 6 s warm. The scan reads one
-  thread. Timings and method:
+- Sessions are searched on parallel threads, at most as many as
+  `std::thread::available_parallelism` reports and never more than the
+  sessions in scope, and every thread finishes before the call returns.
+- One scan of 1.3 GB of logs with no artifacts took 0.35 to 0.38 s warm on
+  macOS arm64 (11 cores); the same logs with a tool output in 25 saved as an
+  artifact took 1.0 to 1.1 s warm there. On a Linux x86_64 runner, measured
+  with the scan on one thread, the logs with no artifacts took 6.7 to 6.9 s
+  cold. Timings and method:
   [research/session-search](../research/session-search/README.md).
 
 ## Provider quota

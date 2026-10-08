@@ -881,11 +881,6 @@ fn a_function_that_raises_leaves_the_file_and_releases_the_lock() {
     assert_eq!(finish(&start_token(&provider)).unwrap(), "later");
 }
 
-/// The refresh function's secret `dead` is a URL nothing listens on.
-fn dead_url() -> String {
-    format!("http://127.0.0.1:{}", free_port())
-}
-
 #[test]
 fn a_refresh_the_token_endpoint_rejects_is_authentication_failed() {
     let env = Env::new();
@@ -911,7 +906,7 @@ fn a_refresh_that_never_reached_the_token_endpoint_is_connection_failed() {
     let ext = env.extension();
     let server = OauthServer::start(vec![]);
     let provider = env.provider(&ext, &server, "ok");
-    env.secret("url", &dead_url());
+    env.secret("url", &fakes::refused::url());
     env.store(&json!({ "token": "old", "expires_at": WALL + 100 }));
     let before = env.stored().unwrap();
     let error = finish(&start_token(&provider)).unwrap_err();
@@ -925,7 +920,7 @@ fn a_function_that_catches_the_transport_error_and_raises_its_own_is_connection_
     let ext = env.extension();
     let server = OauthServer::start(vec![]);
     let provider = env.provider(&ext, &server, "pcall_dead");
-    env.secret("dead", &dead_url());
+    env.secret("dead", &fakes::refused::url());
     env.store(&json!({ "token": "old", "expires_at": WALL + 100 }));
     let error = finish(&start_token(&provider)).unwrap_err();
     assert_eq!(error.code(), ErrorCode::ConnectionFailed, "{error}");
@@ -938,7 +933,7 @@ fn a_later_reply_clears_the_transport_failure() {
     let ext = env.extension();
     let server = OauthServer::start(vec![OauthReply::raw(400, "{}")]);
     let provider = env.provider(&ext, &server, "dead_then_live");
-    env.secret("dead", &dead_url());
+    env.secret("dead", &fakes::refused::url());
     env.store(&json!({ "token": "old", "expires_at": WALL + 100 }));
     let error = finish(&start_token(&provider)).unwrap_err();
     assert_eq!(error.code(), ErrorCode::AuthenticationFailed, "{error}");
@@ -1223,7 +1218,7 @@ fn a_refresh_function_refused_after_a_failed_request_is_authentication_failed() 
     let ext = login_with(&env, Arc::new(Recording::never()));
     let server = OauthServer::start(vec![]);
     let provider = env.provider(&ext, &server, "refresh_poll");
-    env.secret("dead", &dead_url());
+    env.secret("dead", &fakes::refused::url());
     env.store(&json!({ "token": "old", "expires_at": WALL + 100 }));
     let before = env.stored().unwrap();
     let error = finish(&start_token(&provider)).unwrap_err();
@@ -1386,7 +1381,7 @@ fn a_refresh_function_that_raises_a_table_passes_it_through_for_pcall() {
     let env = Env::new();
     let ext = caught(&env, Arc::new(Recording::never()));
     let server = OauthServer::start(vec![]);
-    env.secret("dead", &dead_url());
+    env.secret("dead", &fakes::refused::url());
     env.store(&json!({ "token": "old", "expires_at": WALL + 100 }));
     assert_eq!(
         caught_token(&env, &ext, &server, "table"),

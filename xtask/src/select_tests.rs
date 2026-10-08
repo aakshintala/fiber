@@ -250,7 +250,7 @@ fn jobs(
 
 #[test]
 fn a_docs_only_pull_request_runs_no_job_after_the_selection() {
-    let plan = plan("docs", &[], "pull_request", true);
+    let plan = plan("docs", &[], "pull_request", true, true);
     assert_eq!(
         plan,
         Plan {
@@ -262,7 +262,7 @@ fn a_docs_only_pull_request_runs_no_job_after_the_selection() {
 
 #[test]
 fn a_code_pull_request_runs_what_it_selected() {
-    let plan = plan("crates", &strings(&["log"]), "pull_request", true);
+    let plan = plan("crates", &strings(&["log"]), "pull_request", true, true);
     assert_eq!(
         plan,
         Plan {
@@ -274,19 +274,27 @@ fn a_code_pull_request_runs_what_it_selected() {
 
 #[test]
 fn a_pull_request_without_a_bug_label_skips_the_bug_check() {
-    let plan = plan("all", &strings(&["log"]), "pull_request", false);
+    let plan = plan("all", &strings(&["log"]), "pull_request", false, true);
     assert_eq!(plan.jobs, jobs(true, true, true, false, false));
 }
 
 #[test]
 fn a_pull_request_that_selects_no_crate_skips_the_tests() {
-    let plan = plan("crates", &[], "pull_request", false);
+    let plan = plan("crates", &[], "pull_request", false, true);
     assert_eq!(plan.jobs, jobs(true, false, true, false, false));
 }
 
 #[test]
+fn an_unlabelled_draft_skips_mutants_and_runs_the_rest() {
+    let plan = plan("crates", &strings(&["log"]), "pull_request", false, false);
+    assert!(!plan.jobs["mutants"]);
+    assert_eq!(plan.shards, 0);
+    assert!(plan.jobs["lint"] && plan.jobs["test"]);
+}
+
+#[test]
 fn a_docs_push_runs_lint_and_tests_but_no_mutants() {
-    let plan = plan("docs", &[], "push", true);
+    let plan = plan("docs", &[], "push", true, true);
     assert_eq!(
         plan,
         Plan {
@@ -298,7 +306,7 @@ fn a_docs_push_runs_lint_and_tests_but_no_mutants() {
 
 #[test]
 fn a_code_push_runs_lint_tests_and_mutants_but_no_bug_check() {
-    let plan = plan("all", &strings(&["log"]), "push", true);
+    let plan = plan("all", &strings(&["log"]), "push", true, true);
     assert_eq!(
         plan,
         Plan {
@@ -310,20 +318,32 @@ fn a_code_push_runs_lint_tests_and_mutants_but_no_bug_check() {
 
 #[test]
 fn a_pull_request_that_selects_the_binary_runs_the_release_job() {
-    let plan = plan("crates", &strings(&["log", "main"]), "pull_request", false);
+    let plan = plan(
+        "crates",
+        &strings(&["log", "main"]),
+        "pull_request",
+        false,
+        true,
+    );
     assert_eq!(plan.jobs, jobs(true, true, true, false, true));
 }
 
 #[test]
 fn a_pull_request_that_runs_everything_runs_the_release_job() {
     let packages = strings(&["config", "log", "main", "xtask"]);
-    let plan = plan("all", &packages, "pull_request", false);
+    let plan = plan("all", &packages, "pull_request", false, true);
     assert_eq!(plan.jobs, jobs(true, true, true, false, true));
 }
 
 #[test]
 fn a_pull_request_without_the_binary_skips_the_release_job() {
-    let plan = plan("crates", &strings(&["log", "xtask"]), "pull_request", false);
+    let plan = plan(
+        "crates",
+        &strings(&["log", "xtask"]),
+        "pull_request",
+        false,
+        true,
+    );
     assert_eq!(plan.jobs, jobs(true, true, true, false, false));
 }
 

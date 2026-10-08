@@ -105,17 +105,13 @@ impl Prompt {
     }
 }
 
-/// A session opening from home: its last subscribe, whose
-/// acknowledgement ends the gate, and whether a same-level refusal of
-/// it may still retry once with `summary` then `full`.
+/// A session opening from home and its last subscribe, whose
+/// acknowledgement ends the gate.
 struct Opening {
     /// The session opening.
     session: SessionId,
     /// The last subscribe's id: only its rejection fails the open.
     ack: String,
-    /// A same-level refusal may still retry: a one-step open whose
-    /// retry has not run.
-    retry: bool,
 }
 
 impl App {
@@ -318,8 +314,7 @@ impl App {
                     let accepted = hub.kind.as_str() == "command_accepted";
                     if self.answered(id, accepted).is_some() {
                         if !accepted && self.is_ack(id) {
-                            let (code, message) = refusal_parts(&hub.payload);
-                            return Some(self.retry_or_fail(code, message));
+                            return Some(self.fail_open(refusal(&hub.payload)));
                         }
                         return Some(Vec::new());
                     }
@@ -410,8 +405,7 @@ impl App {
                     let id = envelope.payload.get("command_id").and_then(Value::as_str)?;
                     if self.answered(id, accepted).is_some() {
                         if !accepted && self.is_ack(id) {
-                            let (code, message) = refusal_parts(&envelope.payload);
-                            return Some(self.retry_or_fail(code, message));
+                            return Some(self.fail_open(refusal(&envelope.payload)));
                         }
                         let session = envelope.session_id.clone();
                         if accepted
@@ -1163,11 +1157,7 @@ impl App {
         }
         lines.push(self.ask_commands(&session));
         if let Some(home) = self.home.as_mut() {
-            home.opening = Some(Opening {
-                session,
-                ack,
-                retry: levels.len() == 1,
-            });
+            home.opening = Some(Opening { session, ack });
         }
         Effect::Send(lines)
     }
@@ -1215,46 +1205,10 @@ impl App {
         }
     }
 
-    /// A rejection of the open's last subscribe: a same-level refusal of
-    /// a one-step open retries once with `summary` then `full`, since
-    /// the hub keeps a connection's first subscribe even when rejected
-    /// and replays it on resume, dropping its acknowledgement. A second
-    /// same-level refusal, or any other code, fails the open: home again
+    /// A rejection of the open's last subscribe fails the open: home again
     /// when still attached, with the message as the row's note and a
     /// notice. A rejection of an earlier step changes nothing by itself.
-    fn retry_or_fail(&mut self, code: &str, message: String) -> Vec<String> {
-        let retry = self
-            .home
-            .as_ref()
-            .and_then(|home| home.opening.as_ref())
-            .is_some_and(|opening| code == "invalid_arguments" && opening.retry);
-        if retry {
-            let session = self
-                .home
-                .as_ref()
-                .and_then(|home| home.opening.as_ref())
-                .map(|opening| opening.session.clone());
-            let Some(session) = session else {
-                return Vec::new();
-            };
-            let mut ack = String::new();
-            let mut lines = Vec::new();
-            for level in [Level::Summary, Level::Full] {
-                let (id, line) = subscribe_line(&session, level);
-                if let Some(home) = self.home.as_mut() {
-                    home.subs.sent(id.clone(), session.clone(), level);
-                }
-                ack = id;
-                lines.push(line);
-            }
-            if let Some(home) = self.home.as_mut()
-                && let Some(opening) = home.opening.as_mut()
-            {
-                opening.ack = ack;
-                opening.retry = false;
-            }
-            return lines;
-        }
+    fn fail_open(&mut self, message: String) -> Vec<String> {
         let session = self
             .home
             .as_mut()
@@ -1324,7 +1278,7 @@ fn subscribe_line(session: &SessionId, level: Level) -> (String, String) {
     (id, line)
 }
 
-/// A refusal's code and message, for the open's acknowledgement.
+/// A refusal's code and message.
 fn refusal_parts(payload: &serde_json::Map<String, Value>) -> (&str, String) {
     let code = payload
         .get("code")

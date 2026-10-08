@@ -126,7 +126,10 @@ On Linux x86_64 alone:
 - cargo-deny's licence, source and ban checks
 - the built-in tool definitions within their byte budget, with each
   definition's size printed
-- mutation testing: `cargo-mutants --in-diff`, split across 6 runners. Each
+- mutation testing: `cargo-mutants --in-diff`, split across 6 runners. It runs
+  on a ready pull request, on a push to `main`, and on a draft pull request
+  that carries the label `mutants`; an unlabelled draft skips it, and adding
+  the label starts a run. Each
   lists its own share of the diff's mutants and stops when it has none. The
   number was picked, not measured; it is reset from the first real runs.
   Mutants run under nextest's `mutants` profile (`.cargo/mutants.toml`),
@@ -243,6 +246,18 @@ an area doc. Nothing else hosts Fiber's documentation. The command reference
 in `docs/user/` is generated from the same command definitions as `fiber help`
 and shell completion, and the docs check fails when the committed copy differs
 from what the generator writes.
+
+## Manually dispatched workflows
+
+Two workflows never run on a push or a pull request. Someone starts them with
+`gh workflow run <file> --ref <branch>`, and GitHub allows that only once the
+workflow file is on `main`.
+
+- `tui-demo.yml` builds the two static Linux binaries of the tui-prototype demo
+  (`research/tui-prototype/demo`).
+- `dependency-probe.yml` runs the dependency memory probe on Linux x86_64,
+  Linux arm64 and macOS arm64 and uploads one table per runner
+  (`docs/dependencies.md`, "Measuring memory").
 
 ## Job time limits
 

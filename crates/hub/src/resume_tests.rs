@@ -835,6 +835,91 @@ fn a_rejected_change_leaves_the_replayed_level_unchanged() {
 }
 
 #[test]
+fn a_rejected_first_subscribe_is_not_replayed_on_resume() {
+    let temp = Temp::new();
+    temp.recorded();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    client.subscribe("c_1", "bogus");
+    let rejected = client.next("the rejection");
+    assert_eq!(rejected["kind"], "command_rejected", "{rejected}");
+    assert_eq!(rejected["payload"]["command_id"], "c_1");
+    assert_eq!(rejected["payload"]["code"], "invalid_arguments");
+    assert!(starter.stop(&sid(), DEADLINE), "the fake session ended");
+    client.send("c_2", "reply");
+    assert_eq!(client.acknowledged("the reply"), "c_2");
+    assert_eq!(
+        received_levels(&starter),
+        [
+            ("c_1".into(), "subscribe".into(), Some("bogus".into())),
+            ("c_2".into(), "reply".into(), Some("full".into())),
+        ]
+    );
+}
+
+#[test]
+fn a_subscribe_accepted_after_a_rejected_one_is_replayed() {
+    let temp = Temp::new();
+    temp.recorded();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    client.subscribe("c_1", "bogus");
+    let rejected = client.next("the rejection");
+    assert_eq!(rejected["kind"], "command_rejected", "{rejected}");
+    assert_eq!(rejected["payload"]["command_id"], "c_1");
+    client.subscribe("c_2", "summary");
+    assert_eq!(client.acknowledged("the subscribe"), "c_2");
+    assert!(starter.stop(&sid(), DEADLINE), "the fake session ended");
+    client.send("c_3", "reply");
+    assert_eq!(client.acknowledged("the reply"), "c_3");
+    let got = received_levels(&starter);
+    assert_eq!(got.len(), 4, "{got:?}");
+    assert_eq!(
+        got[0],
+        ("c_1".into(), "subscribe".into(), Some("bogus".into()))
+    );
+    assert_eq!(
+        got[1],
+        ("c_2".into(), "subscribe".into(), Some("summary".into()))
+    );
+    assert_eq!(got[2].1, "subscribe");
+    assert!(got[2].0.starts_with("c_"), "{got:?}");
+    assert_ne!(got[2].0, "c_1", "the replay carries an id of the hub's own");
+    assert_ne!(got[2].0, "c_2", "the replay carries an id of the hub's own");
+    assert_eq!(got[2].2, Some("summary".into()), "{got:?}");
+    assert_eq!(got[3].0, "c_3");
+    assert_eq!(got[3].1, "reply");
+}
+
+#[test]
+fn a_subscribe_answered_closing_after_fiber_exited_is_sent_once() {
+    let temp = Temp::new();
+    temp.recorded();
+    temp.append("fiber_exited");
+    // A session whose log is gone answers `subscribe` `closing` too.
+    let dying = FakeStarter::closing_every_command(&temp.dir);
+    let started = crate::Starter::start(&dying, &sid(), &temp.workspace(), None);
+    assert!(started.is_ok(), "the closing session binds");
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    client.subscribe("c_1", "full");
+    let until = temp.clock.origin() + HELD_POLL;
+    assert!(
+        temp.clock.await_parked(until, DEADLINE),
+        "the hub waits out the exiting process"
+    );
+    assert!(dying.stop(&sid(), DEADLINE), "the exiting process ended");
+    temp.clock.advance(HELD_POLL);
+    // One acknowledgement, the resumed session's.
+    assert_eq!(client.acknowledged("the subscribe"), "c_1");
+    assert_eq!(starter.resumed().len(), 1);
+    assert_eq!(received(&starter), [("c_1".into(), "subscribe".into())]);
+}
+
+#[test]
 fn a_lowered_level_is_replayed() {
     let temp = Temp::new();
     temp.recorded();

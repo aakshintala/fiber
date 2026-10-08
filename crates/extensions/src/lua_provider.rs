@@ -200,20 +200,23 @@ impl LuaProvider {
         }))
     }
 
-    /// Whether `max_age` names one and the cached list is no older than
-    /// it. A list whose age reads exactly `max_age` is not stale.
+    /// Whether an age-checked refresh has nothing to do: `max_age` names
+    /// one and the cached list is no older than it, or no cached copy
+    /// exists (`models()` runs when the list is first needed). A list whose
+    /// age reads exactly `max_age` is not stale.
     fn fresh(&self, max_age: Option<Duration>) -> bool {
         let Some(max) = max_age else {
             return false;
         };
-        matches!(
-            config::model_cache_age(
-                self.extension.home(),
-                &self.name,
-                self.extension.clock().wall()
-            ),
-            Ok(Some(age)) if age <= max
-        )
+        match config::model_cache_age(
+            self.extension.home(),
+            &self.name,
+            self.extension.clock().wall(),
+        ) {
+            Ok(Some(age)) => age <= max,
+            Ok(None) => true,
+            Err(_) => false,
+        }
     }
 
     fn discover(&self) -> Result<Vec<ModelData>, Error> {

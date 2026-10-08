@@ -964,11 +964,7 @@ fn a_lookup_with_no_address_is_connection_failed() {
 
 #[test]
 fn a_refused_connection_is_connection_failed() {
-    let port = {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        listener.local_addr().unwrap().port()
-    };
-    let output = Rig::new().fetch(&format!("http://127.0.0.1:{port}/"));
+    let output = Rig::new().fetch(&format!("{}/", fakes::refused::url()));
     assert_eq!(code(&output), Some(ErrorCode::ConnectionFailed));
 }
 
