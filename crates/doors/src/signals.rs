@@ -377,13 +377,7 @@ fn sleep_until(clock: &dyn Clock, until: Instant) {
 /// Reads `input` to EOF or an error, ignoring every byte: the parent
 /// never writes to the lifeline.
 fn drain(mut input: Box<dyn Read + Send>) {
-    let mut buf = [0u8; 1024];
-    loop {
-        match input.read(&mut buf) {
-            Ok(0) | Err(_) => return,
-            Ok(_) => {}
-        }
-    }
+    let _copied = io::copy(&mut input, &mut io::sink());
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
