@@ -416,9 +416,22 @@ fn subscribe(conn: &mut Conn, id: CommandId, level: contract::commands::Subscrib
     };
     let injector = watcher.injector();
     let outbox = level::Outbox::new(injector.clone());
+    // A `full` connection is counted before its acknowledgement, so a
+    // client that reads the acknowledgement is already in `clients`. When
+    // the write fails, the read loop's cleanup detaches it.
+    conn.full = !summary;
+    if conn.full {
+        // The watcher is registered, so this connection receives the line.
+        conn.gate.attach();
+    }
     // The acknowledgement is written here, before the writer starts, so it
     // is the first line the client reads.
     accept(conn, id, None);
+    #[cfg(test)]
+    if conn.full {
+        conn.gate
+            .note(crate::session::tests::Probe::SubscribeAcknowledged);
+    }
     if conn.gone {
         return;
     }
@@ -433,12 +446,7 @@ fn subscribe(conn: &mut Conn, id: CommandId, level: contract::commands::Subscrib
         }
     }
     conn.subscribed = true;
-    conn.full = !summary;
     conn.outbox = Some(outbox);
-    if conn.full {
-        // The watcher is registered, so this connection receives the line.
-        conn.gate.attach();
-    }
     let Some(stream) = conn.writer.take() else {
         return;
     };
