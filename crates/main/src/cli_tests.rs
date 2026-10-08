@@ -157,6 +157,28 @@ fn extension_update_parses_an_optional_name() {
 }
 
 #[test]
+fn extension_test_parses_an_optional_path_and_rejects_extra_arguments() {
+    let Invocation::Run(Some(Commands::Extension(ExtensionCommands::Test { path }))) =
+        parse_from(["fiber", "extension", "test"])
+    else {
+        panic!("extension test without a path");
+    };
+    assert_eq!(path, None);
+
+    let Invocation::Run(Some(Commands::Extension(ExtensionCommands::Test { path }))) =
+        parse_from(["fiber", "extension", "test", "./package"])
+    else {
+        panic!("extension test with a path");
+    };
+    assert_eq!(path, Some(PathBuf::from("./package")));
+
+    let error = sentence(&["fiber", "extension", "test", "a", "b"]);
+    assert!(error.starts_with("Unexpected argument 'b'"), "{error}");
+    assert!(error.ends_with("Run `fiber --help` for usage."), "{error}");
+    assert_eq!(error.lines().count(), 1, "{error}");
+}
+
+#[test]
 fn approve_parses_an_optional_yes_and_nothing_else() {
     let Invocation::Run(Some(Commands::Approve(args))) = parse_from(["fiber", "approve"]) else {
         panic!("approve");
@@ -613,7 +635,7 @@ fn the_menu_lists_completion_under_fiber_itself() {
 fn extension_alone_is_a_one_line_usage_sentence() {
     assert_eq!(
         sentence(&["fiber", "extension"]),
-        "'fiber extension' requires a subcommand but one was not provided [subcommands: install, update, remove, list]. Run `fiber --help` for usage."
+        "'fiber extension' requires a subcommand but one was not provided [subcommands: install, update, remove, list, test]. Run `fiber --help` for usage."
     );
 }
 

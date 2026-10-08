@@ -70,7 +70,14 @@ struct RunOptions {
 }
 
 /// `fiber extension test [<path>]`: run every case in a package directory.
-pub fn extension_test(path: Option<&Path>, fiber: &Path) -> i32 {
+pub fn extension_test(path: Option<&Path>, fiber: Result<PathBuf, String>) -> i32 {
+    let fiber = match fiber {
+        Ok(fiber) => fiber,
+        Err(error) => {
+            writeln!(io::stderr().lock(), "fiber: {error}").unwrap_or(());
+            return 1;
+        }
+    };
     let options = RunOptions {
         clock: Arc::new(ProcessClock),
         timeouts: RunTimeouts::process(),
@@ -80,7 +87,7 @@ pub fn extension_test(path: Option<&Path>, fiber: &Path) -> i32 {
     };
     extension_test_with(
         path,
-        fiber,
+        &fiber,
         &options,
         &mut io::stdout().lock(),
         &mut io::stderr().lock(),

@@ -1001,6 +1001,7 @@ Extensions:
   extension update [<name>]         Update one extension, or every installed extension, to its newest tag
   extension remove <name>           Remove an extension, the dependencies nothing else uses, and their data
   extension list                    List installed extensions: name, version and commit
+  extension test [<path>]           Run an extension's test cases against the scripted provider
 
 Configuration:
   config get <key>                              Print the effective value and the layer it came from
@@ -1086,6 +1087,7 @@ fn help_for_every_command_matches_the_flag() {
         ("extension", "update"),
         ("extension", "remove"),
         ("extension", "list"),
+        ("extension", "test"),
         ("config", "get"),
         ("config", "set"),
     ] {
@@ -1126,6 +1128,10 @@ fn each_command_prints_its_own_help() {
         (
             "extension list",
             "List installed extensions: name, version and commit",
+        ),
+        (
+            "extension test",
+            "Run an extension's test cases against the scripted provider",
         ),
         ("version", "Print the version"),
         ("help", "Print this menu, or a command's help"),
