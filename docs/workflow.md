@@ -134,8 +134,9 @@ lands one commit. A pull request whose every changed file is a docs file, as
 "Selection" defines it, passes the check with a message saying so: the doc
 was wrong and the code was right, so no test can show the bug.
 
-A ticket whose defect is in test code, such as a flaky test, carries the
-`test-only` label, never `bug`. Its pull request states the root cause and
+A ticket whose defect is in test code, such as a flaky test, or in CI
+configuration (`.github/` or a script only CI runs), carries the `test-only`
+label, never `bug`. Its pull request states the root cause and
 the evidence that the fix holds, such as repeated runs under load, in place
 of a red commit. Once a `test-only` ticket's cause is confirmed to be in
 production code, it is a bug: the implementer relabels it `bug` and drops
