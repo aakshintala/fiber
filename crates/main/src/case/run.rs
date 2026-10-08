@@ -259,13 +259,7 @@ impl CaseRun {
             }
             let index = next.saturating_add(1);
             let duration = Duration::from_millis(entry.advance_ms);
-            let advanced = if entry.after.is_some() {
-                self.clock
-                    .advance_when_parked_after_event(duration, self.waits.advance)
-            } else {
-                self.clock.advance_when_parked(duration, self.waits.advance)
-            };
-            if let Err(reason) = advanced {
+            if let Err(reason) = self.clock.advance_when_parked(duration, self.waits.advance) {
                 failures.push(format!("clock advance[{index}]: {reason}"));
                 return false;
             }

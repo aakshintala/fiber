@@ -387,7 +387,7 @@ fn slow_script_fragments_need_one_advance_each() {
         {"after": {"kind": "assistant_message_delta", "nth": 2}, "advance_ms": 400}
     ]);
     let output = run_case(&setup, "mismatched-advance", &value);
-    assert_failure(&output, "would skip the only parked deadline");
+    assert_failure(&output, "no waiter parked");
     assert!(
         String::from_utf8_lossy(&output.stdout).contains("clock advance[2] was not reached"),
         "{}",

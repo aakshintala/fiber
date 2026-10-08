@@ -310,3 +310,41 @@ fn exiting_before_the_next_advance_names_that_advance() {
         ]
     );
 }
+
+#[test]
+fn a_missing_advance_fails_on_the_short_advance_wait() {
+    let (_root, log) = session_log(&[turn_completed()]);
+    let case = case_run(
+        vec![json!({"kind": "turn_completed"})],
+        vec![ClockAdvance {
+            after: Some(Selector {
+                kind: "turn_completed".to_owned(),
+                nth: 1,
+            }),
+            advance_ms: 200,
+        }],
+        Some(Selector {
+            kind: "turn_completed".to_owned(),
+            nth: 1,
+        }),
+    );
+    let driver = Arc::new(FakeDrive {
+        log: Arc::clone(&log),
+        close_calls: AtomicUsize::new(0),
+        exit_on_close: false,
+    });
+
+    let failures = case.drive(
+        driver.clone() as Arc<dyn contract::extension::Drive>,
+        log,
+        Arc::new(r#loop::TurnCancel::default()),
+    );
+
+    assert_eq!(driver.close_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(failures.len(), 2, "{failures:?}");
+    assert!(
+        failures[0].contains("clock advance[1]: no waiter parked"),
+        "{failures:?}"
+    );
+    assert_eq!(failures[1], "clock advance[1] was not reached");
+}
