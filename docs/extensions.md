@@ -252,8 +252,8 @@ string, one text part, or `{ content, details?, error = { code, message }?,
 control? }`, where `control` takes the fields any tool may set
 (`docs/tools.md`, "What a result carries"). A raised error fails the call
 `tool_error` with its message. When two extensions register one tool name,
-neither gets it, a `notice` names both, and configuration can rename one, as
-for commands ("Commands and screens").
+neither gets it, a `notice` names both, and configuration can leave one out
+(`extensions."<name>".tools.disabled`, `docs/configuration.md`).
 
 A tool, harness, search backend, hook or watcher registers before the
 session's tool set is fixed (`docs/prompt-cache.md`, "Tools"), which is why

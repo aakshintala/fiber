@@ -95,18 +95,18 @@ impl Tool for LuaTool {
 
     /// Runs `run`. A callback past its timeout fails `timeout`; any other
     /// failure, a raised error or a return that does not read, fails
-    /// `tool_error` (`docs/errors.md`).
-    fn run(
-        &self,
-        arguments: &Map<String, Value>,
-        _cancel: &dyn Cancel,
-        _emit: &dyn Emit,
-    ) -> Output {
-        let returned = self
-            .extension
-            .tool_run(&self.declared.name, Value::Object(arguments.clone()));
+    /// `tool_error` (`docs/errors.md`). A call `cancel` stopped returns no
+    /// content and no error, so the loop completes it `cancelled`
+    /// (`docs/tools.md`, "Cancellation").
+    fn run(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel, _emit: &dyn Emit) -> Output {
+        let returned = self.extension.tool_run(
+            &self.declared.name,
+            Value::Object(arguments.clone()),
+            cancel,
+        );
         let value = match returned {
-            Ok(value) => value,
+            Ok(Some(value)) => value,
+            Ok(None) => return Output::default(),
             Err(e @ Error::Timeout { .. }) => {
                 return failed_output(failure(ErrorCode::Timeout, e.to_string()));
             }

@@ -128,7 +128,9 @@ pub(crate) type Registered = (String, Arc<dyn Tool>, ToolDefinition);
 
 /// `tools`, each paired with who registered it, by name. A later tool of a
 /// name already taken replaces the earlier one, and each replacement is
-/// returned (`docs/architecture.md`, "Tool seam").
+/// returned (`docs/architecture.md`, "Tool seam"). No two extension tools
+/// in `tools` share a name: the extensions settle that before the list is
+/// built, and their tools come after the built-in and MCP tools.
 pub(crate) fn register(
     tools: Vec<(String, Arc<dyn Tool>)>,
 ) -> (BTreeMap<String, Registered>, Vec<ToolReplaced>) {

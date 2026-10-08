@@ -449,12 +449,12 @@ fn a_tool_call_completes_while_a_command_is_parked_on_an_ask() {
         "waited for the command to ask"
     );
     let quick = Arc::clone(&ext);
-    let ran = on_thread(move || quick.tool_run("quick", json!({})));
+    let ran = on_thread(move || quick.tool_run("quick", json!({}), &fakes::CancelToken::new()));
     assert_eq!(
         ran.recv_timeout(WAIT)
             .expect("the tool call ran while the command waited")
             .unwrap(),
-        json!("quick")
+        Some(json!("quick"))
     );
     assert_eq!(ext.hub.lock().asks.len(), 1, "the command still waits");
 }
@@ -470,7 +470,7 @@ fn a_hook_runs_to_completion_while_a_tool_call_is_parked() {
         )
     ));
     let holding = Arc::clone(&ext);
-    let _held = on_thread(move || holding.tool_run("hold", json!({})));
+    let _held = on_thread(move || holding.tool_run("hold", json!({}), &fakes::CancelToken::new()));
     accepted
         .recv_timeout(WAIT)
         .expect("waited for the tool call to reach the server");
@@ -508,7 +508,7 @@ fn a_spinning_tool_holds_the_extensions_hook_until_its_timeout() {
         clock.clone(),
     ));
     let spinning = Arc::clone(&ext);
-    let spun = on_thread(move || spinning.tool_run("spin", json!({})));
+    let spun = on_thread(move || spinning.tool_run("spin", json!({}), &fakes::CancelToken::new()));
     went.recv_timeout(WAIT)
         .expect("waited for the tool to spin");
     let hooked = Arc::clone(&ext);
@@ -537,4 +537,84 @@ fn a_spinning_tool_holds_the_extensions_hook_until_its_timeout() {
             .unwrap(),
         json!({"content": "hooked"})
     );
+}
+
+/// Clears the settle hook when it drops, so a failing test leaves none.
+struct SettleGuard;
+
+impl Drop for SettleGuard {
+    fn drop(&mut self) {
+        super::super::schedule::unpause_settle();
+    }
+}
+
+/// A cancel that lands before `host.exec` is admitted ends the call at once,
+/// with the clock never moved, and starts no run; the extension stays ready,
+/// so the next call of the tool runs to its result. The settle hook orders
+/// the cancel before admission, with no sleeps.
+#[test]
+fn a_cancel_before_exec_admission_ends_the_call_and_keeps_the_extension() {
+    let dir = fakes::TempDir::new("fiber-lua-tool");
+    let marker = dir.path().join("exec-started");
+    std::fs::write(
+        dir.path().join("init.lua"),
+        format!(
+            "fiber.tool(\"admit\", {})\n",
+            tool_spec(
+                5000,
+                &format!(
+                    "function() host.exec(\"sh\", {{ \"-c\", \"touch '{}'\" }}) return \"ran\" end",
+                    marker.display()
+                )
+            )
+        ),
+    )
+    .unwrap();
+    let ext = Arc::new(LuaExtension::new(
+        "fiber.test/t",
+        dir.path(),
+        "/nonexistent-fiber-home",
+        FakeClock::new(),
+    ));
+    let cancel = fakes::CancelToken::new();
+    let fired = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    super::super::schedule::pause_settle({
+        let ext = Arc::clone(&ext);
+        let cancel = cancel.clone();
+        Arc::new(move |target: &Target| {
+            if matches!(target, Target::Tool(name) if name == "admit")
+                && !fired.swap(true, Ordering::SeqCst)
+            {
+                cancel.cancel();
+                assert!(
+                    until(&ext, |shared| !shared.cancelled.is_empty()),
+                    "waited for the cancel to mark the call"
+                );
+            }
+        })
+    });
+    let _guard = SettleGuard;
+    let cancelled = {
+        let ext = Arc::clone(&ext);
+        let cancel = cancel.clone();
+        on_thread(move || ext.tool_run("admit", json!({}), &cancel))
+    };
+    assert!(
+        cancelled
+            .recv_timeout(WAIT)
+            .expect("the cancelled call returned without the clock moving")
+            .unwrap()
+            .is_none(),
+        "the call ends cancelled"
+    );
+    assert!(!marker.exists(), "no run starts for a cancelled call");
+    let again = Arc::clone(&ext);
+    let ran = on_thread(move || again.tool_run("admit", json!({}), &fakes::CancelToken::new()));
+    assert_eq!(
+        ran.recv_timeout(WAIT)
+            .expect("the next call ran: the extension stayed ready")
+            .unwrap(),
+        Some(json!("ran"))
+    );
+    assert!(marker.exists(), "the next call's run started");
 }

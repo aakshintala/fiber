@@ -10,6 +10,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::sync::mpsc::Sender;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -173,10 +174,28 @@ pub(super) fn serve(hub: Arc<Hub>, start: Start) {
 /// extension is stopped.
 fn next(name: &str, hub: &Hub, parked: &mut Vec<Parked>) -> Option<Work> {
     let mut shared = hub.lock();
+    // Nothing runs here: an interrupt raised for the callback that just
+    // ended must not stop the next one.
+    shared.interrupt.store(false, Ordering::SeqCst);
     loop {
         let now = hub.clock().now();
         if !matches!(shared.phase, Phase::Ready(_)) {
             return None;
+        }
+        if let Some(pos) = parked.iter().position(|p| shared.cancelled.contains(&p.id)) {
+            // A cancelled callback goes, and its host call with it. The call
+            // ends once no admitted `host.exec` run is going; a run still
+            // going ends it when it delivers.
+            let p = parked.swap_remove(pos);
+            let unsent = p.ask.as_ref().and_then(|request| shared.decline(request));
+            if !shared.exec_pending(p.id) {
+                shared.end_cancelled(p.id);
+            }
+            hub.notify();
+            drop(p);
+            drop(shared);
+            drop(unsent);
+            return Some(Work::Collect);
         }
         if let Some(pos) = parked.iter().position(|p| expired(p.deadline, now)) {
             let p = parked.swap_remove(pos);
@@ -207,7 +226,11 @@ fn next(name: &str, hub: &Hub, parked: &mut Vec<Parked>) -> Option<Work> {
         });
         if let Some((id, reply)) = due {
             let Some(pos) = parked.iter().position(|p| p.id == id) else {
-                // The callback is gone. Dropping its reply frees a lock in it.
+                // The callback is gone. Dropping its reply frees a lock in
+                // it. A cancelled `host.exec` run ends its call here.
+                if shared.end_cancelled(id) {
+                    hub.notify();
+                }
                 continue;
             };
             let p = parked.swap_remove(pos);
@@ -321,13 +344,23 @@ fn settle(
             request,
         }) => (thread, target, deadline, timeout, request),
     };
+    #[cfg(test)]
+    settle_hook(&target);
+    // Read before the admission lock below takes it.
+    let driver = hub.driver();
+    // Every host call is admitted here: a stopped extension, whose callback
+    // may still run on an abandoned thread, or a cancelled call starts
+    // nothing. Work that spawns starts under this lock hold; the rest drops
+    // it first and is stopped with its parked callback.
+    let Some(mut shared) = hub.admit(id) else {
+        return;
+    };
     let deliver: Deliver = {
         let hub = Arc::clone(hub);
         Arc::new(move |reply| hub.deliver(id, reply))
     };
     let (cancel, wake) = match request {
         Request::Ask(interaction) => {
-            let mut shared = hub.lock();
             if !shared.answerable || shared.sealed || shared.disposed {
                 // nobody_to_answer_returns_declined_at_once: as headless
                 // approvals write no request.
@@ -371,7 +404,7 @@ fn settle(
             (None, None)
         }
         Request::Drive(request) => {
-            match hub.driver() {
+            match driver {
                 Some(driver) => {
                     // The door runs the command elsewhere, as `host.http`
                     // does: a driven `prompt` carrying an image blocks on
@@ -391,13 +424,12 @@ fn settle(
                         _cancel: None,
                         ask: None,
                     });
-                    if let Some(progress) = hub.lock().calls.get_mut(&id) {
+                    if let Some(progress) = shared.calls.get_mut(&id) {
                         *progress = Progress::Started {
                             deadline,
                             parked: true,
                         };
                     }
-                    hub.notify();
                     let answered = Arc::clone(hub);
                     let extension = name.to_owned();
                     let command = request.command;
@@ -424,6 +456,7 @@ fn settle(
                         // The spawn failed after the park: drop exactly the
                         // callback just parked, so nothing later resumes it.
                         take_parked(parked, id);
+                        drop(shared);
                         return hub.finish(
                             id,
                             Err(Error::Io {
@@ -432,11 +465,14 @@ fn settle(
                             }),
                         );
                     }
+                    drop(shared);
+                    hub.notify();
                     return;
                 }
                 None => {
                     // drive_without_a_driver_is_closing: only a sealed
                     // extension sees this; it raises `closing`.
+                    drop(shared);
                     deliver(Reply::Drive(Err((
                         contract::ErrorCode::Closing,
                         "host.drive: the session is closing".to_owned(),
@@ -447,12 +483,31 @@ fn settle(
         }
         Request::Http(request) => {
             if let Some(script) = hub.host_script() {
+                drop(shared);
                 deliver(Reply::Http(script.http(request.case_value())));
             } else {
+                parked.push(Parked {
+                    id,
+                    thread,
+                    target: target.clone(),
+                    deadline,
+                    timeout,
+                    wake: None,
+                    _cancel: None,
+                    ask: None,
+                });
+                if let Some(progress) = shared.calls.get_mut(&id) {
+                    *progress = Progress::Started {
+                        deadline,
+                        parked: true,
+                    };
+                }
                 let spawned = thread::Builder::new()
                     .name(format!("http {name}"))
                     .spawn(move || deliver(Reply::Http(host::perform(&request))));
                 if let Err(source) = spawned {
+                    take_parked(parked, id);
+                    drop(shared);
                     return hub.finish(
                         id,
                         Err(Error::Io {
@@ -461,10 +516,16 @@ fn settle(
                         }),
                     );
                 }
+                drop(shared);
+                hub.notify();
+                return;
             }
             (None, None)
         }
-        Request::Callback { port } => (oauth::listen(port, &deliver), None),
+        Request::Callback { port } => {
+            drop(shared);
+            (oauth::listen(port, &deliver), None)
+        }
         Request::Exec(request) => {
             let hub_exec = Arc::clone(hub);
             // A run inside a tool call is what the call's declared effects
@@ -477,6 +538,7 @@ fn settle(
                 cwd: request.cwd.clone(),
             });
             if let Some(script) = hub.host_script() {
+                drop(shared);
                 let result = script.exec(request.case_value()).map(|reply| {
                     let ran = exec::Ran {
                         exit_code: Some(reply.code),
@@ -491,13 +553,35 @@ fn settle(
                 deliver(Reply::Exec(result));
                 (None, None)
             } else {
-                let (cancel_tx, cancel_rx) = std::sync::mpsc::channel::<()>();
+                // The stop sender stays in the hub, so the stop reaches the
+                // run without the Lua thread, and the run's end clears it.
+                let cancel_rx = shared.register_exec(id);
+                parked.push(Parked {
+                    id,
+                    thread,
+                    target: target.clone(),
+                    deadline,
+                    timeout,
+                    wake: None,
+                    _cancel: None,
+                    ask: None,
+                });
+                if let Some(progress) = shared.calls.get_mut(&id) {
+                    *progress = Progress::Started {
+                        deadline,
+                        parked: true,
+                    };
+                }
                 let clock = hub.clock_handle();
                 let spawned =
                     thread::Builder::new()
                         .name(format!("exec {name}"))
                         .spawn(move || {
                             let outcome = exec::run(&request, clock.as_ref(), deadline, cancel_rx);
+                            // The group is empty or killed and drained past
+                            // here: a cancelled call may return only now.
+                            hub_exec.lock().finish_exec(id);
+                            hub_exec.notify();
                             match &outcome {
                                 Ok(ran) => send_exec(&hub_exec, meta.as_ref(), ran),
                                 Err(failed) => {
@@ -512,6 +596,9 @@ fn settle(
                             });
                         });
                 if let Err(source) = spawned {
+                    take_parked(parked, id);
+                    shared.finish_exec(id);
+                    drop(shared);
                     return hub.finish(
                         id,
                         Err(Error::Io {
@@ -520,10 +607,13 @@ fn settle(
                         }),
                     );
                 }
-                (Some(cancel_tx), None)
+                drop(shared);
+                hub.notify();
+                return;
             }
         }
         Request::Lock => {
+            drop(shared);
             // A command, hook, timer or tool holds no provider credential: calling
             // `refresh` there is an error in the calling code, raised as
             // a string.
@@ -566,8 +656,11 @@ fn settle(
             };
             (cancel, None)
         }
-        // Past the end of time is no sleep.
-        Request::Sleep(d) => (None, hub.clock().now().checked_add(d)),
+        Request::Sleep(d) => {
+            drop(shared);
+            // Past the end of time is no sleep.
+            (None, hub.clock().now().checked_add(d))
+        }
     };
     parked.push(Parked {
         id,
@@ -586,6 +679,44 @@ fn settle(
         };
     }
     hub.notify();
+}
+
+/// What a test pauses `settle` with: called with the suspending target.
+#[cfg(test)]
+type SettleHook = Arc<dyn Fn(&Target) + Send + Sync>;
+
+/// A test's pause inside `settle`, after the callback suspended and before
+/// its host work is admitted: it runs without the hub lock, so the test may
+/// abandon the VM or cancel the call there, without sleeps. The hook sees
+/// only calls for the tool it names; every other call passes through.
+#[cfg(test)]
+static SETTLE_HOOK: std::sync::Mutex<Option<SettleHook>> = std::sync::Mutex::new(None);
+
+/// Runs `hook` at each `settle` admission point from now on.
+#[cfg(test)]
+pub(super) fn pause_settle(hook: SettleHook) {
+    *SETTLE_HOOK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(hook);
+}
+
+/// Stops pausing at each `settle` admission point.
+#[cfg(test)]
+pub(super) fn unpause_settle() {
+    *SETTLE_HOOK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+}
+
+#[cfg(test)]
+fn settle_hook(target: &Target) {
+    let hook = SETTLE_HOOK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    if let Some(hook) = hook {
+        hook(target);
+    }
 }
 
 /// Drops the parked callback `id`, when it is still parked, and reports

@@ -7,17 +7,22 @@
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::rc::Rc;
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::atomic::Ordering;
+use std::sync::{Arc, MutexGuard};
+use std::time::{Duration, Instant};
 
+use contract::clock::Wake;
+use contract::inbox::Delivery;
 use contract::shapes::{DeclaredEffects, Effect};
+use contract::tool::Cancel;
 use mlua::{Function, Lua, Table, Value as LuaValue};
 use serde_json::Value;
 
 use crate::extension_tools::LuaTool;
 use crate::{Error, host};
 
-use super::{LuaExtension, Target};
+use super::hub::{Hub, Progress};
+use super::{LuaExtension, Next, Phase, Shared, Target};
 
 /// The longest tool name a provider accepts (`docs/mcp.md`, "Tools and
 /// their names").
@@ -267,10 +272,202 @@ impl LuaExtension {
     }
 
     /// Runs the `run` function of the tool `name` on `args` and returns what
-    /// it returned, under the tool's timeout. It runs in the gaps of the
-    /// extension's ordered stream, as a provider function does.
-    pub(crate) fn tool_run(&self, name: &str, args: Value) -> Result<Value, Error> {
-        self.call(Target::Tool(name.to_owned()), args)
+    /// it returned, under the tool's timeout, or `None` once `cancel`
+    /// stopped it (`docs/tools.md`, "Cancellation"). It runs in the gaps of
+    /// the extension's ordered stream, as a provider function does. A
+    /// cancelled call that has not started never runs; one that suspends on
+    /// a host call starts no host work and ends there; one parked on a host
+    /// call is dropped, and one parked on `host.exec` returns only once the
+    /// run has stopped; one running Lua is stopped by the deadline hook, or
+    /// abandoned with the VM past its grace.
+    pub(crate) fn tool_run(
+        &self,
+        name: &str,
+        args: Value,
+        cancel: &dyn Cancel,
+    ) -> Result<Option<Value>, Error> {
+        let target = Target::Tool(name.to_owned());
+        // When Fiber asks, before it waits for the hub (`docs/extensions.md`).
+        let asked = self.hub.clock().now();
+        // Subscribed before anything is queued, and the signal is read
+        // after, so no cancel is missed.
+        let wake: Arc<dyn Wake> = Arc::clone(&self.hub) as Arc<dyn Wake>;
+        cancel.subscribe(Arc::downgrade(&wake));
+        let mut shared = self.hub.lock();
+        self.start(&mut shared)?;
+        let id = shared.push(target.clone(), args, asked);
+        self.hub.notify();
+        let mut cancelling = false;
+        loop {
+            if !cancelling && cancel.is_cancelled() {
+                cancelling = true;
+                shared.cancel_call(id);
+                self.hub.notify();
+            }
+            let now = self.hub.clock().now();
+            let (judged, unsent) = shared.judge_tool(&self.name, id, &target, asked, now);
+            let returned = match judged {
+                Some(Next::Sleep(until)) => {
+                    drop(unsent);
+                    shared = self.hub.wait(shared, until);
+                    continue;
+                }
+                Some(Next::Return(result)) => result.map(Some),
+                None => Ok(None),
+            };
+            self.hub.notify();
+            drop(shared);
+            drop(unsent);
+            return returned;
+        }
+    }
+}
+
+/// An admitted `host.exec` run: its stop sender, held until cancel, stop
+/// or completion, so the stop reaches the exec thread without the Lua thread.
+pub(super) struct ExecAdmit {
+    stop: Option<std::sync::mpsc::Sender<()>>,
+}
+
+impl ExecAdmit {
+    /// Drops the stop sender, so the stop reaches the exec thread without
+    /// the Lua thread running.
+    pub(super) fn stop_take(&mut self) {
+        self.stop.take();
+    }
+}
+
+impl Hub {
+    /// Admits the host work a suspended callback of the call `id` asks for,
+    /// and returns the lock the work starts under, so no stop or cancel lands
+    /// between the check and the start. A stopped extension admits nothing,
+    /// and `judge` ends its calls. A cancelled call admits nothing and ends
+    /// here, its waiter woken: the thread drops the callback, so nothing
+    /// else would end it.
+    pub(super) fn admit(&self, id: u64) -> Option<MutexGuard<'_, Shared>> {
+        let mut shared = self.lock();
+        if !matches!(shared.phase, Phase::Ready(_)) {
+            return None;
+        }
+        if shared.end_cancelled(id) {
+            self.notify();
+            return None;
+        }
+        Some(shared)
+    }
+}
+
+/// What a tool call's caller does next: as [`Shared::judge`] says, or
+/// `None` once the call was cancelled.
+type Judged = (Option<Next>, Vec<Delivery>);
+
+impl Shared {
+    /// Cancels the call `id`: a queued call is dropped and ends cancelled; a
+    /// started one is marked for the thread, and one running Lua is
+    /// interrupted. One that ended keeps how it ended. Dropping an admitted
+    /// exec's stop sender stops its run without the Lua thread.
+    pub(super) fn cancel_call(&mut self, id: u64) {
+        match self.calls.get(&id) {
+            Some(Progress::Queued) => {
+                self.queue.retain(|job| job.id != id);
+                self.calls.insert(id, Progress::Cancelled);
+            }
+            Some(Progress::Started { parked, .. }) => {
+                if !*parked {
+                    self.interrupt.store(true, Ordering::SeqCst);
+                }
+                self.cancelled.insert(id);
+                self.stop_exec(id);
+            }
+            Some(Progress::Done(_) | Progress::Cancelled) | None => {}
+        }
+    }
+
+    /// Registers an exec run for the call `id`, admitted by [`Hub::admit`]
+    /// under the same lock hold, and returns the stop receiver the run
+    /// watches.
+    pub(super) fn register_exec(&mut self, id: u64) -> std::sync::mpsc::Receiver<()> {
+        let (stop, rx) = std::sync::mpsc::channel::<()>();
+        self.execs.insert(id, ExecAdmit { stop: Some(stop) });
+        rx
+    }
+
+    /// Stops the admitted exec run of the call `id`, if any: the sender's
+    /// drop reaches the exec thread without the Lua thread running.
+    pub(super) fn stop_exec(&mut self, id: u64) {
+        if let Some(admit) = self.execs.get_mut(&id) {
+            admit.stop.take();
+        }
+    }
+
+    /// Ends the admitted exec run of the call `id`: its group is empty or
+    /// killed and drained, so a cancelled call may return.
+    pub(super) fn finish_exec(&mut self, id: u64) {
+        self.execs.remove(&id);
+    }
+
+    /// Whether the call `id` has an admitted exec run still going: its
+    /// group may still write, so a cancelled call must not return yet.
+    pub(super) fn exec_pending(&self, id: u64) -> bool {
+        self.execs.contains_key(&id)
+    }
+
+    /// Ends the call `id`, if it was cancelled, once its thread work has
+    /// stopped. Returns whether it was.
+    pub(super) fn end_cancelled(&mut self, id: u64) -> bool {
+        if !self.cancelled.remove(&id) {
+            return false;
+        }
+        if let Some(progress) = self.calls.get_mut(&id) {
+            *progress = Progress::Cancelled;
+        }
+        true
+    }
+
+    /// Judges the tool call `id` as [`Shared::judge`] does, except that a
+    /// cancelled call parked on a host call waits for the thread to stop
+    /// it, past its deadline too; one parked on `host.exec` waits for the
+    /// run's group to empty, even abandoned; and a cancelled call the
+    /// extension's end fails ends cancelled once no admitted run is going.
+    pub(super) fn judge_tool(
+        &mut self,
+        name: &str,
+        id: u64,
+        target: &Target,
+        asked: Instant,
+        now: Instant,
+    ) -> Judged {
+        // Before `judge`, which forgets a stopped call: an admitted run
+        // still going may still write, so the call waits for its end.
+        if self.exec_pending(id)
+            && self.cancelled.contains(&id)
+            && !matches!(self.phase, Phase::Ready(_))
+        {
+            return (Some(Next::Sleep(None)), Vec::new());
+        }
+        let cancelled = self.cancelled.contains(&id);
+        match self.calls.get(&id) {
+            Some(Progress::Cancelled) => {
+                self.calls.remove(&id);
+                return (None, Vec::new());
+            }
+            Some(Progress::Started { parked: true, .. })
+                if cancelled && matches!(self.phase, Phase::Ready(_)) =>
+            {
+                return (Some(Next::Sleep(None)), Vec::new());
+            }
+            _ => {}
+        }
+        match self.judge(name, id, target, asked, now) {
+            // The extension ended under a cancelled call: abandoned with
+            // it, or stopped before the thread dropped it.
+            (Next::Return(Err(_)), unsent)
+                if cancelled && !matches!(self.phase, Phase::Ready(_)) =>
+            {
+                (None, unsent)
+            }
+            (next, unsent) => (Some(next), unsent),
+        }
     }
 }
 

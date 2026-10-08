@@ -186,3 +186,100 @@ fn a_dotted_name_reads_its_own_keys() {
     assert_eq!(specs.specs.len(), 1);
     assert_eq!(specs.specs[0].name, "my.server");
 }
+
+/// A tool with only a name, for the session's tool list.
+struct Named(&'static str);
+
+impl contract::tool::Tool for Named {
+    fn definition(&self) -> contract::provider::ToolDefinition {
+        contract::provider::ToolDefinition {
+            name: self.0.to_owned(),
+            description: "d".to_owned(),
+            input_schema: json!({ "type": "object" }),
+            deferred: false,
+            hosted: None,
+        }
+    }
+
+    fn effects(
+        &self,
+        _arguments: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<contract::tool::Effects, contract::tool::EffectsError> {
+        Err(contract::tool::EffectsError::Tool("unused".to_owned()))
+    }
+
+    fn run(
+        &self,
+        _arguments: &serde_json::Map<String, serde_json::Value>,
+        _cancel: &dyn contract::tool::Cancel,
+        _emit: &dyn contract::emit::Emit,
+    ) -> contract::tool::Output {
+        contract::tool::Output::default()
+    }
+}
+
+fn pair(who: &str, name: &'static str) -> (String, std::sync::Arc<dyn contract::tool::Tool>) {
+    (who.to_owned(), std::sync::Arc::new(Named(name)))
+}
+
+fn row(name: &'static str, source: contract::events::ToolSource) -> contract::events::ToolInfo {
+    crate::builtin::info(&Named(name), source).unwrap()
+}
+
+#[test]
+fn extension_tools_follow_the_built_in_and_mcp_tools_and_replace_their_rows() {
+    use contract::events::ToolSource;
+    let mut tools = vec![
+        pair("builtin", "read"),
+        pair("builtin", "write"),
+        pair("docs", "search"),
+    ];
+    let mut infos = vec![
+        row("read", ToolSource::Builtin),
+        row(
+            "search",
+            ToolSource::Mcp {
+                server: "docs".to_owned(),
+            },
+        ),
+        row("write", ToolSource::Builtin),
+    ];
+    super::add_extension_tools(
+        &mut tools,
+        &mut infos,
+        vec![
+            pair("fiber.test/myread", "read"),
+            pair("fiber.test/notes", "note_count"),
+            pair("fiber.test/mysearch", "search"),
+        ],
+    )
+    .unwrap();
+    let who: Vec<(String, String)> = tools
+        .iter()
+        .map(|(who, tool)| (who.clone(), tool.definition().name))
+        .collect();
+    let expected: Vec<(String, String)> = [
+        ("builtin", "read"),
+        ("builtin", "write"),
+        ("docs", "search"),
+        ("fiber.test/myread", "read"),
+        ("fiber.test/notes", "note_count"),
+        ("fiber.test/mysearch", "search"),
+    ]
+    .iter()
+    .map(|(who, name)| ((*who).to_owned(), (*name).to_owned()))
+    .collect();
+    assert_eq!(who, expected);
+    let extension = |name: &str| ToolSource::Extension {
+        extension: name.to_owned(),
+    };
+    assert_eq!(
+        infos,
+        [
+            row("note_count", extension("fiber.test/notes")),
+            row("read", extension("fiber.test/myread")),
+            row("search", extension("fiber.test/mysearch")),
+            row("write", ToolSource::Builtin),
+        ]
+    );
+}

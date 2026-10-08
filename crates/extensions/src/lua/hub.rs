@@ -11,7 +11,7 @@
 //! running callback is still running a grace period past its own deadline.
 //! Dropping the extension stops it. Stopped is final.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -183,7 +183,7 @@ impl Hub {
 
     /// Hands the call `id`'s parked callback the answer to what it waits on.
     /// A stopped extension's thread takes no more replies, so the reply is
-    /// dropped, which releases a credential lock in it.
+    /// dropped, releasing a credential lock in it.
     pub(super) fn deliver(&self, id: u64, reply: Reply) {
         let mut shared = self.lock();
         if !matches!(shared.phase, Phase::Ready(_)) {
@@ -467,6 +467,14 @@ pub(crate) struct Shared {
     /// Timer ids whose Lua functions the extension's thread still frees.
     pub(crate) timer_cleanup: Vec<u64>,
     next_id: u64,
+    /// Started calls whose caller cancelled them (`docs/tools.md`,
+    /// "Cancellation"), until the thread ends them.
+    pub(super) cancelled: HashSet<u64>,
+    /// Admitted `host.exec` runs by call id, until each group is empty or killed and drained.
+    pub(super) execs: HashMap<u64, super::tool::ExecAdmit>,
+    /// Raised into running Lua by the deadline hook while a cancelled call
+    /// runs; set and cleared only under this lock.
+    pub(super) interrupt: Arc<std::sync::atomic::AtomicBool>,
     /// The next timer's id, assigned in set order from 0.
     pub(crate) next_timer: u64,
 }
@@ -512,6 +520,8 @@ pub(super) enum Progress {
         parked: bool,
     },
     Done(Result<Value, Error>),
+    /// Cancelled before it returned: it ran no further.
+    Cancelled,
 }
 
 pub(super) struct Job {
@@ -659,8 +669,8 @@ impl Shared {
             });
         }
         let gate = match &self.phase {
-            // A caller starts the thread before it waits, so no thread is
-            // coming: failing beats waiting forever.
+            // No thread is coming: a caller starts the thread before it
+            // waits, so failing beats waiting forever.
             Phase::Idle => Gate::Stopped(stopped(name)),
             Phase::Registering { abandon_at } => Gate::Wait(*abandon_at),
             Phase::Ready(timeouts) => Gate::Ready(timeouts),
@@ -725,10 +735,7 @@ impl Shared {
             // Queued or parked, not on the thread: failing it leaves the VM up.
             return (Next::Return(Err(timed_out(name, target, timeout))), unsent);
         }
-        // debt: the abandoned thread is leaked, still running, until the
-        // process exits, and a credential lock its VM holds with it; Rust
-        // cannot stop a thread. Cap abandoned VMs per session if leaked
-        // threads or locks show (docs/performance.md).
+        // debt: as in `gate`, the abandoned thread leaks until the process exits.
         unsent = self.stop(stopped(name));
         (
             Next::Return(Err(Error::Abandoned {
@@ -739,21 +746,28 @@ impl Shared {
         )
     }
 
-    /// Records `result` for the call `id`, if its caller still waits.
+    /// Records `result` for the call `id`, if its caller still waits. A
+    /// cancelled call that failed ends cancelled.
     pub(super) fn finish(&mut self, id: u64, result: Result<Value, Error>) {
+        let stopped = self.cancelled.remove(&id) && result.is_err();
         if let Some(progress) = self.calls.get_mut(&id) {
-            *progress = Progress::Done(result);
+            *progress = if stopped {
+                Progress::Cancelled
+            } else {
+                Progress::Done(result)
+            };
         }
     }
 
     /// Stops the extension with `e`. The replies no thread will take are
-    /// dropped, which releases a credential lock in one. Every held ask is
-    /// declined by `fiber`, routed in the same critical section; returns
-    /// what could not be sent, for the caller to drop after the hub lock
-    /// is released.
+    /// dropped, which releases a credential lock in one. Admitted exec runs
+    /// stop without the Lua thread: their sender's drop reaches the run.
+    /// Every held ask is declined by `fiber` in the same critical section;
+    /// returns what could not be sent, for the caller to drop afterwards.
     pub(super) fn stop(&mut self, e: Error) -> Vec<Delivery> {
         self.phase = Phase::Stopped(e);
         self.replies.clear();
+        self.execs.values_mut().for_each(|admit| admit.stop_take());
         // stop_declines_every_held_ask: one `Resolved` per held ask.
         let held: Vec<RequestId> = self.asks.keys().cloned().collect();
         let mut unsent = Vec::new();
@@ -766,6 +780,7 @@ impl Shared {
     /// Drops the call `id`: its caller has stopped waiting.
     fn forget(&mut self, id: u64) {
         self.calls.remove(&id);
+        self.cancelled.remove(&id);
         self.queue.retain(|job| job.id != id);
     }
 }

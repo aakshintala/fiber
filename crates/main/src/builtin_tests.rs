@@ -600,3 +600,25 @@ fn every_builtin_schema_keeps_to_the_documented_subset() {
     }
     assert!(found.is_empty(), "outside the subset: {found:?}");
 }
+
+/// The names an extension must list in `replaces` are exactly the names
+/// `builtin` can register: `web_search` included whether or not the
+/// model hosts a search.
+#[test]
+fn built_in_tools_is_every_name_builtin_registers() {
+    let names = |web_search| {
+        let (definitions, _) = registered_with(web_search);
+        let mut names: Vec<String> = definitions.into_iter().map(|(name, _)| name).collect();
+        names.sort();
+        names
+    };
+    let listed: Vec<String> = contract::tool::BUILT_IN_TOOLS
+        .iter()
+        .map(|name| (*name).to_owned())
+        .collect();
+    assert_eq!(names(Some("web_search_20250305")), listed);
+    let mut without = names(None);
+    without.push("web_search".to_owned());
+    without.sort();
+    assert_eq!(without, listed);
+}

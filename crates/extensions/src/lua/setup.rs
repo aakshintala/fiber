@@ -7,6 +7,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use contract::clock::Clock;
@@ -123,11 +124,14 @@ pub(super) fn message(e: &mlua::Error) -> String {
 /// The hook looks at the clock every `CHECK_EVERY` instructions. Once the
 /// deadline passes it raises a timeout and re-arms its coroutine to raise one
 /// on every instruction, so a `pcall` that catches the first cannot run on
-/// (`research/extension-runtime/pass1/`, `interrupt_escalate`).
+/// (`research/extension-runtime/pass1/`, `interrupt_escalate`). A raised
+/// interrupt stops the running callback the same way, for a cancel
+/// (`docs/tools.md`, "Cancellation").
 #[derive(Clone)]
 pub(crate) struct Deadline {
     at: Rc<Cell<Option<Instant>>>,
     clock: Arc<dyn Clock>,
+    interrupt: Arc<AtomicBool>,
 }
 
 impl Deadline {
@@ -135,7 +139,15 @@ impl Deadline {
         Self {
             at: Rc::default(),
             clock,
+            interrupt: Arc::default(),
         }
+    }
+
+    /// Stops the running callback whenever `interrupt` is raised, as at its
+    /// deadline.
+    pub(super) fn with_interrupt(mut self, interrupt: Arc<AtomicBool>) -> Self {
+        self.interrupt = interrupt;
+        self
     }
 
     /// The deadline the hook stops at, if one is set.
@@ -148,9 +160,10 @@ impl Deadline {
         self.at.set(at);
     }
 
-    /// Whether the deadline has passed.
+    /// Whether the deadline has passed or the interrupt is raised.
     pub(super) fn passed(&self) -> bool {
-        self.at.get().is_some_and(|at| self.clock.now() >= at)
+        self.interrupt.load(Ordering::SeqCst)
+            || self.at.get().is_some_and(|at| self.clock.now() >= at)
     }
 
     /// Arms `thread` so the hook stops it at this deadline.

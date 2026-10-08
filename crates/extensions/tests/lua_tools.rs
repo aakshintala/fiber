@@ -8,19 +8,24 @@
     reason = "test code"
 )]
 
+mod common;
+
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::net::TcpListener;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
+use common::{Setup, install, manifest, write};
+use config::{Config, ProjectKey, Sources};
 use contract::ErrorCode;
 use contract::clock::Clock;
+use contract::hook::Hooks;
 use contract::inbox::Delivery;
 use contract::shapes::{ContentPart, DeclaredEffects, Effect};
 use contract::tool::{Effects, EffectsError, Output, Tool};
-use extensions::{LuaExtension, LuaTool};
+use extensions::{LuaExtension, LuaTool, SessionExtensions};
 use fakes::clock::FakeClock;
 use fakes::{CancelToken, Recorder};
 use serde_json::{Map, Value, json};
@@ -637,4 +642,600 @@ fiber.tool("refresh", {
         message.contains("a tool has no provider credential"),
         "{message}"
     );
+}
+
+// Settling names across a session's extensions (`docs/extensions.md`,
+// "What a package holds" and "Registering").
+
+struct NoLock;
+
+impl contract::files::PathLock for NoLock {
+    fn hold(&self, _path: &Path, run: &mut dyn FnMut()) {
+        run();
+    }
+
+    fn hold_all(&self, _paths: &[PathBuf], run: &mut dyn FnMut()) {
+        run();
+    }
+}
+
+/// Installs `fiber.test/<short>` with the entry script `init`, listing
+/// `replaces` in its manifest.
+fn installed(setup: &Setup, short: &str, replaces: &[&str], init: &str) {
+    let mut listed = manifest(&format!("fiber.test/{short}"));
+    if let Value::Object(fields) = &mut listed {
+        fields.insert("replaces".to_owned(), json!(replaces));
+    }
+    let source = setup.source(short, &listed, &[]);
+    write(&source.join("init.lua"), init);
+    install(&setup.home(), &source, "0.1.0").unwrap();
+}
+
+/// The session's extensions, loaded on a thread under `WAIT`.
+fn session(setup: &Setup) -> Arc<SessionExtensions> {
+    let config = Config::load(Sources {
+        home: setup.home(),
+        workspace: setup.workspace(),
+        project: ProjectKey::new("p").unwrap(),
+        overrides: Vec::new(),
+    })
+    .unwrap();
+    let home = setup.home();
+    let loaded = fakes::within("the extensions to load", WAIT, move || {
+        let locks: Arc<dyn contract::files::PathLock> = Arc::new(NoLock);
+        SessionExtensions::load(&home, &config, FakeClock::new(), locks, None)
+    });
+    Arc::new(loaded)
+}
+
+/// Each declared tool as `(extension, tool)`.
+fn declared(session: &SessionExtensions) -> Vec<(String, String)> {
+    session
+        .tools()
+        .iter()
+        .map(|(extension, tool)| (extension.clone(), tool.definition().name))
+        .collect()
+}
+
+fn loaded(session: &SessionExtensions) -> Vec<String> {
+    session.loaded().into_iter().map(|ext| ext.name).collect()
+}
+
+/// A tool `name` returning `said`, as a line of Lua.
+fn tool_line(name: &str, said: &str) -> String {
+    format!(
+        r#"fiber.tool("{name}", {{ description = "d", input_schema = {{ type = "object" }}, effects = {{ effects = {{ "reads" }}, reversible = true }}, timeout = 1000, run = function() return "{said}" end }})
+"#
+    )
+}
+
+const HOOK_AND_COMMAND: &str = r#"
+fiber.hook("after_tool", { timeout = 1000, on_failure = "non-blocking", run = function() return nil end })
+fiber.command("mine", { timeout = 1000, run = function() return "" end })
+"#;
+
+#[test]
+fn a_declared_replacement_of_read_is_declared_with_its_extension() {
+    let setup = Setup::new();
+    installed(&setup, "myread", &["read"], &tool_line("read", "mine"));
+    let session = session(&setup);
+    assert_eq!(
+        declared(&session),
+        [("fiber.test/myread".to_owned(), "read".to_owned())]
+    );
+    assert_eq!(session.notices(), []);
+}
+
+#[test]
+fn an_undeclared_replacement_of_read_unloads_the_extension_and_all_it_registered() {
+    let setup = Setup::new();
+    installed(
+        &setup,
+        "myread",
+        &[],
+        &format!("{}{HOOK_AND_COMMAND}", tool_line("read", "mine")),
+    );
+    let session = session(&setup);
+    assert!(declared(&session).is_empty());
+    assert!(loaded(&session).is_empty());
+    assert!(!session.has_hooks());
+    assert!(session.commands().is_empty());
+    let notices = session.notices();
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0].code, ErrorCode::ExtensionFailed);
+    assert_eq!(
+        notices[0].message,
+        "Tool `read` replaces a built-in tool its manifest does not list in `replaces`; `fiber.test/myread` is not loaded."
+    );
+    assert_eq!(notices[0].extension.as_deref(), Some("fiber.test/myread"));
+}
+
+#[test]
+fn two_extensions_registering_one_tool_lose_it_and_keep_their_others() {
+    let setup = Setup::new();
+    installed(
+        &setup,
+        "a",
+        &[],
+        &format!("{}{}", tool_line("dup", "a"), tool_line("only_a", "a")),
+    );
+    installed(
+        &setup,
+        "b",
+        &[],
+        &format!("{}{}", tool_line("dup", "b"), tool_line("only_b", "b")),
+    );
+    let session = session(&setup);
+    assert_eq!(
+        declared(&session),
+        [
+            ("fiber.test/a".to_owned(), "only_a".to_owned()),
+            ("fiber.test/b".to_owned(), "only_b".to_owned())
+        ]
+    );
+    assert_eq!(loaded(&session), ["fiber.test/a", "fiber.test/b"]);
+    let notices = session.notices();
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(
+        notices[0].message,
+        "Extensions `fiber.test/a` and `fiber.test/b` both register the tool `dup`, so neither gets it."
+    );
+    assert_eq!(notices[0].extension, None);
+}
+
+#[test]
+fn an_extension_with_only_tools_stays_loaded_and_delivers() {
+    let setup = Setup::new();
+    installed(
+        &setup,
+        "only",
+        &[],
+        r#"
+fiber.tool("probe", {
+  description = "d", input_schema = { type = "object" }, timeout = 5000,
+  effects = function() host.exec("sh", { "-c", "exit 4" }) return { effects = { "reads" }, reversible = true } end,
+  run = function() return "" end,
+})
+"#,
+    );
+    let session = session(&setup);
+    let (tx, inbox) = mpsc::channel();
+    session.deliver_to(tx);
+    let tools = session.tools();
+    let (_, probe) = tools.first().expect("the tool is declared");
+    let probe = Arc::clone(probe);
+    fakes::within("the effects call", WAIT, move || probe.effects(&Map::new()))
+        .expect("the effects function ran");
+    match inbox.recv_timeout(WAIT) {
+        Ok(Delivery::ExtensionExec(exec)) => assert_eq!(exec.process.exit_code, Some(4)),
+        other => panic!("expected the effects function's extension_exec, got {other:?}"),
+    }
+}
+
+// Cancellation (`docs/tools.md`, "Cancellation"): a cancelled call returns
+// no content and no error only once it can change nothing more.
+
+/// Runs `tool` with no arguments on its own thread, cancelled by `cancel`.
+fn run_cancellable(tool: &Arc<LuaTool>, cancel: &CancelToken) -> mpsc::Receiver<Output> {
+    let (tx, rx) = mpsc::channel();
+    let tool = Arc::clone(tool);
+    let cancel = cancel.clone();
+    std::thread::spawn(move || {
+        let output = tool.run(&Map::new(), &cancel, &Recorder::default());
+        match tx.send(output) {
+            Ok(()) | Err(mpsc::SendError(_)) => {}
+        }
+    });
+    rx
+}
+
+/// What a cancelled call returns.
+fn cancelled() -> Output {
+    Output::default()
+}
+
+/// Waits `bound` for nothing: a bounded receive on a channel no one sends on.
+fn pause(bound: Duration) {
+    let (_keep, never) = mpsc::channel::<()>();
+    assert!(never.recv_timeout(bound).is_err());
+}
+
+#[test]
+fn a_queued_call_cancelled_before_it_starts_never_runs() {
+    let dir = fakes::TempDir::new("fiber-lua-tools");
+    let clock = FakeClock::new();
+    let ext = extension(
+        dir.path(),
+        "queue",
+        r#"
+local calls = 0
+fiber.tool("spin", {
+  description = "d", input_schema = { type = "object" },
+  effects = { effects = {}, reversible = true }, timeout = 100,
+  run = function() require("go_spin") while true do end end,
+})
+fiber.tool("count", {
+  description = "d", input_schema = { type = "object" },
+  effects = { effects = {}, reversible = true }, timeout = 60000,
+  run = function() calls = calls + 1 return tostring(calls) end,
+})
+"#,
+        clock.clone(),
+    );
+    let went = go_module(dir.path(), "spin");
+    let tools = by_name(&ext);
+    let spinning = run(&tools["spin"], json!({}));
+    went.recv_timeout(WAIT).expect("waited for spin to start");
+    // The thread spins, so this call stays queued.
+    let cancel = CancelToken::new();
+    let queued = run_cancellable(&tools["count"], &cancel);
+    cancel.cancel();
+    assert_eq!(ran(&queued), cancelled());
+    clock.advance(Duration::from_millis(100));
+    assert_eq!(failed(&ran(&spinning)).0, ErrorCode::Timeout);
+    assert_eq!(text(&ran(&run(&tools["count"], json!({})))), "1");
+}
+
+#[test]
+fn a_call_parked_on_a_host_call_is_cancelled_without_the_clock_moving() {
+    let dir = fakes::TempDir::new("fiber-lua-tools");
+    let held = hold("late");
+    let ext = extension(
+        dir.path(),
+        "parked",
+        &format!(
+            r#"
+local calls = 0
+fiber.tool("wait", {{
+  description = "d", input_schema = {{ type = "object" }},
+  effects = {{ effects = {{}}, reversible = true }}, timeout = 60000,
+  run = function()
+    calls = calls + 1
+    if calls == 1 then return host.http({{ url = "{}" }}).body end
+    return "again"
+  end,
+}})
+"#,
+            held.url
+        ),
+        FakeClock::new(),
+    );
+    let tools = by_name(&ext);
+    let cancel = CancelToken::new();
+    let first = run_cancellable(&tools["wait"], &cancel);
+    held.accepted
+        .recv_timeout(WAIT)
+        .expect("waited for the request to reach the server");
+    cancel.cancel();
+    assert_eq!(ran(&first), cancelled());
+    assert_eq!(text(&ran(&run(&tools["wait"], json!({})))), "again");
+}
+
+#[test]
+fn a_call_spinning_in_lua_is_cancelled_before_its_timeout() {
+    let dir = fakes::TempDir::new("fiber-lua-tools");
+    let ext = extension(
+        dir.path(),
+        "spin",
+        r#"
+local calls = 0
+fiber.tool("spin", {
+  description = "d", input_schema = { type = "object" },
+  effects = { effects = {}, reversible = true }, timeout = 60000,
+  run = function()
+    calls = calls + 1
+    if calls == 1 then require("go_spin") while true do end end
+    return "again"
+  end,
+})
+"#,
+        FakeClock::new(),
+    );
+    let went = go_module(dir.path(), "spin");
+    let tools = by_name(&ext);
+    let cancel = CancelToken::new();
+    let first = run_cancellable(&tools["spin"], &cancel);
+    went.recv_timeout(WAIT).expect("waited for spin to start");
+    cancel.cancel();
+    assert_eq!(ran(&first), cancelled());
+    // The interrupt is cleared: the next call runs to its own result.
+    assert_eq!(text(&ran(&run(&tools["spin"], json!({})))), "again");
+}
+
+/// An extension whose tool `exec` runs `script` through `sh`, with the
+/// ready FIFO's path as `$0`, the first time, and returns `again` after.
+fn exec_extension(dir: &Path, script: &str, ready: &Path) -> Arc<LuaExtension> {
+    extension(
+        dir,
+        "exec",
+        &format!(
+            r#"
+local calls = 0
+fiber.tool("exec", {{
+  description = "d", input_schema = {{ type = "object" }},
+  effects = {{ effects = {{ "executes" }}, reversible = false }}, timeout = 60000,
+  run = function()
+    calls = calls + 1
+    if calls == 1 then host.exec("sh", {{ "-c", {script:?}, {ready:?} }}) end
+    return "again"
+  end,
+}})
+"#,
+            ready = ready.display().to_string(),
+        ),
+        FakeClock::new(),
+    )
+}
+
+#[test]
+fn a_call_parked_on_exec_returns_once_its_group_is_empty() {
+    let dir = fakes::TempDir::new("fiber-lua-tools");
+    let ready = fakes::children::Ready::new(dir.path());
+    let ext = exec_extension(dir.path(), r#"echo $$ > "$0"; exec sleep 60"#, ready.path());
+    let tools = by_name(&ext);
+    let cancel = CancelToken::new();
+    let first = run_cancellable(&tools["exec"], &cancel);
+    let group = ready.wait(WAIT)[0];
+    let watchdog = fakes::Watchdog::group(group);
+    cancel.cancel();
+    assert_eq!(ran(&first), cancelled());
+    assert!(
+        !fakes::kill_group(group, "0").unwrap(),
+        "the group is empty when the call returns"
+    );
+    watchdog.stand_down(WAIT);
+    assert_eq!(text(&ran(&run(&tools["exec"], json!({})))), "again");
+}
+
+#[test]
+fn a_cancelled_exec_that_ignores_sigterm_returns_only_after_the_kill() {
+    let dir = fakes::TempDir::new("fiber-lua-tools");
+    let ready = fakes::children::Ready::new(dir.path());
+    let out = dir.path().join("out");
+    let clock = FakeClock::new();
+    let ext = extension(
+        dir.path(),
+        "exec",
+        &format!(
+            r#"
+fiber.tool("exec", {{
+  description = "d", input_schema = {{ type = "object" }},
+  effects = {{ effects = {{ "executes" }}, reversible = false }}, timeout = 500,
+  run = function()
+    host.exec("sh", {{ "-c", {script:?}, {ready:?}, {out:?} }})
+    return "ran"
+  end,
+}})
+"#,
+            script =
+                r#"trap 'echo $$ >> "$0"' TERM; echo $$ > "$0"; while :; do echo x >> "$1"; done"#,
+            ready = ready.path().display().to_string(),
+            out = out.display().to_string(),
+        ),
+        clock.clone(),
+    );
+    let tools = by_name(&ext);
+    let cancel = CancelToken::new();
+    let first = run_cancellable(&tools["exec"], &cancel);
+    let group = ready.wait(WAIT)[0];
+    let watchdog = fakes::Watchdog::group(group);
+    cancel.cancel();
+    // The trap's line: SIGTERM arrived and the group runs on.
+    ready.wait(WAIT);
+    assert!(
+        first.recv_timeout(Duration::from_millis(200)).is_err(),
+        "the call returned while its group still ran"
+    );
+    // Past the SIGKILL 800 ms after the SIGTERM, and past the call's 500 ms
+    // deadline and its grace: a cancelled call waits for its run, not its
+    // deadline.
+    clock.advance(Duration::from_millis(500) + GRACE);
+    assert_eq!(ran(&first), cancelled());
+    assert!(
+        !fakes::kill_group(group, "0").unwrap(),
+        "the group is empty when the call returns"
+    );
+    let len = || std::fs::metadata(&out).unwrap().len();
+    let before = len();
+    pause(Duration::from_millis(100));
+    assert_eq!(len(), before, "nothing writes after the call returned");
+    watchdog.stand_down(WAIT);
+}
+
+#[test]
+fn a_cancelled_call_the_hook_cannot_stop_ends_with_the_vm_abandoned() {
+    let dir = fakes::TempDir::new("fiber-lua-tools");
+    let clock = FakeClock::new();
+    let ext = extension(
+        dir.path(),
+        "stuck",
+        r#"
+fiber.tool("find", {
+  description = "d", input_schema = { type = "object" },
+  effects = { effects = {}, reversible = true }, timeout = 50,
+  run = function()
+    require("go_find")
+    string.find(string.rep("a", 100000), "a*a*a*a*b")
+    host.exec("sh", { "-c", "exit 0" })
+    return "found"
+  end,
+})
+fiber.tool("other", {
+  description = "d", input_schema = { type = "object" },
+  effects = { effects = {}, reversible = true }, timeout = 50,
+  run = function() return "other" end,
+})
+"#,
+        clock.clone(),
+    );
+    let (tx, inbox) = mpsc::channel();
+    ext.deliver_to(tx);
+    let went = go_module(dir.path(), "find");
+    let tools = by_name(&ext);
+    let asked = clock.now();
+    let cancel = CancelToken::new();
+    let first = run_cancellable(&tools["find"], &cancel);
+    went.recv_timeout(WAIT)
+        .expect("waited for the callback to pass its clock check");
+    cancel.cancel();
+    let abandon_at = asked + Duration::from_millis(50) + GRACE;
+    assert!(
+        clock.await_parked(abandon_at, WAIT),
+        "waited for the caller to park at the grace"
+    );
+    clock.advance(Duration::from_millis(50) + GRACE);
+    assert_eq!(ran(&first), cancelled());
+    let later = ran(&run(&tools["other"], json!({})));
+    assert_eq!(
+        failed(&later),
+        (
+            ErrorCode::ToolError,
+            "`fiber.test/stuck` is stopped and takes no more calls.".to_owned()
+        )
+    );
+    assert!(matches!(inbox.try_recv(), Err(mpsc::TryRecvError::Empty)));
+}
+
+#[test]
+fn a_cancelled_parked_call_ends_when_a_stuck_call_abandons_the_vm() {
+    let dir = fakes::TempDir::new("fiber-lua-tools");
+    let clock = FakeClock::new();
+    let held = hold("late");
+    let ext = extension(
+        dir.path(),
+        "stuck",
+        &format!(
+            r#"
+fiber.tool("wait", {{
+  description = "d", input_schema = {{ type = "object" }},
+  effects = {{ effects = {{}}, reversible = true }}, timeout = 60000,
+  run = function() return host.http({{ url = "{}" }}).body end,
+}})
+fiber.tool("find", {{
+  description = "d", input_schema = {{ type = "object" }},
+  effects = {{ effects = {{}}, reversible = true }}, timeout = 50,
+  run = function()
+    require("go_find")
+    string.find(string.rep("a", 100000), "a*a*a*a*b")
+  end,
+}})
+"#,
+            held.url
+        ),
+        clock.clone(),
+    );
+    let went = go_module(dir.path(), "find");
+    let tools = by_name(&ext);
+    let cancel = CancelToken::new();
+    let waiting = run_cancellable(&tools["wait"], &cancel);
+    held.accepted
+        .recv_timeout(WAIT)
+        .expect("waited for the request to reach the server");
+    let asked = clock.now();
+    let stuck = run(&tools["find"], json!({}));
+    went.recv_timeout(WAIT)
+        .expect("waited for the stuck callback to pass its clock check");
+    // The thread is stuck in a C call, so it never drops the parked call.
+    cancel.cancel();
+    assert!(
+        waiting.recv_timeout(Duration::from_millis(200)).is_err(),
+        "the parked call returned before the thread dropped it"
+    );
+    let abandon_at = asked + Duration::from_millis(50) + GRACE;
+    assert!(
+        clock.await_parked(abandon_at, WAIT),
+        "waited for the stuck call's caller to park at the grace"
+    );
+    clock.advance(Duration::from_millis(50) + GRACE);
+    assert_eq!(failed(&ran(&stuck)).0, ErrorCode::ToolError);
+    assert_eq!(ran(&waiting), cancelled());
+}
+
+#[test]
+fn a_cancelled_exec_abandoned_with_the_vm_returns_only_once_its_group_is_empty() {
+    let dir = fakes::TempDir::new("fiber-lua-tools");
+    let ready = fakes::children::Ready::new(dir.path());
+    let out = dir.path().join("out");
+    let clock = FakeClock::new();
+    let ext = extension(
+        dir.path(),
+        "stuckexec",
+        &format!(
+            r#"
+fiber.tool("exec", {{
+  description = "d", input_schema = {{ type = "object" }},
+  effects = {{ effects = {{ "executes" }}, reversible = false }}, timeout = 60000,
+  run = function()
+    host.exec("sh", {{ "-c", {script:?}, {ready:?}, {out:?} }})
+    return "ran"
+  end,
+}})
+fiber.tool("find", {{
+  description = "d", input_schema = {{ type = "object" }},
+  effects = {{ effects = {{}}, reversible = true }}, timeout = 50,
+  run = function()
+    require("go_find")
+    string.find(string.rep("a", 100000), "a*a*a*a*b")
+  end,
+}})
+"#,
+            script =
+                r#"trap 'echo $$ >> "$0"' TERM; echo $$ > "$0"; while :; do echo x >> "$1"; done"#,
+            ready = ready.path().display().to_string(),
+            out = out.display().to_string(),
+        ),
+        clock.clone(),
+    );
+    let went = go_module(dir.path(), "find");
+    let tools = by_name(&ext);
+    let cancel = CancelToken::new();
+    let first = run_cancellable(&tools["exec"], &cancel);
+    let group = ready.wait(WAIT)[0];
+    let watchdog = fakes::Watchdog::group(group);
+    let asked = clock.now();
+    let stuck = run(&tools["find"], json!({}));
+    went.recv_timeout(WAIT)
+        .expect("waited for the stuck callback to pass its clock check");
+    // The stop's SIGKILL bound anchors at the cancel, so the cancel lands
+    // 300 ms into the stuck call's 50 ms timeout plus grace: the abandon
+    // below does not cross the 800 ms bound early.
+    clock.advance(Duration::from_millis(300));
+    // The thread is stuck in a C call, so it never drops the parked call.
+    cancel.cancel();
+    assert!(
+        first.recv_timeout(Duration::from_millis(200)).is_err(),
+        "the parked call returned before the abandon"
+    );
+    let abandon_at = asked + Duration::from_millis(50) + GRACE;
+    assert!(
+        clock.await_parked(abandon_at, WAIT),
+        "waited for the stuck call's caller to park at the grace"
+    );
+    clock.advance(Duration::from_millis(750));
+    assert_eq!(failed(&ran(&stuck)).0, ErrorCode::ToolError);
+    // Abandoned with the VM: the call is still going while its group runs.
+    assert!(
+        first.try_recv().is_err(),
+        "the call returned at the abandon while its group still ran"
+    );
+    // The stop reached the run without the Lua thread: SIGTERM arrived,
+    // and the group runs on past it.
+    ready.wait(WAIT);
+    assert!(
+        first.recv_timeout(Duration::from_millis(200)).is_err(),
+        "the call returned while its group still ran"
+    );
+    // Past the SIGKILL 800 ms after the SIGTERM: the group is killed and
+    // drained before the call returns.
+    clock.advance(Duration::from_millis(800));
+    assert_eq!(ran(&first), cancelled());
+    assert!(
+        !fakes::kill_group(group, "0").unwrap(),
+        "the group is empty when the call returns"
+    );
+    let len = || std::fs::metadata(&out).unwrap().len();
+    let before = len();
+    pause(Duration::from_millis(100));
+    assert_eq!(len(), before, "nothing writes after the call returned");
+    watchdog.stand_down(WAIT);
 }
