@@ -233,7 +233,7 @@ impl App {
             TargetId::Link { .. } => self.link_text(id),
             TargetId::Token(number) => self.draft.token_text(number).map(str::to_owned),
             TargetId::Notice(id) => self.notices.text(id).map(str::to_owned),
-            TargetId::FindResult(at) => self.result_line(at),
+            TargetId::FindResult(at) => self.find.result_line(at),
             TargetId::FindCount => None,
             TargetId::Steering(at) => self.steering.text(at).map(str::to_owned),
             TargetId::Turn(at) => self.turn_text(at),

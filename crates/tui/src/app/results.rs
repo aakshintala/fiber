@@ -220,11 +220,6 @@ impl App {
         self.close_results();
         self.reveal_current();
     }
-
-    /// The results view's selected entry's line, for a focused entry.
-    pub(super) fn result_line(&self, at: usize) -> Option<String> {
-        self.find.result_line(at)
-    }
 }
 
 #[cfg(test)]
