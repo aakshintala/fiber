@@ -63,7 +63,7 @@ impl Gate {
 /// first touch with one 2 MiB huge page: the idle terminal measured 2 MiB
 /// more in about half its runs. A stack under 2 MiB cannot hold such a
 /// span. The threads read, parse one line and send, so 1 MiB is ample.
-const STACK: usize = 2_097_152;
+const STACK: usize = 1_048_576;
 
 /// A builder for the terminal thread `name`, with [`STACK`].
 pub(crate) fn builder(name: &str) -> thread::Builder {
