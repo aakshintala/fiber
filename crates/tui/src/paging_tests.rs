@@ -1994,3 +1994,55 @@ fn force_open_never_closes() {
     // Nothing holds the login line here.
     assert!(!pages.force_open(&Target::Login));
 }
+
+#[test]
+fn a_keyless_group_is_drawn_as_is_on_a_search_draw() {
+    // A group with no key has no target, cannot be opened by a click, and
+    // draws as it is on a search draw: a match there would be one nothing
+    // could reveal (`docs/tui.md`, "Search").
+    let mut page = part();
+    for (kind, action, payload) in [
+        (
+            "turn_started",
+            None,
+            json!({"input": [{"type": "message", "source": "driver",
+                "content": [{"type": "text", "text": "hi"}]}]}),
+        ),
+        ("reasoning_started", Some("a_r"), json!({})),
+        (
+            "reasoning_completed",
+            Some("a_r"),
+            json!({"text": "hidden keyless words"}),
+        ),
+        (
+            "tool_call_requested",
+            Some("a_t"),
+            json!({"name": "read", "arguments": {"path": "src/a.rs"}}),
+        ),
+        (
+            "tool_call_completed",
+            Some("a_t"),
+            json!({"status": "completed", "content": [{"type": "text", "text": "ok"}]}),
+        ),
+        ("text_completed", Some("a_m"), json!({"text": "reply"})),
+        ("turn_completed", None, json!({"outcome": "completed"})),
+    ] {
+        fold(&mut page, &envelope(kind, action, payload));
+    }
+    for card in &mut page.turns {
+        for group in card.groups_mut() {
+            group.key = None;
+            group.open = false;
+        }
+    }
+    let pages = Pages::new(80);
+    let (shown, _, _, _) = pages.draw_data(0, &page, Draw::Shown);
+    let (all, _, _, _) = pages.draw_data(0, &page, Draw::AllOpen);
+    assert_eq!(drawn_texts(&shown), drawn_texts(&all));
+    assert!(
+        drawn_texts(&all)
+            .iter()
+            .all(|line| !line.contains("hidden keyless")),
+        "a keyless ledger draws on a search draw"
+    );
+}

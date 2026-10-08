@@ -191,3 +191,61 @@ fn hover_tints_a_link() {
     assert!(underlined, "the link underlines");
     insta::assert_snapshot!("hover_tints_a_link", hover_shown(&app, 60, 10, at));
 }
+
+/// The screen's text, then a mask: `m` where a match is marked, `c` where
+/// the current match is brighter, `.` elsewhere.
+fn marked(app: &App, width: u16, height: u16) -> String {
+    use super::{CURRENT, MATCH};
+    let (buf, _) = draw(app, width, height);
+    let current = CURRENT.bg.unwrap_or_default();
+    let matched = MATCH.bg.unwrap_or_default();
+    let mut mask = String::new();
+    for y in 0..height {
+        for x in 0..width {
+            let bg = buf.cell((x, y)).map(|cell| cell.bg).unwrap_or_default();
+            mask.push(if bg == current {
+                'c'
+            } else if bg == matched {
+                'm'
+            } else {
+                '.'
+            });
+        }
+        mask.push('\n');
+    }
+    format!("{}\n---\n{mask}", super::super::text(&buf))
+}
+
+/// Opens the bar, types `query` and starts the scan: resident pages only.
+fn search(app: &mut App, query: &str) {
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::CtrlF, now), Effect::None);
+    let mut generation = 0u64;
+    for ch in query.chars() {
+        generation += 1;
+        assert!(
+            matches!(app.on_key(Key::Char(ch), now), Effect::FindPause { .. }),
+            "typing {ch:?}"
+        );
+    }
+    assert!(app.find_due(generation).is_empty());
+}
+
+#[test]
+fn marks_on_a_match_wrapped_over_two_rows() {
+    let mut app = replied(40, 12, &format!("{} brown fox jumps", "x".repeat(33)));
+    search(&mut app, "brown fox");
+    insta::assert_snapshot!(
+        "marks_on_a_match_wrapped_over_two_rows",
+        marked(&app, 40, 12)
+    );
+}
+
+#[test]
+fn the_current_match_is_brighter() {
+    let mut app = replied(40, 12, "needle one\n\nneedle two");
+    search(&mut app, "needle");
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Enter, now), Effect::None);
+    insta::assert_snapshot!("the_current_match_is_brighter", marked(&app, 40, 12));
+}

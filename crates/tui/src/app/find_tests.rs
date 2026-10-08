@@ -733,14 +733,28 @@ fn a_match_in_a_closed_section_counts_from_its_section_line() {
         &mut seq,
         "reasoning_started",
         json!({}),
-        Some("a_r"),
+        Some("a_r1"),
     ));
     app.on_line(numbered(
         &mut log,
         &mut seq,
         "reasoning_completed",
-        json!({"text": "weigh it\nneedle hidden"}),
-        Some("a_r"),
+        json!({"text": "weigh it\nneedle one"}),
+        Some("a_r1"),
+    ));
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "reasoning_started",
+        json!({}),
+        Some("a_r2"),
+    ));
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "reasoning_completed",
+        json!({"text": "weigh it\nneedle two"}),
+        Some("a_r2"),
     ));
     app.on_line(numbered(
         &mut log,
@@ -758,20 +772,31 @@ fn a_match_in_a_closed_section_counts_from_its_section_line() {
     ));
     let ranges = search_all(&mut app, &log, "needle");
     assert!(ranges.is_empty());
-    assert_eq!(count(&app), "1 of 1");
+    assert_eq!(count(&app), "1 of 2");
     let current = app.find.current.clone().expect("a current match");
     assert!(!current.anchor.scopes.is_empty(), "no section named");
-    let (row, hidden) = app.current_place(&current).expect("a row");
-    assert!(hidden, "a closed section's match shows as hidden");
-    // Its row is the section's own line.
+    // Becoming current expands its section: the first thought shows.
     let (rows, _) = app.pages().page_text(0).expect("the resident page");
-    let section = rows
-        .iter()
-        .position(|(_, target)| {
-            target.is_some_and(|target| current.anchor.scopes.contains(&target))
-        })
-        .expect("the section line");
-    assert_eq!(row, section);
+    assert!(
+        rows.iter()
+            .any(|(line, _)| line.to_string().contains("needle one")),
+        "the section did not expand"
+    );
+    // The other thought stays closed: its match counts from its own
+    // line, hidden until it becomes current.
+    let other = app
+        .find
+        .matches
+        .get(&0)
+        .and_then(|list| list.get(1))
+        .expect("two matches");
+    let (row, hidden) = app.current_place(other).expect("a row");
+    assert!(hidden, "a closed section's match shows as visible");
+    let (line, _) = rows.get(row).expect("the section line");
+    assert!(
+        line.to_string().contains("Thought"),
+        "not the section's own line: {line}"
+    );
 }
 
 /// A two-page app with `needle` on its dropped first page: the fetch for
@@ -1348,4 +1373,402 @@ fn matches_stay_in_page_then_render_order_after_rescans() {
     let mut ordered = flat.clone();
     ordered.sort();
     assert_eq!(flat, ordered, "page order, then render order");
+}
+
+/// An app with three `needle` replies on one page.
+fn three_matches() -> (App, Vec<contract::Envelope>) {
+    let mut app = attached(40, 10);
+    let mut log = Vec::new();
+    let mut seq = 0u64;
+    text_turn(
+        &mut log,
+        &mut seq,
+        &mut app,
+        &["needle one", "needle two", "needle three"],
+    );
+    (app, log)
+}
+
+#[test]
+fn enter_and_down_move_to_the_next_match_and_wrap() {
+    let (mut app, log) = three_matches();
+    search_all(&mut app, &log, "needle");
+    assert_eq!(count(&app), "1 of 3");
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(count(&app), "2 of 3");
+    assert_eq!(current_text(&app).as_deref(), Some("needle two"));
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(count(&app), "3 of 3");
+    assert_eq!(current_text(&app).as_deref(), Some("needle three"));
+    // Wraps past the end.
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(count(&app), "1 of 3");
+    assert_eq!(current_text(&app).as_deref(), Some("needle one"));
+}
+
+#[test]
+fn up_and_shift_enter_move_back_and_wrap() {
+    let (mut app, log) = three_matches();
+    search_all(&mut app, &log, "needle");
+    assert_eq!(count(&app), "1 of 3");
+    // Wraps back from the first.
+    assert_eq!(app.on_key(Key::Up, now()), Effect::None);
+    assert_eq!(count(&app), "3 of 3");
+    assert_eq!(current_text(&app).as_deref(), Some("needle three"));
+    assert_eq!(app.on_edit(Edit::ShiftEnter), Effect::None);
+    assert_eq!(count(&app), "2 of 3");
+    assert_eq!(current_text(&app).as_deref(), Some("needle two"));
+}
+
+#[test]
+fn the_count_reads_3_of_41() {
+    let mut app = attached(40, 10);
+    let mut log = Vec::new();
+    let mut seq = 0u64;
+    let needles: Vec<String> = (0..41).map(|n| format!("needle {n}")).collect();
+    let refs: Vec<&str> = needles.iter().map(String::as_str).collect();
+    for chunk in refs.chunks(10) {
+        text_turn(&mut log, &mut seq, &mut app, chunk);
+    }
+    let ranges = search_all(&mut app, &log, "needle");
+    assert!(ranges.is_empty());
+    let index: usize = count(&app)
+        .split(' ')
+        .next()
+        .and_then(|first| first.parse().ok())
+        .expect("an index");
+    assert!(count(&app).ends_with(" of 41"));
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(count(&app), format!("{} of 41", index + 2));
+}
+
+#[test]
+fn the_count_shows_scanning_and_incomplete() {
+    let mut app = attached(40, 10);
+    let mut log = Vec::new();
+    let mut seq = 0u64;
+    text_turn(&mut log, &mut seq, &mut app, &["nothing here"]);
+    for turn in 0..34 {
+        let filler: Vec<String> = (0..4).map(|line| format!("filler {turn} {line}")).collect();
+        let refs: Vec<&str> = filler.iter().map(String::as_str).collect();
+        text_turn(&mut log, &mut seq, &mut app, &refs);
+    }
+    assert!(app.pages().page_count() > 2);
+    assert_eq!(app.on_key(Key::CtrlF, now()), Effect::None);
+    let mut generation = 0u64;
+    for ch in "needle".chars() {
+        generation += 1;
+        assert_eq!(
+            app.on_key(Key::Char(ch), now()),
+            Effect::FindPause {
+                generation,
+                after: FIND_PAUSE,
+            }
+        );
+    }
+    let mut outgoing = app.find_due(generation);
+    outgoing.extend(app.find_outgoing());
+    assert_eq!(outgoing.len(), 1);
+    assert_eq!(count(&app), "…");
+    // Its answer rejected: incomplete, while the next page still scans.
+    let (id, _, _) = command(&outgoing[0]);
+    let rejected = Line::Session(contract::Envelope {
+        kind: "command_rejected".to_owned(),
+        session_id: contract::SessionId(SESSION.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: serde_json::json!({"command_id": id, "message": "gone"})
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+    });
+    let outgoing = app.on_line(rejected);
+    assert_eq!(outgoing.len(), 1, "the next page still scans");
+    assert_eq!(count(&app), "… · incomplete");
+}
+
+#[test]
+fn a_match_in_a_closed_ledger_expands_it_when_current() {
+    let mut app = attached(40, 10);
+    let mut log = Vec::new();
+    let mut seq = 0u64;
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "turn_started",
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "go"}]}]}),
+        None,
+    ));
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "reasoning_started",
+        json!({}),
+        Some("a_r"),
+    ));
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "reasoning_completed",
+        json!({"text": "weigh it\nneedle here"}),
+        Some("a_r"),
+    ));
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "text_completed",
+        json!({"text": "reply"}),
+        Some("a_m"),
+    ));
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "turn_completed",
+        json!({"outcome": "completed"}),
+        None,
+    ));
+    let ranges = search_all(&mut app, &log, "needle");
+    assert!(ranges.is_empty());
+    assert_eq!(count(&app), "1 of 1");
+    let (rows, _) = app.pages().page_text(0).expect("the resident page");
+    assert!(
+        rows.iter()
+            .any(|(line, _)| line.to_string().contains("needle here")),
+        "the ledger did not expand"
+    );
+}
+
+#[test]
+fn a_match_in_a_closed_call_detail_opens_its_group_and_call() {
+    let mut app = attached(40, 10);
+    let mut log = Vec::new();
+    let mut seq = 0u64;
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "turn_started",
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "go"}]}]}),
+        None,
+    ));
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "tool_call_requested",
+        json!({"name": "read", "arguments": {"path": "src/a.rs"}}),
+        Some("a_t"),
+    ));
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "tool_call_completed",
+        json!({"status": "completed", "content": [{"type": "text", "text": "needle inside detail"}]}),
+        Some("a_t"),
+    ));
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "text_completed",
+        json!({"text": "reply"}),
+        Some("a_m"),
+    ));
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "turn_completed",
+        json!({"outcome": "completed"}),
+        None,
+    ));
+    let ranges = search_all(&mut app, &log, "needle");
+    assert!(ranges.is_empty());
+    // The match sits inside the group and the call: both open, outermost
+    // first, and stay open.
+    let current = app.find.current.clone().expect("a current match");
+    assert_eq!(current.anchor.scopes.len(), 2);
+    let (rows, _) = app.pages().page_text(0).expect("the resident page");
+    let texts: Vec<String> = rows.iter().map(|(line, _)| line.to_string()).collect();
+    assert!(
+        texts.iter().any(|line| line.contains("read")),
+        "the group did not open"
+    );
+    assert!(
+        texts
+            .iter()
+            .any(|line| line.contains("needle inside detail")),
+        "the call did not open: {texts:?}"
+    );
+}
+
+#[test]
+fn an_expansion_clears_the_selection() {
+    let mut app = attached(40, 10);
+    let mut log = Vec::new();
+    let mut seq = 0u64;
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "turn_started",
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "go"}]}]}),
+        None,
+    ));
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "reasoning_started",
+        json!({}),
+        Some("a_r"),
+    ));
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "reasoning_completed",
+        json!({"text": "weigh it\nneedle here"}),
+        Some("a_r"),
+    ));
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "text_completed",
+        json!({"text": "reply words"}),
+        Some("a_m"),
+    ));
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "turn_completed",
+        json!({"outcome": "completed"}),
+        None,
+    ));
+    let at = find(&app, "reply");
+    assert_eq!(
+        report(&mut app, MouseKind::Press(Button::Left), at),
+        Effect::None
+    );
+    assert_eq!(
+        report(&mut app, MouseKind::Drag(Button::Left), (at.0 + 2, at.1)),
+        Effect::None
+    );
+    assert!(app.select.span().is_some());
+    search_all(&mut app, &log, "needle");
+    assert!(
+        app.select.span().is_none(),
+        "the expansion clears the selection"
+    );
+}
+
+#[test]
+fn revealing_scrolls_only_when_the_match_is_not_shown() {
+    let mut app = attached(40, 10);
+    let mut log = Vec::new();
+    let mut seq = 0u64;
+    let mut replies = vec!["filler", "filler", "filler", "filler", "needle five"];
+    replies.extend((0..22).map(|_| "filler"));
+    replies.push("needle far");
+    let refs: Vec<&str> = replies.clone();
+    text_turn(&mut log, &mut seq, &mut app, &refs);
+    app.jump(2);
+    assert_eq!(app.top(), Some(2));
+    search_all(&mut app, &log, "needle");
+    // The first match shows: no scroll.
+    assert_eq!(current_text(&app).as_deref(), Some("needle five"));
+    assert_eq!(app.top(), Some(2));
+    // The next does not: the view scrolls to it.
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(current_text(&app).as_deref(), Some("needle far"));
+    let (rows, _) = app.pages().page_text(0).expect("the resident page");
+    let at = rows
+        .iter()
+        .position(|(line, _)| line.to_string().contains("needle far"))
+        .expect("the far match");
+    let (top, _) = app.scroll();
+    let height = app.conversation_height();
+    assert_ne!(top, 2);
+    assert!((top..top.saturating_add(height)).contains(&at));
+}
+
+#[test]
+fn revealing_a_match_on_a_dropped_page_loads_it_in_the_same_step() {
+    let (mut app, log, fetch) = dropped_fetch();
+    let (id, from, to) = command(&fetch);
+    app.on_line(hub_answer(&id, &log, from, to));
+    // The reveal already scrolled while answering: the dropped page is
+    // what the frame needs next.
+    let start = app.pages().index().start(0);
+    assert_eq!(app.top(), Some(start));
+    let first = log.first().and_then(|line| line.seq).expect("a first seq");
+    assert!(app.needs().iter().any(|range| range.contains(&first)));
+}
+
+#[test]
+fn an_approval_takes_typing_and_esc_over_the_bar() {
+    let mut app = attached(40, 10);
+    search(&mut app, "ab");
+    // A request opens the approval panel over the bar.
+    app.on_line(request("a_1", "r_1"));
+    assert!(app.panel().is_some());
+    assert_eq!(app.on_key(Key::Char('x'), now()), Effect::None);
+    assert_eq!(query(&app), "ab", "typing reaches the approval first");
+    // Esc puts the approval aside; the bar stays open with its query.
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert!(app.panel().is_none());
+    assert_eq!(query(&app), "ab");
+}
+
+#[test]
+fn ctrl_f_opens_the_bar_while_an_approval_waits() {
+    let mut app = attached(40, 10);
+    app.on_line(request("a_1", "r_1"));
+    assert!(app.panel().is_some());
+    assert_eq!(app.on_key(Key::CtrlF, now()), Effect::None);
+    assert!(app.find_bar().is_some());
+}
+
+#[test]
+fn the_ctrl_r_panel_takes_typing_over_the_bar() {
+    let mut app = attached(40, 10);
+    search(&mut app, "");
+    app.open_search();
+    assert!(app.search_panel().is_some());
+    assert_eq!(app.on_key(Key::Char('x'), now()), Effect::None);
+    assert_eq!(query(&app), "");
+    let panel = app.search_panel().expect("the panel keeps typing");
+    assert!(panel.lines.first().is_some_and(|line| line.ends_with('x')));
+}
+
+#[test]
+fn esc_closes_the_notice_overlay_then_the_bar_then_the_selection() {
+    let mut app = replied(40, 10, "hello there");
+    search(&mut app, "hell");
+    let at = find(&app, "hello");
+    assert_eq!(
+        report(&mut app, MouseKind::Press(Button::Left), at),
+        Effect::None
+    );
+    assert_eq!(
+        report(&mut app, MouseKind::Drag(Button::Left), (at.0 + 2, at.1)),
+        Effect::None
+    );
+    assert!(app.select.span().is_some());
+    app.notices.push("first".to_owned());
+    app.notices.push("second".to_owned());
+    app.open_more_notices();
+    assert!(app.notice_overlay().is_some());
+    // The overlay first, the bar and the selection staying.
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert!(app.notice_overlay().is_none());
+    assert!(app.find_bar().is_some());
+    assert!(app.select.span().is_some());
+    // Then the bar, the selection staying.
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert!(app.find_bar().is_none());
+    assert!(app.select.span().is_some());
+    // Then the selection.
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert!(app.select.span().is_none());
 }

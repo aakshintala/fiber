@@ -319,6 +319,19 @@ fn line_hash(text: &str) -> u64 {
     hasher.finish()
 }
 
+/// The chars a match covers: each one's page row and its byte offset in
+/// that row's drawn text. A char the draw dropped, like the space a soft
+/// wrap took, covers nothing.
+fn hit_chars(line: &Logical, hit: &Range<usize>) -> Vec<(usize, usize)> {
+    line.text
+        .chars()
+        .zip(&line.from)
+        .enumerate()
+        .filter(|(at, _)| hit.contains(at))
+        .filter_map(|(_, (_, from))| *from)
+        .collect()
+}
+
 /// A shown line's identity to its conversation rows, in order, and each
 /// drawn section target to its own line's row.
 type Placed = (
@@ -457,9 +470,6 @@ impl App {
             // The view's keys scroll on with the bar open.
             Key::PageUp | Key::PageDown => None,
             Key::Backspace
-            | Key::Enter
-            | Key::Up
-            | Key::Down
             | Key::End
             | Key::Tab
             | Key::BackTab
@@ -475,6 +485,16 @@ impl App {
             | Key::AltP
             | Key::AltR
             | Key::AltDigit(_) => Some(Effect::None),
+            // Between matches, wrapping at either end (`docs/tui.md`,
+            // "Search").
+            Key::Enter | Key::Down => {
+                self.find_next();
+                Some(Effect::None)
+            }
+            Key::Up => {
+                self.find_prev();
+                Some(Effect::None)
+            }
         }
     }
 
@@ -515,12 +535,89 @@ impl App {
         })
     }
 
-    /// The match marks on screen: none until the scan lands.
+    /// The match marks on screen, each with whether it is the current
+    /// match: every occurrence of the query in every shown logical line
+    /// as drawn, the current one brighter (`docs/tui.md`, "Search").
+    /// With no query, no scan or no matches this costs one check
+    /// (`docs/tui.md`, "Performance").
     pub(crate) fn find_marks(
         &self,
-        _area: ratatui::layout::Rect,
+        area: ratatui::layout::Rect,
     ) -> Vec<(ratatui::layout::Rect, bool)> {
-        Vec::new()
+        if !self.find.open || !self.find.due || self.find.query.is_empty() || self.find.total == 0 {
+            return Vec::new();
+        }
+        let pages = self.screen.pages();
+        let width = pages.wrap_width();
+        let (top, y0, _) = self.view_rows(area);
+        let height = usize::from(area.height);
+        let mut out = Vec::new();
+        for at in 0..pages.page_count() {
+            let Some((rows, texts)) = pages.page_text(at) else {
+                continue;
+            };
+            let start = pages.index().start(at);
+            if start >= top.saturating_add(height) {
+                break;
+            }
+            let offsets = row_offsets(&rows, width);
+            let end = start.saturating_add(offsets.last().copied().unwrap_or(0));
+            if end < top {
+                continue;
+            }
+            // The placed cells of the rows holding matches, each placed
+            // once however many of its chars match.
+            let mut placed: HashMap<usize, Vec<crate::cells::Placed>> = HashMap::new();
+            for line in logical::logical(&rows, &texts) {
+                let hash = line_hash(&line.text);
+                let len = line.text.chars().count();
+                for hit in logical::matches(&line.text, &self.find.query) {
+                    let anchor = Anchor {
+                        page: at,
+                        scopes: line.scopes.clone(),
+                        line_hash: hash,
+                        line_len: len,
+                        at: hit.clone(),
+                    };
+                    let current = self
+                        .find
+                        .current
+                        .as_ref()
+                        .is_some_and(|current| current.anchor == anchor);
+                    for (row, byte) in hit_chars(&line, &hit) {
+                        let cells = placed.entry(row).or_insert_with(|| {
+                            rows.get(row)
+                                .map_or(Vec::new(), |drawn| crate::cells::place(&drawn.0, width))
+                        });
+                        let next = cells.partition_point(|cell| cell.bytes.end <= byte);
+                        let Some(cell) = cells.get(next) else {
+                            continue;
+                        };
+                        if cell.bytes.start > byte {
+                            continue;
+                        }
+                        let y = y0 as usize
+                            + start
+                                .saturating_add(offsets.get(row).copied().unwrap_or(0))
+                                .saturating_add(usize::from(cell.row))
+                                .saturating_sub(top);
+                        let x = area.x.saturating_add(cell.col);
+                        if y < usize::from(area.bottom()) && x < area.right() {
+                            out.push((
+                                ratatui::layout::Rect::new(
+                                    x,
+                                    u16::try_from(y).unwrap_or(u16::MAX),
+                                    cell.width,
+                                    1,
+                                ),
+                                current,
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        out
     }
 
     /// The pause after `generation`'s keystroke passed: resident pages
@@ -541,6 +638,10 @@ impl App {
             }
         }
         self.pump_find();
+        // Reveals in the same step: the current match's sections open
+        // and the view scrolls to it, and a dropped page it sits on
+        // loads with the frame's other pages.
+        self.settle_find();
         self.find_outgoing()
     }
 
@@ -841,6 +942,10 @@ impl App {
         }
         if expanded {
             self.clear_selection();
+            // The rows moved, but no match did: the page scans again
+            // only when its text moves next.
+            let revision = self.screen.pages().index().revision(current.anchor.page);
+            self.find.scanned.insert(current.anchor.page, revision);
         }
         let Some((row, _)) = self.current_place(&current) else {
             self.find.reveal = false;
@@ -923,11 +1028,50 @@ impl App {
 
     /// Moves to the previous match, wrapping: lands with the task that
     /// moves between matches.
-    fn find_prev(&mut self) {}
+    fn find_prev(&mut self) {
+        self.step_find(false);
+    }
+
+    /// Moves to the next match, wrapping (`docs/tui.md`, "Search":
+    /// Enter or ↓ moves to the next match, Shift+Enter or ↑ to the
+    /// previous, both wrapping).
+    fn find_next(&mut self) {
+        self.step_find(true);
+    }
+
+    /// Moves `down` through the matches in page order, then render order,
+    /// wrapping at either end; nothing with no matches. The newly current
+    /// match is revealed.
+    fn step_find(&mut self, down: bool) {
+        let flat = self.find.flat();
+        if flat.is_empty() {
+            return;
+        }
+        let at = self
+            .find
+            .current
+            .as_ref()
+            .and_then(|current| flat.iter().position(|kept| kept.anchor == current.anchor))
+            .unwrap_or(0);
+        let next = if down {
+            at.saturating_add(1) % flat.len()
+        } else {
+            at.checked_sub(1).unwrap_or(flat.len().saturating_sub(1))
+        };
+        if let Some(kept) = flat.get(next) {
+            self.find.current = Some((*kept).clone());
+            self.find.reveal = true;
+        }
+    }
 
     /// Closes the bar, going home.
     pub(super) fn close_find(&mut self) {
         self.find.close();
+    }
+
+    /// How many search matches are kept (the paging jig's report).
+    pub(crate) fn find_matches(&self) -> usize {
+        self.find.total
     }
 }
 

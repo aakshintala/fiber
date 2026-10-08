@@ -175,6 +175,7 @@ pub fn measure_paging(
         paging.app.jump(jumped);
         slowest_jump = slowest_jump.max(paging.frame()?.0);
     }
+    let (search_took, search_matches) = paging.search("shell")?;
     let mut slowest_width = Duration::ZERO;
     for wide in [width.saturating_sub(1), width] {
         paging.app.set_size(wide, height);
@@ -196,6 +197,7 @@ pub fn measure_paging(
          open pass and first frame: {:.2} ms\n\
          slowest frame that loaded pages: {:.2} ms, of {loads} paging up\n\
          slowest jump frame: {:.2} ms, of {JUMPS} to row {jumped}\n\
+         search of the whole log: {:.2} ms, {search_matches} matches\n\
          slowest re-count at a new width: {:.2} ms\n\
          slowest append frame: {:.2} ms, of {appended}; pages while appending: {} to {}, \
          most resident {}\n",
@@ -203,6 +205,7 @@ pub fn measure_paging(
         ms(open),
         ms(slowest_load),
         ms(slowest_jump),
+        ms(search_took),
         ms(slowest_width),
         ms(slowest_append),
         pages_before,
@@ -223,6 +226,91 @@ struct Paging<'a> {
 }
 
 impl Paging<'_> {
+    /// Types `query` into the search bar and answers its `history`
+    /// commands from the log until the count stops scanning. Returns how
+    /// long the scan took and how many matches it kept (`docs/tui.md`,
+    /// "History and paging": search of the whole log).
+    fn search(&mut self, query: &str) -> Result<(Duration, usize), String> {
+        // The scan fetches dropped pages with `history`, so the jig
+        // connects first: the answers come from the log, as the hub's
+        // would.
+        self.app.on_line(Line::Hub(contract::HubLine {
+            kind: "hub_hello".to_owned(),
+            ts: 0,
+            schema_version: contract::SCHEMA_VERSION,
+            payload: serde_json::Map::new(),
+        }));
+        let now = self.clock.now();
+        self.app.on_key(Key::CtrlF, now);
+        for ch in query.chars() {
+            self.app.on_key(Key::Char(ch), now);
+        }
+        let generation = u64::try_from(query.chars().count()).unwrap_or(u64::MAX);
+        let started = self.clock.now();
+        let mut outgoing = self.app.find_due(generation);
+        let bound = self
+            .app
+            .pages()
+            .page_count()
+            .saturating_mul(2)
+            .saturating_add(2);
+        for _ in 0..bound {
+            if outgoing.is_empty() {
+                break;
+            }
+            let line = outgoing.remove(0);
+            let command: serde_json::Value =
+                serde_json::from_str(&line).map_err(|error| error.to_string())?;
+            let id = command
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            let args = command.get("args");
+            let from = args
+                .and_then(|args| args.get("from_seq"))
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0);
+            let to = args
+                .and_then(|args| args.get("to_seq"))
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(u64::MAX);
+            let mut held: Vec<Envelope> = Vec::new();
+            for (_, line) in self
+                .log
+                .iter()
+                .skip_while(|(seq, _)| seq.0 < from)
+                .take_while(|(seq, _)| seq.0 <= to)
+            {
+                held.push(serde_json::from_str(line).map_err(|error| error.to_string())?);
+            }
+            let answer = contract::Envelope {
+                kind: "command_accepted".to_owned(),
+                session_id: self
+                    .app
+                    .session()
+                    .cloned()
+                    .unwrap_or(contract::SessionId(String::new())),
+                ts: 0,
+                schema_version: contract::SCHEMA_VERSION,
+                turn_id: None,
+                action_id: None,
+                seq: None,
+                payload: serde_json::json!({"command_id": id, "result": {"lines": held}})
+                    .as_object()
+                    .cloned()
+                    .unwrap_or_default(),
+            };
+            outgoing = self.app.on_line(Line::Session(answer));
+        }
+        if outgoing.into_iter().next().is_some() {
+            return Err("the search never settled".to_owned());
+        }
+        Ok((
+            self.clock.now().saturating_duration_since(started),
+            self.app.find_matches(),
+        ))
+    }
+
     /// One frame: loads what it needs from the log and draws. Returns how
     /// long it took and whether it loaded a page.
     fn frame(&mut self) -> Result<(Duration, bool), String> {
