@@ -109,9 +109,13 @@ impl Find {
         self.due = false;
     }
 
-    /// Closes the bar and drops the whole scan.
+    /// Closes the bar and drops the whole scan; the generation stays, so a
+    /// pause scheduled before the close is stale after a reopen.
     pub(super) fn close(&mut self) {
-        *self = Self::default();
+        *self = Self {
+            generation: self.generation,
+            ..Self::default()
+        };
     }
 
     /// Types `text` into the bar and schedules the scan after the pause.

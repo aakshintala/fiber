@@ -426,6 +426,29 @@ fn esc_closes_the_bar_and_clears_the_marks() {
 }
 
 #[test]
+fn a_pause_from_before_a_close_does_nothing_after_the_bar_reopens() {
+    let mut app = replied(40, 10, "hello there");
+    assert_eq!(app.on_key(Key::CtrlF, now()), Effect::None);
+    let Effect::FindPause {
+        generation: old, ..
+    } = app.on_key(Key::Char('h'), now())
+    else {
+        panic!("typing schedules a pause");
+    };
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert_eq!(app.on_key(Key::CtrlF, now()), Effect::None);
+    let Effect::FindPause {
+        generation: new, ..
+    } = app.on_key(Key::Char('h'), now())
+    else {
+        panic!("typing schedules a pause");
+    };
+    assert_ne!(old, new, "a reopened bar never reuses a generation");
+    assert!(app.find_due(old).is_empty());
+    assert!(!app.find.due(), "the old pause started no scan");
+}
+
+#[test]
 fn esc_closes_the_bar_before_the_selection() {
     let mut app = replied(40, 10, "hello there");
     search(&mut app, "hell");
