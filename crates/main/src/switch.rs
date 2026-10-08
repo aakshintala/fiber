@@ -232,11 +232,8 @@ impl Switching {
                 ),
                 (None, None) => None,
             };
-            let read = crate::lua_providers::session_credential(
-                lua.as_ref(),
-                data,
-                &want.label,
-                || {
+            let read =
+                crate::lua_providers::session_credential(lua.as_ref(), data, &want.label, || {
                     if let Some(key) = want.known.clone().flatten() {
                         return Ok(key);
                     }
@@ -258,13 +255,10 @@ impl Switching {
                     );
                     let labels = self.config.labels(data);
                     if want.label != current && !labels.contains(&want.label) {
-                        let listed = config::Config::listed(&labels);
-                        return Err(doors::failure(
-                            ErrorCode::CredentialMissing,
-                            format!(
-                                "`{}` has no credential label `{}`. The labels for `{}` are: {listed}",
-                                want.name, want.label, want.name
-                            ),
+                        return Err(crate::credential::no_label(
+                            &want.name,
+                            &want.label,
+                            &labels,
                         ));
                     }
                     let run = |command: &mut std::process::Command| self.reads.command(command);
@@ -276,8 +270,7 @@ impl Switching {
                     )?;
                     file = read.file;
                     Ok(read.secret)
-                },
-            )?;
+                })?;
             Ok(Access::new(lua.as_ref(), read))
         })?;
         Ok(Got {
@@ -338,6 +331,7 @@ pub(crate) fn prepare(
         None => None,
     };
     let resolved = resolve(&switching.registry, &switching.naming, &args.model)?;
+    crate::scripted::label(resolved.provider, label).map_err(rejection)?;
     let reference = resolved.reference();
     let context_window = crate::settings::context_window(resolved.model, &reference)
         .map_err(|failure| invalid(failure.message))?;
@@ -478,7 +472,7 @@ pub(crate) fn prepare(
         // The suffix first, then what was asked for now, then the
         // session's choice.
         chosen: resolved.thinking.or(asked).or(chosen),
-        credential: Some(got.label),
+        credential: crate::scripted::credential(resolved.provider, got.label),
         cache_lifetime: crate::settings::cache_lifetime(&switching.config, &reference),
         context_window,
         addendum: switching.registry.addendum(&resolved).map(str::to_owned),

@@ -2,7 +2,7 @@
 //! "The scripted provider"): the session's registry gains a scripted model
 //! only for a reference that names it, and a scripted model reads no
 //! credential and never warms, since it has no credential, quota, cost or
-//! prompt cache.
+//! prompt cache, and has no credential label.
 
 use config::{Config, ModelData, Protocol, ProviderData};
 use contract::shapes::Failure;
@@ -56,6 +56,19 @@ pub(crate) fn access(
         });
     }
     read()
+}
+
+/// A scripted provider has no credential label: `asked` is `credential_missing`.
+pub(crate) fn label(provider: &ProviderData, asked: Option<&str>) -> Result<(), Failure> {
+    let _ = (provider, asked);
+    Ok(())
+}
+
+/// The label `provider` records on `preamble_built` and `model_changed`:
+/// none for a scripted provider, else `label`.
+pub(crate) fn credential(provider: &ProviderData, label: String) -> Option<String> {
+    let _ = provider;
+    Some(label)
 }
 
 /// The configured warming for `model`: none for a scripted model, which has

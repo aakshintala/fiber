@@ -14,10 +14,14 @@
 mod support;
 
 use std::process::Output;
+use std::sync::{Arc, Mutex};
 
 use fakes::ProviderServer;
 use serde_json::{Value, json};
-use support::{Setup, hello, run_to_exit, write_json};
+use support::{
+    HubProc, SessionGuard, Setup, connect_hub, hello, recv_reply, run_to_exit, subscribe, until,
+    write_json,
+};
 
 /// One `fiber` run: its exit code, every stdout line and stderr.
 struct Run {
@@ -100,6 +104,65 @@ const TEXT_TURN: [&str; 13] = [
     "turn_completed",
     "fiber_exited",
 ];
+
+/// The resumed form of [`TEXT_TURN`]: no `session_started` and no
+/// `opening_message`.
+const RESUMED_TURN: [&str; 11] = [
+    "fiber_started",
+    "extensions_loaded",
+    "preamble_built",
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    "fiber_exited",
+];
+
+/// The `sessions` directory of the workspace's project.
+fn sessions(setup: &Setup) -> std::path::PathBuf {
+    let workspace = std::fs::canonicalize(setup.workspace()).unwrap();
+    let key = workspace.to_string_lossy().replace('/', "-");
+    setup.home().join("projects").join(key).join("sessions")
+}
+
+/// The session `run` started.
+fn session_id(run: &Run) -> &str {
+    run.of("session_started")[0]["session_id"].as_str().unwrap()
+}
+
+/// The session's `events.jsonl` lines.
+fn log_lines(setup: &Setup, id: &str) -> Vec<Value> {
+    std::fs::read_to_string(sessions(setup).join(id).join("events.jsonl"))
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+
+/// The kinds of the session's `events.jsonl`, in order.
+fn log_kinds(setup: &Setup, id: &str) -> Vec<String> {
+    log_lines(setup, id)
+        .iter()
+        .map(|line| line["kind"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+/// The event kinds of socket `lines`, in order, without `session_status`.
+fn kinds(lines: &[Value]) -> Vec<&str> {
+    lines
+        .iter()
+        .filter(|line| line["kind"] != "session_status")
+        .map(|line| line["kind"].as_str().unwrap())
+        .collect()
+}
+
+/// A two-step script answering one line of text per request.
+fn two_steps() -> Value {
+    json!({"steps": [{"text": "One."}, {"text": "Two."}]})
+}
 
 #[test]
 fn a_scripted_text_step_answers_with_no_provider_installed() {
@@ -309,4 +372,283 @@ fn a_vendor_session_with_a_scripted_reviewer_reads_no_scripted_credential() {
         "{:?}",
         run.of("tool_call_completed")
     );
+}
+
+#[test]
+fn a_scripted_session_records_no_credential_label() {
+    let setup = Setup::new();
+    script(&setup, "s.json", &json!({"steps": [{"text": "Hi."}]}));
+    let run = ask(&setup);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert_eq!(run.durable(), TEXT_TURN);
+    let built = run.of("preamble_built");
+    assert_eq!(built.len(), 1, "{:?}", run.durable());
+    assert!(
+        built[0].get("payload").unwrap().get("credential").is_none(),
+        "{}",
+        built[0]
+    );
+}
+
+#[test]
+fn a_scripted_session_ignores_a_configured_label() {
+    let setup = Setup::new();
+    script(&setup, "s.json", &json!({"steps": [{"text": "Hi."}]}));
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "scripted/s.json", "providers": {"scripted": {"credential": "work"}}}),
+    );
+    let run = fiber(&setup, &["ask", "hi"]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert_eq!(run.durable(), TEXT_TURN);
+    let built = run.of("preamble_built");
+    assert_eq!(built.len(), 1, "{:?}", run.durable());
+    assert!(
+        built[0].get("payload").unwrap().get("credential").is_none(),
+        "{}",
+        built[0]
+    );
+}
+
+#[test]
+fn a_scripted_resume_with_a_label_fails_credential_missing_before_the_session() {
+    let setup = Setup::new();
+    script(&setup, "s.json", &two_steps());
+    let first = fiber(&setup, &["ask", "--model", "scripted/s.json", "one"]);
+    assert_eq!(first.code, Some(0), "{}", first.stderr);
+    assert_eq!(first.durable(), TEXT_TURN);
+    let id = session_id(&first).to_owned();
+    let events = sessions(&setup).join(&id).join("events.jsonl");
+    let before = std::fs::read(&events).unwrap();
+
+    let run = fiber(
+        &setup,
+        &["ask", "--resume", &id, "--credential", "x", "two"],
+    );
+    assert_eq!(run.code, Some(1), "{}", run.stderr);
+    assert_eq!(run.lines.len(), 1, "{:?}", run.lines);
+    assert_eq!(
+        run.lines
+            .iter()
+            .map(|line| line["kind"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["fiber_exited"]
+    );
+    let error = &run.last()["payload"]["error"];
+    assert_eq!(error["code"], "credential_missing");
+    let message = error["message"].as_str().unwrap();
+    assert!(message.ends_with("are: none"), "{message}");
+    assert_eq!(std::fs::read(&events).unwrap(), before);
+}
+
+#[test]
+fn a_scripted_resume_without_a_label_records_none() {
+    let setup = Setup::new();
+    script(&setup, "s.json", &two_steps());
+    let first = fiber(&setup, &["ask", "--model", "scripted/s.json", "one"]);
+    assert_eq!(first.code, Some(0), "{}", first.stderr);
+    let id = session_id(&first).to_owned();
+
+    let second = fiber(&setup, &["ask", "--resume", &id, "two"]);
+    assert_eq!(second.code, Some(0), "{}", second.stderr);
+    assert_eq!(second.durable(), RESUMED_TURN);
+    let built = second.of("preamble_built");
+    assert_eq!(built.len(), 1, "{:?}", second.durable());
+    assert!(
+        built[0].get("payload").unwrap().get("credential").is_none(),
+        "{}",
+        built[0]
+    );
+}
+
+#[test]
+fn a_scripted_log_with_a_recorded_label_still_resumes() {
+    let setup = Setup::new();
+    script(&setup, "s.json", &two_steps());
+    let first = fiber(&setup, &["ask", "--model", "scripted/s.json", "one"]);
+    assert_eq!(first.code, Some(0), "{}", first.stderr);
+    let id = session_id(&first).to_owned();
+    let events = sessions(&setup).join(&id).join("events.jsonl");
+    let text = std::fs::read_to_string(&events).unwrap();
+    let rewritten: Vec<String> = text
+        .lines()
+        .map(|line| {
+            let mut value: Value = serde_json::from_str(line).unwrap();
+            if value["kind"] == "preamble_built" {
+                value["payload"]["credential"] = json!("default");
+            }
+            serde_json::to_string(&value).unwrap()
+        })
+        .collect();
+    std::fs::write(&events, rewritten.join("\n") + "\n").unwrap();
+
+    let second = fiber(&setup, &["ask", "--resume", &id, "two"]);
+    assert_eq!(second.code, Some(0), "{}", second.stderr);
+    let mut expected = vec!["fiber_started", "extensions_loaded", "model_changed"];
+    expected.extend(RESUMED_TURN[2..].iter().copied());
+    assert_eq!(second.durable(), expected);
+    let built = second.of("preamble_built");
+    assert_eq!(built.len(), 1, "{:?}", second.durable());
+    assert!(
+        built[0].get("payload").unwrap().get("credential").is_none(),
+        "{}",
+        built[0]
+    );
+    let changed = second.of("model_changed");
+    assert_eq!(changed.len(), 1, "{:?}", second.durable());
+    assert_eq!(changed[0]["payload"]["before"]["credential"], "default");
+    assert!(
+        changed[0]["payload"]["after"].get("credential").is_none(),
+        "{}",
+        changed[0]
+    );
+}
+
+/// The hub stream of a scripted start turn through `turn_completed`: the
+/// full ordered list without any retry lines.
+const SCRIPTED_START_KINDS: [&str; 14] = [
+    "session_started",
+    "fiber_started",
+    "extensions_loaded",
+    "clients",
+    "preamble_built",
+    "opening_message",
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "assistant_message_delta",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+];
+
+#[test]
+fn the_credential_command_on_a_scripted_session_is_rejected() {
+    let setup = Setup::new();
+    script(&setup, "s.json", &two_steps());
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "scripted/s.json"}),
+    );
+    let hub: Arc<Mutex<Option<HubProc>>> = Arc::new(Mutex::new(None));
+    let (client, _) = connect_hub(&setup, &hub);
+    let workspace = setup.workspace().to_string_lossy().into_owned();
+    let guard = SessionGuard::arm(setup.deadline, &workspace);
+    client.send(
+        &json!({
+            "id": "c_start",
+            "command": "start",
+            "args": {"workspace": workspace, "content": [{"type": "text", "text": "hi"}]},
+        })
+        .to_string(),
+    );
+    let started = recv_reply(&client, "the start acknowledgement");
+    assert_eq!(started["kind"], "command_accepted", "{started}");
+    let id = started["payload"]["result"]["session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    subscribe(&client, &id);
+    let mut stream = until(&client, "turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    assert_eq!(kinds(&stream), SCRIPTED_START_KINDS);
+
+    client.send(
+        &json!({"id": "c_cred", "session_id": id, "command": "credential", "args": {"label": "x"}})
+            .to_string(),
+    );
+    let rejected = until(&client, "the credential rejection", |line| {
+        line["kind"] == "command_rejected" && line["payload"]["command_id"] == "c_cred"
+    });
+    assert_eq!(rejected.len(), 1, "{rejected:?}");
+    assert_eq!(rejected[0]["payload"]["code"], "credential_missing");
+    let message = rejected[0]["payload"]["message"].as_str().unwrap();
+    assert!(message.ends_with("are: none"), "{message}");
+    stream.extend(rejected);
+
+    client.send(&json!({"id": "c_close", "session_id": id, "command": "close"}).to_string());
+    let tail = until(&client, "fiber_exited", |line| {
+        line["kind"] == "fiber_exited"
+    });
+    stream.extend(tail);
+    let mut expected: Vec<&str> = SCRIPTED_START_KINDS.to_vec();
+    expected.push("command_rejected");
+    expected.extend(["command_accepted", "fiber_exited"]);
+    assert_eq!(kinds(&stream), expected);
+
+    guard.wait_gone();
+    drop(client);
+    hub.lock()
+        .unwrap()
+        .take()
+        .expect("the hub ran")
+        .kill_and_wait();
+    let kinds = log_kinds(&setup, &id);
+    assert_eq!(
+        kinds.iter().map(String::as_str).collect::<Vec<_>>(),
+        TEXT_TURN
+    );
+    assert!(!kinds.contains(&"model_changed".to_owned()));
+}
+
+#[test]
+fn a_live_scripted_resume_with_a_label_is_rejected() {
+    let setup = Setup::new();
+    script(&setup, "s.json", &two_steps());
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "scripted/s.json"}),
+    );
+    let hub: Arc<Mutex<Option<HubProc>>> = Arc::new(Mutex::new(None));
+    let (client, _) = connect_hub(&setup, &hub);
+    let workspace = setup.workspace().to_string_lossy().into_owned();
+    let guard = SessionGuard::arm(setup.deadline, &workspace);
+    client.send(
+        &json!({
+            "id": "c_start",
+            "command": "start",
+            "args": {"workspace": workspace, "content": [{"type": "text", "text": "hi"}]},
+        })
+        .to_string(),
+    );
+    let started = recv_reply(&client, "the start acknowledgement");
+    assert_eq!(started["kind"], "command_accepted", "{started}");
+    let id = started["payload"]["result"]["session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    subscribe(&client, &id);
+    let stream = until(&client, "turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    assert_eq!(kinds(&stream), SCRIPTED_START_KINDS);
+
+    let run = fiber(&setup, &["ask", "--resume", &id, "--credential", "x", "hi"]);
+    assert_eq!(run.code, Some(1), "{}", run.stderr);
+    assert_eq!(run.lines.len(), 1, "{:?}", run.lines);
+    assert_eq!(run.lines[0]["kind"], "fiber_exited");
+    let error = &run.lines[0]["payload"]["error"];
+    assert_eq!(error["code"], "credential_missing");
+    let message = error["message"].as_str().unwrap();
+    assert!(message.ends_with("are: none"), "{message}");
+
+    client.send(&json!({"id": "c_close", "session_id": id, "command": "close"}).to_string());
+    let _tail = until(&client, "fiber_exited", |line| {
+        line["kind"] == "fiber_exited"
+    });
+    guard.wait_gone();
+    drop(client);
+    hub.lock()
+        .unwrap()
+        .take()
+        .expect("the hub ran")
+        .kill_and_wait();
+    let kinds = log_kinds(&setup, &id);
+    assert_eq!(
+        kinds.iter().map(String::as_str).collect::<Vec<_>>(),
+        TEXT_TURN
+    );
+    assert!(!kinds.contains(&"model_changed".to_owned()));
 }

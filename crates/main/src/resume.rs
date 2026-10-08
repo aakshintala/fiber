@@ -184,7 +184,7 @@ fn resumed_session(
     let parts = match crate::parts_with(
         overrides,
         folded.model.as_deref(),
-        credential.as_deref().or(folded.credential.as_deref()),
+        crate::credential::Labels::new(credential.as_deref(), folded.credential.as_deref()),
         recorded_thinking,
         Arc::clone(&clock),
         None,
